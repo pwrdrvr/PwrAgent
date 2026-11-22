@@ -10652,6 +10652,7 @@ describe("app server ipc", () => {
         attachment: { backend: "codex"; primaryRepoKey: string; prs: PrSummary[] } | undefined,
       ) => void;
       fetchForgePullRequests: (refs: Array<Record<string, unknown>>) => Promise<PrSummary[]>;
+      publishPullRequestStatusUpdates: (params: { backend: "codex"; prs: PrSummary[] }) => Promise<void>;
     };
     const oldUrl = "https://gitlab.com/team/legacy/tools/api/-/merge_requests/41";
     const newUrl = "https://gitlab.com/platform/api/-/merge_requests/41";
@@ -10674,7 +10675,7 @@ describe("app server ipc", () => {
     try {
       expect(service.primaryPrThreadsByKey.has("gitlab.com/platform/api#41")).toBe(false);
 
-      await service.fetchForgePullRequests([
+      const prs = await service.fetchForgePullRequests([
         { kind: "gitlab", host: "gitlab.com", owner: "team/legacy/tools", repo: "api", number: 41 },
         { kind: "gitlab", host: "gitlab.com", owner: "team", repo: "other", number: 41 },
       ]);
@@ -10682,6 +10683,14 @@ describe("app server ipc", () => {
       expect(service.prRepositoryAliases.canonicalizeUrl(oldUrl)).toBe(newUrl);
       expect(service.prRepositoryAliases.canonicalizeUrl(otherUrl)).toBe(otherUrl);
       expect(service.primaryPrThreadsByKey.has("gitlab.com/platform/api#41")).toBe(true);
+      await service.publishPullRequestStatusUpdates({ backend: "codex", prs });
+      expect(publishLocalEvent).toHaveBeenCalledWith({ backend: "codex",
+        navigationPullRequestKeyAliases: ["gitlab.com/team/legacy/tools/api#41"],
+        notification: { method: "pullRequest/status/updated", params: { prKey: "gitlab.com/platform/api#41", pr: expect.objectContaining({ url: newUrl }) } },
+      });
+      expect(publishLocalEvent).toHaveBeenCalledWith({ backend: "codex",
+        notification: { method: "pullRequest/status/updated", params: { prKey: "gitlab.com/team/other#41", pr: expect.objectContaining({ url: otherUrl }) } },
+      });
     } finally {
       fetcher.mockRestore();
       service.setThreadPrAttachment("codex:transferred-poll", undefined);

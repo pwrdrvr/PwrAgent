@@ -3333,7 +3333,7 @@ describe("CodexAppServerClient", () => {
     }
   });
 
-  it("does not walk the provider or reread listing overlays for an announced turn's active echo", async () => {
+  it("keeps an announced turn's Inbox ordering in sync with the provider's activity timestamps", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
     const { openInMemoryStateDb } = await import("./sqlite-test-utils");
@@ -3351,6 +3351,8 @@ describe("CodexAppServerClient", () => {
     const pageSize = 100;
     const pageCount = 8;
     const primary = "turn-echo-0";
+    let updatedAt = 1_777_400_001;
+    const siblingUpdatedAt = 1_777_400_002;
     const metadata = vi.spyOn(store, "getThreadListingOverlayStates");
     const rpc = vi.spyOn(transport, "send").mockImplementation((message) => {
       const request = JSON.parse(message);
@@ -3358,7 +3360,8 @@ describe("CodexAppServerClient", () => {
       pages++;
       const page = Number(request.params.cursor ?? 0);
       MockTransport.threadListResultBySearchTerm.set("turn-echo", Array.from({ length: pageSize }, (_, index) => ({
-        id: `turn-echo-${page * pageSize + index}`, name: "Fixture turn", source: "vscode", status: { type: "idle" },
+        id: `turn-echo-${page * pageSize + index}`, name: "Fixture turn", source: "vscode",
+        status: { type: "idle" }, updatedAt: page === 0 && index === 0 ? updatedAt : siblingUpdatedAt,
       })));
       const cursor = MockTransport.threadListNextCursor;
       MockTransport.threadListNextCursor = page + 1 < pageCount ? String(page + 1) : undefined;
@@ -3371,14 +3374,17 @@ describe("CodexAppServerClient", () => {
       const beforeEcho = await registry.listThreads(request);
       expect(beforeEcho).toHaveLength(pageSize * pageCount);
       expect(beforeEcho.find(({ id }) => id === primary)?.threadStatus).toBe("active");
-      for (let index = 0; index < 3; index++) {
-        await registry.publishLocalEvent({ backend: "codex", notification: { method: "thread/status/changed", params: {
-          threadId: primary, status: { type: "active" },
-        } } });
-        const rows = await registry.listThreads(request);
-        expect(rows.find(({ id }) => id === primary)?.threadStatus).toBe("active");
+      expect(beforeEcho[0]?.id).not.toBe(primary);
+      updatedAt = siblingUpdatedAt + 1;
+      await registry.publishLocalEvent({ backend: "codex", notification: { method: "thread/status/changed", params: {
+        threadId: primary, status: { type: "active" },
+      } } });
+      // Refreshes of the same generation share one provider observation.
+      const refreshed = await Promise.all(Array.from({ length: 3 }, () => registry.listThreads(request)));
+      for (const rows of refreshed) {
+        expect(rows[0]).toMatchObject({ id: primary, updatedAt: updatedAt * 1_000, threadStatus: "active" });
       }
-      expect({ pages, listingOverlayReads: metadata.mock.calls.length }).toEqual({ pages: 8, listingOverlayReads: 2 });
+      expect({ pages, listingOverlayReads: metadata.mock.calls.length }).toEqual({ pages: 16, listingOverlayReads: 4 });
 
       // A status without a matching announced turn still owns discovery.
       await registry.publishLocalEvent({ backend: "codex", notification: { method: "thread/status/changed", params: {
@@ -3386,7 +3392,7 @@ describe("CodexAppServerClient", () => {
       } } });
       const changed = await registry.listThreads(request);
       expect(changed.find(({ id }) => id === "turn-echo-1")?.threadStatus).toBe("active");
-      expect(pages).toBe(pageCount * 2);
+      expect(pages).toBe(pageCount * 3);
     } finally {
       rpc.mockRestore();
       metadata.mockRestore();

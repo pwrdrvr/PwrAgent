@@ -1004,6 +1004,10 @@ export function navigationInvalidationForLocalEvent(event: AgentEvent): AgentEve
 
 /** A local event as this owner sends it to a federated viewer. */
 export function projectLocalEventForFederation(event: AgentEvent, ownerInstanceId: FederationInstanceId): AgentEvent {
+  if (event.navigationPullRequestKeyAliases) {
+    const { navigationPullRequestKeyAliases: _localAliases, ...federatedEvent } = event;
+    event = federatedEvent;
+  }
   return rewriteLiveTranscriptImagesForFederation(projectThreadDisplayEvent(event), ownerInstanceId);
 }
 

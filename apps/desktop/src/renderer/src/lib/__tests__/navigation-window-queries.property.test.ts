@@ -268,10 +268,12 @@ it("shares one continuation budget across metadata replacements", async () => {
 });
 
 it("reads only PR-bearing rows and never list counts on a PR-only change", async () => {
-  await fc.assert(fc.asyncProperty(fc.integer({ min: 5, max: 18 }), fc.boolean(), async (size, remote) => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 5, max: 18 }), fc.boolean(), fc.boolean(), async (size, remote, renamed) => {
     const target = remote ? { scope: "remote" as const, instanceId: "peer" } : undefined;
     const pr = { provider: "github.com", org: "fixture", repo: "changes", number: 71,
       state: "pending", url: "https://github.com/fixture/changes/pull/71" } as const;
+    const prKey = "github.com/fixture/changes#71";
+    const aliasKey = "github.com/fixture/old-name#71";
     const parent = { backend: "codex", threadId: "parent", ownerInstanceId: target?.instanceId } as const;
     const child = { ...parent, threadId: "child" };
     const demand = new Map<string, NavigationQueryRequest>();
@@ -287,13 +289,15 @@ it("reads only PR-bearing rows and never list counts on a PR-only change", async
     const read = vi.fn(async (request: NavigationQueryRequest): Promise<NavigationQueryPage> => {
       const key = JSON.stringify(request.query);
       const carriesChange = request.query.kind === "children" || request.query.kind === "exact";
+      const prKeys = carriesChange ? [renamed && !remote ? aliasKey : prKey]
+        : !remote && request.query.kind === "directory" ? [`github.com/fixture/${request.query.directoryKey}#71`] : [];
       const ref = carriesChange ? child : { ...parent, threadId: key };
       const row: NavigationRow = { id: ref.threadId, source: ref.backend, ref, rowRevision: key, title: key,
         titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: false }, ordinaryChildCount: 0,
         nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown", ...(carriesChange ? { prs: [pr] } : {}) };
       return { protocol: 2, queryKey: key, generation: key, ownerEpoch: "fixture", countsRevision: key,
         counts: { total: 1, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, complete: true,
-        metadataDependencies: { version: 1, threadKeys: [], prKeys: carriesChange ? ["github.com/fixture/changes#71"] : [], prKeysComplete: true },
+        metadataDependencies: { version: 1, threadKeys: [], prKeys, prKeysComplete: true },
         entries: request.query.kind === "directory-index" ? [] : [{ row, orderKey: key, placement: { kind: "root" } }] };
     });
     const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
@@ -301,8 +305,8 @@ it("reads only PR-bearing rows and never list counts on a PR-only change", async
       queries.setDemand(demand);
       await queries.refresh();
       read.mockClear();
-      const prKey = "github.com/fixture/changes#71";
       queries.invalidate(undefined, [target ?? { scope: "local" }], { backend: "codex", federationTarget: target,
+        ...(renamed && !remote ? { navigationPullRequestKeyAliases: [aliasKey] } : {}),
         notification: target ? { method: "navigation/invalidated", params: { sourceMethod: "pullRequest/status/updated" } }
           : { method: "pullRequest/status/updated", params: { prKey, pr } } });
       await queries.refresh(undefined, undefined, true);
@@ -310,7 +314,7 @@ it("reads only PR-bearing rows and never list counts on a PR-only change", async
     } finally {
       queries.dispose();
     }
-  }), { numRuns: 12 });
+  }), { numRuns: 12, examples: [[5, false, false], [5, false, true]] });
 });
 
 it("keeps PR recovery live through an attachment race, legacy notices and stream gaps", async () => {

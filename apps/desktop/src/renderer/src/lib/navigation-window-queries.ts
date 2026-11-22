@@ -653,7 +653,9 @@ export class NavigationWindowQueries {
         // leave them alone; full status observations can patch shared PRs.
         if (sourceOwner && request.inventory === "viewer" && request.federationTarget?.scope !== "remote"
           && event.notification.method === "navigation/invalidated") return false;
-        return dependencies.prKeys.some((candidate) => !key || navigationPullRequestKeysMayMatch(candidate, key));
+        const aliases = sourceOwner ? undefined : event.navigationPullRequestKeyAliases;
+        return dependencies.prKeys.some((candidate) => !key || navigationPullRequestKeysMayMatch(candidate, key)
+          || aliases?.some((alias) => navigationPullRequestKeysMayMatch(candidate, alias)));
       }
       // A verified preview can omit a stored attachment. Its absence
       // cannot rule out a status change that makes that attachment visible.

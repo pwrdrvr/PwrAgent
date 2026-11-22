@@ -5338,12 +5338,15 @@ class DesktopAppServerService {
   }): Promise<void> {
     await Promise.all(
       params.prs.map(async (pr) => {
+        const prKey = getPrStatusKey(pr);
+        const aliases = this.prRepositoryAliases.equivalentStatusKeys(prKey);
         await getDesktopBackendRegistry().publishLocalEvent({
           backend: params.backend,
+          ...(aliases.length ? { navigationPullRequestKeyAliases: aliases } : {}),
           notification: {
             method: "pullRequest/status/updated",
             params: {
-              prKey: getPrStatusKey(pr),
+              prKey,
               pr,
             },
           },

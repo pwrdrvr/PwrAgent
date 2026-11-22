@@ -92,9 +92,6 @@ const HUB_HOOKS: Array<{ name: string; owner: (registry: Members) => Members | u
     "notifyForTerminalOutcome",
     "emitToListeners",
   ].map((name) => ({ name, owner: (registry: Members) => registry })),
-  // Notifications can invalidate a single backend directly. Calls nested
-  // under the general cache invalidator are filtered by the hook depth.
-  { name: "invalidateThreadListCache", method: "invalidateBackendThreadLists", owner: (registry) => registry },
   {
     name: "flushQueuedAcpRuntimeOptionIfPresent",
     owner: (registry: Members) => registryModules(registry as unknown as DesktopBackendRegistry).acpSessionRuntimeOptions as unknown as Members,
