@@ -376,7 +376,10 @@ describe("Get started", () => {
       isReplay: true,
       bootInfo: { mode: "active-profile", decisionKind: "open", activeProfileName: "default" },
     });
-    fireEvent.click(await screen.findByRole("button", { name: "Done" }));
+    // Done stays disabled until the first agent check finds a ready agent.
+    const done = await screen.findByRole("button", { name: "Done" });
+    await waitFor(() => expect(done).toBeEnabled());
+    fireEvent.click(done);
     await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
     expect(desktopApi.createPwrAgentProfile).not.toHaveBeenCalled();
     expect(desktopApi.openPwrAgentProfile).not.toHaveBeenCalled();
@@ -657,7 +660,7 @@ describe("Get started projects", () => {
         expect(desktopApi.discoverRecentProjects).toHaveBeenCalledTimes(expected);
       },
     ), { numRuns: 20 });
-  }, 20_000);
+  });
 
   it("neither looks for nor imports projects in a replay", async () => {
     const desktopApi = api({
@@ -669,7 +672,10 @@ describe("Get started projects", () => {
       isReplay: true,
       bootInfo: { mode: "active-profile", decisionKind: "open", activeProfileName: "default" },
     });
-    fireEvent.click(await screen.findByRole("button", { name: "Done" }));
+    // Done stays disabled until the first agent check finds a ready agent.
+    const done = await screen.findByRole("button", { name: "Done" });
+    await waitFor(() => expect(done).toBeEnabled());
+    fireEvent.click(done);
     await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
     expect(screen.queryByRole("region", { name: /Projects/ })).not.toBeInTheDocument();
     expect(desktopApi.discoverRecentProjects).not.toHaveBeenCalled();
