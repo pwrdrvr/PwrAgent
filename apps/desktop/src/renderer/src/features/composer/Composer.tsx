@@ -2252,6 +2252,7 @@ function ComposerThreadOptionsMenu(props: {
   const menuId = useId();
   const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const pointerOpenedMenu = useRef(false);
   useMenuNavigation({ open, menuRef, triggerRef, onClose: () => setOpen(false), includeAriaDisabled: true });
   useEffect(() => {
     if (!open) return;
@@ -2363,7 +2364,8 @@ function ComposerThreadOptionsMenu(props: {
         disabled={props.disabled}
         type="button"
         onBlur={hideTooltip}
-        onClick={() => {
+        onClick={(event) => {
+          pointerOpenedMenu.current = !open && event.detail > 0;
           hideTooltip();
           setOpen((current) => !current);
         }}
@@ -2400,6 +2402,10 @@ function ComposerThreadOptionsMenu(props: {
             className="composer-thread-options__item"
             onBlur={hideMenuTooltip}
             onFocus={(event) => {
+              if (pointerOpenedMenu.current) {
+                pointerOpenedMenu.current = false;
+                return;
+              }
               showMenuTooltip(event.currentTarget, agentThreadTooltip);
             }}
             onMouseEnter={(event) => {
