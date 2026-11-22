@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { createRef } from "react";
+import { createRef, useState } from "react";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_PROJECT_FORGE_AUTOMATION } from "@pwragent/shared/project-forge-automation";
@@ -432,6 +432,40 @@ describe("Sidebar project index", () => {
     expect(screen.queryByRole("navigation", { name: "Project index" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Sidebar view" }));
     expect(screen.getByRole("menuitemcheckbox", { name: /Project index/ })).toHaveTextContent("Shown with two or more projects");
+  });
+
+  it("says why at once when turning the index on leaves it undrawn", async () => {
+    const threads = [thread("t-quill", "quill")];
+    function Host() {
+      const [hidden, setHidden] = useState(true);
+      return (
+        <Sidebar
+          backends={backends}
+          browseMode="inbox"
+          directories={[directory("quill", "t-quill")]}
+          inboxThreads={threads}
+          loading={false}
+          creatingThread={undefined}
+          threads={threads}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+          projectIndexHidden={hidden}
+          onProjectIndexHiddenChange={setHidden}
+          projectIndexWidth={null}
+          onProjectIndexWidthChange={() => undefined}
+        />
+      );
+    }
+    render(<Host />);
+    fireEvent.click(screen.getByRole("button", { name: "Sidebar view" }));
+    const item = screen.getByRole("menuitemcheckbox", { name: /Project index/ });
+    expect(item).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(item);
+    await act(async () => { await new Promise((resolve) => requestAnimationFrame(resolve)); });
+    expect(item).toHaveAttribute("aria-checked", "true");
+    expect(item).toHaveTextContent("Shown with two or more projects");
   });
 });
 

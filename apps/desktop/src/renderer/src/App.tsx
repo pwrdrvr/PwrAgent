@@ -5101,9 +5101,9 @@ function DesktopAppShell(props: {
                   // Start in an existing profile. Mark first run complete
                   // and start the deferred Codex `listThreads` prefetch in
                   // one call (#500). A replay never touches onboarding. A
-                  // bootstrap Start never comes here: Get started creates
-                  // the real profile and opens it, and that window runs its
-                  // own completion and prefetch.
+                  // bootstrap Start comes here only when the new profile's
+                  // window failed to take over; that profile's own window
+                  // runs its completion and prefetch, so this just closes.
                   if (
                     onboardingOpen !== "replay"
                     && bootInfo?.mode !== "bootstrap"

@@ -135,8 +135,14 @@ export function SidebarViewMenu(props: {
                 className="sidebar-view-menu__item"
                 onClick={() => {
                   projectIndex.onToggle();
-                  // Turning it on may leave it undrawn; say so in place.
+                  // Turning it on may leave it undrawn; say so in place. The
+                  // column renders with this click's commit, so read why on
+                  // the next frame, once it is in the DOM.
                   setIndexReason(undefined);
+                  const readReason = projectIndex.unavailableReason;
+                  if (readReason) {
+                    requestAnimationFrame(() => setIndexReason(readReason()));
+                  }
                 }}
               >
                 <span className="sidebar-view-menu__check" aria-hidden="true">

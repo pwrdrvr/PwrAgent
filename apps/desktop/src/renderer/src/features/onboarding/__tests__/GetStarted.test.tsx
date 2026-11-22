@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AcpAgentSettingsEntry, BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { DesktopBootInfo, DesktopSettingsSnapshot } from "@pwragent/shared/contracts/settings";
@@ -193,6 +193,24 @@ describe("Get started", () => {
     fireEvent.click(within(codex).getByRole("button", { name: "Cancel" }));
     expect(within(codex).getByText("Sign-in didn't finish. Nothing changed.")).toBeInTheDocument();
     expect(within(codex).getByRole("button", { name: "Try again" })).toBeInTheDocument();
+
+    // A later check that still finds no login keeps the cancelled row.
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await screen.findByRole("button", { name: "Check again" });
+    await waitFor(() => expect(desktopApi.checkCodexAuthProfileStatus).toHaveBeenCalledTimes(2));
+    expect(within(agentRow("Codex")).getByText("Sign-in didn't finish. Nothing changed.")).toBeInTheDocument();
+    expect(within(agentRow("Codex")).getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+
+  it("reports both discovery failures, not only the last", async () => {
+    const desktopApi = api({
+      refreshCodexDiscovery: vi.fn(async () => { throw new Error("Codex discovery failed"); }),
+      listAcpAgents: vi.fn(async () => { throw new Error("ACP discovery failed"); }),
+    } as Partial<DesktopApi>);
+    renderGetStarted({ desktopApi });
+    const status = await screen.findByText(/discovery failed/);
+    expect(status).toHaveTextContent("Codex discovery failed");
+    expect(status).toHaveTextContent("ACP discovery failed");
   });
 
   it("turns on an installed agent that is off, through its own setting", async () => {
@@ -212,15 +230,37 @@ describe("Get started", () => {
     // A packaged build opens the new profile; dev mode can only quit.
     vi.stubEnv("DEV", false);
     const desktopApi = api();
-    const { settings } = renderGetStarted({ desktopApi });
+    const { settings, onComplete } = renderGetStarted({ desktopApi });
     fireEvent.click(await screen.findByRole("button", { name: "Start" }, { timeout: 2000 }));
     await waitFor(() => expect(desktopApi.openPwrAgentProfile).toHaveBeenCalledWith({ profile: "default" }));
     expect(settings.writeConfig).toHaveBeenCalledWith({ general: { codexProfileModel: "shared" } });
     expect(desktopApi.createPwrAgentProfile).toHaveBeenCalledWith({ profile: "default", seedOnboardingCompleted: true });
     expect(desktopApi.createCodexAuthProfile).not.toHaveBeenCalled();
     expect(desktopApi.graduateBootstrapConfigToProfile).toHaveBeenCalledWith({ targetProfile: "default" });
-    // The new window never reported alive, so this one stays open.
+    // The new window never reported alive, so this one stays open, with
+    // the page closed over it: the profile exists, so Start can't run again.
+    await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
     expect(desktopApi.quitApp).not.toHaveBeenCalled();
+  });
+
+  it("leaves the page up while a bootstrap window that handed off quits", async () => {
+    vi.stubEnv("DEV", false);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const desktopApi = api({
+        waitForProfileAlive: vi.fn(async () => ({ profile: "default", alive: true, waitedMs: 5 })),
+      } as Partial<DesktopApi>);
+      const { onComplete } = renderGetStarted({ desktopApi });
+      await screen.findByRole("button", { name: "Check again" });
+      fireEvent.click(screen.getByRole("button", { name: "Start" }));
+      await waitFor(() => expect(desktopApi.waitForProfileAlive).toHaveBeenCalled());
+      // The grace period for the new window to paint.
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+      await waitFor(() => expect(desktopApi.quitApp).toHaveBeenCalledOnce());
+      expect(onComplete).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("confirms a profile the launch named, then gives it its own Codex login by default", async () => {
@@ -262,6 +302,43 @@ describe("Get started", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Back to setup" }));
     expect(screen.queryByRole("dialog", { name: "Skip setup?" })).not.toBeInTheDocument();
     expect(onDismiss).not.toHaveBeenCalled();
+  });
+
+  it("rechecks agents on window focus only while nothing is ready or after a setup step opens", async () => {
+    let focus: () => void = () => undefined;
+    const desktopApi = api({
+      onWindowFocus: vi.fn((listener: () => void) => {
+        focus = listener;
+        return () => undefined;
+      }),
+    } as Partial<DesktopApi>);
+    renderGetStarted({ desktopApi });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Start" })).toBeEnabled());
+    expect(desktopApi.listAcpAgents).toHaveBeenCalledOnce();
+    await screen.findByRole("button", { name: "Check again" });
+    // Codex is ready; Claude Code is not installed and nobody asked about it.
+    await act(async () => { focus(); });
+    expect(desktopApi.listAcpAgents).toHaveBeenCalledOnce();
+    fireEvent.click(within(agentRow("Claude Code")).getByRole("button", { name: "Install" }));
+    await act(async () => { focus(); });
+    await waitFor(() => expect(desktopApi.listAcpAgents).toHaveBeenCalledTimes(2));
+    await screen.findByRole("button", { name: "Check again" });
+  });
+
+  it("names the Codex login a skipped named profile gets, even before its choice is shown", async () => {
+    const desktopApi = api();
+    renderGetStarted({
+      desktopApi,
+      bootInfo: { mode: "bootstrap", decisionKind: "missing-named-profile", requestedProfileName: "work" },
+    });
+    // Still on the name confirmation, which hides the login choice.
+    fireEvent.click(screen.getByRole("button", { name: "Close setup" }));
+    const dialog = screen.getByRole("dialog", { name: "Skip setup?" });
+    expect(dialog).toHaveTextContent("with its own Codex login, which you sign in to after setup.");
+    expect(dialog).not.toHaveTextContent("the Codex login you chose");
+    await screen.findByRole("button", { name: "Back to setup" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Back to setup" }));
+    await screen.findByRole("button", { name: "Set up work" });
   });
 
   it("closes a replay on Escape", async () => {

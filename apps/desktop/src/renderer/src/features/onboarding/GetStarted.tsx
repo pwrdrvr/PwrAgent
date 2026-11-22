@@ -124,11 +124,11 @@ export function GetStarted(props: {
           console.warn(`Get started: graduateBootstrapConfigToProfile failed for "${target}"`, caught);
         }
       }
-      await openProfileAndQuitBootstrap(api, target, inBootstrapMode);
-      // Still here: the new window never reported in. The profile exists,
-      // so a second Start would only fail; close this page and leave the
-      // bootstrap window up as the fallback.
-      await props.onComplete();
+      const handedOff = await openProfileAndQuitBootstrap(api, target, inBootstrapMode);
+      // Not handed off: the new window never reported in, or could not
+      // open. The profile exists, so a second Start would only fail; close
+      // this page and leave the bootstrap window up as the fallback.
+      if (!handedOff) await props.onComplete();
     },
     [inBootstrapMode, props],
   );
@@ -262,6 +262,7 @@ export function GetStarted(props: {
         {dismissModalOpen ? (
           <DismissConfirmModal
             profileName={requestedName}
+            separateLogin={separateLogin}
             submitting={submitting}
             onCancel={() => setDismissModalOpen(false)}
             onContinueWithoutAgent={() => void start({ withoutAgent: true })}
@@ -292,13 +293,16 @@ export function bootstrapProvisionProfileName(
  * Opens the new profile's window, then quits this bootstrap instance once
  * that window reports it is alive. Leaving the bootstrap open on a timeout
  * keeps a window on screen if the new one never comes up.
+ *
+ * Resolves `true` once this instance has asked to quit, so the caller
+ * leaves the page up for the moment before the window closes.
  */
 async function openProfileAndQuitBootstrap(
   api: DesktopApi,
   targetProfile: string,
   inBootstrapMode: boolean,
-): Promise<void> {
-  if (!api.openPwrAgentProfile) return;
+): Promise<boolean> {
+  if (!api.openPwrAgentProfile) return false;
   // Messaging adapters hold exclusive upstream connections; release them
   // before another process opens the same profile.
   if (api.shutdownMessagingRuntime) {
@@ -316,36 +320,45 @@ async function openProfileAndQuitBootstrap(
       `Get started: profile "${targetProfile}" is ready. Dev mode can't open a second app `
         + `instance, so PwrAgent will exit now. Relaunch with \`pnpm dev\` to open it.`,
     );
-    await api.quitApp?.().catch((caught: unknown) => {
+    if (!api.quitApp) return false;
+    try {
+      await api.quitApp();
+      return true;
+    } catch (caught) {
       console.warn("Get started: quitApp after setup (dev) failed", caught);
-    });
-    return;
+      return false;
+    }
   }
   try {
     await api.openPwrAgentProfile({ profile: targetProfile });
   } catch (caught) {
     console.warn(`Get started: failed to open "${targetProfile}"`, caught);
-    return;
+    return false;
   }
-  if (!inBootstrapMode) return;
+  if (!inBootstrapMode) return false;
   if (api.waitForProfileAlive) {
     try {
       const result = await api.waitForProfileAlive({ profile: targetProfile, timeoutMs: 10_000 });
       if (!result.alive) {
         console.warn(`Get started: "${targetProfile}" didn't report alive in time; keeping this window open`);
-        return;
+        return false;
       }
     } catch (caught) {
       console.warn("Get started: waitForProfileAlive failed; keeping this window open", caught);
-      return;
+      return false;
     }
   }
   // The new window still has to fetch and paint its renderer after its
   // heartbeat appears. In dev that comes from Vite, which quits with us.
   await new Promise((resolve) => setTimeout(resolve, 2_000));
-  await api.quitApp?.().catch((caught: unknown) => {
+  if (!api.quitApp) return false;
+  try {
+    await api.quitApp();
+    return true;
+  } catch (caught) {
     console.warn("Get started: quitApp after opening the profile failed", caught);
-  });
+    return false;
+  }
 }
 
 /* ----------------------------------------------------------------
@@ -513,6 +526,8 @@ type AgentsModel = {
   codexSignIn: CodexSignInState;
   startCodexSignIn: () => Promise<void>;
   cancelCodexSignIn: () => void;
+  /** The user opened an install or sign-in step outside this window. */
+  noteSetupStep: () => void;
 };
 
 function desktopPlatform(platform?: string): DesktopPlatform {
@@ -559,12 +574,16 @@ function useGetStartedAgents(params: {
       setCodexSignIn({ kind: "signed-in" });
       return;
     }
-    setCodexSignIn((current) => current.kind === "waiting" ? current : { kind: "checking" });
+    // A sign-in still open in the browser, or one the user cancelled, keeps
+    // its row until a check finds the login; a recheck says nothing new.
+    const keep = (current: CodexSignInState): boolean => current.kind === "waiting"
+      || (current.kind === "signed-out" && current.cancelled === true);
+    setCodexSignIn((current) => keep(current) ? current : { kind: "checking" });
     try {
       const result = await api.checkCodexAuthProfileStatus({ profile: "" });
       setCodexSignIn((current) => result.authenticated
         ? { kind: "signed-in", email: result.email, planType: result.planType }
-        : current.kind === "waiting"
+        : keep(current)
           ? current
           : { kind: "signed-out", detail: result.detail });
     } catch (caught) {
@@ -597,14 +616,16 @@ function useGetStartedAgents(params: {
       } else {
         await currentSettings.refresh();
       }
+      const errors: string[] = [];
+      if (codexResult.status === "rejected") errors.push(String(codexResult.reason));
       if (acpResult.status === "fulfilled") {
         setAcpEntries(acpResult.value?.entries ?? []);
-        if (acpResult.value?.error) setError(acpResult.value.error);
+        if (acpResult.value?.error) errors.push(acpResult.value.error);
       } else {
         setAcpEntries((current) => current ?? []);
-        setError(String(acpResult.reason));
+        errors.push(String(acpResult.reason));
       }
-      if (codexResult.status === "rejected") setError(String(codexResult.reason));
+      if (errors.length > 0) setError(errors.join(" "));
       window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
       await checkCodexSignIn();
     } finally {
@@ -621,19 +642,27 @@ function useGetStartedAgents(params: {
   }, [refresh]);
 
   // Coming back to the window is the moment after an install or a browser
-  // sign-in. Discovery starts every agent's CLI, so it runs only while some
-  // row still waits on one of those.
+  // sign-in. Discovery starts every agent's CLI, so it runs only while no
+  // agent is ready yet, or after the user opened one of those steps. An
+  // uninstalled agent nobody asked about is not a reason to recheck.
   const recheckOnFocusRef = useRef(false);
+  const setupStepOpenedRef = useRef(false);
+  const noteSetupStep = useCallback((): void => {
+    setupStepOpenedRef.current = true;
+  }, []);
   useEffect(() => {
     if (!desktopApi?.onWindowFocus) return undefined;
     return desktopApi.onWindowFocus(() => {
-      if (recheckOnFocusRef.current) void refresh();
+      // The setup-step flag is read here, not folded in at render: opening
+      // a row's install step re-renders only that row.
+      if (recheckOnFocusRef.current || setupStepOpenedRef.current) void refresh();
     });
   }, [desktopApi, refresh]);
 
   const startCodexSignIn = useCallback(async (): Promise<void> => {
     const api = apiRef.current;
     if (!api?.startCodexAuthProfileLogin) return;
+    setupStepOpenedRef.current = true;
     setCodexSignIn({ kind: "starting" });
     try {
       // This computer's own login: the empty profile is `~/.codex/`.
@@ -689,8 +718,7 @@ function useGetStartedAgents(params: {
   }), [acpEntries, backends, codexSignIn, optimisticEnabled, refreshing, separateLogin, snapshot]);
 
   recheckOnFocusRef.current = codexSignIn.kind === "waiting"
-    || rows.some((row) => row.state.kind !== "ready" && row.state.kind !== "checking"
-      && (row.definition.primary || row.state.kind !== "not-installed"));
+    || !canStartWithAgents(rows.map((row) => row.state));
 
   return {
     rows,
@@ -701,6 +729,7 @@ function useGetStartedAgents(params: {
     codexSignIn,
     startCodexSignIn,
     cancelCodexSignIn,
+    noteSetupStep,
   };
 }
 
@@ -829,7 +858,10 @@ function AgentRowView(props: {
         className="get-started__btn get-started__btn--ghost"
         aria-expanded={expanded}
         aria-controls={panelId}
-        onClick={() => setExpanded(!expanded)}
+        onClick={() => {
+          if (!expanded) props.agents.noteSetupStep();
+          setExpanded(!expanded);
+        }}
       >
         Install
       </button>
@@ -863,7 +895,10 @@ function AgentRowView(props: {
         type="button"
         className="get-started__btn get-started__btn--primary"
         disabled={props.claudeSignIn.signingIn}
-        onClick={props.claudeSignIn.onSignIn}
+        onClick={() => {
+          props.agents.noteSetupStep();
+          props.claudeSignIn?.onSignIn?.();
+        }}
       >
         {props.claudeSignIn.signingIn ? "Waiting for sign-in…" : "Sign in"}
       </button>
@@ -873,7 +908,10 @@ function AgentRowView(props: {
         className="get-started__btn get-started__btn--ghost"
         aria-expanded={expanded}
         aria-controls={panelId}
-        onClick={() => setExpanded(!expanded)}
+        onClick={() => {
+          if (!expanded) props.agents.noteSetupStep();
+          setExpanded(!expanded);
+        }}
       >
         Sign in
       </button>
@@ -1111,6 +1149,8 @@ function CodexLoginChoice(props: {
 function DismissConfirmModal(props: {
   /** The profile the launch asked for, if any. */
   profileName?: string;
+  /** Which Codex login that profile gets; its confirm step may hide the choice. */
+  separateLogin: boolean;
   submitting: boolean;
   onCancel: () => void;
   onContinueWithoutAgent: () => void;
@@ -1139,8 +1179,12 @@ function DismissConfirmModal(props: {
         {props.profileName ? (
           <p className="get-started__dismiss-prose">
             PwrAgent will create the <code>{props.profileName}</code> profile
-            with the Codex login you chose. You can set up agents later in
-            Settings.
+            {props.separateLogin ? (
+              <> with its own Codex login, which you sign in to after setup.</>
+            ) : (
+              <> with this computer&rsquo;s Codex login at <code>~/.codex/</code>.</>
+            )}{" "}
+            You can set up agents later in Settings.
           </p>
         ) : (
           <>
