@@ -69,20 +69,26 @@ PwrGit's open questions 1 and 2.
 | Merge: `PUT /repos/{o}/{r}/pulls/{n}/merge-async` merges up to that PR, choosing between `merge_queue` and `direct_merge` | `merge.go`, `merge_async.go` | The linked-stack merge regime (§8) |
 | Auto-merge is disabled on stacked PRs by `submit`; `link` rejects PRs that have it | `submit.go`, `link.go` | The P0 merge guard (§6.3) |
 
-## 3. Decision: one engine, two hosts
+## 3. Decision: PwrAgent keeps its own copy of the engine
 
 | Option | Verdict |
 |---|---|
 | A. PwrAgent orchestrates PwrGit's MCP `plan/apply` | Rejected. PwrGit is optional, desktop-only and must be running, while PwrAgent owners also run headless and as Outposts. The handshake would straddle two processes. Consent would happen twice. And PwrGit never session-grants `.publish`, so every automated sync would wait on a dialog in an app nobody is looking at. PwrAgent's main process doesn't call PwrGit tools today: `PwrGitConnectionService` only relays them to agents. |
-| B. PwrAgent ships its own engine | Rejected. Two implementations of the squash boundary and the patch-id proof would diverge in the cases that matter (see gh-stack #586). |
-| C. Both, with a fallback | Rejected. The costs of A and B together, plus behaviour that depends on whether PwrGit is running. |
-| **D. One engine as a package, linked by both** | **Recommended.** |
+| B. One engine as a shared package, linked by both apps | Rejected. The engine is a few thousand lines. Publishing, versioning and releasing a cross-repository package costs more than keeping two copies, and it would make each app's release wait on the other's. |
+| C. Both, with a fallback | Rejected. Behaviour would depend on whether PwrGit is running. |
+| **D. Copy the engine into PwrAgent** | **Recommended.** |
 
-PwrGit factors its plan/apply engine out of `main/git` into
-`@pwrdrvr/stack-engine`, with no Electron dependency. It has two ports:
+PwrAgent ports PwrGit's engine design (#646 §4) into
+`packages/owner-core/src/stacks/engine/` and owns that copy. Whichever app
+implements it first, the other copies the code. After that, each repository
+fixes its own copy. Divergence is allowed. The tests in §11 keep both copies
+honest against the same outside oracle, gh stack v0.3.0, and the same #586
+fixture.
+
+The copy talks to Git and to gh stack's catalog through two ports:
 
 ```ts
-interface GitRunner {           // PwrAgent: runGitCommand + bundled Git
+interface GitRunner {           // runGitCommand + bundled Git, in apps/desktop main
   run(cwd: string, args: string[], opts?: { stdin?: string }): Promise<GitResult>;
 }
 interface CatalogStore {        // gh stack's flock protocol (§2)
@@ -92,24 +98,28 @@ interface CatalogStore {        // gh stack's flock protocol (§2)
 }
 ```
 
-Its API is PwrGit's §4: `plan(op) → StackPlan` (replay + merge-tree forecast,
-patch-id proof, dirty preflight, `expectedTips`), `apply(plan, hooks)` (undo
-refs, one `update-ref --stdin` transaction, `reset --keep` per worktree, catalog
-write), and `undo(opId)`. `hooks.beforeTransaction` is where PwrAgent's
+Its API follows PwrGit's §4: `plan(op) → StackPlan` (replay + merge-tree
+forecast, patch-id proof, dirty preflight, `expectedTips`), `apply(plan, hooks)`
+(undo refs, one `update-ref --stdin` transaction, `reset --keep` per worktree,
+catalog write), and `undo(opId)`. `hooks.beforeTransaction` is where the
 coordinator re-plans after the threads are held (§5).
 
-PwrGit and PwrAgent interoperate through files, not calls: the catalog and its
-locks, the op journal `$GIT_COMMON_DIR/pwrgit-stack-op.json`, and
-`refs/pwrgit/undo/<op>/*`. PwrGit can undo an operation PwrAgent ran, and the
-reverse. Version skew between the two apps is safe for the same reason gh stack
-can be a third writer: every apply is a compare-and-swap against expected tips.
+**Interoperating without shared code.** PwrAgent, PwrGit and gh stack share only
+gh stack's catalog and its two `flock` locks, so any one of them serializes
+against the others. Each app keeps its own journal and undo refs:
+`$GIT_COMMON_DIR/pwragent-stack-op.json` and `refs/pwragent/undo/<op>/*` here,
+PwrGit's `pwrgit-stack-op.json` and `refs/pwrgit/undo/*` there. Each app treats
+the other's journal, while it exists, the way it treats gh stack's: the clone is
+busy (`gh_stack_busy`, naming the app). Every apply is a compare-and-swap
+against expected tips, so a stack moved by another tool is replanned, never
+overwritten.
 
-Layering: the engine is a dependency of `packages/owner-core`. The `GitRunner`
-adapter lives in `apps/desktop` main. Health and inference are pure functions in
-`packages/shared` so the renderer, main and Outpost compute the same answer. The
-renderer gets everything else over IPC. `.dependency-cruiser.cjs` is unchanged.
-
-Cost: PwrAgent's P1 depends on PwrGit's P1 shipping the package.
+Layering: the engine lives in `packages/owner-core`, which already holds
+host-independent owner services and ports. The `GitRunner` adapter lives in
+`apps/desktop` main. Health and inference are pure functions in
+`packages/shared`, so the renderer, main and Outpost compute the same answer.
+The renderer gets everything else over IPC. `.dependency-cruiser.cjs` is
+unchanged.
 
 ## 4. State
 
@@ -196,7 +206,7 @@ type StackNotice = {
   proof: { patchIdsMatch: true; dropped: string[] };
   worktree: { followed: "reset --keep" | "not checked out"; keptDirty: string[] };
   interruptedBy?: "operator";
-  undo: string;                  // refs/pwrgit/undo/<opId>
+  undo: string;                  // refs/pwragent/undo/<opId>
 };
 ```
 
@@ -425,7 +435,7 @@ has each one.
 |---|---|
 | Conflict in another thread's layer | The plan stops before that layer, and nothing moves. The operator or the caller chooses: apply only the clean layers below; route the conflict to the owning thread with `send_message_to_thread` (the conflicting commit, the files, and the parent change), which resolves it with a real `rebase --onto` in its own worktree and calls `manage_stack_operation continue`, after which the rest re-plans from its tip; or abort. If the owner is archived, the lead resolves it in a disposable worktree. |
 | Two agents race | Applies serialize on the repository's `PerKeyAsyncLock`, then compare-and-swap in `update-ref`. The loser gets `stale_plan` with the refs that moved. A re-plan with an unchanged forecast applies once on its own. A changed one goes back to the caller. |
-| gh stack mid-operation | A journal present, or the operation lock contended, gives `gh_stack_busy` naming the worktree. PwrAgent never breaks a `flock` or deletes a journal. |
+| gh stack or PwrGit mid-operation | A gh stack journal or PwrGit's `pwrgit-stack-op.json` present, or the operation lock contended, gives `gh_stack_busy`, naming the tool and the worktree. PwrAgent never breaks a `flock` or deletes a journal. |
 | Remote moved | If local is an ancestor of remote, the plan fast-forwards first. If they diverged, it's `remote_diverged`: nothing is pushed, and the layer thread is asked to integrate the remote commits. |
 | Lease fails | `--atomic` means nothing moved on GitHub. Re-fetch and re-plan the push steps, with a new approval if the push list changed. |
 | Quit mid-operation | Journal replay (§5). |
@@ -458,7 +468,10 @@ Per [property-model-oracle-testing.md](../property-model-oracle-testing.md):
   refuse, and never makes it break the lock. The #586 shape reuses
   `scripts/diagnostics/gh-stack-stale-boundary`. Skipped, with a visible reason,
   where the extension isn't installed.
-- **Engine tests** live with the package, as PwrGit #646 §8 specifies.
+- **Engine tests** come with the copy: PwrGit #646 §8's model test, atomicity
+  fault injection, forecast soundness and the #586 regression run against
+  PwrAgent's copy in `packages/owner-core`. They are what keeps the two copies
+  honest without shared code.
 
 ## 12. SQLite write budget
 
@@ -477,16 +490,15 @@ estimate.
 | Phase | Ships | Gate |
 |---|---|---|
 | P0 | Catalog reader, health and inference in `packages/shared`; position chips, tray spine, PR rail card, Star Map edges; `list_stacks`; the `stack_parent_open` merge and auto-merge guard; the stacked guidance sentence | No engine needed. The merge-guard property test fails on `main` first. |
-| P1 | `plan`/`apply` for `restack`, `add_branch`, `adopt`, `remove`; the coordinator and handshake; notices; undo | PwrGit ships `@pwrdrvr/stack-engine`. Coordinator model test. |
+| P1 | `plan`/`apply` for `restack`, `add_branch`, `adopt`, `remove`; the coordinator and handshake; notices; undo | The engine copied into `owner-core` with #646 §8's model and atomicity tests. Coordinator model test. |
 | P2 | `submit`, `sync`, automatic dependencies, `stack_publish` with approval, Stack API link with 404 fallback | gh stack oracle tests. Stack API confirmed for the org. |
 | P3 | Drag-to-plan reorder, `move_onto`, `fold`, `merge` in both regimes | PwrGit's forecast-soundness property. |
 
 ## 14. Open questions
 
-1. Is the engine package published from the PwrGit repository to npm, or
-   vendored? Either way it is MIT and first-party; see
-   [third-party-license-notices.md](../third-party-license-notices.md) for the
-   check that still applies.
+1. Which app builds the engine first? The other copies it, so the first one
+   should land with the model, atomicity and gh stack oracle tests the second
+   copy will reuse.
 2. Is GitHub's Stack API (`/stacks`, `merge-async`) enabled for the org? A 404
    from the list call means it isn't.
 3. Should a notice to an idle thread ever start a turn? The proposal is no.

@@ -310,51 +310,51 @@
 
       <!-- ================================================================ TURN 1 -->
       <section class="dv-turn" id="t1" data-screen-label="Turn 1 Who runs the engine">
-        <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Who runs the engine: one engine, two hosts</span></div>
-        <p class="dv-sub">The stack engine is the riskiest code in either product: squash boundaries, patch-id proofs, ref transactions, worktree follow. Two copies would drift on exactly the cases that matter. gh-stack’s own #586 took a fix to choose between two plausible base candidates. So there is one engine. The question is how PwrAgent reaches it. Today PwrAgent’s main process <b>never</b> calls a <code>pwrgit_*</code> tool. <code>PwrGitConnectionService</code> only relays PwrGit’s tools to agents, and PwrGit approves each session in its own window.</p>
+        <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Who runs the engine: PwrAgent keeps its own copy</span></div>
+        <p class="dv-sub">The stack engine covers squash boundaries, patch-id proofs, ref transactions and worktree follow. It runs to a few thousand lines, which is too small to justify a shared library that both apps would have to publish, version and release in step. So PwrAgent <b>copies</b> PwrGit’s engine design into its own owner, and owns that copy. The three tools interoperate through files on disk, never through calls. Today PwrAgent’s main process <b>never</b> calls a <code>pwrgit_*</code> tool. <code>PwrGitConnectionService</code> only relays PwrGit’s tools to agents.</p>
         <div class="dv-opts">
           <div class="dv-opt" id="1a" data-screen-label="1a Options">
             <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a>The options, and what each costs</div>
             <div class="tbl" style="width: 760px">
               <div class="tr head" style="grid-template-columns: 190px 100px minmax(0, 1fr)"><span>Option</span><span>Verdict</span><span>Why</span></div>
               <div class="tr" style="grid-template-columns: 190px 100px minmax(0, 1fr)"><span><b>A. Orchestrate PwrGit’s MCP</b><br /><code>pwrgit_stack_plan/apply</code></span><span><span class="verdict bug">Rejected</span></span><span>PwrGit is optional, desktop-only and must be running, but PwrAgent owners also run headless and as Outposts on Linux. The handshake would straddle two processes: PwrAgent pauses threads, PwrGit moves their worktrees. Consent would happen twice, once in PwrGit’s window and once in PwrAgent or Slack. And <code>.publish</code> can never be session-granted there, so every automated sync after a merge would wait on a PwrGit dialog nobody is watching.</span></div>
-              <div class="tr" style="grid-template-columns: 190px 100px minmax(0, 1fr)"><span><b>B. PwrAgent ships its own engine</b></span><span><span class="verdict bug">Rejected</span></span><span>Two implementations of the squash boundary, the patch-id proof and the worktree follow, tested separately and diverging in the cases nobody tested. A stack restacked by PwrGit and then by PwrAgent could disagree about <code>base</code>.</span></div>
-              <div class="tr" style="grid-template-columns: 190px 100px minmax(0, 1fr)"><span><b>C. Both, with a fallback</b></span><span><span class="verdict bug">Rejected</span></span><span>The costs of A and B together, plus behaviour that changes depending on whether PwrGit happens to be running. A conflict forecast would depend on which engine answered.</span></div>
-              <div class="tr" style="grid-template-columns: 190px 100px minmax(0, 1fr)"><span><b>D. One engine as a package, two hosts</b><br /><code>@pwrdrvr/stack-engine</code></span><span><span class="verdict keep">Recommended</span></span><span>PwrGit factors its plan/apply engine out of <code>main/git</code> into a package with no Electron dependency. It talks to git through a <code>GitRunner</code> port and to the catalog through a <code>CatalogStore</code> port. PwrGit’s MCP tools and PwrAgent’s owner both link it. They interoperate through on-disk state (gh stack’s catalog and locks, the op journal, <code>refs/pwrgit/undo/*</code>), never through an IPC call. Each host keeps its own consent model.</span></div>
+              <div class="tr" style="grid-template-columns: 190px 100px minmax(0, 1fr)"><span><b>B. A shared package</b><br />linked by both apps</span><span><span class="verdict bug">Rejected</span></span><span>The engine is a few thousand lines. Publishing, versioning and releasing a cross-repository package costs more than keeping two copies, and it would make each app’s release wait on the other’s.</span></div>
+              <div class="tr" style="grid-template-columns: 190px 100px minmax(0, 1fr)"><span><b>C. Both, with a fallback</b></span><span><span class="verdict bug">Rejected</span></span><span>Behaviour would change depending on whether PwrGit happens to be running. A conflict forecast would depend on which engine answered.</span></div>
+              <div class="tr" style="grid-template-columns: 190px 100px minmax(0, 1fr)"><span><b>D. Copy the engine into PwrAgent</b><br /><code>owner-core/src/stacks/engine</code></span><span><span class="verdict keep">Recommended</span></span><span>Whichever app builds the engine first, the other copies the code. After that, each repository fixes its own copy. The copy talks to git through a <code>GitRunner</code> port and to the catalog through a <code>CatalogStore</code> port. Each app keeps its own journal and undo refs.</span></div>
             </div>
-            <p class="note"><b>The cost of D:</b> PwrGit’s P1 has to land the engine as a package, and PwrAgent’s P1 waits on it. Version skew between the two apps is safe because they agree on the files, not on code. gh stack is already a third writer to those files, and every apply is a compare-and-swap against expected tips.</p>
+            <p class="note"><b>What keeps two copies honest:</b> the same outside oracle. Both run PwrGit #646’s model and atomicity tests, gh stack v0.3.0 interop, and the #586 fixture. Divergence is allowed, so a fix lands in one copy without waiting for the other. Every apply is a compare-and-swap against expected tips, so a stack another tool moved is replanned, never overwritten.</p>
           </div>
           <div class="dv-opt" id="1b" data-screen-label="1b Topology">
             <div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a>Where each piece lives</div>
             <div class="stage" style="width: 520px">
-              <svg width="484" height="330" viewBox="0 0 484 330" role="img" aria-label="Topology. PwrGit app and PwrAgent owner both link the stack engine package. The engine reads and writes shared state in the common git dir: the gh stack catalog and locks, the op journal, and undo refs. gh stack CLI also writes the catalog. PwrAgent adds the thread coordinator and the forge policy gate.">
-                <rect x="10" y="10" width="200" height="104" rx="8" fill="#101010" stroke="rgba(247,243,235,.14)" />
+              <svg width="484" height="330" viewBox="0 0 484 330" role="img" aria-label="Topology. PwrGit and PwrAgent each carry their own copy of the stack engine. They share only gh stack's catalog and its two flock locks in the common git dir, which gh stack itself also writes. Each app keeps its own op journal and undo refs and treats the other's journal as busy.">
+                <rect x="10" y="10" width="200" height="132" rx="8" fill="#101010" stroke="rgba(247,243,235,.14)" />
                 <text x="24" y="32" fill="#f7f3eb" font-family="Geist, sans-serif" font-size="12" font-weight="650">PwrGit app</text>
                 <text x="24" y="52" fill="#b8b0a5" font-family="Geist Mono, monospace" font-size="10">pwrgit_stack_* MCP tools</text>
-                <text x="24" y="68" fill="#b8b0a5" font-family="Geist Mono, monospace" font-size="10">consent sheet (its window)</text>
-                <text x="24" y="84" fill="#b8b0a5" font-family="Geist Mono, monospace" font-size="10">Stacks sidebar, stack view</text>
-                <rect x="274" y="10" width="200" height="104" rx="8" fill="#120800" stroke="rgba(255,138,31,.42)" />
+                <text x="24" y="68" fill="#b8b0a5" font-family="Geist Mono, monospace" font-size="10">Stacks sidebar, stack view</text>
+                <rect x="24" y="82" width="172" height="44" rx="6" fill="#0a0a0a" stroke="#8c857a" />
+                <text x="34" y="100" fill="#f7f3eb" font-family="Geist Mono, monospace" font-size="10.5" font-weight="600">engine (its copy)</text>
+                <text x="34" y="116" fill="#8c857a" font-family="Geist, sans-serif" font-size="9.5">plan · prove · apply · undo</text>
+                <rect x="274" y="10" width="200" height="132" rx="8" fill="#120800" stroke="rgba(255,138,31,.42)" />
                 <text x="288" y="32" fill="#ffb35c" font-family="Geist, sans-serif" font-size="12" font-weight="650">PwrAgent owner</text>
-                <text x="288" y="52" fill="#b8b0a5" font-family="Geist Mono, monospace" font-size="10">StackCoordinator (owner-core)</text>
-                <text x="288" y="68" fill="#b8b0a5" font-family="Geist Mono, monospace" font-size="10">turn holds · notices · deps</text>
-                <text x="288" y="84" fill="#b8b0a5" font-family="Geist Mono, monospace" font-size="10">forge policy · RBAC · approvals</text>
-                <text x="288" y="100" fill="#8c857a" font-family="Geist, sans-serif" font-size="9.5">desktop main, headless, Outpost</text>
-                <rect x="112" y="152" width="260" height="56" rx="8" fill="#0a0a0a" stroke="#ff8a1f" stroke-width="1.5" />
-                <text x="242" y="176" text-anchor="middle" fill="#f7f3eb" font-family="Geist Mono, monospace" font-size="11.5" font-weight="600">@pwrdrvr/stack-engine</text>
-                <text x="242" y="194" text-anchor="middle" fill="#8c857a" font-family="Geist, sans-serif" font-size="10">plan · prove · apply · undo · health</text>
-                <path d="M110 114 L 200 152" stroke="#8c857a" stroke-width="1.5" fill="none" />
-                <path d="M374 114 L 284 152" stroke="#ff8a1f" stroke-width="1.5" fill="none" />
-                <text x="118" y="140" fill="#8c857a" font-family="Geist, sans-serif" font-size="9.5">links</text>
-                <text x="346" y="140" fill="#8c857a" font-family="Geist, sans-serif" font-size="9.5">links</text>
-                <rect x="10" y="242" width="464" height="78" rx="8" fill="none" stroke="rgba(247,243,235,.2)" stroke-dasharray="4 4" />
-                <text x="24" y="262" fill="#8c857a" font-family="Geist, sans-serif" font-size="9.5" font-weight="700" letter-spacing=".8">$GIT_COMMON_DIR · SHARED BY EVERY THREAD WORKTREE</text>
-                <text x="24" y="282" fill="#b8b0a5" font-family="Geist Mono, monospace" font-size="10">gh-stack  gh-stack.lock  gh-stack-operation.lock</text>
-                <text x="24" y="298" fill="#b8b0a5" font-family="Geist Mono, monospace" font-size="10">pwrgit-stack-op.json  refs/pwrgit/undo/&lt;op&gt;/*</text>
-                <text x="24" y="314" fill="#8c857a" font-family="Geist Mono, monospace" font-size="10">gh stack CLI writes here too (third writer)</text>
-                <path d="M242 208 L 242 242" stroke="#ff8a1f" stroke-width="1.5" fill="none" />
+                <text x="288" y="52" fill="#b8b0a5" font-family="Geist Mono, monospace" font-size="10">StackCoordinator · holds</text>
+                <text x="288" y="68" fill="#b8b0a5" font-family="Geist Mono, monospace" font-size="10">notices · deps · forge policy</text>
+                <rect x="288" y="82" width="172" height="44" rx="6" fill="#0a0a0a" stroke="#ff8a1f" stroke-width="1.5" />
+                <text x="298" y="100" fill="#f7f3eb" font-family="Geist Mono, monospace" font-size="10.5" font-weight="600">engine (its copy)</text>
+                <text x="298" y="116" fill="#8c857a" font-family="Geist, sans-serif" font-size="9.5">owner-core/src/stacks/engine</text>
+                <path d="M196 104 H 288" stroke="#8c857a" stroke-width="1.2" stroke-dasharray="4 4" fill="none" />
+                <text x="208" y="96" fill="#8c857a" font-family="Geist, sans-serif" font-size="9.5">code copied once</text>
+                <path d="M110 142 L 160 196 M374 142 L 324 196" stroke="#8c857a" stroke-width="1.5" fill="none" />
+                <rect x="10" y="196" width="464" height="124" rx="8" fill="none" stroke="rgba(247,243,235,.2)" stroke-dasharray="4 4" />
+                <text x="24" y="216" fill="#8c857a" font-family="Geist, sans-serif" font-size="9.5" font-weight="700" letter-spacing=".8">$GIT_COMMON_DIR · SHARED BY EVERY THREAD WORKTREE</text>
+                <text x="24" y="238" fill="#f7f3eb" font-family="Geist Mono, monospace" font-size="10">gh-stack  gh-stack.lock  gh-stack-operation.lock</text>
+                <text x="24" y="254" fill="#8c857a" font-family="Geist, sans-serif" font-size="9.5">shared by all three · flock serializes them · gh stack CLI writes here too</text>
+                <text x="24" y="280" fill="#b8b0a5" font-family="Geist Mono, monospace" font-size="10">pwrgit-stack-op.json    refs/pwrgit/undo/*</text>
+                <text x="24" y="296" fill="#ffb35c" font-family="Geist Mono, monospace" font-size="10">pwragent-stack-op.json  refs/pwragent/undo/*</text>
+                <text x="24" y="312" fill="#8c857a" font-family="Geist, sans-serif" font-size="9.5">each app’s own · the other app’s journal means “busy”, like gh stack’s</text>
               </svg>
             </div>
-            <p class="note"><b>Layering.</b> The engine is a runtime dependency of <code>packages/owner-core</code>, which already holds host-independent owner services. A <code>runGitCommand</code>-backed <code>GitRunner</code> adapter lives in <code>apps/desktop</code> main, next to the bundled Git (2.56.1, so <code>git replay</code> is there everywhere). The renderer imports only <code>@pwragent/shared</code>: health and inference are pure functions there, and everything else reaches the renderer over IPC.</p>
+            <p class="note"><b>Layering.</b> The engine copy lives in <code>packages/owner-core</code>, which already holds host-independent owner services. A <code>runGitCommand</code>-backed <code>GitRunner</code> adapter lives in <code>apps/desktop</code> main, next to the bundled Git (2.56.1, so <code>git replay</code> is there everywhere). The renderer imports only <code>@pwragent/shared</code>: health and inference are pure functions there, and everything else reaches the renderer over IPC.</p>
           </div>
         </div>
       </section>
@@ -653,7 +653,7 @@
   <span class="k">"proof"</span>: { <span class="k">"patchIdsMatch"</span>: true, <span class="k">"dropped"</span>: [] },
   <span class="k">"worktree"</span>: { <span class="k">"followed"</span>: <span class="s">"reset --keep"</span>, <span class="k">"keptDirty"</span>: [] },
   <span class="k">"interruptedBy"</span>: null,
-  <span class="k">"undo"</span>: <span class="s">"refs/pwrgit/undo/op-0412"</span>
+  <span class="k">"undo"</span>: <span class="s">"refs/pwragent/undo/op-0412"</span>
 }</pre>
             <p class="note"><b><code>staleReads</code></b> intersects the files the parent change touched with the files this thread’s transcript read or edited since its last notice. That’s the line an agent actually needs: “reread this before you rely on it”. The notice also tells the agent to call <code>plan_stack_operation</code> instead of rebasing by hand, and the guidance repeats it (turn 7c).</p>
           </div>
@@ -754,10 +754,10 @@
             <div class="grid2" style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 22px">
               <div class="fitem"><span class="pin">1</span><div><h4>A conflict in another thread’s layer</h4><p>The plan stops before that layer. Options: apply only the clean layers below; route the conflict to the owning thread with <code>send_message_to_thread</code> (conflicting commit, files, and the parent change), which resolves it with a real <code>rebase --onto</code> in its own worktree and calls <code>manage_stack_operation continue</code>, after which the rest is re-planned from its tip; or abort. If the owner is archived, the lead resolves it in a disposable worktree.</p></div></div>
               <div class="fitem"><span class="pin">2</span><div><h4>Two agents racing on one stack</h4><p>Applies serialize on the existing per-common-dir <code>PerKeyAsyncLock</code> (the key <code>worktreeMutationLocks</code> uses), then compare-and-swap in <code>update-ref</code>. The loser gets <code>stale_plan</code> with the refs that moved. A re-plan whose forecast is unchanged applies once on its own. One whose forecast changed goes back to the caller.</p></div></div>
-              <div class="fitem"><span class="pin">3</span><div><h4>gh stack is mid-operation</h4><p>A <code>gh-stack-rebase-state</code>, <code>-modify-state</code> or <code>-migration</code> journal, or a contended <code>gh-stack-operation.lock</code>, refuses with <code>gh_stack_busy</code> and names the worktree. PwrAgent never breaks a <code>flock</code> and never deletes a journal. The operation lock is held only from re-plan to catalog write: milliseconds, never a turn.</p></div></div>
+              <div class="fitem"><span class="pin">3</span><div><h4>gh stack or PwrGit is mid-operation</h4><p>A <code>gh-stack-rebase-state</code>, <code>-modify-state</code> or <code>-migration</code> journal, PwrGit’s <code>pwrgit-stack-op.json</code>, or a contended <code>gh-stack-operation.lock</code>, refuses with <code>gh_stack_busy</code> and names the tool and the worktree. PwrAgent never breaks a <code>flock</code> and never deletes a journal. The operation lock is held only from re-plan to catalog write: milliseconds, never a turn.</p></div></div>
               <div class="fitem"><span class="pin">4</span><div><h4>The remote moved</h4><p>If the local tip is an ancestor of the remote one (a reviewer pushed a suggestion), the plan fast-forwards first and the worktree follows. If they really diverged, it’s <code>remote_diverged</code>. Leases never push over it. The layer thread is asked to integrate the remote commits, because it’s the one that knows them.</p></div></div>
               <div class="fitem"><span class="pin">5</span><div><h4>The lease fails at push time</h4><p><code>--atomic</code> means none of the branches moved on GitHub. PwrAgent re-fetches and re-plans. Local refs are already correct, so only the push steps are retried, and with a new approval if the push list changed.</p></div></div>
-              <div class="fitem"><span class="pin">6</span><div><h4>PwrAgent quits mid-operation</h4><p>The engine’s journal (<code>pwrgit-stack-op.json</code>) records the phase. On restart, the coordinator releases holds for an operation that hadn’t reached the transaction. After the transaction, it re-sends notices, which are idempotent by <code>opId</code>, and then releases. Holds are journalled with the operation, so a crash can’t leave a thread held forever.</p></div></div>
+              <div class="fitem"><span class="pin">6</span><div><h4>PwrAgent quits mid-operation</h4><p>The engine’s journal (<code>pwragent-stack-op.json</code>) records the phase. On restart, the coordinator releases holds for an operation that hadn’t reached the transaction. After the transaction, it re-sends notices, which are idempotent by <code>opId</code>, and then releases. Holds are journalled with the operation, so a crash can’t leave a thread held forever.</p></div></div>
             </div>
           </div>
         </div>
@@ -785,13 +785,13 @@
             <div class="tbl" style="width: 760px">
               <div class="tr head" style="grid-template-columns: 50px 300px minmax(0, 1fr)"><span>Phase</span><span>Ships</span><span>Gate</span></div>
               <div class="tr" style="grid-template-columns: 50px 300px minmax(0, 1fr)"><span class="mn">P0</span><span><b>See stacks, stop the footguns.</b> Catalog reader, health and inference in <code>packages/shared</code>; position chips, tray spine, PR rail card, Star Map edges; <code>list_stacks</code>; merge and auto-merge guards; stacked guidance sentence.</span><span>Needs no engine. Merge-guard property test fails on main first.</span></div>
-              <div class="tr" style="grid-template-columns: 50px 300px minmax(0, 1fr)"><span class="mn">P1</span><span><b>Restack across threads.</b> Plan/apply with <code>restack</code>, <code>add_branch</code>, <code>adopt</code>, <code>remove</code>; the handshake; notices; undo.</span><span>PwrGit’s P1 ships <code>@pwrdrvr/stack-engine</code>. Coordinator model test.</span></div>
+              <div class="tr" style="grid-template-columns: 50px 300px minmax(0, 1fr)"><span class="mn">P1</span><span><b>Restack across threads.</b> Plan/apply with <code>restack</code>, <code>add_branch</code>, <code>adopt</code>, <code>remove</code>; the handshake; notices; undo.</span><span>The engine copied into <code>owner-core</code> with PwrGit #646’s model and atomicity tests. Coordinator model test.</span></div>
               <div class="tr" style="grid-template-columns: 50px 300px minmax(0, 1fr)"><span class="mn">P2</span><span><b>Publish and follow merges.</b> <code>submit</code>, <code>sync</code>, automatic dependencies, <code>stack_publish</code> with approval, GitHub Stack API with 404 fallback.</span><span>gh stack oracle tests; the Stack API confirmed for the org.</span></div>
               <div class="tr" style="grid-template-columns: 50px 300px minmax(0, 1fr)"><span class="mn">P3</span><span><b>Shape the stack.</b> Drag-to-plan reorder, <code>move_onto</code>, <code>fold</code>, <code>merge</code> in both regimes.</span><span>Forecast soundness property from PwrGit.</span></div>
             </div>
           </div>
         </div>
-        <p class="dv-next"><b>Open questions:</b> (1) Is the engine package published from the PwrGit monorepo to npm, or vendored? (2) Is GitHub’s Stack API (<code>/stacks</code>, <code>merge-async</code>) enabled for the org (a 404 means no)? (3) Should a notice to an idle thread ever start a turn? The proposal is no. (4) Should approving a merge also cover its mechanical follow-through (retarget, replay, leased push of the layer above)? The proposal is yes, listed on the merge card. (5) Should one stack span instances? The proposal is no, one clone. Engineering detail is in <code>docs/design/stacked-prs.md</code>. PwrGit’s board is <a href="https://claude.ai/artifact/9vMQKXLMcp8phcnzjsJaUk#page-Stacked-PRs---UX-Review">Stacked PRs · UX Review</a>.</p>
+        <p class="dv-next"><b>Open questions:</b> (1) Which app builds the engine first? The other copies it, so the first should land with the tests the second copy reuses. (2) Is GitHub’s Stack API (<code>/stacks</code>, <code>merge-async</code>) enabled for the org (a 404 means no)? (3) Should a notice to an idle thread ever start a turn? The proposal is no. (4) Should approving a merge also cover its mechanical follow-through (retarget, replay, leased push of the layer above)? The proposal is yes, listed on the merge card. (5) Should one stack span instances? The proposal is no, one clone. Engineering detail is in <code>docs/design/stacked-prs.md</code>. PwrGit’s board is <a href="https://claude.ai/artifact/9vMQKXLMcp8phcnzjsJaUk#page-Stacked-PRs---UX-Review">Stacked PRs · UX Review</a>.</p>
       </section>
     </x-dc>
 
@@ -928,7 +928,7 @@
           ids.forEach((id) => steps.push(this.replayStep(s, id, this.parentOf(s, id) + "@new", "Objects only.")));
           steps.push({ t: "hold " + ids.length + " threads · wait for safe points", sub: "Running turns finish; nothing is interrupted.", fc: "", fcKind: "", eff: { kind: "quiesce", ids: ids } });
           steps.push({ t: "re-plan · compare-and-swap " + ids.length + " expected tips", sub: "Anything that moved during the wait is replanned, not overwritten.", fc: "", fcKind: "", eff: { kind: "verify", ids: ids } });
-          steps.push({ t: "update-ref transaction · " + ids.length + " refs", sub: "Snapshot to refs/pwrgit/undo/op-0" + s.op + ", then all or none.", fc: "", fcKind: "", eff: { kind: "txn", ids: ids } });
+          steps.push({ t: "update-ref transaction · " + ids.length + " refs", sub: "Snapshot to refs/pwragent/undo/op-0" + s.op + ", then all or none.", fc: "", fcKind: "", eff: { kind: "txn", ids: ids } });
           steps.push({ t: "worktrees follow · reset --keep · notify " + ids.length + " threads", sub: "Each moved thread gets a stack notice; holds release.", fc: "", fcKind: "", eff: { kind: "notify", ids: ids } });
           const t = this.stage("restack", steps, "Restack · " + ids.length + " layers", s.conflict ? "Forecast: windows/api conflicts. Nothing moves until that's settled." : "Forecast: clean. Nothing has moved yet.", by);
           this.pushLog(t, agent ? byArg : "Operator", "pwragent.plan_stack_operation({ stack: \"windows\", operation: \"restack\" })", "plan op-0" + s.op + " · " + ids.length + " layers · " + (s.conflict ? "forecast: 1 conflict" : "forecast: clean"));
@@ -1090,14 +1090,14 @@
           s.phase = "done"; s.at = s.steps.length;
           const k = s.kind;
           const led = {
-            restack: ["✓ forecast was merge-tree · no worktree touched while planning", "✓ no turn was interrupted · threads held at turn end", s.replanned ? "✓ a racing commit was replanned, not overwritten" : "✓ every expected tip matched at apply", "✓ patch-ids match · undo at refs/pwrgit/undo/op-0" + s.op, "· nothing pushed · publishing is a separate approval"],
+            restack: ["✓ forecast was merge-tree · no worktree touched while planning", "✓ no turn was interrupted · threads held at turn end", s.replanned ? "✓ a racing commit was replanned, not overwritten" : "✓ every expected tip matched at apply", "✓ patch-ids match · undo at refs/pwragent/undo/op-0" + s.op, "· nothing pushed · publishing is a separate approval"],
             sync: k !== "sync" ? [] : (() => { const b = s.syncFrom; const ids = s.order; const child = ids[0]; return ["✓ #" + s.pr[b] + "'s commits skipped · 0 replayed over the squash", "✓ #" + s.pr[child] + " retargeted to main before " + L[b].name + " was deleted", "✓ " + L[b].thread + " marked done · its layer left the stack", "✓ " + ids.length + " threads told what moved under them"]; })(),
             submit: ["✓ pushed atomically · each lease named its expected sha", "✓ #654 opened as a draft and attached to Next-window banner", "✓ stack #12 linked on GitHub"]
           }[k] || [];
           const nCut = Object.keys(s.interrupted || {}).length;
           if (nCut && k === "restack") led.splice(1, 1, "✓ " + nCut + " turns interrupted by the operator · each thread told why");
           if (s.localOnly) led.splice(1, 1, "· #" + s.pr[s.order[0]] + " not retargeted · " + s.order.length + " pushes not done · returned as not done");
-          if (s.partial) led.splice(0, led.length, "✓ windows/scheduler restacked", "· windows/api and windows/ui unchanged · still marked", "✓ undo at refs/pwrgit/undo/op-0" + s.op);
+          if (s.partial) led.splice(0, led.length, "✓ windows/scheduler restacked", "· windows/api and windows/ui unchanged · still marked", "✓ undo at refs/pwragent/undo/op-0" + s.op);
           s.ledger = led.map((t, i) => ({ t: t, cls: t.charAt(0) === "·" ? "n" : "", delay: i * 90 }));
           const nMoved = s.steps.filter((x) => x.eff.kind === "replay").length;
           s.toast = { restack: "Restacked " + nMoved + (nMoved === 1 ? " layer in 1 thread." : " layers across " + nMoved + " threads."), sync: k === "sync" ? "Synced: " + L[s.syncFrom].name + " is in main, and the stack is one shorter." : "", submit: "Submitted. GitHub shows stack #12." }[k] || "";
@@ -1224,7 +1224,7 @@
               (g.cut ? "Your turn was interrupted by the operator so the stack could move. PwrAgent continues this thread next. " : "") + "Stack windows was restacked by " + LEAD + " (op-0" + g.op + "). Your branch " + name + " moved to " + g.sha + ".",
               "Below you, " + L[g.from].name + " gained 1 commit: " + (g.from === "m" ? "fix: reject windows longer than 24h" : "fix: address review") + ". It touches " + FILES[g.from] + ", which your layer imports.",
               "Your " + L[id].commits + " commits replayed cleanly; patch-ids match. Your worktree followed with git reset --keep; uncommitted files kept: " + (id === "s" ? "src/scheduler/notes.md" : "none") + ".",
-              "Files you read this turn may have changed under you: reread " + FILES[g.from] + " before relying on it. Don't rebase this branch yourself. Call plan_stack_operation instead. Undo: refs/pwrgit/undo/op-0" + g.op + "."
+              "Files you read this turn may have changed under you: reread " + FILES[g.from] + " before relying on it. Don't rebase this branch yourself. Call plan_stack_operation instead. Undo: refs/pwragent/undo/op-0" + g.op + "."
             ];
           };
           const selNotice = Boolean(s.got[sel]);
