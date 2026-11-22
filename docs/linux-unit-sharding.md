@@ -8,6 +8,13 @@ costs. Desktop-main retains its fork pool and per-file isolation. Worker counts,
 test ordering within a lane, readiness checks and deadlines remain Vitest's
 existing configuration. Other projects retain Vitest's hash-based ownership.
 
+On pull requests, both the initial Linux unit step and its selective retry
+enable SQLite write accounting. The lane log shows totals and the top 15
+sources and tables for each attempt. The `linux-unit-sqlite-writes-lane-*`
+artifact holds the summaries and original JSONL for seven days. A selected
+slice that produces no SQLite writes reports that outcome. A reproducible
+write-budget assertion fails the retry and reaches the required `Test` check.
+
 ## Evidence
 
 [Main run 43949436837](https://github.com/pwrdrvr/PwrAgent/actions/runs/43949436837)
