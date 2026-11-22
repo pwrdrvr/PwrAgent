@@ -14901,10 +14901,8 @@ command = "pnpm dev"
       startThreadResult: { threadId: "monitor-thread" },
     });
     Object.assign(codexClient, { readTurnRoot: vi.fn(async () => rootTurnId) });
-    const registry = createDesktopBackendRegistry({
-      codexClient,
-      overlayStore: createOverlayStoreMock(),
-    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
     await registry.publishLocalEvent({
       backend: "codex",
       notification: {
@@ -14954,6 +14952,9 @@ command = "pnpm dev"
       monitorTurnId: "turn-1",
     });
     expect(String(payload.monitorId)).toMatch(/^monitor-/);
+    expect(await overlayStore.getThreadSubAgent({
+      backend: "codex", threadId: "thread-1", monitorId: String(payload.monitorId),
+    })).toMatchObject({ task: "Watch PR #123 checks until they finish.", displayTitle: "PR 123 CI" });
     expect(String(payload.parentAgentGuidance)).toContain("do not call generic spawnAgent");
     expect(String(payload.parentAgentGuidance)).toContain("model=gpt-5.6-luna");
     expect(String(payload.parentAgentGuidance)).toContain("exact monitoring procedure");

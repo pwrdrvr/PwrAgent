@@ -41,7 +41,7 @@ function buildThread(
 
 describe("ActiveSubAgentsStrip", () => {
   it("renders owner-projected rows without history and clears them after completion", async () => {
-    const running = buildSubAgent();
+    const running = buildSubAgent({ task: "Watch PR #123 CI until the checks finish", displayTitle: "PR 123 CI" });
     const blocked = buildSubAgent({ monitorId: "blocked", task: "Wait for approval", status: "blocked" });
     const failed = buildSubAgent({ monitorId: "failed", task: "Build package", status: "failure" });
     const stopSubAgent = vi.fn<NonNullable<DesktopApi["stopSubAgent"]>>(async (request) => ({ ...request, stoppedAt: 3 }));
@@ -50,7 +50,7 @@ describe("ActiveSubAgentsStrip", () => {
     fireEvent.click(screen.getByRole("button", { name: "Active sub-agents, 2, 1 failed" }));
     expect(screen.getByText("Blocked", { exact: true })).toBeVisible();
     expect(screen.getByRole("button", { name: "Dismiss failed sub-agent: Build package" })).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Stop sub-agent: Watch the deployment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stop sub-agent: PR 123 CI" }));
     await waitFor(() => expect(stopSubAgent).toHaveBeenCalledWith({
       backend: "codex", threadId: thread.id, monitorId: running.monitorId,
     }));
@@ -76,8 +76,7 @@ describe("ActiveSubAgentsStrip", () => {
     expect(screen.queryByText("Codex sub-agent 1d8b90cc")).not.toBeInTheDocument();
     // No name yet: the placeholder carries the id it falls back to.
     expect(screen.getByText("Codex sub-agent 7263e35b")).toBeVisible();
-    // A PwrAgent monitor keeps its task, which is what it was asked to do.
-    expect(screen.getByRole("button", { name: "Stop sub-agent: Watch the deployment" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Stop sub-agent: the deployment" })).toBeVisible();
   });
 
   describe("presence", () => {

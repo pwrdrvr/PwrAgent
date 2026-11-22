@@ -4,6 +4,7 @@ import {
   isCodexNativeSubAgent,
   isDecisionBatchSubAgent,
 } from "@pwragent/shared/subagent-kind";
+import { taskMonitorDisplayTitle } from "@pwragent/shared/task-monitor-display-title";
 import {
   type NavigationThreadSummary,
   type ThreadSubAgentSummary,
@@ -260,7 +261,7 @@ export function ActiveSubAgentsStrip(props: {
             // placeholder carries the id the name falls back to.
             const label = (isCodexNativeSubAgent(subAgent)
               ? subAgent.agentName ?? subAgent.task
-              : subAgent.task) || subAgent.monitorId;
+              : taskMonitorDisplayTitle(subAgent) ?? subAgent.task) || subAgent.monitorId;
             const canStop =
               (subAgent.status === "pending"
                 || subAgent.status === "running"
