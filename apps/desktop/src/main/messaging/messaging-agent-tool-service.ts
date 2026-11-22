@@ -25,10 +25,12 @@ export type DynamicToolPermissionCheck = {
 };
 
 export type DynamicToolPermissionResult = {
-  /** True when the tool may run. Non-messaging / legacy turns are always allowed. */
+  /** True when the messaging policy allows this tool call. */
   allowed: boolean;
   /** The permission that was required (present when denied). */
   permission?: string;
+  /** Lifecycle calls require enforcing RBAC even for admitted legacy actors. */
+  rbacNotEnforced?: true;
 };
 
 export type MessagingAgentToolService = {
@@ -43,8 +45,8 @@ export type MessagingAgentToolService = {
    * Authorize an agent dynamic-tool call against the RBAC permissions of the
    * messaging actor who started the turn. Returns `{ allowed: true }` when the
    * turn is NOT messaging-originated (a desktop-operator turn) or when RBAC is
-   * not enforcing — those keep full capability, exactly as before. Denials are
-   * audited by the messaging layer.
+   * not enforcing, except for tools that require explicit authorization.
+   * Missing grants are audited by the messaging layer.
    */
   checkDynamicToolPermission(
     check: DynamicToolPermissionCheck,

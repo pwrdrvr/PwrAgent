@@ -500,7 +500,11 @@ import {
   isPwrAgentAppDynamicToolCall,
 } from "../agent-tools/pwragent-app-codex-tools";
 import type { PwrAgentAppManagementHandler } from "../agent-tools/pwragent-app-agent-tools";
-import { authorizeAppManagement } from "../agent-tools/app-management-authorization";
+import {
+  agentToolPermissionDeniedMessage,
+  appManagementActorDenial,
+  appManagementDenial,
+} from "../agent-tools/app-management-authorization";
 import {
   handlePwrAgentThreadDynamicToolCall,
   isPwrAgentThreadDynamicToolCall,
@@ -2634,8 +2638,16 @@ export class DesktopBackendRegistry {
   private readonly appManagementCallSources = new WeakMap<object, string>();
 
   async canManagePwrAgent(context: import("@pwragent/shared/contracts/app-tools").PwrAgentAppManagementContext, discovery = false, acceptedOperation = false): Promise<boolean> {
+    return await this.appManagementPermissionDenied(context, discovery, acceptedOperation) === null;
+  }
+
+  private async appManagementPermissionDenied(
+    context: import("@pwragent/shared/contracts/app-tools").PwrAgentAppManagementContext,
+    discovery = false,
+    acceptedOperation = false,
+  ): Promise<string | null> {
     let sourceKey: string | undefined;
-    const allowed = await authorizeAppManagement({
+    const denial = await appManagementDenial({
       allowCompleted: acceptedOperation && this.appManagementCallSources.has(context),
       isActive: (caller) => Boolean(caller.backend && caller.threadId && caller.turnId
         && this.isLiveDynamicToolCall(caller.backend, { threadId: caller.threadId, turnId: caller.turnId })),
@@ -2651,14 +2663,17 @@ export class DesktopBackendRegistry {
         const bound = this.appManagementCallSources.get(context);
         return bound && bound !== sourceKey ? undefined : origin;
       },
-      authorizeActor: async (caller, origin) => Boolean(caller.backend && caller.threadId && this.messagingAgentToolService?.authorizeRetainedTool
-        && (await this.messagingAgentToolService.authorizeRetainedTool({ backend: caller.backend, threadId: caller.threadId,
-          turnId: caller.turnId, causalMessagingSource: origin.causalMessagingSource }, {
-          backend: caller.backend, threadId: caller.threadId, turnId: caller.turnId, category: "app_management", tool: "manage_pwragent",
-        })).allowed),
+      actorDenial: async (caller, origin) => {
+        if (!caller.backend || !caller.threadId) return "PwrAgent could not verify app management authorization.";
+        const identity = { backend: caller.backend, threadId: caller.threadId, turnId: caller.turnId };
+        const result = await this.messagingAgentToolService?.authorizeRetainedTool?.({
+          ...identity, causalMessagingSource: origin.causalMessagingSource,
+        }, { ...identity, category: "app_management", tool: "manage_pwragent" });
+        return appManagementActorDenial(result);
+      },
     }, context, discovery);
-    if (allowed && sourceKey && !discovery) this.appManagementCallSources.set(context, sourceKey);
-    return allowed;
+    if (denial === null && sourceKey && !discovery) this.appManagementCallSources.set(context, sourceKey);
+    return denial;
   }
 
   getAppManagementRuntimeId(): string { return this.runtimeInstanceId; }
@@ -18505,7 +18520,7 @@ export class DesktopBackendRegistry {
           return toDynamicToolResponse({
             ok: false,
             code: "forbidden",
-            message: `The messaging user who started this turn lacks permission for this tool (${denied}).`,
+            message: agentToolPermissionDeniedMessage(hostToolCall.tool, denied),
           });
         }
         backendRegistryLog.info("handling catalog dynamic tool call", {
@@ -18830,17 +18845,17 @@ export class DesktopBackendRegistry {
   /**
    * RBAC gate for agent dynamic tools. When a turn was started by a messaging
    * user, the agent acting for them may only invoke tools their role permits.
-   * Returns the required permission when the call is denied, or `null` to allow
-   * (non-messaging / legacy turns, and ungated tools, always allow). Denials
-   * are audited by the messaging layer.
+   * Returns a required permission or a lifecycle denial when the call is
+   * refused, or `null` to allow. Missing grants are audited by messaging.
    */
   private async dynamicToolPermissionDenied(
     backend: AppServerBackendKind,
     category: MessagingDynamicToolCategory,
     call: { threadId: string; turnId?: string; tool: string; arguments?: unknown },
   ): Promise<string | null> {
-    if (call.tool === "manage_pwragent" && !await this.canManagePwrAgent({ backend, threadId: call.threadId, turnId: call.turnId })) {
-      return "designated Agent and tools.instance_lifecycle";
+    if (call.tool === "manage_pwragent") {
+      const denial = await this.appManagementPermissionDenied({ backend, threadId: call.threadId, turnId: call.turnId });
+      if (denial) return denial;
     }
     const service = this.messagingAgentToolService;
     const causalContext = await this.readCausalMessagingContext({ backend, ...call });
@@ -18870,7 +18885,7 @@ export class DesktopBackendRegistry {
       tool: call.tool,
       turnId: call.turnId,
     });
-    return result.permission ?? "required capability";
+    return call.tool === "manage_pwragent" ? appManagementActorDenial(result) : result.permission ?? "required capability";
   }
 
   private async authorizeAgentToolMcpCall(params: {

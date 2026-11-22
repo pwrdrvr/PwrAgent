@@ -4642,7 +4642,7 @@ export class MessagingController {
   async authorizeRetainedTool(
     context: PwrAgentMessagingRequest["context"],
     check: Parameters<MessagingController["checkDynamicToolPermission"]>[0],
-  ): Promise<{ owns: boolean; allowed: boolean; permission?: string }>{
+  ): ReturnType<MessagingAccessControl["authorizeRetainedTool"]> {
     return this.accessControl.authorizeRetainedTool(context, check);
   }
 

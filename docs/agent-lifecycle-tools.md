@@ -34,6 +34,15 @@ A host-bound accepted operation may outlive its initiating turn during quieting,
 while still rechecking that exact retained actor, Agent designation and current
 permissions. A fresh context cannot inherit that exception.
 
+An operator upgrading a profile that used legacy messaging access needs to
+review **Settings → Access Control** before relying on lifecycle commands from
+chat. Enabling enforcement can seed Admin roles for existing provider contacts
+when there are no attachments. Review those assignments, and retain Admin or
+both explicit instance permissions only for contacts intended to manage the
+owner. For a fresh authorization check, send a new message from that account
+to the designated Agent. A desktop operator can use the normal desktop update
+controls independently of messaging RBAC.
+
 An authenticated chat request supplies the operation decision; it never opens
 a desktop quit confirmation. Agent designation and actor authority are checked
 again after response acknowledgement and after quieting. Native package

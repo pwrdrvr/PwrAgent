@@ -20,6 +20,7 @@ import { lazyModule } from "../lazy-module.js";
 import { loadedMcpTypes, mcpServer as mcpServerSdk, mcpServerStreamableHttp, mcpTypes } from "../mcp-connections/mcp-sdk.js";
 import type { ResolvedAgentToolCatalog } from "./agent-tool-catalog-registry.js";
 import { agentToolFailure } from "./agent-tool-definition.js";
+import { agentToolPermissionDeniedMessage } from "./app-management-authorization.js";
 import {
   PWRAGENT_AGENT_TOOL_NAMESPACE_DESCRIPTION,
   toMcpToolResponse,
@@ -600,8 +601,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       return toMcpToolResponse(
         agentToolFailure({
           code: "forbidden",
-          message:
-            `The messaging user who started this turn lacks permission for this tool (${deniedPermission}).`,
+          message: agentToolPermissionDeniedMessage(request.params.name, deniedPermission),
         }),
       );
     }
