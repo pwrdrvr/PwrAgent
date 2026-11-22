@@ -1,9 +1,13 @@
 import { useCallback, useMemo, useState } from "react";
 import type { SubmitServerRequestRequest } from "@pwragent/shared/contracts/agent";
+import { operatorTodoItemKey } from "@pwragent/shared/contracts/operator-requests";
+import { threadTodoThreadKey, type ThreadTodo, type ThreadTodoCiApproval } from "@pwragent/shared/contracts/thread-todos";
+import { openExternalUrl } from "../../lib/open-external-url";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { approvalDisplayCommand } from "../thread-detail/approval-display-command";
 import { cleanComposerErrorMessage } from "../composer/composer-error-message";
 import type { TodoSplitMenuEntry } from "../thread-todos/TodoSplitButton";
+import { threadTodoCiApprovals } from "../thread-todos/thread-todo-ci-approval";
 import {
   APPROVAL_STILL_OPEN_MESSAGE,
   approvalChoices,
@@ -12,6 +16,7 @@ import {
 import { operatorWaitLabel, type OperatorWait } from "./operator-waits";
 
 const APPROVAL_NOTICE_PREFIX = "operator-approval:";
+const NO_TODOS: readonly ThreadTodo[] = [];
 
 /** Shown when the request leaves the thread open in its own card and To-dos. */
 export const APPROVAL_NOTICE_HIDE_LABEL =
@@ -167,6 +172,46 @@ function approvalNoticeText(
   return { message: wait.title };
 }
 
+function toCiApprovalNotice(
+  key: string,
+  todo: ThreadTodo,
+  approval: ThreadTodoCiApproval,
+  titleFor: ApprovalNoticeInput["threadTitleForKey"],
+  onHide: () => void,
+  onHideAll: () => void,
+): AppNoticeToastNotice {
+  const ownerTitle = todo.threadTitle?.trim();
+  return {
+    id: approvalNoticeId(key),
+    // The one-shot watch saved a milestone. GitHub has the current gate state.
+    title: "Deployment approval gate reached",
+    message: `${approval.repository} run #${approval.runId}`,
+    tone: "warning",
+    autoDismiss: false,
+    facts: [
+      { label: "Environments", value: approval.environments.join(", ") },
+      ...(approval.ref ? [{ label: "Ref", value: approval.ref }] : []),
+      ...(approval.headSha ? [{ label: "Commit", value: approval.headSha.slice(0, 12) }] : []),
+    ],
+    threadLink: {
+      backend: todo.backend,
+      threadId: todo.threadId,
+      title: ownerTitle || titleFor(threadTodoThreadKey(todo)),
+      ...(ownerTitle ? { titleOrigin: "owner" as const } : {}),
+      ...(todo.federationTarget ? { instanceId: todo.federationTarget.instanceId } : {}),
+    },
+    actions: [{ label: "Review on GitHub", tone: "primary", onClick: () => openExternalUrl(approval.url) }],
+    dismissLabel: "Hide notice. The reminder stays in To-dos.",
+    dismissGroup: {
+      key: "operator-approvals",
+      label: "approval notices",
+      actionLabel: "Hide all",
+      onDismissAll: onHideAll,
+    },
+    onDismiss: onHide,
+  };
+}
+
 /**
  * Approval notices for this window. Hidden cards stay hidden for the
  * window's life; nothing is saved, so a reload shows a pending request again.
@@ -176,6 +221,7 @@ export function useApprovalNotices(
     ApprovalNoticeInput,
     "hiddenKeys" | "onHide" | "onHideAll" | "onAnswer" | "answers"
   > & {
+    ciApprovalTodos?: readonly ThreadTodo[];
     /**
      * Sends an answer, then re-reads the owner queue before it resolves.
      * Without it the notices offer Review alone.
@@ -186,7 +232,9 @@ export function useApprovalNotices(
     ) => Promise<void>;
   },
 ): AppNoticeToastNotice[] {
-  const { waits, selectedThreadKey, threadTitleForKey, onReview, respond } = input;
+  const { waits, ciApprovalTodos = NO_TODOS, selectedThreadKey, threadTitleForKey, onReview, respond } = input;
+  const ciApprovals = useMemo(() => ciApprovalTodos.flatMap((todo) => threadTodoCiApprovals(todo)
+      .map((approval) => ({ key: `${operatorTodoItemKey(todo.id)}:${approval.url}`, todo, approval }))), [ciApprovalTodos]);
   const [hiddenKeys, setHiddenKeys] = useState<ReadonlySet<string>>(() => new Set());
   const [answers, setAnswers] = useState<ReadonlyMap<string, ApprovalNoticeAnswer>>(
     () => new Map(),
@@ -195,17 +243,17 @@ export function useApprovalNotices(
   // only pending requests.
   const hide = useCallback((keys: readonly string[]): void => {
     setHiddenKeys((current) => {
-      const pending = new Set(waits.map((wait) => wait.key));
+      const pending = new Set([...waits, ...ciApprovals].map((entry) => entry.key));
       const next = new Set([...current, ...keys].filter((key) => pending.has(key)));
       return next.size === current.size && [...next].every((key) => current.has(key))
         ? current
         : next;
     });
-  }, [waits]);
+  }, [waits, ciApprovals]);
   const onHide = useCallback((wait: OperatorWait): void => hide([wait.key]), [hide]);
   const onHideAll = useCallback((): void => {
-    hide(waits.filter(isApprovalNoticeWait).map((wait) => wait.key));
-  }, [hide, waits]);
+    hide([...waits.filter(isApprovalNoticeWait), ...ciApprovals].map((entry) => entry.key));
+  }, [hide, waits, ciApprovals]);
   // A sent answer keeps its notice busy until `respond` settles. Each change
   // drops keys for requests that are gone.
   const setAnswer = useCallback((key: string, answer: ApprovalNoticeAnswer): void => {
@@ -244,13 +292,17 @@ export function useApprovalNotices(
       }
     : undefined, [respond, setAnswer]);
   return useMemo(
-    () => buildApprovalNotices({
-      waits, selectedThreadKey, hiddenKeys, threadTitleForKey, onReview, onHide, onHideAll,
-      ...(onAnswer ? { onAnswer, answers } : {}),
-    }),
+    () => [
+      ...buildApprovalNotices({
+        waits, selectedThreadKey, hiddenKeys, threadTitleForKey, onReview, onHide, onHideAll,
+        ...(onAnswer ? { onAnswer, answers } : {}),
+      }),
+      ...ciApprovals.filter(({ key }) => !hiddenKeys.has(key))
+        .map(({ key, todo, approval }) => toCiApprovalNotice(key, todo, approval, threadTitleForKey, () => hide([key]), onHideAll)),
+    ],
     [
       waits, selectedThreadKey, hiddenKeys, threadTitleForKey, onReview, onHide, onHideAll,
-      onAnswer, answers,
+      onAnswer, answers, ciApprovals, hide,
     ],
   );
 }

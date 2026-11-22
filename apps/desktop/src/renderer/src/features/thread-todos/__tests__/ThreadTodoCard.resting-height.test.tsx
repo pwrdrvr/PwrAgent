@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import { ThreadTodoCard, type ThreadTodoCardProps } from "../ThreadTodoCard";
@@ -61,6 +62,62 @@ function props(todo: ThreadTodo): ThreadTodoCardProps {
     onSetItemChecked: vi.fn(),
   };
 }
+
+it("puts the signing gate, release facts and GitHub review action on the resting card", () => {
+  const url = "https://github.com/example/app/actions/runs/42";
+  const detail = "Check the release checklist before approving this deployment.";
+  const todo = card([], {
+    title: "Run 42 needs approval for windows-signing. Review the Windows signing gate for run 42.",
+    detail, items: undefined,
+    ciApprovals: [{
+      url, repository: "example/app", runId: 42, environments: ["windows-signing"], ref: "v2.0.0", headSha: "abc1234567890",
+    }],
+  });
+  const open = vi.spyOn(window, "open").mockImplementation(() => null);
+  const handlers = props(todo);
+  render(<ThreadTodoCard {...handlers} />);
+
+  expect(screen.getByRole("heading", { name: "Review windows-signing" })).toBeTruthy();
+  expect(screen.getByText(/example\/app.*v2\.0\.0/)).toBeTruthy();
+  expect(screen.getByText(/Run #42.*abc123456789/)).toBeTruthy();
+  expect(screen.queryByText(detail)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Review on GitHub" }));
+  expect(open).toHaveBeenCalledWith(url, "_blank", "noopener,noreferrer");
+  expect(handlers.onResolve).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Show details" }));
+  expect(screen.getByText(detail)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Mark done" }));
+  expect(handlers.onResolve).toHaveBeenCalledWith(todo, "done", undefined, undefined);
+});
+
+function expectStoredApprovalTitleInDetails(instruction: string, hasDetail: boolean): void {
+  const title = `Run 42: Needs approval: windows-signing: ${instruction}`;
+  const todo = card([], {
+    title, detail: hasDetail ? "• Run 42 (met): Needs approval: windows-signing" : undefined, items: undefined,
+    ciApprovals: [{ url: "https://github.com/example/app/actions/runs/42", repository: "example/app", runId: 42,
+      environments: ["windows-signing"] }],
+  });
+  const view = render(<ThreadTodoCard {...props(todo)} />);
+  try {
+    expect(screen.queryByText(title)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show details" }));
+    expect(screen.getByText(title)).toBeTruthy();
+  } finally {
+    view.unmount();
+  }
+}
+
+it("reveals short instructions that were saved only in the original title", () => {
+  expectStoredApprovalTitleInDetails("Wait for the smoke test before approving.", true);
+});
+
+it("preserves the original title in the details of any decorated signing reminder", () => {
+  const action = fc.constantFrom("Confirm", "Read", "Wait for", "Check");
+  const subject = fc.constantFrom("the smoke test", "the signed manifest", "release team approval", "the release notes");
+  fc.assert(fc.property(action, subject, fc.boolean(), (verb, target, hasDetail) => {
+    expectStoredApprovalTitleInDetails(`${verb} ${target} before approving.`, hasDetail);
+  }), { numRuns: 24 });
+});
 
 const HANDOFF: ThreadTodo["action"] = {
   type: "start_thread",

@@ -359,6 +359,15 @@ export type ThreadTodoItem = {
   prerequisite?: true;
 };
 
+export type ThreadTodoCiApproval = {
+  url: string;
+  repository: string;
+  runId: number;
+  environments: string[];
+  ref?: string;
+  headSha?: string;
+};
+
 export type ThreadTodo = {
   id: string;
   /** A projected tracked review, whose status is owned by review tracking. */
@@ -387,6 +396,8 @@ export type ThreadTodo = {
    * its status.
    */
   dependencyId?: string;
+  /** Read-time projection of GitHub signing or deployment gates that raised this card. */
+  ciApprovals?: ThreadTodoCiApproval[];
   kind: ThreadTodoKind;
   status: ThreadTodoStatus;
   title: string;

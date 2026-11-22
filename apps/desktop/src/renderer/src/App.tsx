@@ -2626,6 +2626,7 @@ function DesktopAppShell(props: {
   }, [refreshOperatorRequests, submitServerRequest]);
   const approvalNotices = useApprovalNotices({
     waits: operatorRequests.waits,
+    ciApprovalTodos: threadTodoController.openTodos,
     selectedThreadKey,
     threadTitleForKey: waitThreadTitle,
     onReview: reviewApprovalNotice,

@@ -18,6 +18,7 @@ import type { PrMergeQueueStatus } from "@pwragent/shared/contracts/navigation";
 import type { ThreadReviewItem } from "@pwragent/shared/contracts/thread-reviews";
 import type {
   ThreadTodo,
+  ThreadTodoCiApproval,
   ThreadTodoItem,
   ThreadTodoKind,
   ThreadTodoMergeMethod,
@@ -59,6 +60,8 @@ import {
   type IconProps,
 } from "../../icons";
 import { copyText } from "../../lib/copy-text";
+import { openExternalUrl } from "../../lib/open-external-url";
+import { threadTodoCiApprovals, threadTodoCiApprovalTitle } from "./thread-todo-ci-approval";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import {
   ChipContextMenu,
@@ -525,6 +528,7 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
  */
 function ThreadTodoCardHead(props: {
   todo: ThreadTodo;
+  title?: string;
   titleId: string;
   copying: TodoCopying;
   onCollapse?: () => void;
@@ -535,6 +539,7 @@ function ThreadTodoCardHead(props: {
   onDismiss: () => void;
 }) {
   const { todo, copying } = props;
+  const title = props.title ?? todo.title;
   const KindIcon = KIND_ICONS[todo.kind];
   return (
     <div className="thread-todo-card__head">
@@ -547,12 +552,12 @@ function ThreadTodoCardHead(props: {
             type="button"
             className="thread-todo-card__title-link tooltip-target"
             data-tooltip={props.openLabel}
-            aria-label={`${props.openLabel}: ${todo.title}`}
+            aria-label={`${props.openLabel}: ${title}`}
             onClick={props.onOpen}
           >
-            {todo.title}
+            {title}
           </button>
-        ) : todo.title}
+        ) : title}
       </h3>
       <div className="thread-todo-card__tools">
         <button
@@ -650,6 +655,8 @@ function ThreadTodoCardPager(props: { pager: NonNullable<ThreadTodoCardProps["pa
 
 function ActionThreadTodoCard(props: ThreadTodoCardProps) {
   const { todo } = props;
+  const ciApprovals = todo.action ? [] : threadTodoCiApprovals(todo);
+  const ciTitle = threadTodoCiApprovalTitle(ciApprovals);
   const dispatch = useTodoDispatchContext();
   const [localMessageChoices, setLocalMessageChoices] = useState<TodoDispatchChoices>({});
   const messageChoices = dispatch.provided
@@ -853,11 +860,26 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
         className="button thread-todo-card__button thread-todo-card__button--quiet"
         onClick={() => markDone()}
       >
-        Done
+        {ciTitle ? "Mark done" : "Done"}
       </button>
     );
     switch (action?.type) {
       case undefined:
+        if (ciTitle) return (
+          <>
+            {done}
+            {ciApprovals.map((approval) => (
+              <button
+                key={approval.url}
+                type="button"
+                className="button button--primary thread-todo-card__button"
+                onClick={() => openExternalUrl(approval.url)}
+              >
+                {ciApprovals.length === 1 ? "Review on GitHub" : `Review run #${approval.runId} on GitHub`}
+              </button>
+            ))}
+          </>
+        );
         return (
           <button
             type="button"
@@ -1021,7 +1043,8 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
 
   // Under what it opens: the step window when steps are hidden, else the
   // description. Below the whole body it read as the prompt's control.
-  const restingToggle = resting.toggleLabel ? (
+  const toggleLabel = resting.toggleLabel ?? (ciTitle ? "Show details" : undefined);
+  const restingToggle = toggleLabel ? (
     <button
       type="button"
       className="thread-todo-card__more"
@@ -1031,7 +1054,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
       onClick={resting.toggle}
     >
       {resting.expanded ? <ChevronUpIcon size={11} /> : <ChevronDownIcon size={11} />}
-      {resting.toggleLabel}
+      {toggleLabel}
       {/* The space sits outside the span, where the accessible name keeps it. */}
       {resting.toggleDetail ? " " : null}
       {resting.toggleDetail ? (
@@ -1051,10 +1074,11 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
     >
       <ThreadTodoCardHead
         todo={todo}
+        title={ciTitle}
         titleId={titleId}
         copying={copying}
         onCollapse={props.onCollapse}
-        dismissLabel={`Dismiss to-do: ${todo.title}`}
+        dismissLabel={`Dismiss to-do: ${ciTitle ?? todo.title}`}
         onDismiss={() => props.onResolve(todo, "dismissed")}
       />
       <ThreadTodoCardMeta
@@ -1071,13 +1095,17 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
         )}
       />
 
-      {todo.detail || progress || prerequisites.length > 0 || hasFacts || prompt || todo.error
+      {ciTitle || todo.detail || progress || prerequisites.length > 0 || hasFacts || prompt || todo.error
         || action?.type === "start_thread" ? (
         <div
           id={resting.bodyId}
           className={`thread-todo-card__body${resting.expanded ? " is-expanded" : ""}`}
         >
-          {todo.detail ? (
+          {ciTitle ? <CiApprovalRunDetails approvals={ciApprovals} /> : null}
+          {ciTitle && resting.expanded ? (
+            <p className="thread-todo-card__detail">{todo.title}</p>
+          ) : null}
+          {todo.detail && (!ciTitle || resting.expanded) ? (
             <p
               ref={resting.detailRef}
               className={`thread-todo-card__detail${resting.expanded ? "" : " is-clamped"}`}
@@ -1217,6 +1245,18 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
       {copying.menu}
     </article>
   );
+}
+
+function CiApprovalRunDetails({ approvals }: { approvals: readonly ThreadTodoCiApproval[] }) {
+  return approvals.map((approval) => (
+    <div key={approval.url}>
+      {approvals.length > 1 || approval.environments.length > 1 ? (
+        <p className="thread-todo-card__detail">{approval.environments.join(", ")}</p>
+      ) : null}
+      <p className="thread-todo-card__detail">{[approval.repository, approval.ref].filter(Boolean).join(" · ")}</p>
+      <p className="thread-todo-card__detail">{[`Run #${approval.runId}`, approval.headSha?.slice(0, 12)].filter(Boolean).join(" · ")}</p>
+    </div>
+  ));
 }
 
 type TodoCopying = ReturnType<typeof useTodoCopy>;

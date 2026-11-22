@@ -4,6 +4,7 @@ import { join } from "node:path";
 import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  ThreadDependency,
   ThreadDependencyCiRunObservation,
   ThreadDependencyCiRunOutcome,
   ThreadDependencyCondition,
@@ -19,7 +20,7 @@ import { StateDb } from "../state/state-db";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
 import { ThreadDependencyCoordinator, buildDependencyPrompt } from "../app-server/thread-dependency-coordinator";
 import {
-  CI_RUN_GONE_CHECKS, CI_RUN_STREAK_GAP_MS, CI_RUN_UNREADABLE_MS, ThreadDependencyCiRunPoller, evaluateCiRunCondition, mergeCiRunCheck,
+  CI_RUN_GONE_CHECKS, CI_RUN_STREAK_GAP_MS, CI_RUN_UNREADABLE_MS, ThreadDependencyCiRunPoller, ciApprovalsForDependency, evaluateCiRunCondition, mergeCiRunCheck,
   normalizeGithubEnterpriseHosts, parseCiRunUrl, readCiRun,
 } from "../app-server/thread-dependency-ci-runs";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
@@ -80,6 +81,42 @@ const observationArb: fc.Arbitrary<ThreadDependencyCiRunObservation> = fc.record
 }));
 
 describe("CI run prerequisite evaluation", () => {
+  it("projects only the signing environments that satisfied a delivered GitHub reminder", () => {
+    const environments = ["windows-signing", "apple-signing", "production"];
+    fc.assert(fc.property(
+      fc.subarray(environments, { minLength: 1 }),
+      fc.subarray(environments),
+      outcomesArb,
+      fc.constantFrom("waiting", "completed"),
+      fc.constantFrom("ready", "delivered"),
+      fc.subarray(environments),
+      (pending, filter, on, runStatus, dependencyStatus, timerOnly) => {
+        const condition = ciRunCondition({ url: RUN_URL, on, environments: filter.map((name) => name.toUpperCase()) });
+        const check = observation({
+          status: runStatus,
+          conclusion: runStatus === "completed" ? "success" : undefined,
+          // Older deliveries saved every pending environment, including timer-only waits.
+          gates: runStatus === "waiting" ? pending.map((environment) => timerOnly.includes(environment)
+            ? { environment, reviewers: [], waitTimerMinutes: 10 }
+            : { environment, reviewers: ["release-team"] }) : [],
+        });
+        const evidence = evaluateCiRunCondition(condition, check, undefined, check.checkedAt);
+        if (evidence.state === "waiting") return;
+        const dependency: ThreadDependency = {
+          id: "watch", backend: "codex", threadId: "release-thread", conditions: [condition],
+          mode: "all", onFailure: "notify", continuation: "Review signing", deliver: "operator",
+          status: dependencyStatus, outcome: evidence.state === "satisfied" ? "success" : "failure",
+          evidence: [evidence], createdAt: 0, updatedAt: check.checkedAt,
+        };
+        const expected = dependencyStatus === "delivered" && runStatus === "waiting" && (!on || on.includes("approval_gate"))
+          ? pending.filter((name) => !timerOnly.includes(name) && (filter.length === 0 || filter.includes(name))) : [];
+        const approvals = ciApprovalsForDependency(dependency);
+        expect(approvals.map(({ url, environments }) => ({ url, environments })))
+          .toEqual(expected.length > 0 ? [{ url: RUN_URL, environments: expected }] : []);
+      },
+    ));
+  });
+
   it("fires once on the first check the oracle accepts and never changes after", () => {
     fc.assert(fc.property(outcomesArb, environmentsArb, fc.array(observationArb, { maxLength: 12 }), (on, environments, checks) => {
       const condition = ciRunCondition({ url: RUN_URL, ...(on ? { on } : {}), ...(environments && (!on || on.includes("approval_gate")) ? { environments } : {}) });
@@ -244,10 +281,13 @@ describe("reading a run", () => {
   it("counts the latest attempt's jobs, names failed steps, and reads gates only while the run waits", async () => {
     const get = vi.fn(async (_repository: unknown, path: string): Promise<unknown> => {
       if (path.endsWith("/pending_deployments")) {
-        return [{ environment: { name: "windows-signing" }, wait_timer: 0, reviewers: [
-          { type: "Team", reviewer: { slug: "release-team", name: "Release Team" } },
-          { type: "User", reviewer: { login: "octo-maintainer" } },
-        ] }];
+        return [
+          { environment: { name: "cooldown" }, wait_timer: 10, reviewers: [] },
+          { environment: { name: "windows-signing" }, wait_timer: 5, reviewers: [
+            { type: "Team", reviewer: { slug: "release-team", name: "Release Team" } },
+            { type: "User", reviewer: { login: "octo-maintainer" } },
+          ] },
+        ];
       }
       if (path.includes("/jobs?")) {
         return { jobs: [
@@ -266,7 +306,7 @@ describe("reading a run", () => {
       runId: 8841207733, status: "waiting", attempt: 1, branch: "v2.4.1", checkedAt: 42,
       jobs: { total: 5, passed: 1, failed: 1, running: 1, waiting: 1, queued: 1, skipped: 0 },
       failedJobs: [{ name: "macOS tests", failedStep: "Unit tests", url: "https://github.com/example/app/actions/runs/8841207733/job/2" }],
-      gates: [{ environment: "windows-signing", reviewers: ["release-team", "octo-maintainer"] }],
+      gates: [{ environment: "windows-signing", reviewers: ["release-team", "octo-maintainer"], waitTimerMinutes: 5 }],
     });
     get.mockClear();
     get.mockImplementation(async (_repository, path) => path.includes("/jobs?") ? { jobs: [] } : { id: 8841207733, status: "in_progress" });
