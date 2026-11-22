@@ -14,7 +14,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
-import type { ThreadTodo, ThreadTodoKind } from "@pwragent/shared/contracts/thread-todos";
+import type { ThreadTodo, ThreadTodoCiApproval, ThreadTodoKind } from "@pwragent/shared/contracts/thread-todos";
 import {
   THREAD_TODO_BUSY_RETRY_MS,
   THREAD_TODO_RESOLUTION_RESULTS,
@@ -524,6 +524,14 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                                     setActionError(String(error));
                                   });
                                 }}
+                                {...(view.reviewCiDeployment ? {
+                                  onReviewCiDeployment: (target: ThreadTodo, approval: ThreadTodoCiApproval) => {
+                                    setActionError(undefined);
+                                    void view.reviewCiDeployment?.(target, approval).catch((error: unknown) => {
+                                      setActionError(String(error));
+                                    });
+                                  },
+                                } : {})}
                                 onStartReview={props.onStartReview}
                                 onShowReview={view.openReview}
                                 onDoHere={props.onDoHere}

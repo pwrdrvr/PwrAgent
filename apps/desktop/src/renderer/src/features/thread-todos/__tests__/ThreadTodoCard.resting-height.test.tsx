@@ -90,6 +90,39 @@ it("puts the signing gate, release facts and GitHub review action on the resting
   expect(handlers.onResolve).toHaveBeenCalledWith(todo, "done", undefined, undefined);
 });
 
+it("approves the gate it shows only after the operator confirms, and keeps GitHub's refusal on the card", () => {
+  // Invented run and environment: no real release gate is involved.
+  const approval = { url: "https://github.com/example/app/actions/runs/88", repository: "example/app", runId: 88,
+    environments: ["windows-signing"], environmentIds: [301], attempt: 2, headSha: "a".repeat(40), ref: "v2.4.1" };
+  const todo = card([], { title: "Review signing", detail: undefined, items: undefined, ciApprovals: [approval] });
+  const onReviewCiDeployment = vi.fn();
+  const view = render(<ThreadTodoCard {...props(todo)} onReviewCiDeployment={onReviewCiDeployment} />);
+  expect(screen.getByText(/Run #88 · attempt 2 · aaaaaaaaaaaa/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Review on GitHub" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+  expect(onReviewCiDeployment).not.toHaveBeenCalled();
+  expect(screen.getByText(/Approve windows-signing for example\/app run #88, attempt 2.*GitHub records the approval as yours\./)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+  fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+  expect(onReviewCiDeployment).toHaveBeenCalledExactlyOnceWith(todo, approval);
+
+  const refused = { ...todo, error: "GitHub returned HTTP 422: Reviewer is not allowed to approve" };
+  view.rerender(<ThreadTodoCard {...props(refused)} onReviewCiDeployment={onReviewCiDeployment} />);
+  expect(screen.getByRole("alert").textContent).toBe(refused.error);
+  expect(screen.getByRole("button", { name: "Retry approval" })).toBeTruthy();
+  view.rerender(<ThreadTodoCard {...props(refused)} running onReviewCiDeployment={onReviewCiDeployment} />);
+  expect(screen.getByRole("status").textContent).toContain("Approving…");
+
+  // Without ids, or without a reviewer on this surface, GitHub is the only way.
+  view.rerender(<ThreadTodoCard {...props({ ...todo, ciApprovals: [{ ...approval, environmentIds: undefined }] })}
+    onReviewCiDeployment={onReviewCiDeployment} />);
+  expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+  view.rerender(<ThreadTodoCard {...props(todo)} />);
+  expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Review on GitHub" })).toBeTruthy();
+});
+
 function expectStoredApprovalTitleInDetails(instruction: string, hasDetail: boolean): void {
   const title = `Run 42: Needs approval: windows-signing: ${instruction}`;
   const todo = card([], {

@@ -2627,6 +2627,8 @@ function DesktopAppShell(props: {
   const approvalNotices = useApprovalNotices({
     waits: operatorRequests.waits,
     ciApprovalTodos: threadTodoController.openTodos,
+    reviewCiDeployment: threadTodoController.reviewCiDeployment,
+    runningTodoIds: threadTodoController.runningIds,
     selectedThreadKey,
     threadTitleForKey: waitThreadTitle,
     onReview: reviewApprovalNotice,
@@ -2828,6 +2830,7 @@ function DesktopAppShell(props: {
         );
         return gateTodoRun(todo, options, runAndMount);
       },
+      reviewCiDeployment: (todo, approval) => threadTodoController.reviewCiDeployment(todo, approval),
       openThread: (todo) => showTodoThread(todo),
       openReview: openTodoReview,
       openStartedThread: (todo) => {

@@ -25,6 +25,7 @@ function operations() {
     setItemChecked: vi.fn((_request?: unknown) => ({ todo: card })),
     setProject: vi.fn(async (_request?: unknown) => ({ todo: card })),
     raisePlan: vi.fn(async (_request?: unknown) => ({ todo: card })),
+    reviewCiDeployment: vi.fn(async (_request?: unknown) => ({ todo: card })),
     snapshotFeed: vi.fn(async (_request?: unknown) => ({ epoch: "owner", revision: 0, todos: [card] })),
     listDispatchEnvironments: vi.fn(async (_request?: unknown) => ({
       projectFound: true, environments: [], defaultSource: "none" as const,
@@ -83,6 +84,24 @@ describe("federated To-do ownership", () => {
     await service.request("runAction", { id: "remote-todo:peer:same-card", modelSettings });
     expect(remoteOperations.runAction).toHaveBeenCalledWith({ id: "same-card", modelSettings });
     expect(local.runAction).not.toHaveBeenCalled();
+  });
+
+  it("sends a deployment review only to the card's owner, under the owner's id, never to a colliding local card", async () => {
+    const { service, local, remote, remoteOperations } = setup();
+    const listed = await service.request("listTodos", { status: "open" });
+    const viewerCard = listed.todos.find((todo) => todo.federationTarget)!;
+    const reviewed = { url: "https://github.com/example/app/actions/runs/88", repository: "example/app", runId: 88,
+      attempt: 2, headSha: "a".repeat(40), environments: ["windows-signing"], environmentIds: [301] };
+    const response = await service.request("reviewCiDeployment", { id: viewerCard.id, ...reviewed,
+      federationTarget: viewerCard.federationTarget });
+    expect(remote).toHaveBeenLastCalledWith(target, "reviewCiDeployment", { id: card.id, ...reviewed });
+    expect(remoteOperations.reviewCiDeployment).toHaveBeenCalledExactlyOnceWith({ id: card.id, ...reviewed });
+    expect(local.reviewCiDeployment).not.toHaveBeenCalled();
+    // The owner's answer comes back as the viewer's card.
+    expect(response.todo).toMatchObject({ id: viewerCard.id, federationTarget: target });
+    await expect(service.request("reviewCiDeployment", { id: viewerCard.id, ...reviewed,
+      federationTarget: { scope: "remote", instanceId: "other" } })).rejects.toThrow("owner does not match");
+    expect(remoteOperations.reviewCiDeployment).toHaveBeenCalledOnce();
   });
 
   it("reads gateway environments explicitly without changing the remote viewer's card owner", async () => {
@@ -206,10 +225,26 @@ describe("To-do federation protocol", () => {
       id: "request", protocolVersion: 1, createdAt: Date.now(), kind: "request", sourceInstanceId: "viewer", targetInstanceId: "owner", method, params,
     } });
     expect((await send(FEDERATION_THREAD_TODO_METHODS.listTodos, { status: "open" })).status).toBe("handled");
-    for (const operation of ["updateReview", "resolveTodo", "runAction", "setItemChecked", "setProject", "raisePlan"] as const) {
+    for (const operation of ["updateReview", "resolveTodo", "runAction", "setItemChecked", "setProject", "raisePlan", "reviewCiDeployment"] as const) {
       expect((await send(FEDERATION_THREAD_TODO_METHODS[operation], { id: card.id, status: "dismissed" })).status).toBe("rejected");
       expect(local[operation]).not.toHaveBeenCalled();
     }
     expect((await send(FEDERATION_THREAD_TODO_METHODS.listTodos, { federationTarget: target })).status).toBe("rejected");
+  });
+
+  it("lets a peer the operator granted turn control review a deployment on the owner, and stops a relayed one", async () => {
+    const local = operations();
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_THREAD_TODO_CAPABILITIES });
+    registerFederationThreadTodoHandlers(router, local);
+    router.registerConnection({ peerId: "viewer", capabilities: ["thread_detail", "turn_control"], sendEnvelope: () => {} });
+    const send = (params: unknown) => router.routeEnvelope({ sourcePeerId: "viewer", envelope: {
+      id: "request", protocolVersion: 1, createdAt: Date.now(), kind: "request", sourceInstanceId: "viewer", targetInstanceId: "owner",
+      method: FEDERATION_THREAD_TODO_METHODS.reviewCiDeployment, params,
+    } });
+    expect((await send({ id: card.id })).status).toBe("handled");
+    expect(local.reviewCiDeployment).toHaveBeenCalledExactlyOnceWith({ id: card.id });
+    // A request still naming a target was meant for another owner.
+    expect((await send({ id: card.id, federationTarget: target })).status).toBe("rejected");
+    expect(local.reviewCiDeployment).toHaveBeenCalledOnce();
   });
 });

@@ -14,6 +14,7 @@ import type {
   ListThreadTodoDispatchEnvironmentsRequest,
   ListThreadTodoDispatchEnvironmentsResponse,
   RaiseThreadTodoPlanRequest,
+  ReviewThreadTodoCiDeploymentRequest,
 } from "@pwragent/shared/contracts/thread-todos";
 import type {
   DisarmReviewAutoFixRequest,
@@ -203,6 +204,15 @@ export const localThreadTodoOperations = {
       }),
     };
   },
+  /**
+   * The operator's Approve on a CI approval card, on the card's owner. No
+   * agent tool reaches this: only the To-do IPC and a peer's turn_control.
+   */
+  reviewCiDeployment: async (
+    request: ReviewThreadTodoCiDeploymentRequest,
+  ): Promise<ThreadTodoMutationResponse> => ({
+    todo: await getThreadTodoService().reviewCiDeployment(parseCiDeploymentReview(request)),
+  }),
   listDispatchEnvironments: async (
     request: ListThreadTodoDispatchEnvironmentsRequest,
   ): Promise<ListThreadTodoDispatchEnvironmentsResponse> => await listThreadTodoDispatchEnvironments(request, {
@@ -256,6 +266,24 @@ export const localThreadTodoOperations = {
     };
   },
 };
+
+/** Peers cross with plain data; only the fields the owner compares are kept. */
+function parseCiDeploymentReview(value: unknown): ReviewThreadTodoCiDeploymentRequest {
+  const request = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
+  const { id, url, repository, runId, attempt, headSha, environments, environmentIds } = request;
+  const positive = (entry: unknown): entry is number => Number.isSafeInteger(entry) && Number(entry) > 0;
+  if (typeof id !== "string" || !id || typeof url !== "string" || typeof repository !== "string"
+    || !positive(runId) || !positive(attempt) || typeof headSha !== "string" || !/^[0-9a-fA-F]{40,64}$/.test(headSha)
+    || !Array.isArray(environments) || !environments.every((name) => typeof name === "string" && name.length > 0)
+    || !Array.isArray(environmentIds) || !environmentIds.every(positive)
+    || environments.length === 0 || environments.length !== environmentIds.length || environments.length > 8) {
+    throw new Error("A deployment review needs the run, attempt, commit and environments the card showed.");
+  }
+  return {
+    id, url, repository, runId, attempt, headSha,
+    environments: environments as string[], environmentIds: environmentIds as number[],
+  };
+}
 
 function isCodexSpeed(value: unknown): value is CodexSpeed {
   return value === "standard" || value === "fast" || value === "ultrafast";

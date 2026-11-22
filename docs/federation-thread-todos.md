@@ -22,6 +22,7 @@ pairings advertise the capability on reconnect; re-enrollment is unnecessary.
 | `threadTodos.setItemChecked` | `turn_control` | Toggle a checklist step |
 | `threadTodos.setProject` | `turn_control` | Change the card's target project |
 | `threadTodos.runAction` | `turn_control` and `environment_actions` | Merge or start a thread using the owner's workspace, configuration, and credentials |
+| `threadTodos.reviewCiDeployment` | `turn_control` | Approve a CI approval card's GitHub deployment gate with the owner's `gh` sign-in, after re-reading the run; see [Approving a GitHub gate from its card](thread-dependencies.md#approving-a-github-gate-from-its-card) |
 
 Wire parameters use the shared To-do/review request contracts with
 `federationTarget` removed. Owner handlers reject a target field instead of

@@ -5,6 +5,7 @@ import type {
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   ListThreadTodosRequest,
+  ReviewThreadTodoCiDeploymentRequest,
   ThreadTodo,
   ThreadTodoAction,
   ThreadTodoCiApproval,
@@ -33,6 +34,7 @@ import {
   resolveThreadTodoPlacement,
   settleMergeMethod,
   threadTodoActionProject,
+  threadTodoCiDeploymentReviewRequest,
   threadTodoKindForAction,
   threadTodoBlockingItems,
   threadTodoItemNoun,
@@ -203,6 +205,15 @@ export class ThreadTodoError extends Error {
   }
 }
 
+/**
+ * Approves the deployment gate the operator reviewed, on this owner's forge
+ * sign-in. It re-reads GitHub and refuses unless the gate still matches;
+ * see `approveGithubCiDeployment`.
+ */
+export type ThreadTodoCiDeploymentReviewer = (
+  reviewed: ReviewThreadTodoCiDeploymentRequest,
+) => Promise<{ environments: string[] }>;
+
 export type ThreadTodoServiceOptions = {
   store: ThreadTodoStorage;
   readCiApprovals?: (todo: ThreadTodo, dependencyId: string) => ThreadTodoCiApproval[];
@@ -217,6 +228,7 @@ export type ThreadTodoServiceOptions = {
 export class ThreadTodoService {
   private readonly store: ThreadTodoStorage;
   private readonly readCiApprovals: ThreadTodoServiceOptions["readCiApprovals"];
+  private ciDeploymentReviewer: ThreadTodoCiDeploymentReviewer | undefined;
   private readonly now: () => number;
   private readonly newId: () => string;
   private readonly running = new Set<string>();
@@ -259,6 +271,11 @@ export class ThreadTodoService {
       }
       return { ...todo, dispatchDefaults: await pending };
     }));
+  }
+
+  /** Installed by the owner with its forge client; absent, the cards offer Review on GitHub alone. */
+  setCiDeploymentReviewer(reviewer: ThreadTodoCiDeploymentReviewer | undefined): void {
+    this.ciDeploymentReviewer = reviewer;
   }
 
   setRunners(runners: ThreadTodoActionRunners | undefined): void {
@@ -541,6 +558,75 @@ export class ThreadTodoService {
       const ciApprovals = readCiApprovals(todo, todo.dependencyId);
       return ciApprovals.length > 0 ? { ...todo, ciApprovals } : todo;
     });
+  }
+
+  /** One open card's deployment gates, as `list` decorates it. */
+  private ciApprovalsFor(todo: ThreadTodo): ThreadTodoCiApproval[] {
+    return todo.status === "open" && !todo.action && todo.dependencyId && this.readCiApprovals
+      ? this.readCiApprovals(todo, todo.dependencyId)
+      : [];
+  }
+
+  /** The runs open approval cards are waiting on, for the owner's reconciler. */
+  ciApprovalUrls(include: (todo: ThreadTodo) => boolean = () => true): string[] {
+    return [...new Set(this.list({ status: "open" }).filter(include)
+      .flatMap((todo) => (todo.ciApprovals ?? []).map((approval) => approval.url)))];
+  }
+
+  /**
+   * The operator's Approve on a CI approval card. The request must match
+   * the card as stored now, so a card whose milestone changed after the
+   * operator saw it is refused before GitHub is asked. A refusal from the
+   * reviewer, ours or GitHub's, stays on the card as its error.
+   */
+  async reviewCiDeployment(request: ReviewThreadTodoCiDeploymentRequest): Promise<ThreadTodo> {
+    const todo = this.require(request.id);
+    if (todo.status !== "open") throw new ThreadTodoError("conflict", "This to-do is already resolved.");
+    const approval = this.ciApprovalsFor(todo).find((entry) => entry.url === request.url);
+    if (!approval) throw new ThreadTodoError("invalid_arguments", "This to-do has no deployment gate for that run.");
+    const shown = threadTodoCiDeploymentReviewRequest(todo, approval);
+    if (!shown) {
+      throw new ThreadTodoError("invalid_arguments", "This card cannot approve the gate here. Review it on GitHub.");
+    }
+    if (!sameCiDeploymentReview(shown, request)) {
+      throw new ThreadTodoError("conflict", "This card's deployment gate changed after you saw it. Review it again.");
+    }
+    if (this.running.has(todo.id)) throw new ThreadTodoError("conflict", "This to-do's action is already running.");
+    const reviewer = this.ciDeploymentReviewer;
+    if (!reviewer) throw new Error("Deployment reviews are not available on this PwrAgent.");
+    this.running.add(todo.id);
+    try {
+      // The owner's stored gate, not the viewer's copy, is what GitHub is asked to approve.
+      const approved = await reviewer(shown);
+      return this.finish(todo.id, { result: `Approved ${approved.environments.join(", ")} on GitHub` });
+    } catch (error) {
+      const failed = this.store.setError({
+        id: todo.id,
+        error: error instanceof Error ? error.message : String(error),
+        now: this.now(),
+      });
+      this.emit(failed);
+      return failed;
+    } finally {
+      this.running.delete(todo.id);
+    }
+  }
+
+  /**
+   * Resolves each open approval card whose every run GitHub no longer holds
+   * at its gates, whoever reviewed them. `settled` names a run's result once
+   * the owner has seen it settle; a card with a review running is left to it.
+   */
+  settleCiApprovals(settled: (approval: ThreadTodoCiApproval) => string | undefined): ThreadTodo[] {
+    const resolved: ThreadTodo[] = [];
+    for (const todo of this.list({ status: "open" })) {
+      const approvals = todo.ciApprovals ?? [];
+      if (approvals.length === 0 || this.running.has(todo.id)) continue;
+      const results = approvals.map(settled);
+      if (results.some((result) => result === undefined)) continue;
+      resolved.push(this.finish(todo.id, { result: [...new Set(results)].join("; ") }));
+    }
+    return resolved;
   }
 
   /** The operator's last merge-method pick for a project, if any. */
@@ -1027,6 +1113,22 @@ export class ThreadTodoService {
       threadId: todo.threadId,
     });
   }
+}
+
+/** The operator reviewed exactly this gate: same run, attempt, commit and environments. */
+function sameCiDeploymentReview(
+  stored: ReviewThreadTodoCiDeploymentRequest,
+  request: ReviewThreadTodoCiDeploymentRequest,
+): boolean {
+  return stored.url === request.url
+    && stored.repository.toLowerCase() === String(request.repository).toLowerCase()
+    && stored.runId === request.runId
+    && stored.attempt === request.attempt
+    && stored.headSha.toLowerCase() === String(request.headSha).toLowerCase()
+    && Array.isArray(request.environments) && Array.isArray(request.environmentIds)
+    && stored.environments.length === request.environments.length
+    && stored.environments.every((name, index) => name === request.environments[index]
+      && stored.environmentIds[index] === request.environmentIds[index]);
 }
 
 /**

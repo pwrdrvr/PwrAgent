@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { ThreadTodo, ThreadTodoResolution } from "@pwragent/shared/contracts/thread-todos";
+import type { ThreadTodo, ThreadTodoCiApproval, ThreadTodoResolution } from "@pwragent/shared/contracts/thread-todos";
 import { threadTodoItemProgress } from "@pwragent/shared/contracts/thread-todos";
 import { TodoIcon } from "../../icons";
 import { ThreadTodoCard } from "./ThreadTodoCard";
@@ -126,6 +126,18 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
       showNotice({ todo: target, text: String(error), undoable: false });
     });
   };
+  // GitHub's refusal stays on the card; a refusal before GitHub is asked is shown here.
+  const reviewCiDeployment = view.reviewCiDeployment
+    ? (target: ThreadTodo, approval: ThreadTodoCiApproval): void => {
+        void view.reviewCiDeployment?.(target, approval).then((ended) => {
+          if (ended?.status === "done" && ended.result) {
+            showNotice({ todo: ended, text: ended.result, undoable: false });
+          }
+        }).catch((error: unknown) => {
+          showNotice({ todo: target, text: String(error), undoable: false });
+        });
+      }
+    : undefined;
   const onDoHere = props.onDoHere;
   const doHere = onDoHere
     ? async (target: ThreadTodo, options?: ThreadTodoDoHereOptions): Promise<boolean> => {
@@ -207,6 +219,7 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
             projectMenu={view.projectMenu}
             onResolve={resolve}
             onRun={run}
+            {...(reviewCiDeployment ? { onReviewCiDeployment: reviewCiDeployment } : {})}
             onStartReview={props.onStartReview}
             onShowReview={view.openReview}
             onDoHere={doHere}

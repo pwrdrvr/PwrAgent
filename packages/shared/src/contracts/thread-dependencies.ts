@@ -114,9 +114,10 @@ export type ThreadDependencyCiRunObservation = {
   branch?: string;
   /**
    * What waits for a person: GitHub's pending deployments, or GitLab's
-   * blocked deployments and playable manual jobs.
+   * blocked deployments and playable manual jobs. `environmentId` is
+   * GitHub's environment id, which a deployment review must name.
    */
-  gates?: { environment: string; reviewers: string[]; waitTimerMinutes?: number }[];
+  gates?: { environment: string; environmentId?: number; reviewers: string[]; waitTimerMinutes?: number }[];
   jobs?: { total: number; passed: number; failed: number; running: number; queued: number; waiting: number; skipped: number };
   failedJobs?: { name: string; url: string; failedStep?: string }[];
   /** The check failed; the wait keeps the last good observation's meaning. */

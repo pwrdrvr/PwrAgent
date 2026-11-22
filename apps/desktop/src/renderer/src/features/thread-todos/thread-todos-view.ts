@@ -2,6 +2,7 @@ import type {
   ResolveThreadTodoRequest,
   RunThreadTodoActionRequest,
   ThreadTodo,
+  ThreadTodoCiApproval,
   ThreadTodoMergeMethodPreferences,
   ThreadTodoProject,
   ThreadTodoResolution,
@@ -93,6 +94,14 @@ export type ThreadTodosView = {
   run: (
     todo: ThreadTodo,
     options?: ThreadTodoRunOptions,
+  ) => Promise<ThreadTodo | undefined>;
+  /**
+   * Approves a CI approval card's GitHub deployment gate on its owner.
+   * Absent, the card offers Review on GitHub alone.
+   */
+  reviewCiDeployment?: (
+    todo: ThreadTodo,
+    approval: ThreadTodoCiApproval,
   ) => Promise<ThreadTodo | undefined>;
   /** Shows the card's own thread. */
   openThread: (todo: ThreadTodo) => void;

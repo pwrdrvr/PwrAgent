@@ -13,3 +13,12 @@ export function threadTodoCiApprovalTitle(approvals: readonly ThreadTodoCiApprov
     ? `Review ${approval.environments[0]}`
     : "Review deployments";
 }
+
+/** What one Approve click does, said before it is sent. */
+export function confirmCiApprovalText(approval: ThreadTodoCiApproval, remote: boolean): string {
+  const run = [`run #${approval.runId}`, approval.attempt ? `attempt ${approval.attempt}` : undefined,
+    approval.headSha?.slice(0, 12)].filter(Boolean).join(", ");
+  return `Approve ${approval.environments.join(", ")} for ${approval.repository} ${run}? `
+    + "PwrAgent checks GitHub again first and approves only if nothing changed. "
+    + (remote ? "GitHub records the approval for the account signed in on the card's PwrAgent." : "GitHub records the approval as yours.");
+}

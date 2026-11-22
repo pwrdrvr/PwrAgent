@@ -2857,7 +2857,9 @@ export class DesktopFederationRuntime {
         : "This Federation owner does not support To-dos. Update that PwrAgent instance.");
     }
     return await this.rpcFor(target).request({ method: FEDERATION_THREAD_TODO_METHODS[operation], params: request,
-      ...(operation === "runAction" ? { timeoutMs: null } : {}),
+      // The owner's run, or its GitHub review, can outlast an RPC timeout;
+      // its card says how it ended either way.
+      ...(operation === "runAction" || operation === "reviewCiDeployment" ? { timeoutMs: null } : {}),
     });
   }
 

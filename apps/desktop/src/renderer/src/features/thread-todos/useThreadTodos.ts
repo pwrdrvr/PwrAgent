@@ -11,6 +11,7 @@ import type {
   ResolveThreadTodoRequest,
   RunThreadTodoActionRequest,
   ThreadTodo,
+  ThreadTodoCiApproval,
   ThreadTodoMergeMethodPreferences,
   ThreadTodoStatus,
   TodoUnavailableInstance,
@@ -21,7 +22,7 @@ import {
   compareThreadTodosNewestFirst,
   ThreadTodoFeedFollower,
 } from "@pwragent/shared/thread-todo-feed";
-import { threadTodoThreadKey } from "@pwragent/shared/contracts/thread-todos";
+import { threadTodoCiDeploymentReviewRequest, threadTodoThreadKey } from "@pwragent/shared/contracts/thread-todos";
 import { useThreadItemGroups } from "../../lib/thread-item-groups";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadTodoResolveOptions } from "./thread-todos-view";
@@ -57,6 +58,15 @@ export type ThreadTodosController = {
     id: string,
     options?: Omit<RunThreadTodoActionRequest, "id">,
   ) => Promise<ThreadTodo | undefined>;
+  /**
+   * The operator's Approve on a CI approval card: sends what the card shows
+   * to its owner, which re-reads GitHub before writing. Resolves to the card
+   * as it ended; a GitHub refusal is the card's error.
+   */
+  reviewCiDeployment: (
+    todo: ThreadTodo,
+    approval: ThreadTodoCiApproval,
+  ) => Promise<ThreadTodo | undefined>;
 };
 
 type ThreadTodosApi = Pick<
@@ -69,6 +79,7 @@ type ThreadTodosApi = Pick<
   | "resolveThreadTodo"
   | "runThreadTodoAction"
   | "setThreadTodoItemChecked"
+  | "reviewThreadTodoCiDeployment"
 >;
 
 const EMPTY_TODOS: ThreadTodo[] = [];
@@ -263,6 +274,24 @@ export function useThreadTodos(
     [api],
   );
 
+  const reviewCiDeployment = useCallback(
+    async (todo: ThreadTodo, approval: ThreadTodoCiApproval): Promise<ThreadTodo | undefined> => {
+      const request = threadTodoCiDeploymentReviewRequest(todo, approval);
+      if (!request || !api?.reviewThreadTodoCiDeployment) return undefined;
+      setRunningIds((current) => new Set(current).add(todo.id));
+      try {
+        return (await api.reviewThreadTodoCiDeployment(request)).todo;
+      } finally {
+        setRunningIds((current) => {
+          const next = new Set(current);
+          next.delete(todo.id);
+          return next.size > 0 ? next : EMPTY_SET;
+        });
+      }
+    },
+    [api],
+  );
+
   const openByThreadKey = useThreadItemGroups(openTodos, threadTodoThreadKey, Object.is);
 
   return useMemo(
@@ -276,6 +305,7 @@ export function useThreadTodos(
       runningIds,
       resolve,
       runAction,
+      reviewCiDeployment,
       setItemChecked,
     }),
     [
@@ -290,6 +320,7 @@ export function useThreadTodos(
       runningIds,
       resolve,
       runAction,
+      reviewCiDeployment,
       setItemChecked,
     ],
   );

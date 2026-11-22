@@ -263,6 +263,7 @@ export const THREAD_TODOS_LIST_PROJECTS_CHANNEL = "thread-todos:list-projects";
 export const THREAD_TODOS_SET_PROJECT_CHANNEL = "thread-todos:set-project";
 export const THREAD_TODOS_LIST_DISPATCH_ENVIRONMENTS_CHANNEL = "thread-todos:list-dispatch-environments";
 export const THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL = "thread-todos:set-item-checked";
+export const THREAD_TODOS_REVIEW_CI_DEPLOYMENT_CHANNEL = "thread-todos:review-ci-deployment";
 /**
  * Marker event: a thread's to-do cards changed. Review details refetch with
  * `thread-reviews:list`. A window hears only its own owner's markers.
