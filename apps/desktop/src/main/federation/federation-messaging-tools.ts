@@ -1,6 +1,7 @@
 import { FederationRoleDeniedError } from "@pwragent/federation/federation-router";
 import type { FilePushResult } from "@pwragent/federation/federation-file-push";
 import type { OriginalAttachmentConsumer } from "../messaging/core/messaging-original-attachment-store";
+import type { DynamicToolPermissionResult } from "../messaging/messaging-agent-tool-service";
 import type {
   PwrAgentMessagingRequest,
   PwrAgentMessagingResponse,
@@ -18,8 +19,7 @@ export type FederationMessagingDestinationOperation =
       category: MessagingDynamicToolCategory; tool: string; arguments?: Record<string, unknown> | null;
     } };
 
-export type FederationMessagingDestinationResult = PwrAgentMessagingResponse
-  | { allowed: boolean; permission?: string };
+export type FederationMessagingDestinationResult = PwrAgentMessagingResponse | DynamicToolPermissionResult;
 
 let handler: ((operation: FederationMessagingDestinationOperation, callerInstanceId: string, contained: boolean,
   consumeOriginal?: OriginalAttachmentConsumer) => Promise<FederationMessagingDestinationResult>) | undefined;

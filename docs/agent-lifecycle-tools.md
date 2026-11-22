@@ -34,6 +34,15 @@ A host-bound accepted operation may outlive its initiating turn during quieting,
 while still rechecking that exact retained actor, Agent designation and current
 permissions. A fresh context cannot inherit that exception.
 
+An operator upgrading a profile that used legacy messaging access needs to
+review **Settings → Access Control** before relying on lifecycle commands from
+chat. Enabling enforcement can seed Admin roles for existing provider contacts
+when there are no attachments. Review those assignments, and retain Admin or
+both explicit instance permissions only for contacts intended to manage the
+owner. For a fresh authorization check, send a new message from that account
+to the designated Agent. A desktop operator can use the normal desktop update
+controls independently of messaging RBAC.
+
 An authenticated chat request supplies the operation decision; it never opens
 a desktop quit confirmation. Agent designation and actor authority are checked
 again after response acknowledgement and after quieting. Native package
@@ -89,8 +98,10 @@ authorization remains required. Quiet is a bounded restart protocol:
 2. Save the running-thread continuations and accepted queued messages in the
    existing atomic checkpoint. Failure of this initial checkpoint cancels quit
    before any steer or process termination and restores the prior gate.
-3. Steer supported running turns about the restart. Terminate environment actions
-   with a three-second SIGTERM grace, followed by the existing forced cleanup.
+3. Steer supported running turns about the restart. This owner-generated notice
+   preserves each running turn's existing messaging attribution. Terminate
+   environment actions with a three-second SIGTERM grace, followed by the
+   existing forced cleanup.
 4. Give turns fifteen seconds to settle, save the final continuation snapshot,
    then let the ordinary shutdown path interrupt remaining work and own process
    cleanup. Quiet does not wait indefinitely for every tool or child process.
