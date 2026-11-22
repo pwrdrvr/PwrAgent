@@ -13,8 +13,12 @@ export function useFilePreviewRead(
   path: string | undefined,
   thread: ReadMarkdownFileRequest["thread"],
   federationTarget?: ReadMarkdownFileRequest["federationTarget"],
+  openSequence?: number,
 ): LoadState {
-  const source = useMemo(() => ({ path, thread, federationTarget }), [path, thread, federationTarget]);
+  const source = useMemo(
+    () => ({ path, thread, federationTarget, openSequence }),
+    [path, thread, federationTarget, openSequence],
+  );
   const readRef = useRef<{
     source: typeof source;
     reader: NonNullable<DesktopApi["readMarkdownFile"]>;
@@ -74,7 +78,7 @@ export function useFilePreviewRead(
   }, [reader, path, thread, federationTarget, source]);
 
   // A new selection renders before its effect. Never expose the old file
-  // under the new path, kind, thread or owner.
+  // under the new path, kind, thread or owner, or after an explicit reopen.
   return result?.source === source ? result.state : { status: path ? "loading" : "idle" };
 }
 
