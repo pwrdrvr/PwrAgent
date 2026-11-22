@@ -330,6 +330,22 @@ it("pitches decisions and opens setup when no provider is ready", async () => {
   expect(api.onDetailsModalOpenChange).toHaveBeenLastCalledWith(false);
 });
 
+it.each([
+  ["jev-preview", "clef-flash", /^Experimental image input/, /^Image input/],
+  ["jev-1.12.0", "text-only", /^Images unavailable/, /^Images unavailable/],
+])("discloses image input for the configured %s and %s models", async (jev, local, jevLabel, localLabel) => {
+  const settings = setupSettings(settingsSnapshot({
+    decisionModels: { jev: { model: jev }, local: { model: local } },
+  }));
+  renderPanel({ snapshot: { now: NOW, decisions: [], batches: [] }, settings });
+  fireEvent.click(screen.getByRole("button", { name: "Set up decisions" }));
+  const dialog = within(await screen.findByRole("dialog", { name: "Choose where decisions run" }));
+  const card = (name: string) => within(dialog.getByRole("heading", { name }).closest("li")!);
+  expect(card("OpenAI Decisions").getByText(/^Image input.*PNG or JPEG/)).toBeInTheDocument();
+  expect(card("TypeSafe Jev").getByText(jevLabel)).toBeInTheDocument();
+  expect(card("Local decision model").getByText(localLabel)).toBeInTheDocument();
+});
+
 it("suggests something to ask once a provider is ready", () => {
   renderPanel({
     snapshot: { now: NOW, decisions: [], batches: [] },
