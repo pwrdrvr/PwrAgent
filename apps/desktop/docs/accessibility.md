@@ -38,6 +38,13 @@ Things to know when extending the audit:
   `listThreads` has waited for startup reconciliation. Then reload the window
   so the renderer reads the cards. The audit checks the collapsed header,
   bulk-dismiss control, and each row state before passing those surfaces to axe.
+- **Resources state comes from the checkout service, not a mock.**
+  `e2e/fixtures/resource-checkout-seeding.ts` writes the authorities file and
+  runs `DesktopResourceCheckoutService` from the test process on the app's own
+  checkout stores, as a second profile would. Agent holds and queues go in before
+  launch; a recovery-required job goes in after the operator's hold is
+  released, and the app reads it on its next poll. Never feed the screen the
+  preview fixtures.
 - **Every surface is audited in every color theme.** The file wraps its
   `describe` in `for (... of AUDIT_APPEARANCES)`: the Tangerine dark and
   light pair plus each other dark theme in the dark scheme and each light

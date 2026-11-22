@@ -3687,6 +3687,7 @@ function SidebarContent(props: SidebarProps) {
                     )}
                     <button
                       className="sidebar__menu-item"
+                      data-testid="profile-menu-resources"
                       role="menuitem"
                       type="button"
                       onClick={() => {
