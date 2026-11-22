@@ -357,6 +357,7 @@ export const OPERATOR_FOCUS_VIEWS = [
   "thread",
   "settings",
   "automations",
+  "resources",
   "search",
 ] as const;
 

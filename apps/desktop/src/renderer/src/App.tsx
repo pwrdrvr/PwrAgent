@@ -351,6 +351,8 @@ import {
   useDirectorVoiceShortcut,
 } from "./features/native-voice/DirectorVoice";
 import { AutomationsScreen } from "./features/automations/AutomationsScreen";
+import { ResourcesScreen } from "./features/resources/ResourcesScreen";
+import { createDesktopResourceCheckoutsSource } from "./features/resources/resource-checkouts-source";
 import { useAutomationSchedulingStatus } from "./features/automations/useAutomationSchedulingStatus";
 import {
   ThreadSearchPanel,
@@ -375,11 +377,11 @@ const SETTINGS_SECTIONS = new Set<SettingsSection>([
 ]);
 
 /** Which full-window surface the shell shows. */
-type MainView = "thread" | "settings" | "automations" | "search";
+type MainView = "thread" | "settings" | "automations" | "resources" | "search";
 
 /** The views drawn in `.app-shell__settings-layer`, over the whole shell. */
 function isLayerView(view: MainView): boolean {
-  return view === "settings" || view === "automations";
+  return view === "settings" || view === "automations" || view === "resources";
 }
 
 /**
@@ -647,6 +649,17 @@ function DesktopAppShell(props: {
     useState<ComponentType<ThreadViewProps>>();
   const desktopApi = props.desktopApi;
   const automationsSchedulingStatus = useAutomationSchedulingStatus(desktopApi);
+  // `null` until the main process serves resource checkouts; every entry to
+  // the Resources screen is hidden while it is.
+  const resourceCheckoutsSource = useMemo(
+    () => createDesktopResourceCheckoutsSource(desktopApi),
+    [desktopApi],
+  );
+  useEffect(() => {
+    if (mainView === "resources" && !resourceCheckoutsSource) {
+      setMainView("thread");
+    }
+  }, [mainView, resourceCheckoutsSource, setMainView]);
   const acknowledgedSpendAlertIdsRef = useRef(new Set<string>());
   const acknowledgeThreadSpendAlert = useCallback((params: {
     alert: ThreadSpendAlert;
@@ -4738,6 +4751,9 @@ function DesktopAppShell(props: {
             onOpenUsageActivity={desktopApi?.openUsageActivity
               ? () => void desktopApi.openUsageActivity?.()
               : undefined}
+            onOpenResources={resourceCheckoutsSource
+              ? () => setMainView("resources")
+              : undefined}
             onSelectThread={(thread, options) => {
               setMainView("thread");
               setComposerFocusRequest(options?.focusComposer && options.focusOrigin
@@ -5089,6 +5105,24 @@ function DesktopAppShell(props: {
                 onSelectThread={(thread) => {
                   setMainView("thread");
                   navigation.selectThread(thread);
+                }}
+              />
+            </div>
+          ) : null}
+
+          {mainView === "resources" && resourceCheckoutsSource ? (
+            <div ref={layerRef} className="app-shell__settings-layer" tabIndex={-1}>
+              <ResourcesScreen
+                source={resourceCheckoutsSource}
+                onClose={() => setMainView("thread")}
+                onOpenThread={(thread) => {
+                  setMainView("thread");
+                  showThreadFromLink({
+                    backend: thread.backend,
+                    threadId: thread.threadId,
+                    ...(thread.instanceId ? { instanceId: thread.instanceId } : {}),
+                    ...(thread.instanceLabel ? { instanceLabel: thread.instanceLabel } : {}),
+                  });
                 }}
               />
             </div>
