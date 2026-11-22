@@ -145,6 +145,9 @@ import {
   DetachPullRequestWarning,
   shouldShowDetachPullRequestWarning,
 } from "../pr-status/DetachPullRequestWarning";
+import { resolvePullRequestMergeOffer } from "@pwragent/shared/pull-request-merge-offer";
+import { MergePullRequestDialog } from "../pr-status/MergePullRequestDialog";
+import { usePullRequestMergeService } from "../pr-status/pull-request-merge-context";
 import { PullRequestWatchMenuItems } from "../pr-watches/PullRequestWatchMenuItems";
 import { SidebarSearchPopup } from "./SidebarSearchPopup";
 import {
@@ -978,6 +981,10 @@ function SidebarContent(props: SidebarProps) {
         prs: readonly PrSummary[];
       }
     | undefined
+  >();
+  const pullRequestMerge = usePullRequestMergeService();
+  const [mergingPullRequest, setMergingPullRequest] = useState<
+    { thread: NavigationThreadSummary; pr: PrSummary } | undefined
   >();
   const [renamingRow, setRenamingRow] = useState<RenamingThreadRow>();
   // Another lens unmounts the field without a commit; forget the edit, or it
@@ -4592,6 +4599,21 @@ function SidebarContent(props: SidebarProps) {
                             pr={contextMenuPullRequest}
                             onClose={() => setContextMenu(undefined)}
                           />
+                          {/* The PR card's merge, for the keyboard. A
+                              thread another PwrAgent owns merges there. */}
+                          {pullRequestMerge && !contextMenu.thread.federation
+                            && resolvePullRequestMergeOffer({ pr: contextMenuPullRequest }).kind !== "none" ? (
+                            <button
+                              role="menuitem"
+                              type="button"
+                              onClick={() => {
+                                setMergingPullRequest({ thread: contextMenu.thread, pr: contextMenuPullRequest });
+                                setContextMenu(undefined);
+                              }}
+                            >
+                              Merge Pull Request…
+                            </button>
+                          ) : null}
                           {props.onDetachPullRequest ? (
                             <button
                               role="menuitem"
@@ -4697,6 +4719,16 @@ function SidebarContent(props: SidebarProps) {
             ) : null
           );
         })()}
+
+        {mergingPullRequest && pullRequestMerge ? (
+          <MergePullRequestDialog
+            pr={mergingPullRequest.pr}
+            thread={{ backend: mergingPullRequest.thread.source, threadId: mergingPullRequest.thread.id }}
+            service={pullRequestMerge}
+            returnFocus={contextMenuOpenerRef}
+            onClose={() => setMergingPullRequest(undefined)}
+          />
+        ) : null}
 
         {pendingDetachPullRequest ? (
           <DetachPullRequestWarning

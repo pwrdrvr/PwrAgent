@@ -545,6 +545,8 @@ export type PrLegacyChipState = "merged" | "draft" | "closed";
 export type PrLifecycleState = "open" | "merged" | "closed";
 export type PrReviewState = "draft" | "ready_for_review";
 export type PrMergeState = "mergeable" | "conflicting" | "unknown";
+/** A way to land a PR. `ThreadTodoMergeMethod` is the same set. */
+export type PrMergeMethod = "squash" | "rebase" | "merge";
 
 /**
  * Where a PR stands in its base branch's merge queue (GitHub) or merge train
@@ -649,6 +651,12 @@ export type PrSummary = {
    * Absent from older builds and peers: treat absence as "no queue known".
    */
   mergeQueue?: PrMergeQueueStatus;
+  /**
+   * The merge methods the destination repository allows, read with the
+   * status poll. Absent from older builds, peers, GitLab and rows cached
+   * before it existed: treat absence as "not known", never as "none".
+   */
+  allowedMergeMethods?: PrMergeMethod[];
   /** Head commit observed with this status snapshot. */
   headSha?: string;
   /** Direct destination for the first failed CI check in this snapshot. */
@@ -3375,6 +3383,35 @@ export type DetachThreadPullRequestResponse = {
   threadId: ThreadIdentifier;
   detachedPrKeys: string[];
   prs: PrSummary[];
+};
+
+/** A local thread whose attached PR the operator merges from its PR card. */
+export type ThreadPullRequestMergeTarget = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+};
+
+/**
+ * The merge method a thread's PR card starts on: the operator's last pick for
+ * the thread's project, which to-do merge cards share, then Settings' default.
+ */
+export type ReadThreadPullRequestMergeResponse = {
+  remembered?: PrMergeMethod;
+  fallback: PrMergeMethod;
+};
+
+export type MergeThreadPullRequestRequest = ThreadPullRequestMergeTarget & {
+  /** One of the thread's attached PRs; main refuses any other. */
+  url: string;
+  method: PrMergeMethod;
+  /** The pick came from the method list, so it becomes the project's. */
+  rememberMethod?: boolean;
+};
+
+export type MergeThreadPullRequestResponse = {
+  summary: string;
+  /** Added to the base branch's merge queue rather than merged. */
+  queued?: boolean;
 };
 
 export type AttachDirectoryToThreadRequest = {

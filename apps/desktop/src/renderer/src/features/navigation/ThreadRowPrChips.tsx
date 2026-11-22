@@ -1,7 +1,8 @@
-import { memo, type ComponentProps } from "react";
+import { memo, useMemo, type ComponentProps } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { PrChip } from "../pr-status/PrChip";
 import { PrRollupChip } from "../pr-status/PrRollupChip";
+import { usePullRequestMergeService } from "../pr-status/pull-request-merge-context";
 import {
   resolvePrChipWatch,
   useThreadAutoFixRepository,
@@ -12,6 +13,18 @@ type WatchedThread = Pick<
   NavigationThreadSummary,
   "id" | "source" | "federation" | "prAutoDispatchEnabled" | "primaryGitRepository" | "prCiWatches"
 >;
+
+/**
+ * What lets a row's PR card merge: only a local thread's, in a window that
+ * merges. A thread another PwrAgent owns merges there, with its own holds.
+ */
+function useThreadPrMerge(thread: WatchedThread): ComponentProps<typeof PrChip>["merge"] {
+  const service = usePullRequestMergeService();
+  const local = !thread.federation;
+  return useMemo(() => service && local
+    ? { thread: { backend: thread.source, threadId: thread.id }, service }
+    : undefined, [service, local, thread.source, thread.id]);
+}
 
 /**
  * A sidebar row's PR chip and its watch. The watch context is read here, not
@@ -25,11 +38,13 @@ export const ThreadRowPrChip = memo(function ThreadRowPrChip(
   const { thread, ...chip } = props;
   const watches = useThreadPrWatches(thread);
   const autoFixRepository = useThreadAutoFixRepository(thread);
+  const merge = useThreadPrMerge(thread);
   return (
     <PrChip
       {...chip}
       watch={resolvePrChipWatch(watches, chip.pr, autoFixRepository)}
       cardActions
+      merge={merge}
     />
   );
 });
@@ -43,5 +58,13 @@ export const ThreadRowPrRollupChip = memo(function ThreadRowPrRollupChip(
   const { thread, ...chip } = props;
   const prWatches = useThreadPrWatches(thread);
   const autoFixRepository = useThreadAutoFixRepository(thread);
-  return <PrRollupChip {...chip} prWatches={prWatches} autoFixRepository={autoFixRepository} />;
+  const merge = useThreadPrMerge(thread);
+  return (
+    <PrRollupChip
+      {...chip}
+      prWatches={prWatches}
+      autoFixRepository={autoFixRepository}
+      merge={merge}
+    />
+  );
 });

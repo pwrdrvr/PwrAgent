@@ -494,6 +494,10 @@ import type {
   GlabStatus,
   GhStatus,
   DetachThreadPullRequestRequest,
+  MergeThreadPullRequestRequest,
+  MergeThreadPullRequestResponse,
+  ReadThreadPullRequestMergeResponse,
+  ThreadPullRequestMergeTarget,
   DetachThreadPullRequestResponse,
   RefreshThreadPullRequestsRequest,
   RefreshThreadGitWorkingStateRequest,
@@ -1987,6 +1991,14 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   detachThreadPullRequest?: (
     request: DetachThreadPullRequestRequest
   ) => Promise<DetachThreadPullRequestResponse>;
+  /** The merge method a local thread's PR card starts on. */
+  readThreadPullRequestMerge?: (
+    request: ThreadPullRequestMergeTarget,
+  ) => Promise<ReadThreadPullRequestMergeResponse>;
+  /** Merges one of a local thread's attached PRs, as its to-do merge card would. */
+  mergeThreadPullRequest?: (
+    request: MergeThreadPullRequestRequest,
+  ) => Promise<MergeThreadPullRequestResponse>;
   refreshDirectoryGitStatuses?: (
     request: RefreshDirectoryGitStatusesRequest
   ) => Promise<RefreshDirectoryGitStatusesResponse>;
