@@ -6,11 +6,12 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { ResourceCheckoutAuthority, type CheckoutToken } from "@pwragent/owner-core/resource-checkout-authority";
 import { executeResourceCheckout, type CheckoutProviderAdapter } from "@pwragent/owner-core/resource-checkout-executor";
-import type { CheckoutActor, CheckoutDefinition } from "@pwragent/owner-core/resource-checkout-storage";
+import type { CheckoutActor, CheckoutDefinition, CheckoutGrant } from "@pwragent/owner-core/resource-checkout-storage";
 import type { ResourceCheckoutActionRequest } from "@pwragent/shared/contracts/resource-checkouts";
 import { openResourceCheckoutStore } from "@pwragent/sqlite-storage/resource-checkout-store";
 import { createResourceCheckoutToolHandler } from "../agent-tools/pwragent-resource-checkout-agent-tools";
 import { checkoutRootCanHostMachine } from "../resource-checkouts/checkout-runtime";
+import { projectCheckoutDomain } from "../resource-checkouts/checkout-projection";
 import { DesktopResourceCheckoutService } from "../resource-checkouts/resource-checkout-service";
 import type { ExternalBinding } from "../resource-checkouts/checkout-configuration";
 import { readOrCreateFederationMachineId } from "../federation/federation-host-info";
@@ -56,6 +57,75 @@ function granted(authority: ResourceCheckoutAuthority, key: string): CheckoutTok
 }
 
 describe("the persisted resource checkout authority", () => {
+  it("uses the durable machine capacity even when another profile detects a different CPU count", async () => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 64 }), fc.integer({ min: 0, max: 64 }), async (capacity, detected) => {
+      fc.pre(capacity !== detected);
+      const root = mkdtempSync(path.join(os.tmpdir(), "pwragent-cpu-detection-"));
+      const open = (profile: string, machineCpuCount: number) => new DesktopResourceCheckoutService({
+        viewer: { instanceId: profile, instanceLabel: profile, profile, machineId: "host" },
+        machineStore: openResourceCheckoutStore(path.join(root, "machine.db"), "host"), machineCpuCount,
+        bindings: [], now: () => 1, requestPeer: async () => { throw new Error("Offline"); }, warn: () => {},
+      });
+      const first = open("first", capacity);
+      const [machine] = first.read().resources;
+      const second = open("second", detected);
+      try {
+        await expect(first.perform(request("light", { resourceId: machine.resourceId, units: 1 }))).resolves.toMatchObject({ outcome: "granted" });
+        expect(second.read().resources[0]).toMatchObject({
+          condition: "available",
+          sharing: { mode: "counted", capacity, inUse: 1 },
+        });
+        await expect(second.perform(request("whole machine", { resourceId: machine.resourceId }))).resolves.toMatchObject({ outcome: "queued" });
+        expect(first.read().resources[0].queue).toMatchObject([{ units: capacity }]);
+      } finally {
+        await Promise.all([first.close(), second.close()]);
+        rmSync(root, { recursive: true, force: true });
+      }
+    }), { numRuns: 16 });
+  });
+
+  it("never binds a managed job when more than one idle reservation belongs to its executor", () => {
+    fc.assert(fc.property(fc.integer({ min: 2, max: 32 }), (largeReservation) => {
+      const harness = createHarness(largeReservation + 1);
+      try {
+        const { authority } = harness.open();
+        const small = authority.perform(actor, request("small", { units: 1, expectedDurationMs: 50 }));
+        const large = authority.perform(actor, request("large", { units: largeReservation, expectedDurationMs: 5_000 }));
+        if (small.outcome !== "granted" || large.outcome !== "granted") throw new Error("Invalid counted fixture.");
+        const before = authority.records(resourceId);
+        const job = { id: "managed", executor: "host" };
+        expect(() => authority.admitLocalJob(resourceId, actor, "Managed action", job)).toThrow(/multiple idle/i);
+        expect(authority.records(resourceId)).toEqual(before);
+        authority.perform(actor, change("release", { resourceId, epoch: definition.epoch, ...small }, "release small"));
+        expect(authority.admitLocalJob(resourceId, actor, "Managed action", job)).toMatchObject({
+          allocationId: large.allocationId, generation: large.generation,
+        });
+      } finally { harness.close(); }
+    }), { numRuns: 20 });
+  });
+
+  it("projects fencing and cleanup gates for each allocation independently of earlier failures", () => {
+    fc.assert(fc.property(fc.array(fc.constantFrom("missing", "unverified", "verified"), { minLength: 2, maxLength: 12 }), (states) => {
+      const machine = { ...definition, resourceId: "machine:host:cpu", canonicalKey: "machine:host:cpu", scope: "machine" as const };
+      const grants: CheckoutGrant[] = states.map((state, index) => ({
+        actor, id: `failed-${index}`, generation: index + 1, requestedAt: 1, purpose: `Job ${index}`,
+        units: 1, durationMs: 10, grantedAt: 1, deadlineAt: 11, renewals: 0, state: "recovery_required",
+        job: { id: `job-${index}`, executor: "host", ...(state === "missing" ? {} : { processGroupId: index + 1 }) },
+        ...(state === "verified" ? { fencingVerifiedAt: 12 } : {}),
+      }));
+      const view = projectCheckoutDomain({ definition: machine, generation: grants.length, grants, queue: [] }, actor, {
+        authorityId: machine.authorityId, kind: "machine_broker", status: "reachable", label: "Host",
+        endpointLabel: "Local", epoch: machine.epoch,
+      });
+      expect(view.recoveries?.map((entry) => [
+        entry.allocationId, entry.generation, entry.actions?.fence?.allowed, entry.actions?.verify_cleanup?.allowed,
+      ])).toEqual(states.map((state, index) => [
+        `failed-${index}`, index + 1, state === "missing" ? undefined : true, state === "missing" ? undefined : state === "verified",
+      ]));
+      expect(view.actions.request).toMatchObject({ allowed: false });
+    }), { numRuns: 30 });
+  });
+
   it("preserves exclusive holders and FIFO waiters while upgrading dev's machine pool", async () => {
     await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 128 }), async (machineCpuCount) => {
       const root = mkdtempSync(path.join(os.tmpdir(), "pwragent-machine-capacity-"));

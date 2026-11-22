@@ -106,6 +106,9 @@ simulated results.
 - Grant-scoped actions (`release`, `extend`, `fence`, `verify_cleanup`,
   `administrative_release`) carry the `allocationId` and `generation` the
   operator saw. Reject a stale generation with `stale_generation`.
+- The authority supplies recovery evidence and gates for each failed
+  allocation. The recovery dialog stays bound to the selected allocation
+  even as other jobs enter or leave recovery.
 - `request` comes from the operator, and its holder is the operator. It
   never names a thread as owner. On counted resources the operator selects
   the unit count. Agents request through their own tools.

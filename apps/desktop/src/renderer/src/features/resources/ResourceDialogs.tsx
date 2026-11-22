@@ -4,6 +4,8 @@ import type {
   ResourceCheckoutActionRequest,
   ResourceCheckoutActionResult,
   ResourceDomain,
+  ResourceRecoveryActionGates,
+  ResourceRecoveryStatus,
   ResourceScope,
 } from "@pwragent/shared/contracts/resource-checkouts";
 import { useModalDialog } from "../../lib/useModalDialog";
@@ -276,19 +278,15 @@ export function ReleaseDialog(props: {
 
 export function RecoveryDialog(props: {
   resource: ResourceDomain;
-  actions: ResourceActionDescriptor[];
+  recovery: ResourceRecoveryStatus | undefined;
+  actions: ResourceRecoveryActionGates;
   submit: SubmitResourceAction;
   onClose: () => void;
 }): ReactElement {
-  const { resource } = props;
-  const recovery = resource.recovery;
+  const { resource, recovery } = props;
   const [note, setNote] = useState("");
   const { busy, problem, send } = useDialogSubmit(props.submit, () => undefined);
-  const gateFor = (kind: string): ResourceActionGate | undefined =>
-    props.actions.find((action) => action.kind === kind)?.gate;
-  const fenceGate = gateFor("fence");
-  const verifyGate = gateFor("verify_cleanup");
-  const adminGate = gateFor("administrative_release");
+  const { fence: fenceGate, verify_cleanup: verifyGate, administrative_release: adminGate } = props.actions;
   const noteGate: ResourceActionGate | undefined = adminGate?.allowed && note.trim() === ""
     ? { allowed: false, reason: "policy", detail: "Write an audit note first." }
     : adminGate;
@@ -303,7 +301,7 @@ export function RecoveryDialog(props: {
     <ResourceDialog
       wide
       busy={busy}
-      lede="Prove the old grant can't act before the resource is handed on."
+      lede="Verify that this allocation can no longer act before releasing its slots."
       problem={problem}
       title={`Recover ${resource.displayName}`}
       titleId="resources-recover-title"
@@ -330,7 +328,9 @@ export function RecoveryDialog(props: {
                 <ResourceActionButton busy={busy} gate={recovery.fencing === "verified" ? { allowed: false, reason: "not_applicable", detail: "Fencing is already verified." } : fenceGate} onClick={() => grantScoped("fence")}>
                   Fence old workload
                 </ResourceActionButton>
-                <small>Cancels the old grant's commands and retires its stop guard. Rejected if a newer grant exists.</small>
+                <small>{resource.placement === "machine"
+                  ? "Checks that this allocation's recorded process group is gone."
+                  : "Checks that commands and stop guards from this allocation can no longer act."}</small>
               </li>
             ) : null}
             {verifyGate ? (
@@ -338,7 +338,7 @@ export function RecoveryDialog(props: {
                 <ResourceActionButton busy={busy} emphasis="primary" gate={verifyGate} onClick={() => grantScoped("verify_cleanup")}>
                   Verify cleanup and release
                 </ResourceActionButton>
-                <small>Runs the declared cleanup, then wakes the next waiter.</small>
+                <small>Rechecks cleanup for this allocation. The queue waits until all recoveries are resolved.</small>
               </li>
             ) : null}
           </ol>
@@ -372,7 +372,7 @@ export function RecoveryDialog(props: {
           ) : null}
         </>
       ) : (
-        <p className="resources-note">Recovery is complete. This resource is back in normal service.</p>
+        <p className="resources-note">This allocation no longer needs recovery.</p>
       )}
     </ResourceDialog>
   );

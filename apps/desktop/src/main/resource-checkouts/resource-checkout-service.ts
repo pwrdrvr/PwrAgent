@@ -80,7 +80,7 @@ export class DesktopResourceCheckoutService {
     if (machineStore) {
       try {
         this.machine = new ResourceCheckoutAuthority(machineStore, this.now, randomUUID);
-        this.machine.ensure(this.machineDefinition, { upgradeExclusiveMachine: true });
+        this.machine.ensure(this.machineDefinition, { machineCpuPool: true });
         if (options.bootId) this.machine.reconcilePriorMachineBoot(machineKey, options.bootId);
       } catch (error) {
         this.machineConflict = true;

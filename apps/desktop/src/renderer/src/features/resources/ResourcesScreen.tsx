@@ -24,8 +24,9 @@ import {
   matchesFilter,
   matchesSearch,
   presentResources,
-  resourceActions,
   resourceGroup,
+  resourceRecoveries,
+  resourceRecoveryGates,
   type PresentedResource,
   type ResourceActionDescriptor,
   type ResourceFilter,
@@ -49,7 +50,7 @@ const SCOPES: ReadonlyArray<{ value: ResourceScopeFilter; label: string }> = [
 type DialogState =
   | { kind: "request"; resourceId: string; action: ResourceActionDescriptor }
   | { kind: "release"; resourceId: string }
-  | { kind: "recover"; resourceId: string }
+  | { kind: "recover"; resourceId: string; allocationId: string; generation: number }
   | { kind: "resolve"; resourceId: string }
   | { kind: "register" };
 
@@ -159,7 +160,7 @@ export function ResourcesScreen(props: {
   const onIntent = (intent: ResourceInspectorIntent) => {
     if (!selected) return;
     const resource = selected.resource;
-    if (intent.kind === "recover") return setDialog({ kind: "recover", resourceId: resource.resourceId });
+    if (intent.kind === "recover") return setDialog({ ...intent, resourceId: resource.resourceId });
     if (intent.kind === "resolve") return setDialog({ kind: "resolve", resourceId: resource.resourceId });
     const { action } = intent;
     switch (action.kind) {
@@ -182,12 +183,15 @@ export function ResourcesScreen(props: {
         return;
       }
       default:
-        return setDialog({ kind: "recover", resourceId: resource.resourceId });
+        return;
     }
   };
 
   const dialogResource = dialog && dialog.kind !== "register"
     ? presented.find((item) => item.resource.resourceId === dialog.resourceId)
+    : undefined;
+  const dialogRecovery = dialog?.kind === "recover" && dialogResource
+    ? resourceRecoveries(dialogResource.resource).find((entry) => entry.allocationId === dialog.allocationId && entry.generation === dialog.generation)
     : undefined;
   const dialogOpen = dialog?.kind === "register" || Boolean(dialogResource);
   const closeDialog = () => setDialog(null);
@@ -334,7 +338,8 @@ export function ResourcesScreen(props: {
       ) : null}
       {dialog?.kind === "recover" && dialogResource ? (
         <RecoveryDialog
-          actions={resourceActions(dialogResource.resource, dialogResource.authority)}
+          recovery={dialogRecovery}
+          actions={dialogRecovery ? resourceRecoveryGates(dialogResource.resource, dialogResource.authority, dialogRecovery) : {}}
           resource={dialogResource.resource}
           submit={submit}
           onClose={closeDialog}

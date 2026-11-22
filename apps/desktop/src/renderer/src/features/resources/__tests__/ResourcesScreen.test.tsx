@@ -6,6 +6,7 @@ import type {
   ResourceCheckoutActionResult,
   ResourceCheckoutsChangedEvent,
   ResourceCheckoutsSnapshot,
+  ResourceDomain,
 } from "@pwragent/shared/contracts/resource-checkouts";
 import { RequestCheckoutDialog } from "../ResourceDialogs";
 import { ResourcesScreen } from "../ResourcesScreen";
@@ -259,6 +260,39 @@ describe("ResourcesScreen", () => {
     const [first, second, third] = perform.mock.calls.map(([request]) => request);
     expect(second).toEqual(first);
     expect(third.idempotencyKey).not.toBe(first.idempotencyKey);
+  });
+
+  it("recovers the selected allocation and never retargets its dialog after release", async () => {
+    const base = buildPreviewSnapshot(NOW);
+    const resource = base.resources.find(({ displayName }) => displayName === "mac-lab-03")!;
+    const first = { ...resource.recovery!, allocationId: "missing", generation: 1, actions: {} };
+    const second = { ...resource.recovery!, allocationId: "selected", generation: 2, actions: { fence: { allowed: true as const } } };
+    const failed: ResourceDomain = {
+      ...resource,
+      recovery: first, recoveries: [first, second], actions: {},
+      allocations: [
+        { ...resource.allocations[0], allocationId: first.allocationId, generation: first.generation, taskLabel: "Missing process group" },
+        { ...resource.allocations[0], allocationId: second.allocationId, generation: second.generation, taskLabel: "Finished shard" },
+      ],
+    };
+    const snapshot = (revision: number, replacement: ResourceDomain) => ({
+      ...base, revision, resources: base.resources.map((candidate) => candidate === resource ? replacement : candidate),
+    });
+    const { source, perform, publish } = liveSource(snapshot(base.revision, failed));
+    await renderScreen(source);
+    selectRow(resource.displayName);
+    expect(within(inspector()).queryByRole("button", { name: "Recover Missing process group" })).toBeNull();
+    fireEvent.click(within(inspector()).getByRole("button", { name: "Recover Finished shard" }));
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Fence old workload" }));
+    });
+    expect(perform).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "fence", allocationId: second.allocationId, generation: second.generation,
+    }));
+    await publish(snapshot(base.revision + 1, { ...failed, recoveries: [first], allocations: failed.allocations.slice(0, 1) }));
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.getByText("This allocation no longer needs recovery.")).toBeInTheDocument();
+    expect(dialog.queryByRole("button", { name: "Fence old workload" })).toBeNull();
   });
 
   it.each([1, 2, 5])("sends the selected number of counted units (%i) and predicts the queue", async (units) => {
