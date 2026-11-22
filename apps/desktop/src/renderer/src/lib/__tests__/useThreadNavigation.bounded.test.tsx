@@ -8,6 +8,7 @@ import {
 } from "@pwragent/shared/project-forge-automation";
 import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import {
+  buildPullRequestStatusKey,
   type NavigationDirectoryRow,
   type NavigationQueryPage,
   type NavigationRow,
@@ -1283,7 +1284,6 @@ it("keeps one PR burst bounded across 36 open project collections and preserves 
     counts: { ...counts, total: 25 }, pinnedRootCount: 1, unpinnedRootCount: 23, launchpadPresent: false,
   }));
   const target = { scope: "remote", instanceId: "fixture-peer" } as const;
-  const prKey = "github.com/fixture/unified#71";
   const pr: PrSummary = { provider: "github.com", org: "fixture", repo: "unified", number: 71,
     url: "https://github.com/fixture/unified/pull/71", state: "pending" };
   const selected = row("selection");
@@ -1292,7 +1292,9 @@ it("keeps one PR burst bounded across 36 open project collections and preserves 
   let staggerResponses = false;
   const projectRows = (directoryKey: string, pinned: boolean) => {
     if (pinned) return [{ ...row(`${directoryKey}/root`), pinnedRank: "1024", ordinaryChildCount: 1 }];
-    return Array.from({ length: 23 }, (_, index) => row(`${directoryKey}/thread-${index}`));
+    return Array.from({ length: 23 }, (_, index) => ({ ...row(`${directoryKey}/thread-${index}`),
+      ...(index === 0 ? { prs: [{ ...pr, number: 72, url: "https://github.com/fixture/unified/pull/72" }] } : {}),
+    }));
   };
   const peerChild = (threadId: string, parentThreadId?: string): NavigationRow => ({
     ...row(threadId), parentThreadId, rowRevision: prState,
@@ -1316,11 +1318,13 @@ it("keeps one PR burst bounded across 36 open project collections and preserves 
     } else if (query.kind === "exact" && query.identities.some(({ threadId }) => threadId === selected.id)) {
       members = [selected];
     } else return baseline;
-    const containsPr = members.some((member) => member.prs?.length);
+    const nativeViewerRows = request.federationTarget?.scope !== "remote" && members.every((member) => !member.federation);
+    const proof = nativeViewerRows ? { prKeysComplete: true as const, prKeys: members.flatMap((member) =>
+      member.prs?.map(buildPullRequestStatusKey) ?? []) } : { prKeys: [] };
     const entries = members.map((row) => ({ row, placement: { kind: "root" as const }, orderKey: row.id }));
     return { ...baseline, entries, complete: true, nextCursor: undefined, viewerRowOwners: [target.instanceId],
       metadataDependencies: { version: 1, threadKeys: members.map(({ ref }) => navigationIdentityKey(ref)),
-        prKeys: containsPr ? [prKey] : [], prKeysComplete: true },
+        ...proof },
     };
   });
   let listener: ((event: AgentEvent) => void) | undefined;

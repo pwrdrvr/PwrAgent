@@ -587,10 +587,7 @@ function projectNavigationRow(params: {
     ...(thread.lock ? { lock: thread.lock } : {}),
     ...(thread.checkoutHibernated ? { checkoutHibernated: true } : {}),
     ...(thread.keepCheckoutAwake ? { keepCheckoutAwake: true } : {}),
-    ...(!params.omitPullRequests ? {
-      ...projectNavigationPullRequests(thread.prs),
-      ...(thread.prsTruncated ? { prsTruncated: true, prCount: thread.prCount } : {}),
-    } : {}),
+    ...(!params.omitPullRequests ? projectNavigationPullRequests(thread.prs) : {}),
     ...(messagingBindings.items
       ? { messagingBindings: messagingBindings.items }
       : {}),
@@ -1384,10 +1381,12 @@ function projectionMetadataDependencies(params: {
     const ref = navigationIdentity(thread);
     threadKeys.add(JSON.stringify([ref.ownerInstanceId ?? null, ref.backend, ref.threadId]));
   }
-  // Count descriptors do not display PRs. Compacted peer previews can hide
-  // attachments, so only a complete attachment population certifies absence.
-  const prKeysComplete = selectedThreads.every((thread) => !thread.prsTruncated);
-  for (const thread of selectedThreads) for (const pr of thread.prs ?? []) prKeys.add(buildPullRequestStatusKey(pr));
+  // Count descriptors do not display PRs, and peer previews cannot prove
+  // raw attachment absence. Only local viewer proofs can name raw keys.
+  const prKeysComplete = selectedThreads.every((thread) => !thread.federation && (viewer || !thread.prs?.length));
+  if (viewer && prKeysComplete) {
+    for (const thread of selectedThreads) for (const pr of thread.prs ?? []) prKeys.add(buildPullRequestStatusKey(pr));
+  }
   if (ownerSidebar) for (const thread of selectedThreads) {
     const path = navigationWorkingStatePath(thread);
     if (path) workingStatePaths.add(path);

@@ -63,7 +63,7 @@ function createSource(coverage: "complete" | "checking" | "degraded" = "complete
       listeners.add(listener);
       return () => { listeners.delete(listener); };
     },
-    canonicalizeNavigationThreadPullRequests: async (threads: []) => threads,
+    withNavigationPrimaryGitRepositories: (threads: []) => threads,
     hydrateThreadGitWorkingStates: async (threads: []) => threads,
     withNavigationSubAgentActivity: (threads: []) => threads,
     getNavigationInputRequestThreadKeys: () => new Set<string>(),
@@ -631,7 +631,7 @@ describe("owner index reads under live turns", () => {
         listeners.add(listener);
         return () => { listeners.delete(listener); };
       },
-      canonicalizeNavigationThreadPullRequests: async (threads: []) => threads,
+      withNavigationPrimaryGitRepositories: (threads: []) => threads,
       hydrateThreadGitWorkingStates: async (threads: []) => threads,
       withNavigationSubAgentActivity: (threads: []) => threads,
       getNavigationInputRequestThreadKeys: () => new Set<string>(),
@@ -666,7 +666,7 @@ describe("owner index reads under live turns", () => {
         listeners.add(listener);
         return () => { listeners.delete(listener); };
       },
-      canonicalizeNavigationThreadPullRequests: async (threads: []) => threads,
+      withNavigationPrimaryGitRepositories: (threads: []) => threads,
       hydrateThreadGitWorkingStates: async (threads: []) => threads,
       withNavigationSubAgentActivity: (threads: []) => threads,
       getNavigationInputRequestThreadKeys: () => new Set<string>(),
@@ -700,7 +700,7 @@ it.each([
   const registry = {
     listThreads: async () => [thread],
     onEvent: () => () => undefined,
-    canonicalizeNavigationThreadPullRequests: async (threads: NavigationThreadSummary[]) => threads,
+    withNavigationPrimaryGitRepositories: (threads: NavigationThreadSummary[]) => threads,
     hydrateThreadGitWorkingStates: async (threads: NavigationThreadSummary[]) => threads,
     withNavigationSubAgentActivity: (threads: NavigationThreadSummary[]) => threads,
     getNavigationInputRequestThreadKeys: () => new Set<string>(),
@@ -761,7 +761,7 @@ it.each([
       listeners.add(listener);
       return () => { listeners.delete(listener); };
     },
-    canonicalizeNavigationThreadPullRequests: async (threads: NavigationThreadSummary[]) => threads,
+    withNavigationPrimaryGitRepositories: (threads: NavigationThreadSummary[]) => threads,
     hydrateThreadGitWorkingStates: async (threads: NavigationThreadSummary[]) => threads,
     withNavigationSubAgentActivity: (threads: NavigationThreadSummary[]) => threads,
     getNavigationInputRequestThreadKeys: () => new Set<string>(),
@@ -835,7 +835,7 @@ describe("owner index coverage", () => {
       isIncompleteThreadList: (threads: unknown) => params.incomplete && threads === listed,
       getStartupProviderRefreshStatus: () => params.startup,
       onEvent: () => () => {},
-      canonicalizeNavigationThreadPullRequests: async (threads: []) => threads,
+      withNavigationPrimaryGitRepositories: (threads: []) => threads,
       hydrateThreadGitWorkingStates: async (threads: []) => threads,
       withNavigationSubAgentActivity: (threads: []) => threads,
       getNavigationInputRequestThreadKeys: () => new Set<string>(),
@@ -873,7 +873,7 @@ describe("owner index coverage", () => {
       isIncompleteThreadList: () => false,
       getStartupProviderRefreshStatus: () => startup,
       onEvent: () => () => {},
-      canonicalizeNavigationThreadPullRequests: async (threads: []) => threads,
+      withNavigationPrimaryGitRepositories: (threads: []) => threads,
       hydrateThreadGitWorkingStates: async (threads: []) => threads,
       withNavigationSubAgentActivity: (threads: []) => threads,
       getNavigationInputRequestThreadKeys: () => new Set<string>(),
@@ -900,16 +900,21 @@ it("reuses membership across a PR status burst while pages observe the current r
     linkedDirectories: [], inbox: { inInbox: true }, ...(index === 0 ? { prs: [pr] } : {}),
   }));
   source.listThreads.mockResolvedValue(threads);
+  vi.spyOn(source.registry, "withNavigationPrimaryGitRepositories").mockImplementation((rows) => rows.map((row) => ({
+    ...row, primaryGitRepository: "github.com/fixture/work",
+  })));
   project.mockClear().mockImplementation(({ threads }) => ({ threads, directories: [] }));
   source.finish();
   const store = new NavigationQueryStore();
   const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar",
-    query: { kind: "exact", identities: [{ backend: "codex", threadId: "fixture-0" }] } };
+    query: { kind: "exact", identities: [{ backend: "codex", threadId: "fixture-0" }, { backend: "codex", threadId: "fixture-1" }] } };
   let status: NonNullable<NavigationThreadSummary["prs"]>[number] = pr;
   const read = () => store.readPage({ request, scopeKey: "fixture", loadIndex: () => source.read(),
     pullRequests: { read: async () => [[status]], verify: async () => [[status]] } });
   try {
-    expect((await read()).entries[0]?.row.prs?.[0]?.state).toBe("pending");
+    const initial = await read();
+    expect(initial.entries[0]?.row.prs?.[0]?.state).toBe("pending");
+    expect(initial.entries[1]?.row).toMatchObject({ id: "fixture-1", primaryGitRepository: "github.com/fixture/work" });
     for (const state of ["failing", "passing", "merged"] as const) {
       status = { ...pr, state };
       source.emit("pullRequest/status/updated");

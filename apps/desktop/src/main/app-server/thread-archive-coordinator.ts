@@ -2618,9 +2618,11 @@ export class ThreadArchiveCoordinator {
     // Only a complete read can forget IDs. Every returned row, including a
     // partial first page, can protect its binding against older archive reads.
     const active = params.completeInventory || !previous ? new Map<string, number>() : previous;
+    let addedActiveThread = false;
     for (const thread of params.threads) {
       const lastSeen = previous?.get(thread.id);
       if (previous && lastSeen === undefined) {
+        addedActiveThread = true;
         this.recordArchiveWorkspaceChange(buildThreadIdentityKey(params.backend, thread.id), archiveWorkspacePaths(thread));
       }
       active.set(thread.id, Math.max(lastSeen ?? 0, params.observationSequence));
@@ -2633,10 +2635,7 @@ export class ThreadArchiveCoordinator {
       }
     }
     this.activeObservationsByBackend.set(params.backend, active);
-    // A newly observed active row protects its own binding below and still
-    // fences checkout removal above. Only a disappearance can create newly
-    // missing archive candidates and invalidate the archived page walk.
-    if (missingThreadIds.size > 0) {
+    if (addedActiveThread || missingThreadIds.size > 0) {
       this.invalidateArchiveCleanupReads(params.backend, undefined, false);
     }
     if (!params.completeInventory) return;

@@ -294,9 +294,6 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   keepCheckoutAwake?: boolean;
   /** Pull requests known for this thread's linked directories + branch history. */
   prs?: PrSummary[];
-  /** Peer summaries can be compact previews of a larger attachment set. */
-  prsTruncated?: boolean;
-  prCount?: number;
   /** Codex environments discovered from the active thread workspace. */
   codexEnvironmentOptions?: CodexEnvironmentOption[];
   /**
@@ -2641,7 +2638,7 @@ export type NavigationMetadataDependencies = {
   version: 1;
   /** JSON tuples [ownerInstanceId or null, backend, threadId]. */
   threadKeys: string[];
-  /** When certified, attachment keys for the entire collection, including off-page rows. */
+  /** Viewer-local raw attachment keys. Owner proofs only certify an empty set. */
   prKeys: string[];
   prKeysComplete?: true;
   /** Paths that can change projected rows, independent of count dependencies. */

@@ -1566,6 +1566,10 @@ export class DesktopBackendRegistry {
     return this.forgeToolBridge.canonicalizeNavigationPullRequests(prs, demand);
   }
 
+  withNavigationPrimaryGitRepositories(threads: NavigationSnapshot["threads"]): NavigationSnapshot["threads"] {
+    return this.forgeToolBridge.withNavigationPrimaryGitRepositories(threads);
+  }
+
   // Thread inspection members the registry's importers use. ThreadInspectionTools
   // owns the state; each member delegates to it.
   mutateThreadParentV1(

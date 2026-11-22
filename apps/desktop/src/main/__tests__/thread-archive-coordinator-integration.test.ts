@@ -2749,7 +2749,7 @@ describe("DesktopBackendRegistry", () => {
     expect(worktreeArchive).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])("shares archived pages after observing an active addition (provider notice: %s)", async (notice) => {
+  it.each([false, true])("uses one replacement archive walk after observing an active addition (provider notice: %s)", async (notice) => {
     const provider = new CodexAppServerClient({ directoryResolver: async () => [] });
     await provider.getInitializeResult();
     const transport = ArchiveCleanupTransport.latest;
@@ -2804,7 +2804,41 @@ describe("DesktopBackendRegistry", () => {
     await flushAsync();
     const archived = transport.listings.filter((listing) => listing.archived);
     expect({ walks: archived.filter(({ cursor }) => cursor === undefined).length, pages: archived.length })
-      .toEqual({ walks: 1, pages: 43 });
+      .toEqual({ walks: 2, pages: 86 });
+  });
+
+  it("fences held cleanup evidence on a new active observation even if a restore event was dropped", async () => {
+    const provider = new CodexAppServerClient({ directoryResolver: async () => [] });
+    await provider.getInitializeResult();
+    const transport = ArchiveCleanupTransport.latest;
+    transport.activeIds = ["active"];
+    transport.archivedIds = ["restored"];
+    transport.holdNextListing(true);
+    const codexClient = Object.assign(new MockBackendClient({}), {
+      listThreads: (...args: Parameters<CodexAppServerClient["listThreads"]>) => provider.listThreads(...args),
+      invalidateThreadListings: (notification?: AppServerNotification) => provider.invalidateThreadListings(notification),
+    });
+    const messagingStore = createMessagingArchiveCleanupStoreMock({
+      bindings: [{ id: "restored-binding", threadId: "restored" }], pendingIntentIds: ["restored-intent"],
+    });
+    const registry = createDesktopBackendRegistry({ codexClient, messagingStore, overlayStore: createOverlayStoreMock() });
+    onTestFinished(async () => { transport.releaseListings(); await registry.close(); await provider.close(); });
+    const request = { backend: "codex", callerReason: "renderer-navigation-query" } as const;
+    await registry.listThreads(request);
+    await transport.whenListing(true);
+
+    transport.activeIds.push("created");
+    await codexClient.emit({ method: "turn/started", params: { threadId: "active", turn: { id: "turn", status: "inProgress", output: [] } } });
+    await registry.listThreads(request);
+    // Restore after the active snapshot. The held archived response still
+    // contains the thread, and the provider delivered no restore notice.
+    transport.archivedIds = [];
+    transport.activeIds.push("restored");
+    transport.releaseListings(true);
+    await flushAsync();
+    expect({ revoked: messagingStore.revokedBindingIds, deleted: messagingStore.deletedPendingThreads })
+      .toEqual({ revoked: [], deleted: [] });
+    expect(transport.listings.filter(({ archived }) => archived).length).toBeGreaterThan(1);
   });
 
   it("requires an exhausted cursor before shared archived pages authorize messaging cleanup", async () => {

@@ -264,7 +264,7 @@ async function buildLocalNavigationQueryIndex(params: {
     async () => await overlayStore.listAllActivePrStatusWatches(),
   );
   params.signal?.throwIfAborted();
-  const threads = await registry.hydrateThreadGitWorkingStates(watchedThreads, {
+  const threads = await registry.hydrateThreadGitWorkingStates(registry.withNavigationPrimaryGitRepositories(watchedThreads), {
     probeMissing: false,
   });
   params.signal?.throwIfAborted();

@@ -3,7 +3,6 @@ import { createNavigationDiagnosticView, navigationDiagnosticOrigin, navigationL
 import {
   NAVIGATION_QUERY_MAX_PAGE_ROWS,
   NAVIGATION_QUERY_MAX_RESULT_BYTES,
-  buildPullRequestStatusKey,
 } from "@pwragent/shared/contracts/navigation";
 import { navigationQueryPageBudgetBytes } from "@pwragent/shared/navigation-remote-owner";
 import {
@@ -647,15 +646,18 @@ export class NavigationWindowQueries {
       if (request.query.kind === "directory-index") return false;
       if (resource.membershipUncertain || resource.prAttachmentsUncertain || page?.coverage.state !== "complete") return true;
       const dependencies = this.ownerPageProofs.get(page)?.dependencies ?? this.metadataDependencies(page);
-      const key = event.notification.method === "pullRequest/status/updated" ? event.notification.params.prKey : undefined;
+      const key = event.notification.method === "pullRequest/status/updated"
+        && typeof event.notification.params.prKey === "string" ? event.notification.params.prKey : undefined;
       if (dependencies?.prKeysComplete) {
+        // A viewer-local proof covers native rows only. Compact peer notices
+        // leave them alone; full status observations can patch shared PRs.
+        if (sourceOwner && request.inventory === "viewer" && request.federationTarget?.scope !== "remote"
+          && event.notification.method === "navigation/invalidated") return false;
         return dependencies.prKeys.some((candidate) => !key || navigationPullRequestKeysMayMatch(candidate, key));
       }
-      // Older peers omit the attachment proof. Preserve scoping for complete
-      // child trays, where the prior protocol already used row membership.
-      if (request.query.kind !== "children" || !page.complete || (page.rangeStart ?? 0) !== 0) return true;
-      return page.entries.some(({ row }) => row.prsTruncated || row.prs?.some((pr) =>
-        !key || navigationPullRequestKeysMayMatch(buildPullRequestStatusKey(pr), key)));
+      // A verified preview can omit a stored attachment. Its absence
+      // cannot rule out a status change that makes that attachment visible.
+      return true;
     }
     if (gitRevisions && typeof params?.directoryKey === "string" && params.directoryKey
       && federationTargetsEqual(request.federationTarget, event.federationTarget)
