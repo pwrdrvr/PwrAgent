@@ -98,8 +98,10 @@ authorization remains required. Quiet is a bounded restart protocol:
 2. Save the running-thread continuations and accepted queued messages in the
    existing atomic checkpoint. Failure of this initial checkpoint cancels quit
    before any steer or process termination and restores the prior gate.
-3. Steer supported running turns about the restart. Terminate environment actions
-   with a three-second SIGTERM grace, followed by the existing forced cleanup.
+3. Steer supported running turns about the restart. This owner-generated notice
+   preserves each running turn's existing messaging attribution. Terminate
+   environment actions with a three-second SIGTERM grace, followed by the
+   existing forced cleanup.
 4. Give turns fifteen seconds to settle, save the final continuation snapshot,
    then let the ordinary shutdown path interrupt remaining work and own process
    cleanup. Quiet does not wait indefinitely for every tool or child process.

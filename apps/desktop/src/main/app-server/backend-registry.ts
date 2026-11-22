@@ -938,6 +938,9 @@ import {
 
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 const backendLifecycleLog = getMainLogger("pwragent:backend-lifecycle");
+// Only the local quieting path holds this origin object. Display metadata
+// with the same fields cannot opt a steer out of the authority merge.
+const QUIET_RESTART_STEER_ORIGIN: AppServerThreadMessageOrigin = Object.freeze({ kind: "pwragent", systemReason: "app-restart" });
 
 function logBackendLifecycleNotification(
   backend: AppServerBackendKind,
@@ -9484,7 +9487,7 @@ export class DesktopBackendRegistry {
             expectedTurnId: target.turnId,
             requestId: `quiet-restart:${target.backend}:${target.threadId}:${target.turnId}`,
             input: [{ type: "text", text: QUIET_RESTART_STEER_TEXT }],
-          }, { kind: "pwragent", systemReason: "app-restart" }).then(() => true),
+          }, QUIET_RESTART_STEER_ORIGIN).then(() => true),
           new Promise<false>((resolve) => {
             timer = setTimeout(() => resolve(false), QUIET_RESTART_STEER_TIMEOUT_MS);
           }),
@@ -12402,6 +12405,9 @@ export class DesktopBackendRegistry {
     result: SteerTurnResponse,
     messageOrigin?: AppServerThreadMessageOrigin,
   ): Promise<void> {
+    // The owner is announcing its shutdown. It contributes no user request
+    // to the active turn and must leave its existing authority intact.
+    if (messageOrigin === QUIET_RESTART_STEER_ORIGIN) return;
     if (result.disposition === "steered" && messageOrigin) {
       const turn = { backend: params.backend, threadId: params.threadId, turnId: result.turnId };
       // Read-modify-write: overlapping steers must merge, not overwrite.
@@ -12693,7 +12699,7 @@ export class DesktopBackendRegistry {
     messageOrigin?: AppServerThreadMessageOrigin,
   ): Promise<ThreadSteeringSubmission> {
     // Accepted requests replay before reaching this admission boundary.
-    if (this.restartGate.phase === "quieting" && messageOrigin?.systemReason !== "app-restart") {
+    if (this.restartGate.phase === "quieting" && messageOrigin !== QUIET_RESTART_STEER_ORIGIN) {
       throw new Error("PwrAgent is restarting. Retry after it relaunches; this message was not accepted.");
     }
     return await this.threadSteerSubmission.submit(params, messageOrigin);
