@@ -76,7 +76,7 @@ import {
   moveThreadKey,
 } from "@pwragent/shared/thread-pins";
 import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
-import { isSubthreadLaunchpadKey } from "@pwragent/shared/contracts/navigation";
+import { isSubthreadLaunchpadKey, navigationThreadInAttentionScope } from "@pwragent/shared/contracts/navigation";
 import { resolveThreadParentKey } from "@pwragent/shared/subthreads";
 import {
   isFederationViewerWindow,
@@ -190,10 +190,12 @@ import {
 } from "./ThreadRowStatus";
 import { SelectedThreadDock } from "./SelectedThreadDock";
 import { type BridgedHoverCard, sidebarPrCardBridge } from "../../lib/hover-card-bridge";
-import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 import {
+  ATTENTION_SCOPE_LABELS,
+  AttentionIndicator,
   AttentionReviewReadout,
   AttentionTurnReadouts,
+  attentionScopeIndicator,
   describeAttentionCounts,
   useAttentionHoverCard,
 } from "./AttentionSignals";
@@ -753,15 +755,6 @@ function formatDraftThreadCount(count: number): string {
 // The line a thread lens's tooltip gains while no threads exist to show.
 const NO_THREADS_TOOLTIP_LINE = "No threads yet";
 
-// The Attention card's row labels, so a narrowed lens names its scope in the
-// card's own words.
-const attentionScopeLabels: Record<NavigationAttentionScope, string> = {
-  active: "In progress",
-  "active-local": "In progress here",
-  "active-remote": "In progress elsewhere",
-  review: "To review",
-};
-
 const attentionScopeEmptyMessages: Record<NavigationAttentionScope, string> = {
   active: "Nothing in progress.",
   "active-local": "Nothing in progress here.",
@@ -1048,10 +1041,18 @@ function SidebarContent(props: SidebarProps) {
         : resource.id === "lens" || (pinnedGroupShown && resource.id === PINNED_GROUP_RESOURCE_ID));
     const keys = new Set(resources.flatMap((resource) => resource.state.page?.entries ?? [])
       .map((entry) => navigationThreadSelectionKey(entry.row.ref)));
+    // An owner that predates the scope answers with the whole queue. Its
+    // page goes through the owner's own predicate here, so a narrowed lens
+    // never lists what its strip says it hides; a page that honoured the
+    // scope passes through unchanged.
+    const inScope = (key: string) => {
+      const row = rowsByKey.get(key);
+      return Boolean(row) && (!attentionScope || navigationThreadInAttentionScope(row!, attentionScope));
+    };
     return { directories: props.directories, threads: props.threads,
-      visibleKeys: [...keys].filter((key) => rowsByKey.has(key)),
+      visibleKeys: [...keys].filter(inScope),
       order: readNavigationPresentationOrder(props.pagedNavigation?.resources ?? new Map()) };
-  }, [props.directories, props.threads, props.pagedNavigation?.resources, props.browseMode, pinnedGroupShown, rowsByKey]);
+  }, [props.directories, props.threads, props.pagedNavigation?.resources, props.browseMode, pinnedGroupShown, rowsByKey, attentionScope]);
   // One hydrator per Sidebar instance: it holds the previous hydrated result
   // so a render that changes nothing hands the rows back their existing
   // object identities, which is what lets the memoized rows bail out while
@@ -5308,18 +5309,10 @@ function AttentionScopeStrip(props: {
   count: number;
   onShowAll: () => void;
 }) {
-  const label = attentionScopeLabels[props.scope];
   return (
     <div className="attention-scope" data-attention-scope={props.scope}>
-      <span
-        aria-hidden="true"
-        className={`signal-count signal-count--${
-          props.scope === "review" ? "idle" : props.scope === "active-remote" ? "remote-active" : "active"
-        }`}
-      >
-        {props.scope === "review" ? <span className="thread-row__status-cookie" /> : <ThinkingScanner compact />}
-      </span>
-      <span className="attention-scope__label">{label}</span>
+      <AttentionIndicator kind={attentionScopeIndicator(props.scope)} count={props.count} />
+      <span className="attention-scope__label">{ATTENTION_SCOPE_LABELS[props.scope]}</span>
       <span className="attention-scope__count">{props.count}</span>
       <button type="button" className="attention-scope__show-all" onClick={props.onShowAll}>
         Show All
@@ -5390,7 +5383,7 @@ function AttentionLensTab(props: {
     ...counts,
     title: browseModeLabels.attention,
     caption: "Threads in progress or waiting to be reviewed",
-    reviewLabel: "To review",
+    reviewLabel: ATTENTION_SCOPE_LABELS.review,
     footer: props.disabled ? NO_THREADS_TOOLTIP_LINE
       : shortcut ? withChordHint(pickable ? "Show All Attention" : "Show Attention", shortcut) : undefined,
     scopes: pickable ? {
@@ -5426,7 +5419,7 @@ function AttentionLensTab(props: {
   const accessibleName = `${browseModeLabels.attention}, ${describeAttentionCounts(
     counts,
     formatReviewThreadCount,
-  )}${scope ? `, showing ${attentionScopeLabels[scope].toLowerCase()} only` : ""}`;
+  )}${scope ? `, showing ${ATTENTION_SCOPE_LABELS[scope].toLowerCase()} only` : ""}`;
 
   return (
     <>
@@ -5445,12 +5438,7 @@ function AttentionLensTab(props: {
         }`}
         data-attention-scope={scope}
         type="button"
-        onBlur={(event) => {
-          // A click on one of the card's rows moves focus into the card;
-          // closing it here would drop the click before it lands.
-          if (event.relatedTarget instanceof Node && tooltip.getElement()?.contains(event.relatedTarget)) return;
-          tooltip.hide();
-        }}
+        onBlur={tooltip.hide}
         onClick={() => {
           if (props.disabled) return;
           tooltip.hide();

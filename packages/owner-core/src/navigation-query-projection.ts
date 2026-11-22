@@ -7,7 +7,6 @@ import type {
   LinkedDirectorySummary,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
-  NavigationAttentionScope,
   NavigationCounts,
   NavigationStarMapFacetCounts,
   NavigationDirectorySummary,
@@ -31,8 +30,10 @@ import type {
 import type { NavigationStarMapSignals } from "@pwragent/shared/navigation-star-map-filters";
 import {
   buildThreadIdentityKey,
+  isNavigationThreadRunning,
   NAVIGATION_QUERY_MAX_PAGE_ROWS,
   buildPullRequestStatusKey,
+  navigationThreadInAttentionScope,
 } from "@pwragent/shared/contracts/navigation";
 import { federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
 import { comparePinnedThreads } from "@pwragent/shared/thread-pins";
@@ -378,31 +379,7 @@ function queryDirectory(params: {
 }
 
 function isActive(thread: NavigationThreadSummary): boolean {
-  return thread.threadStatus === "active"
-    || thread.hasActiveSubAgent === true
-    || thread.hasBackgroundTasks === true;
-}
-
-/**
- * Whether an Attention member is of `scope`'s kind. The same predicates
- * `countsForThreads` counts with, so a narrowed lens lists exactly the
- * number the Attention card showed beside the row that narrowed it.
- */
-export function isInAttentionScope(
-  thread: NavigationThreadSummary,
-  scope: NavigationAttentionScope,
-): boolean {
-  const active = isActive(thread);
-  switch (scope) {
-    case "active":
-      return active;
-    case "active-local":
-      return active && thread.federation?.ref.target.scope !== "remote";
-    case "active-remote":
-      return active && thread.federation?.ref.target.scope === "remote";
-    case "review":
-      return thread.inbox.inInbox && !active;
-  }
+  return isNavigationThreadRunning(thread);
 }
 
 function countsForThreads(
@@ -1092,7 +1069,7 @@ function selectQueryThreads(params: {
       .filter((thread) => {
         if (query.lens === "attention") {
           if (!isActive(thread) && !thread.inbox.inInbox) return false;
-          if (query.attention && !isInAttentionScope(thread, query.attention)) return false;
+          if (query.attention && !navigationThreadInAttentionScope(thread, query.attention)) return false;
         }
         // A subtree follows its root, so a pinned thread's children render
         // in its tray in the Pinned group and never orphaned in the list.

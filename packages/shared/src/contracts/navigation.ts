@@ -829,6 +829,39 @@ export const NAVIGATION_ATTENTION_SCOPES = [
   "review",
 ] as const satisfies readonly NavigationAttentionScope[];
 
+/** A live turn, a running sub-agent, or background tasks that outlived the turn. */
+export function isNavigationThreadRunning(
+  thread: Pick<NavigationThreadSummary, "threadStatus" | "hasActiveSubAgent" | "hasBackgroundTasks">,
+): boolean {
+  return thread.threadStatus === "active"
+    || thread.hasActiveSubAgent === true
+    || thread.hasBackgroundTasks === true;
+}
+
+/**
+ * Whether an Attention member is of `scope`'s kind. The owner filters a
+ * narrowed lens with it, and a viewer re-applies it to a page from an owner
+ * that predates the field. Its predicates are the ones `NavigationCounts`
+ * counts with, so a narrowed lens lists exactly the number the Attention
+ * card showed beside the row that narrowed it.
+ */
+export function navigationThreadInAttentionScope(
+  thread: Pick<NavigationThreadSummary, "threadStatus" | "hasActiveSubAgent" | "hasBackgroundTasks" | "inbox" | "federation">,
+  scope: NavigationAttentionScope,
+): boolean {
+  const running = isNavigationThreadRunning(thread);
+  switch (scope) {
+    case "active":
+      return running;
+    case "active-local":
+      return running && thread.federation?.ref.target.scope !== "remote";
+    case "active-remote":
+      return running && thread.federation?.ref.target.scope === "remote";
+    case "review":
+      return thread.inbox.inInbox && !running;
+  }
+}
+
 /**
  * The one allowlist for a persisted / bridged lens value. Lives here rather
  * than in the desktop app because three processes decode it independently —

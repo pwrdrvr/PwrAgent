@@ -111,6 +111,46 @@ export function AttentionReviewReadout(props: { count: number; unknown?: boolean
   );
 }
 
+/** What each kind of Attention member is called, on the card and wherever a
+ *  lens narrowed to it is named (the scope strip, the tab's name). */
+export const ATTENTION_SCOPE_LABELS: Record<NavigationAttentionScope, string> = {
+  active: "In progress",
+  "active-local": "In progress here",
+  "active-remote": "In progress elsewhere",
+  review: "To review",
+};
+
+export type AttentionIndicatorKind = "turn" | "remote-turn" | "review";
+
+/** The mark a scope's readout wears: accent scanner, neutral scanner, cookie. */
+export function attentionScopeIndicator(scope: NavigationAttentionScope): AttentionIndicatorKind {
+  return scope === "review" ? "review" : scope === "active-remote" ? "remote-turn" : "turn";
+}
+
+/**
+ * One count's indicator outside the tab: the card's rows and the scope strip.
+ * A turn indicator is a dormant track at zero, never a sweeping beam beside
+ * a 0 (see `AttentionTurnScanner`).
+ */
+export function AttentionIndicator(props: { kind: AttentionIndicatorKind; count: number; unknown?: boolean }) {
+  const zero = props.unknown || props.count === 0;
+  return (
+    <span
+      aria-hidden="true"
+      className={`signal-count signal-count--${
+        props.kind === "review" ? "idle" : props.kind === "remote-turn" ? "remote-active" : "active"
+      }`}
+      data-zero={zero ? "true" : undefined}
+    >
+      {props.kind === "review" ? (
+        <span className="thread-row__status-cookie" />
+      ) : (
+        <AttentionTurnScanner count={zero ? 0 : props.count} />
+      )}
+    </span>
+  );
+}
+
 /**
  * One line of the Attention hover card: the control's own indicator, what it
  * counts, and the count. Repeating the indicator is what ties a row to the
@@ -120,7 +160,7 @@ export function AttentionReviewReadout(props: { count: number; unknown?: boolean
 function AttentionCardRow(props: {
   count: number;
   unknown?: boolean;
-  indicator: "turn" | "remote-turn" | "review";
+  indicator: AttentionIndicatorKind;
   label: string;
   /** What quitting does to this row's work. Omitted when nothing is at stake. */
   note?: string;
@@ -135,23 +175,7 @@ function AttentionCardRow(props: {
   const zero = props.unknown || props.count === 0;
   const content = (
     <>
-      <span
-        aria-hidden="true"
-        className={`signal-count signal-count--${
-          props.indicator === "review"
-            ? "idle"
-            : props.indicator === "remote-turn"
-              ? "remote-active"
-              : "active"
-        }`}
-        data-zero={props.unknown || props.count === 0 ? "true" : undefined}
-      >
-        {props.indicator === "review" ? (
-          <span className="thread-row__status-cookie" />
-        ) : (
-          <AttentionTurnScanner count={props.unknown ? 0 : props.count} />
-        )}
-      </span>
+      <AttentionIndicator kind={props.indicator} count={props.count} unknown={props.unknown} />
       <span className="attention-card__row-text">
         <span className="attention-card__row-label">{props.label}</span>
         {props.note ? (
@@ -170,6 +194,7 @@ function AttentionCardRow(props: {
         tabIndex={-1}
         className={`attention-card__row attention-card__row--pick${props.selected ? " is-selected" : ""}`}
         aria-current={props.selected ? "true" : undefined}
+        onMouseDown={keepFocusOnTrigger}
         onClick={props.onPick}
       >
         {content}
@@ -228,6 +253,15 @@ export type AttentionCardOptions = {
 };
 
 /**
+ * A press on one of the card's controls leaves focus where it was. Chromium
+ * focuses a button on mousedown, and the card closes once a row is picked,
+ * so focus moved into it would be dropped on <body> along with the card.
+ */
+function keepFocusOnTrigger(event: { preventDefault: () => void }): void {
+  event.preventDefault();
+}
+
+/**
  * The scope a turn row narrows to. "In progress" without the split is every
  * turn; with it, the first row is this machine's alone.
  */
@@ -266,7 +300,7 @@ function AttentionCard(props: AttentionCardCounts & AttentionCardOptions) {
           indicator="turn"
           // Only qualify the row once there is something to tell it apart
           // from.
-          label={activeRemote === undefined ? "In progress" : "In progress here"}
+          label={ATTENTION_SCOPE_LABELS[localScope]}
           note={
             activeRemote === undefined ? undefined : "Quitting interrupts these"
           }
@@ -278,7 +312,7 @@ function AttentionCard(props: AttentionCardCounts & AttentionCardOptions) {
             onPick={pick("active-remote")}
             selected={isSelected("active-remote")}
             indicator="remote-turn"
-            label="In progress elsewhere"
+            label={ATTENTION_SCOPE_LABELS["active-remote"]}
             note="Quitting leaves these running"
           />
         )}
@@ -297,6 +331,7 @@ function AttentionCard(props: AttentionCardCounts & AttentionCardOptions) {
             type="button"
             tabIndex={-1}
             className="attention-card__show-all"
+            onMouseDown={keepFocusOnTrigger}
             onClick={() => scopes.onSelect(undefined)}
           >
             {props.footer}

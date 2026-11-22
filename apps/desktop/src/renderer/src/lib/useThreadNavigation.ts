@@ -3822,10 +3822,13 @@ export function useThreadNavigation(
     }).catch(() => undefined);
   }, [setAttentionScopeState, setBrowseMode]);
 
+  // Already on Attention, only the scope moves: the lens is persisted
+  // (a state.db meta write), and re-sending the same lens on every pick
+  // would commit an identical row per click.
   const selectAttentionScope = useCallback((scope: NavigationAttentionScope | undefined): void => {
-    updateBrowseMode("attention");
+    if (browseMode !== "attention") updateBrowseMode("attention");
     setAttentionScopeState(scope);
-  }, [setAttentionScopeState, updateBrowseMode]);
+  }, [browseMode, setAttentionScopeState, updateBrowseMode]);
 
   // One write per change: a reveal that finds the group already open, or a
   // repeated toggle to the same value, must not commit.
