@@ -24,18 +24,15 @@ export function primaryCheckoutKey(thread: ThreadWorkspace): string {
 /** Evidence for status polling. Checkout-dependent actions resolve the workspace themselves. */
 export function readStoredPrimaryThreadRepository(thread: ThreadWorkspace): {
   key?: string;
-  observedOrigin?: boolean;
-  checkoutUnresolved?: boolean;
+  canProbe: boolean;
 } {
   const { path, origin } = primaryCheckout(thread);
   const observation = path ? readObservedGitOrigin(path) : undefined;
-  if (observation?.foundOrigin) {
-    const repo = observation.repo;
-    return { key: repo && buildPrRepositoryKey(repo.host, repo.owner, repo.repo), observedOrigin: true };
-  }
-  const repo = origin ? parseForgeRemote(origin) : undefined;
-  if (repo) return { key: buildPrRepositoryKey(repo.host, repo.owner, repo.repo) };
-  return { checkoutUnresolved: Boolean(path && !observation) };
+  const repo = observation?.conclusive ? observation.repo : origin ? parseForgeRemote(origin) : undefined;
+  return {
+    key: repo && buildPrRepositoryKey(repo.host, repo.owner, repo.repo),
+    canProbe: Boolean(path && !observation?.conclusive && (observation?.retryAt ?? 0) <= Date.now()),
+  };
 }
 
 export async function resolvePrimaryThreadRepoKey(
@@ -62,7 +59,7 @@ export async function resolvePrimaryThreadRepoKey(
     }
     const repositoryKey = await resolution;
     if (repositoryKey) return repositoryKey;
-    if (readObservedGitOrigin(primaryPath)?.foundOrigin) return undefined;
+    if (readObservedGitOrigin(primaryPath)?.conclusive) return undefined;
   }
 
   // A missing checkout can still use the provider's snapshot, except after

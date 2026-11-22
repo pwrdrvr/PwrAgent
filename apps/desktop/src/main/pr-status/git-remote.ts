@@ -148,12 +148,19 @@ export async function resolveGitHubRepoForDirectory(
   return observation.value.find((remote) => remote.name === "origin")?.repo;
 }
 
-/** The last checkout observation can supply polling identity without launching Git. */
-export function readObservedGitOrigin(cwd: string): { repo?: GitHubRepoRef; foundOrigin: boolean } | undefined {
+/** Keep negative observations until the shared remote cache permits a retry. */
+export function readObservedGitOrigin(cwd: string): {
+  repo?: GitHubRepoRef;
+  conclusive: boolean;
+  retryAt: number;
+} | undefined {
   const observation = remoteCache.get(cwd);
   if (!observation) return undefined;
   const origin = observation.value.find((remote) => remote.name === "origin");
-  return { repo: origin?.repo, foundOrigin: Boolean(origin) };
+  // A listed origin with a failed get-url read is inconclusive. A confirmed
+  // remote list without origin establishes absence, even if the list is empty.
+  const conclusive = Boolean(origin || (observation.names && !observation.names.includes("origin")));
+  return { repo: origin?.repo, conclusive, retryAt: observation.fetchedAt + REMOTE_CACHE_TTL_MS };
 }
 
 /**
@@ -332,15 +339,14 @@ async function defaultReadRemotes(cwd: string, demand: PrMetadataDemand): Promis
       const { stdout } = await runPrMetadataGit(cwd,
         ["config", "--null", "--show-scope", "--includes", "--get-regexp", REMOTE_CONFIG_KEYS], gitOptions, demand);
       const configuration = parseGitRemoteConfiguration(stdout);
-      if (configuration) return configuration;
-    } catch (error) {
+      if (configuration?.names.length) return configuration;
+    } catch {
       demand.signal?.throwIfAborted();
-      // `config --get-regexp` exits 1 when no key matches.
-      const result = error as { code?: number; stdout?: string; stderr?: string };
-      if (result.code === 1 && result.stdout === "" && result.stderr === "") return { names: [], remotes: [] };
     }
   }
 
+  // Config can return no matches both inside and outside a repository.
+  // Only Git's remote command can establish that an empty checkout has no origin.
   const { stdout } = await runPrMetadataGit(cwd, ["remote"], gitOptions, demand);
   const names = uniqueNonEmptyLines(stdout);
   const entries = await Promise.all(

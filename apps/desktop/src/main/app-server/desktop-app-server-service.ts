@@ -576,7 +576,6 @@ type AppServerOverlayStoreLike = OverlayStoreLike &
 type ThreadPrAttachment = {
   backend: AppServerBackendKind;
   primaryRepoKey?: string;
-  primaryResolved?: boolean;
   workspace?: Pick<NavigationThreadSummary, "linkedDirectories" | "gitOriginUrl">;
   prs: PrSummary[];
 };
@@ -2784,28 +2783,24 @@ class DesktopAppServerService {
       string,
       Promise<string | undefined>
     >();
-    const repositories = await Promise.all(threads.map(async (thread) => {
+    const primaryRepoKeys = await Promise.all(threads.map((thread) => {
       if (!options.inventoryDemand) {
         return thread.prs?.length || options.resolveUnattached
-          ? { key: await resolvePrimaryThreadRepoKey(thread, primaryRepoResolutionByPath), resolved: true }
-          : {};
+          ? resolvePrimaryThreadRepoKey(thread, primaryRepoResolutionByPath)
+          : undefined;
       }
+      if (!thread.prs?.length) return undefined;
       const stored = readStoredPrimaryThreadRepository(thread);
       const previous = this.attachedPrsByThreadKey.get(buildThreadIdentityKey(thread.source, thread.id));
       const workspaceChanged = previous?.workspace && primaryCheckoutKey(previous.workspace) !== primaryCheckoutKey(thread);
-      const resolvedWorkspace = previous?.workspace && previous.primaryResolved;
-      // Some live attachments (for example an explicit link after a workspace
-      // handoff) have no saved identity. Resolve their origin once so polling
-      // can start. Inventory discovery never validates their default refs.
-      if (thread.prs?.length && (workspaceChanged || (
-        stored.checkoutUnresolved && !resolvedWorkspace && thread.prs.some((pr) => !isTerminalPullRequest(pr))
-      ))) {
-        return { key: await resolvePrimaryThreadRepoKey(thread, primaryRepoResolutionByPath, options.inventoryDemand, Boolean(workspaceChanged)), resolved: true };
-      }
-      if (previous && resolvedWorkspace && !workspaceChanged && !stored.observedOrigin) {
-        return { key: previous.primaryRepoKey, resolved: true };
-      }
-      return { key: stored.key, resolved: stored.observedOrigin };
+      const live = thread.prs.filter((pr) => !isTerminalPullRequest(pr));
+      // Terminal attachments still need primary identity to arbitrate status
+      // from peers. A saved origin can also name an unexpanded SSH alias.
+      const unresolved = !stored.key || (live.length > 0
+        && !live.some((pr) => this.matchesPrimaryRepository(pr, stored.key)));
+      return workspaceChanged || (stored.canProbe && unresolved)
+        ? resolvePrimaryThreadRepoKey(thread, primaryRepoResolutionByPath, options.inventoryDemand, Boolean(workspaceChanged))
+        : stored.key;
     }));
     const liveThreadKeys = new Set<string>();
     const candidates: Array<{ backend: AppServerBackendKind; threadId: string; prKeys: string[] }> = [];
@@ -2813,11 +2808,10 @@ class DesktopAppServerService {
       if (options.isCurrent && !options.isCurrent()) return;
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
       liveThreadKeys.add(threadKey);
-      const { key: primaryRepoKey, resolved: primaryResolved } = repositories[index]!;
+      const primaryRepoKey = primaryRepoKeys[index];
       this.setThreadPrAttachment(threadKey, {
         backend: thread.source,
         workspace: { gitOriginUrl: thread.gitOriginUrl, linkedDirectories: thread.linkedDirectories },
-        ...(primaryResolved ? { primaryResolved } : {}),
         ...(primaryRepoKey ? { primaryRepoKey } : {}),
         prs: thread.prs ?? [],
       });
@@ -2862,13 +2856,13 @@ class DesktopAppServerService {
         prs: params.prs,
       },
     );
-    if (params.prs.length > 0 && !current?.primaryRepoKey && !current?.primaryResolved) {
+    if (params.prs.length > 0 && !current?.primaryRepoKey) {
       const primaryRepoKey = await this.resolveUncachedPrimaryRepoKey(params);
       // Patch only the key onto whatever list is now current. A refresh may
       // have supplied a key, or dropped the thread, while this resolved.
       const latest = this.attachedPrsByThreadKey.get(threadKey);
-      if (latest && latest.workspace === current?.workspace && !latest.primaryResolved && !latest.primaryRepoKey) {
-        this.setThreadPrAttachment(threadKey, { ...latest, primaryRepoKey, primaryResolved: true });
+      if (primaryRepoKey && latest && latest.workspace === current?.workspace && !latest.primaryRepoKey) {
+        this.setThreadPrAttachment(threadKey, { ...latest, primaryRepoKey });
       }
     }
     await this.syncThreadPrAutoDispatchCandidates(params);
@@ -3049,7 +3043,7 @@ class DesktopAppServerService {
       : undefined;
     this.setThreadPrAttachment(threadKey, {
       backend: params.backend, prs: this.canonicalizePrs(overlay.prs), ...latest,
-      primaryRepoKey, primaryResolved: true,
+      primaryRepoKey,
     });
     return { overlay, primaryRepoKey, prs: prs.filter((pr) =>
       this.matchesPrimaryRepository(pr, primaryRepoKey) && (!updatedKeys || updatedKeys.has(getPrStatusKey(pr))),
@@ -3100,8 +3094,8 @@ class DesktopAppServerService {
     backend: AppServerBackendKind;
     threadId: string;
     prKey: string;
-  }): Promise<boolean> {
-    const { prs } = await this.readPrimaryAttachedPrs(params);
+  }, fresh = true): Promise<boolean> {
+    const { prs } = await this.readPrimaryAttachedPrs(params, fresh);
     return prs.some((pr) => getPrStatusKey(pr) === this.prRepositoryAliases.canonicalizeKey(params.prKey));
   }
 
@@ -6171,19 +6165,27 @@ class DesktopAppServerService {
    */
   private async getPrAutoDispatchWinner(pr: PrSummary, prKey: string) {
     const store = this.getOverlayStore();
-    const eventKinds = getProjectForgeAutomationIndex().hasAny()
-      ? getPrAutoDispatchEventKinds(pr)
-      : [];
-    const allowed = eventKinds.length > 0
-      ? await store.getPrAutoDispatchCandidateWinner({
-          prKey,
-          accepts: (candidate) => {
-            const automation = this.threadForgeAutomation(candidate);
-            return eventKinds.some((kind) => projectAllowsAutoFixKind(automation, kind));
-          },
-        })
-      : undefined;
-    return allowed ?? await store.getPrAutoDispatchCandidateWinner({ prKey });
+    const eventKinds = getPrAutoDispatchEventKinds(pr);
+    const hasProjectRules = getProjectForgeAutomationIndex().hasAny();
+    const validate = this.isPrAutoDispatchAvailable() && Boolean(pr.headSha) && eventKinds.length > 0;
+    if (eventKinds.length === 0 || (!validate && !hasProjectRules)) {
+      return await store.getPrAutoDispatchCandidateWinner({ prKey });
+    }
+    const allowsRepair = (candidate: { backend: AppServerBackendKind; threadId: string }) => {
+      const automation = this.threadForgeAutomation(candidate);
+      return eventKinds.some((kind) => projectAllowsAutoFixKind(automation, kind));
+    };
+    const winner = await store.getPrAutoDispatchCandidateWinner({
+      prKey,
+      accepts: (candidate) => allowsRepair(candidate)
+        && (!validate || this.isPrimaryPrAttached({ ...candidate, prKey }, false)),
+    });
+    if (winner) return winner;
+    // A project-blocked candidate can still report the gate and cancel a
+    // pending repair. It cannot claim the same incident ahead of a valid one.
+    return hasProjectRules ? await store.getPrAutoDispatchCandidateWinner({
+      prKey, accepts: (candidate) => !allowsRepair(candidate),
+    }) : undefined;
   }
 
   private async handlePrAutoDispatchSnapshots(
@@ -6297,14 +6299,14 @@ class DesktopAppServerService {
   ): Promise<SandboxCleanupReport | undefined> {
     const service = this.getSandboxerPrCleanup();
     if (!service) return undefined;
-    const attachment = this.attachedPrsByThreadKey.get(
-      buildThreadIdentityKey(backend, threadId),
-    );
-    const prs = (attachment?.prs ?? []).map((pr) =>
-      this.prStatusRegistry.get(getPrStatusKey(pr))?.pr ?? pr
-    );
-    if (prs.length === 0) return undefined;
-    if (!prs.every((pr) => isTerminalPullRequest(pr))) return undefined;
+    const threadKey = buildThreadIdentityKey(backend, threadId);
+    const attachment = this.attachedPrsByThreadKey.get(threadKey);
+    if (!attachment || !this.canonicalizePrs(attachment.prs).some(isTerminalPullRequest)) return undefined;
+    // Cached membership can nominate a thread for cleanup. Verify its
+    // automatic attachments and abandon the decision if membership changed.
+    const prs = await this.canonicalizeStoredPullRequests(attachment.prs);
+    if (this.attachedPrsByThreadKey.get(threadKey) !== attachment
+      || prs.length === 0 || !prs.every(isTerminalPullRequest)) return undefined;
     // A sandbox created after the last PR closed is for later work on this
     // thread. Without a forge timestamp, everything recorded so far counts.
     const closedAt = prs.map((pr) => pr.mergedAt ?? pr.closedAt);
@@ -6505,8 +6507,8 @@ class DesktopAppServerService {
 
     const primaryPrs: PrSummary[] = [];
     for (const request of enabledRequests) {
-      const { overlay, prs } = await this.readPrimaryAttachedPrs(request);
-      await this.rememberThreadPrAttachmentUpdate({ ...request, prs: this.canonicalizePrs(overlay?.prs ?? []) });
+      const { prs } = await this.readPrimaryAttachedPrs(request);
+      await this.syncThreadPrAutoDispatchCandidates(request);
       // Only an off -> on change refills the incident's attempts. A repeated
       // `enabled: true` must not, or each one buys another round of repairs.
       await coordinator.resetIfTurnedOn(request);

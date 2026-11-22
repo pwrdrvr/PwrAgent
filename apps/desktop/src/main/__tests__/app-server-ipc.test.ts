@@ -2541,14 +2541,14 @@ describe("app server ipc", () => {
     const missing = await read(exact(1));
     expect(missing.entries[0]?.row.prs?.[0]?.number).toBe(2);
     expect((await read(exact(1), missing)).unchanged).toBe(true);
-    expect(runner.mock.calls.filter(([cwd]) => cwd === `${root}-1`)).toHaveLength(1);
+    expect(runner.mock.calls.filter(([cwd]) => cwd === `${root}-1`)).toHaveLength(2);
     now += 60_001;
     defaultBranch = "release";
     const refreshed = await read(exact(0), first);
     expect(refreshed.entries[0]?.row.prs?.[0]?.number).toBe(1);
     expect(refreshed.countsRevision).not.toBe(first.countsRevision);
     expect(runner.mock.calls.map(([cwd]) => cwd)).toEqual([
-      ...Array(2).fill(`${root}-0`), `${root}-1`, `${root}-0`, `${root}-0`,
+      ...Array(2).fill(`${root}-0`), `${root}-1`, `${root}-1`, `${root}-0`, `${root}-0`,
     ]);
 
     getStartupProviderRefreshStatus.mockReturnValue({ state: "ready" });
@@ -2556,7 +2556,7 @@ describe("app server ipc", () => {
     expect(syncThreadPrAutoDispatchCandidatesBatch.mock.lastCall?.[0].threads).toEqual(rows.map((row) => ({
       backend: row.source, threadId: row.id, prKeys: [buildPullRequestStatusKey(row.prs[0]!)],
     })));
-    expect(runner.mock.calls).toHaveLength(5);
+    expect(runner.mock.calls).toHaveLength(6);
   });
 
   it.each([12, 24])("probes only PR-bearing checkouts when a thread starts in an inventory of %i worktrees", async (size) => {
@@ -2723,6 +2723,7 @@ describe("app server ipc", () => {
     now += 300_001;
     await measure("repeat after remote metadata expiry", refreshInventory);
     const selected = rows[checkoutCount - 1]!;
+    const selectedOffset = starts.length;
     getCachedThreadSummary.mockReturnValue(selected);
     getThreadOverlayState.mockResolvedValue({
       backend: selected.source, threadId: selected.id, executionMode: "default", extraLinkedDirectories: [], prs: selected.prs,
@@ -2735,8 +2736,8 @@ describe("app server ipc", () => {
     });
     if (measurementsPath) await writeFile(measurementsPath, JSON.stringify(measurements, null, 2));
 
-    // Inventory events only reconcile membership; local Git demand is for the
-    // selected checkout. Open PRs remain pollable while merged history stays attached.
+    // Inventory needs only origins for paths without saved identity. It never
+    // validates default refs, and all live PRs with known origins keep polling.
     const service = appServerService as unknown as {
       collectPrPollTargets: () => { pr: PrSummary }[];
       backgroundPrPollingEnabled: boolean;
@@ -2745,8 +2746,12 @@ describe("app server ipc", () => {
     expect(service.collectPrPollTargets().map(({ pr }) => pr.number)).toEqual(
       Array.from({ length: checkoutCount }, (_, index) => index + 1),
     );
-    expect(measurements.slice(0, 4).map(({ total }) => total)).toEqual([0, 0, 0, 0]);
-    expect(starts.map(({ cwd }) => cwd)).toEqual(Array(measurements[4]!.total).fill(selected.linkedDirectories[0]!.path));
+    expect(measurements.slice(0, 4).map(({ total, discovery }) => [total, discovery]))
+      .toEqual([[2 * unownedCount, 0], [0, 0], [0, 0], [2 * unownedCount, 0]]);
+    const unownedPaths = new Set(rows.slice(checkoutCount).map((row) => row.linkedDirectories[0]!.path));
+    expect(starts.slice(0, selectedOffset).every(({ cwd }) => unownedPaths.has(cwd))).toBe(true);
+    expect(starts.slice(selectedOffset).map(({ cwd }) => cwd))
+      .toEqual(Array(measurements[4]!.total).fill(selected.linkedDirectories[0]!.path));
     expect(measurements[4]!.total).toBeGreaterThan(0);
     expect(measurements[4]!.total).toBeLessThanOrEqual(3);
 
@@ -2771,6 +2776,189 @@ describe("app server ipc", () => {
     expect(starts.slice(offset).map(({ cwd }) => cwd)).toEqual([moved.linkedDirectories[0]!.path]);
     expect(service.collectPrPollTargets().some(({ pr }) => pr.number === 1)).toBe(false);
   }, 45_000);
+
+  it("recovers polling and terminal ownership when the stored origin cannot establish the checkout identity", async () => {
+    const { startAppServerOwnerNavigation, appServerService } = await import("../shell/ipc/app-server");
+    const { getDesktopOverlayStore } = await import("../storage/desktop-overlay-store");
+    const { runGitCommand } = await import("../app-server/git-executable");
+    const { resolveGitHubRepoForDirectory: readOrigin, clearGitHubRemoteCache } =
+      await vi.importActual<typeof import("../pr-status/git-remote")>("../pr-status/git-remote");
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-pr-owner-oracle-"));
+    const restoreGit = isolateProcessGitEnvironment(root);
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    onTestFinished(async () => {
+      clock.mockRestore();
+      clearGitHubRemoteCache();
+      restoreGit();
+      await rm(root, { recursive: true, force: true });
+    });
+    const createCheckout = async (cwd: string, origin: string) => {
+      await mkdir(cwd);
+      await runGitCommand(cwd, ["init", "-b", "main"]);
+      await runGitCommand(cwd, ["remote", "add", "origin", origin]);
+    };
+    const forgeOrigin = "https://github.com/fixture/project.git";
+    const aliasOrigin = "git@github-work:fixture/project.git";
+    const aliasPath = path.join(root, "alias");
+    const terminalPath = path.join(root, "handoff");
+    const restoredPath = path.join(root, "restored");
+    await Promise.all([createCheckout(aliasPath, aliasOrigin), createCheckout(terminalPath, forgeOrigin)]);
+    const specs = [
+      { id: "alias", cwd: aliasPath, origin: aliasOrigin },
+      { id: "terminal", cwd: terminalPath, terminal: true },
+      { id: "restored", cwd: restoredPath },
+    ];
+    const rows = specs.map(({ id, cwd, origin, terminal }, index) => ({
+      id, source: "codex", title: id, titleSource: "explicit", gitOriginUrl: origin,
+      linkedDirectories: [{ id: terminal ? "pwragent-handoff:codex:terminal" : id, kind: "local", label: id, path: cwd }],
+      prs: [githubPr({ number: index + 1, org: "fixture", repo: "project", state: "passing",
+        lifecycleState: terminal ? "merged" : "open", explicitlyAttached: true,
+        url: `https://github.com/fixture/project/pull/${index + 1}` })],
+    }));
+    resolveGitHubRepoForDirectory.mockImplementation((cwd, options) => readOrigin(cwd!, {
+      ...options, resolveSshHostname: async () => "github.com",
+    }));
+    overlayStoreFixture.stable = getDesktopOverlayStore();
+    getStartupProviderRefreshStatus.mockReturnValue({ state: "ready" });
+    listThreads.mockResolvedValue(rows as never);
+    registerAppServerIpcHandlers();
+    await startAppServerOwnerNavigation();
+
+    const owner = setLocalPullRequestAuthorityResolver.mock.lastCall?.[0];
+    const memberships = () => rows.map(({ prs }) => owner(buildPullRequestStatusKey(prs[0]!)));
+    const beforeRestore = memberships();
+    await createCheckout(restoredPath, forgeOrigin);
+    const refresh = async () => {
+      const prior = syncThreadPrAutoDispatchCandidatesBatch.mock.calls.length;
+      emitRegistryEvent({ backend: "codex", notification: { method: "navigation/providerThreads/refreshed", params: {} } });
+      await vi.waitFor(() => expect(syncThreadPrAutoDispatchCandidatesBatch.mock.calls.length).toBeGreaterThan(prior));
+    };
+    const calls = resolveGitHubRepoForDirectory.mock.calls.length;
+    await refresh();
+    expect(resolveGitHubRepoForDirectory.mock.calls.length).toBe(calls);
+    now += 5 * 60_000 + 1;
+    await refresh();
+    expect.soft([beforeRestore, memberships()]).toEqual([[true, true, false], [true, true, true]]);
+
+    // A real checkout with its origin removed cannot borrow the old session
+    // origin and grant permission to watch an explicitly attached PR.
+    const row = rows[0]!;
+    await runGitCommand(aliasPath, ["remote", "remove", "origin"]);
+    getCachedThreadSummary.mockReturnValue({ ...row, gitOriginUrl: forgeOrigin } as never);
+    getThreadOverlayState.mockResolvedValue({
+      backend: "codex", threadId: row.id, executionMode: "default", extraLinkedDirectories: [], prs: row.prs,
+    });
+    const watch = setThreadPullRequestWatchToolHandler.mock.lastCall?.[0];
+    await expect(watch({ backend: "codex", threadId: row.id, notifyOn: ["merged"] }))
+      .resolves.toMatchObject({ ok: false, error: { code: "not_found" } });
+    expect(appServerService.readPrimaryGitRepository("codex", row.id)).toBeUndefined();
+  });
+
+  it("uses validated automatic attachments for sandbox cleanup and repair elections", async () => {
+    const { appServerService } = await import("../shell/ipc/app-server");
+    const { runGitCommand } = await import("../app-server/git-executable");
+    const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
+    const { StateDb } = await import("../state/state-db");
+    const { createTempStateDb, removeTempStateDbDir } = await import("./sqlite-test-utils");
+    const { resolveGitHubRepoForDirectory: readOrigin, clearGitHubRemoteCache } =
+      await vi.importActual<typeof import("../pr-status/git-remote")>("../pr-status/git-remote");
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-pr-action-oracle-"));
+    const restoreGit = isolateProcessGitEnvironment(root);
+    onTestFinished(async () => {
+      clearGitHubRemoteCache();
+      restoreGit();
+      await rm(root, { recursive: true, force: true });
+    });
+    const pr = githubPr({ number: 158, org: "fixture", repo: "project", state: "failing", headSha: "b".repeat(40),
+      headRefName: "topic", url: "https://github.com/fixture/project/pull/158" });
+    const prKey = buildPullRequestStatusKey(pr);
+    const origin = "https://github.com/fixture/project.git";
+    const candidates = await Promise.all(["topic", "main"].map(async (defaultBranch, index) => {
+      const cwd = path.join(root, defaultBranch);
+      await mkdir(cwd);
+      await runGitCommand(cwd, ["init", "-b", defaultBranch]);
+      await runGitCommand(cwd, ["remote", "add", "origin", origin]);
+      await runGitCommand(cwd, ["symbolic-ref", "refs/remotes/origin/HEAD", `refs/remotes/origin/${defaultBranch}`]);
+      return { backend: "codex" as const, threadId: `candidate-${index}`, cwd,
+        prs: [{ ...pr, linkedDirectoryPaths: [cwd] }] };
+    }));
+    getCachedThreadSummary.mockImplementation(({ threadId }) => {
+      const candidate = candidates.find((item) => item.threadId === threadId)!;
+      return { id: threadId, source: "codex", gitOriginUrl: origin,
+        linkedDirectories: [{ id: threadId, kind: "local", label: threadId, path: candidate.cwd }] } as never;
+    });
+    resolveGitHubRepoForDirectory.mockImplementation((cwd, options) => readOrigin(cwd!, options));
+    const temp = createTempStateDb("pr-election-oracle-");
+    const db = StateDb.open(temp.dbPath);
+    const store = new SqliteOverlayStore(db);
+    onTestFinished(() => {
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+    });
+    for (const [index, { backend, threadId, prs }] of candidates.entries()) {
+      await store.setThreadPrAutoDispatchEnabled({ backend, threadId, enabled: true });
+      await store.setThreadPullRequests({ backend, threadId, prs, fetchedAt: 1, refreshKey: threadId });
+      await store.syncThreadPrAutoDispatchCandidates({ backend, threadId, prKeys: [prKey], now: index + 1 });
+    }
+    const service = appServerService as unknown as {
+      setThreadPrAttachment: (key: string, attachment: { backend: "codex"; primaryRepoKey: string; prs: PrSummary[] }) => void;
+      getOverlayStore: () => typeof store;
+      getPrAutoDispatchWinner: (pr: PrSummary, prKey: string) => Promise<{ threadId: string } | undefined>;
+      getSandboxerPrCleanup: () => unknown;
+      cleanupThreadSandboxesIfDone: (backend: "codex", threadId: string) => Promise<unknown>;
+      backgroundPrPollingEnabled: boolean;
+      prAutoDispatchAllowed: boolean;
+    };
+    registerAppServerIpcHandlers();
+    const overlay = vi.spyOn(service, "getOverlayStore").mockReturnValue(store);
+    onTestFinished(() => { overlay.mockRestore(); });
+    service.backgroundPrPollingEnabled = true;
+    service.prAutoDispatchAllowed = true;
+    const winner = await service.getPrAutoDispatchWinner(pr, prKey);
+    const cleanupThread = vi.fn(async (_request: { backend: string; threadId: string }) => ({}));
+    vi.spyOn(service, "getSandboxerPrCleanup").mockReturnValue({ cleanupThread });
+    for (const candidate of candidates) {
+      service.setThreadPrAttachment(`codex:${candidate.threadId}`, {
+        backend: "codex", primaryRepoKey: "github.com/fixture/project",
+        prs: candidate.prs.map((row) => ({ ...row, lifecycleState: "merged" })),
+      });
+      await service.cleanupThreadSandboxesIfDone(candidate.backend, candidate.threadId);
+    }
+    // Only the checkout on which the PR branch is nondefault may prove that
+    // the PR belongs to the thread, whether it is failing or already merged.
+    expect({ elected: winner?.threadId, cleaned: cleanupThread.mock.calls }).toEqual({
+      elected: "candidate-1", cleaned: [[{ backend: "codex", threadId: "candidate-1" }]],
+    });
+  });
+
+  it("keeps a concurrent detach out of the Auto-fix candidate index during enablement", async () => {
+    const pr = githubPr({ number: 159, org: "fixture", repo: "project", state: "pending",
+      explicitlyAttached: true, url: "https://github.com/fixture/project/pull/159" });
+    const threadId = "detach-during-enable";
+    getCachedThreadSummary.mockReturnValue({ id: threadId, source: "codex",
+      linkedDirectories: [{ id: "repo", kind: "local", label: "Repo", path: "/detach-oracle" }] } as never);
+    getThreadOverlayState.mockResolvedValue({
+      backend: "codex", threadId, executionMode: "default", extraLinkedDirectories: [], prs: [pr],
+    });
+    const { appServerService } = await import("../shell/ipc/app-server");
+    const service = appServerService as unknown as {
+      setThreadPrAttachment: (key: string, attachment: { backend: "codex"; primaryRepoKey: string; prs: PrSummary[] }) => void;
+    };
+    registerAppServerIpcHandlers();
+    service.setThreadPrAttachment(`codex:${threadId}`, { backend: "codex", primaryRepoKey: "github.com/fixture/project", prs: [pr] });
+    let finish!: (repo: { host: string; owner: string; repo: string }) => void;
+    resolveGitHubRepoForDirectory.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const handler = setThreadPrAutoDispatchHandler.mock.lastCall?.[0];
+    const enabled = handler.preferenceChanged({ backend: "codex", threadId, enabled: true, previouslyEnabled: false });
+    await vi.waitFor(() => expect(finish).toBeDefined());
+    emitRegistryEvent({ backend: "codex", notification: { method: "thread/pullRequests/updated", params: { threadId, prs: [] } } });
+    finish({ host: "github.com", owner: "fixture", repo: "project" });
+    await enabled;
+    expect(syncThreadPrAutoDispatchCandidates.mock.lastCall?.[0]).toMatchObject({ prKeys: [] });
+    const owner = setLocalPullRequestAuthorityResolver.mock.lastCall?.[0];
+    expect(owner(buildPullRequestStatusKey(pr))).toBe(false);
+  });
 
   it("does not repopulate owner metadata when startup finishes after shutdown", async () => {
     const { startAppServerOwnerNavigation } = await import("../shell/ipc/app-server");
@@ -2900,7 +3088,13 @@ describe("app server ipc", () => {
     });
     service.rememberPrStatuses([pr], Date.now(), "test");
     const handler = setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0];
-    getPrAutoDispatchCandidateWinner.mockResolvedValue({ backend: "codex", threadId: "child" } as never);
+    const child = { backend: "codex" as const, threadId: "child" };
+    getCachedThreadSummary.mockReturnValue({ id: child.threadId, source: "codex", linkedDirectories: [],
+      gitOriginUrl: "https://github.com/pwrdrvr/PwrAgent.git" } as never);
+    getThreadOverlayState.mockResolvedValue({ ...child, executionMode: "default", extraLinkedDirectories: [], prs: [pr] });
+    getPrAutoDispatchCandidateWinner.mockImplementation((async (request: {
+      accepts?: (candidate: typeof child) => boolean | Promise<boolean>;
+    }) => (!request.accepts || await request.accepts(child)) ? child : undefined) as never);
     syncThreadPrAutoDispatchCandidates.mockClear();
     syncThreadPrAutoDispatchCandidates.mockResolvedValueOnce([{ backend: "codex", threadId: "parent", prKey }]);
     getThreadPrAutoDispatchPending.mockClear();
@@ -2912,7 +3106,7 @@ describe("app server ipc", () => {
     expect(syncThreadPrAutoDispatchCandidates).toHaveBeenCalledWith(expect.objectContaining({
       backend: "codex", threadId: "parent", prKeys: [prKey],
     }));
-    expect(getPrAutoDispatchCandidateWinner).toHaveBeenCalledWith({ prKey });
+    expect(getPrAutoDispatchCandidateWinner).toHaveBeenCalledWith({ prKey, accepts: expect.any(Function) });
     expect(scheduleThreadPrAutoDispatch).toHaveBeenCalledWith(expect.objectContaining({
       backend: "codex", threadId: "child", allowCancelledRearm: false,
     }));
