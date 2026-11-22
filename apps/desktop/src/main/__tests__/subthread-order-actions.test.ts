@@ -168,7 +168,7 @@ function peers(live: NavigationThreadSummary[] = []): PeerChildSource {
   return {
     localInstanceId: async () => LOCAL,
     summaries: {
-      resolvePinnedThreads: async (pins) => {
+      readPinnedThreads: (pins) => {
         const served = pins.flatMap((pin) => {
           const thread = liveById.get(pin.ref.threadId);
           return thread ? [{ pin, thread: { ...thread, federation: pin.summary!.federation } }] : [];
@@ -432,13 +432,12 @@ it("fences relevant provider archive and restore events and re-reads intervening
 });
 
 
-it.each(["unmount", "mount", "remount", "refresh"] as const)("refuses stale peer membership when another connection can %s a pin", async (mutation) => {
+it.each(["unmount", "mount", "refresh"] as const)("refuses stale peer membership when another connection can %s a pin", async (mutation) => {
   const { dbPath, tempDir } = createTempStateDb("pwragent-subthread-peer-race-");
   const reader = StateDb.open(dbPath);
   const secondConnection = StateDb.open(dbPath);
   try {
     const store = mocks.store = new SqliteOverlayStore(reader);
-    const writer = new SqliteOverlayStore(secondConnection);
     const target = { backend: "codex", parentThreadId: "root" } as const;
     await store.setThreadParent({ ...target, threadId: "anchor" });
     await store.setThreadParent({ ...target, threadId: "child" });
@@ -446,33 +445,35 @@ it.each(["unmount", "mount", "remount", "refresh"] as const)("refuses stale peer
     const initial = ["anchor", "child", "peer-child"];
     await store.updateSubthreadOrder({ ...target, threadIds: initial });
     mocks.readProvider.mockResolvedValue({ threads: ["root", "anchor", "child"].map((id) => summary("codex", id)) });
-    const reached = Promise.withResolvers<void>();
-    const finish = Promise.withResolvers<void>();
-    const pending = updateLocalSubthreadOrder({ ...target,
+    const writer = secondConnection.raw;
+
+    // A synchronous consumer still has to fence a writer in another process.
+    // Use a second connection to commit while the local action holds old rows.
+    const mutate = () => {
+      switch (mutation) {
+        case "unmount":
+          writer.prepare("DELETE FROM remote_thread_pins WHERE thread_id = ?").run("peer-child");
+          break;
+        case "mount":
+          writer.prepare(`INSERT INTO remote_thread_pins(instance_id, backend, thread_id, added_at, payload)
+            SELECT instance_id, backend, ?, added_at, payload FROM remote_thread_pins WHERE thread_id = ?`)
+            .run("new-peer-sibling", "peer-child");
+          break;
+        case "refresh":
+          writer.prepare(`UPDATE remote_thread_pins SET payload = json_set(payload, '$.summary.parentThreadId', ?)
+            WHERE thread_id = ?`).run("another-parent", "peer-child");
+          break;
+      }
+    };
+    await expect(updateLocalSubthreadOrder({ ...target,
       move: { threadId: "child", anchorThreadId: "peer-child", placement: "after" } }, {
       peers: { localInstanceId: async () => LOCAL, summaries: {
-        resolvePinnedThreads: async (pins) => {
-          reached.resolve();
-          await finish.promise;
-          return peers().summaries.resolvePinnedThreads(pins);
+        readPinnedThreads: (pins) => {
+          mutate();
+          return peers().summaries.readPinnedThreads(pins);
         },
       } },
-    });
-    const expectation = expect(pending).rejects.toThrow("mounted peer threads changed");
-    await reached.promise;
-    const ref = buildFederatedThreadRef({ backend: "codex", instanceId: PEER, threadId: "peer-child" });
-    const saved = (await writer.listRemoteThreadPins())[0]!;
-    if (mutation === "unmount" || mutation === "remount") await writer.removeRemoteThreadPin({ ref });
-    if (mutation === "remount") await writer.addRemoteThreadPin({ ...saved, addedAt: saved.addedAt + 1 });
-    if (mutation === "mount") {
-      await writer.addRemoteThreadPin({ ...saved, ref: { ...ref, threadId: "new-peer-sibling" } });
-    }
-    if (mutation === "refresh") {
-      await writer.updateRemoteThreadPinSnapshots([{ ref,
-        summary: { ...saved.summary!, parentThreadId: "another-parent" }, instanceLabel: saved.instanceLabel }]);
-    }
-    finish.resolve();
-    await expectation;
+    })).rejects.toThrow("mounted peer threads changed");
     expect((await store.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder).toEqual(initial);
     expect(mocks.publish).not.toHaveBeenCalled();
   } finally {
@@ -536,4 +537,82 @@ it("commits a changed peer snapshot and the child order together", async () => {
     removeTempStateDbDir(tempDir);
     vi.unstubAllEnvs();
   }
+});
+
+it("never spends old archive evidence on a same-tick remount", async () => {
+  const { dbPath, tempDir } = createTempStateDb("pwragent-subthread-same-tick-");
+  const reader = StateDb.open(dbPath);
+  const writer = StateDb.open(dbPath);
+  try {
+    const store = mocks.store = new SqliteOverlayStore(reader);
+    const target = { backend: "codex", parentThreadId: "root" } as const;
+    for (const threadId of ["anchor", "child"]) await store.setThreadParent({ ...target, threadId });
+    await pinPeerChild("mounted");
+    await store.updateSubthreadOrder({ ...target, threadIds: ["anchor", "child", "mounted"] });
+    mocks.readProvider.mockResolvedValue({ threads: ["root", "anchor", "child"].map((id) => summary("codex", id)) });
+
+    const readPin = writer.raw.prepare("SELECT rowid, instance_id, backend, thread_id, added_at, payload FROM remote_thread_pins");
+    const remount = writer.raw.transaction(() => {
+      const [old] = readPin.raw().all() as [number, string, string, string, number, string][];
+      writer.raw.prepare("DELETE FROM remote_thread_pins").run();
+      writer.raw.prepare("INSERT INTO remote_thread_pins(instance_id, backend, thread_id, added_at, payload) VALUES (?, ?, ?, ?, ?)")
+        .run(...old!.slice(1));
+      expect(readPin.raw().all()).toEqual([old]);
+    });
+
+    await expect(updateLocalSubthreadOrder({ ...target,
+      move: { threadId: "child", anchorThreadId: "anchor", placement: "before" } }, {
+      peers: { localInstanceId: async () => LOCAL, summaries: {
+        readPinnedThreads: (pins) => {
+          remount();
+          return { threads: [], refreshed: [], archived: [pins[0]!.ref] };
+        },
+      } },
+    })).rejects.toThrow("mounted peer threads changed");
+    expect((await store.listRemoteThreadPins()).map(({ ref }) => ref.threadId)).toEqual(["mounted"]);
+    expect((await store.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder)
+      .toEqual(["anchor", "child", "mounted"]);
+  } finally {
+    writer.close();
+    reader.close();
+    removeTempStateDbDir(tempDir);
+  }
+});
+
+it("commits the chosen live peer view before a cache-only publication can interleave", async () => {
+  const store = mocks.store!;
+  const target = { backend: "codex", parentThreadId: "root" } as const;
+  await store.setThreadParent({ ...target, threadId: "child" });
+  await pinPeerChild("mounted");
+  await store.updateSubthreadOrder({ ...target, threadIds: ["child", "mounted"] });
+  mocks.readProvider.mockResolvedValue({ threads: ["root", "child"].map((id) => summary("codex", id)) });
+  const row = summary("codex", "mounted", { parentThreadId: "root", parentThreadBackend: "codex", parentThreadInstanceId: LOCAL });
+  let live = row;
+  const events: string[] = [];
+  const commit = store.commitSubthreadOrder.bind(store);
+  vi.spyOn(store, "commitSubthreadOrder").mockImplementation((params) => {
+    const order = commit(params);
+    events.push("commit");
+    return order;
+  });
+
+  await updateLocalSubthreadOrder({ ...target,
+    move: { threadId: "child", anchorThreadId: "mounted", placement: "after" } }, {
+    peers: { localInstanceId: async () => LOCAL, summaries: {
+      readPinnedThreads: (pins) => {
+        events.push("resolve");
+        const chosen = peers([live]).summaries.readPinnedThreads(pins);
+        queueMicrotask(() => {
+          // This tests the live view independently of persisted pin metadata.
+          live = { ...row, parentThreadId: "different-parent" };
+          events.push("publish");
+        });
+        return chosen;
+      },
+    } },
+  });
+  expect(live.parentThreadId).toBe("different-parent");
+  expect(events).toEqual(["resolve", "commit", "publish"]);
+  expect((await store.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder)
+    .toEqual(["mounted", "child"]);
 });

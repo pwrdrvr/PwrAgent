@@ -9,6 +9,7 @@ import type {
   NavigationDirectorySummary,
   NavigationIdentity,
   NavigationThreadSummary,
+  RemoteThreadPin,
 } from "@pwragent/shared/contracts/navigation";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import type { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
@@ -19,28 +20,22 @@ export async function loadViewerNavigationPins(
   store: Pick<DesktopOwnerStorage, "readRemoteThreadPinNavigationRows" | "updateRemoteThreadPinSnapshots" | "removeRemoteThreadPin">,
   cache: Pick<RemoteThreadSummaryCache, "resolvePinnedThreads">,
 ): Promise<NavigationThreadSummary[]> {
-  const resolved = await resolveViewerNavigationPinRows(await store.readRemoteThreadPinNavigationRows(), cache);
+  const pins = viewerNavigationPinInputs(await store.readRemoteThreadPinNavigationRows());
+  const resolved = await cache.resolvePinnedThreads(pins);
   for (const ref of resolved.archived) await store.removeRemoteThreadPin({ ref });
   await store.updateRemoteThreadPinSnapshots(resolved.refreshed);
-  return resolved.threads;
-}
-
-/** Resolve a supplied snapshot so a mutation can validate it before applying its refreshes. */
-export async function resolveViewerNavigationPinRows(
-  saved: readonly NavigationThreadSummary[],
-  cache: Pick<RemoteThreadSummaryCache, "resolvePinnedThreads">,
-): ReturnType<RemoteThreadSummaryCache["resolvePinnedThreads"]> {
-  const pins = saved.flatMap((summary) => summary.federation ? [{
-    ref: summary.federation.ref, instanceLabel: summary.federation.instanceLabel,
-    addedAt: 0, summary, localPinnedRank: summary.pinnedRank,
-  }] : []);
-  const resolved = await cache.resolvePinnedThreads(pins);
   const ranks = new Map(pins.map((pin) => [federatedThreadIdentityKey(pin.ref), pin.localPinnedRank]));
-  const threads = resolved.threads.map(({ pinnedRank: _ownerRank, ...thread }) => {
+  return resolved.threads.map(({ pinnedRank: _ownerRank, ...thread }) => {
     const rank = thread.federation ? ranks.get(federatedThreadIdentityKey(thread.federation.ref)) : undefined;
     return rank ? { ...thread, pinnedRank: rank } : thread;
   });
-  return { ...resolved, threads };
+}
+
+export function viewerNavigationPinInputs(saved: readonly NavigationThreadSummary[]): RemoteThreadPin[] {
+  return saved.flatMap((summary) => summary.federation ? [{
+    ref: summary.federation.ref, instanceLabel: summary.federation.instanceLabel,
+    addedAt: 0, summary, localPinnedRank: summary.pinnedRank,
+  }] : []);
 }
 
 /**

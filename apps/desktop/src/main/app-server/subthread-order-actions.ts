@@ -10,7 +10,8 @@ import type {
 import { getDesktopBackendRegistry, type DesktopBackendRegistry } from "./backend-registry";
 import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { getDesktopOverlayStore, type DesktopOwnerStorage } from "../storage/desktop-overlay-store";
-import { resolveViewerNavigationPinRows } from "./navigation-viewer-pins";
+import { viewerNavigationPinInputs } from "./navigation-viewer-pins";
+import type { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
 import { peerSubthreadKey } from "./thread-archive-sweeper";
 
 /**
@@ -68,7 +69,7 @@ export type PeerChildSource = {
   /** This machine's federation identity. Without one, no peer can link a child here. */
   localInstanceId: () => Promise<string | undefined>;
   /** The live peer summaries the sidebar reads its mounted peer threads through. */
-  summaries: Parameters<typeof resolveViewerNavigationPinRows>[1];
+  summaries: Pick<RemoteThreadSummaryCache, "readPinnedThreads">;
 };
 
 /**
@@ -162,10 +163,11 @@ async function updateRelativeOrder(
     const observedLocalKeys = new Set(listings.flatMap((listing) =>
       listing.map(({ source, id }) => buildThreadIdentityKey(source, id))));
     const localInstanceId = await peers?.localInstanceId();
-    let peerPins: Parameters<DesktopOwnerStorage["updateSubthreadOrder"]>[0]["peerPins"];
+    let peerPins: Parameters<DesktopOwnerStorage["commitSubthreadOrder"]>[0]["peerPins"];
     if (peers && localInstanceId) {
       const saved = store.readSubthreadOrderPeerPins();
-      const resolved = await resolveViewerNavigationPinRows(saved.rows, peers.summaries);
+      // Resolve and commit without yielding to a newer live cache publication.
+      const resolved = peers.summaries.readPinnedThreads(viewerNavigationPinInputs(saved.rows));
       peerPins = { fingerprint: saved.fingerprint, archived: resolved.archived, refreshed: resolved.refreshed };
       for (const thread of resolved.threads) {
         const ref = thread.federation?.ref;
@@ -178,7 +180,7 @@ async function updateRelativeOrder(
     }
     assertComplete();
     if (ownerChanged) throw new Error("The owning group changed while discovering its children. Try the move again.");
-    return await store.updateSubthreadOrder({
+    return store.commitSubthreadOrder({
       ...target, children, groupFingerprint: group.fingerprint, observedLocalKeys, peerPins,
       ...(request.move ? { move: request.move } : { insertAfter: request.insertAfter }),
     });

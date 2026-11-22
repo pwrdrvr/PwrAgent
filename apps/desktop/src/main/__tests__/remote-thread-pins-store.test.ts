@@ -1,8 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { CURRENT_STATE_DB_USER_VERSION, StateDb } from "../state/state-db";
+import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import {
   createTempStateDb,
   openInMemoryStateDb,
@@ -68,6 +70,61 @@ describe("SqliteOverlayStore — remote thread pins", () => {
 
     expect(await store.removeRemoteThreadPin({ ref: ref() })).toBe(true);
     expect(await store.listRemoteThreadPins()).toEqual([]);
+  });
+
+  it("persists a mount token in the ordinary pin commits and keeps it through snapshot updates", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const { dbPath, tempDir } = createTempStateDb("pwragent-pin-mount-budget-");
+    const state = StateDb.open(dbPath);
+    try {
+      const pins = new SqliteOverlayStore(state);
+      const readToken = () => state.raw.prepare("SELECT hex(mount_token) FROM remote_thread_pins").pluck().get();
+      const input = { ref: ref(), summary: summary(), instanceLabel: "Laptop", addedAt: 1_000 };
+      const { writes } = await measureSqliteWrites(() => pins.addRemoteThreadPin(input));
+      expectSqliteWriteBudget({ scenario: "navigation-viewer-pin-mount-token",
+        note: "The token shares the pin INSERT commit and target observation still commits separately. ~24.8 KB or 2.48 MB/day at 100 new mounts/day. No periodic writes.", writes });
+      const token = readToken();
+      expect(token).toMatch(/^[0-9A-F]{32}$/);
+      await pins.updateRemoteThreadPinSnapshots([{ ref: ref(), summary: summary({ title: "Updated title" }), instanceLabel: "Laptop" }]);
+      expect(readToken()).toBe(token);
+      await pins.removeRemoteThreadPin({ ref: ref() });
+      await pins.addRemoteThreadPin(input);
+      expect(readToken()).not.toBe(token);
+    } finally {
+      state.close();
+      removeTempStateDbDir(tempDir);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("repairs the mount-token schema on an existing current or newer profile", async () => {
+    const { dbPath, tempDir } = createTempStateDb("pwragent-pin-mount-upgrade-");
+    try {
+      const old = StateDb.open(dbPath);
+      old.raw.exec(`DROP TRIGGER remote_thread_pin_mount_insert;
+        DROP TRIGGER remote_thread_pin_mount_update;
+        ALTER TABLE remote_thread_pins DROP COLUMN mount_token`);
+      const newerVersion = CURRENT_STATE_DB_USER_VERSION + 1;
+      old.raw.pragma(`user_version = ${newerVersion}`);
+      await new SqliteOverlayStore(old).addRemoteThreadPin({ ref: ref(), instanceLabel: "Laptop", addedAt: 1_000 });
+      old.close();
+
+      const opened = StateDb.open(dbPath);
+      try {
+        expect(opened.raw.pragma("user_version", { simple: true })).toBe(newerVersion);
+        const readToken = () => opened.raw.prepare("SELECT hex(mount_token) FROM remote_thread_pins").pluck().get();
+        expect(readToken()).toBe("");
+        opened.raw.prepare("UPDATE remote_thread_pins SET revoked_at = ?").run(2_000);
+        const revokedToken = readToken();
+        expect(revokedToken).toMatch(/^[0-9A-F]{32}$/);
+        opened.raw.prepare("UPDATE remote_thread_pins SET revoked_at = NULL").run();
+        expect(readToken()).not.toBe(revokedToken);
+      } finally {
+        opened.close();
+      }
+    } finally {
+      removeTempStateDbDir(tempDir);
+    }
   });
 
   it("is idempotent: re-pinning refreshes the payload but keeps addedAt", async () => {

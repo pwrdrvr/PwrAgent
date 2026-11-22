@@ -1404,6 +1404,34 @@ function ensureRemoteThreadPinRevokedAtColumn(
   }
 }
 
+const REMOTE_THREAD_PIN_MOUNT_TRIGGERS = `
+CREATE TRIGGER IF NOT EXISTS remote_thread_pin_mount_insert
+AFTER INSERT ON remote_thread_pins BEGIN
+  UPDATE remote_thread_pins SET mount_token = randomblob(16) WHERE rowid = NEW.rowid;
+END;
+CREATE TRIGGER IF NOT EXISTS remote_thread_pin_mount_update
+AFTER UPDATE OF instance_id, backend, thread_id, revoked_at ON remote_thread_pins
+WHEN OLD.instance_id IS NOT NEW.instance_id OR OLD.backend IS NOT NEW.backend
+  OR OLD.thread_id IS NOT NEW.thread_id OR OLD.revoked_at IS NOT NEW.revoked_at BEGIN
+  UPDATE remote_thread_pins SET mount_token = randomblob(16) WHERE rowid = NEW.rowid;
+END;
+`;
+
+function hasRemoteThreadPinMountTokens(db: BetterSqlite3.Database): boolean {
+  return tableColumnExists(db, "remote_thread_pins", "mount_token")
+    && db.prepare(`SELECT count(*) FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = 'remote_thread_pins'
+      AND name IN ('remote_thread_pin_mount_insert', 'remote_thread_pin_mount_update')`).pluck().get() === 2;
+}
+
+function ensureRemoteThreadPinMountTokens(db: BetterSqlite3.Database): void {
+  if (!tableColumnExists(db, "remote_thread_pins", "mount_token")) {
+    // Existing rows keep their default token until their mount changes.
+    db.exec("ALTER TABLE remote_thread_pins ADD COLUMN mount_token BLOB NOT NULL DEFAULT X''");
+  }
+  // Persistent triggers also cover a profile shared with an older writer.
+  db.exec(REMOTE_THREAD_PIN_MOUNT_TRIGGERS);
+}
+
 export const FEDERATION_SCHEMA = `
 CREATE TABLE IF NOT EXISTS federation_peers (
   peer_id       TEXT PRIMARY KEY,
@@ -2285,12 +2313,15 @@ export class StateDb {
         }).immediate();
       }
       const hasThreads = tableExists(db, "threads");
+      const hasRemotePins = tableExists(db, "remote_thread_pins");
       if ((db.pragma("user_version", { simple: true }) as number) < 87
-        || (hasThreads && !hasSubthreadGroupIndexes(db))) {
+        || (hasThreads && !hasSubthreadGroupIndexes(db))
+        || (hasRemotePins && !hasRemoteThreadPinMountTokens(db))) {
         db.transaction(() => {
           // Atomically backfill the indexes. A profile from another branch
           // can already have this version or a newer one without them.
           if (hasThreads) db.exec(SUBTHREAD_GROUP_INDEXES);
+          if (hasRemotePins) ensureRemoteThreadPinMountTokens(db);
           if ((db.pragma("user_version", { simple: true }) as number) < 87) db.pragma("user_version = 87");
         }).immediate();
       }

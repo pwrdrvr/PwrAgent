@@ -61,8 +61,12 @@ function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersio
     && row.name !== "idx_scheduled_thread_actions_terminal_updated"
     && row.name !== "idx_threads_subthread_id"
     && row.name !== "idx_threads_subthread_parent"
+    && row.name !== "remote_thread_pin_mount_insert"
+    && row.name !== "remote_thread_pin_mount_update"
   ).map(row => {
     switch (row.name) {
+      case "remote_thread_pins":
+        return { ...row, sql: row.sql?.replace(", mount_token BLOB NOT NULL DEFAULT X''", "") };
       case "thread_usage_lines":
         return { ...row, sql: row.sql?.replace(/^ {2}request_pricing +TEXT,\n/m, "") };
       case "thread_pricing_summaries":

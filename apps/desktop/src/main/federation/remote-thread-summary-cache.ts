@@ -636,6 +636,10 @@ export class RemoteThreadSummaryCache {
     }
   }
 
+  async resolvePinnedThreads(pins: readonly RemoteThreadPin[]): Promise<ResolvedRemotePins> {
+    return this.readPinnedThreads(pins);
+  }
+
   /**
    * Never awaits a peer: navigation-refresh latency must stay independent
    * of peer responsiveness (a connected-but-slow owner used to stall every
@@ -652,9 +656,9 @@ export class RemoteThreadSummaryCache {
    * `provenArchived` and are reported by the next resolve — which the
    * refresh event triggers immediately.
    */
-  async resolvePinnedThreads(
+  readPinnedThreads(
     pins: readonly RemoteThreadPin[],
-  ): Promise<ResolvedRemotePins> {
+  ): ResolvedRemotePins {
     const threads: NavigationThreadSummary[] = [];
     const refreshed: ResolvedRemotePins["refreshed"] = [];
     const archived: ResolvedRemotePins["archived"] = [];

@@ -5251,11 +5251,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     // the saved fields that affect membership and order, without hydrating rows.
     const rows = this.stateDb.raw.prepare(`
       WITH pins AS (
-        SELECT instance_id, backend, thread_id, added_at, rowid,
+        SELECT instance_id, backend, thread_id, added_at, mount_token,
           CASE WHEN json_valid(payload) THEN payload ELSE '{}' END AS data
         FROM remote_thread_pins WHERE revoked_at IS NULL
       )
-      SELECT instance_id, backend, thread_id, added_at, rowid,
+      SELECT instance_id, backend, thread_id, added_at, hex(mount_token),
         json_extract(data, '$.summary.parentThreadId') AS parent_id,
         json_extract(data, '$.summary.parentThreadBackend') AS parent_backend,
         json_extract(data, '$.summary.parentThreadInstanceId') AS parent_owner,
@@ -5863,7 +5863,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     })();
   }
 
-  async updateSubthreadOrder(params: {
+  async updateSubthreadOrder(params: Parameters<SqliteOverlayStore["commitSubthreadOrder"]>[0]): Promise<string[]> {
+    return this.commitSubthreadOrder(params);
+  }
+
+  /** The reorder must commit in the same JS turn that selected its live peer rows. */
+  commitSubthreadOrder(params: {
     backend: ThreadOverlayState["backend"];
     parentThreadId: string;
     threadIds?: string[];
@@ -5890,7 +5895,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       createdAt?: number;
       ownerInstanceId?: string;
     }[];
-  }): Promise<string[]> {
+  }): string[] {
     const apply = this.stateDb.raw.transaction(() => {
       const group = params.groupFingerprint === undefined ? undefined
         : this.readSubthreadGroup(params.backend, params.parentThreadId);

@@ -959,6 +959,7 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "navigation-viewer-pin-mount-token": {"commits": 2, "note": "The token shares the pin INSERT commit and target observation still commits separately. ~24.8 KB or 2.48 MB/day at 100 new mounts/day. No periodic writes.", "observedWalBytes": 24752, "rowsChanged": 2, "statements": 2},
   "navigation-viewer-pin-unchanged-reads": {
     "commits": 0,
     "note": "Twenty Attention and directory query pairs retain the same owner lifecycle: zero commits, 0 MB/day added WAL.",
