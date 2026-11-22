@@ -3358,7 +3358,7 @@ command = "pnpm dev"
           yield { type: "system", subtype: "init", session_id: options.sessionId ?? options.resume } as ClaudeMessage;
           yield { type: "result", subtype: "success", is_error: false, result: "Done" } as ClaudeMessage;
         }
-        return Object.assign(messages(), { close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+        return Object.assign(messages(), { initializationResult: async () => ({ mcp_servers_applied: true }), close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
       },
     };
   }

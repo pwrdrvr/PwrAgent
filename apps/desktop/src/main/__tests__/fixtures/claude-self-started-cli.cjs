@@ -69,9 +69,11 @@ if (process.argv.includes("--version")) {
       pending.delete(message.response.request_id);
       resolve?.(message.response.response ?? {});
     } else if (message.type === "control_request") {
-      if (message.request.subtype === "initialize") hooks = message.request.hooks ?? {};
+      const initialize = message.request.subtype === "initialize";
+      if (initialize) hooks = message.request.hooks ?? {};
       send({ type: "control_response", response: { subtype: "success", request_id: message.request_id,
         response: { commands: [], agents: [], models: [], account: {}, mcpServers: [],
+          mcp_servers_applied: initialize && process.argv.includes("--await-initialize") && Boolean(message.request.mcpServers),
           output_style: "default", available_output_styles: ["default"] }, pending_permission_requests: [] } });
       if (message.request.subtype === "interrupt") result();
     } else if (message.type === "user") {

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { PassThrough } from "node:stream";
+import { setImmediate } from "node:timers/promises";
 import { query, type Options, type SDKControlRequest, type SpawnOptions } from "@anthropic-ai/claude-agent-sdk";
 import fc from "fast-check";
 import { expect, it } from "vitest";
@@ -17,6 +18,8 @@ type Fixture = {
   bundled?: boolean;
   delivery: Delivery;
   reject?: boolean;
+  refusal?: boolean;
+  pending?: "timeout" | "stop";
   strict?: boolean;
 };
 
@@ -29,16 +32,19 @@ async function observeLaunch(fixture: Fixture, marker: string) {
   const system = path.join(root, "system", "claude");
   const bundled = path.join(root, "bundle", "claude");
   const commands: SDKControlRequest["request"][] = [];
-  const seen = Promise.withResolvers<"prompt" | "failed">();
+  const seen = Promise.withResolvers<"prompt" | "failed" | "cancelled">();
+  const control = Promise.withResolvers<void>();
   const stopped = Promise.withResolvers<void>();
   let launch: SpawnOptions | undefined;
   let stopFixture: (() => void) | undefined;
   let promptCount = 0;
   let commandsBeforePrompt = 0;
+  let turnId: string | undefined;
   const backend = new ClaudeBackend({
     store: new ClaudeSessionStore(path.join(root, "sessions")),
     resolveEnv: async () => ({}),
     discoverModels: async () => [],
+    mcpStartupTimeoutMs: fixture.pending === "timeout" ? 50 : undefined,
     inspectInstallation: async () => await inspectClaudeInstallation({
       env: {},
       resolveExecutable: async () => fixture.systemVersion ? system : undefined,
@@ -50,6 +56,8 @@ async function observeLaunch(fixture: Fixture, marker: string) {
     cancelRequest: async () => {},
     emit: async (event) => {
       if (event.notification.method === "turn/failed") seen.resolve("failed");
+      if (event.notification.method === "turn/cancelled") seen.resolve("cancelled");
+      if (event.notification.method === "turn/started") turnId = (event.notification.params.turn as { id: string }).id;
     },
     query: ({ prompt, options }) => query({ prompt, options: {
       ...options,
@@ -83,10 +91,14 @@ async function observeLaunch(fixture: Fixture, marker: string) {
           if (message.type !== "control_request") return;
           const request = message.request;
           commands.push(request);
+          if (request.subtype === fixture.delivery) {
+            control.resolve();
+            if (fixture.pending) return;
+          }
           const reject = fixture.reject && request.subtype === fixture.delivery;
           const response = request.subtype === "initialize"
-            ? { commands: [], models: [], mcp_servers_applied: Boolean(request.mcpServers) }
-            : { added: Object.keys(mcpServers), removed: [], errors: {} };
+            ? { commands: [], models: [], mcp_servers_applied: Boolean(request.mcpServers) && !fixture.refusal }
+            : { added: Object.keys(mcpServers), removed: [], errors: fixture.refusal ? { remote: "fixture refusal" } : {} };
           stdout.write(JSON.stringify({ type: "control_response", response: {
             request_id: message.request_id,
             ...(reject ? { subtype: "error", error: "fixture refused MCP configuration" } : { subtype: "success", response }),
@@ -98,15 +110,26 @@ async function observeLaunch(fixture: Fixture, marker: string) {
   });
   try {
     const { threadId } = await backend.startThread({ cwd: root, executionMode: "default" });
-    // Newer SDK queries may report initialization failure through the stream;
-    // older CLI control failures can reject startTurn before consumption.
+    let accepted = false;
+    let startError: string | undefined;
     const start = backend.startTurn({ threadId, mcpServers, strictMcpConfig: fixture.strict,
       input: [{ type: "text", text: "Fixture prompt" }],
-    }).catch(() => seen.resolve("failed"));
+    }).then(() => { accepted = true; }, (error: unknown) => {
+      startError = error instanceof Error ? error.message : String(error);
+    });
+    if (fixture.pending) {
+      await control.promise;
+      await setImmediate();
+      const acceptedWhilePending = accepted;
+      if (fixture.pending === "stop" || acceptedWhilePending) {
+        await backend.interruptTurn({ threadId, turnId: turnId! });
+      }
+      expect(acceptedWhilePending).toBe(false);
+    }
     const outcome = await seen.promise;
     await start;
-    if (fixture.reject && outcome === "failed") await stopped.promise;
-    return { launch, commands, commandsBeforePrompt, outcome, promptCount, mcpServers, bundled, system };
+    if (outcome !== "prompt") await stopped.promise;
+    return { accepted, startError, launch, commands, commandsBeforePrompt, outcome, promptCount, mcpServers, bundled, system };
   } finally {
     stopFixture?.();
     await backend.close();
@@ -139,6 +162,24 @@ it.each(launches)("sends MCP config over stdin before prompting $name", async (f
 it.each(launches)("closes the query when $name rejects MCP config before the prompt", async (fixture) => {
   const result = await observeLaunch({ ...fixture, reject: true }, "fixture-refused");
   expect(result.outcome).toBe("failed");
+  expect(result.accepted).toBe(false);
   expect(result.promptCount).toBe(0);
   expect(result.launch?.args.join(" ")).not.toContain("fixture-refused");
+});
+
+it.each([launches[0], launches[2]])("refuses partial MCP setup on $name", async (fixture) => {
+  const result = await observeLaunch({ ...fixture, refusal: true }, "fixture-partial");
+  expect(result).toMatchObject({ accepted: false, outcome: "failed", promptCount: 0 });
+});
+
+it.each([launches[0], launches[2]])("times out unanswered MCP setup on $name", async (fixture) => {
+  const result = await observeLaunch({ ...fixture, pending: "timeout" }, "fixture-timeout");
+  expect(result).toMatchObject({ accepted: false, outcome: "failed", promptCount: 0 });
+  expect(result.startError).toContain("timed out applying the MCP configuration");
+});
+
+it.each([launches[0], launches[2]])("cancels pending MCP setup on $name", async (fixture) => {
+  const result = await observeLaunch({ ...fixture, pending: "stop" }, "fixture-stop");
+  expect(result).toMatchObject({ accepted: false, outcome: "cancelled", promptCount: 0 });
+  expect(result.startError).toContain("cancelled before sending the prompt");
 });

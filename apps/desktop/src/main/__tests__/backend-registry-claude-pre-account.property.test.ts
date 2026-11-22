@@ -25,6 +25,7 @@ it.each(["EOF", "a rejected read"] as const)("retires a Claude turn when its fir
       query: () => ({
         [Symbol.asyncIterator]() { return this; },
         next: () => read.promise,
+        initializationResult: async () => ({ mcp_servers_applied: true }),
         close: eof,
       }) as unknown as Query,
     },

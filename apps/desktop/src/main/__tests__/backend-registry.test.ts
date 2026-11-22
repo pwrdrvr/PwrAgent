@@ -391,7 +391,7 @@ describe("DesktopBackendRegistry", () => {
             yield { type: "assistant", parent_tool_use_id: null, message: { id: `answer-${optionsSeen.length}`, content: [{ type: "text", text: "Done" }] } } as ClaudeMessage;
             yield { type: "result", subtype: "success", is_error: false, result: "Done" } as ClaudeMessage;
           }
-          return Object.assign(messages(), { close: closeQuery, setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+          return Object.assign(messages(), { initializationResult: async () => ({ mcp_servers_applied: true }), close: closeQuery, setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
         },
       },
     });
@@ -530,7 +530,7 @@ describe("DesktopBackendRegistry", () => {
             yield { type: "system", subtype: "init", session_id: options.sessionId ?? options.resume } as ClaudeMessage;
             yield { type: "result", subtype: "success", is_error: false, result: "Done." } as ClaudeMessage;
           }
-          return Object.assign(messages(), { close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+          return Object.assign(messages(), { initializationResult: async () => ({ mcp_servers_applied: true }), close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
         },
       },
     });
@@ -582,7 +582,7 @@ describe("DesktopBackendRegistry", () => {
             await release.promise;
             yield { type: "result", subtype: "success", is_error: false, result: "Done." } as ClaudeMessage;
           }
-          return Object.assign(messages(), { close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+          return Object.assign(messages(), { initializationResult: async () => ({ mcp_servers_applied: true }), close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
         },
       },
     });
@@ -663,7 +663,7 @@ describe("DesktopBackendRegistry", () => {
             // its follow-up grace. close() must also unblock a pending task.
             await queryClosed.promise;
           }
-          return Object.assign(messages(), { close: closeQuery, setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+          return Object.assign(messages(), { initializationResult: async () => ({ mcp_servers_applied: true }), close: closeQuery, setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
         },
       },
     });

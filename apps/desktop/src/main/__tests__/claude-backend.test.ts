@@ -115,7 +115,8 @@ async function fixture(messages?: (options: Options, prompt: AsyncIterable<SDKUs
       yield { type: "result", subtype: "success", is_error: false, result: "Hello world" } as SDKMessage;
     }
     return Object.assign(messages ? messages(options, args.prompt as AsyncIterable<SDKUserMessage>) : normal(), {
-      close, setPermissionMode: vi.fn().mockResolvedValue(undefined), ...controls,
+      close, initializationResult: vi.fn().mockResolvedValue({ mcp_servers_applied: true }),
+      setPermissionMode: vi.fn().mockResolvedValue(undefined), ...controls,
     }) as unknown as Query;
   });
   const backendOptions = {

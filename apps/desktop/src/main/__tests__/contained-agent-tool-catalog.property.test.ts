@@ -259,6 +259,7 @@ function listingClaudeQuery(launches: AgentSideSession[], turnTools: string[][])
     }
     return Object.assign(run(), {
       close: vi.fn(),
+      initializationResult: async () => ({ mcp_servers_applied: true }),
       setPermissionMode: vi.fn().mockResolvedValue(undefined),
       setMcpServers: vi.fn().mockResolvedValue({ added: [], removed: [], errors: {} }),
     }) as unknown as Query;

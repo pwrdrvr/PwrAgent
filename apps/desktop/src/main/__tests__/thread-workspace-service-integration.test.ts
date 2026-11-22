@@ -292,6 +292,7 @@ describe("DesktopBackendRegistry", () => {
               }
             }
             return Object.assign(messages(), {
+              initializationResult: async () => ({ mcp_servers_applied: true }),
               close: () => outcome.resolve("closed"),
               // Claude asks for the account after saving its init metadata.
               accountInfo: async () => { initialized.resolve(); },
