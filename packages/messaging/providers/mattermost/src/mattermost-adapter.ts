@@ -546,10 +546,12 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         port: bindPortFromCallbackUrl(options.config.callbackBaseUrl),
         hmacSecret:
           options.config.callbackHmacSecret ?? generateMattermostHmacSecret(),
-        handler: (body, rawBody) =>
-          this.handleInteractiveCallback(body, rawBody),
-        slashCommandHandler: (body, rawBody) =>
-          this.handleSlashCommand(body, rawBody),
+        handler: (body, rawBody, receivedAt) =>
+          this.handleInteractiveCallback(body, rawBody, receivedAt),
+        slashCommandHandler: (body, rawBody, receivedAt) =>
+          this.handleSlashCommand(body, rawBody, receivedAt),
+        now: () => this.now(),
+        onValidationRejected: (event) => this.emitInboundRejected(event),
         validSlashCommandTokens: this.slashCommandTokens,
         logger: this.logger,
       });
@@ -1363,8 +1365,9 @@ export class MattermostAdapter implements MattermostProviderAdapter {
   private async handleInteractiveCallback(
     body: MattermostInteractiveCallbackBody,
     rawBody: string,
+    receivedAt = this.now(),
   ): Promise<MattermostCallbackHandlerResult | void> {
-    const receipt = captureMessagingInboundReceipt(this.now());
+    const receipt = captureMessagingInboundReceipt(receivedAt);
     if (!this.listener) {
       return;
     }
@@ -1509,9 +1512,11 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       return;
     }
     if (!resolvedHandle) {
-      this.logger.warn("mattermost callback handle unknown or expired", {
-        handle,
-        actorId: body.user_id,
+      this.logger.warn("mattermost callback handle unknown or expired", {});
+      this.emitInboundRejected({
+        kind: "validation",
+        reason: "callback-handle-unavailable",
+        receivedAt,
       });
       return;
     }
@@ -1673,8 +1678,9 @@ export class MattermostAdapter implements MattermostProviderAdapter {
   private async handleSlashCommand(
     body: MattermostSlashCommandBody,
     rawBody: string,
+    receivedAt = this.now(),
   ): Promise<MattermostSlashCommandResult | void> {
-    const receipt = captureMessagingInboundReceipt(this.now());
+    const receipt = captureMessagingInboundReceipt(receivedAt);
     void rawBody;
     if (!this.listener) {
       return;

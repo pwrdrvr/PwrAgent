@@ -2123,6 +2123,7 @@ describe("FeishuAdapter webhook authentication", () => {
     config: { encryptKey?: string; verificationToken?: string },
     run: (params: {
       events: MessagingInboundEvent[];
+      rejections: MessagingRejectedInboundEvent[];
       post: (body: string, headers?: Record<string, string>) => Promise<Response>;
     }) => Promise<void>,
   ): Promise<void> {
@@ -2138,6 +2139,8 @@ describe("FeishuAdapter webhook authentication", () => {
       now: () => 1_700_000_000_000,
     });
     const events: MessagingInboundEvent[] = [];
+    const rejections: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => { rejections.push(event); });
     await adapter.start(async (event) => {
       events.push(event);
     });
@@ -2145,6 +2148,7 @@ describe("FeishuAdapter webhook authentication", () => {
       const port = webhookServerPort(adapter);
       await run({
         events,
+        rejections,
         post: (body, headers = { "content-type": "application/json" }) =>
           fetch(`http://127.0.0.1:${port}`, { method: "POST", body, headers }),
       });
@@ -2161,6 +2165,7 @@ describe("FeishuAdapter webhook authentication", () => {
     await withWebhookAdapter({ encryptKey, verificationToken: "verify-token" }, async ({
       events,
       post,
+      rejections,
     }) => {
       const mutations = [
         "plaintext-with-token",
@@ -2179,6 +2184,7 @@ describe("FeishuAdapter webhook authentication", () => {
           fc.constantFrom(...mutations),
           async (text, timestamp, nonce, mutation) => {
             events.length = 0;
+            rejections.length = 0;
             const event = messageEvent(`hello ${text}`);
             const body = JSON.stringify({ encrypt: encryptFeishuPayload(event, encryptKey) });
             const signature = signFeishuBody({ body, encryptKey, nonce, timestamp });
@@ -2192,6 +2198,7 @@ describe("FeishuAdapter webhook authentication", () => {
             const accepted = await post(body, headers);
             expect(accepted.status).toBe(200);
             expect(events).toHaveLength(1);
+            expect(rejections).toEqual([]);
 
             events.length = 0;
             let forged: Response;
@@ -2238,6 +2245,11 @@ describe("FeishuAdapter webhook authentication", () => {
             }
             expect(forged.status).toBe(401);
             expect(events).toEqual([]);
+            expect(rejections).toEqual([{
+              kind: "validation",
+              reason: "webhook-authentication",
+              receivedAt: 1_700_000_000_000,
+            }]);
           },
         ),
         { numRuns: 40 },

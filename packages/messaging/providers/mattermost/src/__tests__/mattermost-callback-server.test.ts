@@ -153,10 +153,13 @@ describe("MattermostCallbackServer", () => {
   it("silently rejects callbacks with bad HMAC (200 response, no dispatch)", async () => {
     const port = nextPort++;
     const handler = vi.fn();
+    const onValidationRejected = vi.fn();
     const server = createMattermostCallbackServer({
       port,
       hmacSecret: "real-secret",
       handler,
+      now: () => 2000,
+      onValidationRejected,
       logger: silentLogger,
     });
     await server.start();
@@ -178,6 +181,11 @@ describe("MattermostCallbackServer", () => {
       });
       expect(response.status).toBe(200);
       expect(handler).not.toHaveBeenCalled();
+      expect(onValidationRejected.mock.calls).toEqual([[{
+        kind: "validation",
+        reason: "callback-signature",
+        receivedAt: 2000,
+      }]]);
       expect(silentLogger.warn).toHaveBeenCalledWith(
         expect.stringContaining("HMAC"),
         expect.any(Object),
@@ -298,6 +306,7 @@ describe("MattermostCallbackServer", () => {
   it("rejects slash-command POSTs with unknown token (200 response, no dispatch)", async () => {
     const port = nextPort++;
     const slashHandler = vi.fn();
+    const onValidationRejected = vi.fn();
     const validTokens = new Set(["valid-token"]);
     const server = createMattermostCallbackServer({
       port,
@@ -305,6 +314,8 @@ describe("MattermostCallbackServer", () => {
       handler: vi.fn(),
       slashCommandHandler: slashHandler,
       validSlashCommandTokens: validTokens,
+      now: () => 2000,
+      onValidationRejected,
       logger: silentLogger,
     });
     await server.start();
@@ -324,6 +335,11 @@ describe("MattermostCallbackServer", () => {
       });
       expect(response.status).toBe(200);
       expect(slashHandler).not.toHaveBeenCalled();
+      expect(onValidationRejected.mock.calls).toEqual([[{
+        kind: "validation",
+        reason: "command-authentication",
+        receivedAt: 2000,
+      }]]);
       expect(silentLogger.warn).toHaveBeenCalledWith(
         expect.stringContaining("token"),
         expect.any(Object),
