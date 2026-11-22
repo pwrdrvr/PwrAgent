@@ -147,7 +147,6 @@ import {
 } from "../federation/federation-noise";
 
 import {
-  readDesktopSettingsConfig,
   resolveDesktopConfigPath,
   userHomeWorktreesRoot,
   type DesktopSettingsConfig,
@@ -1892,8 +1891,7 @@ export class DesktopSettingsService {
 
   async setDevelopmentWorkingUpdatesDefault(mode: MessagingToolUpdateMode) {
     // Another instance can save this profile before the local watcher runs.
-    const saved = readDesktopSettingsConfig(this.configPath);
-    const current = resolveMessagingSettingsDomain(saved.messaging ?? {}, this.env).toolUpdateMode;
+    const current = this.resolveToolUpdateMode(this.configStore.readSavedDevelopmentWorkingUpdatesMode());
     if (current.value === mode) return { ...current, changed: false };
     const update = await this.writeConfigPatchTargeted({ messaging: { toolUpdateMode: mode } });
     return {
