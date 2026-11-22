@@ -2268,47 +2268,17 @@ export function desktopSettingsPatchToEdits(
       });
     }
   }
-  if (patch.acpAgents?.antigravity?.cliPath !== undefined) {
-    set(["acp_agents", "antigravity", "cli_path"], patch.acpAgents.antigravity.cliPath);
-  }
-  if (patch.acpAgents?.antigravity?.enabled !== undefined) {
-    set(["acp_agents", "antigravity", "enabled"], patch.acpAgents.antigravity.enabled);
-  }
-  if (patch.acpAgents?.gemini?.cliPath !== undefined) {
-    set(["acp_agents", "gemini", "cli_path"], patch.acpAgents.gemini.cliPath);
-  }
-  if (patch.acpAgents?.gemini?.enabled !== undefined) {
-    set(["acp_agents", "gemini", "enabled"], patch.acpAgents.gemini.enabled);
-  }
-  if (patch.acpAgents?.grok?.cliPath !== undefined) {
-    set(["acp_agents", "grok", "cli_path"], patch.acpAgents.grok.cliPath);
-  }
-  if (patch.acpAgents?.grok?.enabled !== undefined) {
-    set(["acp_agents", "grok", "enabled"], patch.acpAgents.grok.enabled);
-  }
-  if (patch.acpAgents?.grok?.managedBuilds !== undefined) {
-    set(
-      ["acp_agents", "grok", "managed_builds"],
-      patch.acpAgents.grok.managedBuilds,
-    );
-  }
-  if (patch.acpAgents?.grok?.managedBuildChannel !== undefined) {
-    set(
-      ["acp_agents", "grok", "managed_build_channel"],
-      patch.acpAgents.grok.managedBuildChannel,
-    );
-  }
-  if (patch.acpAgents?.kimi?.cliPath !== undefined) {
-    set(["acp_agents", "kimi", "cli_path"], patch.acpAgents.kimi.cliPath);
-  }
-  if (patch.acpAgents?.kimi?.enabled !== undefined) {
-    set(["acp_agents", "kimi", "enabled"], patch.acpAgents.kimi.enabled);
-  }
-  if (patch.acpAgents?.qwen?.cliPath !== undefined) {
-    set(["acp_agents", "qwen", "cli_path"], patch.acpAgents.qwen.cliPath);
-  }
-  if (patch.acpAgents?.qwen?.enabled !== undefined) {
-    set(["acp_agents", "qwen", "enabled"], patch.acpAgents.qwen.enabled);
+  if (patch.acpAgents) {
+    for (const registryId of ["antigravity", "gemini", "grok", "kimi", "qwen"] as const) {
+      const agent = patch.acpAgents[registryId];
+      if (!agent) continue;
+      set(["acp_agents", registryId, "cli_path"], agent.cliPath);
+      set(["acp_agents", registryId, "enabled"], agent.enabled);
+      if (registryId === "grok") {
+        set(["acp_agents", "grok", "managed_builds"], patch.acpAgents.grok?.managedBuilds);
+        set(["acp_agents", "grok", "managed_build_channel"], patch.acpAgents.grok?.managedBuildChannel);
+      }
+    }
   }
 
   if (patch.git?.backgroundPrPolling !== undefined) {
