@@ -3909,6 +3909,7 @@ export class DesktopBackendRegistry {
     backend?: AppServerBackendKind;
     callerReason?: ThreadListCallerReason;
     enrichDirectories?: boolean;
+    skipPendingDirectoryEnrichment?: boolean;
     filter?: string;
     forceRefresh?: boolean;
     limit?: number;
@@ -4513,6 +4514,7 @@ export class DesktopBackendRegistry {
       backend?: AppServerBackendKind;
       callerReason?: ThreadListCallerReason;
       enrichDirectories: boolean;
+      skipPendingDirectoryEnrichment?: boolean;
       filter?: string;
       forceRefresh?: boolean;
       limit?: number;
@@ -4566,6 +4568,7 @@ export class DesktopBackendRegistry {
         archived: params.archived,
         callerReason: params.callerReason,
         enrichDirectories: params.enrichDirectories,
+        skipPendingDirectoryEnrichment: params.skipPendingDirectoryEnrichment,
         filter: params.filter,
         forceRefresh: params.forceRefresh,
         limit: params.limit,
@@ -16348,6 +16351,7 @@ export class DesktopBackendRegistry {
       backend?: AppServerBackendKind;
       callerReason?: ThreadListCallerReason;
       enrichDirectories?: boolean;
+      skipPendingDirectoryEnrichment?: boolean;
       filter?: string;
       forceRefresh?: boolean;
       limit?: number;
@@ -16384,7 +16388,7 @@ export class DesktopBackendRegistry {
       enrichDirectories: true,
     });
     const enriched = this.readFreshThreadListCache(enrichedKey, now, "navigation-shared");
-    return enriched?.pending ? undefined : enriched;
+    return enriched?.pending && params.skipPendingDirectoryEnrichment ? undefined : enriched;
   }
 
   private readFreshThreadListCache(

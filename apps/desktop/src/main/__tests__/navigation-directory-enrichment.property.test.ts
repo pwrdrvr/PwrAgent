@@ -84,7 +84,8 @@ it("keeps navigation inventory independent of historical checkout discovery and 
             } else if (cwd === linked || cwd === nested) {
               expect(directory).toMatchObject({ path: normalize(primary!), worktreePath: normalize(worktree!), kind: "worktree" });
             } else {
-              expect(directory).toMatchObject({ path: normalize(cwd), kind: "local" });
+              expect(directory?.kind).toBe("local");
+              expect(normalize(directory!.path)).toBe(normalize(cwd));
             }
           }
           const raw = (await client.listThreads({ enrichDirectories: false, skipArchivedMetadataRefresh: true }))[0]!;
@@ -101,7 +102,7 @@ it("keeps navigation inventory independent of historical checkout discovery and 
           await client.close();
         }
       },
-    ), { examples: [[[repo]]], numRuns: 8 });
+    ), { examples: [[[repo]], [[plain, repo]]], numRuns: 8 });
   } finally {
     vi.unstubAllEnvs();
     await rm(root, { recursive: true, force: true });

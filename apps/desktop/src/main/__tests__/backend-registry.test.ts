@@ -11399,7 +11399,9 @@ command = "pnpm dev"
     let visible: Promise<AppServerThreadSummary[]> | undefined;
     try {
       await started.promise;
-      visible = registry.listThreads({ backend: "codex", callerReason: "renderer-navigation-query", enrichDirectories: false });
+      visible = registry.listThreads({
+        backend: "codex", callerReason: "renderer-navigation-query", enrichDirectories: false, skipPendingDirectoryEnrichment: true,
+      });
       await vi.waitFor(() => expect(calls).toHaveBeenCalledWith(
         expect.objectContaining({ enrichDirectories: false }), expect.objectContaining({ callerReason: "renderer-navigation-query" }),
         expect.any(Function),

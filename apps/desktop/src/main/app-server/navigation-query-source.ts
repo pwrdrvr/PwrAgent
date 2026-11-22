@@ -277,6 +277,7 @@ async function buildLocalNavigationQueryIndex(params: {
       backend: backend === "all" ? undefined : backend,
       callerReason: params.callerReason,
       enrichDirectories: params.requireVerifiedDirectories === true,
+      skipPendingDirectoryEnrichment: !params.requireVerifiedDirectories,
       ...(params.refreshProviders ? { forceRefresh: true } : {}),
     }));
   params.signal?.throwIfAborted();
