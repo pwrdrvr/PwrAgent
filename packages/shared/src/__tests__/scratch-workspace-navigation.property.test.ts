@@ -38,3 +38,31 @@ it("groups scratch links using the owner's configured profile roots", () => {
     expect(findRemoteHomeDirectoryIndex(viewerDirectories, snapshot.threads[1]!)).toBeUndefined();
   }));
 });
+
+function checkInactiveWorktreeAlias(home: string, label: string) {
+  const inactivePath = `${home}/profiles/other/projects/${label}`;
+  const path = `${home}/.codex/worktrees/ab12/${label}`;
+  const thread = (id: string, cwd: string): AppServerThreadSummary => ({
+    id, source: "codex", title: id, titleSource: "explicit",
+    linkedDirectories: [{ id: cwd, kind: "local", label, path: cwd }],
+  });
+  const directories = (threads: AppServerThreadSummary[]) => buildNavigationSnapshot({
+    backend: "all", fetchedAt: 1, firstSnapshot: true, unchanged: false,
+    overlayByThreadKey: {}, previousKnownThreadKeys: [],
+    workspaceRoots: [`${home}/profiles/default/projects`], threads,
+  }).directories;
+  const worktree = thread("worktree", path);
+  const visible = directories([worktree]);
+  expect(visible).toMatchObject([{ path, threadKeys: ["codex:worktree"] }]);
+  expect(directories([thread("inactive", inactivePath), worktree])).toEqual(visible);
+}
+
+it("keeps a same-named worktree from borrowing an inactive custom scratch path", () => {
+  checkInactiveWorktreeAlias("/state", "catalog");
+});
+
+it("keeps worktree placement independent of a same-named inactive scratch link", () => {
+  fc.assert(fc.property(fc.constantFrom("/state", "C:/Outpost"), fc.nat(), (home, suffix) => {
+    checkInactiveWorktreeAlias(home, `catalog-${suffix}`);
+  }));
+});

@@ -280,14 +280,26 @@ export function classifyDirectory(
   };
 }
 
+function classifyDirectoryInProfile(
+  directory: LinkedDirectorySummary,
+  workspaceRoots: readonly string[] | undefined,
+): DirectoryDescriptor {
+  // Unstamped sibling profiles still need classification for the owner
+  // allowlist. Only active roots are sent as workspace links to viewers.
+  const root = directory.kind === "local" && !directory.scratchWorkspaceRoot && workspaceRoots?.length
+    ? findConfiguredScratchProjectsRoot(directory.path, workspaceRoots) : undefined;
+  return classifyDirectory(root ? { ...directory, scratchWorkspaceRoot: root } : directory);
+}
+
 function collectStablePathByLabel(
   threads: NavigationThreadSummary[],
+  workspaceRoots: readonly string[] | undefined,
 ): Map<string, string | undefined> {
   const pathsByLabel = new Map<string, Set<string>>();
 
   for (const thread of threads) {
     for (const directory of thread.linkedDirectories) {
-      const descriptor = classifyDirectory(directory);
+      const descriptor = classifyDirectoryInProfile(directory, workspaceRoots);
       if (!descriptor.path || descriptor.kind !== "directory") {
         continue;
       }
@@ -616,7 +628,7 @@ export function buildDirectorySummaries(params: {
   checkoutGroups?: readonly ProjectCheckoutGroup[];
 }): NavigationDirectorySummary[] {
   const summaries = new Map<string, NavigationDirectorySummary>();
-  const stablePathByLabel = collectStablePathByLabel(params.threads);
+  const stablePathByLabel = collectStablePathByLabel(params.threads, params.workspaceRoots);
   const managedWorktreeDescriptorByOrigin =
     collectManagedWorktreeDescriptorByOrigin(params.threads);
   const allowedWorkspaceRoots = workspaceRootSet(params.workspaceRoots);
@@ -648,11 +660,7 @@ export function buildDirectorySummaries(params: {
     // to one entry here.
     const descriptorsByKey = new Map<string, DirectoryDescriptor>();
     for (const directory of thread.linkedDirectories) {
-      // Unstamped sibling profiles still need classification for the owner
-      // allowlist. Only active roots are sent as workspace links to viewers.
-      const root = directory.kind === "local" && !directory.scratchWorkspaceRoot && params.workspaceRoots?.length
-        ? findConfiguredScratchProjectsRoot(directory.path, params.workspaceRoots) : undefined;
-      const descriptor = classifyDirectory(root ? { ...directory, scratchWorkspaceRoot: root } : directory);
+      const descriptor = classifyDirectoryInProfile(directory, params.workspaceRoots);
       const stablePath = stablePathByLabel.get(descriptor.label);
       const origin = normalizeGitOriginUrl(thread.gitOriginUrl);
       const managedWorktreeOriginDescriptor =
