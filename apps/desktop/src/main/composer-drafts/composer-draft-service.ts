@@ -11,6 +11,7 @@ import type {
   SaveComposerDraftResponse,
 } from "@pwragent/shared/contracts/composer-drafts";
 import { createComposerDraftStorage } from "../storage/desktop-composer-draft-storage";
+import { findWindowsDirectoryCaseAliases } from "../app-server/navigation-windows-directory-aliases";
 
 export function saveComposerDraft(request: SaveComposerDraftRequest): SaveComposerDraftResponse {
   return { draft: createComposerDraftStorage().save(request) };
@@ -25,8 +26,17 @@ export function clearComposerDraft(request: ClearComposerDraftRequest): ClearCom
   return { scopeKey: request.scopeKey };
 }
 
-export function listComposerDraftRecoveryCandidates(request?: ListComposerDraftRecoveryCandidatesRequest): ListComposerDraftRecoveryCandidatesResponse {
-  return { candidates: createComposerDraftStorage().listCandidates(request) };
+export async function listComposerDraftRecoveryCandidates(
+  request?: ListComposerDraftRecoveryCandidatesRequest,
+): Promise<ListComposerDraftRecoveryCandidatesResponse> {
+  const storage = createComposerDraftStorage();
+  const { directoryKey, scopeKey } = request ?? {};
+  if (process.platform !== "win32" || !directoryKey?.startsWith("directory:")
+    || (scopeKey && scopeKey !== `launchpad:${directoryKey}`)) {
+    return { candidates: storage.listCandidates(request) };
+  }
+  const aliases = await findWindowsDirectoryCaseAliases(directoryKey, storage.listUnsentProjectDraftKeys());
+  return { candidates: storage.listCandidatesWithProjectAliases(request, aliases) };
 }
 
 export function listComposerDraftLatest(request?: ListComposerDraftLatestRequest): ListComposerDraftLatestResponse {

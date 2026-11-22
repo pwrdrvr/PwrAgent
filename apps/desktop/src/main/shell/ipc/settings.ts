@@ -10,7 +10,6 @@ import {
   codexConfigHomesFromProfiles,
   scanCodexModelProviderImports,
 } from "../../settings/codex-model-provider-import";
-import { realpath } from "node:fs/promises";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
 import type {
@@ -214,7 +213,6 @@ import { resolveWindowsCodexLaunchCommand } from "../../codex-windows-launch";
 import { normalizeProfileName } from "../../profile";
 import {
   discoverRecentProjects,
-  folderInRealCase,
   readRecentCodexDirectories,
   RecentProjectDiscoveryRuns,
 } from "../../onboarding/recent-project-discovery";
@@ -1213,10 +1211,7 @@ async function discoverRecentProjectsForOnboarding(
         : acpLabels.get(agent) ?? agent,
     resolveProjectRoot: async (folder) => {
       const resolved = await resolveDirectoryRegistrationRoot(folder);
-      if (!resolved.ok) return undefined;
-      return process.platform === "win32"
-        ? await folderInRealCase(resolved.directoryPath, realpath)
-        : resolved.directoryPath;
+      return resolved.ok ? resolved.directoryPath : undefined;
     },
   });
   return response;

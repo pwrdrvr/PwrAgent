@@ -73,6 +73,46 @@ it("removes an empty owner registration and pin atomically", async () => {
     note: "Owner membership check and removal: one transaction deletes registration and clears pin; 100 removals/day at ~8 KiB/commit is ~0.8 MB/day; no idle writes" });
 });
 
+it("rejects removal by an alternate spelling that navigation has folded into a project", async () => {
+  const alias = "directory:/REPO";
+  const legacy = { directoryKey: alias, directoryKind: "directory", directoryLabel: "REPO", directoryPath: "/REPO",
+    backend: "codex", workMode: "local", executionMode: "default", prompt: "Unsent legacy draft",
+    createdAt: 1, updatedAt: 1, registeredAt: 1 } as const;
+  await mocks.store!.upsertDirectoryLaunchpad(legacy);
+  mocks.loadIndex.mockResolvedValue({ threads: [], directories: [directory], directoryCaseAliases: { [key]: [alias] } });
+
+  await expect(removeLocalNavigationDirectory({ directoryKey: alias })).rejects.toThrow("shown under another spelling");
+  expect((await mocks.store!.getDirectoryLaunchpad({ directoryKey: alias }))?.prompt).toBe(legacy.prompt);
+  expect(mocks.publish).not.toHaveBeenCalled();
+});
+
+it("keeps a removed Windows project's alias draft out of the directory list", async () => {
+  const original = await mocks.store!.getDirectoryLaunchpad({ directoryKey: key });
+  db.close();
+  const temp = createTempStateDb("remove-directory-alias-");
+  measuredTempDir = temp.tempDir;
+  db = StateDb.open(temp.dbPath);
+  mocks.store = new SqliteOverlayStore(db);
+  await mocks.store.upsertDirectoryLaunchpad(original!);
+  await mocks.store.setDirectoryPin({ directoryKey: key, pinned: true });
+  const alias = "directory:/REPO";
+  const legacy = { directoryKey: alias, directoryKind: "directory", directoryLabel: "REPO", directoryPath: "/REPO",
+    backend: "codex", workMode: "local", executionMode: "default", prompt: "Unsent legacy draft",
+    createdAt: 1, updatedAt: 1, registeredAt: 1 } as const;
+  await mocks.store!.upsertDirectoryLaunchpad(legacy);
+  mocks.loadIndex.mockResolvedValue({ threads: [], directories: [directory], directoryCaseAliases: { [key]: [alias] } });
+
+  const { writes } = await measureSqliteWrites(() => removeLocalNavigationDirectory({ directoryKey: key }));
+  const latest = await mocks.store!.getDirectoryLaunchpad({ directoryKey: alias });
+  expect(latest?.prompt).toBe(legacy.prompt);
+  expect(mocks.store!.readNavigationQueryIndex({ backend: "all", threads: [] }).directories).toEqual([]);
+  expectSqliteWriteBudget({ scenario: "navigation-remove-project-retain-case-alias-drafts", writes,
+    note: "Removing a project hides the case aliases and retains their drafts in one commit. At 100 removals/day and 12,360 bytes/commit, about 1.24 MB/day; zero idle writes." });
+  await mocks.store!.upsertDirectoryLaunchpad({ ...latest!, registeredAt: 2 });
+  expect(mocks.store!.readNavigationQueryIndex({ backend: "all", threads: [] }).directories)
+    .toMatchObject([{ key: alias, launchpad: { registeredAt: 2 } }]);
+});
+
 it("removes folded worktree registrations in the same commit as their empty project", async () => {
   const alias = "directory:/elsewhere/linked-checkout";
   await mocks.store!.upsertDirectoryLaunchpad({ directoryKey: alias, directoryKind: "directory", directoryLabel: "linked-checkout",
