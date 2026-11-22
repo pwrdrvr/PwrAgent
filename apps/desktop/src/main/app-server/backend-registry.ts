@@ -252,6 +252,7 @@ import {
   type EditGroupCommitState,
   type NavigationDirectoryGitStatus,
   type NavigationDirectorySummary,
+  type ProjectCheckoutGroup,
   type NavigationLaunchpadDraft,
   type NavigationSnapshot,
   type NavigationThreadGitWorkingStateUpdatedNotification,
@@ -286,6 +287,7 @@ import {
   resolveDefaultLaunchpadExecutionMode,
   isAcpBackendId,
   isAppServerBackendKind,
+  isSubthreadLaunchpadKey,
 } from "@pwragent/shared/contracts/navigation";
 import {
   type PreviewThreadRewindRequest,
@@ -382,6 +384,8 @@ import {
   type EnsureDirectoryLaunchpadResponse,
 } from "@pwragent/shared/contracts/agent";
 import { classifyDirectory, navigationPathIdentity, orderByHomePreference } from "@pwragent/shared/directory-navigation";
+import { mergeThreadLinkedDirectories } from "@pwragent/shared/navigation-state";
+import { isToolManagedWorktreePath } from "@pwragent/shared/worktree-paths";
 import { buildThreadMarkdownLink, buildThreadUrl } from "@pwragent/shared/contracts/thread-link";
 import { parseClaudeSubAgentTranscriptThreadId } from "@pwragent/shared/subagent-kind";
 import { shortenDerivedThreadTitle } from "@pwragent/shared/thread-titles";
@@ -7868,28 +7872,36 @@ export class DesktopBackendRegistry {
     directoryKey?: string;
     cwd?: string;
     linkedDirectories?: LinkedDirectorySummary[];
-  }): { directoryKey?: string; directory?: CreatedThreadDirectoryVisibility } {
-    if (params.directoryKey) {
-      return {
-        directoryKey: params.directoryKey,
-        directory: this.createdThreadDirectoryVisibility.get(params.directoryKey),
-      };
-    }
-
-    const normalizePath = (value?: string): string | undefined => {
-      const normalized = value && navigationPathIdentity(value.trim(), process.platform === "win32");
-      return normalized || undefined;
-    };
+  }, checkoutGroups: ProjectCheckoutGroup[] | undefined): { directoryKey?: string; directory?: CreatedThreadDirectoryVisibility } {
+    const explicitKey = params.directoryKey && !isSubthreadLaunchpadKey(params.directoryKey)
+      ? params.directoryKey : undefined;
+    const normalizePath = (value?: string): string | undefined =>
+      value?.trim() ? navigationPathIdentity(value.trim(), process.platform === "win32") : undefined;
     const [home] = orderByHomePreference(
       (params.linkedDirectories?.length ? params.linkedDirectories : buildLocalLinkedDirectory(params.cwd))
         .map(classifyDirectory),
       (directory) => directory.path,
     );
+    const checkoutPath = explicitKey?.startsWith("directory:")
+      ? explicitKey.slice("directory:".length)
+      : home?.kind === "directory" ? home.path : undefined;
+    const checkoutIdentity = normalizePath(checkoutPath);
+    const group = checkoutIdentity
+      ? checkoutGroups?.find((candidate) => candidate.paths.some((checkout) => normalizePath(checkout) === checkoutIdentity))
+      : undefined;
+    const projectKey = group ? `directory:${group.preferredPath}` : explicitKey;
+    if (projectKey) {
+      return {
+        directoryKey: projectKey,
+        directory: this.createdThreadDirectoryVisibility.get(projectKey),
+      };
+    }
+
     const homePath = normalizePath(home?.path);
     if (!homePath) return {};
     const directories = [...this.createdThreadDirectoryVisibility.values()];
     const directory = directories.find((entry) => normalizePath(entry.path) === homePath
-      || entry.checkoutPaths?.some((checkout) => normalizePath(checkout) === homePath))
+      || (!checkoutGroups && entry.checkoutPaths?.some((checkout) => normalizePath(checkout) === homePath)))
       ?? directories.filter((entry) => entry.kind === "workspace")
         .sort((left, right) => (right.path?.length ?? 0) - (left.path?.length ?? 0))
         .find((directory) => {
@@ -7900,10 +7912,9 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * The row this directory renders top-level for `threadId`'s group, or
-   * `undefined` when the directory renders no such row — a parent on a peer,
-   * in another project, or outside the navigation window all land here, and a
-   * new child of one of those is top-level in this directory itself.
+   * The top-level row for this group in the saved navigation projection.
+   * When it has no such row, consult the owner's thread metadata before
+   * deciding where the new child renders.
    */
   private resolveCreatedThreadVisibilityAncestor(params: {
     backend: AppServerBackendKind;
@@ -7931,6 +7942,36 @@ export class DesktopBackendRegistry {
     return row;
   }
 
+  private async resolveUnindexedCreatedThreadParent(
+    parent: { backend: AppServerBackendKind; threadId: string },
+    directoryKey: string,
+    checkoutGroups: ProjectCheckoutGroup[] | undefined,
+  ): Promise<CreatedThreadVisibilityRow | "outside" | undefined> {
+    const overlay = await this.overlayStore.getThreadOverlayState(parent);
+    if (overlay?.archiveTombstonedAt !== undefined) return "outside";
+    const threadKey = buildThreadIdentityKey(parent.backend, parent.threadId);
+    const summary = this.pendingStartedThreads.get(threadKey) ?? this.getCachedThreadSummary(parent);
+    const linkedDirectories = mergeThreadLinkedDirectories([
+      ...(summary?.linkedDirectories ?? []),
+      ...(overlay?.extraLinkedDirectories ?? []),
+    ]);
+    const home = this.resolveCreatedThreadDirectoryVisibility({ linkedDirectories }, checkoutGroups);
+    if (!home.directoryKey) return undefined;
+    if (home.directoryKey !== directoryKey) {
+      // An overlay's links can be secondary to the provider's own checkout.
+      if (!summary) return undefined;
+      // A raw managed checkout can still be projected into this project once
+      // Git enrichment finds its repository. Require a resolved project key.
+      if (!home.directory && home.directoryKey.startsWith("directory:")
+        && isToolManagedWorktreePath(home.directoryKey.slice("directory:".length))) return undefined;
+      return "outside";
+    }
+    // An unindexed nested parent may itself render inside a tray. The indexed
+    // path can walk that group. Until then, leave all its pin ranks alone.
+    if (overlay?.parentThreadId) return undefined;
+    return { ...parent, pinned: Boolean(overlay?.pinnedRank), remote: false, subthreadsCollapsed: overlay?.subthreadsCollapsed === true };
+  }
+
   /**
    * Make a group's top-level row show the child that was just created: pin the
    * row when the collapse would hide it, and open its sub-thread tray when the
@@ -7940,12 +7981,9 @@ export class DesktopBackendRegistry {
    */
   private async revealCreatedThreadGroup(params: {
     ancestor: CreatedThreadVisibilityRow;
-    directory: CreatedThreadDirectoryVisibility;
+    directoryKey: string;
   }): Promise<Pick<StartThreadResponse, "pinnedRank" | "autoPinFailure">> {
     const { ancestor } = params;
-    if (ancestor.pinned && !ancestor.subthreadsCollapsed) {
-      return {};
-    }
     if (ancestor.remote) {
       // This row belongs to a peer: its pin lives in `remote_thread_pins` and
       // its collapse is the owner's state, so both mutators below would write
@@ -7953,13 +7991,17 @@ export class DesktopBackendRegistry {
       // fabricate one — and never fall through to pinning the child, which is
       // a nested row either way.
       logDebug("createdThreadVisibility:remoteGroupSkipped", {
-        directoryKey: params.directory.key,
+        directoryKey: params.directoryKey,
         threadId: ancestor.threadId,
       });
       return {};
     }
     try {
-      if (ancestor.subthreadsCollapsed) {
+      const overlay = await this.overlayStore.getThreadOverlayState(ancestor);
+      const subthreadsCollapsed = overlay?.subthreadsCollapsed ?? ancestor.subthreadsCollapsed;
+      const pinned = overlay ? Boolean(overlay.pinnedRank) : ancestor.pinned;
+      if (pinned && !subthreadsCollapsed) return {};
+      if (subthreadsCollapsed) {
         await this.overlayStore.setSubthreadsCollapsed?.({
           backend: ancestor.backend,
           parentThreadId: ancestor.threadId,
@@ -7976,11 +8018,11 @@ export class DesktopBackendRegistry {
           },
         });
       }
-      if (!ancestor.pinned) {
+      if (!pinned) {
         await this.prependCreatedThreadPin(ancestor);
       }
       logDebug("createdThreadVisibility:groupRevealed", {
-        directoryKey: params.directory.key,
+        directoryKey: params.directoryKey,
         threadId: ancestor.threadId,
       });
       return {};
@@ -8022,11 +8064,13 @@ export class DesktopBackendRegistry {
     linkedDirectories?: LinkedDirectorySummary[];
     parentThreadBackend?: AppServerBackendKind;
     parentThreadId?: string;
+    parentThreadInstanceId?: string;
     threadId: string;
   }): Promise<Pick<StartThreadResponse, "pinnedRank" | "autoPinFailure">> {
-    const { directoryKey, directory } = this.resolveCreatedThreadDirectoryVisibility(params);
-    if (!directoryKey) return {};
     try {
+      const checkoutGroups = this.overlayStore.readProjectCheckoutGroups?.();
+      const { directoryKey, directory } = this.resolveCreatedThreadDirectoryVisibility(params, checkoutGroups);
+      if (!directoryKey) return {};
       // The bounded sidebar uses the saved fold even when the owner has no
       // complete navigation inventory or an old scan is still in flight.
       const overlay = await this.overlayStore.getDirectoryOverlayState?.({ directoryKey });
@@ -8051,18 +8095,13 @@ export class DesktopBackendRegistry {
       // pinned as soon as it does not. So walk to the top-level ancestor and
       // make *that* row show its tray.
       const parentThreadId = params.parentThreadId?.trim();
-      // Without membership, a saved parent could be rendered in this project.
-      // Wait for a known directory before treating such a child as a root.
-      if (parentThreadId && !directory) return {};
-      const ancestor = parentThreadId && directory
-        ? this.resolveCreatedThreadVisibilityAncestor({
-            backend: params.parentThreadBackend ?? params.backend,
-            directory,
-            threadId: parentThreadId,
-          })
-        : undefined;
-      if (ancestor && directory) {
-        return await this.revealCreatedThreadGroup({ ancestor, directory });
+      if (parentThreadId) {
+        if (params.parentThreadInstanceId) return {};
+        const parent = { backend: params.parentThreadBackend ?? params.backend, threadId: parentThreadId };
+        const indexed = directory ? this.resolveCreatedThreadVisibilityAncestor({ ...parent, directory }) : undefined;
+        const ancestor = indexed ?? await this.resolveUnindexedCreatedThreadParent(parent, directoryKey, checkoutGroups);
+        if (!ancestor) return {};
+        if (ancestor !== "outside") return await this.revealCreatedThreadGroup({ ancestor, directoryKey });
       }
 
       // No ancestor this directory renders — the new thread is a top-level row
@@ -8514,7 +8553,7 @@ export class DesktopBackendRegistry {
       finalizeVisibility: async ({ threadId }, parent) => await this.finalizeCreatedThreadVisibility({
         backend, directoryKey, cwd,
         linkedDirectories: resolvedLinkedDirectories?.length ? resolvedLinkedDirectories : buildLocalLinkedDirectory(cwd),
-        ...parent, threadId,
+        ...parent, parentThreadInstanceId, threadId,
       }),
       announceStarted: async ({ threadId }) => {
         await this.emit({ backend, notification: { method: "thread/started", params: { threadId } } });
@@ -8947,6 +8986,7 @@ export class DesktopBackendRegistry {
       linkedDirectories,
       parentThreadBackend: request.parentThreadBackend,
       parentThreadId: request.parentThreadId,
+      parentThreadInstanceId: request.parentThreadInstanceId,
       threadId: result.threadId,
     });
     // Provider thread/started can arrive before the fork's workspace overlay

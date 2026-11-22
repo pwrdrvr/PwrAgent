@@ -5918,6 +5918,7 @@ describe("DesktopBackendRegistry", () => {
         },
       },
     });
+    const parentPath = expectedDir(path.join(os.tmpdir(), "pwragent-foreign-parent"));
     const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         threads: [
@@ -5936,6 +5937,13 @@ describe("DesktopBackendRegistry", () => {
             ],
             updatedAt: 1_000,
           },
+          {
+            id: "thread-in-another-project",
+            title: "Foreign parent",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [{ id: parentPath, kind: "local", label: "Other project", path: parentPath }],
+          },
         ],
       }),
       overlayStore,
@@ -5950,13 +5958,13 @@ describe("DesktopBackendRegistry", () => {
       events.push(event);
     });
 
-    // A parent that aged out of the navigation window renders nowhere, so this
-    // directory shows its new child as a top-level row — and that row is the
-    // one that needs the pin.
+    // The owner can verify that the parent belongs to a different project.
+    // Its child therefore renders at the root of this project.
+    await registry.listThreads({ backend: "codex" });
     const response = await registry.startThread({
       backend: "codex",
       cwd: directoryPath,
-      parentThreadId: "thread-outside-the-window",
+      parentThreadId: "thread-in-another-project",
       parentThreadBackend: "codex",
     });
 

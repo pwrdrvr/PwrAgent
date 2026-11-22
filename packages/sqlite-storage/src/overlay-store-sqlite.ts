@@ -6089,7 +6089,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       : pinnedRanks;
   }
 
-  private readProjectCheckoutGroups(): ProjectCheckoutGroup[] {
+  readProjectCheckoutGroups(): ProjectCheckoutGroup[] {
     const payload = this.stateDb.getMeta(PROJECT_CHECKOUT_GROUPS_META_KEY);
     if (!payload) return [];
     // Every navigation read passes through here; an unreadable row must not

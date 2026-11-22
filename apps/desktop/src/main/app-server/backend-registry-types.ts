@@ -1272,6 +1272,7 @@ export type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<Pick<Ow
     | "repairThreadUsageTurnTimes"
     | "readUsageActivity"
     | "listRemoteThreadPins"
+    | "readProjectCheckoutGroups"
     | "listThreadCompactions"
     | "recordThreadCompaction"
     | "readTokenMiserGatePricingLines"
