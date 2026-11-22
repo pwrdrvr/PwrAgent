@@ -1774,6 +1774,7 @@ export class MessagingInboundTurns {
     binding: MessagingBindingRecord;
     event?: MessagingInboundEvent;
     navigation: MessagingNavigationContext;
+    origin?: ActiveAgentMessagingOrigin;
     turnId: string;
   }): Promise<void> {
     const currentTurn = this.context.host().getActiveTurn(params.binding);
@@ -1799,6 +1800,7 @@ export class MessagingInboundTurns {
       binding: params.binding,
       event: params.event,
       navigation: params.navigation,
+      origin: params.origin,
       turnId: params.turnId,
     });
     await this.context.host().signalTurnActivity(params.binding, activeTurn, {
@@ -2014,12 +2016,14 @@ export class MessagingInboundTurns {
     const startFirstTurnAfterEnvironmentSetup = Boolean(
       launchpad.codexEnvironmentId,
     );
+    const startInline = !startFirstTurnAfterEnvironmentSetup && prepared.pendingOriginals.length === 0;
     const environmentSetupReporter = startFirstTurnAfterEnvironmentSetup
       ? this.createMessagingEnvironmentSetupReporter(event)
       : undefined;
     let materialized: Awaited<
       ReturnType<NonNullable<MessagingBackendBridge["materializeDirectoryLaunchpad"]>>
     > | undefined;
+    let materializedOrigin: ActiveAgentMessagingOrigin | undefined;
     try {
       materialized = this.context.backend.materializeDirectoryLaunchpad
         ? await this.context.backend.materializeDirectoryLaunchpad(
@@ -2028,9 +2032,7 @@ export class MessagingInboundTurns {
               ...(project.federationTarget ? { federationTarget: project.federationTarget } : {}),
               agent: agentForNewThreadSession(session),
               launchpad,
-              ...(startFirstTurnAfterEnvironmentSetup || prepared.pendingOriginals.length > 0
-                ? {}
-                : { input: prepared.input }),
+              ...(startInline ? { input: prepared.input } : {}),
             },
             {
               messageOrigin: messageOriginForInboundEvent(event),
@@ -2044,7 +2046,11 @@ export class MessagingInboundTurns {
                   }
                 : {}),
               onThreadMaterialized: async (started) => {
-                await bindStartedThread(started);
+                const bound = await bindStartedThread(started);
+                if (startInline && prepared.input.length > 0) {
+                  materializedOrigin = await this.context.host().buildAgentMessagingOrigin({ ...bound, event });
+                  return messageOriginForInboundEvent(event, materializedOrigin?.source?.ref);
+                }
               },
             },
           )
@@ -2129,6 +2135,7 @@ export class MessagingInboundTurns {
         binding: updatedBinding,
         event,
         navigation: optimisticNavigation,
+        origin: materializedOrigin,
         turnId: materialized.turnId,
       });
       return;

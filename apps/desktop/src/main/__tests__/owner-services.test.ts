@@ -63,6 +63,17 @@ it("returns the root's instances through every owner getter", async () => {
   expect(() => startOwnerServices(getOwnerHostServices(), { bootMode: "bootstrap", startedAt: 1 })).toThrow(/already/);
 });
 
+it("updates the Development Working Updates default without refreshing the messaging lease", async () => {
+  const refresh = vi.spyOn(getRuntimeMessagingLeaseCoordinator(), "applyLatestConfig");
+  try {
+    const settings = getDesktopSettingsService();
+    expect(await settings.setDevelopmentWorkingUpdatesDefault("show_none")).toMatchObject({ value: "show_none", changed: true });
+    expect(refresh).not.toHaveBeenCalled();
+  } finally {
+    refresh.mockRestore();
+  }
+});
+
 // The federation handlers are available as soon as the owner starts, including
 // on the Outpost, so their results must agree with the newly opened store.
 it.each([

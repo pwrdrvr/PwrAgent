@@ -1,4 +1,6 @@
 {
+  "agent-working-updates-default-read-noop-invalid": {"commits": 0, "note": "Profile Working Updates read, identical update and invalid attempts commit nothing.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "agent-working-updates-default-change": {"commits": 1, "note": "One existing config snapshot commit per changed Working Updates default. No per-turn, idle or streaming writes.", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
   "resource-checkout-provider-recovery-cleanup": {"commits": 1, "note": "Verified provider recovery writes one boundary commit for proof, release, and FIFO promotion.", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
   "resource-checkout-provider-unchanged-recovery": {"commits": 0, "note": "Ten explicit recovery retries with unverified provider effects produce zero commits.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "resource-checkout-handoff": {"commits": 1, "note": "Delegation and its receipt commit once; retry costs zero. At 100 handoffs a day this is about 0.82 MB of WAL.", "observedWalBytes": 8240, "rowsChanged": 2, "statements": 2},

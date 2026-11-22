@@ -1889,6 +1889,17 @@ export class DesktopSettingsService {
     return resolveMessagingSettingsDomain(this.readMessagingConfig(), this.env);
   }
 
+  async setDevelopmentWorkingUpdatesDefault(mode: MessagingToolUpdateMode) {
+    // Another instance can save this profile before the local watcher runs.
+    const current = this.resolveToolUpdateMode(this.configStore.readSavedDevelopmentWorkingUpdatesMode());
+    if (current.value === mode) return { ...current, changed: false };
+    const update = await this.writeConfigPatchTargeted({ messaging: { toolUpdateMode: mode } });
+    return {
+      ...resolveMessagingSettingsDomain(update.values.messaging, this.env).toolUpdateMode,
+      changed: true,
+    };
+  }
+
   async readMessagingProjection(): Promise<DesktopMessagingSettingsProjection> {
     const override = resolveRuntimeMessagingOverride({
       argv: this.argv,

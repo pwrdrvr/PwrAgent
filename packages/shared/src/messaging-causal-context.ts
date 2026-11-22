@@ -1,7 +1,16 @@
-import type { AppServerThreadMessageOrigin } from "./contracts/normalized-app-server";
+import type { AppServerThreadMessageOrigin, MessagingCausalSourceRef } from "./contracts/normalized-app-server";
 
 /** The messaging contact behind a turn, or the mark that it had more than one. */
 export type CausalMessagingContext = Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">;
+
+export function sameCausalMessagingSource(
+  source: MessagingCausalSourceRef,
+  other: MessagingCausalSourceRef | undefined,
+): boolean {
+  return source.ownerId === other?.ownerId
+    && (source.requestId === other.requestId
+      || Boolean(source.surfaceSelector && source.surfaceSelector === other.surfaceSelector));
+}
 
 /**
  * The contact behind work that several requests caused. One contact keeps
@@ -16,9 +25,7 @@ export function mergeCausalMessagingContext<T extends CausalMessagingContext>(
   const first = sources[0];
   const ambiguous = origins.some((origin) => origin?.causalMessagingAmbiguous)
     || sources.length !== origins.length
-    || sources.some((source) => source.ownerId !== first?.ownerId
-      || (source.requestId !== first?.requestId
-        && (!source.surfaceSelector || source.surfaceSelector !== first?.surfaceSelector)));
+    || sources.some((source) => !sameCausalMessagingSource(source, first));
   return ambiguous ? { causalMessagingSource: undefined, causalMessagingAmbiguous: true }
     : { causalMessagingSource: sources[sources.length - 1], causalMessagingAmbiguous: undefined };
 }

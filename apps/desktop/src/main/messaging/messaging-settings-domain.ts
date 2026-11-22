@@ -1,4 +1,5 @@
 import type { DesktopSettingsSnapshot, DesktopSettingsValue } from "@pwragent/shared/contracts/settings";
+import { DEFAULT_DEVELOPMENT_WORKING_UPDATES_MODE } from "@pwragent/shared/contracts/messaging";
 import {
   SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT,
   SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT,
@@ -124,7 +125,7 @@ export function resolveMessagingSettingsDomain(
       MESSAGING_INPUT_DEBOUNCE_MS_ENV,
       5_000,
     ),
-    toolUpdateMode: setting(config.toolUpdateMode, "show_some"),
+    toolUpdateMode: setting(config.toolUpdateMode, DEFAULT_DEVELOPMENT_WORKING_UPDATES_MODE),
     managerToolUpdateMode: setting(
       config.managerToolUpdateMode,
       "show_none",

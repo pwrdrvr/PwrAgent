@@ -182,6 +182,7 @@ const getExistingRuntimeFederationLeaseCoordinatorMock = vi.fn();
 const requestBindingRevokeAllForThreadMock = vi.fn();
 const setMessagingArchiveCleanerMock = vi.fn();
 const setMessagingAgentToolServiceMock = vi.fn();
+const setMessagingWorkingUpdatesSettingsMock = vi.fn();
 const setPwrAgentAppManagementHandlerMock = vi.fn();
 const setPwrAgentStarMapHandlerMock = vi.fn();
 const setPwrAgentOpenAIDecisionsHandlerMock = vi.fn();
@@ -787,6 +788,7 @@ vi.mock("../app-server/backend-registry", () => { const mocked = {
     listThreads: listThreadsMock,
     refreshProvidersAtStartup: refreshProvidersAtStartupMock,
     setMessagingAgentToolService: setMessagingAgentToolServiceMock,
+    setMessagingWorkingUpdatesSettings: setMessagingWorkingUpdatesSettingsMock,
     setPwrAgentAppManagementHandler: setPwrAgentAppManagementHandlerMock,
     getAppManagementRuntimeId: vi.fn(() => "fixture-runtime"),
     canManagePwrAgent: vi.fn(async () => false),
@@ -957,10 +959,11 @@ describe("bootstrapApp", () => {
       || ["setBundledGitLfsAdvisory", "setNavigationDetailPendingWakesProjector", "setManagedGrokSignatureRejectionReporter",
         "setFederationMessagingPlatformStatusReader", "setInboundPreviewSink"].includes(name);
     const legacyHandlers = legacy.filter(isHandler);
-    // The owner also binds checkout, research, and To-do services.
+    // Include the owner handlers added after the boot recording.
     const coreHandlers = legacyHandlers.flatMap((name) => {
       if (name === "registry.setPwrAgentAppManagementHandler") return ["registry.setResourceCheckoutHandler", name];
       if (name === "registry.setPwrAgentOpenAIDecisionsHandler") return [name, "registry.setResearchHandler"];
+      if (name === "registry.setMessagingAgentToolService") return [name, "registry.setMessagingWorkingUpdatesSettings"];
       return [name];
     });
     const handlers = [...coreHandlers, "registry.setPwrAgentThreadTodoHandler"];
@@ -1203,6 +1206,7 @@ describe("bootstrapApp", () => {
     requestBindingRevokeAllForThreadMock.mockReset();
     setMessagingArchiveCleanerMock.mockReset();
     setMessagingAgentToolServiceMock.mockReset();
+    setMessagingWorkingUpdatesSettingsMock.mockReset();
     setPwrAgentAppManagementHandlerMock.mockReset();
     setPwrAgentStarMapHandlerMock.mockReset();
     setPwrAgentOpenAIDecisionsHandlerMock.mockReset();

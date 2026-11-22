@@ -19,6 +19,7 @@ export const MESSAGING_TOOL_UPDATE_MODES = [
 ] as const;
 
 export type MessagingToolUpdateMode = (typeof MESSAGING_TOOL_UPDATE_MODES)[number];
+export const DEFAULT_DEVELOPMENT_WORKING_UPDATES_MODE: MessagingToolUpdateMode = "show_some";
 
 export const MESSAGING_BINDING_TARGET_KINDS = ["thread", "agent_thread"] as const;
 

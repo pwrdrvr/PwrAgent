@@ -3,6 +3,7 @@ import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import Database from "better-sqlite3";
 import fc from "fast-check";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { expect, it } from "vitest";
@@ -406,20 +407,28 @@ it("desktop → Codex-only headless → desktop preserves unsupported providers 
       overlay.initializeNavigationUnreadBaseline(threads.map(thread => ({ ...thread, inbox: { inInbox: true } })));
     } finally { db.close(); }
     const snapshot = () => {
-      const db = StateDb.open(database);
+      const db = new Database(database, { readonly: true, fileMustExist: true });
       try {
-        return JSON.stringify({ claude: fs.readFileSync(claude).toString("base64"),
-          metadata: db.raw.prepare("SELECT * FROM threads WHERE thread_id IN (?, ?) ORDER BY thread_id").all(buildThreadIdentityKey("claude", threadId), buildThreadIdentityKey("acp:gemini", threadId)),
-          acp: db.raw.prepare("SELECT * FROM acp_sessions ORDER BY backend_id, session_id").all(),
-          inventory: db.raw.prepare("SELECT * FROM provider_thread_snapshots WHERE backend != 'codex' ORDER BY backend").all(),
-          unread: db.raw.prepare("SELECT * FROM meta WHERE key = 'navigation-unread-baseline-v2'").all(),
-          archive: db.raw.prepare("SELECT * FROM thread_storage_retention WHERE backend != 'codex' ORDER BY backend, thread_id").all(),
-        });
+        return db.transaction(() => JSON.stringify({
+          claude: fs.readFileSync(claude).toString("base64"),
+          metadata: db.prepare("SELECT * FROM threads WHERE thread_id IN (?, ?) ORDER BY thread_id").all(buildThreadIdentityKey("claude", threadId), buildThreadIdentityKey("acp:gemini", threadId)),
+          acp: db.prepare("SELECT * FROM acp_sessions ORDER BY backend_id, session_id").all(),
+          inventory: db.prepare("SELECT * FROM provider_thread_snapshots WHERE backend != 'codex' ORDER BY backend").all(),
+          unread: db.prepare("SELECT * FROM meta WHERE key = 'navigation-unread-baseline-v2'").all(),
+          archive: db.prepare("SELECT * FROM thread_storage_retention WHERE backend != 'codex' ORDER BY backend, thread_id").all(),
+        }))();
       } finally { db.close(); }
     };
     let host: Awaited<ReturnType<typeof openOwner>> | undefined;
     await runWithOwnerCleanup(async () => {
-      const expected = snapshot();
+      // The observer must read even while a different connection owns the WAL writer lock.
+      const writer = new Database(database, { fileMustExist: true });
+      let expected: string;
+      try {
+        expected = writer.transaction(snapshot).immediate();
+      } finally {
+        writer.close();
+      }
       trace(`${example} setup:done`);
       for (const [index, kind] of (["desktop", "headless", "desktop"] as const).entries()) {
         const ownerTrace: TraceOwnerPhase = phase => trace(`${example}:${index + 1}:${kind} ${phase}`);

@@ -453,7 +453,7 @@ import {
 } from "@pwragent/shared/helper-models";
 import { PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION } from "@pwragent/shared/contracts/messaging-tools";
 import { type AgentToolCatalogId } from "@pwragent/shared/contracts/agent-tools";
-import { type MessagingDynamicToolCategory } from "@pwragent/shared/contracts/rbac";
+import { permissionForDynamicTool, type MessagingDynamicToolCategory } from "@pwragent/shared/contracts/rbac";
 import { type TaskMonitorUsageSnapshot } from "@pwragent/shared/contracts/task-monitor-tools";
 import {
   AcpBackendAdapter,
@@ -535,7 +535,7 @@ import {
 } from "../agent-tools/pwragent-thread-todo-agent-tools";
 import type { PwrAgentOpenAIDecisionsHandler } from "../agent-tools/pwragent-openai-decisions-agent-tools";
 import { ThreadTodoError } from "../thread-todos/thread-todo-service";
-import type { MessagingAgentToolService } from "../messaging/messaging-agent-tool-service";
+import type { DynamicToolPermissionCheck, MessagingAgentToolService } from "../messaging/messaging-agent-tool-service";
 
 import { buildAutomationMcpConsent, isMcpToolApproval } from "../mcp-connections/mcp-approval-consent";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
@@ -558,6 +558,9 @@ import {
 import { buildMcpGatewayToolDefinitions } from "../agent-tools/pwragent-mcp-gateway-tools";
 import { researchToolsOffered, researchToolSurface, type ResearchAgentHandler, type ResearchToolSurface } from "../agent-tools/pwragent-research-agent-tools";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
+import { agentToolFailure, agentToolSuccess } from "../agent-tools/agent-tool-definition";
+import type { MessagingWorkingUpdatesHandler } from "../agent-tools/messaging-working-updates-agent-tools";
+import type { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
 import {
   TokenMiserHookBridge,
@@ -1288,6 +1291,7 @@ export class DesktopBackendRegistry {
   private readonly queuedMessageTitler: QueuedMessageTitler;
   private automationInspectionHandler?: AutomationInspectionHandler;
   private appManagementHandler?: PwrAgentAppManagementHandler;
+  private messagingWorkingUpdatesSettings?: Pick<DesktopSettingsService, "readMessagingSettings" | "setDevelopmentWorkingUpdatesDefault">;
   private starMapHandler?: PwrAgentStarMapHandler;
   private threadTodoHandler?: PwrAgentThreadTodoHandler;
   private openAIDecisionsHandler?: PwrAgentOpenAIDecisionsHandler;
@@ -1391,7 +1395,10 @@ export class DesktopBackendRegistry {
    * Until one does, the turn's first prompt origin is the record. While the
    * turn is starting, that origin is in memory before its row is written.
    */
-  private async readTurnCausalMessagingOrigin(context: { backend: AppServerBackendKind; threadId: string; turnId?: string }): Promise<AppServerThreadMessageOrigin | undefined> {
+  private async readTurnCausalMessagingOrigin(
+    context: { backend: AppServerBackendKind; threadId: string; turnId?: string },
+    allowUnbound = true,
+  ): Promise<AppServerThreadMessageOrigin | undefined> {
     if (!context.turnId) return undefined;
     const starting = this.findStartingTurnOrigin(context);
     const causalId = buildTurnCausalMessagingContextId(context.turnId);
@@ -1404,7 +1411,7 @@ export class DesktopBackendRegistry {
     return origins[causalId]
       ?? (starting?.turnId ? starting.origin : undefined)
       ?? origins[promptId]
-      ?? starting?.origin;
+      ?? (allowUnbound ? starting?.origin : undefined);
   }
 
   /** The origin bound to this turn, else the thread's origin still awaiting its turn id. */
@@ -1970,6 +1977,7 @@ export class DesktopBackendRegistry {
       admitNewThreadModelSettings: (...args: Parameters<typeof this.admitNewThreadModelSettings>) => this.admitNewThreadModelSettings(...args),
       get agentThreadActions() { return current().agentThreadActions; },
       get appManagementHandler() { return current().appManagementHandler; },
+      get messagingWorkingUpdatesHandler() { return current().messagingWorkingUpdatesHandler; },
       applyAcpRuntimeSelection: (...args: Parameters<typeof this.applyAcpRuntimeSelection>) => this.applyAcpRuntimeSelection(...args),
       applyQueuedMessageTitle: (...args: Parameters<typeof this.applyQueuedMessageTitle>) => this.applyQueuedMessageTitle(...args),
       approveGatewayInvocation: (...args: Parameters<ThreadMcpConnections["approveGatewayInvocation"]>) => this.threadMcpConnections.approveGatewayInvocation(...args),
@@ -2114,7 +2122,7 @@ export class DesktopBackendRegistry {
       publishLiveTokenMiserLedgerEntryInOrder: (...args: Parameters<ThreadUsageLedger["publishLiveTokenMiserLedgerEntryInOrder"]>) => this.threadUsageLedger.publishLiveTokenMiserLedgerEntryInOrder(...args),
       publishLocalEvent: (...args: Parameters<typeof this.publishLocalEvent>) => this.publishLocalEvent(...args),
       readCausalMessagingContext: (...args: Parameters<typeof this.readCausalMessagingContext>) => this.readCausalMessagingContext(...args),
-      readTurnCausalMessagingOrigin: (...args: Parameters<typeof this.readTurnCausalMessagingOrigin>) => this.readTurnCausalMessagingOrigin(...args),
+      readTurnCausalMessagingOrigin: (context: Parameters<typeof this.readTurnCausalMessagingOrigin>[0]) => this.readTurnCausalMessagingOrigin(context),
       readCodexDefaultModelsOnce: (...args: Parameters<typeof this.readCodexDefaultModelsOnce>) => this.readCodexDefaultModelsOnce(...args),
       readDelegatedTurnAncestry: (...args: Parameters<typeof this.readDelegatedTurnAncestry>) => this.readDelegatedTurnAncestry(...args),
       readMcpGatewaySelection: (...args: Parameters<ThreadMcpConnections["readMcpGatewaySelection"]>) => this.threadMcpConnections.readMcpGatewaySelection(...args),
@@ -2632,6 +2640,54 @@ export class DesktopBackendRegistry {
   ): void {
     this.messagingAgentToolService = service ?? undefined;
   }
+
+  setMessagingWorkingUpdatesSettings(settings: typeof this.messagingWorkingUpdatesSettings): void {
+    this.messagingWorkingUpdatesSettings = settings;
+  }
+
+  private readonly messagingWorkingUpdatesHandler: MessagingWorkingUpdatesHandler = async (context, mode) => {
+    const check: DynamicToolPermissionCheck = {
+      backend: context.backend,
+      threadId: context.threadId,
+      turnId: context.turnId,
+      category: "messaging_context",
+      tool: mode === undefined ? "get_messaging_working_updates_default" : "set_messaging_working_updates_default",
+    };
+    const service = this.messagingAgentToolService;
+    const forbidden = agentToolFailure({
+      code: "forbidden",
+      message: "This setting requires a verified local messaging requester with tools.messaging_profile_settings.",
+    });
+    try {
+      if (!service?.authorizeRetainedTool || !this.isLiveDynamicToolCall(context.backend, context)) return forbidden;
+      const origin = await this.readTurnCausalMessagingOrigin(context, false);
+      const source = origin?.causalMessagingSource;
+      if (!source || origin.causalMessagingAmbiguous) return forbidden;
+      const allowed = await service.authorizeRetainedTool({
+        backend: context.backend, threadId: context.threadId, turnId: context.turnId, causalMessagingSource: source,
+      }, check);
+      if (!allowed.allowed) return forbidden;
+      const current = await this.readTurnCausalMessagingOrigin(context, false);
+      if (current?.causalMessagingAmbiguous
+        || current?.causalMessagingSource?.requestId !== source.requestId
+        || current.causalMessagingSource.ownerId !== source.ownerId
+        || current.causalMessagingSource.instanceId !== source.instanceId
+        || this.messagingAgentToolService !== service
+        || !this.isLiveDynamicToolCall(context.backend, context)) return forbidden;
+    } catch {
+      return forbidden;
+    }
+    const settings = this.messagingWorkingUpdatesSettings;
+    if (!settings) return agentToolFailure({ code: "unsupported_operation", message: "Profile settings are unavailable on this owner." });
+    try {
+      const result = mode === undefined
+        ? settings.readMessagingSettings().toolUpdateMode
+        : await settings.setDevelopmentWorkingUpdatesDefault(mode);
+      return agentToolSuccess({ scope: "local_profile", bindingTargetKind: "thread", ...result });
+    } catch {
+      return agentToolFailure({ code: "settings_unavailable", message: "The local profile's Working Updates default could not be saved or read." });
+    }
+  };
 
   // Automations need the registry before they can supply their inspection binding.
   setAutomationInspectionHandler(
@@ -8261,6 +8317,7 @@ export class DesktopBackendRegistry {
       mcpConnectionHandler: async (request) =>
         await this.threadMcpConnections.handleAgentMcpConnectionRequest(request),
       messagingHandler: this.messagingHandler,
+      messagingWorkingUpdatesHandler: this.messagingWorkingUpdatesHandler,
       taskMonitorHandler: async (request) =>
         await this.subAgentMonitorService.handleAgentTaskMonitorRequest(request),
       threadInspectionHandler: this.threadInspectionHandler,
@@ -15515,6 +15572,7 @@ export class DesktopBackendRegistry {
         mcpConnectionHandler: async (request) =>
           await this.threadMcpConnections.handleAgentMcpConnectionRequest(request),
         messagingHandler: this.messagingHandler,
+        messagingWorkingUpdatesHandler: this.messagingWorkingUpdatesHandler,
         taskMonitorHandler: async (request) =>
           await this.subAgentMonitorService.handleAgentTaskMonitorRequest(request),
         threadInspectionHandler: this.threadInspectionHandler,
@@ -18474,6 +18532,7 @@ export class DesktopBackendRegistry {
         mcpConnectionHandler: async (connectionRequest) =>
           await this.threadMcpConnections.handleAgentMcpConnectionRequest(connectionRequest),
         messagingHandler: this.messagingHandler,
+        messagingWorkingUpdatesHandler: this.messagingWorkingUpdatesHandler,
         taskMonitorHandler: async (monitorRequest) =>
           await this.subAgentMonitorService.handleAgentTaskMonitorRequest(monitorRequest),
         threadInspectionHandler: this.threadInspectionHandler,
@@ -18887,6 +18946,9 @@ export class DesktopBackendRegistry {
     category: MessagingDynamicToolCategory,
     call: { threadId: string; turnId?: string; tool: string; arguments?: unknown },
   ): Promise<string | null> {
+    // Profile settings enforce a stricter retained-actor gate inside their
+    // handler, including when there is no controller or no attributed turn.
+    if (permissionForDynamicTool(category, call.tool) === "tools.messaging_profile_settings") return null;
     if (call.tool === "manage_pwragent") {
       const denial = await this.appManagementPermissionDenied({ backend, threadId: call.threadId, turnId: call.turnId });
       if (denial) return denial;

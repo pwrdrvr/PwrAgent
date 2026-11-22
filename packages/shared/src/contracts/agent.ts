@@ -1256,9 +1256,10 @@ export type MaterializeDirectoryLaunchpadOptions = {
   onCodexEnvironmentSetupProgress?: (
     event: CodexEnvironmentSetupProgressEvent,
   ) => void;
+  /** Local host hook. May supply the origin for the inline first turn once its thread is known. */
   onThreadMaterialized?: (
     thread: MaterializedDirectoryLaunchpadThread,
-  ) => void | Promise<void>;
+  ) => void | AppServerThreadMessageOrigin | Promise<void | AppServerThreadMessageOrigin>;
 };
 
 export type MaterializeDirectoryLaunchpadResponse = MaterializedDirectoryLaunchpadThread & {
