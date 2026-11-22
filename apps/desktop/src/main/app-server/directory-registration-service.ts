@@ -8,6 +8,7 @@ import type {
 } from "@pwragent/shared/contracts/agent";
 import { canonicalizeNavigationPath } from "@pwragent/shared/directory-navigation";
 import { parseWorktreeListPaths } from "@pwragent/shared/nested-worktree-pathspec";
+import { macDirectorySpelling } from "../mac-path-spelling";
 import { runGitCommand } from "./git-executable";
 import { buildWorktreeLinkedDirectory, toDirectoryId } from "./linked-directory-identity";
 
@@ -46,6 +47,8 @@ export type DirectoryRegistrationDeps = {
   runGit?: (cwd: string, args: string[]) => Promise<string>;
   /** Test seam — defaults to `node:fs` `stat`. */
   statPath?: (target: string) => Promise<{ isDirectory: () => boolean }>;
+  /** macOS desktop: paths from the active profile's registered directory keys. */
+  listRegisteredProjectPaths?: () => Promise<readonly string[]>;
 };
 
 async function defaultRunGit(cwd: string, args: string[]): Promise<string> {
@@ -157,7 +160,7 @@ export async function registerDirectoryFromDisk(
 ): Promise<RegisterDirectoryFromDiskResponse> {
   const resolved = await resolveDirectoryRegistrationRoot(request.path, deps);
   if (!resolved.ok) return resolved;
-  const { directoryPath, repoRoot, checkoutPath } = resolved;
+  const { repoRoot, checkoutPath } = resolved;
   const runGit = deps.runGit ?? defaultRunGit;
 
   // Resolve the current branch only for detected repos (best effort).
@@ -177,6 +180,9 @@ export async function registerDirectoryFromDisk(
     }
   }
 
+  const directoryPath = deps.listRegisteredProjectPaths
+    ? await macDirectoryRegistrationPath(resolved.directoryPath, deps.listRegisteredProjectPaths)
+    : resolved.directoryPath;
   const directoryKey = `directory:${directoryPath}`;
   const directoryLabel = path.basename(directoryPath) || directoryPath;
   const ensured = await deps.ensureDirectoryLaunchpad({
@@ -199,6 +205,27 @@ export async function registerDirectoryFromDisk(
     launchpad: ensured.launchpad,
     defaults: ensured.defaults,
   };
+}
+
+async function macDirectoryRegistrationPath(
+  folder: string,
+  listRegisteredProjectPaths: () => Promise<readonly string[]>,
+): Promise<string> {
+  const registeredPaths = await listRegisteredProjectPaths();
+  if (registeredPaths.includes(folder)) return folder;
+  const spelling = await macDirectorySpelling(folder);
+  if (spelling === undefined || registeredPaths.includes(spelling)) return spelling ?? folder;
+
+  // Compare only paths that reach the same directory. Comparing their stored
+  // spellings also keeps aliases distinct from their targets.
+  const current = await fsStat(spelling, { bigint: true }).catch(() => undefined);
+  if (!current) return spelling;
+  for (const candidate of [...registeredPaths].sort()) {
+    const existing = await fsStat(candidate, { bigint: true }).catch(() => undefined);
+    if (existing?.dev !== current.dev || existing.ino !== current.ino) continue;
+    if (await macDirectorySpelling(candidate) === spelling) return candidate;
+  }
+  return spelling;
 }
 
 /** Thread attachments retain the selected checkout as their working copy. */

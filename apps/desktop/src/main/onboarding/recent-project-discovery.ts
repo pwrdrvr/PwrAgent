@@ -7,6 +7,7 @@ import type {
   RecentProjectSourceReport,
 } from "@pwragent/shared/contracts/settings";
 import { canonicalizeNavigationPath, navigationPathIdentity } from "@pwragent/shared/directory-navigation";
+import { macDirectorySpelling } from "../mac-path-spelling";
 
 /** Codex is read newest first, one page at a time, up to this budget. */
 export const RECENT_PROJECT_CODEX_PAGE_SIZE = 100;
@@ -29,8 +30,9 @@ export type RecentProjectDiscoveryDeps = {
   /** False when the profile being set up has its own Codex login. */
   includeCodex: boolean;
   platform: NodeJS.Platform;
-  /** Test seam for the on-disk spelling of a resolved project root. */
+  /** Test seams for the on-disk spelling of a resolved project root. */
   realpath?: (path: string) => Promise<string>;
+  macDirectorySpelling?: (path: string) => Promise<string | undefined>;
   /** Aborted when a newer discovery replaces this one; no more folders are checked. */
   signal?: AbortSignal;
   /**
@@ -125,9 +127,9 @@ export class RecentProjectDiscoveryRuns {
 }
 
 /**
- * On Windows and macOS, `folder` as the disk spells it, whichever case an
- * agent used. Only letter case is taken from the disk: a mapped drive,
- * junction or link to another path keeps the reported path.
+ * On Windows, `folder` as the disk spells it, whichever case an agent used.
+ * Only letter case is taken from the disk: a mapped drive, junction or link
+ * to another path keeps the reported path.
  */
 export async function folderInRealCase(
   folder: string,
@@ -209,14 +211,15 @@ export async function discoverRecentProjects(
   }
 
   const { platform } = deps;
-  const canonicalizeRootCase = platform === "win32" || platform === "darwin";
   const { observations, droppedAgents, probed } = await resolveObservations(raw, {
     // macOS volumes can have different case rules. Compare their on-disk
     // root spellings exactly so App and app can remain distinct.
     identity: (path) => navigationPathIdentity(path, platform === "win32"),
     resolveProjectRoot: async (folder) => {
       const root = await deps.resolveProjectRoot(folder);
-      return root && canonicalizeRootCase ? await folderInRealCase(root, deps.realpath ?? realpath) : root;
+      if (!root) return root;
+      if (platform === "darwin") return (await (deps.macDirectorySpelling ?? macDirectorySpelling)(root)) ?? root;
+      return platform === "win32" ? await folderInRealCase(root, deps.realpath ?? realpath) : root;
     },
     signal: deps.signal,
   });

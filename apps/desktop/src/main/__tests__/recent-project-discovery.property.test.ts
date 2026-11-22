@@ -1,12 +1,16 @@
+import { lstat, mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import fc from "fast-check";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   DiscoverRecentProjectsResponse,
   RecentProjectAgent,
   RecentProjectObservation,
 } from "@pwragent/shared/contracts/settings";
-import { discoverRecentProjects } from "../onboarding/recent-project-discovery";
+import { registerDirectoryFromDisk, resolveDirectoryRegistrationRoot, type DirectoryRegistrationDeps } from "../app-server/directory-registration-service";
+import { discoverRecentProjects, type RecentProjectDiscoveryDeps } from "../onboarding/recent-project-discovery";
 
 /*
  * Rule: the main process sends Get started one spelling per folder. Two
@@ -92,12 +96,17 @@ function thread(report: Reported, index: number): AppServerThreadSummary {
  * spelling, with differently cased entries sharing one physical folder only
  * on the case-insensitive volume.
  */
-async function discover(platform: Platform, reported: readonly Reported[]): Promise<DiscoverRecentProjectsResponse> {
+async function discover(
+  platform: Platform,
+  reported: readonly Reported[],
+  overrides?: Partial<RecentProjectDiscoveryDeps>,
+): Promise<DiscoverRecentProjectsResponse> {
   return await discoverRecentProjects({
     includeCodex: true,
     platform,
-    realpath: async (folder) => {
-      if (platform !== "darwin" || folder.startsWith(`${MAC_SENSITIVE_ROOT}/`)) return folder;
+    realpath: async (folder) => folder,
+    macDirectorySpelling: async (folder) => {
+      if (folder.startsWith(`${MAC_SENSITIVE_ROOT}/`)) return folder;
       return `${MAC_INSENSITIVE_ROOT}/${folder.slice(MAC_INSENSITIVE_ROOT.length + 1).toLowerCase()}`;
     },
     readCodexDirectories: async () => ({
@@ -110,6 +119,7 @@ async function discover(platform: Platform, reported: readonly Reported[]): Prom
     listPwrAgentThreads: async () => reported.map(thread).filter((summary) => summary.source !== "codex"),
     labelFor: (agent) => agent,
     resolveProjectRoot: async (folder) => folder.replace(/\\/g, "/").replace(/\/+$/, ""),
+    ...overrides,
   });
 }
 
@@ -192,5 +202,103 @@ describe("recent project discovery path identity", () => {
       `${MAC_SENSITIVE_ROOT}/A`,
       `${MAC_SENSITIVE_ROOT}/a`,
     ]));
+  });
+});
+
+async function withMacFixture(run: (folder: string) => Promise<void>): Promise<void> {
+  const folder = await mkdtemp(path.join(await realpath(os.tmpdir()), "pwragent-project-spelling-"));
+  try {
+    await run(folder);
+  } finally {
+    await rm(folder, { recursive: true, force: true });
+  }
+}
+
+/** Ask the disk whether the alternate spelling resolves before creating it. */
+async function createFolderSpellings(stored: string, alternate: string): Promise<boolean> {
+  await mkdir(stored);
+  try {
+    await lstat(alternate);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    await mkdir(alternate);
+    return false;
+  }
+}
+
+const noGit = async () => "";
+
+function registrationRecorder() {
+  return vi.fn<DirectoryRegistrationDeps["ensureDirectoryLaunchpad"]>(async (request) => ({
+    launchpad: { ...request, backend: "codex", executionMode: "default", prompt: "", workMode: "local", createdAt: 1, updatedAt: 1 },
+    defaults: { backend: "codex", executionMode: "default" },
+  }));
+}
+
+async function discoverMacFolders(folders: string[]): Promise<string[]> {
+  const { observations } = await discover("darwin", folders.map((cwd) => ({ cwd, agent: "codex" })), {
+    macDirectorySpelling: undefined,
+    resolveProjectRoot: async (cwd) => {
+      const root = await resolveDirectoryRegistrationRoot(cwd, { runGit: noGit });
+      return root.ok ? root.directoryPath : undefined;
+    },
+  });
+  return observations.map(({ path }) => path).sort();
+}
+
+describe.skipIf(process.platform !== "darwin")("recent projects against the macOS filesystem", () => {
+  it("uses the names of linked path components and their children, including APFS Unicode case matches", async () => {
+    await withMacFixture(async (folder) => {
+      const target = path.join(folder, "target");
+      const alias = path.join(folder, "Alias");
+      const alternateAlias = path.join(folder, "alias");
+      await mkdir(target);
+      await symlink(target, alias);
+      const aliasIgnoresCase = await lstat(alternateAlias).then(() => true, () => false);
+      const aliases = aliasIgnoresCase ? [alias, alternateAlias] : [alias];
+      expect(await discoverMacFolders([alias, target])).toEqual([alias, target].sort());
+      const [discoveredAlias] = await discoverMacFolders([aliases[aliases.length - 1]!]);
+      await expect(registerDirectoryFromDisk({ path: discoveredAlias! }, {
+        ensureDirectoryLaunchpad: registrationRecorder(),
+        runGit: noGit,
+        listRegisteredProjectPaths: async () => [target, `${alias}/`],
+      })).resolves.toMatchObject({ ok: true, directoryKey: `directory:${alias}/` });
+
+      for (const [stored, alternate] of [["Project", "project"], ["ΟΣ", "οσ"]] as const) {
+        const ignoresCase = await createFolderSpellings(path.join(target, stored), path.join(target, alternate));
+        const reported = aliases.flatMap((name) => [path.join(name, stored), path.join(name, alternate)]);
+        const expected = ignoresCase ? [path.join(alias, stored)] : [path.join(alias, stored), path.join(alias, alternate)];
+        expect(await discoverMacFolders(reported)).toEqual(expected.sort());
+        expect(await discoverMacFolders([path.join(target, alternate)])).toEqual([
+          path.join(target, ignoresCase ? stored : alternate),
+        ]);
+      }
+    });
+  });
+
+  it("registers a discovered project under its existing key exactly when the disk treats the spellings as one folder", async () => {
+    await fc.assert(fc.asyncProperty(fc.stringMatching(/^[a-z]{1,5}$/), async (name) => {
+      await withMacFixture(async (folder) => {
+        const stored = path.join(folder, name.toUpperCase());
+        const legacy = path.join(folder, name);
+        const ignoresCase = await createFolderSpellings(stored, legacy);
+        const ensureDirectoryLaunchpad = registrationRecorder();
+        const old = await registerDirectoryFromDisk({ path: legacy }, { ensureDirectoryLaunchpad, runGit: noGit });
+        expect(old).toMatchObject({ ok: true, directoryKey: `directory:${legacy}` });
+
+        const [discovered] = await discoverMacFolders([stored]);
+        expect(discovered).toBe(stored);
+        const registrationDeps = {
+          ensureDirectoryLaunchpad,
+          runGit: noGit,
+          listRegisteredProjectPaths: async () => [legacy],
+        };
+        const registration = await registerDirectoryFromDisk({ path: discovered! }, registrationDeps);
+        const expected = `directory:${ignoresCase ? legacy : stored}`;
+        expect(registration).toMatchObject({ ok: true, directoryKey: expected });
+        expect(ensureDirectoryLaunchpad).toHaveBeenLastCalledWith(expect.objectContaining({ directoryKey: expected }));
+      });
+    }), { numRuns: 12 });
   });
 });
