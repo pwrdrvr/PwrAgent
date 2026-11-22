@@ -601,15 +601,22 @@ export class NavigationWindowQueries {
     if (changed) this.publish();
   }
 
-  private needsWorkingStateReplacement(resource: Resource, candidate?: RetainableState): boolean {
+  private needsWorkingStateReplacement(resource: Resource, candidate?: RetainableState, phase: "finish" | "continue" = "finish"): boolean {
     const read = resource.workingStateRead;
     if (!read?.paths.size || resource.invalidated) return false;
     const { request } = resource.value.state;
     const target = request.federationTarget;
     const ownerId = target?.scope === "remote" ? target.instanceId : undefined;
     const page = candidate?.state.page;
-    const ownerPaths = candidate?.ownerProof?.dependencies?.workingStatePaths;
-    if (page?.coverage.state === "complete" && (ownerPaths
+    const ownerPaths = page?.coverage.state === "complete" ? candidate?.ownerProof?.dependencies?.workingStatePaths : undefined;
+    if (phase === "continue") {
+      // A known checkout match already fences this generation. An incomplete
+      // page without a match can still resolve the notice on a later page.
+      const matches = ownerPaths?.some((path) => read.paths.has(path)) ?? page?.entries.some(({ row }) =>
+        row.ref.ownerInstanceId === ownerId && (!row.linkedDirectoriesTruncated || row.projectKey?.trim())
+        && read.paths.has(navigationWorkingStatePath(row) ?? ""));
+      if (!matches) return false;
+    } else if (page?.coverage.state === "complete" && (ownerPaths
       ? !ownerPaths.some((path) => read.paths.has(path)) : this.excludesWorkingStatePaths(request, page, ownerId, read.paths))) {
       read.paths.clear();
       return false;
@@ -1143,6 +1150,7 @@ export class NavigationWindowQueries {
         while (next.state.page?.nextCursor && loadedRows(next.state.page) < wanted
           && (loadedRows(next.state.page) < restoring || ((!resuming || this.canResumeExpansion(budget))
             && extensions < MAX_LOAD_MORE_READS && Date.now() < extendUntil))) {
+          if (this.needsWorkingStateReplacement(resource, next, "continue")) return;
           const nextCursor = next.state.page.nextCursor;
           const before = loadedRows(next.state.page);
           try {
@@ -1171,10 +1179,10 @@ export class NavigationWindowQueries {
         resource.membershipUncertain = false;
         resource.prAttachmentsUncertain = false;
       } catch (error) {
-        if (this.isCurrent(resource)) resource.value = { ...resource.value,
+        // An overtaken cursor cannot establish a new rebaseline requirement.
+        if (this.isCurrent(resource) && !this.needsWorkingStateReplacement(resource)) resource.value = { ...resource.value,
           state: failNavigationPageRead(resource.value.state, started.pendingSequence, error) };
       } finally {
-        if (this.isCurrent(resource)) this.needsWorkingStateReplacement(resource);
         resource.workingStateRead = undefined;
         // An invalidation can discard the opening page before it is accepted.
         // Its coalesced replacement still owes the saved depth. Carry the same

@@ -366,6 +366,113 @@ it("keeps a second row when the one-row opening page is invalidated before deliv
   await interruptedResume(1, 1, 0);
 });
 
+const checkoutDirectoryRequest: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", inventory: "viewer",
+  query: { kind: "directory", directoryKey: "project" } };
+
+function checkoutPage(generation: string, start: number, count: number, total: number): NavigationQueryPage {
+  const end = Math.min(total, start + count);
+  const entries = Array.from({ length: end - start }, (_, offset) => {
+    const index = start + offset;
+    const id = `thread-${index}`;
+    const row: NavigationRow = { id, source: "codex", ref: { backend: "codex", threadId: id },
+      title: id, titleSource: "explicit", rowRevision: generation, projectKey: `/checkout/${index}`, linkedDirectories: [],
+      inbox: { inInbox: false }, ordinaryChildCount: 0, nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" };
+    return { row, placement: { kind: "root" as const }, orderKey: id };
+  });
+  return { protocol: 2, queryKey: "project", generation, ownerEpoch: "owner", countsRevision: generation,
+    counts: { total, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, entries,
+    rangeStart: start, complete: end === total, nextCursor: end < total ? String(end) : undefined };
+}
+
+const directoryChange: AgentEvent = { backend: "codex", notification: { method: "navigation/threadDirectories/updated",
+  params: { reason: "selected-thread", threadIds: ["thread-0"] } } };
+const workingStateChange = (index: number): AgentEvent => ({ backend: "codex", notification: {
+  method: "navigation/threadGitWorkingState/updated",
+  params: { worktreePath: `/checkout/${index}`, fetchedAt: 1, gitWorkingState: null },
+} });
+
+async function checkExpiredFencedRefresh(visibleRows: number, firstPageRows: number) {
+  const cursorDispatched = deferred<void>();
+  const expireCursor = deferred<void>();
+  let generation = "initial";
+  const read = vi.fn(async (sent: NavigationQueryRequest) => {
+    if (generation === "overtaken" && sent.cursor) {
+      cursorDispatched.resolve();
+      await expireCursor.promise;
+      generation = "recovered";
+      throw new Error("[navigation_cursor_expired] Navigation cursor expired");
+    }
+    return checkoutPage(generation, 0, generation === "overtaken" ? firstPageRows : visibleRows, visibleRows);
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  try {
+    queries.setDemand(new Map([["project", checkoutDirectoryRequest]]));
+    await queries.refresh();
+    read.mockClear();
+    generation = "overtaken";
+    queries.invalidate(undefined, undefined, directoryChange);
+    const refreshed = queries.refresh(undefined, undefined, true);
+    await cursorDispatched.promise;
+    // A path beyond the first page cannot be excluded when the cursor fails.
+    queries.invalidate(undefined, undefined, workingStateChange(visibleRows - 1));
+    expireCursor.resolve();
+    await refreshed;
+    expect(queries.getSnapshot().resources.get("project")?.state).toMatchObject({
+      stale: false, error: undefined, rebaselineRequired: false, page: { generation: "recovered", complete: true },
+    });
+    expect(read.mock.calls.map(([sent]) => sent.cursor)).toEqual([undefined, String(firstPageRows), undefined]);
+  } finally { expireCursor.resolve(); queries.dispose(); }
+}
+
+it("replaces a fenced two-row refresh when its cursor expires before the second row", async () => {
+  await checkExpiredFencedRefresh(2, 1);
+});
+
+it("recovers the displayed range when a working-state notice overtakes an expired refresh cursor", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 20 }), fc.nat(100), async (visible, split) => {
+    await checkExpiredFencedRefresh(visible, 1 + split % (visible - 1));
+  }), { numRuns: 20 });
+});
+
+async function checkFencedSavedDepth(savedRows: number) {
+  const firstDispatched = deferred<void>();
+  const firstDelivery = deferred<void>();
+  let opening = 0;
+  const obsoleteCursors: string[] = [];
+  const read = vi.fn(async (sent: NavigationQueryRequest) => {
+    if (!sent.cursor && ++opening === 1) {
+      firstDispatched.resolve();
+      await firstDelivery.promise;
+    }
+    if (opening === 1 && sent.cursor) obsoleteCursors.push(sent.cursor);
+    return checkoutPage(opening === 1 ? "overtaken" : "recovered", Number(sent.cursor ?? 0), 1, savedRows);
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined,
+    { loadedRowsByQuery: { [navigationResumeQueryKey(checkoutDirectoryRequest)]: savedRows } });
+  try {
+    queries.setDemand(new Map([["project", checkoutDirectoryRequest]]));
+    queries.invalidate(undefined, undefined, directoryChange);
+    const refreshed = queries.refresh(undefined, undefined, true);
+    await firstDispatched.promise;
+    // A match on the opening page proves this generation is already stale.
+    queries.invalidate(undefined, undefined, workingStateChange(0));
+    firstDelivery.resolve();
+    await refreshed;
+    const page = queries.getSnapshot().resources.get("project")?.state.page;
+    expect(page?.generation).toBe("recovered");
+    expect(page?.entries).toHaveLength(savedRows);
+    expect(obsoleteCursors).toEqual([]);
+  } finally { firstDelivery.resolve(); queries.dispose(); }
+}
+
+it("leaves all eight saved-depth continuations for the replacement after a first-page match", async () => {
+  await checkFencedSavedDepth(9);
+});
+
+it("preserves saved depth when the new checkout is on the first page", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 9 }), checkFencedSavedDepth), { numRuns: 16 });
+});
+
 it("shares one continuation budget across metadata replacements", async () => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(0);
   try {
