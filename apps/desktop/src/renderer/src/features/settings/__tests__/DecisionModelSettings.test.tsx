@@ -93,8 +93,16 @@ describe("decision provider screens", () => {
     const model = screen.getByRole("combobox", { name: "Model" });
     expect(model).toHaveTextContent("clef-flash (default)");
     await chooseSelectOption(model, "Other model id…");
+    const abandoned = screen.getByRole("textbox", { name: "Model id" });
+    expect(abandoned).toHaveFocus();
+    // One Escape leaves the box, even with text typed, and saves nothing.
+    fireEvent.change(abandoned, { target: { value: "clef-typo" } });
+    fireEvent.keyDown(abandoned, { key: "Escape" });
+    expect(screen.queryByRole("textbox", { name: "Model id" })).not.toBeInTheDocument();
+    expect(onSave).not.toHaveBeenCalled();
+
+    await chooseSelectOption(model, "Other model id…");
     const typed = screen.getByRole("textbox", { name: "Model id" });
-    expect(typed).toHaveFocus();
     fireEvent.change(typed, { target: { value: "clef-pro" } });
     await act(async () => { fireEvent.keyDown(typed, { key: "Enter" }); });
     expect(onSave).toHaveBeenLastCalledWith({ local: { endpoint: "http://localhost:9911", model: "clef-pro" } });
@@ -162,6 +170,31 @@ describe("decision provider screens", () => {
     expect(await screen.findByText("TypeSafe rejected the API key. Showing the models PwrAgent knows.")).toBeInTheDocument();
     expect(listDecisionModels).toHaveBeenCalledTimes(2);
     expect(selectOptionLabels(screen.getByRole("combobox", { name: "Model" }))).not.toContain("jev-team-tuned");
+  });
+
+  it("reads the model list again after a key is replaced in the same store", async () => {
+    const listDecisionModels = vi.fn(async (): Promise<DecisionModelListing> => ({ ok: false, detail: "TypeSafe rejected the API key." }));
+    const desktopApi = { listDecisionModels } as unknown as DesktopApi;
+    render(
+      <DecisionProviderScreen
+        provider="jev"
+        snapshot={snapshot({}, true)}
+        desktopApi={desktopApi}
+        saving={false}
+        onSave={vi.fn(async () => undefined)}
+        onClearSecret={vi.fn(async () => true)}
+        onReplaceSecret={vi.fn(async () => true)}
+      />,
+    );
+    expect(await screen.findByText(/TypeSafe rejected the API key/)).toBeInTheDocument();
+    listDecisionModels.mockResolvedValueOnce({ ok: true, models: [{ id: "jev-team-tuned" }] });
+    // The snapshot is unchanged: a replaced key stays configured, in the keychain.
+    const key = screen.getByLabelText("API key");
+    fireEvent.change(key, { target: { value: "sample-new-key" } });
+    await act(async () => { fireEvent.keyDown(key, { key: "Enter" }); });
+    expect(await screen.findByText(/Lists the models your key can use/)).toBeInTheDocument();
+    expect(listDecisionModels).toHaveBeenCalledTimes(2);
+    expect(selectOptionLabels(screen.getByRole("combobox", { name: "Model" }))).toContain("jev-team-tuned");
   });
 
   it("says when the local server does not offer the saved model", async () => {

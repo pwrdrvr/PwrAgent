@@ -76,6 +76,12 @@ describe("decision model listing", () => {
     expect(local.mock.calls[0]![0]).toBe("http://localhost:9911/v1/models");
   });
 
+  it("keeps up to 100 valid models, however many invalid entries come first", async () => {
+    const entries = [...Array.from({ length: 120 }, () => ({ name: " " })), ...Array.from({ length: 150 }, (_, index) => ({ name: `model-${index}` }))];
+    const listing = await listDecisionModels("local", { settings: {}, fetch: vi.fn(async () => reply(200, { models: entries })) });
+    expect(listing.ok && listing.models.map((model) => model.id)).toEqual(Array.from({ length: 100 }, (_, index) => `model-${index}`));
+  });
+
   it("needs a Jev key before asking, and names a refused key, an error and silence", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>();
     await expect(listDecisionModels("jev", { settings: {}, fetch })).resolves.toMatchObject({ ok: false, detail: expect.stringContaining("Add a TypeSafe API key") });

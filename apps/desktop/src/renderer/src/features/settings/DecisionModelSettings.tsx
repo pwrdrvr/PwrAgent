@@ -192,7 +192,7 @@ export function DraftTextField(props: {
   disabled?: boolean;
   validate?: (value: string) => string | undefined;
   onSave: (value: string | undefined) => Promise<unknown>;
-  /** Escape with nothing typed; the field takes focus when given. */
+  /** Escape leaves the field without saving; the field takes focus when given. */
   onCancel?: () => void;
 }) {
   const [draft, setDraft] = useState<string | undefined>(undefined);
@@ -231,13 +231,13 @@ export function DraftTextField(props: {
             if (event.key === "Enter") {
               event.preventDefault();
               void commit();
+            } else if (event.key === "Escape" && props.onCancel) {
+              event.preventDefault();
+              props.onCancel();
             } else if (event.key === "Escape" && draft !== undefined) {
               event.preventDefault();
               setDraft(undefined);
               setProblem(undefined);
-            } else if (event.key === "Escape" && props.onCancel) {
-              event.preventDefault();
-              props.onCancel();
             }
           }}
         />
@@ -403,6 +403,18 @@ export function DecisionProviderScreen(props: {
     props.onSave({ ...settings, local: providerSection({ ...settings.local, ...local }) });
   const saveJev = (jev: NonNullable<DesktopDecisionModelSettings["jev"]>) =>
     props.onSave({ ...settings, jev: providerSection({ ...settings.jev, ...jev }) });
+  // A replaced key keeps its `configured` and `source`, so count saves to read the model list again.
+  const [keySaves, setKeySaves] = useState(0);
+  const replaceSecret = async (secret: DesktopSettingsSecretName, value: string) => {
+    const saved = await props.onReplaceSecret(secret, value);
+    if (saved) setKeySaves((count) => count + 1);
+    return saved;
+  };
+  const clearSecret = async (secret: DesktopSettingsSecretName) => {
+    const cleared = await props.onClearSecret(secret);
+    if (cleared) setKeySaves((count) => count + 1);
+    return cleared;
+  };
 
   if (props.provider === "local") {
     return (
@@ -452,7 +464,7 @@ export function DecisionProviderScreen(props: {
               defaultModel={DECISION_LOCAL_DEFAULT_MODEL}
               sub={`${decisionImageCapabilityLabel(decisionImageCapabilities("local", resolved.localModel))}.`}
               desktopApi={props.desktopApi}
-              refreshKey={`${resolved.localEndpoint}:${secrets.localApiKey.configured}`}
+              refreshKey={`${resolved.localEndpoint}:${secrets.localApiKey.configured}:${keySaves}`}
               saving={props.saving}
               onSave={async (model) => await saveLocal({ model })}
             />
@@ -462,8 +474,8 @@ export function DecisionProviderScreen(props: {
               secret="decisionLocalApiKey"
               state={secrets.localApiKey}
               disabled={props.saving}
-              onClearSecret={props.onClearSecret}
-              onReplaceSecret={props.onReplaceSecret}
+              onClearSecret={clearSecret}
+              onReplaceSecret={replaceSecret}
             />
             <SettingsField
               label="Connection test"
@@ -518,8 +530,8 @@ export function DecisionProviderScreen(props: {
             secret="typesafeJevApiKey"
             state={secrets.jevApiKey}
             disabled={props.saving}
-            onClearSecret={props.onClearSecret}
-            onReplaceSecret={props.onReplaceSecret}
+            onClearSecret={clearSecret}
+            onReplaceSecret={replaceSecret}
           />
           <DecisionModelField
             provider="jev"
@@ -528,7 +540,7 @@ export function DecisionProviderScreen(props: {
             defaultModel={DECISION_JEV_DEFAULT_MODEL}
             sub={`${decisionImageCapabilityLabel(decisionImageCapabilities("jev", resolved.jevModel))}.`}
             desktopApi={props.desktopApi}
-            refreshKey={`${secrets.jevApiKey.configured}:${secrets.jevApiKey.source}`}
+            refreshKey={`${secrets.jevApiKey.configured}:${secrets.jevApiKey.source}:${keySaves}`}
             saving={props.saving}
             onSave={async (model) => await saveJev({ model })}
           />
