@@ -33,7 +33,7 @@ describe("task monitor titles", () => {
     ["Monitor `pnpm --filter @pwragent/desktop typecheck` until it exits.", "Desktop Typecheck"],
     ["Watch pnpm -C apps/desktop run typecheck.", "Desktop Typecheck"],
     ["Watch pnpm --filter @pwragent/desktop build:headless.", "Desktop Build:headless"],
-    ["Monitor Giphy Swift Verify commit a40f3de.", "Giphy Swift Verify"],
+    ["Monitor Acme Swift Verify commit a40f3de.", "Acme Swift Verify"],
     ["Watch CI on branch staging at commit a40f3deeae808a1129ef59b07c3ffc33913ba4ca.", "CI on branch staging"],
     ["Monitor commit a40f3de.", "Job Monitor"],
   ])("labels %s as %s", (task, title) => {
