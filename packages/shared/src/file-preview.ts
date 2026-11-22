@@ -22,6 +22,8 @@ export type FilePreviewKind =
   | "text"
   | "html";
 
+export const MAX_TEXT_FILE_PREVIEW_BYTES = 2 * 1024 * 1024;
+
 const FILE_PREVIEW_KINDS_BY_EXTENSION: Record<string, FilePreviewKind> = {
   md: "markdown",
   markdown: "markdown",
