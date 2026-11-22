@@ -11877,7 +11877,7 @@ export class DesktopBackendRegistry {
       .then(() => this.managedReviewService.startReview(params, trustedSnapshot, turnAttribution));
   }
 
-  async submitReview(
+  submitReview(
     params: StartReviewRequest & {
       idempotencyKey?: string;
     },
@@ -11893,8 +11893,7 @@ export class DesktopBackendRegistry {
         invokingTurnId: string;
       }
   > {
-    await this.assertStoredAgentCapabilityAdmission(params, "child");
-    return await this.managedReviewService.submitReview(params, trustedSnapshot);
+    return this.managedReviewService.submitReview(params, trustedSnapshot);
   }
 
   cancelPendingReview(

@@ -59,6 +59,9 @@ describe("Agent capability admission at the owner", () => {
         .rejects.toThrow("interactive execution");
       await expect(registry.setThreadAgent({ ...identity, agent: null }))
         .rejects.toThrow("interactive execution");
+      const review = { ...identity, target: { type: "uncommittedChanges" as const } };
+      await expect(registry.startReview(review)).rejects.toThrow("child execution");
+      await expect(registry.submitReview(review)).rejects.toThrow("child execution");
     } finally {
       await registry.close();
     }
