@@ -17,6 +17,7 @@ import { ThreadTodoStack } from "../ThreadTodoStack";
 import { TodoDispatchProvider } from "../TodoDispatchProvider";
 import { ThreadTodosPanel } from "../ThreadTodosPanel";
 import { ThreadTodoCountsContext } from "../useThreadTodos";
+import { resetThreadTodoLaunchesForTests } from "../thread-todo-launches";
 import { ThreadTodoRevealContext } from "../thread-todo-reveal";
 import { unwrapNavigationRead } from "../../../../../shared/navigation-ipc-result";
 import type { ThreadTodosView } from "../thread-todos-view";
@@ -30,6 +31,7 @@ vi.mock("../../../lib/copy-text", () => ({
 
 afterEach(() => {
   cleanup();
+  resetThreadTodoLaunchesForTests();
   delete (window as unknown as { pwragent?: unknown }).pwragent;
   vi.useRealTimers();
   vi.mocked(copyTextWithHtml).mockClear();
@@ -452,7 +454,10 @@ describe("ThreadTodoStack", () => {
     fireEvent.keyDown(document.activeElement!, { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: "Machine for the new thread: This machine" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Studio Mac" }));
-    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    // The run ends with the card open and no error, so it comes back.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    });
     expect(view.run).toHaveBeenCalledWith(handoff, { startOnInstanceId: "peer-1", workMode: "local" });
 
     fireEvent.click(screen.getByRole("button", { name: "Handoff options" }));
