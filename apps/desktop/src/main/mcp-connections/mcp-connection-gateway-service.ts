@@ -718,6 +718,7 @@ export class McpConnectionGatewayService {
   private bridgeSocketPath?: string;
   private bridgeSocketDirectory?: string;
   private bridgeStart?: Promise<void>;
+  private closePromise?: Promise<void>;
   private readonly grants = new Map<string, BridgeGrant>();
   private readonly threadRegistrations = new Map<
     string,
@@ -2683,7 +2684,15 @@ export class McpConnectionGatewayService {
     };
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    this.closePromise ??= this.closeOnce();
+    return this.closePromise;
+  }
+
+  private async closeOnce(): Promise<void> {
+    // The kernel listener may already exist while startup is awaiting chmod
+    // or publish. Join startup before taking the listener for cleanup.
+    await this.bridgeStart?.catch(() => undefined);
     await this.boatSignIn.cancel({ wait: true });
     await this.boat.closePortForwards();
     this.grants.clear();
@@ -2745,6 +2754,7 @@ export class McpConnectionGatewayService {
   }
 
   private claimProfileOwnership(): ProfileOwnership {
+    if (this.closePromise) throw new Error("The MCP connection gateway is shutting down.");
     // Status reads also start the broker on demand. During onboarding there
     // is no active profile: publishing discovery would create profiles/default
     // even when the operator is provisioning only named profiles.
@@ -4466,6 +4476,7 @@ export class McpConnectionGatewayService {
   }
 
   private async startBridgeServer(): Promise<void> {
+    if (this.closePromise) throw new Error("The MCP connection gateway is shutting down.");
     if (this.bridgeServer) return;
     if (this.bridgeStart) return await this.bridgeStart;
     this.bridgeStart = this.startBridgeServerNow().finally(() => {

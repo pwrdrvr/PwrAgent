@@ -1,3 +1,5 @@
+import { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
+import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ManageThreadDependenciesRequest,
@@ -802,5 +804,126 @@ describe("marked-done prerequisites", () => {
     });
     expect(cards()).toHaveLength(1);
     expectSqliteWriteBudget({ scenario: "thread-dependency-marked-done", note: "One marked-done wait: registration, mark done, and its reminder card; PR events in between write nothing. Operator-paced, so ~0 MB/day idle.", writes });
+  });
+});
+
+describe("resource checkout continuations", () => {
+  const checkout: ThreadDependencyCondition = {
+    backend: "codex", threadId: "", when: "resource_checkout",
+    resourceCheckout: { resourceId: "fixture-lab", requestKey: "request-one" },
+  };
+  const registration = {
+    action: "create", backend: "codex", threadId: "dependencies",
+    conditions: [checkout], continuation: "Run the previously authorized work.",
+  } as const;
+  const register = (owner: ThreadDependencyCoordinator) =>
+    owner.manage({ ...registration, conditions: [checkout] }, undefined, "owner:resource-checkout");
+
+  it("wakes at most once and only from a fresh terminal observation across restarts", async () => {
+    await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("queued", "partition", "restart", "granted", "ended"), {
+      minLength: 1, maxLength: 10,
+    }), async (operations) => {
+      const suffix = crypto.randomUUID();
+      const threadId = "checkout-" + suffix;
+      snapshots.set(threadId, { turns: [], prs: [] });
+      const wake = vi.fn<CoordinatorOptions["submit"]>().mockResolvedValue({ status: "started", turnId: "continued" });
+      let observation: "granted" | "ended" | undefined;
+      const makeOwner = () => coordinator(store, async () => {}, {
+        submit: wake,
+        observeResourceCheckout: async (item) => item.threadId !== threadId ? undefined
+          : observation === "granted" ? { state: "satisfied", reason: "Promoted" }
+            : observation === "ended" ? { state: "failed", reason: "Ended" } : undefined,
+      });
+      let owner = makeOwner();
+      const input = { ...registration, conditions: [checkout], threadId };
+      await expect(owner.manage(input, undefined, "agent:codex")).rejects.toThrow(/resource wait tool/);
+      await owner.manage(input, undefined, "owner:resource-checkout");
+      let expected = 0;
+      for (const operation of operations) {
+        if (operation === "restart") {
+          owner = makeOwner();
+          await owner.reconcile();
+        } else {
+          observation = operation === "granted" || operation === "ended" ? operation : undefined;
+          if (observation) expected = 1;
+          await owner.checkResourceCheckouts();
+        }
+        expect(wake).toHaveBeenCalledTimes(expected);
+        await owner.manage(input, undefined, "owner:resource-checkout");
+      }
+      snapshots.delete(threadId);
+      const item = store.list("codex", threadId)[0];
+      if (item?.status === "waiting") store.cancel("codex", threadId, item.id, now);
+    }), { numRuns: 25 });
+  });
+
+  it.each((["start", "steer"] as const).flatMap((route) =>
+    (["granted", "expired", "unreachable"] as const).map((state) => ({ route, state })),
+  ))("checks the authority again before queued $route with a $state grant", async ({ route, state }) => {
+    let occupied = true;
+    let observation: "granted" | "expired" | "unreachable" = "unreachable";
+    const provider = vi.fn(async (entry) => ({ backend: entry.backend, threadId: entry.threadId, turnId: "continued" }));
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => occupied || route === "steer",
+      canSteerThread: () => !occupied && route === "steer",
+      steerTurn: provider,
+      prepareInput: (entry) => entry.messageOrigin?.dependencyId
+        ? owner.resourceCheckoutDeliveryText(entry, entry.messageOrigin.dependencyId).then((text) => text ? [{ type: "text", text }] : entry.input)
+        : undefined,
+      startTurn: provider,
+    });
+    const owner = coordinator(store, async () => {}, {
+      submit: (entry) => queue.submitSteer(entry),
+      observeResourceCheckout: async () => observation === "granted" ? { state: "satisfied", reason: "Promoted" }
+        : observation === "expired" ? { state: "failed", reason: "Checkout expired" } : undefined,
+    });
+    await register(owner);
+    observation = "granted";
+    await owner.checkResourceCheckouts();
+    expect(queue.getQueuedEntries(registration)).toHaveLength(1);
+    expect(provider).not.toHaveBeenCalled();
+
+    occupied = false;
+    observation = state;
+    await queue.releaseThread(registration);
+    expect(provider).toHaveBeenCalledOnce();
+    const [{ input }] = provider.mock.calls[0]!;
+    if (state === "granted") expect(input[0].text).toContain(registration.continuation);
+    else {
+      expect(input[0].text).not.toContain(registration.continuation);
+      expect(input[0].text).toContain("Do not bypass the dependency or begin dependent work");
+    }
+    queue.close();
+  });
+
+  it("writes only on registration, fresh promotion, admission claim, and delivery", async () => {
+    let granted = false;
+    const owner = coordinator(store, async () => {}, {
+      observeResourceCheckout: async () => granted ? { state: "satisfied", reason: "Promoted" } : undefined,
+    });
+    const lifecycle = await measureSqliteWrites(async () => {
+      await register(owner);
+      granted = true;
+      await owner.checkResourceCheckouts();
+    });
+    expectSqliteWriteBudget({
+      scenario: "resource-checkout-continuation",
+      note: "One durable wait registration, promotion observation, admission claim, and delivery; 100 such waits per day produce about 4.1 MB of WAL.",
+      writes: lifecycle.writes,
+    });
+    expect(submit).toHaveBeenCalledTimes(1);
+    granted = false;
+    const pending = { ...checkout, resourceCheckout: { resourceId: "fixture-lab", requestKey: "request-two" } };
+    const input = { ...registration, conditions: [pending] };
+    await owner.manage(input, undefined, "owner:resource-checkout");
+    const idle = await measureSqliteWrites(async () => {
+      for (let i = 0; i < 100; i++) await owner.checkResourceCheckouts();
+      await owner.manage(input, undefined, "owner:resource-checkout");
+    });
+    expectSqliteWriteBudget({
+      scenario: "resource-checkout-continuation-idle",
+      note: "100 queued or unreachable observations and an identical registration produce zero writes.",
+      writes: idle.writes,
+    });
   });
 });

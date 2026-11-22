@@ -219,6 +219,26 @@ function buildRuntime(params: {
 }
 
 describe("federated thread message service", () => {
+  it.each([false, true])("binds only after a peer confirms the requested executor is present (%s)", async (ownsThread) => {
+    const { backends, runtime } = buildRuntime({ peers: [{ instanceId: "owner", label: "Owner", ownsThread }] });
+    const peer = backends.get("owner")!;
+    const bind = vi.fn(async () => {
+      expect(peer.resolveThread).toHaveBeenCalledOnce();
+      expect(peer.startTurn).not.toHaveBeenCalled();
+    });
+    const handler = createFederatedThreadMessageHandler({ runtime: () => runtime });
+    const delivery = handler({ ...request, instanceId: "owner", beforeDelivery: bind });
+    if (ownsThread) {
+      await expect(delivery).resolves.toMatchObject({ instanceId: "owner", turnId: "remote-turn-1" });
+      expect(bind).toHaveBeenCalledOnce();
+      expect(peer.startTurn).toHaveBeenCalledOnce();
+    } else {
+      await expect(delivery).rejects.toThrow(/not found/);
+      expect(bind).not.toHaveBeenCalled();
+      expect(peer.startTurn).not.toHaveBeenCalled();
+    }
+  });
+
   it.each([undefined, "owner"])("reports an archived peer target without an archive timestamp (owner: %s)", async (instanceId) => {
     const { backends, runtime } = buildRuntime({ peers: [{ instanceId: "owner", label: "Owner", archived: true }] });
     const handler = createFederatedThreadMessageHandler({ runtime: () => runtime });

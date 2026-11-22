@@ -1,3 +1,4 @@
+import type { CheckoutToolHandler } from "../agent-tools/pwragent-resource-checkout-agent-tools";
 import type { ThreadModelSettings } from "./thread-model-settings";
 import type { AcpSessionRuntimeOptions } from "./acp-session-runtime-options";
 import type { HeadlessAutomationTurns } from "./headless-automation-turns";
@@ -1284,6 +1285,8 @@ export class DesktopBackendRegistry {
   private threadTodoHandler?: PwrAgentThreadTodoHandler;
   private openAIDecisionsHandler?: PwrAgentOpenAIDecisionsHandler;
   private researchHandler?: ResearchAgentHandler;
+  private checkoutHandler?: CheckoutToolHandler;
+  private prepareCheckoutWakeup?: (entry: ThreadTurnQueueEntry, dependencyId: string) => Promise<AppServerTurnInputItem[]>;
   private researchEnabled: () => boolean = () => false;
   private researchWorkerCheck?: (thread: { backend: AppServerBackendKind; threadId: string }) => boolean;
   private agentThreadActions?: AgentThreadActions;
@@ -2179,6 +2182,7 @@ export class DesktopBackendRegistry {
       startThread: (...args: Parameters<typeof this.startThread>) => this.startThread(...args),
       startTurn: (...args: Parameters<typeof this.startTurn>) => this.startTurn(...args),
       startTurnNow: (...args: Parameters<typeof this.startTurnNow>) => this.startTurnNow(...args),
+      prepareQueuedTurnInput: (entry: ThreadTurnQueueEntry) => this.prepareQueuedTurnInput(entry),
       startTurnWithoutHandoff: (...args: Parameters<typeof this.startTurnWithoutHandoff>) => this.startTurnWithoutHandoff(...args),
       steerTurn: (...args: Parameters<typeof this.steerTurn>) => this.steerTurn(...args),
       get stoppingRunningTurnsForShutdown() { return current().stoppingRunningTurnsForShutdown; },
@@ -2207,6 +2211,7 @@ export class DesktopBackendRegistry {
       get threadStarts() { return current().threadStarts; },
       get threadTodoHandler() { return current().threadTodoHandler; },
       get openAIDecisionsHandler() { return current().openAIDecisionsHandler; },
+      get checkoutHandler() { return current().checkoutHandler; },
       get mcpResearchHandler() { return current().mcpResearchHandler; },
       get threadTurnQueue() { return current().threadTurnQueue; },
       get tokenMiserCodeModeGroupingVersion() { return current().tokenMiserCodeModeGroupingVersion; },
@@ -2757,6 +2762,24 @@ export class DesktopBackendRegistry {
     handler: PwrAgentOpenAIDecisionsHandler | null | undefined,
   ): void {
     this.openAIDecisionsHandler = handler ?? undefined;
+  }
+
+  private prepareQueuedTurnInput(entry: ThreadTurnQueueEntry): Promise<AppServerTurnInputItem[]> | undefined {
+    const id = entry.messageOrigin?.kind === "pwragent" ? entry.messageOrigin.dependencyId : undefined;
+    if (!id?.startsWith("checkout:")) return undefined;
+    return this.prepareCheckoutWakeup?.(entry, id)
+      ?? Promise.resolve([{ type: "text", text: "The resource checkout could not be verified. Do not start the dependent work." }]);
+  }
+
+  setResourceCheckoutHandler(
+    handler: CheckoutToolHandler,
+    prepare?: DesktopBackendRegistry["prepareCheckoutWakeup"],
+  ): void {
+    this.prepareCheckoutWakeup = prepare;
+    this.checkoutHandler = (operation, args, context) => {
+      if (!this.isLiveDynamicToolCall(context.backend, context)) throw new Error("Resource tools require an active thread turn.");
+      return handler(operation, args, context);
+    };
   }
 
   setResearchHandler(handler: ResearchAgentHandler | undefined, workerCheck?: (thread: { backend: AppServerBackendKind; threadId: string }) => boolean, enabled: () => boolean = () => false): void {
@@ -8232,6 +8255,7 @@ export class DesktopBackendRegistry {
       threadTodoHandler: this.threadTodoHandler,
       openAIDecisionsHandler: this.openAIDecisionsHandler,
       researchHandler: this.advertisedResearchHandler,
+      checkoutHandler: this.checkoutHandler,
     });
     const pdfMcpPreparation = resources.track(
       backend === "codex" && this.resolvePdfAnalysisEnabledFn()
@@ -15478,6 +15502,7 @@ export class DesktopBackendRegistry {
         threadTodoHandler: this.threadTodoHandler,
         openAIDecisionsHandler: this.openAIDecisionsHandler,
         researchHandler: this.advertisedResearchHandler,
+        checkoutHandler: this.checkoutHandler,
       }),
     ), discoveryEnabled, eagerTools);
     // Tool search reads this catalog too, so it must not name refused tools.
@@ -18440,6 +18465,7 @@ export class DesktopBackendRegistry {
         threadTodoHandler: this.threadTodoHandler,
         openAIDecisionsHandler: this.openAIDecisionsHandler,
         researchHandler: this.advertisedResearchHandler,
+        checkoutHandler: this.checkoutHandler,
       }, { taskMonitorRole: "all" });
       const catalog = catalogs.find(({ router }) => router.acceptsDynamicToolCall(hostToolCall));
       // These adapters retain the historical namespace normalization and
@@ -19192,8 +19218,24 @@ export class DesktopBackendRegistry {
     })).find((thread) => thread.id === target.threadId);
   }
 
+  async sendResourceCheckoutHandoff(
+    context: AgentToolCallContext,
+    target: { backend: AppServerBackendKind; threadId: string; instanceId?: string },
+    prompt: string,
+    bind: () => Promise<void>,
+  ): Promise<PwrAgentThreadOrchestrationResponse> {
+    return await this.sendMessageToThread({
+      operation: "send_message_to_thread", context,
+      args: { ...target, includeRemote: Boolean(target.instanceId), prompt, delivery: "new_turn" },
+    }, async () => {
+      if (!this.isLiveDynamicToolCall(context.backend, context)) throw new Error("Checkout handoff requires an active source turn.");
+      await bind();
+    });
+  }
+
   private async sendMessageToThread(
     named: PwrAgentThreadOrchestrationRequest<"send_message_to_thread">,
+    beforeDelivery?: () => Promise<void>,
   ): Promise<PwrAgentThreadOrchestrationResponse> {
     // Before the paused-project gate, which leaves a peer's thread to its peer.
     const request = this.ownerRelativeRequest(named);
@@ -19232,7 +19274,7 @@ export class DesktopBackendRegistry {
         return threadOrchestrationFailure(accessRefusal.code, accessRefusal.message);
       }
     }
-    return await this.deliverMessageToThread(request);
+    return await this.deliverMessageToThread(request, beforeDelivery ? { beforeDelivery } : undefined);
   }
 
   /**
@@ -19255,7 +19297,7 @@ export class DesktopBackendRegistry {
   private async deliverMessageToThread(
     named: PwrAgentThreadOrchestrationRequest<"send_message_to_thread">,
     /** Set only by the operator's to-do dispatch, never from tool arguments. */
-    options?: { threadTodo?: { id: string; title?: string }; operatorApproved?: boolean },
+    options?: { threadTodo?: { id: string; title?: string }; operatorApproved?: boolean; beforeDelivery?: () => Promise<void> },
   ): Promise<PwrAgentThreadOrchestrationResponse> {
     const request = this.ownerRelativeRequest(named);
     const backend = request.args.backend;
@@ -19394,10 +19436,14 @@ export class DesktopBackendRegistry {
           localResolutionError = error;
         }
       }
+      if (options?.beforeDelivery && localThread) {
+        await options.beforeDelivery();
+      }
       const rememberedRemoteTurn =
         !localThread && includeRemote && this.federatedThreadMessageHandler
         ? await this.federatedThreadMessageHandler({
             ...remoteRequest,
+            ...(options?.beforeDelivery ? { beforeDelivery: options.beforeDelivery } : {}),
             ...(instanceId
               ? { instanceId }
               : { resolutionMode: "remembered_only" as const }),

@@ -207,3 +207,30 @@ describe("observing an existing local watcher", () => {
     }), { numRuns: 75 });
   });
 });
+
+
+it("checks promotions immediately even when an earlier checkout check is still in flight", async () => {
+  vi.useFakeTimers();
+  let calls = 0;
+  const first = Promise.withResolvers<void>();
+  const poller = new LocalFilePoller({
+    intervalMs: 500,
+    hasPending: () => true,
+    check: async () => { if (++calls === 1) await first.promise; },
+    onError: (error) => { throw error; },
+  });
+  try {
+    poller.sync();
+    await vi.advanceTimersByTimeAsync(300);
+    poller.sync(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toBe(1);
+    poller.sync(0);
+    first.resolve();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toBe(2);
+  } finally {
+    poller.dispose();
+    vi.useRealTimers();
+  }
+});

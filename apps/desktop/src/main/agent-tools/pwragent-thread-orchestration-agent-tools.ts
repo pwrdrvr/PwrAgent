@@ -62,6 +62,7 @@ export type PwrAgentFederatedThreadMessageRequest = {
   threadId: SendMessageToThreadToolArgs["threadId"];
   instanceId?: SendMessageToThreadToolArgs["instanceId"];
   replaceQueueEntryId?: string;
+  beforeDelivery?: () => Promise<void>;
   delivery?: "new_turn";
   resolutionMode?: "remembered_only" | "discover_only";
   input: AppServerTurnInputItem[];

@@ -66,6 +66,7 @@ const DEPENDENT_PHRASES: Record<When, string> = {
   // A CI run and a file marker name no prerequisite thread.
   ci_run: "until its run reaches its milestone",
   local_file: "until its watcher writes a result",
+  resource_checkout: "until its resource checkout is promoted",
 };
 const MAX_CONDITIONS = 16;
 const MAX_TITLE_LENGTH = 200;

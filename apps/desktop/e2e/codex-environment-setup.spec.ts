@@ -1,3 +1,4 @@
+import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
@@ -621,6 +622,12 @@ test("thread environment Run command uses the current cwd after workspace handof
         },
       )
       .toBe(comparableCommandCwd(await realpath(worktreePath!)));
+
+    const machine = await app.window.evaluate(async () => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      return (await api.readResourceCheckouts!()).resources.find((resource) => resource.placement === "machine");
+    });
+    expect(machine).toMatchObject({ condition: "available", allocations: [], cleanup: { state: "verified" } });
 
     await app.window.getByLabel(/^Workspace mode(?::|$)/).click();
     await app.window.getByRole("menuitem", { name: "Handoff to Local" }).click();

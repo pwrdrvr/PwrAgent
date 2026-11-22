@@ -995,6 +995,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
               threadTodoHandler: ports.threadTodoHandler,
               openAIDecisionsHandler: ports.openAIDecisionsHandler,
               researchHandler: ports.mcpResearchHandler,
+              checkoutHandler: ports.checkoutHandler,
             }, { taskMonitorRole: "all" }),
           authorizeToolCall: (params) =>
             ports.authorizeAgentToolMcpCall(params),
@@ -1316,6 +1317,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   const threadTurnQueue = new ThreadTurnQueue({
     isAdmissionHeld: () => ports.restartGate.phase === "quieting",
     startTurn: async (entry) => await ports.startTurnNow(entry),
+    prepareInput: (entry) => ports.prepareQueuedTurnInput(entry),
     canSteerThread: (entry) => !ports.stoppingRunningTurnsForShutdown
       && !ports.threadHasBlockingWorkspaceMove(entry)
       && ports.getActiveTurnForThread(entry) !== undefined

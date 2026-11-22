@@ -27,6 +27,9 @@ export const desktopFederationState = {
   read(field: keyof typeof fields): string | undefined {
     return getAppStateDb().getMeta(fields[field]);
   },
+  getOrCreateInstanceId(candidate: string): string {
+    return getAppStateDb().getOrInsertMeta(fields.instanceId, candidate);
+  },
   write(field: keyof typeof fields, value: string): void {
     getAppStateDb().setMeta(fields[field], value);
   },
