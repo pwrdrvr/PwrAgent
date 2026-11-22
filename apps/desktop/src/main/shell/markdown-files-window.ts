@@ -159,6 +159,7 @@ function upsertSnapshotFile(
     ...snapshot,
     files,
     selectedPath: file.path,
+    openSequence: (snapshot.openSequence ?? 0) + 1,
     ...(editorApplication ? { editorApplication } : {}),
   };
 }

@@ -277,7 +277,7 @@ async function buildLocalNavigationQueryIndex(params: {
     }),
   );
   const projects = await resolveNavigationWorktreeProjects(withGitStatus, {
-    signal: params.signal, directoryOverlays: index.directoryOverlays, gitStatusByKey: directoryStatusCache,
+    threads, signal: params.signal, directoryOverlays: index.directoryOverlays, gitStatusByKey: directoryStatusCache,
   });
   // Startup refresh status says only whether live listings have begun: it
   // records one attempt, and a Claude or ACP discovery failure in it says

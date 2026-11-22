@@ -827,6 +827,10 @@ export function createThreadTodoRunners(params: {
       return {
         backend: started.backend, threadId: started.threadId,
         dispatchSettings: { settings: chosen, source: sourceSettings },
+        // The thread still started and shows the setup's output; the card says so.
+        ...(started.codexEnvironmentStartupFailure
+          ? { setupFailure: started.codexEnvironmentStartupFailure.message }
+          : {}),
       };
     },
     ...(federation

@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ComposerDraftStorage } from "@pwragent/owner-core/composer-draft-storage";
@@ -17,6 +18,7 @@ import { createComposerDraftStorage } from "../storage/desktop-composer-draft-st
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 const active = vi.hoisted(() => ({ db: undefined as StateDb | undefined }));
+vi.mock("node:fs/promises", { spy: true });
 vi.mock("../state/app-state", () => ({
   getAppStateDb: () => {
     if (!active.db) throw new Error("App state not initialized. Call initializeAppState() first.");
@@ -26,7 +28,39 @@ vi.mock("../state/app-state", () => ({
 
 afterEach(() => {
   active.db = undefined;
+  vi.mocked(realpath).mockReset();
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
+});
+
+it("recovers a folded Windows project's unsent draft under its original scope", async () => {
+  active.db = openInMemoryStateDb();
+  try {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.mocked(realpath).mockResolvedValue("C:\\Repo");
+    const directoryKey = "directory:c:/repo";
+    const legacy = {
+      ...draft("launchpad", "Unsent alias draft"),
+      directoryKey, scopeKey: `launchpad:${directoryKey}`,
+    };
+    saveComposerDraft({ draft: legacy });
+    const canonical = { directoryKey: "directory:C:/Repo", scopeKey: "launchpad:directory:C:/Repo" };
+    expect(await listComposerDraftRecoveryCandidates(canonical)).toMatchObject({
+      candidates: [{ scopeKey: legacy.scopeKey, text: legacy.text }],
+    });
+    recordComposerDraftHistory({ draft: { ...legacy, ...canonical, text: "Older draft history" } });
+    expect(await listComposerDraftRecoveryCandidates({ ...canonical, limit: 1 })).toMatchObject({
+      candidates: [{ scopeKey: legacy.scopeKey, text: legacy.text }],
+    });
+    vi.mocked(realpath).mockImplementation(async (folder) => String(folder));
+    expect((await listComposerDraftRecoveryCandidates(canonical)).candidates.map(({ scopeKey }) => scopeKey))
+      .toEqual([canonical.scopeKey]);
+    expect(await listComposerDraftRecoveryCandidates({ scopeKey: legacy.scopeKey })).toMatchObject({
+      candidates: [{ scopeKey: legacy.scopeKey, text: legacy.text }],
+    });
+  } finally {
+    active.db.close();
+  }
 });
 
 function draft(scope: "legacy" | "local" | "peer" | "launchpad", text = "Draft"): ComposerDraftSnapshotRecord {
@@ -92,7 +126,7 @@ describe("composer draft application storage oracle", () => {
           const oracle: ComposerDraftStorage = new ComposerDraftRecoveryStore(profile.oracle);
           const record = { ...draft(op.scope, op.text), status: op.status, updatedAt: index + 10 };
           const query = { scopeKey: record.scopeKey, includeSent: op.includeSent, limit: op.limit };
-          const actual = await measureSqliteWrites(() => {
+          const actual = await measureSqliteWrites(async () => {
             if (op.kind === "save") return saveComposerDraft({ draft: record, recordHistory: op.recordHistory });
             if (op.kind === "history") return recordComposerDraftHistory({ draft: record });
             if (op.kind === "clear") return clearComposerDraft({ scopeKey: record.scopeKey });
@@ -118,7 +152,7 @@ describe("composer draft application storage oracle", () => {
               expect(pair.db.raw.prepare(sql).all()).toEqual(pair.oracle.raw.prepare(sql).all());
             }
           }
-          expect(listComposerDraftRecoveryCandidates()).toEqual({ candidates: oracle.listCandidates() });
+          expect(await listComposerDraftRecoveryCandidates()).toEqual({ candidates: oracle.listCandidates() });
         }
       } finally {
         active.db = undefined;

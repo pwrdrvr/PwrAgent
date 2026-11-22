@@ -5,6 +5,7 @@ import type { SubmitDurableTurnRequest } from "@pwragent/shared/contracts/durabl
 import { ensureNamedProfileExists } from "../profile";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
+import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import type { startOwnerServices } from "../owner-services";
 
 type Services = Awaited<ReturnType<typeof startOwnerServices>>;
@@ -29,7 +30,10 @@ export async function handleOutpostCommand(services: Services, method: string, p
       // The same registration the desktop's Add Project Directory performs; the project then lists for viewers.
       const bridge = new DesktopMessagingBackendBridge();
       return registerDirectoryFromDisk({ path: String(params.path ?? ""), preferredBackend: "codex" },
-        { ensureDirectoryLaunchpad: request => bridge.ensureDirectoryLaunchpad(request) });
+        {
+          ensureDirectoryLaunchpad: (request) => bridge.ensureDirectoryLaunchpad(request),
+          listDirectoryLaunchpads: () => getDesktopOverlayStore().listDirectoryLaunchpads(),
+        });
     }
     case "submit": return federation.submitDurableTurnRequest("local-cli", params as unknown as SubmitDurableTurnRequest);
     case "receipt": return federation.getDurableTurnRequest("local-cli", params as Parameters<typeof federation.getDurableTurnRequest>[1]);

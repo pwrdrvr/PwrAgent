@@ -44,7 +44,7 @@ export function MarkdownFilesWindow() {
     [snapshot?.context],
   );
   const readMarkdownFile = viewerApi?.readMarkdownFile;
-  const loadState = useFilePreviewRead(readMarkdownFile, selectedPath, thread, federationTarget);
+  const loadState = useFilePreviewRead(readMarkdownFile, selectedPath, thread, federationTarget, snapshot?.openSequence);
   const remoteSource = Boolean(federationTarget && isRemoteFederationTarget(federationTarget));
 
   useEffect(() => {
@@ -64,7 +64,11 @@ export function MarkdownFilesWindow() {
       .readMarkdownFileViewerSnapshot({ contextKey })
       .then((response) => {
         if (!cancelled) {
-          setSnapshot(response.snapshot);
+          // An open notification can arrive before this initial read resolves.
+          const next = response.snapshot;
+          setSnapshot((current) => (current?.openSequence ?? 0) > (next?.openSequence ?? 0)
+            ? current
+            : next);
         }
       })
       .catch((error: unknown) => {

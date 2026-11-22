@@ -2844,6 +2844,8 @@ export type MarkdownFileViewerSnapshot = {
   files: MarkdownFileViewerFile[];
   selectedPath: string;
   editorApplication?: DesktopApplicationDiscoveryCandidate;
+  /** Advances on each explicit open, including when the selected path is unchanged. */
+  openSequence?: number;
 };
 
 export type ReadMarkdownFileViewerSnapshotRequest = {

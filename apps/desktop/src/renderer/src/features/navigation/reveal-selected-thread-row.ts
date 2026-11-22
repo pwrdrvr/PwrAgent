@@ -16,7 +16,9 @@
  * the nearest-edge scroll leaves a row alone while its centering runs.
  */
 const SELECTED_ROW = ".sidebar .thread-row.is-selected";
-const REGION = ".sidebar__scroll-region";
+/** The sidebar's lane region, which holds the scrolling lists. */
+export const SIDEBAR_REGION = ".sidebar__scroll-region";
+const REGION = SIDEBAR_REGION;
 // Directory and Pinned group headers stick to the top of the list and
 // cover the rows that scroll under them.
 const STICKY_HEADER = ".directory-row__header";

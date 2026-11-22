@@ -17,6 +17,7 @@ import { ThreadTodoStack } from "../ThreadTodoStack";
 import { TodoDispatchProvider } from "../TodoDispatchProvider";
 import { ThreadTodosPanel } from "../ThreadTodosPanel";
 import { ThreadTodoCountsContext } from "../useThreadTodos";
+import { resetThreadTodoLaunchesForTests } from "../thread-todo-launches";
 import { ThreadTodoRevealContext } from "../thread-todo-reveal";
 import { unwrapNavigationRead } from "../../../../../shared/navigation-ipc-result";
 import type { ThreadTodosView } from "../thread-todos-view";
@@ -30,10 +31,14 @@ vi.mock("../../../lib/copy-text", () => ({
 
 afterEach(() => {
   cleanup();
+  resetThreadTodoLaunchesForTests();
   delete (window as unknown as { pwragent?: unknown }).pwragent;
   vi.useRealTimers();
   vi.mocked(copyTextWithHtml).mockClear();
 });
+
+/** A stack start reports its begin, so the card leaves the deck only then. */
+const START_HOOKS = { onBegin: expect.any(Function) };
 
 const AGENT: ThreadTodoProject = { key: "directory:/src/pwragent", label: "PwrAgent", path: "/src/pwragent" };
 const SNAP: ThreadTodoProject = { key: "directory:/src/pwrsnap", label: "PwrSnap", path: "/src/pwrsnap" };
@@ -452,8 +457,11 @@ describe("ThreadTodoStack", () => {
     fireEvent.keyDown(document.activeElement!, { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: "Machine for the new thread: This machine" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Studio Mac" }));
-    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
-    expect(view.run).toHaveBeenCalledWith(handoff, { startOnInstanceId: "peer-1", workMode: "local" });
+    // The run ends with the card open and no error, so it comes back.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    });
+    expect(view.run).toHaveBeenCalledWith(handoff, { startOnInstanceId: "peer-1", workMode: "local" }, START_HOOKS);
 
     fireEvent.click(screen.getByRole("button", { name: "Handoff options" }));
     await act(async () => {
@@ -830,7 +838,7 @@ describe("thread to-do checklists", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     });
-    expect(handoffView.run).toHaveBeenCalledWith(handoff, { allowOpenItems: true, modelSettings: { backend: "codex" } });
+    expect(handoffView.run).toHaveBeenCalledWith(handoff, { allowOpenItems: true, modelSettings: { backend: "codex" } }, START_HOOKS);
   });
 
   it("starts a thread at once when only the new thread's steps are open", async () => {
@@ -857,7 +865,7 @@ describe("thread to-do checklists", () => {
       fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     });
     expect(screen.queryByText(/still open/)).toBeNull();
-    expect(view.run).toHaveBeenCalledWith(handoff, { modelSettings: { backend: "codex" } });
+    expect(view.run).toHaveBeenCalledWith(handoff, { modelSettings: { backend: "codex" } }, START_HOOKS);
     cleanup();
 
     // A peer's card may live on an older owner, which blocks on every open
@@ -874,7 +882,7 @@ describe("thread to-do checklists", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     });
-    expect(remoteView.run).toHaveBeenCalledWith(remote, { allowOpenItems: true, modelSettings: { backend: "codex" } });
+    expect(remoteView.run).toHaveBeenCalledWith(remote, { allowOpenItems: true, modelSettings: { backend: "codex" } }, START_HOOKS);
   });
 
   it("drops the question once the last open step is checked", () => {

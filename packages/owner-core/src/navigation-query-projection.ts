@@ -81,6 +81,8 @@ export type NavigationQueryIndex = {
   localInstanceId?: string;
   coverage?: NavigationQueryCoverage;
   directories: NavigationDirectorySummary[];
+  /** Verified case spellings of local directories, keyed by the visible project key. */
+  directoryCaseAliases?: Record<string, string[]>;
   /** Worktree directory keys folded into each primary project. */
   worktreeProjectAliases?: Record<string, string[]>;
   /** The checkout supplying fallback repository identity for a synthesized parent project. */
@@ -358,6 +360,21 @@ function directoryMemberThreads(
     .filter((thread): thread is NavigationThreadSummary => Boolean(thread)) ?? [];
 }
 
+function matchesDirectoryKey(index: NavigationQueryIndex, directory: NavigationDirectorySummary, key: string): boolean {
+  return directory.key === key || index.directoryCaseAliases?.[directory.key]?.includes(key) === true;
+}
+
+function matchesDirectoryPath(index: NavigationQueryIndex, directory: NavigationDirectorySummary, path: string): boolean {
+  return directory.path === path
+    || (index.directoryCaseAliases?.[directory.key] !== undefined
+      && matchesDirectoryKey(index, directory, `directory:${canonicalizeNavigationPath(path)}`));
+}
+
+function findDirectory(index: NavigationQueryIndex, key: string, allowPath = false): NavigationDirectorySummary | undefined {
+  return index.directories.find((directory) => matchesDirectoryKey(index, directory, key)
+    || (allowPath && matchesDirectoryPath(index, directory, key)));
+}
+
 function queryDirectory(params: {
   query: NavigationQueryRequest["query"];
   index: NavigationQueryIndex;
@@ -365,7 +382,10 @@ function queryDirectory(params: {
 }): NavigationDirectorySummary | undefined {
   const { query } = params;
   if (query.kind === "directory" || query.kind === "children") {
-    return params.index.directories.find((directory) => directory.key === query.directoryKey);
+    return query.directoryKey ? findDirectory(params.index, query.directoryKey) : undefined;
+  }
+  if (query.kind === "messaging-threads" && query.directoryKey) {
+    return findDirectory(params.index, query.directoryKey, true);
   }
   if (query.kind === "exact" && query.ancestryScope === "directory") {
     if (query.identities.length !== 1) throw new Error("Directory-scoped ancestry requires exactly one thread identity.");
@@ -758,13 +778,13 @@ function buildDirectoryRows(params: {
 }
 
 function selectIndexedDirectories(
-  directories: NavigationDirectorySummary[],
+  index: NavigationQueryIndex,
   query: Extract<NavigationQuery, { kind: "directory-index" }>,
 ): NavigationDirectorySummary[] {
-  const candidates = query.keys || query.paths ? directories.filter((directory) =>
-    query.keys?.some((key) => directoryIncludesCheckout(directory, key))
-    || (directory.path !== undefined && query.paths?.includes(directory.path))
-    || directory.checkoutPaths?.some((path) => query.paths?.includes(path))) : directories;
+  const candidates = query.keys || query.paths ? index.directories.filter((directory) =>
+    query.keys?.some((key) => matchesDirectoryKey(index, directory, key) || directoryIncludesCheckout(directory, key))
+    || query.paths?.some((path) => matchesDirectoryPath(index, directory, path))
+    || directory.checkoutPaths?.some((path) => query.paths?.includes(path))) : index.directories;
   const filter = query.filter?.trim() ?? "";
   if (query.match === "mention") {
     return rankDirectoryMentionMatches(candidates, filter, homedir());
@@ -1028,7 +1048,7 @@ function selectQueryThreads(params: {
   const ordinaryThreads = params.index.threads.filter(isOrdinaryThread);
   const query = params.query;
   if (query.kind === "messaging-threads" || query.kind === "messaging-projects") {
-    const directory = query.directoryKey ? params.index.directories.find((candidate) => candidate.key === query.directoryKey || candidate.path === query.directoryKey) : undefined;
+    const directory = query.directoryKey ? findDirectory(params.index, query.directoryKey, true) : undefined;
     const members = directory ? new Set(directory.threadKeys.flatMap((key) => {
       const thread = params.threadsByLegacyKey.get(key);
       return thread ? [threadKey(thread)] : [];
@@ -1052,8 +1072,9 @@ function selectQueryThreads(params: {
     return [];
   }
   if (query.kind === "star-map") {
+    const projectKey = query.projectKey ? findDirectory(params.index, query.projectKey)?.key ?? query.projectKey : undefined;
     return ordinaryThreads.filter(isStarMapOwnerThread)
-      .filter((thread) => query.projectKey === undefined || starMapProjectKey(thread, params.checkoutProjects) === query.projectKey)
+      .filter((thread) => projectKey === undefined || starMapProjectKey(thread, params.checkoutProjects) === projectKey)
       .filter((thread) => (thread.pinnedRank !== undefined && query.filters.pinned !== "exclude")
         || passesNavigationStarMapFilters(starMapSignals(thread, params.index), query.filters))
       .sort((left, right) => {
@@ -1093,9 +1114,7 @@ function selectQueryThreads(params: {
     return threads.sort(query.lens === "recents" ? compareCreated : compareUpdated);
   }
   if (query.kind === "directory") {
-    const directory = params.index.directories.find(
-      (candidate) => candidate.key === query.directoryKey,
-    );
+    const directory = findDirectory(params.index, query.directoryKey);
     if (!directory) return [];
     const disclosedParents = new Set(query.disclosedParentThreadKeys ?? []);
     const members = directoryMemberThreads(directory, params.threadsByLegacyKey);
@@ -1140,7 +1159,7 @@ function selectQueryThreads(params: {
   if (query.kind === "children") {
     const parentThread = params.threadsByIdentity.get(identityKey(query.parent));
     const members = query.directoryKey === undefined ? undefined : new Set(directoryMemberThreads(
-      params.index.directories.find((directory) => directory.key === query.directoryKey), params.threadsByLegacyKey,
+      findDirectory(params.index, query.directoryKey), params.threadsByLegacyKey,
     ));
     if (members && (!parentThread || !members.has(parentThread))) return [];
     const children = ordinaryThreads.filter((thread) => {
@@ -1276,16 +1295,24 @@ function buildProjectionIndex(index: NavigationQueryIndex, onWork?: NavigationPr
   onWork?.("index", index.threads.length);
   const checkoutProjects = new Map<string, NavigationDirectorySummary>();
   const foldedProjects = new Map<string, NavigationDirectorySummary>();
+  const caseProjects = new Map<string, NavigationDirectorySummary>();
   for (const directory of index.directories) {
     if (directory.checkoutPaths) {
       for (const key of directory.threadKeys) checkoutProjects.set(key, directory);
     }
     for (const key of index.worktreeProjectAliases?.[directory.key] ?? []) foldedProjects.set(key, directory);
+    const caseAliases = index.directoryCaseAliases?.[directory.key];
+    if (caseAliases) {
+      caseProjects.set(directory.key, directory);
+      for (const key of caseAliases) caseProjects.set(key, directory);
+    }
   }
-  if (foldedProjects.size) {
+  if (foldedProjects.size || caseProjects.size) {
     for (const thread of index.threads) {
       const primary = thread.linkedDirectories[0];
-      const project = primary && foldedProjects.get(`directory:${canonicalizeNavigationPath(primary.path)}`);
+      if (!primary || thread.federation) continue;
+      const project = (caseProjects.size ? caseProjects.get(classifyDirectory(primary).key) : undefined)
+        ?? foldedProjects.get(`directory:${canonicalizeNavigationPath(primary.path)}`);
       if (project) checkoutProjects.set(buildThreadIdentityKey(thread.source, thread.id), project);
     }
   }
@@ -1614,7 +1641,7 @@ export function projectNavigationQuery(params: {
   const exactDescriptor = query.kind === "exact" && selectedThreads.length
     ? params.index.directories.find((directory) => directory.threadKeys.some((key) => selectedThreads[0] === threadsByLegacyKey.get(key))) : undefined;
   const descriptor = query.kind === "exact" ? exactDescriptor : scopedDirectory;
-  const indexedDirectories = query.kind === "directory-index" ? selectIndexedDirectories(params.index.directories, query) : undefined;
+  const indexedDirectories = query.kind === "directory-index" ? selectIndexedDirectories(params.index, query) : undefined;
   // A mixed viewer can place remote pins using local project metadata. Its
   // authored row set alone cannot exclude a change to that placement.
   const directoryGitProof = params.includeDirectoryGitProof && snapshot && params.index.coverage?.state === "complete"
@@ -1644,10 +1671,7 @@ export function projectNavigationQuery(params: {
     // `roots` sets no collection size on a lens page, so the viewer knows to
     // filter that page itself.
     ...(lensRootOf ? { collectionSize: selectedThreads.filter((thread) => lensRootOf(thread) === thread).length } : {}),
-    ...(query.kind === "messaging-threads" ? { collectionSize: entries.length,
-      ...(query.directoryKey ? { selectionDirectory: buildDirectoryRows({ snapshot: { ...params.index, directories: params.index.directories.filter((directory) =>
-          directory.key === query.directoryKey || directory.path === query.directoryKey) }, threadsByLegacyKey, parentCandidates })
-        .find((directory) => directory.key === query.directoryKey || directory.path === query.directoryKey) } : {}) } : {}),
+    ...(query.kind === "messaging-threads" ? { collectionSize: entries.length } : {}),
     ...(query.kind === "star-map" ? {
       facets: countNavigationStarMapFacets(
         [...new Map(params.index.threads.filter(isStarMapOwnerThread).map((thread) => [threadKey(thread), thread])).values()]
