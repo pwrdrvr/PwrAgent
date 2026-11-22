@@ -72,6 +72,12 @@ says when to read this document. Relative links were updated for this location.
     bridge. Its buttons stay out of the Tab order and the chip's description;
     the chip keeps Delete and its menu for the keyboard. The card stops React
     propagation of presses, since its portal sits in the row's React tree.
+    A card that opens next to its trigger over other hover targets also
+    passes `interactive.bridge`: a transparent strip of the card fills the
+    10px gap (`tooltipBridgeRect`), so the pointer crosses into the card
+    without passing over anything else. The grace period alone is not enough:
+    entering another bridged trigger in the gap, such as a project index row
+    under the Attention tab, closes the card at once.
   - **A card with content worth hearing needs `aria-describedby`.** Point the
     trigger at the hook's `tooltipId` while `visible`; nothing else references
     the portal, so an unwired card is sighted-only. Do not solve this by

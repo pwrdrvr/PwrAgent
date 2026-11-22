@@ -49,6 +49,7 @@ import type {
 } from "@pwragent/shared/contracts/settings";
 import type {
   MessagingThreadBindingSummary,
+  NavigationAttentionScope,
   NavigationRelativePinMove,
   NavigationThreadSummary,
   NavigationRelativeChildMove,
@@ -75,7 +76,7 @@ import {
   moveThreadKey,
 } from "@pwragent/shared/thread-pins";
 import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
-import { isSubthreadLaunchpadKey } from "@pwragent/shared/contracts/navigation";
+import { isSubthreadLaunchpadKey, navigationThreadInAttentionScope } from "@pwragent/shared/contracts/navigation";
 import { resolveThreadParentKey } from "@pwragent/shared/subthreads";
 import {
   isFederationViewerWindow,
@@ -188,9 +189,13 @@ import {
   isThreadRemoteWorkHere,
 } from "./ThreadRowStatus";
 import { SelectedThreadDock } from "./SelectedThreadDock";
+import { type BridgedHoverCard, sidebarPrCardBridge } from "../../lib/hover-card-bridge";
 import {
+  ATTENTION_SCOPE_LABELS,
+  AttentionIndicator,
   AttentionReviewReadout,
   AttentionTurnReadouts,
+  attentionScopeIndicator,
   describeAttentionCounts,
   useAttentionHoverCard,
 } from "./AttentionSignals";
@@ -382,6 +387,13 @@ type SidebarProps = {
   agentCommandThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
   onBrowseModeChange: (browseMode: BrowseMode) => void;
+  /** The kind of member Attention is narrowed to; undefined lists the whole queue. */
+  attentionScope?: NavigationAttentionScope;
+  /**
+   * Opens Attention narrowed to one kind of member, from the Attention card's
+   * rows. Absent, the card stays a plain readout.
+   */
+  onAttentionScopeChange?: (scope: NavigationAttentionScope | undefined) => void;
   onCreateThread: () => Promise<void>;
   onCreateThreadWithoutDirectory?: () => Promise<void>;
   /**
@@ -743,6 +755,13 @@ function formatDraftThreadCount(count: number): string {
 // The line a thread lens's tooltip gains while no threads exist to show.
 const NO_THREADS_TOOLTIP_LINE = "No threads yet";
 
+const attentionScopeEmptyMessages: Record<NavigationAttentionScope, string> = {
+  active: "Nothing in progress.",
+  "active-local": "Nothing in progress here.",
+  "active-remote": "Nothing in progress elsewhere.",
+  review: "Nothing to review.",
+};
+
 /**
  * The lenses that draw pin order: each project's pins in Directories, and the
  * Pinned group in Updated and Created while pinned threads sit on top. There
@@ -1008,6 +1027,7 @@ function SidebarContent(props: SidebarProps) {
       profile: activeProfile,
     })
     : undefined;
+  const attentionScope = props.browseMode === "attention" ? props.attentionScope : undefined;
   const lensResources = [...props.pagedNavigation?.resources.values() ?? []]
     .filter((resource) => props.browseMode === "drafts" ? resource.id.startsWith("drafts:")
       : resource.id === "lens" || (pinnedGroupShown && resource.id === PINNED_GROUP_RESOURCE_ID));
@@ -1021,10 +1041,18 @@ function SidebarContent(props: SidebarProps) {
         : resource.id === "lens" || (pinnedGroupShown && resource.id === PINNED_GROUP_RESOURCE_ID));
     const keys = new Set(resources.flatMap((resource) => resource.state.page?.entries ?? [])
       .map((entry) => navigationThreadSelectionKey(entry.row.ref)));
+    // An owner that predates the scope answers with the whole queue. Its
+    // page goes through the owner's own predicate here, so a narrowed lens
+    // never lists what its strip says it hides; a page that honoured the
+    // scope passes through unchanged.
+    const inScope = (key: string) => {
+      const row = rowsByKey.get(key);
+      return Boolean(row) && (!attentionScope || navigationThreadInAttentionScope(row!, attentionScope));
+    };
     return { directories: props.directories, threads: props.threads,
-      visibleKeys: [...keys].filter((key) => rowsByKey.has(key)),
+      visibleKeys: [...keys].filter(inScope),
       order: readNavigationPresentationOrder(props.pagedNavigation?.resources ?? new Map()) };
-  }, [props.directories, props.threads, props.pagedNavigation?.resources, props.browseMode, pinnedGroupShown, rowsByKey]);
+  }, [props.directories, props.threads, props.pagedNavigation?.resources, props.browseMode, pinnedGroupShown, rowsByKey, attentionScope]);
   // One hydrator per Sidebar instance: it holds the previous hydrated result
   // so a render that changes nothing hands the rows back their existing
   // object identities, which is what lets the memoized rows bail out while
@@ -1046,7 +1074,9 @@ function SidebarContent(props: SidebarProps) {
         refreshThreadPinRanks: !lensShowsPinOrder(props.browseMode, pinnedThreadsOnTop),
         removeMissingThreads: props.browseMode === "attention",
       }),
-    scope: props.browseMode,
+    // A narrowed Attention is its own list: rows frozen under the pointer
+    // must not carry over from the whole queue, or the reverse.
+    scope: attentionScope ? `attention:${attentionScope}` : props.browseMode,
     // A pin or reorder settles with its pages invalidated; their re-read,
     // not the command's reply, carries the new order. A failed read stays
     // stale, so it counts as landed: waiting on it would leave the list
@@ -1101,7 +1131,7 @@ function SidebarContent(props: SidebarProps) {
   const lensEmptyMessage = (
     <p className="sidebar-empty">
       {props.browseMode === "attention"
-        ? "Nothing running, nothing to review."
+        ? attentionScope ? attentionScopeEmptyMessages[attentionScope] : "Nothing running, nothing to review."
         : props.browseMode === "drafts"
           // "replies", not "drafts": launchpad (new-thread) composer
           // text is equally unsent but belongs to a directory rather
@@ -3747,6 +3777,8 @@ function SidebarContent(props: SidebarProps) {
                     reviewThreadCount={attentionCounts.review}
                     disabled={props.threadLensesEmpty}
                     onSelect={() => props.onBrowseModeChange(mode)}
+                    scope={attentionScope}
+                    onSelectScope={props.onAttentionScopeChange}
                   />
                 ) : (
                   <LensTab
@@ -3814,6 +3846,13 @@ function SidebarContent(props: SidebarProps) {
             onPointerOut={hoverStableSnapshot.onPointerOut}
             onPointerOver={hoverStableSnapshot.onPointerOver}
           >
+            {attentionScope && props.onAttentionScopeChange ? (
+              <AttentionScopeStrip
+                scope={attentionScope}
+                count={attentionScopeCount(attentionScope, attentionCounts)}
+                onShowAll={() => props.onAttentionScopeChange?.(undefined)}
+              />
+            ) : null}
             {props.browseMode === "drafts" && renderedThreads.length > 0 && Boolean(props.unassignedThreadDraftCount) ? (
               <p className="sidebar-empty">Older drafts are also available. Use Recover Draft in a composer to choose one.</p>
             ) : null}
@@ -5241,6 +5280,47 @@ function useLingeringRemoteActiveSignal(count: number): boolean {
   return count > 0 || lingering;
 }
 
+/** The card's number for `scope`: what the narrowed list holds. */
+function attentionScopeCount(
+  scope: NavigationAttentionScope,
+  counts: { activeLocal: number; activeRemote: number; review: number },
+): number {
+  switch (scope) {
+    case "active":
+      return counts.activeLocal + counts.activeRemote;
+    case "active-local":
+      return counts.activeLocal;
+    case "active-remote":
+      return counts.activeRemote;
+    case "review":
+      return counts.review;
+  }
+}
+
+/**
+ * The line over a narrowed Attention list: which kind it shows, how many,
+ * and the way back to the whole queue. It exists only while a scope does —
+ * an always-on row of scopes would cost the list a row to repeat counts the
+ * tab already shows. Show All is also the keyboard's way back, since the
+ * card's rows stay out of the Tab order.
+ */
+function AttentionScopeStrip(props: {
+  scope: NavigationAttentionScope;
+  count: number;
+  onShowAll: () => void;
+}) {
+  return (
+    <div className="attention-scope" data-attention-scope={props.scope}>
+      <AttentionIndicator kind={attentionScopeIndicator(props.scope)} count={props.count} />
+      <span className="attention-scope__label">{ATTENTION_SCOPE_LABELS[props.scope]}</span>
+      <span className="attention-scope__count">{props.count}</span>
+      <button type="button" className="attention-scope__show-all" onClick={props.onShowAll}>
+        Show All
+      </button>
+    </div>
+  );
+}
+
 /**
  * The Attention tab. Where the other three lenses show a static icon, this one
  * shows the numbers it exists for: threads with a live turn, and threads
@@ -5279,6 +5359,14 @@ function AttentionLensTab(props: {
   /** No threads exist, so the lens would be empty. See `LensTab`'s `disabled`. */
   disabled?: boolean;
   onSelect: () => void;
+  /** The kind of member the lens is narrowed to, while it is the active lens. */
+  scope?: NavigationAttentionScope;
+  /**
+   * Narrows the lens from the card's rows. Given, the card is enterable: it
+   * shares the sidebar's hover-card bridge, so the pointer can cross the gap
+   * from the tab to a row.
+   */
+  onSelectScope?: (scope: NavigationAttentionScope | undefined) => void;
 }) {
   const keybindings = useKeybindings();
   const shortcut = chordLabelFor(keybindings, LENS_KEYBINDING_ACTIONS.attention);
@@ -5287,18 +5375,51 @@ function AttentionLensTab(props: {
     activeRemote: props.remoteActiveThreadCount,
     review: props.reviewThreadCount,
   };
+  const pickable = Boolean(props.onSelectScope) && !props.disabled;
+  const onSelectScope = props.onSelectScope;
+  const bridgeCardRef = useRef<BridgedHoverCard>({ hide: () => undefined });
+  const hideRef = useRef<() => void>(() => undefined);
   const { card, tooltip } = useAttentionHoverCard({
     ...counts,
     title: browseModeLabels.attention,
     caption: "Threads in progress or waiting to be reviewed",
-    reviewLabel: "To review",
+    reviewLabel: ATTENTION_SCOPE_LABELS.review,
     footer: props.disabled ? NO_THREADS_TOOLTIP_LINE
-      : shortcut ? withChordHint("Show Attention", shortcut) : undefined,
+      : shortcut ? withChordHint(pickable ? "Show All Attention" : "Show Attention", shortcut) : undefined,
+    scopes: pickable ? {
+      selected: props.active ? props.scope : undefined,
+      onSelect: (scope) => {
+        hideRef.current();
+        onSelectScope?.(scope);
+      },
+    } : undefined,
+    interactive: pickable ? {
+      onPointerEnter: () => sidebarPrCardBridge.enterCard(bridgeCardRef.current),
+      onPointerLeave: () => sidebarPrCardBridge.leaveCard(bridgeCardRef.current),
+      // The card opens over the project index and thread rows, which are
+      // card triggers on the same bridge: crossing one on the way down
+      // would close this card at once.
+      bridge: true,
+    } : undefined,
   });
+  hideRef.current = tooltip.hide;
+  bridgeCardRef.current.hide = tooltip.hide;
+  const tooltipVisible = tooltip.visible;
+  useEffect(() => {
+    if (!pickable) return;
+    const bridged = bridgeCardRef.current;
+    if (tooltipVisible) sidebarPrCardBridge.shown(bridged);
+    else sidebarPrCardBridge.hidden(bridged);
+  }, [pickable, tooltipVisible]);
+  useEffect(() => {
+    const bridged = bridgeCardRef.current;
+    return () => sidebarPrCardBridge.hidden(bridged);
+  }, []);
+  const scope = props.active ? props.scope : undefined;
   const accessibleName = `${browseModeLabels.attention}, ${describeAttentionCounts(
     counts,
     formatReviewThreadCount,
-  )}`;
+  )}${scope ? `, showing ${ATTENTION_SCOPE_LABELS[scope].toLowerCase()} only` : ""}`;
 
   return (
     <>
@@ -5315,6 +5436,7 @@ function AttentionLensTab(props: {
         className={`lens-switch__button lens-switch__button--attention${
           props.active ? " is-active" : ""
         }`}
+        data-attention-scope={scope}
         type="button"
         onBlur={tooltip.hide}
         onClick={() => {
@@ -5323,8 +5445,19 @@ function AttentionLensTab(props: {
           props.onSelect();
         }}
         onFocus={(event) => tooltip.show(event.currentTarget, card)}
-        onMouseEnter={(event) => tooltip.show(event.currentTarget, card)}
-        onMouseLeave={tooltip.hide}
+        onMouseEnter={(event) => {
+          if (pickable) sidebarPrCardBridge.enterTrigger(bridgeCardRef.current);
+          tooltip.show(event.currentTarget, card);
+        }}
+        onMouseLeave={() => {
+          // The card opens right under the tab, so the pointer can always
+          // reach it across the bridge without crossing another row.
+          if (pickable && tooltip.visible) {
+            sidebarPrCardBridge.leaveTrigger(bridgeCardRef.current);
+            return;
+          }
+          tooltip.hide();
+        }}
       >
         <span
           role="img"

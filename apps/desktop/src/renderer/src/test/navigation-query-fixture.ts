@@ -4,6 +4,7 @@ import type { NavigationPresentedThread } from "../lib/navigation-loaded-rows";
 import { classifyDirectory } from "@pwragent/shared/directory-navigation";
 import {
   buildThreadIdentityKey,
+  navigationThreadInAttentionScope,
   type NavigationDirectorySummary,
   type NavigationQueryPage,
   type NavigationQueryRequest,
@@ -84,7 +85,11 @@ export function navigationQueryFixture(
   }
   if (query.kind === "search") threads = rankThreadJumpMatches(all, query.text);
   if (query.kind === "lens") {
-    if (query.lens === "attention") threads = all.filter((thread) => thread.threadStatus === "active" || thread.inbox.inInbox);
+    if (query.lens === "attention") {
+      threads = all.filter((thread) => thread.threadStatus === "active" || thread.inbox.inInbox);
+      const scope = query.attention;
+      if (scope) threads = threads.filter((thread) => navigationThreadInAttentionScope(thread, scope));
+    }
     else if (!options?.ownerLensOrder) threads = [...all].sort((left, right) => query.lens === "recents"
       ? (right.createdAt ?? 0) - (left.createdAt ?? 0) : (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
   }

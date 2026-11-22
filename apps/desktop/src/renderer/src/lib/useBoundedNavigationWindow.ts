@@ -117,7 +117,7 @@ export function useBoundedNavigationWindow(params: Demand & {
     const demandParams = { browseMode: params.browseMode, target: params.target, attentionView: params.attentionView,
       expandedByKey: params.expandedByKey, unpinnedExpandedByKey: params.unpinnedExpandedByKey,
       selectedRef: params.selectedRef, removedDirectoryKeys: params.removedDirectoryKeys, draftRefs: params.draftRefs,
-      pinnedThreadsOnTop: params.pinnedThreadsOnTop, directories, selectedDirectoryKeys,
+      pinnedThreadsOnTop: params.pinnedThreadsOnTop, attentionScope: params.attentionScope, directories, selectedDirectoryKeys,
       selectedRootRef: selectedRoot?.row.ref, selectedContextReady,
       indexedDirectoryKeys: new Set((indexedDirectories ?? []).map((directory) => directory.key)),
     };
@@ -132,7 +132,7 @@ export function useBoundedNavigationWindow(params: Demand & {
     addVisibleMountedOwnerDemand({ demand: requests, pages, target: params.target, selectedRef: params.selectedRef });
     return prepareNavigationDemand(requests);
   }, [params.browseMode, params.target, params.attentionView, params.expandedByKey, params.unpinnedExpandedByKey,
-    params.selectedRef, params.removedDirectoryKeys, params.draftRefs, params.pinnedThreadsOnTop, params.disclosedParents,
+    params.selectedRef, params.removedDirectoryKeys, params.draftRefs, params.pinnedThreadsOnTop, params.attentionScope, params.disclosedParents,
     directories, selectedDirectoryKeys, selectedRoot?.row.ref, selectedContextReady, indexedDirectories, pages, presentedSelection]);
   // A previous lens can still own the snapshot during the render that changes
   // demand. Empty Drafts and collapsed Directories are ready only after that

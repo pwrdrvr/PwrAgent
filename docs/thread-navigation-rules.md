@@ -31,6 +31,9 @@ Read this before changing thread lenses, Attention membership/order, unread stat
 - Show zero for each empty count.
 - Make an indicator grey when its count is zero.
 - Do not hide a zero indicator. A missing indicator makes an idle tab appear broken.
+- The tab's hover card is enterable. Each row with a count narrows the lens to that kind of member: in progress (here or elsewhere once peer work runs), or to review.
+- A narrowed lens lists exactly the threads its card row counted. The owner filters with the count's own predicate (`navigationThreadInAttentionScope` in the shared navigation contract), so paging is unchanged. The viewer applies the same predicate to a page from an older owner that ignores the scope. Ranks still come from the whole queue, so narrowing never moves a thread.
+- A narrowed lens is window-local and never persisted. Choosing any lens tab, or pressing its hotkey, shows the whole lens again, as does the strip's Show All.
 
 ### Attention order
 

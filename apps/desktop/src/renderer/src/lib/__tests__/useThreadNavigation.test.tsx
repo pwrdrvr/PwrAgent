@@ -14137,6 +14137,45 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("persists the lens once when Attention is narrowed, not per scope pick", async () => {
+    const snapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: 1,
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    };
+    const setNavigationBrowseMode = vi.fn(async (request) => request);
+    const desktopApi: DesktopApi = {
+      readPopulation: async () => snapshot,
+      onAgentEvent: () => () => undefined,
+      setNavigationBrowseMode,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    setNavigationBrowseMode.mockClear();
+
+    await act(async () => {
+      result.current.setAttentionScope("review");
+    });
+    await act(async () => {
+      result.current.setAttentionScope("active");
+    });
+    await act(async () => {
+      result.current.setAttentionScope(undefined);
+    });
+
+    // The lens is a state.db meta write; only the move onto Attention is one.
+    expect(setNavigationBrowseMode).toHaveBeenCalledTimes(1);
+    expect(setNavigationBrowseMode).toHaveBeenCalledWith({ browseMode: "attention" });
+  });
+
   it("starts the Pinned group from its bridged state and writes only changes", async () => {
     Object.defineProperty(window, "__pwragentNavigationPreferences", {
       configurable: true,

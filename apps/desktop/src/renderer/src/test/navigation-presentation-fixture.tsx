@@ -22,6 +22,7 @@ type FixtureProps = {
   selectedItemKey?: string;
   thinkingThreadKeys?: Record<string, boolean>;
   attentionPromoteOnTurnEnd?: boolean;
+  attentionScope?: ComponentProps<typeof Sidebar>["attentionScope"];
   pinnedThreadsOnTop?: boolean;
   draftThreadKeys?: Record<string, boolean>;
 };
@@ -77,7 +78,9 @@ function usePresentationOwner(props: FixtureProps) {
     const lensThreads = mode === "recents" ? props.recentThreads ?? ownerThreads : ownerThreads;
     add("lens-pins", { kind: "lens", lens: mode, roots: "pinned" }, lensThreads);
     add("lens", { kind: "lens", lens: mode, roots: "unpinned" }, lensThreads);
-  } else if (mode !== "directories") add("lens", { kind: "lens", lens: mode }, mode === "attention" ? attention.threads : ownerThreads);
+  } else if (mode === "attention") {
+    add("lens", { kind: "lens", lens: mode, ...(props.attentionScope ? { attention: props.attentionScope } : {}) }, attention.threads);
+  } else if (mode !== "directories") add("lens", { kind: "lens", lens: mode }, ownerThreads);
   for (const directory of props.directories) {
     add(`directory-pins:${directory.key}`, { kind: "directory", directoryKey: directory.key, roots: "pinned" });
     if (!directory.directoryThreadsCollapsed) add(`directory:${directory.key}`, { kind: "directory", directoryKey: directory.key, roots: "unpinned" });

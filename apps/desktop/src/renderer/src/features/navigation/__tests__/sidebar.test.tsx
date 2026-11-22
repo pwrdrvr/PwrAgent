@@ -4222,6 +4222,25 @@ describe("Sidebar", () => {
         />,
       );
 
+    const renderAttentionPickable = () =>
+      render(
+        <Sidebar
+          backends={backends}
+          browseMode="inbox"
+          directories={directories}
+          inboxThreads={allThreads}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey={undefined}
+          threads={allThreads}
+          onBrowseModeChange={() => undefined}
+          onAttentionScopeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+
     it("lists only threads in progress or waiting to be reviewed", () => {
       renderAttention();
 
@@ -4752,6 +4771,177 @@ describe("Sidebar", () => {
       // The consequence lines exist nowhere else, so the card has to be
       // reachable to a screen reader rather than sighted-only.
       expect(tab).toHaveAttribute("aria-describedby", card.id);
+      // Without a way to narrow the lens, the card stays a readout.
+      expect(within(card).queryByRole("button")).toBeNull();
+    });
+
+    it("narrows the lens from a card the pointer can cross into", () => {
+      vi.useFakeTimers();
+      try {
+        const onAttentionScopeChange = vi.fn();
+        render(
+          <Sidebar
+            backends={backends}
+            browseMode="inbox"
+            directories={directories}
+            inboxThreads={allThreads}
+            loading={false}
+            creatingThread={undefined}
+            selectedItemKey={undefined}
+            threads={allThreads}
+            onBrowseModeChange={() => undefined}
+            onAttentionScopeChange={onAttentionScopeChange}
+            onCreateThread={async () => undefined}
+            onOpenLaunchpad={async () => undefined}
+            onSelectThread={() => undefined}
+          />,
+        );
+        const tab = screen.getByRole("tab", { name: /^Attention,/ });
+        fireEvent.mouseEnter(tab);
+        const card = screen.getByRole("tooltip");
+        // The gap under the tab is part of the card, so the pointer never
+        // crosses the project index or thread rows (both card triggers) on
+        // the way. Its geometry is `tooltip-bridge.property.test.ts`'s.
+        expect(card.querySelector(".tooltip-hover-bridge")).not.toBeNull();
+        // Leaving the tab keeps the card across the bridge; reaching it
+        // holds it there for as long as the pointer stays.
+        fireEvent.mouseLeave(tab);
+        act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS - 1));
+        fireEvent.mouseEnter(card);
+        act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS * 2));
+        expect(screen.getByRole("tooltip")).toBe(card);
+
+        fireEvent.click(within(card).getByRole("button", { name: /To review/ }));
+        expect(onAttentionScopeChange).toHaveBeenLastCalledWith("review");
+        expect(screen.queryByRole("tooltip")).toBeNull();
+
+        // A card left for good closes once the bridge runs out.
+        fireEvent.mouseEnter(tab);
+        fireEvent.mouseLeave(tab);
+        act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS));
+        expect(screen.queryByRole("tooltip")).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("names a narrowed lens on the tab, over the list and in the card", () => {
+      const onAttentionScopeChange = vi.fn();
+      render(
+        <Sidebar
+          backends={backends}
+          browseMode="attention"
+          attentionScope="review"
+          directories={directories}
+          inboxThreads={allThreads}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey={undefined}
+          threads={allThreads}
+          onBrowseModeChange={() => undefined}
+          onAttentionScopeChange={onAttentionScopeChange}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+      const tab = screen.getByRole("tab", {
+        name: "Attention, 1 active thread, 1 thread to review, showing to review only",
+      });
+      expect(tab).toHaveAttribute("data-attention-scope", "review");
+      const browseSection = screen.getByRole("region", { name: "Thread browser" });
+      expect(within(browseSection).getByText(unreadThread.title)).toBeInTheDocument();
+      expect(within(browseSection).queryByText(activeThread.title)).toBeNull();
+
+      fireEvent.mouseEnter(tab);
+      const card = screen.getByRole("tooltip");
+      expect(within(card).getByRole("button", { name: /To review/ })).toHaveAttribute("aria-current", "true");
+      expect(within(card).getByRole("button", { name: /In progress/ })).not.toHaveAttribute("aria-current");
+      fireEvent.click(within(card).getByRole("button", { name: /Show All Attention/ }));
+      expect(onAttentionScopeChange).toHaveBeenLastCalledWith(undefined);
+
+      // The strip's Show All is the keyboard's way back: the card's rows
+      // stay out of the Tab order.
+      const showAll = screen.getByRole("button", { name: "Show All" });
+      expect(showAll).not.toHaveAttribute("tabindex", "-1");
+      onAttentionScopeChange.mockClear();
+      fireEvent.click(showAll);
+      expect(onAttentionScopeChange).toHaveBeenCalledWith(undefined);
+    });
+
+    it("re-applies the scope to a page from an owner that predates it", () => {
+      // An older owner ignores `attention` and answers with the whole queue.
+      const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar",
+        query: { kind: "lens", lens: "attention" } };
+      const indexRequest: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar",
+        query: { kind: "directory-index" } };
+      const population = { directories, threads: allThreads };
+      const resource = (id: string, query: NavigationQueryRequest) => ({ id, loading: false,
+        state: { ...createNavigationPageState(query), page: navigationQueryFixture(query, population), stale: false } });
+      render(
+        <Sidebar
+          backends={backends}
+          browseMode="attention"
+          attentionScope="review"
+          directories={directories}
+          inboxThreads={allThreads}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey={undefined}
+          threads={allThreads}
+          onBrowseModeChange={() => undefined}
+          onAttentionScopeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+          pagedNavigation={{ presentationReady: true, resources: new Map([
+            ["directory-index", resource("directory-index", indexRequest)],
+            ["lens", resource("lens", request)],
+          ]), directories: [], selectedDirectoryKeys: undefined, connected: true,
+            invalidate: () => undefined, refresh: async () => undefined, loadMore: async () => undefined,
+            rebaseline: async () => undefined, restart: async () => undefined, setVisibleAnchor: () => undefined }}
+        />,
+      );
+      const browseSection = screen.getByRole("region", { name: "Thread browser" });
+      expect(within(browseSection).getByText(unreadThread.title)).toBeInTheDocument();
+      expect(within(browseSection).queryByText(activeThread.title)).toBeNull();
+    });
+
+    it("draws a narrowed scope with nothing in it as idle, not sweeping", () => {
+      const { container } = render(
+        <Sidebar
+          backends={backends}
+          browseMode="attention"
+          attentionScope="active"
+          directories={directories}
+          inboxThreads={[unreadThread, idleThread]}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey={undefined}
+          threads={[unreadThread, idleThread]}
+          onBrowseModeChange={() => undefined}
+          onAttentionScopeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+      const strip = container.querySelector(".attention-scope")!;
+      expect(strip).toHaveTextContent("In progress0");
+      expect(strip.querySelector(".signal-count")).toHaveAttribute("data-zero", "true");
+      expect(strip.querySelector(".thinking-scanner")).toBeNull();
+      expect(screen.getByText("Nothing in progress.")).toBeInTheDocument();
+    });
+
+    it("keeps focus where it was when a card row is pressed", () => {
+      renderAttentionPickable();
+      const tab = screen.getByRole("tab", { name: /^Attention,/ });
+      act(() => tab.focus());
+      const card = screen.getByRole("tooltip");
+      const row = within(card).getByRole("button", { name: /To review/ });
+      // Chromium focuses a pressed button; the card then closes under it.
+      expect(fireEvent.mouseDown(row)).toBe(false);
+      expect(fireEvent.mouseDown(within(card).getByRole("button", { name: /Show All Attention/ }))).toBe(false);
     });
 
     it("pushes fresh counts into a card the pointer is still resting on", async () => {
