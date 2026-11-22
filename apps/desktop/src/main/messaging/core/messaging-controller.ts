@@ -747,8 +747,19 @@ export class MessagingController {
   private async admitBoundAgentTrust(event: MessagingInboundEvent, binding: MessagingBindingRecord): Promise<boolean> {
     const federationTarget = federationTargetForBinding(binding);
     const { backend, threadId } = binding;
-    const state = await this.options.backend.getThreadAdmissionState({ backend, threadId, federationTarget });
-    return await this.admitAgentTrust(event, { backend, threadId, policy: state.thread?.agent?.trustPolicy, remote: !!federationTarget });
+    const target = { backend, threadId, federationTarget };
+    const bridge = this.options.backend;
+    let policy: unknown;
+    try {
+      // Callback authorization does not depend on the thread's turn occupancy.
+      policy = bridge.getThreadAgentTrustPolicy
+        ? await bridge.getThreadAgentTrustPolicy(target)
+        : (await bridge.getThreadAdmissionState(target)).thread?.agent?.trustPolicy;
+    } catch (error) {
+      this.logger.warn?.("messaging Agent trust lookup failed", { backend, error });
+      return false;
+    }
+    return await this.admitAgentTrust(event, { backend, threadId, policy, remote: !!federationTarget });
   }
 
   async handleInboundChannelMetadata(

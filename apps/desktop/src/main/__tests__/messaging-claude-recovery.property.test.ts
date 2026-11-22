@@ -9,10 +9,11 @@ import { SqliteMessagingStore } from "../state/messaging-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 describe("messaging Claude recovery permission model", () => {
-  it("uses current reply permission and the bound local Claude target on every invocation", async () => {
+  it("uses current reply permission and trust for the bound local Claude target on every invocation", async () => {
     await fc.assert(fc.asyncProperty(fc.array(fc.record({
       reply: fc.boolean(),
       callback: fc.boolean(),
+      restricted: fc.boolean(),
       target: fc.constantFrom("local", "remote", "codex", "rebound"),
     }), { minLength: 1, maxLength: 8 }), async (operations) => {
       const db = openInMemoryStateDb();
@@ -20,6 +21,7 @@ describe("messaging Claude recovery permission model", () => {
       const channel = { channel: "telegram" as const, conversation: { id: "fixture-chat", kind: "dm" as const } };
       const permissions = new Set<MessagingPermissionId>(["thread.status.view"]);
       const recover = vi.fn(async () => ({ threadId: "fixture-thread" }));
+      let restricted = false;
       const delivered: MessagingSurfaceIntent[] = [];
       const controller = new MessagingController({
         channel: "telegram", authorizedActorIds: ["fixture-actor"], store,
@@ -30,7 +32,10 @@ describe("messaging Claude recovery permission model", () => {
             return { channel: "telegram", deliveredAt: 1, outcome: "presented" };
           },
         },
-        backend: { continueClaudeThreadInNewSession: recover } as unknown as MessagingBackendBridge,
+        backend: {
+          continueClaudeThreadInNewSession: recover,
+          getThreadAgentTrustPolicy: async () => restricted ? { version: 1, denialResponse: "silent", rules: [] } : undefined,
+        } as unknown as MessagingBackendBridge,
         rbacPolicy: {
           isEnforcing: () => true,
           resolve: () => ({ permissions, roleIds: ["fixture-role"], matchedSubjects: [], rejected: false }),
@@ -39,7 +44,8 @@ describe("messaging Claude recovery permission model", () => {
       try {
         // The initial permitted invocation keeps the property from passing
         // vacuously when the command or callback has no implementation.
-        for (const [index, operation] of [{ reply: true, callback: true, target: "local" }, ...operations].entries()) {
+        for (const [index, operation] of [{ reply: true, callback: true, restricted: false, target: "local" }, ...operations].entries()) {
+          restricted = operation.restricted;
           if (operation.reply) permissions.add("message.reply");
           else permissions.delete("message.reply");
           const backend = operation.target === "codex" ? "codex" as const : "claude" as const;
@@ -60,11 +66,11 @@ describe("messaging Claude recovery permission model", () => {
           await controller.handleInboundEvent(event);
           const allowed = operation.reply && operation.target !== "remote" && operation.target !== "codex"
             && (!operation.callback || operation.target !== "rebound");
-          expect(recover).toHaveBeenCalledTimes(allowed ? 1 : 0);
-          if (allowed) expect(recover).toHaveBeenCalledWith({
+          expect(recover).toHaveBeenCalledTimes(allowed && !restricted ? 1 : 0);
+          if (allowed && !restricted) expect(recover).toHaveBeenCalledWith({
             threadId: operation.target === "rebound" ? "another-thread" : "fixture-thread",
           });
-          else expect(delivered.at(-1)).toMatchObject({ kind: "error" });
+          if (!allowed) expect(delivered.at(-1)).toMatchObject({ kind: "error" });
         }
       } finally {
         await controller.dispose();

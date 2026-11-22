@@ -37,6 +37,7 @@ export async function messagingInboundHarness(options: {
   const hooks: {
     start?: () => Promise<void>;
     admission?: (threadId: string) => Promise<void>;
+    trustPolicy?: (threadId: string) => Promise<unknown>;
     outcome: "started" | "queued" | "failed";
     postStartFailure?: boolean;
   } = { outcome: "started" };
@@ -51,6 +52,7 @@ export async function messagingInboundHarness(options: {
     getNavigationSelectedDetail: async request => ({ protocol: 2, revision: "fixture", ref: request.ref,
       identity: "present", readiness: "ready", thread: thread(request.ref.threadId),
     }),
+    getThreadAgentTrustPolicy: async (request) => await hooks.trustPolicy?.(request.threadId),
     getThreadAdmissionState: async request => {
       admissions.push(request.threadId);
       await hooks.admission?.(request.threadId);
