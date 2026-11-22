@@ -124,29 +124,47 @@ it("matches fleet visibility across legacy and migrated rows, shared writers, an
         { monitorThreadId: "child", backend: "codex:opaque" },
         { monitorThreadId: "parent" },
         { monitorThreadId: "x\0x" },
+        { monitorThreadId: "legacy-\ud800" },
         null,
         { monitorThreadId: "after-malformed" },
       ],
     }));
     legacy.run("codex:broken", "{bad json");
     legacy.run("codex:duplicate", '["codex","duplicate",[{"monitorThreadId":"other","monitorThreadId":"duplicate-child"}]]');
+    writer.prepare(`INSERT INTO thread_navigation_relationships(thread_id, managed_children, grouped_subthread)
+      VALUES ('codex:raw-legacy', CAST(? AS TEXT), 0)`).run(Buffer.concat([
+      Buffer.from('["codex","raw-legacy",[{"monitorThreadId":"broken-'),
+      Buffer.from([0xed, 0xa0, 0x80]),
+      Buffer.from('"}]]'),
+    ]));
     state.close();
     state = StateDb.open(dbPath);
     const store = new SqliteOverlayStore(state);
+    const legacyUnicodeKey = "codex:legacy-\ufffd\ufffd\ufffd";
+    const rawLegacyUnicodeKey = "codex:broken-\ufffd\ufffd\ufffd";
+    const paddedUnicodeKey = "codex:\ufffd\ufffd\ufffd";
+    const rawUnicodeKey = "codex:raw-\ufffd\ufffd\ufffd";
     const keys = ["codex:shared", "acp:grok:shared", "claude:shared", "codex:parent",
-      "claude:parent", "codex:opaque:child", "codex:x\0x", "codex:after-malformed", "codex:duplicate-child"];
+      "claude:parent", "codex:opaque:child", "codex:x\0x", "codex:after-malformed", "codex:duplicate-child",
+      legacyUnicodeKey, rawLegacyUnicodeKey, paddedUnicodeKey, rawUnicodeKey];
     const read = () => store.readManagedSubAgentThreadKeysForOwners(keys);
     const compare = () => {
       const fleet = store.readManagedSubAgentThreadKeys();
       expect(read()).toEqual(new Set(keys.filter((key) => fleet.has(key))));
     };
     expect(read()).toEqual(new Set(["codex:shared", "claude:parent", "codex:opaque:child", "codex:x\0x",
-      "codex:duplicate-child"]));
+      "codex:duplicate-child", legacyUnicodeKey, rawLegacyUnicodeKey]));
     compare();
     // A malformed parent key cannot lend its identity to a migrated card.
     overlay.run("not-a-thread", JSON.stringify({ subAgents: [{ monitorId: "ignored", monitorThreadId: "after-malformed" }] }));
     overlay.run("acp%3Agrok:parent", JSON.stringify({ subAgents: [{ monitorId: "acp", monitorThreadId: "\ufeffshared\u2029" }] }));
     overlay.run("claude:parent", JSON.stringify({ subAgents: [{ monitorId: "anthropic", monitorThreadId: "shared" }] }));
+    overlay.run("codex:malformed-unicode", JSON.stringify({ subAgents: [
+      { monitorId: "padded", monitorThreadId: "\u00a0\udc00\t" },
+      { monitorId: "raw", monitorThreadId: "raw-\ud800" },
+    ] }));
+    expect([...read()]).toEqual(expect.arrayContaining([paddedUnicodeKey, rawUnicodeKey]));
+    compare();
     const grouped = JSON.stringify({ handoffOrigin: { groupingMode: "subthread" } });
     const rollback = new Error("roll back fixture");
     state.raw.transaction(() => {

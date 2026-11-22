@@ -24,7 +24,9 @@ const PADDED_CHILD_INDEX = "CREATE INDEX IF NOT EXISTS thread_sub_agents_padded_
 // document deletion by rowid, even if the array names thousands of children.
 // Store the parent key so the link survives VACUUM or a projection rekey.
 // Hex prefixes find candidates. JS checks exact IDs and legacy array order.
-const LEGACY_CHILD_TOKEN = "('x' || hex(substr(CAST(trim(field.value, " + JS_TRIM_CHARS + ") AS BLOB), 1, 128)))";
+const LEGACY_CHILD_TOKEN_BYTES = 128;
+const LEGACY_CHILD_TOKEN = "('x' || hex(substr(CAST(trim(field.value, " + JS_TRIM_CHARS
+  + ") AS BLOB), 1, " + LEGACY_CHILD_TOKEN_BYTES + ")))";
 const DELETE_NEW_PARENT_DOCUMENT = `
   DELETE FROM thread_managed_legacy_search WHERE rowid IN (
     SELECT rowid FROM thread_managed_legacy_search
@@ -121,8 +123,8 @@ export function managedKeysFromLegacyProjection(projection: string): Set<string>
   return keys;
 }
 
+const REQUESTED_CHILD_IDS = "WITH child_ids AS (SELECT value FROM json_each(@childIds))";
 const SCOPED_MANAGED_MEMBERSHIP = `
-WITH child_ids AS (SELECT value FROM json_each(@childIds))
 SELECT thread_id, grouped_subthread, NULL AS projection, NULL AS backend, NULL AS child
   FROM thread_navigation_relationships
   WHERE thread_id IN (SELECT value FROM json_each(@storageKeys)) AND grouped_subthread = 1
@@ -132,7 +134,8 @@ SELECT thread_id, 0, managed_children, NULL, NULL
   WHERE thread_id IN (
     SELECT parent_key FROM child_ids
     CROSS JOIN thread_managed_legacy_search
-    WHERE thread_managed_legacy_search MATCH ('x' || hex(substr(CAST(child_ids.value AS BLOB), 1, 128)))
+    WHERE thread_managed_legacy_search MATCH ('x' || hex(substr(CAST(child_ids.value AS BLOB), 1, `
+  + LEGACY_CHILD_TOKEN_BYTES + `)))
   )
 UNION ALL
 SELECT thread_id, 0, NULL, backend, monitor_thread_id
@@ -143,6 +146,53 @@ SELECT thread_id, 0, NULL, backend, monitor_thread_id
   FROM thread_sub_agents INDEXED BY thread_sub_agents_padded_child
   WHERE ` + PADDED_CARD_CHILD + " AND " + TRIMMED_CARD_CHILD + " IN (SELECT value FROM child_ids)";
 
+// Older SQLite capture triggers can put malformed UTF-8 into TEXT columns.
+// The JS reader sees replacement characters. For an owner with a replacement
+// character, seek candidate bytes by the intact prefix and recheck in JS.
+const REPLACEMENT_PROBES = `, replacement_probes AS (
+  SELECT CAST(unhex(json_extract(value, '$.lower')) AS TEXT) AS lower_bound,
+    CAST(unhex(json_extract(value, '$.upper')) AS TEXT) AS upper_bound,
+    json_extract(value, '$.legacyMatch') AS legacy_match
+  FROM json_each(@replacementProbes)
+)`;
+const REPLACEMENT_CANDIDATES = `
+UNION ALL
+SELECT thread_id, 0, managed_children, NULL, NULL
+  FROM thread_navigation_relationships
+  WHERE thread_id IN (
+    SELECT parent_key FROM replacement_probes
+    CROSS JOIN thread_managed_legacy_search
+    WHERE thread_managed_legacy_search MATCH replacement_probes.legacy_match
+  )
+UNION ALL
+SELECT thread_id, 0, NULL, backend, monitor_thread_id
+  FROM replacement_probes CROSS JOIN thread_sub_agents INDEXED BY thread_sub_agents_child
+  WHERE monitor_thread_id IS NOT NULL
+    AND monitor_thread_id >= lower_bound AND monitor_thread_id < upper_bound
+UNION ALL
+SELECT thread_id, 0, NULL, backend, monitor_thread_id
+  FROM replacement_probes CROSS JOIN thread_sub_agents INDEXED BY thread_sub_agents_padded_child
+  WHERE ` + PADDED_CARD_CHILD + " AND " + TRIMMED_CARD_CHILD + " >= lower_bound"
+  + " AND " + TRIMMED_CARD_CHILD + " < upper_bound";
+
+type ReplacementProbe = { lower: string; upper: string; legacyMatch: string };
+
+function replacementProbe(id: string, replacementIndex: number): ReplacementProbe {
+  const prefix = Buffer.from(id.slice(0, replacementIndex));
+  const lower = prefix.toString("hex") + "80";
+  const token = "x" + prefix.subarray(0, LEGACY_CHILD_TOKEN_BYTES).toString("hex");
+  const legacyMatch = prefix.length >= LEGACY_CHILD_TOKEN_BYTES ? token
+    : [..."89abcdef"].map((nibble) => token + nibble + "*").join(" OR ");
+  if (prefix.length === 0) {
+    // An invalid sequence consumes at most as many bytes as the UTF-8
+    // encoding of its replacement character. One more byte bounds the seek.
+    return { lower, upper: "ff".repeat(Buffer.byteLength(id) + 1), legacyMatch };
+  }
+  const last = prefix.length - 1;
+  prefix.writeUInt8(prefix.readUInt8(last) + 1, last);
+  return { lower, upper: prefix.toString("hex"), legacyMatch };
+}
+
 type MembershipRow = {
   thread_id: string;
   grouped_subthread: number;
@@ -151,14 +201,24 @@ type MembershipRow = {
   child: string | null;
 };
 
+type MembershipBindings = { childIds: string; storageKeys: string };
+
 /** One SQLite snapshot of only the candidate relationships and group flags. */
 export function prepareScopedManagedMembership(db: Database.Database) {
-  const statement = db.prepare<{ childIds: string; storageKeys: string }, MembershipRow>(SCOPED_MANAGED_MEMBERSHIP);
-  return (keys: readonly string[]) => readScopedManagedMembership(statement, keys);
+  const statement = db.prepare<MembershipBindings, MembershipRow>(REQUESTED_CHILD_IDS + SCOPED_MANAGED_MEMBERSHIP);
+  let replacementStatement: Database.Statement<MembershipBindings & { replacementProbes: string }, MembershipRow> | undefined;
+  const readRows = (bindings: MembershipBindings, probes: ReplacementProbe[]): MembershipRow[] => {
+    if (probes.length === 0) return statement.all(bindings);
+    replacementStatement ??= db.prepare(
+      REQUESTED_CHILD_IDS + REPLACEMENT_PROBES + SCOPED_MANAGED_MEMBERSHIP + REPLACEMENT_CANDIDATES,
+    );
+    return replacementStatement.all({ ...bindings, replacementProbes: JSON.stringify(probes) });
+  };
+  return (keys: readonly string[]) => readScopedManagedMembership(readRows, keys);
 }
 
 function readScopedManagedMembership(
-  statement: Database.Statement<{ childIds: string; storageKeys: string }, MembershipRow>,
+  readRows: (bindings: MembershipBindings, probes: ReplacementProbe[]) => MembershipRow[],
   keys: readonly string[],
 ): Set<string> {
   if (keys.length === 0) return new Set();
@@ -176,7 +236,12 @@ function readScopedManagedMembership(
   }
   const managed = new Set<string>();
   if (childIds.size === 0) return managed;
-  const rows = statement.all({ childIds: JSON.stringify([...childIds]), storageKeys: JSON.stringify([...storageKeys]) });
+  const probes: ReplacementProbe[] = [];
+  for (const id of childIds) {
+    const replacement = id.indexOf("\ufffd");
+    if (replacement !== -1) probes.push(replacementProbe(id, replacement));
+  }
+  const rows = readRows({ childIds: JSON.stringify([...childIds]), storageKeys: JSON.stringify([...storageKeys]) }, probes);
   const grouped = new Set<string>();
   for (const row of rows) {
     if (row.child !== null) {
