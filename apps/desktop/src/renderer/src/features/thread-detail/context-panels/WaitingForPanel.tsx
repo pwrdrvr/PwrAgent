@@ -823,7 +823,7 @@ function renderDetail(wake: ThreadPendingWake, props: WaitingForPanelProps, now:
 
 function stopLabel(wake: ThreadPendingWake): string {
   return wake.stop === "turn_off" ? "Turn Off"
-    : wake.stop === "cancel" ? "Cancel"
+    : wake.kind === "monitor" || wake.stop === "cancel" ? "Cancel"
     : wake.stop === "discard" ? "Discard"
     : "Stop";
 }
