@@ -1,8 +1,9 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary, ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { DataTooltipLayer } from "../../../lib/DataTooltipLayer";
 import { ActiveSubAgentsStrip } from "../ActiveSubAgentsStrip";
 
 afterEach(() => {
@@ -40,6 +41,30 @@ function buildThread(
 }
 
 describe("ActiveSubAgentsStrip", () => {
+  it("describes and previews the distinct tasks behind identical monitor titles", () => {
+    const displayTitle = "PR 123 CI";
+    const alpha = buildSubAgent({ displayTitle, task: "Watch PR #123 CI in example/alpha" });
+    const beta = buildSubAgent({ monitorId: "monitor-2", displayTitle,
+      task: "Watch PR #123 CI in example/beta", status: "failure" });
+    render(<>
+      <ActiveSubAgentsStrip thread={buildThread([alpha, beta])} desktopApi={{
+        stopSubAgent: vi.fn(), dismissFailedSubAgents: vi.fn(),
+      }} />
+      <DataTooltipLayer />
+    </>);
+
+    const stop = screen.getByRole("button", { name: "Stop sub-agent: PR 123 CI" });
+    const dismiss = screen.getByRole("button", { name: "Dismiss failed sub-agent: PR 123 CI" });
+    expect(stop).toHaveAccessibleDescription(alpha.task);
+    expect(dismiss).toHaveAccessibleDescription(beta.task);
+    const [label] = screen.getAllByText(displayTitle);
+    fireEvent.pointerOver(label!);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(alpha.task);
+    fireEvent.pointerOut(label!);
+    act(() => dismiss.focus());
+    expect(screen.getByRole("tooltip")).toHaveTextContent(beta.task);
+  });
+
   it("renders owner-projected rows without history and clears them after completion", async () => {
     const running = buildSubAgent({ task: "Watch PR #123 CI until the checks finish", displayTitle: "PR 123 CI" });
     const blocked = buildSubAgent({ monitorId: "blocked", task: "Wait for approval", status: "blocked" });

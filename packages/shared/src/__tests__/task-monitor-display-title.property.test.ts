@@ -26,14 +26,35 @@ describe("task monitor titles", () => {
   it.each([
     ["Monitor PR #1 CI after pushing commit 0000000000000000000000000000000000000000.", "PR 1 CI"],
     ["Watch gh pr checks 753 --watch and report failures.", "PR 753 CI"],
+    ["Watch PR #123 for review comments and check for new replies every minute", "PR 123"],
+    ["Monitor PR #123 until CI completes", "PR 123 CI"],
+    ["Monitor PR #123\nUntil the required checks complete.", "PR 123 CI"],
     ["Monitor CI for https://github.com/acme/example/pull/753.", "PR 753 CI"],
     ["Monitor `pnpm --filter @pwragent/desktop typecheck` until it exits.", "Desktop Typecheck"],
     ["Watch pnpm -C apps/desktop run typecheck.", "Desktop Typecheck"],
+    ["Watch pnpm --filter @pwragent/desktop build:headless.", "Desktop Build:headless"],
     ["Monitor Giphy Swift Verify commit a40f3de.", "Giphy Swift Verify"],
     ["Watch CI on branch staging at commit a40f3deeae808a1129ef59b07c3ffc33913ba4ca.", "CI on branch staging"],
     ["Monitor commit a40f3de.", "Job Monitor"],
   ])("labels %s as %s", (task, title) => {
     expect(deriveTaskMonitorDisplayTitle(task)).toBe(title);
+  });
+
+  it("distinguishes scripts from their colon-suffixed variants", () => {
+    fc.assert(fc.property(
+      fc.constantFrom("build", "test", "lint", "check", "typecheck", "verify"),
+      fc.constantFrom("headless", "fast", "unit", "typed"),
+      (script, suffix) => {
+        const command = `Monitor pnpm --filter @pwragent/desktop ${script}`;
+        expect(deriveTaskMonitorDisplayTitle(`${command}:${suffix}`))
+          .not.toBe(deriveTaskMonitorDisplayTitle(command));
+      },
+    ));
+  });
+
+  it("normalizes large gaps in a task line before reading its subject", () => {
+    const task = "Monitor deployment" + " \t".repeat(100_000) + "to staging";
+    expect(deriveTaskMonitorDisplayTitle(task)).toBe("deployment to staging");
   });
 
   it("bounds arbitrary labels, preserving whole graphemes", () => {
