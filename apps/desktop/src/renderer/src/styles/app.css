@@ -50045,7 +50045,6 @@ button.composer__subthread-source-parent:hover {
 }
 
 .composer__autocomplete-option--hidden {
-  color: var(--text-muted);
   cursor: default;
 }
 

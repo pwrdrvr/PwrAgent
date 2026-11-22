@@ -51,7 +51,9 @@ export function CodexSkillProfilesSettings(props: {
     directory.kind === "directory" && directory.path && !directory.localAvailability
       ? [{ path: directory.path, label: directory.label }]
       : []));
+  const needsCatalog = props.profiles.length > 0 || editId !== undefined;
   useEffect(() => {
+    if (!needsCatalog) return;
     let current = true;
     const origins = JSON.parse(directoryKey) as Array<{ path: string; label: string }>;
     const load = async () => {
@@ -80,7 +82,7 @@ export function CodexSkillProfilesSettings(props: {
     };
     void load();
     return () => { current = false; };
-  }, [directoryKey, props.desktopApi, refresh]);
+  }, [directoryKey, needsCatalog, props.desktopApi, refresh]);
 
   const close = (message?: string) => {
     setEditId(undefined);

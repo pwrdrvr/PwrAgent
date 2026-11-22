@@ -3178,6 +3178,9 @@ function DesktopAppShell(props: {
     ? navigation.selectedLaunchpad.backend === "codex"
     : Boolean(loadThreadDetail && navigation.selectedThread?.federation
       && navigation.selectedThread.codexSkillProfile);
+  const openCodexSkillProfiles = useCallback(() => {
+    openSettingsSection("models", "codex-skill-profiles");
+  }, [openSettingsSection]);
   // Lives here, not in ThreadView: ThreadView unmounts on the search view and
   // on any refresh that flips `threadDetailPending`, and terminal state kept
   // inside it left the main process's PTYs running with nothing in the UI
@@ -4377,8 +4380,8 @@ function DesktopAppShell(props: {
         skillLoading: skills.loading,
         codexSkillProfiles: remoteSkillProfileOwner
           ? skills.response?.codexSkillProfiles
-          : settings.snapshot?.models.codex.skillProfiles,
-        onOpenCodexSkillProfiles: () => openSettingsSection("models", "codex-skill-profiles"),
+          : settings.snapshot?.models?.codex?.skillProfiles,
+        onOpenCodexSkillProfiles: openCodexSkillProfiles,
         providerCommands: skills.providerCommands,
         skills: skills.skills,
         transcriptEntries: session.entries,
