@@ -53,6 +53,7 @@ import {
   type ProfileEntry,
 } from "../../profile";
 import { resolveDesktopConfigPath } from "../../settings/desktop-config";
+import { writeOnboardingProjectSeed } from "../../onboarding/onboarding-project-seed";
 import {
   readProfileConfigFile,
   writeProfileConfigPatch,
@@ -285,6 +286,11 @@ export function createDesktopPwrAgentProfile(
         onboarding: { completed: true, completedSource: "wizard" },
       },
     );
+  }
+  // Get started's checked projects. The new profile registers them the first
+  // time it starts; this bootstrap profile's state is thrown away.
+  if (request.seedProjectPaths?.length) {
+    writeOnboardingProjectSeed(result.profileDir, request.seedProjectPaths);
   }
   return {
     profile,

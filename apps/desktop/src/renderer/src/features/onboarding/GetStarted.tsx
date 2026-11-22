@@ -11,6 +11,7 @@ import type {
   DesktopBootInfo,
   DesktopSettingsConfigPatch,
   DesktopSettingsSnapshot,
+  RecentProjectAgent,
 } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
@@ -34,6 +35,16 @@ import {
   type CodexSignInState,
   type GetStartedAgentState,
 } from "./get-started-agents";
+import {
+  checkedProjectPaths,
+  isProjectChecked,
+  projectRecencyLabel,
+  projectScanNotices,
+  rankProjectCandidates,
+  splitProjectCandidates,
+  type ProjectCandidate,
+  type ProjectScanNotice,
+} from "./get-started-projects";
 import { provisionPairedProfiles } from "./provisionPairedProfiles";
 
 /**
@@ -93,6 +104,15 @@ export function GetStarted(props: {
     separateLogin,
   });
 
+  // A replay never imports projects again, so it does not look for them.
+  const projects = useGetStartedProjects({
+    desktopApi: props.desktopApi,
+    enabled: !props.isReplay,
+    includeCodex: !separateLogin,
+  });
+  const checkedPathsRef = useRef<string[]>([]);
+  checkedPathsRef.current = projects.checkedPaths;
+
   // An in-app Claude Code sign-in ends when its CLI exits, which can come
   // after the window regains focus. Check again then, so the row does not
   // keep saying Needs sign-in.
@@ -116,16 +136,20 @@ export function GetStarted(props: {
         general: { codexProfileModel: useSeparateLogin ? "isolated" : "shared" },
       } satisfies DesktopSettingsConfigPatch);
       let target: string | undefined = profileName;
+      // The new profile registers these the first time it starts; this
+      // bootstrap profile's own state is thrown away.
+      const seedProjectPaths = checkedPathsRef.current;
       if (useSeparateLogin) {
         // A PwrAgent profile paired with a Codex login of the same name.
         // Its Codex sign-in happens in the new window, under Settings →
         // Profiles, so this page never signs in the wrong account.
-        target = (await provisionPairedProfiles(api, [profileName]))[0];
+        target = (await provisionPairedProfiles(api, [profileName], { seedProjectPaths }))[0];
       } else {
         // No Codex pairing means this computer's own Codex login.
         await api.createPwrAgentProfile({
           profile: profileName,
           seedOnboardingCompleted: true,
+          ...(seedProjectPaths.length > 0 ? { seedProjectPaths } : {}),
         });
       }
       if (!target) return;
@@ -152,6 +176,7 @@ export function GetStarted(props: {
       setStartError(undefined);
       try {
         if (props.isReplay || !inBootstrapMode) {
+          if (!props.isReplay) await registerCheckedProjects(props.desktopApi, checkedPathsRef.current);
           if (options?.withoutAgent && !props.isReplay) {
             props.onDismiss(true);
             return;
@@ -240,6 +265,7 @@ export function GetStarted(props: {
                 desktopApi={props.desktopApi}
                 claudeSignIn={props.claudeSignIn}
               />
+              {projects.status === "off" ? null : <ProjectList projects={projects} />}
               {startError ? (
                 <p className="get-started__error" role="alert">
                   PwrAgent couldn&rsquo;t finish setting up: {startError}
@@ -1080,6 +1106,211 @@ function AgentMark(props: { mark: AgentDefinition["mark"] }) {
     <span aria-hidden="true" className={`get-started__mark get-started__mark--${props.mark}`}>
       {props.mark === "codex" ? <OpenAIIcon /> : props.mark === "grok" ? <GrokIcon /> : <TerminalIcon />}
     </span>
+  );
+}
+
+/* ----------------------------------------------------------------
+   Projects
+   ---------------------------------------------------------------- */
+
+const PROJECT_AGENT_LABELS: Partial<Record<RecentProjectAgent, string>> = {
+  codex: "Codex",
+  claude: "Claude Code",
+};
+
+type ProjectsModel = {
+  /** `off` in a replay, or on a bridge that cannot look. */
+  status: "off" | "loading" | "ready";
+  candidates: ProjectCandidate[];
+  notices: ProjectScanNotice[];
+  agentLabels: ReadonlyMap<RecentProjectAgent, string>;
+  /** When the result arrived; recency is measured from it, not from render. */
+  readAt: number;
+  isChecked: (candidate: ProjectCandidate) => boolean;
+  toggle: (candidate: ProjectCandidate) => void;
+  checkedPaths: string[];
+};
+
+/**
+ * Recent project folders from every agent PwrAgent may read, newest first.
+ * The most recent start checked. Looks again when the Codex login choice
+ * changes, since a separate login's projects are not this computer's.
+ */
+function useGetStartedProjects(params: {
+  desktopApi?: DesktopApi;
+  enabled: boolean;
+  includeCodex: boolean;
+}): ProjectsModel {
+  const { desktopApi, enabled, includeCodex } = params;
+  const available = enabled && Boolean(desktopApi?.discoverRecentProjects);
+  const [result, setResult] = useState<{
+    candidates: ProjectCandidate[];
+    notices: ProjectScanNotice[];
+    agentLabels: ReadonlyMap<RecentProjectAgent, string>;
+    readAt: number;
+  }>();
+  const [choices, setChoices] = useState<ReadonlyMap<string, boolean>>(new Map());
+  const requestRef = useRef(0);
+
+  useEffect(() => {
+    const discover = desktopApi?.discoverRecentProjects;
+    if (!enabled || !discover) return;
+    const request = ++requestRef.current;
+    setResult(undefined);
+    discover({ includeCodex }).then((response) => {
+      if (request !== requestRef.current) return;
+      const agentLabels = new Map<RecentProjectAgent, string>();
+      for (const source of response.sources) agentLabels.set(source.agent, source.label);
+      setResult({
+        candidates: rankProjectCandidates(response.observations),
+        notices: projectScanNotices(response.sources),
+        agentLabels,
+        readAt: Date.now(),
+      });
+    }, (caught: unknown) => {
+      if (request !== requestRef.current) return;
+      setResult({
+        candidates: [],
+        notices: [{
+          agent: "codex",
+          tone: "failed",
+          text: `Recent projects couldn't be read: ${caught instanceof Error ? caught.message : String(caught)}`,
+        }],
+        agentLabels: new Map(),
+        readAt: Date.now(),
+      });
+    });
+  }, [desktopApi, enabled, includeCodex]);
+
+  const toggle = useCallback((candidate: ProjectCandidate): void => {
+    setChoices((current) => {
+      const next = new Map(current);
+      next.set(candidate.key, !isProjectChecked(candidate, current));
+      return next;
+    });
+  }, []);
+  const isChecked = useCallback(
+    (candidate: ProjectCandidate): boolean => isProjectChecked(candidate, choices),
+    [choices],
+  );
+  const candidates = result?.candidates;
+  const checkedPaths = useMemo(
+    () => (candidates ? checkedProjectPaths(candidates, choices) : []),
+    [candidates, choices],
+  );
+
+  return {
+    status: !available ? "off" : result ? "ready" : "loading",
+    candidates: result?.candidates ?? [],
+    notices: result?.notices ?? [],
+    agentLabels: result?.agentLabels ?? new Map(),
+    readAt: result?.readAt ?? 0,
+    isChecked,
+    toggle,
+    checkedPaths: available ? checkedPaths : [],
+  };
+}
+
+/** Start in an existing profile registers the checked folders here. */
+async function registerCheckedProjects(api: DesktopApi | undefined, paths: readonly string[]): Promise<void> {
+  if (!api?.registerDirectoryFromDisk) return;
+  for (const folder of paths) {
+    try {
+      const result = await api.registerDirectoryFromDisk({ path: folder });
+      if (!result.ok) console.warn(`Get started: couldn't add ${folder}: ${result.message}`);
+    } catch (caught) {
+      console.warn(`Get started: couldn't add ${folder}`, caught);
+    }
+  }
+}
+
+function ProjectList(props: { projects: ProjectsModel }) {
+  const { projects } = props;
+  const [showAll, setShowAll] = useState(false);
+  const { shown, collapsed } = splitProjectCandidates(projects.candidates);
+  const checkedCount = projects.checkedPaths.length;
+  return (
+    <section className="get-started__section" aria-labelledby="get-started-projects-heading">
+      <div className="get-started__section-head">
+        <h2 id="get-started-projects-heading" className="get-started__label">
+          Projects{checkedCount > 0 ? ` · ${checkedCount} selected` : ""}
+        </h2>
+      </div>
+      {projects.status === "loading" ? (
+        <p className="get-started__fine" role="status">Looking for recent projects…</p>
+      ) : projects.candidates.length === 0 ? (
+        <p className="get-started__fine">
+          No recent projects found. You can add folders any time.
+        </p>
+      ) : (
+        <ul className="get-started__agents get-started__projects">
+          {[...shown, ...(showAll ? collapsed : [])].map((candidate) => (
+            <ProjectRow
+              key={candidate.key}
+              candidate={candidate}
+              checked={projects.isChecked(candidate)}
+              agentLabels={projects.agentLabels}
+              readAt={projects.readAt}
+              onToggle={() => projects.toggle(candidate)}
+            />
+          ))}
+        </ul>
+      )}
+      {collapsed.length > 0 ? (
+        <button
+          type="button"
+          className="get-started__btn get-started__btn--link get-started__more"
+          aria-expanded={showAll}
+          onClick={() => setShowAll(!showAll)}
+        >
+          {showAll ? "Show fewer" : `Review all (${projects.candidates.length})`}
+        </button>
+      ) : null}
+      {projects.notices.map((notice) => (
+        <p key={`${notice.agent}-${notice.tone}`} className="get-started__notice" role="status">
+          {notice.text}
+        </p>
+      ))}
+      <p className="get-started__fine">
+        Codex threads in these folders appear on their own when this profile
+        shares this computer&rsquo;s Codex login.
+      </p>
+    </section>
+  );
+}
+
+/** One state (checked or not) and one action (toggle it). */
+function ProjectRow(props: {
+  candidate: ProjectCandidate;
+  checked: boolean;
+  agentLabels: ReadonlyMap<RecentProjectAgent, string>;
+  readAt: number;
+  onToggle: () => void;
+}) {
+  const { candidate } = props;
+  const agents = candidate.agents
+    .map((agent) => props.agentLabels.get(agent) ?? PROJECT_AGENT_LABELS[agent] ?? agent)
+    .join(", ");
+  const recency = projectRecencyLabel(candidate.lastActiveAt, props.readAt);
+  return (
+    <li className="get-started__agent get-started__project" data-project={candidate.path}>
+      <label className="get-started__project-main">
+        <input
+          type="checkbox"
+          className="get-started__check-input"
+          checked={props.checked}
+          onChange={props.onToggle}
+        />
+        <span aria-hidden="true" className={`get-started__check${props.checked ? " is-checked" : ""}`} />
+        <span className="get-started__agent-text">
+          <span className="get-started__agent-name">{candidate.label}</span>
+          <span className="get-started__project-path">{candidate.path}</span>
+        </span>
+        <span className="get-started__project-meta">
+          {recency ? `${agents} · ${recency}` : agents}
+        </span>
+      </label>
+    </li>
   );
 }
 

@@ -450,6 +450,8 @@ import type {
   CheckDesktopCodexAuthProfileStatusResponse,
   ClearDesktopSettingsSecretRequest,
   CompleteOnboardingCodexBootstrapRequest,
+  DiscoverRecentProjectsRequest,
+  DiscoverRecentProjectsResponse,
   CompleteOnboardingCodexBootstrapResponse,
   CreateDesktopPwrAgentProfileRequest,
   CreateDesktopPwrAgentProfileResponse,
@@ -1306,6 +1308,7 @@ import {
   LAUNCHPAD_ACCESS_NOTICE_READ_CHANNEL,
   SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL,
   SETTINGS_CLEAR_SECRET_CHANNEL,
+  SETTINGS_DISCOVER_RECENT_PROJECTS_CHANNEL,
   SETTINGS_SET_CODEX_MODEL_PROVIDER_KEY_CHANNEL,
   SETTINGS_TEST_CODEX_MODEL_PROVIDER_CHANNEL,
   SETTINGS_REFRESH_CODEX_MODEL_PROVIDER_CATALOGS_CHANNEL,
@@ -2344,6 +2347,10 @@ const desktopApi = Object.freeze({
       SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL,
       request,
     ),
+  discoverRecentProjects: async (
+    request: DiscoverRecentProjectsRequest,
+  ): Promise<DiscoverRecentProjectsResponse> =>
+    await ipcRenderer.invoke(SETTINGS_DISCOVER_RECENT_PROJECTS_CHANNEL, request),
   completeOnboardingCodexBootstrap: async (
     request?: CompleteOnboardingCodexBootstrapRequest,
   ): Promise<CompleteOnboardingCodexBootstrapResponse> =>
