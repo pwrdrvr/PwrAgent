@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises";
 import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   DiscoverRecentProjectsResponse,
@@ -27,11 +28,9 @@ export type RecentCodexDirectories = {
 export type RecentProjectDiscoveryDeps = {
   /** False when the profile being set up has its own Codex login. */
   includeCodex: boolean;
-  /**
-   * True where folder names ignore case (Windows): `C:/code/app` and
-   * `c:/code/app` are one folder, checked once and sent as one path.
-   */
-  ignorePathCase: boolean;
+  platform: NodeJS.Platform;
+  /** Test seam for the on-disk spelling of a resolved project root. */
+  realpath?: (path: string) => Promise<string>;
   /** Aborted when a newer discovery replaces this one; no more folders are checked. */
   signal?: AbortSignal;
   /**
@@ -126,10 +125,9 @@ export class RecentProjectDiscoveryRuns {
 }
 
 /**
- * On Windows, `folder` as the disk spells it, so a project registers as
- * `C:/Code/App` whichever case an agent used. Only letter case is taken
- * from the disk: a mapped drive, junction or link keeps the path the agent
- * reported.
+ * On Windows and macOS, `folder` as the disk spells it, whichever case an
+ * agent used. Only letter case is taken from the disk: a mapped drive,
+ * junction or link to another path keeps the reported path.
  */
 export async function folderInRealCase(
   folder: string,
@@ -143,9 +141,9 @@ export async function folderInRealCase(
  * Recent project folders for Get started, with how each agent's read went.
  * Nothing here reads an agent's own storage: Codex answers through its
  * protocol, and Claude Code and ACP agents through PwrAgent's thread lists.
- * Two spellings of one folder leave here as one path, since only main knows
- * whether the platform's folder names ignore case. Ranking, prechecking and
- * merging the same folder from two agents happen in the renderer
+ * Main takes the spelling of the registered root from disk where case can
+ * vary. Ranking, prechecking and merging the same folder from two agents
+ * happen in the renderer
  * (`get-started-projects.ts`).
  */
 export async function discoverRecentProjects(
@@ -210,9 +208,16 @@ export async function discoverRecentProjects(
     }
   }
 
+  const { platform } = deps;
+  const canonicalizeRootCase = platform === "win32" || platform === "darwin";
   const { observations, droppedAgents, probed } = await resolveObservations(raw, {
-    identity: (path) => navigationPathIdentity(path, deps.ignorePathCase),
-    resolveProjectRoot: deps.resolveProjectRoot,
+    // macOS volumes can have different case rules. Compare their on-disk
+    // root spellings exactly so App and app can remain distinct.
+    identity: (path) => navigationPathIdentity(path, platform === "win32"),
+    resolveProjectRoot: async (folder) => {
+      const root = await deps.resolveProjectRoot(folder);
+      return root && canonicalizeRootCase ? await folderInRealCase(root, deps.realpath ?? realpath) : root;
+    },
     signal: deps.signal,
   });
   for (const agent of droppedAgents) {
