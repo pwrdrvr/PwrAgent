@@ -95,18 +95,16 @@ test("Troubleshooting persists the Chromium trace opt-in independently of Start 
     const slowburn = rules.getByRole("checkbox", { name: "Slow burn", exact: true });
     await slowburn.click();
     await expect(slowburn).toBeChecked();
-    // Drive both rules with the same observed interval while exercising the
-    // real debugger, trace publication, settings sync and capture notice.
+    // Exercise the shared interval fallback alongside the live main-process
+    // sampler, debugger, trace publication and capture notice.
     await app.electronApp.evaluate(({ app: electronApp, BrowserWindow }) => {
       const rendererPid = BrowserWindow.getAllWindows()[0].webContents.getOSProcessId();
       const readMetrics = electronApp.getAppMetrics.bind(electronApp);
-      const start = performance.now();
       electronApp.getAppMetrics = () => readMetrics().map((metric) => metric.pid === rendererPid
         ? {
           ...metric,
           cpu: {
             percentCPUUsage: 95,
-            cumulativeCPUUsage: (performance.now() - start) * 0.95 / 1_000,
             idleWakeupsPerSecond: 0,
           },
         }
@@ -127,8 +125,8 @@ test("Troubleshooting persists the Chromium trace opt-in independently of Start 
     const written = events.filter((event) => event.type === "profile-written");
     expect(written).toHaveLength(1);
     expect(written[0].detail.matchedRules).toEqual([
-      expect.objectContaining({ id: "spike", thresholdPercent: 50, durationMs: 100, sampleCount: 1 }),
-      expect.objectContaining({ id: "slowburn", thresholdPercent: 15, durationMs: 100, sampleCount: 1 }),
+      expect.objectContaining({ id: "spike", thresholdPercent: 50, durationMs: 100, sampleCount: 1, usedElectronInterval: true }),
+      expect.objectContaining({ id: "slowburn", thresholdPercent: 15, durationMs: 100, sampleCount: 1, usedElectronInterval: true }),
     ]);
     expect(written[0].detail.triggerMode).toBe("spike");
     expect(renderer.manifest.artifacts, JSON.stringify(events))

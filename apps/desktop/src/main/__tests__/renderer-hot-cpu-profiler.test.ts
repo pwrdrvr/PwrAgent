@@ -1,3 +1,4 @@
+import { createAppMetricsReader } from "../shell/diagnostics/app-metrics";
 import { migrateHotCpuCaptureRules } from "@pwragent/shared/hot-cpu-rules";
 import type { HotCpuRuleMatch } from "../../shared/hot-cpu-profile";
 import fs from "node:fs/promises";
@@ -1069,6 +1070,47 @@ describe("HotCpuProfiler", () => {
     const events = (await fs.readFile(created.session.eventsPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
     expect(events.filter((event) => event.type === "profile-started")).toHaveLength(1);
     expect(events.filter((event) => event.type === "profile-written")).toHaveLength(1);
+  });
+
+  it("captures with fallback metrics when another consumer reads during the sample interval", async () => {
+    vi.useFakeTimers();
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+    const config = createEnabledConfig(workspace.path, {
+      PWRAGENT_HOT_CPU_PROFILING_INTERVAL_MS: "2000",
+      PWRAGENT_HOT_CPU_PROFILING_TRIGGER_MODE: "spike",
+    });
+    const created = await createHotCpuProfileSession({
+      config,
+      versions: { appVersion: "test", electronVersion: "test", chromeVersion: "test", nodeVersion: process.version },
+    });
+    if (!created.ok) throw new Error(created.message);
+    const { target } = createTarget();
+    const getAppMetrics = createAppMetricsReader(() => [{
+      ...createMetric(80),
+      cpu: { percentCPUUsage: 80, idleWakeupsPerSecond: 0 },
+    }], Date.now);
+    const report = vi.fn();
+    const profiler = createProfiler({
+      config, getAppMetrics, session: created.session, target,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      onProfileWritten: report,
+    });
+
+    await profiler.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await samplesOf(profiler).waitForCount(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    getAppMetrics();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await samplesOf(profiler).waitForCount(2);
+    expect(profiler.hasActiveProfile).toBe(true);
+    await profiler.stop();
+    expect(report).toHaveBeenCalledWith(expect.objectContaining({
+      matchedRules: [expect.objectContaining({
+        triggerCpuPercent: 80, measuredDurationMs: 2_000, usedElectronInterval: true,
+      })],
+    }));
   });
 
   it("requires two observed hot intervals after a missing metric", async () => {

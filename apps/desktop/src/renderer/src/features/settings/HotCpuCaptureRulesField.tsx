@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from "react";
+import { useId, useLayoutEffect, useRef, useState } from "react";
 import {
   HOT_CPU_RULE_DURATIONS,
   HOT_CPU_RULE_LABELS,
@@ -42,22 +42,25 @@ function RuleThreshold(props: {
   onChange: (value: number) => Promise<boolean>;
 }) {
   const id = useId();
-  const writing = useRef(false);
+  const submitted = useRef<{ draft: string } | undefined>(undefined);
   const [draft, setDraft] = useState<string>();
   const invalid = draft !== undefined && !isHotCpuThreshold(Number(draft));
   const value = props.disabled ? String(props.value) : draft ?? String(props.value);
   const commit = async () => {
-    if (props.disabled || invalid || draft === undefined || writing.current) return;
+    if (props.disabled || invalid || draft === undefined || submitted.current?.draft === draft) return;
     const next = Number(draft);
-    if (next === props.value) {
+    if (!submitted.current && next === props.value) {
       setDraft(undefined);
       return;
     }
-    writing.current = true;
+    const edit = { draft };
+    submitted.current = edit;
     try {
-      if (await props.onChange(next)) setDraft(undefined);
+      if (await props.onChange(next) && submitted.current === edit) {
+        setDraft((current) => current === draft ? undefined : current);
+      }
     } finally {
-      writing.current = false;
+      if (submitted.current === edit) submitted.current = undefined;
     }
   };
   return (
@@ -117,13 +120,23 @@ function RuleValues(props: {
   const timingLocked = Boolean(overrides.mode || (id === "spike" ? overrides.interval : overrides.sampleCount));
   const lockedDuration = timingLocked && active;
   const label = HOT_CPU_RULE_LABELS[id];
+  const legacyDuration = !timingLocked && overrides.interval && "legacyIntervalTiming" in rule
+    && rule.legacyIntervalTiming && active;
   const options = lockedDuration ? [{
     value: String(lockedDuration.durationMs),
     label: `${seconds(lockedDuration.durationMs)} · ${samples(lockedDuration.sampleCount)}`,
-  }] : HOT_CPU_RULE_DURATIONS[id].map((ms) => {
-    const count = id === "spike" ? 1 : Math.max(2, Math.ceil(ms / effective.intervalMs));
-    return { value: String(ms), label: `${seconds(ms)} · ${samples(count)}` };
-  });
+  }] : [
+    ...(legacyDuration ? [{
+      value: "legacy",
+      label: `${seconds(legacyDuration.durationMs)} · ${samples(legacyDuration.sampleCount)}`,
+      description: "Legacy window from the environment. Select a duration to replace it.",
+      disabled: true,
+    }] : []),
+    ...HOT_CPU_RULE_DURATIONS[id].map((ms) => {
+      const count = id === "spike" ? 1 : Math.max(2, Math.ceil(ms / effective.intervalMs));
+      return { value: String(ms), label: `${seconds(ms)} · ${samples(count)}` };
+    }),
+  ];
   return (
     <div className="settings-cpu-rules__values">
       <RuleThreshold
@@ -139,7 +152,7 @@ function RuleValues(props: {
           aria-label={`${label} duration`}
           className="settings-input"
           options={options}
-          value={String(lockedDuration ? lockedDuration.durationMs : rule.durationMs)}
+          value={legacyDuration ? "legacy" : String(lockedDuration ? lockedDuration.durationMs : rule.durationMs)}
           disabled={props.disabled || timingLocked}
           onChange={props.onDurationChange}
         />
@@ -154,10 +167,14 @@ export function HotCpuCaptureRulesField(props: {
   onChange: (rules: HotCpuCaptureRules) => Promise<boolean>;
 }) {
   const id = useId();
-  const writing = useRef(false);
   const [status, setStatus] = useState("");
   const { setting } = props;
   const { effective, value: configured } = setting;
+  const savedRules = useRef(configured);
+  const writeTail = useRef(Promise.resolve());
+  useLayoutEffect(() => {
+    savedRules.current = configured;
+  }, [configured]);
   const { overrides, intervalMs } = effective;
   const modeLocked = Boolean(overrides.mode);
   const displayed = overrides.mode ? migrateHotCpuCaptureRules(effective.rules[0].id) : configured;
@@ -166,15 +183,22 @@ export function HotCpuCaptureRulesField(props: {
   const redundant = second && second.thresholdPercent >= first.thresholdPercent
     && second.durationMs >= first.durationMs && second.sampleCount >= first.sampleCount;
   const summary = effective.rules.map((rule) => describeRule(rule, intervalMs)).join(", or ");
-  const save = async (rules: HotCpuCaptureRules) => {
-    if (modeLocked || props.saving || writing.current) return false;
-    writing.current = true;
-    try {
-      setStatus("");
-      return await props.onChange(rules);
-    } finally {
-      writing.current = false;
-    }
+  const save = (edit: (rules: HotCpuCaptureRules) => HotCpuCaptureRules): Promise<boolean> => {
+    if (modeLocked) return Promise.resolve(false);
+    setStatus("");
+    const write = writeTail.current.then(async () => {
+      const previous = savedRules.current;
+      const next = edit(previous);
+      if (next === previous) {
+        setStatus(LAST_RULE);
+        return false;
+      }
+      if (!await props.onChange(next)) return false;
+      savedRules.current = next;
+      return true;
+    }).catch(() => false);
+    writeTail.current = write.then(() => undefined);
+    return write;
   };
   const groupToggle = (group: "high" | "slowburn") => {
     const high = group === "high";
@@ -196,7 +220,8 @@ export function HotCpuCaptureRulesField(props: {
             setStatus(LAST_RULE);
           }}
           onChange={(event) => {
-            if (!last) void save(setHotCpuRuleEnabled(configured, group, event.currentTarget.checked));
+            const { checked: enabled } = event.currentTarget;
+            if (!last) void save((rules) => setHotCpuRuleEnabled(rules, group, enabled));
           }}
         />
         {high ? "High CPU" : "Slow burn"}
@@ -222,7 +247,7 @@ export function HotCpuCaptureRulesField(props: {
                 value={highId}
                 disabled={modeLocked || !displayed.highEnabled}
                 rovingFocus
-                onChange={(highMode) => { void save({ ...configured, highMode }); }}
+                onChange={(highMode) => { void save((rules) => ({ ...rules, highMode })); }}
               />
             </div>
             <RuleValues
@@ -231,17 +256,19 @@ export function HotCpuCaptureRulesField(props: {
               rule={displayed[highId]}
               disabled={modeLocked || !displayed.highEnabled}
               effective={effective}
-              onThresholdChange={(thresholdPercent) => save({
-                ...configured,
-                [highId]: { ...configured[highId], thresholdPercent },
-              })}
+              onThresholdChange={(thresholdPercent) => save((rules) => ({
+                ...rules,
+                [highId]: { ...rules[highId], thresholdPercent },
+              }))}
               onDurationChange={(value) => {
                 if (highId === "spike") {
                   const durationMs = HOT_CPU_RULE_DURATIONS.spike.find((ms) => String(ms) === value);
-                  if (durationMs) void save({ ...configured, spike: { ...configured.spike, durationMs } });
+                  if (durationMs) void save((rules) => ({ ...rules, spike: { ...rules.spike, durationMs } }));
                 } else {
                   const durationMs = HOT_CPU_RULE_DURATIONS.sustained.find((ms) => String(ms) === value);
-                  if (durationMs) void save({ ...configured, sustained: { ...configured.sustained, durationMs } });
+                  if (durationMs) void save((rules) => ({
+                    ...rules, sustained: { ...rules.sustained, durationMs, legacyIntervalTiming: undefined },
+                  }));
                 }
               }}
             />
@@ -256,12 +283,14 @@ export function HotCpuCaptureRulesField(props: {
               rule={slowburn}
               disabled={modeLocked || !slowburn.enabled}
               effective={effective}
-              onThresholdChange={(thresholdPercent) => save({
-                ...configured, slowburn: { ...configured.slowburn, thresholdPercent },
-              })}
+              onThresholdChange={(thresholdPercent) => save((rules) => ({
+                ...rules, slowburn: { ...rules.slowburn, thresholdPercent },
+              }))}
               onDurationChange={(value) => {
                 const durationMs = HOT_CPU_RULE_DURATIONS.slowburn.find((ms) => String(ms) === value);
-                if (durationMs) void save({ ...configured, slowburn: { ...configured.slowburn, durationMs } });
+                if (durationMs) void save((rules) => ({
+                  ...rules, slowburn: { ...rules.slowburn, durationMs, legacyIntervalTiming: undefined },
+                }));
               }}
             />
           </div>

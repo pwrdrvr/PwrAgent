@@ -1,8 +1,7 @@
 import desktopPackage from "../../../package.json" with { type: "json" };
 import {
-  HOT_CPU_RULE_DURATIONS,
   assertHotCpuCaptureRules,
-  isHotCpuThreshold,
+  isHotCpuCaptureRules,
   migrateHotCpuCaptureRules,
   primaryHotCpuRule,
   type HotCpuCaptureRules,
@@ -507,8 +506,10 @@ const HOT_CPU_RULE_KEYS = {
   spikeDuration: "hot_cpu_profiling_spike_duration_ms",
   sustainedThreshold: "hot_cpu_profiling_sustained_threshold_percent",
   sustainedDuration: "hot_cpu_profiling_sustained_duration_ms",
+  sustainedLegacyInterval: "hot_cpu_profiling_sustained_legacy_interval_timing",
   slowburnEnabled: "hot_cpu_profiling_slowburn_enabled",
   slowburnDuration: "hot_cpu_profiling_slowburn_duration_ms",
+  slowburnLegacyInterval: "hot_cpu_profiling_slowburn_legacy_interval_timing",
 } as const;
 const HOT_CPU_SLOWBURN_THRESHOLD = "hot_cpu_profiling_slowburn_threshold_percent";
 
@@ -707,9 +708,9 @@ export const LEGACY_SETTINGS_RETIREMENTS: readonly LegacySettingRetirement[] = [
       if (readHotCpuCaptureRules(general)) return [];
       const mode = readHotCpuProfileTriggerMode(general[LEGACY_HOT_CPU_TRIGGER[1]]);
       if (!mode) return [];
-      return hotCpuCaptureRulesEdits(migrateHotCpuCaptureRules(
-        mode, readNumber(general[HOT_CPU_SLOWBURN_THRESHOLD]),
-      ));
+      const rules = migrateHotCpuCaptureRules(mode, readNumber(general[HOT_CPU_SLOWBURN_THRESHOLD]));
+      if (mode !== "spike") rules[mode].legacyIntervalTiming = true;
+      return hotCpuCaptureRulesEdits(rules);
     },
   },
 ];
@@ -895,7 +896,8 @@ export function desktopSettingsPatchToEdits(
     const rules = patch.general.hotCpuProfilingCaptureRules;
     assertHotCpuCaptureRules(rules);
     edits.push(...hotCpuCaptureRulesEdits(rules));
-    if (!isPastReleaseSeries(desktopPackage.version, LEGACY_HOT_CPU_TRIGGER_KEPT_THROUGH)) {
+    if (readHotCpuProfileTriggerMode(currentTables.general?.[LEGACY_HOT_CPU_TRIGGER[1]])
+      && !isPastReleaseSeries(desktopPackage.version, LEGACY_HOT_CPU_TRIGGER_KEPT_THROUGH)) {
       set(LEGACY_HOT_CPU_TRIGGER, primaryHotCpuRule(rules));
       edits.push({
         op: "ensureCommentBefore",
@@ -3734,35 +3736,37 @@ function readHotCpuCaptureRules(general?: TomlTables[string]): HotCpuCaptureRule
   }
   const keys = HOT_CPU_RULE_KEYS;
   const defaults = migrateHotCpuCaptureRules();
-  const readThreshold = (key: string, fallback: number) => {
-    const value = general[key];
-    return isHotCpuThreshold(value) ? value : fallback;
-  };
-  const readDuration = <T extends number>(key: string, choices: readonly T[], fallback: T): T =>
-    choices.find((choice) => choice === general[key]) ?? fallback;
-  const slowburnEnabled = readBoolean(general[keys.slowburnEnabled]) ?? false;
-  return {
-    highEnabled: !slowburnEnabled || (readBoolean(general[keys.highEnabled]) ?? true),
-    highMode: general[keys.highMode] === "spike" ? "spike" : "sustained",
+  // Hand-edited profiles may omit fields. A present malformed field invalidates
+  // this representation so the settings reader and retirement can use legacy data.
+  const rules = {
+    highEnabled: general[keys.highEnabled] ?? defaults.highEnabled,
+    highMode: general[keys.highMode] ?? defaults.highMode,
     spike: {
-      thresholdPercent: readThreshold(keys.spikeThreshold, defaults.spike.thresholdPercent),
-      durationMs: readDuration(keys.spikeDuration, HOT_CPU_RULE_DURATIONS.spike, defaults.spike.durationMs),
+      thresholdPercent: general[keys.spikeThreshold] ?? defaults.spike.thresholdPercent,
+      durationMs: general[keys.spikeDuration] ?? defaults.spike.durationMs,
     },
     sustained: {
-      thresholdPercent: readThreshold(keys.sustainedThreshold, defaults.sustained.thresholdPercent),
-      durationMs: readDuration(keys.sustainedDuration, HOT_CPU_RULE_DURATIONS.sustained, defaults.sustained.durationMs),
+      thresholdPercent: general[keys.sustainedThreshold] ?? defaults.sustained.thresholdPercent,
+      durationMs: general[keys.sustainedDuration] ?? defaults.sustained.durationMs,
+      ...(general[keys.sustainedLegacyInterval] === undefined ? {} : {
+        legacyIntervalTiming: general[keys.sustainedLegacyInterval],
+      }),
     },
     slowburn: {
-      enabled: slowburnEnabled,
-      thresholdPercent: readThreshold(HOT_CPU_SLOWBURN_THRESHOLD, defaults.slowburn.thresholdPercent),
-      durationMs: readDuration(keys.slowburnDuration, HOT_CPU_RULE_DURATIONS.slowburn, defaults.slowburn.durationMs),
+      enabled: general[keys.slowburnEnabled] ?? defaults.slowburn.enabled,
+      thresholdPercent: general[HOT_CPU_SLOWBURN_THRESHOLD] ?? defaults.slowburn.thresholdPercent,
+      durationMs: general[keys.slowburnDuration] ?? defaults.slowburn.durationMs,
+      ...(general[keys.slowburnLegacyInterval] === undefined ? {} : {
+        legacyIntervalTiming: general[keys.slowburnLegacyInterval],
+      }),
     },
   };
+  return isHotCpuCaptureRules(rules) ? rules : undefined;
 }
 
 function hotCpuCaptureRulesEdits(rules: HotCpuCaptureRules): TomlEdit[] {
   const keys = HOT_CPU_RULE_KEYS;
-  return Object.entries({
+  const edits: TomlEdit[] = Object.entries({
     [keys.highEnabled]: rules.highEnabled,
     [keys.highMode]: rules.highMode,
     [keys.spikeThreshold]: rules.spike.thresholdPercent,
@@ -3773,6 +3777,14 @@ function hotCpuCaptureRulesEdits(rules: HotCpuCaptureRules): TomlEdit[] {
     [keys.slowburnDuration]: rules.slowburn.durationMs,
     [HOT_CPU_SLOWBURN_THRESHOLD]: rules.slowburn.thresholdPercent,
   }).map(([key, value]) => ({ op: "set", path: ["general", key], value }));
+  for (const [key, legacyTiming] of [
+    [keys.sustainedLegacyInterval, rules.sustained.legacyIntervalTiming],
+    [keys.slowburnLegacyInterval, rules.slowburn.legacyIntervalTiming],
+  ] as const) {
+    const path = ["general", key];
+    edits.push(legacyTiming ? { op: "set", path, value: true } : { op: "delete", path });
+  }
+  return edits;
 }
 
 function readHotCpuProfileTriggerMode(

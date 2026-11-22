@@ -1,5 +1,5 @@
-import { assertHotCpuCaptureRules, migrateHotCpuCaptureRules, primaryHotCpuRule } from "@pwragent/shared/hot-cpu-rules";
-import { resolveHotCpuRulePlan } from "../diagnostics/hot-cpu-profile-config";
+import { assertHotCpuCaptureRules, primaryHotCpuRule } from "@pwragent/shared/hot-cpu-rules";
+import { resolveHotCpuRules } from "../diagnostics/hot-cpu-profile-config";
 import { CommandDiscoveryLifetime } from "./command-discovery-lifetime";
 import {
   DEFAULT_FORGE_AGENT_TOOL_POLICY,
@@ -4654,13 +4654,12 @@ export class DesktopSettingsService {
       triggerMode: general?.hotCpuProfilingTriggerMode,
       slowburnThresholdPercent: general?.hotCpuProfilingSlowburnThresholdPercent,
     };
-    const effective = resolveHotCpuRulePlan(options, this.env);
+    const { configured, plan: effective } = resolveHotCpuRules(options, this.env);
     const hasEnv = Object.keys(effective.overrides).length > 0;
     const hasConfig = Object.values(options).some((value) => value !== undefined);
     const source = hasEnv ? "env" as const : hasConfig ? "config" as const : "default" as const;
     return {
-      value: options.captureRules
-        ?? migrateHotCpuCaptureRules(options.triggerMode, options.slowburnThresholdPercent),
+      value: configured,
       effective,
       source,
       overriddenByEnv: hasEnv && hasConfig,

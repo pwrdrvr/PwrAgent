@@ -12,12 +12,17 @@ type RuleSettings<Id extends HotCpuRuleId> = {
   durationMs: (typeof HOT_CPU_RULE_DURATIONS)[Id][number];
 };
 
+type LegacyIntervalTiming = {
+  /** Retain the scripted two-sample window under an explicit cadence override until its duration is edited. */
+  legacyIntervalTiming?: true;
+};
+
 export type HotCpuCaptureRules = {
   highEnabled: boolean;
   highMode: HighCpuMode;
   spike: RuleSettings<"spike">;
-  sustained: RuleSettings<"sustained">;
-  slowburn: RuleSettings<"slowburn"> & { enabled: boolean };
+  sustained: RuleSettings<"sustained"> & LegacyIntervalTiming;
+  slowburn: RuleSettings<"slowburn"> & LegacyIntervalTiming & { enabled: boolean };
 };
 
 export type EffectiveHotCpuRule = {
@@ -90,6 +95,8 @@ export function isHotCpuCaptureRules(value: unknown): value is HotCpuCaptureRule
     && (rules.highMode === "spike" || rules.highMode === "sustained")
     && typeof rules.slowburn?.enabled === "boolean"
     && (rules.highEnabled || rules.slowburn.enabled)
+    && (rules.sustained?.legacyIntervalTiming === undefined || rules.sustained.legacyIntervalTiming === true)
+    && (rules.slowburn.legacyIntervalTiming === undefined || rules.slowburn.legacyIntervalTiming === true)
     && (["spike", "sustained", "slowburn"] as const).every((id) => {
       const rule = rules[id];
       const durations: readonly number[] = HOT_CPU_RULE_DURATIONS[id];

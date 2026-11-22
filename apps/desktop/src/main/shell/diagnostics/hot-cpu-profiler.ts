@@ -9,7 +9,7 @@ import type {
 } from "../../../shared/hot-cpu-profile";
 import type { HotCpuProfileConfig } from "../../diagnostics/hot-cpu-profile-config";
 import type { HotCpuProfileSession } from "../../diagnostics/hot-cpu-profile-session";
-import type { AppMetricsReading } from "./app-metrics";
+import type { AppCpuEstimate, AppMetricsReading } from "./app-metrics";
 import { HotCpuRuleEvaluator, isCpuSampleInterval, type CpuInterval } from "../../diagnostics/hot-cpu-rule-evaluator";
 import type { ChromiumTrace } from "../../diagnostics/chromium-trace";
 import { getMainLogger } from "../../log";
@@ -133,7 +133,13 @@ export class HotCpuProfiler {
   private captureSamplePromise: Promise<void> | null = null;
   private intervalTimer: ReturnType<typeof setTimeout> | null = null;
   private lastProfileAtMs: number | null = null;
-  private previousMetric?: { pid: number; creationTime: number; atMs: number; cumulative?: number };
+  private previousMetric?: {
+    pid: number;
+    creationTime: number;
+    atMs: number;
+    cumulative?: number;
+    estimate?: AppCpuEstimate;
+  };
   private recorderRotationCpuMicros = 0;
   private profileDurationTimer: ReturnType<typeof setTimeout> | null = null;
   private profileCount = 0;
@@ -368,7 +374,8 @@ export class HotCpuProfiler {
       const cpuUsage = this.calculateCpuUsage(
         metric,
         capturedAtMonotonicMs,
-        Array.isArray(reading) ? this.previousMetric?.atMs : reading.previousReadMs,
+        Array.isArray(reading) ? undefined : reading.cpuEstimates.get(pid),
+        Array.isArray(reading),
       );
       const matches = this.evaluator.observe(cpuUsage.interval);
 
@@ -433,11 +440,16 @@ export class HotCpuProfiler {
     this.evaluator.reset();
   }
 
-  private calculateCpuUsage(metric: ProcessMetric, atMs: number, previousReadMs?: number): CpuUsageReading {
+  private calculateCpuUsage(
+    metric: ProcessMetric,
+    atMs: number,
+    estimate: AppCpuEstimate | undefined,
+    dedicatedReader: boolean,
+  ): CpuUsageReading {
     const { cumulativeCPUUsage, percentCPUUsage } = metric.cpu;
     const cumulative = Number.isFinite(cumulativeCPUUsage) ? cumulativeCPUUsage : undefined;
     const previous = this.previousMetric;
-    this.previousMetric = { pid: metric.pid, creationTime: metric.creationTime, atMs, cumulative };
+    this.previousMetric = { pid: metric.pid, creationTime: metric.creationTime, atMs, cumulative, estimate };
     const recorderRotationCpuSeconds = this.recorderRotationCpuMicros / 1_000_000;
     this.recorderRotationCpuMicros = 0;
     const baseline = { cpuPercent: percentCPUUsage, electronCpuPercent: percentCPUUsage };
@@ -446,13 +458,19 @@ export class HotCpuProfiler {
     if (!isCpuSampleInterval(elapsedMs, this.config.intervalMs)) return baseline;
     const wallDeltaSeconds = elapsedMs / 1_000;
     if (cumulative === undefined && previous.cumulative === undefined) {
-      // The percentage is only evidence for this interval when no other
-      // app.getAppMetrics() call reset Electron's measurement in between.
-      if (previous.atMs !== previousReadMs || !Number.isFinite(percentCPUUsage)) return baseline;
+      const prior = previous.estimate;
+      // Only a dedicated reader owns the raw interval. The shared reader
+      // can reconstruct the whole interval from a continuous estimate.
+      const cpuPercent = dedicatedReader ? percentCPUUsage
+        : estimate && prior?.generation === estimate.generation
+          ? (estimate.cpuMs - prior.cpuMs) / elapsedMs * 100
+          : undefined;
+      if (cpuPercent === undefined || !Number.isFinite(cpuPercent) || cpuPercent < 0) return baseline;
       return {
         ...baseline,
+        cpuPercent,
         wallDeltaSeconds,
-        interval: { cpuPercent: percentCPUUsage, elapsedMs, source: "electron-interval" },
+        interval: { cpuPercent, elapsedMs, source: "electron-interval" },
       };
     }
     if (cumulative === undefined || previous.cumulative === undefined || cumulative < previous.cumulative) {

@@ -3277,6 +3277,60 @@ describe("SettingsScreen", () => {
     });
   });
 
+  it("saves a threshold and a following checkbox edit without losing either", async () => {
+    let finishThreshold!: (value: boolean) => void;
+    const thresholdSaved = new Promise<boolean>((resolve) => { finishThreshold = resolve; });
+    const settings = createSettingsState();
+    const writeConfig = vi.fn<typeof settings.writeConfig>()
+      .mockReturnValueOnce(thresholdSaved).mockResolvedValue(true);
+    render(<SettingsScreen
+      initialSection="troubleshooting"
+      settings={{ ...settings, writeConfig }}
+      onClose={() => undefined}
+    />);
+
+    const rules = within(screen.getByRole("group", { name: "Capture rules" }));
+    const threshold = rules.getByRole("spinbutton", { name: "Sustained CPU threshold" });
+    fireEvent.change(threshold, { target: { value: "85" } });
+    fireEvent.blur(threshold);
+    fireEvent.click(rules.getByRole("checkbox", { name: "Slow burn" }));
+    finishThreshold(true);
+    await waitFor(() => expect(writeConfig).toHaveBeenCalledTimes(2));
+    expect(writeConfig).toHaveBeenLastCalledWith({
+      general: { hotCpuProfilingCaptureRules: {
+        ...migrateHotCpuCaptureRules(),
+        sustained: { thresholdPercent: 85, durationMs: 4_000 },
+        slowburn: { enabled: true, thresholdPercent: 15, durationMs: 4_000 },
+      } },
+    });
+  });
+
+  it("shows the effective legacy window until the operator selects a duration", async () => {
+    const snapshot = createSnapshot();
+    const defaults = migrateHotCpuCaptureRules();
+    snapshot.general.hotCpuProfilingCaptureRules = {
+      value: { ...defaults, sustained: { ...defaults.sustained, legacyIntervalTiming: true } },
+      source: "env",
+      effective: {
+        intervalMs: 250,
+        overrides: { interval: "PWRAGENT_HOT_CPU_PROFILING_INTERVAL_MS" },
+        rules: [{ id: "sustained", thresholdPercent: 50, durationMs: 500, sampleCount: 2 }],
+      },
+    };
+    const settings = createSettingsState(snapshot);
+    render(<SettingsScreen
+      initialSection="troubleshooting"
+      settings={settings}
+      onClose={() => undefined}
+    />);
+    const duration = screen.getByRole("combobox", { name: "Sustained duration" });
+    expect(duration).toHaveTextContent("0.5 s · 2 samples");
+    chooseSelectOption(duration, "4 s · 16 samples");
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({
+      general: { hotCpuProfilingCaptureRules: defaults },
+    }));
+  });
+
   it("defaults the missing Codex skill questions flag to off and persists changes", async () => {
     const snapshot = createSnapshot();
     const experimental = snapshot.experimental as Partial<

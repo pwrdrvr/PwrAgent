@@ -1,6 +1,7 @@
 import path from "node:path";
 import {
   migrateHotCpuCaptureRules,
+  primaryHotCpuRule,
   type EffectiveHotCpuRule,
   type HotCpuCaptureRules,
   type HotCpuRulePlan,
@@ -102,20 +103,23 @@ export function resolveHotCpuRulePlan(
   return resolveHotCpuRules(options, env).plan;
 }
 
-function resolveHotCpuRules(options: HotCpuRuleOptions, env: NodeJS.ProcessEnv) {
+export function resolveHotCpuRules(options: HotCpuRuleOptions, env: NodeJS.ProcessEnv) {
   const configured = options.captureRules
     ?? migrateHotCpuCaptureRules(options.triggerMode, options.slowburnThresholdPercent);
   const envMode = env[MODE_ENV]?.trim().toLowerCase();
   const forcedMode = envMode && isDesktopHotCpuProfileTriggerMode(envMode) ? envMode : undefined;
-  const rules = forcedMode ? migrateHotCpuCaptureRules(forcedMode) : configured;
   const forcedHighThreshold = parsePositiveNumber(env[HIGH_THRESHOLD_ENV], 0);
   const forcedSlowburnThreshold = parsePositiveNumber(env[SLOWBURN_THRESHOLD_ENV], 0);
   const forcedInterval = parsePositiveInteger(env[INTERVAL_ENV], 0);
   const forcedCount = parsePositiveInteger(env[COUNT_ENV], 0);
+  const legacyRule = primaryHotCpuRule(configured);
+  if (!options.captureRules && forcedInterval && legacyRule !== "spike") {
+    configured[legacyRule].legacyIntervalTiming = true;
+  }
+  const rules = forcedMode ? migrateHotCpuCaptureRules(forcedMode) : configured;
   const intervalMs = forcedInterval || (
     rules.highEnabled && rules.highMode === "spike" ? rules.spike.durationMs : DEFAULT_INTERVAL_MS
   );
-  const legacyTiming = Boolean(forcedMode || (!options.captureRules && forcedInterval));
   const highThresholdPercent = forcedHighThreshold || rules[rules.highMode].thresholdPercent;
   const slowburnThresholdPercent = forcedSlowburnThreshold
     ? clampPercent(forcedSlowburnThreshold)
@@ -126,6 +130,8 @@ function resolveHotCpuRules(options: HotCpuRuleOptions, env: NodeJS.ProcessEnv) 
     ...(rules.slowburn.enabled ? ["slowburn" as const] : []),
   ];
   for (const id of ids) {
+    const legacyTiming = Boolean(forcedMode
+      || (forcedInterval && id !== "spike" && rules[id].legacyIntervalTiming));
     const sampleCount = id === "spike" ? 1
       : forcedCount || (legacyTiming ? DEFAULT_CONSECUTIVE_SAMPLES
         : Math.max(2, Math.ceil(rules[id].durationMs / intervalMs)));
@@ -146,7 +152,7 @@ function resolveHotCpuRules(options: HotCpuRuleOptions, env: NodeJS.ProcessEnv) 
       ...(forcedCount ? { sampleCount: COUNT_ENV } : {}),
     },
   };
-  return { plan, highThresholdPercent, slowburnThresholdPercent, forcedCount };
+  return { configured, plan, highThresholdPercent, slowburnThresholdPercent, forcedCount };
 }
 
 export function resolveHotCpuProfileConfig(options?: HotCpuRuleOptions & {
