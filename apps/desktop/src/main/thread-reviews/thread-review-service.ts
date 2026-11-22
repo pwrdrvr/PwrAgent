@@ -61,6 +61,7 @@ export class ThreadReviewError extends Error {
 export class ThreadReviewService {
   private readonly trackingStartedAt: number;
   private onUpdated: (review: ThreadReview) => void = () => {};
+  private readonly changeListeners = new Set<(review: ThreadReview) => void>();
 
   constructor(
     private readonly storage: ThreadReviewStorage,
@@ -358,6 +359,38 @@ export class ThreadReviewService {
   }
 
   /**
+   * Records the commit a review's findings were fixed through, for the
+   * settlement at `settledAt`. One commit per settlement; an older or
+   * repeated settlement writes nothing. No change event, since nothing a
+   * card shows changed.
+   */
+  recordFixedThrough(id: string, commit: string, settledAt: number): ThreadReview | undefined {
+    const stale = (review: ThreadReview): boolean =>
+      review.fixedThroughAt !== undefined && review.fixedThroughAt >= settledAt;
+    const snapshot = this.get(id);
+    if (!snapshot || stale(snapshot)) return snapshot;
+    return this.storage.runExclusive(() => {
+      const review = this.get(id);
+      if (!review || stale(review)) return review;
+      review.fixedThroughCommit = commit;
+      review.fixedThroughAt = settledAt;
+      this.storage.update(review);
+      return review;
+    });
+  }
+
+  /**
+   * Called with every review whose record changed: recorded, imported,
+   * settled, or reopened, whoever did it. Returns an unsubscribe function.
+   */
+  addChangeListener(listener: (review: ThreadReview) => void): () => void {
+    this.changeListeners.add(listener);
+    return () => {
+      this.changeListeners.delete(listener);
+    };
+  }
+
+  /**
    * Called after an agent or the operator changes a review or one of its
    * findings. A reviewer's own reported outcomes do not count.
    */
@@ -367,5 +400,12 @@ export class ThreadReviewService {
 
   private emit(review: ThreadReview): void {
     this.onChanged({ backend: review.backend, threadId: review.threadId, at: this.now() });
+    for (const listener of this.changeListeners) {
+      try {
+        listener(review);
+      } catch {
+        // A listener's failure must not fail the review write it observes.
+      }
+    }
   }
 }

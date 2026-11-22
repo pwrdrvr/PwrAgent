@@ -6,7 +6,7 @@ import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { PwrAgentThreadTodoHandler } from "../agent-tools/pwragent-thread-todo-agent-tools";
 import { buildPwrAgentThreadTodoToolDefinitions } from "../agent-tools/pwragent-thread-todo-agent-tools";
 import * as appState from "../state/app-state";
-import { getThreadTodoService, installThreadTodoRuntime, resetThreadTodoServiceForTests } from "../thread-todos/thread-todo-runtime";
+import { getThreadTodoService, installThreadTodoRuntime, resetThreadTodoServiceForTests, setThreadTodoMergeOfferGate } from "../thread-todos/thread-todo-runtime";
 import { ThreadTodoStore } from "../storage/thread-todo-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
@@ -17,7 +17,7 @@ const providers = ["codex", "claude", "acp:kimi"] as const;
 const models = { codex: "sol", claude: "opus", "acp:kimi": "kimi" };
 const labels = { codex: "Sol", claude: "Opus 5.5", "acp:kimi": "Kimi" };
 
-afterEach(() => { resetThreadTodoServiceForTests(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
+afterEach(() => { setThreadTodoMergeOfferGate(undefined); resetThreadTodoServiceForTests(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 function fixture(source: typeof providers[number] = "codex", db = openInMemoryStateDb()) {
   vi.spyOn(appState, "getAppStateDb").mockReturnValue(db);
@@ -175,5 +175,28 @@ it("refuses unverifiable proposals and revalidates saved destinations before lau
       expect(f.registry.startThread).not.toHaveBeenCalled();
       expect(f.store.get(card.id)?.action).toEqual(card.action);
     }
+  } finally { f.db.close(); }
+});
+
+// The PR review-offer coordinator's gate decides; see docs/pr-review-readiness.md.
+it("refuses an agent's merge card the merge-offer gate refuses, and raises one it allows", async () => {
+  const f = fixture();
+  const pullRequest = "https://github.com/example/project/pull/7";
+  const gate = vi.fn(async (): Promise<string | undefined> => "#7 has no review covering its head.");
+  setThreadTodoMergeOfferGate(gate);
+  try {
+    const refused = await f.call("add_todo", { title: "Merge #7", action: { type: "merge_pull_request", pullRequest } });
+    expect(refused.ok).toBe(false);
+    expect(JSON.stringify(refused)).toContain("has no review covering its head");
+    expect(gate).toHaveBeenCalledWith({ backend: "codex", threadId: "source" }, pullRequest);
+    expect(f.store.list({ status: "open" })).toEqual([]);
+    // Other cards never consult the gate.
+    expect((await f.call("add_todo", { title: "Follow up", action: { type: "start_thread", prompt: "Go" } })).ok).toBe(true);
+    expect(gate).toHaveBeenCalledTimes(1);
+    gate.mockResolvedValueOnce(undefined);
+    expect((await f.call("add_todo", { title: "Merge #7", action: { type: "merge_pull_request", pullRequest } })).ok).toBe(true);
+    // A gate that fails does not block the card.
+    gate.mockRejectedValueOnce(new Error("unreadable"));
+    expect((await f.call("add_todo", { title: "Merge #7 again", key: "again", action: { type: "merge_pull_request", pullRequest } })).ok).toBe(true);
   } finally { f.db.close(); }
 });

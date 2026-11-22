@@ -37,6 +37,10 @@ import type { ForgePrToolArgs, ForgePrToolOperation } from "../pr-status/forge-p
 import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation } from "../pr-status/forge-tool-contract";
 import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
 import { readLocalHeadPastPrHead } from "../pr-status/local-pr-head";
+import { PrChangeIdentityReader } from "../pr-status/pr-change-identity";
+import { PrReviewOfferCoordinator, type PrReviewOfferThread } from "../pr-status/pr-review-offer-coordinator";
+import { describePrReviewReadiness } from "../pr-status/pr-review-readiness";
+import { getThreadReviewService } from "../thread-reviews/thread-review-runtime";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { publishedPrCommitShas } from "../../shared/pull-request-publication";
 import {
@@ -83,7 +87,7 @@ import {
   summarizeProjectHeldWakeup,
   type ProjectForgeAutomationResolution,
 } from "../app-server/project-forge-automation-index";
-import { getThreadTodoService, readProjectMergeMethodPreference, readThreadTodoPlacement } from "../thread-todos/thread-todo-runtime";
+import { getThreadTodoService, readProjectMergeMethodPreference, readThreadTodoPlacement, setThreadTodoMergeOfferGate } from "../thread-todos/thread-todo-runtime";
 import { archiveCandidateProtectionReason } from "../app-server/thread-archive-sweeper";
 import { threadArtifactDirectory } from "../app-server/thread-assets";
 import { readFederatedThreadFamilyPricing } from "../app-server/thread-family-pricing";
@@ -299,6 +303,7 @@ import {
   type WatchThreadPullRequestResult,
   type ThreadPullRequestWatchListResult,
   type ThreadPullRequestAutomationStatus,
+  type ThreadPullRequestReviewReadiness,
   type ThreadPullRequestWatchEvent,
   type ThreadPullRequestWatchSummary,
   type ThreadPullRequestWatchBaseline,
@@ -1282,6 +1287,8 @@ class DesktopAppServerService {
   private prAutoDispatchBudgetPaused = false;
   private prAutoDispatchBudgetPausedAt: number | undefined;
   private prAutoDispatchCoordinator: PrAutoDispatchCoordinator | undefined;
+  private prReviewOfferCoordinator: PrReviewOfferCoordinator | undefined;
+  private prReviewOfferUnsubscribe: (() => void) | undefined;
   private prStatusWatchCoordinator: PrStatusWatchCoordinator | undefined;
   /**
    * CI re-runs this instance requested, by PR. In memory only: they explain
@@ -4779,11 +4786,22 @@ class DesktopAppServerService {
             : "Background PR polling is active, but automatic PR repair is disabled globally in Git settings. Use watch_thread_pull_request for a bounded one-shot success, failure, merge, or close notification instead of polling or creating a monitor thread."
           : "Background PR polling and Auto-fix PR are off. PwrAgent will not wake this thread for PR status changes.";
     const projectSkippedKind = projectSkipsMergeConflicts ? "merge conflicts" : "failing CI";
-    const guidance = autoFixEnabled && forgeProject && projectBlocksAutoFix
+    const reviewReadiness = await this.readPrReviewReadiness(params, primaryPrs);
+    const readinessGuidance = reviewReadiness
+      .filter((entry) => entry.readiness !== "closed")
+      .map((entry) => describePrReviewReadiness({
+        prNumber: entry.prNumber,
+        readiness: entry.readiness as Parameters<typeof describePrReviewReadiness>[0]["readiness"],
+        ...(entry.headSha ? { headSha: entry.headSha } : {}),
+        reviewed: entry.reviewed,
+        ...(entry.openFindings !== undefined ? { openFindings: entry.openFindings } : {}),
+      }));
+    const automationGuidance = autoFixEnabled && forgeProject && projectBlocksAutoFix
       ? `Auto-fix PR is saved for this thread, but it is in ${forgeProject.label}, where ${forgeProject.automation.paused ? "forge activity is paused" : "Auto-fix is turned off in Forge Automation"}. PwrAgent will not start a repair turn. Do not poll CI or create a monitor in its place. Tell the operator, who can change it from the project menu: Forge Automation.`
       : autoFixActive && forgeProject && (projectSkipsMergeConflicts || projectSkipsCiFailures)
         ? `${baseGuidance} ${forgeProject.label} skips ${projectSkippedKind} in Forge Automation, so PwrAgent will not start a repair turn for ${projectSkippedKind}.`
         : baseGuidance;
+    const guidance = [automationGuidance, ...readinessGuidance].join(" ");
     return {
       backgroundPollingEnabled: this.backgroundPrPollingEnabled,
       autoFixAllowed: this.prAutoDispatchAllowed,
@@ -4793,6 +4811,7 @@ class DesktopAppServerService {
         ? { autoFixPending: overlay.prAutoDispatchPending }
         : {}),
       ...(watches.length > 0 ? { watches } : {}),
+      ...(reviewReadiness.length > 0 ? { reviewReadiness } : {}),
       guidance,
     };
   }
@@ -4995,6 +5014,7 @@ class DesktopAppServerService {
           ...observation,
         },
       );
+      this.prReviewOfferCoordinator?.handleTransition(transition);
       for (const listener of this.prStatusTransitionListeners) {
         try {
           listener(transition);
@@ -5818,6 +5838,7 @@ class DesktopAppServerService {
    * thread→PR contexts to poll). Idempotent: called on every snapshot.
    */
   private ensurePrPollingSchedulerStarted(): void {
+    this.ensurePrReviewOfferCoordinator();
     if (this.prPollingScheduler) {
       if (this.backgroundPrPollingEnabled && this.prStatusRegistryLoaded && this.threadPullRequestLookup.loaded) {
         this.prPollingScheduler.start();
@@ -8334,6 +8355,10 @@ class DesktopAppServerService {
     this.prStatusTransitionListeners.clear();
     this.prAutoDispatchCoordinator?.close();
     this.prAutoDispatchCoordinator = undefined;
+    this.prReviewOfferUnsubscribe?.();
+    this.prReviewOfferUnsubscribe = undefined;
+    this.prReviewOfferCoordinator?.close();
+    this.prReviewOfferCoordinator = undefined;
     this.prStatusWatchCoordinator = undefined;
     this.sandboxerPrCleanup = undefined;
     this.attachedPrsByThreadKey.clear();
@@ -8411,6 +8436,169 @@ class DesktopAppServerService {
       });
     }
     return this.prAutoDispatchCoordinator;
+  }
+
+  /**
+   * Review and merge offers for PRs that live threads own; see
+   * docs/pr-review-readiness.md. Created with the PR poller, because only its
+   * transitions and review changes drive it.
+   */
+  private ensurePrReviewOfferCoordinator(): void {
+    if (this.prReviewOfferCoordinator || !this.backgroundPrPollingEnabled) return;
+    let reviews: ReturnType<typeof getThreadReviewService>;
+    let todos: ReturnType<typeof getThreadTodoService>;
+    try {
+      reviews = getThreadReviewService();
+      todos = getThreadTodoService();
+    } catch (error) {
+      // Profile state is not open yet; the next snapshot tries again.
+      appServerLog.debug("pr review offers unavailable", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    const coordinator = new PrReviewOfferCoordinator({
+      ownerThread: async (prKey) => await this.prReviewOfferOwner(prKey),
+      threadPrKeys: (thread) => {
+        const attachment = this.attachedPrsByThreadKey.get(
+          buildThreadIdentityKey(thread.backend, thread.threadId),
+        );
+        return (attachment?.prs ?? [])
+          .filter((pr) => this.matchesPrimaryRepository(pr, attachment?.primaryRepoKey))
+          .map(getPrStatusKey);
+      },
+      getPr: (prKey) => this.prStatusRegistry.get(prKey)?.pr,
+      directories: (thread, pr) => this.prReviewOfferDirectories(thread, pr),
+      listReviews: (thread, pr) => {
+        // The owner and every other thread showing the PR, such as a
+        // sub-thread the review ran in. Bounded by that PR's thread index.
+        const threads = new Map([[buildThreadIdentityKey(thread.backend, thread.threadId), thread]]);
+        for (const threadKey of this.primaryPrThreadsByKey.get(getPrStatusKey(pr)) ?? []) {
+          const identity = parseThreadIdentityKey(threadKey);
+          if (identity) threads.set(threadKey, { backend: identity.backend, threadId: identity.threadId });
+        }
+        return [...threads.values()].flatMap((candidate) =>
+          reviews.list({ ...candidate, status: "all" }, { includeDetached: true })
+        );
+      },
+      recordFixedThrough: (reviewId, commit, settledAt) => {
+        reviews.recordFixedThrough(reviewId, commit, settledAt);
+      },
+      cards: todos,
+      identity: new PrChangeIdentityReader(),
+      log: (message, fields) => appServerLog.debug(message, fields),
+    });
+    const unsubscribeReviews = reviews.addChangeListener((review) => {
+      coordinator.handleReviewChanged(review);
+    });
+    setThreadTodoMergeOfferGate(async (thread, pullRequest) =>
+      await this.prMergeOfferRefusal(thread, pullRequest)
+    );
+    this.prReviewOfferUnsubscribe = () => {
+      unsubscribeReviews();
+      setThreadTodoMergeOfferGate(undefined);
+    };
+    this.prReviewOfferCoordinator = coordinator;
+  }
+
+  /** The thread's primary attached PR a card's `pullRequest` names, by URL or number. */
+  private findPrimaryAttachedPr(
+    thread: PrReviewOfferThread,
+    pullRequest: string,
+  ): PrSummary | undefined {
+    const attachment = this.attachedPrsByThreadKey.get(
+      buildThreadIdentityKey(thread.backend, thread.threadId),
+    );
+    const wanted = pullRequest.trim().replace(/\/+$/, "").toLowerCase();
+    const number = /^#?(\d+)$/.exec(wanted)?.[1];
+    return attachment?.prs.find((pr) =>
+      this.matchesPrimaryRepository(pr, attachment.primaryRepoKey)
+      && (number ? String(pr.number) === number : pr.url.replace(/\/+$/, "").toLowerCase() === wanted)
+    );
+  }
+
+  /**
+   * Why a thread may not raise a merge card for its PR yet: no review covers
+   * the head, or the covering review has unsettled findings. The direct
+   * merge_pull_request tool is not gated; the operator approves it.
+   */
+  private async prMergeOfferRefusal(
+    thread: PrReviewOfferThread,
+    pullRequest: string,
+  ): Promise<string | undefined> {
+    const coordinator = this.prReviewOfferCoordinator;
+    const pr = this.findPrimaryAttachedPr(thread, pullRequest);
+    if (!coordinator || !pr) return undefined;
+    const prKey = getPrStatusKey(pr);
+    const owner = await this.prReviewOfferOwner(prKey);
+    if (owner?.backend !== thread.backend || owner.threadId !== thread.threadId) return undefined;
+    return await coordinator.mergeOfferRefusal(thread, prKey);
+  }
+
+  /**
+   * Readiness for at most three PRs this thread owns offers for, for its
+   * automation status. A thread that does not own a PR's offers gets none,
+   * so its guidance never promises an offer.
+   */
+  private async readPrReviewReadiness(
+    thread: PrReviewOfferThread,
+    prs: PrSummary[],
+  ): Promise<ThreadPullRequestReviewReadiness[]> {
+    const coordinator = this.prReviewOfferCoordinator;
+    if (!coordinator) return [];
+    const readiness: ThreadPullRequestReviewReadiness[] = [];
+    for (const pr of prs.slice(0, 3)) {
+      const prKey = getPrStatusKey(pr);
+      const owner = await this.prReviewOfferOwner(prKey);
+      if (owner?.backend !== thread.backend || owner.threadId !== thread.threadId) continue;
+      const assessment = await coordinator.assess(thread, prKey, { coverage: true })
+        .catch(() => undefined);
+      if (!assessment) continue;
+      readiness.push({
+        prUrl: pr.url,
+        prNumber: pr.number,
+        readiness: assessment.readiness,
+        ...(assessment.headSha ? { headSha: assessment.headSha } : {}),
+        reviewed: assessment.headCovered,
+        ...(assessment.reviewId ? { reviewId: assessment.reviewId } : {}),
+        ...(assessment.openFindings !== undefined ? { openFindings: assessment.openFindings } : {}),
+      });
+    }
+    return readiness;
+  }
+
+  /**
+   * The one thread a PR's offers go to: the elected Auto-fix owner when it
+   * qualifies, else the first live primary thread. Archived threads and
+   * paused projects get none, and nothing happens while polling is off.
+   */
+  private async prReviewOfferOwner(prKey: string): Promise<PrReviewOfferThread | undefined> {
+    if (!this.backgroundPrPollingEnabled) return undefined;
+    const eligible: PrReviewOfferThread[] = [];
+    for (const threadKey of this.primaryPrThreadsByKey.get(prKey) ?? []) {
+      const identity = parseThreadIdentityKey(threadKey);
+      if (!identity) continue;
+      if (getDesktopBackendRegistry().getThreadInfo(identity)?.archived === true) continue;
+      if (!projectAllowsForgePolling(this.threadKeyForgeAutomation(threadKey))) continue;
+      eligible.push({ backend: identity.backend, threadId: identity.threadId });
+    }
+    if (eligible.length <= 1) return eligible[0];
+    const winner = await this.getOverlayStore().getPrAutoDispatchCandidateWinner({ prKey });
+    return eligible.find((thread) =>
+      thread.backend === winner?.backend && thread.threadId === winner.threadId
+    ) ?? eligible[0];
+  }
+
+  private prReviewOfferDirectories(thread: PrReviewOfferThread, pr: PrSummary): string[] {
+    const prKey = getPrStatusKey(pr);
+    const attached = this.attachedPrsByThreadKey
+      .get(buildThreadIdentityKey(thread.backend, thread.threadId))
+      ?.prs.find((candidate) => getPrStatusKey(candidate) === prKey);
+    if (attached?.linkedDirectoryPaths?.length) return attached.linkedDirectoryPaths.slice(0, 4);
+    const summary = getDesktopBackendRegistry().getCachedThreadSummary(thread);
+    return resolveThreadPullRequestDirectoryPaths({
+      linkedDirectories: summary?.linkedDirectories ?? [],
+    }).slice(0, 4);
   }
 
   private getPrStatusWatchCoordinator(): PrStatusWatchCoordinator {
