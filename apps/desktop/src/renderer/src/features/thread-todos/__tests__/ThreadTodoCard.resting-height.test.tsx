@@ -110,7 +110,7 @@ it("approves the gate it shows only after the operator confirms, and keeps GitHu
   const refused = { ...todo, error: "GitHub returned HTTP 422: Reviewer is not allowed to approve" };
   view.rerender(<ThreadTodoCard {...props(refused)} onReviewCiDeployment={onReviewCiDeployment} />);
   expect(screen.getByRole("alert").textContent).toBe(refused.error);
-  expect(screen.getByRole("button", { name: "Retry approval" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Approve" })).toBeTruthy();
   view.rerender(<ThreadTodoCard {...props(refused)} running onReviewCiDeployment={onReviewCiDeployment} />);
   expect(screen.getByRole("status").textContent).toContain("Approving…");
 

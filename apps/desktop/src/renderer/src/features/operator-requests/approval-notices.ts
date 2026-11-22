@@ -237,7 +237,7 @@ function toCiApprovalNotice(
         ]
       : [
           { ...github, tone: "secondary" },
-          { label: refusal ? "Retry approval" : "Approve", tone: "primary", onClick: review.onConfirm },
+          { label: "Approve", tone: "primary", onClick: review.onConfirm },
         ],
     dismissLabel: "Hide notice. The reminder stays in To-dos.",
     dismissGroup: {

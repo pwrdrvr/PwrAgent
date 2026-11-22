@@ -424,8 +424,8 @@ endpoint only for a required-reviewer gate.
   no further card. Forge tools switched off, or **Approve and merge** set to
   Off, refuses the approval, and so does GitHub turned off in Settings → Git.
 - **Refusals.** A refusal from the owner or GitHub stays on the card as its
-  error, and the notice shows it. The card stays open, with **Retry
-  approval**. A request that no longer matches the card is refused before
+  error, and the notice shows it. The card stays open, and **Approve**
+  tries again. A request that no longer matches the card is refused before
   GitHub is asked, and the surface that sent it says so.
 - **Reconciliation.** While an approval card is open, its owner keeps reading
   the run on the CI-wait schedule and gate. The card is marked done when the

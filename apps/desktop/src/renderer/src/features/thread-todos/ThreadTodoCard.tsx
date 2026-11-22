@@ -922,7 +922,8 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
                     onClick={() => setConfirmingApproval(approval)}
                   >
                     <CheckIcon size={12} />
-                    {todo.error ? "Retry approval" : ciApprovals.length === 1 ? "Approve" : `Approve run #${approval.runId}`}
+                    {/* A refusal shows above; "Retry approval" would wrap the 340px footer. */}
+                    {ciApprovals.length === 1 ? "Approve" : `Approve run #${approval.runId}`}
                   </button>
                 ) : null}
               </Fragment>

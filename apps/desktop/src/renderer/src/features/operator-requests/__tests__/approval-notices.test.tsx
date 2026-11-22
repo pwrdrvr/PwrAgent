@@ -232,7 +232,7 @@ describe("approval notice cards", () => {
       const refused = { ...reviewable, error: "GitHub returned HTTP 422: Reviewer is not allowed to approve" };
       rerender(<Harness initialWaits={[]} ciApprovalTodos={[refused]} reviewCiDeployment={review} />);
       expect(screen.getByText(refused.error)).toBeInTheDocument();
-      fireEvent.click(screen.getByRole("button", { name: "Retry approval" }));
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
       fireEvent.click(screen.getByRole("button", { name: "Approve" }));
       expect(await screen.findByText("Could not approve: This card's deployment gate changed after you saw it. Review it again."))
         .toBeInTheDocument();
