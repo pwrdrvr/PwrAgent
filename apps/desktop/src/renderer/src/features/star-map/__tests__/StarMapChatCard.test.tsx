@@ -587,6 +587,43 @@ describe("StarMapChatCard gesture persistence", () => {
 });
 
 describe("StarMapChatCard transcript loading", () => {
+  it("keeps a peer's approval pending until the owning instance accepts the response", async () => {
+    const thread = remoteThread();
+    const request = { threadId: thread.id, turnId: "turn-1", requestId: "approval-1" };
+    const response = { backend: "codex" as const, ...request };
+    const submitServerRequest = vi.fn<NonNullable<DesktopApi["submitServerRequest"]>>()
+      .mockRejectedValueOnce(new Error("Pending request control denied"))
+      .mockResolvedValueOnce(response);
+    const desktopApi = buildApi({
+      readThread: vi.fn(async (): Promise<AppServerReadThreadResponse> => ({
+        ...response,
+        fetchedAt: 1,
+        replay: { entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false } },
+        pendingRequest: {
+          method: "item/commandExecution/requestApproval",
+          params: { ...request, command: "ls demo" },
+        },
+      })),
+      submitServerRequest,
+    });
+    renderCard({ desktopApi, thread });
+
+    const approval = await screen.findByRole("group", { name: "Pending approval" });
+    const approve = within(approval).getByRole("button", { name: "Approve once" });
+    fireEvent.click(approve);
+    await screen.findByText("Pending request control denied");
+    expect(approval.isConnected).toBe(true);
+    expect(submitServerRequest).toHaveBeenCalledExactlyOnceWith({
+      ...response,
+      federationTarget: thread.federation?.ref.target,
+      response: { decision: "accept" },
+    });
+
+    fireEvent.click(approve);
+    await waitFor(() => expect(approval.isConnected).toBe(false));
+    expect(submitServerRequest).toHaveBeenCalledTimes(2);
+  });
+
   it.each([true, false])("reads a restored remote card once during Strict Mode mount replay (subscriptions: %s)", async (subscriptions) => {
     const restoredThread = (updatedAt = 1): NavigationThreadSummary => {
       const thread = remoteThread({ updatedAt });
