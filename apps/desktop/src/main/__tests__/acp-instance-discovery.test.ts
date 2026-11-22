@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AcpAgentInstance, AcpRejectedAgentInstance } from "@pwragent/shared/contracts/backend";
-import type { LocalAcpDiscoveryOptions } from "@pwrdrvr/agent-acp/discovery";
+import { discoverLocalAcpAgentInstances, type LocalAcpDiscoveryOptions } from "@pwrdrvr/agent-acp/discovery";
 import { resolveActiveAcpInstance } from "../acp/acp-instance-resolver";
 import {
   discoverAcpAgentInstances,
@@ -267,6 +267,38 @@ describe("discoverAcpAgentInstances", () => {
 });
 
 describe("discoverLocalAcpAgentRecords", () => {
+  it("uses the official Antigravity ACP subcommand and excludes a pre-ACP install", async () => {
+    const older = "/fixtures/old/agy";
+    const current = "/fixtures/current/agy";
+    const [record] = await discoverLocalAcpAgentRecords({
+      enabledRegistryIds: ["antigravity"],
+      bundledGrokCommand: null,
+      fallbackRootDir: "/fixtures/empty",
+      listExecutables: (command) => command === "agy" ? [older, current] : [],
+      discover: async (options) => await discoverLocalAcpAgentInstances({
+        ...options,
+        probe: async (command, args) => {
+          if (args.join(" ") === "--version") {
+            return { stdout: command === current ? "1.5.14" : "1.4.12" };
+          }
+          expect(args).toEqual(["acp", "--help"]);
+          return {
+            stdout: command === current
+              ? "Usage: antigravity acp [flags]\n\nStart the Agent Client Protocol (ACP) stdio server"
+              : "Usage: antigravity [flags]",
+          };
+        },
+      }),
+    });
+    expect(record).toMatchObject({
+      backendId: "acp:antigravity",
+      installStatus: "installed",
+      activeCommand: current,
+      launchDescriptor: { command: current, args: ["acp", "--process-per-session"] },
+      rejectedInstances: [{ command: older, reason: "acp-help-mismatch" }],
+    });
+  });
+
   it("distinguishes the legacy Python CLI from current Kimi Code output", () => {
     expect(
       isLegacyPythonKimiCli({

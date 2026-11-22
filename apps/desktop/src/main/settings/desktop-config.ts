@@ -120,6 +120,7 @@ import {
 import { DEFAULT_PASTED_IMAGE_MAX_PATCHES } from "../../shared/image-normalization";
 import { resolveActiveProfilePath } from "../profile";
 import {
+  ACP_AGENTS_ANTIGRAVITY_CLI_PATH_ENV,
   ACP_AGENTS_GEMINI_CLI_PATH_ENV,
   ACP_AGENTS_GROK_CLI_PATH_ENV,
   ACP_AGENTS_KIMI_CLI_PATH_ENV,
@@ -396,6 +397,10 @@ export type DesktopSettingsConfig = {
     };
   };
   acpAgents?: {
+    antigravity?: {
+      cliPath?: string;
+      enabled?: boolean;
+    };
     gemini?: {
       cliPath?: string;
       enabled?: boolean;
@@ -556,6 +561,7 @@ export function readDesktopSettingsConfig(
 }
 
 const ACP_CLI_PATH_ENV_BY_ID: Record<string, string> = {
+  antigravity: ACP_AGENTS_ANTIGRAVITY_CLI_PATH_ENV,
   gemini: ACP_AGENTS_GEMINI_CLI_PATH_ENV,
   grok: ACP_AGENTS_GROK_CLI_PATH_ENV,
   kimi: ACP_AGENTS_KIMI_CLI_PATH_ENV,
@@ -2262,6 +2268,12 @@ export function desktopSettingsPatchToEdits(
       });
     }
   }
+  if (patch.acpAgents?.antigravity?.cliPath !== undefined) {
+    set(["acp_agents", "antigravity", "cli_path"], patch.acpAgents.antigravity.cliPath);
+  }
+  if (patch.acpAgents?.antigravity?.enabled !== undefined) {
+    set(["acp_agents", "antigravity", "enabled"], patch.acpAgents.antigravity.enabled);
+  }
   if (patch.acpAgents?.gemini?.cliPath !== undefined) {
     set(["acp_agents", "gemini", "cli_path"], patch.acpAgents.gemini.cliPath);
   }
@@ -2520,6 +2532,7 @@ function normalizeDesktopConfig(
   const codexAppServerRecycle = tables["models.codex.app_server_recycle"];
   const decision = tables["models.decision"];
   const openaiDecisions = tables["models.openai_decisions"];
+  const acpAgentsAntigravity = tables["acp_agents.antigravity"];
   const acpAgentsGemini = tables["acp_agents.gemini"];
   const acpAgentsGrok = tables["acp_agents.grok"];
   const acpAgentsKimi = tables["acp_agents.kimi"];
@@ -2959,6 +2972,10 @@ function normalizeDesktopConfig(
       },
     },
     acpAgents: {
+      antigravity: {
+        cliPath: readString(acpAgentsAntigravity?.cli_path),
+        enabled: readBoolean(acpAgentsAntigravity?.enabled),
+      },
       gemini: {
         cliPath: readString(acpAgentsGemini?.cli_path),
         enabled: readBoolean(acpAgentsGemini?.enabled),
@@ -3392,17 +3409,22 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     };
   }
 
+  const acpAgentsAntigravity = config.acpAgents?.antigravity;
   const acpAgentsGemini = config.acpAgents?.gemini;
   const acpAgentsGrok = config.acpAgents?.grok;
   const acpAgentsKimi = config.acpAgents?.kimi;
   const acpAgentsQwen = config.acpAgents?.qwen;
   if (
+    (acpAgentsAntigravity && hasDefinedValue(acpAgentsAntigravity)) ||
     (acpAgentsGemini && hasDefinedValue(acpAgentsGemini)) ||
     (acpAgentsGrok && hasDefinedValue(acpAgentsGrok)) ||
     (acpAgentsKimi && hasDefinedValue(acpAgentsKimi)) ||
     (acpAgentsQwen && hasDefinedValue(acpAgentsQwen))
   ) {
     pruned.acpAgents = {
+      ...(acpAgentsAntigravity && hasDefinedValue(acpAgentsAntigravity)
+        ? { antigravity: acpAgentsAntigravity }
+        : {}),
       ...(acpAgentsGemini && hasDefinedValue(acpAgentsGemini)
         ? { gemini: acpAgentsGemini }
         : {}),

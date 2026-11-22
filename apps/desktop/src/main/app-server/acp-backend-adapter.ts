@@ -122,7 +122,8 @@ import {
   ensureAcpRuntimeDiscoveryWorkspace,
   refreshAcpRuntimeCapabilities,
 } from "../acp/acp-capability-probe";
-import { geminiConsumerDeprecationMessage } from "../acp/acp-discovery-error";
+import { acpDiscoveryActionRequiredMessage } from "../acp/acp-discovery-error";
+import { ACP_LOCAL_AGENT_STRATEGIES } from "../acp/acp-local-strategies";
 import {
   checkGrokCliUpdate,
   grokUpdateChecksDisabled,
@@ -219,13 +220,12 @@ export function createLocalAcpAgentDiscovery(params: {
     // (same as the settings path), so the binary that launches is the
     // resolved active install (override → picked → first) and every agent's
     // cliPath override is honored — consistent with what Settings shows.
-    // Read + parse the config once for all four agents (override + enabled),
-    // not once per lookup.
+    // Read and parse provider settings once for discovery.
     const providers = params.configStore.read("providers");
     const preferences: Record<string, AcpAgentPreference> = {};
-    const enabledRegistryIds = ["gemini", "grok", "kimi", "qwen"].filter(
-      (registryId) => acpProviderEnabledFromSnapshot(providers, registryId),
-    );
+    const enabledRegistryIds = ACP_LOCAL_AGENT_STRATEGIES
+      .map((strategy) => strategy.id)
+      .filter((registryId) => acpProviderEnabledFromSnapshot(providers, registryId));
     for (const registryId of enabledRegistryIds) {
       const override = acpProviderCommandOverrideFromSnapshot(
         providers,
@@ -495,15 +495,15 @@ export function describeInstalledAcpBackend(
   agent: AcpInstalledAgentRecord,
 ): BackendSummary {
   const runtimeCapabilities = acpRuntimeCapabilitiesForAgent(agent);
-  const deprecation = geminiConsumerDeprecationMessage(agent.registryId, agent.lastDiscoveryError);
+  const actionRequired = acpDiscoveryActionRequiredMessage(agent.registryId, agent.lastDiscoveryError);
   const available =
     agent.installStatus === "installed"
     && (agent.authStatus === "not-required" || agent.authStatus === "authenticated")
-    && deprecation === undefined;
+    && actionRequired === undefined;
   const unavailableReason =
     available
       ? undefined
-      : deprecation ?? agent.lastError ??
+      : actionRequired ?? agent.lastError ??
         (agent.authStatus === "required"
           ? "ACP agent authentication required"
           : "ACP agent unavailable");

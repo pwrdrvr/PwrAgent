@@ -31,7 +31,7 @@ import { SetupMark, type SetupMarkId } from "./SetupMark";
 
 /** An ACP agent PwrAgent supports: one per key of the settings contract's
  *  `acpAgents`. */
-type AcpAgentId = keyof DesktopSettingsSnapshot["acpAgents"];
+type AcpAgentId = Exclude<keyof DesktopSettingsSnapshot["acpAgents"], "antigravity">;
 
 export type AgentBackendId = "codex" | AcpAgentId;
 
@@ -109,11 +109,8 @@ const CODEX_BACKEND: AgentBackendDefinition = {
 };
 
 /**
- * The ACP agents, keyed by the settings contract's `acpAgents`. That
- * contract lists every ACP agent PwrAgent supports, and main discovers
- * exactly those, so the guided flow covers each by construction: an agent
- * added there fails typecheck here until it has its install copy, and its
- * tab follows. Key order is tab order.
+ * The ACP agents offered in guided setup. Antigravity is configured in
+ * AI Providers. Key order is tab order.
  */
 const ACP_AGENT_BACKENDS: Record<AcpAgentId, AgentBackendDefinition> = {
   gemini: {

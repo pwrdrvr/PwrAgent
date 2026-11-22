@@ -418,7 +418,7 @@ async function openProfileAndQuitBootstrap(
    Agents
    ---------------------------------------------------------------- */
 
-type AcpAgentId = keyof DesktopSettingsSnapshot["acpAgents"];
+type AcpAgentId = Exclude<keyof DesktopSettingsSnapshot["acpAgents"], "antigravity">;
 type AgentId = "codex" | "claude" | AcpAgentId;
 type DesktopPlatform = "darwin" | "win32" | "linux";
 type InstallCommand = { label: string; command: string };

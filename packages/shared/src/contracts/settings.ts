@@ -1715,6 +1715,10 @@ export type DesktopSettingsSnapshot = {
     };
   };
   acpAgents: {
+    antigravity: {
+      cliPath: DesktopSettingsValue<string>;
+      enabled: boolean;
+    };
     gemini: {
       /**
        * Optional override for the Gemini CLI executable path. When empty,
@@ -2082,6 +2086,10 @@ export type DesktopSettingsConfigPatch = {
     };
   };
   acpAgents?: {
+    antigravity?: {
+      cliPath?: string;
+      enabled?: boolean;
+    };
     gemini?: {
       cliPath?: string;
       enabled?: boolean;
