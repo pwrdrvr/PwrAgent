@@ -61,6 +61,7 @@ import {
   selectStaleWorktreeWorkingStatePaths,
 } from "../app-server/thread-working-state-refresh-policy";
 import { expectPendingWakeReadBudget } from "./fixtures/pending-wake-read-budget";
+import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
 import { resolvePwragentRoot } from "../profile";
 import type { DirectoryGitStatusEntry } from "../app-server/git-directory-service";
 
@@ -2487,6 +2488,7 @@ describe("app server ipc", () => {
   });
 
   it.each([20, 40])("validates only demanded PR rows from a mounted query over %i stored checkouts", async (size) => {
+    onTestFinished(isolateProcessGitEnvironment());
     const { startAppServerOwnerNavigation } = await import("../shell/ipc/app-server");
     const { getDesktopOverlayStore } = await import("../storage/desktop-overlay-store");
     const git = await import("../app-server/git-executable");
@@ -2494,9 +2496,11 @@ describe("app server ipc", () => {
     let defaultBranch = "main";
     const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
     const runner = vi.spyOn(git, "runGitCommand").mockImplementation(async (cwd, args) => {
-      if (cwd.endsWith("-1")) throw new Error("checkout unavailable");
-      return { stdout: args[0] === "symbolic-ref" ? `origin/${defaultBranch}\n`
-        : args.length === 1 ? "origin\n" : "https://github.com/fixture/project.git\n", stderr: "" };
+      if (cwd.endsWith("-1")) return { stdout: "", stderr: "" };
+      const stdout = args[0] === "symbolic-ref" ? `origin/${defaultBranch}\n`
+        : args[0] === "remote" ? "origin\n"
+        : ["local", "remote.origin.url\nhttps://github.com/fixture/project.git", ""].join("\0");
+      return { stdout, stderr: "" };
     });
     onTestFinished(() => { runner.mockRestore(); clock.mockRestore(); });
     const root = `page-budget-${size}-${now}`;
@@ -2530,7 +2534,7 @@ describe("app server ipc", () => {
     const first = await read(exact(0));
     expect(first.entries[0]?.row.prs ?? []).toEqual([]);
     expect(readNavigationPullRequests).toHaveBeenCalledExactlyOnceWith([{ backend: "codex", threadId: "page-0" }]);
-    expect(runner.mock.calls.map(([cwd]) => cwd)).toEqual(Array(4).fill(`${root}-0`));
+    expect(runner.mock.calls.map(([cwd]) => cwd)).toEqual(Array(2).fill(`${root}-0`));
     expect((await read(exact(0), first)).unchanged).toBe(true);
     const missing = await read(exact(1));
     expect(missing.entries[0]?.row.prs?.[0]?.number).toBe(2);
@@ -2542,7 +2546,7 @@ describe("app server ipc", () => {
     expect(refreshed.entries[0]?.row.prs?.[0]?.number).toBe(1);
     expect(refreshed.countsRevision).not.toBe(first.countsRevision);
     expect(runner.mock.calls.map(([cwd]) => cwd)).toEqual([
-      ...Array(4).fill(`${root}-0`), `${root}-1`, `${root}-0`, `${root}-0`,
+      ...Array(2).fill(`${root}-0`), `${root}-1`, `${root}-0`, `${root}-0`,
     ]);
 
     getStartupProviderRefreshStatus.mockReturnValue({ state: "ready" });
@@ -2550,7 +2554,7 @@ describe("app server ipc", () => {
     expect(syncThreadPrAutoDispatchCandidatesBatch.mock.lastCall?.[0].threads).toEqual(rows.map((row) => ({
       backend: row.source, threadId: row.id, prKeys: [buildPullRequestStatusKey(row.prs[0]!)],
     })));
-    expect(runner.mock.calls).toHaveLength(7 + 4 * (size - 2));
+    expect(runner.mock.calls).toHaveLength(5 + 2 * (size - 2));
   });
 
   it.each([12, 24])("probes only PR-bearing checkouts when a thread starts in an inventory of %i worktrees", async (size) => {
@@ -2560,7 +2564,9 @@ describe("app server ipc", () => {
     const { resolveGitHubRepoForDirectory: readOrigin, clearGitHubRemoteCache } =
       await vi.importActual<typeof import("../pr-status/git-remote")>("../pr-status/git-remote");
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-owner-git-budget-"));
+    const restoreGitEnv = isolateProcessGitEnvironment(root);
     onTestFinished(async () => {
+      restoreGitEnv();
       clearGitHubRemoteCache();
       await rm(root, { recursive: true, force: true });
     });
@@ -2605,13 +2611,13 @@ describe("app server ipc", () => {
     );
     const remoteCommands = runGit.mock.calls.filter(([, , options]) => options?.purpose === "pr-remotes");
     expect({ checkouts: resolveGitHubRepoForDirectory.mock.calls.length, gitCalls: remoteCommands.length })
-      .toEqual({ checkouts: 2, gitCalls: 4 });
+      .toEqual({ checkouts: 2, gitCalls: 2 });
     expect(resolveGitHubRepoForDirectory.mock.calls).toEqual([
       [checkouts[0]], [checkouts[1]],
     ]);
     for (const cwd of checkouts.slice(0, 2)) {
-      expect(remoteCommands.filter(([path]) => path === cwd).map(([, args]) => args))
-        .toEqual([["remote"], ["remote", "get-url", "--all", "origin"]]);
+      expect(remoteCommands.filter(([path]) => path === cwd).map(([, args]) => args[0]))
+        .toEqual(["config"]);
     }
   });
 

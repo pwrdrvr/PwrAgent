@@ -4,10 +4,12 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
+import { parseGitRemoteConfiguration, type GitRemote, type GitRemoteConfiguration } from "./git-remote-config";
 import { runPrMetadataGit, runPrMetadataProcess, SharedPrMetadataRead, type PrMetadataDemand } from "./pr-metadata-process";
 
 const execFileAsync = promisify(execFile);
 const GIT_REMOTE_TIMEOUT_MS = 2_000;
+const REMOTE_CONFIG_KEYS = "^remote\\.|^url\\..*\\.(push)?insteadof$|^branch\\..*\\.(remote|pushremote|merge)$";
 /** Remotes change infrequently; re-probing on every PR refresh is wasted work. */
 const REMOTE_CACHE_TTL_MS = 5 * 60_000;
 
@@ -93,10 +95,7 @@ function parseStandardUrl(url: string): { host: string; path: string } | undefin
   }
 }
 
-export type GitRemote = {
-  name: string;
-  url: string;
-};
+export type { GitRemote } from "./git-remote-config";
 
 type ParsedGitRemote = GitRemote & {
   repo: GitHubRepoRef | undefined;
@@ -104,11 +103,12 @@ type ParsedGitRemote = GitRemote & {
 
 type RemoteCacheEntry = {
   value: ParsedGitRemote[];
+  names?: string[];
   fetchedAt: number;
 };
 
 const remoteCache = new Map<string, RemoteCacheEntry>();
-const remoteLookups = new Map<string, SharedPrMetadataRead<ParsedGitRemote[]>>();
+const remoteLookups = new Map<string, SharedPrMetadataRead<RemoteCacheEntry>>();
 type SshResolver = (host: string, demand?: PrMetadataDemand) => Promise<string | undefined>;
 // Share only running OpenSSH evaluations. A completed evaluation belongs to
 // its directory's existing TTL; a new probe must evaluate Include/Match again.
@@ -142,8 +142,8 @@ export async function resolveGitHubRepoForDirectory(
   cwd: string,
   options: ResolveGitHubRepoOptions = {},
 ): Promise<GitHubRepoRef | undefined> {
-  const remotes = await readParsedGitRemotes(cwd, options);
-  return remotes.find((remote) => remote.name === "origin")?.repo;
+  const observation = await readParsedGitRemotes(cwd, options);
+  return observation.value.find((remote) => remote.name === "origin")?.repo;
 }
 
 /**
@@ -182,8 +182,18 @@ export async function resolveForgeReposForDirectory(
   kind?: ForgeKind,
   options: ResolveGitHubRepoOptions = {},
 ): Promise<GitHubRepoRef[]> {
+  return (await observeForgeRepositoriesForDirectory(cwd, kind, options)).repos;
+}
+
+export async function observeForgeRepositoriesForDirectory(
+  cwd: string,
+  kind?: ForgeKind,
+  options: ResolveGitHubRepoOptions = {},
+): Promise<{ repos: GitHubRepoRef[]; refreshedRemoteNames?: string[] }> {
+  const previous = remoteCache.get(cwd);
+  const observation = await readParsedGitRemotes(cwd, options);
   const repos = new Map<string, GitHubRepoRef>();
-  for (const { repo } of await readParsedGitRemotes(cwd, options)) {
+  for (const { repo } of observation.value) {
     if (!repo) continue;
     const matched = forgeKindForRemoteHost(repo.host);
     if (!matched || (kind !== undefined && matched !== kind)) continue;
@@ -191,23 +201,25 @@ export async function resolveForgeReposForDirectory(
     const key = `${repo.host}/${repo.owner}/${repo.repo}`.toLowerCase();
     if (!repos.has(key)) repos.set(key, repo);
   }
-  return [...repos.values()];
+  // Default-branch reads can reuse names sampled by this lookup, while an
+  // older identity cache hit must not extend their separate freshness window.
+  return { repos: [...repos.values()], refreshedRemoteNames: observation === previous ? undefined : observation.names };
 }
 
 /** Unclassified hosts require explicit product evidence from the caller. */
 export async function readForgeRepositoryRemotes(cwd: string): Promise<GitHubRepoRef[]> {
-  return (await readParsedGitRemotes(cwd, {})).flatMap(({ repo }) => repo ? [repo] : []);
+  return (await readParsedGitRemotes(cwd, {})).value.flatMap(({ repo }) => repo ? [repo] : []);
 }
 
 async function readParsedGitRemotes(
   cwd: string,
   options: ResolveGitHubRepoOptions,
-): Promise<ParsedGitRemote[]> {
+): Promise<RemoteCacheEntry> {
   options.demand?.signal?.throwIfAborted();
   const now = options.now ?? (() => Date.now());
   const cached = remoteCache.get(cwd);
   if (cached && now() - cached.fetchedAt < REMOTE_CACHE_TTL_MS) {
-    return cached.value;
+    return cached;
   }
 
   const existing = remoteLookups.get(cwd);
@@ -217,10 +229,11 @@ async function readParsedGitRemotes(
 
   const pending = new SharedPrMetadataRead(async (demand) => {
     try {
-      const value = await loadParsedGitRemotes(cwd, options, demand);
+      const loaded = await loadParsedGitRemotes(cwd, options, demand);
       demand.signal?.throwIfAborted();
-      if (remoteLookups.get(cwd) === pending) remoteCache.set(cwd, { value, fetchedAt: now() });
-      return value;
+      const observation = { ...loaded, fetchedAt: now() };
+      if (remoteLookups.get(cwd) === pending) remoteCache.set(cwd, observation);
+      return observation;
     } finally {
       if (remoteLookups.get(cwd) === pending) remoteLookups.delete(cwd);
     }
@@ -233,15 +246,17 @@ async function loadParsedGitRemotes(
   cwd: string,
   options: ResolveGitHubRepoOptions,
   demand: PrMetadataDemand,
-): Promise<ParsedGitRemote[]> {
+): Promise<Omit<RemoteCacheEntry, "fetchedAt">> {
   const resolveSshHostname =
     options.resolveSshHostname ?? defaultResolveSshHostname;
   // Also retain resolved values within this probe, including negative answers.
   const localSshLookups = new Map<string, Promise<string | undefined>>();
   try {
     demand.signal?.throwIfAborted();
-    const remotes = await (options.readRemotes ? options.readRemotes(cwd) : defaultReadRemotes(cwd, demand));
-    return await Promise.all(
+    const { names, remotes } = options.readRemotes
+      ? { names: undefined, remotes: await options.readRemotes(cwd) }
+      : await defaultReadRemotes(cwd, demand);
+    const value = await Promise.all(
       remotes.map(async (remote) => {
         const repo = parseForgeRemote(remote.url);
         const sshHost = readSshHost(remote.url);
@@ -262,10 +277,11 @@ async function loadParsedGitRemotes(
         };
       }),
     );
+    return { names, value };
   } catch {
     demand.signal?.throwIfAborted();
     // Preserve the bounded negative cache, including non-git directories.
-    return [];
+    return { value: [] };
   }
 }
 
@@ -290,14 +306,32 @@ function resolveSshHostInFlight(host: string, resolve: SshResolver, demand: PrMe
   return pending.read(demand);
 }
 
-async function defaultReadRemotes(cwd: string, demand: PrMetadataDemand): Promise<GitRemote[]> {
+async function defaultReadRemotes(cwd: string, demand: PrMetadataDemand): Promise<GitRemoteConfiguration> {
   const childEnv = buildPwrAgentChildProcessEnv(process.env);
-  const { stdout } = await runPrMetadataGit(cwd, ["remote"], {
-    purpose: "pr-remotes",
+  const gitOptions = {
+    purpose: "pr-remotes" as const,
     env: childEnv,
     maxBuffer: 64 * 1024,
     timeout: GIT_REMOTE_TIMEOUT_MS,
-  }, demand);
+  };
+  // GIT_CONFIG affects the config subcommand, while remote reads the standard
+  // hierarchy. Keep the original Git commands in this case and for unusual
+  // configuration. `remote --verbose` prints only the first fetch URL.
+  if (!Object.keys(childEnv).some((key) => key.toUpperCase() === "GIT_CONFIG")) {
+    try {
+      const { stdout } = await runPrMetadataGit(cwd,
+        ["config", "--null", "--show-scope", "--includes", "--get-regexp", REMOTE_CONFIG_KEYS], gitOptions, demand);
+      const configuration = parseGitRemoteConfiguration(stdout);
+      if (configuration) return configuration;
+    } catch (error) {
+      demand.signal?.throwIfAborted();
+      // `config --get-regexp` exits 1 when no key matches.
+      const result = error as { code?: number; stdout?: string; stderr?: string };
+      if (result.code === 1 && result.stdout === "" && result.stderr === "") return { names: [], remotes: [] };
+    }
+  }
+
+  const { stdout } = await runPrMetadataGit(cwd, ["remote"], gitOptions, demand);
   const names = uniqueNonEmptyLines(stdout);
   const entries = await Promise.all(
     names.map(async (name): Promise<GitRemote[]> => {
@@ -305,12 +339,7 @@ async function defaultReadRemotes(cwd: string, demand: PrMetadataDemand): Promis
         const result = await runPrMetadataGit(
           cwd,
           ["remote", "get-url", "--all", name],
-          {
-            purpose: "pr-remotes",
-            env: childEnv,
-            maxBuffer: 64 * 1024,
-            timeout: GIT_REMOTE_TIMEOUT_MS,
-          }, demand,
+          gitOptions, demand,
         );
         return uniqueNonEmptyLines(result.stdout).map((url) => ({ name, url }));
       } catch {
@@ -318,7 +347,7 @@ async function defaultReadRemotes(cwd: string, demand: PrMetadataDemand): Promis
       }
     }),
   );
-  return entries.flat();
+  return { names, remotes: entries.flat() };
 }
 
 function uniqueNonEmptyLines(value: string): string[] {
