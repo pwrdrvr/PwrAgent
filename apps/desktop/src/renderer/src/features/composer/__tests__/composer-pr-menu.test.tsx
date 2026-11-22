@@ -8,7 +8,8 @@ import type {
   ThreadDependency,
 } from "@pwragent/shared/contracts/thread-dependencies";
 import type { DesktopApi } from "../../../lib/desktop-api";
-import { ComposerPrMenu, describeMergeBuildWatch, mergeBuildPullRequestUrl } from "../ComposerPrMenu";
+import { ComposerPrMenu } from "../ComposerPrMenu";
+import { describeMergeBuildWatch, mergeBuildPullRequestUrl } from "../../pr-watches/merge-build-watches";
 
 const PR_URL = "https://github.com/example/app/pull/41";
 

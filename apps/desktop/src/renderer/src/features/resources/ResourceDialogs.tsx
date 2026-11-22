@@ -4,6 +4,8 @@ import type {
   ResourceCheckoutActionRequest,
   ResourceCheckoutActionResult,
   ResourceDomain,
+  ResourceRecoveryActionGates,
+  ResourceRecoveryStatus,
   ResourceScope,
 } from "@pwragent/shared/contracts/resource-checkouts";
 import { useModalDialog } from "../../lib/useModalDialog";
@@ -124,9 +126,11 @@ export function RequestCheckoutDialog(props: {
   const [purpose, setPurpose] = useState("");
   const [duration, setDuration] = useState(durations[Math.min(1, durations.length - 1)]);
   const { busy, problem, send } = useDialogSubmit(props.submit, props.onClose);
-  const [unitCount, setUnitCount] = useState("1");
-  const units = Number(unitCount);
   const counted = resource.sharing.mode === "counted" ? resource.sharing : undefined;
+  const machinePool = !!counted && resource.placement === "machine";
+  const [slotMode, setSlotMode] = useState<"all" | "partial">(machinePool ? "all" : "partial");
+  const [unitCount, setUnitCount] = useState("1");
+  const units = slotMode === "all" ? counted!.capacity : Number(unitCount);
   const validUnits = !counted || (Number.isSafeInteger(units) && units > 0 && units <= counted.capacity);
   const holder = resource.allocations[0];
   const waits = props.action.waits === true || resource.queue.length > 0
@@ -155,7 +159,7 @@ export function RequestCheckoutDialog(props: {
               resourceId: resource.resourceId,
               purpose: purpose.trim(),
               expectedDurationMs: duration,
-              ...(counted ? { units } : {}),
+              ...(counted && slotMode === "partial" ? { units } : {}),
             }))}
           >
             {busy ? "Sending…" : problem?.unknown ? "Send again" : actionLabel}
@@ -177,11 +181,27 @@ export function RequestCheckoutDialog(props: {
       </label>
       {counted ? (
         <div className="resources-field">
-          <label htmlFor="resources-request-units">Units</label>
-          <input id="resources-request-units" aria-describedby="resources-request-unit-capacity"
-            className="settings-input resources-input" type="number" min={1} max={counted.capacity}
-            value={unitCount} onChange={(event) => setUnitCount(event.target.value)} disabled={busy || problem?.unknown} />
-          <small id="resources-request-unit-capacity">{Math.max(0, counted.capacity - counted.inUse)} of {counted.capacity} units free.</small>
+          {machinePool && counted.capacity > 1 ? (
+            <SegmentedControl
+              label="CPU reservation"
+              options={[{ label: "All CPU slots", value: "all" }, { label: "Choose slots", value: "partial" }]}
+              value={slotMode}
+              onChange={setSlotMode}
+              disabled={busy || problem?.unknown}
+            />
+          ) : null}
+          {slotMode === "partial" ? (
+            <>
+              <label htmlFor="resources-request-units">{machinePool ? "CPU slots" : "Units"}</label>
+              <input id="resources-request-units" aria-describedby="resources-request-unit-capacity"
+                className="settings-input resources-input" type="number" min={1} max={counted.capacity}
+                value={unitCount} onChange={(event) => setUnitCount(event.target.value)} disabled={busy || problem?.unknown} />
+            </>
+          ) : null}
+          <small id="resources-request-unit-capacity">
+            {Math.max(0, counted.capacity - counted.inUse)} of {counted.capacity} {machinePool ? "CPU slots" : "units"} free.
+            {slotMode === "all" ? " Reserves the whole machine pool." : ""}
+          </small>
         </div>
       ) : null}
       <div className="resources-field">
@@ -258,19 +278,15 @@ export function ReleaseDialog(props: {
 
 export function RecoveryDialog(props: {
   resource: ResourceDomain;
-  actions: ResourceActionDescriptor[];
+  recovery: ResourceRecoveryStatus | undefined;
+  actions: ResourceRecoveryActionGates;
   submit: SubmitResourceAction;
   onClose: () => void;
 }): ReactElement {
-  const { resource } = props;
-  const recovery = resource.recovery;
+  const { resource, recovery } = props;
   const [note, setNote] = useState("");
   const { busy, problem, send } = useDialogSubmit(props.submit, () => undefined);
-  const gateFor = (kind: string): ResourceActionGate | undefined =>
-    props.actions.find((action) => action.kind === kind)?.gate;
-  const fenceGate = gateFor("fence");
-  const verifyGate = gateFor("verify_cleanup");
-  const adminGate = gateFor("administrative_release");
+  const { fence: fenceGate, verify_cleanup: verifyGate, administrative_release: adminGate } = props.actions;
   const noteGate: ResourceActionGate | undefined = adminGate?.allowed && note.trim() === ""
     ? { allowed: false, reason: "policy", detail: "Write an audit note first." }
     : adminGate;
@@ -285,7 +301,7 @@ export function RecoveryDialog(props: {
     <ResourceDialog
       wide
       busy={busy}
-      lede="Prove the old grant can't act before the resource is handed on."
+      lede="Verify that this allocation can no longer act before releasing its slots."
       problem={problem}
       title={`Recover ${resource.displayName}`}
       titleId="resources-recover-title"
@@ -312,7 +328,9 @@ export function RecoveryDialog(props: {
                 <ResourceActionButton busy={busy} gate={recovery.fencing === "verified" ? { allowed: false, reason: "not_applicable", detail: "Fencing is already verified." } : fenceGate} onClick={() => grantScoped("fence")}>
                   Fence old workload
                 </ResourceActionButton>
-                <small>Cancels the old grant's commands and retires its stop guard. Rejected if a newer grant exists.</small>
+                <small>{resource.placement === "machine"
+                  ? "Checks that this allocation's recorded process group is gone."
+                  : "Checks that commands and stop guards from this allocation can no longer act."}</small>
               </li>
             ) : null}
             {verifyGate ? (
@@ -320,7 +338,7 @@ export function RecoveryDialog(props: {
                 <ResourceActionButton busy={busy} emphasis="primary" gate={verifyGate} onClick={() => grantScoped("verify_cleanup")}>
                   Verify cleanup and release
                 </ResourceActionButton>
-                <small>Runs the declared cleanup, then wakes the next waiter.</small>
+                <small>Rechecks cleanup for this allocation. The queue waits until all recoveries are resolved.</small>
               </li>
             ) : null}
           </ol>
@@ -354,7 +372,7 @@ export function RecoveryDialog(props: {
           ) : null}
         </>
       ) : (
-        <p className="resources-note">Recovery is complete. This resource is back in normal service.</p>
+        <p className="resources-note">This allocation no longer needs recovery.</p>
       )}
     </ResourceDialog>
   );

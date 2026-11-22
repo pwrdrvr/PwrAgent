@@ -568,6 +568,8 @@
     "statements": 30
   },
   "live-thread-token-usage-timer-windows": {"commits": 10, "note": "10 cumulative live-usage observations separated by full one-second timer windows", "observedWalBytes": 589192, "rowsChanged": 21, "statements": 21},
+  "todo-managed-membership-legacy-move": {"commits": 1, "note": "Move one padded legacy child into the card table and read membership. Both indexes change in the existing migration commit. At 100 qualifying legacy moves/day, the measured 24,720 bytes per move is about 2.5 MB/day. The reads commit nothing.", "observedWalBytes": 24720, "rowsChanged": 1, "statements": 1},
+  "todo-managed-membership-reclaim-empty-search": {"commits": 1, "note": "Expiry sweep clears retired search postings once the last legacy parent migrates. The 10,000-child fixture costs about 0.033 MB on that cleanup day, with no repeated clear. Parent deletion and incremental vacuum are outside the measured transaction.", "observedWalBytes": 32992, "rowsChanged": 1, "statements": 17},
   "managed-relationship-delete-parent": {
     "commits": 1,
     "note": "1 thread deletions; autocommit; page frames separately bounded including trigger writes",

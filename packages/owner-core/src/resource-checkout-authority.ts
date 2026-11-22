@@ -161,7 +161,7 @@ function applyCheckout(
 export class ResourceCheckoutAuthority {
   constructor(private readonly store: CheckoutStore, private readonly now: () => number, private readonly newId: () => string) {}
 
-  ensure(definition: CheckoutDefinition): void {
+  ensure(definition: CheckoutDefinition, options?: { machineCpuPool: true }): void {
     this.store.change((tx) => {
       const record = tx.read(definition.resourceId);
       if (!record) {
@@ -170,7 +170,23 @@ export class ResourceCheckoutAuthority {
       }
       const saved = record.definition;
       if (saved.authorityId !== definition.authorityId || saved.epoch !== definition.epoch
-        || saved.canonicalKey !== definition.canonicalKey || saved.capacity !== definition.capacity) {
+        || saved.canonicalKey !== definition.canonicalKey) {
+        throw new Error("The durable definition conflicts with the configured authority or capacity.");
+      }
+      if (options?.machineCpuPool && saved.scope === "machine" && definition.scope === "machine"
+        && saved.publication === "published" && definition.revision === 2 && definition.counted) {
+        // The first profile to initialize the counted pool sets its capacity.
+        // Later CPU samples cannot resize a shared pool with live reservations.
+        if (saved.counted && saved.revision === definition.revision) return;
+        if (saved.revision === 1 && !saved.counted && saved.capacity === 1) {
+          // Preserve the earlier whole-machine holds, tokens and FIFO order.
+          for (const hold of [...record.grants, ...record.queue]) hold.units = definition.capacity;
+          record.definition = definition;
+          tx.save(record);
+          return;
+        }
+      }
+      if (saved.capacity !== definition.capacity) {
         throw new Error("The durable definition conflicts with the configured authority or capacity.");
       }
       if (definition.revision > saved.revision) {
@@ -265,7 +281,11 @@ export class ResourceCheckoutAuthority {
       if (!record || record.definition.publication !== "published") return undefined;
       const now = this.now();
       const changed = reconcile(record, now);
-      let grant = record.grants.find((entry) => executionOwner(entry).key === actor.key && entry.state === "granted" && !entry.job);
+      const candidates = record.grants.filter((entry) => executionOwner(entry).key === actor.key && entry.state === "granted" && !entry.job);
+      if (candidates.length > 1) {
+        throw new Error("Multiple idle machine reservations belong to this thread. Release the extra reservations before launching a managed job.");
+      }
+      let grant = candidates[0];
       const retainGrant = !!grant && retainExistingGrant;
       if (!grant && !record.grants.length && !record.queue.length) {
         record.queue.push({

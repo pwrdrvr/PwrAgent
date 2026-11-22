@@ -24,10 +24,15 @@ import {
   HistoryIcon,
   ServerIcon,
 } from "../../../icons";
+import type { ThreadDependency } from "@pwragent/shared/contracts/thread-dependencies";
 import {
   summarizeThreadPrWatches,
   ThreadPrWatchIndicatorsContext,
 } from "../../pr-watches/useThreadPrWatchIndicators";
+import {
+  summarizeThreadDependencies,
+  ThreadDependencyIndicatorsContext,
+} from "../../thread-dependencies/useThreadDependencyIndicators";
 import { DEFAULT_CONTEXT_TAB, isContextTabId, type ContextTabId } from "../context-panels/context-tab";
 import { collectEditedFileGroups } from "../edited-file-groups";
 import {
@@ -427,6 +432,31 @@ describe("ThreadContextPanel", () => {
     renderPanel();
     expect(screen.getByRole("tab", { name: "Pull requests" })
       .querySelector(".context-rail__activity--watches")).toBeNull();
+  });
+
+  it("counts a merge build watch, which the Pull requests card lists, on its tab", () => {
+    const condition = { backend: "codex" as const, threadId: "thread-1", when: "merge_build" as const, prUrl: "https://github.com/example/widgets/pull/41" };
+    const wait: ThreadDependency = {
+      id: "wait-1", backend: "codex", threadId: "thread-1", mode: "all", onFailure: "notify", status: "waiting",
+      wakeOn: "failure", automatic: true, conditions: [condition],
+      evidence: [{ condition, state: "waiting", reason: "PR merged; waiting for its merge build", observedAt: 1, prUrl: condition.prUrl }],
+      createdAt: 1, updatedAt: 1,
+    };
+    render(
+      <ThreadDependencyIndicatorsContext.Provider value={{ byThreadKey: summarizeThreadDependencies([wait]) }}>
+        <ThreadPrWatchIndicatorsContext.Provider value={{ byThreadKey: new Map() }}>
+          <ThreadContextPanel
+            activeTab="info"
+            backends={[baseBackend]}
+            pinned={false}
+            thread={baseThread}
+            onActiveTabChange={() => undefined}
+          />
+        </ThreadPrWatchIndicatorsContext.Provider>
+      </ThreadDependencyIndicatorsContext.Provider>,
+    );
+    expect(screen.getByRole("tab", { name: "Pull requests · 1 watch waking this thread" })
+      .querySelector(".context-rail__activity--watches")).toHaveTextContent("1");
   });
 
   it("wires the tabs to a labelled tabpanel when the rail is open", () => {

@@ -1,25 +1,40 @@
 import { MAX_CHECKOUT_RENEWALS } from "@pwragent/owner-core/resource-checkout-authority";
-import type { CheckoutActor, CheckoutDomainRecord } from "@pwragent/owner-core/resource-checkout-storage";
-import type { ResourceActionGates, ResourceAuthority, ResourceDomain } from "@pwragent/shared/contracts/resource-checkouts";
+import type { CheckoutActor, CheckoutDomainRecord, CheckoutGrant } from "@pwragent/owner-core/resource-checkout-storage";
+import type { ResourceActionGates, ResourceAuthority, ResourceDomain, ResourceRecoveryStatus } from "@pwragent/shared/contracts/resource-checkouts";
+
+function projectRecovery(grant: CheckoutGrant, machine: boolean, canRecover: boolean): ResourceRecoveryStatus {
+  const hasProcessGroup = grant.job?.processGroupId !== undefined;
+  const verified = grant.fencingVerifiedAt !== undefined;
+  const verifiedGate = verified ? { allowed: true as const }
+    : { allowed: false as const, reason: "fencing_required" as const, detail: "Fence the owned process group first." };
+  return {
+    allocationId: grant.id, generation: grant.generation, since: grant.recoverySince ?? grant.deadlineAt,
+    reason: machine && !hasProcessGroup
+      ? "No local process group was recorded for this job."
+      : "An owned job has unverified cleanup.",
+    fencing: verified ? "verified" : "unverified",
+    evidence: verified ? ["The local process group is gone."] : [],
+    actions: canRecover && hasProcessGroup ? {
+      fence: { allowed: true }, verify_cleanup: verifiedGate, administrative_release: verifiedGate,
+    } : {},
+  };
+}
 
 export function projectCheckoutDomain(record: CheckoutDomainRecord, actor: CheckoutActor, authority: ResourceAuthority, approvedProvider = false): ResourceDomain {
   const { definition, grants, queue, cleanupVerifiedAt } = record;
   const machine = definition.scope === "machine" && definition.canonicalKey.startsWith("machine:");
   const pending = definition.publication === "pending_registration";
   const held = record.grants.reduce((sum, grant) => sum + grant.units, 0);
-  const recovery = grants.find((grant) => grant.state === "recovery_required");
   const draining = grants.some((grant) => grant.state === "draining");
   const owned = grants.find((grant) => grant.actor.key === actor.key);
   const unavailable = authority.status !== "reachable";
-  const recoverable = machine && recovery?.job?.processGroupId !== undefined && actor.manage && actor.holder.kind === "operator";
-  const fencingVerified = recovery?.fencingVerifiedAt !== undefined;
-  const verifiedGate = fencingVerified ? { allowed: true as const }
-    : { allowed: false as const, reason: "fencing_required" as const, detail: "Fence the owned process group first." };
+  const canRecover = machine && !unavailable && !pending && actor.manage && actor.holder.kind === "operator";
+  const recoveries = grants.filter((grant) => grant.state === "recovery_required")
+    .map((grant) => projectRecovery(grant, machine, canRecover));
+  const recovery = recoveries[0] ?? null;
   const actions: ResourceActionGates = unavailable || pending ? {} : {
     request: recovery ? { allowed: false, reason: "fencing_required", detail: "The previous job needs verified cleanup." } : { allowed: true },
-    ...(recoverable ? {
-      fence: { allowed: true }, verify_cleanup: verifiedGate, administrative_release: verifiedGate,
-    } : {}),
+    ...recovery?.actions,
     ...(queue.some((entry) => entry.actor.key === actor.key) ? { cancel_request: { allowed: true } } : {}),
     ...(owned && owned.state !== "recovery_required" && owned.state !== "draining" ? { release: { allowed: true } } : {}),
     ...(owned && !owned.job?.provider && (owned.state === "granted" || owned.state === "active") ? {
@@ -36,7 +51,9 @@ export function projectCheckoutDomain(record: CheckoutDomainRecord, actor: Check
       : pending ? "pending_registration" : recovery ? "recovery_required" : draining ? "draining"
         : held >= definition.capacity || queue.length > 0 ? "busy" : "available",
     ...(recovery ? { conditionDetail: "The executor has not verified that its owned work ended." } : {}),
-    sharing: definition.counted ? { mode: "counted", capacity: definition.capacity, inUse: held, unitLabel: "slots" } : { mode: "exclusive" },
+    sharing: definition.counted ? {
+      mode: "counted", capacity: definition.capacity, inUse: held, unitLabel: machine ? "CPU slots" : "slots",
+    } : { mode: "exclusive" },
     enforcement: machine ? {
       coverage: "mixed", summary: "Managed environment setup, environment actions, and automation gates must hold capacity.",
       gaps: ["Agent shell commands, terminals, CI, and other applications are outside checkout enforcement."],
@@ -89,11 +106,7 @@ export function projectCheckoutDomain(record: CheckoutDomainRecord, actor: Check
       : draining ? { state: "in_progress", detail: "Capacity stays reserved during cleanup." }
         : cleanupVerifiedAt === undefined ? { state: "not_applicable", detail: "No managed cleanup has been recorded." }
           : { state: "verified", detail: "The executor verified an owned job ended.", verifiedAt: cleanupVerifiedAt },
-    recovery: recovery ? {
-      allocationId: recovery.id, generation: recovery.generation, since: recovery.recoverySince ?? recovery.deadlineAt,
-      reason: "An owned job has unverified cleanup.", fencing: fencingVerified ? "verified" : "unverified",
-      evidence: fencingVerified ? ["The local process group is gone."] : [],
-    } : null,
+    recovery, recoveries,
     ownershipConflict: authority.status === "unresolved" ? {
       reason: "Machine identity and the durable store could not be reconciled.", candidates: [],
     } : null,

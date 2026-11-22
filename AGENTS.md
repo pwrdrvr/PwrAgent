@@ -52,7 +52,7 @@ Read the task-specific references below before doing the work they cover. They c
 - Linux checks do not verify macOS or Windows behavior. Use native CI or the corresponding PwrSuiteLab skill. For lab operations, read the exact macOS/Windows skill routes in [desktop test operations](docs/development-checks.md#desktop-test-operations); do not improvise product-local Tart labs or direct Tart/SSH access.
 - Before changes to Windows Git/Bash process ownership, Vitest isolation, queue/composer lifecycle tests, or lazy renderer readiness, review the ownership/readiness constraints in that same reference. Do not substitute retries, longer timeouts, fewer workers, or serial lanes for ownership or evidence-based readiness fixes.
 - macOS CI and release jobs must use free GitHub-hosted `macos-26`, never paid larger runners, `macos-26-intel`, or self-hosted machines. Fork PRs run every macOS job; actool 26 requires a macOS 26 host.
-- The [Sandboxer verification process](.agents/skills/sandboxer-verification/SKILL.md) is **dormant**. Preserve its procedure, helper, and historical measurements; do not invoke it automatically or route checks to it. Use native/local and CI alternatives. Keep product/remote-compute integrations and installed MCP settings intact.
+- Check whether Boat is available in PwrAgent before planning remote verification. If Boat is busy or unavailable, use local checks and repository CI without waiting for a slot. Use Boat only when it can start a sandbox and the operator approves or asks in this thread, and read the [Boat verification skill](.agents/skills/boat-verification/SKILL.md) first.
 - Read the [workflow label list](.github/workflows/README.md) before using a CI-triggering label.
 
 ### SQLite write budgets

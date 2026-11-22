@@ -24,8 +24,9 @@ import {
   matchesFilter,
   matchesSearch,
   presentResources,
-  resourceActions,
   resourceGroup,
+  resourceRecoveries,
+  resourceRecoveryGates,
   type PresentedResource,
   type ResourceActionDescriptor,
   type ResourceFilter,
@@ -49,7 +50,7 @@ const SCOPES: ReadonlyArray<{ value: ResourceScopeFilter; label: string }> = [
 type DialogState =
   | { kind: "request"; resourceId: string; action: ResourceActionDescriptor }
   | { kind: "release"; resourceId: string }
-  | { kind: "recover"; resourceId: string }
+  | { kind: "recover"; resourceId: string; allocationId: string; generation: number }
   | { kind: "resolve"; resourceId: string }
   | { kind: "register" };
 
@@ -98,6 +99,7 @@ export function ResourcesScreen(props: {
   onOpenThread: (thread: ResourceThreadRef) => void;
   /** Omitted where the screen is its own window (the preview). */
   onClose?: () => void;
+  hasWindowTitleBar?: boolean;
   /** Extra controls for the preview banner. */
   previewControls?: ReactNode;
 }): ReactElement {
@@ -128,7 +130,7 @@ export function ResourcesScreen(props: {
     {
       key: "machine",
       label: "This machine",
-      detail: snapshot ? `Every ${snapshot.viewer.instanceLabel} profile shares one broker` : "",
+      detail: snapshot ? `All profiles on ${snapshot.viewer.instanceLabel} share this pool` : "",
       items: visible.filter((item) => groupOf(item) === "machine"),
     },
     {
@@ -158,7 +160,7 @@ export function ResourcesScreen(props: {
   const onIntent = (intent: ResourceInspectorIntent) => {
     if (!selected) return;
     const resource = selected.resource;
-    if (intent.kind === "recover") return setDialog({ kind: "recover", resourceId: resource.resourceId });
+    if (intent.kind === "recover") return setDialog({ ...intent, resourceId: resource.resourceId });
     if (intent.kind === "resolve") return setDialog({ kind: "resolve", resourceId: resource.resourceId });
     const { action } = intent;
     switch (action.kind) {
@@ -181,12 +183,15 @@ export function ResourcesScreen(props: {
         return;
       }
       default:
-        return setDialog({ kind: "recover", resourceId: resource.resourceId });
+        return;
     }
   };
 
   const dialogResource = dialog && dialog.kind !== "register"
     ? presented.find((item) => item.resource.resourceId === dialog.resourceId)
+    : undefined;
+  const dialogRecovery = dialog?.kind === "recover" && dialogResource
+    ? resourceRecoveries(dialogResource.resource).find((entry) => entry.allocationId === dialog.allocationId && entry.generation === dialog.generation)
     : undefined;
   const dialogOpen = dialog?.kind === "register" || Boolean(dialogResource);
   const closeDialog = () => setDialog(null);
@@ -196,9 +201,11 @@ export function ResourcesScreen(props: {
   return (
     <section aria-label="Resources" className="resources-screen">
       <nav aria-label="Resource navigation" className="settings-nav" inert={dialogOpen}>
-        <header className="settings-nav__masthead">
-          <BrandLockup variant="settings-nav" />
-        </header>
+        {!props.hasWindowTitleBar ? (
+          <header className="settings-nav__masthead">
+            <BrandLockup variant="settings-nav" />
+          </header>
+        ) : null}
         {props.onClose ? (
           <button className="settings-nav__exit" type="button" onClick={props.onClose}>
             <span aria-hidden="true">←</span> Exit Resources
@@ -331,7 +338,8 @@ export function ResourcesScreen(props: {
       ) : null}
       {dialog?.kind === "recover" && dialogResource ? (
         <RecoveryDialog
-          actions={resourceActions(dialogResource.resource, dialogResource.authority)}
+          recovery={dialogRecovery}
+          actions={dialogRecovery ? resourceRecoveryGates(dialogResource.resource, dialogResource.authority, dialogRecovery) : {}}
           resource={dialogResource.resource}
           submit={submit}
           onClose={closeDialog}

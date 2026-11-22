@@ -112,7 +112,7 @@ export class PrAutoDispatchCoordinator {
         backend: AppServerBackendKind;
         threadId: string;
         prKey: string;
-      }) => boolean;
+      }) => boolean | Promise<boolean>;
       getCurrentPr?: (prKey: string) => PrSummary | undefined;
       /**
        * Whether the thread's project lets Auto-fix act on this kind of
@@ -416,14 +416,14 @@ export class PrAutoDispatchCoordinator {
         ...(budget ? { budget: "repair" as const, ...budget } : {}),
       });
     };
+    const attached = (await this.options.isPrAttached?.({
+      ...identity,
+      prKey: record.pending.prKey,
+    })) ?? true;
     const currentPr = this.options.getCurrentPr?.(record.pending.prKey);
     const currentEvent = currentPr
       ? buildPrAutoDispatchEvent(currentPr, this.kindFilter(identity))
       : undefined;
-    const attached = this.options.isPrAttached?.({
-      ...identity,
-      prKey: record.pending.prKey,
-    }) ?? true;
     if (
       attached
       && currentPr

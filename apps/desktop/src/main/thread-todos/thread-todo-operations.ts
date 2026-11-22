@@ -63,8 +63,11 @@ export async function listLocalTodoOwnerThreads() {
 }
 
 /** Private managed sub-agent threads; their cards never reach the queue. */
-export function readManagedTodoThreadKeys(): ReadonlySet<string> {
-  return getDesktopOverlayStore().readManagedSubAgentThreadKeys();
+export function readManagedTodoThreadKeys(keys?: readonly string[]): ReadonlySet<string> {
+  const store = getDesktopOverlayStore();
+  return keys === undefined
+    ? store.readManagedSubAgentThreadKeys()
+    : store.readManagedSubAgentThreadKeysForOwners(keys);
 }
 
 async function listLocalTodoOwners() {

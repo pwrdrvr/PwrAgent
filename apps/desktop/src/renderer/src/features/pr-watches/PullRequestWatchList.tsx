@@ -2,8 +2,11 @@ import { useState } from "react";
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { ThreadPrWatchHistoryEntry } from "@pwragent/shared/contracts/thread-pr-watches";
 import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
-import { EyeIcon, MergeIcon, PullRequestIcon } from "../../icons";
+import type { ThreadDependency } from "@pwragent/shared/contracts/thread-dependencies";
+import { CommitIcon, EyeIcon, MergeIcon, PullRequestIcon } from "../../icons";
 import { describeCiOutcomes } from "../pr-status/PrStatusCard";
+import { resolveLifecycleState } from "../pr-status/pr-chip-state";
+import { describeMergeBuildWatchRow } from "./merge-build-watches";
 import {
   isCiWatch,
   readWatchRunAttempt,
@@ -29,6 +32,9 @@ type PullRequestWatchListProps = {
    */
   ownerLabel?: string;
   onStop?: (watch: ThreadPullRequestWatchSummary) => Promise<void>;
+  /** The thread's active merge build watch on this PR. */
+  mergeBuild?: ThreadDependency;
+  onStopMergeBuild?: (wait: ThreadDependency) => Promise<void>;
   onTurnOffAutoFix?: () => void;
   /** Arms a success and failure watch now, without an agent turn. */
   onWatchCi?: () => Promise<void>;
@@ -71,6 +77,20 @@ export function PullRequestWatchList(props: PullRequestWatchListProps) {
     setArming(true);
     void props.onWatchCi().finally(() => setArming(false));
   };
+  const stopMergeBuild = (wait: ThreadDependency): void => {
+    if (!props.onStopMergeBuild) return;
+    setStopping((current) => new Set(current).add(wait.id));
+    void props.onStopMergeBuild(wait).finally(() => {
+      setStopping((current) => {
+        const next = new Set(current);
+        next.delete(wait.id);
+        return next;
+      });
+    });
+  };
+  const mergeBuildRow = props.mergeBuild ? describeMergeBuildWatchRow(props.mergeBuild, now) : undefined;
+  // A merged or closed PR has no CI left to wait for.
+  const open = resolveLifecycleState(props.pr) === "open";
   const historyRows = props.history?.slice(0, HISTORY_ROWS) ?? [];
   const autoFixBlocked = props.autoFixBlocked;
 
@@ -123,6 +143,30 @@ export function PullRequestWatchList(props: PullRequestWatchListProps) {
           ) : null}
         </div>
       ))}
+      {props.mergeBuild && mergeBuildRow ? (
+        <div className="pr-watch-list__row">
+          <span className="pr-watch-list__icon" aria-hidden="true">
+            <CommitIcon size={12} />
+          </span>
+          <span className="pr-watch-list__text">
+            <span className="pr-watch-list__title">
+              {`Merge build · wakes ${mergeBuildRow.wakes}`}
+            </span>
+            <span className="pr-watch-list__sub">{mergeBuildRow.status}</span>
+          </span>
+          {props.onStopMergeBuild ? (
+            <button
+              type="button"
+              className="pr-watch-list__action"
+              aria-label={`Stop watching the merge build of #${props.pr.number}`}
+              disabled={stopping.has(props.mergeBuild.id)}
+              onClick={() => stopMergeBuild(props.mergeBuild!)}
+            >
+              Stop
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       {props.autoFix ? (
         <div className="pr-watch-list__row">
           <span className="pr-watch-list__icon" aria-hidden="true">
@@ -176,7 +220,7 @@ export function PullRequestWatchList(props: PullRequestWatchListProps) {
           ) : null}
         </div>
       ) : null}
-      {ciWatches.length === 0 && !readOnly ? (
+      {ciWatches.length === 0 && !readOnly && open ? (
         <div className="pr-watch-list__hint">
           <span className="pr-watch-list__hint-text">Not waiting for CI.</span>
           {props.onWatchCi ? (

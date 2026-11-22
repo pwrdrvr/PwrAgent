@@ -913,12 +913,14 @@ export class ForgeToolBridge {
 
   /**
    * The thread's project, as a forge rule names it: its primary repository.
-   * The resolver reads a thread no navigation refresh has listed yet.
+   * Policy checks resolve the workspace on demand. Navigation's cached
+   * repository only describes where the owner's status observations came from.
    */
   async threadProjectRepository(backend: AppServerBackendKind, threadId: string): Promise<string | undefined> {
     try {
-      const primary = this.threadPrimaryGitRepositoryReader?.(backend, threadId)
-        ?? await this.threadProjectRepositoryResolver?.(backend, threadId);
+      const primary = this.threadProjectRepositoryResolver
+        ? await this.threadProjectRepositoryResolver(backend, threadId)
+        : this.threadPrimaryGitRepositoryReader?.(backend, threadId);
       return primary ? normalizeForgeRuleRepository(primary) : undefined;
     } catch (error) {
       backendRegistryLog.warn("could not read a thread's project for MCP tool approval", { threadId, error: String(error) });
