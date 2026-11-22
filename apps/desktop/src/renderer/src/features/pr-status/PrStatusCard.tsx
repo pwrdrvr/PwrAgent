@@ -4,6 +4,7 @@ import { BranchIcon } from "../../icons";
 import { DiffStat } from "../../lib/DiffStat";
 import { formatRunningDurationMs } from "../../lib/format-duration";
 import type { PrChipWatch } from "../pr-watches/useThreadPrWatchIndicators";
+import { describeMergeBuildWatchRow } from "../pr-watches/merge-build-watches";
 import { readPrBranchDrift, type PrBranchDrift } from "./pr-branch-drift";
 import { splitPrBranch } from "./pr-branch-split";
 import {
@@ -61,9 +62,9 @@ export function PrStatusCard(props: {
   const timeline = readPrTimeline(pr, now);
   const branch = splitPrBranch(pr.headRefName);
   const drift = readBranchDriftRows(props.branchDrift);
-  const wakes = readWatchRows(props.watch);
+  const wakes = readWatchRows(props.watch, now);
   const queue = readMergeQueueSection(pr, now);
-  const stoppable = Boolean(props.watch?.ci || props.watch?.terminal);
+  const stoppable = Boolean(props.watch?.ci || props.watch?.terminal || props.watch?.mergeBuild);
 
   return (
     <>
@@ -276,7 +277,7 @@ type PrWatchRow = PrTimelineRow & { muted?: boolean; detail?: string };
  * One row per thing that wakes the thread. The attempt is the useful number
  * after a re-run: it says which run's result the watch is waiting for.
  */
-function readWatchRows(watch: PrChipWatch | undefined): PrWatchRow[] {
+function readWatchRows(watch: PrChipWatch | undefined, now: number): PrWatchRow[] {
   if (!watch) {
     return [];
   }
@@ -291,6 +292,10 @@ function readWatchRows(watch: PrChipWatch | undefined): PrWatchRow[] {
   }
   if (watch.terminal) {
     rows.push({ label: "Merge or close", value: "watching" });
+  }
+  if (watch.mergeBuild) {
+    const row = describeMergeBuildWatchRow(watch.mergeBuild, now);
+    rows.push({ label: "Merge build", value: row.wakes, detail: row.status });
   }
   if (watch.autoFix) {
     rows.push({ label: "Auto-fix", value: "on", muted: true });

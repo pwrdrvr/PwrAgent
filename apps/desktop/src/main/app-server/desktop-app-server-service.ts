@@ -339,6 +339,7 @@ import {
   projectAllowsAutoFixKind,
   projectAllowsForgePolling,
   projectAllowsPrWatches,
+  projectWatchesMergeBuilds,
   resolveProjectForgeAutomation,
 } from "@pwragent/shared/project-forge-automation";
 import { type NavigationResumeState } from "@pwragent/shared/navigation-resume-state";
@@ -4943,13 +4944,14 @@ class DesktopAppServerService {
     const merged = transitions.filter((transition) => transition.changed.lifecycleState?.to === "merged"
       && (transition.pr.mergedAt === undefined || Date.now() - transition.pr.mergedAt < MERGE_BUILD_ARM_MAX_AGE_MS));
     if (!merged.length || !getAppStateMode() || !this.ownerNavigationActive) return;
-    if (!getDesktopSettingsService().resolveWatchMergeBuilds()) return;
+    const globalDefault = getDesktopSettingsService().resolveWatchMergeBuilds();
     const coordinator = this.getThreadDependencyCoordinator();
     for (const transition of merged) {
       for (const threadKey of transition.threadKeys) {
         const identity = parseThreadIdentityKey(threadKey);
         if (!identity || getDesktopBackendRegistry().getThreadInfo(identity)?.archived === true) continue;
-        if (!projectAllowsPrWatches(this.threadKeyForgeAutomation(threadKey))) continue;
+        // The project's Forge Automation beats the Git setting either way.
+        if (!projectWatchesMergeBuilds(this.threadKeyForgeAutomation(threadKey), globalDefault)) continue;
         void coordinator.armMergeBuild(identity, { url: transition.url, title: transition.title })
           .then((armed) => {
             if (armed) appServerLog.info("merge build watch armed", { prKey: transition.prKey, threadId: identity.threadId });
@@ -8625,7 +8627,8 @@ class DesktopAppServerService {
       repository, mergeCommitSha,
       ...details?.baseBranch ?? pr.baseRefName ? { baseBranch: details?.baseBranch ?? pr.baseRefName } : {},
       ...Number.isFinite(mergedAt) ? { mergedAt } : {},
-    }, Date.now());
+      // A build followed past a cancellation is read where it was left.
+    }, Date.now(), this.getThreadDependencyCoordinator().mergeBuildObservation(prUrl));
   }
 
   private async readDependencyCiRun(url: string) {

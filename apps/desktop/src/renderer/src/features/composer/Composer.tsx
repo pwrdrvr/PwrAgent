@@ -162,8 +162,10 @@ import type {
   DesktopProviderModelDefaults,
 } from "@pwragent/shared/contracts/settings";
 import { DEFAULT_WATCH_MERGE_BUILDS } from "@pwragent/shared/contracts/settings";
+import { projectWatchesMergeBuilds } from "@pwragent/shared/project-forge-automation";
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
-import { ComposerPrMenu, mergeBuildPullRequestUrl } from "./ComposerPrMenu";
+import { ComposerPrMenu } from "./ComposerPrMenu";
+import { mergeBuildPullRequestUrl } from "../pr-watches/merge-build-watches";
 import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import {
   HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE,
@@ -11949,6 +11951,7 @@ function useComposerController(props: ComposerProps) {
     prAutoDispatchIdleTooltip,
     prAutoDispatchTooltip,
     prAutoDispatchProjectMuted,
+    prMergeBuildWatchDefault,
     prAutoDispatchIdle,
     environmentMenuAction,
     workspaceOpenPath,
@@ -12664,6 +12667,12 @@ function useComposerController(props: ComposerProps) {
               : hasAttachedPullRequest
             ? "Auto-fix PR — starts a repair turn when a new push fails CI or hits a merge conflict. To hear about a pass or a re-run, ask the agent to watch CI."
             : "Auto-fix PR — starts when a PR for this workspace is linked";
+    // Watch Merge Build's default: the project's Forge Automation beats the
+    // Git setting either way.
+    const prMergeBuildWatchDefault = projectWatchesMergeBuilds(
+      prAutoDispatchProject?.forgeAutomation,
+      props.watchMergeBuildsDefault ?? DEFAULT_WATCH_MERGE_BUILDS,
+    );
     const prAutoDispatchProjectMuted = Boolean(
       prAutoDispatchAvailable && prAutoDispatchProjectOverride?.muted,
     );
@@ -13536,6 +13545,7 @@ function useComposerController(props: ComposerProps) {
       prAutoDispatchIdleTooltip,
       prAutoDispatchTooltip,
       prAutoDispatchProjectMuted,
+      prMergeBuildWatchDefault,
       prAutoDispatchIdle,
       environmentMenuAction,
       workspaceOpenPath,
@@ -15926,7 +15936,7 @@ function useComposerController(props: ComposerProps) {
             <ComposerPrMenu
               thread={props.thread}
               desktopApi={props.desktopApi}
-              watchMergeBuildsDefault={props.watchMergeBuildsDefault ?? DEFAULT_WATCH_MERGE_BUILDS}
+              watchMergeBuildsDefault={prMergeBuildWatchDefault}
               prUrl={mergeBuildPullRequestUrl(primaryWorkspacePullRequests(props.thread))}
               className={`composer__toggle${
                 props.thread.prAutoDispatchEnabled ? " is-active" : ""

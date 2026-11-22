@@ -32,6 +32,12 @@ export type ProjectForgeAutomation = {
    * After conditions on a PR may wake threads.
    */
   prWatches: boolean;
+  /**
+   * Whether a merged PR's thread watches its merge build. `default` follows
+   * `[git] watch_merge_builds` on the project's machine, and is left out,
+   * as an older owner leaves it.
+   */
+  mergeBuildWatches?: ProjectMergeBuildWatches;
   /** While paused, refuse agent messages from other threads. */
   refuseThreadMessages: boolean;
   /**
@@ -42,6 +48,8 @@ export type ProjectForgeAutomation = {
 };
 
 export type ProjectForgeAutomationWakeupPolicy = "hold" | "discard";
+
+export type ProjectMergeBuildWatches = "default" | "on" | "off";
 
 export const DEFAULT_PROJECT_FORGE_AUTOMATION: Readonly<ProjectForgeAutomation> = {
   paused: false,
@@ -63,7 +71,7 @@ export function resolveProjectForgeAutomation(value: unknown): ProjectForgeAutom
   const record = value && typeof value === "object"
     ? value as Record<string, unknown>
     : {};
-  const flag = (key: keyof ProjectForgeAutomation): boolean => {
+  const flag = (key: "paused" | "autoFixMergeConflicts" | "autoFixCiFailures" | "prWatches" | "refuseThreadMessages"): boolean => {
     const raw = record[key];
     return typeof raw === "boolean"
       ? raw
@@ -81,6 +89,9 @@ export function resolveProjectForgeAutomation(value: unknown): ProjectForgeAutom
     autoFixMergeConflicts: flag("autoFixMergeConflicts"),
     autoFixCiFailures: flag("autoFixCiFailures"),
     prWatches: flag("prWatches"),
+    ...(record.mergeBuildWatches === "on" || record.mergeBuildWatches === "off"
+      ? { mergeBuildWatches: record.mergeBuildWatches }
+      : {}),
     refuseThreadMessages: flag("refuseThreadMessages"),
     wakeupPolicy: record.wakeupPolicy === "discard" ? "discard" : "hold",
   };
@@ -92,6 +103,7 @@ export function isDefaultProjectForgeAutomation(value: ProjectForgeAutomation): 
     && value.autoFixMergeConflicts === DEFAULT_PROJECT_FORGE_AUTOMATION.autoFixMergeConflicts
     && value.autoFixCiFailures === DEFAULT_PROJECT_FORGE_AUTOMATION.autoFixCiFailures
     && value.prWatches === DEFAULT_PROJECT_FORGE_AUTOMATION.prWatches
+    && (value.mergeBuildWatches ?? "default") === "default"
     && value.refuseThreadMessages === DEFAULT_PROJECT_FORGE_AUTOMATION.refuseThreadMessages
     && value.wakeupPolicy === DEFAULT_PROJECT_FORGE_AUTOMATION.wakeupPolicy;
 }
@@ -111,6 +123,17 @@ export function projectAllowsAutoFixKind(
 /** Whether PR watches and PR Continue After conditions may wake threads. */
 export function projectAllowsPrWatches(value: ProjectForgeAutomation | undefined): boolean {
   return !value || (!value.paused && value.prWatches);
+}
+
+/**
+ * Whether PwrAgent watches the merge build of a PR that merges in this
+ * project. A paused project, or one with PR watches off, watches none;
+ * otherwise the project's choice beats `[git] watch_merge_builds`.
+ */
+export function projectWatchesMergeBuilds(value: ProjectForgeAutomation | undefined, globalDefault: boolean): boolean {
+  if (!projectAllowsPrWatches(value)) return false;
+  const choice = value?.mergeBuildWatches ?? "default";
+  return choice === "default" ? globalDefault : choice === "on";
 }
 
 /** Whether the project's pull requests should be polled at all. */

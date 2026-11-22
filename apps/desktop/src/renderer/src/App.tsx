@@ -117,6 +117,8 @@ import {
   useThreadDependencyIndicators,
   useThreadDependencyIndicatorsValue,
 } from "./features/thread-dependencies/useThreadDependencyIndicators";
+import { cancelMergeBuildWatches, createMergeBuildWatch } from "./features/pr-watches/merge-build-watches";
+import type { ThreadDependency } from "@pwragent/shared/contracts/thread-dependencies";
 import {
   buildWatchCiRequestText,
   ThreadPrWatchIndicatorsContext,
@@ -3404,21 +3406,50 @@ function DesktopAppShell(props: {
     ? (settings.snapshot.git?.backgroundPrPolling?.value ?? DEFAULT_BACKGROUND_PR_POLLING)
       && (settings.snapshot.git?.prAutoDispatchAllowed?.value ?? DEFAULT_PR_AUTO_DISPATCH_ALLOWED)
     : undefined;
+  // Merge build watches are Continue After waits. The lists refresh from
+  // `thread/dependencies/updated`; only a change that did not go through is
+  // worth a notice.
+  const watchMergeBuild = useEventCallback(async (thread: NavigationThreadSummary, pr: PrSummary) => {
+    try {
+      await createMergeBuildWatch(desktopApi ?? {}, thread, pr.url);
+    } catch (error) {
+      showAppNotice({
+        id: `merge-build-watch:${threadSummaryIdentityKey(thread)}:${pr.url}`,
+        title: "Couldn't watch the merge build",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+  const stopMergeBuild = useEventCallback(async (thread: NavigationThreadSummary, wait: ThreadDependency) => {
+    try {
+      await cancelMergeBuildWatches(desktopApi ?? {}, thread, [wait]);
+    } catch (error) {
+      showAppNotice({
+        id: `merge-build-watch:${wait.id}`,
+        title: "The merge build watch is still running",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
   const threadPrWatchContext = useMemo(
     () => ({
       byThreadKey: threadPrWatchIndicators,
       ...(prAutoFixAvailable !== undefined ? { autoFixAvailable: prAutoFixAvailable } : {}),
       ...(canManagePrWatches ? { stop: stopPrWatch, watchCi: watchPrCi } : {}),
       ...(canAskAgentToWatchCi ? { askAgentToWatchCi } : {}),
+      ...(canContinueAfter ? { watchMergeBuild, stopMergeBuild } : {}),
     }),
     [
       threadPrWatchIndicators,
       prAutoFixAvailable,
       canManagePrWatches,
       canAskAgentToWatchCi,
+      canContinueAfter,
       stopPrWatch,
       watchPrCi,
       askAgentToWatchCi,
+      watchMergeBuild,
+      stopMergeBuild,
     ],
   );
   const threadHandoffTargets = useMemo(

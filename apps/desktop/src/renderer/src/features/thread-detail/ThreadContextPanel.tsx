@@ -262,12 +262,14 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   );
   const actionRuns = useMemo(() => props.actionRuns ?? [], [props.actionRuns]);
   // The Pull requests tab counts what wakes this thread: this instance's own
-  // list for a local thread, the owner's projection for a peer's.
+  // list for a local thread, the owner's projection for a peer's, plus the
+  // merge build watches its card lists from Continue After.
   const localPrWatches = useThreadPrWatches(props.thread);
   const prWatchCount = props.thread
-    ? props.thread.federation || readRendererFederationTarget()
+    ? (props.thread.federation || readRendererFederationTarget()
       ? props.thread.activePrWatches?.length ?? 0
-      : localPrWatches?.watches.length ?? 0
+      : localPrWatches?.watches.length ?? 0)
+      + (localPrWatches?.mergeBuildWaits?.length ?? 0)
     : 0;
   // The Waiting for tab counts every pending wake, so a waiting thread says
   // so before the tab opens. Unknown (an older owner) draws no badge.
