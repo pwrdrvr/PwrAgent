@@ -113,13 +113,16 @@ it.each([8, 16])("shares a checkout's remote observation between attachment vali
   const owners = await Promise.all(directories.map((cwd) => resolveGitHubRepoForDirectory(cwd)));
   expect(owners).toEqual([...checkouts.map(() => ({ host: "github.com", owner: "fixture", repo: "origin" })), undefined, undefined]);
 
-  // Each real checkout needs one effective-config observation and one HEAD
-  // read per remote. Inconclusive paths cache a negative remote observation.
+  // The Git-confirmed files observation replaces both dangling HEAD reads
+  // on supported platforms. Inconclusive paths cache a negative remote answer.
+  const headReads = process.platform === "win32" ? ["symbolic-ref", "symbolic-ref"] : ["rev-parse"];
   const remoteStarts = launches.mock.calls.filter(([, , purpose]) => purpose === "pr-remotes");
   const discoveryStarts = launches.mock.calls.filter(([, , purpose]) => purpose === "pr-discovery");
-  expect({ remotes: remoteStarts.length, discovery: discoveryStarts.length }).toEqual({ remotes: size + 3, discovery: size * 2 });
+  expect({ remotes: remoteStarts.length, discovery: discoveryStarts.length }).toEqual({ remotes: size + 3, discovery: size * headReads.length });
   expect(remoteStarts.map(([cwd]) => cwd).sort()).toEqual([...directories, missing].sort());
-  expect(discoveryStarts.every(([, args]) => args[0] === "symbolic-ref")).toBe(true);
+  for (const cwd of checkouts) {
+    expect(discoveryStarts.filter(([directory]) => directory === cwd).map(([, args]) => args[0])).toEqual(headReads);
+  }
 });
 
 it("matches Git across effective config changes and overrides", async () => {
