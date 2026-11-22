@@ -601,7 +601,8 @@ export class NavigationWindowQueries {
     if (changed) this.publish();
   }
 
-  private needsWorkingStateReplacement(resource: Resource, candidate?: RetainableState, phase: "finish" | "continue" = "finish"): boolean {
+  private needsWorkingStateReplacement(resource: Resource, candidate?: RetainableState,
+    evidence: "require-exclusion" | "match-only" = "require-exclusion"): boolean {
     const read = resource.workingStateRead;
     if (!read?.paths.size || resource.invalidated) return false;
     const { request } = resource.value.state;
@@ -609,7 +610,7 @@ export class NavigationWindowQueries {
     const ownerId = target?.scope === "remote" ? target.instanceId : undefined;
     const page = candidate?.state.page;
     const ownerPaths = page?.coverage.state === "complete" ? candidate?.ownerProof?.dependencies?.workingStatePaths : undefined;
-    if (phase === "continue") {
+    if (evidence === "match-only") {
       // A known checkout match already fences this generation. An incomplete
       // page without a match can still resolve the notice on a later page.
       const matches = ownerPaths?.some((path) => read.paths.has(path)) ?? page?.entries.some(({ row }) =>
@@ -1010,7 +1011,7 @@ export class NavigationWindowQueries {
           if (retainedBytes > MAX_RETAINED_BYTES) throw new Error("Navigation retained-page budget reached. Collapse a directory or change lens to release pages.");
         };
         // Rows already on screen are restored outside the saved-depth budget.
-        const readPage = async (request: NavigationQueryRequest, restoringDisplayed = false) => {
+        const readPage = async (request: NavigationQueryRequest, restoringDisplayed = false, preceding?: RetainableState) => {
           // A page is measured as its owner measured it, so one that honored
           // the budget fits here. An owner that did not would send the same
           // page on every request, and a control that hit it could never
@@ -1020,7 +1021,11 @@ export class NavigationWindowQueries {
           for (;;) {
             const charged = resuming && Boolean(request.cursor) && !restoringDisplayed;
             if (charged) {
-              if (!budget || !this.canResumeExpansion(budget)) throw RESUME_BUDGET_REACHED;
+              // Unresolved notices reserve this slot for the replacement.
+              // Check every attempt, including retries with a smaller page.
+              if (!budget || !this.canResumeExpansion(budget) || this.needsWorkingStateReplacement(resource, preceding)) {
+                throw RESUME_BUDGET_REACHED;
+              }
               budget.reads -= 1;
             }
             diagnostic.attempt += 1;
@@ -1150,11 +1155,12 @@ export class NavigationWindowQueries {
         while (next.state.page?.nextCursor && loadedRows(next.state.page) < wanted
           && (loadedRows(next.state.page) < restoring || ((!resuming || this.canResumeExpansion(budget))
             && extensions < MAX_LOAD_MORE_READS && Date.now() < extendUntil))) {
-          if (this.needsWorkingStateReplacement(resource, next, "continue")) return;
           const nextCursor = next.state.page.nextCursor;
           const before = loadedRows(next.state.page);
+          const restoringDisplayed = before < restoring;
+          if ((!resuming || restoringDisplayed) && this.needsWorkingStateReplacement(resource, next, "match-only")) return;
           try {
-            const continuationPage = await readPage({ ...started.request, cursor: nextCursor, pageSize: cursorPageSize(before) }, before < restoring);
+            const continuationPage = await readPage({ ...started.request, cursor: nextCursor, pageSize: cursorPageSize(before) }, restoringDisplayed, next);
             if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
             const extended = this.retainableState(applyNavigationPage({ state: next.state, sequence: started.pendingSequence, page: continuationPage, cursor: nextCursor }));
             if (loadedRows(extended.state.page) <= before) throw new Error("Navigation range refresh did not advance.");

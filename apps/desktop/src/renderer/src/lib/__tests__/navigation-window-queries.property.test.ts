@@ -1,11 +1,13 @@
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
+import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared/contracts/navigation";
 import type {
   NavigationQueryPage,
   NavigationQueryRequest,
   NavigationRow,
 } from "@pwragent/shared/contracts/navigation";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import { expandNavigationRemoteOwner } from "@pwragent/shared/navigation-remote-owner";
 import { navigationIdentityKey } from "../navigation-query-state";
 import { NavigationWindowQueries, navigationResumeQueryKey } from "../navigation-window-queries";
 
@@ -434,18 +436,23 @@ it("recovers the displayed range when a working-state notice overtakes an expire
   }), { numRuns: 20 });
 });
 
-async function checkFencedSavedDepth(savedRows: number) {
-  const firstDispatched = deferred<void>();
-  const firstDelivery = deferred<void>();
+async function checkFencedSavedDepth(savedRows: number, matchingRow: number, noticePage: number, oversized = false) {
+  const dispatched = deferred<void>();
+  const delivery = deferred<void>();
   let opening = 0;
-  const obsoleteCursors: string[] = [];
   const read = vi.fn(async (sent: NavigationQueryRequest) => {
-    if (!sent.cursor && ++opening === 1) {
-      firstDispatched.resolve();
-      await firstDelivery.promise;
+    if (!sent.cursor) opening++;
+    const start = Number(sent.cursor ?? 0);
+    const page = checkoutPage(opening === 1 ? "overtaken" : "recovered", start, 1, savedRows);
+    if (opening === 1 && start === noticePage) {
+      dispatched.resolve();
+      await delivery.promise;
+      if (oversized) {
+        oversized = false;
+        page.entries[0]!.row.title = "x".repeat(NAVIGATION_QUERY_MAX_RESULT_BYTES);
+      }
     }
-    if (opening === 1 && sent.cursor) obsoleteCursors.push(sent.cursor);
-    return checkoutPage(opening === 1 ? "overtaken" : "recovered", Number(sent.cursor ?? 0), 1, savedRows);
+    return page;
   });
   const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined,
     { loadedRowsByQuery: { [navigationResumeQueryKey(checkoutDirectoryRequest)]: savedRows } });
@@ -453,24 +460,68 @@ async function checkFencedSavedDepth(savedRows: number) {
     queries.setDemand(new Map([["project", checkoutDirectoryRequest]]));
     queries.invalidate(undefined, undefined, directoryChange);
     const refreshed = queries.refresh(undefined, undefined, true);
-    await firstDispatched.promise;
-    // A match on the opening page proves this generation is already stale.
-    queries.invalidate(undefined, undefined, workingStateChange(0));
-    firstDelivery.resolve();
+    await dispatched.promise;
+    queries.invalidate(undefined, undefined, workingStateChange(matchingRow));
+    delivery.resolve();
     await refreshed;
     const page = queries.getSnapshot().resources.get("project")?.state.page;
+    // An overtaken generation owes no more paid continuations after the notice.
+    // Reads already issued keep their place in the same eight-read budget.
+    const expected = Math.min(savedRows, 9 - noticePage);
+    const cursors = read.mock.calls.map(([sent]) => sent.cursor);
     expect(page?.generation).toBe("recovered");
-    expect(page?.entries).toHaveLength(savedRows);
-    expect(obsoleteCursors).toEqual([]);
-  } finally { firstDelivery.resolve(); queries.dispose(); }
+    expect(page?.entries.map(({ row }) => row.id)).toEqual(Array.from({ length: expected }, (_, i) => `thread-${i}`));
+    expect(cursors.slice(1, cursors.lastIndexOf(undefined))).toEqual(Array.from({ length: noticePage }, (_, i) => String(i + 1)));
+    expect(cursors.filter(Boolean)).toHaveLength(noticePage + expected - 1);
+  } finally { delivery.resolve(); queries.dispose(); }
 }
 
 it("leaves all eight saved-depth continuations for the replacement after a first-page match", async () => {
-  await checkFencedSavedDepth(9);
+  await checkFencedSavedDepth(9, 0, 0);
 });
 
-it("preserves saved depth when the new checkout is on the first page", async () => {
-  await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 9 }), checkFencedSavedDepth), { numRuns: 16 });
+it("restores nine saved rows when the opening notice refers to a checkout on page two", async () => {
+  await checkFencedSavedDepth(9, 1, 0);
+});
+
+it("reserves the next paid attempt when a fenced continuation exceeds the page limit", async () => {
+  await checkFencedSavedDepth(9, 2, 1, true);
+});
+
+it("preserves the remaining saved-depth budget for any matching row and notice timing", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 9 }), fc.nat(8), fc.nat(8), async (saved, match, notice) => {
+    await checkFencedSavedDepth(saved, match % saved, notice % saved);
+  }), { numRuns: 30, examples: [[9, 1, 0], [8, 5, 2], [9, 0, 1]] });
+});
+
+it("continues a saved-depth restore when the owner proves the notified checkout is absent", async () => {
+  const target = { scope: "remote", instanceId: "peer" } as const;
+  const request: NavigationQueryRequest = { ...checkoutDirectoryRequest, inventory: "owner", federationTarget: target };
+  const dispatched = deferred<void>();
+  const delivery = deferred<void>();
+  const workingStatePaths = Array.from({ length: 9 }, (_, i) => `/checkout/${i}`);
+  const read = vi.fn(async (sent: NavigationQueryRequest) => {
+    if (!sent.cursor) {
+      dispatched.resolve();
+      await delivery.promise;
+    }
+    return expandNavigationRemoteOwner({ ...checkoutPage("current", Number(sent.cursor ?? 0), 1, 9),
+      remoteOwner: { instanceId: target.instanceId, instanceLabel: "Peer" },
+      metadataDependencies: { version: 1, threadKeys: [], prKeys: [], workingStatePaths } });
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined,
+    { loadedRowsByQuery: { [navigationResumeQueryKey(request)]: 9 } });
+  try {
+    queries.setDemand(new Map([["project", request]]));
+    queries.invalidate(undefined, [target], { ...directoryChange, federationTarget: target });
+    const refreshed = queries.refresh(undefined, [target], true);
+    await dispatched.promise;
+    queries.invalidate(undefined, [target], { ...workingStateChange(9), federationTarget: target });
+    delivery.resolve();
+    await refreshed;
+    expect(read.mock.calls.map(([sent]) => sent.cursor)).toEqual([undefined, "1", "2", "3", "4", "5", "6", "7", "8"]);
+    expect(queries.getSnapshot().resources.get("project")?.state.page?.entries).toHaveLength(9);
+  } finally { delivery.resolve(); queries.dispose(); }
 });
 
 it("shares one continuation budget across metadata replacements", async () => {
