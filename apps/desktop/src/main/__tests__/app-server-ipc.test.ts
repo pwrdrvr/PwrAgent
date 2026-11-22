@@ -904,7 +904,7 @@ const registerDirectoryFromDiskService = vi.fn(async (request: { path: string })
 });
 const getThreadOverlayState = vi.fn();
 const getThreadOverlayStates = vi.fn(async () => ({}));
-const readNavigationPullRequests = vi.fn();
+const readNavigationPullRequests = vi.fn((refs: { threadId: string }[]): PrSummary[][] => refs.map(() => []));
 const readDetachedThreadPullRequests = vi.fn(() => ({}));
 const addLinkedDirectory = vi.fn(async (request: {
   backend: "codex" | "acp:grok";
