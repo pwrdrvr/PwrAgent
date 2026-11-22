@@ -514,13 +514,23 @@ describe("settings ipc", () => {
     });
     expect(disposeDesktopBackendRegistryMock).not.toHaveBeenCalled();
     expect(readSettings).toHaveBeenCalledOnce();
-    const secretResponse = await handlers.get(SETTINGS_REPLACE_SECRET_CHANNEL)?.(
+    const replaceDiscordSecret = () => handlers.get(SETTINGS_REPLACE_SECRET_CHANNEL)?.(
       {},
       {
         secret: "discordBotToken",
         value: "discord-secret",
       },
     );
+    await expect(replaceDiscordSecret()).rejects.toThrow(
+      "Review and acknowledge the messaging safety principles in Settings → Messaging",
+    );
+    expect(secretStore.getSecretSync("discordBotToken")).toBeUndefined();
+    await service.writeConfigPatchTargeted({
+      general: {
+        messagingAcknowledgment: { acknowledgedAt: "2026-11-22T12:00:00.000Z", providers: [] },
+      },
+    });
+    const secretResponse = await replaceDiscordSecret();
     expect(secretResponse).toEqual({
       secret: "discordBotToken",
       state: {
@@ -1604,10 +1614,18 @@ describe("settings ipc", () => {
 
     registerSettingsIpcHandlers(service);
 
+    await expect(handlers.get(SETTINGS_WRITE_CONFIG_CHANNEL)?.({}, {
+      patch: { messaging: { telegram: { enabled: true } } },
+    })).rejects.toThrow("Review and acknowledge the messaging safety principles in Settings → Messaging");
+    expect(runtimeMock.applyConfig).not.toHaveBeenCalled();
+
     await handlers.get(SETTINGS_WRITE_CONFIG_CHANNEL)?.(
       {},
       {
         patch: {
+          general: {
+            messagingAcknowledgment: { acknowledgedAt: "2026-11-22T12:00:00.000Z", providers: [] },
+          },
           messaging: {
             telegram: {
               enabled: true,

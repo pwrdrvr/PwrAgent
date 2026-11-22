@@ -5,6 +5,8 @@ import {
   type DesktopSettingsConfig,
 } from "../desktop-config";
 
+export { requireSavedMessagingSafetyAcknowledgment } from "./raw-config-file";
+
 /**
  * Explicit-path profile/bootstrap operations that cannot use the active
  * profile store. Keeping them inside config-store prevents profile workflows

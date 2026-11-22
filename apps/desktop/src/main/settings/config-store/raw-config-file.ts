@@ -6,6 +6,7 @@ import {
   type DesktopSettingsConfig,
 } from "../desktop-config";
 import type { DesktopSettingsConfigPatch } from "@pwragent/shared/contracts/settings";
+import { requireMessagingSafetyAcknowledgment } from "../messaging-safety";
 
 export type RawConfigFileObservation =
   | Readonly<{
@@ -76,6 +77,15 @@ export function writeRawConfigPatch(
   patch: DesktopSettingsConfigPatch,
 ): ReturnType<typeof applyDesktopSettingsPatch> {
   return applyDesktopSettingsPatch(configPath, patch);
+}
+
+export function requireSavedMessagingSafetyAcknowledgment(configPath: string): void {
+  // The watcher may still be catching up to another window or a local edit.
+  // Check the current file, even when the running settings retain older data.
+  const current = readRawConfigFile(configPath);
+  requireMessagingSafetyAcknowledgment(current.kind === "valid"
+    ? current.config.general?.messagingAcknowledgment?.acknowledgedAt
+    : undefined);
 }
 
 export function hashConfigText(text: string): string {

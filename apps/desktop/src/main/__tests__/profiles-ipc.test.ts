@@ -80,6 +80,7 @@ vi.mock("../detached-launch", () => ({
 }));
 
 const roots: string[] = [];
+const messagingAcknowledgmentToml = '[general.messaging_acknowledgment]\nacknowledged_at = "2026-11-22T12:00:00.000Z"\nproviders = []\n';
 
 afterEach(() => {
   // `resolveActiveProfileName()` caches its first-call result for
@@ -597,6 +598,31 @@ describe("profile IPC helpers", () => {
       });
     });
 
+    it("copies a new provider enable only with an acknowledgment in the resulting profile", async () => {
+      const root = createRoot();
+      vi.stubEnv(PWRAGENT_HOME_ENV, root);
+      getAppStateModeMock.mockReturnValue("bootstrap");
+      ensureNamedProfileExists("personal");
+      const targetPath = path.join(root, "profiles", "personal", "config.toml");
+      const original = fs.readFileSync(targetPath, "utf8");
+      const bootstrapDir = path.join(root, ".bootstrap");
+      fs.mkdirSync(bootstrapDir);
+      const bootstrapPath = path.join(bootstrapDir, "config.toml");
+      fs.writeFileSync(bootstrapPath, "[messaging.telegram]\nenabled = true\n");
+      const { graduateDesktopBootstrapConfigToProfile } = await import("../shell/ipc/profiles");
+      const graduate = () => graduateDesktopBootstrapConfigToProfile({ targetProfile: "personal" });
+
+      expect(graduate).toThrow("Review and acknowledge the messaging safety principles in Settings → Messaging");
+      expect(fs.readFileSync(targetPath, "utf8")).toBe(original);
+      expect(readProfilesRegistry().default_profile).not.toBe("personal");
+
+      fs.appendFileSync(bootstrapPath, `\n${messagingAcknowledgmentToml}`);
+      expect(graduate()).toEqual({ graduated: true, targetProfile: "personal" });
+      const saved = fs.readFileSync(targetPath, "utf8");
+      expect(saved).toContain("[messaging.telegram]\nenabled = true");
+      expect(saved).toContain(messagingAcknowledgmentToml.trim());
+    });
+
     it("copies bootstrap config to target and sets default_profile when graduating", async () => {
       const root = createRoot();
       vi.stubEnv(PWRAGENT_HOME_ENV, root);
@@ -661,6 +687,7 @@ describe("profile IPC helpers", () => {
       const env = { [PWRAGENT_HOME_ENV]: root } as NodeJS.ProcessEnv;
       ensureNamedProfileExists("personal", { env });
       vi.stubEnv(PWRAGENT_HOME_ENV, root);
+      fs.appendFileSync(path.join(root, "profiles", "personal", "config.toml"), `\n${messagingAcknowledgmentToml}`);
 
       const { writeDesktopSecretsToProfile } = await import("../shell/ipc/profiles");
 
@@ -699,13 +726,17 @@ describe("profile IPC helpers", () => {
       const env = { [PWRAGENT_HOME_ENV]: root } as NodeJS.ProcessEnv;
       ensureNamedProfileExists("personal", { env });
       vi.stubEnv(PWRAGENT_HOME_ENV, root);
+      const configPath = path.join(root, "profiles", "personal", "config.toml");
+      const original = fs.readFileSync(configPath, "utf8");
+      fs.appendFileSync(configPath, `\n${messagingAcknowledgmentToml}`);
 
       const { writeDesktopSecretsToProfile } = await import("../shell/ipc/profiles");
       writeDesktopSecretsToProfile({
         profile: "personal",
         secrets: { discordBotToken: "first-value" },
       });
-      // Replay-style clear: empty string deletes.
+      // Clear a saved credential after the acknowledgment was removed.
+      fs.writeFileSync(configPath, original);
       writeDesktopSecretsToProfile({
         profile: "personal",
         secrets: { discordBotToken: "" },

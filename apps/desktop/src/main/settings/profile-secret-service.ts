@@ -1,13 +1,16 @@
 import { secretEncryption as safeStorage } from "../owner-host";
 import fs from "node:fs";
 import path from "node:path";
-import type {
-  WriteDesktopSecretsToProfileRequest,
-  WriteDesktopSecretsToProfileResponse,
+import {
+  isMessagingRuntimeSecret,
+  type DesktopSettingsSecretName,
+  type WriteDesktopSecretsToProfileRequest,
+  type WriteDesktopSecretsToProfileResponse,
 } from "@pwragent/shared/contracts/settings";
 import { normalizeProfileName, resolveProfileDir } from "../profile";
 import { openProfileSecretStorage } from "../storage/desktop-settings-storage";
 import { isSecretStorageDisabledByEnv } from "./desktop-secret-store";
+import { requireSavedMessagingSafetyAcknowledgment } from "./config-store/profile-config-file";
 import { getMainLogger } from "../log";
 
 const profilesIpcLog = getMainLogger("pwragent:profiles");
@@ -15,11 +18,8 @@ const profilesIpcLog = getMainLogger("pwragent:profiles");
 /**
  * Write secrets directly to a specific PwrAgent profile's keychain
  * (its state.db `secrets` table), encrypting each value via
- * `safeStorage` first. Used by the wizard's Finish path to graduate
- * in-memory messaging credentials collected during the wizard to the
- * operator's chosen real profile, avoiding stranded secrets in
- * `.bootstrap/state.db` when the
- * wizard runs in bootstrap mode.
+ * `safeStorage` first. This IPC supports writes while the singleton is
+ * bound to `.bootstrap/state.db` and the destination is a named profile.
  *
  * Implementation notes:
  *   - Opens the target profile's state.db transiently (not via the
@@ -28,6 +28,8 @@ const profilesIpcLog = getMainLogger("pwragent:profiles");
  *   - Closes the transient DB even on error to avoid leaking
  *     better-sqlite3 handles.
  *   - Empty string values delete the secret (clears stale entries).
+ *   - A batch containing a messaging credential requires a saved safety
+ *     acknowledgment in the destination profile before any writes.
  *   - Unencrypted-storage edge cases (basic_text / unavailable) are
  *     surfaced as a thrown error rather than silently writing
  *     plaintext — caller decides whether to retry or warn.
@@ -69,6 +71,15 @@ export function writeDesktopSecretsToProfile(
     throw new Error(`Profile "${profile}" does not exist.`);
   }
 
+  const entries = Object.entries(request.secrets);
+  if (entries.some(([name, value]) =>
+    typeof value === "string"
+    && value.length > 0
+    && isMessagingRuntimeSecret(name as DesktopSettingsSecretName),
+  )) {
+    requireSavedMessagingSafetyAcknowledgment(path.join(profileDir, "config.toml"));
+  }
+
   const dbPath = path.join(profileDir, "state", "state.db");
   // Ensure the state dir exists. For a freshly-created paired profile
   // the wizard just called ensureNamedProfileExists which seeded
@@ -80,7 +91,7 @@ export function writeDesktopSecretsToProfile(
   const storage = openProfileSecretStorage(dbPath, { profileName: profile });
   const written: string[] = [];
   try {
-    for (const [name, value] of Object.entries(request.secrets)) {
+    for (const [name, value] of entries) {
       if (typeof name !== "string" || name.length === 0) continue;
       if (typeof value !== "string") continue;
       if (value.length === 0) {

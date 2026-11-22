@@ -29,6 +29,7 @@ import {
 import { validateLocalModelIds } from "@pwragent/shared/local-model-pricing";
 import fs from "node:fs";
 import { validateCodexConfigOverrides } from "./codex-config-overrides";
+import { requireMessagingSafetyAcknowledgment } from "./messaging-safety";
 import { normalizeOpenAIDecisionsAccountId } from "@pwragent/shared/openai-decisions";
 import os from "node:os";
 import path from "node:path";
@@ -612,14 +613,28 @@ export function applyDesktopSettingsPatch(
   configPath: string,
   patch: DesktopSettingsConfigPatch,
 ): DesktopSettingsPatchWriteResult {
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
   const source = fs.existsSync(configPath)
     ? fs.readFileSync(configPath, "utf8")
     : "";
-  const edits = desktopSettingsPatchToEdits(
-    patch,
-    parseTomlTables(source, configPath),
+  const tables = parseTomlTables(source, configPath);
+  const edits = desktopSettingsPatchToEdits(patch, tables);
+  // Both active-profile writes and bootstrap graduation enter here. A patch
+  // can record the acknowledgment and enable a provider in the same save.
+  // Existing enabled flags and the profile-wide pause switch are independent.
+  const enablesProvider = edits.some((edit) =>
+    edit.op === "set"
+    && edit.path.length === 3
+    && edit.path[0] === "messaging"
+    && edit.path[2] === "enabled"
+    && edit.value === true
+    && tables[`messaging.${edit.path[1]}`]?.enabled !== true,
   );
+  if (enablesProvider) {
+    const acknowledgment = patch.general?.messagingAcknowledgment;
+    requireMessagingSafetyAcknowledgment(acknowledgment === undefined
+      ? readMessagingAcknowledgment(tables["general.messaging_acknowledgment"])?.acknowledgedAt
+      : acknowledgment?.acknowledgedAt);
+  }
   if (edits.length === 0) {
     return { changed: false, text: source };
   }
@@ -627,6 +642,7 @@ export function applyDesktopSettingsPatch(
   if (next === source) {
     return { changed: false, text: source };
   }
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
   const temporaryPath = `${configPath}.${process.pid}.tmp`;
   fs.writeFileSync(temporaryPath, next, "utf8");
   fs.renameSync(temporaryPath, configPath);

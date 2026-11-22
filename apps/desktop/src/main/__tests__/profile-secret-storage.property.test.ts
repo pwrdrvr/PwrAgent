@@ -24,9 +24,9 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it("closes every transient profile writer and preserves partial writes when later encryption fails", async () => {
+it("checks the destination profile before writing, and closes every transient profile writer", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
-  const names = ["discordBotToken", "telegramBotToken"] as const;
+  const names = ["openaiDecisionsApiKey", "discordBotToken", "telegramBotToken"] as const;
   const operation = fc.record({
     profile: fc.integer({ min: 0, max: 1 }),
     available: fc.boolean(),
@@ -39,6 +39,10 @@ it("closes every transient profile writer and preserves partial writes when late
     const databases = [0, 1].map(index => {
       const directory = path.join(root, "profiles", `fixture-${index}`, "state");
       fs.mkdirSync(directory, { recursive: true });
+      if (index === 0) {
+        fs.writeFileSync(path.join(directory, "..", "config.toml"),
+          '[general.messaging_acknowledgment]\nacknowledged_at = "2026-11-22T12:00:00.000Z"\nproviders = []\n');
+      }
       return StateDb.open(path.join(directory, "state.db"), { profileName: `fixture-${index}` });
     });
     const model = [new Map<string, string>(), new Map<string, string>()];
@@ -51,8 +55,9 @@ it("closes every transient profile writer and preserves partial writes when late
         encryption.available = op.available;
         vi.stubEnv("PWRAGENT_DEV_DISABLE_SECRET_STORAGE", op.disabled ? "1" : "0");
         const expectedWritten: string[] = [];
+        const blocked = op.profile === 1 && op.values.slice(1).some(value => value !== "");
         let failed = false;
-        if (!op.disabled && op.available) {
+        if (!op.disabled && op.available && !blocked) {
           for (const [index, name] of names.entries()) {
             const value = op.values[index]!;
             if (value === "fixture-denied") { failed = true; break; }
@@ -66,11 +71,13 @@ it("closes every transient profile writer and preserves partial writes when late
             profile: `fixture-${op.profile}`,
             secrets: Object.fromEntries(names.map((name, index) => [name, op.values[index]])),
           });
-          if (!op.disabled && (!op.available || failed)) expect(call).toThrow(op.available ? "fixture encryption denied" : "encryption is unavailable");
+          if (!op.disabled && !op.available) expect(call).toThrow("encryption is unavailable");
+          else if (!op.disabled && blocked) expect(call).toThrow("Review and acknowledge the messaging safety principles in Settings → Messaging");
+          else if (failed) expect(call).toThrow("fixture encryption denied");
           else expect(call().written).toEqual(expectedWritten);
         });
         expect(mutation.writes.commits).toBe(expectedWritten.length);
-        const opens = !op.disabled && op.available ? 1 : 0;
+        const opens = !op.disabled && op.available && !blocked ? 1 : 0;
         expect(open).toHaveBeenCalledTimes(opens);
         expect(close).toHaveBeenCalledTimes(opens);
         for (const result of open.mock.results) {
