@@ -52,6 +52,7 @@ import {
   seedPrWatchAuditState,
 } from "./fixtures/pr-watch-state-seeding";
 import {
+  RESOURCES_AUDIT_CHANGED,
   RESOURCES_AUDIT_POOL,
   RESOURCES_AUDIT_UNREACHABLE,
   RESOURCES_AUDIT_UNRESOLVED,
@@ -820,16 +821,17 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
     // through the authorities file and the main-process checkout service on the
     // app's own stores (fixtures/resource-checkout-seeding.ts): an agent holds
     // a counted pool with another waiting, a Federation peer is unreachable,
-    // and a binding copied from another machine leaves ownership unresolved.
-    // Recovery is seeded after launch, once the operator's own hold is
-    // released, and the pending draft comes from the Register dialog itself.
+    // a binding copied from another machine leaves ownership unresolved with
+    // only a remedy, and a hosted resource whose configured epoch changed
+    // offers to accept the new definition. Recovery is seeded after launch,
+    // once the operator's own hold is released, and the pending draft comes
+    // from the Register dialog itself.
     //
-    // Not reachable, so not audited: Resolve ownership (the authority offers
-    // no `resolve_ownership` gate, so its control never renders; asserted
-    // below) and Needs interactive session (no authority reports readiness).
+    // Not reachable, so not audited: Needs interactive session (no authority
+    // reports readiness).
     test("Resources checkout surfaces have no violations", async () => {
-      // Twelve unscoped scans plus a launch.
-      test.setTimeout(120_000);
+      // Fourteen unscoped scans plus a launch.
+      test.setTimeout(150_000);
       let seed: ResourcesAuditSeed | undefined;
       const app = await launchAuditApp({
         ...appearance,
@@ -883,6 +885,7 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
           await expect(chip(RESOURCES_AUDIT_POOL.resourceId, "busy")).toHaveText("1 of 4 free");
           await expect(chip(RESOURCES_AUDIT_UNREACHABLE.resourceId, "unreachable")).toBeVisible();
           await expect(chip(RESOURCES_AUDIT_UNRESOLVED.resourceId, "ownership_unresolved")).toBeVisible();
+          await expect(chip(RESOURCES_AUDIT_CHANGED.resourceId, "ownership_unresolved")).toBeVisible();
           const toggle = row(machineId).getByRole("button", { name: "Show routes for This machine", exact: true });
           await toggle.click();
           await expect(row(machineId).getByRole("button", { name: "Hide routes for This machine", exact: true }))
@@ -907,7 +910,7 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
           await expect(opener).toHaveText("Join queue");
           const dialog = window.getByRole("dialog", { name: `Join queue: ${RESOURCES_AUDIT_POOL.displayName}`, exact: true });
           await checkDialogKeyboard(opener, dialog);
-          await dialog.getByRole("textbox", { name: /^Purpose / }).fill("Accessibility audit render");
+          await dialog.getByRole("textbox", { name: "Purpose", exact: true }).fill("Accessibility audit render");
           await expect(dialog.getByRole("spinbutton", { name: "Units", exact: true })).toBeVisible();
           await runAxe(window, "Join queue dialog");
           await dialog.getByRole("button", { name: "Join queue", exact: true }).click();
@@ -934,10 +937,35 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
         await test.step("inspector: ownership unresolved", async () => {
           const inspector = await select(RESOURCES_AUDIT_UNRESOLVED.displayName);
           await expect(inspector.getByRole("note")).toContainText("Ownership unresolved");
-          // The authority sends no resolve_ownership gate, so there is no
-          // dialog to audit. When it does, audit ResolveOwnershipDialog here.
+          // The binding names this instance on another machine. Only the
+          // authorities file can fix that, so the callout names the remedy
+          // and offers nothing to press.
+          await expect(inspector.getByTestId("resources-callout-next-step")).toContainText("authorityMachineId");
           await expect(inspector.getByTestId("resources-action-resolve")).toHaveCount(0);
+          await expect(inspector.getByTestId("resources-action-request")).toHaveCount(0);
           await runAxe(window, "Resources inspector, ownership unresolved");
+        });
+
+        await test.step("inspector: changed definition offers to accept it", async () => {
+          const inspector = await select(RESOURCES_AUDIT_CHANGED.displayName);
+          await expect(inspector.getByRole("note")).toContainText("Ownership unresolved");
+          await expect(inspector.getByTestId("resources-action-resolve")).toHaveText("Accept configured definition…");
+          await expect(inspector.getByTestId("resources-action-request")).toHaveCount(0);
+          await runAxe(window, "Resources inspector, changed definition");
+        });
+
+        await test.step("Resolve ownership dialog", async () => {
+          const inspector = inspectorFor(RESOURCES_AUDIT_CHANGED.displayName);
+          const dialog = window.getByRole("dialog", {
+            name: `Resolve ownership of ${RESOURCES_AUDIT_CHANGED.displayName}?`, exact: true,
+          });
+          await checkDialogKeyboard(inspector.getByTestId("resources-action-resolve"), dialog);
+          await expect(dialog).toContainText("Current checkouts and the queue are kept.");
+          await runAxe(window, "Resolve ownership dialog");
+          await dialog.getByRole("button", { name: "Accept configured definition", exact: true }).click();
+          await expect(dialog).toBeHidden();
+          await expect(chip(RESOURCES_AUDIT_CHANGED.resourceId, "available")).toBeVisible();
+          await expect(inspector.getByTestId("resources-action-request")).toBeVisible();
         });
 
         await test.step("Request checkout dialog", async () => {
@@ -946,7 +974,7 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
           await expect(opener).toHaveText("Request checkout");
           const dialog = window.getByRole("dialog", { name: "Request checkout: This machine", exact: true });
           await checkDialogKeyboard(opener, dialog);
-          await dialog.getByRole("textbox", { name: /^Purpose / }).fill("Accessibility audit hold");
+          await dialog.getByRole("textbox", { name: "Purpose", exact: true }).fill("Accessibility audit hold");
           await runAxe(window, "Request checkout dialog");
           await dialog.getByRole("button", { name: "Request checkout", exact: true }).click();
           await expect(inspector.getByText(/^Accessibility audit hold · /)).toBeVisible();
@@ -989,13 +1017,22 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
             .getByRole("button", { name: "Register Resource", exact: true });
           const dialog = window.getByRole("dialog", { name: "Register resource", exact: true });
           await checkDialogKeyboard(opener, dialog);
-          await dialog.getByLabel("Name", { exact: true }).fill("Bench signal generator");
-          await dialog.getByRole("textbox", { name: /^Canonical identity / }).fill("external:fixture:audit:signal-generator");
+          await dialog.getByRole("textbox", { name: "Name", exact: true }).fill("Bench signal generator");
+          // A key the authority would refuse shows its problem and keeps
+          // Save disabled, so the scan covers the problem text too.
+          const key = dialog.getByRole("textbox", { name: "Canonical identity", exact: true });
+          await key.fill("Signal Generator");
+          await expect(key).toHaveAttribute("aria-invalid", "true");
+          await expect(key).toHaveAccessibleDescription(/lowercase scheme/);
+          const save = dialog.getByRole("button", { name: "Save draft", exact: true });
+          await expect(save).toBeDisabled();
           // Counted adds the capacity field.
           await dialog.getByRole("radio", { name: "Counted", exact: true }).click();
           await expect(dialog.getByLabel("Capacity", { exact: true })).toBeVisible();
           await runAxe(window, "Register resource dialog");
-          await dialog.getByRole("button", { name: "Save draft", exact: true }).click();
+          await key.fill("device:audit-bench/signal-generator");
+          await expect(key).not.toHaveAttribute("aria-invalid");
+          await save.click();
           await expect(dialog).toBeHidden();
         });
 

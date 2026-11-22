@@ -1,4 +1,5 @@
 {
+  "resource-checkout-resolve-ownership": {"commits": 1, "note": "One commit for an operator's ownership resolution and its receipt; a retry commits nothing", "observedWalBytes": 4120, "rowsChanged": 2, "statements": 2},
   "agent-working-updates-default-read-noop-invalid": {"commits": 0, "note": "Profile Working Updates read, identical update and invalid attempts commit nothing.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "agent-working-updates-default-change": {"commits": 1, "note": "One existing config snapshot commit per changed Working Updates default. No per-turn, idle or streaming writes.", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
   "resource-checkout-provider-recovery-cleanup": {"commits": 1, "note": "Verified provider recovery writes one boundary commit for proof, release, and FIFO promotion.", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},

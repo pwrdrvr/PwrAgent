@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { MAX_CHECKOUT_HOLD_MS } from "@pwragent/owner-core/resource-checkout-authority";
 import type { CheckoutDefinition } from "@pwragent/owner-core/resource-checkout-storage";
-import { externalKey, object, positiveInt, text } from "./checkout-input";
+import { canonicalKey as parseCanonicalKey, object, positiveInt, text } from "./checkout-input";
 
 export type ExternalBinding = {
   authorityInstanceId: string;
@@ -26,7 +26,7 @@ export function readExternalCheckoutBindings(root: string): { bindings: External
   const keys = new Set<string>();
   const bindings = config.domains.map((value: unknown): ExternalBinding => {
     const domain = object(value);
-    const canonicalKey = externalKey(domain.canonicalKey);
+    const canonicalKey = parseCanonicalKey(domain.canonicalKey);
     if (keys.has(canonicalKey)) throw new Error("Duplicate canonical resource authority binding.");
     keys.add(canonicalKey);
     const authorityInstanceId = text(domain.authorityInstanceId, "authority instance ID");

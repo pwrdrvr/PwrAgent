@@ -321,14 +321,16 @@ export function buildPreviewResources(now: number): ResourceDomain[] {
       cleanup: { state: "not_applicable", detail: "No allocations while quarantined." },
       recovery: null,
       ownershipConflict: {
-        reason: "Two machine IDs report the same hardware. This looks like a cloned VM image. Both records are quarantined until you choose the canonical one.",
-        candidates: [
-          { candidateId: "cand-c19d", label: "machine:c19d", detail: "lin-ci-box · default", observedAt: now - 2 * MIN },
-          { candidateId: "cand-5e02", label: "machine:5e02", detail: "lin-ci-box-clone · default", observedAt: now - 2 * MIN },
-        ],
+        reason: "This root's checkout store was created on another machine. This looks like a cloned VM image.",
+        remedy: "If this root now belongs to this machine, adopt the store. Otherwise run machine work on the machine that created it.",
+        resolution: {
+          kind: "adopt_store",
+          label: "Adopt for this machine",
+          consequence: "Checkouts and waiters copied from the other machine are dropped. They never held this machine's capacity.",
+        },
       },
       definition: { revision: 1, publication: "quarantined", updatedAt: now - 8 * MIN },
-      actions: { ...allowAll("resolve_ownership"), request: { allowed: false, reason: "ownership_unresolved", detail: "Resolve ownership before anyone can use this resource." } },
+      actions: allowAll("resolve_ownership"),
     },
     {
       resourceId: "res-mac",
@@ -551,20 +553,18 @@ export function createPreviewResourceCheckoutsSource(options: {
         };
       }
       case "resolve_ownership": {
-        const chosen = resource.ownershipConflict?.candidates.find((candidate) => candidate.candidateId === request.canonicalCandidateId);
         update(resource.resourceId, (current) => ({
           ...current,
           authorityId: "broker-studio",
           condition: "available",
           ownershipConflict: null,
-          canonicalKey: chosen ? `${chosen.label}:cpu` : current.canonicalKey,
           enforcement: { coverage: "enforced", summary: "Enforced for PwrAgent launches", gaps: [] },
-          readiness: [{ checkId: "identity", label: "Machine identity", state: "ok", detail: `Canonical: ${chosen?.label ?? "resolved"}`, observedAt: now, advisory: false }],
+          readiness: [{ checkId: "identity", label: "Machine identity", state: "ok", detail: "Adopted for this machine", observedAt: now, advisory: false }],
           routes: current.routes.map((route) => ({ ...route, status: "available" })),
           definition: { ...current.definition, publication: "published", updatedAt: now },
           actions: allowAll("request"),
         }));
-        return { outcome: "accepted", message: "Ownership resolved. The other identity was retired." };
+        return { outcome: "accepted", message: "Ownership resolved." };
       }
     }
   };

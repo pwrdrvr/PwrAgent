@@ -95,6 +95,65 @@ describe("ResourcesScreen", () => {
     expect(conditionOf("mac-lab-03")).toBe("recovery_required");
   });
 
+  it("explains unresolved ownership and resolves it through a confirmation dialog", async () => {
+    const base = buildPreviewSnapshot(Date.now());
+    const { source, perform } = liveSource(base);
+    perform.mockResolvedValueOnce({ outcome: "accepted", message: "Ownership resolved." });
+    await renderScreen(source);
+    selectRow("lin-ci-box");
+    const unresolved = base.resources.find((resource) => resource.displayName === "lin-ci-box")!;
+    const resolution = unresolved.ownershipConflict!.resolution!;
+    const note = within(inspector()).getByRole("note");
+    expect(note).toHaveTextContent(unresolved.ownershipConflict!.reason);
+    expect(within(note).getByTestId("resources-callout-next-step")).toHaveTextContent(unresolved.ownershipConflict!.remedy);
+    expect(within(inspector()).queryByTestId("resources-action-request")).toBeNull();
+
+    fireEvent.click(within(note).getByTestId("resources-action-resolve"));
+    const dialog = screen.getByRole("dialog", { name: `Resolve ownership of ${unresolved.displayName}?` });
+    expect(dialog).toHaveTextContent(resolution.consequence);
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole("button", { name: resolution.label }));
+    });
+    expect(perform).toHaveBeenCalledTimes(1);
+    expect(perform.mock.calls[0]![0]).toMatchObject({
+      kind: "resolve_ownership",
+      resourceId: unresolved.resourceId,
+      resolution: resolution.kind,
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("checks the canonical identity as it is typed, by the authority's rule", async () => {
+    const base = buildPreviewSnapshot(Date.now());
+    const { source, perform } = liveSource(base);
+    await renderScreen(source);
+    fireEvent.click(screen.getByRole("button", { name: "Register Resource" }));
+    const dialog = screen.getByRole("dialog", { name: "Register resource" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Name" }), { target: { value: "Bench scope" } });
+    const key = within(dialog).getByRole("textbox", { name: "Canonical identity" });
+    const save = within(dialog).getByRole("button", { name: "Save draft" });
+
+    fireEvent.change(key, { target: { value: "machine:abc:cpu" } });
+    expect(key).toHaveAttribute("aria-invalid", "true");
+    expect(key).toHaveAccessibleDescription(/reserved/);
+    expect(save).toBeDisabled();
+
+    fireEvent.change(key, { target: { value: "Bench Scope" } });
+    expect(key).toHaveAccessibleDescription(/lowercase scheme/);
+    expect(save).toBeDisabled();
+
+    fireEvent.change(key, { target: { value: (key as HTMLInputElement).placeholder } });
+    expect(key).not.toHaveAttribute("aria-invalid");
+    expect(save).toBeEnabled();
+    await act(async () => {
+      fireEvent.click(save);
+    });
+    expect(perform.mock.calls[0]![0]).toMatchObject({
+      kind: "register_definition",
+      draft: { canonicalKey: (key as HTMLInputElement).placeholder },
+    });
+  });
+
   it("does not show a request as queued until the authority's snapshot says so", async () => {
     const base = buildPreviewSnapshot(Date.now());
     const { source, perform, publish } = liveSource(base);

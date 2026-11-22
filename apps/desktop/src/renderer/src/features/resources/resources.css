@@ -789,6 +789,11 @@
   line-height: 1.45;
 }
 
+/* The next step reads as its own paragraph after the reason. */
+.resources-callout__body + .resources-callout__body {
+  margin-top: 6px;
+}
+
 .resources-callout__actions {
   display: flex;
   flex-wrap: wrap;
@@ -947,6 +952,10 @@
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 400;
+}
+
+.resources-field small.resources-field__problem {
+  color: var(--danger-text);
 }
 
 .settings-input.resources-input {

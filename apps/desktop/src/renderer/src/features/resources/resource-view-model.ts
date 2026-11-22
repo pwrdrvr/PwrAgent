@@ -175,8 +175,8 @@ export function effectiveGate(
       "The authority can't be reached. Cached state can't change a checkout.",
     );
   }
-  if (kind === "resolve_ownership" && condition !== "ownership_unresolved") {
-    return blocked("not_applicable", "Ownership is already resolved.");
+  if (kind === "resolve_ownership" && (condition !== "ownership_unresolved" || !resource.ownershipConflict?.resolution)) {
+    return blocked("not_applicable", "Ownership has nothing to resolve here.");
   }
   if (kind === "administrative_release" && resource.recovery?.fencing !== "verified") {
     return blocked(
@@ -268,8 +268,9 @@ export function resourceActions(
     add("verify_cleanup", "Verify cleanup", "secondary");
     add("administrative_release", "Administrative release", "danger");
   }
-  if (condition === "ownership_unresolved") {
-    add("resolve_ownership", "Resolve ownership", "danger");
+  const resolution = resource.ownershipConflict?.resolution;
+  if (condition === "ownership_unresolved" && resolution) {
+    add("resolve_ownership", resolution.label, "danger");
   }
   return out;
 }

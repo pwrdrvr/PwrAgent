@@ -1,6 +1,8 @@
 import { MAX_CHECKOUT_RENEWALS } from "@pwragent/owner-core/resource-checkout-authority";
 import type { CheckoutActor, CheckoutDomainRecord, CheckoutGrant } from "@pwragent/owner-core/resource-checkout-storage";
-import type { ResourceActionGates, ResourceAuthority, ResourceDomain, ResourceRecoveryStatus } from "@pwragent/shared/contracts/resource-checkouts";
+import type {
+  ResourceActionGates, ResourceAuthority, ResourceDomain, ResourceOwnershipConflict, ResourceRecoveryStatus,
+} from "@pwragent/shared/contracts/resource-checkouts";
 
 function projectRecovery(grant: CheckoutGrant, machine: boolean, canRecover: boolean): ResourceRecoveryStatus {
   const hasProcessGroup = grant.job?.processGroupId !== undefined;
@@ -20,7 +22,24 @@ function projectRecovery(grant: CheckoutGrant, machine: boolean, canRecover: boo
   };
 }
 
-export function projectCheckoutDomain(record: CheckoutDomainRecord, actor: CheckoutActor, authority: ResourceAuthority, approvedProvider = false): ResourceDomain {
+/** For an unresolved authority whose caller could not say more. */
+export const UNEXPLAINED_OWNERSHIP_CONFLICT: ResourceOwnershipConflict = {
+  reason: "The checkout authority could not be bound to this root.",
+  remedy: "Check the main-process log for pwragent:resource-checkouts, correct the cause, and restart PwrAgent.",
+};
+
+/**
+ * `conflict` explains an `unresolved` authority and is ignored otherwise. An
+ * unresolved resource offers only `resolve_ownership`, and only to the local
+ * operator when the conflict carries a resolution.
+ */
+export function projectCheckoutDomain(
+  record: CheckoutDomainRecord,
+  actor: CheckoutActor,
+  authority: ResourceAuthority,
+  approvedProvider = false,
+  conflict: ResourceOwnershipConflict = UNEXPLAINED_OWNERSHIP_CONFLICT,
+): ResourceDomain {
   const { definition, grants, queue, cleanupVerifiedAt } = record;
   const machine = definition.scope === "machine" && definition.canonicalKey.startsWith("machine:");
   const pending = definition.publication === "pending_registration";
@@ -32,7 +51,9 @@ export function projectCheckoutDomain(record: CheckoutDomainRecord, actor: Check
   const recoveries = grants.filter((grant) => grant.state === "recovery_required")
     .map((grant) => projectRecovery(grant, machine, canRecover));
   const recovery = recoveries[0] ?? null;
-  const actions: ResourceActionGates = unavailable || pending ? {} : {
+  const resolvable = authority.status === "unresolved" && conflict.resolution !== undefined
+    && actor.manage && actor.holder.kind === "operator";
+  const actions: ResourceActionGates = resolvable ? { resolve_ownership: { allowed: true } } : unavailable || pending ? {} : {
     request: recovery ? { allowed: false, reason: "fencing_required", detail: "The previous job needs verified cleanup." } : { allowed: true },
     ...recovery?.actions,
     ...(queue.some((entry) => entry.actor.key === actor.key) ? { cancel_request: { allowed: true } } : {}),
@@ -107,9 +128,8 @@ export function projectCheckoutDomain(record: CheckoutDomainRecord, actor: Check
         : cleanupVerifiedAt === undefined ? { state: "not_applicable", detail: "No managed cleanup has been recorded." }
           : { state: "verified", detail: "The executor verified an owned job ended.", verifiedAt: cleanupVerifiedAt },
     recovery, recoveries,
-    ownershipConflict: authority.status === "unresolved" ? {
-      reason: "Machine identity and the durable store could not be reconciled.", candidates: [],
-    } : null,
+    // A copy, so a caller can't change the shared explanations.
+    ownershipConflict: authority.status === "unresolved" ? structuredClone(conflict) : null,
     definition: { revision: definition.revision, updatedAt: definition.updatedAt, publication: definition.publication },
     actions,
   };

@@ -1,12 +1,14 @@
-import { useRef, useState, type ReactElement, type ReactNode } from "react";
-import type {
-  ResourceActionGate,
-  ResourceCheckoutActionRequest,
-  ResourceCheckoutActionResult,
-  ResourceDomain,
-  ResourceRecoveryActionGates,
-  ResourceRecoveryStatus,
-  ResourceScope,
+import { useId, useRef, useState, type ReactElement, type ReactNode } from "react";
+import {
+  CANONICAL_RESOURCE_KEY_EXAMPLE,
+  canonicalResourceKeyProblem,
+  type ResourceActionGate,
+  type ResourceCheckoutActionRequest,
+  type ResourceCheckoutActionResult,
+  type ResourceDomain,
+  type ResourceRecoveryActionGates,
+  type ResourceRecoveryStatus,
+  type ResourceScope,
 } from "@pwragent/shared/contracts/resource-checkouts";
 import { useModalDialog } from "../../lib/useModalDialog";
 import { SegmentedControl } from "../settings/SettingsLayout";
@@ -96,6 +98,44 @@ function ResourceDialog(props: {
   );
 }
 
+/**
+ * A labelled text input whose hint and problem are its description, not part
+ * of its name, so assistive technology announces the name alone first.
+ */
+function TextField(props: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  hint?: ReactNode;
+  problem?: string;
+  placeholder?: string;
+  disabled?: boolean;
+  mono?: boolean;
+}): ReactElement {
+  const id = useId();
+  const hintId = `${id}-hint`;
+  const problemId = `${id}-problem`;
+  const describedBy = [props.hint ? hintId : undefined, props.problem ? problemId : undefined].filter(Boolean).join(" ");
+  return (
+    <div className="resources-field">
+      <label htmlFor={id}>{props.label}</label>
+      <input
+        aria-describedby={describedBy || undefined}
+        aria-invalid={props.problem ? true : undefined}
+        className={props.mono ? "settings-input" : "settings-input resources-input"}
+        disabled={props.disabled}
+        id={id}
+        placeholder={props.placeholder}
+        type="text"
+        value={props.value}
+        onChange={(event) => props.onChange(event.target.value)}
+      />
+      {props.hint ? <small id={hintId}>{props.hint}</small> : null}
+      {props.problem ? <small className="resources-field__problem" id={problemId}>{props.problem}</small> : null}
+    </div>
+  );
+}
+
 function PolicySummary(props: { resource: ResourceDomain }): ReactElement {
   const { policy } = props.resource;
   return (
@@ -167,18 +207,14 @@ export function RequestCheckoutDialog(props: {
         </>
       )}
     >
-      <label className="resources-field">
-        <span>Purpose</span>
-        <input
-          className="settings-input resources-input"
-          placeholder="What the checkout is for"
-          type="text"
-          value={purpose}
-          disabled={busy || problem?.unknown}
-          onChange={(event) => setPurpose(event.target.value)}
-        />
-        <small>Shown to other waiters and kept in the audit record.</small>
-      </label>
+      <TextField
+        disabled={busy || problem?.unknown}
+        hint="Shown to other waiters and kept in the audit record."
+        label="Purpose"
+        placeholder="What the checkout is for"
+        value={purpose}
+        onChange={setPurpose}
+      />
       {counted ? (
         <div className="resources-field">
           {machinePool && counted.capacity > 1 ? (
@@ -271,6 +307,50 @@ export function ReleaseDialog(props: {
       <p className="resources-note">
         The resource shows Draining until cleanup is verified. If it can't be verified, it moves to
         Recovery required instead of being handed on.
+      </p>
+    </ResourceDialog>
+  );
+}
+
+export function ResolveOwnershipDialog(props: {
+  resource: ResourceDomain;
+  submit: SubmitResourceAction;
+  onClose: () => void;
+}): ReactElement {
+  const { resource } = props;
+  const conflict = resource.ownershipConflict;
+  const resolution = conflict?.resolution;
+  const { busy, problem, send } = useDialogSubmit(props.submit, props.onClose);
+  return (
+    <ResourceDialog
+      busy={busy}
+      lede={conflict?.reason ?? "This resource's ownership is unresolved."}
+      problem={problem}
+      title={`Resolve ownership of ${resource.displayName}?`}
+      titleId="resources-resolve-title"
+      onClose={props.onClose}
+      footer={(
+        <>
+          <button className="button button--secondary" disabled={busy} type="button" onClick={props.onClose}>Cancel</button>
+          <button
+            className="button button--primary"
+            disabled={busy || !resolution}
+            type="button"
+            onClick={() => resolution && void send((idempotencyKey) => ({
+              kind: "resolve_ownership",
+              idempotencyKey,
+              resourceId: resource.resourceId,
+              resolution: resolution.kind,
+            }))}
+          >
+            {busy ? "Resolving…" : problem?.unknown ? "Send again" : (resolution?.label ?? "Resolve")}
+          </button>
+        </>
+      )}
+    >
+      {resolution ? <p className="resources-note">{resolution.consequence}</p> : null}
+      <p className="resources-note">
+        Checkouts are cooperative. If this turns out wrong, work can overlap until the affected leases end.
       </p>
     </ResourceDialog>
   );
@@ -378,51 +458,6 @@ export function RecoveryDialog(props: {
   );
 }
 
-export function ResolveOwnershipDialog(props: {
-  resource: ResourceDomain;
-  submit: SubmitResourceAction;
-  onClose: () => void;
-}): ReactElement {
-  const candidates = props.resource.ownershipConflict?.candidates ?? [];
-  const [choice, setChoice] = useState(candidates[0]?.candidateId ?? "");
-  const { busy, problem, send } = useDialogSubmit(props.submit, props.onClose);
-  return (
-    <ResourceDialog
-      busy={busy}
-      lede="Choose the canonical identity. The other record is retired, not merged, and its profiles must enroll again."
-      problem={problem}
-      title={`Resolve ownership of ${props.resource.displayName}`}
-      titleId="resources-resolve-title"
-      onClose={props.onClose}
-      footer={(
-        <>
-          <button className="button button--secondary" disabled={busy} type="button" onClick={props.onClose}>Cancel</button>
-          <button
-            className="button button--secondary resources-button--danger"
-            disabled={busy || !choice}
-            type="button"
-            onClick={() => void send((idempotencyKey) => ({
-              kind: "resolve_ownership",
-              idempotencyKey,
-              resourceId: props.resource.resourceId,
-              canonicalCandidateId: choice,
-            }))}
-          >
-            {busy ? "Resolving…" : "Keep selected, retire other"}
-          </button>
-        </>
-      )}
-    >
-      <SegmentedControl
-        label="Canonical identity"
-        options={candidates.map((candidate) => ({ label: candidate.label, meta: candidate.detail, value: candidate.candidateId }))}
-        value={choice}
-        onChange={setChoice}
-      />
-    </ResourceDialog>
-  );
-}
-
 export function RegisterResourceDialog(props: {
   submit: SubmitResourceAction;
   onClose: () => void;
@@ -436,7 +471,9 @@ export function RegisterResourceDialog(props: {
   const [instructions, setInstructions] = useState("");
   const { busy, problem, send } = useDialogSubmit(props.submit, props.onClose);
   const capacityValue = Number.parseInt(capacity, 10);
-  const valid = name.trim() !== "" && key.trim() !== ""
+  // Checked as the operator types, by the same rule the authority applies.
+  const keyProblem = key.trim() === "" ? undefined : canonicalResourceKeyProblem(key.trim());
+  const valid = name.trim() !== "" && key.trim() !== "" && !keyProblem
     && (sharing === "exclusive" || (Number.isInteger(capacityValue) && capacityValue > 0));
   return (
     <ResourceDialog
@@ -474,19 +511,17 @@ export function RegisterResourceDialog(props: {
         </>
       )}
     >
-      <label className="resources-field">
-        <span>Name</span>
-        <input className="settings-input resources-input" type="text" value={name} onChange={(event) => setName(event.target.value)} />
-      </label>
-      <label className="resources-field">
-        <span>Canonical identity</span>
-        <input className="settings-input" placeholder="device:<machine>/<port>" type="text" value={key} onChange={(event) => setKey(event.target.value)} />
-        <small>Use an immutable identifier. Hostnames and IP addresses aren't identities.</small>
-      </label>
-      <label className="resources-field">
-        <span>Kind</span>
-        <input className="settings-input resources-input" type="text" value={kind} onChange={(event) => setKind(event.target.value)} />
-      </label>
+      <TextField label="Name" value={name} onChange={setName} />
+      <TextField
+        mono
+        hint="Use an identifier that doesn't change. Hostnames and IP addresses aren't identities."
+        label="Canonical identity"
+        placeholder={CANONICAL_RESOURCE_KEY_EXAMPLE}
+        problem={keyProblem}
+        value={key}
+        onChange={setKey}
+      />
+      <TextField label="Kind" value={kind} onChange={setKind} />
       <div className="resources-field">
         <span>Allocation scope</span>
         <SegmentedControl
@@ -515,11 +550,14 @@ export function RegisterResourceDialog(props: {
           <input className="settings-input settings-input--inline" inputMode="numeric" type="text" value={capacity} onChange={(event) => setCapacity(event.target.value)} />
         </label>
       ) : null}
-      <label className="resources-field">
-        <span>Instructions</span>
-        <input className="settings-input" placeholder="Skill or resource notes" type="text" value={instructions} onChange={(event) => setInstructions(event.target.value)} />
-        <small>Agents read these. They can't grant permissions.</small>
-      </label>
+      <TextField
+        mono
+        hint="Agents read these. They can't grant permissions."
+        label="Instructions"
+        placeholder="Skill or resource notes"
+        value={instructions}
+        onChange={setInstructions}
+      />
     </ResourceDialog>
   );
 }
