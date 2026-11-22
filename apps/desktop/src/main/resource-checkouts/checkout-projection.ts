@@ -36,7 +36,9 @@ export function projectCheckoutDomain(record: CheckoutDomainRecord, actor: Check
       : pending ? "pending_registration" : recovery ? "recovery_required" : draining ? "draining"
         : held >= definition.capacity || queue.length > 0 ? "busy" : "available",
     ...(recovery ? { conditionDetail: "The executor has not verified that its owned work ended." } : {}),
-    sharing: definition.counted ? { mode: "counted", capacity: definition.capacity, inUse: held, unitLabel: "slots" } : { mode: "exclusive" },
+    sharing: definition.counted ? {
+      mode: "counted", capacity: definition.capacity, inUse: held, unitLabel: machine ? "CPU slots" : "slots",
+    } : { mode: "exclusive" },
     enforcement: machine ? {
       coverage: "mixed", summary: "Managed environment setup, environment actions, and automation gates must hold capacity.",
       gaps: ["Agent shell commands, terminals, CI, and other applications are outside checkout enforcement."],

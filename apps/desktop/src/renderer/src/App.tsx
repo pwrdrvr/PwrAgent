@@ -351,8 +351,6 @@ import {
   useDirectorVoiceShortcut,
 } from "./features/native-voice/DirectorVoice";
 import { AutomationsScreen } from "./features/automations/AutomationsScreen";
-import { ResourcesScreen } from "./features/resources/ResourcesScreen";
-import { createDesktopResourceCheckoutsSource } from "./features/resources/resource-checkouts-source";
 import { useAutomationSchedulingStatus } from "./features/automations/useAutomationSchedulingStatus";
 import {
   ThreadSearchPanel,
@@ -377,11 +375,11 @@ const SETTINGS_SECTIONS = new Set<SettingsSection>([
 ]);
 
 /** Which full-window surface the shell shows. */
-type MainView = "thread" | "settings" | "automations" | "resources" | "search";
+type MainView = "thread" | "settings" | "automations" | "search";
 
 /** The views drawn in `.app-shell__settings-layer`, over the whole shell. */
 function isLayerView(view: MainView): boolean {
-  return view === "settings" || view === "automations" || view === "resources";
+  return view === "settings" || view === "automations";
 }
 
 /**
@@ -649,17 +647,6 @@ function DesktopAppShell(props: {
     useState<ComponentType<ThreadViewProps>>();
   const desktopApi = props.desktopApi;
   const automationsSchedulingStatus = useAutomationSchedulingStatus(desktopApi);
-  // `null` until the main process serves resource checkouts; every entry to
-  // the Resources screen is hidden while it is.
-  const resourceCheckoutsSource = useMemo(
-    () => createDesktopResourceCheckoutsSource(desktopApi),
-    [desktopApi],
-  );
-  useEffect(() => {
-    if (mainView === "resources" && !resourceCheckoutsSource) {
-      setMainView("thread");
-    }
-  }, [mainView, resourceCheckoutsSource, setMainView]);
   const acknowledgedSpendAlertIdsRef = useRef(new Set<string>());
   const acknowledgeThreadSpendAlert = useCallback((params: {
     alert: ThreadSpendAlert;
@@ -4753,8 +4740,8 @@ function DesktopAppShell(props: {
             onOpenUsageActivity={desktopApi?.openUsageActivity
               ? () => void desktopApi.openUsageActivity?.()
               : undefined}
-            onOpenResources={resourceCheckoutsSource
-              ? (opener) => setMainView("resources", undefined, opener)
+            onOpenResources={desktopApi?.openResourceCheckoutsWindow
+              ? () => void desktopApi.openResourceCheckoutsWindow?.()
               : undefined}
             onSelectThread={(thread, options) => {
               setMainView("thread");
@@ -5107,24 +5094,6 @@ function DesktopAppShell(props: {
                 onSelectThread={(thread) => {
                   setMainView("thread");
                   navigation.selectThread(thread);
-                }}
-              />
-            </div>
-          ) : null}
-
-          {mainView === "resources" && resourceCheckoutsSource ? (
-            <div ref={layerRef} className="app-shell__settings-layer" tabIndex={-1}>
-              <ResourcesScreen
-                source={resourceCheckoutsSource}
-                onClose={() => setMainView("thread")}
-                onOpenThread={(thread) => {
-                  setMainView("thread");
-                  showThreadFromLink({
-                    backend: thread.backend,
-                    threadId: thread.threadId,
-                    ...(thread.instanceId ? { instanceId: thread.instanceId } : {}),
-                    ...(thread.instanceLabel ? { instanceLabel: thread.instanceLabel } : {}),
-                  });
                 }}
               />
             </div>
@@ -5691,7 +5660,8 @@ function useShellLayout(settings: DesktopSettingsState) {
 
 // Keep layer navigation, the Settings leave guard and focus restoration together.
 function useMainView() {
-  const [mainView, setMainViewState] = useRecoverableState<MainView>("app.mainView", "thread");
+  const [savedView, setMainViewState] = useRecoverableState<MainView | "resources">("app.mainView", "thread");
+  const mainView = savedView === "resources" ? "thread" : savedView;
   const mainViewRef = useRef<MainView>(mainView);
   // The control that opened Settings or Automations. The layer covers the
   // sidebar and main, which go inert under it, so focus returns here on

@@ -98,6 +98,7 @@ export function ResourcesScreen(props: {
   onOpenThread: (thread: ResourceThreadRef) => void;
   /** Omitted where the screen is its own window (the preview). */
   onClose?: () => void;
+  hasWindowTitleBar?: boolean;
   /** Extra controls for the preview banner. */
   previewControls?: ReactNode;
 }): ReactElement {
@@ -128,7 +129,7 @@ export function ResourcesScreen(props: {
     {
       key: "machine",
       label: "This machine",
-      detail: snapshot ? `Every ${snapshot.viewer.instanceLabel} profile shares one broker` : "",
+      detail: snapshot ? `All profiles on ${snapshot.viewer.instanceLabel} share this pool` : "",
       items: visible.filter((item) => groupOf(item) === "machine"),
     },
     {
@@ -196,9 +197,11 @@ export function ResourcesScreen(props: {
   return (
     <section aria-label="Resources" className="resources-screen">
       <nav aria-label="Resource navigation" className="settings-nav" inert={dialogOpen}>
-        <header className="settings-nav__masthead">
-          <BrandLockup variant="settings-nav" />
-        </header>
+        {!props.hasWindowTitleBar ? (
+          <header className="settings-nav__masthead">
+            <BrandLockup variant="settings-nav" />
+          </header>
+        ) : null}
         {props.onClose ? (
           <button className="settings-nav__exit" type="button" onClick={props.onClose}>
             <span aria-hidden="true">←</span> Exit Resources

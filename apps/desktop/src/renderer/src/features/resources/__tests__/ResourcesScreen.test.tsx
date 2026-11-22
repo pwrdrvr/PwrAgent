@@ -266,10 +266,23 @@ describe("ResourcesScreen", () => {
     const submit = vi.fn(async (_request: ResourceCheckoutActionRequest): Promise<ResourceCheckoutActionResult> => ({ outcome: "accepted" }));
     render(<RequestCheckoutDialog resource={{ ...resource, queue: [], sharing: { mode: "counted", capacity: 5, inUse: 3, unitLabel: "slots" } }}
       action={{ kind: "request", label: "Request checkout", gate: { allowed: true }, emphasis: "primary" }} now={NOW} submit={submit} onClose={() => undefined} />);
-    fireEvent.change(screen.getByRole("spinbutton", { name: "Units" }), { target: { value: String(units) } });
+    fireEvent.click(screen.getByRole("radio", { name: "Choose slots" }));
+    fireEvent.change(screen.getByRole("spinbutton", { name: "CPU slots" }), { target: { value: String(units) } });
     fireEvent.change(screen.getByPlaceholderText("What the checkout is for"), { target: { value: "Partial grant" } });
     await act(async () => fireEvent.click(screen.getByRole("button", { name: units > 2 ? "Join queue" : "Request checkout" })));
     expect(submit.mock.calls[0][0]).toMatchObject({ kind: "request", units });
+  });
+
+  it("lets a full machine request follow the authority's capacity", async () => {
+    const resource = buildPreviewSnapshot(NOW).resources[0];
+    const submit = vi.fn(async (_request: ResourceCheckoutActionRequest): Promise<ResourceCheckoutActionResult> => ({ outcome: "accepted" }));
+    render(<RequestCheckoutDialog resource={resource}
+      action={{ kind: "request", label: "Request checkout", gate: { allowed: true }, emphasis: "primary" }}
+      now={NOW} submit={submit} onClose={() => undefined} />);
+    expect(screen.getByRole("radio", { name: "All CPU slots", checked: true })).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("What the checkout is for"), { target: { value: "Full test suite" } });
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Join queue" })));
+    expect(submit.mock.calls[0][0]).not.toHaveProperty("units");
   });
 
   it("opens the holder's thread from the inspector", async () => {

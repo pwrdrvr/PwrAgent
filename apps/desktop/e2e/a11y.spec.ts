@@ -793,30 +793,34 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
       try {
         const profile = app.window.getByRole("button", { name: /^Open PwrAgent profile menu:/ });
         await profile.click();
+        const opened = app.electronApp.waitForEvent("window");
         await app.window.getByRole("menuitem", { name: /^Resources/ }).click();
-        const resources = app.window.getByRole("region", { name: "Resources", exact: true });
+        const popout = await opened;
+        const resources = popout.getByRole("region", { name: "Resources", exact: true });
         const inspector = resources.getByRole("complementary", { name: "This machine" });
         await expect(inspector).toBeVisible();
         await expect(inspector.getByText("Available", { exact: true })).toBeVisible();
-        await runAxe(app.window, "Resources and machine checkout details");
+        await runAxe(popout, "Resources and machine checkout details");
 
         await inspector.getByTestId("resources-action-request").click();
-        const request = app.window.getByRole("dialog", { name: "Request checkout: This machine" });
+        const request = popout.getByRole("dialog", { name: "Request checkout: This machine" });
         await expect(request).toBeVisible();
         await request.getByLabel("Purpose").fill("Accessibility audit hold");
-        await runAxe(app.window, "Request checkout dialog");
+        await runAxe(popout, "Request checkout dialog");
         await request.getByRole("button", { name: "Request checkout", exact: true }).click();
-        await expect(inspector.getByText("Accessibility audit hold", { exact: true })).toBeVisible();
+        await expect(inspector.getByText(/^Accessibility audit hold · /)).toBeVisible();
         await expect(inspector.getByText("Busy", { exact: true })).toBeVisible();
 
         await inspector.getByTestId("resources-action-release").click();
-        const release = app.window.getByRole("dialog", { name: "Release This machine?" });
+        const release = popout.getByRole("dialog", { name: "Release This machine?" });
         await expect(release).toBeVisible();
-        await runAxe(app.window, "Release checkout dialog");
+        await runAxe(popout, "Release checkout dialog");
         await release.getByRole("button", { name: "Release", exact: true }).click();
         await expect(inspector.getByText("Available", { exact: true })).toBeVisible();
-        await resources.getByRole("button", { name: "Exit Resources" }).click();
-        await expect(profile).toBeFocused();
+        await profile.click();
+        await app.window.getByRole("menuitem", { name: /^Resources/ }).click();
+        expect(app.electronApp.windows().filter((window) => window.url().endsWith("#resources"))).toEqual([popout]);
+        await expect(app.window.getByRole("region", { name: "Resources", exact: true })).toHaveCount(0);
       } finally {
         await app.close();
       }

@@ -124,9 +124,11 @@ export function RequestCheckoutDialog(props: {
   const [purpose, setPurpose] = useState("");
   const [duration, setDuration] = useState(durations[Math.min(1, durations.length - 1)]);
   const { busy, problem, send } = useDialogSubmit(props.submit, props.onClose);
-  const [unitCount, setUnitCount] = useState("1");
-  const units = Number(unitCount);
   const counted = resource.sharing.mode === "counted" ? resource.sharing : undefined;
+  const machinePool = !!counted && resource.placement === "machine";
+  const [slotMode, setSlotMode] = useState<"all" | "partial">(machinePool ? "all" : "partial");
+  const [unitCount, setUnitCount] = useState("1");
+  const units = slotMode === "all" ? counted!.capacity : Number(unitCount);
   const validUnits = !counted || (Number.isSafeInteger(units) && units > 0 && units <= counted.capacity);
   const holder = resource.allocations[0];
   const waits = props.action.waits === true || resource.queue.length > 0
@@ -155,7 +157,7 @@ export function RequestCheckoutDialog(props: {
               resourceId: resource.resourceId,
               purpose: purpose.trim(),
               expectedDurationMs: duration,
-              ...(counted ? { units } : {}),
+              ...(counted && slotMode === "partial" ? { units } : {}),
             }))}
           >
             {busy ? "Sending…" : problem?.unknown ? "Send again" : actionLabel}
@@ -177,11 +179,27 @@ export function RequestCheckoutDialog(props: {
       </label>
       {counted ? (
         <div className="resources-field">
-          <label htmlFor="resources-request-units">Units</label>
-          <input id="resources-request-units" aria-describedby="resources-request-unit-capacity"
-            className="settings-input resources-input" type="number" min={1} max={counted.capacity}
-            value={unitCount} onChange={(event) => setUnitCount(event.target.value)} disabled={busy || problem?.unknown} />
-          <small id="resources-request-unit-capacity">{Math.max(0, counted.capacity - counted.inUse)} of {counted.capacity} units free.</small>
+          {machinePool && counted.capacity > 1 ? (
+            <SegmentedControl
+              label="CPU reservation"
+              options={[{ label: "All CPU slots", value: "all" }, { label: "Choose slots", value: "partial" }]}
+              value={slotMode}
+              onChange={setSlotMode}
+              disabled={busy || problem?.unknown}
+            />
+          ) : null}
+          {slotMode === "partial" ? (
+            <>
+              <label htmlFor="resources-request-units">{machinePool ? "CPU slots" : "Units"}</label>
+              <input id="resources-request-units" aria-describedby="resources-request-unit-capacity"
+                className="settings-input resources-input" type="number" min={1} max={counted.capacity}
+                value={unitCount} onChange={(event) => setUnitCount(event.target.value)} disabled={busy || problem?.unknown} />
+            </>
+          ) : null}
+          <small id="resources-request-unit-capacity">
+            {Math.max(0, counted.capacity - counted.inUse)} of {counted.capacity} {machinePool ? "CPU slots" : "units"} free.
+            {slotMode === "all" ? " Reserves the whole machine pool." : ""}
+          </small>
         </div>
       ) : null}
       <div className="resources-field">

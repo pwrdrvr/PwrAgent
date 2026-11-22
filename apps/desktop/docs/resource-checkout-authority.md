@@ -17,15 +17,30 @@ local platform fingerprint when available. A mismatch quarantines the
 store. Live profile advertisements come from the existing runtime markers
 and do not change durable registrations or capacity.
 
-The machine starts with one exclusive slot. Codex environment setup,
-environment actions, and local automation gates claim the slot before
-launch. Startup, explicit reruns, workspace restore and owner-routed
+The built-in machine pool starts with one slot per logical CPU reported by
+the OS, with a one-slot fallback. Units are reservations among cooperating
+jobs. They neither measure live load nor set process affinity. The same
+machine key and queue apply to every profile in the shared root.
+
+Use `resource_checkout_action` and omit `units` to reserve the whole machine
+for a full test suite or heavy build. Known smaller jobs can request their
+expected number of parallel workers. Acquire before launching and release
+after the command exits. A large request at the head of the queue waits
+for enough slots to clear, and later small requests wait behind it.
+
+Codex environment setup, environment actions, and local automation gates
+claim the whole pool before launch unless they bind an explicit grant.
+Startup, explicit reruns, workspace restore and owner-routed
 Federation environment actions use the same admission path. A finite setup
 can use its thread's existing grant and returns it to `granted` after verified
 cleanup. An environment action consumes the grant. A launch with an unknown
 thread or an automation gate can use idle capacity. An operator hold or
 earlier waiter blocks those launches. Agent shells, terminals, remote CI
 workers, and independent applications are advisory.
+
+The pre-release single-slot database upgrades in place. Existing holders and
+waiters retain whole-machine reservations, their tokens and their queue
+order. The first upgraded profile commits the migration once.
 
 An expired bound job retains capacity and enters recovery. On POSIX the
 executor tracks the process group after shell exit and verifies that it

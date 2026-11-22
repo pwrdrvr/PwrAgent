@@ -1,12 +1,16 @@
-import { ipcMain, type IpcMainInvokeEvent } from "electron";
-import { RESOURCE_CHECKOUTS_CHANGED_CHANNEL, RESOURCE_CHECKOUTS_PERFORM_CHANNEL, RESOURCE_CHECKOUTS_READ_CHANNEL } from "../../../shared/ipc";
+import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from "electron";
+import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
+import type { ResourceThreadRef } from "@pwragent/shared/contracts/resource-checkouts";
+import { RESOURCE_CHECKOUTS_CHANGED_CHANNEL, RESOURCE_CHECKOUTS_OPEN_THREAD_CHANNEL, RESOURCE_CHECKOUTS_PERFORM_CHANNEL, RESOURCE_CHECKOUTS_READ_CHANNEL, RESOURCE_CHECKOUTS_WINDOW_OPEN_CHANNEL } from "../../../shared/ipc";
 import type { DesktopResourceCheckoutService } from "../../resource-checkouts/resource-checkout-service";
-import { subscribersForChannel } from "../window-channels";
+import { requestShowThreadInPrimaryMainWindow } from "../primary-main-window";
+import { showResourcesWindow } from "../resources-window";
+import { isLocalMainWindowWebContents, isLocalResourceCheckoutWebContents, subscribersForChannel } from "../window-channels";
 
 function checkLocalWindow(event: IpcMainInvokeEvent): void {
-  if (!subscribersForChannel(RESOURCE_CHECKOUTS_CHANGED_CHANNEL).includes(event.sender)
+  if (!isLocalResourceCheckoutWebContents(event.sender)
     || !event.senderFrame || event.senderFrame !== event.sender.mainFrame) {
-    throw new Error("Resource checkouts are available to the local main window.");
+    throw new Error("Resource checkouts are available to local checkout windows.");
   }
 }
 
@@ -16,7 +20,26 @@ export function registerResourceCheckoutIpcHandlers(service?: DesktopResourceChe
   unsubscribe?.();
   ipcMain.removeHandler(RESOURCE_CHECKOUTS_READ_CHANNEL);
   ipcMain.removeHandler(RESOURCE_CHECKOUTS_PERFORM_CHANNEL);
+  ipcMain.removeHandler(RESOURCE_CHECKOUTS_WINDOW_OPEN_CHANNEL);
+  ipcMain.removeHandler(RESOURCE_CHECKOUTS_OPEN_THREAD_CHANNEL);
   if (!service) return;
+  ipcMain.handle(RESOURCE_CHECKOUTS_WINDOW_OPEN_CHANNEL, (event) => {
+    checkLocalWindow(event);
+    if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open Resources from the local main window.");
+    showResourcesWindow({ sourceWindow: BrowserWindow.fromWebContents(event.sender) ?? undefined });
+  });
+  ipcMain.handle(RESOURCE_CHECKOUTS_OPEN_THREAD_CHANNEL, (event, thread?: ResourceThreadRef) => {
+    checkLocalWindow(event);
+    if (!thread || typeof thread.backend !== "string" || !isAppServerBackendKind(thread.backend)
+      || typeof thread.threadId !== "string" || !thread.threadId.trim()
+      || (thread.instanceId !== undefined && typeof thread.instanceId !== "string")) return;
+    requestShowThreadInPrimaryMainWindow({
+      backend: thread.backend,
+      threadId: thread.threadId,
+      ...(thread.instanceId && thread.instanceId !== service.handoffInstanceId()
+        ? { federationTarget: { scope: "remote", instanceId: thread.instanceId } } : {}),
+    });
+  });
   ipcMain.handle(RESOURCE_CHECKOUTS_READ_CHANNEL, (event) => {
     checkLocalWindow(event);
     return service.read();

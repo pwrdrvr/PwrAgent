@@ -56,6 +56,50 @@ function granted(authority: ResourceCheckoutAuthority, key: string): CheckoutTok
 }
 
 describe("the persisted resource checkout authority", () => {
+  it("preserves exclusive holders and FIFO waiters while upgrading dev's machine pool", async () => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 128 }), async (machineCpuCount) => {
+      const root = mkdtempSync(path.join(os.tmpdir(), "pwragent-machine-capacity-"));
+      const file = path.join(root, "machine.db");
+      const resourceId = "machine:host:cpu";
+      const legacy = openResourceCheckoutStore(file, "host");
+      const authority = new ResourceCheckoutAuthority(legacy, () => 1, randomUUID);
+      authority.ensure({
+        resourceId, canonicalKey: resourceId, authorityId: resourceId,
+        displayName: "This machine", kindLabel: "Machine compute", scope: "machine",
+        counted: false, capacity: 1, epoch: 1, publication: "published", revision: 1,
+        maxHoldMs: 10_000, updatedAt: 1,
+      });
+      const first = authority.perform(actor, request("old holder", { resourceId }));
+      const second = authority.perform(other, request("old waiter", { resourceId, units: 1 }));
+      legacy.close();
+      if (first.outcome !== "granted" || second.outcome !== "queued") throw new Error("Invalid legacy fixture.");
+      const services = ["dev", "default"].map((profile) => new DesktopResourceCheckoutService({
+        viewer: { instanceId: profile, instanceLabel: profile, profile, machineId: "host" },
+        machineStore: openResourceCheckoutStore(file, "host"), machineCpuCount,
+        bindings: [], now: () => 2, requestPeer: async () => { throw new Error("Offline"); }, warn: () => {},
+      }));
+      const [dev, releaseProfile] = services;
+      try {
+        await expect(dev.perform(request("light", { resourceId, units: 1 }))).resolves.toMatchObject({ outcome: "queued", position: 2 });
+        expect(releaseProfile.read().resources[0]).toMatchObject({
+          sharing: { mode: "counted", capacity: machineCpuCount, inUse: machineCpuCount },
+          allocations: [{ allocationId: first.allocationId, generation: first.generation, units: machineCpuCount }],
+          queue: [{ queueEntryId: second.queueEntryId, units: machineCpuCount }, { units: 1 }],
+        });
+        const oldToken = { resourceId, allocationId: first.allocationId, generation: first.generation, epoch: 1 };
+        await expect(releaseProfile.perform(change("release", oldToken, "old release"), actor)).resolves.toMatchObject({ outcome: "accepted" });
+        expect(dev.read().resources[0]).toMatchObject({
+          sharing: { inUse: machineCpuCount }, allocations: [{ allocationId: second.queueEntryId, units: machineCpuCount }],
+          queue: [{ units: 1 }],
+        });
+        await expect(dev.status(actor, resourceId, "old holder")).resolves.toMatchObject({ receipt: first, state: "ended" });
+      } finally {
+        await Promise.all(services.map((service) => service.close()));
+        rmSync(root, { recursive: true, force: true });
+      }
+    }), { numRuns: 20 });
+  });
+
   it("keeps an unenrolled root unresolved and out of managed admission", async () => {
     const service = new DesktopResourceCheckoutService({
       viewer: { instanceId: "alternate", instanceLabel: "Alternate root", profile: "default", machineId: "host" },

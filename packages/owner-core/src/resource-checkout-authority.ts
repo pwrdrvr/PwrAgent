@@ -161,7 +161,7 @@ function applyCheckout(
 export class ResourceCheckoutAuthority {
   constructor(private readonly store: CheckoutStore, private readonly now: () => number, private readonly newId: () => string) {}
 
-  ensure(definition: CheckoutDefinition): void {
+  ensure(definition: CheckoutDefinition, options?: { upgradeExclusiveMachine: true }): void {
     this.store.change((tx) => {
       const record = tx.read(definition.resourceId);
       if (!record) {
@@ -170,7 +170,20 @@ export class ResourceCheckoutAuthority {
       }
       const saved = record.definition;
       if (saved.authorityId !== definition.authorityId || saved.epoch !== definition.epoch
-        || saved.canonicalKey !== definition.canonicalKey || saved.capacity !== definition.capacity) {
+        || saved.canonicalKey !== definition.canonicalKey) {
+        throw new Error("The durable definition conflicts with the configured authority or capacity.");
+      }
+      if (options?.upgradeExclusiveMachine && saved.scope === "machine" && definition.scope === "machine"
+        && saved.publication === "published" && saved.revision === 1 && !saved.counted && saved.capacity === 1
+        && definition.revision === 2 && definition.counted) {
+        // All requests in the exclusive pool occupied the whole machine.
+        // Preserve that promise, along with grant tokens and FIFO position.
+        for (const hold of [...record.grants, ...record.queue]) hold.units = definition.capacity;
+        record.definition = definition;
+        tx.save(record);
+        return;
+      }
+      if (saved.capacity !== definition.capacity) {
         throw new Error("The durable definition conflicts with the configured authority or capacity.");
       }
       if (definition.revision > saved.revision) {

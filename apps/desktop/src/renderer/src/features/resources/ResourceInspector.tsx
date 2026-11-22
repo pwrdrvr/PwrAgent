@@ -15,6 +15,7 @@ import {
   formatAge,
   formatDeadline,
   formatDuration,
+  freeUnits,
   holderLabel,
   presentCondition,
   resourceActions,
@@ -76,6 +77,10 @@ export function ResourceInspector(props: {
     ? { allowed: true as const }
     : recoveryActions[0]?.gate;
   const counted = capacitySummary(resource);
+  const unitLabel = resource.placement === "machine" ? "CPU slot" : "unit";
+  const firstRequest = resource.queue[0]?.units;
+  const free = freeUnits(resource);
+  const waitingForSlots = condition === "busy" && firstRequest !== undefined && free !== undefined && firstRequest > free;
 
   return (
     <aside aria-labelledby="resources-inspector-title" className="resources-inspector">
@@ -129,6 +134,7 @@ export function ResourceInspector(props: {
               <AllocationDetail
                 key={allocation.allocationId}
                 allocation={allocation}
+                unitLabel={unitLabel}
                 now={props.now}
                 onOpenThread={props.onOpenThread}
               />
@@ -137,6 +143,11 @@ export function ResourceInspector(props: {
         </Section>
 
         <Section title="Queue" aside="First in, first out">
+          {waitingForSlots ? (
+            <p className="resources-note">
+              The first request needs {firstRequest} {unitLabel}s. {free} free now. Later requests wait behind it.
+            </p>
+          ) : null}
           {resource.queue.length === 0 ? (
             <p className="resources-note">Nobody is waiting.</p>
           ) : (
@@ -148,6 +159,7 @@ export function ResourceInspector(props: {
                     <HolderName holder={entry.requester} onOpenThread={props.onOpenThread} />
                     <span className="resources-row__meta">
                       {entry.purpose}
+                      {entry.units !== undefined ? ` · ${entry.units} ${unitLabel}${entry.units === 1 ? "" : "s"} requested` : ""}
                       {entry.expectedDurationMs ? ` · ${formatDuration(entry.expectedDurationMs)}` : ""}
                       {` · waiting ${formatAge(entry.requestedAt, props.now)}`}
                       {entry.eligibility.eligible ? "" : ` · ${entry.eligibility.reason}`}
@@ -365,6 +377,7 @@ function StateCallout(props: {
 
 function AllocationDetail(props: {
   allocation: ResourceAllocation;
+  unitLabel: string;
   now: number;
   onOpenThread: (thread: ResourceThreadRef) => void;
 }): ReactElement {
@@ -394,7 +407,7 @@ function AllocationDetail(props: {
           {allocation.lastKnown ? <span className="resources-note"> · last known</span> : null}
         </dd>
         <dt>Task</dt>
-        <dd>{allocation.taskLabel}{allocation.units ? ` · ${allocation.units} ${allocation.units === 1 ? "unit" : "units"}` : ""}</dd>
+        <dd>{allocation.taskLabel}{allocation.units ? ` · ${allocation.units} ${props.unitLabel}${allocation.units === 1 ? "" : "s"} held` : ""}</dd>
         <dt>Runs on</dt>
         <dd>{allocation.executorLabel}</dd>
         <dt>Deadline</dt>
