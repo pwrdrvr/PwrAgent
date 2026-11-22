@@ -91,6 +91,13 @@ export const FEDERATION_CAPABILITIES = [
    * sub-thread, which is what that owner makes, and sends no placement.
    */
   "thread_todo_placement",
+  /**
+   * The owner files a handoff's thread as a sibling of the raising thread,
+   * and does so when the card names no placement. A viewer offers Sibling
+   * only to such an owner, and treats an older owner's default as a
+   * sub-thread.
+   */
+  "thread_todo_placement_sibling",
   /** Owner-persisted async question dismissals and change notifications. */
   "operator_questions",
   "operator_requests",

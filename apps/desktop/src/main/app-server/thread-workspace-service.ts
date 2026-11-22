@@ -381,6 +381,15 @@ export class ThreadWorkspaceService {
         && overlay.codexEnvironmentRuntime.executionTarget === "local"
         ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
         : {}),
+      ...(overlay?.parentThreadId
+        ? {
+            parentThread: {
+              backend: overlay.parentThreadBackend ?? params.backend,
+              threadId: overlay.parentThreadId,
+              ...(overlay.parentThreadInstanceId ? { instanceId: overlay.parentThreadInstanceId } : {}),
+            },
+          }
+        : {}),
     };
   }
 

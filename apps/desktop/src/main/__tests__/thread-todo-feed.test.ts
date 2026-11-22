@@ -34,6 +34,16 @@ function event(method: string, params: Record<string, unknown>): AgentEvent {
 }
 
 describe("ThreadTodoFeed", () => {
+  it("re-projects a thread's cards when its parent changes, so a sibling's parent stays current", async () => {
+    const { feed, source } = harness([card("a", "t", 1)], [owner("t")]);
+    await feed.snapshot();
+    for (const method of ["thread/parent/set", "thread/parent/cleared"]) {
+      source.readOpenCards.mockClear();
+      feed.handleBackendEvent(event(method, { threadId: "t" }));
+      await vi.waitFor(() => expect(source.readOpenCards).toHaveBeenCalledWith({ backend: "codex", threadId: "t" }));
+    }
+  });
+
   it("does no work before the first snapshot", () => {
     const { feed, source } = harness([], [owner("t")]);
     feed.cardsChanged({ backend: "codex", threadId: "t" });

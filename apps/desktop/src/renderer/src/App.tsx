@@ -2684,6 +2684,8 @@ function DesktopAppShell(props: {
         ?.capabilities.includes("thread_todo_message") === true,
       placement: liveFederationHealth?.peers.find((peer) => peer.id === target.instanceId)
         ?.capabilities.includes("thread_todo_placement") === true,
+      placementSibling: liveFederationHealth?.peers.find((peer) => peer.id === target.instanceId)
+        ?.capabilities.includes("thread_todo_placement_sibling") === true,
     })),
     [federationMachines, liveFederationHealth],
   );

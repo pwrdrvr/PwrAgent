@@ -24,6 +24,7 @@ import type { ThreadReview, ThreadReviewIdentity } from "@pwragent/shared/contra
 import {
   DEFAULT_THREAD_TODO_MERGE_METHOD,
   resolveThreadTodoModelSettings,
+  threadTodoPlacementParent,
 } from "@pwragent/shared/contracts/thread-todos";
 import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared/contracts/navigation";
 import { threadReviewTodo } from "@pwragent/shared/contracts/thread-reviews";
@@ -322,6 +323,7 @@ export function installThreadTodoRuntime(params: {
     return {
       thread: { backend: thread.backend, model: settings.model, reasoningEffort: settings.reasoningEffort },
       ...(Object.keys(threadSpeed).length > 0 ? { threadSpeed } : {}),
+      ...(settings.parentThread ? { threadParent: settings.parentThread } : {}),
     };
   });
   // An archived thread's cards have nothing left to act on.
@@ -711,6 +713,15 @@ export function createThreadTodoRunners(params: {
         ...optional("inherited", inheritedSpeed),
       });
       const workMode = chosenWorkMode ?? action.workMode;
+      // A runner called without a placement nests, as every start did
+      // before placements existed; the service always names one.
+      const parent = crossProject
+        ? undefined
+        : threadTodoPlacementParent(
+            placement ?? "sub_thread",
+            { backend: sourceBackend, threadId: sourceThreadId },
+            source.parentThread,
+          );
       const cwd = await resolveThreadTodoStartCwd({ cwd: requestedCwd, project });
       const codexEnvironment = await resolveThreadTodoStartEnvironment({
         requested: environment,
@@ -743,13 +754,14 @@ export function createThreadTodoRunners(params: {
         ...(workMode === "worktree"
           ? { worktreeBase: "default_branch" as const, requiredWorkMode: "worktree" as const }
           : {}),
-        // A sub-thread is filed under the raising thread. The service has
-        // already made work for another project top-level, as handoff_task
-        // does not group it either.
-        ...(placement !== "top_level" && !crossProject
+        // A sub-thread is filed under the raising thread and a sibling under
+        // its parent. The service has already made work for another project
+        // top-level, as handoff_task does not group it either.
+        ...(parent
           ? {
-              parentThreadId: sourceThreadId,
-              parentThreadBackend: sourceBackend,
+              parentThreadId: parent.threadId,
+              parentThreadBackend: parent.backend,
+              ...(parent.instanceId ? { parentThreadInstanceId: parent.instanceId } : {}),
             }
           : {}),
       });

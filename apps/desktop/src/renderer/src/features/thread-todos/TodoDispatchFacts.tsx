@@ -148,7 +148,8 @@ export function useTodoDispatchTarget(params: {
   const workMode = choices.workMode ?? defaultWorkMode;
 
   const placement = todoDispatchPlacement({
-    todo, ...(choices.placement ? { picked: choices.placement } : {}), onOwner, ownerHonorsPlacement: owner.placement,
+    todo, ...(choices.placement ? { picked: choices.placement } : {}), onOwner,
+    ownerHonorsPlacement: owner.placement, ownerMakesSiblings: owner.placementSibling,
   });
 
   const legacy = !owner.dispatchTarget;
@@ -519,28 +520,23 @@ export function TodoDispatchFacts(props: {
   const placement = target.placement;
   const placementProject = (target.onOwner ? project?.label : ready?.projectLabel ?? project?.label) ?? "the project";
   const placementDefaultDetail = placement.proposed ? "Proposed" : "Default";
-  const placementEntries: TodoFactMenuEntry[] = [
-    {
-      kind: "item",
-      key: "sub_thread",
-      label: "Sub-thread of this thread",
-      ...(placement.defaultValue === "sub_thread" ? { detail: placementDefaultDetail } : {}),
-      checked: placement.value === "sub_thread",
-      onSelect: () => target.setPlacement("sub_thread"),
-    },
-    {
-      kind: "item",
-      key: "top_level",
-      label: `New thread in ${placementProject}`,
-      ...(placement.defaultValue === "top_level" ? { detail: placementDefaultDetail } : {}),
-      checked: placement.value === "top_level",
-      onSelect: () => target.setPlacement("top_level"),
-    },
-  ];
-  const placementValue = placement.value === "sub_thread" ? "Sub-thread" : "Top-level";
-  const placementDescription = placement.value === "sub_thread"
-    ? "Sub-thread of this thread"
-    : `New thread in ${placementProject}`;
+  const placementWords: Record<ThreadTodoPlacement, { menu: string; chip: string }> = {
+    sibling: { menu: "Sibling of this thread", chip: "Sibling" },
+    sub_thread: { menu: "Sub-thread of this thread", chip: "Sub-thread" },
+    top_level: { menu: `New thread in ${placementProject}`, chip: "Top-level" },
+  };
+  const placementEntries: TodoFactMenuEntry[] = placement.options.map((option) => ({
+    kind: "item",
+    key: option,
+    label: placementWords[option].menu,
+    ...(placement.defaultValue === option ? { detail: placementDefaultDetail } : {}),
+    checked: placement.value === option,
+    onSelect: () => target.setPlacement(option),
+  }));
+  const placementValue = placementWords[placement.value].chip;
+  const placementDescription = placement.value === "sibling"
+    ? "Sibling of this thread, under its parent"
+    : placementWords[placement.value].menu;
   const placementTooltip = placement.lock === "owner"
     ? `Update PwrAgent on ${target.owner.label} to choose where the new thread is filed.`
     : placement.lock ? THREAD_TODO_PLACEMENT_LOCK_MESSAGES[placement.lock] : undefined;
@@ -554,10 +550,8 @@ export function TodoDispatchFacts(props: {
       testId="todo-dispatch-placement"
       {...(compact
         ? {
+            // Each placement is named: none of them is a quiet default.
             icon: placement.value === "sub_thread" ? SubthreadIcon : ThreadIcon,
-            // A sub-thread is the usual case, so it is the bare icon; a
-            // top-level start is named, as Speed names a faster tier.
-            iconOnly: placement.value === "sub_thread",
             tooltip: placementTooltip ?? `Thread: ${placementDescription}`,
           }
         : placementTooltip ? { tooltip: placementTooltip } : {})}

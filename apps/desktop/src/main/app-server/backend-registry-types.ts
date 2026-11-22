@@ -1155,6 +1155,12 @@ export type HandoffSourceSettings = {
   fastMode?: boolean;
   /** The thread's environment, when it runs one locally. */
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+  /** The thread's sidebar parent, which a sibling handoff is filed under. */
+  parentThread?: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    instanceId?: string;
+  };
 };
 
 /** See `DesktopBackendRegistry.setAgentThreadActions`. */

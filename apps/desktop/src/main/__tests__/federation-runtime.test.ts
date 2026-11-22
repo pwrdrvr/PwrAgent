@@ -2465,6 +2465,15 @@ describe("DesktopFederationRuntime", () => {
       await vi.waitFor(() => expect(current.sent).toHaveLength(1));
       expect(current.sent[0]).toMatchObject({ method: "threadTodos.runAction", params: { id: "card", placement: "top_level" } });
 
+      // An owner without siblings would drop a sibling pick and nest the thread.
+      await expect(current.runtime.requestThreadTodoOperation(target, "runAction", { id: "card", placement: "sibling" }))
+        .rejects.toThrow("start a sibling thread");
+      expect(current.sent).toHaveLength(1);
+      const siblings = viewerOf(["thread_detail", "turn_control", "thread_todos", "thread_todo_placement", "thread_todo_placement_sibling"]);
+      void siblings.runtime.requestThreadTodoOperation(target, "runAction", { id: "card", placement: "sibling" }).catch(() => undefined);
+      await vi.waitFor(() => expect(siblings.sent).toHaveLength(1));
+      expect(siblings.sent[0]).toMatchObject({ params: { id: "card", placement: "sibling" } });
+
       // A disconnected owner is reported as disconnected, not as outdated.
       const offline = viewerOf(["thread_detail", "turn_control", "thread_todos", "thread_todo_placement"], "remembered");
       await expect(offline.runtime.requestThreadTodoOperation(target, "runAction", { id: "card", placement: "top_level" }))
