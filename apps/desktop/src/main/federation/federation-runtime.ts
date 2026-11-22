@@ -771,6 +771,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "thread_todo_message",
   "thread_todo_plan",
   "thread_todo_placement",
+  "thread_todo_placement_sibling",
   "operator_questions",
   "operator_requests",
   "thread_display_bulk_reads",
@@ -2816,6 +2817,11 @@ export class DesktopFederationRuntime {
     if (operation === "runAction" && request && "placement" in request && request.placement !== undefined
       && this.todoQueueUnavailableInstance(target, "thread_todo_placement")?.reason === "unsupported") {
       throw new Error("Update the card's PwrAgent owner to choose where the new thread is filed.");
+    }
+    // An owner without siblings would drop the pick and nest the thread.
+    if (operation === "runAction" && request && "placement" in request && request.placement === "sibling"
+      && this.todoQueueUnavailableInstance(target, "thread_todo_placement_sibling")?.reason === "unsupported") {
+      throw new Error("Update the card's PwrAgent owner to start a sibling thread.");
     }
     const unavailable = this.todoQueueUnavailableInstance(target, "thread_todos")
       ?? (operation === "raisePlan" ? this.todoQueueUnavailableInstance(target, "thread_todo_plan") : undefined);

@@ -61,14 +61,17 @@ before launch. `handoff_task` and `create_instance_thread` already accept
 provider overrides, but create threads immediately rather than configure a
 card for later operator dispatch.
 
-`placement` says where the started thread is filed. `sub_thread`, the
-default, files it under the raising thread; `top_level` starts it as a
-thread of its own in the project. Use `top_level` for deferred work that
-stands alone, such as an unrelated bug or a new feature. A card for another
+`placement` says where the started thread is filed. `sibling`, the
+default, files it beside the raising thread, under that thread's parent, or
+top-level when the raising thread has no parent. `sub_thread` files it under
+the raising thread; use it only for work that belongs to that thread alone.
+`top_level` starts a thread of its own in the project. A card for another
 project, or a start on another machine, is always top-level, and an explicit
 `sub_thread` there is refused. The operator can change the placement on the
-card before starting it; a Federation viewer sends that pick only to an owner
-that advertises `thread_todo_placement`.
+card before starting it. A Federation viewer sends that pick only to an
+owner that advertises `thread_todo_placement`, and offers Sibling only to an
+owner that also advertises `thread_todo_placement_sibling`. An older owner
+treats an unnamed placement as a sub-thread.
 
 `update_review_item` also accepts other names. `dismissed` is the older name
 for declined. Claude Code's code review reports `fixed`, `no_change_needed`,

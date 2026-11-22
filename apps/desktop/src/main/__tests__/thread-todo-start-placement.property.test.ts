@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   THREAD_TODO_PLACEMENTS,
   resolveThreadTodoPlacement,
+  threadTodoPlacementParent,
   type ThreadTodoPlacement,
   type ThreadTodoProject,
 } from "@pwragent/shared/contracts/thread-todos";
@@ -17,28 +18,45 @@ import { StateDb } from "../state/state-db";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
 /**
- * The rule: a start-thread card's thread is a sub-thread of the raising
- * thread exactly when it starts on the card's own machine, in the same
- * project, and neither the operator's pick nor the agent's proposal says
- * top-level. A sub-thread asked for where none can exist is refused, never
- * quietly made top-level. Before placement, every same-project local start
- * was nested, whatever the work was.
+ * The rule: a started thread is filed beside the raising thread (under its
+ * parent, or top-level when it has none) unless the operator or the agent
+ * names another placement. A sub-thread goes under the raising thread and
+ * top-level under nothing. A start for another project or on another
+ * machine is always top-level, and an explicit sub-thread there is refused,
+ * never quietly made top-level. Before siblings, an unnamed placement nested
+ * the thread under the raising one, so a child's follow-up became a
+ * grandchild.
  */
+type Outcome = "under-source" | "under-group-root" | "top-level" | "refused";
+
 function oracle(params: {
   proposed?: ThreadTodoPlacement;
   requested?: ThreadTodoPlacement;
   crossProject: boolean;
   onPeer: boolean;
-}): "nested" | "top_level" | "refused" {
+  sourceHasParent: boolean;
+}): Outcome {
   if (params.crossProject || params.onPeer) {
-    return params.requested === "sub_thread" ? "refused" : "top_level";
+    return params.requested === "sub_thread" ? "refused" : "top-level";
   }
-  return (params.requested ?? params.proposed ?? "sub_thread") === "sub_thread" ? "nested" : "top_level";
+  const placement = params.requested ?? params.proposed ?? "sibling";
+  if (placement === "sub_thread") return "under-source";
+  if (placement === "sibling" && params.sourceHasParent) return "under-group-root";
+  return "top-level";
 }
 
 const CHOICES: (ThreadTodoPlacement | undefined)[] = [undefined, ...THREAD_TODO_PLACEMENTS];
 const CASES = CHOICES.flatMap((proposed) => CHOICES.flatMap((requested) =>
-  [false, true].flatMap((crossProject) => [false, true].map((onPeer) => ({ proposed, requested, crossProject, onPeer })))));
+  [false, true].flatMap((crossProject) => [false, true].flatMap((onPeer) =>
+    [false, true].map((sourceHasParent) => ({ proposed, requested, crossProject, onPeer, sourceHasParent }))))));
+
+const GROUP_ROOT = { backend: "codex" as const, threadId: "group-root" };
+
+function outcomeOf(parent: { threadId: string } | undefined): Outcome {
+  return parent?.threadId === "source-thread" ? "under-source"
+    : parent?.threadId === "group-root" ? "under-group-root"
+    : "top-level";
+}
 
 const THREAD = { backend: "codex" as const, threadId: "source-thread" };
 const ATLAS: ThreadTodoProject = { key: "directory:/src/atlas", label: "atlas", path: "/src/atlas" };
@@ -46,7 +64,7 @@ const SNAP: ThreadTodoProject = { key: "directory:/src/pwrsnap", label: "PwrSnap
 const SOURCE: HandoffSourceSettings = { executionMode: "default", model: "gpt-6.1-sol", reasoningEffort: "high" };
 
 describe("resolveThreadTodoPlacement", () => {
-  it("matches the oracle for every proposal, pick, project and machine", () => {
+  it("matches the oracle for every proposal, pick, project, machine and parent", () => {
     for (const entry of CASES) {
       const resolved = resolveThreadTodoPlacement({
         ...(entry.proposed ? { proposed: entry.proposed } : {}),
@@ -54,10 +72,15 @@ describe("resolveThreadTodoPlacement", () => {
         crossProject: entry.crossProject,
         otherMachine: entry.onPeer,
       });
-      const expected = oracle(entry);
-      expect({ entry, outcome: resolved.refused ? "refused" : resolved.placement === "sub_thread" ? "nested" : "top_level" })
-        .toEqual({ entry, outcome: expected });
+      const outcome: Outcome = resolved.refused ? "refused" : outcomeOf(threadTodoPlacementParent(
+        resolved.placement, THREAD, entry.sourceHasParent ? GROUP_ROOT : undefined));
+      expect({ entry, outcome }).toEqual({ entry, outcome: oracle(entry) });
     }
+  });
+
+  it("keeps an older owner's unnamed placement a sub-thread", () => {
+    expect(resolveThreadTodoPlacement({ crossProject: false, otherMachine: false, legacyDefault: true }).placement)
+      .toBe("sub_thread");
   });
 });
 
@@ -77,9 +100,9 @@ describe("a to-do card's Start thread files the thread where the rule says", () 
     removeTempStateDbDir(tempDir);
   });
 
-  it("nests, starts top-level, or refuses for every combination", async () => {
+  it("files the thread beside, under, or apart from the raising thread for every combination", async () => {
     const registry = {
-      readThreadHandoffSettings: vi.fn(async () => SOURCE),
+      readThreadHandoffSettings: vi.fn(async (): Promise<HandoffSourceSettings> => SOURCE),
       readBackendModelOptions: vi.fn(async () => undefined),
       listBackends: vi.fn(async () => ({ fetchedAt: 0, backends: [] })),
       startThread: vi.fn(async (_params: Record<string, unknown>) => ({ backend: "codex" as const, threadId: "child" })),
@@ -96,6 +119,7 @@ describe("a to-do card's Start thread files the thread where the rule says", () 
     });
 
     for (const entry of CASES) {
+      registry.readThreadHandoffSettings.mockResolvedValue(entry.sourceHasParent ? { ...SOURCE, parentThread: GROUP_ROOT } : SOURCE);
       registry.startThread.mockClear();
       startThreadOnInstance.mockClear();
       const expected = oracle(entry);
@@ -121,6 +145,8 @@ describe("a to-do card's Start thread files the thread where the rule says", () 
         await expect(run, label).rejects.toBeInstanceOf(ThreadTodoError);
         expect(registry.startThread, label).not.toHaveBeenCalled();
         expect(startThreadOnInstance, label).not.toHaveBeenCalled();
+        // A refused card stays open; close it so the thread stays under its cap.
+        service.resolve({ id: todo.id, status: "dismissed" });
         continue;
       }
       await expect(run, label).resolves.toMatchObject({ status: "done" });
@@ -128,8 +154,8 @@ describe("a to-do card's Start thread files the thread where the rule says", () 
         expect(startThreadOnInstance, label).toHaveBeenCalledTimes(1);
         continue;
       }
-      const started = registry.startThread.mock.calls[0]?.[0];
-      expect(started?.parentThreadId, label).toBe(expected === "nested" ? "source-thread" : undefined);
+      const started = registry.startThread.mock.calls[0]?.[0] as { parentThreadId?: string } | undefined;
+      expect(outcomeOf(started?.parentThreadId ? { threadId: started.parentThreadId } : undefined), label).toBe(expected);
     }
   });
 
