@@ -2128,11 +2128,19 @@ export function registerSettingsIpcHandlers(
     async (
       event,
       request: DiscoverRecentProjectsRequest,
-    ): Promise<DiscoverRecentProjectsResponse> =>
-      await recentProjectDiscoveryRuns.run(
-        event.sender.id,
-        async (signal) => await discoverRecentProjectsForOnboarding(getService(service), request, signal),
-      ),
+    ): Promise<DiscoverRecentProjectsResponse> => {
+      const owner = event.sender.id;
+      const cancel = (): void => recentProjectDiscoveryRuns.cancel(owner);
+      event.sender.once("destroyed", cancel);
+      try {
+        return await recentProjectDiscoveryRuns.run(
+          owner,
+          async (signal) => await discoverRecentProjectsForOnboarding(getService(service), request, signal),
+        );
+      } finally {
+        event.sender.removeListener("destroyed", cancel);
+      }
+    },
   );
 
   ipcMain.removeHandler(SETTINGS_PICK_GH_COMMAND_CHANNEL);

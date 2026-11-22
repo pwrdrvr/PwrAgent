@@ -101,13 +101,20 @@ export async function readRecentCodexDirectories(
  * One discovery per window. A newer request from the same window aborts the
  * one before it: React runs Get started's effect twice on mount in
  * development, and changing the Codex login choice asks again, and the
- * renderer keeps only the newest answer.
+ * renderer keeps only the newest answer. A window that closes cancels its
+ * search.
  */
 export class RecentProjectDiscoveryRuns {
   private readonly current = new Map<number, AbortController>();
 
+  /** Aborts `owner`'s search, if one is running. */
+  cancel(owner: number, reason = "The window that asked for recent projects closed."): void {
+    this.current.get(owner)?.abort(new Error(reason));
+    this.current.delete(owner);
+  }
+
   async run<T>(owner: number, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
-    this.current.get(owner)?.abort(new Error("A newer search for recent projects replaced this one."));
+    this.cancel(owner, "A newer search for recent projects replaced this one.");
     const controller = new AbortController();
     this.current.set(owner, controller);
     try {
@@ -306,7 +313,7 @@ async function resolveObservations(
       continue;
     }
     const rootKey = roots.get(key);
-    const root = rootKey === undefined ? undefined : distinctRoots.get(rootKey);
+    const root = rootKey && distinctRoots.get(rootKey);
     if (!rootKey || !root) continue;
     const id = JSON.stringify([observation.agent, rootKey]);
     const existing = byRootAndAgent.get(id);

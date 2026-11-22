@@ -13,10 +13,11 @@ import {
  * Rule: a window has at most one Codex App Server open for Get started's
  * project search, and it belongs to that window's newest request. A request
  * the window replaced closes its App Server at once rather than paging
- * `thread/list` to the end. Other windows' searches are untouched.
+ * `thread/list` to the end, and a window that closes has none open. Other
+ * windows' searches are untouched.
  *
- * Model: per window, the newest request. Commands: a window asks again, or
- * one open App Server finishes its read.
+ * Model: per window, the newest request still wanted. Commands: a window
+ * asks again, a window closes, or one open App Server finishes its read.
  */
 
 type FakeClient = RecentCodexDirectoryClient & {
@@ -65,11 +66,15 @@ function search(
   }));
 }
 
-type Command = { kind: "ask"; owner: number } | { kind: "finish"; pick: number };
+type Command =
+  | { kind: "ask"; owner: number }
+  | { kind: "close"; owner: number }
+  | { kind: "finish"; pick: number };
 
 const arbCommands = fc.array(
   fc.oneof(
     fc.record({ kind: fc.constant("ask" as const), owner: fc.integer({ min: 0, max: 2 }) }),
+    fc.record({ kind: fc.constant("close" as const), owner: fc.integer({ min: 0, max: 2 }) }),
     fc.record({ kind: fc.constant("finish" as const), pick: fc.nat() }),
   ),
   { minLength: 1, maxLength: 30, size: "max" },
@@ -92,6 +97,9 @@ describe("superseded recent project searches", () => {
         if (command.kind === "ask") {
           newest.set(command.owner, index);
           pending.push(search(runs, clients, command.owner, index));
+        } else if (command.kind === "close") {
+          newest.delete(command.owner);
+          runs.cancel(command.owner);
         } else {
           const open = clients.filter((client) => !client.closed && !finished.has(client));
           if (open.length === 0) continue;
