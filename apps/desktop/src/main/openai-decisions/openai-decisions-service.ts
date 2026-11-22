@@ -21,6 +21,8 @@ import {
   OPENAI_DECISION_BOUNDS,
   buildOpenAIDecisionsRequestBody,
   canonicalJson,
+  AD_HOC_DECISION_ID_PREFIX,
+  isAdHocDecisionId,
   parseOpenAIDecisionAdHocDefinition,
   openAIDecisionPromptCacheMaterial,
   openAIDecisionSafetyMaterial,
@@ -48,6 +50,7 @@ import {
   DecisionBatchRegistry,
   DecisionItemTimings,
   OPERATOR_STOP_CODE,
+  batchDefinition,
   batchProgressLine,
   batchWakeupText,
   compactBatchItem,
@@ -834,6 +837,7 @@ export class OpenAIDecisionsService {
       failed: 0,
       skipped: 0,
       controller: new AbortController(),
+      definition: batchDefinition(record.questions, record.prefix),
     };
   }
 
@@ -1446,12 +1450,6 @@ function parseConcurrency(value: unknown, bulk: boolean): number {
     );
   }
   return value as number;
-}
-
-const AD_HOC_DECISION_ID_PREFIX = "adhoc:";
-
-function isAdHocDecisionId(decisionId: string): boolean {
-  return decisionId.startsWith(AD_HOC_DECISION_ID_PREFIX);
 }
 
 /** A decision's observed per-request time, once it has run since PwrAgent started. */

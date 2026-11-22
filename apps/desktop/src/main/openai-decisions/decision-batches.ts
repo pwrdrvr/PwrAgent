@@ -1,6 +1,11 @@
-import { DECISIONS_OPERATOR_STOP_CODE } from "@pwragent/shared/decisions-rail";
+import {
+  DECISIONS_OPERATOR_STOP_CODE,
+  type DecisionsRailDefinition,
+  type DecisionsRailDefinitionQuestion,
+} from "@pwragent/shared/decisions-rail";
 import {
   looksLikeCredentialText,
+  type OpenAIDecisionQuestion,
   type RegisteredDecisionProvider,
 } from "@pwragent/shared/openai-decisions";
 
@@ -124,7 +129,87 @@ export type DecisionBatchRecord = {
   controller: AbortController;
   /** The batch's JSONL file in its thread's storage; absent when it could not be written. */
   resultsFile?: string;
+  /** The prompt every item shared. Absent in a file written before it was kept. */
+  definition?: DecisionsRailDefinition;
 };
+
+/** The questions and prefix a batch runs, as the Decisions tab shows them. */
+export function batchDefinition(
+  questions: readonly OpenAIDecisionQuestion[],
+  prefix: string | undefined,
+): DecisionsRailDefinition {
+  return {
+    questions: questions.map((question): DecisionsRailDefinitionQuestion => {
+      const base = {
+        type: question.type,
+        ...(question.name !== undefined ? { name: question.name } : {}),
+        instructions: question.instructions,
+      };
+      if (question.type === "choice") {
+        return {
+          ...base,
+          options: question.choices.map((choice) => ({
+            label: choice.value,
+            ...(choice.description !== undefined ? { description: choice.description } : {}),
+          })),
+        };
+      }
+      if (question.type === "score") {
+        return {
+          ...base,
+          options: question.levels.map((level) => ({
+            label: level.label,
+            ...(level.description !== undefined ? { description: level.description } : {}),
+          })),
+        };
+      }
+      return base;
+    }),
+    ...(prefix !== undefined && prefix.length > 0 ? { prefix } : {}),
+  };
+}
+
+/**
+ * A definition read back from a result file, or undefined when the line
+ * does not hold one in this shape. Unknown fields are dropped.
+ */
+export function parseBatchDefinition(value: unknown): DecisionsRailDefinition | undefined {
+  if (!isRecord(value) || !Array.isArray(value.questions) || value.questions.length === 0) return undefined;
+  const questions: DecisionsRailDefinitionQuestion[] = [];
+  for (const raw of value.questions) {
+    if (!isRecord(raw) || typeof raw.instructions !== "string") return undefined;
+    if (raw.type !== "predicate" && raw.type !== "choice" && raw.type !== "score") return undefined;
+    if (raw.name !== undefined && typeof raw.name !== "string") return undefined;
+    let options: DecisionsRailDefinitionQuestion["options"];
+    if (raw.options !== undefined) {
+      if (!Array.isArray(raw.options)) return undefined;
+      options = [];
+      for (const option of raw.options) {
+        if (!isRecord(option) || typeof option.label !== "string") return undefined;
+        if (option.description !== undefined && typeof option.description !== "string") return undefined;
+        options.push({
+          label: option.label,
+          ...(option.description !== undefined ? { description: option.description } : {}),
+        });
+      }
+    }
+    questions.push({
+      type: raw.type,
+      ...(raw.name !== undefined ? { name: raw.name } : {}),
+      instructions: raw.instructions,
+      ...(options ? { options } : {}),
+    });
+  }
+  if (value.prefix !== undefined && typeof value.prefix !== "string") return undefined;
+  return {
+    questions,
+    ...(typeof value.prefix === "string" && value.prefix.length > 0 ? { prefix: value.prefix } : {}),
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
 
 /** Retention. Running batches are never evicted. */
 export const DECISION_BATCH_LIMITS = {

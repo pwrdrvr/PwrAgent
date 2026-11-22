@@ -7,7 +7,9 @@ import type {
   DecisionsRailBatchRequest,
   DecisionsRailSnapshot,
 } from "@pwragent/shared/decisions-rail";
-import { DecisionsPanel } from "../DecisionsPanel";
+import type { DesktopSettingsSnapshot } from "@pwragent/shared/contracts/settings";
+import type { DesktopDecisionModelSettings } from "@pwragent/shared/decision-models";
+import { DecisionsPanel, type DecisionSetupSettings } from "../DecisionsPanel";
 
 afterEach(cleanup);
 
@@ -19,6 +21,7 @@ const running: DecisionsRailBatch = {
   decisionId: "dec_1",
   name: "triage_relevance",
   version: 2,
+  adHoc: false,
   provider: "openai",
   model: "gpt-6-luna",
   state: "running",
@@ -101,12 +104,57 @@ function page(request: DecisionsRailBatchRequest): DecisionsRailBatchPage {
   ];
   return {
     batch: running,
+    definition: {
+      prefix: "You triage bug reports for a desktop app.",
+      questions: [
+        { type: "predicate", name: "relevant", instructions: "Is this report about the sidebar?" },
+        {
+          type: "choice",
+          name: "severity",
+          instructions: "How bad is it?",
+          options: [{ label: "low" }, { label: "medium", description: "Annoying but has a workaround" }],
+        },
+      ],
+    },
     items: request.status === "failed" ? items.filter((item) => !item.ok) : items,
+  };
+}
+
+const UNSET = { configured: false, source: "unset", writable: true } as const;
+const SAVED = { configured: true, source: "config", writable: true } as const;
+
+/** Only the Settings fields the Decisions tab reads. */
+function settingsSnapshot(params: {
+  openaiKey?: boolean;
+  jevKey?: boolean;
+  decisionModels?: DesktopDecisionModelSettings;
+} = {}): DesktopSettingsSnapshot {
+  return {
+    models: {
+      decisionModels: params.decisionModels,
+      openaiDecisions: { apiKey: params.openaiKey ? SAVED : UNSET },
+      decisionSecrets: { localApiKey: UNSET, jevApiKey: params.jevKey ? SAVED : UNSET },
+    },
+  } as unknown as DesktopSettingsSnapshot;
+}
+
+function setupSettings(snapshotValue: DesktopSettingsSnapshot): DecisionSetupSettings & {
+  writeConfig: ReturnType<typeof vi.fn>;
+  replaceSecret: ReturnType<typeof vi.fn>;
+} {
+  return {
+    snapshot: snapshotValue,
+    saving: false,
+    writeConfig: vi.fn(async () => true),
+    replaceSecret: vi.fn(async () => true),
+    clearSecret: vi.fn(async () => true),
   };
 }
 
 function renderPanel(overrides: {
   snapshot?: DecisionsRailSnapshot;
+  settings?: DecisionSetupSettings;
+  onOpenSettings?: (focus?: string) => void;
   readDecisionsRailBatch?: (request: DecisionsRailBatchRequest) => Promise<DecisionsRailBatchPage>;
 } = {}) {
   const readDecisionsRailBatch = vi.fn(overrides.readDecisionsRailBatch ?? (async (request: DecisionsRailBatchRequest) => page(request)));
@@ -121,6 +169,8 @@ function renderPanel(overrides: {
       snapshot={next}
       error={false}
       onRefresh={onRefresh}
+      settings={overrides.settings}
+      onOpenSettings={overrides.onOpenSettings}
       onDetailsModalOpenChange={onDetailsModalOpenChange}
     />
   );
@@ -169,22 +219,49 @@ it("stops a running batch from its card", async () => {
   await waitFor(() => expect(api.onRefresh).toHaveBeenCalled());
 });
 
-it("opens a batch's items with previews, answers and latency, and filters them", async () => {
+it("opens a batch for review: its prompt, its items as fields, answers with probabilities", async () => {
   const api = renderPanel();
-  fireEvent.click(screen.getAllByRole("button", { name: "Details" })[0]!);
+  fireEvent.click(screen.getAllByRole("button", { name: "Review" })[0]!);
   expect(api.onDetailsModalOpenChange).toHaveBeenCalledWith(true);
   const dialog = await screen.findByRole("dialog", { name: "Decision batch: triage_relevance v2" });
-  await within(dialog).findByText("{\"title\":\"Sidebar flickers when a thread finishes\"}");
+  const list = await within(dialog).findByRole("listbox", { name: "Items" });
   expect(api.readDecisionsRailBatch).toHaveBeenCalledWith({ ...THREAD, batchId: "batch_run-1", status: "all", from: 0, limit: 100 });
-  expect(within(dialog).getByText("relevant: yes")).toBeInTheDocument();
-  expect(within(dialog).getByText("0.93")).toBeInTheDocument();
-  expect(within(dialog).getByText("402 ms")).toBeInTheDocument();
-  expect(within(dialog).getByText("rate_limited")).toBeInTheDocument();
   expect(within(dialog).getByText("OpenAI · gpt-6-luna")).toBeInTheDocument();
+
+  // The prompt every item shared.
+  expect(within(dialog).getByText("Prompt · the same for every item")).toBeInTheDocument();
+  expect(within(dialog).getByText("You triage bug reports for a desktop app.")).toBeInTheDocument();
+  expect(within(dialog).getByText("Is this report about the sidebar?")).toBeInTheDocument();
+  expect(within(dialog).getByText("Annoying but has a workaround")).toBeInTheDocument();
+
+  // The list summarizes each item by its text, never as JSON.
+  const options = within(list).getAllByRole("option");
+  expect(options).toHaveLength(2);
+  expect(within(options[0]!).getByText("Sidebar flickers when a thread finishes")).toBeInTheDocument();
+  expect(within(options[0]!).getByText("yes · 0.93")).toBeInTheDocument();
+  expect(within(options[1]!).getByText("rate_limited")).toBeInTheDocument();
+  expect(within(dialog).queryByText(/\{"title"/)).not.toBeInTheDocument();
+
+  // The first item is selected: its answers and its input as fields.
+  const detail = within(dialog).getByRole("region", { name: "Item 0" });
+  expect(within(detail).getByText("402 ms", { exact: false })).toBeInTheDocument();
+  expect(within(detail).getByText("relevant")).toBeInTheDocument();
+  expect(within(detail).getByText("0.93")).toBeInTheDocument();
+  expect(within(detail).getByText("medium")).toBeInTheDocument();
+  expect(within(detail).getByText("title")).toBeInTheDocument();
+  expect(within(detail).getByText("Sidebar flickers when a thread finishes")).toBeInTheDocument();
+
+  // Arrow keys move through the list.
+  fireEvent.keyDown(list, { key: "ArrowDown" });
+  const failed = within(dialog).getByRole("region", { name: "Item 3" });
+  expect(within(failed).getByText("Retried 3 times, gave up.")).toBeInTheDocument();
+  expect(options[1]).toHaveAttribute("aria-selected", "true");
+  fireEvent.keyDown(list, { key: "k" });
+  expect(within(dialog).getByRole("region", { name: "Item 0" })).toBeInTheDocument();
 
   fireEvent.click(within(dialog).getByRole("tab", { name: "Failed 9" }));
   await waitFor(() => expect(api.readDecisionsRailBatch).toHaveBeenLastCalledWith({ ...THREAD, batchId: "batch_run-1", status: "failed", from: 0, limit: 100 }));
-  await waitFor(() => expect(within(dialog).queryByText("relevant: yes")).not.toBeInTheDocument());
+  await waitFor(() => expect(within(dialog).getByRole("region", { name: "Item 3" })).toBeInTheDocument());
 
   fireEvent.click(within(dialog).getByRole("button", { name: "Open results file" }));
   await waitFor(() => expect(api.openDecisionsRailResults).toHaveBeenCalledWith({ ...THREAD, batchId: "batch_run-1" }));
@@ -197,17 +274,75 @@ it("opens a batch's items with previews, answers and latency, and filters them",
   expect(api.onDetailsModalOpenChange).toHaveBeenLastCalledWith(false);
 });
 
+// Rule: an ad hoc definition is never stored, so its placeholder name and
+// version are not shown; the batch says what it asked instead.
+it("calls an ad hoc batch Ad hoc, with no version, and names its questions", () => {
+  const adHoc: DecisionsRailBatch = {
+    ...running,
+    batchId: "batch_adhoc-1",
+    decisionId: "adhoc:0123",
+    name: "ad_hoc",
+    version: 1,
+    adHoc: true,
+    state: "completed",
+    questionNames: ["preferred_caption"],
+  };
+  renderPanel({ snapshot: { now: NOW, decisions: [], batches: [adHoc] } });
+  const card = screen.getAllByRole("listitem").find((item) => item.classList.contains("decisions-batch"))!;
+  expect(within(card).getByText("Ad hoc")).toBeInTheDocument();
+  expect(within(card).getByText("not stored")).toBeInTheDocument();
+  expect(within(card).queryByText("v1")).not.toBeInTheDocument();
+  expect(within(card).queryByText("ad_hoc")).not.toBeInTheDocument();
+  expect(within(card).getByText("Asks preferred_caption")).toBeInTheDocument();
+});
+
 it("says so when the thread has no decisions and no batches", () => {
   renderPanel({ snapshot: { now: NOW, decisions: [], batches: [] } });
-  expect(screen.getByText(/No decisions are visible to this thread/)).toBeInTheDocument();
+  expect(screen.getByText(/None saved/)).toBeInTheDocument();
   expect(screen.getByText("This thread has not run a decision batch.")).toBeInTheDocument();
+});
+
+// Rule: a thread that has not used decisions, on a profile with no
+// provider ready, gets the pitch and a way to set one up.
+it("pitches decisions and opens setup when no provider is ready", async () => {
+  const settings = setupSettings(settingsSnapshot());
+  const onOpenSettings = vi.fn();
+  const api = renderPanel({ snapshot: { now: NOW, decisions: [], batches: [] }, settings, onOpenSettings });
+  expect(screen.getByRole("heading", { name: /Ask one typed question/ })).toBeInTheDocument();
+  expect(screen.getByText("OpenAI Decisions").nextElementSibling).toHaveTextContent("Needs key");
+  expect(screen.getByText("Local decision model").nextElementSibling).toHaveTextContent("Not chosen");
+
+  fireEvent.click(screen.getByRole("button", { name: "Set up decisions" }));
+  const dialog = await screen.findByRole("dialog", { name: "Choose where decisions run" });
+  expect(api.onDetailsModalOpenChange).toHaveBeenLastCalledWith(true);
+  // The first provider that needs something opens with its key field.
+  expect(within(dialog).getByText("OpenAI API key")).toBeInTheDocument();
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "Use local model" }));
+  await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ models: { decisionModels: { model: "local" } } }));
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "All decision settings" }));
+  expect(onOpenSettings).toHaveBeenCalledWith(undefined);
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(api.onDetailsModalOpenChange).toHaveBeenLastCalledWith(false);
+});
+
+it("suggests something to ask once a provider is ready", () => {
+  renderPanel({
+    snapshot: { now: NOW, decisions: [], batches: [] },
+    settings: setupSettings(settingsSnapshot({ jevKey: true })),
+  });
+  expect(screen.queryByRole("heading", { name: /Ask one typed question/ })).not.toBeInTheDocument();
+  expect(screen.getByText("TypeSafe Jev is ready. Try asking:")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Providers" })).toBeInTheDocument();
 });
 
 // Rule: whenever the batch dialog is gone, the rail hears it closed, or the
 // hover rail stays pinned open with nothing on it.
 it("releases the rail when the open batch leaves the snapshot or the panel unmounts", async () => {
   const api = renderPanel();
-  fireEvent.click(screen.getAllByRole("button", { name: "Details" })[0]!);
+  fireEvent.click(screen.getAllByRole("button", { name: "Review" })[0]!);
   await screen.findByRole("dialog");
   expect(api.onDetailsModalOpenChange).toHaveBeenLastCalledWith(true);
 
@@ -217,7 +352,7 @@ it("releases the rail when the open batch leaves the snapshot or the panel unmou
   expect(api.onDetailsModalOpenChange).toHaveBeenLastCalledWith(false);
 
   api.rerender(snapshot);
-  fireEvent.click(screen.getAllByRole("button", { name: "Details" })[0]!);
+  fireEvent.click(screen.getAllByRole("button", { name: "Review" })[0]!);
   await screen.findByRole("dialog");
   api.onDetailsModalOpenChange.mockClear();
   api.unmount();
@@ -235,8 +370,8 @@ it("keeps polling a running batch after a failed read", async () => {
       return page(request);
     },
   });
-  fireEvent.click(screen.getAllByRole("button", { name: "Details" })[0]!);
+  fireEvent.click(screen.getAllByRole("button", { name: "Review" })[0]!);
   const dialog = await screen.findByRole("dialog");
-  await within(dialog).findByText("{\"title\":\"Sidebar flickers when a thread finishes\"}", undefined, { timeout: 4_000 });
+  await within(dialog).findByRole("listbox", { name: "Items" }, { timeout: 4_000 });
   expect(api.readDecisionsRailBatch).toHaveBeenCalledTimes(2);
 }, 10_000);

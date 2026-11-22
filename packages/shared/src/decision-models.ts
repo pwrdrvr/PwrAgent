@@ -197,3 +197,72 @@ export function normalizeDecisionModelSettings(value: {
     ...(Object.keys(jev).length ? { jev } : {}),
   };
 }
+
+/** Every provider an agent can run a decision on, in the order agents prefer them. */
+export type DecisionRunProvider = "openai" | DecisionProviderId;
+
+export type DecisionProviderReadinessInput = {
+  decisionModels: DesktopDecisionModelSettings | undefined;
+  /** OpenAI Decisions is on in Settings (the default). */
+  openaiEnabled: boolean;
+  openaiKey: boolean;
+  jevKey: boolean;
+};
+
+export type DecisionProviderReadiness = {
+  provider: DecisionRunProvider;
+  enabled: boolean;
+  /** Settings hold everything an agent needs to run a decision on it. */
+  ready: boolean;
+  /**
+   * What an enabled provider that is not ready lacks: an API key, or, for
+   * the local model, being chosen as the decision model.
+   */
+  missing?: "key" | "choice";
+};
+
+export type DecisionProvidersReadiness = {
+  /** OpenAI Decisions, TypeSafe Jev, then the local model. */
+  providers: DecisionProviderReadiness[];
+  /** The provider a decision that names none runs on. */
+  defaultProvider: DecisionRunProvider;
+};
+
+/**
+ * What the Decisions tab and its setup dialog say about each provider, and
+ * which one an agent gets by default. The default follows the owner's
+ * pick (`resolveDefaultDecisionProvider`): OpenAI when it is on with a key,
+ * else the decision model chosen under Defaults → Decisions, else Jev when
+ * it is on with a key, else the first provider that is on. A local model
+ * counts as ready only once it is chosen: nothing says a server is running
+ * at the default address until the operator says so.
+ */
+export function decisionProvidersReadiness(input: DecisionProviderReadinessInput): DecisionProvidersReadiness {
+  const resolved = resolveDecisionModelSettings(input.decisionModels);
+  const enabled: Record<DecisionRunProvider, boolean> = {
+    openai: input.openaiEnabled,
+    jev: resolved.enabled.jev,
+    local: resolved.enabled.local,
+  };
+  const ready: Record<DecisionRunProvider, boolean> = {
+    openai: enabled.openai && input.openaiKey,
+    jev: enabled.jev && input.jevKey,
+    local: enabled.local && resolved.model === "local",
+  };
+  const order: DecisionRunProvider[] = ["openai", "jev", "local"];
+  const providers = order.map((provider): DecisionProviderReadiness => ({
+    provider,
+    enabled: enabled[provider],
+    ready: ready[provider],
+    ...(enabled[provider] && !ready[provider] ? { missing: provider === "local" ? "choice" : "key" } : {}),
+  }));
+  const chosen = resolved.model;
+  const defaultProvider: DecisionRunProvider = ready.openai
+    ? "openai"
+    : chosen === "jev" || chosen === "local"
+      ? chosen
+      : ready.jev
+        ? "jev"
+        : order.find((provider) => enabled[provider]) ?? "openai";
+  return { providers, defaultProvider };
+}

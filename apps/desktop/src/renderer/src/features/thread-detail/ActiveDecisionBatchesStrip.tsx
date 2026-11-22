@@ -8,7 +8,7 @@ import { formatRunningDurationMs } from "../../lib/format-duration";
 import { statusPulseRef } from "../../lib/status-pulse";
 import { DecisionBatchDetailsModal } from "./context-panels/DecisionBatchDetailsModal";
 import { isDecisionBatchEventFor } from "./context-panels/decision-batch-events";
-import { isDecisionBatchRunning } from "./context-panels/decisions-format";
+import { decisionBatchTitle, decisionBatchVersionTag, isDecisionBatchRunning } from "./context-panels/decisions-format";
 import { useNowWhileActive } from "./context-panels/RailCardTiming";
 import { ThinkingScanner } from "./ThinkingScanner";
 
@@ -131,7 +131,7 @@ export function ActiveDecisionBatchesStrip(props: {
             <ul className="live-strip__list">
               {visible.map((batch) => {
                 const failedRow = !isDecisionBatchRunning(batch);
-                const label = `${batch.name} v${batch.version}`;
+                const label = [decisionBatchTitle(batch), decisionBatchVersionTag(batch)].filter(Boolean).join(" ");
                 const progress = `${batch.finished}/${batch.count}`;
                 const elapsed = formatRunningDurationMs(Math.max(0, now - (batch.startedAt ?? batch.createdAt)));
                 return (

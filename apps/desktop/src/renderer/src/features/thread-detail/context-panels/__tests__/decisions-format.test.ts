@@ -19,6 +19,7 @@ const batch: DecisionsRailBatch = {
   decisionId: "dec_1",
   name: "diff_risk",
   version: 1,
+  adHoc: false,
   provider: "jev",
   state: "completed",
   stopping: false,

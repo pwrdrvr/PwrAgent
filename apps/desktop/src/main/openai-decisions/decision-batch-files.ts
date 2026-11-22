@@ -2,6 +2,7 @@ import { appendFile, mkdir, readdir, readFile, rm, stat } from "node:fs/promises
 import path from "node:path";
 import { isRegisteredDecisionProvider } from "@pwragent/shared/openai-decisions";
 import {
+  parseBatchDefinition,
   recordBatchItem,
   type DecisionBatchCaller,
   type DecisionBatchItem,
@@ -113,6 +114,7 @@ export function batchHeaderEntry(record: DecisionBatchRecord): Record<string, un
     concurrency: record.concurrency,
     background: record.background,
     createdAt: record.createdAt,
+    ...(record.definition ? { definition: record.definition } : {}),
   };
 }
 
@@ -258,12 +260,17 @@ function headerRecord(
     state: "running",
     createdAt: entry.createdAt,
     resultsFile: file,
+    ...definitionField(parseBatchDefinition(entry.definition)),
     results: new Array<DecisionBatchItem | undefined>(count).fill(undefined),
     succeeded: 0,
     failed: 0,
     skipped: 0,
     controller: new AbortController(),
   };
+}
+
+function definitionField(definition: ReturnType<typeof parseBatchDefinition>) {
+  return definition ? { definition } : {};
 }
 
 function parseItem(entry: Record<string, unknown>, count: number): DecisionBatchItem | undefined {
