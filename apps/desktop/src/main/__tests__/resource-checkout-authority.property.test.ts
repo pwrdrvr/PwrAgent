@@ -622,6 +622,11 @@ describe("the persisted resource checkout authority", () => {
       await scenario("administrative-release", "One commit for validated recovery, a wake, and the operator audit note", () => authority.perform(actor, {
         ...local, kind: "administrative_release", idempotencyKey: "recover", auditNote: "Fixture proof",
       }, { proveFenced: () => true }));
+      const resolve = { kind: "resolve_ownership", idempotencyKey: "resolve", resourceId, resolution: "accept_definition" } as const;
+      await scenario("resolve-ownership", "One commit for an operator's ownership resolution and its receipt; a retry commits nothing", () => {
+        authority.resolveOwnership(actor, resolve, (record) => { record.definition = { ...record.definition }; });
+        authority.resolveOwnership(actor, resolve);
+      });
     } finally {
       harness.close();
       if (old === undefined) delete process.env[SQLITE_WRITE_METRICS_ENV];

@@ -9,6 +9,7 @@ import { defaultInstanceLabel } from "../federation/federation-instance-label";
 import type { DesktopFederationRuntime } from "../federation/federation-runtime";
 import { buildDockProfileSnapshot, findLiveProfileRuntimeMarkers, resolveActiveProfileName, resolvePwragentRoot } from "../profile";
 import {
+  adoptMachineCheckoutStorage,
   CheckoutStoreIdentityError,
   openFederationCheckoutStorage,
   openMachineCheckoutStorage,
@@ -56,8 +57,9 @@ export async function initializeResourceCheckouts(federation: DesktopFederationR
   let allowAgentDrafts = false;
   let machineStore;
   let machineUnresolved: ResourceOwnershipConflict = OWNERSHIP_CONFLICTS.machineIdMissing;
-  let adoptMachineStore: (() => ReturnType<typeof openMachineCheckoutStorage>) | undefined;
+  let adoptMachineStore: (() => ReturnType<typeof adoptMachineCheckoutStorage>) | undefined;
   let externalStore;
+  let externalUnresolved: ResourceOwnershipConflict | undefined;
   try {
     const config = readExternalCheckoutBindings(root);
     bindings = config.bindings;
@@ -74,7 +76,7 @@ export async function initializeResourceCheckouts(federation: DesktopFederationR
         warn(error);
         if (error instanceof CheckoutStoreIdentityError) {
           machineUnresolved = OWNERSHIP_CONFLICTS.copiedRoot;
-          adoptMachineStore = () => openMachineCheckoutStorage(root, identity, { adoptIdentity: true });
+          adoptMachineStore = () => adoptMachineCheckoutStorage(root, identity);
         } else {
           machineUnresolved = OWNERSHIP_CONFLICTS.machineStoreUnavailable;
         }
@@ -82,12 +84,16 @@ export async function initializeResourceCheckouts(federation: DesktopFederationR
     }
     if (evidence.hostBinding && bindings.some((binding) => binding.authorityInstanceId === instanceId && binding.authorityMachineId === machineId)) {
       try { externalStore = await openCheckoutStorage(() => openFederationCheckoutStorage(root, identity)); }
-      catch (error) { warn(error); }
+      catch (error) {
+        warn(error);
+        if (error instanceof CheckoutStoreIdentityError) externalUnresolved = OWNERSHIP_CONFLICTS.federationCopiedRoot;
+      }
     }
   }
   runtime = new DesktopResourceCheckoutService({
     viewer: { instanceId, profile, machineId, instanceLabel: defaultInstanceLabel() },
-    machineStore, machineUnresolved, adoptMachineStore, machineCpuCount: cpus().length, externalStore, bindings, allowAgentDrafts, approvedLabCheckouts, warn,
+    machineStore, machineUnresolved, adoptMachineStore, machineCpuCount: cpus().length, externalStore, externalUnresolved,
+    bindings, allowAgentDrafts, approvedLabCheckouts, warn,
     bootId: evidence.hostBinding ? evidence.bootId : undefined,
     readMachineAdvertisements: () => buildDockProfileSnapshot().profiles
       .filter((entry) => entry.name !== profile)

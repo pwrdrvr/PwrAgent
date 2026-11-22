@@ -5,7 +5,9 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   CheckoutDefinitionConflictError, ResourceCheckoutAuthority, MAX_CHECKOUT_HOLD_MS, rejectCheckout, type CheckoutStatus, type CheckoutToken,
 } from "@pwragent/owner-core/resource-checkout-authority";
-import type { CheckoutActor, CheckoutDefinition, CheckoutStore } from "@pwragent/owner-core/resource-checkout-storage";
+import type {
+  CheckoutActor, CheckoutDefinition, CheckoutDomainRecord, CheckoutStore,
+} from "@pwragent/owner-core/resource-checkout-storage";
 import {
   RESOURCE_CHECKOUTS_CONTRACT_VERSION, type ResourceAuthority, type ResourceCheckoutActionResult,
   type ResourceCheckoutsSnapshot, type ResourceViewer, type ResourceDomain, type ResourceAdvertisement, type ResourceCheckoutActionRequest,
@@ -28,10 +30,16 @@ type Options = {
   machineStore?: Store;
   /** Why no machine store was passed, for the operator. */
   machineUnresolved?: ResourceOwnershipConflict;
-  /** Opens the machine store under this machine's identity, taking over a copied one. */
-  adoptMachineStore?: () => Store;
+  /**
+   * Opens the machine store under this machine's identity. `adopted` is true
+   * only when this call took the store over from another identity; another
+   * profile on the root may already have done that.
+   */
+  adoptMachineStore?: () => { store: Store; adopted: boolean };
   machineCpuCount?: number;
   externalStore?: Store;
+  /** Why no Federation store was passed, for the operator. */
+  externalUnresolved?: ResourceOwnershipConflict;
   bindings: ExternalBinding[];
   allowAgentDrafts?: boolean;
   approvedLabCheckouts?: ReadonlyMap<string, ApprovedLabCheckout>;
@@ -74,6 +82,8 @@ export class DesktopResourceCheckoutService {
   private closed = false;
   private closing?: Promise<void>;
   private machineConflict = false;
+  /** The adopted machine store came from another identity in this process. */
+  private machineAdopted = false;
   private machineConflictExplanation: ResourceOwnershipConflict = UNEXPLAINED_OWNERSHIP_CONFLICT;
   private lastAdvertisementScan = -Infinity;
   private localAdvertisements: ResourceAdvertisement[] = [];
@@ -225,7 +235,7 @@ export class DesktopResourceCheckoutService {
   /** Why a binding this instance should host is unresolved. */
   private bindingConflict(binding: ExternalBinding): ResourceOwnershipConflict {
     if (!this.isLocalAuthority(binding)) return misboundAuthorityConflict(binding.authorityMachineId);
-    if (!this.external) return OWNERSHIP_CONFLICTS.federationStoreUnavailable;
+    if (!this.external) return this.options.externalUnresolved ?? OWNERSHIP_CONFLICTS.federationStoreUnavailable;
     if (this.changedDefinitions.has(binding.definition.resourceId)) return OWNERSHIP_CONFLICTS.definitionChanged;
     return UNEXPLAINED_OWNERSHIP_CONFLICT;
   }
@@ -507,43 +517,73 @@ export class DesktopResourceCheckoutService {
     }
     if (action.resolution !== offered) return rejectCheckout("not_applicable", this.machineConflictExplanation.remedy);
     if (offered === "accept_definition" && this.machine) {
-      const machine = this.machine;
-      const result = machine.resolveOwnership(actor, action, (record) => { record.definition = this.machineDefinition; });
-      if (result.outcome === "accepted") {
-        this.machineConflict = false;
-        // The constructor skipped this when the definition conflicted.
-        if (this.options.bootId) machine.reconcilePriorMachineBoot(this.machineDefinition.resourceId, this.options.bootId);
-      }
+      const result = this.machine.resolveOwnership(actor, action, (record) => this.acceptMachineDefinition(record));
+      if (result.outcome === "accepted") this.machineResolved(this.machine);
       return result;
     }
     if (!this.machine) {
       const adopt = this.options.adoptMachineStore;
       if (!adopt) return rejectCheckout("not_applicable", this.machineConflictExplanation.remedy);
-      let store: Store;
+      let opened: { store: Store; adopted: boolean };
       try {
-        store = adopt();
+        opened = adopt();
       } catch (error) {
         this.options.warn(error);
         return rejectCheckout("not_applicable", OWNERSHIP_CONFLICTS.machineStoreUnavailable.remedy);
       }
-      this.machineStore = store;
-      this.machine = new ResourceCheckoutAuthority(store, this.now, randomUUID);
+      const machine = new ResourceCheckoutAuthority(opened.store, this.now, randomUUID);
       try {
-        this.machine.ensure(this.machineDefinition, { machineCpuPool: true });
+        machine.ensure(this.machineDefinition, { machineCpuPool: true });
       } catch (error) {
-        // The copied record is replaced below along with its checkouts.
-        if (!(error instanceof CheckoutDefinitionConflictError)) throw error;
+        // A copied record is replaced below; anything else leaves nothing half bound.
+        if (!(error instanceof CheckoutDefinitionConflictError)) {
+          opened.store.close();
+          this.options.warn(error);
+          return rejectCheckout("not_applicable", OWNERSHIP_CONFLICTS.machineStoreUnavailable.remedy);
+        }
       }
+      this.machineStore = opened.store;
+      this.machine = machine;
+      this.machineAdopted = opened.adopted;
     }
+    const adopted = this.machineAdopted;
     const result = this.machine.resolveOwnership(actor, action, (record, now) => {
-      // Holds and waiters from the other machine never held this machine.
-      record.definition = this.machineDefinition;
+      this.acceptMachineDefinition(record);
+      // Holds and waiters copied from the other machine never held this one.
+      // When another profile on this root adopted first, they are its own.
+      if (!adopted) return;
       record.grants = [];
       record.queue = [];
       record.cleanupVerifiedAt = now;
     });
-    if (result.outcome === "accepted") this.machineConflict = false;
+    if (result.outcome === "accepted") this.machineResolved(this.machine);
     return result;
+  }
+
+  /**
+   * The first profile to initialize the counted pool set its capacity, and a
+   * later CPU sample can't resize it under live reservations, so keep it.
+   */
+  private acceptMachineDefinition(record: CheckoutDomainRecord): void {
+    const saved = record.definition;
+    if (saved.counted) {
+      record.definition = { ...this.machineDefinition, capacity: saved.capacity };
+      return;
+    }
+    // A pre-release single-slot record: its holds took the whole machine.
+    record.definition = this.machineDefinition;
+    for (const hold of [...record.grants, ...record.queue]) hold.units = this.machineDefinition.capacity;
+  }
+
+  private machineResolved(machine: ResourceCheckoutAuthority): void {
+    this.machineConflict = false;
+    if (!this.options.bootId) return;
+    try {
+      // The constructor skipped this while the machine was unresolved.
+      machine.reconcilePriorMachineBoot(this.machineDefinition.resourceId, this.options.bootId);
+    } catch (error) {
+      this.options.warn(error);
+    }
   }
 
   private performWithExecutor(

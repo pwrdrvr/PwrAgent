@@ -128,9 +128,8 @@ export function projectCheckoutDomain(
         : cleanupVerifiedAt === undefined ? { state: "not_applicable", detail: "No managed cleanup has been recorded." }
           : { state: "verified", detail: "The executor verified an owned job ended.", verifiedAt: cleanupVerifiedAt },
     recovery, recoveries,
-    ownershipConflict: authority.status === "unresolved"
-      ? { ...conflict, ...(conflict.resolution ? { resolution: { ...conflict.resolution } } : {}) }
-      : null,
+    // A copy, so a caller can't change the shared explanations.
+    ownershipConflict: authority.status === "unresolved" ? structuredClone(conflict) : null,
     definition: { revision: definition.revision, updatedAt: definition.updatedAt, publication: definition.publication },
     actions,
   };

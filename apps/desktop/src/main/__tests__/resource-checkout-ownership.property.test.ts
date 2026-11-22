@@ -12,6 +12,7 @@ import { openResourceCheckoutStore } from "@pwragent/sqlite-storage/resource-che
 import type { ExternalBinding } from "../resource-checkouts/checkout-configuration";
 import { misboundAuthorityConflict, OWNERSHIP_CONFLICTS } from "../resource-checkouts/checkout-ownership";
 import { DesktopResourceCheckoutService } from "../resource-checkouts/resource-checkout-service";
+import { adoptMachineCheckoutStorage, openMachineCheckoutStorage } from "../storage/resource-checkout-storage";
 
 /**
  * Rule: every route to `ownership_unresolved` carries its own reason and
@@ -129,9 +130,9 @@ function saveConflicting(store: CheckoutStore, definition: CheckoutDefinition): 
 }
 
 /** Use the machine store as a profile would, optionally leaving a checkout held. */
-async function seedMachineStore(file: string, identity: string, cpuCount: number, held: boolean): Promise<void> {
+async function seedMachineStore(root: string, identity: string, cpuCount: number, held: boolean): Promise<void> {
   const service = new DesktopResourceCheckoutService({
-    viewer: VIEWER, machineCpuCount: cpuCount, machineStore: openResourceCheckoutStore(file, identity),
+    viewer: VIEWER, machineCpuCount: cpuCount, machineStore: openMachineCheckoutStorage(root, identity),
     bindings: [], requestPeer: NO_PEERS, warn: () => {},
   });
   try {
@@ -147,14 +148,13 @@ async function seedMachineStore(file: string, identity: string, cpuCount: number
 
 async function run(scenario: Scenario): Promise<void> {
   const root = mkdtempSync(path.join(os.tmpdir(), "pwragent-checkout-ownership-"));
-  const machineFile = path.join(root, "machine.db");
   const bindings = scenario.bindings.map((binding, index) => bindingFor(index, binding));
   const seeded = scenario.machine === "changed" || scenario.machine === "copied";
   if (seeded) {
     const identity = scenario.machine === "copied" ? "another-host" : IDENTITY;
-    await seedMachineStore(machineFile, identity, 2, scenario.machineHeld);
+    await seedMachineStore(root, identity, 2, scenario.machineHeld);
     if (scenario.machine === "changed") {
-      const store = openResourceCheckoutStore(machineFile, identity);
+      const store = openMachineCheckoutStorage(root, identity);
       store.change((tx) => {
         const record = tx.read(MACHINE_RESOURCE)!;
         tx.save({ ...record, definition: { ...record.definition, epoch: 9 } });
@@ -164,7 +164,7 @@ async function run(scenario: Scenario): Promise<void> {
   }
   const machineStore = scenario.machine === "alternate_root" || scenario.machine === "copied"
     ? undefined
-    : openResourceCheckoutStore(machineFile, IDENTITY);
+    : openMachineCheckoutStorage(root, IDENTITY);
   const externalStore = scenario.externalStore
     ? openResourceCheckoutStore(path.join(root, "federation.db"), IDENTITY)
     : undefined;
@@ -179,7 +179,7 @@ async function run(scenario: Scenario): Promise<void> {
     machineStore,
     machineUnresolved: scenario.machine === "copied" ? OWNERSHIP_CONFLICTS.copiedRoot : OWNERSHIP_CONFLICTS.alternateRoot,
     adoptMachineStore: scenario.machine === "copied"
-      ? () => openResourceCheckoutStore(machineFile, IDENTITY, { adoptIdentity: true })
+      ? () => adoptMachineCheckoutStorage(root, IDENTITY)
       : undefined,
     externalStore,
     bindings,
@@ -233,6 +233,11 @@ async function run(scenario: Scenario): Promise<void> {
       expect(after?.condition).not.toBe("ownership_unresolved");
       const heldBefore = resource.resourceId === MACHINE_RESOURCE && scenario.machineHeld ? 1 : 0;
       expect(after?.allocations).toHaveLength(expectedHoldsAfter(resolution, heldBefore));
+      if (resource.resourceId === MACHINE_RESOURCE && resolution === "accept_definition") {
+        // The pool keeps the capacity its first profile set (2), not this
+        // profile's CPU sample (4), so the kept holds still fit.
+        expect(after?.sharing).toMatchObject({ mode: "counted", capacity: 2 });
+      }
       expect(after?.actions.resolve_ownership).toBeUndefined();
       expect(after?.actions.request).toBeDefined();
       // Resolving twice under a new key finds nothing left to resolve.
@@ -248,6 +253,35 @@ async function run(scenario: Scenario): Promise<void> {
 describe("unresolved checkout ownership", () => {
   it("explains each route to ownership unresolved and resolves only what Resources offers", async () => {
     await fc.assert(fc.asyncProperty(scenarioArb, run), { numRuns: 60 });
+  });
+
+  it("keeps checkouts made after another profile on the root adopted the store", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "pwragent-checkout-ownership-"));
+    await seedMachineStore(root, "another-host", 2, true);
+    const profile = () => new DesktopResourceCheckoutService({
+      viewer: VIEWER, machineCpuCount: 2, machineUnresolved: OWNERSHIP_CONFLICTS.copiedRoot,
+      adoptMachineStore: () => adoptMachineCheckoutStorage(root, IDENTITY),
+      bindings: [], requestPeer: NO_PEERS, warn: () => {},
+    });
+    // Both profiles started before either adopted the copied store.
+    const first = profile();
+    const second = profile();
+    const adopt = { kind: "resolve_ownership", resourceId: MACHINE_RESOURCE, resolution: "adopt_store" } as const;
+    try {
+      await expect(first.perform({ ...adopt, idempotencyKey: "first" })).resolves.toMatchObject({ outcome: "accepted" });
+      expect(first.read().resources[0]?.allocations).toHaveLength(0);
+      await expect(first.perform({
+        kind: "request", idempotencyKey: "after", resourceId: MACHINE_RESOURCE, purpose: "Real work", expectedDurationMs: 60_000,
+      })).resolves.toMatchObject({ outcome: "granted" });
+      expect(second.read().resources[0]?.condition).toBe("ownership_unresolved");
+      await expect(second.perform({ ...adopt, idempotencyKey: "second" })).resolves.toMatchObject({ outcome: "accepted" });
+      expect(second.read().resources[0]?.allocations).toHaveLength(1);
+      expect(first.read().resources[0]?.allocations).toHaveLength(1);
+    } finally {
+      await first.close(0);
+      await second.close(0);
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("lets only this instance's operator resolve ownership, never a peer", async () => {

@@ -23,7 +23,7 @@ export const OWNERSHIP_CONFLICTS = {
     resolution: {
       kind: "adopt_store",
       label: "Adopt for this machine",
-      consequence: "Checkouts and waiters copied from the other machine are dropped. They never held this machine's capacity. Other profiles on this root pick up the change when they restart.",
+      consequence: "Checkouts and waiters copied from the other machine are dropped. They never held this machine's capacity. If another profile on this root already adopted it, its checkouts are kept.",
     },
   },
   machineStoreUnavailable: {
@@ -42,6 +42,10 @@ export const OWNERSHIP_CONFLICTS = {
   federationStoreUnavailable: {
     reason: "This instance hosts the resource, but its Federation checkout store is unavailable.",
     remedy: "Hosting needs this machine's platform identity. Check the main-process log for pwragent:resource-checkouts, correct the cause, and restart PwrAgent.",
+  },
+  federationCopiedRoot: {
+    reason: "This instance hosts the resource, but its Federation checkout store was created on another machine.",
+    remedy: "Host it from the machine that created this root, or bind it to another instance in resource-checkout-authorities.json and restart every participating instance.",
   },
   definitionChanged: {
     reason: "The configured owner, epoch or capacity differs from the resource's saved record.",

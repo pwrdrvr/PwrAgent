@@ -199,14 +199,15 @@ inspector shows both, and a button when the case has a resolution.
 
 | Cause | Resolution in Resources | Otherwise |
 | --- | --- | --- |
-| `resource-checkouts.db` was created under another machine identity | **Adopt for this machine** takes the store under this machine's identity. Checkouts and waiters that came with the copy are dropped: they never held this machine. Other profiles on this root pick up the change when they restart. | Run machine work on the machine that created the root. |
-| This machine's saved record differs from the current definition | **Accept current definition** saves the current definition and keeps checkouts and the queue. | |
+| `resource-checkouts.db` was created under another machine identity | **Adopt for this machine** takes the store under this machine's identity. Checkouts and waiters that came with the copy are dropped: they never held this machine. Another profile on this root that still shows the conflict binds the adopted store without dropping anything. | Run machine work on the machine that created the root. |
+| This machine's saved record differs from the current definition, pool capacity aside | **Accept current definition** saves the current definition and keeps checkouts, the queue and the pool's saved capacity. | |
 | The configured owner, epoch or capacity differs from a hosted resource's saved record | **Accept configured definition** saves the configured definition and keeps checkouts and the queue. If capacity shrank, new requests wait until holds end. | Restore the previous values in `resource-checkout-authorities.json` and restart. |
 | The root has no valid `machine-id` | None | Make sure the file is readable, then restart. |
 | A packaged app runs from an alternate root | None | Run machine work from the primary root. |
 | The machine store can't be opened | None | Read `pwragent:resource-checkouts` in the main-process log, correct the cause, and restart. |
 | A binding names this instance on another machine | None | If the profile was copied from that machine, run the authority there. Otherwise correct `authorityMachineId` on every participating instance and restart them. |
 | This instance hosts a binding but has no Federation store | None | Hosting needs the platform machine identity. Read the log, correct the cause, and restart. |
+| This instance hosts a binding, but `federation-resource-checkouts.db` was created on another machine | None | Host it from the machine that created the root, or bind it to another instance on every participant. Federation peers hold those checkouts, so adopting the copy would hand out capacity twice. |
 
 The cases without a resolution have nothing for the app to choose between:
 the fix is a file, a path or a restart.
