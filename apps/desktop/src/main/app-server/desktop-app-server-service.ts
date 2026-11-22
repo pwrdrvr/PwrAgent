@@ -8250,9 +8250,17 @@ class DesktopAppServerService {
   async registerDirectoryFromDisk(
     request: RegisterDirectoryFromDiskRequest,
   ): Promise<RegisterDirectoryFromDiskResponse> {
+    const listDirectoryLaunchpads = () => this.getOverlayStore().listDirectoryLaunchpads();
     const response = await registerDirectoryFromDisk(request, {
       ensureDirectoryLaunchpad: (req) => this.ensureDirectoryLaunchpad(req),
-      listDirectoryLaunchpads: () => this.getOverlayStore().listDirectoryLaunchpads(),
+      listDirectoryLaunchpads,
+      listRegisteredProjectPaths: process.platform === "darwin" ? async () => {
+        const launchpads = await listDirectoryLaunchpads();
+        return launchpads.flatMap(({ directoryKey, directoryKind, registeredAt }) =>
+          directoryKind === "directory" && registeredAt !== undefined && directoryKey.startsWith("directory:/")
+            ? [directoryKey.slice("directory:".length)]
+            : []);
+      } : undefined,
     });
     if (response.ok) {
       this.lastDirectoriesByKey.set(response.directoryKey, {

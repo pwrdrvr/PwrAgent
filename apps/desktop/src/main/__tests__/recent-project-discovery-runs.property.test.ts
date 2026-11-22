@@ -54,7 +54,7 @@ function search(
 ): Promise<DiscoverRecentProjectsResponse> {
   return runs.run(owner, async (signal) => await discoverRecentProjects({
     includeCodex: true,
-    ignorePathCase: false,
+    platform: "linux",
     signal,
     readCodexDirectories: async () => await readRecentCodexDirectories(() => {
       const client = fakeClient(owner, request);

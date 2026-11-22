@@ -29,7 +29,7 @@ function thread(overrides: Partial<AppServerThreadSummary>): AppServerThreadSumm
 function deps(overrides: Partial<RecentProjectDiscoveryDeps>): RecentProjectDiscoveryDeps {
   return {
     includeCodex: true,
-    ignorePathCase: false,
+    platform: "linux",
     labelFor: (agent) => (agent === "codex" ? "Codex" : agent === "claude" ? "Claude Code" : agent),
     resolveProjectRoot: async (folder) => folder,
     ...overrides,
