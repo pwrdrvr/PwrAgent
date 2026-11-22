@@ -5,7 +5,10 @@ import { buildThreadIdentityKey, type NavigationThreadSummary } from "@pwragent/
 import { resolveThreadParentKey, sortSubthreadSummaries } from "@pwragent/shared/subthreads";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
-import { openInMemoryStateDb } from "./sqlite-test-utils";
+import { StateDb } from "../state/state-db";
+import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
+import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
 const mocks = vi.hoisted(() => ({
   readProvider: vi.fn(),
@@ -22,8 +25,8 @@ vi.mock("../app-server/backend-registry", () => ({
       mocks.listeners.add(listener);
       return () => mocks.listeners.delete(listener);
     },
-    readSubthreadOrderProviderRows: async (backend: string, ids: ReadonlySet<string>) => {
-      const result = await mocks.readProvider({ backend, ids });
+    readSubthreadOrderProviderRows: async (backend: string, ids: ReadonlySet<string>, preserveListingOrder?: boolean) => {
+      const result = await mocks.readProvider({ backend, ids, preserveListingOrder });
       if (result.coverage && result.coverage.state !== "complete") throw new Error("Wait for complete owner discovery before moving a child.");
       return result.threads;
     },
@@ -341,8 +344,14 @@ it("matches the complete navigation index for colliding IDs, legacy links, and m
       const orderHints = ["anchor", "candidate-1"];
       await store.updateSubthreadOrder({ ...target, threadIds: orderHints });
       const scopes = [...new Set(["codex" as const, "claude" as const, ...rows.map((row) => row.source)])];
+      // Metadata listing order can disagree with insertion order even when
+      // all handoffs have different creation times.
+      const canonical = [...listing];
+      const firstHandoff = canonical.findIndex((row) => row.id === "handoff");
+      const secondHandoff = canonical.findIndex((row) => row.id === "handoff-of-handoff");
+      [canonical[firstHandoff], canonical[secondHandoff]] = [canonical[secondHandoff]!, canonical[firstHandoff]!];
       const full = scopes.flatMap((backend) => store.readNavigationQueryIndex({
-        backend, threads: listing.filter((row) => row.source === backend),
+        backend, threads: canonical.filter((row) => row.source === backend),
       }).threads);
       const byKey = new Map(full.map((thread) => [buildThreadIdentityKey(thread.source, thread.id), thread]));
       const expected = sortSubthreadSummaries({ subthreadOrder: orderHints }, full.filter((thread) =>
@@ -351,9 +360,9 @@ it("matches the complete navigation index for colliding IDs, legacy links, and m
         .map((thread) => thread.id).filter((id) => id !== "moved");
       expected.splice(expected.indexOf("anchor") + 1, 0, "moved");
 
-      mocks.readProvider.mockImplementation(async ({ backend, ids }: {
-        backend: NavigationThreadSummary["source"]; ids: ReadonlySet<string>;
-      }) => ({ threads: listing.filter((row) => row.source === backend && ids.has(row.id)) }));
+      mocks.readProvider.mockImplementation(async ({ backend, ids, preserveListingOrder }: {
+        backend: NavigationThreadSummary["source"]; ids: ReadonlySet<string>; preserveListingOrder?: boolean;
+      }) => ({ threads: (preserveListingOrder ? canonical : listing).filter((row) => row.source === backend && ids.has(row.id)) }));
       await updateLocalSubthreadOrder({ ...target, move: { threadId: "moved", anchorThreadId: "anchor", placement: "after" } });
       expect((await store.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder).toEqual(expected);
     } finally {
@@ -420,4 +429,111 @@ it("fences relevant provider archive and restore events and re-reads intervening
   await updateLocalSubthreadOrder(request);
   expect((await store.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder)
     .toEqual(["sibling", "child", "anchor"]);
+});
+
+
+it.each(["unmount", "mount", "remount", "refresh"] as const)("refuses stale peer membership when another connection can %s a pin", async (mutation) => {
+  const { dbPath, tempDir } = createTempStateDb("pwragent-subthread-peer-race-");
+  const reader = StateDb.open(dbPath);
+  const secondConnection = StateDb.open(dbPath);
+  try {
+    const store = mocks.store = new SqliteOverlayStore(reader);
+    const writer = new SqliteOverlayStore(secondConnection);
+    const target = { backend: "codex", parentThreadId: "root" } as const;
+    await store.setThreadParent({ ...target, threadId: "anchor" });
+    await store.setThreadParent({ ...target, threadId: "child" });
+    await pinPeerChild("peer-child");
+    const initial = ["anchor", "child", "peer-child"];
+    await store.updateSubthreadOrder({ ...target, threadIds: initial });
+    mocks.readProvider.mockResolvedValue({ threads: ["root", "anchor", "child"].map((id) => summary("codex", id)) });
+    const reached = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const pending = updateLocalSubthreadOrder({ ...target,
+      move: { threadId: "child", anchorThreadId: "peer-child", placement: "after" } }, {
+      peers: { localInstanceId: async () => LOCAL, summaries: {
+        resolvePinnedThreads: async (pins) => {
+          reached.resolve();
+          await finish.promise;
+          return peers().summaries.resolvePinnedThreads(pins);
+        },
+      } },
+    });
+    const expectation = expect(pending).rejects.toThrow("mounted peer threads changed");
+    await reached.promise;
+    const ref = buildFederatedThreadRef({ backend: "codex", instanceId: PEER, threadId: "peer-child" });
+    const saved = (await writer.listRemoteThreadPins())[0]!;
+    if (mutation === "unmount" || mutation === "remount") await writer.removeRemoteThreadPin({ ref });
+    if (mutation === "remount") await writer.addRemoteThreadPin({ ...saved, addedAt: saved.addedAt + 1 });
+    if (mutation === "mount") {
+      await writer.addRemoteThreadPin({ ...saved, ref: { ...ref, threadId: "new-peer-sibling" } });
+    }
+    if (mutation === "refresh") {
+      await writer.updateRemoteThreadPinSnapshots([{ ref,
+        summary: { ...saved.summary!, parentThreadId: "another-parent" }, instanceLabel: saved.instanceLabel }]);
+    }
+    finish.resolve();
+    await expectation;
+    expect((await store.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder).toEqual(initial);
+    expect(mocks.publish).not.toHaveBeenCalled();
+  } finally {
+    secondConnection.close();
+    reader.close();
+    removeTempStateDbDir(tempDir);
+  }
+});
+
+it("keeps a child ranked by a concurrent insertion before the provider lists it", async () => {
+  const store = mocks.store!;
+  const target = { backend: "codex", parentThreadId: "root" } as const;
+  for (const threadId of ["anchor", "child", "sibling"]) await store.setThreadParent({ ...target, threadId });
+  await store.setThreadParent({ backend: "claude", threadId: "pending", parentThreadId: "root", parentThreadBackend: "codex" });
+  const active = ["anchor", "child", "sibling"];
+  await store.updateSubthreadOrder({ ...target, threadIds: active });
+  const reached = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  mocks.readProvider.mockImplementation(async ({ backend }: { backend: string }) => {
+    if (backend !== "codex") return { threads: [] };
+    reached.resolve();
+    await finish.promise;
+    return { threads: ["root", ...active].map((id) => summary("codex", id)) };
+  });
+  const moving = updateLocalSubthreadOrder({ ...target,
+    move: { threadId: "child", anchorThreadId: "anchor", placement: "before" } });
+  await reached.promise;
+  await expect(store.updateSubthreadOrder({ ...target, children: active.map((id) => ({ id })),
+    insertAfter: { threadId: "pending", sourceThreadId: "anchor" } }))
+    .resolves.toEqual(["anchor", "pending", "child", "sibling"]);
+  finish.resolve();
+  await moving;
+
+  expect((await store.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder)
+    .toEqual(["child", "anchor", "pending", "sibling"]);
+});
+
+
+it("commits a changed peer snapshot and the child order together", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const { dbPath, tempDir } = createTempStateDb("pwragent-subthread-peer-writes-");
+  const state = StateDb.open(dbPath);
+  try {
+    const store = mocks.store = new SqliteOverlayStore(state);
+    const target = { backend: "codex", parentThreadId: "root" } as const;
+    await store.setThreadParent({ ...target, threadId: "anchor" });
+    await pinPeerChild("mounted");
+    await store.updateSubthreadOrder({ ...target, threadIds: ["anchor", "mounted"] });
+    mocks.readProvider.mockResolvedValue({ threads: ["root", "anchor"].map((id) => summary("codex", id)) });
+    const live = summary("codex", "mounted", { parentThreadId: "root", parentThreadBackend: "codex",
+      parentThreadInstanceId: LOCAL, title: "Fresh peer summary" });
+    const { writes } = await measureSqliteWrites(() => updateLocalSubthreadOrder({ ...target,
+      move: { threadId: "mounted", anchorThreadId: "anchor", placement: "before" } }, { peers: peers([live]) }));
+    expectSqliteWriteBudget({ scenario: "navigation-relative-child-move-peer-refresh",
+      note: "One commit for a move and a changed peer snapshot, ~20.6 KB or 2.06 MB/day at 100 such moves/day. No periodic writes.", writes });
+    expect((await store.listRemoteThreadPins())[0]?.summary?.title).toBe("Fresh peer summary");
+    expect((await store.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder)
+      .toEqual(["mounted", "anchor"]);
+  } finally {
+    state.close();
+    removeTempStateDbDir(tempDir);
+    vi.unstubAllEnvs();
+  }
 });

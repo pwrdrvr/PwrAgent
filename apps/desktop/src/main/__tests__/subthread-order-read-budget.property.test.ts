@@ -52,11 +52,12 @@ it("seeks stored subthread membership by parent or child ID regardless of unrela
 });
 
 
-it("backfills prior-version links and keeps them indexed across shared writers", async () => {
+it.each([86, 87, 999])("backfills links when a v%i profile lacks the indexes", async (version) => {
   const { dbPath, tempDir } = createTempStateDb("pwragent-subthread-group-");
   try {
     const older = StateDb.open(dbPath);
-    older.raw.exec("DROP INDEX idx_threads_subthread_id; DROP INDEX idx_threads_subthread_parent; PRAGMA user_version = 86");
+    older.raw.exec("DROP INDEX idx_threads_subthread_id; DROP INDEX idx_threads_subthread_parent");
+    older.raw.pragma(`user_version = ${version}`);
     const insert = older.raw.prepare("INSERT INTO threads(thread_id, payload) VALUES (?, ?)");
     insert.run("claude:root", JSON.stringify({ backend: "claude", threadId: "root" }));
     insert.run("acp%3Agrok:legacy", JSON.stringify({ backend: "acp:grok", threadId: "legacy", parentThreadId: "root" }));
@@ -68,7 +69,7 @@ it("backfills prior-version links and keeps them indexed across shared writers",
       const store = new SqliteOverlayStore(reader);
       const scopes = () => [...store.readSubthreadGroup("codex", "root").scopes].map(([backend, ids]) => [backend, [...ids]]);
       expect(scopes()).toEqual([["codex", ["root"]], ["claude", ["root"]], ["acp:grok", ["root", "legacy"]]]);
-      expect(reader.raw.pragma("user_version", { simple: true })).toBeGreaterThan(86);
+      expect(reader.raw.pragma("user_version", { simple: true })).toBe(Math.max(87, version));
       const move = writer.raw.prepare("UPDATE threads SET payload = json_set(payload, '$.parentThreadId', ?) WHERE thread_id = ?");
       move.run("elsewhere", "acp%3Agrok:legacy");
       expect(scopes()).toEqual([["codex", ["root"]], ["claude", ["root"]]]);

@@ -273,6 +273,12 @@ type RemoteDirectoryOverlayPayload = DirectoryOverlayState & {
   legacyLaunchpadSettledAt?: number;
 };
 
+type RemoteThreadPinSnapshotUpdate = {
+  ref: FederatedThreadRef;
+  summary: NavigationThreadSummary;
+  instanceLabel: string;
+};
+
 type RemoteThreadTargetRow = {
   instance_id: string;
   instance_label: string;
@@ -5139,15 +5145,19 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   }
 
   async removeRemoteThreadPin(params: { ref: FederatedThreadRef }): Promise<boolean> {
+    return this.deleteRemoteThreadPin(params.ref);
+  }
+
+  private deleteRemoteThreadPin(ref: FederatedThreadRef): boolean {
     const result = this.stateDb.raw
       .prepare(
         `DELETE FROM remote_thread_pins
          WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
       )
       .run(
-        remotePinInstanceId(params.ref),
-        params.ref.backend,
-        params.ref.threadId,
+        remotePinInstanceId(ref),
+        ref.backend,
+        ref.threadId,
       );
     return result.changes > 0;
   }
@@ -5227,8 +5237,45 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return pins;
   }
 
+  /** The compact viewer projection and its membership proof share one read snapshot. */
+  readSubthreadOrderPeerPins(): { rows: NavigationThreadSummary[]; fingerprint: string } {
+    return this.stateDb.raw.transaction(() => ({
+      rows: this.readRemoteThreadPinNavigationRowsSync(),
+      fingerprint: this.readSubthreadPeerPinFingerprint(),
+    }))();
+  }
+
+  private readSubthreadPeerPinFingerprint(): string {
+    // Any saved direct mount can become relevant through live peer data, even
+    // if its saved parent points elsewhere. Compare all direct identities and
+    // the saved fields that affect membership and order, without hydrating rows.
+    const rows = this.stateDb.raw.prepare(`
+      WITH pins AS (
+        SELECT instance_id, backend, thread_id, added_at, rowid,
+          CASE WHEN json_valid(payload) THEN payload ELSE '{}' END AS data
+        FROM remote_thread_pins WHERE revoked_at IS NULL
+      )
+      SELECT instance_id, backend, thread_id, added_at, rowid,
+        json_extract(data, '$.summary.parentThreadId') AS parent_id,
+        json_extract(data, '$.summary.parentThreadBackend') AS parent_backend,
+        json_extract(data, '$.summary.parentThreadInstanceId') AS parent_owner,
+        json_extract(data, '$.summary.createdAt') AS created_at,
+        json_extract(data, '$.summary.updatedAt') AS updated_at,
+        json_extract(data, '$.summary.archivedAt') AS archived_at,
+        json_type(data, '$.summary.codexNativeSubAgent') AS native_worker
+      FROM pins ORDER BY instance_id, backend, thread_id
+    `).raw().iterate();
+    const hash = createHash("sha256");
+    for (const row of rows) hash.update(JSON.stringify(row));
+    return hash.digest("hex");
+  }
+
   /** Viewer membership only: never materialize cached detail, FIFO, bindings or draft payloads. */
   async readRemoteThreadPinNavigationRows(): Promise<NavigationThreadSummary[]> {
+    return this.readRemoteThreadPinNavigationRowsSync();
+  }
+
+  private readRemoteThreadPinNavigationRowsSync(): NavigationThreadSummary[] {
     const version = this.stateDb.raw.inTransaction ? undefined : this.readNavigationSourceVersion();
     if (version && this.remotePinNavigationCache?.version === version
       && this.remotePinNavigationCache.expires > Date.now()) return this.remotePinNavigationCache.rows;
@@ -5301,13 +5348,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   }
 
   async updateRemoteThreadPinSnapshots(
-    entries: Array<{
-      ref: FederatedThreadRef;
-      summary: NavigationThreadSummary;
-      instanceLabel: string;
-    }>,
+    entries: RemoteThreadPinSnapshotUpdate[],
     options?: { onlyMissing?: boolean },
   ): Promise<boolean> {
+    return this.writeRemoteThreadPinSnapshots(entries, options);
+  }
+
+  private writeRemoteThreadPinSnapshots(
+    entries: RemoteThreadPinSnapshotUpdate[],
+    options?: { onlyMissing?: boolean },
+  ): boolean {
     if (entries.length === 0) {
       return false;
     }
@@ -5819,6 +5869,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     threadIds?: string[];
     /** Durable relationships read before awaiting provider membership. */
     groupFingerprint?: string;
+    observedLocalKeys?: ReadonlySet<string>;
+    peerPins?: {
+      fingerprint: string;
+      archived: FederatedThreadRef[];
+      refreshed: RemoteThreadPinSnapshotUpdate[];
+    };
     insertAfter?: { threadId: string; sourceThreadId: string };
     move?: NavigationRelativeChildMove;
     /**
@@ -5836,8 +5892,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     }[];
   }): Promise<string[]> {
     const apply = this.stateDb.raw.transaction(() => {
-      if (params.groupFingerprint !== undefined
-        && this.readSubthreadGroup(params.backend, params.parentThreadId).fingerprint !== params.groupFingerprint) {
+      const group = params.groupFingerprint === undefined ? undefined
+        : this.readSubthreadGroup(params.backend, params.parentThreadId);
+      if (group && group.fingerprint !== params.groupFingerprint) {
         throw new Error("The owning group changed while discovering its children. Try the move again.");
       }
       const parentKey = buildThreadIdentityKey(params.backend, params.parentThreadId);
@@ -5867,10 +5924,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         executionMode: "default" as const,
         extraLinkedDirectories: [],
       };
+      // A concurrent insert can add a manual rank for a freshly linked child
+      // before the provider lists it. Keep that hint without admitting the
+      // unlisted identity as a move operand.
+      const orderChildren = params.children && group && params.observedLocalKeys
+        ? [...params.children, ...this.rankedUnlistedSubthreads(params, group, params.observedLocalKeys,
+          new Set((parent.subthreadOrder ?? []).filter((id) => !owners.has(id))))]
+        : params.children;
       let requestedOrder = params.threadIds;
       if (params.move) {
         const { threadId, anchorThreadId, placement } = params.move;
-        if (params.threadIds || params.insertAfter || !params.children || !threadId || !anchorThreadId
+        if (params.threadIds || params.insertAfter || !orderChildren || !threadId || !anchorThreadId
           || threadId === anchorThreadId || (placement !== "before" && placement !== "after")
           || parent.archiveTombstonedAt !== undefined) {
           throw new Error("A relative child move requires distinct live children and an owner order.");
@@ -5887,7 +5951,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         }
         // Re-read manual ranks inside the write transaction, then retain every
         // live owner child, including siblings absent from the viewer's pages.
-        requestedOrder = sortSubthreadSummaries(parent, params.children).map((child) => child.id)
+        requestedOrder = sortSubthreadSummaries(parent, orderChildren).map((child) => child.id)
           .filter((id) => id !== threadId);
         const anchor = requestedOrder.indexOf(anchorThreadId);
         requestedOrder.splice(anchor + Number(placement === "after"), 0, threadId);
@@ -5915,8 +5979,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         if (parent.archiveTombstonedAt !== undefined || threadId === params.parentThreadId || threadId === sourceThreadId) {
           throw new Error("The relative child move targets an invalid group identity.");
         }
-        const ownerOrder = params.children
-          ? sortSubthreadSummaries(parent, params.children).map((child) => child.id)
+        const ownerOrder = orderChildren
+          ? sortSubthreadSummaries(parent, orderChildren).map((child) => child.id)
           : parent.subthreadOrder ?? [];
         requestedOrder = insertSubthreadIdAfter(ownerOrder, sourceThreadId, threadId);
       }
@@ -5932,7 +5996,21 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       }
       return threadIds;
     });
-    return params.groupFingerprint === undefined ? apply() : apply.immediate();
+    const pins = params.peerPins;
+    if (!pins) return params.groupFingerprint === undefined ? apply() : apply.immediate();
+    const result = this.stateDb.raw.transaction(() => {
+      if (pins.fingerprint !== this.readSubthreadPeerPinFingerprint()) {
+        throw new Error("The mounted peer threads changed while discovering children. Try the move again.");
+      }
+      for (const ref of pins.archived) this.deleteRemoteThreadPin(ref);
+      this.writeRemoteThreadPinSnapshots(pins.refreshed);
+      // Pin refresh remains useful when live peer data rules out the move.
+      // Only the rank write rolls back on that rejection.
+      try { return { threadIds: apply() }; }
+      catch (error) { return { error }; }
+    }).immediate();
+    if ("error" in result) throw result.error;
+    return result.threadIds;
   }
 
   /** Sparse provider candidates and durable facts for validating a relative reorder. */
@@ -5947,6 +6025,25 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       return key && encodeThreadIdentityKeyForStorage(key) === row.storageKey ? [[key, row] as const] : [];
     }));
     return { scopes: group.scopes, overlays, managed, fingerprint: JSON.stringify([group.fingerprint, [...managed].sort()]) };
+  }
+
+  private rankedUnlistedSubthreads(
+    target: { backend: AppServerBackendKind; parentThreadId: string },
+    group: ReturnType<SqliteOverlayStore["readSubthreadGroup"]>,
+    observedKeys: ReadonlySet<string>,
+    missingRanks: ReadonlySet<string>,
+  ): Array<{ id: string }> {
+    if (!missingRanks.size) return [];
+    const matches = new Map<string, number>();
+    for (const [key, row] of group.overlays) {
+      const identity = parseThreadIdentityKey(key);
+      if (!identity || !missingRanks.has(identity.threadId) || observedKeys.has(key) || group.managed.has(key)
+        || row.parentThreadId !== target.parentThreadId || row.parentThreadInstanceId
+        || row.tombstoned !== null || row.archived !== null
+        || (row.parentThreadBackend ?? identity.backend) !== target.backend) continue;
+      matches.set(identity.threadId, (matches.get(identity.threadId) ?? 0) + 1);
+    }
+    return [...matches].flatMap(([id, count]) => count === 1 ? [{ id }] : []);
   }
 
   private findLinkedSubthread(

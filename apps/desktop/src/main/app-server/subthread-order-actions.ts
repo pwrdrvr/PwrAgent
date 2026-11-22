@@ -10,7 +10,7 @@ import type {
 import { getDesktopBackendRegistry, type DesktopBackendRegistry } from "./backend-registry";
 import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { getDesktopOverlayStore, type DesktopOwnerStorage } from "../storage/desktop-overlay-store";
-import { loadViewerNavigationPins } from "./navigation-viewer-pins";
+import { resolveViewerNavigationPinRows } from "./navigation-viewer-pins";
 import { peerSubthreadKey } from "./thread-archive-sweeper";
 
 /**
@@ -68,7 +68,7 @@ export type PeerChildSource = {
   /** This machine's federation identity. Without one, no peer can link a child here. */
   localInstanceId: () => Promise<string | undefined>;
   /** The live peer summaries the sidebar reads its mounted peer threads through. */
-  summaries: Parameters<typeof loadViewerNavigationPins>[1];
+  summaries: Parameters<typeof resolveViewerNavigationPinRows>[1];
 };
 
 /**
@@ -142,15 +142,32 @@ async function updateRelativeOrder(
       }
     };
     assertComplete();
+    // The old compatibility repair walks provider rows in listing order. A
+    // single hop reads durable data either way, but a chain can observe an
+    // earlier repair, so preserve canonical order for those providers.
+    const orderedProviders = new Set<NavigationThreadSummary["source"]>();
+    for (const row of group.overlays.values()) {
+      if (!row.handoffSourceBackend || !row.handoffSourceThreadId || row.parentThreadId !== parentThreadId) continue;
+      const origin = group.overlays.get(buildThreadIdentityKey(row.handoffSourceBackend, row.handoffSourceThreadId));
+      if (origin?.parentThreadId === parentThreadId && origin.handoffSourceThreadId) {
+        orderedProviders.add(row.handoffSourceBackend);
+      }
+    }
     const listings = await Promise.all([...group.scopes].map(async ([scope, ids]) => {
-      const threads = await registry.readSubthreadOrderProviderRows(scope, ids);
+      const threads = await registry.readSubthreadOrderProviderRows(scope, ids, orderedProviders.has(scope));
       return threads.filter((thread) => thread.source === scope && ids.has(thread.id)
         && !group.managed.has(buildThreadIdentityKey(scope, thread.id)));
     }));
     const children = resolveLocalSubthreadOrderChildren(target, group, listings);
+    const observedLocalKeys = new Set(listings.flatMap((listing) =>
+      listing.map(({ source, id }) => buildThreadIdentityKey(source, id))));
     const localInstanceId = await peers?.localInstanceId();
+    let peerPins: Parameters<DesktopOwnerStorage["updateSubthreadOrder"]>[0]["peerPins"];
     if (peers && localInstanceId) {
-      for (const thread of await loadViewerNavigationPins(store, peers.summaries)) {
+      const saved = store.readSubthreadOrderPeerPins();
+      const resolved = await resolveViewerNavigationPinRows(saved.rows, peers.summaries);
+      peerPins = { fingerprint: saved.fingerprint, archived: resolved.archived, refreshed: resolved.refreshed };
+      for (const thread of resolved.threads) {
         const ref = thread.federation?.ref;
         if (!ref || !isRemoteFederationTarget(ref.target) || thread.federation?.derivedFromMountedParent
           || !isPeerChildOfLocalThread({ ownerInstanceId: ref.target.instanceId, summary: thread,
@@ -162,7 +179,7 @@ async function updateRelativeOrder(
     assertComplete();
     if (ownerChanged) throw new Error("The owning group changed while discovering its children. Try the move again.");
     return await store.updateSubthreadOrder({
-      ...target, children, groupFingerprint: group.fingerprint,
+      ...target, children, groupFingerprint: group.fingerprint, observedLocalKeys, peerPins,
       ...(request.move ? { move: request.move } : { insertAfter: request.insertAfter }),
     });
   } finally {

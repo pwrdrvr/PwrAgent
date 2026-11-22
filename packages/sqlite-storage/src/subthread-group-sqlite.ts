@@ -11,6 +11,11 @@ export const SUBTHREAD_GROUP_INDEXES = `
     WHERE (CASE WHEN json_valid(payload) THEN json_extract(payload, '$.parentThreadId') END) IS NOT NULL;
 `;
 
+export function hasSubthreadGroupIndexes(db: Database.Database): boolean {
+  return db.prepare(`SELECT count(*) FROM sqlite_schema WHERE type = 'index'
+    AND tbl_name = 'threads' AND name IN ('idx_threads_subthread_id', 'idx_threads_subthread_parent')`).pluck().get() === 2;
+}
+
 type OverlayRow = {
   storageKey: string;
   backend: AppServerBackendKind | null;

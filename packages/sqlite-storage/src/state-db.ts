@@ -5,7 +5,7 @@ import {
 import { OWNER_JOB_SCHEMA } from "./owner-job-schema";
 import { RESEARCH_SCHEMA, ensureResearchProjections } from "./research-store";
 import { removeUsageActivityIndex } from "./usage-activity-index";
-import { SUBTHREAD_GROUP_INDEXES } from "./subthread-group-sqlite";
+import { hasSubthreadGroupIndexes, SUBTHREAD_GROUP_INDEXES } from "./subthread-group-sqlite";
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
@@ -2284,11 +2284,13 @@ export class StateDb {
           if ((db.pragma("user_version", { simple: true }) as number) < 86) db.pragma("user_version = 86");
         }).immediate();
       }
-      if ((db.pragma("user_version", { simple: true }) as number) < 87) {
+      const hasThreads = tableExists(db, "threads");
+      if ((db.pragma("user_version", { simple: true }) as number) < 87
+        || (hasThreads && !hasSubthreadGroupIndexes(db))) {
         db.transaction(() => {
-          // The expression indexes backfill from existing payloads, including
-          // legacy links, in the same commit as the version change.
-          if (tableExists(db, "threads")) db.exec(SUBTHREAD_GROUP_INDEXES);
+          // Atomically backfill the indexes. A profile from another branch
+          // can already have this version or a newer one without them.
+          if (hasThreads) db.exec(SUBTHREAD_GROUP_INDEXES);
           if ((db.pragma("user_version", { simple: true }) as number) < 87) db.pragma("user_version = 87");
         }).immediate();
       }
@@ -2309,7 +2311,7 @@ export class StateDb {
       db.exec(PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX);
       // Additive index for current-version profiles too. Partial-schema repair
       // fixtures may omit threads; normal profiles always have this table.
-      if (tableExists(db, "threads")) {
+      if (hasThreads) {
         db.exec(`CREATE INDEX IF NOT EXISTS idx_threads_pending_spend_alert
           ON threads(thread_id)
           WHERE CASE WHEN json_valid(payload) THEN json_type(payload, '$.threadSpendAlertPending') END = 'object'`);

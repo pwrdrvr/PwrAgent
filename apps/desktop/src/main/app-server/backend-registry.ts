@@ -4055,6 +4055,7 @@ export class DesktopBackendRegistry {
   async readSubthreadOrderProviderRows(
     backend: AppServerBackendKind,
     ids: ReadonlySet<string>,
+    preserveListingOrder = false,
   ): Promise<AppServerThreadSummary[]> {
     await this.subAgentStartupReconciliation;
     if (this.isBootstrapModeFn()) return [];
@@ -4069,15 +4070,16 @@ export class DesktopBackendRegistry {
       }
       return listing.filter((thread) => thread.source === backend && ids.has(thread.id));
     }
-    if (backend === "claude") return this.claudeBackend.readSubthreadOrderSummaries(ids);
+    if (backend === "claude") return this.claudeBackend.readSubthreadOrderSummaries(ids, preserveListingOrder);
     if (!isAcpBackendId(backend)) return [];
     const sessions = [...ids].flatMap((id) => {
       const session = this.acpBackend.getSession(backend, id);
       return session && !session.hidden && !session.archivedAt ? [session] : [];
     }).sort((left, right) => right.updatedAt - left.updatedAt);
-    // The durable listing is ordered by updatedAt. Resolve exact timestamp
-    // ties through that listing to keep its stable sibling ordering.
-    const ties = new Set(sessions.map(({ createdAt, updatedAt }) => `${createdAt}:${updatedAt}`));
+    // The durable listing is ordered by updatedAt. Ties can affect legacy
+    // handoff repair even when sibling creation timestamps are distinct.
+    const ties = new Set(sessions.map(({ createdAt, updatedAt }) =>
+      preserveListingOrder ? updatedAt : `${createdAt}:${updatedAt}`));
     const ordered = ties.size < sessions.length
       ? this.acpBackend.listSessions(backend).filter((session) => ids.has(session.sessionId))
       : sessions;

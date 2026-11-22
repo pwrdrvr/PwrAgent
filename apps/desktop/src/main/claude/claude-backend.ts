@@ -935,13 +935,13 @@ export class ClaudeBackend {
         && (!filter || thread.title.toLowerCase().includes(filter) || thread.id.includes(filter)));
   }
 
-  async readSubthreadOrderSummaries(ids: ReadonlySet<string>): Promise<AppServerThreadSummary[]> {
+  async readSubthreadOrderSummaries(ids: ReadonlySet<string>, preserveListingOrder = false): Promise<AppServerThreadSummary[]> {
     const sessions = await Promise.all([...ids].map((id) => this.store.readListedSession(id)));
     const summaries = sessions.flatMap((session) =>
       session && !session.thread.archivedAt ? [this.threadSummary(session)] : []);
-    // With equal creation times, stable tray sort uses the provider's listing
-    // order. Use its canonical order only when the requested rows can tie.
-    if (new Set(summaries.map((thread) => thread.createdAt ?? 0)).size < summaries.length) {
+    // Stable tray sort and ordered legacy handoff repair can both depend on
+    // the metadata listing order. Only those cases need the full listing.
+    if (preserveListingOrder || new Set(summaries.map((thread) => thread.createdAt ?? 0)).size < summaries.length) {
       const byId = new Map(summaries.map((thread) => [thread.id, thread]));
       const ordered = (await this.listThreads()).flatMap(({ id }) => {
         const thread = byId.get(id);
