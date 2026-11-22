@@ -25,6 +25,8 @@ import {
   useThreadPrWatches,
 } from "../../pr-watches/useThreadPrWatchIndicators";
 import { RailStatusChip, type RailChipTone } from "./RailStatusChip";
+import { orderPullRequestSet } from "@pwragent/shared/pull-request-review";
+import { isStaleStackLayer, type StackSummary } from "@pwragent/shared/stacks/stack-status";
 
 type PullRequestsPanelProps = {
   desktopApi?: Pick<DesktopApi, "detachThreadPullRequest" | "manageThreadPrWatches">;
@@ -45,6 +47,27 @@ type WatchHistoryState = {
 const NO_WATCHES: readonly ThreadPullRequestWatchSummary[] = [];
 
 type CheckState = NonNullable<PrSummary["checkState"]>;
+
+function StackRailCard({ stack }: { stack: StackSummary }) {
+  return (
+    <li className={`rail-card stack-rail-card${stack.inferred ? " stack-rail-card--inferred" : ""}`}>
+      <p className="rail-card__title">{stack.inferred ? "Inferred stack" : "Stack"} · {stack.name}</p>
+      <p className="rail-card__meta">Trunk · {stack.trunk}</p>
+      <ol className="stack-rail-card__layers" reversed>
+        {[...stack.layers].reverse().map((layer) => (
+          <li key={layer.branch} data-stale={isStaleStackLayer(layer.health) || undefined}>
+            <span className="stack-rail-card__branch">{layer.pullRequest ? `#${layer.pullRequest.number} ` : ""}{layer.branch}</span>
+            <span className="rail-card__meta">{[
+              layer.thread?.title,
+              layer.pullRequest?.lifecycleState === "merged" ? "Merged"
+                : layer.health === "unknown" ? undefined : layer.health.replaceAll("_", " "),
+            ].filter(Boolean).join(" · ")}</span>
+          </li>
+        ))}
+      </ol>
+    </li>
+  );
+}
 
 /**
  * Pull Requests tab — the GitHub PRs detected for this thread's linked
@@ -151,10 +174,18 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
   // Newest first. `PrSummary` carries no creation timestamp, so sort by PR
   // number (monotonic with creation within a repo); for the rare multi-repo
   // thread, group by repo first so the numbers stay comparable.
-  const prs = [...(props.thread.prs ?? [])].sort((left, right) => {
+  const byRepo = new Map<string, PrSummary[]>();
+  for (const pr of [...(props.thread.prs ?? [])].sort((left, right) => {
     const repoOrder = repositoryLabel(left).localeCompare(repositoryLabel(right));
     return repoOrder !== 0 ? repoOrder : right.number - left.number;
-  });
+  })) {
+    const label = `${pr.provider}/${repositoryLabel(pr)}`;
+    const group = byRepo.get(label) ?? [];
+    group.push(pr);
+    byRepo.set(label, group);
+  }
+  const prs = [...byRepo.values()].flatMap((group) => orderPullRequestSet(group, (pr) => pr).ordered);
+  const stacks = [...new Map(props.thread.stacks?.map(({ stack }) => [stack.key, stack])).values()];
   const detachPr = async (pr: PrSummary): Promise<void> => {
     if (!props.desktopApi?.detachThreadPullRequest) {
       return;
@@ -182,8 +213,9 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
   return (
     <section className="context-panel__section">
       <h3>Pull requests</h3>
-      {prs.length > 0 ? (
+      {prs.length > 0 || stacks.length > 0 ? (
         <ul className="context-list context-list--cards">
+          {stacks.map((stack) => <StackRailCard key={stack.key} stack={stack} />)}
           {prs.map((pr) => {
             const lifecycle = resolveLifecycleState(pr);
             const isOpen = lifecycle === "open";

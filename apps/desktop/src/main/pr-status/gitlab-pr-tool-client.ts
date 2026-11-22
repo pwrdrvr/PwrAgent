@@ -442,16 +442,29 @@ export class GitlabPrToolClient {
       }
       case "merge_pull_request": {
         ctx.assertCanMerge?.(r, args.number!);
+        const mr = await readMergeRequest(args.number!);
+        const base = str(mr.target_branch, 255);
+        if (!base) throw new ForgeReadError("unavailable", `Could not confirm the base of merge request !${args.number}.`);
+        await assertStackMergeAllowed({
+          repository: r, catalogs: [],
+          candidate: { number: args.number!, base },
+          readMerged: async () => false,
+          findParent: async (branch) => {
+            const params = new URLSearchParams({ source_branch: branch, state: "opened", per_page: "100" });
+            const rows = items(await get(`/merge_requests?${params}`));
+            return num(rows.find((row) => row.state === "opened" && row.source_branch === branch
+              && row.source_project_id !== undefined && row.source_project_id === mr.target_project_id)?.iid);
+          },
+        });
         // A project with merge trains takes no direct merge: the MR joins
         // the train, which merges it with the project's method. A project
         // whose setting cannot be read merges as before.
         if (await this.mergeTrainsEnabled(r) === true) {
-          const mr = await readMergeRequest(args.number!);
           if (mr.state !== "opened") throw new ForgeReadError("invalid_arguments", `Merge request !${args.number} is not open.`);
           if (args.expectedHeadSha && str(mr.sha, 64) !== args.expectedHeadSha) {
             throw new ForgeReadError("head_changed", `The merge request's head is no longer ${args.expectedHeadSha}. Read it again before merging.`);
           }
-          const baseRef = str(mr.target_branch, 255);
+          const baseRef = base;
           const url = forgeWebUrl(r, mr.web_url, `/-/merge_requests/${args.number}`);
           const nextStep = "Nothing has merged yet. watch_thread_pull_request with notifyOn [\"merged\"] wakes this thread when the train lands the merge request.";
           let car: Payload | undefined;
@@ -507,3 +520,4 @@ export class GitlabPrToolClient {
     }
   }
 }
+import { assertStackMergeAllowed } from "../stacks/stack-merge-guard";

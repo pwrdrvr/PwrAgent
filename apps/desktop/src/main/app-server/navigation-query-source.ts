@@ -23,8 +23,10 @@ import {
 import { getMainLogger } from "../log";
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
 import { PR_METADATA_PRIORITY } from "../pr-status/pr-metadata-process";
+import { StackReader, stackMemberships } from "../stacks/stack-reader";
 
 const indexReads = new NavigationIndexReadPool(1_000);
+const stackReader = new StackReader();
 
 export function navigationPullRequestProjection(options: {
   kind: NavigationQueryRequest["query"]["kind"];
@@ -268,6 +270,23 @@ async function buildLocalNavigationQueryIndex(params: {
     probeMissing: false,
   });
   params.signal?.throwIfAborted();
+  const stackCandidates = threads.filter((thread) => thread.linkedDirectories?.some((directory) =>
+    directory.gitBranch || directory.worktreePath || directory.repositoryKey)
+    || ((thread.observedGitBranch || thread.gitBranch) && thread.linkedDirectories?.length));
+  const attachments = stackCandidates.length ? overlayStore.readNavigationPullRequests(
+    stackCandidates.map((thread) => ({ backend: thread.source, threadId: thread.id })),
+  ) : [];
+  const observedPrs = attachments.flat();
+  const canonical = observedPrs.length
+    ? await registry.canonicalizeNavigationPullRequests(observedPrs, { signal: params.signal, priority: () => PR_METADATA_PRIORITY.background })
+    : [];
+  const { stacks } = await stackReader.read(stackCandidates.map((thread, i) => ({ ...thread, prs: attachments[i] })), canonical);
+  params.signal?.throwIfAborted();
+  const memberships = stackMemberships(stacks);
+  const withStacks = memberships.size ? threads.map((thread) => {
+    const stacks = memberships.get(buildThreadIdentityKey(thread.source, thread.id));
+    return stacks ? { ...thread, stacks } : thread;
+  }) : threads;
   const directoryStatusCache = await overlayStore.readDirectoryGitStatusCache();
   params.signal?.throwIfAborted();
   const withGitStatus: NavigationDirectorySummary[] = index.directories.map(
@@ -290,7 +309,7 @@ async function buildLocalNavigationQueryIndex(params: {
       : registry.isIncompleteThreadList?.(listedThreads)
         ? { state: "degraded", failedProviders: 1 }
         : { state: "complete" };
-  return { ...projects, threads: registry.withNavigationSubAgentActivity(threads), inputRequestThreadKeys: registry.getNavigationInputRequestThreadKeys(),
+  return { ...projects, threads: registry.withNavigationSubAgentActivity(withStacks), inputRequestThreadKeys: registry.getNavigationInputRequestThreadKeys(),
     coverage,
   };
 }

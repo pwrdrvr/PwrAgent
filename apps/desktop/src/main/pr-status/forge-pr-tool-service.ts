@@ -7,6 +7,7 @@ import { ForgeReadError, repositoryKey, type ForgeRepository } from "./forge-too
 import { repositoryFromPr, resolveForgeRepositories, type ForgeReadScope } from "./forge-read-service";
 import type { ForgePrToolContext } from "./forge-pr-tool-shared";
 import type { ForgePrToolArgs, ForgePrToolOperation } from "./forge-pr-tool-contract";
+import { readStackClones } from "../stacks/stack-reader";
 
 export type ForgePrToolScope = Pick<ForgeReadScope, "remotes" | "attached" | "branch"> & {
   directories: string[];
@@ -110,9 +111,12 @@ export class ForgePrToolService {
       const r = repositoryFromPr(pr.url);
       return r && repositoryKey(r) === repositoryKey(repository) && Number.isSafeInteger(pr.number) ? [{ number: pr.number, headRefName: pr.headRefName }] : [];
     });
+    const stackCatalogs = operation === "merge_pull_request" && repository.provider === "github"
+      ? (await readStackClones(scope.directories, signal)).flatMap(({ catalog }) => catalog.status === "ok" ? [catalog.catalog] : [])
+      : undefined;
     return await this.options.clients[repository.provider].execute(operation, args, {
       repository, branch: scope.branch, directories: scope.directories, attached,
-      privateRoots: scope.privateRoots, defaultMergeMethod: this.options.defaultMergeMethod, assertCanMerge: this.options.assertCanMerge, signal,
+      privateRoots: scope.privateRoots, defaultMergeMethod: this.options.defaultMergeMethod, assertCanMerge: this.options.assertCanMerge, stackCatalogs, signal,
     });
   }
 }

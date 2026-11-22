@@ -608,6 +608,7 @@ function projectNavigationRow(params: {
     ...(thread.checkoutHibernated ? { checkoutHibernated: true } : {}),
     ...(thread.keepCheckoutAwake ? { keepCheckoutAwake: true } : {}),
     ...(!params.omitPullRequests ? projectNavigationPullRequests(thread.prs) : {}),
+    ...(thread.stacks?.length ? { stacks: thread.stacks } : {}),
     ...(messagingBindings.items
       ? { messagingBindings: messagingBindings.items }
       : {}),

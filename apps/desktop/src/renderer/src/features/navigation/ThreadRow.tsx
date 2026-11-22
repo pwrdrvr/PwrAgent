@@ -36,6 +36,7 @@ import { ThreadRowPrChip, ThreadRowPrRollupChip } from "./ThreadRowPrChips";
 import { ThreadRowDensityContext } from "./thread-row-density";
 import { ReactionPicker } from "./ReactionPicker";
 import { ThreadMetaChips } from "./ThreadMetaChips";
+import { isStaleStackLayer } from "@pwragent/shared/stacks/stack-status";
 import {
   getThreadRowStatus,
   isThreadRemoteWorkHere,
@@ -91,6 +92,7 @@ type ThreadRowProps = {
   includeLinkedDirectories?: boolean;
   linkedDirectoryMode?: "label" | "kind";
   nested?: boolean;
+  stackTrayKey?: string;
   /**
    * How deep this row sits inside its tray: 1 for a direct child, 2 for a
    * grandchild. The tray is flat, so the indent is the only thing separating
@@ -482,6 +484,9 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
       ) : null}
       <div
         ref={rowRef}
+        data-stack-tray-layer={props.stackTrayKey && props.thread.stacks?.find(({ stack }) => stack.key === props.stackTrayKey)?.stack.key}
+        data-stack-tray-stale={props.stackTrayKey && props.thread.stacks?.some(({ stack, position }) =>
+          stack.key === props.stackTrayKey && isStaleStackLayer(stack.layers[position - 1]!.health)) || undefined}
         className={`thread-row${props.compact ? " thread-row--compact" : ""}${
           selected ? " is-selected" : ""
         }${

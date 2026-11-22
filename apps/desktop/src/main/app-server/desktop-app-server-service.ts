@@ -36,6 +36,9 @@ import { GitlabPrToolClient } from "../pr-status/gitlab-pr-tool-client";
 import type { ForgePrToolArgs, ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
 import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation } from "../pr-status/forge-tool-contract";
 import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
+import { StackReader, stackMemberships } from "../stacks/stack-reader";
+import { githubStackRepository } from "../stacks/stack-merge-guard";
+import { catalogMergeBlock, type StackSummary } from "@pwragent/shared/stacks/stack-status";
 import { readLocalHeadPastPrHead } from "../pr-status/local-pr-head";
 import { PrChangeIdentityReader } from "../pr-status/pr-change-identity";
 import { PrReviewOfferCoordinator, type PrReviewOfferThread } from "../pr-status/pr-review-offer-coordinator";
@@ -1223,6 +1226,8 @@ class DesktopAppServerService {
     Promise<ResolveEditCommitStatesResponse>
   >();
   private readonly prStatusRegistry = new Map<string, PrStatusRegistryEntry>();
+  private readonly stackReader = new StackReader();
+  private publishedStacks: readonly StackSummary[] = [];
   private readonly prActivity = new PrActivityJournal();
   /** Repository renames the forge has answered with. See its class. */
   private readonly prRepositoryAliases = new PullRequestRepositoryAliases();
@@ -2431,6 +2436,13 @@ class DesktopAppServerService {
         });
       });
 
+    const { stacks } = await this.stackReader.read(threadsWithWorkingState, this.knownStackPullRequests());
+    if (replaceThreadPrAttachments) this.publishedStacks = stacks;
+    const memberships = stackMemberships(stacks);
+    const threadsWithStacks = threadsWithWorkingState.map((thread) => {
+      const stacks = memberships.get(buildThreadIdentityKey(thread.source, thread.id));
+      return stacks ? { ...thread, stacks } : thread;
+    });
     const remotePins = await this.mergePinnedRemoteThreads();
 
     const registry = getDesktopBackendRegistry();
@@ -2442,7 +2454,7 @@ class DesktopAppServerService {
         : undefined;
     const responseWithoutLiveTokenMiser = {
       ...snapshot,
-      threads: [...threadsWithWorkingState, ...remotePins.threads],
+      threads: [...threadsWithStacks, ...remotePins.threads],
       // One unified ranking over local + remote rows: the local keys were
       // computed by this same function inside the reconcile, so re-ranking
       // the combined set preserves their order while letting a fresher
@@ -3768,6 +3780,51 @@ class DesktopAppServerService {
     };
   }
 
+  private knownStackPullRequests(): PrSummary[] {
+    return [...this.prStatusRegistry.values()].map(({ pr }) => pr);
+  }
+
+  private async stackMergeBlocked(thread: PrReviewOfferThread, pr: PrSummary): Promise<boolean> {
+    if (pr.lifecycleState === "closed" || pr.lifecycleState === "merged") return false;
+    const repository = `${pr.provider}:${pr.org}/${pr.repo}`.toLowerCase();
+    for (const catalog of await this.stackReader.readCatalogs(this.prReviewOfferDirectories(thread, pr))) {
+      if (catalog.status !== "ok" || catalog.catalog.repository.toLowerCase() !== repository) continue;
+      for (const stack of catalog.catalog.stacks) {
+        const index = stack.branches.findIndex((branch) => branch.pullRequest?.number === pr.number
+          || (!branch.pullRequest && !pr.sourceRepository && branch.branch === pr.headRefName));
+        if (index < 0) continue;
+        const merged = new Set(stack.branches.slice(0, index).flatMap(({ pullRequest }) => {
+          if (!pullRequest) return [];
+          const saved = this.prStatusRegistry.get(getPrStatusKey({ provider: pr.provider, org: pr.org, repo: pr.repo, number: pullRequest.number }))?.pr.lifecycleState;
+          return (saved ? saved === "merged" : pullRequest.merged === true) ? [pullRequest.number] : [];
+        }));
+        if (catalogMergeBlock(stack, index, pr.baseRefName, merged)) return true;
+      }
+    }
+    return this.knownStackPullRequests().some((parent) =>
+      parent.number !== pr.number && parent.lifecycleState === "open"
+      && parent.headRefName !== undefined && parent.headRefName === pr.baseRefName
+      && `${parent.provider}:${parent.org}/${parent.repo}`.toLowerCase() === repository
+      && (!parent.sourceRepository || `${parent.sourceRepository.provider}:${parent.sourceRepository.org}/${parent.sourceRepository.repo}`.toLowerCase() === repository));
+  }
+
+  private async readScopedStacks(directories: readonly string[], scope: { backend: string; threadId: string; prs: PrSummary[] }) {
+    if (!directories.length) return { stacks: [], catalogs: [] };
+    const { threads } = await this.listThreads({});
+    const attached = getDesktopOverlayStore().readNavigationPullRequests(threads.map((thread) => ({
+      backend: thread.source, threadId: thread.id,
+    })));
+    const rows = threads.map((thread, index) => {
+      const attachment = this.attachedPrsByThreadKey.get(buildThreadIdentityKey(thread.source, thread.id));
+      const isScope = thread.source === scope.backend && thread.id === scope.threadId;
+      return {
+        ...thread, linkedDirectories: attachment?.workspace?.linkedDirectories ?? thread.linkedDirectories,
+        prs: isScope ? scope.prs : this.canonicalizePrs(attachment?.prs ?? attached[index] ?? []),
+      };
+    });
+    return await this.stackReader.read(rows, this.knownStackPullRequests(), directories);
+  }
+
   private forgePrToolService(context?: AgentToolCallContext): ForgePrToolService {
     this.githubPrToolClient ??= new GithubPrToolClient({ ci: this.getForgeCiClient() });
     this.gitlabPrToolClient ??= new GitlabPrToolClient({ gitlab: this.getPrFetcher().gitlab });
@@ -3808,7 +3865,19 @@ class DesktopAppServerService {
 
   /** Pull request and issue tools act only in the calling thread's own repositories. */
   async runForgePrToolForAgent(operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext): Promise<unknown> {
-    const result = await this.forgePrToolService(context).execute(operation, args, await this.forgePrToolScope(context), context.signal);
+    const scope = await this.forgePrToolScope(context);
+    if (operation === "list_stacks") {
+      const repository = args.repository && this.forgePrToolService().resolveRepository(args, scope);
+      const { stacks, catalogs } = await this.readScopedStacks(scope.directories, {
+        backend: context.backend, threadId: context.threadId, prs: this.canonicalizePrs(scope.attached),
+      });
+      return {
+        stacks: repository ? stacks.filter((stack) => stack.repository === githubStackRepository(repository)) : stacks,
+        catalogIssues: catalogs.flatMap((catalog) => ["ok", "missing"].includes(catalog.status) ? [] : [catalog]),
+        backend: context.backend, threadId: context.threadId,
+      };
+    }
+    const result = await this.forgePrToolService(context).execute(operation, args, scope, context.signal);
     if (operation === "rerun_failed_ci_jobs") {
       // The re-run already happened; failing to remember it must not fail the call.
       await this.recordCiRerun(result, context).catch((error: unknown) => {
@@ -4829,7 +4898,8 @@ class DesktopAppServerService {
       : autoFixActive && forgeProject && (projectSkipsMergeConflicts || projectSkipsCiFailures)
         ? `${baseGuidance} ${forgeProject.label} skips ${projectSkippedKind} in Forge Automation, so PwrAgent will not start a repair turn for ${projectSkippedKind}.`
         : baseGuidance;
-    const guidance = [automationGuidance, ...readinessGuidance].join(" ");
+    const stackGuidance = await this.threadStackGuidance(params, primaryPrs, attachment?.workspace);
+    const guidance = [...stackGuidance, automationGuidance, ...readinessGuidance].join(" ");
     return {
       backgroundPollingEnabled: this.backgroundPrPollingEnabled,
       autoFixAllowed: this.prAutoDispatchAllowed,
@@ -4842,6 +4912,27 @@ class DesktopAppServerService {
       ...(reviewReadiness.length > 0 ? { reviewReadiness } : {}),
       guidance,
     };
+  }
+
+  private async threadStackGuidance(
+    thread: PrReviewOfferThread,
+    prs: PrSummary[],
+    workspace: ThreadPrAttachment["workspace"],
+  ): Promise<string[]> {
+    if (!prs.length) return [];
+    const directories = workspace ? resolveThreadPullRequestDirectoryPaths(workspace) : [];
+    const { stacks } = directories.length
+      ? await this.readScopedStacks(directories, { ...thread, prs })
+      : { stacks: this.publishedStacks };
+    return prs.flatMap((pr) => {
+      const repository = `${pr.provider}:${pr.org}/${pr.repo}`.toLowerCase();
+      const stack = stacks.find((entry) => entry.repository === repository && entry.layers.some((layer) => layer.pullRequest?.number === pr.number));
+      if (!stack) return [];
+      const index = stack.layers.findIndex((layer) => layer.pullRequest?.number === pr.number);
+      const layer = stack.layers[index]!;
+      const parent = stack.layers[index - 1]?.pullRequest?.number;
+      return [`#${pr.number} is layer ${index + 1} of ${stack.layers.length} in ${stack.inferred ? "inferred " : ""}stack ${stack.name}, with expected base ${layer.parent}${parent === undefined ? "" : ` (#${parent})`} and health ${layer.health.replaceAll("_", " ")}. Merge or enable auto-merge only after all lower layers have merged and the PR targets ${stack.trunk}.`];
+    });
   }
 
   async detachThreadPullRequest(
@@ -8515,6 +8606,7 @@ class DesktopAppServerService {
           .map(getPrStatusKey);
       },
       getPr: (prKey) => this.prStatusRegistry.get(prKey)?.pr,
+      stackBlocksMerge: (thread, pr) => this.stackMergeBlocked(thread, pr),
       directories: (thread, pr) => this.prReviewOfferDirectories(thread, pr),
       listReviews: (thread, pr) => {
         // The owner and every other thread showing the PR, such as a

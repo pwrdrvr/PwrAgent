@@ -236,6 +236,7 @@ import {
   useThreadTodos,
 } from "./features/thread-todos/useThreadTodos";
 import { newestResolvedFirst } from "./features/thread-todos/busy-thread-todos";
+import { StackRailContext } from "./features/stacks/stack-presentation";
 import { readReviewTranscriptEntryId } from "./features/thread-todos/review-tracking";
 import {
   ThreadTodoRevealContext,
@@ -2705,6 +2706,12 @@ function DesktopAppShell(props: {
   // transcript's stack, expanded.
   const [threadTodoRevealRequest, setThreadTodoRevealRequest] = useState<ThreadTodoRevealRequest>();
   const selectThreadNavigation = navigation.selectThread;
+  const openStackRail = useCallback((thread: NavigationThreadSummary) => {
+    setMainView("thread");
+    if (threadSummaryIdentityKey(thread) !== selectedThreadKeyRef.current) selectThreadNavigation(thread);
+    setContextRailPinnedPersisted(true);
+    setActiveContextTabPersisted("prs");
+  }, [selectThreadNavigation, setActiveContextTabPersisted, setContextRailPinnedPersisted, setMainView]);
   const revealThreadTodos = useCallback((thread: NavigationThreadSummary) => {
     const threadKey = threadSummaryIdentityKey(thread);
     setThreadTodoRevealRequest({ threadKey });
@@ -4543,6 +4550,7 @@ function DesktopAppShell(props: {
       <FederationDisplayLabelsProvider health={liveFederationHealth}>
       <ThreadTodoCountsContext.Provider value={threadTodoController.openByThreadKey}>
       <ThreadTodoRevealContext.Provider value={threadTodosView ? revealThreadTodos : undefined}>
+      <StackRailContext.Provider value={openStackRail}>
       <TodoDispatchProvider
         api={desktopApi}
         backends={backendSummaries.backends}
@@ -5303,6 +5311,7 @@ function DesktopAppShell(props: {
       </ThreadDependencyIndicatorsContext.Provider>
       </OperatorWaitsContext.Provider>
       </TodoDispatchProvider>
+      </StackRailContext.Provider>
       </ThreadTodoRevealContext.Provider>
       </ThreadTodoCountsContext.Provider>
       </FederationDisplayLabelsProvider>

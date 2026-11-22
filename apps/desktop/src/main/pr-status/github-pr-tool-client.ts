@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { discoverGhCommands } from "../settings/gh-discovery";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import { assertGithubStackMergeAllowed, assertStackMergeBaseUnchanged } from "../stacks/stack-merge-guard";
 import { redactForgeLog, type ForgeCiClient } from "./forge-ci-client";
 import { describeMergeQueueRemoval, describeMergeQueueState } from "@pwragent/shared/pr-merge-queue";
 import { type PrMergeQueueStatus } from "@pwragent/shared/contracts/navigation";
@@ -483,6 +484,7 @@ export class GithubPrToolClient {
       }
       case "merge_pull_request": {
         ctx.assertCanMerge?.(r, args.number!);
+        const checkedBase = await assertGithubStackMergeAllowed(r, args.number!, ctx.stackCatalogs ?? [], (route) => call("GET", route));
         // Read the queue only when it can matter. A queue read that fails
         // never blocks a merge: GitHub itself refuses a direct merge past one.
         const readGate = async () => {
@@ -498,6 +500,7 @@ export class GithubPrToolClient {
           if (gate.headSha && args.expectedHeadSha && gate.headSha !== args.expectedHeadSha) {
             throw new ForgeReadError("head_changed", `The pull request's head is no longer ${args.expectedHeadSha}. Read it again before merging.`);
           }
+          assertStackMergeBaseUnchanged(checkedBase, gate.baseRef);
           const url = `${repositoryUrl(r)}/pull/${args.number}`;
           const queued = (status: PrMergeQueueStatus | undefined, extra: Record<string, unknown>) => writeResult({
             merged: false, queued: true, number: args.number,

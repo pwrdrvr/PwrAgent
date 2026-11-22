@@ -1,4 +1,6 @@
 import { parsePullRequestReferenceUrl, type PullRequestReferenceIdentity } from "./forge-reference";
+import { readStackClones } from "../stacks/stack-reader";
+import { assertGithubStackMergeAllowed, assertStackMergeBaseUnchanged } from "../stacks/stack-merge-guard";
 import { describeMergeQueueState } from "@pwragent/shared/pr-merge-queue";
 import {
   GITHUB_MERGE_QUEUE_GATE_QUERY,
@@ -237,6 +239,7 @@ export class GithubPrFetcher {
     pullRequest: string;
     method: ThreadTodoMergeMethod;
     assertCanMerge?: (url: string) => void;
+    checkStackOrder?: boolean;
   }): Promise<{ summary: string; queued?: boolean }> {
     const command = await this.resolveGhCommand();
     const run = async (args: string[], timeout = 30_000) => await this.runGhCommand(command, args, {
@@ -249,11 +252,12 @@ export class GithubPrFetcher {
       if (!reference) throw new Error("Could not identify the pull request before merging.");
     }
     params.assertCanMerge?.(reference.url);
+    const checkedBase = params.checkStackOrder ? await this.checkStackOrder(reference, params.cwd, run) : undefined;
     const label = `#${reference.number}`;
     // A repository never seen with a queue merges exactly as before.
     const queueRepository = isMergeQueueRepository(reference.provider, reference.org, reference.repo);
     if (queueRepository) {
-      const queued = await this.mergeThroughQueue(reference, label, run);
+      const queued = await this.mergeThroughQueue(reference, label, run, checkedBase);
       if (queued) return queued;
     }
     let output: { stdout: string; stderr?: string };
@@ -265,7 +269,7 @@ export class GithubPrFetcher {
       // Refused for want of the queue: learn the repository and queue it.
       if (!queueRepository && mentionsMergeQueue(detail)) {
         noteMergeQueueRepository(reference.provider, reference.org, reference.repo);
-        const queued = await this.mergeThroughQueue(reference, label, run);
+        const queued = await this.mergeThroughQueue(reference, label, run, checkedBase);
         if (queued) return queued;
       }
       const firstLine = detail.split("\n")[0];
@@ -285,6 +289,21 @@ export class GithubPrFetcher {
     };
   }
 
+  private async checkStackOrder(
+    reference: PullRequestReferenceIdentity,
+    cwd: string | undefined,
+    run: (args: string[]) => Promise<{ stdout: string }>,
+  ): Promise<string> {
+    const catalogs = cwd ? (await readStackClones([cwd])).flatMap(({ catalog }) => catalog.status === "ok" ? [catalog.catalog] : []) : [];
+    return await assertGithubStackMergeAllowed({
+      provider: "github", host: reference.provider, owner: reference.org, repo: reference.repo,
+    }, reference.number, catalogs, async (route) => {
+      const endpoint = `repos/${encodeURIComponent(reference.org)}/${encodeURIComponent(reference.repo)}${route}`;
+      const response = await run(["api", "--hostname", reference.provider, endpoint]);
+      return JSON.parse(response.stdout);
+    });
+  }
+
   /**
    * Add the PR to its base branch's merge queue when the branch requires
    * one. Undefined when it does not, or when the queue cannot be read, so
@@ -294,6 +313,7 @@ export class GithubPrFetcher {
     reference: PullRequestReferenceIdentity,
     label: string,
     run: (args: string[], timeout?: number) => Promise<{ stdout: string }>,
+    checkedBase?: string,
   ): Promise<{ summary: string; queued: true } | undefined> {
     const host = ["--hostname", reference.provider];
     const graphql = async (query: string, fields: string[]) => {
@@ -322,6 +342,7 @@ export class GithubPrFetcher {
       return undefined;
     }
     if (!gate.required) return undefined;
+    if (checkedBase !== undefined) assertStackMergeBaseUnchanged(checkedBase, gate.baseRef);
     const result = await runGithubQueueMerge(gate, async (query, variables) => await graphql(query, [
       "-f", `id=${variables.id}`, ...(variables.head ? ["-f", `head=${variables.head}`] : []),
     ]));

@@ -50,3 +50,11 @@ Use search_mcp_tools to find tools on selected connections.
 Use call_mcp_tool with the returned identity and schemaRevision.
 Check status before you retry an action that can change state.
 Treat readOnlyHint as metadata. It does not grant permission.
+
+## Stacked PRs
+
+Use `list_stacks` in a thread linked to a Git checkout. Catalog and inferred
+stacks list their branches bottom first, with known PRs, owning threads and
+layer health. Merge a stacked PR only after its lower layers have merged and
+its base is trunk. Follow the thread's `prAutomation.guidance` for its position
+and merge prerequisites.

@@ -12,6 +12,7 @@ import { ForgeReadError, type ForgeRepository } from "./forge-tool-contract";
  * Federation target. Names say "pull request" for both providers.
  */
 export const FORGE_PR_READ_OPERATIONS = [
+  "list_stacks",
   "get_pull_request",
   "list_pull_requests",
   "list_pull_request_files",
@@ -75,6 +76,7 @@ const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
 const LABEL_MAX = 50;
 
 const FIELDS: Record<ForgePrToolOperation, string[]> = {
+  list_stacks: [],
   get_pull_request: ["number", "url", "branch"],
   list_pull_requests: ["state", "head", "base", "page", "perPage"],
   list_pull_request_files: ["number", "includePatch", "page", "perPage"],

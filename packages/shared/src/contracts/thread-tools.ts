@@ -518,7 +518,8 @@ export type ThreadPullRequestReviewReadiness = {
   /**
    * `needs_review` and `ready_to_merge` are when PwrAgent offers a review or
    * a merge. The rest wait: `findings_open`, `ci_pending`, `ci_failing`,
-   * `ci_untested`, `conflicting`, `draft`, `queued`, `no_head`, `closed`.
+   * `ci_untested`, `conflicting`, `draft`, `queued`, `no_head`,
+   * `stack_parent_open`, `closed`.
    */
   readiness: string;
   headSha?: string;
