@@ -111,12 +111,21 @@ export function GetStarted(props: {
   useEffect(() => {
     if (!agents.refreshing) setAgentsChecked(true);
   }, [agents.refreshing]);
+  // Claude Code's history is read only once it is signed in, so a sign-in
+  // or install on this page looks again. Once is enough: a later recheck
+  // that passes through "checking" must not throw away the list.
+  const claudeReady = agents.rows.some((row) => row.definition.id === "claude" && row.state.kind === "ready");
+  const [claudeWasReady, setClaudeWasReady] = useState(false);
+  useEffect(() => {
+    if (claudeReady) setClaudeWasReady(true);
+  }, [claudeReady]);
   const projects = useGetStartedProjects({
     desktopApi: props.desktopApi,
     enabled: !props.isReplay,
     ready: agentsChecked,
     includeCodex: !separateLogin,
     codexInstalled: Boolean(selectedCodexCandidate(props.settings.snapshot)),
+    claudeReady: claudeWasReady,
   });
   const checkedPathsRef = useRef<string[]>([]);
   checkedPathsRef.current = projects.checkedPaths;
@@ -1151,7 +1160,8 @@ type ProjectsModel = {
  * Recent project folders from every agent PwrAgent may read, newest first.
  * The most recent start checked. Looks again when the Codex login choice
  * changes, since a separate login's projects are not this computer's, and
- * when a Codex is found, since none could be read before.
+ * when a Codex is found or Claude Code is first ready, since neither could
+ * be read before.
  */
 function useGetStartedProjects(params: {
   desktopApi?: DesktopApi;
@@ -1161,8 +1171,10 @@ function useGetStartedProjects(params: {
   ready: boolean;
   includeCodex: boolean;
   codexInstalled: boolean;
+  /** True from the first time Claude Code was ready on this page. */
+  claudeReady: boolean;
 }): ProjectsModel {
-  const { desktopApi, enabled, ready, includeCodex, codexInstalled } = params;
+  const { desktopApi, enabled, ready, includeCodex, codexInstalled, claudeReady } = params;
   const available = enabled && Boolean(desktopApi?.discoverRecentProjects);
   const [result, setResult] = useState<{
     candidates: ProjectCandidate[];
@@ -1201,7 +1213,7 @@ function useGetStartedProjects(params: {
         readAt: Date.now(),
       });
     });
-  }, [codexInstalled, desktopApi, enabled, includeCodex, ready]);
+  }, [claudeReady, codexInstalled, desktopApi, enabled, includeCodex, ready]);
 
   const toggle = useCallback((candidate: ProjectCandidate): void => {
     setChoices((current) => {
