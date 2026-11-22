@@ -57,8 +57,6 @@ import {
   DESKTOP_MARKDOWN_RENDERING_DEFAULTS,
   DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
   type DesktopBootInfo,
-  type DesktopCodexProfileModel,
-  type DesktopPwrAgentProfileSummary,
   type DesktopSettingsSnapshot,
   type PrAutoDispatchBudgetStatus,
   DESKTOP_CONTEXT_MOON_STYLE_DEFAULT,
@@ -409,8 +407,8 @@ const LazySettingsScreen = lazy(async () => ({
   default: (await import("./features/settings/SettingsScreen")).SettingsScreen,
 }));
 
-const LazyOnboardingWizard = lazy(async () => ({
-  default: (await import("./features/onboarding/OnboardingWizard")).OnboardingWizard,
+const LazyGetStarted = lazy(async () => ({
+  default: (await import("./features/onboarding/GetStarted")).GetStarted,
 }));
 
 export function resolveNormalAppEnabled(params: {
@@ -2491,12 +2489,6 @@ function DesktopAppShell(props: {
     onThreadLifecycleChanged: navigation.refresh,
     sources: scheduledActionProjectionSources,
   });
-  const replayCodexProfileSetup = settings.snapshot
-    ? inferReplayCodexProfileSetup(
-        settings.snapshot.general.codexProfileModel?.value ?? "shared",
-        profiles.profiles,
-      )
-    : undefined;
   // Replying is what clears unread on the Attention lens, where focusing a
   // thread deliberately does not. Harmless elsewhere: every other lens has
   // already marked the thread seen on focus by the time a reply lands. Shared
@@ -4688,6 +4680,9 @@ function DesktopAppShell(props: {
             projectRevealRequest={projectRevealRequest}
             projectIndexHidden={projectIndexHidden}
             onProjectIndexHiddenChange={setProjectIndexHiddenPersisted}
+            density={props.appearanceController.appearance.density}
+            onDensityChange={(density) => props.appearanceController.setDensity(density)}
+            onOpenAppearanceSettings={() => openSettingsSection("general")}
             projectIndexWidth={projectIndexWidth}
             onProjectIndexWidthChange={setProjectIndexWidthPersisted}
             selectedItemKey={navigation.selectedItemKey}
@@ -5135,59 +5130,23 @@ function DesktopAppShell(props: {
 
           {onboardingOpen !== null && settings.snapshot ? (
             <Suspense fallback={null}>
-              <LazyOnboardingWizard
+              <LazyGetStarted
                 isReplay={onboardingOpen === "replay"}
                 bootInfo={bootInfo}
-                initialDensity={settings.snapshot.general.appearance.density.value}
-                initialTheme={settings.snapshot.general.appearance.theme.value}
-                initialCodexProfileModel={
-                  onboardingOpen === "replay" && replayCodexProfileSetup
-                    ? replayCodexProfileSetup.model
-                    : settings.snapshot.general.codexProfileModel.value
-                }
-                initialCodexProfileNames={
-                  onboardingOpen === "replay"
-                    ? replayCodexProfileSetup?.profileNames
-                    : undefined
-                }
-                appearanceController={props.appearanceController}
                 settings={settings}
                 desktopApi={desktopApi}
-                onComplete={async (patch) => {
-                  await settings.writeConfig(patch);
-                  // The wizard already flips theme + density live via
-                  // appearanceController as the operator clicks — the
-                  // explicit setters below are a belt-and-suspenders to keep
-                  // the controller's React state aligned with whatever the
-                  // final patch holds, even if persistAndComplete adjusts.
-                  if (patch.general?.appearance?.density) {
-                    props.appearanceController.setDensity(
-                      patch.general.appearance.density,
-                    );
-                  }
-                  if (patch.general?.appearance?.theme) {
-                    props.appearanceController.setTheme(
-                      patch.general.appearance.theme,
-                    );
-                  }
-                  // Mark onboarding complete AND kick off the deferred Codex
-                  // `listThreads` prefetch in one IPC call (#500). On replay,
-                  // skip the call entirely — replays don't touch onboarding.
-                  //
-                  // In bootstrap mode (#524), skip this too. The bootstrap
-                  // window is about to quit; firing
-                  // `completeOnboardingCodexBootstrap` here would (a) write
-                  // `[onboarding] completed = true` to `.bootstrap/config.toml`
-                  // (which we're about to delete) and (b) trigger a Codex
-                  // `listThreads` against the system default Codex install,
-                  // contaminating the soon-to-quit window with the operator's
-                  // real Codex Desktop threads. The new profile's window
-                  // handles its own completion + prefetch on launch.
-                  if (!onboardingOpen) return;
+                claudeSignIn={claudeSignIn.controls}
+                onComplete={async () => {
+                  // Start in an existing profile. Mark first run complete
+                  // and start the deferred Codex `listThreads` prefetch in
+                  // one call (#500). A replay never touches onboarding. A
+                  // bootstrap Start comes here only when the new profile's
+                  // window failed to take over; that profile's own window
+                  // runs its completion and prefetch, so this just closes.
                   if (
-                    onboardingOpen !== "replay" &&
-                    bootInfo?.mode !== "bootstrap" &&
-                    desktopApi?.completeOnboardingCodexBootstrap
+                    onboardingOpen !== "replay"
+                    && bootInfo?.mode !== "bootstrap"
+                    && desktopApi?.completeOnboardingCodexBootstrap
                   ) {
                     await desktopApi.completeOnboardingCodexBootstrap({
                       connect: true,
@@ -5198,19 +5157,14 @@ function DesktopAppShell(props: {
                 }}
                 onDismiss={(persistCompleted) => {
                   if (persistCompleted) {
-                    // Skip path: persist `completed = true` so the wizard
-                    // doesn't auto-fire again, but pass `connect: false` so
-                    // we don't auto-load Codex threads under an unverified
-                    // identity. The renderer's next explicit refresh (or app
-                    // restart) will surface them.
+                    // Started without an agent: persist `completed = true`
+                    // so first run doesn't open again, with `connect: false`
+                    // so no Codex threads load under an unverified identity.
                     void desktopApi?.completeOnboardingCodexBootstrap?.({
                       connect: false,
                     }).then(() => settings.refresh());
                   }
                   setOnboardingOpen(null);
-                }}
-                onOpenMessagingSettings={() => {
-                  openSettingsSection("messaging");
                 }}
               />
             </Suspense>
@@ -5349,41 +5303,6 @@ function isSettingsSection(
   return (
     section !== undefined && SETTINGS_SECTIONS.has(section as SettingsSection)
   );
-}
-
-export type ReplayCodexProfileSetup = {
-  model: DesktopCodexProfileModel;
-  profileNames?: readonly string[];
-};
-
-export function inferReplayCodexProfileSetup(
-  persisted: DesktopCodexProfileModel,
-  profiles: readonly DesktopPwrAgentProfileSummary[],
-): ReplayCodexProfileSetup {
-  const namedPairings = profiles.filter((profile) => profile.codexProfile.name);
-  if (namedPairings.length >= 2) {
-    return {
-      model: "multiple",
-      profileNames: namedPairings.map((profile) => profile.name),
-    };
-  }
-
-  const activeProfile = profiles.find((profile) => profile.active);
-  const isolatedProfile = activeProfile?.codexProfile.name
-    ? activeProfile
-    : namedPairings[0];
-  if (isolatedProfile) {
-    return { model: "isolated", profileNames: [isolatedProfile.name] };
-  }
-
-  return { model: persisted };
-}
-
-export function inferReplayCodexProfileModel(
-  persisted: DesktopCodexProfileModel,
-  profiles: readonly DesktopPwrAgentProfileSummary[],
-): DesktopCodexProfileModel {
-  return inferReplayCodexProfileSetup(persisted, profiles).model;
 }
 
 // Own window layout, including live drag width and startup preference adoption.

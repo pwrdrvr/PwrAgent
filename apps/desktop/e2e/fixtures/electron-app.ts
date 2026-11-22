@@ -140,12 +140,12 @@ const PROFILE_PROCESS_EXIT_TIMEOUT_MS = 5_000;
 const PROFILE_PROCESS_EXIT_POLL_MS = 100;
 
 /**
- * Root element of the first-run wizard overlay (`OnboardingWizard.tsx`).
- * It is also `role="dialog"` / `aria-label="First-run setup"`, but the
- * class is the element the component itself roots on and does not move
- * when the accessible name is reworded.
+ * Root element of the first-run overlay (`GetStarted.tsx`). It is also
+ * `role="dialog"` / `aria-label="Get started"`, but the class is the
+ * element the component itself roots on and does not move when the
+ * accessible name is reworded.
  */
-const ONBOARDING_WIZARD_SELECTOR = ".onboarding-wizard-overlay";
+const ONBOARDING_WIZARD_SELECTOR = ".get-started-overlay";
 
 /**
  * Env vars that redirect which PwrAgent root and profile the launched
@@ -156,7 +156,7 @@ const ONBOARDING_WIZARD_SELECTOR = ".onboarding-wizard-overlay";
  * harness seeds `onboarding.completed = true` into. The wizard then
  * fires over every spec. Strip them from the inherited copy BEFORE
  * per-spec `params.env` is applied, so a spec that deliberately sets one
- * (see `onboarding-wizard.spec.ts`) still gets it.
+ * (see `get-started.spec.ts`) still gets it.
  */
 const PROFILE_RESOLUTION_ENV_VARS = [
   PWRAGENT_HOME_ENV,
@@ -465,7 +465,7 @@ export async function launchElectronApp(
   // launched process is ours the moment `electron.launch()` resolves, so a
   // failure past this point has to close it rather than leave an orphan for
   // the next job on a persistent runner to inherit. That now includes the
-  // onboarding-wizard check inside `finishElectronLaunch`, which throws by
+  // first-run overlay check inside `finishElectronLaunch`, which throws by
   // design.
   let captureMainProcessTiming: () => Promise<unknown> = async () => undefined;
   try {
@@ -713,7 +713,7 @@ async function finishElectronLaunch(args: {
  * before it wrote a line of stderr when this harness tried it.
  *
  * Scoped to win32 so POSIX keeps resolving through `HOME` exactly as before,
- * and skipped when a spec set its own — `onboarding-wizard.spec.ts` drives
+ * and skipped when a spec set its own — `get-started.spec.ts` drives
  * these resolvers deliberately. The seed follows along on its own:
  * `resolveSeedConfigPath` reads `PWRAGENT_HOME` from this same environment
  * first, so it and the app agree, which is what the pre-flight

@@ -85,7 +85,7 @@ export function wholeSuiteReason(files) {
     if (/^\.github\/|^scripts\/ci\/|(?:^|\/)(?:electron\.)?(?:vitest|vite|playwright|tsconfig)[.-]|(?:^|\/)\.env(?:\.|$)/.test(file)) {
       return "CI or test/build configuration";
     }
-    if (/^apps\/desktop\/(?:native|build)\/|^apps\/desktop\/scripts\/(?:macos-|assemble-mac-|app-icon)|\.swift$|^apps\/desktop\/e2e\/(?:macos-|windows-|visual-regression\.spec\.ts|onboarding-wizard\.spec\.ts|fixtures\/detached-profile-instances\.ts)/.test(file)) {
+    if (/^apps\/desktop\/(?:native|build)\/|^apps\/desktop\/scripts\/(?:macos-|assemble-mac-|app-icon)|\.swift$|^apps\/desktop\/e2e\/(?:macos-|windows-|visual-regression\.spec\.ts|get-started\.spec\.ts|fixtures\/detached-profile-instances\.ts)/.test(file)) {
       return "native or platform-only input";
     }
   }

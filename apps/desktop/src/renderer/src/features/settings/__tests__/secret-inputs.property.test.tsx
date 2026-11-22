@@ -9,7 +9,6 @@ import type {
   DesktopSettingsSnapshot,
 } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../../lib/desktop-api";
-import { SecretFieldRow } from "../../onboarding/OnboardingWizard";
 import { CodexModelProvidersSettings } from "../CodexModelProvidersSettings";
 import {
   GithubConnectionFields,
@@ -214,36 +213,6 @@ describe("every secret input states its stored value the same way", () => {
       { numRuns: 8 },
     );
   });
-
-  it("an onboarding messaging token", () => {
-    fc.assert(
-      fc.property(fc.boolean(), arbDraft, (stored, draft) => {
-        cleanup();
-        render(
-          <SecretFieldRow
-            field={{ kind: "secret", name: "telegramBotToken", label: "Bot token" }}
-            snapshot={snapshotWithTelegramToken({
-              configured: stored,
-              source: stored ? "keychain" : "unset",
-              writable: true,
-            })}
-            bufferedValue=""
-            onBuffer={() => undefined}
-            replaceSecret={async () => true}
-            clearSecret={async () => true}
-          />,
-        );
-        const input = screen.getByLabelText("Bot token");
-        if (draft) fireEvent.change(input, { target: { value: draft } });
-        expectSecretRow(input, {
-          stored,
-          draft: Boolean(draft),
-          removeName: "Remove saved Bot token",
-        });
-      }),
-      { numRuns: 20 },
-    );
-  });
 });
 
 // The rule: one click never deletes a stored secret. Its value is never shown
@@ -324,36 +293,6 @@ describe("removing a stored secret", () => {
           return true;
         });
         await expectRemovalWaitsForConfirm(steps, "Fixture key", () => onClearSecret.mock.calls.length);
-      }),
-      { numRuns: 40 },
-    );
-  });
-
-  it("waits for confirmation in onboarding", async () => {
-    await fc.assert(
-      fc.asyncProperty(arbSteps, async (steps) => {
-        cleanup();
-        const clearSecret = vi.fn(async () => true);
-        const row = (configured: boolean) => (
-          <SecretFieldRow
-            field={{ kind: "secret", name: "telegramBotToken", label: "Bot token" }}
-            snapshot={snapshotWithTelegramToken({
-              configured,
-              source: configured ? "keychain" : "unset",
-              writable: true,
-            })}
-            bufferedValue=""
-            onBuffer={() => undefined}
-            replaceSecret={async () => true}
-            clearSecret={clearSecret}
-          />
-        );
-        const view = render(row(true));
-        clearSecret.mockImplementation(async () => {
-          view.rerender(row(false));
-          return true;
-        });
-        await expectRemovalWaitsForConfirm(steps, "Bot token", () => clearSecret.mock.calls.length);
       }),
       { numRuns: 40 },
     );
@@ -480,85 +419,6 @@ describe("a removal question", () => {
   });
 });
 
-describe("onboarding", () => {
-  // The buffer is filled before the live write and kept when it fails, so it
-  // is no evidence that anything reached the keychain.
-  it("does not claim a keychain write that failed", async () => {
-    let buffered = "";
-    const row = () => (
-      <SecretFieldRow
-        field={{ kind: "secret", name: "telegramBotToken", label: "Bot token" }}
-        snapshot={snapshotWithTelegramToken({ configured: false, source: "unset", writable: true })}
-        bufferedValue={buffered}
-        onBuffer={(value) => { buffered = value; }}
-        replaceSecret={async () => false}
-        clearSecret={async () => true}
-      />
-    );
-    const view = render(row());
-    const input = screen.getByLabelText("Bot token");
-    expect(statusLine(input)).toHaveTextContent(/^Not set$/);
-    fireEvent.change(input, { target: { value: "0000:AA-fixture" } });
-    await act(async () => {
-      fireEvent.keyDown(input, { key: "Enter" });
-    });
-    view.rerender(row());
-    expect(screen.getByText("Could not enable this provider — try again.")).toBeInTheDocument();
-    // The value stays in the box to retry, as a draft, not as a write.
-    expect(statusLine(input)).toHaveClass("is-draft");
-    expect(statusLine(input)).not.toHaveTextContent(/New value saved/);
-    // Cleared, the line says what Finish will do with the buffer.
-    fireEvent.change(input, { target: { value: "" } });
-    expect(statusLine(input)).toHaveTextContent(/^Saved in keychain when you finish setup$/);
-  });
-
-  it("removes a value it just wrote, before the snapshot reports it", async () => {
-    const clearSecret = vi.fn(async () => true);
-    let buffered = "";
-    const row = () => (
-      <SecretFieldRow
-        field={{ kind: "secret", name: "telegramBotToken", label: "Bot token" }}
-        snapshot={snapshotWithTelegramToken({ configured: false, source: "unset", writable: true })}
-        bufferedValue={buffered}
-        onBuffer={(value) => { buffered = value; }}
-        replaceSecret={async () => true}
-        clearSecret={clearSecret}
-      />
-    );
-    const view = render(row());
-    const input = screen.getByLabelText("Bot token");
-    fireEvent.change(input, { target: { value: "0000:AA-fixture" } });
-    await act(async () => {
-      fireEvent.keyDown(input, { key: "Enter" });
-    });
-    view.rerender(row());
-    expect(statusLine(input)).toHaveTextContent("New value saved in keychain");
-    fireEvent.click(screen.getByRole("button", { name: "Remove saved Bot token" }));
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Remove saved Bot token now" }));
-    });
-    expect(clearSecret).toHaveBeenCalledWith("telegramBotToken");
-  });
-
-  // Every messaging secret is written as soon as it is taken, so the runtime
-  // can pair mid-setup. Any other secret waits for Finish, and must say so.
-  it("says a value held for Finish is not in the keychain yet", () => {
-    render(
-      <SecretFieldRow
-        field={{ kind: "secret", name: "federationCloudflareAccessClientSecret", label: "Signing secret" }}
-        snapshot={snapshotWithTelegramToken({ configured: false, source: "unset", writable: true })}
-        bufferedValue="fixture-signing-secret"
-        onBuffer={() => undefined}
-        replaceSecret={async () => true}
-        clearSecret={async () => true}
-      />,
-    );
-    const field = screen.getByLabelText("Signing secret").closest(".onboarding-wizard__field") as HTMLElement;
-    expect(within(field).getByText("Saved in keychain when you finish setup")).toBeInTheDocument();
-    expect(screen.getByLabelText("Signing secret")).toHaveAttribute("placeholder", PASTE_REPLACE);
-  });
-});
-
 /** Settings → Plugins with one local IPC connection, owned by this window. */
 function ipcConnectionApi(stored: boolean): DesktopApi {
   const connection: McpConnectionStatus = {
@@ -609,20 +469,6 @@ function pluginsSnapshot(): DesktopSettingsSnapshot {
           }],
         },
       },
-    },
-  } as unknown as DesktopSettingsSnapshot;
-}
-
-function snapshotWithTelegramToken(botToken: DesktopSettingsSecretState): DesktopSettingsSnapshot {
-  const unset: DesktopSettingsSecretState = { configured: false, source: "unset", writable: true };
-  return {
-    messaging: {
-      telegram: { botToken },
-      discord: { botToken: unset },
-      mattermost: { botToken: unset, hmacSecret: unset },
-      slack: { botToken: unset, appToken: unset, signingSecret: unset },
-      feishu: { appId: unset, appSecret: unset, encryptKey: unset, verificationToken: unset },
-      line: { channelAccessToken: unset, channelSecret: unset },
     },
   } as unknown as DesktopSettingsSnapshot;
 }

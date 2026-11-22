@@ -397,7 +397,7 @@ describe("Electron E2E renderer readiness", () => {
   }): { window: Parameters<typeof waitForRendererReady>[0]["window"]; dom: FixtureDom } {
     const dom = new JSDOM("<!doctype html><html><body></body></html>", { runScripts: "outside-only" });
     if (options?.overlayAttaches) {
-      dom.window.document.body.innerHTML = '<div class="onboarding-wizard-overlay"></div>';
+      dom.window.document.body.innerHTML = '<div class="get-started-overlay"></div>';
     }
     const window = {
       waitForLoadState: async () => undefined,
@@ -487,7 +487,7 @@ describe("Electron E2E renderer readiness", () => {
 
     const readiness = waitForRendererReady(args({ env, window: stalled as never }));
     const detected = expect(readiness).rejects.toThrow(/onboarding wizard is showing/);
-    dom.window.document.body.innerHTML = '<div class="onboarding-wizard-overlay"></div>';
+    dom.window.document.body.innerHTML = '<div class="get-started-overlay"></div>';
     try {
       await detected;
     } finally {

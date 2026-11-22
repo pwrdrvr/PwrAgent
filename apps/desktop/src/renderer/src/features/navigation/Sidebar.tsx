@@ -43,7 +43,10 @@ import type {
   ThreadExecutionMode,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
-import type { DesktopPwrAgentProfileSummary } from "@pwragent/shared/contracts/settings";
+import type {
+  DesktopAppearanceDensity,
+  DesktopPwrAgentProfileSummary,
+} from "@pwragent/shared/contracts/settings";
 import type {
   MessagingThreadBindingSummary,
   NavigationRelativePinMove,
@@ -163,7 +166,7 @@ import {
   isProjectForgeActivityPaused,
   withProjectForgePause,
 } from "../forge-automation/forge-automation-view";
-import { ProjectIndexToggle } from "./ProjectIndexToggle";
+import { SidebarViewMenu } from "./SidebarViewMenu";
 import type { ThreadRowRef } from "./ThreadRow";
 import {
   findThreadRowElement,
@@ -356,6 +359,13 @@ type SidebarProps = {
    */
   projectIndexHidden?: boolean;
   onProjectIndexHiddenChange?: (hidden: boolean) => void;
+  /**
+   * Thread row density (`[general.appearance] density`). With a handler the
+   * lens row's view menu offers the three row styles.
+   */
+  density?: DesktopAppearanceDensity;
+  onDensityChange?: (density: DesktopAppearanceDensity) => void;
+  onOpenAppearanceSettings?: () => void;
   /** A dragged index width (`[ui] project_index_width`); `null` is natural. */
   projectIndexWidth?: number | null;
   onProjectIndexWidthChange?: (width: number | null) => void;
@@ -3760,12 +3770,21 @@ function SidebarContent(props: SidebarProps) {
                 ),
               )}
             </div>
-            {projectIndexEnabled ? (
-              <ProjectIndexToggle
-                hidden={props.projectIndexHidden ?? false}
-                unavailableReason={projectIndexUnavailableReason}
-                onToggle={() =>
-                  props.onProjectIndexHiddenChange?.(!props.projectIndexHidden)}
+            {projectIndexEnabled || props.onDensityChange ? (
+              <SidebarViewMenu
+                density={props.density}
+                onDensityChange={props.onDensityChange}
+                onOpenAppearanceSettings={props.onOpenAppearanceSettings}
+                projectIndex={
+                  projectIndexEnabled
+                    ? {
+                        hidden: props.projectIndexHidden ?? false,
+                        unavailableReason: projectIndexUnavailableReason,
+                        onToggle: () =>
+                          props.onProjectIndexHiddenChange?.(!props.projectIndexHidden),
+                      }
+                    : undefined
+                }
               />
             ) : null}
           </div>

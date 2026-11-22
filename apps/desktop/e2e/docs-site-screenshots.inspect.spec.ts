@@ -1274,17 +1274,16 @@ test("desktop-queued-turns — composer with /review queued behind an in-flight 
   }
 });
 
-// ────────────────────── First-run onboarding wizard ──────────────────────
+// ────────────────────── First-run Get started ──────────────────────
 
-test("desktop-onboarding-wizard — Codex profile step", async () => {
+test("desktop-get-started — first-run agents page", async () => {
   test.setTimeout(120_000);
 
-  // No fixturePath: the wizard runs against a fresh PWRAGENT_HOME (no
+  // No fixturePath: first run opens against a fresh PWRAGENT_HOME (no
   // ~/.pwragent/profiles/default/ pre-seeded), so the boot decision
-  // returns `no-profile-configured` and the wizard fires for real.
-  // `suppressOnboarding: false` is the explicit opt-in, and the
-  // wizard doesn't need the replay driver until it tries to spawn a
-  // thread (which we won't do — we stop on the Codex Profile step).
+  // returns `no-profile-configured` and Get started opens for real.
+  // `suppressOnboarding: false` is the explicit opt-in. The page needs no
+  // replay driver; the capture stops before Start.
   const app = await launchDocsSiteApp({
     suppressOnboarding: false,
     requiresReplayDriver: false,
@@ -1294,41 +1293,15 @@ test("desktop-onboarding-wizard — Codex profile step", async () => {
   });
 
   try {
-    // Welcome → Thread presentation → AI Providers → Codex
-    // profile. The Codex profile step is the most distinctive shot —
-    // it shows the Shared / Isolated / Multiple cards that frame how
-    // PwrAgent relates to a Codex install.
+    const page = app.window.getByRole("dialog", { name: "Get started" });
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    // Wait for the opening agent check so no row is caught mid-check.
     await expect(
-      app.window.getByRole("heading", { name: /A few short choices/i }),
-    ).toBeVisible();
-    await app.window.getByRole("button", { name: /Get started/i }).click();
-
-    // Thread presentation — accept defaults.
-    await expect(
-      app.window.getByRole("heading", {
-        name: /Pick your appearance and thread density/i,
-      }),
-    ).toBeVisible();
-    await app.window.getByRole("button", { name: /^Continue/i }).click();
-
-    // AI Providers — the deterministic executable override clears the
-    // gate without collecting credentials in the wizard.
-    await expect(
-      app.window.getByRole("heading", {
-        name: /Install at least one AI provider/i,
-      }),
-    ).toBeVisible();
-    await app.window.getByRole("button", { name: /^Continue/i }).click();
-
-    // Codex profile — this is the screenshot target.
-    await expect(
-      app.window.getByRole("heading", {
-        name: /How should PwrAgent relate to your Codex install/i,
-      }),
-    ).toBeVisible();
+      page.locator(".get-started__section-head").getByRole("button"),
+    ).toHaveText("Check again", { timeout: 20_000 });
 
     await bringToFront(app.electronApp);
-    await captureNative(app.electronApp, "desktop-onboarding-codex-profile.png");
+    await captureNative(app.electronApp, "desktop-get-started.png");
   } finally {
     await app.close();
   }
