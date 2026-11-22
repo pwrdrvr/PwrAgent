@@ -11,7 +11,7 @@ Search when the user wants to:
 - Create or attach a worktree, link another project/repository directory, detach a directory, or move this thread into another project folder or existing checkout.
 - Run work on another machine or instance through Federation; discover connected machines, their load and projects; find remote threads or create work there.
 - Work with messaging in Telegram, Discord, Slack, LINE, Lark/Feishu, or Mattermost: inspect the current conversation, attach a thread or native child topic, rename a conversation, send a requested file or private response, list/export received original files for saving, or inspect/render PDF attachments. Search does not authorize sending messages.
-- Read or change the local profile's default Working Updates for bound Development threads from an authorized messaging turn.
+- Read or change the messaging profile's Working Updates default.
 - Open, edit, read back, comment on, review, approve or merge GitHub pull requests and GitLab merge requests, with screenshot or video attachments; read PR/MR diffs, changed files, reviews and inline review threads; reply to or resolve review comments; search, open, edit or comment on GitHub and GitLab issues.
 - Read forge cache, PR/MR status, GitHub Actions runs and GitLab pipelines, logs and artifacts; rerun failed jobs; attach or watch PRs; hold merges; wait durably for standalone CI, local watcher markers, thread turns, or PR prerequisites; request or record code reviews, list unresolved findings, and settle them as addressed, declined, or deferred. Prefer these tools to GitHub connectors and gh/glab.
 - Inspect automations, schedules, runs, alerts, artifacts, or failures; inspect PwrAgent version, updates, restart, or shutdown.
