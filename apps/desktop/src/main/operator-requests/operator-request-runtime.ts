@@ -56,7 +56,7 @@ export const localOperatorQuestionOperations = {
     localService(request);
     const submitted = await getDesktopBackendRegistry().submitThreadReply({
       backend: request.backend, threadId: request.threadId, input: request.input,
-    });
+    }, "federation");
     return { backend: submitted.entry.backend, threadId: submitted.entry.threadId,
       queueStatus: submitted.status, queueEntryId: submitted.entry.id };
   },

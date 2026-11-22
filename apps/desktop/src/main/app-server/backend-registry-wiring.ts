@@ -977,6 +977,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
             : resolveAgentToolCatalogs({
               appManagementAllowed: true, // Per-actor discovery is checked below for each MCP request.
               appManagementHandler: ports.appManagementHandler,
+              currentTurnInputSource: ports.currentTurnInputSource,
               automationInspectionHandler: ports.automationInspectionHandler,
               federationHandler: ports.federationHandler,
               mcpGatewayTools: ports.mcpGatewayTools,
@@ -1042,6 +1043,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       workerPath: path.join(__dirname, "claude-session-reader-worker.js"),
     }),
     emit: async (event) => { await ports.emit(event); },
+    onFollowUpTurnStarted: (turn) => { context.turnState.rememberTurnInputSource({ ...turn, backend: "claude" }, "agent"); },
     request: async (request, signal) => await ports.handleServerRequest("claude", request, signal),
     cancelRequest: async (threadId, turnId, requestId) => {
       const key = buildPendingRequestKey({ backend: "claude", threadId, requestId });

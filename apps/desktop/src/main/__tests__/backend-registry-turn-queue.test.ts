@@ -53,6 +53,44 @@ import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { type PwrAgentFederatedThreadMessageRequest } from "../agent-tools/pwragent-thread-orchestration-agent-tools";
 
 describe("DesktopBackendRegistry", () => {
+  it("keeps the admission source through the FIFO and exposes it before the provider acknowledges the start", async () => {
+    const client = new MockBackendClient({ threads: [] });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
+    const identity = { backend: "codex" as const, threadId: "input-source-thread" };
+    const sourceAtFirstCall: unknown[] = [];
+    const readSource = async (turnId: string) => {
+      const response = await client.emitRequest({ method: "item/tool/call", params: {
+        threadId: identity.threadId, turnId, namespace: "pwragent", tool: "get_current_turn_input_source",
+        requestId: `request-${turnId}`, callId: `call-${turnId}`, arguments: {},
+      } }) as { success: boolean; contentItems: Array<{ text: string }> };
+      expect(response.success).toBe(true);
+      return JSON.parse(response.contentItems[0]!.text);
+    };
+    const starts = vi.spyOn(client, "startTurn").mockImplementation(async ({ threadId }) => {
+      const turnId = `provider-turn-${starts.mock.calls.length}`;
+      await emitStartedTurn(registry, "codex", threadId, turnId);
+      sourceAtFirstCall.push(await readSource(turnId));
+      return { threadId, turnId };
+    });
+    try {
+      const input = [{ type: "text" as const, text: "invented operator input" }];
+      const first = await registry.submitTurn({ ...identity, input }, "desktop");
+      expect(first).toMatchObject({ status: "started", turnId: "provider-turn-1" });
+      expect(await registry.submitTurn({ ...identity, input }, "federation")).toMatchObject({ status: "queued" });
+      expect(await registry.submitTurn({ ...identity, input, messageOrigin: {
+        kind: "messaging", messaging: { platform: "telegram", surface: { id: "private-room", kind: "dm" }, actor: { platformUserId: "private-actor" } },
+      } })).toMatchObject({ status: "queued" });
+      expect(await readSource("provider-turn-1")).toEqual({ source: "desktop" });
+      await emitCompletedTurn(registry, "codex", identity.threadId, "provider-turn-1");
+      await vi.waitFor(() => expect(sourceAtFirstCall).toHaveLength(2));
+      await emitCompletedTurn(registry, "codex", identity.threadId, "provider-turn-2");
+      await vi.waitFor(() => expect(sourceAtFirstCall).toHaveLength(3));
+      expect(await readSource("provider-turn-3")).toEqual({ source: "messaging" });
+      expect(sourceAtFirstCall).toEqual([{ source: "desktop" }, { source: "federation" }, { source: "messaging" }]);
+      await emitCompletedTurn(registry, "codex", identity.threadId, "provider-turn-3");
+    } finally { await registry.close(); }
+  });
+
   it("constructs the shared owner queue and projects generated held admissions through its actual host", async () => {
     const shared = await import("@pwragent/owner-core/thread-turn-queue").catch(() => undefined);
     await fc.assert(fc.asyncProperty(
@@ -1062,13 +1100,13 @@ describe("DesktopBackendRegistry", () => {
       let clock = Date.now();
       const now = vi.spyOn(Date, "now").mockImplementation(() => clock++);
       onTestFinished(() => now.mockRestore());
-      const queue = async (value: string) => {
-        const result = await first.registry.submitTurn({ backend: "codex", threadId: "busy", input: text(value) });
+      const queue = async (value: string, source?: "desktop" | "federation") => {
+        const result = await first.registry.submitTurn({ backend: "codex", threadId: "busy", input: text(value) }, source);
         if (result.status !== "queued") throw new Error("expected a queued turn");
         return result.entry.id;
       };
-      const one = await queue("Queued one");
-      const two = await queue("Queued two");
+      const one = await queue("Queued one", "desktop");
+      const two = await queue("Queued two", "federation");
       const three = await queue("Queued three");
       // The operator moves the newest to the front and pauses another.
       await first.registry.moveQueuedTurn({ queueEntryId: three, beforeQueueEntryId: one });
@@ -1115,6 +1153,9 @@ describe("DesktopBackendRegistry", () => {
         writes,
       });
       const saved = payloads().sort((left, right) => (left.queued?.position ?? 0) - (right.queued?.position ?? 0));
+      expect(saved.map((row) => [row.id, row.queued?.turnInputSource])).toEqual([
+        [two, "federation"], [three, undefined], [one, "desktop"],
+      ]);
       expect(saved.map((row) => [row.id, row.queued?.paused ?? false])).toEqual([
         [two, false],
         [three, false],

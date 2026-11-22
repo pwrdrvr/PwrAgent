@@ -22,7 +22,7 @@ export { RESTART_CONTINUATION_SCHEMA } from "@pwragent/sqlite-storage/state-sche
 
 /** Queue settings a saved queued message keeps across the restart. */
 export type StoredRestartQueuedFields = Partial<Pick<ThreadTurnQueueEntry,
-  | "origin" | "delivery" | "agentMessages" | "agentMessageOrigins" | "executionMode"
+  | "origin" | "turnInputSource" | "delivery" | "agentMessages" | "agentMessageOrigins" | "executionMode"
   | "approvalPolicy" | "sandbox" | "model" | "collaborationMode" | "serviceTier"
   | "reasoningEffort" | "fastMode" | "automationRunId" | "automationName" | "title"
 >> & {

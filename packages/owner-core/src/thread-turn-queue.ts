@@ -14,6 +14,7 @@ import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { combinedDeliveryInput } from "@pwragent/shared/combined-delivery";
 import { mergeCausalMessagingContext } from "@pwragent/shared/messaging-causal-context";
 import { transitionQueueAdmission, type QueueAdmission, type QueueAdmissionEvent } from "./queue-admission";
+import { combinedTurnInputSource, type TurnInputSource } from "./turn-input-source";
 
 export type ThreadTurnQueueOrigin =
   | "manual"
@@ -26,6 +27,7 @@ export type ThreadTurnQueueEntry = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   origin: ThreadTurnQueueOrigin;
+  turnInputSource?: TurnInputSource;
   messageOrigin?: AppServerThreadMessageOrigin;
   delivery?: "queued-steer";
   agentMessages?: QueuedAgentMessage[];
@@ -280,7 +282,7 @@ const RECENT_TERMINAL_TURN_LIMIT = 1_000;
 
 function sameAcceptance(left: ThreadTurnQueueEntry, right: ThreadTurnQueueEntry): boolean {
   const fields = [
-    "backend", "threadId", "origin", "messageOrigin", "delivery", "input",
+    "backend", "threadId", "origin", "turnInputSource", "messageOrigin", "delivery", "input",
     "executionMode", "approvalPolicy", "sandbox", "model", "collaborationMode",
     "serviceTier", "reasoningEffort", "fastMode", "automationRunId", "automationName",
     "agentMessages", "agentMessageOrigins", "restartContinuation",
@@ -482,6 +484,7 @@ function combineQueuedDelivery(members: readonly ThreadTurnQueueEntry[]): Thread
   return {
     ...base,
     input: combinedDeliveryInput(members),
+    turnInputSource: combinedTurnInputSource(members),
     messageOrigin: combinedOrigin(members),
     agentMessages: members.map((member) => ({
       input: structuredClone(member.input),

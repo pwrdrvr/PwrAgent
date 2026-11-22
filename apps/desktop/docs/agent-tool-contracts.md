@@ -59,3 +59,20 @@ unknown native tool on those clients.
   exempt arbitrary upstream output by tool name or marker text alone.
 - Attribute the existing invocation to its original connection and tool. Do not
   emit a duplicate tool event or add per-call persistence for discovery.
+
+## Turn input source
+
+`get_current_turn_input_source` takes no arguments and returns one `source`
+value for the calling turn. The owner assigns `desktop` or `federation` at
+composer admission and recognizes `messaging` from the inbound route.
+`automation` and `agent` describe continuations and other non-operator work.
+Combined inputs with different known sources return `mixed`. Missing evidence
+returns `unknown`, including a combined input with an unattributed member.
+Steering an active turn leaves its starting source intact.
+
+The tool describes the sending surface and conveys no physical presence or
+permission. It returns no peer, actor, or conversation identifiers. The owner
+tracks the source in memory for a running turn. Queued prompts keep admission
+source in their queue entry and any existing restart checkpoint.
+Codex threads with a fixed older catalog receive the tool when the runtime can
+refresh their catalog or when a new thread receives the current catalog.

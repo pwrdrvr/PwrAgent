@@ -107,6 +107,7 @@ export type ClaudeBackendOptions = {
   readMcpServers?: (params: { executable: string; env: NodeJS.ProcessEnv; cwd: string }) => Promise<McpServerStatus[]>;
   resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
   emit: (event: AgentEvent) => Promise<void>;
+  onFollowUpTurnStarted?: (turn: { threadId: string; turnId: string }) => void;
   request: (request: AppServerPendingRequestNotification, signal: AbortSignal) => Promise<unknown>;
   cancelRequest: (threadId: string, turnId: string, requestId: string) => Promise<void>;
   /** Account plan limits shared with the other providers; a private store when absent. */
@@ -1879,6 +1880,7 @@ export class ClaudeBackend {
     live.lastTurnId = turn.turnId;
     if (live.followUpTimer) clearTimeout(live.followUpTimer);
     live.followUpTimer = undefined;
+    this.options.onFollowUpTurnStarted?.({ threadId: live.session.thread.id, turnId: turn.turnId });
     await this.emit({ method: "turn/started", params: {
       threadId: live.session.thread.id, turn: { id: turn.turnId, status: "in_progress", startedAt: turn.startedAt },
     } });

@@ -1,4 +1,5 @@
 import type { AppServerCollaborationModeRequest } from "@pwragent/shared/contracts/agent";
+import type { TurnInputSource } from "@pwragent/owner-core/turn-input-source";
 import type {
   AppServerBackendKind,
   AppServerThreadStatus,
@@ -23,6 +24,7 @@ import {
 import { buildActiveTurnKey, buildActiveTurnModeKey, parseActiveTurnKey, parseThreadTurnKeyBody } from "./thread-turn-keys";
 
 type TurnIdentity = { backend: AppServerBackendKind; threadId: string; turnId: string };
+const turnInputSourceKey = ({ backend, threadId, turnId }: TurnIdentity): string => JSON.stringify([backend, threadId, turnId]);
 type CodexTurnReference = string | Pick<TurnIdentity, "threadId" | "turnId">;
 type TurnReference = string | TurnIdentity;
 type ReviewProjection = {
@@ -40,6 +42,7 @@ export class RegistryTurnState {
   // These entries genuinely belong to other providers, not to Codex's model.
   private readonly otherProviderRegistrations = new Map<string, number>();
   private readonly otherProviderOrigins = new Set<StartingTurnOrigin>();
+  private readonly turnInputSources = new Map<string, TurnInputSource>();
   private readonly deletionListeners = new Set<(key: string) => void>();
   // Immutable projections, invalidated by the canonical state commit. Streamed
   // events must not scan idle thread history just to ask whether reviews exist.
@@ -63,6 +66,7 @@ export class RegistryTurnState {
       if (turn.phase !== "announced") continue;
       if (next.turns.some(candidate => candidate.turnId === turn.turnId && candidate.phase === "announced")) continue;
       const key = buildActiveTurnKey("codex", threadId, turn.turnId);
+      this.turnInputSources.delete(turnInputSourceKey({ backend: "codex", threadId, turnId: turn.turnId }));
       for (const listener of this.deletionListeners) listener(key);
     }
   }
@@ -112,7 +116,10 @@ export class RegistryTurnState {
     return this.codex(receipt.threadId).deliveries.some(delivery => delivery.owner === receipt.owner && delivery.phase === "pending");
   }
   observeTurnTerminal(threadId: string, turnId: string | undefined): void {
-    if (turnId) this.transition(threadId, { type: "terminalDelivery", turnId });
+    if (turnId) {
+      this.turnInputSources.delete(turnInputSourceKey({ backend: "codex", threadId, turnId }));
+      this.transition(threadId, { type: "terminalDelivery", turnId });
+    }
   }
   pendingStartedTurnId(threadId: string): string | undefined {
     return this.codex(threadId).deliveries.find(delivery => delivery.phase === "pending" && !delivery.turnId.startsWith("pending:"))?.turnId;
@@ -130,6 +137,7 @@ export class RegistryTurnState {
     const turn = this.registeredIdentity(reference);
     const key = typeof reference === "string" ? reference : buildActiveTurnKey(reference.backend, reference.threadId, reference.turnId);
     if (!turn) return false;
+    this.turnInputSources.delete(turnInputSourceKey(turn));
     const registered = this.hasRegisteredTurn(key);
     if (turn.backend === "codex") this.transition(turn.threadId, { type: "unregistered", turnId: turn.turnId });
     else if (this.otherProviderRegistrations.delete(key)) {
@@ -328,6 +336,14 @@ export class RegistryTurnState {
   addStartingOrigin(origin: StartingTurnOrigin): void {
     if (origin.backend === "codex") this.transition(origin.threadId, { type: "originAdded", origin, order: ++this.order });
     else this.otherProviderOrigins.add(origin);
+  }
+
+  rememberTurnInputSource(turn: TurnIdentity, source: TurnInputSource): void {
+    this.turnInputSources.set(turnInputSourceKey(turn), source);
+  }
+
+  readTurnInputSource(turn: TurnIdentity): TurnInputSource | undefined {
+    return this.turnInputSources.get(turnInputSourceKey(turn));
   }
   removeStartingOrigin(origin: StartingTurnOrigin): void {
     if (origin.backend === "codex") {

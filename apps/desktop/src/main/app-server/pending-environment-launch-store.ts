@@ -7,6 +7,7 @@ import type {
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type { MaterializeDirectoryLaunchpadRequest } from "@pwragent/shared/contracts/agent";
 import type { NavigationLaunchpadDraft } from "@pwragent/shared/contracts/navigation";
+import type { TurnInputSource } from "@pwragent/owner-core/turn-input-source";
 
 export type PendingEnvironmentLaunch = {
   backend: AppServerBackendKind;
@@ -14,6 +15,7 @@ export type PendingEnvironmentLaunch = {
   request: MaterializeDirectoryLaunchpadRequest;
   launchpad: NavigationLaunchpadDraft;
   messageOrigin?: AppServerThreadMessageOrigin;
+  turnInputSource?: TurnInputSource;
 };
 
 /** Unsent launch requests belong to PwrAgent, outside the metadata database. */

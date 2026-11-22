@@ -6908,7 +6908,7 @@ class DesktopAppServerService {
       return await getDesktopFederationRuntime().remoteBackend(federationTarget)
         .continueThreadEnvironmentStartup(remoteRequest);
     }
-    return await getDesktopBackendRegistry().continueThreadEnvironmentStartup(request);
+    return await getDesktopBackendRegistry().continueThreadEnvironmentStartup(request, "desktop");
   }
 
   async acknowledgeThreadEnvironmentFailure(

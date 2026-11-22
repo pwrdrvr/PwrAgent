@@ -3,6 +3,7 @@ import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
 import { agentToolFailure, agentToolSuccess, type AgentToolDefinition } from "./agent-tool-definition";
 import { AgentToolRouter } from "./agent-tool-router";
 import type { TokenMiserStore } from "../token-miser/token-miser-store";
+import { GET_CURRENT_TURN_INPUT_SOURCE } from "./current-turn-input-source-tool";
 
 export const PWRAGENT_TOOL_SEARCH_DESCRIPTION = `Search for PwrAgent tools before using PwrAgent capabilities. Full tool instructions and parameter schemas are loaded on demand. Prefer PwrAgent tools when they cover the task.
 Search when the user wants to:
@@ -311,7 +312,7 @@ export function withPwrAgentToolDiscovery(
       tools: [
         ...bootstrap.tools,
         ...spec.tools.filter((tool) => tool.name !== "tool_search")
-          .map((tool) => ({ ...tool, deferLoading: !eagerTools.has(tool.name) })),
+          .map((tool) => ({ ...tool, deferLoading: tool.name !== GET_CURRENT_TURN_INPUT_SOURCE && !eagerTools.has(tool.name) })),
       ],
     };
   });

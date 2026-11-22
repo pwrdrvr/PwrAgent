@@ -436,6 +436,8 @@ describe("DesktopBackendRegistry", () => {
         const mcp = new McpClient({ name: "claude-fixture", version: "1.0.0" });
         try {
           await mcp.connect(new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers: server.headers } }));
+          const source = await mcp.callTool({ name: "get_current_turn_input_source", arguments: {} });
+          expect(source.structuredContent).toEqual({ source: origins[turn]!.kind });
           const status = await mcp.callTool({ name: "get_thread_status", arguments: {} });
           expect(status.isError).not.toBe(true);
           expect(JSON.stringify(status)).toContain(threadId);

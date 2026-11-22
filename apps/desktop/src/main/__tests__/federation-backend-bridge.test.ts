@@ -62,6 +62,21 @@ describe("federation backend bridge", () => {
     expect(getNavigationSelectedDetail).toHaveBeenCalledExactlyOnceWith(request, expect.any(Object));
   });
 
+  it("assigns a Federation viewer send at the authenticated owner boundary", async () => {
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    router.registerConnection({ peerId: "viewer", capabilities: ["turn_control"], sendEnvelope: () => {} });
+    const startTurn = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread", turnId: "turn" }));
+    const onTurnInputAccepted = vi.fn();
+    registerFederationBackendHandlers({ router, backend: { startTurn } as unknown as FederationBackendOperations, onTurnInputAccepted });
+    const request = { backend: "codex", threadId: "thread", input: [{ type: "text", text: "desktop" }] };
+    await router.routeEnvelope({ sourcePeerId: "viewer", envelope: {
+      id: "request", kind: "request", protocolVersion: 1, sourceInstanceId: "viewer", targetInstanceId: "owner", createdAt: 1_000,
+      method: FEDERATION_BACKEND_METHODS.startTurn, params: { ...request, turnInputSource: "desktop" },
+    } });
+    expect(startTurn).toHaveBeenCalledExactlyOnceWith(request, "federation");
+    expect(startTurn).toHaveBeenCalledBefore(onTurnInputAccepted);
+  });
+
   it("requires grouping and versioned promotion capabilities on the receiving owner", async () => {
     const request = { backend: "codex" as const, parentThreadId: "root", archivePromotion: {
       archived: { backend: "codex" as const, threadId: "middle", instanceId: "viewer" },
@@ -154,7 +169,7 @@ describe("federation backend bridge", () => {
           ...(knownSender ? { instanceLabel: "Viewer Mac", celestialIcon: "moon" } : {}),
         } },
       },
-    });
+    }, "agent");
   });
 
   it("round-trips versioned owner parent validation and requires thread_grouping", async () => {
@@ -4047,7 +4062,7 @@ describe("federation backend bridge", () => {
           threadId: "source-thread",
         },
       },
-    });
+    }, "agent");
     expect(replies).toMatchObject([
       {
         kind: "response",

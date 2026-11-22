@@ -227,6 +227,7 @@ import type {
   ListScheduledThreadActionsResponse,
   ScheduledThreadActionIdRequest,
   ScheduledThreadActionMutationResponse,
+  SteerFallbackInputSource,
   UpdateScheduledThreadActionRequest,
 } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import type { TodoUnavailableInstance } from "@pwragent/shared/contracts/thread-todos";
@@ -427,7 +428,8 @@ import { getDesktopSettingsService } from "../settings/desktop-settings-singleto
 import { isAppStateInitialized } from "../storage/desktop-runtime-storage";
 import { desktopFederationState, createFederationStorage, createDurableTurnRequestStorage, type FederationStorage } from "../storage/desktop-federation-storage";
 import { DurableTurnRequestService, DurableTurnRequestError } from "@pwragent/owner-core/durable-turn-request-service";
-import { durableFederationCallerScope, authenticateMessageOrigin } from "./federation-backend-bridge";
+import { durableFederationCallerScope, authenticateMessageOrigin, federationTurnInputSource } from "./federation-backend-bridge";
+import type { TurnInputSource } from "@pwragent/owner-core/turn-input-source";
 import {
   TurnInputViewers,
   mountCreatedThreadOnTurnViewers,
@@ -1400,14 +1402,16 @@ export class DesktopFederationRuntime {
         },
         dispatch: async (request, scope) => {
           const sourceInstanceId = (JSON.parse(scope) as string[])[1]!;
+          const messageOrigin = authenticateMessageOrigin({
+            messageOrigin: request.messageOrigin,
+            sourceInstanceId,
+            resolveSourceInstance: (instanceId) => this.resolveThreadMessageOriginInstance(instanceId),
+          });
           const response = await backend.startTurn({
             ...request,
-            messageOrigin: authenticateMessageOrigin({
-              messageOrigin: request.messageOrigin,
-              sourceInstanceId,
-              resolveSourceInstance: (instanceId) => this.resolveThreadMessageOriginInstance(instanceId),
-            }),
-          });
+            messageOrigin,
+          }, sourceInstanceId === this.ensureLocalInstanceId() ? "unknown"
+            : federationTurnInputSource(messageOrigin));
           this.turnViewers.accepted(sourceInstanceId, { backend: response.backend, threadId: response.threadId },
             startTurnInputOutcome(response));
           return response;
@@ -8025,8 +8029,8 @@ function localBackendOperations(): FederationBackendOperations {
         ...(request.keepAwake !== undefined ? { keepAwake: request.keepAwake } : {}),
       });
     },
-    async continueThreadEnvironmentStartup(request: ContinueThreadEnvironmentStartupRequest): Promise<ContinueThreadEnvironmentStartupResponse> {
-      return await getDesktopBackendRegistry().continueThreadEnvironmentStartup(request);
+    async continueThreadEnvironmentStartup(request: ContinueThreadEnvironmentStartupRequest, fallbackInputSource?: TurnInputSource): Promise<ContinueThreadEnvironmentStartupResponse> {
+      return await getDesktopBackendRegistry().continueThreadEnvironmentStartup(request, fallbackInputSource);
     },
     async acknowledgeThreadEnvironmentFailure(request: AcknowledgeThreadEnvironmentFailureRequest): Promise<AcknowledgeThreadEnvironmentFailureResponse> {
       return await getDesktopBackendRegistry().acknowledgeThreadEnvironmentFailure(request);
@@ -8303,6 +8307,7 @@ function localBackendOperations(): FederationBackendOperations {
     },
     async startTurn(
       request: FederationStartTurnRequest,
+      turnInputSource?: TurnInputSource,
     ): Promise<StartTurnResponse> {
       // A peer agent's message into a paused project here is refused, as a
       // local agent's is; a remote operator's composer is not.
@@ -8310,7 +8315,7 @@ function localBackendOperations(): FederationBackendOperations {
       const submitted = await getDesktopBackendRegistry().submitTurn({
         ...request,
         origin: "manual",
-      });
+      }, turnInputSource);
       return submitted.status === "started"
         ? {
             backend: submitted.entry.backend,
@@ -8497,7 +8502,7 @@ function localBackendOperations(): FederationBackendOperations {
     ): Promise<StopSubAgentResponse> {
       return await getDesktopBackendRegistry().stopSubAgent(request);
     },
-    async steerTurn(request: SteerTurnRequest): Promise<SteerTurnResponse> {
+    async steerTurn(request: SteerTurnRequest, fallbackInputSource?: SteerFallbackInputSource): Promise<SteerTurnResponse> {
       const registry = getDesktopBackendRegistry();
       const { admitSteerTurn } = await import(
         "../scheduled-actions/steer-turn-admission.js"
@@ -8509,6 +8514,7 @@ function localBackendOperations(): FederationBackendOperations {
         registry,
         getScheduledThreadActionService(),
         request,
+        fallbackInputSource,
       );
     },
     async setThreadExecutionMode(
@@ -8728,6 +8734,7 @@ function localBackendOperations(): FederationBackendOperations {
       request: MaterializeDirectoryLaunchpadRequest,
       options?: MaterializeDirectoryLaunchpadOptions & {
         sourceInstanceId?: FederationInstanceId;
+        turnInputSource?: TurnInputSource;
       },
     ): Promise<MaterializeDirectoryLaunchpadResponse> {
       const response = await getDesktopBackendRegistry()
