@@ -376,6 +376,8 @@ type SidebarProps = {
   onProjectIndexWidthChange?: (width: number | null) => void;
   selectedItemKey?: string;
   pendingLaunchpadCreations?: PendingLaunchpadCreation[];
+  /** Starts this machine reports while it prepares their workspaces. */
+  pendingThreadStartRows?: PendingLaunchpadCreation[];
   /** Sub-thread launchpads being written in this window. */
   subthreadLaunchpadDrafts?: SubthreadLaunchpadDraft[];
   onSelectPendingLaunchpad?: (entry: PendingSidebarRow) => void;
@@ -1091,7 +1093,7 @@ function SidebarContent(props: SidebarProps) {
     ],
     value: sidebarSnapshot,
   });
-  const creationRevision = JSON.stringify((props.pendingLaunchpadCreations ?? [])
+  const creationRevision = JSON.stringify([...props.pendingLaunchpadCreations ?? [], ...props.pendingThreadStartRows ?? []]
     .map((creation) => [creation.operationId, creation.threadKey]));
   const revealedCreationRevisionRef = useRef(creationRevision);
   const revealCreation = hoverStableSnapshot.reveal;
@@ -1115,11 +1117,14 @@ function SidebarContent(props: SidebarProps) {
   // sibling still starting: the slot the next child takes.
   const startingThreads = useMemo((): PendingSidebarRow[] => {
     if (props.browseMode === "drafts") return NO_STARTING_THREADS;
-    const creations = props.pendingLaunchpadCreations ?? NO_STARTING_THREADS;
+    const launchpads = props.pendingLaunchpadCreations ?? NO_STARTING_THREADS;
+    const creations = props.pendingThreadStartRows?.length
+      ? [...launchpads, ...props.pendingThreadStartRows]
+      : launchpads;
     return props.subthreadLaunchpadDrafts?.length
       ? [...creations, ...props.subthreadLaunchpadDrafts]
       : creations;
-  }, [props.browseMode, props.pendingLaunchpadCreations, props.subthreadLaunchpadDrafts]);
+  }, [props.browseMode, props.pendingLaunchpadCreations, props.pendingThreadStartRows, props.subthreadLaunchpadDrafts]);
   const onCreateThreadWithoutDirectory = props.onCreateThreadWithoutDirectory;
   const onAddProjectDirectory = props.onAddProjectDirectory;
   // The list's own way to begin. Not while it loads, and not without a

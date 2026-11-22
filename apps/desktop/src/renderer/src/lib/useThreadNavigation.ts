@@ -29,6 +29,14 @@ import { loadedThreadRows, loadedDirectoryRows, indexLoadedThreadRows, indexLoad
 import { readNavigationUnlinkPlan } from "./navigation-unlink-plan";
 import { readNavigationActionDetail, readNavigationActionThread } from "./navigation-action-authority";
 import { applyLaunchpadEnvironmentSetupProgress, type LaunchpadEnvironmentSetupProgress } from "./launchpad-setup-progress";
+import {
+  applyPendingThreadStartReport,
+  pendingThreadStartOpenTarget,
+  pendingThreadStartRows,
+  retirePendingThreadStart,
+  type PendingThreadStart,
+  type PendingThreadStartReport,
+} from "../features/navigation/pending-thread-starts";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type {
   AppServerBackendKind,
@@ -3087,6 +3095,14 @@ export function useThreadNavigation(
   recentThreads: NavigationThreadSummary[];
   launchpadError?: string;
   pendingLaunchpadCreations: PendingLaunchpadCreation[];
+  /**
+   * Starts this machine reports while it prepares their workspaces, as
+   * starting rows. They open no starting view: selecting one opens its
+   * thread once it has landed.
+   */
+  pendingThreadStartRows: PendingLaunchpadCreation[];
+  /** The thread a pending start's row opens; see `pendingThreadStartOpenTarget`. */
+  pendingThreadStartTarget: (selectionKey: string) => { backend: AppServerBackendKind; threadId: string } | undefined;
   /** Sub-thread launchpads being written in this window, in no set order. */
   subthreadLaunchpadDrafts: SubthreadLaunchpadDraft[];
   /** Drop a sub-thread launchpad's parent link and keep its draft. */
@@ -3562,6 +3578,9 @@ export function useThreadNavigation(
   const pendingLaunchpadCreationsRef = useRef(new Map<string, PendingLaunchpadCreation>());
   const [pendingLaunchpadCreations, setPendingLaunchpadCreations] =
     useState<PendingLaunchpadCreation[]>([]);
+  // Starts the owner reports while it prepares their workspaces (to-do cards).
+  const [pendingThreadStarts, setPendingThreadStarts] = useState<readonly PendingThreadStart[]>([]);
+  const retiredPendingThreadStartIdsRef = useRef(new Set<string>());
   // The directory whose launchpad a selection shows, including a thread that
   // is still starting from one.
   const getLaunchpadSelectionDirectoryKey = useCallback(
@@ -3887,6 +3906,14 @@ export function useThreadNavigation(
   const { refresh: refreshSelectedLaunchpadConfiguration } = launchpadConfiguration;
   const draftStore = options.composerDraftStore;
   const localFederationInstanceId = options.localFederationInstanceId;
+  const pendingThreadStartTarget = useCallback(
+    (selectionKey: string) => pendingThreadStartOpenTarget(pendingThreadStarts, selectionKey),
+    [pendingThreadStarts],
+  );
+  const pendingThreadStartRowList = useMemo(
+    () => pendingThreadStartRows(pendingThreadStarts, localFederationInstanceId),
+    [localFederationInstanceId, pendingThreadStarts],
+  );
   const draftVersion = useSyncExternalStore(
     useCallback((listener: () => void) => draftStore?.subscribeDraftPresence(listener) ?? (() => undefined), [draftStore]),
     useCallback(() => draftStore?.getDraftPresenceVersion() ?? 0, [draftStore]),
@@ -4466,6 +4493,29 @@ export function useThreadNavigation(
         if (method !== "navigation/threadGitWorkingState/updated" && method !== "navigation/directoryGitStatus/updated") {
           scheduleEventRefresh();
         }
+      }
+      if (method === "thread/start/pending") {
+        // This machine's starts, drawn only in a window listing this machine.
+        if (event.federationTarget || (windowTarget && isRemoteFederationTarget(windowTarget))) return;
+        const report = event.notification.params as PendingThreadStartReport;
+        const startId = report.start.startId;
+        setPendingThreadStarts((current) =>
+          applyPendingThreadStartReport(current, report, retiredPendingThreadStartIdsRef.current));
+        if (report.phase !== "ended") return;
+        if (!report.createdThreadId) {
+          retiredPendingThreadStartIdsRef.current.add(startId);
+          return;
+        }
+        // The thread's row replaces the starting row once a read brings it
+        // in; until then the starting row holds the slot, so nothing blinks.
+        const retire = () => {
+          retiredPendingThreadStartIdsRef.current.add(startId);
+          setPendingThreadStarts((current) => retirePendingThreadStart(current, startId));
+        };
+        void refresh(undefined, undefined, false, {
+          invalidatedOnly: true, includeDirectoryIndex: true, diagnosticTrigger: "event/thread-start-ended",
+        }).finally(retire);
+        return;
       }
       if (method === "navigation/thread/seen" && federationTargetsEqual(event.federationTarget, windowTarget)) {
         const params = event.notification.params as { threadId: string; seenUpdatedAt?: number };
@@ -5477,6 +5527,7 @@ export function useThreadNavigation(
     desktopApi,
     enabled,
     markNavigationActivity,
+    refresh,
     scheduleRefresh,
     state.rows,
     invalidateNavigation,
@@ -10466,6 +10517,8 @@ export function useThreadNavigation(
     recentThreads,
     launchpadError,
     pendingLaunchpadCreations,
+    pendingThreadStartRows: pendingThreadStartRowList,
+    pendingThreadStartTarget,
     subthreadLaunchpadDrafts,
     detachSubthreadLaunchpad,
     selectSubthreadLaunchpadParent,

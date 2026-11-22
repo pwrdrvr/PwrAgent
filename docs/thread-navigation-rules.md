@@ -179,6 +179,21 @@ Read this before changing thread lenses, Attention membership/order, unread stat
     every lens. Agents use `mutate_thread`'s `parentThreadId` and
     `detachFromParent`, for threads sharing an owner, including connected peers.
 
+### Starting rows
+
+- A thread that is still starting has a starting row in the slot its thread will take.
+- The thread's own row takes that slot once it renders (`selectUnlandedStartingThreads`). No frame shows both rows or neither.
+- A launchpad draws its own starting row, in the window that sent it.
+- A start with no launchpad passes `pendingStart` to `startThread`. A to-do card's Start thread does this, so its row shows while its worktree and environment setup run.
+- The owner reports such a start with `thread/start/pending`:
+  - `starting` before the worktree is prepared.
+  - `landed` with the thread id once the provider creates it, before the owner announces the thread (its parent, pin, or `thread/started`). Codex sends its own `thread/started` during the start request. If a list reads the new row on that event before `landed` arrives, both rows show until it does.
+  - `ended` exactly once, last, after a refused start has rolled its worktree back.
+- A refused start's row goes at `ended`. A landed start's row stays until a read after `ended` brings in the thread's own row.
+- The report is not thread state; it has no row in the state DB. Only this machine's windows draw it. A window opened during the start does not.
+- Selecting the row opens the thread whose to-do tray reports the start. Once it has landed, it opens the new thread.
+- `thread-start-pending-row.property.test.ts` and `pending-thread-starts.test.ts` hold these rules.
+
 ### Group archive
 
 - Prepare the complete archive list before removing any row. Discover viewer-mounted members and owner-listed descendants, including unloaded threads.

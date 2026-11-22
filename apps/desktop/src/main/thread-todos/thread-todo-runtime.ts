@@ -764,6 +764,16 @@ export function createThreadTodoRunners(params: {
         backend: chosen.backend,
         ...(cwd ? { cwd } : {}),
         ...settings,
+        // The lists draw the card's thread as starting while its worktree
+        // and setup run; the thread's own row takes the slot when it lands.
+        pendingStart: {
+          startId: `thread-todo:${todo.id}`,
+          // The row shows the first line of the prompt when the card has no title.
+          title: action.title?.trim() || todo.title?.trim() || action.prompt,
+          ...(project ? { directoryKey: project.key, directoryLabel: project.label } : {}),
+          // The card's tray in this thread reports the start until it lands.
+          progressThread: { backend: sourceBackend, threadId: sourceThreadId },
+        },
         // startThread prepares an environment only for a named work mode.
         ...(workMode || codexEnvironment ? { workMode: workMode ?? "local" } : {}),
         ...(codexEnvironment
