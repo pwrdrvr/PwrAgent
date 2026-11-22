@@ -411,11 +411,16 @@ describe("HotCpuProfiler", () => {
     const { target, debuggerApi } = createTarget();
     let recordingStart = 0;
     let windowIndex = 0;
+    let elapsedDuringRotationMs = 0;
     const frame = { functionName: "(root)", scriptId: "0", url: "", lineNumber: -1, columnNumber: -1 };
     debuggerApi.sendCommand.mockImplementation(async (method: string) => {
-      if (method === "Profiler.start") recordingStart = Date.now() * 1_000;
+      if (method === "Profiler.start") {
+        // The new segment begins only after the old segment's stop/start gap.
+        if (windowIndex > 0) elapsedDuringRotationMs += 240;
+        recordingStart = (Date.now() + elapsedDuringRotationMs) * 1_000;
+      }
       if (method !== "Profiler.stop") return {};
-      const endTime = Date.now() * 1_000;
+      const endTime = (Date.now() + elapsedDuringRotationMs) * 1_000;
       const name = ["expiredHistory", "burstBeforeRotation", "burstAfterRotation"][windowIndex++];
       return { profile: {
         nodes: [
@@ -434,6 +439,7 @@ describe("HotCpuProfiler", () => {
       config,
       session: sessionResult.session,
       target,
+      now: () => new Date(Date.now() + elapsedDuringRotationMs),
       getAppMetrics: () => missingMetrics && !hot ? [] : [{
         ...createMetric(0),
         cpu: { percentCPUUsage: hot ? 80 : 0, idleWakeupsPerSecond: 0 },
@@ -465,7 +471,11 @@ describe("HotCpuProfiler", () => {
     expect(names).toContain("burstBeforeRotation");
     expect(names).toContain("burstAfterRotation");
     expect(names).not.toContain("expiredHistory");
-    expect(profile.endTime - profile.startTime).toBe(60_010_000);
+    expect(profile.endTime - profile.startTime).toBe(60_250_000);
+    const events = (await fs.readFile(sessionResult.session.eventsPath, "utf8"))
+      .trim().split("\n").map((line) => JSON.parse(line));
+    expect(events.find((event) => event.type === "profile-started")?.detail.preTriggerDurationMs)
+      .toBe((profile.endTime - profile.startTime) / 1_000 - config.profileDurationMs);
     expect(debuggerApi.sendCommand.mock.calls.filter(([method]) => method === "Profiler.start")).toHaveLength(3);
     expect(debuggerApi.sendCommand.mock.calls.filter(([method]) => method === "Profiler.stop")).toHaveLength(3);
     expect(target.debugger.isAttached()).toBe(false);

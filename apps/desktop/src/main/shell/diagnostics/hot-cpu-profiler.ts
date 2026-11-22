@@ -26,6 +26,7 @@ type CpuUsageReading = {
   cpuPercent: number;
   electronCpuPercent: number;
   cumulativeCpuDeltaSeconds?: number;
+  recorderRotationCpuSeconds?: number;
   wallDeltaSeconds?: number;
 };
 
@@ -93,6 +94,7 @@ export class HotCpuProfiler {
   private lastProfileAtMs: number | null = null;
   private previousCumulativeCpuSeconds: number | null = null;
   private previousSampleAtMs: number | null = null;
+  private recorderRotationCpuMicros = 0;
   private profileDurationTimer: ReturnType<typeof setTimeout> | null = null;
   private profileCount = 0;
   private shutdownPromise: Promise<void> | null = null;
@@ -173,6 +175,7 @@ export class HotCpuProfiler {
         captureHeapSnapshot: this.config.captureHeapSnapshot,
         heapSnapshotLimit: this.config.heapSnapshotLimit,
         recordingWindowMs: this.recordingWindowMs(),
+        cpuProfileSamplingIntervalUs: this.target.cpuProfileSamplingIntervalUs,
       },
     });
     await this.ensureRecording(startedAt.getTime());
@@ -319,6 +322,9 @@ export class HotCpuProfiler {
         ...(cumulativeCpuSeconds !== undefined
           ? { cumulativeCpuSeconds }
           : {}),
+        ...(cpuUsage.recorderRotationCpuSeconds !== undefined
+          ? { recorderRotationCpuSeconds: cpuUsage.recorderRotationCpuSeconds }
+          : {}),
         ...(cpuUsage.wallDeltaSeconds !== undefined
           ? { wallDeltaSeconds: cpuUsage.wallDeltaSeconds }
           : {}),
@@ -362,6 +368,8 @@ export class HotCpuProfiler {
     cumulativeCpuSeconds?: number;
     electronCpuPercent: number;
   }): CpuUsageReading {
+    const recorderRotationCpuSeconds = this.recorderRotationCpuMicros / 1_000_000;
+    this.recorderRotationCpuMicros = 0;
     if (options.cumulativeCpuSeconds === undefined) {
       this.previousCumulativeCpuSeconds = null;
       this.previousSampleAtMs = null;
@@ -393,10 +401,13 @@ export class HotCpuProfiler {
       };
     }
 
+    // The process counter and thread counter can have different granularity.
+    const applicationCpuDeltaSeconds = Math.max(0, cumulativeCpuDeltaSeconds - recorderRotationCpuSeconds);
     return {
-      cpuPercent: (cumulativeCpuDeltaSeconds / wallDeltaSeconds) * 100,
+      cpuPercent: (applicationCpuDeltaSeconds / wallDeltaSeconds) * 100,
       electronCpuPercent: options.electronCpuPercent,
       cumulativeCpuDeltaSeconds,
+      recorderRotationCpuSeconds: recorderRotationCpuSeconds || undefined,
       wallDeltaSeconds,
     };
   }
@@ -448,7 +459,7 @@ export class HotCpuProfiler {
       this.recording
       && performance.now() - this.recordingStartedAtMonotonicMs >= this.recordingWindowMs()
     ) {
-      await this.rotateRecording(startedAtMs);
+      await this.rotateRecording();
     }
   }
 
@@ -467,11 +478,12 @@ export class HotCpuProfiler {
       }
       await this.target.debugger.sendCommand("Profiler.enable");
       if (this.stopped) return;
-      await this.target.debugger.sendCommand("Profiler.start");
-      if (!this.debuggerLease?.valid || this.isTargetDestroyed()) throw new Error("CPU recorder target lost");
-      this.recording = true;
-      this.recordingStartedAtMs = startedAtMs;
-      this.recordingStartedAtMonotonicMs = performance.now();
+      const interval = this.target.cpuProfileSamplingIntervalUs;
+      if (interval !== undefined) {
+        await this.target.debugger.sendCommand("Profiler.setSamplingInterval", { interval });
+        if (this.stopped) return;
+      }
+      await this.startRecording();
     } catch (error) {
       this.recording = false;
       this.previousRecording = null;
@@ -484,25 +496,43 @@ export class HotCpuProfiler {
     }
   }
 
-  private async finishRecording(): Promise<Profiler.Profile> {
+  private sendRecordingCommand(method: "Profiler.start" | "Profiler.stop", rotating: boolean): Promise<unknown> {
+    const readCpuMicros = this.target.readProfilerThreadCpuMicros;
+    if (!rotating || !readCpuMicros) return this.target.debugger.sendCommand(method);
+
+    // Session.post dispatches and decodes the response inline. Measure only
+    // that thread and end the measurement before yielding to other JS work.
+    const before = readCpuMicros();
+    try {
+      return this.target.debugger.sendCommand(method);
+    } finally {
+      this.recorderRotationCpuMicros += readCpuMicros() - before;
+    }
+  }
+
+  private async startRecording(rotating = false): Promise<void> {
+    await this.sendRecordingCommand("Profiler.start", rotating);
+    if (!this.debuggerLease?.valid || this.isTargetDestroyed()) throw new Error("CPU recorder target lost");
+    this.recording = true;
+    this.recordingStartedAtMs = this.now().getTime();
+    this.recordingStartedAtMonotonicMs = performance.now();
+  }
+
+  private async finishRecording(rotating = false): Promise<Profiler.Profile> {
     if (!this.recording) throw new Error("CPU recorder is not armed");
-    const result = await this.target.debugger.sendCommand("Profiler.stop") as {
+    const result = await this.sendRecordingCommand("Profiler.stop", rotating) as {
       profile: Profiler.Profile;
     };
     this.recording = false;
     return result.profile;
   }
 
-  private async rotateRecording(startedAtMs: number): Promise<void> {
+  private async rotateRecording(): Promise<void> {
     try {
-      this.previousRecording = await this.finishRecording();
+      this.previousRecording = await this.finishRecording(true);
       this.previousRecordingStartedAtMs = this.recordingStartedAtMs;
       if (this.stopped) return;
-      await this.target.debugger.sendCommand("Profiler.start");
-      if (!this.debuggerLease?.valid || this.isTargetDestroyed()) throw new Error("CPU recorder target lost");
-      this.recording = true;
-      this.recordingStartedAtMs = startedAtMs;
-      this.recordingStartedAtMonotonicMs = performance.now();
+      await this.startRecording(true);
     } catch (error) {
       this.recording = false;
       this.previousRecording = null;
@@ -771,6 +801,7 @@ export class HotCpuProfiler {
     this.samplingPausedForProfile = false;
     this.previousCumulativeCpuSeconds = null;
     this.previousSampleAtMs = null;
+    this.recorderRotationCpuMicros = 0;
     if (this.stopped || this.intervalTimer || this.isTargetDestroyed()) {
       return;
     }
