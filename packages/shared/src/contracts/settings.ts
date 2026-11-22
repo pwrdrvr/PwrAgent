@@ -3028,6 +3028,19 @@ export type SettingsCredentialTestRequest = {
   kind: SettingsCredentialTestKind;
 };
 
+export type LineRichMenuSetupRequest =
+  | { action: "check" }
+  | { action: "install" | "remove"; accountId: string };
+
+export type LineRichMenuSetupResponse =
+  | { kind: "unconfigured" }
+  | { kind: "error"; reason: "busy" | "changed" | "recovery-required" | "request-failed" | "rolled-back" }
+  | ({ accountId: string; preview: string; version: string; cleanupRequired: boolean } & (
+    | { kind: "available" }
+    | { kind: "installed"; revision: string; updateAvailable: boolean }
+    | { kind: "blocked"; reason: "administrator" | "different-menu" }
+  ));
+
 /** Prepare the current Slack manifest for a new or existing app. */
 export type SlackCreateAppRequest = {
   /** When true (default), also open the URL via the OS browser. */

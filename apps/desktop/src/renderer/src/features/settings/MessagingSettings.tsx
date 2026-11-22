@@ -84,6 +84,7 @@ import {
   ToggleField,
   type SettingsChipTone,
 } from "./SettingsLayout";
+import { LineRichMenuSettings } from "./LineRichMenuSettings";
 import { SecretField } from "./SecretField";
 import { AutomationStage } from "../automations/AutomationFunnel";
 import {
@@ -2140,6 +2141,10 @@ export function MessagingSettings(props: {
                 defaultSub="getBotInfo"
               />
             }
+          />
+          <LineRichMenuSettings
+            configured={line.channelAccessToken.configured}
+            setup={props.desktopApi?.lineRichMenuSetup}
           />
           <PairingTokenField
             desktopApi={props.desktopApi}

@@ -129,6 +129,7 @@ import {
   SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL,
   SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL,
   SETTINGS_TEST_CREDENTIALS_CHANNEL,
+  SETTINGS_LINE_RICH_MENU_CHANNEL,
   SETTINGS_WRITE_CONFIG_CHANNEL,
   SETTINGS_MANAGED_GIT_ACTION_CHANNEL,
 } from "../../../shared/ipc";
@@ -2320,6 +2321,15 @@ export function registerSettingsIpcHandlers(
     },
   );
 
+  ipcMain.removeHandler(SETTINGS_LINE_RICH_MENU_CHANNEL);
+  ipcMain.handle(SETTINGS_LINE_RICH_MENU_CHANNEL, async (_event, request) => {
+    const [{ runLineRichMenuSetup }, { default: imagePath }] = await Promise.all([
+      import("../../messaging/line-rich-menu-setup"),
+      import("@pwragent/messaging-provider-line/rich-menu.png?asset"),
+    ]);
+    return await runLineRichMenuSetup(getService(service).resolveLineChannelAccessTokenSync(), request, imagePath);
+  });
+
   ipcMain.removeHandler(SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL);
   ipcMain.handle(
     SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL,
@@ -2604,6 +2614,7 @@ export function disposeSettingsIpcHandlers(): void {
   ipcMain.removeHandler(SETTINGS_REFRESH_GIT_DISCOVERY_CHANNEL);
   ipcMain.removeHandler(SETTINGS_INSPECT_CODE_SIGNATURES_CHANNEL);
   ipcMain.removeHandler(SETTINGS_TEST_CREDENTIALS_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_LINE_RICH_MENU_CHANNEL);
   ipcMain.removeHandler(SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL);
   ipcMain.removeHandler(SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL);
   ipcMain.removeHandler(SETTINGS_OPEN_SLACK_APP_SETTINGS_CHANNEL);
