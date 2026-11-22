@@ -5403,6 +5403,10 @@ function AttentionLensTab(props: {
     interactive: pickable ? {
       onPointerEnter: () => sidebarPrCardBridge.enterCard(bridgeCardRef.current),
       onPointerLeave: () => sidebarPrCardBridge.leaveCard(bridgeCardRef.current),
+      // The card opens over the project index and thread rows, which are
+      // card triggers on the same bridge: crossing one on the way down
+      // would close this card at once.
+      bridge: true,
     } : undefined,
   });
   hideRef.current = tooltip.hide;

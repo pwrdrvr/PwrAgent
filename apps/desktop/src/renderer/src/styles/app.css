@@ -6555,6 +6555,16 @@ body.is-project-index-resizing {
   line-height: 1.3;
 }
 
+/* The transparent part of an enterable card that fills the gap to its
+   trigger (`useViewportTooltip` `interactive.bridge`, sized inline from
+   `tooltipBridgeRect`). It takes the card's pointer events, so leaving the
+   trigger lands on the card rather than on whatever lies under the gap. */
+.tooltip-hover-bridge {
+  position: absolute;
+  background: transparent;
+  -webkit-app-region: no-drag;
+}
+
 /* The sidebar tab's card is enterable (AttentionSignals `scopes`): each
    counted row narrows Attention to its kind, and the footer shows all of it
    again. Rows take the project card's target recipe (`.project-card__target`)

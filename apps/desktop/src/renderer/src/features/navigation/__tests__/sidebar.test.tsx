@@ -4780,6 +4780,10 @@ describe("Sidebar", () => {
         const tab = screen.getByRole("tab", { name: /^Attention,/ });
         fireEvent.mouseEnter(tab);
         const card = screen.getByRole("tooltip");
+        // The gap under the tab is part of the card, so the pointer never
+        // crosses the project index or thread rows (both card triggers) on
+        // the way. Its geometry is `tooltip-bridge.property.test.ts`'s.
+        expect(card.querySelector(".tooltip-hover-bridge")).not.toBeNull();
         // Leaving the tab keeps the card across the bridge; reaching it
         // holds it there for as long as the pointer stays.
         fireEvent.mouseLeave(tab);

@@ -18,7 +18,7 @@ import {
   subscribeNativeDragInteraction,
 } from "./native-drag-interaction";
 import { anchorRectsMatch, observeTooltipAnchor } from "./observe-tooltip-anchor";
-import { anchoredTooltipPosition, TOOLTIP_GAP } from "./tooltip-placement";
+import { anchoredTooltipPosition, TOOLTIP_GAP, tooltipBridgeRect } from "./tooltip-placement";
 
 const VIEWPORT_PADDING = 12;
 /** Where a pointer-anchored tooltip sits relative to the cursor's hotspot:
@@ -396,6 +396,14 @@ export function useViewportTooltip(options: {
   interactive?: {
     onPointerEnter: () => void;
     onPointerLeave: () => void;
+    /**
+     * Fill the gap between the trigger and the card with a transparent part
+     * of the card (`tooltipBridgeRect`), so the pointer crosses straight
+     * from one to the other. For a card that opens next to its trigger over
+     * other hover targets; the grace period alone loses to any of them that
+     * claims the pointer on the way.
+     */
+    bridge?: boolean;
   };
 }): {
   /**
@@ -450,6 +458,7 @@ export function useViewportTooltip(options: {
   const interactiveRef = useRef(interactive);
   interactiveRef.current = interactive;
   const tooltipRef = useRef<HTMLDivElement>(null);
+  const bridgeRef = useRef<HTMLDivElement>(null);
   const targetRef = useRef<HTMLElement | null>(null);
   const targetRectRef = useRef<TooltipTargetRect | null>(null);
   const hoverDelayTimerRef = useRef<number | null>(null);
@@ -667,6 +676,31 @@ export function useViewportTooltip(options: {
       setState({ ...state, left, top });
     }
   }, [state, tooltipId, placement]);
+
+  // Sized from the boxes as laid out, after the card has its position. A
+  // direct style write rather than state: the strip changes nothing else on
+  // screen, and a second render per placement would be pure cost.
+  useLayoutEffect(() => {
+    const bridge = bridgeRef.current;
+    const card = tooltipRef.current;
+    if (!bridge || !card || state?.left === undefined || state.top === undefined) return;
+    const box = card.getBoundingClientRect();
+    const rect = tooltipBridgeRect(
+      { top: state.targetTop, bottom: state.targetBottom, left: state.targetLeft, right: state.targetRight },
+      { top: box.top, bottom: box.bottom, left: box.left, right: box.right },
+    );
+    if (!rect) {
+      bridge.style.display = "none";
+      return;
+    }
+    // An absolute child is placed from the card's padding box, inside its
+    // border; the rectangle is measured from the border box.
+    bridge.style.display = "block";
+    bridge.style.left = `${rect.left - card.clientLeft}px`;
+    bridge.style.top = `${rect.top - card.clientTop}px`;
+    bridge.style.width = `${rect.width}px`;
+    bridge.style.height = `${rect.height}px`;
+  }, [state]);
 
   const show = useCallback((target: HTMLElement, content: ReactNode): void => {
     recordRendererUpdate(RendererUpdateEvent.tooltipShow, tooltipId);
@@ -919,6 +953,9 @@ export function useViewportTooltip(options: {
             }}
           >
             {state.content}
+            {interactive?.bridge ? (
+              <div ref={bridgeRef} aria-hidden="true" className="tooltip-hover-bridge" style={{ display: "none" }} />
+            ) : null}
           </div>,
           document.body,
         )
