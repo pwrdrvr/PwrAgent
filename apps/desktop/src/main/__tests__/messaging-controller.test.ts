@@ -6779,8 +6779,9 @@ describe("MessagingController", () => {
         if (route === "default") {
           navigation.threads[0]!.agent = { name: "Fixture Agent", instructionLineCount: 1, instructionsTooLong: false, updatedAt: 1000 };
         }
+        const requests = new SqliteMessagingRequestStore(db.raw);
         const harness = await createHarness({
-          requestStore: new SqliteMessagingRequestStore(db.raw),
+          requestStore: requests,
           authorizeRetainedSource: (_event, verify = true) => !verify || member,
           navigation,
           rbacPolicy: route === "legacy" ? undefined : rbacProviderGranting(permissions),
@@ -6800,6 +6801,22 @@ describe("MessagingController", () => {
         expect(await authorize()).toEqual(denied);
         permissions.push("tools.messaging_profile_settings");
         expect(await authorize()).toEqual(route === "legacy" ? denied : { owns: true, allowed: true });
+        if (route !== "legacy") {
+          const retained = requests.get(source!)!;
+          const rememberSteer = (steer: typeof event) => requests.remember({
+            agent: retained.agent, bindingId: retained.bindingId, connectionId: retained.connectionId, event: steer,
+          })!.ref;
+          const sameActor = rememberSteer({ ...event, id: "same-actor-steer" });
+          const otherActor = rememberSteer({ ...event, id: "other-actor-steer", actor: { ...event.actor, platformUserId: "other" } });
+          const otherConversation = rememberSteer({ ...event, id: "other-conversation-steer", channel: buildTopicChannel("401") });
+          const authorizeSteer = (causalMessagingSource: typeof sameActor, causalMessagingAmbiguous = false) =>
+            harness.controller.authorizeRetainedTool({ ...context, causalMessagingSource, causalMessagingAmbiguous }, check);
+          expect(sameActor.requestId).not.toBe(source!.requestId);
+          expect(await authorizeSteer(sameActor)).toEqual({ owns: true, allowed: true });
+          expect(await authorizeSteer(otherActor)).toEqual(denied);
+          expect(await authorizeSteer(otherConversation)).toEqual(denied);
+          expect(await authorizeSteer(sameActor, true)).toMatchObject({ allowed: false });
+        }
         expect(await harness.controller.authorizeRetainedTool({ ...context, turnId: "completion" }, check)).toEqual(denied);
         member = false;
         expect(await authorize()).toEqual(denied);
@@ -6812,6 +6829,41 @@ describe("MessagingController", () => {
       }
     },
   );
+
+  it("passes the bound requester to the launchpad before it starts the first prompt", async () => {
+    const db = StateDb.open(":memory:");
+    const requests = new SqliteMessagingRequestStore(db.raw);
+    const materialize = vi.fn(async (request: MaterializeDirectoryLaunchpadRequest, options?: MaterializeDirectoryLaunchpadOptions) => {
+      const thread = { backend: "codex", threadId: "new-thread-1", executionMode: "default", workMode: "local" } as const;
+      const origin = await options?.onThreadMaterialized?.(thread);
+      return { ...thread, turnId: "turn-1", origin };
+    });
+    const harness = await createHarness({
+      requestStore: requests,
+      authorizeRetainedSource: () => true,
+      materializeDirectoryLaunchpad: materialize,
+      rbacPolicy: rbacProviderGranting(["thread.new", "message.reply", "tools.messaging_profile_settings"]),
+    });
+    try {
+      await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "browse:select-project", value: {
+        directoryKey: "directory:pwragent", label: "PwrAgent", path: "/repo/pwragent",
+      } }));
+      await harness.controller.handleInboundEvent(buildTextEvent("Start with chat settings"));
+      expect(materialize).toHaveBeenCalledOnce();
+      expect(materialize.mock.calls[0]?.[0].input).toEqual([{ type: "text", text: "Start with chat settings" }]);
+      const origin = (await materialize.mock.results[0]?.value)?.origin;
+      expect(origin).toMatchObject({ kind: "messaging", causalMessagingSource: { ownerId: expect.any(String), requestId: expect.any(String) } });
+      const causalMessagingSource = origin?.causalMessagingSource;
+      const context = { backend: "codex", threadId: "new-thread-1", turnId: "turn-1", causalMessagingSource } as const;
+      expect(await harness.controller.authorizeRetainedTool(context, {
+        ...context, category: "messaging_context", tool: "set_messaging_working_updates_default",
+      })).toEqual({ owns: true, allowed: true });
+    } finally {
+      harness.controller.dispose();
+      db.close();
+    }
+  });
 
   it("rechecks revocation after provider preflight and before creating a retained destination", async () => {
     const db = StateDb.open(":memory:");

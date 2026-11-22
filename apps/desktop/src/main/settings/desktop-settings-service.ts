@@ -147,6 +147,7 @@ import {
 } from "../federation/federation-noise";
 
 import {
+  readDesktopSettingsConfig,
   resolveDesktopConfigPath,
   userHomeWorktreesRoot,
   type DesktopSettingsConfig,
@@ -1890,10 +1891,9 @@ export class DesktopSettingsService {
   }
 
   async setDevelopmentWorkingUpdatesDefault(mode: MessagingToolUpdateMode) {
-    if (this.configStore.fileStatus().kind === "invalid") {
-      throw new Error("Cannot save the Working Updates default while the profile configuration is invalid.");
-    }
-    const current = this.readMessagingSettings().toolUpdateMode;
+    // Another instance can save this profile before the local watcher runs.
+    const saved = readDesktopSettingsConfig(this.configPath);
+    const current = resolveMessagingSettingsDomain(saved.messaging ?? {}, this.env).toolUpdateMode;
     if (current.value === mode) return { ...current, changed: false };
     const update = await this.writeConfigPatchTargeted({ messaging: { toolUpdateMode: mode } });
     return {

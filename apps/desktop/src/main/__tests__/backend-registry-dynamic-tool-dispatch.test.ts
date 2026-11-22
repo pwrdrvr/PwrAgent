@@ -190,6 +190,11 @@ describe("Codex catalog dynamic tool dispatch", () => {
       });
       expectSqliteWriteBudget({ scenario: "agent-working-updates-default-read-noop-invalid", writes: unchanged.writes,
         note: "Profile Working Updates read, identical update and invalid attempts commit nothing." });
+      // A peer process can save the same profile before this owner's watcher runs.
+      writeFileSync(configPath, readFileSync(configPath, "utf8").replace('tool_update_mode = "show_none"', 'tool_update_mode = "show_all"'));
+      expect(config.read("messaging").toolUpdateMode).toBe("show_none");
+      expect(data(await set({ mode: "show_none" }))).toEqual({ ...scope, value: "show_none", source: "config", changed: true });
+      expect(readFileSync(configPath, "utf8")).toContain('tool_update_mode = "show_none"');
       expect(authorizeRetainedTool).toHaveBeenCalledWith(
         { ...context, turnId: "turn-1", causalMessagingSource: source },
         { ...context, turnId: "turn-1", category: "messaging_context", tool: "set_messaging_working_updates_default" },

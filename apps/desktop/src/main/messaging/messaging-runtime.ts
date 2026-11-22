@@ -569,6 +569,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         ) => void;
       };
       config: DesktopMessagingConfig | DesktopMessagingConfigLoader;
+      readDevelopmentWorkingUpdatesDefault?: () => MessagingToolUpdateMode;
       automationInboundHandler?: MessagingAutomationInboundHandler;
       automationInboundMatches?: MessagingAutomationInboundMatcher;
       /**
@@ -1655,7 +1656,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       toolUpdateDefaultMode: (targetKind) =>
         targetKind === "agent_thread"
           ? this.messagingAdmissionPolicySnapshot.managerToolUpdateDefaultMode
-          : this.messagingAdmissionPolicySnapshot.toolUpdateDefaultMode,
+          : (this.options.readDevelopmentWorkingUpdatesDefault?.()
+            ?? this.messagingAdmissionPolicySnapshot.toolUpdateDefaultMode),
       fullAccessControls: () => this.fullAccessPolicySnapshot.controls,
       fullAccessControlsSource: "runtime-snapshot",
       fullAccessPolicyRevision: () => this.fullAccessPolicySnapshot.revision,
@@ -3533,6 +3535,7 @@ let runtime: DesktopMessagingRuntime | null = null;
 
 export function initializeDesktopMessagingRuntime(
   config?: DesktopMessagingConfig | DesktopMessagingConfigLoader,
+  readDevelopmentWorkingUpdatesDefault?: () => MessagingToolUpdateMode,
 ): DesktopMessagingRuntime {
   if (!runtime) {
     runtime = new DesktopMessagingRuntime({
@@ -3542,6 +3545,7 @@ export function initializeDesktopMessagingRuntime(
         getDesktopFederationRuntime(),
       ),
       config: config ?? (() => loadDesktopMessagingConfig()),
+      readDevelopmentWorkingUpdatesDefault,
       automationInboundHandler: (event) =>
         getDesktopAutomationService().handleMessagingInboundEvent(event),
       automationInboundMatches: (event) =>

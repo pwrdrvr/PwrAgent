@@ -1,6 +1,7 @@
 import { FULL_ACCESS_RISK_ACTION_PREFIX, type NewThreadOptionsSummary, type FullAccessRiskWarningContext, type FullAccessEscalationContext, type MessagingFullAccessControls, type FullAccessWarningResolution } from "./messaging-callback-helpers";
 import { federationTargetForBinding, agentMessagingTurnKey } from "./messaging-backend-event-helpers";
 import { containedMessagingBindingMatches } from "@pwragent/shared/contained-messaging";
+import { sameCausalMessagingSource } from "@pwragent/shared/messaging-causal-context";
 import {
   permissionForDynamicTool,
   permissionsForThreadMutation,
@@ -383,8 +384,8 @@ export class MessagingAccessControl {
         agentMessagingTurnKey(context.backend, context.threadId, context.turnId),
       );
       const origin = active();
-      if (!origin || origin.source?.ref.ownerId !== source.ref.ownerId
-        || origin.source.ref.requestId !== source.ref.requestId || origin.binding?.federatedThread
+      if (!origin || !sameCausalMessagingSource(source.ref, origin.source?.ref)
+        || origin.binding?.federatedThread
         || !await this.retainedSourceIsAuthorized(source, true, true) || active() !== origin) {
         return { owns: true, allowed: false, permission };
       }
