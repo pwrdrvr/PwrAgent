@@ -1274,6 +1274,7 @@ vi.mock("../app-server/backend-registry", () => {
     hydrateThreadGitWorkingStates,
     canonicalizeNavigationThreadPullRequests,
     canonicalizeNavigationPullRequests,
+    withNavigationPrimaryGitRepositories: (threads: NavigationThreadSummary[]) => threads,
     withNavigationSubAgentActivity: (threads: unknown[]) => threads,
     getNavigationInputRequestThreadKeys: () => new Set<string>(),
     refreshThreadGitWorkingStates,

@@ -43,6 +43,17 @@ const prEvent = (group: number): AgentEvent => ({ backend: "codex", notification
 async function advance() { for (let i = 0; i < 160; i++) await Promise.resolve(); }
 const idle = (queries: NavigationWindowQueries) => [...queries.getSnapshot().resources.values()].every((r) => !r.loading);
 
+function childPage(request: NavigationQueryRequest, threads: NavigationThreadSummary[]) {
+  const page = navigationQueryFixture(request, { threads });
+  if (request.query.kind !== "children" || request.query.parent.ownerInstanceId) return page;
+  const parent = request.query.parent;
+  const children = threads.filter((row) => !row.federation && row.parentThreadId === parent.threadId
+    && row.parentThreadBackend === parent.backend && row.source === parent.backend);
+  return { ...page, metadataDependencies: { version: 1 as const, prKeysComplete: true as const,
+    prKeys: [...new Set(children.flatMap((row) => (row.prs ?? []).map(buildPullRequestStatusKey)))],
+    threadKeys: children.map((row) => JSON.stringify([null, row.source, row.id])) } };
+}
+
 it("a named remote mount cannot use old complete child membership to exclude a new child", async () => {
   let threads = population(2);
   const read = vi.fn(async (request: NavigationQueryRequest) => navigationQueryFixture(request, { threads }));
@@ -188,9 +199,9 @@ it("fences each dispatched generation when discovery and row events overtake an 
   }), { numRuns: 25 });
 });
 
-it("metadata refresh reads exactly the complete child collections containing the changed owner row or PR", async () => {
-  // Oracle: the full viewer population owns identity and PR attachment. Local
-  // and remote rows deliberately reuse IDs; PR status applies to both owners.
+it("refreshes the changed owner row or PR and preserves fallback for preview-only child collections", async () => {
+  // Local and remote rows deliberately reuse IDs. Native children expose raw
+  // attachments, while mounted children have verified previews only.
   await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 16 }), fc.boolean(), fc.nat(15), fc.boolean(), async (groups, pins, index, nested) => {
     let threads = population(groups);
     threads = [...threads, ...threads.filter((row) => row.federation).map((row) => ({ ...row,
@@ -199,7 +210,7 @@ it("metadata refresh reads exactly the complete child collections containing the
       ...(row.parentThreadId ? { parentThreadBackend: "claude" } : {}),
       ...(row.federation ? { federation: { ...row.federation, ref: { ...row.federation.ref, backend: "claude" } } } : {}),
     }))];
-    const read = vi.fn(async (request: NavigationQueryRequest) => navigationQueryFixture(request, { threads }));
+    const read = vi.fn(async (request: NavigationQueryRequest) => childPage(request, threads));
     const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
     const requests = demand(groups);
     for (const [id, request] of [...requests]) {
@@ -216,7 +227,7 @@ it("metadata refresh reads exactly the complete child collections containing the
       await advance(); expect(idle(queries)).toBe(true); read.mockClear();
       const group = index % groups;
       const affected = pins ? [`${nested ? "nested" : "remote"}-${group}`]
-        : ["", "claude-"].flatMap((backend) => ["local", "remote", "nested"].map((owner) => `${backend}${owner}-${group}`));
+        : [...requests.keys()].filter((id) => !id.includes("local-") || id.endsWith(`-${group}`));
       const before = queries.getSnapshot();
       threads = threads.map((thread) => pins
         ? thread.id === `child-${group}-0` && thread.source === "codex" && thread.federation?.ref.target.scope === "remote"
@@ -228,7 +239,7 @@ it("metadata refresh reads exactly the complete child collections containing the
         ? `${sent.query.parent.backend === "claude" ? "claude-" : ""}${sent.query.parent.ownerInstanceId === "nested" ? "nested"
           : sent.query.parent.ownerInstanceId ? "remote" : "local"}-${sent.query.parent.threadId.slice(7)}` : "unexpected").sort()).toEqual(affected.sort());
       for (const [id, resource] of queries.getSnapshot().resources) {
-        if (affected.includes(id)) expect(resource.state.page).toEqual(navigationQueryFixture(resource.state.request, { threads }));
+        if (affected.includes(id)) expect(resource.state.page).toEqual(childPage(resource.state.request, threads));
         else expect(resource).toBe(before.resources.get(id));
       }
     } finally { queries.dispose(); }
@@ -237,7 +248,7 @@ it("metadata refresh reads exactly the complete child collections containing the
 
 it.each([4, 16, 48])("budgets one unrelated metadata notification across %i local and mounted child collections", async (groups) => {
   const threads = population(groups);
-  const read = vi.fn(async (request: NavigationQueryRequest) => navigationQueryFixture(request, { threads }));
+  const read = vi.fn(async (request: NavigationQueryRequest) => childPage(request, threads));
   const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
   const published = vi.fn();
   const unsubscribe = queries.subscribe(published);
@@ -248,7 +259,10 @@ it.each([4, 16, 48])("budgets one unrelated metadata notification across %i loca
       read.mockClear(); published.mockClear();
       queries.invalidate(undefined, undefined, event);
       await queries.refresh(undefined, undefined, true);
-      expect({ calls: read.mock.calls.length, publications: published.mock.calls.length }).toEqual({ calls: 0, publications: 0 });
+      const expected = event.notification.method === "pullRequest/status/updated"
+        ? [...demand(groups)].filter(([id]) => id.startsWith("remote-")).map(([, request]) => request.query) : [];
+      expect(read.mock.calls.map(([request]) => request.query)).toEqual(expected);
+      expect(published).toHaveBeenCalledTimes(expected.length ? expected.length + 2 : 0);
     }
   } finally { unsubscribe(); queries.dispose(); }
 });
@@ -303,7 +317,7 @@ it("fences a PR status update behind an in-flight observation of a newly attache
     const replies: Array<() => void> = [];
     let gated = false;
     const read = vi.fn(async (request: NavigationQueryRequest) => {
-      const page = navigationQueryFixture(request, { threads });
+      const page = childPage(request, threads);
       if (gated) await new Promise<void>((resolve) => replies.push(resolve));
       return page;
     });
