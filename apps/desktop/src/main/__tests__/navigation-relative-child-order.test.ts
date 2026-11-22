@@ -27,7 +27,7 @@ it("moves against the complete owner order including unranked unloaded siblings"
       expect(await store.updateSubthreadOrder({ ...request, groupFingerprint })).toEqual(expected);
     });
     expectSqliteWriteBudget({ scenario: "navigation-relative-child-move", writes,
-      note: "One owner-validated move among 100 children: one commit per explicit drag; at 100 moves/day and ~16 KiB/commit, ~1.6 MB/day; no idle writes" });
+      note: "One owner-validated move among 100 children: one commit per explicit drag; at 100 moves/day and ~12 KiB/commit, ~1.2 MB/day; no idle writes" });
     await store.setThreadParent({ backend: "codex", threadId: "child-50", parentThreadId: "another-root" });
     await expect(store.updateSubthreadOrder(request)).rejects.toThrow("no longer places");
   } finally {
@@ -52,7 +52,7 @@ it("inserts relative to the current owner order and preserves every unloaded sib
       expect(await store.updateSubthreadOrder(request)).toEqual(expected);
     });
     expectSqliteWriteBudget({ scenario: "navigation-relative-child-insertion", writes,
-      note: "One owner-validated relative insertion among 101 children: one commit per explicit creation; at 100 creations/day and ~16 KiB/commit, ~1.6 MB/day; no idle writes" });
+      note: "One owner-validated relative insertion among 101 children: one commit per explicit creation; at 100 creations/day and ~12 KiB/commit, ~1.2 MB/day; no idle writes" });
     const repeated = await measureSqliteWrites(async () => {
       expect(await store.updateSubthreadOrder(request)).toEqual(expected);
     });

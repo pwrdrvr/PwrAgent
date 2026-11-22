@@ -2,10 +2,17 @@ import type Database from "better-sqlite3";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import { parseThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 
-// Keep the guarded lookup expressions identical in the indexes and reads.
+// Codex and Claude already have direct primary-key lookups for the normal
+// storage keys. Index only ACP identities and unusual legacy payload/key
+// pairs, so unrelated overlay updates and deletes do not dirty a second tree.
 export const SUBTHREAD_GROUP_INDEXES = `
-  CREATE INDEX IF NOT EXISTS idx_threads_subthread_id
-    ON threads(CASE WHEN json_valid(payload) THEN json_extract(payload, '$.threadId') END);
+  DROP INDEX IF EXISTS idx_threads_subthread_id;
+  CREATE INDEX IF NOT EXISTS idx_threads_subthread_nonstandard_id
+    ON threads(CASE WHEN json_valid(payload) THEN json_extract(payload, '$.threadId') END)
+    WHERE CASE WHEN json_valid(payload) THEN thread_id NOT IN (
+      'codex:' || json_extract(payload, '$.threadId'),
+      'claude:' || json_extract(payload, '$.threadId')
+    ) END;
   CREATE INDEX IF NOT EXISTS idx_threads_subthread_parent
     ON threads(CASE WHEN json_valid(payload) THEN json_extract(payload, '$.parentThreadId') END)
     WHERE (CASE WHEN json_valid(payload) THEN json_extract(payload, '$.parentThreadId') END) IS NOT NULL;
@@ -13,7 +20,7 @@ export const SUBTHREAD_GROUP_INDEXES = `
 
 export function hasSubthreadGroupIndexes(db: Database.Database): boolean {
   return db.prepare(`SELECT count(*) FROM sqlite_schema WHERE type = 'index'
-    AND tbl_name = 'threads' AND name IN ('idx_threads_subthread_id', 'idx_threads_subthread_parent')`).pluck().get() === 2;
+    AND tbl_name = 'threads' AND name IN ('idx_threads_subthread_nonstandard_id', 'idx_threads_subthread_parent')`).pluck().get() === 2;
 }
 
 type OverlayRow = {
@@ -46,25 +53,44 @@ export function prepareSubthreadGroup(db: Database.Database) {
       json_extract(payload, '$.archiveRestoredAt') AS restored
     FROM (
       SELECT rowid FROM threads INDEXED BY idx_threads_subthread_parent
-       WHERE (CASE WHEN json_valid(payload) THEN json_extract(payload, '$.parentThreadId') END) = ?
+       WHERE (CASE WHEN json_valid(payload) THEN json_extract(payload, '$.parentThreadId') END) = @id
       UNION
-      SELECT rowid FROM threads INDEXED BY idx_threads_subthread_id
-       WHERE (CASE WHEN json_valid(payload) THEN json_extract(payload, '$.threadId') END) = ?
+      SELECT rowid FROM threads INDEXED BY sqlite_autoindex_threads_1
+       WHERE thread_id IN ('codex:' || @id, 'claude:' || @id)
+         AND (CASE WHEN json_valid(payload) THEN json_extract(payload, '$.threadId') END) = @id
+      UNION
+      SELECT rowid FROM threads INDEXED BY idx_threads_subthread_nonstandard_id
+       WHERE (CASE WHEN json_valid(payload) THEN json_extract(payload, '$.threadId') END) = @id
+         AND CASE WHEN json_valid(payload) THEN thread_id NOT IN (
+           'codex:' || json_extract(payload, '$.threadId'),
+           'claude:' || json_extract(payload, '$.threadId')
+         ) END
     ) AS matches
     CROSS JOIN threads ON threads.rowid = matches.rowid
     ORDER BY matches.rowid
   `);
   const linkedChild = db.prepare(`
-    SELECT payload FROM threads INDEXED BY idx_threads_subthread_id
-     WHERE (CASE WHEN json_valid(payload) THEN json_extract(payload, '$.threadId') END) = ?
-       AND json_extract(payload, '$.parentThreadId') = ?
-       AND json_extract(payload, '$.parentThreadBackend') = ?
-     LIMIT 2
+    SELECT payload FROM (
+      SELECT rowid FROM threads INDEXED BY sqlite_autoindex_threads_1
+       WHERE thread_id IN ('codex:' || @id, 'claude:' || @id)
+         AND (CASE WHEN json_valid(payload) THEN json_extract(payload, '$.threadId') END) = @id
+      UNION ALL
+      SELECT rowid FROM threads INDEXED BY idx_threads_subthread_nonstandard_id
+       WHERE (CASE WHEN json_valid(payload) THEN json_extract(payload, '$.threadId') END) = @id
+         AND CASE WHEN json_valid(payload) THEN thread_id NOT IN (
+           'codex:' || json_extract(payload, '$.threadId'),
+           'claude:' || json_extract(payload, '$.threadId')
+         ) END
+    ) AS matches
+    CROSS JOIN threads ON threads.rowid = matches.rowid
+    WHERE json_extract(payload, '$.parentThreadId') = @parentId
+      AND json_extract(payload, '$.parentThreadBackend') = @parentBackend
+    LIMIT 2
   `);
 
   return {
     read(backend: AppServerBackendKind, parentThreadId: string) {
-      const rows = group.all(parentThreadId, parentThreadId) as OverlayRow[];
+      const rows = group.all({ id: parentThreadId }) as OverlayRow[];
       const scopes = new Map<AppServerBackendKind, Set<string>>([[backend, new Set([parentThreadId])]]);
       // A same-ID parent on a relevant provider can be in its live listing
       // without an overlay of its own. Always ask each scope for that ID.
@@ -88,7 +114,7 @@ export function prepareSubthreadGroup(db: Database.Database) {
       return { scopes, rows, fingerprint };
     },
     linkedChild(threadId: string, parentThreadId: string, backend: AppServerBackendKind): string | undefined {
-      const rows = linkedChild.all(threadId, parentThreadId, backend) as { payload: string }[];
+      const rows = linkedChild.all({ id: threadId, parentId: parentThreadId, parentBackend: backend }) as { payload: string }[];
       return rows.length === 1 ? rows[0]!.payload : undefined;
     },
   };

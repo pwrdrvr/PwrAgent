@@ -41,7 +41,8 @@ it("seeks stored subthread membership by parent or child ID regardless of unrela
       })).resolves.toEqual(["fresh"]);
       expect(plans, plans.join("\n")).toEqual(expect.arrayContaining([
         expect.stringMatching(/^SEARCH threads USING (COVERING )?INDEX idx_threads_subthread_parent/),
-        expect.stringMatching(/^SEARCH threads USING (COVERING )?INDEX idx_threads_subthread_id/),
+        expect.stringMatching(/^SEARCH threads USING (COVERING )?INDEX idx_threads_subthread_nonstandard_id/),
+        expect.stringMatching(/^SEARCH threads USING (COVERING )?INDEX sqlite_autoindex_threads_1/),
       ]));
       expect(plans.filter((detail) => /^SCAN threads\b/.test(detail))).toEqual([]);
       expect(rowCounts).toEqual([2, 1]);
@@ -56,11 +57,20 @@ it.each([86, 87, 999])("backfills links when a v%i profile lacks the indexes", a
   const { dbPath, tempDir } = createTempStateDb("pwragent-subthread-group-");
   try {
     const older = StateDb.open(dbPath);
-    older.raw.exec("DROP INDEX idx_threads_subthread_id; DROP INDEX idx_threads_subthread_parent");
+    older.raw.exec("DROP INDEX idx_threads_subthread_nonstandard_id; DROP INDEX idx_threads_subthread_parent");
+    if (version === 87) {
+      older.raw.exec(`CREATE INDEX idx_threads_subthread_id
+        ON threads(CASE WHEN json_valid(payload) THEN json_extract(payload, '$.threadId') END)`);
+    }
     older.raw.pragma(`user_version = ${version}`);
     const insert = older.raw.prepare("INSERT INTO threads(thread_id, payload) VALUES (?, ?)");
     insert.run("claude:root", JSON.stringify({ backend: "claude", threadId: "root" }));
     insert.run("acp%3Agrok:legacy", JSON.stringify({ backend: "acp:grok", threadId: "legacy", parentThreadId: "root" }));
+    // A legacy stored key can disagree with the payload. Match the payload
+    // identity for provider admission and for the just-created-child fallback.
+    insert.run("claude:stored-alias", JSON.stringify({
+      backend: "claude", threadId: "payload-id", parentThreadId: "legacy-parent", parentThreadBackend: "codex",
+    }));
     older.close();
 
     const reader = StateDb.open(dbPath);
@@ -70,6 +80,10 @@ it.each([86, 87, 999])("backfills links when a v%i profile lacks the indexes", a
       const scopes = () => [...store.readSubthreadGroup("codex", "root").scopes].map(([backend, ids]) => [backend, [...ids]]);
       expect(scopes()).toEqual([["codex", ["root"]], ["claude", ["root"]], ["acp:grok", ["root", "legacy"]]]);
       expect(reader.raw.pragma("user_version", { simple: true })).toBe(Math.max(87, version));
+      expect(reader.raw.prepare("SELECT name FROM sqlite_schema WHERE name = 'idx_threads_subthread_id'").get()).toBeUndefined();
+      expect([...store.readSubthreadGroup("codex", "payload-id").scopes.keys()]).toEqual(["codex", "claude"]);
+      await expect(store.updateSubthreadOrder({ backend: "codex", parentThreadId: "legacy-parent",
+        insertAfter: { threadId: "payload-id", sourceThreadId: "legacy-parent" } })).resolves.toEqual(["payload-id"]);
       const move = writer.raw.prepare("UPDATE threads SET payload = json_set(payload, '$.parentThreadId', ?) WHERE thread_id = ?");
       move.run("elsewhere", "acp%3Agrok:legacy");
       expect(scopes()).toEqual([["codex", ["root"]], ["claude", ["root"]]]);

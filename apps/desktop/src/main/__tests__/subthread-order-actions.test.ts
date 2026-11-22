@@ -529,7 +529,7 @@ it("commits a changed peer snapshot and the child order together", async () => {
     const { writes } = await measureSqliteWrites(() => updateLocalSubthreadOrder({ ...target,
       move: { threadId: "mounted", anchorThreadId: "anchor", placement: "before" } }, { peers: peers([live]) }));
     expectSqliteWriteBudget({ scenario: "navigation-relative-child-move-peer-refresh",
-      note: "One commit for a move and a changed peer snapshot, ~20.6 KB or 2.06 MB/day at 100 such moves/day. No periodic writes.", writes });
+      note: "One commit for a move and a changed peer snapshot, ~16.5 KB or 1.65 MB/day at 100 such moves/day. No periodic writes.", writes });
     expect((await store.listRemoteThreadPins())[0]?.summary?.title).toBe("Fresh peer summary");
     expect((await store.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder)
       .toEqual(["mounted", "anchor"]);
