@@ -1199,6 +1199,7 @@ export type ThreadMaintenanceToolHandler = {
 export type StartingTurnOrigin = {
   backend: AppServerBackendKind;
   threadId: string;
+  admittedCodexTurnSequence?: number;
   origin?: AppServerThreadMessageOrigin;
   turnInputSource?: TurnInputSource;
   turnId?: string;

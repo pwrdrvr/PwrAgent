@@ -380,8 +380,20 @@ export type FederationStartTurnRequest = StartTurnRequest & {
   delivery?: "new_turn";
 };
 
-export function federationTurnInputSource(messageOrigin?: AppServerThreadMessageOrigin): TurnInputSource {
-  return messageOrigin === undefined ? "federation" : resolveTurnInputSource({ messageOrigin });
+/** The caller supplies the receiver's authenticated peer and messaging-route admission. */
+export function federationTurnInputSource(
+  sourceInstanceId: string,
+  messageOrigin: AppServerThreadMessageOrigin | undefined,
+  messagingRouteAuthorized = false,
+): TurnInputSource {
+  if (messageOrigin === undefined) return "federation";
+  if (messageOrigin?.kind === "messaging") return messagingRouteAuthorized ? "messaging" : "unknown";
+  // The authenticated peer attests to an attributed sender on its instance.
+  // A kind without a usable sender reference has no such evidence.
+  const sender = messageOrigin?.sourceThread;
+  if (!sender || sender.instanceId !== sourceInstanceId || !isAppServerBackendKind(sender.backend)
+    || typeof sender.threadId !== "string" || !sender.threadId.trim()) return "unknown";
+  return resolveTurnInputSource({ messageOrigin });
 }
 
 export type FederationReplaceQueuedMessageRequest = {
@@ -1056,6 +1068,7 @@ export type FederationBackendOperations = NavigationBackendOperations & {
   ): Promise<SetFederationShortNameResponse>;
   starMapIntake(
     request: FederationStarMapIntakeRequest,
+    turnInputSource: "federation",
   ): Promise<StarMapIntakeResponse>;
 };
 
@@ -1388,8 +1401,7 @@ export function registerFederationBackendHandlers(params: {
           }
         : undefined;
       if (!fallbackTurn) return await params.backend.continueThreadEnvironmentStartup({ ...request, fallbackTurn });
-      // This recovery endpoint authenticates the peer but has no messaging-route grant.
-      const source = fallbackTurn.messageOrigin?.kind === "messaging" ? "unknown" : federationTurnInputSource(fallbackTurn.messageOrigin);
+      const source = federationTurnInputSource(envelope.sourceInstanceId, fallbackTurn.messageOrigin);
       return await params.backend.continueThreadEnvironmentStartup({ ...request, fallbackTurn }, source);
     },
   );
@@ -1628,7 +1640,7 @@ export function registerFederationBackendHandlers(params: {
         ...request,
         input,
         ...(messageOrigin ? { messageOrigin } : {}),
-      }, federationTurnInputSource(messageOrigin));
+      }, federationTurnInputSource(envelope.sourceInstanceId, messageOrigin, true));
       turnInputAccepted(envelope.sourceInstanceId, { backend: response.backend, threadId: response.threadId },
         startTurnInputOutcome(response));
       return response;
@@ -2174,7 +2186,7 @@ export function registerFederationBackendHandlers(params: {
           ) } : {}),
           ...(messageOrigin ? { messageOrigin } : {}),
           sourceInstanceId: envelope.sourceInstanceId,
-          turnInputSource: federationTurnInputSource(messageOrigin),
+          turnInputSource: federationTurnInputSource(envelope.sourceInstanceId, messageOrigin, true),
           onCodexEnvironmentSetupProgress: (event) => {
             forwardEnvironmentSetupProgress(event, envelope.sourceInstanceId);
           },
@@ -2336,7 +2348,7 @@ export function registerFederationBackendHandlers(params: {
                 attachments as FederationStarMapIntakeAttachment[],
             }
           : {}),
-      });
+      }, "federation");
     },
   );
 }

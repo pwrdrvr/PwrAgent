@@ -68,6 +68,8 @@ composer admission and recognizes `messaging` from the inbound route.
 `automation` and `agent` describe continuations and other non-operator work.
 Combined inputs with different known sources return `mixed`. Missing evidence
 returns `unknown`, including a combined input with an unattributed member.
+Federated agent and automation claims require a sender thread attributed to the
+authenticated peer. Federated messaging claims use the authorized messaging route.
 Steering an active turn leaves its starting source intact.
 
 The tool describes the sending surface and conveys no physical presence or

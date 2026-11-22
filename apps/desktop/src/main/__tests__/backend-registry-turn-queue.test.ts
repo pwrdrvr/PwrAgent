@@ -9,7 +9,7 @@ import {
   emitStartedTurn,
   discoverCodexBackendForTest,
 } from "./helpers/backend-registry-fixture";
-import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { getOwnerHostServices } from "../owner-host";
 import { createPwrAgentAppManagementHandler } from "../agent-tools/pwragent-app-management-service";
 import { createQuitManager } from "../shell/quit-manager";
@@ -28,6 +28,7 @@ import {
   vi,
 } from "vitest";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { buildPendingTurnId } from "@pwragent/shared/turn-placeholder";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
   AppServerPendingRequestNotification,
@@ -53,6 +54,45 @@ import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { type PwrAgentFederatedThreadMessageRequest } from "../agent-tools/pwragent-thread-orchestration-agent-tools";
 
 describe("DesktopBackendRegistry", () => {
+  it.each(["desktop", "federation"] as const)("keeps %s attribution when Codex names a finalized pending turn", async (source) => {
+    const threadId = "late-turn-identity";
+    const turnId = "native-turn";
+    const pending = buildPendingTurnId(threadId);
+    const client = new MockBackendClient({ startTurnResults: [{ threadId, turnId: pending }] });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
+    const readSource = async (id: string) => {
+      const response = await client.emitRequest({ method: "item/tool/call", params: {
+        threadId, turnId: id, namespace: "pwragent", tool: "get_current_turn_input_source",
+        requestId: `source-request-${id}`, callId: `source-call-${id}`, arguments: {},
+      } }) as { success: boolean; contentItems: Array<{ text: string }> };
+      expect(response.success).toBe(true);
+      return JSON.parse(response.contentItems[0]!.text);
+    };
+    try {
+      // A replayed start for an older turn cannot take the new admission's source.
+      const oldTurn = "already-ended-turn";
+      await emitStartedTurn(registry, "codex", threadId, oldTurn);
+      await emitCompletedTurn(registry, "codex", threadId, oldTurn);
+      const result = await registry.startTurn({ backend: "codex", threadId, input: [{ type: "text", text: "Invented prompt" }] }, source);
+      expect(result.turnId).toBe(pending);
+      await emitStartedTurn(registry, "codex", threadId, oldTurn);
+      expect(await readSource(oldTurn)).toEqual({ source: "unknown" });
+      await emitCompletedTurn(registry, "codex", threadId, oldTurn);
+
+      // The provider can call a tool while its start notification is being delivered.
+      const state = registryModules(registry).turnState;
+      const delivery = state.beginStartDelivery(threadId, turnId);
+      try {
+        expect(await readSource(turnId)).toEqual({ source });
+      } finally { state.endStartDelivery(delivery); }
+      await emitStartedTurn(registry, "codex", threadId, turnId);
+      expect(await readSource(turnId)).toEqual({ source });
+    } finally {
+      await emitCompletedTurn(registry, "codex", threadId, turnId);
+      await registry.close();
+    }
+  });
+
   it("keeps the admission source through the FIFO and exposes it before the provider acknowledges the start", async () => {
     const client = new MockBackendClient({ threads: [] });
     const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });

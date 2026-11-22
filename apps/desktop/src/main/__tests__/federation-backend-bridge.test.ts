@@ -77,6 +77,37 @@ describe("federation backend bridge", () => {
     expect(startTurn).toHaveBeenCalledBefore(onTurnInputAccepted);
   });
 
+  it("requires sender or route evidence for non-viewer turn source labels", async () => {
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+      additionalRequiredCapabilities: additionalFederationBackendCapabilities });
+    const startTurn = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread", turnId: "turn" }));
+    registerFederationBackendHandlers({ router, backend: { startTurn } as unknown as FederationBackendOperations });
+    const request = { backend: "codex", threadId: "thread", input: [{ type: "text", text: "Invented prompt" }] };
+    const sourceThread = { backend: "codex", threadId: "sender", instanceId: "claimed-peer" };
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom("agent", "sub-agent", "automation", "pwragent", "messaging"),
+      fc.constantFrom(undefined, sourceThread, { ...sourceThread, threadId: "" }, { ...sourceThread, backend: "unregistered" }),
+      fc.boolean(),
+      async (kind, sender, messagingRoute) => {
+        router.registerConnection({ peerId: "viewer", capabilities: messagingRoute ? ["turn_control", "messaging_route"] : ["turn_control"], sendEnvelope: () => {} });
+        startTurn.mockClear();
+        const result = await router.routeEnvelope({ sourcePeerId: "viewer", envelope: {
+          id: "request", kind: "request", protocolVersion: 1, sourceInstanceId: "viewer", targetInstanceId: "owner", createdAt: 1_000,
+          method: FEDERATION_BACKEND_METHODS.startTurn, params: { ...request, messageOrigin: { kind, sourceThread: sender } },
+        } });
+        if (kind === "messaging" && !messagingRoute) {
+          expect(result).toMatchObject({ status: "rejected", code: "capability_denied" });
+          expect(startTurn).not.toHaveBeenCalled();
+        } else {
+          expect(result.status).toBe("handled");
+          const expected = kind === "messaging" ? "messaging" : sender !== sourceThread ? "unknown"
+            : kind === "agent" || kind === "sub-agent" ? "agent" : "automation";
+          expect(startTurn).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(request), expected);
+        }
+      },
+    ));
+  });
+
   it("requires grouping and versioned promotion capabilities on the receiving owner", async () => {
     const request = { backend: "codex" as const, parentThreadId: "root", archivePromotion: {
       archived: { backend: "codex" as const, threadId: "middle", instanceId: "viewer" },
@@ -952,6 +983,12 @@ describe("federation backend bridge", () => {
       kind: "error",
       requestId: "star-map-with-path",
     }));
+    const intake = { requestId: "intake-2", request: "Make a thread", directoryKey: "project" };
+    await router.routeEnvelope({ sourcePeerId: "viewer_one", envelope: {
+      id: "star-map-direct", kind: "request", protocolVersion: 1, sourceInstanceId: "viewer_one", targetInstanceId: "owner_one", createdAt: 1_002,
+      method: FEDERATION_BACKEND_METHODS.starMapIntake, params: intake,
+    } });
+    expect(starMapIntake).toHaveBeenCalledExactlyOnceWith(intake, "federation");
   });
 
   it("negotiates launchpad metadata separately from environment actions", () => {
@@ -1093,6 +1130,7 @@ describe("federation backend bridge", () => {
       },
       expect.objectContaining({
         sourceInstanceId: "viewer_one",
+        turnInputSource: "agent",
         messageOrigin: {
           kind: "agent",
           sourceThread: {

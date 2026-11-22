@@ -1431,9 +1431,18 @@ export class DesktopBackendRegistry {
   private readonly currentTurnInputSource: CurrentTurnInputSourceHandler = (context) => {
     if (!context.turnId) return "unknown";
     const turn = { ...context, turnId: context.turnId };
-    return this.context.turnState.readTurnInputSource(turn)
-      ?? this.findStartingTurnOrigin(turn)?.turnInputSource
-      ?? "unknown";
+    const exact = this.context.turnState.readTurnInputSource(turn);
+    if (exact !== undefined) return exact;
+    const observedSequence = turn.backend === "codex"
+      ? this.codexMessageContextTurnObservations.get(turn.threadId)?.get(turn.turnId) : undefined;
+    if (turn.backend === "codex" && this.context.turnState.pendingStartedTurnId(turn.threadId) === turn.turnId) {
+      const pending = this.context.turnState.readPendingCodexTurnInputSource(turn.threadId, observedSequence);
+      if (pending !== undefined) return pending;
+    }
+    const starting = this.findStartingTurnOrigin(turn);
+    if (starting?.turnId === undefined && observedSequence !== undefined
+      && observedSequence <= (starting?.admittedCodexTurnSequence ?? -1)) return "unknown";
+    return starting?.turnInputSource ?? "unknown";
   };
 
   /**
@@ -1449,6 +1458,7 @@ export class DesktopBackendRegistry {
     if (!params.origin && params.turnInputSource === undefined) return undefined;
     const entry: StartingTurnOrigin = {
       backend: params.backend, threadId: params.threadId, origin: params.origin,
+      ...(params.backend === "codex" ? { admittedCodexTurnSequence: this.codexMessageContextTurnSequence } : {}),
       turnInputSource: resolveTurnInputSource({ turnInputSource: params.turnInputSource, messageOrigin: params.origin }),
     };
     this.context.turnState.addStartingOrigin(entry);
@@ -1466,7 +1476,7 @@ export class DesktopBackendRegistry {
     const identity = { ...turn, backend: entry.backend };
     if (entry.turnInputSource !== undefined && !terminalObserved
       && (entry.backend === "codex" || this.context.turnState.hasRegisteredTurn(identity))) {
-      this.context.turnState.rememberTurnInputSource(identity, entry.turnInputSource);
+      this.context.turnState.rememberTurnInputSource(identity, entry.turnInputSource, entry.admittedCodexTurnSequence);
     }
   }
 
@@ -21201,12 +21211,13 @@ export class DesktopBackendRegistry {
         });
       }
       if (event.backend === "codex" && commitCodexStart) {
-        const pendingTurnId = buildPendingTurnId(notification.params.threadId);
-        const pendingActiveKey = buildActiveTurnKey("codex", notification.params.threadId, pendingTurnId);
-        const pendingModeKey = buildActiveTurnModeKey(notification.params.threadId, pendingTurnId);
-        const collaborationMode = this.context.turnState.collaborationMode(
-          pendingActiveKey,
-        );
+        const { threadId } = notification.params;
+        const pendingTurnId = buildPendingTurnId(threadId);
+        const pendingActiveKey = buildActiveTurnKey("codex", threadId, pendingTurnId);
+        const pendingModeKey = buildActiveTurnModeKey(threadId, pendingTurnId);
+        const canTransferPending = this.context.turnState.transferPendingCodexTurnInputSource(threadId, turnId,
+          this.codexMessageContextTurnObservations.get(threadId)?.get(turnId));
+        const collaborationMode = canTransferPending ? this.context.turnState.collaborationMode(pendingActiveKey) : undefined;
         const pendingMode = collaborationMode ? this.context.turnState.executionMode(pendingModeKey) : undefined;
         if (collaborationMode) {
           this.context.turnState.setCollaboration(

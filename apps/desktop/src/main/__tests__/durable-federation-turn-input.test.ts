@@ -83,8 +83,9 @@ it("attests durable Federation starts from the authenticated scope before dispat
   router.registerConnection({ peerId: "gateway", capabilities: ["turn_control", "durable_turn_requests_v1"], sendEnvelope: () => {} });
   const owner = runtime as unknown as { durableTurnRequestService(): DurableTurnRequestService };
   registerFederationBackendHandlers({ router, backend: runtime.localBackend(), durableTurnRequests: owner.durableTurnRequestService() });
-  const makeSubmission = () => {
+  const makeSubmission = (messageOrigin?: SubmitDurableTurnRequest["request"]["messageOrigin"]) => {
     const value = submission([{ type: "text", text: "invented durable send" }], false) as SubmitDurableTurnRequest;
+    if (messageOrigin) value.request.messageOrigin = messageOrigin;
     value.clientRequest.createdAt = Date.now();
     value.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableTurnRequest("owner", value)).digest("hex");
     return value;
@@ -100,6 +101,11 @@ it("attests durable Federation starts from the authenticated scope before dispat
       expect(result).toMatchObject({ status: "handled", response: { result: { state: "dispatched", payloadHash: remote.clientRequest.payloadHash } } });
     }
     expect(submitTurn).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ input: remote.request.input }), "federation");
+    const unattributed = makeSubmission({ kind: "automation" });
+    expect(await router.routeEnvelope({ sourcePeerId: "gateway", envelope: {
+      ...envelope, id: randomUUID(), params: { ...unattributed, callerScope: "local-cli" },
+    } })).toMatchObject({ status: "handled", response: { result: { state: "dispatched" } } });
+    expect(submitTurn).toHaveBeenLastCalledWith(expect.objectContaining({ messageOrigin: { kind: "automation" } }), "unknown");
     const local = makeSubmission();
     expect(await runtime.submitDurableTurnRequest("local-cli", local)).toMatchObject({ state: "dispatched", payloadHash: local.clientRequest.payloadHash });
     expect(submitTurn).toHaveBeenLastCalledWith(expect.objectContaining({ input: local.request.input }), "unknown");

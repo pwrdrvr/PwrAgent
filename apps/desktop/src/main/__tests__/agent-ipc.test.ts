@@ -1297,6 +1297,7 @@ describe("agent ipc", () => {
     });
     expect(registry.submitTurn).toHaveBeenLastCalledWith(
       expect.objectContaining({ queueEntryId: "renderer-queue-1" }),
+      "desktop",
     );
     expect(
       await handlers.get(AGENT_START_TURN_CHANNEL)?.({}, {
@@ -1445,7 +1446,7 @@ describe("agent ipc", () => {
     });
     expect(registry.submitThreadReply).toHaveBeenCalledWith({
       backend: "codex", threadId: "thread-1", input,
-    });
+    }, "desktop");
     vi.mocked(registry.submitThreadReply).mockRejectedValueOnce(new Error("This thread is locked: Parked."));
     await expect(handlers.get(AGENT_SUBMIT_THREAD_REPLY_CHANNEL)?.({ sender: { id: 1 } }, {
       backend: "codex", threadId: "thread-1", input,

@@ -1411,7 +1411,7 @@ export class DesktopFederationRuntime {
             ...request,
             messageOrigin,
           }, sourceInstanceId === this.ensureLocalInstanceId() ? "unknown"
-            : federationTurnInputSource(messageOrigin));
+            : federationTurnInputSource(sourceInstanceId, messageOrigin, true));
           this.turnViewers.accepted(sourceInstanceId, { backend: response.backend, threadId: response.threadId },
             startTurnInputOutcome(response));
           return response;
@@ -8815,8 +8815,9 @@ function localBackendOperations(): FederationBackendOperations {
     },
     async starMapIntake(
       request: StarMapIntakeRequest,
+      turnInputSource: "federation",
     ): Promise<StarMapIntakeResponse> {
-      return await dispatchStarMapIntake(request);
+      return await dispatchStarMapIntake(request, turnInputSource);
     },
   };
 }

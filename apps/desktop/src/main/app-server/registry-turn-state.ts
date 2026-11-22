@@ -1,4 +1,5 @@
 import type { AppServerCollaborationModeRequest } from "@pwragent/shared/contracts/agent";
+import { buildPendingTurnId, isPendingTurnId } from "@pwragent/shared/turn-placeholder";
 import type { TurnInputSource } from "@pwragent/owner-core/turn-input-source";
 import type {
   AppServerBackendKind,
@@ -24,6 +25,7 @@ import {
 import { buildActiveTurnKey, buildActiveTurnModeKey, parseActiveTurnKey, parseThreadTurnKeyBody } from "./thread-turn-keys";
 
 type TurnIdentity = { backend: AppServerBackendKind; threadId: string; turnId: string };
+type TurnInputSourceRecord = { source: TurnInputSource; admittedCodexTurnSequence?: number };
 const turnInputSourceKey = ({ backend, threadId, turnId }: TurnIdentity): string => JSON.stringify([backend, threadId, turnId]);
 type CodexTurnReference = string | Pick<TurnIdentity, "threadId" | "turnId">;
 type TurnReference = string | TurnIdentity;
@@ -42,7 +44,7 @@ export class RegistryTurnState {
   // These entries genuinely belong to other providers, not to Codex's model.
   private readonly otherProviderRegistrations = new Map<string, number>();
   private readonly otherProviderOrigins = new Set<StartingTurnOrigin>();
-  private readonly turnInputSources = new Map<string, TurnInputSource>();
+  private readonly turnInputSources = new Map<string, TurnInputSourceRecord>();
   private readonly deletionListeners = new Set<(key: string) => void>();
   // Immutable projections, invalidated by the canonical state commit. Streamed
   // events must not scan idle thread history just to ask whether reviews exist.
@@ -338,12 +340,31 @@ export class RegistryTurnState {
     else this.otherProviderOrigins.add(origin);
   }
 
-  rememberTurnInputSource(turn: TurnIdentity, source: TurnInputSource): void {
-    this.turnInputSources.set(turnInputSourceKey(turn), source);
+  rememberTurnInputSource(turn: TurnIdentity, source: TurnInputSource, admittedCodexTurnSequence?: number): void {
+    this.turnInputSources.set(turnInputSourceKey(turn), { source, admittedCodexTurnSequence });
   }
 
   readTurnInputSource(turn: TurnIdentity): TurnInputSource | undefined {
-    return this.turnInputSources.get(turnInputSourceKey(turn));
+    return this.turnInputSources.get(turnInputSourceKey(turn))?.source;
+  }
+
+  readPendingCodexTurnInputSource(threadId: string, observedSequence: number | undefined): TurnInputSource | undefined {
+    const pending = this.turnInputSources.get(turnInputSourceKey({ backend: "codex", threadId, turnId: buildPendingTurnId(threadId) }));
+    // A redelivered start for an older turn cannot consume a newer admission.
+    if (observedSequence !== undefined && observedSequence <= (pending?.admittedCodexTurnSequence ?? -1)) return undefined;
+    return pending?.source;
+  }
+
+  /** Returns false when an older notification must leave the placeholder alone. */
+  transferPendingCodexTurnInputSource(threadId: string, turnId: string, observedSequence: number | undefined): boolean {
+    if (isPendingTurnId(threadId, turnId)) return true;
+    const turn = { backend: "codex" as const, threadId, turnId };
+    const pendingKey = turnInputSourceKey({ ...turn, turnId: buildPendingTurnId(threadId) });
+    const source = this.readPendingCodexTurnInputSource(threadId, observedSequence);
+    if (source === undefined) return !this.turnInputSources.has(pendingKey);
+    if (this.readTurnInputSource(turn) === undefined) this.rememberTurnInputSource(turn, source);
+    this.turnInputSources.delete(pendingKey);
+    return true;
   }
   removeStartingOrigin(origin: StartingTurnOrigin): void {
     if (origin.backend === "codex") {
