@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createTemporaryTestDirectory } from "../shell/testing/test-harness";
 import type { ProcessMetric } from "electron";
 import { resolveHotCpuProfileConfig } from "../diagnostics/hot-cpu-profile-config";
@@ -393,7 +393,13 @@ describe("HotCpuProfiler", () => {
     expect(profile.samples.some((id: number) => burstIds.has(id))).toBe(true);
   });
 
-  it.each([false, true])("bounds history across rotations and capture limits (missing metrics: %s)", async (missingMetrics) => {
+  it.each([
+    { missingMetrics: false, delayedStop: false, suspendedMs: 0, timingErrorMs: 0, uncertaintyMs: 240 },
+    { missingMetrics: true, delayedStop: true, suspendedMs: 0, timingErrorMs: 15, uncertaintyMs: 255 },
+    { missingMetrics: false, delayedStop: false, suspendedMs: 1_000, timingErrorMs: undefined, uncertaintyMs: undefined },
+  ])("times bounded history with missing metrics $missingMetrics, delayed stop $delayedStop and suspend $suspendedMs", async ({
+    missingMetrics, delayedStop, suspendedMs, timingErrorMs, uncertaintyMs,
+  }) => {
     const workspace = await createTemporaryTestDirectory();
     cleanups.push(workspace.cleanup);
     const config = createEnabledConfig(workspace.path, {
@@ -411,11 +417,27 @@ describe("HotCpuProfiler", () => {
     const { target, debuggerApi } = createTarget();
     let recordingStart = 0;
     let windowIndex = 0;
+    let elapsedDuringRotationMs = 0;
+    const clockMs = () => Date.now() + elapsedDuringRotationMs;
+    const fakePerformanceNow = performance.now.bind(performance);
+    const appClock = vi.spyOn(performance, "now").mockImplementation(() => fakePerformanceNow() + elapsedDuringRotationMs);
+    onTestFinished(() => { appClock.mockRestore(); });
     const frame = { functionName: "(root)", scriptId: "0", url: "", lineNumber: -1, columnNumber: -1 };
     debuggerApi.sendCommand.mockImplementation(async (method: string) => {
-      if (method === "Profiler.start") recordingStart = Date.now() * 1_000;
+      if (method === "Profiler.start") {
+        // The new segment begins only after the old segment's stop/start gap.
+        if (windowIndex > 0) elapsedDuringRotationMs += 240;
+        recordingStart = clockMs() * 1_000;
+        // The reply can arrive after V8 has already started recording.
+        if (windowIndex > 0) elapsedDuringRotationMs += 100;
+      }
       if (method !== "Profiler.stop") return {};
-      const endTime = Date.now() * 1_000;
+      const finalStop = windowIndex === 2;
+      // V8 can stop after dispatch and reply later. Its clock can also omit
+      // time the app's clock counted during system suspend.
+      if (finalStop && delayedStop) elapsedDuringRotationMs += 70;
+      const endTime = (clockMs() - (finalStop ? suspendedMs : 0)) * 1_000;
+      if (finalStop && delayedStop) elapsedDuringRotationMs += 200;
       const name = ["expiredHistory", "burstBeforeRotation", "burstAfterRotation"][windowIndex++];
       return { profile: {
         nodes: [
@@ -434,6 +456,7 @@ describe("HotCpuProfiler", () => {
       config,
       session: sessionResult.session,
       target,
+      now: () => new Date(clockMs()),
       getAppMetrics: () => missingMetrics && !hot ? [] : [{
         ...createMetric(0),
         cpu: { percentCPUUsage: hot ? 80 : 0, idleWakeupsPerSecond: 0 },
@@ -465,7 +488,22 @@ describe("HotCpuProfiler", () => {
     expect(names).toContain("burstBeforeRotation");
     expect(names).toContain("burstAfterRotation");
     expect(names).not.toContain("expiredHistory");
-    expect(profile.endTime - profile.startTime).toBe(60_010_000);
+    expect(profile.endTime - profile.startTime).toBe((60_450 - suspendedMs + (delayedStop ? 70 : 0)) * 1_000);
+    const events = (await fs.readFile(sessionResult.session.eventsPath, "utf8"))
+      .trim().split("\n").map((line) => JSON.parse(line));
+    const started = events.find((event) => event.type === "profile-started");
+    const timing = events.find((event) => event.type === "profile-written").detail;
+    expect(timing.triggeredAt).toBe(started.capturedAt);
+    expect(timing.profileDurationMs).toBe((profile.endTime - profile.startTime) / 1_000);
+    expect(timing.recordingStartUncertaintyMs).toBe(uncertaintyMs);
+    if (timingErrorMs === undefined) {
+      expect(timing.recordingStartedAt).toBeUndefined();
+      expect(timing.preTriggerDurationMs).toBeUndefined();
+    } else {
+      expect(Date.parse(timing.recordingStartedAt)).toBe(Date.parse(started.capturedAt) - timing.preTriggerDurationMs);
+      const actualPreTriggerMs = Date.parse(started.capturedAt) - profile.startTime / 1_000;
+      expect(Math.abs(timing.preTriggerDurationMs - actualPreTriggerMs)).toBe(timingErrorMs);
+    }
     expect(debuggerApi.sendCommand.mock.calls.filter(([method]) => method === "Profiler.start")).toHaveLength(3);
     expect(debuggerApi.sendCommand.mock.calls.filter(([method]) => method === "Profiler.stop")).toHaveLength(3);
     expect(target.debugger.isAttached()).toBe(false);
