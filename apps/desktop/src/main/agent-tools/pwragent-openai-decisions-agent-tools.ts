@@ -2,6 +2,7 @@ import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools"
 import {
   OPENAI_DECISION_BOUNDS,
   OPENAI_DECISIONS_TOOL_NAMES,
+  DECISION_IMAGE_SCHEMA_KEY,
   type OpenAIDecisionsToolName,
 } from "@pwragent/shared/openai-decisions";
 import type {
@@ -118,7 +119,8 @@ const DESCRIPTIONS: Record<OpenAIDecisionsToolName, string> = {
     "provider picks the model: openai (OpenAI Decisions, gpt-6-luna), jev (TypeSafe Jev), or local (a decision model on this Mac).",
     "Omit provider to use the one the operator set up.",
     "Give one predicate, choice, or score question, or up to 16 questions.",
-    "Add an input JSON Schema and an optional shared prefix.",
+    `Add an input JSON Schema and an optional shared text prefix. Set "${DECISION_IMAGE_SCHEMA_KEY}": true at the schema root to require an image per item.`,
+    "OpenAI Decisions and local Clef accept images. Jev 1.13, 1.14 and jev-latest accept images through TypeSafe's experimental API.",
     "Registration is stored locally and makes no API call.",
     "An active name in the same scope fails with decision_name_taken.",
     "Scope profile, the default, reaches every thread in this profile.",
@@ -127,8 +129,9 @@ const DESCRIPTIONS: Record<OpenAIDecisionsToolName, string> = {
     "Call decisions_list to see what exists.",
   ].join(" "),
   decisions_list: [
-    "List registered OpenAI decisions visible to this thread.",
+    "List registered decisions visible to this thread.",
     "Each entry has its id, name, version, scope, provider, questions, choice values or score labels, and input schema.",
+    "inputCapabilities.images reports support for its configured model, including experimental status, formats and limits.",
     "timing gives one request's p50Ms, meanMs, minMs and maxMs over the version's latest 200 successes.",
     "It appears once the version has run since PwrAgent started.",
     "Instructions and prefixes appear only with includeInstructions.",
@@ -137,7 +140,9 @@ const DESCRIPTIONS: Record<OpenAIDecisionsToolName, string> = {
     "Run a registered decision on new input, or pass definition to run one ad hoc without registering it.",
     "One input returns its answers. For OpenAI it also returns the request id, response body, and token usage with an estimated price.",
     "Pass inputs instead of input to run a batch of up to 500 items, at most 8 at once.",
-    "Every input is checked against the schema before any request, and a failed item does not stop the rest.",
+    "For images, pass an array starting with an optional {type: input_text, text: ...} or {type: input_json, data: {...}}, followed by one to four {type: input_image, image_url: ...} parts.",
+    "Use PNG or JPEG base64 data URLs. Images go to the chosen provider. Jev image input is experimental and requires each side to be 280–1568 pixels. Check decisions_list for model-specific limits.",
+    "The schema applies to the text or JSON part. images_unsupported and invalid_image are per-item batch failures.",
     "A batch returns a batchId, totals, and results by index: each item's answers and confidence, without response bodies.",
     "Pass detail full for response bodies, request ids, and per-item usage.",
     "Results stop at 64 KiB. nextFrom then says where decisions_batch_results continues.",
@@ -278,6 +283,7 @@ const DEFINITION_PROPERTIES = {
       "JSON Schema for invoke input, at most 8 KiB, with root type object or string.",
       "Supported keywords are type, properties, required, additionalProperties, items, enum, and title.",
       "Also description, minLength, maxLength, minimum, maximum, minItems, and maxItems.",
+      `Optional root ${DECISION_IMAGE_SCHEMA_KEY}: true requires at least one image part.`,
     ].join(" "),
   },
   prefix: {
@@ -322,14 +328,14 @@ const INPUT_SCHEMAS: Record<OpenAIDecisionsToolName, Record<string, unknown>> = 
         },
       },
       input: {
-        description: "Evidence for one run, matching the schema (an object or a string).",
+        description: "One string or JSON object, or an array with optional input_text or input_json followed by input_image data URL parts.",
       },
       inputs: {
         type: "array",
         minItems: 1,
         maxItems: OPENAI_DECISION_BOUNDS.bulkMaxItems,
         description: "A batch of inputs instead of input. Results come back by index.",
-        items: {},
+        items: { description: "Same evidence shape as input, including optional image parts." },
       },
       concurrency: {
         type: "integer",

@@ -6,6 +6,7 @@ import type {
   DecisionsRailBatchActionResult,
   DecisionsRailBatchPage,
   DecisionsRailDecision,
+  DecisionsRailItem,
   DecisionsRailItemFilter,
   DecisionsRailActiveBatches,
   DecisionsRailSnapshot,
@@ -13,7 +14,9 @@ import type {
   DecisionsProfileDeleteResult,
 } from "@pwragent/shared/decisions-rail";
 import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import { decisionImageCapabilities } from "@pwragent/shared/decision-models";
 import {
+  DECISION_IMAGE_SCHEMA_KEY,
   OPENAI_DECISIONS_ORIGIN,
   OPENAI_DECISIONS_PRICING_CATALOG_ID,
   OPENAI_DECISIONS_PRICING_CATALOG_VERSION,
@@ -23,13 +26,13 @@ import {
   canonicalJson,
   AD_HOC_DECISION_ID_PREFIX,
   isAdHocDecisionId,
+  isRegisteredDecisionProvider,
   parseOpenAIDecisionAdHocDefinition,
   openAIDecisionPromptCacheMaterial,
   openAIDecisionSafetyMaterial,
   parseOpenAIDecisionRegistration,
   priceOpenAIDecisionsUsage,
   readOpenAIDecisionsUsage,
-  validateOpenAIDecisionInput,
   type OpenAIDecisionInputSchema,
   type OpenAIDecisionQuestion,
   type OpenAIDecisionsPrice,
@@ -78,6 +81,8 @@ import {
 } from "./decision-batch-files";
 import { railBatch, railBatchPage } from "./decision-batch-rail";
 import type { SystemOneTarget } from "../decision/system-one";
+import { imageCodec } from "../owner-host";
+import { decisionImageReferences, hasDecisionImageParts, prepareDecisionInput, type PreparedDecisionInput } from "./decision-images";
 import { buildSystemOneDecisionRequest, postSystemOneDecision } from "./system-one-decisions";
 import {
   postOpenAIDecision,
@@ -91,6 +96,8 @@ export type OpenAIDecisionsErrorCode =
   | "decision_deleted"
   | "invalid_definition"
   | "invalid_input"
+  | "invalid_image"
+  | "images_unsupported"
   | "credential_missing"
   | "provider_disabled"
   | "credential_rejected"
@@ -140,6 +147,9 @@ export type OpenAIDecisionsServiceOptions = {
    * request, after validation. Undefined when that provider cannot run.
    */
   readSystemOneTarget?: (provider: "jev" | "local") => Promise<SystemOneTarget | undefined>;
+  /** Settings model id, available without reading credentials. */
+  readProviderModel?: (provider: RegisteredDecisionProvider) => string | undefined;
+  decodeImage?: typeof imageCodec.createFromBuffer;
   /** The provider for a registration that names none. Defaults to openai. */
   resolveDefaultProvider?: () => Promise<RegisteredDecisionProvider>;
   /**
@@ -268,6 +278,9 @@ export class OpenAIDecisionsService {
   }
 
   async register(caller: OpenAIDecisionCaller, args: Record<string, unknown>) {
+    if (hasDecisionImageParts(args.prefix)) {
+      this.assertDefinitionImages(await this.registrationProvider(args.provider), args);
+    }
     const parsed = parseOpenAIDecisionRegistration(args);
     if (!parsed.ok) throw new OpenAIDecisionsError("invalid_definition", parsed.message);
     const definition = parsed.value;
@@ -277,6 +290,7 @@ export class OpenAIDecisionsService {
     const provider = definition.provider
       ?? await this.options.resolveDefaultProvider?.()
       ?? "openai";
+    this.assertDefinitionImages(provider, args);
     this.assertProviderEnabled(provider);
     const decisionId = (this.options.newDecisionId ?? randomUUID)();
     const record: OpenAIDecisionVersionRecord = {
@@ -329,6 +343,7 @@ export class OpenAIDecisionsService {
         version: record.version,
         scope: record.scope,
         provider: record.provider,
+        inputCapabilities: { images: this.imageCapabilities(record.provider) },
         ...(this.options.isProviderEnabled?.(record.provider) === false ? { providerDisabled: true } : {}),
         questions: record.questions.map((question) => summarizeQuestion(question, includeInstructions)),
         inputSchema: record.inputSchema,
@@ -340,6 +355,10 @@ export class OpenAIDecisionsService {
   }
 
   update(caller: OpenAIDecisionCaller, args: Record<string, unknown>) {
+    if (hasDecisionImageParts(args.prefix)) {
+      const current = this.resolveTarget(caller, args);
+      this.assertDefinitionImages(isRegisteredDecisionProvider(args.provider) ? args.provider : current.provider, args);
+    }
     const parsed = parseOpenAIDecisionRegistration(args, { extraKeys: ["decisionId"] });
     if (!parsed.ok) throw new OpenAIDecisionsError("invalid_definition", parsed.message);
     const current = this.resolveTarget(caller, {
@@ -354,6 +373,8 @@ export class OpenAIDecisionsService {
     }
     const version = current.version + 1;
     const definition = parsed.value;
+    const provider = definition.provider ?? current.provider;
+    this.assertDefinitionImages(provider, args);
     // Editing a decision whose provider is off is allowed; moving one onto
     // a provider that is off is not.
     if (definition.provider !== undefined && definition.provider !== current.provider) {
@@ -363,7 +384,7 @@ export class OpenAIDecisionsService {
       ...current,
       version,
       status: "active",
-      provider: definition.provider ?? current.provider,
+      provider,
       questions: definition.questions,
       inputSchema: definition.inputSchema,
       promptCacheKey: promptCacheKey(current.decisionId, version, definition.questions, definition.prefix),
@@ -435,16 +456,24 @@ export class OpenAIDecisionsService {
       ? await this.adHocRecord(caller, args)
       : this.registeredRecord(caller, args);
     // Every input is checked before the key is read or any request is sent.
+    const capability = this.imageCapabilities(record.provider);
     const validated = inputs.map((input, index) => {
-      const result = validateOpenAIDecisionInput(schema, input);
+      const result = prepareDecisionInput(input, schema, capability, unsupportedImagesMessage(record.provider));
       if (!result.ok) {
-        throw new OpenAIDecisionsError("invalid_input", bulk ? `inputs[${index}]: ${result.message}` : result.message);
+        const error = new OpenAIDecisionsError(
+          result.code,
+          bulk ? `inputs[${index}]: ${result.message}` : result.message,
+        );
+        if (!bulk || result.code === "invalid_input") throw error;
+        return error;
       }
       return result.value;
     });
     if (!bulk) {
+      const input = validated[0] as PreparedDecisionInput;
+      await this.imageReferences(input, false);
       const run = await this.itemRunner(caller, record, signal);
-      const result = await this.inLane(record.decisionId, signal, async () => await run(validated[0]));
+      const result = await this.inLane(record.decisionId, signal, async () => await run(input));
       return detail === "compact" ? compactSingleResult(result) : result;
     }
     if (background && this.batches.unfinishedBackground(caller) >= DECISION_BATCH_LIMITS.backgroundPerThread) {
@@ -454,7 +483,9 @@ export class OpenAIDecisionsService {
       );
     }
     const batch = this.newBatch(caller, record, validated.length, concurrency, background);
-    const run = await this.itemRunner(caller, record, batch.controller.signal);
+    const run = validated.some((input) => !(input instanceof OpenAIDecisionsError))
+      ? await this.itemRunner(caller, record, batch.controller.signal)
+      : undefined;
     // A full queue is refused as busy, as before batches had ids. Nothing
     // awaits between this check and inLane's own, so they cannot disagree.
     this.assertLaneHasRoom(record.decisionId);
@@ -896,6 +927,10 @@ export class OpenAIDecisionsService {
         throw new OpenAIDecisionsError("invalid_input", `Pass ${key} or definition, not both.`);
       }
     }
+    const raw = args.definition as Record<string, unknown> | undefined;
+    if (raw && hasDecisionImageParts(raw.prefix)) {
+      this.assertDefinitionImages(await this.registrationProvider(raw.provider), raw);
+    }
     const parsed = parseOpenAIDecisionAdHocDefinition(args.definition);
     if (!parsed.ok) throw new OpenAIDecisionsError("invalid_definition", parsed.message);
     const definition = parsed.value;
@@ -936,6 +971,30 @@ export class OpenAIDecisionsService {
     }
   }
 
+  private async registrationProvider(value: unknown): Promise<RegisteredDecisionProvider> {
+    return isRegisteredDecisionProvider(value) ? value : await this.options.resolveDefaultProvider?.() ?? "openai";
+  }
+
+  private imageCapabilities(provider: RegisteredDecisionProvider) {
+    return decisionImageCapabilities(provider, this.options.readProviderModel?.(provider));
+  }
+
+  private assertDefinitionImages(provider: RegisteredDecisionProvider, args: Record<string, unknown>): void {
+    const schema = args.inputSchema as OpenAIDecisionInputSchema | undefined;
+    if ((hasDecisionImageParts(args.prefix) || schema?.[DECISION_IMAGE_SCHEMA_KEY] === true)
+      && !this.imageCapabilities(provider).supported) {
+      throw new OpenAIDecisionsError("images_unsupported", unsupportedImagesMessage(provider));
+    }
+  }
+
+  private async imageReferences(input: PreparedDecisionInput, thumbnail: boolean) {
+    if (input.images.length === 0) return undefined;
+    const decode = this.options.decodeImage ?? ((buffer: Buffer) => imageCodec.createFromBuffer(buffer));
+    const references = await decisionImageReferences(input.images, decode, thumbnail);
+    if (!references) throw new OpenAIDecisionsError("invalid_image", "An input image could not be decoded.");
+    return references;
+  }
+
   /**
    * Checks the provider's credential once, then returns the function that
    * runs one validated input. It throws OpenAIDecisionsError on failure.
@@ -944,7 +1003,7 @@ export class OpenAIDecisionsService {
     caller: OpenAIDecisionCaller,
     record: OpenAIDecisionVersionRecord,
     signal: AbortSignal | undefined,
-  ): Promise<(input: unknown) => Promise<DecisionItemResult>> {
+  ): Promise<RunDecisionItem> {
     const run = await this.untimedItemRunner(caller, record, signal);
     // decisions_list shows timing for saved decisions only. An ad-hoc
     // definition would take a slot and evict a saved one's window.
@@ -961,7 +1020,7 @@ export class OpenAIDecisionsService {
     caller: OpenAIDecisionCaller,
     record: OpenAIDecisionVersionRecord,
     signal: AbortSignal | undefined,
-  ): Promise<(input: unknown) => Promise<DecisionItemResult>> {
+  ): Promise<RunDecisionItem> {
     const run = await this.ungatedItemRunner(caller, record, signal);
     // Checked again per item: turning a provider off stops a batch that is
     // running and a call waiting in its lane. The error stops the batch.
@@ -975,7 +1034,7 @@ export class OpenAIDecisionsService {
     caller: OpenAIDecisionCaller,
     record: OpenAIDecisionVersionRecord,
     signal: AbortSignal | undefined,
-  ): Promise<(input: unknown) => Promise<DecisionItemResult>> {
+  ): Promise<RunDecisionItem> {
     this.assertProviderEnabled(record.provider);
     if (record.provider !== "openai") {
       const provider = record.provider;
@@ -988,7 +1047,12 @@ export class OpenAIDecisionsService {
             : "The local decision model is not set up. Configure it in Settings → AI Providers → Local decision model.",
         );
       }
-      return async (input) => await this.postSystemOne(record, provider, target, input, signal);
+      return async (input) => {
+        if (input.images.length > 0 && !decisionImageCapabilities(provider, target.model).supported) {
+          throw new OpenAIDecisionsError("images_unsupported", unsupportedImagesMessage(provider));
+        }
+        return await this.postSystemOne(record, provider, target, input, signal);
+      };
     }
     const apiKey = (await this.options.readApiKey())?.trim();
     if (!apiKey) {
@@ -1009,8 +1073,8 @@ export class OpenAIDecisionsService {
    */
   private async runBatch(
     batch: DecisionBatchRecord,
-    inputs: readonly unknown[],
-    run: (input: unknown) => Promise<DecisionItemResult>,
+    inputs: readonly (PreparedDecisionInput | OpenAIDecisionsError)[],
+    run: RunDecisionItem | undefined,
     announcer: BatchAnnouncer,
     onProgress?: (message: string) => void,
   ): Promise<void> {
@@ -1027,10 +1091,19 @@ export class OpenAIDecisionsService {
     const mapper = new IterableMapper(pending(), async (index: number): Promise<number> => {
       const startedAt = this.now();
       // A preview of the input and the item's time, for the Decisions tab.
-      const preview = decisionInputPreview(inputs[index]);
-      const rail = () => ({ ...preview, durationMs: Math.max(0, this.now() - startedAt) });
+      const input = inputs[index]!;
+      const preview = input instanceof OpenAIDecisionsError ? {} : decisionInputPreview(input.value);
+      let inputImages: DecisionsRailItem["inputImages"];
+      const rail = () => ({
+        ...preview,
+        ...(inputImages ? { inputImages } : {}),
+        durationMs: Math.max(0, this.now() - startedAt),
+      });
       try {
-        const result = await run(inputs[index]);
+        if (input instanceof OpenAIDecisionsError) throw input;
+        inputImages = await this.imageReferences(input, true);
+        if (!run) throw new Error("No runner for a valid decision input.");
+        const result = await run(input);
         this.recordItem(batch, { index, ok: true, ...batchItemData(result), ...rail() });
       } catch (error) {
         // Any failure stays with its item: earlier items were sent and
@@ -1184,7 +1257,7 @@ export class OpenAIDecisionsService {
   private async post(
     caller: OpenAIDecisionCaller,
     record: OpenAIDecisionVersionRecord,
-    input: unknown,
+    input: PreparedDecisionInput,
     apiKey: string,
     signal: AbortSignal | undefined,
   ): Promise<DecisionItemResult> {
@@ -1192,7 +1265,8 @@ export class OpenAIDecisionsService {
     const body = buildOpenAIDecisionsRequestBody({
       questions: record.questions,
       prefix: record.prefix,
-      input,
+      input: input.value,
+      images: input.images,
       promptCacheKey: record.promptCacheKey,
       safetyIdentifier: sha256Hex(openAIDecisionSafetyMaterial({
         profileId: this.options.profileId(),
@@ -1241,7 +1315,7 @@ export class OpenAIDecisionsService {
       const statusNote = result.status ? ` HTTP ${result.status}.` : "";
       throw new OpenAIDecisionsError(
         result.code,
-        `${result.code}:${statusNote}${requestNote}${result.detail ? ` ${result.detail}` : ""}`.trim(),
+        `${result.code}:${statusNote}${requestNote}${result.detail && !input.images.length ? ` ${result.detail}` : ""}`.trim(),
         {
           ...(result.status ? { status: result.status } : {}),
           ...(result.requestId ? { requestId: result.requestId } : {}),
@@ -1267,13 +1341,14 @@ export class OpenAIDecisionsService {
     record: OpenAIDecisionVersionRecord,
     provider: "jev" | "local",
     target: SystemOneTarget,
-    input: unknown,
+    input: PreparedDecisionInput,
     signal: AbortSignal | undefined,
   ): Promise<DecisionItemResult> {
     const request = buildSystemOneDecisionRequest({
       questions: record.questions,
       prefix: record.prefix,
-      input,
+      input: input.value,
+      media: { provider, images: input.images },
     });
     const result = await postSystemOneDecision({
       target,
@@ -1291,7 +1366,7 @@ export class OpenAIDecisionsService {
       const statusNote = result.status ? ` HTTP ${result.status}.` : "";
       throw new OpenAIDecisionsError(
         result.code,
-        `${result.code}:${statusNote}${result.detail ? ` ${result.detail}` : ""}`.trim(),
+        `${result.code}:${statusNote}${result.detail && !input.images.length ? ` ${result.detail}` : ""}`.trim(),
         result.status ? { status: result.status } : undefined,
       );
     }
@@ -1412,6 +1487,8 @@ export class OpenAIDecisionsService {
 }
 
 /** What one input's run returns, from either provider. */
+type RunDecisionItem = (input: PreparedDecisionInput) => Promise<DecisionItemResult>;
+
 type DecisionItemResult = {
   decisionId: string;
   name: string;
@@ -1423,6 +1500,10 @@ type DecisionItemResult = {
   answers?: unknown[];
   usage: Record<string, unknown>;
 };
+
+function unsupportedImagesMessage(provider: RegisteredDecisionProvider): string {
+  return `The ${provider} provider's configured model does not accept images in PwrAgent. Use OpenAI Decisions or select a Clef model for the local provider.`;
+}
 
 function parseBulkInputs(value: unknown): unknown[] {
   if (!Array.isArray(value) || value.length < 1 || value.length > OPENAI_DECISION_BOUNDS.bulkMaxItems) {
