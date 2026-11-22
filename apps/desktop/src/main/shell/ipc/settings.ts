@@ -10,6 +10,7 @@ import {
   codexConfigHomesFromProfiles,
   scanCodexModelProviderImports,
 } from "../../settings/codex-model-provider-import";
+import { realpath } from "node:fs/promises";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
 import type {
@@ -213,8 +214,9 @@ import { resolveWindowsCodexLaunchCommand } from "../../codex-windows-launch";
 import { normalizeProfileName } from "../../profile";
 import {
   discoverRecentProjects,
-  RECENT_PROJECT_CODEX_MAX_PAGES,
-  RECENT_PROJECT_CODEX_PAGE_SIZE,
+  folderInRealCase,
+  readRecentCodexDirectories,
+  RecentProjectDiscoveryRuns,
 } from "../../onboarding/recent-project-discovery";
 import { resolveDirectoryRegistrationRoot } from "../../app-server/directory-registration-service";
 import { isBootstrapProfile } from "../../profile-service";
@@ -1156,6 +1158,7 @@ function resolveRequiredCodexProfileHome(profile: string): string {
 
 
 const RECENT_PROJECT_DISCOVERY_TIMEOUT_MS = 20_000;
+const recentProjectDiscoveryRuns = new RecentProjectDiscoveryRuns();
 
 /**
  * Get started's recent projects. Codex answers `thread/list` from a
@@ -1167,6 +1170,7 @@ const RECENT_PROJECT_DISCOVERY_TIMEOUT_MS = 20_000;
 async function discoverRecentProjectsForOnboarding(
   service: DesktopSettingsService,
   request: DiscoverRecentProjectsRequest,
+  signal: AbortSignal,
 ): Promise<DiscoverRecentProjectsResponse> {
   const bootstrap = isBootstrapProfile();
   const command = request.includeCodex
@@ -1180,22 +1184,16 @@ async function discoverRecentProjectsForOnboarding(
   const acpLabels = new Map<string, string>();
   const response = await discoverRecentProjects({
     includeCodex: request.includeCodex,
+    ignorePathCase: process.platform === "win32",
+    signal,
     readCodexDirectories: command
-      ? async () => {
-        const client = new CodexAppServerClient({
+      ? async () => await readRecentCodexDirectories(
+        () => new CodexAppServerClient({
           command,
           env: { ...process.env, CODEX_HOME: codexHome },
-        });
-        try {
-          return await client.listRecentThreadDirectories({
-            limit: RECENT_PROJECT_CODEX_PAGE_SIZE,
-            maxPages: RECENT_PROJECT_CODEX_MAX_PAGES,
-            deadlineAt,
-          });
-        } finally {
-          await client.close();
-        }
-      }
+        }),
+        { deadlineAt, signal },
+      )
       : undefined,
     listPwrAgentThreads: registry
       ? async () => {
@@ -1215,7 +1213,10 @@ async function discoverRecentProjectsForOnboarding(
         : acpLabels.get(agent) ?? agent,
     resolveProjectRoot: async (folder) => {
       const resolved = await resolveDirectoryRegistrationRoot(folder);
-      return resolved.ok ? resolved.directoryPath : undefined;
+      if (!resolved.ok) return undefined;
+      return process.platform === "win32"
+        ? await folderInRealCase(resolved.directoryPath, realpath)
+        : resolved.directoryPath;
     },
   });
   return response;
@@ -2125,10 +2126,21 @@ export function registerSettingsIpcHandlers(
   ipcMain.handle(
     SETTINGS_DISCOVER_RECENT_PROJECTS_CHANNEL,
     async (
-      _event,
+      event,
       request: DiscoverRecentProjectsRequest,
-    ): Promise<DiscoverRecentProjectsResponse> =>
-      await discoverRecentProjectsForOnboarding(getService(service), request),
+    ): Promise<DiscoverRecentProjectsResponse> => {
+      const owner = event.sender.id;
+      const cancel = (): void => recentProjectDiscoveryRuns.cancel(owner);
+      event.sender.once("destroyed", cancel);
+      try {
+        return await recentProjectDiscoveryRuns.run(
+          owner,
+          async (signal) => await discoverRecentProjectsForOnboarding(getService(service), request, signal),
+        );
+      } finally {
+        event.sender.removeListener("destroyed", cancel);
+      }
+    },
   );
 
   ipcMain.removeHandler(SETTINGS_PICK_GH_COMMAND_CHANNEL);

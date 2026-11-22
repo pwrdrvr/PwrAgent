@@ -53,6 +53,16 @@ export function canonicalizeNavigationPath(value: string): string {
   return value.replace(/\\/g, "/").replace(/\/+$/, "");
 }
 
+/**
+ * A key that two spellings of one folder share: canonical separators, and,
+ * where the file system ignores case (Windows), lower case. Compare keys;
+ * never show or register one, since it loses the folder's real case.
+ */
+export function navigationPathIdentity(value: string, ignoreCase: boolean): string {
+  const canonical = canonicalizeNavigationPath(value);
+  return ignoreCase ? canonical.toLowerCase() : canonical;
+}
+
 export function directoryIncludesCheckout(
   directory: Pick<NavigationDirectorySummary, "key" | "checkoutPaths">,
   checkoutKey: string,

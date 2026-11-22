@@ -5,7 +5,7 @@ import type {
   RecentProjectObservation,
   RecentProjectSourceReport,
 } from "@pwragent/shared/contracts/settings";
-import { canonicalizeNavigationPath } from "@pwragent/shared/directory-navigation";
+import { canonicalizeNavigationPath, navigationPathIdentity } from "@pwragent/shared/directory-navigation";
 
 /** Codex is read newest first, one page at a time, up to this budget. */
 export const RECENT_PROJECT_CODEX_PAGE_SIZE = 100;
@@ -28,6 +28,13 @@ export type RecentProjectDiscoveryDeps = {
   /** False when the profile being set up has its own Codex login. */
   includeCodex: boolean;
   /**
+   * True where folder names ignore case (Windows): `C:/code/app` and
+   * `c:/code/app` are one folder, checked once and sent as one path.
+   */
+  ignorePathCase: boolean;
+  /** Aborted when a newer discovery replaces this one; no more folders are checked. */
+  signal?: AbortSignal;
+  /**
    * Reads Codex's `thread/list` through the App Server protocol. Undefined
    * when no Codex is set up, which the agent rows already say.
    */
@@ -44,12 +51,102 @@ export type RecentProjectDiscoveryDeps = {
 
 type RawObservation = { cwd: string; agent: RecentProjectAgent; lastActiveAt?: number };
 
+/** The App Server calls one Codex read makes. */
+export type RecentCodexDirectoryClient = {
+  listRecentThreadDirectories(params: {
+    limit: number;
+    maxPages: number;
+    deadlineAt?: number;
+  }): Promise<RecentCodexDirectories>;
+  close(): Promise<void>;
+};
+
+/**
+ * Reads Codex's recent thread folders from a one-off App Server, and closes
+ * it when the read ends or `signal` aborts, whichever comes first. Closing
+ * stops the `thread/list` pages still to come.
+ */
+export async function readRecentCodexDirectories(
+  createClient: () => RecentCodexDirectoryClient,
+  params: { deadlineAt?: number; signal?: AbortSignal },
+): Promise<RecentCodexDirectories> {
+  const { signal } = params;
+  signal?.throwIfAborted();
+  const client = createClient();
+  let closing: Promise<void> | undefined;
+  const close = (): Promise<void> => (closing ??= client.close().catch(() => undefined));
+  try {
+    const read = client.listRecentThreadDirectories({
+      limit: RECENT_PROJECT_CODEX_PAGE_SIZE,
+      maxPages: RECENT_PROJECT_CODEX_MAX_PAGES,
+      deadlineAt: params.deadlineAt,
+    });
+    if (!signal) return await read;
+    // Settled below or abandoned on abort; either way never unhandled.
+    read.catch(() => undefined);
+    return await new Promise<RecentCodexDirectories>((resolve, reject) => {
+      const onAbort = (): void => {
+        void close();
+        reject(signal.reason);
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      void read.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+    });
+  } finally {
+    await close();
+  }
+}
+
+/**
+ * One discovery per window. A newer request from the same window aborts the
+ * one before it: React runs Get started's effect twice on mount in
+ * development, and changing the Codex login choice asks again, and the
+ * renderer keeps only the newest answer. A window that closes cancels its
+ * search.
+ */
+export class RecentProjectDiscoveryRuns {
+  private readonly current = new Map<number, AbortController>();
+
+  /** Aborts `owner`'s search, if one is running. */
+  cancel(owner: number, reason = "The window that asked for recent projects closed."): void {
+    this.current.get(owner)?.abort(new Error(reason));
+    this.current.delete(owner);
+  }
+
+  async run<T>(owner: number, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    this.cancel(owner, "A newer search for recent projects replaced this one.");
+    const controller = new AbortController();
+    this.current.set(owner, controller);
+    try {
+      return await work(controller.signal);
+    } finally {
+      if (this.current.get(owner) === controller) this.current.delete(owner);
+    }
+  }
+}
+
+/**
+ * On Windows, `folder` as the disk spells it, so a project registers as
+ * `C:/Code/App` whichever case an agent used. Only letter case is taken
+ * from the disk: a mapped drive, junction or link keeps the path the agent
+ * reported.
+ */
+export async function folderInRealCase(
+  folder: string,
+  realpath: (path: string) => Promise<string>,
+): Promise<string> {
+  const real = await realpath(folder).then(canonicalizeNavigationPath, () => undefined);
+  return real && navigationPathIdentity(real, true) === navigationPathIdentity(folder, true) ? real : folder;
+}
+
 /**
  * Recent project folders for Get started, with how each agent's read went.
  * Nothing here reads an agent's own storage: Codex answers through its
  * protocol, and Claude Code and ACP agents through PwrAgent's thread lists.
- * Ranking, prechecking and merging the same folder from two agents happen
- * in the renderer (`get-started-projects.ts`).
+ * Two spellings of one folder leave here as one path, since only main knows
+ * whether the platform's folder names ignore case. Ranking, prechecking and
+ * merging the same folder from two agents happen in the renderer
+ * (`get-started-projects.ts`).
  */
 export async function discoverRecentProjects(
   deps: RecentProjectDiscoveryDeps,
@@ -113,7 +210,11 @@ export async function discoverRecentProjects(
     }
   }
 
-  const { observations, droppedAgents, probed } = await resolveObservations(raw, deps.resolveProjectRoot);
+  const { observations, droppedAgents, probed } = await resolveObservations(raw, {
+    identity: (path) => navigationPathIdentity(path, deps.ignorePathCase),
+    resolveProjectRoot: deps.resolveProjectRoot,
+    signal: deps.signal,
+  });
   for (const agent of droppedAgents) {
     const existing = sources.find((source) => source.agent === agent);
     if (existing && existing.status === "complete") {
@@ -135,11 +236,16 @@ function threadFolder(thread: AppServerThreadSummary): string | undefined {
  * `RECENT_PROJECT_MAX_PROJECTS` roots are found or `RECENT_PROJECT_MAX_FOLDERS`
  * folders are checked. A folder that no longer exists is left out. Returns
  * one observation per (root, agent) at its newest time, and the agents with
- * a folder that was never checked.
+ * a folder that was never checked. Folders and roots are matched by
+ * `identity`; a root is sent as the spelling its newest folder resolved to.
  */
 async function resolveObservations(
   raw: readonly RawObservation[],
-  resolveProjectRoot: (path: string) => Promise<string | undefined>,
+  { identity, resolveProjectRoot, signal }: {
+    identity: (path: string) => string;
+    resolveProjectRoot: (path: string) => Promise<string | undefined>;
+    signal?: AbortSignal;
+  },
 ): Promise<{
   observations: RecentProjectObservation[];
   droppedAgents: Set<RecentProjectAgent>;
@@ -147,35 +253,51 @@ async function resolveObservations(
 }> {
   const newestByFolder = new Map<string, { cwd: string; newest: number }>();
   for (const observation of raw) {
-    const key = canonicalizeNavigationPath(observation.cwd);
+    const key = identity(observation.cwd);
     if (!key) continue;
     const time = observation.lastActiveAt ?? Number.NEGATIVE_INFINITY;
     const existing = newestByFolder.get(key);
-    if (!existing || time > existing.newest) newestByFolder.set(key, { cwd: observation.cwd, newest: time });
+    // Equal times keep the smaller spelling, so the folder checked does not
+    // depend on which agent answered first.
+    if (
+      !existing
+      || time > existing.newest
+      || (time === existing.newest && observation.cwd < existing.cwd)
+    ) {
+      newestByFolder.set(key, { cwd: observation.cwd, newest: time });
+    }
   }
   const ordered = [...newestByFolder.entries()]
     .sort(([leftKey, left], [rightKey, right]) => right.newest - left.newest || leftKey.localeCompare(rightKey));
 
+  /** Folder identity to root identity, or undefined when the folder is gone. */
   const roots = new Map<string, string | undefined>();
-  const distinctRoots = new Set<string>();
+  /** Root identity to the spelling sent to the renderer. */
+  const distinctRoots = new Map<string, string>();
   /** Folders whose project was never listed: unchecked, or past the cap. */
   const droppedKeys = new Set<string>();
   let probed = 0;
   // Batches keep the newest-first order: a later batch starts only while
   // fewer than the cap of projects has been found.
-  while (probed < ordered.length && probed < RECENT_PROJECT_MAX_FOLDERS && distinctRoots.size < RECENT_PROJECT_MAX_PROJECTS) {
+  while (
+    probed < ordered.length
+    && probed < RECENT_PROJECT_MAX_FOLDERS
+    && distinctRoots.size < RECENT_PROJECT_MAX_PROJECTS
+    && !signal?.aborted
+  ) {
     const batch = ordered.slice(probed, Math.min(probed + RESOLVE_CONCURRENCY, RECENT_PROJECT_MAX_FOLDERS));
     probed += batch.length;
     const resolved = await Promise.all(batch.map(async ([, { cwd }]) => await resolveProjectRoot(cwd).catch(() => undefined)));
     for (const [index, [key]] of batch.entries()) {
       const root = resolved[index];
+      const rootKey = root ? identity(root) || undefined : undefined;
       // A batch can cross the cap; the newest roots in it are kept.
-      if (root && !distinctRoots.has(root) && distinctRoots.size >= RECENT_PROJECT_MAX_PROJECTS) {
+      if (rootKey && !distinctRoots.has(rootKey) && distinctRoots.size >= RECENT_PROJECT_MAX_PROJECTS) {
         droppedKeys.add(key);
         continue;
       }
-      roots.set(key, root);
-      if (root) distinctRoots.add(root);
+      roots.set(key, rootKey);
+      if (root && rootKey && !distinctRoots.has(rootKey)) distinctRoots.set(rootKey, root);
     }
   }
 
@@ -184,15 +306,16 @@ async function resolveObservations(
   const droppedAgents = new Set<RecentProjectAgent>();
   const byRootAndAgent = new Map<string, RecentProjectObservation>();
   for (const observation of raw) {
-    const key = canonicalizeNavigationPath(observation.cwd);
+    const key = identity(observation.cwd);
     if (!key) continue;
     if (droppedKeys.has(key)) {
       droppedAgents.add(observation.agent);
       continue;
     }
-    const root = roots.get(key);
-    if (!root) continue;
-    const id = JSON.stringify([observation.agent, root]);
+    const rootKey = roots.get(key);
+    const root = rootKey && distinctRoots.get(rootKey);
+    if (!rootKey || !root) continue;
+    const id = JSON.stringify([observation.agent, rootKey]);
     const existing = byRootAndAgent.get(id);
     if (
       !existing
