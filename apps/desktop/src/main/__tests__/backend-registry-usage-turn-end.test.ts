@@ -689,7 +689,7 @@ describe("DesktopBackendRegistry usage turn ends", () => {
       const sessions = new ClaudeSessionStore(path.join(cwd, "sessions"));
       const registry = createRegistry([], { claudeBackendOptions: {
         store: sessions,
-        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        inspectInstallation: async () => ({ executable: "/fixture/claude", version: "2.1.330", authStatus: "signed-in" }),
         discoverModels: async () => [],
         query: ({ options }) => {
           async function* messages() {

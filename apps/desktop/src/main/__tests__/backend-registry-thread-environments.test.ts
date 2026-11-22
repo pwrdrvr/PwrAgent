@@ -3350,7 +3350,7 @@ command = "pnpm dev"
     return {
       store: new ClaudeSessionStore(path.join(root, "sessions")),
       getSessionInfo: vi.fn().mockResolvedValue(undefined),
-      inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" as const }),
+      inspectInstallation: async () => ({ executable: "/fixture/claude", version: "2.1.330", authStatus: "signed-in" as const }),
       discoverModels: async () => [{ id: "fable", label: "Fable 5.1", current: true }],
       query: ({ options = {} }: { options?: ClaudeOptions }) => {
         optionsSeen.push(options);

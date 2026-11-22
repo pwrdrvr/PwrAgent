@@ -51,7 +51,7 @@ import { resolveActiveProfilePath } from "../profile";
 import { toTranscriptImageProtocolUrl } from "../transcript-images";
 import { ClaudeSessionReaderError, type ClaudeSessionReader, type ClaudeSessionReads } from "./claude-session-reader";
 import { buildClaudeSessionPrimer } from "./claude-session-primer";
-import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, signInWithClaudeCode, type ClaudeInstallation } from "./claude-executable";
+import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, signInWithClaudeCode, supportsClaudeMcpInitialize, type ClaudeInstallation } from "./claude-executable";
 import {
   CLAUDE_EXIT_PLAN_TOOL, claudeAllowedTools, createClaudePermissionHandler, claudePermissionMode,
   threadExecutionModeForClaudePermission,
@@ -778,17 +778,17 @@ export class ClaudeBackend {
       .catch((error: unknown) => claudeBackendLog.warn("Could not publish Claude sign-in status", error));
   }
 
-  private async requireInstallation(): Promise<string> {
+  private async requireInstallation(): Promise<ClaudeInstallation & { executable: string }> {
     // Inspection spawns the CLI three times. Reuse a usable result; an explicit
     // Settings check or startup refresh re-inspects through discover().
-    if (this.installation.executable && this.installation.authStatus !== "sign-in-required") {
-      return this.installation.executable;
-    }
-    await this.discover({ models: false });
     if (!this.installation.executable || this.installation.authStatus === "sign-in-required") {
-      throw new Error(this.installation.message ?? CLAUDE_SETUP_INSTRUCTIONS);
+      await this.discover({ models: false });
     }
-    return this.installation.executable;
+    const installation = this.installation;
+    if (!installation.executable || installation.authStatus === "sign-in-required") {
+      throw new Error(installation.message ?? CLAUDE_SETUP_INSTRUCTIONS);
+    }
+    return { ...installation, executable: installation.executable };
   }
 
   async startThread(params: {
@@ -1157,7 +1157,7 @@ export class ClaudeBackend {
     const turn = claudeTurn(++this.authSequence);
     let live: LiveSession | undefined;
     try {
-      const executable = await this.requireInstallation();
+      const { executable, version } = await this.requireInstallation();
       const startQuery = this.options.query ?? (await loadClaudeAgentSdk()).query;
       const session = await this.store.read(threadId);
       if (session.thread.archivedAt) throw new Error("Restore this Claude thread before sending a message.");
@@ -1197,6 +1197,9 @@ export class ClaudeBackend {
         : configDir === signInConfigDir;
       current.usesProviderAuth = sameConfigDir && env.ANTHROPIC_PROFILE === providerEnv.ANTHROPIC_PROFILE
         && env.HOME === providerEnv.HOME && env.USERPROFILE === providerEnv.USERPROFILE;
+      const initializeMcp = supportsClaudeMcpInitialize(version);
+      const deferredMcp = !initializeMcp && config.mcpServers && Object.keys(config.mcpServers).length > 0
+        ? config.mcpServers : undefined;
       // The thread id names its first SDK session. A rewind past the first
       // prompt leaves the thread with no session to resume, and that id is
       // taken, so the next session gets its own.
@@ -1231,7 +1234,7 @@ export class ClaudeBackend {
         ...(config.effort ? { effort: config.effort } : {}),
         abortController: controller,
         stderr: (data) => { current.stderr = (current.stderr + data).slice(-MAX_TURN_STDERR_LENGTH); },
-        mcpServers: config.mcpServers,
+        ...(initializeMcp ? { mcpServers: config.mcpServers, mcpServersDelivery: "initialize" } : {}),
         ...(config.strictMcpConfig ? { strictMcpConfig: true } : {}),
         // PwrAgent's gateway and forge policy ask for their own calls, so Claude
         // does not ask first.
@@ -1276,9 +1279,11 @@ export class ClaudeBackend {
       };
       let releasePrompt!: () => void;
       const promptReady = new Promise<void>((resolve) => { releasePrompt = resolve; });
+      let promptAccepted = false;
       const input = current.input;
       async function* prompt(): AsyncIterable<SDKUserMessage> {
         await promptReady;
+        if (!promptAccepted || controller.signal.aborted) return;
         // The turn id doubles as the prompt's UUID, which a rewind targets.
         yield { type: "user", uuid: claudePromptUuid(turn), parent_tool_use_id: null,
           session_id: session.sdkSessionId ?? session.forkFromSdkSessionId ?? freshSdkSessionId,
@@ -1291,11 +1296,21 @@ export class ClaudeBackend {
       // session totals before releasing the prompt, so this turn cannot race
       // its own baseline. If unavailable, the first result seeds the next turn.
       try {
+        // Keep MCP headers and env on stdin even when only an older CLI is
+        // available. Wait for the control reply before yielding any prompt.
+        if (deferredMcp) {
+          try { await current.query.setMcpServers(deferredMcp); }
+          catch (error) {
+            throw new Error("Claude Code could not attach MCP servers before the prompt. Update Claude Code and try again.", { cause: error });
+          }
+        }
         // A fork's totals start from its source's, so it reads them too.
         if ((session.sdkSessionId ?? session.forkFromSdkSessionId) && !session.modelUsage) {
           const usage = await claudeTelemetry(() => current.query!.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }));
           if (usage?.session?.model_usage) session.modelUsage = usage.session.model_usage;
         }
+        controller.signal.throwIfAborted();
+        promptAccepted = true;
       } finally { releasePrompt(); }
       turn.usageBaseline = session.modelUsage;
       turn.needsUsageBaseline = Boolean(session.sdkSessionId ?? session.forkFromSdkSessionId) && !session.modelUsage;
@@ -1312,7 +1327,8 @@ export class ClaudeBackend {
       turn.ending = true;
       if (live) {
         live.closing = true;
-        live.input.close();
+        try { await this.closeSession(live); }
+        catch { /* The startup failure still owns the terminal result. */ }
         // A steer accepted during startup writes its own row; let it land
         // before the failed status, so the failed status is final.
         await this.settleInputWrites(live);
@@ -2626,7 +2642,7 @@ export class ClaudeBackend {
     if (Date.now() < (this.commandProbeRetryAt.get(cwd) ?? 0)) return [];
     const probe = (async () => {
       try {
-        const executable = await this.requireInstallation();
+        const { executable } = await this.requireInstallation();
         const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
         const commands = await (this.options.readCommands ?? ((probeParams) => readClaudeMetadata({
           ...probeParams,
@@ -2667,7 +2683,7 @@ export class ClaudeBackend {
         probe = (async () => {
           try {
             const { cwd } = await this.store.read(threadId);
-            const executable = await this.requireInstallation();
+            const { executable } = await this.requireInstallation();
             const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
             return await (this.options.readMcpServers ?? readClaudeMcpServerStatus)({ executable, env, cwd });
           } finally {
@@ -3376,7 +3392,7 @@ export class ClaudeBackend {
   }
 
   private async runRewindQuery<T>(session: ClaudeSession, run: (control: Query) => Promise<T>): Promise<T> {
-    const executable = await this.requireInstallation();
+    const { executable } = await this.requireInstallation();
     const startQuery = this.options.query ?? (await loadClaudeAgentSdk()).query;
     const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
     const input = new ClaudeInputStream();
