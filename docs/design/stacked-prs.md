@@ -45,7 +45,10 @@ Missing today, and harmful:
   in other threads, and `rebase --update-refs` skips refs checked out elsewhere.
 - `merge_pull_request` enables auto-merge while checks are pending under a merge
   queue. On a layer whose base is not trunk, that merges into the parent branch.
-- Deleting a merged base branch with a push closes every open PR based on it.
+- After a parent merges, nothing retargets the layer above it. Whether GitHub
+  retargets or closes that PR when the parent's branch is deleted depends on how
+  the branch is deleted: an agent's `git push --delete`, repository auto-delete,
+  or a GitHub stack that owns the bases.
 - Nothing shows a stack. No `n/N` chip exists, the PR rail sorts by number, and
   the Star Map draws only federation links.
 
@@ -157,8 +160,9 @@ ref-moving operation runs these steps in order:
 4. **Re-plan.** Holding takes time, and an agent may commit before its turn
    ends. Take the repository's `PerKeyAsyncLock`, then gh stack's operation
    lock, then plan again. If the forecast didn't change in substance, continue.
-   If it did (a new conflict or a new publish step), release the locks and
-   return to step 2.
+   If it did (a new conflict or a new publish step), release the locks **and
+   the holds**, then return to step 2. No thread stays held while an approval
+   is outstanding: holds are placed again after it's approved.
 5. **Compare-and-swap and move.** One `update-ref --stdin` transaction against
    the re-planned `expectedTips`, then `reset --keep` in each held worktree,
    then the catalog write. Release gh stack's lock, then the repository lock.
@@ -244,7 +248,12 @@ Caller identity comes from `AgentToolCallContext`. Results use
 
 Result: `{ planId, steps[], forecast: { [branch]: "clean" | { conflict: { commit, files } } },
 affected: [{ threadId, title, branch, state, needs: "none" | "hold" | "wait_turn" | "blocked" }],
-expectedTips, push[], forge[], approval: "none" | "stack_publish" | "approve_merge" }`.
+expectedTips, push[], forge[], approval: "none" | "stack_publish" | "approve_merge" | "disabled" }`.
+
+Advertising: `apply_stack_operation` is advertised while at least one of
+`stacks`, `stack_publish` and `approve_merge` isn't `off` for the caller. A call
+whose plan needs an `off` group fails with `tools_disabled`, naming the group.
+`plan_stack_operation` reports that ahead of time as `approval: "disabled"`.
 
 `apply_stack_operation` takes `{ planId }`, or `{ operation, … }` to plan and
 apply in one call when the forecast is clean and no approval is needed. It
@@ -352,7 +361,9 @@ tip>`. Then:
 - **Linked on GitHub:** don't PATCH bases. GitHub's stack retargets them. Update
   the stack with the Stack API.
 - **No Stack API (404):** retarget the child to trunk **before** anything
-  deletes the merged branch, because deleting an open PR's base closes it.
+  deletes the merged branch. GitHub's own retarget-on-delete depends on how the
+  branch is deleted, and PwrAgent doesn't rely on it, so no layer is ever left
+  based on a branch that no longer exists.
 
 **Merging a whole stack** (`operation: "merge"`, group `approve_merge`):
 
@@ -397,15 +408,16 @@ has each one.
 - **Star Map.** A new `svg.star-map__stacks` layer under the cards draws
   parent → child edges. Edges are solid at the healthy link's 55% accent,
   dashed `--status-warning` where a layer is stale, and `--brand-purple` as a
-  merged layer leaves. The edge being replayed carries a flowing dash.
+  merged layer leaves. The edge being replayed carries a flowing dash, which
+  is hidden under reduced motion so the edge keeps its stale dashing.
   `highlight_star_map_threads` accepts a stack.
 - **Motion.** Cards re-seat in 360 ms on `cubic-bezier(.2, .8, .2, 1)`. The
   replayed branch carries an amber line. A restacked wire draws solid in 420 ms.
   Running threads show `ThinkingScanner`. Under `prefers-reduced-motion`,
   everything stops except the scanner, which **holds** mid-sweep as
-  `desktop-style-guide.md` requires. The Star Map's flowing dash stops and draws
-  solid. Under Calm motion, the loops run twice and rest. New loops get entries
-  in `reduced-motion-contract.test.ts` and `calm-motion-contract.test.ts`.
+  `desktop-style-guide.md` requires. The Star Map's flowing dash is hidden.
+  Under Calm motion, the loops run twice and rest. New loops get entries in
+  `reduced-motion-contract.test.ts` and `calm-motion-contract.test.ts`.
 
 ## 10. Failure paths
 

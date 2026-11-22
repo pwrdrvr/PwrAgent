@@ -267,7 +267,7 @@
             .card .beam { animation: none !important; transform: translateX(116%); }
             /* "Hold it" (desktop-style-guide.md › Reduced motion): the scanner parks mid-sweep, so running ≠ idle */
             .ts::after { animation: none !important; opacity: 1; transform: translateX(22px); }
-            .edge-flow { animation: none !important; stroke-dasharray: none; }
+            .edge-flow { animation: none !important; display: none; }
           }
         </style>
       </helmet>
@@ -290,7 +290,7 @@
             <div class="dv-olabel"><a class="dv-oid" href="#0b">0b</a>What goes wrong today when an agent stacks</div>
             <div class="find">
               <div class="fitem"><span class="pin">1</span><div><h4>An agent can only rebase its own worktree</h4><p>When the bottom layer takes a review fix, the agent there can’t move the branches above it. They are checked out in other threads’ worktrees, and <code>git rebase --update-refs</code> silently skips refs checked out elsewhere. Every layer’s PR quietly shows the parent’s old commits.</p></div></div>
-              <div class="fitem"><span class="pin">2</span><div><h4>Merging can close the layer above</h4><p>Deleting a merged base with <code>git push :branch</code> closes every open PR based on it. GitHub retargets children only when the branch is deleted through the merged PR’s own flow, or when a GitHub stack owns the bases.</p></div></div>
+              <div class="fitem"><span class="pin">2</span><div><h4>Merging strands the layer above</h4><p>After a parent merges, the layer above is still based on the parent’s branch, and nothing in PwrAgent retargets it. Whether GitHub retargets it or closes it when that branch is deleted depends on how and when the branch goes: an agent’s <code>git push --delete</code>, repository auto-delete, or a GitHub stack that owns the bases.</p></div></div>
               <div class="fitem"><span class="pin">3</span><div><h4>Auto-merge on a middle layer merges into its parent</h4><p><code>merge_pull_request</code> turns on auto-merge while checks are pending under a merge queue. On a layer whose base isn’t trunk, that merges into the parent branch, not into main. gh stack disables auto-merge on stacked PRs for this reason.</p></div></div>
               <div class="fitem"><span class="pin">4</span><div><h4>Nothing shows a stack</h4><p>No <code>n/N</code> chip exists. The PR rail sorts by number, and the Star Map draws only federation links. A four-thread stack looks like four unrelated threads.</p></div></div>
             </div>
@@ -475,7 +475,7 @@
               <div class="smc" style="left: 432px; top: 30px"><span class="t">Next-window banner</span><span class="m"><span class="pos-chip stale">4/4</span><span class="pr-chip none"><span class="d"></span>draft</span></span></div>
               <div style="position: absolute; left: 74px; top: 342px; display: flex; align-items: center; gap: 6px; font: 600 11px/1 var(--font-mono); color: var(--text-secondary)"><span style="width: 12px; height: 12px; border-radius: 3px; background: var(--text-muted)"></span>main</div>
             </div>
-            <p class="note">The new <code>svg.star-map__stacks</code> layer sits under the cards and above <code>.star-map__arms</code>. Edges run from parent card to child card: solid at the healthy link’s 55% accent, dashed <code>--status-warning</code> where the child needs a restack, and <code>--brand-purple</code> fading out as a merged layer leaves. During an operation, the edge being replayed carries a flowing dash. That’s the only motion on the map, and under reduced motion it stops and shows solid. <code>highlight_star_map_threads</code> takes a stack too, so an agent can say “look at this stack” in one call (the dashed tether is the lead).</p>
+            <p class="note">The new <code>svg.star-map__stacks</code> layer sits under the cards and above <code>.star-map__arms</code>. Edges run from parent card to child card: solid at the healthy link’s 55% accent, dashed <code>--status-warning</code> where the child needs a restack, and <code>--brand-purple</code> fading out as a merged layer leaves. During an operation, the edge being replayed carries a flowing dash. That’s the only motion on the map, and under reduced motion the flow is hidden and the edge keeps its dashed stale style. <code>highlight_star_map_threads</code> takes a stack too, so an agent can say “look at this stack” in one call (the dashed tether is the lead).</p>
           </div>
         </div>
       </section>
@@ -487,8 +487,8 @@
         <div class="live">
           <div class="scen">
             <span class="lb">Agents &amp; GitHub</span>
-            <button class="sbtn" type="button" onClick="{{act.amend}}" disabled="{{dis.amend}}">Review fix lands on #651</button>
-            <button class="sbtn" type="button" onClick="{{act.merge}}" disabled="{{dis.merge}}">Merge #651 on GitHub</button>
+            <button class="sbtn" type="button" onClick="{{act.amend}}" disabled="{{dis.amend}}">{{amendLabel}}</button>
+            <button class="sbtn" type="button" onClick="{{act.merge}}" disabled="{{dis.merge}}">{{mergeLabel}}</button>
             <span class="sep"></span>
             <span class="lb">Make it hard</span>
             <button class="{{raceCls}}" type="button" onClick="{{act.race}}" aria-pressed="{{racePressed}}">Race: Scheduler commits mid-wait</button>
@@ -501,7 +501,7 @@
             <div class="colhd">Threads · orbit-deploy</div>
             <div class="sb" style="width: 100%">
               <div class="trow">
-                <div class="h"><span class="tt">Ship deploy windows</span><span class="tm">lead</span></div>
+                <div class="h"><span class="tt">Ship deploy windows</span><sc-if value="{{leadRunning}}" hint-placeholder-val="{{false}}"><span class="ts"></span></sc-if><span class="tm">lead</span></div>
                 <div class="cl"><span class="pos-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10" /></svg>stack windows</span><span class="ag">Claude</span></div>
               </div>
               <div class="tray">
@@ -816,6 +816,8 @@
         u: ["0d8c6b3", "a7f21e9", "6e4b2d7", "d19a5c3", "4f0c8b1", "c2a7e95"]
       };
       const STEP_MS = 620;
+      const FILES = { m: "src/model/window.ts", s: "src/scheduler/wait.ts", a: "src/api/tenants.ts", u: "src/ui/banner.tsx" };
+      const SQUASH = ["3fa9b61", "b20e4c7", "5c81d3a"];
       function clone(o) { return JSON.parse(JSON.stringify(o)); }
       const INITIAL = {
         order: ["m", "s", "a", "u"],
@@ -825,7 +827,7 @@
         stale: {}, unpushed: {}, merged: {}, gone: {}, fresh: {},
         th: { m: "idle", s: "running", a: "idle", u: "running", lead: "idle" },
         notice: {}, got: {}, held: {},
-        trunk: "8c1d2e0", trunkMoved: false,
+        trunk: "8c1d2e0", trunkBefore: "8c1d2e0", trunkMoved: false, mergedSha: {}, merges: 0, amended: "m", pubOk: false,
         phase: "idle", kind: "", steps: [], at: -1, by: "",
         conflict: false, race: false, raced: false,
         log: [], sel: "a", toast: "", ledger: [], op: 412, approval: null
@@ -852,7 +854,7 @@
             s.stale[id] = i === fromIndex ? first : "follows " + L[s.order[i - 1]].name;
           });
         }
-        settle(s) { s.phase = "idle"; s.kind = ""; s.steps = []; s.at = -1; s.ledger = []; s.fresh = {}; s.approval = null; s.by = ""; s.held = {}; }
+        settle(s) { s.phase = "idle"; s.kind = ""; s.steps = []; s.at = -1; s.ledger = []; s.fresh = {}; s.approval = null; s.pendingApproval = null; s.pubOk = false; s.by = ""; s.held = {}; }
 
         /* ---------- things agents and GitHub do ---------- */
         amend() {
@@ -860,17 +862,18 @@
           const s = clone(this.state); this.settle(s);
           const b = s.order[0];
           s.th[b] = "running"; s.toast = "";
-          this.pushLog(s, L[b].thread, "git commit -m \"fix: reject windows longer than 24h\"", "in its own worktree");
+          this.pushLog(s, L[b].thread, "git commit -m \"" + (b === "m" ? "fix: reject windows longer than 24h" : "fix: address review") + "\"", "in its own worktree");
           this.setState(s);
           this.later(900, () => {
             const t = clone(this.state);
-            t.rev[b] = t.rev[b] + 1; t.unpushed[b] = true; t.th[b] = "idle";
+            t.rev[b] = t.rev[b] + 1; t.unpushed[b] = true; t.th[b] = "idle"; t.amended = b;
             this.markUpper(t, 1, "needs restack · parent +1");
-            this.pushLog(t, "PwrAgent", "stack health → 3 layers need restack", "catalog base ≠ parent tip");
-            t.toast = L[b].thread + " committed " + this.head(t, b) + " on " + L[b].name + ". Three layers above it now sit on the old tip.";
+            const nUp = t.order.length - 1;
+            this.pushLog(t, "PwrAgent", "stack health → " + nUp + " layers need restack", "catalog base ≠ parent tip");
+            t.toast = L[b].thread + " committed " + this.head(t, b) + " on " + L[b].name + ". " + nUp + " layers above it now sit on the old tip.";
             t.th.lead = "running";
             this.setState(t);
-            this.later(1100, () => { this.setState({ th: Object.assign(clone(this.state.th), { lead: "idle" }) }); this.restack(LEAD); });
+            this.later(1100, () => this.restack(LEAD));
           });
         }
         merge() {
@@ -879,9 +882,10 @@
           if (s0.unpushed[b]) { this.setState({ toast: "#" + s0.pr[b] + " can't merge what GitHub hasn't seen. Submit first." }); return; }
           if (this.anyStale(s0)) { this.setState({ toast: "Restack first: #" + s0.pr[b] + "'s children still sit on its old tip." }); return; }
           const s = clone(s0); this.settle(s);
-          s.merged[b] = true; s.trunk = "3fa9b61"; s.trunkMoved = true;
+          const sq = SQUASH[Math.min(s.merges, SQUASH.length - 1)];
+          s.merged[b] = true; s.mergedSha[b] = sq; s.trunkBefore = s.trunk; s.trunk = sq; s.trunkMoved = true; s.merges = s.merges + 1;
           this.markUpper(s, 1, "parent merged");
-          this.pushLog(s, "GitHub", "#" + s.pr[b] + " squash-merged as 3fa9b61", "");
+          this.pushLog(s, "GitHub", "#" + s.pr[b] + " squash-merged as " + sq, "");
           this.pushLog(s, "PwrAgent", "Continue After fired on " + L[s.order[1]].thread, "pr_merged · " + L[b].name + " · automatic");
           s.toast = "#" + s.pr[b] + " merged. The layer above was waiting on it, so stack automation staged a sync.";
           this.setState(s);
@@ -938,7 +942,7 @@
           const by = typeof byArg === "string" ? byArg : "Operator";
           const ids = s.order.filter((id) => id !== b);
           const child = ids[0];
-          const steps = [{ t: "fetch · main 8c1d2e0 → 3fa9b61", sub: "#" + s.pr[b] + " is merged by GitHub's word, not by ancestry: it was squashed.", fc: "", fcKind: "", eff: { kind: "none" } }];
+          const steps = [{ t: "fetch · main " + s.trunkBefore + " → " + s.trunk, sub: "#" + s.pr[b] + " is merged by GitHub's word, not by ancestry: it was squashed.", fc: "", fcKind: "", eff: { kind: "none" } }];
           ids.forEach((id, i) => {
             if (i === 0) steps.push(this.replayStep(s, id, "main", "--onto main " + this.head(s, b) + " skips #" + s.pr[b] + "'s commits."));
             else steps.push(this.replayStep(s, id, L[ids[i - 1]].name + "@new"));
@@ -947,13 +951,14 @@
           steps.push({ t: "re-plan · compare-and-swap " + ids.length + " expected tips", sub: "", fc: "", fcKind: "", eff: { kind: "verify", ids: ids } });
           steps.push({ t: "update-ref transaction · " + ids.length + " refs, drop " + L[b].name, sub: "Its thread is finished; its worktree is clean.", fc: "", fcKind: "", eff: { kind: "txn", ids: ids, collapse: b } });
           steps.push({ t: "worktrees follow · notify " + ids.length + " threads", sub: "", fc: "", fcKind: "", eff: { kind: "notify", ids: ids } });
-          steps.push({ t: "publish · retarget #" + s.pr[child] + " → main, push " + ids.length + " leased, atomic", sub: "Retarget before the merged branch is deleted: deleting an open PR's base closes it.", fc: "", fcKind: "", eff: { kind: "publish", retarget: child, push: ids } });
-          const t = this.stage("sync", steps, "Sync · #" + s.pr[b] + " merged", "Follow a squash merge without replaying it.", by);
+          steps.push({ t: "publish · retarget #" + s.pr[child] + " → main, push " + ids.length + " leased, atomic", sub: "Retarget first, so the layer is never based on a deleted branch, however that branch gets deleted.", fc: "", fcKind: "", eff: { kind: "publish", retarget: child, push: ids } });
+          const pending = { who: "Stack automation, for " + L[child].thread + ",", what: "retarget #" + s.pr[child] + " to main and push " + ids.length + " rewritten branches with leases" };
+          const t = this.stage("sync", steps, "Sync · #" + s.pr[b] + " merged", "Follow a squash merge without replaying it.", by, { pendingApproval: pending, syncFrom: b });
           this.pushLog(t, "PwrAgent", "plan_stack_operation({ operation: \"sync\" })", "plan op-0" + s.op + " · " + (s.conflict ? "forecast: 1 conflict" : "forecast: clean") + " · publish needs approval");
           this.setState({ log: t.log });
           if (!s.conflict) this.later(1000, () => {
             if (this.state.phase !== "plan") return;
-            this.setState({ phase: "approval", approval: { who: "Stack automation, for Scheduler waits for windows,", what: "retarget #" + s.pr[child] + " to main and push " + ids.length + " rewritten branches with leases" } });
+            this.setState({ phase: "approval", approval: pending });
           });
         }
         submit() {
@@ -978,6 +983,12 @@
         apply(who) {
           const s = clone(this.state); if (s.phase !== "plan") return;
           if (s.steps.some((x) => x.fcKind === "conflict")) { s.phase = "paused"; s.at = s.steps.findIndex((x) => x.fcKind === "conflict"); this.pushLog(s, who || LEAD, "apply_stack_operation(planId)", "refused · conflict forecast in windows/api"); this.setState(s); return; }
+          s.th.lead = "idle";
+          if (s.steps.some((x) => x.eff.kind === "publish") && !s.pubOk) {
+            s.phase = "approval"; s.approval = s.pendingApproval;
+            this.pushLog(s, who || LEAD, "pwragent.apply_stack_operation({ planId: \"op-0" + s.op + "\" })", "needs approval · stack_publish");
+            this.setState(s); return;
+          }
           s.phase = "running"; s.at = 0;
           this.pushLog(s, who || LEAD, "pwragent.apply_stack_operation({ planId: \"op-0" + s.op + "\" })", "accepted · will hold threads at safe points");
           this.setState(s);
@@ -985,7 +996,7 @@
         }
         approve() {
           const s = clone(this.state); if (s.phase !== "approval") return;
-          s.phase = "running"; s.at = 0; s.approval = null;
+          s.phase = "running"; s.at = 0; s.approval = null; s.pubOk = true;
           this.pushLog(s, "Operator", "Approve", "this plan only · not a standing grant");
           this.setState(s); this.later(STEP_MS, () => this.tick());
         }
@@ -1014,6 +1025,8 @@
               this.later(ms, () => {
                 const t = clone(this.state);
                 if (t.th[id] !== "running") return;
+                const live = t.phase === "running" && t.steps[t.at] && t.steps[t.at].eff.kind === "quiesce" && t.steps[t.at].eff.ids.indexOf(id) >= 0;
+                if (!live) { t.th[id] = "idle"; delete t.held[id]; this.setState(t); return; }
                 if (t.race && id === "s" && !t.raced) { t.rev.s = t.rev.s + 1; t.raced = true; this.pushLog(t, L.s.thread, "git commit -m \"test: window edge at midnight\"", "before its turn ended"); }
                 t.th[id] = "held"; t.held[id] = "held · restack";
                 this.pushLog(t, "PwrAgent", L[id].thread + " finished its turn", "hold placed · queued sends wait");
@@ -1053,7 +1066,7 @@
             e.ids.forEach((id) => { delete s.stale[id]; s.rev[id] = s.rev[id] + 1; s.unpushed[id] = true; s.fresh[id] = true; });
             if (e.collapse) { s.gone[e.collapse] = true; s.th[e.collapse] = "done"; s.order = s.order.filter((id) => id !== e.collapse); }
           } else if (e.kind === "notify") {
-            e.ids.forEach((id) => { s.notice[id] = true; s.got[id] = { kind: s.kind, op: s.op, sha: this.head(s, id), local: Boolean(s.localOnly), cut: Boolean(s.interrupted && s.interrupted[id]) }; s.th[id] = "idle"; delete s.held[id]; });
+            e.ids.forEach((id) => { s.notice[id] = true; s.got[id] = { kind: s.kind, op: s.op, sha: this.head(s, id), local: Boolean(s.localOnly), cut: Boolean(s.interrupted && s.interrupted[id]), from: s.kind === "sync" ? s.syncFrom : s.amended }; s.th[id] = "idle"; delete s.held[id]; });
             if (e.ids.indexOf("s") >= 0) {
               s.th.s = "running";
               this.later(2600, () => { const t = this.state; if (t.th.s === "running" && !t.held.s) this.setState({ th: Object.assign(clone(t.th), { s: "idle" }) }); });
@@ -1078,17 +1091,17 @@
           const k = s.kind;
           const led = {
             restack: ["✓ forecast was merge-tree · no worktree touched while planning", "✓ no turn was interrupted · threads held at turn end", s.replanned ? "✓ a racing commit was replanned, not overwritten" : "✓ every expected tip matched at apply", "✓ patch-ids match · undo at refs/pwrgit/undo/op-0" + s.op, "· nothing pushed · publishing is a separate approval"],
-            sync: ["✓ #651's commits skipped · 0 replayed over the squash", "✓ #652 retargeted to main before windows/model was deleted", "✓ DeployWindow model marked done · its layer left the stack", "✓ 3 threads told what moved under them"],
+            sync: k !== "sync" ? [] : (() => { const b = s.syncFrom; const ids = s.order; const child = ids[0]; return ["✓ #" + s.pr[b] + "'s commits skipped · 0 replayed over the squash", "✓ #" + s.pr[child] + " retargeted to main before " + L[b].name + " was deleted", "✓ " + L[b].thread + " marked done · its layer left the stack", "✓ " + ids.length + " threads told what moved under them"]; })(),
             submit: ["✓ pushed atomically · each lease named its expected sha", "✓ #654 opened as a draft and attached to Next-window banner", "✓ stack #12 linked on GitHub"]
           }[k] || [];
           const nCut = Object.keys(s.interrupted || {}).length;
           if (nCut && k === "restack") led.splice(1, 1, "✓ " + nCut + " turns interrupted by the operator · each thread told why");
-          if (s.localOnly) led.splice(1, 1, "· #652 not retargeted · 3 pushes not done · returned as not done");
+          if (s.localOnly) led.splice(1, 1, "· #" + s.pr[s.order[0]] + " not retargeted · " + s.order.length + " pushes not done · returned as not done");
           if (s.partial) led.splice(0, led.length, "✓ windows/scheduler restacked", "· windows/api and windows/ui unchanged · still marked", "✓ undo at refs/pwrgit/undo/op-0" + s.op);
           s.ledger = led.map((t, i) => ({ t: t, cls: t.charAt(0) === "·" ? "n" : "", delay: i * 90 }));
           const nMoved = s.steps.filter((x) => x.eff.kind === "replay").length;
-          s.toast = { restack: "Restacked " + nMoved + (nMoved === 1 ? " layer in 1 thread." : " layers across " + nMoved + " threads."), sync: "Synced: windows/model is in main, and the stack is one shorter.", submit: "Submitted. GitHub shows stack #12." }[k] || "";
-          if (s.localOnly && k === "sync") s.toast = "Synced locally. #652's retarget and the pushes wait for an approval.";
+          s.toast = { restack: "Restacked " + nMoved + (nMoved === 1 ? " layer in 1 thread." : " layers across " + nMoved + " threads."), sync: k === "sync" ? "Synced: " + L[s.syncFrom].name + " is in main, and the stack is one shorter." : "", submit: "Submitted. GitHub shows stack #12." }[k] || "";
+          if (s.localOnly && k === "sync") s.toast = "Synced locally. #" + s.pr[s.order[0]] + "'s retarget and the pushes wait for an approval.";
           s.op = s.op + 1; s.replanned = false; s.localOnly = false; s.partial = false; s.interrupted = {};
           this.setState(s);
         }
@@ -1135,7 +1148,7 @@
             const gone = idx < 0;
             const parent = gone ? "main" : this.parentOf(s, id);
             const badges = [];
-            if (s.merged[id]) badges.push({ t: "merged · squash 3fa9b61", cls: "bdg merged" });
+            if (s.merged[id]) badges.push({ t: "merged · squash " + s.mergedSha[id], cls: "bdg merged" });
             if (s.stale[id]) badges.push({ t: s.stale[id], cls: "bdg warn" });
             if (s.unpushed[id] && s.pr[id] && !s.merged[id]) badges.push({ t: "needs push", cls: "bdg push" });
             if (s.pr[id] && !s.merged[id] && s.prBase[id] !== parent) badges.push({ t: "GitHub base: " + s.prBase[id], cls: "bdg drift" });
@@ -1202,16 +1215,16 @@
           const noticeFor = (id) => {
             const name = L[id].name; const g = s.got[id];
             if (g.kind === "sync") return [
-              "Stack windows · sync after #651 merged (op-0" + g.op + ", by stack automation). Your branch " + name + " moved to " + g.sha + ".",
-              name + " now sits on " + this.parentOf(s, id) + ". " + (id !== s.order[0] ? "Its PR base is unchanged." : g.local ? "#652 still targets windows/model on GitHub: the retarget and push wait for the operator's approval." : "#652's base is main; it was retargeted before windows/model was deleted."),
-              "Your commits replayed cleanly; patch-ids match. main gained 3fa9b61 (the squash of #651); none of its files overlap yours.",
+              "Stack windows · sync after #" + s.pr[g.from] + " merged (op-0" + g.op + ", by stack automation). Your branch " + name + " moved to " + g.sha + ".",
+              name + " now sits on " + this.parentOf(s, id) + ". " + (id !== s.order[0] ? "Its PR base is unchanged." : g.local ? "#" + s.pr[id] + " still targets " + L[g.from].name + " on GitHub: the retarget and push wait for the operator's approval." : "#" + s.pr[id] + "'s base is main; it was retargeted before " + L[g.from].name + " was deleted."),
+              "Your commits replayed cleanly; patch-ids match. main gained " + s.mergedSha[g.from] + " (the squash of #" + s.pr[g.from] + "); none of its files overlap yours.",
               "Your worktree followed with git reset --keep. Uncommitted files kept: none."
             ];
             return [
               (g.cut ? "Your turn was interrupted by the operator so the stack could move. PwrAgent continues this thread next. " : "") + "Stack windows was restacked by " + LEAD + " (op-0" + g.op + "). Your branch " + name + " moved to " + g.sha + ".",
-              "Below you, windows/model gained 1 commit: fix: reject windows longer than 24h. It touches src/model/window.ts, which your layer imports.",
+              "Below you, " + L[g.from].name + " gained 1 commit: " + (g.from === "m" ? "fix: reject windows longer than 24h" : "fix: address review") + ". It touches " + FILES[g.from] + ", which your layer imports.",
               "Your " + L[id].commits + " commits replayed cleanly; patch-ids match. Your worktree followed with git reset --keep; uncommitted files kept: " + (id === "s" ? "src/scheduler/notes.md" : "none") + ".",
-              "Files you read this turn may have changed under you: reread src/model/window.ts before relying on it. Don't rebase this branch yourself. Call plan_stack_operation instead. Undo: refs/pwrgit/undo/op-0" + g.op + "."
+              "Files you read this turn may have changed under you: reread " + FILES[g.from] + " before relying on it. Don't rebase this branch yourself. Call plan_stack_operation instead. Undo: refs/pwrgit/undo/op-0" + g.op + "."
             ];
           };
           const selNotice = Boolean(s.got[sel]);
@@ -1237,6 +1250,9 @@
             log: s.log, hasLog: s.log.length > 0, noLog: s.log.length === 0,
             toast: s.toast, hasToast: Boolean(s.toast),
             selTitle: L[sel].thread, selAgent: L[sel].agent,
+            leadRunning: s.th.lead === "running",
+            amendLabel: "Review fix lands on #" + (s.pr[s.order[0]] || "—"),
+            mergeLabel: "Merge #" + (s.pr[s.order[0]] || "—") + " on GitHub",
             hasNotice: Boolean(selNotice), noNotice: !selNotice,
             noticeLines: selNotice ? noticeFor(sel).map((t) => ({ t: t })) : [],
             conflictCls: "sbtn" + (s.conflict ? " on" : ""), conflictPressed: s.conflict ? "true" : "false",

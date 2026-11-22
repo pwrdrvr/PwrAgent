@@ -137,8 +137,9 @@ with the same content.
   that agents operate across threads, with a live prototype in turn 4. It was
   written for the project, now on Claude Artifacts
   (<https://claude.ai/artifact/R3JdNvJfakiuVBCYSaDtR6#page-Stacked-PRs-UX-Review>),
-  and copied here the same day. Its styles are inline and it loads only
-  `support.js`, so it renders here unchanged. The engineering plan is
+  and copied here the same day. Its styles are inline. It loads `support.js`
+  from this directory and the Geist fonts from Google Fonts, so it renders here
+  unchanged when online. The engineering plan is
   [`../stacked-prs.md`](../stacked-prs.md). Repository names, branches, PR
   numbers and shas are invented.
 
