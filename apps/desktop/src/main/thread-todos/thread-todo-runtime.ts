@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { assertMergeNotHeld } from "../app-server/thread-dependency-merge-hold";
 import { ciApprovalsForDependency } from "../app-server/thread-dependency-ci-runs";
@@ -767,7 +768,8 @@ export function createThreadTodoRunners(params: {
         // The lists draw the card's thread as starting while its worktree
         // and setup run; the thread's own row takes the slot when it lands.
         pendingStart: {
-          startId: `thread-todo:${todo.id}`,
+          startId: randomUUID(),
+          prompt: action.prompt,
           // The row shows the first line of the prompt when the card has no title.
           title: action.title?.trim() || todo.title?.trim() || action.prompt,
           ...(project ? { directoryKey: project.key, directoryLabel: project.label } : {}),

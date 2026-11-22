@@ -2244,7 +2244,7 @@ export type AppServerMcpElicitationRequestNotification = {
   };
 };
 
-export type AppServerPendingThreadStartPhase = "starting" | "landed" | "ended";
+export type AppServerPendingThreadStartPhase = "starting" | "setup" | "landed" | "ended";
 
 /**
  * What a list needs to draw a start in the slot its thread will take. The
@@ -2252,10 +2252,12 @@ export type AppServerPendingThreadStartPhase = "starting" | "landed" | "ended";
  * which does not exist yet.
  */
 export type AppServerPendingThreadStart = {
-  /** The same id on every phase of one start. */
+  /** A unique id for this attempt, shared by every phase. */
   startId: string;
   title: string;
   submittedAt: number;
+  /** The submitted message shown while the thread is starting. */
+  prompt?: string;
   backend: AppServerBackendKind;
   model?: string;
   workMode?: LaunchpadWorkMode;
@@ -2273,6 +2275,15 @@ export type AppServerPendingThreadStart = {
    * the new thread lands.
    */
   progressThread?: { backend: AppServerBackendKind; threadId: string };
+};
+
+export type AppServerPendingThreadStartReport = {
+  start: AppServerPendingThreadStart;
+  phase: AppServerPendingThreadStartPhase;
+  createdThreadId?: string;
+  /** Latest setup state, with bounded cumulative output. */
+  setupProgress?: import("./agent").CodexEnvironmentSetupProgressEvent;
+  setupFailure?: import("./agent").CodexEnvironmentStartupFailure;
 };
 
 export type AppServerNotification =
@@ -2829,12 +2840,7 @@ export type AppServerNotification =
        * `ended` exactly once, last, after any rollback.
        */
       method: "thread/start/pending";
-      params: {
-        start: AppServerPendingThreadStart;
-        phase: AppServerPendingThreadStartPhase;
-        /** The created thread. Set on `landed`, and on `ended` after it. */
-        createdThreadId?: string;
-      };
+      params: AppServerPendingThreadStartReport;
     }
   | {
       method: "warning";

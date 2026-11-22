@@ -2,9 +2,10 @@ import { federatedThreadIdentityKey } from "@pwragent/shared/contracts/federatio
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import type {
   AppServerBackendKind,
-  AppServerNotification,
+  AppServerPendingThreadStartReport,
   AppServerPendingThreadStart,
 } from "@pwragent/shared/contracts/normalized-app-server";
+import { applyLaunchpadEnvironmentSetupProgress, type LaunchpadEnvironmentSetupProgress } from "../../lib/launchpad-setup-progress";
 import type { PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
 
 /**
@@ -22,11 +23,16 @@ export type PendingThreadStart = {
   createdThreadId?: string;
   /** The owner finished the start. A landed start stays until its row is read. */
   ended?: boolean;
+  setupProgress?: LaunchpadEnvironmentSetupProgress;
 };
 
-export type PendingThreadStartReport = Extract<AppServerNotification, { method: "thread/start/pending" }>["params"];
+export type PendingThreadStartReport = AppServerPendingThreadStartReport;
 
 const SELECTION_PREFIX = "pending-thread-start:";
+
+export function pendingThreadStartSelectionKey(startId: string): string {
+  return `${SELECTION_PREFIX}${startId}`;
+}
 
 export function isPendingThreadStartSelectionKey(selectionKey: string | undefined): boolean {
   return selectionKey?.startsWith(SELECTION_PREFIX) === true;
@@ -51,8 +57,12 @@ export function applyPendingThreadStartReport(
     // Nothing was created: the row goes at once.
     return index >= 0 ? starts.filter((_, at) => at !== index) : starts;
   }
+  const setupProgress = report.setupProgress
+    ? applyLaunchpadEnvironmentSetupProgress(current?.setupProgress, report.setupProgress)
+    : current?.setupProgress;
   const next: PendingThreadStart = {
     start: current?.start ?? start,
+    ...(setupProgress ? { setupProgress } : {}),
     ...(landedThreadId ? { createdThreadId: landedThreadId } : {}),
     ...(phase === "ended" ? { ended: true } : {}),
   };
@@ -95,18 +105,19 @@ export function pendingThreadStartRows(
   starts: readonly PendingThreadStart[],
   localInstanceId: string | undefined,
 ): PendingLaunchpadCreation[] {
-  return starts.map(({ start, createdThreadId }) => {
+  return starts.map(({ start, createdThreadId, setupProgress }) => {
     const directoryPath = start.cwd?.trim() || undefined;
     const directoryKey = start.directoryKey ?? (directoryPath ? `directory:${directoryPath}` : "");
     const directoryLabel = start.directoryLabel || pathLabel(directoryPath) || "No project";
-    const selectionKey = `${SELECTION_PREFIX}${start.startId}`;
+    const selectionKey = pendingThreadStartSelectionKey(start.startId);
     return {
       operationId: start.startId,
       submittedAt: start.submittedAt,
       selectionKey,
       directoryKey,
       directoryLabel,
-      setupProgressKey: selectionKey,
+      setupProgressKey: start.startId,
+      ...(setupProgress ? { setupProgress } : {}),
       launchpad: {
         backend: start.backend,
         // Not shown on a starting row; the thread's own row shows its access.
@@ -135,7 +146,7 @@ export function pendingThreadStartRows(
         ? { threadKey: buildThreadIdentityKey(start.backend, createdThreadId) }
         : {}),
       title: start.title,
-      input: [],
+      input: start.prompt === undefined ? [] : [{ type: "text", text: start.prompt }],
     };
   });
 }
@@ -149,7 +160,7 @@ export function pendingThreadStartOpenTarget(
   starts: readonly PendingThreadStart[],
   selectionKey: string,
 ): { backend: AppServerBackendKind; threadId: string } | undefined {
-  const entry = starts.find(({ start }) => `${SELECTION_PREFIX}${start.startId}` === selectionKey);
+  const entry = starts.find(({ start }) => pendingThreadStartSelectionKey(start.startId) === selectionKey);
   if (!entry) return undefined;
   if (entry.createdThreadId) return { backend: entry.start.backend, threadId: entry.createdThreadId };
   return entry.start.progressThread;

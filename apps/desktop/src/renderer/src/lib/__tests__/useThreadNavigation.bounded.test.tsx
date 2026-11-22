@@ -6,6 +6,7 @@ import {
   DEFAULT_PROJECT_FORGE_AUTOMATION,
   type ProjectForgeAutomation,
 } from "@pwragent/shared/project-forge-automation";
+import type { AppServerPendingThreadStartReport } from "@pwragent/shared/contracts/normalized-app-server";
 import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import {
   buildPullRequestStatusKey,
@@ -55,6 +56,65 @@ beforeEach(() => {
   vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
 });
 afterEach(() => vi.restoreAllMocks());
+
+it("opens a start read on mount and follows it to the created thread", async () => {
+  const f = fixture();
+  const listeners = new Set<(event: AgentEvent) => void>();
+  const report: AppServerPendingThreadStartReport = {
+    phase: "starting",
+    start: {
+      startId: "card-start", backend: "codex", submittedAt: 1000, title: "Card title",
+      prompt: "Check the recorder.", progressThread: { backend: "codex", threadId: "thread-0" },
+    },
+  };
+  const api: DesktopApi = { ...f.api,
+    listPendingThreadStarts: async () => [report],
+    onAgentEvent: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
+  };
+  const { result } = renderHook(() => useThreadNavigation(api));
+  await waitFor(() => expect(result.current.pendingThreadStartRows).toHaveLength(1));
+  const [starting] = result.current.pendingThreadStartRows;
+  expect(starting?.input).toEqual([{ type: "text", text: "Check the recorder." }]);
+  act(() => result.current.selectPendingLaunchpad(starting!.selectionKey));
+  expect(result.current.selectedItemKey).toBe(starting!.selectionKey);
+  expect(result.current.selectedThreadKey).toBeUndefined();
+  await act(async () => {
+    for (const listener of listeners) listener({ backend: "codex", notification: {
+      method: "thread/start/pending", params: { ...report, phase: "ended", createdThreadId: "thread-1",
+        setupFailure: { message: "Setup exited 1", phase: "setup", worktreeCleanupAvailable: true } },
+    } });
+  });
+  expect(result.current.selectedThreadKey).toBe("codex:thread-1");
+  expect(result.current.selectedPendingThreadStartFailure).toMatchObject({ message: "Setup exited 1" });
+  act(() => result.current.dismissPendingThreadStartFailure());
+  expect(result.current.selectedPendingThreadStartFailure).toBeUndefined();
+});
+
+it("keeps a refused start gone when its in-flight snapshot arrives late", async () => {
+  const f = fixture();
+  const listeners = new Set<(event: AgentEvent) => void>();
+  const report: AppServerPendingThreadStartReport = {
+    phase: "starting", start: { startId: "refused", backend: "codex", submittedAt: 1000, title: "Card title" },
+  };
+  const snapshot = Promise.withResolvers<AppServerPendingThreadStartReport[]>();
+  const api: DesktopApi = { ...f.api,
+    listPendingThreadStarts: () => snapshot.promise,
+    onAgentEvent: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
+  };
+  const { result } = renderHook(() => useThreadNavigation(api));
+  const publish = (phase: "starting" | "ended") => {
+    for (const listener of listeners) listener({ backend: "codex", notification: {
+      method: "thread/start/pending", params: { ...report, phase },
+    } });
+  };
+  act(() => publish("starting"));
+  expect(result.current.pendingThreadStartRows).toHaveLength(1);
+  await act(async () => {
+    publish("ended");
+    snapshot.resolve([report]);
+  });
+  expect(result.current.pendingThreadStartRows).toHaveLength(0);
+});
 
 it("does not list the local viewer for repeated births or reconnects from an unmounted owner", async () => {
   const f = fixture();

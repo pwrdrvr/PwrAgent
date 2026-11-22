@@ -184,14 +184,15 @@ Read this before changing thread lenses, Attention membership/order, unread stat
 - A thread that is still starting has a starting row in the slot its thread will take.
 - The thread's own row takes that slot once it renders (`selectUnlandedStartingThreads`). No frame shows both rows or neither.
 - A launchpad draws its own starting row, in the window that sent it.
-- A start with no launchpad passes `pendingStart` to `startThread`. A to-do card's Start thread does this, so its row shows while its worktree and environment setup run.
+- To-do card starts and clean handoffs with a new worktree or requested environment pass `pendingStart` to `startThread`. Their rows appear before worktree preparation and environment setup.
 - The owner reports such a start with `thread/start/pending`:
   - `starting` before the worktree is prepared.
-  - `landed` with the thread id once the provider creates it, before the owner announces the thread (its parent, pin, or `thread/started`). Codex sends its own `thread/started` during the start request. If a list reads the new row on that event before `landed` arrives, both rows show until it does.
+  - `setup` with the latest environment setup progress, keyed to the start.
+  - `landed` with the thread id once the provider creates it, before the owner announces the thread (its parent, pin, or `thread/started`). See [the Codex start-order capture](../apps/desktop/docs/protocol-captures.md#codex-thread-start-and-navigation).
   - `ended` exactly once, last, after a refused start has rolled its worktree back.
 - A refused start's row goes at `ended`. A landed start's row stays until a read after `ended` brings in the thread's own row.
-- The report is not thread state; it has no row in the state DB. Only this machine's windows draw it. A window opened during the start does not.
-- Selecting the row opens the thread whose to-do tray reports the start. Once it has landed, it opens the new thread.
+- The owner keeps in-flight reports in memory. Local windows subscribe to live reports before reading that snapshot. A terminal report wins over a late snapshot and the newest setup sequence wins over older output. Federation viewers see the created thread through regular navigation.
+- Selecting a to-do start opens its submitted prompt, elapsed time, and live setup output. Completing the start opens the created thread. A refused start returns to the source thread. If setup failed and the thread was created, the thread keeps a dismissible setup error in windows that saw the start finish. A clean handoff's row opens its source while it is still starting.
 - `thread-start-pending-row.property.test.ts` and `pending-thread-starts.test.ts` hold these rules.
 
 ### Group archive

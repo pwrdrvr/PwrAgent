@@ -42,7 +42,9 @@ type Outcome = {
 
 type LogEntry =
   | { kind: "effect"; start: number; effect: "prepare" | "prepared" | "setup" | "set-up" | "provider" | "provided" | "rollback" }
-  | { kind: "pending"; start: number; phase: string; createdThreadId?: string }
+  | { kind: "pending"; start: number; phase: string; createdThreadId?: string; setupFailure?: string }
+  | { kind: "snapshot"; start: number; phase: string; starts: string[] }
+  | { kind: "progress"; start: number; output: string | undefined }
   | { kind: "parent-set"; threadId: string }
   | { kind: "settled"; start: number; ok: boolean; setupFailure: boolean };
 
@@ -98,6 +100,10 @@ async function runStarts(scheduler: fc.Scheduler, outcomes: readonly Outcome[]):
   vi.spyOn(directoryService, "buildForkedCodexEnvironmentRuntime").mockImplementation(async (params) => {
     const start = startIndexOf(params.cwd);
     log.push({ kind: "effect", start, effect: "setup" });
+    params.onSetupProgress?.({
+      at: 1, environmentId: "environment", environmentName: "Repo Environment",
+      command: "echo setup", phase: "stdout", chunk: `setup for ${start}`,
+    });
     await step();
     const runtime = { ...sourceRuntime, cwd: params.cwd };
     if (outcomes[start]!.setup === "failed") {
@@ -109,9 +115,15 @@ async function runStarts(scheduler: fc.Scheduler, outcomes: readonly Outcome[]):
   registry.onEvent((event: AgentEvent) => {
     const notification = event.notification as AppServerNotification;
     if (notification.method === "thread/start/pending") {
-      const { start, phase, createdThreadId } = notification.params as PendingReport;
+      const { start, phase, createdThreadId, setupProgress, setupFailure } = notification.params as PendingReport;
+      const index = Number(start.startId.replace("card-", ""));
+      if (setupProgress && phase === "setup") {
+        log.push({ kind: "progress", start: index, output: setupProgress.output });
+      }
       log.push({ kind: "pending", start: Number(start.startId.replace("card-", "")), phase,
-        ...(createdThreadId ? { createdThreadId } : {}) });
+        ...(createdThreadId ? { createdThreadId } : {}), ...(setupFailure ? { setupFailure: setupFailure.message } : {}) });
+      const snapshot = registry.listPendingThreadStarts?.();
+      log.push({ kind: "snapshot", start: index, phase, starts: snapshot?.map((entry) => entry.start.startId) ?? [] });
     } else if (notification.method === "thread/parent/set") {
       log.push({ kind: "parent-set", threadId: (notification.params as { threadId: string }).threadId });
     }
@@ -163,6 +175,7 @@ function expectStartOrder(log: readonly LogEntry[], start: number, outcome: Outc
   expect(landed, `start ${start} lands once`).toHaveLength(1);
   expect(landed[0]!.createdThreadId).toBe(threadId);
   expect(ended[0]!.createdThreadId).toBe(threadId);
+  expect(ended[0]!.setupFailure).toBe(outcome.setup === "failed" ? "echo setup exited 1" : undefined);
   const landedAt = log.indexOf(landed[0]!);
   expect(landedAt).toBeGreaterThan(at((entry) => ours(entry) && entry.kind === "effect" && entry.effect === "provided"));
   const parentSetAt = at((entry) => entry.kind === "parent-set" && entry.threadId === threadId);
@@ -171,6 +184,22 @@ function expectStartOrder(log: readonly LogEntry[], start: number, outcome: Outc
   // The setup's failure stays on the started thread.
   const settled = log.find((entry): entry is Extract<LogEntry, { kind: "settled" }> => entry.kind === "settled" && entry.start === start)!;
   expect(settled).toMatchObject({ ok: true, setupFailure: outcome.setup === "failed" });
+}
+
+function expectInFlightStarts(log: readonly LogEntry[]): void {
+  for (const entry of log) {
+    if (entry.kind !== "snapshot") continue;
+    expect(entry.starts.includes(`card-${entry.start}`)).toBe(entry.phase !== "ended");
+  }
+}
+
+function expectSetupProgress(log: readonly LogEntry[], outcomes: readonly Outcome[]): void {
+  outcomes.forEach((outcome, start) => {
+    const progress = log.filter((entry) => entry.kind === "progress" && entry.start === start);
+    expect(progress).toEqual(outcome.worktree === "ok" && outcome.setup !== "none"
+      ? [{ kind: "progress", start, output: `setup for ${start}` }]
+      : []);
+  });
 }
 
 describe("pending thread start reports", () => {
@@ -182,6 +211,31 @@ describe("pending thread start reports", () => {
       }),
       { numRuns: 40 },
     );
+  });
+
+  const oneSetup: Outcome = { worktree: "ok", setup: "ok", provider: "ok", parent: false };
+
+  it("late windows can read exactly the starts that have not ended", async () => {
+    await fc.assert(fc.asyncProperty(fc.scheduler(), fc.array(outcomeArbitrary, { minLength: 1, maxLength: 3 }),
+      async (scheduler, outcomes) => expectInFlightStarts(await runStarts(scheduler, outcomes))), { numRuns: 25 });
+  });
+
+  it("a window opening during one start sees that start until ended", async () => {
+    expectInFlightStarts(await runStarts(fc.schedulerFor([1, 2]), [{ ...oneSetup, setup: "none" }]));
+  });
+
+  it("keys setup output to the right start during concurrent preparations", async () => {
+    await fc.assert(fc.asyncProperty(fc.scheduler(), fc.array(outcomeArbitrary, { minLength: 1, maxLength: 3 }),
+      async (scheduler, outcomes) => expectSetupProgress(await runStarts(scheduler, outcomes), outcomes)), { numRuns: 25 });
+  });
+
+  it("one setup chunk is visible before its thread exists", async () => {
+    expectSetupProgress(await runStarts(fc.schedulerFor([1, 2, 3]), [oneSetup]), [oneSetup]);
+  });
+
+  it("keeps a failed setup on the terminal report after the thread is created", async () => {
+    const failedSetup = { ...oneSetup, setup: "failed" as const };
+    expectStartOrder(await runStarts(fc.schedulerFor([1, 2, 3]), [failedSetup]), 0, failedSetup);
   });
 
   it("reports nothing for a start that asks for no row", async () => {

@@ -80,3 +80,24 @@ Use this when an account type appears to expose incomplete quota or usage
 information. The JSONL output contains every protocol frame and can include
 account identity, local paths, prompts, and model output. Keep captures under
 `.local/`, which is gitignored; never commit a raw account capture.
+
+### Codex thread start and navigation
+
+The 2026-11-22 capture of Codex CLI 0.169.0 used an isolated empty Codex
+home and a disposable cwd. It initialized stdio with `experimentalApi`,
+sent 12 non-ephemeral `thread/start` requests with `threadSource: "user"`,
+and sent a navigation-shaped `thread/list` on receipt of each matching
+`thread/started` notification. The list requested `useStateDbOnly: true`,
+`sortKey: "updated_at"`, and `sourceKinds: ["cli", "vscode"]`. There was no
+first turn, matching the interval before PwrAgent can report that a start
+has landed.
+
+In all 12 trials the start response arrived before the notification. The
+list triggered by the notification and a second list after the response
+omitted all 12 new IDs. `thread/loaded/list` found each new ID, confirming
+that Codex had created the thread. The result is specific to the captured
+build and request path.
+
+Raw capture (ignored): `apps/desktop/.local/protocol-captures/thread-start-order/wire-state-db.jsonl`.
+The first trial's frames 4–13 show the start request, response, notification,
+and the two list reads followed by the loaded-thread read.

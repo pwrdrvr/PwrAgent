@@ -237,7 +237,7 @@ export interface RegistryHostPorts {
      * starting row (`thread/start/pending`). For callers with no row of
      * their own: a launchpad draws its own.
      */
-    pendingStart?: Pick<AppServerPendingThreadStart, "startId" | "title" | "directoryKey" | "directoryLabel" | "progressThread">;
+    pendingStart?: Pick<AppServerPendingThreadStart, "startId" | "title" | "directoryKey" | "directoryLabel" | "progressThread" | "prompt">;
   }): Promise<StartThreadResponse>;
   startTurn(params: {
     backend: AppServerBackendKind;

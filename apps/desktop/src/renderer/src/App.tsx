@@ -2109,7 +2109,10 @@ function DesktopAppShell(props: {
   const threadSearchState = useThreadSearchPanelState();
   // Setup progress replaces a creation's object many times a second. Read
   // only the fields history uses, so those updates do not touch history.
-  const selectedStartingCreation = navigation.pendingLaunchpadCreations.find(
+  const selectedPendingThreadStart = navigation.pendingThreadStartRows.find(
+    (creation) => creation.selectionKey === navigation.selectedItemKey,
+  );
+  const selectedStartingCreation = selectedPendingThreadStart ?? navigation.pendingLaunchpadCreations.find(
     (creation) => creation.selectionKey === navigation.selectedItemKey,
   );
   const selectedStartingCreationId = selectedStartingCreation?.operationId;
@@ -2121,7 +2124,7 @@ function DesktopAppShell(props: {
     if (mainView === "search") {
       return { view: "search", label: "Search" };
     }
-    if (mainView === "thread" && navigation.selectedLaunchpad) {
+    if (mainView === "thread" && (navigation.selectedLaunchpad || selectedStartingCreationId !== undefined)) {
       // A peer's launchpad session is keyed by the peer's own directory key,
       // which only that peer can reopen, so its entry names the machine.
       // Sub-thread launchpads aimed at a peer live in this window's own
@@ -2138,6 +2141,7 @@ function DesktopAppShell(props: {
           ...(selectedStartingLabel ? { label: selectedStartingLabel } : {}),
         };
       }
+      if (!navigation.selectedLaunchpad) return undefined;
       const peerLabel = peerTarget
         ? newThreadFederationTargets.find((target) =>
           target.instanceId === peerTarget.instanceId)?.label
@@ -2180,7 +2184,7 @@ function DesktopAppShell(props: {
   ]);
   // Keyed by what history reads, for the same reason as above.
   const historyStartingThreadsSignature = JSON.stringify(
-    navigation.pendingLaunchpadCreations.map((creation) =>
+    [...navigation.pendingLaunchpadCreations, ...navigation.pendingThreadStartRows].map((creation) =>
       [creation.operationId, creation.threadKey ?? null]),
   );
   const historyStartingThreads = useMemo(
@@ -2332,7 +2336,7 @@ function DesktopAppShell(props: {
       }
       setMainView("thread", () => {
         if (location.view === "starting") {
-          const creation = navigation.pendingLaunchpadCreations.find((candidate) =>
+          const creation = [...navigation.pendingLaunchpadCreations, ...navigation.pendingThreadStartRows].find((candidate) =>
             candidate.operationId === location.creationId);
           if (creation) {
             navigation.selectPendingLaunchpad(creation.selectionKey);
@@ -4233,6 +4237,9 @@ function DesktopAppShell(props: {
         onForkThread: navigation.forkThread,
         onCreateSubthread: navigation.createSubthread,
         readThreadWorktreeAvailability: navigation.readThreadWorktreeAvailability,
+        pendingThreadStart: selectedPendingThreadStart,
+        pendingThreadStartFailure: navigation.selectedPendingThreadStartFailure,
+        onDismissPendingThreadStartFailure: navigation.dismissPendingThreadStartFailure,
         pendingLaunchpadCreation: navigation.pendingLaunchpadCreations.find(
           (creation) => creation.selectionKey === navigation.selectedItemKey,
         ),
@@ -4660,10 +4667,13 @@ function DesktopAppShell(props: {
             subthreadLaunchpadDrafts={navigation.subthreadLaunchpadDrafts}
             onSelectPendingLaunchpad={(entry) => {
               if (isPendingThreadStartSelectionKey(entry.selectionKey)) {
-                // No starting view: open its thread, or the thread whose
-                // to-do tray reports the start.
-                const target = navigation.pendingThreadStartTarget(entry.selectionKey);
-                if (target) showThreadFromLink(target);
+                if (!isSubthreadLaunchpadDraft(entry) && entry.input.length && !entry.threadKey) {
+                  setMainView("thread");
+                  navigation.selectPendingLaunchpad(entry.selectionKey);
+                } else {
+                  const target = navigation.pendingThreadStartTarget(entry.selectionKey);
+                  if (target) showThreadFromLink(target);
+                }
                 return;
               }
               setMainView("thread");

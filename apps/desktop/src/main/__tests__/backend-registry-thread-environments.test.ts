@@ -29,6 +29,7 @@ import {
 import type {
   AcpBackendId,
   AppServerPendingRequestNotification,
+  AppServerPendingThreadStartReport,
   CodexThreadEnvironmentRuntime,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
@@ -3487,6 +3488,27 @@ command = "pnpm dev"
     setupStatus: "completed",
     setupCommand: "pnpm install",
     shellEnvironment: { PATH: `${cwd}/node_modules/.bin:/usr/bin` },
+  });
+
+  it("reports a clean handoff from before workspace preparation until the child exists", async () => {
+    const fixture = await environmentHandoffFixture({ prefix: "pwragent-handoff-starting-" });
+    try {
+      const phases: string[] = [];
+      fixture.registry.onEvent(({ notification }) => {
+        if (notification.method !== "thread/start/pending") return;
+        const { phase, start } = notification.params as AppServerPendingThreadStartReport;
+        phases.push(phase);
+        expect(start.title).toBe("Check the recorder");
+        expect(start.progressThread).toEqual({ backend: "codex", threadId: "ordinary-thread" });
+        if (phase === "starting") expect(fixture.prepareLaunchpadWorkspace).not.toHaveBeenCalled();
+      });
+      const { response } = await fixture.handoff({ title: "Check the recorder" });
+      expect(response).toMatchObject({ success: true });
+      expect(fixture.prepareLaunchpadWorkspace).toHaveBeenCalledOnce();
+      expect(phases).toEqual(["starting", "landed", "ended"]);
+    } finally {
+      await fixture.cleanup();
+    }
   });
 
   it("runs a named environment's setup in a Claude handoff child's new worktree", async () => {

@@ -7294,7 +7294,7 @@ export class DesktopFederationRuntime {
   }
 
   private forwardLocalBackendEvent(event: AgentEvent): void {
-    if (!this.router) return;
+    if (!this.router || event.notification.method === "thread/start/pending") return;
     const invalidation = navigationInvalidationForLocalEvent(event);
     if (invalidation) this.forwardLocalBackendEvent(invalidation);
     const ownerInstanceId = this.ensureLocalInstanceId();

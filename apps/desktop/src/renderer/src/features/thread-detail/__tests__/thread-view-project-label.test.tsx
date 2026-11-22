@@ -6,6 +6,7 @@ import type {
   NavigationDirectorySummary,
   NavigationThreadSummary,
 } from "@pwragent/shared/contracts/navigation";
+import { pendingThreadStartRows } from "../../navigation/pending-thread-starts";
 import { useIntegratedTerminals } from "../../../lib/useIntegratedTerminals";
 import { useThreadNavigation } from "../../../lib/useThreadNavigation";
 import { navigationOwnerApiFixture } from "../../../test/navigation-owner-api-fixture";
@@ -49,6 +50,35 @@ function directory(label: string): NavigationDirectorySummary {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+});
+
+it("shows a read-only starting transcript and setup output for a to-do start", () => {
+  const [creation] = pendingThreadStartRows([{
+    start: { startId: "start-1", backend: "codex", submittedAt: 1000, title: "Review the import", prompt: "Check the fixture." },
+    setupProgress: { directoryKey: "start-1", environmentId: "fixtures", environmentName: "Fixtures",
+      command: "echo ready", startedAt: 1000, status: "running", output: "Fixture ready" },
+  }], undefined);
+  render(<ThreadView {...baseProps} pendingThreadStart={creation} />);
+  expect(screen.getByRole("article", { name: "Submitted message" })).toHaveTextContent("Check the fixture.");
+  expect(screen.getByText("Fixture ready")).toBeVisible();
+  expect(screen.getByText(/^Starting · /)).toBeVisible();
+  expect(screen.queryByRole("textbox")).toBeNull();
+  expect(screen.queryByRole("button", { name: /cancel/i })).toBeNull();
+});
+
+it("shows the to-do setup failure after its first turn has started", () => {
+  const dismiss = vi.fn();
+  render(<ThreadView {...baseProps}
+    selectedThread={thread("created", "Catalog")} activeTurnId="turn-1" messageCount={1}
+    pendingThreadStartFailure={{ message: "Catalog setup exited 1", phase: "setup", worktreeCleanupAvailable: true }}
+    onDismissPendingThreadStartFailure={dismiss}
+  />);
+  const setup = screen.getByRole("alert", { name: "Env setup failed" });
+  fireEvent.click(within(setup).getByRole("button", { name: /env setup failed/i }));
+  expect(within(setup).getByText("Catalog setup exited 1")).toBeVisible();
+  expect(within(setup).queryByRole("button", { name: "Continue" })).toBeNull();
+  fireEvent.click(within(setup).getByRole("button", { name: /dismiss/i }));
+  expect(dismiss).toHaveBeenCalledOnce();
 });
 
 describe("ThreadView project breadcrumb", () => {

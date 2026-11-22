@@ -205,6 +205,7 @@ import {
   type AppServerNotification,
   type AppServerPendingThreadStart,
   type AppServerPendingThreadStartPhase,
+  type AppServerPendingThreadStartReport,
   type AppServerPendingRequestNotification,
   type AppServerReadThreadRequest,
   type AppServerReadThreadResponse,
@@ -1001,8 +1002,9 @@ class CompactionRecoveryRevoked extends Error {
 
 /** One start's `thread/start/pending` reports; see `beginPendingThreadStart`. */
 type PendingThreadStartReporter = {
-  report(phase: Exclude<AppServerPendingThreadStartPhase, "landed">): Promise<void>;
-  land(threadId: string): Promise<void>;
+  report(phase: "starting" | "ended"): Promise<void>;
+  setupProgress: (event: Omit<CodexEnvironmentSetupProgressEvent, "directoryKey">) => void;
+  land(threadId: string, failure?: CodexEnvironmentStartupFailure): Promise<void>;
 };
 
 type IdleSubmission = {
@@ -1152,6 +1154,7 @@ export class DesktopBackendRegistry {
   private readonly restartGateStatusListeners = new Set<(status: RestartGateStatus) => void>();
   private restartDispatchStarted = false;
   private readonly restartDispatchPlanOptions: Omit<RestartDispatchPlanOptions, "now">;
+  private readonly inFlightThreadStarts = new Map<string, AppServerPendingThreadStartReport>();
   private readonly pendingStartedThreads = new Map<string, AppServerThreadSummary>();
   private readonly acceptedHandoffTaskRequests = new Map<
     string,
@@ -8167,7 +8170,7 @@ export class DesktopBackendRegistry {
      * starting row (`thread/start/pending`). For callers with no row of
      * their own: a launchpad draws its own.
      */
-    pendingStart?: Pick<AppServerPendingThreadStart, "startId" | "title" | "directoryKey" | "directoryLabel" | "progressThread">;
+    pendingStart?: Pick<AppServerPendingThreadStart, "startId" | "title" | "directoryKey" | "directoryLabel" | "progressThread" | "prompt">;
   }): Promise<StartThreadResponse> {
     assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
     const pending = params.pendingStart ? this.beginPendingThreadStart(params, params.pendingStart) : undefined;
@@ -8180,10 +8183,13 @@ export class DesktopBackendRegistry {
     }
   }
 
+  listPendingThreadStarts(): AppServerPendingThreadStartReport[] {
+    return [...this.inFlightThreadStarts.values()];
+  }
+
   /**
    * One start's `thread/start/pending` reports. `landed` is reported from
-   * `rememberPending`, the first effect after the provider names the
-   * thread, so it precedes every event this owner sends about the thread.
+   * `rememberPending`, before this owner announces the created thread.
    */
   private beginPendingThreadStart(
     params: Parameters<DesktopBackendRegistry["startThread"]>[0],
@@ -8192,6 +8198,7 @@ export class DesktopBackendRegistry {
     const start: AppServerPendingThreadStart = {
       startId: descriptor.startId,
       title: descriptor.title,
+      ...(descriptor.prompt !== undefined ? { prompt: descriptor.prompt } : {}),
       submittedAt: Date.now(),
       backend: params.backend,
       ...(params.model ? { model: params.model } : {}),
@@ -8209,23 +8216,44 @@ export class DesktopBackendRegistry {
         : {}),
     };
     let createdThreadId: string | undefined;
-    const report = async (phase: AppServerPendingThreadStartPhase): Promise<void> => {
-      try {
-        await this.emit({ backend: params.backend, notification: { method: "thread/start/pending", params: {
-          start, phase, ...(createdThreadId ? { createdThreadId } : {}),
-        } } });
-      } catch (error) {
-        // A list that misses the row still gets the thread; never fail the start.
+    let setupProgress: CodexEnvironmentSetupProgressEvent | undefined;
+    let setupFailure: CodexEnvironmentStartupFailure | undefined;
+    let delivery = Promise.resolve();
+    const report = (phase: AppServerPendingThreadStartPhase): Promise<void> => {
+      const snapshot: AppServerPendingThreadStartReport = {
+        start, phase,
+        ...(createdThreadId ? { createdThreadId } : {}),
+        ...(setupProgress ? { setupProgress } : {}),
+        ...(setupFailure ? { setupFailure } : {}),
+      };
+      if (phase === "ended") this.inFlightThreadStarts.delete(start.startId);
+      else this.inFlightThreadStarts.set(start.startId, snapshot);
+      // Queue delivery per start so output cannot overtake its lifecycle reports.
+      delivery = delivery.then(() => this.emit({
+        backend: params.backend,
+        notification: { method: "thread/start/pending", params: snapshot },
+      })).catch((error: unknown) => {
         backendRegistryLog.warn("pending thread start report failed", {
           phase, startId: start.startId, error: error instanceof Error ? error.message : String(error),
         });
-      }
+      });
+      return delivery;
     };
     return {
       report,
-      land: async (threadId) => {
+      setupProgress: ({ chunk, ...event }) => {
+        setupProgress = {
+          ...event,
+          directoryKey: start.startId,
+          sequence: (setupProgress?.sequence ?? 0) + 1,
+          output: (event.output ?? `${setupProgress?.output ?? ""}${chunk ?? ""}`).slice(-32_000),
+        };
+        void report("setup");
+      },
+      land: async (threadId, failure) => {
         if (createdThreadId) return;
         createdThreadId = threadId;
+        setupFailure = failure;
         await report("landed");
       },
     };
@@ -8321,6 +8349,7 @@ export class DesktopBackendRegistry {
         codexEnvironmentRuntime = await this.threadDirectoryService.buildForkedCodexEnvironmentRuntime({
             cwd,
             forceSetup: rerunCodexEnvironmentSetup,
+            onSetupProgress: pending?.setupProgress,
             sourceRuntime: request.codexEnvironmentRuntime,
             workMode: effectiveWorkMode ?? "local",
           });
@@ -8551,7 +8580,7 @@ export class DesktopBackendRegistry {
       bindPdf: ({ threadId }) => { pdfMcpRegistration?.bindThread(threadId); },
       rememberPending: async ({ threadId }) => {
         // Before the thread can reach a list, so its starting row hands over.
-        await pending?.land(threadId);
+        await pending?.land(threadId, codexEnvironmentStartupFailure);
         const startedAt = Date.now();
         const pendingThreadKey = buildThreadIdentityKey(backend, threadId);
         gitBranch = cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined;

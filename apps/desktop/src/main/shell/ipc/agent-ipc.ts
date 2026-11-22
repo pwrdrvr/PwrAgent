@@ -19,6 +19,7 @@ import { ipcMain, type IpcMainInvokeEvent } from "electron";
 import { issueProviderDiscoveryPermit } from "../../settings/provider-discovery-permit";
 import {
   federationTargetForChannelSubscriber,
+  isLocalMainWindowWebContents,
   subscribersForChannel,
 } from "../window-channels";
 import {
@@ -166,6 +167,7 @@ import {
   AGENT_CANCEL_THREAD_PR_AUTO_DISPATCH_CHANNEL,
   AGENT_SEND_THREAD_PR_AUTO_DISPATCH_NOW_CHANNEL,
   AGENT_TURN_OFF_CODEX_FAST_EVERYWHERE_CHANNEL,
+  AGENT_LIST_PENDING_THREAD_STARTS_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
   AGENT_START_REVIEW_CHANNEL,
   AGENT_START_TURN_CHANNEL,
@@ -557,6 +559,9 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(AGENT_LIST_PENDING_THREAD_STARTS_CHANNEL);
+  ipcMain.handle(AGENT_LIST_PENDING_THREAD_STARTS_CHANNEL, (event) =>
+    isLocalMainWindowWebContents(event.sender) ? registry.listPendingThreadStarts() : []);
   ipcMain.removeHandler(AGENT_START_THREAD_CHANNEL);
   ipcMain.handle(
     AGENT_START_THREAD_CHANNEL,
@@ -1616,6 +1621,7 @@ export function disposeAgentIpcHandlers(): void {
   disposeResearchIpcHandlers();
   disposeDecisionsRailIpcHandlers();
   ipcMain.removeHandler(BACKEND_LIST_CHANNEL);
+  ipcMain.removeHandler(AGENT_LIST_PENDING_THREAD_STARTS_CHANNEL);
   ipcMain.removeHandler(AGENT_START_THREAD_CHANNEL);
   ipcMain.removeHandler(AGENT_FORK_THREAD_CHANNEL);
   ipcMain.removeHandler(AGENT_START_REVIEW_CHANNEL);

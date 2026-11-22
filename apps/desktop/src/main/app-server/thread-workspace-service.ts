@@ -2684,6 +2684,19 @@ export class ThreadWorkspaceService {
           branchName: request.args.branchName,
           ...(worktreeBranchMode ? { worktreeBranchMode } : {}),
           requiredWorkMode: workspaceMode === "new_worktree" ? "worktree" : undefined,
+          ...(workspaceMode === "new_worktree" || environmentSource === "requested"
+            ? {
+                pendingStart: {
+                  startId: randomUUID(),
+                  title,
+                  ...(childProjectBoundary ? {
+                    directoryKey: `directory:${childProjectBoundary}`,
+                    directoryLabel: path.basename(childProjectBoundary),
+                  } : {}),
+                  progressThread: { backend: sourceBackend, threadId: sourceThreadId },
+                },
+              }
+            : {}),
           model: inheritedSettings.model,
           reasoningEffort: inheritedSettings.reasoningEffort,
           serviceTier: inheritedSettings.serviceTier,
