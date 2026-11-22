@@ -612,16 +612,17 @@ export function managedGrokBuildsEnabledForRuntime(
 export function applyDesktopSettingsPatch(
   configPath: string,
   patch: DesktopSettingsConfigPatch,
+  options?: { omitUnacknowledgedProviderEnables?: boolean },
 ): DesktopSettingsPatchWriteResult {
   const source = fs.existsSync(configPath)
     ? fs.readFileSync(configPath, "utf8")
     : "";
   const tables = parseTomlTables(source, configPath);
   const edits = desktopSettingsPatchToEdits(patch, tables);
-  // Both active-profile writes and bootstrap graduation enter here. A patch
-  // can record the acknowledgment and enable a provider in the same save.
-  // Existing enabled flags and the profile-wide pause switch are independent.
-  const enablesProvider = edits.some((edit) =>
+  if (edits.length === 0) {
+    return { changed: false, text: source };
+  }
+  const newProviderEnables = edits.filter((edit) =>
     edit.op === "set"
     && edit.path.length === 3
     && edit.path[0] === "messaging"
@@ -629,16 +630,18 @@ export function applyDesktopSettingsPatch(
     && edit.value === true
     && tables[`messaging.${edit.path[1]}`]?.enabled !== true,
   );
-  if (enablesProvider) {
-    const acknowledgment = patch.general?.messagingAcknowledgment;
-    requireMessagingSafetyAcknowledgment(acknowledgment === undefined
-      ? readMessagingAcknowledgment(tables["general.messaging_acknowledgment"])?.acknowledgedAt
-      : acknowledgment?.acknowledgedAt);
+  let next = applyTomlEdits(source, edits);
+  if (newProviderEnables.length > 0) {
+    // Duplicate-key repair can remove the timestamp that the source reader
+    // found. Use the rendered file, which also includes any new record.
+    const savedTables = parseTomlTables(next, configPath);
+    const acknowledgment = readMessagingAcknowledgment(savedTables["general.messaging_acknowledgment"]);
+    if (!acknowledgment && options?.omitUnacknowledgedProviderEnables) {
+      next = applyTomlEdits(source, edits.filter((edit) => !newProviderEnables.includes(edit)));
+    } else {
+      requireMessagingSafetyAcknowledgment(acknowledgment?.acknowledgedAt);
+    }
   }
-  if (edits.length === 0) {
-    return { changed: false, text: source };
-  }
-  const next = applyTomlEdits(source, edits);
   if (next === source) {
     return { changed: false, text: source };
   }

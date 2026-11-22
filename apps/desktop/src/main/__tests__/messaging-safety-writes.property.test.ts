@@ -15,6 +15,7 @@ const acknowledgmentToml = [
   "providers = []",
   "",
 ].join("\n");
+const duplicateAcknowledgmentToml = `${acknowledgmentToml}acknowledged_at = 2026-11-22\n`;
 
 const roots: string[] = [];
 afterEach(() => {
@@ -38,23 +39,36 @@ it("leaves a disabled Telegram provider and the rest of its patch unsaved withou
   expect(fs.readFileSync(configPath, "utf8")).toBe(original);
 });
 
+it("rejects a provider enable when duplicate repair removes the readable timestamp", () => {
+  const configPath = configPathForTest();
+  fs.writeFileSync(configPath, duplicateAcknowledgmentToml);
+  expect(readDesktopSettingsConfig(configPath).general?.messagingAcknowledgment).toEqual(acknowledgment);
+
+  expect(() => applyDesktopSettingsPatch(configPath, {
+    messaging: { telegram: { enabled: true } },
+  })).toThrow(acknowledgmentRequired);
+  expect(fs.readFileSync(configPath, "utf8")).toBe(duplicateAcknowledgmentToml);
+});
+
 it("requires a persisted acknowledgment for every new provider enable in a config patch", () => {
   const configPath = configPathForTest();
   fc.assert(fc.property(
     fc.constantFrom("telegram", "discord", "mattermost", "slack", "feishu", "line"),
     fc.constantFrom(undefined, false, true),
     fc.boolean(),
-    fc.boolean(),
+    fc.constantFrom("missing", "valid", "duplicate"),
     fc.constantFrom(undefined, null, acknowledgment, { ...acknowledgment, acknowledgedAt: "  " }),
-    (provider, before, after, hasRecord, newRecord) => {
-      const original = (hasRecord ? acknowledgmentToml : "")
+    (provider, before, after, savedRecord, newRecord) => {
+      const recordToml = savedRecord === "valid" ? acknowledgmentToml
+        : savedRecord === "duplicate" ? duplicateAcknowledgmentToml : "";
+      const original = recordToml
         + (before === undefined ? "" : `[messaging.${provider}]\nenabled = ${before}\n`);
       fs.writeFileSync(configPath, original);
       const save = () => applyDesktopSettingsPatch(configPath, {
         general: { messagingAcknowledgment: newRecord, developerMode: true },
         messaging: { [provider]: { enabled: after } },
       });
-      const willHaveRecord = newRecord === undefined ? hasRecord : newRecord === acknowledgment;
+      const willHaveRecord = newRecord === undefined ? savedRecord === "valid" : newRecord === acknowledgment;
 
       if (after && before !== true && !willHaveRecord) {
         expect(save).toThrow(acknowledgmentRequired);

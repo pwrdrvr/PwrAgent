@@ -24,3 +24,11 @@ export function writeProfileConfigPatch(
 ): void {
   applyDesktopSettingsPatch(configPath, patch);
 }
+
+/** Copy bootstrap settings and keep the target's existing provider enables. */
+export function writeBootstrapConfigToProfile(
+  configPath: string,
+  patch: DesktopSettingsConfigPatch,
+): void {
+  applyDesktopSettingsPatch(configPath, patch, { omitUnacknowledgedProviderEnables: true });
+}

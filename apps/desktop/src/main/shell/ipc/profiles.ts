@@ -55,6 +55,7 @@ import {
 import { resolveDesktopConfigPath } from "../../settings/desktop-config";
 import {
   readProfileConfigFile,
+  writeBootstrapConfigToProfile,
   writeProfileConfigPatch,
 } from "../../settings/config-store/profile-config-file";
 import { discoverCodexAuthProfiles } from "@pwrdrvr/codex-discovery";
@@ -340,7 +341,8 @@ export async function deleteDesktopPwrAgentProfile(
  *     messagingAcknowledgment)
  *   - `experimental`, `imageUploads`, `updates`, `messaging` —
  *     everything the operator might have set in the wizard or
- *     bootstrap session.
+ *     bootstrap session. New provider enables are copied only when
+ *     the resulting target config records a safety acknowledgment.
  *
  * What does NOT get copied:
  *   - `onboarding` — the target profile was just created by the
@@ -403,7 +405,7 @@ export function graduateDesktopBootstrapConfigToProfile(
   const { onboarding: _drop, ...patch } = bootstrapConfig;
   void _drop;
 
-  writeProfileConfigPatch(
+  writeBootstrapConfigToProfile(
     resolveDesktopConfigPath({ cliProfile: targetProfile }),
     patch,
   );
