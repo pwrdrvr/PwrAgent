@@ -609,8 +609,12 @@ describe("MattermostAdapter — outbound deliver", () => {
     const adapter = makeAdapter({ createdPosts: [], patchedPosts: [] });
 
     expect(adapter.supportsConversationTitle({
-      channel: dmChannel(),
+      channel: {
+        channel: "mattermost",
+        conversation: { id: "channel-id", kind: "channel" },
+      },
     })).toBe(true);
+    expect(adapter.supportsConversationTitle({ channel: dmChannel() })).toBe(false);
   });
 
   function makeMessageIntent(

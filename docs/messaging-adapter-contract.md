@@ -224,7 +224,11 @@ on the active binding and notifies local surfaces without waiting for a
 provider metadata echo.
 Adapters that implement title updates should also implement
 `supportsConversationTitle` with the same surface predicate they use before a
-title update. `get_current_messaging_surface` reports that result separately
+title update. The status card uses the predicate to show Sync name, and both
+callback and Agent tool requests recheck support before attempting a rename.
+Mattermost can update the header of a channel, while replies share the channel
+ID and have no title of their own.
+`get_current_messaging_surface` reports support separately
 from the initiating actor's `thread.settings.name` permission as
 `conversationCapabilities.rename.supported` and `.allowed`.
 
