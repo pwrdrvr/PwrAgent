@@ -8,6 +8,8 @@ import {
   validateLineUserId,
 } from "@pwragent/messaging-provider-line";
 import type { LineRichMenuSetupRequest, LineRichMenuSetupResponse } from "@pwragent/shared/contracts/settings";
+import { resolveActiveProfilePath } from "../profile";
+import { requireSavedMessagingSafetyAcknowledgment } from "../settings/config-store/profile-config-file";
 import { createLineRichMenuSetupStorage } from "../storage/line-rich-menu-setup-storage";
 
 export async function runLineRichMenuSetup(
@@ -21,6 +23,7 @@ export async function runLineRichMenuSetup(
     return { kind: "error", reason: "request-failed" };
   }
   try {
+    requireSavedMessagingSafetyAcknowledgment(resolveActiveProfilePath("config.toml"));
     const image = await readFile(imagePath);
     const setup = new LineRichMenuSetup(createLineRichMenuApi(channelAccessToken), createLineRichMenuSetupStorage(), {
       image: new Blob([new Uint8Array(image)], { type: "image/png" }),
