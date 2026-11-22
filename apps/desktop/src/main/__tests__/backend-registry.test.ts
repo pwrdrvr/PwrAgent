@@ -8923,7 +8923,11 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("forks into a fresh scratch workspace with an explicit cwd and parent", async () => {
+  it.each([
+    ["workspace", undefined],
+    ["directory", undefined],
+    ["directory", " "],
+  ] as const)("forks a %s request with path %j into a fresh scratch workspace", async (directoryKind, directoryPath) => {
     const overlayStore = createOverlayStoreMock();
     await overlayStore.setThreadCodexEnvironmentRuntime?.({
       backend: "codex",
@@ -8944,7 +8948,8 @@ describe("DesktopBackendRegistry", () => {
       backend: "codex",
       sourceThreadId: "thread-parent",
       parentThreadId: "thread-parent",
-      directoryKind: "workspace",
+      directoryKind,
+      directoryPath,
       directoryLabel: "New Workspace",
       workMode: "local",
     });
