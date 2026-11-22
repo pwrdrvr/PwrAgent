@@ -81,6 +81,8 @@ export type NavigationQueryIndex = {
   localInstanceId?: string;
   coverage?: NavigationQueryCoverage;
   directories: NavigationDirectorySummary[];
+  /** Verified case spellings of local directories, keyed by the visible project key. */
+  directoryCaseAliases?: Record<string, string[]>;
   /** Worktree directory keys folded into each primary project. */
   worktreeProjectAliases?: Record<string, string[]>;
   /** The checkout supplying fallback repository identity for a synthesized parent project. */
@@ -758,13 +760,16 @@ function buildDirectoryRows(params: {
 }
 
 function selectIndexedDirectories(
-  directories: NavigationDirectorySummary[],
+  index: NavigationQueryIndex,
   query: Extract<NavigationQuery, { kind: "directory-index" }>,
 ): NavigationDirectorySummary[] {
-  const candidates = query.keys || query.paths ? directories.filter((directory) =>
-    query.keys?.some((key) => directoryIncludesCheckout(directory, key))
-    || (directory.path !== undefined && query.paths?.includes(directory.path))
-    || directory.checkoutPaths?.some((path) => query.paths?.includes(path))) : directories;
+  const candidates = query.keys || query.paths ? index.directories.filter((directory) => {
+    const aliases = index.directoryCaseAliases?.[directory.key];
+    return query.keys?.some((key) => directoryIncludesCheckout(directory, key) || aliases?.includes(key))
+      || (directory.path !== undefined && query.paths?.includes(directory.path))
+      || directory.checkoutPaths?.some((path) => query.paths?.includes(path))
+      || query.paths?.some((path) => aliases?.includes(`directory:${canonicalizeNavigationPath(path)}`));
+  }) : index.directories;
   const filter = query.filter?.trim() ?? "";
   if (query.match === "mention") {
     return rankDirectoryMentionMatches(candidates, filter, homedir());
@@ -1276,16 +1281,24 @@ function buildProjectionIndex(index: NavigationQueryIndex, onWork?: NavigationPr
   onWork?.("index", index.threads.length);
   const checkoutProjects = new Map<string, NavigationDirectorySummary>();
   const foldedProjects = new Map<string, NavigationDirectorySummary>();
+  const caseProjects = new Map<string, NavigationDirectorySummary>();
   for (const directory of index.directories) {
     if (directory.checkoutPaths) {
       for (const key of directory.threadKeys) checkoutProjects.set(key, directory);
     }
     for (const key of index.worktreeProjectAliases?.[directory.key] ?? []) foldedProjects.set(key, directory);
+    const caseAliases = index.directoryCaseAliases?.[directory.key];
+    if (caseAliases) {
+      caseProjects.set(directory.key, directory);
+      for (const key of caseAliases) caseProjects.set(key, directory);
+    }
   }
-  if (foldedProjects.size) {
+  if (foldedProjects.size || caseProjects.size) {
     for (const thread of index.threads) {
       const primary = thread.linkedDirectories[0];
-      const project = primary && foldedProjects.get(`directory:${canonicalizeNavigationPath(primary.path)}`);
+      if (!primary || thread.federation) continue;
+      const project = (caseProjects.size ? caseProjects.get(classifyDirectory(primary).key) : undefined)
+        ?? foldedProjects.get(`directory:${canonicalizeNavigationPath(primary.path)}`);
       if (project) checkoutProjects.set(buildThreadIdentityKey(thread.source, thread.id), project);
     }
   }
@@ -1614,7 +1627,7 @@ export function projectNavigationQuery(params: {
   const exactDescriptor = query.kind === "exact" && selectedThreads.length
     ? params.index.directories.find((directory) => directory.threadKeys.some((key) => selectedThreads[0] === threadsByLegacyKey.get(key))) : undefined;
   const descriptor = query.kind === "exact" ? exactDescriptor : scopedDirectory;
-  const indexedDirectories = query.kind === "directory-index" ? selectIndexedDirectories(params.index.directories, query) : undefined;
+  const indexedDirectories = query.kind === "directory-index" ? selectIndexedDirectories(params.index, query) : undefined;
   // A mixed viewer can place remote pins using local project metadata. Its
   // authored row set alone cannot exclude a change to that placement.
   const directoryGitProof = params.includeDirectoryGitProof && snapshot && params.index.coverage?.state === "complete"

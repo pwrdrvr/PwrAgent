@@ -431,6 +431,7 @@ import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-s
 import { searchNavigationOwners } from "../app-server/navigation-jump-search";
 import { appendViewerNavigationPins, attachRemoteThreadsToLocalDirectories, loadViewerNavigationPins, loadViewerWatchedNavigationRows } from "../app-server/navigation-viewer-pins";
 import { awaitStartupProviderCoverage, loadLocalNavigationQueryIndex, navigationPullRequestProjection } from "../app-server/navigation-query-source";
+import { reconcileWindowsDirectoryAliases } from "../app-server/navigation-windows-directory-aliases";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
@@ -2384,11 +2385,12 @@ class DesktopAppServerService {
       );
     void this.getPrAutoDispatchCoordinator().resume();
     await this.directoryGitStatus.loadDirectoryGitStatusCache();
-    for (const directory of snapshot.directories) {
+    const { directories: ownerDirectories } = await reconcileWindowsDirectoryAliases(snapshot.directories, snapshot.threads);
+    for (const directory of ownerDirectories) {
       this.lastDirectoriesByKey.set(directory.key, directory);
     }
     const directories = await hydrateDirectoryLaunchpads(
-      snapshot.directories.map((directory) => this.directoryGitStatus.applyCachedStatus(directory)),
+      ownerDirectories.map((directory) => this.directoryGitStatus.applyCachedStatus(directory)),
     );
     const previousDirectories = this.previousDirectoriesByBackend.get(backend);
     const directoriesUnchanged = previousDirectories
@@ -2397,7 +2399,7 @@ class DesktopAppServerService {
     this.previousDirectoriesByBackend.set(backend, directories);
     this.directoryGitStatus.startDirectoryGitStatusRefresh({
       automatic: true,
-      directories: snapshot.directories,
+      directories: ownerDirectories,
       requestKey: getNavigationSnapshotRequestKey(request),
     });
 

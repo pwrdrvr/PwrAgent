@@ -73,8 +73,11 @@ export async function removeLocalNavigationDirectory(
       throw new Error("This directory contains threads. Refresh navigation before removing it.");
     }
     if (!request.archiveThreads) {
-      await getDesktopOverlayStore().removeDirectoryRegistration({ directoryKey: request.directoryKey,
-        worktreeKeys: index.worktreeProjectAliases?.[request.directoryKey],
+      const worktreeKeys = index.worktreeProjectAliases?.[request.directoryKey];
+      const caseAliases = index.directoryCaseAliases?.[request.directoryKey];
+      await getDesktopOverlayStore().removeDirectoryRegistration({
+        directoryKey: request.directoryKey,
+        worktreeKeys: caseAliases ? [...(worktreeKeys ?? []), ...caseAliases] : worktreeKeys,
       });
     }
   } finally { unsubscribe(); }
