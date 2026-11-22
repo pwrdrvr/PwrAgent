@@ -2,14 +2,19 @@ import { realpath } from "node:fs/promises";
 import { cpus } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { readMachineCheckoutEvidence } from "./checkout-machine-evidence";
-import type { ResourceAdvertisement } from "@pwragent/shared/contracts/resource-checkouts";
+import type { ResourceAdvertisement, ResourceOwnershipConflict } from "@pwragent/shared/contracts/resource-checkouts";
 import { getMainLogger } from "../log";
 import { readOrCreateFederationMachineId } from "../federation/federation-host-info";
 import { defaultInstanceLabel } from "../federation/federation-instance-label";
 import type { DesktopFederationRuntime } from "../federation/federation-runtime";
 import { buildDockProfileSnapshot, findLiveProfileRuntimeMarkers, resolveActiveProfileName, resolvePwragentRoot } from "../profile";
-import { openFederationCheckoutStorage, openMachineCheckoutStorage } from "../storage/resource-checkout-storage";
+import {
+  CheckoutStoreIdentityError,
+  openFederationCheckoutStorage,
+  openMachineCheckoutStorage,
+} from "../storage/resource-checkout-storage";
 import { readExternalCheckoutBindings, type ExternalBinding } from "./checkout-configuration";
+import { OWNERSHIP_CONFLICTS } from "./checkout-ownership";
 import type { ApprovedLabCheckout } from "./pwrsuitelab-checkout-adapter";
 import { DesktopResourceCheckoutService } from "./resource-checkout-service";
 
@@ -50,6 +55,8 @@ export async function initializeResourceCheckouts(federation: DesktopFederationR
   let bindings: ExternalBinding[] = [];
   let allowAgentDrafts = false;
   let machineStore;
+  let machineUnresolved: ResourceOwnershipConflict = OWNERSHIP_CONFLICTS.machineIdMissing;
+  let adoptMachineStore: (() => ReturnType<typeof openMachineCheckoutStorage>) | undefined;
   let externalStore;
   try {
     const config = readExternalCheckoutBindings(root);
@@ -60,9 +67,18 @@ export async function initializeResourceCheckouts(federation: DesktopFederationR
   }
   if (machineId && /^mach_[0-9a-f-]{36}$/i.test(machineId)) {
     const identity = JSON.stringify([machineId, evidence.hostBinding ?? null]);
+    machineUnresolved = OWNERSHIP_CONFLICTS.alternateRoot;
     if (await checkoutRootCanHostMachine(root, resolvePwragentRoot({ env: {} }), isPackaged)) {
       try { machineStore = await openCheckoutStorage(() => openMachineCheckoutStorage(root, identity)); }
-      catch (error) { warn(error); }
+      catch (error) {
+        warn(error);
+        if (error instanceof CheckoutStoreIdentityError) {
+          machineUnresolved = OWNERSHIP_CONFLICTS.copiedRoot;
+          adoptMachineStore = () => openMachineCheckoutStorage(root, identity, { adoptIdentity: true });
+        } else {
+          machineUnresolved = OWNERSHIP_CONFLICTS.machineStoreUnavailable;
+        }
+      }
     }
     if (evidence.hostBinding && bindings.some((binding) => binding.authorityInstanceId === instanceId && binding.authorityMachineId === machineId)) {
       try { externalStore = await openCheckoutStorage(() => openFederationCheckoutStorage(root, identity)); }
@@ -71,7 +87,7 @@ export async function initializeResourceCheckouts(federation: DesktopFederationR
   }
   runtime = new DesktopResourceCheckoutService({
     viewer: { instanceId, profile, machineId, instanceLabel: defaultInstanceLabel() },
-    machineStore, machineCpuCount: cpus().length, externalStore, bindings, allowAgentDrafts, approvedLabCheckouts, warn,
+    machineStore, machineUnresolved, adoptMachineStore, machineCpuCount: cpus().length, externalStore, bindings, allowAgentDrafts, approvedLabCheckouts, warn,
     bootId: evidence.hostBinding ? evidence.bootId : undefined,
     readMachineAdvertisements: () => buildDockProfileSnapshot().profiles
       .filter((entry) => entry.name !== profile)

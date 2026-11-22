@@ -1,6 +1,10 @@
 import type { CheckoutToken } from "@pwragent/owner-core/resource-checkout-authority";
 import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
-import type { ResourceCheckoutActionRequest, ResourceDefinitionDraft } from "@pwragent/shared/contracts/resource-checkouts";
+import {
+  canonicalResourceKeyProblem,
+  type ResourceCheckoutActionRequest,
+  type ResourceDefinitionDraft,
+} from "@pwragent/shared/contracts/resource-checkouts";
 
 export function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("An object is required.");
@@ -29,11 +33,11 @@ export function parseCheckoutToken(value: unknown): CheckoutToken {
   };
 }
 
-export function externalKey(value: unknown): string {
+/** The same rule the Register dialog checks before sending. */
+export function canonicalKey(value: unknown): string {
   const key = text(value, "canonical key");
-  if (!/^external:[a-z0-9][a-z0-9_-]*:[a-z0-9][a-z0-9_-]*(?::[a-z0-9][a-z0-9_-]*)+$/.test(key)) {
-    throw new Error("Use an external:<provider>:<namespace>:<immutable-id> canonical key.");
-  }
+  const problem = canonicalResourceKeyProblem(key);
+  if (problem) throw new Error(problem);
   return key;
 }
 
@@ -46,7 +50,7 @@ function parseDraft(value: unknown): ResourceDefinitionDraft {
   }
   if (sharing.mode !== "exclusive" && sharing.mode !== "counted") throw new Error("Invalid sharing mode.");
   return {
-    canonicalKey: externalKey(draft.canonicalKey), displayName: text(draft.displayName, "display name"),
+    canonicalKey: canonicalKey(draft.canonicalKey), displayName: text(draft.displayName, "display name"),
     kindLabel: text(draft.kindLabel, "kind"), allocationScope,
     sharing: sharing.mode === "exclusive" ? { mode: "exclusive" } : {
       mode: "counted", capacity: positiveInt(sharing.capacity, "capacity", 1_000), inUse: 0,
@@ -73,7 +77,10 @@ export function parseCheckoutAction(value: unknown): ResourceCheckoutActionReque
     case "cancel_request":
       return { ...base, kind: action.kind, queueEntryId: text(action.queueEntryId, "queue entry ID") };
     case "resolve_ownership":
-      return { ...base, kind: action.kind, canonicalCandidateId: text(action.canonicalCandidateId, "candidate ID") };
+      if (action.resolution !== "adopt_store" && action.resolution !== "accept_definition") {
+        throw new Error("Unknown ownership resolution.");
+      }
+      return { ...base, kind: action.kind, resolution: action.resolution };
     case "delegate_execution": {
       const executor = object(action.executor);
       const backend = text(executor.backend, "executor backend");

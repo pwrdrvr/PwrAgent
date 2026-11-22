@@ -13,9 +13,10 @@
  * All names, keys and instance IDs are invented.
  */
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { cpus } from "node:os";
 import path from "node:path";
+import { CheckoutDefinitionConflictError } from "@pwragent/owner-core/resource-checkout-authority";
 import type { ResourceCondition } from "@pwragent/shared/contracts/resource-checkouts";
 import { readMachineCheckoutEvidence } from "../../src/main/resource-checkouts/checkout-machine-evidence";
 import { readExternalCheckoutBindings } from "../../src/main/resource-checkouts/checkout-configuration";
@@ -42,12 +43,23 @@ export const RESOURCES_AUDIT_UNREACHABLE = {
 };
 /**
  * Bound to this instance on another machine, as a root copied from another
- * host would be, so the authority stays unresolved.
+ * host would be, so the authority stays unresolved. Resources can only
+ * explain the fix; the authorities file has to change.
  */
 export const RESOURCES_AUDIT_UNRESOLVED = {
   resourceId: "external:fixture:audit:bench-scope",
   displayName: "Bench oscilloscope",
 };
+/**
+ * Hosted here, but the authorities file moved to a new epoch after the
+ * record was saved, so the operator accepts the configured definition.
+ */
+export const RESOURCES_AUDIT_CHANGED = {
+  resourceId: "external:fixture:audit:calibration-rig",
+  displayName: "Calibration rig",
+};
+
+const AUTHORITIES_FILE = "resource-checkout-authorities.json";
 
 export type ResourcesAuditSeed = {
   root: string;
@@ -59,7 +71,7 @@ export type ResourcesAuditSeed = {
   bootId: string | undefined;
 };
 
-function auditService(seed: ResourcesAuditSeed): DesktopResourceCheckoutService {
+function auditService(seed: ResourcesAuditSeed, allowChangedDefinitions = false): DesktopResourceCheckoutService {
   // The identity the main process derives in `initializeResourceCheckouts`;
   // a mismatch would quarantine the store.
   const identity = JSON.stringify([seed.machineId, seed.hostBinding]);
@@ -81,6 +93,7 @@ function auditService(seed: ResourcesAuditSeed): DesktopResourceCheckoutService 
       bootId: seed.bootId,
       requestPeer: () => Promise.reject(new Error("The audit has no Federation peers.")),
       warn: (error) => {
+        if (allowChangedDefinitions && error instanceof CheckoutDefinitionConflictError) return;
         throw error;
       },
     });
@@ -95,8 +108,9 @@ async function withAuditService(
   seed: ResourcesAuditSeed,
   apply: (service: DesktopResourceCheckoutService) => Promise<void>,
   expected: Record<string, ResourceCondition>,
+  allowChangedDefinitions = false,
 ): Promise<void> {
-  const service = auditService(seed);
+  const service = auditService(seed, allowChangedDefinitions);
   try {
     await apply(service);
     // Check the seed through the same projection the renderer reads, so a
@@ -133,7 +147,7 @@ export async function seedResourcesAuditState(homeRoot: string): Promise<Resourc
     stateDb.close();
   }
   const common = { epoch: 1, revision: 1, updatedAt: Date.now(), maxHoldMs: 2_700_000 };
-  await writeFile(path.join(root, "resource-checkout-authorities.json"), JSON.stringify({
+  await writeFile(path.join(root, AUTHORITIES_FILE), JSON.stringify({
     version: 1,
     domains: [
       {
@@ -156,6 +170,12 @@ export async function seedResourcesAuditState(homeRoot: string): Promise<Resourc
         kindLabel: "Bench instrument", capacity: 1,
         authorityInstanceId: AUDIT_INSTANCE_ID, authorityMachineId: otherMachineId,
         allowedInstances: [AUDIT_INSTANCE_ID],
+      },
+      {
+        ...common,
+        canonicalKey: RESOURCES_AUDIT_CHANGED.resourceId, displayName: RESOURCES_AUDIT_CHANGED.displayName,
+        kindLabel: "Bench instrument", capacity: 1,
+        authorityInstanceId: AUDIT_INSTANCE_ID, authorityMachineId: machineId, allowedInstances: [],
       },
     ],
   }));
@@ -186,7 +206,18 @@ export async function seedResourcesAuditState(homeRoot: string): Promise<Resourc
     [RESOURCES_AUDIT_POOL.resourceId]: "busy",
     [RESOURCES_AUDIT_UNREACHABLE.resourceId]: "unreachable",
     [RESOURCES_AUDIT_UNRESOLVED.resourceId]: "ownership_unresolved",
+    [RESOURCES_AUDIT_CHANGED.resourceId]: "available",
   });
+  // The operator moves the rig to a new epoch after its record was saved.
+  const authoritiesPath = path.join(root, AUTHORITIES_FILE);
+  const authorities = JSON.parse(await readFile(authoritiesPath, "utf8")) as { domains: Array<{ canonicalKey: string; epoch: number }> };
+  for (const domain of authorities.domains) {
+    if (domain.canonicalKey === RESOURCES_AUDIT_CHANGED.resourceId) domain.epoch = 2;
+  }
+  await writeFile(authoritiesPath, JSON.stringify(authorities));
+  await withAuditService(seed, async () => {}, {
+    [RESOURCES_AUDIT_CHANGED.resourceId]: "ownership_unresolved",
+  }, true);
   return seed;
 }
 

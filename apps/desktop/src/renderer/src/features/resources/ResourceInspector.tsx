@@ -29,8 +29,7 @@ import {
 /** The header controls group recovery steps behind one Recover control. */
 export type ResourceInspectorIntent =
   | { kind: "action"; action: ResourceActionDescriptor }
-  | { kind: "recover"; allocationId: string; generation: number }
-  | { kind: "resolve" };
+  | { kind: "recover"; allocationId: string; generation: number };
 
 const LIFECYCLE: ReadonlyArray<ResourceAllocationState | "queued" | "released"> = [
   "queued",
@@ -74,8 +73,8 @@ export function ResourceInspector(props: {
   const actions = resourceActions(resource, authority);
   const recoveryActions = actions.filter((action) =>
     action.kind === "fence" || action.kind === "verify_cleanup" || action.kind === "administrative_release");
-  const headerActions = actions.filter((action) => !recoveryActions.includes(action) && action.kind !== "resolve_ownership");
-  const resolve = actions.find((action) => action.kind === "resolve_ownership");
+  const resolveAction = actions.find((action) => action.kind === "resolve_ownership");
+  const headerActions = actions.filter((action) => !recoveryActions.includes(action) && action !== resolveAction);
   const recoveries = resourceRecoveries(resource);
   const recoverButton = (recovery: ResourceRecoveryStatus, label: string, testId?: string) => {
     const gates = Object.values(resourceRecoveryGates(resource, authority, recovery));
@@ -128,9 +127,15 @@ export function ResourceInspector(props: {
           item={item}
           now={props.now}
           recover={recoveries.length === 1 ? recoverButton(recoveries[0], "Recover…", "resources-action-recover") : null}
-          resolve={resolve ? (
-            <ResourceActionButton emphasis="danger" gate={resolve.gate} testId="resources-action-resolve" onClick={() => props.onIntent({ kind: "resolve" })}>
-              Resolve ownership…
+          resolve={resolveAction ? (
+            <ResourceActionButton
+              busy={props.busyKind === resolveAction.kind}
+              emphasis={resolveAction.emphasis}
+              gate={resolveAction.gate}
+              testId="resources-action-resolve"
+              onClick={() => props.onIntent({ kind: "action", action: resolveAction })}
+            >
+              {`${resolveAction.label}…`}
             </ResourceActionButton>
           ) : null}
         />
@@ -332,6 +337,8 @@ function StateCallout(props: {
   const presentation = presentCondition(condition);
   let title: string | undefined;
   let body: ReactNode;
+  /** The operator's next step, in words. */
+  let next: string | undefined;
   let action: ReactNode = null;
   let tone: "warn" | "danger" | "muted" | "plain" = "plain";
   switch (condition) {
@@ -358,6 +365,7 @@ function StateCallout(props: {
     case "ownership_unresolved":
       title = "Ownership unresolved";
       body = resource.ownershipConflict?.reason ?? resource.conditionDetail ?? presentation.meaning;
+      next = resource.ownershipConflict?.remedy;
       action = props.resolve;
       tone = "danger";
       break;
@@ -389,6 +397,7 @@ function StateCallout(props: {
       <div>
         <p className="resources-callout__title">{title}</p>
         <p className="resources-callout__body">{body}</p>
+        {next ? <p className="resources-callout__body" data-testid="resources-callout-next-step">{next}</p> : null}
         {action ? <div className="resources-callout__actions">{action}</div> : null}
       </div>
     </div>

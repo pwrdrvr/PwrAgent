@@ -71,7 +71,12 @@ simulated results.
 - **The server decides `condition` and the action gates.** The renderer may
   only make them more conservative:
   - no bound authority, an ownership conflict, or an `unresolved` authority
-    shows **Ownership unresolved**, and only `resolve_ownership` stays usable;
+    shows **Ownership unresolved** and blocks every action except
+    `resolve_ownership`. The inspector shows `ownershipConflict.reason` and
+    its `remedy`. When the conflict carries a `resolution`, the callout
+    offers it under the resolution's label, and the dialog shows its
+    `consequence` before sending. See
+    [Ownership unresolved](resource-checkout-authority.md#ownership-unresolved);
   - an authority missing from `authorities`, or not `reachable`, shows
     **Authority unreachable** and blocks every action;
   - `available` with capacity fully held shows **Busy**;
@@ -91,6 +96,12 @@ simulated results.
   `onViewerMachine`. Set `onViewerMachine` only after both machine-ids
   resolve and match; an unresolved id leaves a peer's broker under
   Federation.
+- **One canonical key rule.** A key is a lowercase scheme, a colon and an
+  identifier, such as `device:bench-scope/usb-3`; `machine:` is reserved for
+  this machine's capacity. The Register dialog checks it as the operator
+  types with `canonicalResourceKeyProblem` from the shared contract, the
+  same function the main process parses with, and keeps **Save draft**
+  disabled while it reports a problem.
 
 ## Action semantics
 

@@ -4,7 +4,23 @@ import type {
 } from "@pwragent/owner-core/resource-checkout-storage";
 import { attachSqliteWriteMetrics, isSqliteWriteMetricsEnabled } from "./sqlite-write-metrics";
 
-export function openResourceCheckoutStore(path: string, identity: string): CheckoutStore & { close(): void } {
+/** The store was created under another machine identity: a copied or cloned root. */
+export class CheckoutStoreIdentityError extends Error {
+  constructor() {
+    super("The checkout store belongs to another machine identity.");
+    this.name = "CheckoutStoreIdentityError";
+  }
+}
+
+/**
+ * `adoptIdentity` takes over a store created under another identity: the
+ * operator chose to keep a copied root on this machine.
+ */
+export function openResourceCheckoutStore(
+  path: string,
+  identity: string,
+  options?: { adoptIdentity?: boolean },
+): CheckoutStore & { close(): void } {
   const db = new Database(path, { timeout: 2_000 });
   try {
     db.pragma("journal_mode = WAL");
@@ -19,7 +35,10 @@ export function openResourceCheckoutStore(path: string, identity: string): Check
       `);
       const saved = db.prepare("SELECT identity FROM checkout_identity WHERE singleton = 1").pluck().get();
       if (saved === undefined) db.prepare("INSERT INTO checkout_identity VALUES (1, ?)").run(identity);
-      else if (saved !== identity) throw new Error("The checkout store belongs to another machine identity.");
+      else if (saved !== identity) {
+        if (!options?.adoptIdentity) throw new CheckoutStoreIdentityError();
+        db.prepare("UPDATE checkout_identity SET identity = ? WHERE singleton = 1").run(identity);
+      }
     }).immediate();
     if (isSqliteWriteMetricsEnabled()) attachSqliteWriteMetrics({ db, dbPath: path });
     const read = db.prepare("SELECT record FROM checkout_domains WHERE id = ?").pluck();

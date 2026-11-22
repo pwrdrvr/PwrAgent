@@ -26,6 +26,27 @@ import type { AppServerBackendKind } from "./normalized-app-server";
 
 export const RESOURCE_CHECKOUTS_CONTRACT_VERSION = 1;
 
+/** Shown as the format hint wherever an operator types a canonical key. */
+export const CANONICAL_RESOURCE_KEY_EXAMPLE = "device:bench-scope/usb-3";
+
+const CANONICAL_RESOURCE_KEY = /^[a-z0-9][a-z0-9._-]*:[A-Za-z0-9._/:-]+$/;
+
+/**
+ * Why `key` can't name a capacity domain, or `undefined` when it can. One
+ * rule for the Register dialog, operator drafts and the authorities file: a
+ * lowercase scheme, a colon, and a stable identifier. The key only has to be
+ * the same everywhere the resource is shared; hostnames and paths are fine.
+ * `machine:` is reserved for the built-in machine pool.
+ */
+export function canonicalResourceKeyProblem(key: string): string | undefined {
+  if (key.length === 0 || key.length > 160) return "Use 1 to 160 characters.";
+  if (!CANONICAL_RESOURCE_KEY.test(key)) {
+    return `Use a lowercase scheme, a colon and an identifier, such as ${CANONICAL_RESOURCE_KEY_EXAMPLE}.`;
+  }
+  if (key.startsWith("machine:")) return "machine: keys are reserved for this machine's capacity.";
+  return undefined;
+}
+
 /** One complete, revisioned view of every resource this instance can see. */
 export type ResourceCheckoutsSnapshot = {
   contractVersion: typeof RESOURCE_CHECKOUTS_CONTRACT_VERSION;
@@ -112,8 +133,10 @@ export type ResourceEnforcement = {
  * - `waiting_interactive`: granted, but a prerequisite only a person can
  *   satisfy is missing (for example a signed-in desktop session).
  * - `unreachable`: the authority can't be reached. Cached state only.
- * - `ownership_unresolved`: identity or authority conflict. Records are
- *   quarantined; nothing is granted until reconciled.
+ * - `ownership_unresolved`: identity or authority conflict. Nothing is
+ *   granted until it's resolved, either by the operator's
+ *   `resolve_ownership` action when the conflict offers one, or by the
+ *   remedy outside the app that the conflict describes.
  * - `recovery_required`: a lease ended with the workload or cleanup
  *   unverified. Capacity stays reserved.
  * - `pending_registration`: a local definition the registry has not
@@ -319,14 +342,30 @@ export type ResourceRecoveryStatus = {
   actions?: ResourceRecoveryActionGates;
 };
 
+/** The in-app fixes for an unresolved authority. */
+export type ResourceOwnershipResolution =
+  /** Take over a checkout store copied from another machine. */
+  | "adopt_store"
+  /** Replace the saved definition with the configured one. */
+  | "accept_definition";
+
+/**
+ * Why the authority cannot be bound, and what the operator does about it.
+ * Checkouts are cooperative reservations, so a wrong call costs overlapping
+ * work until leases end, not a safety failure.
+ */
 export type ResourceOwnershipConflict = {
   reason: string;
-  candidates: Array<{
-    candidateId: string;
+  /** The operator's next step, as plain text. */
+  remedy: string;
+  /** Present when `resolve_ownership` can fix it from the app. */
+  resolution?: {
+    kind: ResourceOwnershipResolution;
+    /** The button and dialog action, e.g. "Adopt for this machine". */
     label: string;
-    detail: string;
-    observedAt: number;
-  }>;
+    /** What changes when it's applied, as plain text. */
+    consequence: string;
+  };
 };
 
 export type ResourceDefinitionStatus = {
@@ -422,7 +461,7 @@ export type ResourceCheckoutActionRequest =
     kind: "resolve_ownership";
     idempotencyKey: string;
     resourceId: string;
-    canonicalCandidateId: string;
+    resolution: ResourceOwnershipResolution;
   }
   | {
     kind: "register_definition";
