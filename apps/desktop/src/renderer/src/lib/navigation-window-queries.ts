@@ -613,7 +613,7 @@ export class NavigationWindowQueries {
 
   private eventAffectsResource(resource: Resource, event: AgentEvent, directoryScope?: readonly string[], gitRevisions?: NavigationDirectoryGitRevisions): boolean {
     const request = resource.value.state.request;
-    const params = event.notification.params as { sourceMethod?: unknown; threadId?: unknown; worktreePath?: unknown; directoryKey?: unknown; instanceId?: string; prKey?: string;
+    const params = event.notification.params as { sourceMethod?: unknown; threadId?: unknown; worktreePath?: unknown; directoryKey?: unknown; instanceId?: string;
       rowChanges?: Array<{ backend: AgentEvent["backend"]; threadId: string; ownerInstanceId: string }> };
     const method = event.notification.method === "navigation/invalidated" ? params?.sourceMethod : event.notification.method;
     const page = resource.value.state.page;
@@ -647,7 +647,7 @@ export class NavigationWindowQueries {
       if (request.query.kind === "directory-index") return false;
       if (resource.membershipUncertain || resource.prAttachmentsUncertain || page?.coverage.state !== "complete") return true;
       const dependencies = this.ownerPageProofs.get(page)?.dependencies ?? this.metadataDependencies(page);
-      const key = typeof params.prKey === "string" && params.prKey ? params.prKey : undefined;
+      const key = event.notification.method === "pullRequest/status/updated" ? event.notification.params.prKey : undefined;
       if (dependencies?.prKeysComplete) {
         return dependencies.prKeys.some((candidate) => !key || navigationPullRequestKeysMayMatch(candidate, key));
       }

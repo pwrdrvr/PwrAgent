@@ -987,7 +987,6 @@ export function navigationInvalidationForLocalEvent(event: AgentEvent): AgentEve
       method: "navigation/invalidated",
       params: {
         sourceMethod: event.notification.method,
-        ...(event.notification.method === "pullRequest/status/updated" ? { prKey: identity(params.prKey) } : {}),
         ...(event.notification.method === "navigation/threadGitWorkingState/updated"
           ? { worktreePath: identity(params.worktreePath) } : {}),
         threadId: identity(params.threadId ?? thread?.id ?? action?.threadId),

@@ -303,7 +303,7 @@ it("reads only PR-bearing rows and never list counts on a PR-only change", async
       read.mockClear();
       const prKey = "github.com/fixture/changes#71";
       queries.invalidate(undefined, [target ?? { scope: "local" }], { backend: "codex", federationTarget: target,
-        notification: target ? { method: "navigation/invalidated", params: { sourceMethod: "pullRequest/status/updated", prKey } }
+        notification: target ? { method: "navigation/invalidated", params: { sourceMethod: "pullRequest/status/updated" } }
           : { method: "pullRequest/status/updated", params: { prKey, pr } } });
       await queries.refresh(undefined, undefined, true);
       expect(read.mock.calls.map(([sent]) => sent.query.kind).sort()).toEqual(["children", "exact"]);
@@ -336,9 +336,9 @@ it("keeps PR recovery live through an attachment race, legacy notices and stream
     const delayed = deferred<NavigationQueryPage>();
     const api = vi.fn(async () => page(value));
     const queries = new NavigationWindowQueries({ getNavigationQueryPage: api });
-    const invalidate = (sourceMethod: string, prKey?: string) => queries.invalidate(undefined, [target], {
+    const invalidate = (sourceMethod: string) => queries.invalidate(undefined, [target], {
       backend: "codex", federationTarget: target, notification: { method: "navigation/invalidated",
-        params: { sourceMethod, prKey, ...(sourceMethod === "thread/pullRequests/updated" ? { threadId: ref.threadId } : {}) } },
+        params: { sourceMethod, ...(sourceMethod === "thread/pullRequests/updated" ? { threadId: ref.threadId } : {}) } },
     });
     const current = () => queries.getSnapshot().resources.get("project")?.state.page?.entries[0]?.row;
     try {
@@ -352,13 +352,13 @@ it("keeps PR recovery live through an attachment race, legacy notices and stream
       const attachmentRead = queries.refresh(undefined, undefined, true);
       await started.promise;
       value = 2;
-      invalidate("pullRequest/status/updated", key);
+      invalidate("pullRequest/status/updated");
       delayed.resolve(page(1));
       await attachmentRead;
       expect(current()?.prs?.[0]?.state).toBe("passing");
 
       value = 3;
-      invalidate("pullRequest/status/updated"); // Older peer omits the key.
+      invalidate("pullRequest/status/updated");
       await queries.refresh(undefined, undefined, true);
       expect(current()?.prs?.[0]?.state).toBe("merged");
 
