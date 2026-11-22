@@ -607,10 +607,13 @@ describe("Get started projects", () => {
     setClaudeSignIn({ onSignIn: () => undefined, signingIn: false });
   }
 
-  function renderWithClaudeChecks(checks: readonly ClaudeCheck[]) {
+  function renderWithClaudeChecks(
+    checks: readonly ClaudeCheck[],
+    discoverRecentProjects: DesktopApi["discoverRecentProjects"] = discovery(1),
+  ) {
     let check = 0;
     const desktopApi = api({
-      discoverRecentProjects: discovery(1),
+      discoverRecentProjects,
       listBackends: vi.fn(async () => ({
         fetchedAt: 1,
         backends: [claudeAfter(checks[Math.min(check++, checks.length - 1)])],
@@ -638,6 +641,55 @@ describe("Get started projects", () => {
     }
     await settle();
     expect(desktopApi.discoverRecentProjects).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the refreshed Claude Code projects when the signed-out look answers last", async () => {
+    vi.stubEnv("DEV", false);
+    const now = Date.now();
+    const codexApp = { path: "/home/sam/code/codex-app", agent: "codex" as const, lastActiveAt: now - DAY };
+    const signedOut = Promise.withResolvers<DiscoverRecentProjectsResponse>();
+    const signedIn = Promise.withResolvers<DiscoverRecentProjectsResponse>();
+    const discoverRecentProjects = vi.fn<NonNullable<DesktopApi["discoverRecentProjects"]>>()
+      .mockReturnValueOnce(signedOut.promise)
+      .mockReturnValueOnce(signedIn.promise);
+    const { desktopApi, setClaudeSignIn } = renderWithClaudeChecks(
+      ["sign-in-required", "signed-in"],
+      discoverRecentProjects,
+    );
+    // The first look starts while Claude Code is signed out, and is held.
+    await waitFor(() => expect(discoverRecentProjects).toHaveBeenCalledOnce());
+    recheck(setClaudeSignIn);
+    await waitFor(() => expect(discoverRecentProjects).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      signedIn.resolve({
+        sources: [
+          { agent: "codex", label: "Codex", status: "complete" },
+          { agent: "claude", label: "Claude Code", status: "complete" },
+        ],
+        observations: [codexApp, { path: "/home/sam/code/claude-app", agent: "claude", lastActiveAt: now }],
+      });
+    });
+    await waitFor(() => expect(projectBoxes()).toHaveLength(2));
+    // The signed-out answer arrives last. It read no Claude Code history.
+    await act(async () => {
+      signedOut.resolve({
+        sources: [
+          { agent: "codex", label: "Codex", status: "complete" },
+          { agent: "claude", label: "Claude Code", status: "skipped" },
+        ],
+        observations: [codexApp],
+      });
+    });
+    await settle();
+    const claudeRow = screen.getByText("claude-app", { selector: ".get-started__agent-name" }).closest("li")!;
+    expect(within(claudeRow).getByRole("checkbox")).toBeChecked();
+    expect(screen.getByRole("heading", { name: "Projects · 2 selected" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    await waitFor(() => expect(desktopApi.createPwrAgentProfile).toHaveBeenCalledWith({
+      profile: "default",
+      seedOnboardingCompleted: true,
+      seedProjectPaths: ["/home/sam/code/claude-app", "/home/sam/code/codex-app"],
+    }));
   });
 
   it("reads projects one more time exactly when Claude Code first turns ready after the first look", async () => {
