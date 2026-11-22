@@ -14,6 +14,7 @@ import type { McpConnectionBridgeRegistration } from "../mcp-connections/mcp-con
 import type { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
 import { getOwnerHostServices } from "../owner-host";
 import { assertOwnerExecutionPolicy } from "../owner-runtime-policy";
+import { assertAgentCapabilityAdmission } from "./agent-capability-admission";
 import {
   errorMessageFromTerminalNotification,
   finalTextFromTerminalNotification,
@@ -108,6 +109,10 @@ export class HeadlessAutomationTurns {
       backend: params.backend,
       threadId: params.agentThreadId,
     });
+    assertAgentCapabilityAdmission(overlay?.agent?.capabilityPolicy, {
+      backend: params.backend,
+      threadId: params.agentThreadId,
+    }, "automation");
     const executionMode = params.executionMode ?? overlay?.executionMode ?? "default";
     const modeSettings = executionModeSettings(executionMode);
     // An automation turn has nobody watching it, so only Auto asks, and only

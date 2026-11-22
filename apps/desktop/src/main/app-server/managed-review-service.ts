@@ -2,6 +2,7 @@ import type { TurnEventDelivery, TurnEventObserver } from "./turn-event-observer
 import { errorMessageFromTerminalNotification, turnIdFromTerminalNotification } from "./backend-registry-notifications";
 import type { RegistryHostPorts } from "./registry-host-ports";
 import { randomUUID } from "node:crypto";
+import { assertAgentCapabilityAdmission } from "./agent-capability-admission";
 import { buildPendingTurnId } from "@pwragent/shared/turn-placeholder";
 import {
   buildThreadIdentityKey,
@@ -402,6 +403,8 @@ export class ManagedReviewService {
     turnAttribution?: ReturnType<typeof delegatedTurnAttribution>,
   ): Promise<StartReviewResponse> {
     this.host().assertThreadOwnership();
+    const overlay = await this.context.stores.threads.getThreadOverlayState(params);
+    assertAgentCapabilityAdmission(overlay?.agent?.capabilityPolicy, params, "child");
     // Retain terminal evidence only for the lifetime of this start request.
     const terminals = this.context.turnState.beginReviewStart(params);
     // Armed before the start, so a review that lands at once still fixes.

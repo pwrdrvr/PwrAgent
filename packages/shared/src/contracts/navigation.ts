@@ -1,5 +1,6 @@
 import type { ForgeCli } from "../forge-product";
 import type { ProjectForgeAutomation } from "../project-forge-automation";
+import type { AgentCapabilityPolicy } from "./agent-capability-policy";
 import type { AppServerTurnInputItem } from "./normalized-app-server";
 import type {
   AcpBackendId,
@@ -114,6 +115,8 @@ export type ThreadAgentMetadata = {
   name: string;
   instructions?: string;
   instructionsDelivery?: ThreadAgentInstructionsDelivery;
+  /** Absent on pre-policy Agents. The owner applies their existing provider settings. */
+  capabilityPolicy?: AgentCapabilityPolicy;
   instructionLineCount: number;
   instructionsTooLong: boolean;
   updatedAt: number;
@@ -125,7 +128,7 @@ export type ThreadAgentMetadata = {
  */
 export type NavigationLaunchpadAgent = Pick<
   ThreadAgentMetadata,
-  "name" | "instructions" | "instructionsDelivery"
+  "name" | "instructions" | "instructionsDelivery" | "capabilityPolicy"
 >;
 
 export type NavigationThreadSummary = AppServerThreadSummary & {
@@ -3109,10 +3112,7 @@ export type SetThreadAgentRequest = {
    * Null removes the Agent marker. Non-null marks this thread as an
    * Agent/persona thread with compact instructions.
    */
-  agent: {
-    name: string;
-    instructions?: string;
-  } | null;
+  agent: Pick<NavigationLaunchpadAgent, "name" | "instructions" | "capabilityPolicy"> | null;
 };
 
 export type SetThreadAgentResponse = {

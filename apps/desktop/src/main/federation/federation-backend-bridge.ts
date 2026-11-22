@@ -2,6 +2,7 @@ import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/con
 import { isAgentMemoryRead } from "@pwragent/shared/contracts/agent-memory";
 import { registerNavigationBackendHandlers, type NavigationBackendOperations } from "./federation-navigation-handlers";
 import { startTurnInputOutcome, steerInputOutcome, type TurnInputOutcome } from "./turn-input-viewers";
+import { assertAgentCapabilityAdmission } from "../app-server/agent-capability-admission";
 import type {
   ManageThreadDependenciesRequest,
   ManageThreadDependenciesResponse,
@@ -2954,6 +2955,7 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   }
 
   async startThread(request: StartThreadRequest): Promise<StartThreadResponse> {
+    assertAgentCapabilityAdmission(request.agent?.capabilityPolicy, request, "interactive");
     return await this.rpc.request<StartThreadResponse>({
       method: FEDERATION_BACKEND_METHODS.startThread,
       params: request,
@@ -3375,6 +3377,10 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   async setThreadAgent(
     request: SetThreadAgentRequest,
   ): Promise<SetThreadAgentResponse> {
+    assertAgentCapabilityAdmission(request.agent?.capabilityPolicy, {
+      backend: request.backend ?? "codex",
+      threadId: request.threadId,
+    }, "interactive");
     try {
       return await this.rpc.request<SetThreadAgentResponse>({
         method: FEDERATION_BACKEND_METHODS.setThreadAgent,
@@ -3617,6 +3623,9 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     request: MaterializeDirectoryLaunchpadRequest,
     options?: MaterializeDirectoryLaunchpadOptions,
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
+    const identity = { backend: request.launchpad?.backend ?? "codex" };
+    assertAgentCapabilityAdmission(request.launchpad?.agent?.capabilityPolicy, identity, "interactive");
+    assertAgentCapabilityAdmission(request.agent?.capabilityPolicy, identity, "interactive");
     const qualified = request.input && this.qualifyThreadLinks(request.input);
     const input = qualified && this.prepareTurnInput
       ? await this.prepareTurnInput(qualified)
