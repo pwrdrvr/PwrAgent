@@ -88,6 +88,11 @@ export function seedAllMessagingProvidersEnabledConfig(homeRoot: string): void {
   writeFileSync(
     configPath,
     [
+      // Settings → Messaging shows the safety screen until this is on record.
+      "[general.messaging_acknowledgment]",
+      'acknowledged_at = "2026-01-02T03:04:05.000Z"',
+      'providers = ["telegram", "discord", "slack", "mattermost", "feishu", "line"]',
+      "",
       "[messaging]",
       "enabled = true",
       "",

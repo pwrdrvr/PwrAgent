@@ -191,7 +191,12 @@ function createSnapshot(
         transcriptTextSize: { value: "md", source: "default" },
       },
       codexProfileModel: { value: "shared", source: "default" },
-      messagingAcknowledgment: { value: null, source: "default" },
+      // On record, so Messaging tests reach the forms. The safety gate's own
+      // tests clear it.
+      messagingAcknowledgment: {
+        value: { acknowledgedAt: "2026-01-02T03:04:05.000Z", providers: [] },
+        source: "config",
+      },
       interactiveSvgSkipNotice: { value: false, source: "default" },
       interactiveSvgAutoOpen: { value: false, source: "default" },
       htmlPreviewRunScripts: { value: false, source: "default" },
@@ -12088,3 +12093,211 @@ function createCatalogRefreshApi() {
     startProviderCatalogRefresh,
   };
 }
+
+describe("Settings → Messaging safety gate", () => {
+  type Patch = Parameters<DesktopSettingsState["writeConfig"]>[0];
+  const MESSAGING_SUBS = [
+    "telegram",
+    undefined,
+    "routes",
+    "discord",
+    "mattermost",
+    "slack",
+    "feishu",
+    "line",
+  ] as const;
+
+  function unacknowledgedSnapshot(): DesktopSettingsSnapshot {
+    const base = createSnapshot();
+    return createSnapshot({
+      general: {
+        ...base.general,
+        messagingAcknowledgment: { value: null, source: "default" },
+      },
+    });
+  }
+
+  /** Settings whose writes land in the snapshot, the way main answers them,
+   *  so an acknowledgement written by the gate lifts it. */
+  function StatefulSettings(props: {
+    initial: DesktopSettingsSnapshot;
+    writes: Patch[];
+    replaceSecret: DesktopSettingsState["replaceSecret"];
+    sub?: string;
+    desktopApi?: DesktopApi;
+  }) {
+    const [snapshot, setSnapshot] = useState(props.initial);
+    const settings: DesktopSettingsState = {
+      ...createSettingsState(snapshot),
+      replaceSecret: props.replaceSecret,
+      writeConfig: async (patch) => {
+        props.writes.push(patch);
+        setSnapshot((current) => {
+          const ack = patch.general?.messagingAcknowledgment;
+          return ack === undefined
+            ? current
+            : {
+                ...current,
+                general: {
+                  ...current.general,
+                  messagingAcknowledgment: { value: ack, source: "config" },
+                },
+              };
+        });
+        return true;
+      },
+    };
+    return (
+      <SettingsScreen
+        desktopApi={props.desktopApi}
+        initialSection="messaging"
+        initialSubsection={props.sub}
+        settings={settings}
+        onClose={() => undefined}
+      />
+    );
+  }
+
+  function secretInputs(): Element[] {
+    return [...document.querySelectorAll('input[type="password"]')];
+  }
+
+  it("lets no provider be configured from any Messaging screen until an acknowledgement is on record", async () => {
+    for (const sub of MESSAGING_SUBS) {
+      const writes: Patch[] = [];
+      const replaceSecret = vi.fn(async () => true);
+      const generateMessagingPairingToken = vi.fn();
+      const setMessagingEnabled = vi.fn();
+      render(
+        <StatefulSettings
+          initial={unacknowledgedSnapshot()}
+          writes={writes}
+          replaceSecret={replaceSecret}
+          sub={sub}
+          desktopApi={{ generateMessagingPairingToken, setMessagingEnabled }}
+        />,
+      );
+      await act(async () => undefined);
+      // The harm first: a token field or an adapter switch on screen.
+      expect(secretInputs()).toHaveLength(0);
+      expect(screen.queryByRole("switch", { name: /Enabled/ })).toBeNull();
+      const pane = await screen.findByRole("region", { name: "Messaging settings" });
+      expect(within(pane).getByText(/I understand\./)).toBeInTheDocument();
+      // Every control on the screen, clicked without ticking the box.
+      for (const button of within(pane).getAllByRole("button")) {
+        fireEvent.click(button);
+      }
+      await act(async () => undefined);
+      expect(secretInputs()).toHaveLength(0);
+      expect(screen.queryByRole("switch", { name: /Enabled/ })).toBeNull();
+      expect(screen.queryByRole("dialog", { name: "Set up messaging" })).toBeNull();
+      expect(writes).toEqual([]);
+      expect(replaceSecret).not.toHaveBeenCalled();
+      expect(generateMessagingPairingToken).not.toHaveBeenCalled();
+      expect(setMessagingEnabled).not.toHaveBeenCalled();
+      // The locked click points at the box instead of doing nothing.
+      expect(
+        pane.querySelector(".guided-setup__safety-ack-flash"),
+      ).not.toBeNull();
+      cleanup();
+    }
+  });
+
+  it("records the acknowledgement in first-run setup's shape, then shows the forms", async () => {
+    const writes: Patch[] = [];
+    const base = unacknowledgedSnapshot();
+    const initial = createSnapshot({
+      ...base,
+      messaging: {
+        ...base.messaging,
+        discord: {
+          ...base.messaging.discord,
+          enabled: { value: true, source: "config" },
+        },
+      },
+    });
+    render(
+      <StatefulSettings
+        initial={initial}
+        writes={writes}
+        replaceSecret={vi.fn(async () => true)}
+        sub="telegram"
+      />,
+    );
+    fireEvent.click(await screen.findByRole("checkbox", { name: /I understand\./ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue to messaging settings" }));
+    await screen.findByRole("region", { name: "Telegram messaging settings" });
+    expect(writes).toHaveLength(1);
+    const ack = writes[0]?.general?.messagingAcknowledgment;
+    expect(Object.keys(writes[0] ?? {})).toEqual(["general"]);
+    expect(ack?.providers).toEqual(["discord", "telegram"]);
+    expect(new Date(ack?.acknowledgedAt ?? "").toISOString()).toBe(ack?.acknowledgedAt);
+    expect(secretInputs().length).toBeGreaterThan(0);
+  });
+
+  it("opens the guided Telegram setup from the gate after recording the acknowledgement", async () => {
+    const writes: Patch[] = [];
+    render(
+      <StatefulSettings
+        initial={unacknowledgedSnapshot()}
+        writes={writes}
+        replaceSecret={vi.fn(async () => true)}
+      />,
+    );
+    const guided = await screen.findByRole("button", {
+      name: "Set up Telegram step by step →",
+    });
+    fireEvent.click(guided);
+    expect(screen.queryByRole("dialog", { name: "Set up messaging" })).toBeNull();
+    fireEvent.click(screen.getByRole("checkbox", { name: /I understand\./ }));
+    fireEvent.click(guided);
+    const dialog = await screen.findByRole("dialog", { name: "Set up messaging" });
+    expect(
+      await within(dialog).findByRole("heading", { name: "Connect Telegram" }),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Bot token")).toBeInTheDocument();
+    expect(writes[0]?.general?.messagingAcknowledgment?.providers).toEqual(["telegram"]);
+    // Opening the step switches nothing on: with no token stored, skipping
+    // it or closing the flow must not leave the adapter enabled.
+    expect(writes.filter((patch) => patch.messaging?.telegram?.enabled)).toEqual([]);
+  });
+
+  it("puts the safety screen back over a guided provider step when the record is cleared", async () => {
+    const replaceSecret = vi.fn(async () => true);
+    const acknowledged = createSnapshot();
+    const settings = createSettingsState(acknowledged);
+    const view = render(
+      <SettingsScreen
+        initialSection="messaging"
+        settings={{ ...settings, replaceSecret }}
+        onClose={() => undefined}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Set up Telegram" }));
+    const dialog = await screen.findByRole("dialog", { name: "Set up messaging" });
+    expect(within(dialog).getByLabelText("Bot token")).toBeInTheDocument();
+
+    // Another window clears the acknowledgement in Settings → General.
+    view.rerender(
+      <SettingsScreen
+        initialSection="messaging"
+        settings={{ ...settings, snapshot: unacknowledgedSnapshot(), replaceSecret }}
+        onClose={() => undefined}
+      />,
+    );
+    const reopened = screen.getByRole("dialog", { name: "Set up messaging" });
+    expect(within(reopened).queryByLabelText("Bot token")).toBeNull();
+    expect(within(reopened).getByText(/I understand\./)).toBeInTheDocument();
+    expect(replaceSecret).not.toHaveBeenCalled();
+    // It comes back unticked: Continue can't rewrite the record until the
+    // operator ticks the box again.
+    expect(
+      within(reopened).getByRole("checkbox", { name: /I understand\./ }),
+    ).not.toBeChecked();
+    vi.mocked(settings.writeConfig).mockClear();
+    fireEvent.click(
+      within(reopened).getByRole("button", { name: "Continue with messaging →" }),
+    );
+    expect(settings.writeConfig).not.toHaveBeenCalled();
+  });
+});

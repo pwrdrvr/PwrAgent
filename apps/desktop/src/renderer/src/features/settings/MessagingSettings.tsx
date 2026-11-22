@@ -103,6 +103,7 @@ import {
 import { SLACK_EVENTS_API_UNIMPLEMENTED_NOTICE } from "../messaging/slack-connect-copy";
 import { slackCredentialProblem } from "../messaging/slack-token-shape";
 import { SettingsTestBlock } from "./SettingsTestBlock";
+import { GuidedSetupButton } from "./guided-setup/GuidedSetupLauncher";
 import {
   ApprovedSurfaceDefaultAgent,
   PlatformDefaultAgentSetup,
@@ -492,12 +493,32 @@ export function MessagingSettings(props: {
           eyebrow="Messaging"
           title={focusedPlatformLabel}
           help={`Adapter switch, tokens, pairing, and access controls for the ${focusedPlatformLabel} bridge.`}
+          action={
+            props.focus ? (
+              <GuidedSetupButton request={{ flow: "messaging", provider: props.focus }}>
+                Set up {focusedPlatformLabel} step by step
+              </GuidedSetupButton>
+            ) : undefined
+          }
         />
       ) : (
         <SettingsPanelHead
           eyebrow="Messaging"
           title="Connected chat platforms"
           help="Bridge PwrAgent threads to messaging platforms so you can drive runs from your phone. Tokens are stored in the system keychain. Authorization defaults closed: if no allowed IDs are configured, inbound messages are discarded but logged in Messaging Activity so you can copy IDs into the allowlist."
+          action={
+            <>
+              <GuidedSetupButton request={{ flow: "messaging" }}>
+                Set up messaging
+              </GuidedSetupButton>
+              <GuidedSetupButton
+                request={{ flow: "messaging", provider: "telegram" }}
+                variant="primary"
+              >
+                Set up Telegram
+              </GuidedSetupButton>
+            </>
+          }
         />
       )}
 

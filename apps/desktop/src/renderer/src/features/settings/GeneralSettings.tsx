@@ -732,8 +732,8 @@ export function GeneralSettings(props: {
       <SettingsSection eyebrow="General" title="Messaging acknowledgment">
         <div className="settings-fields">
           <SettingsField
-            label="First-run acknowledgment"
-            sub="Your record of when you acknowledged the messaging-safety preamble in the first-run wizard."
+            label="Safety acknowledgment"
+            sub="Your record of when you acknowledged the messaging-safety principles. Settings → Messaging shows them again until one is on record."
             help={
               messagingAcknowledgment.value ? (
                 <>
@@ -754,8 +754,8 @@ export function GeneralSettings(props: {
                 </>
               ) : (
                 <>
-                  Not yet acknowledged. Run Help → Replay Onboarding to set up
-                  messaging.
+                  Not yet acknowledged. Open Settings → Messaging to read the
+                  safety principles and set up messaging.
                 </>
               )
             }

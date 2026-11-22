@@ -109,6 +109,7 @@ import {
   openAIDecisionsKeyState,
 } from "./OpenAIDecisionsSettings";
 import { ProfileDecisionsSettings } from "./ProfileDecisionsSettings";
+import { GuidedSetupButton } from "./guided-setup/GuidedSetupLauncher";
 import {
   AUDIO_TRANSCRIPTION_FOCUS,
   modelServicesByKind,
@@ -757,6 +758,11 @@ export function ModelsSettings(props: {
           eyebrow="AI Providers"
           title="Claude"
           help="PwrAgent runs Claude Code with your CLI sign-in."
+          action={
+            <GuidedSetupButton request={{ flow: "agents", agent: "claude" }}>
+              Set up step by step
+            </GuidedSetupButton>
+          }
         />
         <ProviderDefaultsStrip
           backendKind="claude"
@@ -804,6 +810,11 @@ export function ModelsSettings(props: {
           eyebrow="AI Providers"
           title="Codex"
           help="Binary path, auth profile, and connection checks for the Codex CLI behind OpenAI threads."
+          action={
+            <GuidedSetupButton request={{ flow: "agents", agent: "codex" }}>
+              Set up step by step
+            </GuidedSetupButton>
+          }
         />
         <ProviderDefaultsStrip
           backendKind="codex"
@@ -911,6 +922,11 @@ export function ModelsSettings(props: {
         eyebrow="Models"
         title="AI providers"
         help="Choose models for new threads and for work PwrAgent starts on its own, inspect discovered models, and configure provider credentials."
+        action={
+          <GuidedSetupButton request={{ flow: "agents" }} variant="primary">
+            Set up an agent
+          </GuidedSetupButton>
+        }
       />
 
       <ProviderModelDefaultsSettings

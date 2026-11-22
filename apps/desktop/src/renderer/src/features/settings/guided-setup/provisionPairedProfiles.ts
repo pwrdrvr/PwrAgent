@@ -1,0 +1,72 @@
+import { isCanonicalProfileName, normalizeProfileName } from "@pwragent/shared/profile-names";
+import type { DesktopApi } from "../../../lib/desktop-api";
+
+export { normalizeProfileName };
+
+/**
+ * Profile-name guard matching the validation rule the main-process
+ * `createDesktopPwrAgentProfile` and `setDesktopPwrAgentProfileCodexProfile`
+ * IPC handlers enforce: lowercase letters, digits, underscores, hyphens —
+ * 1 to 32 characters, must start with a letter or digit.
+ */
+export function isValidProfileName(name: string): boolean {
+  return isCanonicalProfileName(name);
+}
+
+export type PairedProfileApi = Pick<
+  DesktopApi,
+  | "createPwrAgentProfile"
+  | "createCodexAuthProfile"
+  | "setPwrAgentProfileCodexProfile"
+>;
+
+/**
+ * For each name in the array, provision a paired PwrAgent + Codex auth
+ * profile of the same name and wire the pairing. Invalid names are
+ * silently skipped. Individual failures are logged and do NOT abort the
+ * rest of the batch — the create step needs to land regardless
+ * of one bad provisioning step. (The Settings → Profiles surface owns
+ * recovery for partial provisioning.)
+ *
+ * Returns the list of names that successfully completed all three IPCs
+ * for callers that want to surface "we created N of M" feedback.
+ */
+export async function provisionPairedProfiles(
+  api: PairedProfileApi | undefined,
+  names: readonly string[],
+): Promise<string[]> {
+  if (
+    !api?.createPwrAgentProfile ||
+    !api.createCodexAuthProfile ||
+    !api.setPwrAgentProfileCodexProfile
+  ) {
+    return [];
+  }
+  const created: string[] = [];
+  for (const raw of names) {
+    const name = normalizeProfileName(raw);
+    if (!name) continue;
+    try {
+      await api.createPwrAgentProfile({
+        profile: name,
+        // The operator set this profile up in a guided flow;
+        // first-run setup must not fire the moment they open it.
+        // The flag is honored by the main-process handler in
+        // `apps/desktop/src/main/ipc/profiles.ts`.
+        seedOnboardingCompleted: true,
+      });
+      await api.createCodexAuthProfile({ profile: name });
+      await api.setPwrAgentProfileCodexProfile({
+        profile: name,
+        codexProfile: name,
+      });
+      created.push(name);
+    } catch (caught) {
+      console.warn(
+        `Guided setup: failed to provision paired profile "${name}"`,
+        caught,
+      );
+    }
+  }
+  return created;
+}
