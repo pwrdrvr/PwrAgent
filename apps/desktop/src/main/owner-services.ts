@@ -627,6 +627,7 @@ wireOwnerRendererEvents();
       messagingRuntime.requestBindingRevokeAllForThread(request),
   });
   getDesktopBackendRegistry().setMessagingAgentToolService(messagingRuntime);
+  if (bootMode === "active-profile") registry.setMessagingWorkingUpdatesSettings(settings);
   wireOwnerMessagingServices(messagingRuntime);
 
 

@@ -18,9 +18,10 @@ import {
   type PwrAgentThreadInspectionHandler,
 } from "./pwragent-thread-agent-tools.js";
 import {
-  buildPwrAgentMessagingToolRouter,
+  buildPwrAgentMessagingToolDefinitions,
   type PwrAgentMessagingHandler,
 } from "./pwragent-messaging-agent-tools.js";
+import { buildMessagingWorkingUpdatesToolDefinitions, type MessagingWorkingUpdatesHandler } from "./messaging-working-updates-agent-tools.js";
 import {
   buildPwrAgentThreadOrchestrationToolDefinitions,
   type PwrAgentThreadOrchestrationHandler,
@@ -72,6 +73,7 @@ export function resolveAgentToolCatalogs(params: {
   mcpConnectionHandler?: PwrAgentMcpConnectionHandler;
   mcpGatewayTools?: McpGatewayToolService;
   messagingHandler?: PwrAgentMessagingHandler;
+  messagingWorkingUpdatesHandler?: MessagingWorkingUpdatesHandler;
   taskMonitorHandler?: PwrAgentTaskMonitorHandler;
   threadInspectionHandler?: PwrAgentThreadInspectionHandler;
   forgeReadHandler?: ForgeReadHandler;
@@ -105,7 +107,10 @@ export function resolveAgentToolCatalogs(params: {
     policy: params.forgeToolPolicy,
   }));
   const forgeDynamicTools = forgeRouter.buildDynamicToolSpecs();
-  const messagingRouter = buildPwrAgentMessagingToolRouter(params.messagingHandler);
+  const messagingRouter = new AgentToolRouter([
+    ...buildPwrAgentMessagingToolDefinitions(params.messagingHandler),
+    ...buildMessagingWorkingUpdatesToolDefinitions(params.messagingWorkingUpdatesHandler),
+  ], { unsupportedMessage: "Unsupported PwrAgent messaging tool." });
   const messagingDynamicTools = messagingRouter.buildDynamicToolSpecs();
   const threadOrchestrationRouter = new AgentToolRouter(
     [

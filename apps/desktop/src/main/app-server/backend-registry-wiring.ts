@@ -982,6 +982,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
               mcpConnectionHandler: async (request) =>
                 await ports.handleAgentMcpConnectionRequest(request),
               messagingHandler: ports.messagingHandler,
+              messagingWorkingUpdatesHandler: ports.messagingWorkingUpdatesHandler,
               taskMonitorHandler: async (request) =>
                 await ports.handleAgentTaskMonitorRequest(request),
               threadInspectionHandler: ports.threadInspectionHandler,

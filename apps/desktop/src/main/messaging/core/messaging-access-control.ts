@@ -339,7 +339,11 @@ export class MessagingAccessControl {
     return !context.requestingInstanceId || this.actorHasPermission(source.event, "federation.remote_control");
   }
 
-  async retainedSourceIsAuthorized(source: MessagingRequestSource, verifyAccess = true): Promise<boolean | undefined> {
+  async retainedSourceIsAuthorized(
+    source: MessagingRequestSource,
+    verifyAccess = true,
+    localOnly = false,
+  ): Promise<boolean | undefined> {
     if (!this.context.host().isChannelInScope(source.event.channel)
       || !source.connectionId || source.connectionId !== this.context.adapter.retainedSourceConnectionId?.()
       || !this.context.adapter.authorizeRetainedSource) return false;
@@ -348,7 +352,8 @@ export class MessagingAccessControl {
     if (source.bindingId) {
       const binding = await this.context.store.findActiveBindingForChannel(source.event.channel);
       if (!binding || binding.revokedAt || binding.backend !== source.agent.backend
-        || binding.id !== source.bindingId || binding.threadId !== source.agent.threadId) return false;
+        || binding.id !== source.bindingId || binding.threadId !== source.agent.threadId
+        || (localOnly && binding.federatedThread)) return false;
     } else {
       if (await this.context.store.findActiveBindingForChannel(source.event.channel)) return false;
       // The effective default route, not any older broader matching assignment,
@@ -372,6 +377,19 @@ export class MessagingAccessControl {
   ): Promise<{ owns: boolean; allowed: boolean; permission?: string }> {
     const source = this.retainedRequestSource(context);
     if (!source || !this.context.host().isChannelInScope(source.event.channel)) return { owns: false, allowed: false };
+    const permission = permissionForDynamicTool(check.category, check.tool);
+    if (permission === "tools.messaging_profile_settings") {
+      const active = () => context.turnId && this.context.host().activeAgentMessagingOriginsByTurnKey.get(
+        agentMessagingTurnKey(context.backend, context.threadId, context.turnId),
+      );
+      const origin = active();
+      if (!origin || origin.source?.ref.ownerId !== source.ref.ownerId
+        || origin.source.ref.requestId !== source.ref.requestId || origin.binding?.federatedThread
+        || !await this.retainedSourceIsAuthorized(source, true, true) || active() !== origin) {
+        return { owns: true, allowed: false, permission };
+      }
+      return this.checkDynamicToolPermission(check, source);
+    }
     if (context.containedPeer) {
       const binding = await this.context.store.findActiveBindingForChannel(source.event.channel);
       if (!source.bindingId || binding?.id !== source.bindingId || !containedMessagingBindingMatches(context, binding)) {
@@ -630,9 +648,11 @@ export class MessagingAccessControl {
     }
     const resolution = this.resolveActorPermissions(origin.event);
     if (resolution === null) {
-      if (params.tool === "manage_pwragent") {
-        // Lifecycle control requires an explicit current grant, including in legacy mode.
-        return { owns: true, allowed: false, permission: "tools.instance_lifecycle" };
+      const explicitPermission = params.tool === "manage_pwragent"
+        ? "tools.instance_lifecycle"
+        : permissionForDynamicTool(params.category, params.tool);
+      if (explicitPermission === "tools.instance_lifecycle" || explicitPermission === "tools.messaging_profile_settings") {
+        return { owns: true, allowed: false, permission: explicitPermission };
       }
       // Legacy-compatible mode: full capability, exactly as before RBAC.
       return { owns: true, allowed: true };

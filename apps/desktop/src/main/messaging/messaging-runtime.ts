@@ -1,6 +1,7 @@
 import { CONTAINED_OUTPOST_MESSAGING_OPERATIONS } from "@pwragent/federation/federation-backend-methods";
 import { validateMessagingFileMetadata } from "@pwragent/agent-tools/messaging-outbound-file";
 import { matchesAutomationConversation } from "@pwragent/shared/contracts/automations";
+import { permissionForDynamicTool } from "@pwragent/shared/contracts/rbac";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createMessagingRequestStorage } from "../storage/desktop-messaging-storage";
 import { setFederationMessagingDestinationHandler } from "../federation/federation-messaging-tools";
@@ -687,6 +688,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   ): Promise<DynamicToolPermissionResult> {
     if (context.causalMessagingAmbiguous) return { allowed: false, permission: "message.reply" };
     const sourceOwner = context.causalMessagingSource?.instanceId;
+    if (permissionForDynamicTool(check.category, check.tool) === "tools.messaging_profile_settings"
+      && (context.requestingInstanceId || !sourceOwner
+        || sourceOwner !== getDesktopFederationRuntime().knownLocalInstanceId())) {
+      return { allowed: false, permission: "tools.messaging_profile_settings" };
+    }
     if (sourceOwner && sourceOwner !== getDesktopFederationRuntime().messagingSourceInstanceId()) {
       try {
         const result = await getDesktopFederationRuntime().requestMessagingDestination(sourceOwner, { kind: "authorize", context, check });

@@ -15,7 +15,7 @@ export interface MessagingAccessHost {
   readonly desktopActivityLog: () => MessagingActivityStorage | undefined;
   readonly deliver: (intent: MessagingSurfaceIntent, binding?: MessagingBindingRecord, event?: MessagingInboundEvent, guard?: MessagingDeliveryGuard) => Promise<MessagingDeliveryResult>;
   readonly newIntentId: (prefix: string) => string;
-  readonly activeAgentMessagingOriginsByTurnKey: Pick<ReadonlyMap<string, Pick<ActiveAgentMessagingOrigin, "event" | "source">>, "get">;
+  readonly activeAgentMessagingOriginsByTurnKey: Pick<ReadonlyMap<string, Pick<ActiveAgentMessagingOrigin, "event" | "source" | "binding">>, "get">;
   readonly storePendingIntent: (intent: MessagingSurfaceIntent, binding?: MessagingBindingRecord, event?: MessagingInboundEvent, options?: { expiresAt?: number; }) => Promise<MessagingPendingIntentRecord>;
   readonly isChannelInScope: (channel: MessagingBindingRecord["channel"] | undefined) => boolean;
 }

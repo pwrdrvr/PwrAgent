@@ -1889,6 +1889,19 @@ export class DesktopSettingsService {
     return resolveMessagingSettingsDomain(this.readMessagingConfig(), this.env);
   }
 
+  async setDevelopmentWorkingUpdatesDefault(mode: MessagingToolUpdateMode) {
+    if (this.configStore.fileStatus().kind === "invalid") {
+      throw new Error("Cannot save the Working Updates default while the profile configuration is invalid.");
+    }
+    const current = this.readMessagingSettings().toolUpdateMode;
+    if (current.value === mode) return { ...current, changed: false };
+    const update = await this.writeConfigPatchTargeted({ messaging: { toolUpdateMode: mode } });
+    return {
+      ...resolveMessagingSettingsDomain(update.values.messaging, this.env).toolUpdateMode,
+      changed: true,
+    };
+  }
+
   async readMessagingProjection(): Promise<DesktopMessagingSettingsProjection> {
     const override = resolveRuntimeMessagingOverride({
       argv: this.argv,

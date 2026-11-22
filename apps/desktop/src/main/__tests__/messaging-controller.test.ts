@@ -6767,6 +6767,52 @@ describe("MessagingController", () => {
     } finally { db.close(); }
   });
 
+  it.each(["binding", "default", "legacy"] as const)(
+    "requires a live provider actor and an explicit profile-settings grant on the %s route",
+    async (route) => {
+      const db = StateDb.open(":memory:");
+      let disposeController: (() => void) | undefined;
+      try {
+        let member = true;
+        const permissions: MessagingPermissionId[] = ["message.reply", "thread.settings.tool_updates"];
+        const navigation = buildNavigationSnapshot();
+        if (route === "default") {
+          navigation.threads[0]!.agent = { name: "Fixture Agent", instructionLineCount: 1, instructionsTooLong: false, updatedAt: 1000 };
+        }
+        const harness = await createHarness({
+          requestStore: new SqliteMessagingRequestStore(db.raw),
+          authorizeRetainedSource: (_event, verify = true) => !verify || member,
+          navigation,
+          rbacPolicy: route === "legacy" ? undefined : rbacProviderGranting(permissions),
+        });
+        disposeController = () => harness.controller.dispose();
+        const event = buildTextEvent("Read the Working Updates default", { botMention: true, channel: buildTopicChannel("400") });
+        if (route === "default") await seedConversationDefaultAgent(harness.store, event.channel);
+        else await harness.store.upsertBinding({ id: "bound", backend: "codex", threadId: "thread-1", targetKind: "thread",
+          channel: event.channel, authorizedActorIds: ["user-1"], createdAt: 1000, updatedAt: 1000 });
+        await harness.controller.handleInboundEvent(event);
+        const source = harness.startTurn.mock.calls[0]?.[0].messageOrigin?.causalMessagingSource;
+        expect(source).toBeDefined();
+        const context = { backend: "codex" as const, threadId: "thread-1", turnId: "turn-1", causalMessagingSource: source };
+        const check = { ...context, category: "messaging_context" as const, tool: "set_messaging_working_updates_default" };
+        const authorize = () => harness.controller.authorizeRetainedTool(context, check);
+        const denied = { owns: true, allowed: false, permission: "tools.messaging_profile_settings" };
+        expect(await authorize()).toEqual(denied);
+        permissions.push("tools.messaging_profile_settings");
+        expect(await authorize()).toEqual(route === "legacy" ? denied : { owns: true, allowed: true });
+        expect(await harness.controller.authorizeRetainedTool({ ...context, turnId: "completion" }, check)).toEqual(denied);
+        member = false;
+        expect(await authorize()).toEqual(denied);
+        member = true;
+        permissions.pop();
+        expect(await authorize()).toEqual(denied);
+      } finally {
+        disposeController?.();
+        db.close();
+      }
+    },
+  );
+
   it("rechecks revocation after provider preflight and before creating a retained destination", async () => {
     const db = StateDb.open(":memory:");
     try {
@@ -22479,6 +22525,35 @@ describe("MessagingController", () => {
         ],
       }),
     ]);
+  });
+
+  it.each([undefined, "show_some"] as const)("applies the changed profile default with binding mode %s", async (override) => {
+    let mode: MessagingToolUpdateMode = "show_some";
+    const harness = await createHarness({ toolUpdateDefaultMode: () => mode });
+    const channel = buildTopicChannel("400");
+    await harness.store.upsertBinding({ id: "binding", backend: "codex", threadId: "thread-1", targetKind: "thread",
+      channel, authorizedActorIds: ["user-1"], createdAt: 1000, updatedAt: 1000,
+      ...(override ? { preferences: { toolUpdateMode: override, updatedAt: 1000 } } : {}) });
+    const delivered = (text: string) => harness.delivered
+      .some((intent) => intent.kind === "message" && JSON.stringify(intent.parts).includes(text));
+    await harness.controller.handleInboundEvent(buildTextEvent("start work", { channel }));
+    try {
+      await harness.controller.handleBackendEvent(buildToolCompletedEvent("before", "echo before"));
+      expect(delivered("Tool update: echo before")).toBe(true);
+      mode = "show_none";
+      await harness.controller.handleBackendEvent(buildToolCompletedEvent("after", "echo after"));
+      expect(delivered("Tool update: echo after")).toBe(override !== undefined);
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "item/completed", params: {
+          threadId: "thread-1", turnId: "turn-1",
+          item: { id: "final", type: "agentMessage", text: "The work is complete." },
+        },
+      } });
+      expect(delivered("The work is complete.")).toBe(true);
+      expect((await harness.store.getBinding("binding"))?.preferences?.toolUpdateMode).toBe(override);
+    } finally {
+      harness.controller.dispose();
+    }
   });
 
   it("delivers completed ACP tool updates as generated system messages", async () => {
