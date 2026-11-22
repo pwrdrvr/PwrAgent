@@ -383,6 +383,8 @@ jobs:
         timeout-minutes: 10
         env:
           PWRAGENT_CI_TEST_REPORT: ${{ github.workspace }}/.local/ci/retry/unit-first.json
+          PWRAGENT_DEV_SQLITE_WRITE_METRICS: ${{ github.event_name == 'pull_request' && '1' || '' }}
+          PWRAGENT_DEV_SQLITE_WRITE_METRICS_FILE: ${{ github.event_name == 'pull_request' && format('{0}/.local/ci/sqlite-writes/first.jsonl', github.workspace) || '' }}
         run: >-
           ${{ needs.pr-test-impact-plan.outputs.unit_mode == 'selected'
           && format('pnpm exec node scripts/ci/run-pr-test-impact.mjs unit linux {0}', matrix.lane)
@@ -396,6 +398,10 @@ jobs:
       - name: Retry failed unit tests
         id: unit-retry
         if: steps.unit-tests.outcome == 'failure'
+        env:
+          # Keep the same accounting on the retry so a budget mismatch still fails.
+          PWRAGENT_DEV_SQLITE_WRITE_METRICS: ${{ github.event_name == 'pull_request' && '1' || '' }}
+          PWRAGENT_DEV_SQLITE_WRITE_METRICS_FILE: ${{ github.event_name == 'pull_request' && format('{0}/.local/ci/sqlite-writes/retry.jsonl', github.workspace) || '' }}
         run: pnpm exec node scripts/ci/run-retry-failures.mjs unit
 
       - name: Record retry slice
@@ -425,6 +431,40 @@ jobs:
         if: matrix.lane == 1
         timeout-minutes: 2
         run: pnpm --filter pwragent test
+
+      - name: Report SQLite writes
+        id: sqlite-write-report
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && (steps.unit-tests.outcome == 'success' || steps.unit-tests.outcome == 'failure') }}
+        shell: bash
+        env:
+          RETRY_OUTCOME: ${{ steps.unit-retry.outcome }}
+        run: |
+          directory=.local/ci/sqlite-writes
+          mkdir -p "$directory"
+          attempts=(first)
+          if [[ "$RETRY_OUTCOME" == success || "$RETRY_OUTCOME" == failure ]]; then
+            attempts+=(retry)
+          fi
+          for attempt in "${attempts[@]}"; do
+            {
+              echo "SQLite writes ($attempt attempt)"
+              if [[ -s "$directory/$attempt.jsonl" ]]; then
+                node scripts/report-sqlite-writes.mjs "$directory/$attempt.jsonl" --top 15
+              else
+                echo "No SQLite writes recorded."
+              fi
+            } | tee "$directory/$attempt.txt"
+          done
+
+      - name: Upload SQLite write reports
+        if: ${{ !cancelled() && steps.sqlite-write-report.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-unit-sqlite-writes-lane-${{ matrix.lane }}-attempt-${{ github.run_attempt }}
+          path: .local/ci/sqlite-writes/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
 
   test-result:
     # Preserve the required `Test` status-check context while the work runs
