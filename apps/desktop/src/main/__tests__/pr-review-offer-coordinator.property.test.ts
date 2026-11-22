@@ -548,6 +548,22 @@ describe("PR review and merge offers", () => {
     }
   });
 
+  it("withdraws a merge card when a newer review opens findings while CI is failing", async () => {
+    const harness = createHarness();
+    try {
+      harness.world.ci = "passing";
+      await transition(harness, { checkState: { from: "pending", to: "passing" } });
+      await reviewChanged(harness, recordReview(harness.world, 0));
+      expect(openOfferCards(harness.todos).map((card) => card.action?.type)).toEqual(["merge_pull_request"]);
+      harness.world.ci = "failing";
+      await transition(harness, { checkState: { from: "passing", to: "failing" } });
+      await reviewChanged(harness, recordReview(harness.world, 1));
+      expect(openOfferCards(harness.todos)).toEqual([]);
+    } finally {
+      harness.close();
+    }
+  });
+
   it("counts the commit recording a reviewed working tree as reviewed, and nothing after it", async () => {
     const harness = createHarness();
     try {

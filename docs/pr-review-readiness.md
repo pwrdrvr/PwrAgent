@@ -97,7 +97,8 @@ example, a finding reopens and settles again at the same head. The withdrawn
 card then reopens rather than adding a new one.
 
 A merge offer is withdrawn when the head moves, a review stops covering it,
-or the PR conflicts or becomes a draft. A merge card whose merge is running
+or the PR conflicts or becomes a draft. A newer review with unsettled
+findings withdraws it too, even while CI is running or failing. A merge card whose merge is running
 is left alone, and no other offer is raised beside it. The next event
 reconciles again. A review offer survives CI runs and
 failures, because the change still needs review. A covering review withdraws
@@ -142,8 +143,8 @@ PwrAgent does no scan at startup, runs no timer, and makes no forge request.
 - **Scope.** Each PR has one owning thread: the elected Auto-fix owner, or
   the first primary-attached thread. The thread must not be archived. Its
   project's forge activity must not be paused. Background polling must be on.
-- **Git.** Git runs only when CI is green, or to withdraw an open review
-  offer. Reviews are read newest first, and the first one covering the head
+- **Git.** Git runs only when CI is green, or to withdraw an open offer: a
+  review offer, or a merge offer for the current head. Reviews are read newest first, and the first one covering the head
   ends the reads. It runs in the thread's own checkout, through the shared
   PR-metadata process pool (purpose `pr-review-coverage`).
   - A head costs three processes once: `merge-base`, `diff`, and `patch-id`.

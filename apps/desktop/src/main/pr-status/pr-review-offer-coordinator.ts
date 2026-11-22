@@ -6,6 +6,7 @@ import type { PrChangeIdentitySource } from "./pr-change-identity";
 import {
   deriveReviewStanding,
   describePrReviewReadiness,
+  type ReviewStanding,
   PR_OFFER_WITHDRAWN_RESULTS,
   desiredPrOffer,
   parsePrOfferId,
@@ -85,6 +86,8 @@ export type PrReviewAssessment = {
   headSha?: string;
   /** A review covers the head, whatever CI says. */
   headCovered: boolean;
+  /** Where the reviews leave the head, when they were read. */
+  standing?: ReviewStanding;
   /**
    * The newest review covering the head, or the latest review with open
    * findings when none covers it. Absent while CI holds readiness back.
@@ -226,10 +229,13 @@ export class PrReviewOfferCoordinator {
         }
       : undefined;
 
-    // Git runs only when CI is green, or to withdraw an open review offer
-    // that a review started some other way has answered.
-    const assessment = await this.assessPr(thread, pr, open?.kind === "review", true);
-    const { readiness, reviewId, headContentId, headCovered } = assessment;
+    // Git runs only when CI is green, or to withdraw an open offer: a review
+    // offer that a review started some other way has answered, or a merge
+    // offer for this head that a newer review has findings against.
+    const withdrawable = open?.kind === "review"
+      || (open?.kind === "merge" && open.headSha === pr.headSha);
+    const assessment = await this.assessPr(thread, pr, withdrawable, true);
+    const { readiness, reviewId, headContentId, headCovered, standing } = assessment;
     const desired = desiredPrOffer({
       prKey,
       readiness,
@@ -241,6 +247,7 @@ export class PrReviewOfferCoordinator {
       desired,
       readiness,
       headCovered,
+      ...(standing ? { standing } : {}),
       ...(pr.headSha ? { headSha: pr.headSha } : {}),
     });
     let raised: PrOffer["kind"] | undefined;
@@ -328,6 +335,7 @@ export class PrReviewOfferCoordinator {
     const standing = deriveReviewStanding(coverage.reviews);
     return {
       readiness: gate ?? standing.readiness,
+      standing: standing.readiness,
       headSha: head!,
       headCovered: coverage.reviews.some((review) => review.coversHead),
       ...(standing.reviewId ? { reviewId: standing.reviewId } : {}),
