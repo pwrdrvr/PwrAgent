@@ -800,7 +800,7 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
     // no `resolve_ownership` gate, so its control never renders; asserted
     // below) and Needs interactive session (no authority reports readiness).
     test("Resources checkout surfaces have no violations", async () => {
-      // Eleven unscoped scans plus a launch.
+      // Twelve unscoped scans plus a launch.
       test.setTimeout(120_000);
       let seed: ResourcesAuditSeed | undefined;
       const app = await launchAuditApp({
@@ -823,7 +823,8 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
         // The row's select button starts with the name; its toggle reads
         // "Show routes for …", and no other control starts with a name.
         const select = async (displayName: string) => {
-          await resources.getByRole("button", { name: new RegExp(`^${displayName} `) }).click();
+          const escaped = displayName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          await resources.getByRole("button", { name: new RegExp(`^${escaped} `) }).click();
           const inspector = inspectorFor(displayName);
           await expect(inspector).toBeVisible();
           return inspector;

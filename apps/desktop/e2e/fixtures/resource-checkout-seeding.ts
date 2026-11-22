@@ -53,26 +53,40 @@ export type ResourcesAuditSeed = {
   machineId: string;
   /** The launched app's machine resource, "This machine". */
   machineResourceId: string;
+  /** Read once, so every seeding service opens the stores under one identity. */
+  hostBinding: string;
+  bootId: string | undefined;
 };
 
-function auditService(seed: ResourcesAuditSeed, hostBinding: string, bootId: string | undefined) {
+function auditService(seed: ResourcesAuditSeed): DesktopResourceCheckoutService {
   // The identity the main process derives in `initializeResourceCheckouts`;
   // a mismatch would quarantine the store.
-  const identity = JSON.stringify([seed.machineId, hostBinding]);
-  return new DesktopResourceCheckoutService({
-    viewer: {
-      instanceId: AUDIT_INSTANCE_ID, profile: "default", machineId: seed.machineId,
-      instanceLabel: "Audit host",
-    },
-    machineStore: openMachineCheckoutStorage(seed.root, identity),
-    externalStore: openFederationCheckoutStorage(seed.root, identity),
-    bindings: readExternalCheckoutBindings(seed.root).bindings,
-    bootId,
-    requestPeer: () => Promise.reject(new Error("The audit has no Federation peers.")),
-    warn: (error) => {
-      throw error;
-    },
-  });
+  const identity = JSON.stringify([seed.machineId, seed.hostBinding]);
+  const opened: Array<{ close(): void }> = [];
+  try {
+    const machineStore = openMachineCheckoutStorage(seed.root, identity);
+    opened.push(machineStore);
+    const externalStore = openFederationCheckoutStorage(seed.root, identity);
+    opened.push(externalStore);
+    return new DesktopResourceCheckoutService({
+      viewer: {
+        instanceId: AUDIT_INSTANCE_ID, profile: "default", machineId: seed.machineId,
+        instanceLabel: "Audit host",
+      },
+      machineStore,
+      externalStore,
+      bindings: readExternalCheckoutBindings(seed.root).bindings,
+      bootId: seed.bootId,
+      requestPeer: () => Promise.reject(new Error("The audit has no Federation peers.")),
+      warn: (error) => {
+        throw error;
+      },
+    });
+  } catch (error) {
+    // A leaked handle keeps the temp root busy on Windows.
+    for (const store of opened) store.close();
+    throw error;
+  }
 }
 
 async function withAuditService(
@@ -80,13 +94,7 @@ async function withAuditService(
   apply: (service: DesktopResourceCheckoutService) => Promise<void>,
   expected: Record<string, ResourceCondition>,
 ): Promise<void> {
-  const evidence = await readMachineCheckoutEvidence();
-  if (!evidence.hostBinding) {
-    // Without it the app opens no Federation store and every hosted
-    // resource would read as unresolved, which is not the state audited.
-    throw new Error("This host reports no machine identity for checkout storage.");
-  }
-  const service = auditService(seed, evidence.hostBinding, evidence.bootId);
+  const service = auditService(seed);
   try {
     await apply(service);
     // Check the seed through the same projection the renderer reads, so a
@@ -149,7 +157,16 @@ export async function seedResourcesAuditState(homeRoot: string): Promise<Resourc
       },
     ],
   }));
-  const seed = { root, machineId, machineResourceId: `machine:${machineId}:cpu` };
+  const evidence = await readMachineCheckoutEvidence();
+  if (!evidence.hostBinding) {
+    // Without it the app opens no Federation store and every hosted
+    // resource would read as unresolved, which is not the state audited.
+    throw new Error("This host reports no machine identity for checkout storage.");
+  }
+  const seed: ResourcesAuditSeed = {
+    root, machineId, machineResourceId: `machine:${machineId}:cpu`,
+    hostBinding: evidence.hostBinding, bootId: evidence.bootId,
+  };
   await withAuditService(seed, async (service) => {
     const hold = await service.perform({
       kind: "request", idempotencyKey: "audit-pool-hold", resourceId: RESOURCES_AUDIT_POOL.resourceId,
