@@ -59,7 +59,7 @@ function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersio
     && row.name !== "thread_sub_agents_padded_child"
     && row.name !== "idx_scheduled_thread_actions_projection_order"
     && row.name !== "idx_scheduled_thread_actions_terminal_updated"
-    && row.name !== "idx_threads_subthread_nonstandard_id"
+    && row.name !== "idx_threads_subthread_noncanonical_id"
     && row.name !== "idx_threads_subthread_parent"
     && row.name !== "remote_thread_pin_mount_insert"
     && row.name !== "remote_thread_pin_mount_update"

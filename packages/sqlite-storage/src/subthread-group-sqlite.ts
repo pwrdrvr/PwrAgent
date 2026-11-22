@@ -7,9 +7,10 @@ import { parseThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 // pairs, so unrelated overlay updates and deletes do not dirty a second tree.
 export const SUBTHREAD_GROUP_INDEXES = `
   DROP INDEX IF EXISTS idx_threads_subthread_id;
-  CREATE INDEX IF NOT EXISTS idx_threads_subthread_nonstandard_id
+  DROP INDEX IF EXISTS idx_threads_subthread_nonstandard_id;
+  CREATE INDEX IF NOT EXISTS idx_threads_subthread_noncanonical_id
     ON threads(CASE WHEN json_valid(payload) THEN json_extract(payload, '$.threadId') END)
-    WHERE CASE WHEN json_valid(payload) THEN thread_id NOT IN (
+    WHERE CASE WHEN json_valid(payload) THEN thread_id IS NULL OR thread_id NOT IN (
       'codex:' || json_extract(payload, '$.threadId'),
       'claude:' || json_extract(payload, '$.threadId')
     ) END;
@@ -20,11 +21,13 @@ export const SUBTHREAD_GROUP_INDEXES = `
 
 export function hasSubthreadGroupIndexes(db: Database.Database): boolean {
   return db.prepare(`SELECT count(*) FROM sqlite_schema WHERE type = 'index'
-    AND tbl_name = 'threads' AND name IN ('idx_threads_subthread_nonstandard_id', 'idx_threads_subthread_parent')`).pluck().get() === 2;
+    AND tbl_name = 'threads' AND name IN ('idx_threads_subthread_noncanonical_id', 'idx_threads_subthread_parent')
+    AND NOT EXISTS (SELECT 1 FROM sqlite_schema WHERE type = 'index'
+      AND name IN ('idx_threads_subthread_id', 'idx_threads_subthread_nonstandard_id'))`).pluck().get() === 2;
 }
 
 type OverlayRow = {
-  storageKey: string;
+  storageKey: string | null;
   backend: AppServerBackendKind | null;
   parentThreadId: string | null;
   parentThreadBackend: AppServerBackendKind | null;
@@ -59,9 +62,9 @@ export function prepareSubthreadGroup(db: Database.Database) {
        WHERE thread_id IN ('codex:' || @id, 'claude:' || @id)
          AND (CASE WHEN json_valid(payload) THEN json_extract(payload, '$.threadId') END) = @id
       UNION
-      SELECT rowid FROM threads INDEXED BY idx_threads_subthread_nonstandard_id
+      SELECT rowid FROM threads INDEXED BY idx_threads_subthread_noncanonical_id
        WHERE (CASE WHEN json_valid(payload) THEN json_extract(payload, '$.threadId') END) = @id
-         AND CASE WHEN json_valid(payload) THEN thread_id NOT IN (
+         AND CASE WHEN json_valid(payload) THEN thread_id IS NULL OR thread_id NOT IN (
            'codex:' || json_extract(payload, '$.threadId'),
            'claude:' || json_extract(payload, '$.threadId')
          ) END
@@ -75,9 +78,9 @@ export function prepareSubthreadGroup(db: Database.Database) {
        WHERE thread_id IN ('codex:' || @id, 'claude:' || @id)
          AND (CASE WHEN json_valid(payload) THEN json_extract(payload, '$.threadId') END) = @id
       UNION ALL
-      SELECT rowid FROM threads INDEXED BY idx_threads_subthread_nonstandard_id
+      SELECT rowid FROM threads INDEXED BY idx_threads_subthread_noncanonical_id
        WHERE (CASE WHEN json_valid(payload) THEN json_extract(payload, '$.threadId') END) = @id
-         AND CASE WHEN json_valid(payload) THEN thread_id NOT IN (
+         AND CASE WHEN json_valid(payload) THEN thread_id IS NULL OR thread_id NOT IN (
            'codex:' || json_extract(payload, '$.threadId'),
            'claude:' || json_extract(payload, '$.threadId')
          ) END
@@ -100,6 +103,9 @@ export function prepareSubthreadGroup(db: Database.Database) {
         }
       }
       for (const row of rows) {
+        // Legacy rows can have payload IDs without a usable storage key.
+        // They still determine provider scope and linked-child ambiguity.
+        if (typeof row.storageKey !== "string") continue;
         const identity = parseThreadIdentityKey(row.storageKey);
         if (identity) scopes.get(identity.backend)?.add(identity.threadId);
       }

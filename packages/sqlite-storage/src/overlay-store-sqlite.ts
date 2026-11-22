@@ -6039,6 +6039,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       [...ids].map((id) => buildThreadIdentityKey(scope, id)));
     const managed = this.readManagedSubAgentThreadKeysForOwners(keys);
     const overlays = new Map(group.rows.flatMap((row) => {
+      if (typeof row.storageKey !== "string") return [];
       const key = normalizeThreadIdentityKey(row.storageKey);
       return key && encodeThreadIdentityKeyForStorage(key) === row.storageKey ? [[key, row] as const] : [];
     }));

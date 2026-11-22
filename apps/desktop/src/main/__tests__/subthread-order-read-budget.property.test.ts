@@ -41,7 +41,7 @@ it("seeks stored subthread membership by parent or child ID regardless of unrela
       })).resolves.toEqual(["fresh"]);
       expect(plans, plans.join("\n")).toEqual(expect.arrayContaining([
         expect.stringMatching(/^SEARCH threads USING (COVERING )?INDEX idx_threads_subthread_parent/),
-        expect.stringMatching(/^SEARCH threads USING (COVERING )?INDEX idx_threads_subthread_nonstandard_id/),
+        expect.stringMatching(/^SEARCH threads USING (COVERING )?INDEX idx_threads_subthread_noncanonical_id/),
         expect.stringMatching(/^SEARCH threads USING (COVERING )?INDEX sqlite_autoindex_threads_1/),
       ]));
       expect(plans.filter((detail) => /^SCAN threads\b/.test(detail))).toEqual([]);
@@ -53,14 +53,20 @@ it("seeks stored subthread membership by parent or child ID regardless of unrela
 });
 
 
-it.each([86, 87, 999])("backfills links when a v%i profile lacks the indexes", async (version) => {
+it.each([86, 87, 999])("converges v%i profiles with missing or obsolete indexes", async (version) => {
   const { dbPath, tempDir } = createTempStateDb("pwragent-subthread-group-");
   try {
     const older = StateDb.open(dbPath);
-    older.raw.exec("DROP INDEX idx_threads_subthread_nonstandard_id; DROP INDEX idx_threads_subthread_parent");
-    if (version === 87) {
+    if (version !== 87) {
+      older.raw.exec("DROP INDEX idx_threads_subthread_noncanonical_id; DROP INDEX idx_threads_subthread_parent");
+    } else {
       older.raw.exec(`CREATE INDEX idx_threads_subthread_id
-        ON threads(CASE WHEN json_valid(payload) THEN json_extract(payload, '$.threadId') END)`);
+        ON threads(CASE WHEN json_valid(payload) THEN json_extract(payload, '$.threadId') END);
+        CREATE INDEX idx_threads_subthread_nonstandard_id
+        ON threads(CASE WHEN json_valid(payload) THEN json_extract(payload, '$.threadId') END)
+        WHERE CASE WHEN json_valid(payload) THEN thread_id NOT IN (
+          'codex:' || json_extract(payload, '$.threadId'), 'claude:' || json_extract(payload, '$.threadId')
+        ) END;`);
     }
     older.raw.pragma(`user_version = ${version}`);
     const insert = older.raw.prepare("INSERT INTO threads(thread_id, payload) VALUES (?, ?)");
@@ -80,7 +86,8 @@ it.each([86, 87, 999])("backfills links when a v%i profile lacks the indexes", a
       const scopes = () => [...store.readSubthreadGroup("codex", "root").scopes].map(([backend, ids]) => [backend, [...ids]]);
       expect(scopes()).toEqual([["codex", ["root"]], ["claude", ["root"]], ["acp:grok", ["root", "legacy"]]]);
       expect(reader.raw.pragma("user_version", { simple: true })).toBe(Math.max(87, version));
-      expect(reader.raw.prepare("SELECT name FROM sqlite_schema WHERE name = 'idx_threads_subthread_id'").get()).toBeUndefined();
+      const indexes = reader.raw.prepare("SELECT name FROM sqlite_schema WHERE name LIKE 'idx_threads_subthread_%' ORDER BY name");
+      expect(indexes.pluck().all()).toEqual(["idx_threads_subthread_noncanonical_id", "idx_threads_subthread_parent"]);
       expect([...store.readSubthreadGroup("codex", "payload-id").scopes.keys()]).toEqual(["codex", "claude"]);
       await expect(store.updateSubthreadOrder({ backend: "codex", parentThreadId: "legacy-parent",
         insertAfter: { threadId: "payload-id", sourceThreadId: "legacy-parent" } })).resolves.toEqual(["payload-id"]);
@@ -98,4 +105,39 @@ it.each([86, 87, 999])("backfills links when a v%i profile lacks the indexes", a
   } finally {
     removeTempStateDbDir(tempDir);
   }
+});
+
+
+it("matches the legacy JSON lookup for NULL keys, aliases, collisions, and malformed payloads", async () => {
+  const rowKinds = ["null", "canonical", "alias", "malformed"] as const;
+  async function check(kinds: readonly (typeof rowKinds)[number][]) {
+    const state = openInMemoryStateDb();
+    try {
+      const store = new SqliteOverlayStore(state);
+      const put = state.raw.prepare("INSERT INTO threads(thread_id, payload) VALUES (?, ?)");
+      const fields = { backend: "claude", threadId: "child", parentThreadId: "root", parentThreadBackend: "codex" };
+      for (const kind of kinds) {
+        if (kind === "malformed") put.run("claude:broken", "{");
+        else put.run(kind === "null" ? null : kind === "canonical" ? "claude:child" : "old-alias", JSON.stringify(fields));
+      }
+      const matches = state.raw.prepare(`SELECT payload FROM threads
+        WHERE CASE WHEN json_valid(payload) THEN json_extract(payload, '$.threadId') = ?
+          AND json_extract(payload, '$.parentThreadId') = ?
+          AND json_extract(payload, '$.parentThreadBackend') = ? END LIMIT 2`).all("child", "root", "codex");
+      const legacyScopes = state.raw.prepare(`SELECT DISTINCT json_extract(payload, '$.backend') AS backend FROM threads
+        WHERE CASE WHEN json_valid(payload) THEN json_extract(payload, '$.parentThreadId') = ?
+          OR json_extract(payload, '$.threadId') = ? END`).all("root", "root") as { backend: "claude" }[];
+      expect([...store.readSubthreadGroup("codex", "root").scopes.keys()])
+        .toEqual(["codex", ...legacyScopes.map(({ backend }) => backend)]);
+      const insertion = store.updateSubthreadOrder({ backend: "codex", parentThreadId: "root",
+        insertAfter: { threadId: "child", sourceThreadId: "root" } });
+      if (matches.length === 1) await expect(insertion).resolves.toEqual(["child"]);
+      else await expect(insertion).rejects.toThrow("no longer places");
+    } finally {
+      state.close();
+    }
+  }
+  await check(["null"]);
+  await check(["null", "canonical", "malformed"]);
+  await fc.assert(fc.asyncProperty(fc.subarray([...rowKinds]), check), { numRuns: 25 });
 });
