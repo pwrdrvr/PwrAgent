@@ -2815,7 +2815,7 @@ function DesktopAppShell(props: {
         threadTodoController.resolve(todo.id, status, resolution, options),
       setItemChecked: (todo, itemId, checked) =>
         threadTodoController.setItemChecked(todo.id, itemId, checked),
-      run: (todo, requested) => {
+      run: (todo, requested, hooks) => {
         const options = withSeenExecutionMode(todo, requested);
         const runAndMount = () => runThreadTodoAndMountStarted(
           () => threadTodoController.runAction(todo.id, options),
@@ -2828,7 +2828,10 @@ function DesktopAppShell(props: {
               federationMachines.find((machine) => machine.instanceId === instanceId)?.label,
           },
         );
-        return gateTodoRun(todo, options, runAndMount);
+        return gateTodoRun(todo, options, () => {
+          hooks?.onBegin?.();
+          return runAndMount();
+        });
       },
       reviewCiDeployment: (todo, approval) => threadTodoController.reviewCiDeployment(todo, approval),
       openThread: (todo) => showTodoThread(todo),

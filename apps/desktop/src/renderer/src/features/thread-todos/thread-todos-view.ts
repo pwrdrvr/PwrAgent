@@ -40,6 +40,15 @@ export type ThreadTodoLocalMachine = {
 
 export type ThreadTodoRunOptions = Omit<RunThreadTodoActionRequest, "id">;
 
+/** What a run reports to its caller before it ends. */
+export type ThreadTodoRunHooks = {
+  /**
+   * The run is going to the owner: at once, or once the operator confirms
+   * Full Access. Never called for a start the operator cancels there.
+   */
+  onBegin?: () => void;
+};
+
 /** `allowOpenItems` completes a card done although steps are unchecked. */
 export type ThreadTodoResolveOptions = Pick<ResolveThreadTodoRequest, "allowOpenItems">;
 /**
@@ -94,6 +103,7 @@ export type ThreadTodosView = {
   run: (
     todo: ThreadTodo,
     options?: ThreadTodoRunOptions,
+    hooks?: ThreadTodoRunHooks,
   ) => Promise<ThreadTodo | undefined>;
   /**
    * Approves a CI approval card's GitHub deployment gate on its owner.

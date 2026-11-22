@@ -28895,6 +28895,7 @@ a.button {
 }
 
 .thread-todo-stack__notice-button,
+.thread-todo-launches__button,
 .thread-todos-panel__row-link {
   min-height: 24px;
   padding: 0 6px;
@@ -28909,14 +28910,239 @@ a.button {
 }
 
 .thread-todo-stack__notice-button:hover,
+.thread-todo-launches__button:hover,
 .thread-todos-panel__row-link:hover {
   background: var(--accent-soft);
 }
 
 .thread-todo-stack__notice-button:focus-visible,
+.thread-todo-launches__button:focus-visible,
 .thread-todos-panel__row-link:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
+}
+
+/* Started cards, below the deck. A start leaves the deck at once and its
+   row reports it here: one panel, one shadow, a row per start. */
+.thread-todo-launches {
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.thread-todo-launches__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.thread-todo-launches__row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
+  min-height: 32px;
+  padding: 4px 4px 4px 10px;
+}
+
+.thread-todo-launches__row + .thread-todo-launches__row {
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* Its card is still flying in; the row shows once it lands. */
+.thread-todo-launches__row.is-landing > * {
+  visibility: hidden;
+}
+
+.thread-todo-launches__glyph {
+  display: inline-grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  color: var(--text-muted);
+}
+
+.thread-todo-launches__row.is-started .thread-todo-launches__glyph {
+  color: var(--status-ok);
+}
+
+.thread-todo-launches__row.is-setup-failed .thread-todo-launches__glyph {
+  color: var(--status-warning);
+}
+
+.thread-todo-launches__row.is-failed .thread-todo-launches__glyph {
+  color: var(--status-error);
+}
+
+.thread-todo-launches__main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.thread-todo-launches__title {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-todo-launches__state {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.thread-todo-launches__row.is-setup-failed .thread-todo-launches__state {
+  color: var(--status-warning-text);
+}
+
+.thread-todo-launches__row.is-failed .thread-todo-launches__state {
+  color: var(--danger-text);
+}
+
+.thread-todo-launches__message {
+  display: -webkit-box;
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 16px;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.thread-todo-launches__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.thread-todo-launches__button {
+  white-space: nowrap;
+}
+
+.thread-todo-launches__close {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.thread-todo-launches__close:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.thread-todo-launches__close:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* Drains toward the left while the row waits to leave; pointer or focus
+   in the tray pauses it along with the row's timer. */
+.thread-todo-launches__countdown {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: var(--status-ok);
+  transform-origin: left center;
+  animation-name: thread-todo-launch-countdown;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+.thread-todo-launches[data-paused] .thread-todo-launches__countdown {
+  background: var(--text-muted);
+  animation-play-state: paused;
+}
+
+@keyframes thread-todo-launch-countdown {
+  from {
+    transform: scaleX(1);
+  }
+
+  to {
+    transform: scaleX(0);
+  }
+}
+
+/* The started card, shrinking from its box in the deck into its row. */
+.thread-todo-stack__flight {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  overflow: hidden;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.thread-todo-stack__flight-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* The card under the started one rises out of the stack. */
+  .thread-todo-stack__card.is-rising {
+    transform-origin: 50% 100%;
+    animation: thread-todo-card-rise 200ms 80ms ease-out backwards;
+  }
+
+  /* The row a card landed in, so the eye finds where it went. */
+  .thread-todo-launches__row.is-arriving {
+    animation: thread-todo-launch-arrive 600ms ease-out;
+  }
+}
+
+@keyframes thread-todo-card-rise {
+  from {
+    opacity: 0.55;
+    transform: translateY(8px) scale(0.97);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes thread-todo-launch-arrive {
+  from {
+    background: var(--accent-soft);
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+
+  to {
+    background: transparent;
+    box-shadow: inset 2px 0 0 transparent;
+  }
 }
 
 /* Rail panel: grouped by thread, this thread first. Its own cards sit flat
