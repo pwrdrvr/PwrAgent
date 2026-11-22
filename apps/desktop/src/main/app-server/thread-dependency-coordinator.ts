@@ -506,6 +506,11 @@ export class ThreadDependencyCoordinator {
     return [...wanted];
   }
 
+  /** The latest check of a merged PR's build, which the next check continues from. */
+  mergeBuildObservation(prUrl: string): ThreadDependencyMergeBuildObservation | undefined {
+    return this.mergeBuilds.get(prUrl);
+  }
+
   /** The merged PR a build check reads, as its waiting prerequisite last saw it. */
   mergeBuildPullRequest(prUrl: string): PrSummary | undefined {
     return this.mergeBuildPrs.get(prUrl);
@@ -538,7 +543,9 @@ export class ThreadDependencyCoordinator {
 
   /** Every active registration, for sidebar status. Continuations stay out: rows never show them. */
   active(): ThreadDependency[] {
-    return this.options.store.active().map(({ continuation: _continuation, ...item }) => item);
+    // A waiting CI run or merge build carries its latest check, so rows and
+    // PR cards can show it without asking for each thread's list.
+    return this.withCiRunObservations(this.options.store.active().map(({ continuation: _continuation, ...item }) => item));
   }
 
   hasPendingLocalFiles(): boolean {
@@ -1317,6 +1324,9 @@ export function buildDependencyPrompt(item: ThreadDependency): string {
       : [],
     ...item.conditions.some((condition) => condition.when === "merge_build") && !satisfied
       ? ["The merge build ran on the target branch after the PR merged, so a failure there may come from this PR combined with others merged before it. Read the failed checks' logs, compare with the target branch's previous build, and report what broke and which change likely caused it. Fix it only in a new branch and PR, and only if the operator already authorized that."]
+      : [],
+    ...!satisfied && item.evidence.some((entry) => entry.condition.when === "merge_build" && entry.mergeBuild?.followedSha)
+      ? ["A newer push cancelled the merge commit's own build, so these checks are from a later commit on the branch. A failure may come from a change pushed after this merge."]
       : [],
     `Dependency ${item.id} (mode ${item.mode}, outcome ${item.outcome}); prerequisites: ${item.conditions.map((condition) => condition.ciRun
       ? `${condition.ciRun.url} (${condition.when})`

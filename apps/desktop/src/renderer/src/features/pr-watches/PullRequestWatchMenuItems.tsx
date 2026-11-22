@@ -1,5 +1,5 @@
 import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
-import { buildPullRequestStatusKey } from "@pwragent/shared/contracts/navigation";
+import { buildPullRequestStatusKey, pullRequestMatchesRepositoryKey } from "@pwragent/shared/contracts/navigation";
 import { resolveLifecycleState } from "../pr-status/pr-chip-state";
 import {
   canManageThreadPrWatches,
@@ -10,6 +10,7 @@ import {
   useThreadPrWatchIndicatorsContext,
   type PrWatchStopTarget,
 } from "./useThreadPrWatchIndicators";
+import { describeMergeBuildWatch, mergeBuildWaitForPr } from "./merge-build-watches";
 
 /**
  * The watch items in a PR chip's sidebar menu, between Copy Pull Request URL
@@ -20,6 +21,10 @@ import {
  * Watch CI arms the watch at once. Ask Agent to Watch CI stays beside it: it
  * drafts the request so the operator can add instructions for the wake, and
  * it shows the phrasing that works in any thread.
+ *
+ * Watch Merge Build and Stop Watching Merge Build manage the thread's
+ * Continue After wait on the PR's merge build. A merged PR keeps them: its
+ * build may still be running.
  *
  * Its own component so the sidebar does not re-render when watches change.
  */
@@ -48,9 +53,22 @@ export function PullRequestWatchMenuItems(props: {
   const stop = context.stop;
   const ask = context.askAgentToWatchCi;
   const watchCi = context.watchCi;
-  const canAsk = Boolean(ask) && !ciWatch && resolveLifecycleState(props.pr) === "open";
+  const lifecycle = resolveLifecycleState(props.pr);
+  const canAsk = Boolean(ask) && !ciWatch && lifecycle === "open";
   const canWatch = Boolean(watchCi) && !ciWatch && canWatchPrCi(props.thread, props.pr);
-  if (!(stop && (ciWatch || terminalWatch)) && !canAsk && !canWatch) {
+  // A merge build watch is this thread's own Continue After wait on the PR.
+  const mergeBuildWait = mergeBuildWaitForPr(threadWatches?.mergeBuildWaits, props.pr);
+  const mergeBuild = mergeBuildWait
+    ? describeMergeBuildWatch({ waits: [mergeBuildWait], defaultOn: false, prUrl: props.pr.url })
+    : undefined;
+  const stopMergeBuild = context.stopMergeBuild;
+  const watchMergeBuild = context.watchMergeBuild;
+  const canStopMergeBuild = Boolean(stopMergeBuild && mergeBuildWait);
+  // A closed PR never merges; a merged one may still be building. Only a PR
+  // on the thread's primary repository is one whose merge PwrAgent sees.
+  const canWatchMergeBuild = Boolean(watchMergeBuild) && !mergeBuildWait && lifecycle !== "closed"
+    && pullRequestMatchesRepositoryKey(props.pr, props.thread.primaryGitRepository);
+  if (!(stop && (ciWatch || terminalWatch)) && !canAsk && !canWatch && !canStopMergeBuild && !canWatchMergeBuild) {
     return null;
   }
   const runAttempt = localCiWatch ? readWatchRunAttempt(localCiWatch) : peerMark?.runAttempt;
@@ -86,6 +104,21 @@ export function PullRequestWatchMenuItems(props: {
           Stop Watching for Merge
         </button>
       ) : null}
+      {canStopMergeBuild ? (
+        <button
+          role="menuitem"
+          type="button"
+          onClick={() => {
+            props.onClose();
+            void stopMergeBuild!(props.thread, mergeBuildWait!);
+          }}
+        >
+          <span>Stop Watching Merge Build</span>
+          {mergeBuild ? (
+            <span className="thread-context-menu__aside">{mergeBuild.detail}</span>
+          ) : null}
+        </button>
+      ) : null}
       {canWatch ? (
         <button
           role="menuitem"
@@ -96,6 +129,18 @@ export function PullRequestWatchMenuItems(props: {
           }}
         >
           Watch CI
+        </button>
+      ) : null}
+      {canWatchMergeBuild ? (
+        <button
+          role="menuitem"
+          type="button"
+          onClick={() => {
+            props.onClose();
+            void watchMergeBuild!(props.thread, props.pr);
+          }}
+        >
+          Watch Merge Build
         </button>
       ) : null}
       {canAsk ? (

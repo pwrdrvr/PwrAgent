@@ -31,6 +31,16 @@ export type ThreadDependencyMergeBuildObservation = {
   conclusion?: "success" | "failure" | "cancelled";
   checks?: { total: number; passed: number; failed: number; cancelled: number; running: number; queued: number; skipped: number };
   failedChecks?: { name: string; url: string }[];
+  /**
+   * Set once a newer push to the target branch cancelled the merge build:
+   * the checks above are then the build of this later commit on the branch,
+   * which contains the merge.
+   */
+  followedSha?: string;
+  /** When the owner moved to `followedSha`, epoch milliseconds. Its windows count from here. */
+  followedAt?: number;
+  /** How many cancelled builds were followed, at most `THREAD_DEPENDENCY_MERGE_BUILD_MAX_FOLLOWS`. */
+  follows?: number;
   /** The check failed; the wait keeps the last good observation's meaning. */
   error?: string;
   errorCode?: string;
@@ -39,18 +49,29 @@ export type ThreadDependencyMergeBuildObservation = {
   checkedAt: number;
 };
 
+/**
+ * A merge build cancelled by a newer push is followed to the branch's next
+ * build at most this many times; a build still cancelled after that counts
+ * as a pass, as an unfollowed one does.
+ */
+export const THREAD_DEPENDENCY_MERGE_BUILD_MAX_FOLLOWS = 3;
+
+/** A merged PR's waiting evidence while its build runs. Constant, so checks write nothing. */
+export const THREAD_DEPENDENCY_MERGE_BUILD_WAITING_REASON = "PR merged; waiting for its merge build";
+
 /** Merge build checks fold into one line: "Running · 4 passed, 2 running". */
 export function summarizeThreadDependencyMergeBuild(observation: ThreadDependencyMergeBuildObservation): string {
   const state = observation.status === "completed"
     ? `Finished: ${observation.conclusion ?? "unknown"}`
     : observation.status === "no_checks" ? "No checks yet"
       : observation.status === "running" ? "Running" : "Could not read the build";
+  const followed = observation.followedSha ? `Following ${observation.followedSha.slice(0, 7)}` : "";
   const checks = observation.checks;
   const counts = checks
     ? ([["passed", checks.passed], ["failed", checks.failed], ["cancelled", checks.cancelled], ["running", checks.running], ["queued", checks.queued]] as const)
       .filter(([, count]) => count > 0).map(([name, count]) => `${count} ${name}`).join(", ")
     : "";
-  return [state, counts, observation.error ? "last check failed" : ""].filter(Boolean).join(" · ");
+  return [followed, state, counts, observation.error ? "last check failed" : ""].filter(Boolean).join(" · ");
 }
 
 /**

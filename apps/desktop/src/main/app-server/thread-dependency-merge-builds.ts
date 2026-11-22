@@ -3,6 +3,10 @@ import type {
   ThreadDependencyEvidence,
   ThreadDependencyMergeBuildObservation,
 } from "@pwragent/shared/contracts/thread-dependencies";
+import {
+  THREAD_DEPENDENCY_MERGE_BUILD_MAX_FOLLOWS,
+  THREAD_DEPENDENCY_MERGE_BUILD_WAITING_REASON,
+} from "@pwragent/shared/contracts/thread-dependencies";
 import type { ForgeRepository } from "../pr-status/forge-tool-contract";
 import { repositoryUrl } from "../pr-status/forge-tool-contract";
 
@@ -25,7 +29,7 @@ export type MergeBuildTarget = {
 };
 
 /** The evidence reason while a merged PR's build runs. Constant, so checks write nothing. */
-export const MERGE_BUILD_WAITING_REASON = "PR merged; waiting for its merge build";
+export const MERGE_BUILD_WAITING_REASON = THREAD_DEPENDENCY_MERGE_BUILD_WAITING_REASON;
 /** Before the merge, the same wait reads as a PR wait. */
 export const MERGE_BUILD_WAITING_FOR_MERGE_REASON = "Waiting for PR merge";
 /**
@@ -90,14 +94,74 @@ export function mergeCommitOf(details: { mergeCommitSha?: string; detailsUnavail
 
 type Check = { name: string; url: string; state: "passed" | "failed" | "cancelled" | "skipped" | "running" | "queued" };
 
-/** Every check on the merge commit, in the one vocabulary `evaluateMergeBuildCondition` reads. */
-export async function readMergeBuild(get: MergeBuildGet, target: MergeBuildTarget, now: number): Promise<ThreadDependencyMergeBuildObservation> {
-  const checks = target.repository.provider === "gitlab" ? await readGitlabPipelines(get, target) : await readGithubChecks(get, target);
-  return observe(target, checks, now);
+/**
+ * Every check on the merge commit, in the one vocabulary
+ * `evaluateMergeBuildCondition` reads.
+ *
+ * A build that a newer push to the branch cancelled says nothing about the
+ * merge. Its build then continues on the branch head, when that head
+ * contains the merge commit: the head's build runs this PR's change with
+ * whatever came after it. `previous` carries the commit followed so far, so
+ * later checks read it directly. At most
+ * `THREAD_DEPENDENCY_MERGE_BUILD_MAX_FOLLOWS` builds are followed; a build
+ * cancelled after that, or with no newer head that contains the merge,
+ * reports `cancelled`, which counts as a pass.
+ */
+export async function readMergeBuild(get: MergeBuildGet, target: MergeBuildTarget, now: number,
+  previous?: ThreadDependencyMergeBuildObservation): Promise<ThreadDependencyMergeBuildObservation> {
+  const carried = previous?.followedSha && previous.mergeCommitSha === target.mergeCommitSha ? previous : undefined;
+  let follow = carried?.followedSha
+    ? { sha: carried.followedSha, at: carried.followedAt ?? now, count: carried.follows ?? 1 }
+    : undefined;
+  for (;;) {
+    const sha = follow?.sha ?? target.mergeCommitSha;
+    const checks = target.repository.provider === "gitlab" ? await readGitlabPipelines(get, target, sha) : await readGithubChecks(get, target, sha);
+    const observation = observe(target, checks, now, follow);
+    if (observation.conclusion !== "cancelled" || (follow?.count ?? 0) >= THREAD_DEPENDENCY_MERGE_BUILD_MAX_FOLLOWS || !target.baseBranch) {
+      return observation;
+    }
+    const head = await readNewerBranchHead(get, target, sha);
+    if (!head) return observation;
+    follow = { sha: head, at: now, count: (follow?.count ?? 0) + 1 };
+  }
 }
 
-async function readGithubChecks(get: MergeBuildGet, target: MergeBuildTarget): Promise<Check[]> {
-  const { repository, mergeCommitSha } = target;
+/**
+ * The target branch's head, when it is newer than `sha` and contains the
+ * merge commit. Asked only when a build was cancelled, so at most a few times
+ * per merge.
+ */
+async function readNewerBranchHead(get: MergeBuildGet, target: MergeBuildTarget, sha: string): Promise<string | undefined> {
+  const { repository, mergeCommitSha, baseBranch } = target;
+  if (!baseBranch) return undefined;
+  if (repository.provider === "gitlab") {
+    const project = `projects/${encodeURIComponent(`${repository.owner}/${repository.repo}`)}`;
+    const branch = record(await get(repository, `${project}/repository/branches/${encodeURIComponent(baseBranch)}`));
+    const head = commitId(record(branch.commit ?? {}).id);
+    if (!head || head === sha) return undefined;
+    const query = new URLSearchParams();
+    query.append("refs[]", mergeCommitSha);
+    query.append("refs[]", head);
+    // The merge commit is in the head when it is their merge base.
+    const base = record(await get(repository, `${project}/repository/merge_base?${query}`));
+    return commitId(base.id) === mergeCommitSha ? head : undefined;
+  }
+  const repo = `repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}`;
+  const branch = record(await get(repository, `${repo}/branches/${encodeURIComponent(baseBranch)}`));
+  const head = commitId(record(branch.commit ?? {}).sha);
+  if (!head || head === sha) return undefined;
+  const compare = record(await get(repository, `${repo}/compare/${encodeURIComponent(mergeCommitSha)}...${encodeURIComponent(head)}?per_page=1`));
+  return compare.status === "ahead" ? head : undefined;
+}
+
+/** A full commit id from a provider, else undefined. */
+function commitId(value: unknown): string | undefined {
+  return typeof value === "string" && /^[0-9a-f]{40}([0-9a-f]{24})?$/i.test(value) ? value.toLowerCase() : undefined;
+}
+
+async function readGithubChecks(get: MergeBuildGet, target: MergeBuildTarget, sha: string): Promise<Check[]> {
+  const { repository } = target;
+  const mergeCommitSha = sha;
   const commit = `repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}/commits/${encodeURIComponent(mergeCommitSha)}`;
   const fallback = `${repositoryUrl(repository)}/commit/${mergeCommitSha}`;
   const checks: Check[] = [];
@@ -130,8 +194,9 @@ async function readGithubChecks(get: MergeBuildGet, target: MergeBuildTarget): P
 }
 
 /** GitLab: each pipeline for the merge commit on the target branch is one check. */
-async function readGitlabPipelines(get: MergeBuildGet, target: MergeBuildTarget): Promise<Check[]> {
-  const { repository, mergeCommitSha, baseBranch } = target;
+async function readGitlabPipelines(get: MergeBuildGet, target: MergeBuildTarget, sha: string): Promise<Check[]> {
+  const { repository, baseBranch } = target;
+  const mergeCommitSha = sha;
   const query = new URLSearchParams({ sha: mergeCommitSha, per_page: "20" });
   if (baseBranch) query.set("ref", baseBranch);
   const rows = list(await get(repository, `projects/${encodeURIComponent(`${repository.owner}/${repository.repo}`)}/pipelines?${query}`));
@@ -155,7 +220,8 @@ function classify(conclusion: string): Check["state"] {
   return "failed";
 }
 
-function observe(target: MergeBuildTarget, checks: Check[], now: number): ThreadDependencyMergeBuildObservation {
+function observe(target: MergeBuildTarget, checks: Check[], now: number,
+  follow?: { sha: string; at: number; count: number }): ThreadDependencyMergeBuildObservation {
   const count = (state: Check["state"]) => checks.filter((check) => check.state === state).length;
   const counts = {
     total: checks.length, passed: count("passed"), failed: count("failed"), cancelled: count("cancelled"),
@@ -168,6 +234,7 @@ function observe(target: MergeBuildTarget, checks: Check[], now: number): Thread
     mergeCommitSha: target.mergeCommitSha,
     ...target.baseBranch ? { baseBranch: target.baseBranch } : {},
     ...target.mergedAt !== undefined ? { mergedAt: target.mergedAt } : {},
+    ...follow ? { followedSha: follow.sha, followedAt: follow.at, follows: follow.count } : {},
     status: checks.length === 0 ? "no_checks" : finished ? "completed" : "running",
     ...checks.length && finished
       ? { conclusion: counts.failed ? "failure" as const : counts.cancelled ? "cancelled" as const : "success" as const }
@@ -210,27 +277,40 @@ export function evaluateMergeBuildCondition(condition: ThreadDependencyCondition
     }
     return waiting;
   }
-  const sinceMerge = observation.mergedAt === undefined ? Number.POSITIVE_INFINITY : observation.checkedAt - observation.mergedAt;
+  // A followed build's windows run from when it was followed: its push came
+  // after the merge, and its checks start after that.
+  const startedAt = observation.followedAt ?? observation.mergedAt;
+  const since = startedAt === undefined ? Number.POSITIVE_INFINITY : observation.checkedAt - startedAt;
+  const followed = observation.followedSha ? ` (followed to ${observation.followedSha.slice(0, 12)} after a newer push cancelled the merge build)` : "";
   if (observation.status === "no_checks") {
-    return sinceMerge >= MERGE_BUILD_NO_CHECKS_MS
-      ? fired("failed", `No checks reported on merge commit${commit}${branch} within ${MERGE_BUILD_NO_CHECKS_MS / 60_000} minutes`)
+    return since >= MERGE_BUILD_NO_CHECKS_MS
+      ? fired("failed", observation.followedSha
+        ? `No checks reported on ${observation.followedSha.slice(0, 12)}${branch} within ${MERGE_BUILD_NO_CHECKS_MS / 60_000} minutes of following it after a newer push cancelled the merge build`
+        : `No checks reported on merge commit${commit}${branch} within ${MERGE_BUILD_NO_CHECKS_MS / 60_000} minutes`)
       : waiting;
   }
-  if (observation.status !== "completed" || sinceMerge < MERGE_BUILD_SETTLE_MS) return waiting;
+  if (observation.status !== "completed" || since < MERGE_BUILD_SETTLE_MS) return waiting;
   const checks = observation.checks;
   if (observation.conclusion === "failure") {
     const names = (observation.failedChecks ?? []).map((check) => check.name).join(", ").slice(0, 300);
-    return fired("failed", `Merge build failed${branch}: ${checks?.failed ?? 0} of ${checks?.total ?? 0} checks failed${names ? ` (${names})` : ""}`);
+    return fired("failed", `Merge build failed${branch}${followed}: ${checks?.failed ?? 0} of ${checks?.total ?? 0} checks failed${names ? ` (${names})` : ""}`);
   }
   if (observation.conclusion === "cancelled") {
-    return fired("satisfied", `Merge build cancelled${branch}: ${checks?.cancelled ?? 0} checks cancelled, none failed; a newer push to the branch may have replaced it`);
+    return fired("satisfied", observation.followedSha
+      ? `Merge build cancelled${branch}${followed}: ${checks?.cancelled ?? 0} checks cancelled, none failed; stopped following after ${observation.follows ?? 1} newer builds`
+      : `Merge build cancelled${branch}: ${checks?.cancelled ?? 0} checks cancelled, none failed; no newer build on the branch contains the merge`);
   }
-  return fired("satisfied", `Merge build passed${branch}: ${checks?.passed ?? 0} of ${checks?.total ?? 0} checks passed`);
+  return fired("satisfied", `Merge build passed${branch}${followed}: ${checks?.passed ?? 0} of ${checks?.total ?? 0} checks passed`);
 }
 
 /** The lines a continuation prompt adds for a fired merge build. */
 export function describeMergeBuildObservation(observation: ThreadDependencyMergeBuildObservation): string[] {
-  const lines = [`  Merge commit ${observation.mergeCommitSha ?? "unknown"}${observation.baseBranch ? ` on ${observation.baseBranch}` : ""}: ${observation.status}${observation.conclusion ? `, ${observation.conclusion}` : ""}`];
+  const lines = observation.followedSha
+    ? [
+      `  Merge commit ${observation.mergeCommitSha ?? "unknown"}${observation.baseBranch ? ` on ${observation.baseBranch}` : ""}: its build was cancelled by a newer push`,
+      `  Followed build ${observation.followedSha}, which contains the merge: ${observation.status}${observation.conclusion ? `, ${observation.conclusion}` : ""}`,
+    ]
+    : [`  Merge commit ${observation.mergeCommitSha ?? "unknown"}${observation.baseBranch ? ` on ${observation.baseBranch}` : ""}: ${observation.status}${observation.conclusion ? `, ${observation.conclusion}` : ""}`];
   const checks = observation.checks;
   if (checks) {
     const parts = ([["passed", checks.passed], ["failed", checks.failed], ["cancelled", checks.cancelled], ["running", checks.running], ["queued", checks.queued], ["skipped", checks.skipped]] as const)

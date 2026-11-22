@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_PROJECT_FORGE_AUTOMATION,
+  resolveProjectForgeAutomation,
   type ProjectForgeAutomation,
   type ProjectHeldWakeup,
 } from "@pwragent/shared/project-forge-automation";
@@ -79,6 +80,29 @@ describe("ForgeAutomationDialog", () => {
       ...DEFAULT_PROJECT_FORGE_AUTOMATION,
       autoFixMergeConflicts: false,
     });
+  });
+
+  it("sets the project's merge build watches, and stores nothing for Default", async () => {
+    const { props } = renderDialog();
+    const group = screen.getByRole("radiogroup", { name: "Merge build watches" });
+    expect(within(group).getByRole("radio", { name: "Default" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText("Follows Watch merge builds in Git settings.")).toBeInTheDocument();
+    fireEvent.click(within(group).getByRole("radio", { name: "Off" }));
+    expect(screen.getByText("No merge build is watched unless a thread asks for it.")).toBeInTheDocument();
+    save();
+    await waitFor(() => expect(props.onSubmit).toHaveBeenCalledWith({ ...DEFAULT_PROJECT_FORGE_AUTOMATION, mergeBuildWatches: "off" }));
+    cleanup();
+    const back = renderDialog({ automation: { ...DEFAULT_PROJECT_FORGE_AUTOMATION, mergeBuildWatches: "on" } });
+    fireEvent.click(within(screen.getByRole("radiogroup", { name: "Merge build watches" })).getByRole("radio", { name: "Default" }));
+    save();
+    await waitFor(() => expect(back.props.onSubmit).toHaveBeenCalledTimes(1));
+    expect(resolveProjectForgeAutomation(vi.mocked(back.props.onSubmit).mock.calls[0]![0])).toEqual(DEFAULT_PROJECT_FORGE_AUTOMATION);
+  });
+
+  it("explains that turning PR watches off stops merge build watches too", () => {
+    renderDialog();
+    fireEvent.click(screen.getByRole("checkbox", { name: "PR watches" }));
+    expect(screen.getByText("PR watches are off, so no merge build is watched.")).toBeInTheDocument();
   });
 
   it("pauses with the while-paused choices and stamps when the pause began", async () => {
