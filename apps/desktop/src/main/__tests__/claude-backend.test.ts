@@ -780,7 +780,8 @@ describe("Claude SDK backend", () => {
       await backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review high" }] });
       await f.waitForTurn();
 
-      expect(resolveReviewContext).toHaveBeenCalledWith({ threadId, cwd: f.root });
+      // A `/code-review` with no target reviewed the uncommitted changes too.
+      expect(resolveReviewContext).toHaveBeenCalledWith({ threadId, cwd: f.root, readsWorkingTree: true });
       const [item] = reviewItems(f.events);
       expect(item).toEqual(expect.objectContaining({ id: "review-1", type: "exitedReviewMode" }));
       const data = item.data as { reviewOutput: { findings: Array<{ title: string; code_location: unknown }> }; reviewer: unknown; context: unknown };

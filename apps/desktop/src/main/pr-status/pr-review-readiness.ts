@@ -94,9 +94,11 @@ export function derivePrReviewReadiness(params: {
  * readiness. The merge-card gate and the status read use it while CI is
  * still running, when `derivePrReviewReadiness` reports only the CI state.
  */
+export type ReviewStanding = "needs_review" | "findings_open" | "ready_to_merge";
+
 export function deriveReviewStanding(
   reviews: readonly PrReviewCoverage[],
-): { readiness: "needs_review" | "findings_open" | "ready_to_merge"; reviewId?: string; openFindings?: number } {
+): { readiness: ReviewStanding; reviewId?: string; openFindings?: number } {
   let newest: PrReviewCoverage | undefined;
   let latest: PrReviewCoverage | undefined;
   for (const review of reviews) {
@@ -197,6 +199,11 @@ export function planPrOffer(params: {
    * open, so a review started some other way withdraws the offer at once.
    */
   headCovered?: boolean;
+  /**
+   * Where the reviews leave the head, when they were read while CI was not
+   * green. A merge offer is withdrawn once it is anything but ready.
+   */
+  standing?: ReviewStanding;
 }): PrOfferPlan {
   const { open, desired, readiness } = params;
   if (desired) {
@@ -218,6 +225,7 @@ export function planPrOffer(params: {
     || readiness === "findings_open"
     || readiness === "draft"
     || readiness === "conflicting"
+    || (params.standing !== undefined && params.standing !== "ready_to_merge")
     || open.headSha !== params.headSha
   ) {
     return { retire: { cardId: open.cardId, reason: "stale" } };

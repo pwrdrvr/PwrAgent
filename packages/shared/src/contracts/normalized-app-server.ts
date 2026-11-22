@@ -326,6 +326,14 @@ export type AppServerReviewContext = {
    */
   headCommit?: string;
   /**
+   * Tree of the working tree the review read, on top of `headCommit`: what a
+   * commit of every staged, unstaged, and untracked change would record.
+   * Present only for a review of the checkout's uncommitted changes, when it
+   * had some. It lets the commit that later records those changes count as
+   * reviewed. See docs/pr-review-readiness.md.
+   */
+  reviewedTree?: string;
+  /**
    * Merge base of `baseBranch` and `headCommit` — the commit the reviewed diff
    * starts from. Only a base-branch review has one: an uncommitted-changes
    * review diffs against `headCommit` itself, and naming a second commit there

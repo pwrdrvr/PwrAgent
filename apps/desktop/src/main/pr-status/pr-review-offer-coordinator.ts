@@ -6,6 +6,7 @@ import type { PrChangeIdentitySource } from "./pr-change-identity";
 import {
   deriveReviewStanding,
   describePrReviewReadiness,
+  type ReviewStanding,
   PR_OFFER_WITHDRAWN_RESULTS,
   desiredPrOffer,
   parsePrOfferId,
@@ -85,6 +86,8 @@ export type PrReviewAssessment = {
   headSha?: string;
   /** A review covers the head, whatever CI says. */
   headCovered: boolean;
+  /** Where the reviews leave the head, when they were read. */
+  standing?: ReviewStanding;
   /**
    * The newest review covering the head, or the latest review with open
    * findings when none covers it. Absent while CI holds readiness back.
@@ -226,10 +229,13 @@ export class PrReviewOfferCoordinator {
         }
       : undefined;
 
-    // Git runs only when CI is green, or to withdraw an open review offer
-    // that a review started some other way has answered.
-    const assessment = await this.assessPr(thread, pr, open?.kind === "review", true);
-    const { readiness, reviewId, headContentId, headCovered } = assessment;
+    // Git runs only when CI is green, or to withdraw an open offer: a review
+    // offer that a review started some other way has answered, or a merge
+    // offer for this head that a newer review has findings against.
+    const withdrawable = open?.kind === "review"
+      || (open?.kind === "merge" && open.headSha === pr.headSha);
+    const assessment = await this.assessPr(thread, pr, withdrawable, true);
+    const { readiness, reviewId, headContentId, headCovered, standing } = assessment;
     const desired = desiredPrOffer({
       prKey,
       readiness,
@@ -241,6 +247,7 @@ export class PrReviewOfferCoordinator {
       desired,
       readiness,
       headCovered,
+      ...(standing ? { standing } : {}),
       ...(pr.headSha ? { headSha: pr.headSha } : {}),
     });
     let raised: PrOffer["kind"] | undefined;
@@ -328,6 +335,7 @@ export class PrReviewOfferCoordinator {
     const standing = deriveReviewStanding(coverage.reviews);
     return {
       readiness: gate ?? standing.readiness,
+      standing: standing.readiness,
       headSha: head!,
       headCovered: coverage.reviews.some((review) => review.coversHead),
       ...(standing.reviewId ? { reviewId: standing.reviewId } : {}),
@@ -339,7 +347,7 @@ export class PrReviewOfferCoordinator {
   /**
    * Which of this PR's reviews cover its head. An exact commit match needs no
    * Git. Otherwise the head's change identity is compared with each review's
-   * reviewed and fixed-through commits.
+   * reviewed working tree, reviewed commit, and fixed-through commit.
    */
   private async reviewCoverage(
     thread: PrReviewOfferThread,
@@ -366,12 +374,13 @@ export class PrReviewOfferCoordinator {
       }
       return targetTip;
     };
-    const changeOf = async (sha: string): Promise<string | undefined> => {
+    const changeOf = async (sha: string, tree?: string): Promise<string | undefined> => {
       const target = await tip();
       if (!cwd || !target) return undefined;
       return await identity.changeIdentity({
         cwd,
         sha,
+        ...(tree ? { tree } : {}),
         targetTip: target,
       });
     };
@@ -386,15 +395,21 @@ export class PrReviewOfferCoordinator {
     };
     const coverage: PrReviewCoverage[] = [];
     for (const review of reviews) {
-      const covered = [review.context!.headCommit!, review.fixedThroughCommit]
+      const reviewed = review.context!.headCommit!;
+      const covered = [reviewed, review.fixedThroughCommit]
         .filter((sha): sha is string => Boolean(sha))
         .map((sha) => sha.toLowerCase());
+      // A review of uncommitted changes also covers the working tree it read.
+      const subjects: Array<{ sha: string; tree?: string }> = [
+        ...(review.context?.reviewedTree ? [{ sha: reviewed, tree: review.context.reviewedTree }] : []),
+        ...covered.map((sha) => ({ sha })),
+      ];
       let coversHead = covered.includes(head);
       if (!coversHead) {
         const current = await headChange();
         if (current) {
-          for (const sha of covered) {
-            if (await changeOf(sha) === current) {
+          for (const subject of subjects) {
+            if (await changeOf(subject.sha, subject.tree) === current) {
               coversHead = true;
               break;
             }

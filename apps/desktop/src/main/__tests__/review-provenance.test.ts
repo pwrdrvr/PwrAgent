@@ -750,4 +750,81 @@ describe("resolveReviewProvenance for a review that named its pull requests", ()
 
     expect(seen).toEqual([]);
   });
+
+});
+
+describe("resolveReviewProvenance reviewed working tree", () => {
+  const TREE = "7a1b2c3d4e5f60718293a4b5c6d7e8f901234567";
+  const capture = async () => ({ head: HEAD_COMMIT, tree: TREE });
+  const codeReview = { type: "custom", instructions: "/code-review" } as const;
+  const base = {
+    cwd: WORKSPACE,
+    linkedDirectories: [directory()],
+    resolveGitHubRepos: noRepos,
+    captureWorkingTree: capture,
+  };
+
+  it("records the tree a review of uncommitted changes read, with the HEAD it sits on", async () => {
+    const context = await resolveReviewProvenance({
+      ...base,
+      runGit: gitRunner("feature", { head: HEAD_COMMIT }),
+      target: { type: "uncommittedChanges" },
+    });
+    expect(context).toMatchObject({ headCommit: HEAD_COMMIT, reviewedTree: TREE });
+  });
+
+  it("records none when HEAD moved between the two reads", async () => {
+    const context = await resolveReviewProvenance({
+      ...base,
+      captureWorkingTree: async () => ({ head: MERGE_BASE, tree: TREE }),
+      runGit: gitRunner("feature", { head: HEAD_COMMIT }),
+      target: { type: "uncommittedChanges" },
+    });
+    expect(context?.headCommit).toBe(HEAD_COMMIT);
+    expect(context).not.toHaveProperty("reviewedTree");
+  });
+
+  it("records it for Claude Code's /code-review, which reads uncommitted changes", async () => {
+    const context = await resolveReviewProvenance({
+      ...base,
+      reviewsWorkingTree: true,
+      runGit: gitRunner("feature", { head: HEAD_COMMIT }),
+      target: codeReview,
+    });
+    expect(context?.reviewedTree).toBe(TREE);
+  });
+
+  it("records none for a review that did not read the working tree", async () => {
+    const cases = [
+      { target: codeReview },
+      { target: { type: "commit" as const, sha: "8117be6f9", title: null } },
+      // `git diff <merge-base>` leaves untracked files out.
+      { target: { type: "baseBranch" as const, branch: "origin/main" } },
+      { target: { type: "uncommittedChanges" as const }, executionTarget: "remote" as const },
+      // A named pull request's diff was read, even with its branch checked out.
+      {
+        target: codeReview,
+        reviewsWorkingTree: true,
+        namedPullRequests: [{ number: 1918 }],
+        prs: [pullRequest()],
+      },
+    ];
+    for (const extra of cases) {
+      const context = await resolveReviewProvenance({
+        ...base,
+        runGit: gitRunner("fix/macos-dock-icon-safe-area", { head: HEAD_COMMIT, mergeBase: MERGE_BASE }),
+        ...extra,
+      });
+      expect(context).not.toHaveProperty("reviewedTree");
+    }
+  });
+
+  it("records none without a HEAD to put it on", async () => {
+    const context = await resolveReviewProvenance({
+      ...base,
+      runGit: gitRunner("feature"),
+      target: { type: "uncommittedChanges" },
+    });
+    expect(context).not.toHaveProperty("reviewedTree");
+  });
 });

@@ -1052,13 +1052,15 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         method: "serverRequest/resolved", params: { threadId, turnId, requestId },
       } });
     },
-    resolveReviewContext: async ({ threadId, cwd, pullRequests }) => await ports.resolveReviewContext({
+    resolveReviewContext: async ({ threadId, cwd, pullRequests, readsWorkingTree }) => await ports.resolveReviewContext({
       backend: "claude", cwd, threadId,
       overlay: await ports.overlayStore.getThreadOverlayState({ backend: "claude", threadId }),
       // `/code-review` with no target reviews the checked-out work, so the
       // branch and its attached pull request name the card. One that named
       // pull requests is named by those.
       target: { type: "custom", instructions: "/code-review" },
+      // Only a review that named no target read the uncommitted changes.
+      ...(readsWorkingTree ? { reviewsWorkingTree: true } : {}),
       ...(pullRequests ? { namedPullRequests: pullRequests } : {}),
     }),
     suggestMonitorJob: async (request) => await ports.suggestClaudeMonitorJob(request),

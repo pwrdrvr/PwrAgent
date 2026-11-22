@@ -1006,6 +1006,7 @@ export class ManagedReviewService {
     executionTarget?: "local" | "remote";
     namedPullRequests?: NamedReviewPullRequest[];
     overlay?: ThreadOverlayState;
+    reviewsWorkingTree?: boolean;
     target: AppServerReviewTarget;
     threadId: string;
   }): Promise<AppServerReviewContext | undefined> {
@@ -1040,6 +1041,7 @@ export class ManagedReviewService {
           ? { namedPullRequests: params.namedPullRequests }
           : {}),
         ...(params.overlay?.prs ? { prs: params.overlay.prs } : {}),
+        ...(params.reviewsWorkingTree ? { reviewsWorkingTree: true } : {}),
         target: params.target,
       });
     } catch (error) {
