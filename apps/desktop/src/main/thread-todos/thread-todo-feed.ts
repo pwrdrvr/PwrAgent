@@ -125,7 +125,10 @@ export class ThreadTodoFeed {
         return;
       case "thread/pullRequests/updated":
       case "thread/modelSettings/updated":
-        // Review queues follow PR attachments; dispatch defaults follow the model.
+      case "thread/parent/set":
+      case "thread/parent/cleared":
+        // Review queues follow PR attachments; dispatch defaults follow the
+        // model and the parent a sibling is filed under.
         if (threadId) this.cardsChanged({ backend: event.backend, threadId });
         return;
     }
