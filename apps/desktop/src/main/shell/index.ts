@@ -1391,11 +1391,13 @@ export function bootstrapApp(): void {
     registerAppServerIpcHandlers();
     if (bootMode === "active-profile") {
       // Projects checked on Get started, handed over by the bootstrap
-      // profile. Registered once, like adding each folder by hand.
-      void importOnboardingProjectSeed(
+      // profile. Registered once, like adding each folder by hand. Every
+      // step, even resolving the profile folder, runs inside the promise:
+      // this optional import must never stop the first window.
+      void Promise.resolve().then(async () => await importOnboardingProjectSeed(
         resolveActiveProfileDir(),
         async (folder) => await getDesktopAppServerService().registerDirectoryFromDisk({ path: folder }),
-      ).then((result) => {
+      )).then((result) => {
         if (!result) return;
         mainLog.info("Registered Get started projects", {
           registered: result.registered.length,
