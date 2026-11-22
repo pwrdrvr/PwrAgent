@@ -166,6 +166,35 @@ describe("SelectedThreadDock", () => {
     expect(region.style.getPropertyValue("--selected-thread-dock-reserve")).toBe("");
   });
 
+  // A project-index jump lands its project under the dock, and the jump can
+  // itself bring the dock or send it off. The list re-lands on this event.
+  it("announces each change in what the headers stick under, and only those", () => {
+    const region = mountList(250);
+    const changes: string[] = [];
+    region.addEventListener("selected-thread-dock-reserve-change", () => {
+      changes.push(region.classList.contains("has-selected-thread-dock-top")
+        ? region.style.getPropertyValue("--selected-thread-dock-reserve")
+        : "none");
+    });
+    const view = renderDock(region);
+    expect(changes).toEqual([]);
+    // The row leaves through the top: the dock arrives there.
+    place(region.querySelector("[data-row='open']")!, -300, 60);
+    view.rerender(dockElement(region, "open", {}));
+    view.rerender(dockElement(region, "open", {}));
+    expect(changes).toEqual(["58px"]);
+    // Off the bottom instead: the headers have their place back.
+    place(region.querySelector("[data-row='open']")!, 900, 60);
+    view.rerender(dockElement(region, "open", {}));
+    expect(changes).toEqual(["58px", "none"]);
+    place(region.querySelector("[data-row='open']")!, -300, 60);
+    view.rerender(dockElement(region, "open", {}));
+    expect(changes).toEqual(["58px", "none", "58px"]);
+    // Gone with the selection.
+    view.unmount();
+    expect(changes).toEqual(["58px", "none", "58px", "none"]);
+  });
+
   // Showing the top dock moves the stuck header down, which covers more of
   // the row. The rule reads the list as it lies without the dock, so the
   // dock shows exactly when the row is lost under the header's own place:
