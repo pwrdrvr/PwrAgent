@@ -55,7 +55,7 @@ import {
   type ThreadTodoActionRunners,
 } from "./thread-todo-service.js";
 import { withThreadTodoPlanNote, type ThreadTodoPlan } from "./thread-todo-plan.js";
-import { ThreadTodoFeed, type ThreadTodoFeedOwner } from "./thread-todo-feed.js";
+import { ThreadTodoFeed, type ThreadTodoFeedSource } from "./thread-todo-feed.js";
 import {
   getThreadReviewService,
   setThreadReviewBroadcast,
@@ -231,9 +231,7 @@ export function installThreadTodoRuntime(params: {
   /** Plan cards for threads started on a peer. */
   peerPlans?: ThreadTodoPeerPlans;
   /** What the live card feed reads besides the services, and where it publishes. */
-  feed: {
-    loadOwners: () => Promise<readonly ThreadTodoFeedOwner[]>;
-    managedThreadKeys: () => ReadonlySet<string>;
+  feed: Pick<ThreadTodoFeedSource, "loadOwners" | "managedThreadKeys"> & {
     onDelta: (delta: ThreadTodoFeedDelta) => void;
   };
 }): void {
