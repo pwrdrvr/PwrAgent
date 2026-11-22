@@ -1,6 +1,6 @@
 import { access, readFile, realpath, stat } from "node:fs/promises";
 import { BrowserWindow, ipcMain, shell } from "electron";
-import { filePreviewKind, isFilePreviewPath } from "@pwragent/shared/file-preview";
+import { filePreviewKind, isFilePreviewPath, MAX_TEXT_FILE_PREVIEW_BYTES } from "@pwragent/shared/file-preview";
 import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
 import {
   type OpenDesktopApplicationRequest,
@@ -69,8 +69,6 @@ import {
   openDesktopApplication,
   withApplicationIcons,
 } from "../../settings/application-discovery";
-
-const MAX_PREVIEW_FILE_BYTES = 2 * 1024 * 1024;
 
 /**
  * Open a filesystem path with the OS default handler. The fallback the
@@ -153,7 +151,7 @@ async function readMarkdownFile(
     const html = filePreviewKind(resolved) === "html";
     const maxBytes = html
       ? MAX_HTML_PREVIEW_FILE_BYTES
-      : MAX_PREVIEW_FILE_BYTES;
+      : MAX_TEXT_FILE_PREVIEW_BYTES;
     if (fileStat.size > maxBytes) {
       return { path: target, error: "File is too large to preview." };
     }

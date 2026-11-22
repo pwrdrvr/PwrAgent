@@ -1,4 +1,5 @@
 import { buildOwnedComposerScopeKey, parseOwnedComposerScopeKey } from "@pwragent/shared/composer-scope";
+import type { ComposerDraftStorage } from "@pwragent/owner-core/composer-draft-storage";
 import type {
   ComposerDraftLifecycle,
   ComposerDraftRecoveryCandidate,
@@ -31,7 +32,7 @@ const RECOVERABLE_STATUSES = new Set<ComposerDraftLifecycle>([
   "abandoned",
 ]);
 
-export class ComposerDraftRecoveryStore {
+export class ComposerDraftRecoveryStore implements ComposerDraftStorage {
   constructor(private readonly stateDb: StateDb) {}
 
   /** One explicit startup migration; unknown or conflicting histories are never reassigned. */
@@ -182,6 +183,30 @@ export class ComposerDraftRecoveryStore {
     return rows
       .map((row) => parseDraftPayload(row.payload))
       .filter((draft): draft is ComposerDraftSnapshotRecord => Boolean(draft));
+  }
+
+  listUnsentProjectDraftKeys(): string[] {
+    const rows = this.stateDb.raw.prepare(
+      "SELECT scope_key FROM composer_draft_latest WHERE status = 'unsent' AND scope_kind = 'launchpad' AND scope_key GLOB 'launchpad:directory:*'",
+    ).all() as Array<{ scope_key: string }>;
+    return rows.map(({ scope_key }) => scope_key.slice("launchpad:".length));
+  }
+
+  listCandidatesWithProjectAliases(
+    request: ListComposerDraftRecoveryCandidatesRequest = {},
+    verifiedProjectAliases: readonly string[],
+  ): ComposerDraftRecoveryCandidate[] {
+    const candidates = this.listCandidates(request);
+    const alternateDrafts = verifiedProjectAliases.flatMap((key) => this.listCandidates({
+      backend: request.backend, directoryKey: key, scopeKey: `launchpad:${key}`, limit: 1,
+    }).filter((draft) => draft.status === "unsent")).sort((left, right) => right.updatedAt - left.updatedAt);
+    if (!alternateDrafts.length) return candidates;
+    const currentDraft = candidates.find((draft) => draft.status === "unsent" && draft.journalId === undefined);
+    return [
+      ...(currentDraft ? [currentDraft] : []),
+      ...alternateDrafts,
+      ...candidates.filter((draft) => draft !== currentDraft),
+    ].slice(0, clampLimit(request.limit));
   }
 
   listCandidates(

@@ -29,6 +29,7 @@ import {
   THREAD_TODO_MAX_OPEN_PER_THREAD,
   THREAD_TODO_MERGE_METHODS,
   THREAD_TODO_PLACEMENT_LOCK_MESSAGES,
+  THREAD_TODO_SETUP_FAILURE_MAX_LENGTH,
   THREAD_TODO_RESOLUTION_RESULTS,
   mergeThreadTodoItems,
   resolveThreadTodoPlacement,
@@ -1051,12 +1052,20 @@ export class ThreadTodoService {
           started.dispatchSettings.settings, started.dispatchSettings.source);
       }
       const { backend, threadId, instanceId, instanceLabel } = started;
-      const result = started.instanceLabel
-        ? `Started thread on ${started.instanceLabel}`
-        : "Started thread";
+      const setupFailure = started.setupFailure?.trim().slice(0, THREAD_TODO_SETUP_FAILURE_MAX_LENGTH);
+      const result = [
+        started.instanceLabel ? `Started thread on ${started.instanceLabel}` : "Started thread",
+        ...(setupFailure ? ["Its environment setup failed"] : []),
+        ...(started.notice ? [started.notice] : []),
+      ].join(". ");
       return this.finish(id, {
-        result: started.notice ? `${result}. ${started.notice}` : result,
-        startedThread: { backend, threadId, ...(instanceId ? { instanceId } : {}), ...(instanceLabel ? { instanceLabel } : {}) },
+        result,
+        startedThread: {
+          backend, threadId,
+          ...(instanceId ? { instanceId } : {}),
+          ...(instanceLabel ? { instanceLabel } : {}),
+          ...(setupFailure ? { setupFailure } : {}),
+        },
       });
     } catch (error) {
       const failed = this.store.setError({

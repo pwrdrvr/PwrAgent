@@ -180,7 +180,7 @@ import {
   materializeNavigationThreads,
   serializeNavigationSnapshotForHash,
 } from "@pwragent/shared/navigation-state";
-import { buildDirectorySummaries } from "@pwragent/shared/directory-navigation";
+import { buildDirectorySummaries, hasPersistableLaunchpadState } from "@pwragent/shared/directory-navigation";
 import {
   estimateTokenUsageCost,
   resolveTokenUsagePriceUnavailableReason,
@@ -1135,11 +1135,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         'createdAt', json_extract(payload, '$.createdAt'),
         'updatedAt', json_extract(payload, '$.updatedAt'), 'prompt', ''
       ) AS compact FROM directory_launchpads
-      WHERE length(trim(COALESCE(json_extract(payload, '$.prompt'), ''))) > 0
-        OR COALESCE(json_array_length(payload, '$.imageAttachments'), 0) > 0
-        OR COALESCE(json_array_length(payload, '$.fileAttachments'), 0) > 0
-        OR json_extract(payload, '$.registeredAt') IS NOT NULL
-        OR json_extract(payload, '$.settingsTouchedAt') IS NOT NULL
+      WHERE json_extract(payload, '$.registeredAt') IS NOT NULL
+        OR (COALESCE(json_extract(payload, '$.hiddenFromDirectoryList'), 0) = 0 AND (
+          length(trim(COALESCE(json_extract(payload, '$.prompt'), ''))) > 0
+          OR COALESCE(json_array_length(payload, '$.imageAttachments'), 0) > 0
+          OR COALESCE(json_array_length(payload, '$.fileAttachments'), 0) > 0
+          OR json_extract(payload, '$.settingsTouchedAt') IS NOT NULL
+        ))
     `).iterate() as Iterable<{ directory_path: string; compact: string }>;
     for (const row of drafts) {
       inputBytes += Buffer.byteLength(row.compact, "utf8");
@@ -10121,6 +10123,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       ...launchpad,
       createdAt: current?.createdAt ?? launchpad.createdAt,
     };
+    if (next.registeredAt != null) delete next.hiddenFromDirectoryList;
     const now = Date.now();
     this.stateDb.raw
       .prepare(
@@ -10140,7 +10143,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return next;
   }
 
-  async removeDirectoryRegistration(params: { directoryKey: string; worktreeKeys?: readonly string[] }): Promise<void> {
+  async removeDirectoryRegistration(params: {
+    directoryKey: string;
+    worktreeKeys?: readonly string[];
+    caseAliasKeys?: readonly string[];
+  }): Promise<void> {
     this.stateDb.raw.transaction(() => {
       const remove = this.stateDb.raw.prepare("DELETE FROM directory_launchpads WHERE directory_path = ?");
       const unpin = (key: string) => {
@@ -10149,25 +10156,35 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           this.putDirectoryOverlay(key, { ...current, pinnedRank: undefined });
         }
       };
-      remove.run(params.directoryKey);
-      unpin(params.directoryKey);
-      if (!params.worktreeKeys?.length) return;
+      const caseKeys = new Set(params.caseAliasKeys);
+      if (caseKeys.size) caseKeys.add(params.directoryKey);
+      else {
+        remove.run(params.directoryKey);
+        unpin(params.directoryKey);
+      }
+      const keys = new Set([...caseKeys, ...(params.worktreeKeys ?? [])]);
+      if (!keys.size) return;
       const read = this.stateDb.raw.prepare("SELECT payload FROM directory_launchpads WHERE directory_path = ?");
       const hasDraft = this.stateDb.raw.prepare("SELECT 1 FROM composer_draft_latest WHERE scope_key = ? AND status = 'unsent'");
       const unregister = this.stateDb.raw.prepare("UPDATE directory_launchpads SET payload = json_remove(payload, '$.registeredAt') WHERE directory_path = ?");
-      for (const key of params.worktreeKeys) {
+      const hide = this.stateDb.raw.prepare(
+        "UPDATE directory_launchpads SET payload = json_set(json_remove(payload, '$.registeredAt'), '$.hiddenFromDirectoryList', json('true')) WHERE directory_path = ?",
+      );
+      for (const key of keys) {
         const row = read.get(key) as { payload: string } | undefined;
         const launchpad = row ? JSON.parse(row.payload) as DirectoryLaunchpadOverlayState : undefined;
-        if (launchpad?.registeredAt == null) continue;
+        const caseAlias = caseKeys.has(key);
+        if (caseAlias) unpin(key);
+        if (!launchpad || (!caseAlias && launchpad.registeredAt == null)) continue;
         // Check the current payload while removing the registration. The
         // compact index has no draft text and may predate a composer save.
         if (launchpad.prompt?.trim() || launchpad.imageAttachments?.length || launchpad.fileAttachments?.length
           || hasDraft.get(`launchpad:${key}`)) {
-          unregister.run(key);
+          (caseAlias ? hide : unregister).run(key);
         } else {
           remove.run(key);
         }
-        unpin(key);
+        if (!caseAlias) unpin(key);
       }
     })();
     this.notifyDirectoryLaunchpadsChanged();
@@ -13025,12 +13042,7 @@ function launchpadDirectoryIdentity(
   if (!launchpad) {
     return undefined;
   }
-  const present = Boolean(launchpad.prompt?.trim())
-    || (launchpad.imageAttachments?.length ?? 0) > 0
-    || (launchpad.fileAttachments?.length ?? 0) > 0
-    || launchpad.registeredAt != null
-    || launchpad.settingsTouchedAt != null;
-  return present
+  return hasPersistableLaunchpadState(launchpad)
     ? JSON.stringify([launchpad.directoryKind, launchpad.directoryLabel, launchpad.directoryPath ?? null, launchpad.registeredAt != null])
     : undefined;
 }

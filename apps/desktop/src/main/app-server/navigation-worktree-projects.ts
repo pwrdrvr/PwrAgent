@@ -1,24 +1,51 @@
 import path from "node:path";
-import type { DirectoryOverlayState, NavigationDirectoryGitStatus, NavigationDirectorySummary } from "@pwragent/shared/contracts/navigation";
+import type { DirectoryOverlayState, NavigationDirectoryGitStatus, NavigationDirectorySummary, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { applyNavigationDirectoryOverlay, canonicalizeNavigationPath } from "@pwragent/shared/directory-navigation";
 import { navigationDirectoryRepositoryRevision, type NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import { resolveWorktreeRepositoryDirectory } from "../git-info/worktree-store";
+import { reconcileWindowsDirectoryAliases } from "./navigation-windows-directory-aliases";
 
 const PROJECT_PROBE_BATCH_SIZE = 16;
+
+type WorktreeProjectOptions = {
+  signal?: AbortSignal;
+  directoryOverlays?: Record<string, DirectoryOverlayState>;
+  gitStatusByKey?: Record<string, { gitStatus?: NavigationDirectoryGitStatus } | undefined>;
+};
+type WorktreeProjects = Pick<NavigationQueryIndex, "directories" | "worktreeProjectAliases" | "worktreeRepositorySources">;
+
+export async function resolveNavigationWorktreeProjects(
+  directories: NavigationDirectorySummary[],
+  options: WorktreeProjectOptions & { threads: readonly NavigationThreadSummary[] },
+): Promise<WorktreeProjects & Pick<NavigationQueryIndex, "directoryCaseAliases">> {
+  const projects = await resolveGitWorktreeProjects(directories, options);
+  const reconciled = await reconcileWindowsDirectoryAliases(projects.directories, options.threads, options.signal);
+  if (!reconciled.directoryCaseAliases) return projects;
+
+  const worktreeProjectAliases = { ...projects.worktreeProjectAliases };
+  const worktreeRepositorySources = { ...projects.worktreeRepositorySources };
+  for (const [preferred, aliases] of Object.entries(reconciled.directoryCaseAliases)) {
+    for (const alias of aliases) {
+      const worktrees = worktreeProjectAliases[alias];
+      if (worktrees) {
+        worktreeProjectAliases[preferred] = [...(worktreeProjectAliases[preferred] ?? []), ...worktrees];
+        delete worktreeProjectAliases[alias];
+      }
+      delete worktreeRepositorySources[alias];
+    }
+  }
+  return { ...reconciled, worktreeProjectAliases, worktreeRepositorySources };
+}
 
 /**
  * Older registrations and provider rows can name a worktree as a project.
  * Project membership follows Git ownership. Keep workspace paths and saved
  * launchpads intact, and use the primary checkout's launchpad for new work.
  */
-export async function resolveNavigationWorktreeProjects(
+async function resolveGitWorktreeProjects(
   directories: NavigationDirectorySummary[],
-  options: {
-    signal?: AbortSignal;
-    directoryOverlays?: Record<string, DirectoryOverlayState>;
-    gitStatusByKey?: Record<string, { gitStatus?: NavigationDirectoryGitStatus } | undefined>;
-  } = {},
-): Promise<Pick<NavigationQueryIndex, "directories" | "worktreeProjectAliases" | "worktreeRepositorySources">> {
+  options: WorktreeProjectOptions,
+): Promise<WorktreeProjects> {
   const { signal } = options;
   const candidates = directories.filter((directory) => directory.kind === "directory"
     && !directory.localAvailability && directory.path && path.isAbsolute(directory.path));

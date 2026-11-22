@@ -1,4 +1,5 @@
 {
+  "navigation-remove-project-retain-case-alias-drafts": {"commits": 1, "note": "Removing a project hides the case aliases and retains their drafts in one commit. At 100 removals/day and 12,360 bytes/commit, about 1.24 MB/day; zero idle writes.", "observedWalBytes": 12360, "rowsChanged": 3, "statements": 3},
   "thread-todo-ci-approval-settled": {"commits": 1, "note": "The owner saw an approval card's gate cleared (approved anywhere) or its run end: the card is marked done.", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
   "thread-todo-ci-approval-still-waiting": {"commits": 0, "note": "One reconciler check of an approval card's run that is still held at its gate.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "thread-todo-ci-deployment-refused": {"commits": 1, "note": "One operator Approve that was refused: the refusal is saved on the open card.", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},

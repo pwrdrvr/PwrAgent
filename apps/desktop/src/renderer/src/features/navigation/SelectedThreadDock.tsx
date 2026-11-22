@@ -17,6 +17,12 @@ import {
   type DockEdge,
   type DockExtent,
 } from "./selected-thread-dock";
+import {
+  TOP_DOCK_CLASS,
+  TOP_DOCK_RESERVE_CHANGE_EVENT,
+  TOP_DOCK_RESERVE_PROPERTY as RESERVE_PROPERTY,
+  topDockReserve,
+} from "./selected-thread-dock-reserve";
 import { formatRelativeTime } from "./thread-time";
 
 // What sticks to the top of a lane and covers the rows under it: a project
@@ -33,10 +39,6 @@ const DOCK_PLATE_PX = 6;
 // The card's height before it has been drawn once: two lines at the default
 // density. The first layout pass after it mounts replaces this.
 const DOCK_HEIGHT_GUESS_PX = 46;
-// On the region while the dock is at the top. Everything that sticks to the
-// top of the list then sticks lower by the reserve, under the dock.
-const TOP_DOCK_CLASS = "has-selected-thread-dock-top";
-const RESERVE_PROPERTY = "--selected-thread-dock-reserve";
 
 type DockState = {
   edge: DockEdge;
@@ -382,6 +384,9 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
   const sync = useCallback((elements?: DockElements): void => {
     const region = regionRef.current;
     const reserved = reservedRegionRef.current;
+    // What the headers stick under now. The measure below lifts the reserve
+    // for its reads, so compare the result with this, not with mid-measure.
+    const reserveBefore = region ? topDockReserve(region) : 0;
     let hasReserve = reserved === region && region?.classList.contains(TOP_DOCK_CLASS);
     if (reserved && reserved !== region) {
       reserved.classList.remove(TOP_DOCK_CLASS);
@@ -413,6 +418,9 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
       reservedRegionRef.current = region;
     } else if (hasReserve) {
       region?.classList.remove(TOP_DOCK_CLASS);
+    }
+    if (region && topDockReserve(region) !== reserveBefore) {
+      region.dispatchEvent(new Event(TOP_DOCK_RESERVE_CHANGE_EVENT));
     }
     if (focusOnArrivalRef.current !== undefined) {
       const arrived = region && focusOnArrivalRef.current === threadKey && !measured
@@ -464,9 +472,13 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
   useLayoutEffect(() => () => {
     layoutRef.current?.dispose();
     layoutRef.current = undefined;
-    reservedRegionRef.current?.classList.remove(TOP_DOCK_CLASS);
-    reservedRegionRef.current?.style.removeProperty(RESERVE_PROPERTY);
+    const reserved = reservedRegionRef.current;
     reservedRegionRef.current = undefined;
+    if (!reserved) return;
+    const hadReserve = topDockReserve(reserved) > 0;
+    reserved.classList.remove(TOP_DOCK_CLASS);
+    reserved.style.removeProperty(RESERVE_PROPERTY);
+    if (hadReserve) reserved.dispatchEvent(new Event(TOP_DOCK_RESERVE_CHANGE_EVENT));
   }, []);
 
   if (!dock || !props.thread) {

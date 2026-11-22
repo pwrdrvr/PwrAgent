@@ -7819,7 +7819,7 @@ function localBackendOperations(): FederationBackendOperations {
         backend: "all", threads, workspaceRoots: resolveScratchProjectsRoots(),
       });
       const { directories } = await resolveNavigationWorktreeProjects(index.directories, {
-        signal: rpcOptions?.signal, directoryOverlays: index.directoryOverlays,
+        threads: index.threads, signal: rpcOptions?.signal, directoryOverlays: index.directoryOverlays,
       });
       return projectFederationProjectPage({ backend: "all", fetchedAt: Date.now(),
         directories, launchpadDefaults: await store.getLaunchpadDefaults(),
@@ -8659,6 +8659,7 @@ function localBackendOperations(): FederationBackendOperations {
           {
             ensureDirectoryLaunchpad: (ensureRequest) =>
               bridge.ensureDirectoryLaunchpad(ensureRequest),
+            listDirectoryLaunchpads: () => getDesktopOverlayStore().listDirectoryLaunchpads(),
           },
         );
         if (!registered.ok) {

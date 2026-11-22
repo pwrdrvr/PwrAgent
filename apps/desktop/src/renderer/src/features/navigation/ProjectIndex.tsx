@@ -30,6 +30,7 @@ import {
   spyProjects,
   type ProjectSpy,
 } from "./project-index";
+import { TOP_DOCK_RESERVE_CHANGE_EVENT, topDockReserve } from "./selected-thread-dock-reserve";
 import { matchMoveHotkey } from "./thread-action-hotkeys";
 
 export type ProjectIndexEntry = {
@@ -78,7 +79,7 @@ function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => v
         top: rect.top - top,
         bottom: rect.bottom - top,
       };
-    }, height));
+    }, height, topDockReserve(region)));
   };
   const schedule = (): void => {
     if (frame !== 0) return;
@@ -139,10 +140,14 @@ function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => v
   // in any section (including a tray opening above the viewport) can move
   // the active boundary without a scroll event.
   region.addEventListener("scroll", schedule, { capture: true, passive: true });
+  // The selected thread's dock arriving at the top moves the line the
+  // headers stick to, without a scroll.
+  region.addEventListener(TOP_DOCK_RESERVE_CHANGE_EVENT, schedule);
   measure();
   return () => {
     window.cancelAnimationFrame(frame);
     region.removeEventListener("scroll", schedule, { capture: true });
+    region.removeEventListener(TOP_DOCK_RESERVE_CHANGE_EVENT, schedule);
     mutation.disconnect();
     resize?.disconnect();
     sections = [];

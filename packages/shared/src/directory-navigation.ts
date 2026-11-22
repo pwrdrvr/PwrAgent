@@ -413,16 +413,15 @@ function isAllowedWorkspaceRoot(
   return Boolean(workspacePath && allowedWorkspaceRoots.has(workspacePath));
 }
 
-function hasPersistableLaunchpadState(
+export function hasPersistableLaunchpadState(
   launchpad: DirectoryLaunchpadOverlayState,
 ): boolean {
-  return (
-    launchpad.prompt.trim().length > 0 ||
+  return launchpad.registeredAt != null || (!launchpad.hiddenFromDirectoryList && (
+    Boolean(launchpad.prompt?.trim()) ||
     (launchpad.imageAttachments?.length ?? 0) > 0 ||
     (launchpad.fileAttachments?.length ?? 0) > 0 ||
-    launchpad.registeredAt !== undefined ||
-    launchpad.settingsTouchedAt !== undefined
-  );
+    launchpad.settingsTouchedAt != null
+  ));
 }
 
 function compareWorkspaceSummaryPreference(

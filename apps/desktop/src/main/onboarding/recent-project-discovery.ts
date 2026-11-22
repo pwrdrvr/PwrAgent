@@ -6,7 +6,7 @@ import type {
   RecentProjectObservation,
   RecentProjectSourceReport,
 } from "@pwragent/shared/contracts/settings";
-import { canonicalizeNavigationPath, navigationPathIdentity } from "@pwragent/shared/directory-navigation";
+import { navigationPathIdentity } from "@pwragent/shared/directory-navigation";
 import { RECENT_PROJECT_CLAUDE_SESSION_LIMIT, type RecentClaudeCodeDirectories } from "../claude/claude-recent-projects";
 
 /** Codex is read newest first, one page at a time, up to this budget. */
@@ -128,20 +128,6 @@ export class RecentProjectDiscoveryRuns {
       if (this.current.get(owner) === controller) this.current.delete(owner);
     }
   }
-}
-
-/**
- * On Windows, `folder` as the disk spells it, so a project registers as
- * `C:/Code/App` whichever case an agent used. Only letter case is taken
- * from the disk: a mapped drive, junction or link keeps the path the agent
- * reported.
- */
-export async function folderInRealCase(
-  folder: string,
-  realpath: (path: string) => Promise<string>,
-): Promise<string> {
-  const real = await realpath(folder).then(canonicalizeNavigationPath, () => undefined);
-  return real && navigationPathIdentity(real, true) === navigationPathIdentity(folder, true) ? real : folder;
 }
 
 /**
