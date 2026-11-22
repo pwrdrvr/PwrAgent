@@ -357,6 +357,7 @@ const DELIVERY_BUDGET_WARNING_TTL_MS = 30_000;
 const DELIVERY_BUDGET_DIAGNOSTIC_THROTTLE_MS = 30_000;
 const REJECTED_ROUTE_AGENT_METADATA_TTL_MS = 60_000;
 const ADAPTER_VALIDATION_ACTIVITY_INTERVAL_MS = 30 * 60 * 1000;
+const ADAPTER_VALIDATION_ACTIVITY_RETRY_MS = 60 * 1000;
 const ADAPTER_VALIDATION_ACTIVITY_SUMMARY = {
   "callback-signature": "Rejected callback with an invalid signature",
   "callback-handle-unavailable": "Rejected callback with an unavailable action handle",
@@ -506,7 +507,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     ReturnType<typeof setTimeout>
   >();
   private readonly deliveryBudgetDiagnosticLastLoggedAt = new Map<string, number>();
-  private readonly adapterValidationActivityLastRecordedAt = new Map<string, number>();
+  private readonly adapterValidationActivityNextAttemptAt = new Map<string, number>();
   // Rate-limit state outlives the adapter. A config change or a messaging
   // stop/start replaces the adapter and its controller, but the provider is
   // still limiting the bot, so the cool-off, slow mode and provider blocks
@@ -3359,12 +3360,10 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     // The runtime survives adapter replacement. Key only on a configured
     // platform and a fixed reason, and use a monotonic clock for the limit.
     const key = `${platform}:${event.reason}`;
-    const now = performance.now();
-    const lastRecordedAt = this.adapterValidationActivityLastRecordedAt.get(key);
-    if (lastRecordedAt !== undefined && now - lastRecordedAt < ADAPTER_VALIDATION_ACTIVITY_INTERVAL_MS) {
+    const nextAttemptAt = this.adapterValidationActivityNextAttemptAt.get(key);
+    if (nextAttemptAt !== undefined && performance.now() < nextAttemptAt) {
       return;
     }
-    this.adapterValidationActivityLastRecordedAt.set(key, now);
 
     try {
       getDesktopMessagingActivityLog().record({
@@ -3377,14 +3376,21 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
           rejectionReason: event.reason,
         },
       });
-      this.emitPlatformActivity(platform);
     } catch (error) {
+      this.adapterValidationActivityNextAttemptAt.set(
+        key, performance.now() + ADAPTER_VALIDATION_ACTIVITY_RETRY_MS,
+      );
       messagingLog.warn("messaging adapter validation activity log write failed", {
         platform,
         reason: event.reason,
         error: error instanceof Error ? error.message : String(error),
       });
+      return;
     }
+    this.adapterValidationActivityNextAttemptAt.set(
+      key, performance.now() + ADAPTER_VALIDATION_ACTIVITY_INTERVAL_MS,
+    );
+    this.emitPlatformActivity(platform);
   }
 
   private async resolveRejectedInboundRoute(

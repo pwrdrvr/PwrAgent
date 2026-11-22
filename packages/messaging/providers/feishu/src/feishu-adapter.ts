@@ -21,6 +21,7 @@ import type {
   MessagingAdapterDiagnosticListener,
   MessagingAdapterRenderingPreferencesUpdate,
   MessagingAdapterState,
+  MessagingAdapterValidationRejectionReason,
   MessagingAttachmentDescriptor,
   MessagingAttachmentDownloadRequest,
   MessagingAttachmentDownloadResult,
@@ -77,6 +78,8 @@ const FEISHU_SIGNED_VALUE_VERSION = 1;
 const FEISHU_WEBHOOK_BODY_LIMIT_BYTES = 2 * 1024 * 1024;
 const FEISHU_INBOUND_DEDUP_TTL_MS = 10 * 60 * 1000;
 const FEISHU_INBOUND_DEDUP_MAX = 1_000;
+
+type FeishuValidationRejectionReporter = (reason: MessagingAdapterValidationRejectionReason) => void;
 
 export type FeishuProviderLogger = {
   debug?: (message: string, data?: Record<string, unknown>) => void;
@@ -758,27 +761,27 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     };
   }
 
-  async handleWebhookPayload(payload: FeishuEventEnvelope, receivedAt = this.now()): Promise<unknown> {
+  async handleWebhookPayload(
+    payload: FeishuEventEnvelope,
+    receivedAt = this.now(),
+    reportValidationRejection: FeishuValidationRejectionReporter =
+      (reason) => this.deferValidationRejection(reason, receivedAt),
+  ): Promise<unknown> {
     this.logReceivedEvent("webhook", payload);
-    if (payload.type === "url_verification" && typeof payload.challenge === "string") {
-      if (!this.isValidWebhookToken(payload.token)) {
-        await this.emitInboundRejected({ kind: "validation", reason: "webhook-authentication", receivedAt });
-        return { status: 401 };
-      }
-      return { challenge: payload.challenge };
-    }
-
-    if (!this.isValidWebhookToken(payload.header?.token ?? payload.token)) {
-      await this.emitInboundRejected({ kind: "validation", reason: "webhook-authentication", receivedAt });
+    const isChallenge = payload.type === "url_verification" && typeof payload.challenge === "string";
+    const token = isChallenge ? payload.token : payload.header?.token ?? payload.token;
+    if (!this.isValidWebhookToken(token)) {
+      reportValidationRejection("webhook-authentication");
       return { status: 401 };
     }
+    if (isChallenge) return { challenge: payload.challenge };
 
     const eventType = payload.header?.event_type;
     if (eventType === "im.message.receive_v1") {
       await this.handleMessageEvent(payload);
     } else if (eventType === "card.action.trigger" || isFeishuCardActionEnvelope(payload)) {
       return {
-        body: await this.handleCardActionEvent(payload, receivedAt),
+        body: await this.handleCardActionEvent(payload, receivedAt, reportValidationRejection),
         status: 200,
       };
     } else if (eventType === "im.chat.access_event.bot_p2p_chat_entered_v1") {
@@ -1171,6 +1174,8 @@ export class FeishuAdapter implements FeishuProviderAdapter {
   private async handleCardActionEvent(
     payload: FeishuEventEnvelope,
     receivedAt = this.now(),
+    reportValidationRejection: FeishuValidationRejectionReporter =
+      (reason) => this.deferValidationRejection(reason, receivedAt),
   ): Promise<FeishuCardActionResponse> {
     const receipt: MessagingInboundReceipt = captureMessagingInboundReceipt(receivedAt);
     const event = payload.event as FeishuCardActionEvent | undefined;
@@ -1214,7 +1219,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         return this.cardActionUnavailable("invalid-message-id", cardActionLogContext);
       }
     }
-    const signed = this.parseSignedCallbackValue(handle, receivedAt);
+    const signed = this.parseSignedCallbackValue(handle, reportValidationRejection);
     if (!signed) {
       return this.cardActionUnavailable("invalid-signed-handle", cardActionLogContext);
     }
@@ -1252,11 +1257,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         handleHash: createHash("sha256").update(signed.handle).digest("hex").slice(0, 8),
         ...cardActionLogContext,
       });
-      await this.emitInboundRejected({
-        kind: "validation",
-        reason: "callback-handle-unavailable",
-        receivedAt,
-      });
+      reportValidationRejection("callback-handle-unavailable");
       return this.cardActionUnavailable("handle-not-found", cardActionLogContext);
     }
 
@@ -1404,6 +1405,16 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     });
   }
 
+  private deferValidationRejection(
+    reason: MessagingAdapterValidationRejectionReason,
+    receivedAt: number,
+  ): void {
+    // Let the persistent connection hand the action result back to its SDK.
+    setImmediate(() => {
+      void this.emitInboundRejected({ kind: "validation", reason, receivedAt });
+    });
+  }
+
   private async emitDiagnostic(event: MessagingAdapterDiagnosticEvent): Promise<void> {
     this.logger.info?.("feishu adapter diagnostic", {
       eventId: event.id,
@@ -1490,7 +1501,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
 
   private parseSignedCallbackValue(
     value: string,
-    receivedAt: number,
+    reportValidationRejection: FeishuValidationRejectionReporter,
   ): {
     channel?: MessagingChannelRef;
     handle: string;
@@ -1527,7 +1538,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       this.logger.warn?.("feishu callback signature rejected", {
         handleHash: createHash("sha256").update(record.h).digest("hex").slice(0, 8),
       });
-      void this.emitInboundRejected({ kind: "validation", reason: "callback-signature", receivedAt });
+      reportValidationRejection("callback-signature");
       return undefined;
     }
     return {
@@ -1867,6 +1878,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       response.writeHead(405).end();
       return;
     }
+    let validationRejection: MessagingAdapterValidationRejectionReason | undefined;
     try {
       const body = await readRequestBody(request, FEISHU_WEBHOOK_BODY_LIMIT_BYTES);
       const payload = parseFeishuWebhookPayload(
@@ -1874,7 +1886,9 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         request.headers,
         this.config.encryptKey,
       );
-      const result = await this.handleWebhookPayload(payload, receivedAt);
+      const result = await this.handleWebhookPayload(payload, receivedAt, (reason) => {
+        validationRejection = reason;
+      });
       if (
         result
         && typeof result === "object"
@@ -1896,9 +1910,21 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       this.logger.warn?.("feishu webhook request failed", {
         error: error instanceof Error ? error.message : String(error),
       });
-      response.writeHead(error instanceof FeishuWebhookAuthError ? 401 : 400).end();
       if (error instanceof FeishuWebhookAuthError) {
-        await this.emitInboundRejected({ kind: "validation", reason: "webhook-authentication", receivedAt });
+        validationRejection = "webhook-authentication";
+        response.writeHead(401).end();
+      } else {
+        response.writeHead(400).end();
+      }
+    } finally {
+      // The activity store may synchronously wait for SQLite. End the HTTP
+      // response before notifying listeners so storage cannot delay the reply.
+      if (validationRejection) {
+        await this.emitInboundRejected({
+          kind: "validation",
+          reason: validationRejection,
+          receivedAt,
+        });
       }
     }
   }

@@ -3522,6 +3522,46 @@ describe("DesktopMessagingRuntime", () => {
     });
   });
 
+  // A storage failure only backs off retries. The full cooldown starts at
+  // the first successful write, even if the database recovers mid-burst.
+  it("retries adapter validation activity after a short write failure backoff", async () => {
+    const { reject } = await createSlackRejectedRuntimeHarness();
+    const {
+      getDesktopMessagingActivityLog,
+      setDesktopMessagingActivityLogForTests,
+    } = await import("../messaging/desktop-messaging-activity-log");
+    const activity = getDesktopMessagingActivityLog();
+    const record = vi.spyOn(activity, "record").mockImplementationOnce(() => {
+      throw new Error("database is locked");
+    });
+    setDesktopMessagingActivityLogForTests(activity);
+    let clock = 0;
+    const monotonicNow = vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const report = async (receivedAt: number) => {
+      await reject({ kind: "validation", reason: "callback-signature", receivedAt });
+    };
+    try {
+      await report(1);
+      expect(activity.list()).toEqual([]);
+      clock = 59_999;
+      await report(2);
+      expect(record).toHaveBeenCalledTimes(1);
+      clock = 60_000;
+      await report(3);
+      expect(activity.list().map((row) => row.createdAt)).toEqual([3]);
+      clock += 30 * 60 * 1000 - 1;
+      await report(4);
+      expect(record).toHaveBeenCalledTimes(2);
+      clock += 1;
+      await report(5);
+      expect(activity.list().map((row) => row.createdAt)).toEqual([5, 3]);
+    } finally {
+      monotonicNow.mockRestore();
+      record.mockRestore();
+      setDesktopMessagingActivityLogForTests(null);
+    }
+  });
+
   it("does not log or persist an unauthorized mention without a route", async () => {
     const { reject } = await createSlackRejectedRuntimeHarness();
     await reject(buildRejectedSlackEvent(

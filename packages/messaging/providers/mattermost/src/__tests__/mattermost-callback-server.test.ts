@@ -150,7 +150,9 @@ describe("MattermostCallbackServer", () => {
     }
   });
 
-  it("silently rejects callbacks with bad HMAC (200 response, no dispatch)", async () => {
+  // Structurally valid callbacks get the same acknowledgment and redacted
+  // signal for an incorrect, empty, or omitted credential.
+  it.each(["invalid-signature", "", undefined])("silently rejects a callback with HMAC %s", async (hmac) => {
     const port = nextPort++;
     const handler = vi.fn();
     const onValidationRejected = vi.fn();
@@ -172,7 +174,7 @@ describe("MattermostCallbackServer", () => {
           intentId: "intent-1",
           actionId: "act",
           issuedAt: 1234,
-          hmac: "not-the-real-hmac-value-just-bytes-here",
+          hmac,
         },
       };
       const response = await fetch(`http://127.0.0.1:${port}/`, {
@@ -180,6 +182,7 @@ describe("MattermostCallbackServer", () => {
         body: JSON.stringify(body),
       });
       expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ update: null });
       expect(handler).not.toHaveBeenCalled();
       expect(onValidationRejected.mock.calls).toEqual([[{
         kind: "validation",
@@ -303,7 +306,7 @@ describe("MattermostCallbackServer", () => {
     }
   });
 
-  it("rejects slash-command POSTs with unknown token (200 response, no dispatch)", async () => {
+  it.each(["spoofed-token", "", undefined])("silently rejects a slash-command POST with token %s", async (token) => {
     const port = nextPort++;
     const slashHandler = vi.fn();
     const onValidationRejected = vi.fn();
@@ -321,19 +324,22 @@ describe("MattermostCallbackServer", () => {
     await server.start();
     try {
       const params = new URLSearchParams({
-        token: "spoofed-token",
         team_id: TEST_TEAM_ID,
         channel_id: TEST_CHANNEL_ID,
         user_id: TEST_USER_ID,
         command: "/resume",
         text: "",
       });
+      if (token !== undefined) {
+        params.set("token", token);
+      }
       const response = await fetch(`http://127.0.0.1:${port}/command`, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: params.toString(),
       });
       expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({});
       expect(slashHandler).not.toHaveBeenCalled();
       expect(onValidationRejected.mock.calls).toEqual([[{
         kind: "validation",

@@ -89,10 +89,12 @@ failures, such as bad callback signatures or unresolved callback handles. Emit
 `kind: "validation"`, a fixed reason, and the local `receivedAt` only. The
 activity log records these as `inbound-rejected` with
 `rejectionStage: "adapter-validation"`, at most once per platform and reason
-every 30 minutes while the owner is running. This path performs no destination
-lookup and carries no request fields. Actor and conversation authorization
-rejections use the same observer with route-resolution metadata and retain their
-actionability rules.
+every 30 minutes while the owner is running. If the write fails, the next
+attempt for that platform and reason can run after one minute. Send any
+webhook rejection response before notifying validation observers. This path
+performs no destination lookup and carries no request fields. Actor and
+conversation authorization rejections use the same observer with
+route-resolution metadata and retain their actionability rules.
 
 ## Lifecycle
 

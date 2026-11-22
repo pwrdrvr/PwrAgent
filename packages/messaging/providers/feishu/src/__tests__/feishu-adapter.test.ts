@@ -1,5 +1,6 @@
 import { createCipheriv, createHash } from "node:crypto";
-import type { AddressInfo } from "node:net";
+import { IncomingMessage, ServerResponse } from "node:http";
+import { Socket, type AddressInfo } from "node:net";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -13,6 +14,7 @@ import type {
   MessagingCallbackHandleStore,
   MessagingChannelRef,
   MessagingAdapterDiagnosticEvent,
+  MessagingAdapterValidationRejectionReason,
   MessagingInboundEvent,
   MessagingRejectedInboundEvent,
   MessagingSurfaceIntent,
@@ -28,6 +30,34 @@ const baseConfig = {
   tenantUrl: "https://open.feishu.cn",
   verificationToken: "verify-token",
 };
+
+// The HTTP response must already be ended when the synchronous audit starts.
+async function expectFeishuValidationAfterResponse(
+  adapter: FeishuAdapter,
+  payload: Parameters<FeishuAdapter["handleWebhookPayload"]>[0],
+  statusCode: number,
+  reason: MessagingAdapterValidationRejectionReason,
+): Promise<void> {
+  const request = new IncomingMessage(new Socket());
+  request.method = "POST";
+  request.push(Buffer.from(JSON.stringify(payload)));
+  request.push(null);
+  const response = new ServerResponse(request);
+  const observed: Array<{ ended: boolean; event: MessagingRejectedInboundEvent }> = [];
+  const unsubscribe = adapter.onInboundRejected((event) => {
+    observed.push({ ended: response.writableEnded, event });
+  });
+  try {
+    await adapter["handleWebhookRequest"](request, response);
+    expect(response.statusCode).toBe(statusCode);
+    expect(observed).toEqual([{
+      ended: true,
+      event: { kind: "validation", reason, receivedAt: 1_700_000_000_000 },
+    }]);
+  } finally {
+    unsubscribe();
+  }
+}
 
 function fakeStore(): MessagingCallbackHandleStore & {
   records: MessagingCallbackHandleRecord[];
@@ -1708,7 +1738,7 @@ describe("FeishuAdapter", () => {
     await adapter.start(async (event) => {
       events.push(event);
     });
-    await expect(adapter.handleWebhookPayload({
+    const payload = {
       header: {
         event_id: "evt_card",
         event_type: "card.action.trigger",
@@ -1726,7 +1756,8 @@ describe("FeishuAdapter", () => {
           value: { handle },
         },
       },
-    })).resolves.toEqual({
+    };
+    await expect(adapter.handleWebhookPayload(payload)).resolves.toEqual({
       body: {
         toast: {
           content: "PwrAgent received this action.",
@@ -1738,6 +1769,8 @@ describe("FeishuAdapter", () => {
     await vi.waitFor(() => {
       expect(events).toHaveLength(1);
     });
+    store.records.length = 0;
+    await expectFeishuValidationAfterResponse(adapter, payload, 200, "callback-handle-unavailable");
     await adapter.stop();
 
     expect(events).toEqual([
@@ -2110,7 +2143,7 @@ describe("FeishuAdapter webhook authentication", () => {
         },
         message: {
           chat_id: "oc_chat",
-          chat_type: "p2p",
+          chat_type: "p2p" as const,
           content: JSON.stringify({ text }),
           message_id: messageId,
           message_type: "text",
@@ -2339,5 +2372,23 @@ describe("FeishuAdapter webhook authentication", () => {
       expect(accepted.status).toBe(200);
       expect(events).toHaveLength(1);
     });
+  });
+
+  it("sends token rejection responses before auditing", async () => {
+    const adapter = new FeishuAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      now: () => 1_700_000_000_000,
+    });
+    const event = messageEvent("token only");
+    await expectFeishuValidationAfterResponse(adapter, {
+      ...event,
+      header: { ...event.header, token: "wrong-token" },
+    }, 401, "webhook-authentication");
+    await expectFeishuValidationAfterResponse(adapter, {
+      type: "url_verification",
+      challenge: "fixture",
+    }, 401, "webhook-authentication");
   });
 });
