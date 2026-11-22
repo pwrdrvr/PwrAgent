@@ -1,5 +1,5 @@
 import { fetchGitHubReleaseMetadata, ReleaseCheckDeferredError } from "./github-release-cache.js";
-import type { DesktopUpdateChannel } from "@pwragent/shared/contracts/settings";
+import type { DesktopUpdateChannel, ManagedCodexTrackTags } from "@pwragent/shared/contracts/settings";
 import {
   MANAGED_CODEX_BUILD_CHANNEL_DEFAULT,
   parseDesktopUpdateChannel,
@@ -438,9 +438,44 @@ function isCachedForOtherTrack(
     && cached.metadata.channel !== channel;
 }
 
+type ReleaseLookupOptions = Pick<
+  ManagedCodexRuntimeOptions,
+  "arch" | "checkMode" | "fetch" | "platform" | "signal"
+>;
+
+/** Read published versions without probing or installing a runtime. */
+export async function readManagedCodexTrackTags(
+  options: Pick<ReleaseLookupOptions, "arch" | "platform"> = {},
+): Promise<ManagedCodexTrackTags> {
+  const { latest, prerelease } = await fetchCompatibleReleaseSlots(options);
+  return { latestTag: latest?.tag, prereleaseTag: prerelease?.tag };
+}
+
+let pendingReleaseMetadata: Promise<Response> | undefined;
+
+async function fetchCodexReleaseMetadata(
+  init: RequestInit,
+  manual: boolean,
+): Promise<Response> {
+  // An automatic Settings lookup can overlap a track switch. Wait for its
+  // cache reservation to clear so the manual check can still revalidate.
+  while (pendingReleaseMetadata) {
+    await pendingReleaseMetadata.catch(() => undefined);
+  }
+  init.signal?.throwIfAborted();
+  pendingReleaseMetadata = fetchGitHubReleaseMetadata(MANAGED_CODEX_RELEASES_URL, init, {
+    manual, ttlMs: MANAGED_CODEX_CHECK_TTL_MS,
+  });
+  try {
+    return await pendingReleaseMetadata;
+  } finally {
+    pendingReleaseMetadata = undefined;
+  }
+}
+
 async function fetchCompatibleReleaseSlots(
-  options: ManagedCodexRuntimeOptions,
-  channel: DesktopUpdateChannel,
+  options: ReleaseLookupOptions,
+  channel?: DesktopUpdateChannel,
 ): Promise<ManagedCodexReleaseSlots> {
   const assetPlatform = managedCodexAssetPlatform(
     options.platform ?? process.platform,
@@ -450,16 +485,18 @@ async function fetchCompatibleReleaseSlots(
     return {};
   }
   const fetchImpl = options.fetch ?? globalThis.fetch;
-  const response = await (options.fetch ?? ((url, init) => fetchGitHubReleaseMetadata(String(url), init, {
-    manual: options.checkMode === "force", ttlMs: 24 * 60 * 60_000,
-  })))(MANAGED_CODEX_RELEASES_URL, {
+  const init = {
     headers: {
       Accept: "application/vnd.github+json",
       "User-Agent": "PwrAgent-managed-codex-runtime",
       "X-GitHub-Api-Version": "2022-11-28",
     },
     signal: managedCodexFetchSignal(options.signal),
-  }).catch((error: unknown) => {
+  };
+  const response = await (options.fetch
+    ? options.fetch(MANAGED_CODEX_RELEASES_URL, init)
+    : fetchCodexReleaseMetadata(init, options.checkMode === "force")
+  ).catch((error: unknown) => {
     if (error instanceof ReleaseCheckDeferredError && error.reason === "rate-limit") {
       // A persisted limit has the same feed fallback as a live 429, without REST.
       return new Response(null, { status: 429 });
@@ -478,6 +515,9 @@ async function fetchCompatibleReleaseSlots(
       `GitHub release check failed with HTTP ${response.status}.`,
     );
   }
+  // Settings labels require a release record with the platform's assets.
+  // Only an install may use the feed and verify the publication itself.
+  if (channel === undefined) return {};
 
   const feedResponse = await fetchImpl(MANAGED_CODEX_RELEASES_FEED_URL, {
     headers: { "User-Agent": "PwrAgent-managed-codex-runtime" },

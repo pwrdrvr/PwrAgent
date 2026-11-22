@@ -5219,6 +5219,71 @@ describe("SettingsScreen", () => {
     expect(screen.getByText(/checked just now/)).toBeInTheDocument();
   });
 
+  async function expectManagedCodexTrackRefresh(previous: number, published: number) {
+    const snapshot = createSnapshot();
+    snapshot.models.codex.managedBuilds = { value: true, source: "config" };
+    snapshot.runtime.tokenMiser = {
+      managedCodex: {
+        state: "ready",
+        version: `0.${previous}.0-pwragent.1`,
+        checkedAt: Date.now() - 21 * 24 * 60 * 60_000,
+        latestTag: `pwragent-v0.${previous}.0-pwragent.1`,
+        prereleaseTag: `pwragent-v0.${previous}.1-pwragent.1`,
+      },
+    };
+    const settings = createSettingsState(snapshot);
+    const readManagedCodexTrackTags = vi.fn(async () => ({
+      latestTag: `pwragent-v0.${published}.0-pwragent.1`,
+      prereleaseTag: `pwragent-v0.${published}.1-pwragent.1`,
+    }));
+    const refreshCodexDiscovery = vi.fn();
+    const listBackends = vi.fn(async () => ({ fetchedAt: Date.now(), backends: [] }));
+    const desktopApi = { listBackends, readManagedCodexTrackTags, refreshCodexDiscovery };
+    const view = render(
+      <SettingsScreen
+        desktopApi={desktopApi as unknown as DesktopApi}
+        initialSection="models"
+        initialSubsection="codex"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    try {
+      await act(async () => {});
+      const track = screen.getByRole("radiogroup", { name: "Build track" });
+      // Opening Codex Settings should show the releases reported by the
+      // publisher even when the last installed build is weeks old.
+      const latest = within(track).getByRole("radio", { name: /^Latest/ });
+      const prerelease = within(track).getByRole("radio", { name: /^Prerelease/ });
+      expect(latest).toHaveAttribute("aria-checked", "true");
+      expect(within(latest).getByText(`0.${published}.0-pwragent.1`)).toBeInTheDocument();
+      expect(within(prerelease).getByText(`0.${published}.1-pwragent.1`)).toBeInTheDocument();
+      expect(readManagedCodexTrackTags).toHaveBeenCalledOnce();
+      expect(refreshCodexDiscovery).not.toHaveBeenCalled();
+      expect(settings.writeConfig).not.toHaveBeenCalled();
+      expect(listBackends).not.toHaveBeenCalledWith(expect.objectContaining({
+        refreshModels: "codex",
+      }));
+    } finally {
+      view.unmount();
+    }
+  }
+
+  it("updates weeks-old Codex track labels on open before switching tracks", async () => {
+    await expectManagedCodexTrackRefresh(162, 171);
+  });
+
+  it("shows the published Codex tracks on open for any older installed version", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.integer({ min: 150, max: 300 }),
+      fc.integer({ min: 1, max: 40 }),
+      async (previous, releasesSinceInstall) => {
+        await expectManagedCodexTrackRefresh(previous, previous + releasesSinceInstall);
+      },
+    ), { numRuns: 25 });
+  });
+
   it("names both managed Codex tracks and switches to the one picked", async () => {
     const snapshot = createSnapshot();
     snapshot.models.codex.managedBuilds = { value: true, source: "config" };
@@ -5310,10 +5375,11 @@ describe("SettingsScreen", () => {
   it("offers no managed Codex track while the PwrAgent build is off", () => {
     const snapshot = createSnapshot();
     snapshot.models.codex.managedBuilds = { value: false, source: "config" };
+    const readManagedCodexTrackTags = vi.fn();
 
     render(
       <SettingsScreen
-        desktopApi={{} as unknown as DesktopApi}
+        desktopApi={{ readManagedCodexTrackTags }}
         initialSection="models"
         initialSubsection="codex"
         settings={createSettingsState(snapshot)}
@@ -5324,6 +5390,7 @@ describe("SettingsScreen", () => {
     expect(screen.getByText("PwrAgent build")).toBeInTheDocument();
     expect(screen.queryByRole("radiogroup", { name: "Build track" }))
       .not.toBeInTheDocument();
+    expect(readManagedCodexTrackTags).not.toHaveBeenCalled();
   });
 
   it("rediscovers Codex models after installing a newer managed build", async () => {

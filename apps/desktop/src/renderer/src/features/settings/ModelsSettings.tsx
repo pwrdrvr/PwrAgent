@@ -21,6 +21,7 @@ import type {
   DesktopSettingsSecretName,
   DesktopSettingsSnapshot,
   DesktopUpdateChannel,
+  ManagedCodexTrackTags,
 } from "@pwragent/shared/contracts/settings";
 import type {
   DesktopHelperModelSettings,
@@ -253,6 +254,27 @@ export function ModelsSettings(props: {
   const managedCodexOn =
     managedCodexRequiredBy !== undefined
     || (codex.managedBuilds?.value ?? false);
+  const showCodexTrack = managedCodexOn && props.focus === "codex";
+  const [publishedCodexTrackTags, setPublishedCodexTrackTags] =
+    useState<ManagedCodexTrackTags>();
+  const managedCodexCheckedAt = managedCodexRuntime?.checkedAt;
+  const checkingCodexReleaseList = managedCodexProgress?.phase === "checking";
+  useEffect(() => {
+    setPublishedCodexTrackTags(undefined);
+    if (!showCodexTrack || checkingCodexReleaseList) return;
+
+    let current = true;
+    void props.desktopApi?.readManagedCodexTrackTags?.().then((tags) => {
+      if (current) setPublishedCodexTrackTags(tags);
+    }).catch(() => {
+      // An unavailable release list leaves the last known tags visible.
+    });
+    return () => { current = false; };
+  }, [checkingCodexReleaseList, managedCodexCheckedAt, props.desktopApi, showCodexTrack]);
+  const managedCodexTrackTags: ManagedCodexTrackTags = {
+    latestTag: publishedCodexTrackTags?.latestTag ?? managedCodexRuntime?.latestTag,
+    prereleaseTag: publishedCodexTrackTags?.prereleaseTag ?? managedCodexRuntime?.prereleaseTag,
+  };
   const managedCodexInstalledAt =
     managedCodexProgress?.phase === "ready"
       ? managedCodexProgress.updatedAt
@@ -369,8 +391,8 @@ export function ModelsSettings(props: {
     // switch installs nothing. Read before the write, which replaces the
     // snapshot this closure sees.
     const trackTag = channel === "latest"
-      ? managedCodexRuntime?.latestTag
-      : managedCodexRuntime?.prereleaseTag;
+      ? managedCodexTrackTags.latestTag
+      : managedCodexTrackTags.prereleaseTag;
     const sameBuild =
       trackTag !== undefined
       && managedBuildVersion(trackTag) === managedCodexRuntime?.version;
@@ -503,7 +525,7 @@ export function ModelsSettings(props: {
               label="Build track"
               sub={MANAGED_BUILD_TRACK_SUB}
               disabled={props.saving || catalogBusy || checkingManagedCodex}
-              options={managedBuildTrackOptions(managedCodexRuntime ?? {})}
+              options={managedBuildTrackOptions(managedCodexTrackTags)}
               // Same wait as the switch above: the config write, then the
               // release check that installs and activates the track's build.
               pendingLabel="Downloading and installing…"

@@ -124,6 +124,7 @@ import {
   SETTINGS_PICK_GIT_COMMAND_CHANNEL,
   SETTINGS_REFRESH_GIT_DISCOVERY_CHANNEL,
   SETTINGS_READ_CHANNEL,
+  SETTINGS_READ_MANAGED_CODEX_TRACK_TAGS_CHANNEL,
   MANAGED_RUNTIME_PROGRESS_READ_CHANNEL,
   TOKEN_MISER_READ_USAGE_CHANNEL,
   SETTINGS_READ_BOOTSTRAP_CHANNEL,
@@ -139,6 +140,7 @@ import {
 } from "../../../shared/ipc";
 import type { ManagedRuntimeProgress } from "../../../shared/managed-runtime-progress";
 import { readManagedRuntimeProgress } from "../../managed-runtime-progress";
+import { readManagedCodexTrackTags } from "../../codex-managed-runtime";
 import type { DesktopSettingsService } from "../../settings/desktop-settings-service";
 import { checkDecisionProvider } from "../../decision/decision-provider-check";
 import {
@@ -2059,6 +2061,14 @@ export function registerSettingsIpcHandlers(
       ),
   );
 
+  ipcMain.removeHandler(SETTINGS_READ_MANAGED_CODEX_TRACK_TAGS_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_READ_MANAGED_CODEX_TRACK_TAGS_CHANNEL,
+    async () => getService(service).resolveManagedCodexEnabled()
+      ? await readManagedCodexTrackTags()
+      : {},
+  );
+
   ipcMain.removeHandler(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL);
   ipcMain.handle(
     SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
@@ -2625,6 +2635,7 @@ export function disposeSettingsIpcHandlers(): void {
   ipcMain.removeHandler(SETTINGS_TEST_CODEX_MODEL_PROVIDER_CHANNEL);
   ipcMain.removeHandler(SETTINGS_REFRESH_CODEX_MODEL_PROVIDER_CATALOGS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_SCAN_CODEX_MODEL_PROVIDER_IMPORTS_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_READ_MANAGED_CODEX_TRACK_TAGS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL);
   ipcMain.removeHandler(SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL);
   ipcMain.removeHandler(SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL);
