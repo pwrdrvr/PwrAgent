@@ -2,6 +2,7 @@ import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import { AcpAgentClient } from "../acp/acp-client";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
+import { AcpSessionRuntimeOptions } from "../app-server/acp-session-runtime-options";
 import { AcpSessionStore } from "../storage/acp-session-store";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
@@ -23,7 +24,9 @@ function configOptions(currentValue: string) {
 class AntigravityTransport extends FakeAcpAgentTransport {
   mode = "default";
   readonly sentPrompts: string[] = [];
-  refuseModeWrite = false;
+  refusedMode?: string;
+  refuseClose = false;
+  workerOpen = false;
 
   override async request(
     method: string,
@@ -32,6 +35,7 @@ class AntigravityTransport extends FakeAcpAgentTransport {
   ): Promise<unknown> {
     const result = super.request(method, params, timeoutMs);
     if (method === "session/new" || method === "session/load") {
+      this.workerOpen = true;
       this.mode = "default";
       return {
         sessionId,
@@ -43,12 +47,16 @@ class AntigravityTransport extends FakeAcpAgentTransport {
       };
     }
     if (method === "session/set_config_option" && params?.configId === "mode") {
-      if (!this.refuseModeWrite) this.mode = String(params.value);
+      if (params.value !== this.refusedMode) this.mode = String(params.value);
       this.emitSessionUpdate(sessionId, {
         sessionUpdate: "current_mode_update",
         currentModeId: this.mode,
       });
       return { configOptions: configOptions(this.mode) };
+    }
+    if (method === "session/close") {
+      if (this.refuseClose) throw new Error("Provider refused to close");
+      this.workerOpen = false;
     }
     if (method === "session/prompt") {
       this.sentPrompts.push(this.mode);
@@ -119,6 +127,27 @@ async function finishPrompt(client: AcpAgentClient) {
   await vi.waitFor(() => expect(client.hasActiveTurns()).toBe(false), { interval: 1 });
 }
 
+function selectModeThroughOwner(client: AcpAgentClient, store: AcpSessionStore, value: string) {
+  const owner = new AcpSessionRuntimeOptions({
+    getSession: (backend, threadId) => store.getSession(backend, threadId),
+    getClientForSession: async () => client,
+    getInstalledAgent: () => undefined,
+    upsertSession: (metadata) => store.upsertSession(metadata),
+  }, {
+    setThreadExecutionMode: async (params) => ({ ...params, extraLinkedDirectories: [] }),
+  }, async () => {}, () => ({
+    threadHasActiveTurn: () => false,
+    appendPermissionTransition: async () => {},
+  }));
+  return owner.setAcpSessionRuntimeOption({
+    backend: "acp:antigravity",
+    threadId: sessionId,
+    source: "configOption",
+    optionId: "mode",
+    value,
+  });
+}
+
 describe("Antigravity native mode on session/load", () => {
   it("keeps launchpad Auto when the first turn is sent through a new client", async () => {
     await withSession(async ({ open, select, store }) => {
@@ -175,14 +204,81 @@ describe("Antigravity native mode on session/load", () => {
       const { client, transport } = await open();
       await select(client, "auto");
       expect(await client.closeIdleSessions({ idleMs: 0 })).toEqual([sessionId]);
-      transport.refuseModeWrite = true;
+      transport.refusedMode = "auto";
       await expect(client.startPrompt({ sessionId, prompt: "Search for the marker" })).rejects.toThrow(/restore.*auto/i);
       expect(transport.sentPrompts).toEqual([]);
       expect(store.getSession("acp:antigravity", sessionId)?.acpRuntime?.currentModeId).toBe("auto");
 
-      transport.refuseModeWrite = false;
+      transport.refusedMode = undefined;
       await finishPrompt(client);
       expect(transport.sentPrompts).toEqual(["auto"]);
     });
+  });
+
+  it("applies an explicit mode selection while the saved mode is refused", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom("auto", "accept-edits", "plan"),
+      fc.constantFrom("cold", "idle", "after-refusal"),
+      fc.boolean(),
+      async (savedMode, activation, chooseDefault) => {
+        await withSession(async ({ open, select, store }) => {
+          const startup = await open();
+          await select(startup.client, savedMode);
+          if (activation !== "cold") {
+            expect(await startup.client.closeIdleSessions({ idleMs: 0 })).toEqual([sessionId]);
+          }
+          const { client, transport } = activation === "cold" ? await open() : startup;
+          transport.refusedMode = savedMode;
+          if (activation === "after-refusal") {
+            // The cleanup RPC can also fail. Recovery must still be possible.
+            transport.refuseClose = true;
+            await expect(client.startPrompt({ sessionId, prompt: "Blocked" })).rejects.toThrow(/restore/);
+            transport.refuseClose = false;
+          }
+
+          const selectedMode = chooseDefault ? "default" : savedMode === "plan" ? "auto" : "plan";
+          const before = transport.requests.length;
+          await selectModeThroughOwner(client, store, selectedMode);
+          expect(transport.requests.slice(before).filter((entry) => entry.method === "session/set_config_option"))
+            .not.toContainEqual(expect.objectContaining({ params: expect.objectContaining({ value: savedMode }) }));
+          expect(store.getSession("acp:antigravity", sessionId)?.acpRuntime?.currentModeId).toBe(selectedMode);
+          await finishPrompt(client);
+          expect(transport.sentPrompts).toEqual([selectedMode]);
+        });
+      },
+    ), { numRuns: 25, examples: [["auto", "idle", true], ["plan", "after-refusal", false]] });
+  });
+
+  it.each([false, true])("keeps the last confirmed mode when the explicit replacement is refused (idle closed: %s)", async (idleClosed) => {
+    await withSession(async ({ open, select, store }) => {
+      const { client, transport } = await open();
+      await select(client, "auto");
+      if (idleClosed) expect(await client.closeIdleSessions({ idleMs: 0 })).toEqual([sessionId]);
+      transport.refusedMode = "plan";
+      await expect(selectModeThroughOwner(client, store, "plan")).rejects.toThrow(/apply.*plan/i);
+      expect(store.getSession("acp:antigravity", sessionId)?.acpRuntime?.currentModeId).toBe("auto");
+      await finishPrompt(client);
+      expect(transport.sentPrompts).toEqual(["auto"]);
+    });
+  });
+
+  it("leaves an unconfirmed worker closed or reachable by archive and idle cleanup", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), fc.boolean(), async (refuseCleanup, archive) => {
+      await withSession(async ({ open, select }) => {
+        const { client, transport } = await open();
+        await select(client, "auto");
+        expect(await client.closeIdleSessions({ idleMs: 0 })).toEqual([sessionId]);
+        transport.refusedMode = "auto";
+        transport.refuseClose = refuseCleanup;
+        await expect(client.startPrompt({ sessionId, prompt: "Search for the marker" })).rejects.toThrow(/restore.*auto/i);
+        expect(transport.sentPrompts).toEqual([]);
+        expect(transport.workerOpen).toBe(refuseCleanup);
+
+        transport.refuseClose = false;
+        if (archive) expect(await client.closeSessionForArchive(sessionId)).toBe(true);
+        else expect(await client.closeIdleSessions({ idleMs: 0 })).toEqual(refuseCleanup ? [sessionId] : []);
+        expect(transport.workerOpen).toBe(false);
+      });
+    }), { numRuns: 25, examples: [[false, true], [true, true], [true, false]] });
   });
 });
