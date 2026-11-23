@@ -239,7 +239,7 @@ it("covers every configured production entry, inline worker, and audio worklet",
   }
   expect(workers).toEqual([worker]);
   expect(worklets).toEqual([audioWorklet]);
-  expect(nodeWorkerLaunchers).toEqual([path.join(main, "diagnostics/chromium-trace-publisher.ts")]);
+  expect(nodeWorkerLaunchers).toEqual([path.join(main, "diagnostics/chromium-trace-processor.ts")]);
   expect(otherWorkerDeclarations).toEqual([]);
   expect(walkFiles(desktop).filter((file) => file.endsWith("electron.vite.config.ts")))
     .toEqual([path.join(desktop, "electron.vite.config.ts")]);
