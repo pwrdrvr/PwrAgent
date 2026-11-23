@@ -3,7 +3,7 @@ import { createHmac, randomBytes } from "node:crypto";
 export type GitSubprocessPurpose =
   | "unspecified" | "directory-enrichment" | "directory-status"
   | "working-state" | "pr-remotes" | "pr-discovery" | "pr-local-head"
-  | "pr-review-coverage" | "review-working-tree";
+  | "pr-review-coverage" | "review-working-tree" | "stack-checkout" | "stack-status";
 
 type Command =
   | "remote-list" | "remote-url" | "remote-other" | "refs" | "symbolic-ref"
@@ -12,7 +12,13 @@ type Command =
 type Counts = { started: number; succeeded: number; failed: number; durationMs: number };
 type Identity = { directory?: string; commonDirectory?: string; sshHost?: string };
 type Row = Counts & { command: Command; purpose: GitSubprocessPurpose; directoryId: string; commonDirectoryId?: string; sshHostId?: string };
-type Bucket = { startMs: number; totals: Counts; overflow: Counts; rows: Map<string, Row> };
+type Bucket = {
+  startMs: number;
+  totals: Counts;
+  overflow: Counts;
+  startsByPurpose: Partial<Record<GitSubprocessPurpose, number>>;
+  rows: Map<string, Row>;
+};
 const counts = (): Counts => ({ started: 0, succeeded: 0, failed: 0, durationMs: 0 });
 
 /** No raw argv, paths, hosts, output, environment, stacks, timers or writes.
@@ -57,9 +63,10 @@ export class GitSubprocessDiagnostics {
       let bucket = this.buckets.get(startMs);
       if (!bucket) {
         this.prune(startMs);
-        bucket = { startMs, totals: counts(), overflow: counts(), rows: new Map() };
+        bucket = { startMs, totals: counts(), overflow: counts(), startsByPurpose: {}, rows: new Map() };
         this.buckets.set(startMs, bucket);
       }
+      if (delta.started) bucket.startsByPurpose[purpose] = (bucket.startsByPurpose[purpose] ?? 0) + delta.started;
       const key = `${command}:${purpose}:${directoryId}:${commonDirectoryId ?? ""}:${sshHostId ?? ""}`;
       let row = bucket.rows.get(key);
       if (!row && bucket.rows.size < 32) {
@@ -93,6 +100,7 @@ export class GitSubprocessDiagnostics {
       schemaVersion: 1, capturedAtMs, bucketMs: 2_000, retentionMs: 120_000, rowsPerBucket: 32,
       buckets: [...this.buckets.values()].map((bucket) => ({
         startMs: bucket.startMs, totals: { ...bucket.totals }, overflow: { ...bucket.overflow },
+        startsByPurpose: { ...bucket.startsByPurpose },
         rows: [...bucket.rows.values()].map((row) => ({ ...row })),
       })),
     };

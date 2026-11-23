@@ -365,7 +365,7 @@ async function projectNavigationStacks(
       const held = registry.stackThreadHeld?.(thread) ?? false;
       return { held, repair: !held && (Boolean(await getDesktopOverlayStore().getThreadPrAutoDispatchPending(thread))
         || await registry.stackRepairActive?.(thread) === true) };
-    });
+    }, demand);
   signal.throwIfAborted();
   return projectBoundNavigationStacks(threads, stacks);
 }

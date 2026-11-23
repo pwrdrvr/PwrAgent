@@ -10,8 +10,8 @@ import {
 } from "@pwragent/shared/stacks/stack-status";
 import { resolveCheckState } from "@pwragent/shared/pull-request-rollup";
 import { stackAutomationGates } from "@pwragent/shared/stacks/stack-automation";
-import { runGitCommand } from "../app-server/git-executable";
-import { PR_METADATA_PRIORITY, runPrMetadataProcess, type PrMetadataDemand } from "../pr-status/pr-metadata-process";
+import { PR_METADATA_PRIORITY, runPrMetadataGit, type PrMetadataDemand } from "../pr-status/pr-metadata-process";
+import { createStackCheckoutHints, stackCatalogCandidates } from "../git-info/stack-checkout-store";
 
 type CatalogRead = GhStackCatalogRead | { status: "missing" | "unavailable" };
 
@@ -36,8 +36,10 @@ export async function readGhStackCatalog(commonDir: string): Promise<CatalogRead
   }
 }
 
-async function git(cwd: string, args: string[], demand?: PrMetadataDemand): Promise<string> {
-  return (await runPrMetadataProcess(() => runGitCommand(cwd, args, { timeout: 3_000, signal: demand?.signal }), demand)).stdout;
+async function git(cwd: string, args: string[], demand?: PrMetadataDemand, checkout = false): Promise<string> {
+  return (await runPrMetadataGit(cwd, args, {
+    timeout: 3_000, signal: demand?.signal, purpose: checkout ? "stack-checkout" : "stack-status",
+  }, demand)).stdout;
 }
 
 type Checkout = { cwd: string; root: string; commonDir: string };
@@ -52,11 +54,14 @@ async function stackJournalInFlight(commonDir: string): Promise<boolean> {
 
 async function locateCheckout(cwd: string, demand?: PrMetadataDemand): Promise<Checkout | undefined> {
   try {
-    const fields = (await git(cwd, ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"], demand)).trimEnd().split("\n");
+    const args = ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"];
+    const fields = (await git(cwd, args, demand, true)).replace(/\r?\n$/, "").split(/\r?\n/);
     if (fields.length !== 2 || !fields[0] || !fields[1]) return undefined;
     const [root, commonDir] = await Promise.all([realpath(fields[0]), realpath(fields[1])]);
+    demand?.signal?.throwIfAborted();
     return { cwd, root, commonDir };
   } catch {
+    demand?.signal?.throwIfAborted();
     return undefined;
   }
 }
@@ -66,9 +71,11 @@ export async function readStackClones(directories: readonly string[], signal?: A
   const checkouts = await Promise.all([...new Set(directories)].map((cwd) => locateCheckout(cwd, demand)));
   signal?.throwIfAborted();
   const clones = new Map(checkouts.flatMap((entry) => entry ? [[entry.commonDir, entry] as const] : []));
-  return await Promise.all([...clones.values()].map(async (clone) => ({
+  const catalogs = await Promise.all([...clones.values()].map(async (clone) => ({
     ...clone, catalog: await readGhStackCatalog(clone.commonDir),
   })));
+  signal?.throwIfAborted();
+  return catalogs;
 }
 
 function checkedOutWorktrees(output: string): StackWorktree[] {
@@ -89,11 +96,13 @@ function parseRefs(output: string): Refs {
   }));
 }
 
-async function isAncestor(cwd: string, ancestor: string | undefined, head: string | undefined): Promise<boolean | undefined> {
+async function isAncestor(
+  cwd: string, ancestor: string | undefined, head: string | undefined, demand?: PrMetadataDemand,
+): Promise<boolean | undefined> {
   if (!ancestor || !head || !SHA.test(ancestor) || !SHA.test(head)) return undefined;
   if (ancestor === head) return true;
   try {
-    await git(cwd, ["merge-base", "--is-ancestor", ancestor, head]);
+    await git(cwd, ["merge-base", "--is-ancestor", ancestor, head], demand);
     return true;
   } catch (error) {
     return (error as { code?: number }).code === 1 ? false : undefined;
@@ -124,8 +133,9 @@ async function projectCatalogLayers(input: {
   prs: readonly PrSummary[];
   worktrees: readonly StackWorktree[];
   threads: readonly StackThread[];
+  demand?: PrMetadataDemand;
 }): Promise<StackLayer[]> {
-  const { stack, clone, refs, prs, worktrees, threads } = input;
+  const { stack, clone, refs, prs, worktrees, threads, demand } = input;
   const local = (branch: GhStackBranch) => refs.get(`refs/heads/${branch.branch}`);
   const byBranch = new Map<string, PrSummary[]>();
   for (const pr of prs) {
@@ -170,11 +180,11 @@ async function projectCatalogLayers(input: {
     const trunkTip = local(stack.trunk)?.head;
     const parentIntegrated = !retargeted && !parentPr && !parent.pullRequest && index > 0
       && trunkTip && parentTip && SHA.test(trunkTip) && SHA.test(parentTip)
-      ? await git(clone.cwd, ["cherry", trunkTip, parentTip]).then((output) => !output.trim(), () => undefined)
+      ? await git(clone.cwd, ["cherry", trunkTip, parentTip], demand).then((output) => !output.trim(), () => undefined)
       : undefined;
     const [baseIsAncestor, remoteIsAncestor] = await Promise.all([
-      isAncestor(clone.cwd, compareBase, localHead),
-      isAncestor(clone.cwd, compareRemote, localHead),
+      isAncestor(clone.cwd, compareBase, localHead, demand),
+      isAncestor(clone.cwd, compareRemote, localHead, demand),
     ]);
     return {
       branch: branch.branch, parent: parent.branch, role: binding.role,
@@ -197,7 +207,9 @@ function clonePrs(threads: readonly CloneThread[], knownPrs: readonly PrSummary[
   return [...new Map(prs.filter((pr) => prRepository(pr) === repository).map((pr) => [pr.number, pr])).values()];
 }
 
-async function projectClone(clone: Clone, threads: readonly CloneThread[], knownPrs: readonly PrSummary[]) {
+async function projectClone(
+  clone: Clone, threads: readonly CloneThread[], knownPrs: readonly PrSummary[], demand?: PrMetadataDemand,
+) {
   const catalog = clone.catalog.status === "ok" ? clone.catalog.catalog : undefined;
   const repositories = new Set(threads.flatMap(({ row }) => (row.prs ?? []).map(prRepository)));
   if (catalog?.stacks.length) repositories.add(catalog.repository.toLowerCase());
@@ -221,8 +233,8 @@ async function projectClone(clone: Clone, threads: readonly CloneThread[], known
   });
   if (!plans.length) return stacks;
   const [worktreeOutput, refOutput] = await Promise.all([
-    git(clone.cwd, ["worktree", "list", "--porcelain", "-z"]).catch(() => ""),
-    git(clone.cwd, ["for-each-ref", "--format=%(refname)%00%(objectname)%00%(upstream)", "refs/heads/", "refs/remotes/"]).catch(() => ""),
+    git(clone.cwd, ["worktree", "list", "--porcelain", "-z"], demand).catch(() => ""),
+    git(clone.cwd, ["for-each-ref", "--format=%(refname)%00%(objectname)%00%(upstream)", "refs/heads/", "refs/remotes/"], demand).catch(() => ""),
   ]);
   const worktrees = checkedOutWorktrees(worktreeOutput);
   const refs = parseRefs(refOutput);
@@ -233,7 +245,7 @@ async function projectClone(clone: Clone, threads: readonly CloneThread[], known
     for (const stack of catalogStacks) {
       if (!stack.branches.length) continue;
       const name = stack.branches[0]!.branch;
-      const layers = await projectCatalogLayers({ stack, clone, refs, prs, worktrees, threads: bindings });
+      const layers = await projectCatalogLayers({ stack, clone, refs, prs, worktrees, threads: bindings, demand });
       const identity = stack.id ?? name;
       const key = `${prefix}:catalog:${identity}`;
       stacks.push({
@@ -252,7 +264,7 @@ async function projectClone(clone: Clone, threads: readonly CloneThread[], known
           health: binding.role === "ambiguous" ? "ambiguous"
             : pr.headSha && pr.baseSha && refs.get(`refs/heads/${branch}`)?.head === pr.headSha
               && (chain.find((parent) => parent.headRefName === pr.baseRefName)?.headSha ?? pr.baseSha) === pr.baseSha
-              && await isAncestor(clone.cwd, pr.baseSha, pr.headSha) ? "in_sync" : "unknown",
+              && await isAncestor(clone.cwd, pr.baseSha, pr.headSha, demand) ? "in_sync" : "unknown",
           pullRequest: { number: pr.number, lifecycleState: pr.lifecycleState },
           ...("thread" in binding ? { thread: { key: binding.thread.key, title: binding.thread.title } } : {}),
         };
@@ -263,34 +275,109 @@ async function projectClone(clone: Clone, threads: readonly CloneThread[], known
   return stacks;
 }
 
-export class StackReader {
-  private readonly checkouts = new Map<string, { expiresAt: number; value: Promise<Checkout | undefined> }>();
+function prIdentity(pr: PrSummary): string {
+  return `${prRepository(pr)}#${pr.number}`;
+}
 
-  private checkout(cwd: string): Promise<Checkout | undefined> {
-    const now = Date.now();
-    const cached = this.checkouts.get(cwd);
-    if (cached && cached.expiresAt > now) return cached.value;
-    const value = locateCheckout(cwd);
-    this.checkouts.set(cwd, { expiresAt: now + 30_000, value });
-    if (this.checkouts.size > 2048) this.checkouts.delete(this.checkouts.keys().next().value!);
-    return value;
+/** A chain needs two distinct, attached PRs whose raw head/base refs meet. */
+function possibleInferredLayers(threads: readonly StackThreadRow[], knownPrs: readonly PrSummary[]): Set<string> {
+  const attached = threads.flatMap((row) => row.prs ?? []);
+  const attachedIds = new Set(attached.map(prIdentity));
+  // Any clone's attachments or the registry may supply the effective refs.
+  // Keep all variants here, leaving the actual chain decision to projectClone.
+  const refs = [...attached, ...knownPrs].filter((pr) => pr.lifecycleState === "open"
+    && pr.headRefName && pr.baseRefName && sameRepositoryHead(pr) && attachedIds.has(prIdentity(pr)));
+  const byHead = new Map<string, Set<string>>();
+  const byBase = new Map<string, Set<string>>();
+  for (const pr of refs) {
+    for (const [index, ref] of [[byHead, pr.headRefName], [byBase, pr.baseRefName]] as const) {
+      const key = `${prRepository(pr)}:${ref}`;
+      const ids = index.get(key) ?? new Set<string>();
+      ids.add(prIdentity(pr));
+      index.set(key, ids);
+    }
   }
+  const eligible = new Set<string>();
+  for (const [key, parents] of byHead) {
+    const children = byBase.get(key);
+    if (!children || (parents.size === 1 && children.size === 1 && children.has(parents.values().next().value!))) continue;
+    for (const id of parents) eligible.add(id);
+    for (const id of children) eligible.add(id);
+  }
+  return eligible;
+}
 
-  async readCatalogs(directories: readonly string[]): Promise<CatalogRead[]> {
-    const checkouts = await Promise.all(directories.map((cwd) => this.checkout(cwd)));
-    const commonDirs = new Set(checkouts.flatMap((checkout) => checkout ? [checkout.commonDir] : []));
-    return await Promise.all([...commonDirs].map(readGhStackCatalog));
+export class StackReader {
+  async readPresentCatalogs(directories: readonly string[]): Promise<CatalogRead[]> {
+    return (await readStackClones(await stackCatalogCandidates(directories))).map(({ catalog }) => catalog);
   }
 
   async read(threads: readonly StackThreadRow[], knownPrs: readonly PrSummary[], directories?: readonly string[],
-    activity?: (threadKey: string) => Promise<{ held?: boolean; repair?: boolean }>) {
-    const paths = new Set([...threads.filter((row) => !row.federation).flatMap(threadDirectories), ...directories ?? []]);
-    const located = await Promise.all([...paths].sort().map((cwd) => this.checkout(cwd)));
-    const checkouts = new Map(located.flatMap((entry) => entry ? [[entry.cwd, entry] as const] : []));
-    const cloneCheckouts = new Map([...checkouts.values()].map((checkout) => [checkout.commonDir, checkout]));
+    activity?: (threadKey: string) => Promise<{ held?: boolean; repair?: boolean }>,
+    demand: PrMetadataDemand = { priority: () => directories ? PR_METADATA_PRIORITY.selected : PR_METADATA_PRIORITY.background },
+  ) {
+    demand.signal?.throwIfAborted();
+    const local = threads.filter((row) => !row.federation);
+    const hints = createStackCheckoutHints(demand.signal);
+    const reads = new Map<string, Promise<Checkout | undefined>>();
+    const locate = (cwd: string) => {
+      let read = reads.get(cwd);
+      if (!read) {
+        read = locateCheckout(cwd, demand);
+        reads.set(cwd, read);
+      }
+      return read;
+    };
+    const anchors = await Promise.all([...new Set(directories)].map(locate));
+    const scopedClones = new Map(anchors.flatMap((entry) => entry ? [[entry.commonDir, entry] as const] : []));
+    if (directories && !scopedClones.size) return { stacks: [], catalogs: [] };
+
+    const eligible = possibleInferredLayers(local, knownPrs);
+    const wanted = new Set<string>();
+    // Read explicitly requested catalogs even when there is nothing to bind.
+    const scopedCatalogs = new Map(await Promise.all([...scopedClones.keys()].map(async (commonDir) => {
+      const catalog = await readGhStackCatalog(commonDir);
+      if (catalog.status === "ok" && catalog.catalog.stacks.length) wanted.add(commonDir);
+      return [commonDir, catalog] as const;
+    })));
+    const paths = !directories || wanted.size || eligible.size
+      ? [...new Set(local.flatMap(threadDirectories))].sort() : [];
+    const possible = new Map(await Promise.all(paths.map(async (cwd) => {
+      const found = reads.has(cwd) ? undefined : await hints.possibleCommonDirs(cwd);
+      if (found) return [cwd, found] as const;
+      const checkout = await locate(cwd);
+      return [cwd, checkout ? [checkout.commonDir] : []] as const;
+    })));
+    if (!directories) {
+      const candidateDirs = new Set([...possible.values()].flat());
+      await Promise.all([...candidateDirs].map(async (commonDir) => {
+        if (await hints.hasCatalog(commonDir)) wanted.add(commonDir);
+      }));
+    }
+    for (const row of local) {
+      if (!row.prs?.some((pr) => eligible.has(prIdentity(pr)))) continue;
+      for (const cwd of threadDirectories(row)) {
+        for (const commonDir of possible.get(cwd) ?? []) {
+          if (!directories || scopedClones.has(commonDir)) wanted.add(commonDir);
+        }
+      }
+    }
+    const participates = (cwd: string) => possible.get(cwd)?.some((commonDir) => wanted.has(commonDir));
+    const admitted = new Set(paths.filter(participates));
+    // An attachment without path provenance is attributed only when the row
+    // belongs to exactly one clone. Include its other paths for that decision.
+    for (const row of local) {
+      if (!row.prs?.some((pr) => !pr.linkedDirectoryPaths?.length)) continue;
+      const paths = threadDirectories(row);
+      if (!paths.some(participates)) continue;
+      for (const cwd of paths) if (possible.get(cwd)?.length) admitted.add(cwd);
+    }
+    const located = await Promise.all([...admitted].map(locate));
+    const checkouts = new Map([...anchors, ...located].flatMap((entry) => entry ? [[entry.cwd, entry] as const] : []));
+    const cloneCheckouts = directories ? scopedClones : new Map([...checkouts.values()]
+      .filter((checkout) => wanted.has(checkout.commonDir)).map((checkout) => [checkout.commonDir, checkout]));
     const cloneThreads = new Map<string, CloneThread[]>();
-    for (const row of threads) {
-      if (row.federation) continue;
+    for (const row of local) {
       const pathsByClone = new Map<string, string[]>();
       for (const cwd of threadDirectories(row)) {
         const checkout = checkouts.get(cwd);
@@ -306,18 +393,19 @@ export class StackReader {
         cloneThreads.set(commonDir, entries);
       }
     }
-    const scope = directories && new Set(directories.map((cwd) => checkouts.get(cwd)?.commonDir));
-    const results = await Promise.all([...cloneCheckouts.values()].filter(({ commonDir }) => !scope || scope.has(commonDir)).map(async (checkout) => {
-      const catalog = await readGhStackCatalog(checkout.commonDir);
+    const results = await Promise.all([...cloneCheckouts.values()].map(async (checkout) => {
+      const catalog = scopedCatalogs.get(checkout.commonDir) ?? await readGhStackCatalog(checkout.commonDir);
       return {
         catalog,
-        stacks: await projectClone({ ...checkout, catalog }, cloneThreads.get(checkout.commonDir) ?? [], knownPrs),
+        stacks: await projectClone({ ...checkout, catalog }, cloneThreads.get(checkout.commonDir) ?? [], knownPrs, demand),
       };
     }));
-    const observed = new Map([...threads.flatMap((row) => row.prs ?? []), ...knownPrs].map((pr) => [`${prRepository(pr)}#${pr.number}`, pr]));
+    demand.signal?.throwIfAborted();
+    const observed = new Map([...threads.flatMap((row) => row.prs ?? []), ...knownPrs].map((pr) => [prIdentity(pr), pr]));
     const stacks = results.flatMap((result) => result.stacks);
     const threadKeys = new Set(stacks.flatMap((stack) => stack.layers.flatMap((layer) => layer.thread ? [layer.thread.key] : [])));
     const activityByThread = new Map(await Promise.all([...threadKeys].map(async (key) => [key, await activity?.(key)] as const)));
+    demand.signal?.throwIfAborted();
     return { stacks: stacks.map((stack) => {
       const layers = stack.layers.map((layer) => {
         const state = layer.thread && activityByThread.get(layer.thread.key);
