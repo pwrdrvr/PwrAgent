@@ -186,6 +186,10 @@ it("waits for the interrupt receipt and retries or abandons completion without r
     const listeners = new Set<() => void>();
     let finishInterrupt!: () => void;
     const interrupted = new Promise<void>((resolve) => { finishInterrupt = resolve; });
+    let enterCompletion!: () => void;
+    let finishCompletion!: () => void;
+    const completing = new Promise<void>((resolve) => { enterCompletion = resolve; });
+    const completionFinished = new Promise<void>((resolve) => { finishCompletion = resolve; });
     let holds = 0;
     let writes = 0;
     let attempts = 0;
@@ -212,6 +216,10 @@ it("waits for the interrupt receipt and retries or abandons completion without r
       complete: async () => {
         expect(holds).toBe(0);
         attempts++;
+        if (attempts === 1) {
+          enterCompletion();
+          await completionFinished;
+        }
         if (failAfterCommit && attempts === 1) throw new Error("provider start failed");
         return { backend: "codex", threadId: "child" };
       },
@@ -231,7 +239,10 @@ it("waits for the interrupt receipt and retries or abandons completion without r
     expect(writes).toBe(0);
     finishInterrupt();
     await requested;
-    await expect.poll(() => coordinator.status(actor, planId).status, { interval: 0 }).toBe(failAfterCommit ? "paused" : "done");
+    await completing;
+    const drained = coordinator.drainBackgroundRuns().then(() => coordinator.status(actor, planId).status);
+    finishCompletion();
+    expect(await drained).toBe(failAfterCommit ? "paused" : "done");
     if (failAfterCommit) {
       expect(coordinator.status(actor, planId).issue?.code).toBe("post_apply_failed");
       if (abandon) await coordinator.abort(actor, planId);

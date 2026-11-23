@@ -133,6 +133,10 @@ export class StackOperationsService {
     return results.flatMap((result) => result.status === "rejected" ? [String(result.reason)] : []);
   }
 
+  async drainBackgroundRuns(): Promise<void> {
+    await Promise.all([...this.sessions.values()].map((session) => session.drainBackgroundRuns()));
+  }
+
   async call(
     tool: "plan_stack_operation" | "apply_stack_operation" | "manage_stack_operation",
     args: StackToolArgs,

@@ -108,6 +108,7 @@ function forecastSignature(plan: StackPlan) {
 export class StackCoordinator {
   private readonly plans = new Map<string, PlanEntry>();
   private readonly runs = new Map<string, StackRun>();
+  private readonly backgroundRuns = new Set<Promise<void>>();
 
   constructor(private readonly port: StackCoordinatorPort) {}
 
@@ -155,6 +156,11 @@ export class StackCoordinator {
 
   status(actor: StackThreadRef, opId: string): StackRunState {
     return this.run(actor, opId).state;
+  }
+
+  /** Wait for launched runs to settle, including their completion work and terminal state. */
+  async drainBackgroundRuns(): Promise<void> {
+    while (this.backgroundRuns.size > 0) await Promise.all(this.backgroundRuns);
   }
 
   async abort(actor: StackThreadRef, opId: string): Promise<StackRunState> {
@@ -279,7 +285,7 @@ export class StackCoordinator {
     const run: StackRun = { actor, state: { opId, status: "waiting" }, abort: new AbortController(), plan, options, interrupted: new Map() };
     this.runs.set(opId, run);
     if (this.runs.size > 64) this.runs.delete(this.runs.keys().next().value!);
-    void work(run).catch(async (error: unknown) => {
+    const task = work(run).catch(async (error: unknown) => {
       if (run.cutBefore && plan?.operation.kind === "restack" && error === run.abort.signal.reason) {
         try {
           const operation = plan.operation;
@@ -302,7 +308,8 @@ export class StackCoordinator {
             ? error.code : "stack_operation_failed",
         message: error instanceof Error ? error.message : String(error),
       } };
-    });
+    }).finally(() => { this.backgroundRuns.delete(task); });
+    this.backgroundRuns.add(task);
     return run.state;
   }
 
