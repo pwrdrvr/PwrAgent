@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as gitExecutable from "../app-server/git-executable";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
-import { PR_METADATA_PRIORITY } from "../pr-status/pr-metadata-process";
+import { PR_METADATA_PRIORITY, runPrMetadataProcess } from "../pr-status/pr-metadata-process";
 import { StackOperationsService } from "../stacks/stack-operations-service";
 import { StackReader, StackReadObservation, readGhStackCatalog, readStackClones } from "../stacks/stack-reader";
 import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
@@ -505,6 +505,34 @@ describe("stack checkout demand", () => {
     }
   });
 
+  it.skipIf(process.platform === "win32")("revalidates an enclosing checkout shadowed by an unborn HEAD symlink", async () => {
+    const outer = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-shadowed-checkout-")));
+    const nested = path.join(outer, "nested");
+    const cwd = path.join(nested, "thread");
+    try {
+      initialize(outer);
+      await writeCatalog(outer, "outer");
+      await mkdir(cwd, { recursive: true });
+      const observation = new StackReadObservation();
+      const discover = () => git(cwd, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir").split("\n");
+      expect(discover()).toEqual([outer, path.join(outer, ".git")]);
+      expect(await observation.preflightCatalogs([cwd])).toMatchObject([{ status: "ok" }]);
+
+      git(nested, "init", "--bare");
+      git(nested, "--git-dir=.", "config", "core.bare", "false");
+      git(nested, "--git-dir=.", "config", "core.worktree", nested);
+      const head = path.join(nested, "HEAD");
+      await rm(head);
+      await symlink("refs/heads/unborn", head);
+      const [root, commonDir] = discover();
+      expect([root, commonDir]).toEqual([nested, nested]);
+      await observation.revalidateAfterListing();
+      expect(await observation.checkoutsByClone([cwd])).toEqual([{ cwd, root, commonDir }]);
+    } finally {
+      await rm(outer, { recursive: true, force: true });
+    }
+  });
+
   it("reuses verified positive and negative inventory with an installed Git", async () => {
     const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-installed-git-"));
     const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
@@ -625,6 +653,40 @@ describe("stack checkout demand", () => {
       expect(start.mock.calls.map(([, args]) => args[0])).toEqual(["rev-parse"]);
     } finally {
       start.mockRestore();
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("does not admit a shared Git preflight after cancellation at the checkout hint boundary", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-canceled-shared-preflight-"));
+    const controller = new AbortController();
+    const reason = new Error("Preflight canceled");
+    try {
+      initialize(sandbox);
+      process.env.PWRAGENT_GIT_PATH = await gitExecutable.resolveGitExecutable();
+      const run = vi.spyOn(gitExecutable, "runGitCommand").mockResolvedValue({
+        stdout: sandbox + "\n" + path.join(sandbox, ".git") + "\n", stderr: "",
+      });
+      try {
+        const observation = new StackReadObservation({ signal: controller.signal });
+        const checkoutIdentity = observation.hints.checkoutIdentity.bind(observation.hints);
+        let probes = 0;
+        observation.hints.checkoutIdentity = async (cwd) => {
+          const result = await checkoutIdentity(cwd);
+          expect(result).toBeDefined();
+          if (++probes === 2) controller.abort(reason);
+          return result;
+        };
+        await expect(new StackReader().preflightCatalogs([sandbox], observation)).rejects.toBe(reason);
+        // Let the metadata queue admit anything already submitted at the
+        // canceled request's priority before checking its Git calls.
+        await runPrMetadataProcess(async () => {});
+        expect(probes).toBe(2);
+        expect(run).not.toHaveBeenCalled();
+      } finally {
+        run.mockRestore();
+      }
+    } finally {
       await rm(sandbox, { recursive: true, force: true });
     }
   });

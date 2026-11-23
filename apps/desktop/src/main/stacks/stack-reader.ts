@@ -462,6 +462,7 @@ export class StackReader {
   private async sharedPreflight(
     cwd: string, version: string, demand: PrMetadataDemand, load: (demand: PrMetadataDemand) => Promise<CheckoutLookup>,
   ): Promise<CheckoutLookup> {
+    demand.signal?.throwIfAborted();
     const key = JSON.stringify([cwd, version]);
     let pending = this.pendingPreflights.get(key);
     if (!pending || pending.signal.aborted) {
