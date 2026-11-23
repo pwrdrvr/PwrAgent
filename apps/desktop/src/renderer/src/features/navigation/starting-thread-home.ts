@@ -1,4 +1,4 @@
-import { directoryIncludesCheckout, navigationPathIdentity } from "@pwragent/shared/directory-navigation";
+import { canonicalizeNavigationPath, directoryIncludesCheckout } from "@pwragent/shared/directory-navigation";
 import {
   findRemoteHomeDirectoryIndex,
   remoteThreadPlaceholderDirectory,
@@ -95,14 +95,13 @@ export function startingThreadHomeDirectoryKey(
       ?? directories.find((directory) => directoryIncludesCheckout(directory, creation.directoryKey))?.key;
     if (exactKey) return exactKey;
 
-    // A cwd-only start can use a native Windows spelling of a listed checkout.
+    // The owner resolves verified case aliases. Only normalize separators here.
     const [, checkoutPath] = /^directory:(.+)$/.exec(creation.directoryKey) ?? [];
     if (!checkoutPath || !isWindowsFilesystemPath(checkoutPath)) return undefined;
-    const identity = navigationPathIdentity(checkoutPath, true);
-    const matches = directories.filter((directory) =>
-      navigationPathIdentity(directory.key, true) === `directory:${identity}`
-      || directory.checkoutPaths?.some((path) => navigationPathIdentity(path, true) === identity));
-    return matches.length === 1 ? matches[0]?.key : undefined;
+    const path = canonicalizeNavigationPath(checkoutPath);
+    return directories.find((directory) =>
+      canonicalizeNavigationPath(directory.key) === `directory:${path}`
+      || directory.checkoutPaths?.some((checkout) => canonicalizeNavigationPath(checkout) === path))?.key;
   }
   const index = findRemoteHomeDirectoryIndex(directories, startingPeerThread(creation));
   return index === undefined ? undefined : directories[index]!.key;

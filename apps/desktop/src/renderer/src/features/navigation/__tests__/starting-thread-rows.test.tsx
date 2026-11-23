@@ -488,7 +488,7 @@ describe("a to-do card's thread while its worktree and setup run", () => {
     expect(startingThreadHomeDirectoryKey(row!, directories)).toBeUndefined();
   });
 
-  it("renders a Windows cwd-only start inside its grouped project despite different case and slashes", () => {
+  it("renders a Windows start inside the project identified by its owner", () => {
     const path = "C:/Projects/Catalog";
     renderSidebar({
       browseMode: "directories",
@@ -499,7 +499,7 @@ describe("a to-do card's thread while its worktree and setup run", () => {
         checkoutPaths: [path, "C:/Projects/a"], threadKeys: [], needsAttentionCount: 0,
       }],
       pendingThreadStarts: rowsFor(report({
-        cwd: "c:\\projects\\a", directoryKey: undefined, directoryLabel: undefined,
+        cwd: "c:\\projects\\a", directoryKey: `directory:${path}`, directoryLabel: undefined,
         progressThread: undefined, title: "Prepare catalog fixtures",
       })),
     });
