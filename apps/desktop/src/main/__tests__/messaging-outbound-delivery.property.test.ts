@@ -43,6 +43,7 @@ type DeliveryOptions = ConstructorParameters<typeof MessagingOutboundDelivery>[0
 function fixture(
   deliver: DeliveryOptions["adapter"]["deliver"],
   resolveDeliveryScope: DeliveryOptions["adapter"]["resolveDeliveryScope"] = () => scope,
+  replacementAdapter?: DeliveryOptions["replacementAdapter"],
 ) {
   let time = 1_000;
   const now = () => time;
@@ -64,6 +65,7 @@ function fixture(
       deliver,
     },
     store: writes,
+    replacementAdapter,
     deliveryBudget: new MessagingDeliveryBudget({ now }),
     deliveryLane: new MessagingDeliveryLane(),
     sleepUntil: async (retryAt: number, clock: () => number) => {
@@ -72,7 +74,9 @@ function fixture(
       time = retryAt;
     },
   };
-  const owner = new MessagingOutboundDelivery(options, {
+  const context: Omit<ConstructorParameters<typeof MessagingOutboundDelivery>[1], "disposed"> & {
+    disposed: boolean;
+  } = {
     disposed: false,
     capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
     logger: {},
@@ -84,8 +88,9 @@ function fixture(
     recordBindingTransition: async (action) => { trace.push(action); },
     notifyBindingChanged: () => { trace.push("binding-changed"); },
     flagDeliveryCheck: async () => {},
-  });
-  return { owner, options, trace, now, advanceTime: (ms: number) => { time += ms; } };
+  };
+  const owner = new MessagingOutboundDelivery(options, context);
+  return { owner, options, context, trace, now, advanceTime: (ms: number) => { time += ms; } };
 }
 
 const telegramBinding: MessagingBindingRecord = {
@@ -388,4 +393,31 @@ it("paces local and federated topic replies against the same Telegram chat", asy
     { at: 4300, chat: -100123, topic: 20 },
   ]);
   expect(trace.filter((entry) => entry.startsWith("persist:"))).toEqual(["persist:presented", "persist:presented"]);
+});
+
+it("replays a stopped intent through a replacement only when no operation was attempted", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), async (beforeFirstWrite) => {
+    const replacement = {
+      capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
+      deliver: async (): Promise<MessagingDeliveryResult> => {
+        f.trace.push("replacement");
+        return { channel: "telegram", deliveredAt: f.now(), outcome: "presented" };
+      },
+    };
+    const f = fixture(async () => {
+      f.context.disposed = true;
+      return {
+        channel: "telegram", deliveredAt: f.now(),
+        ...(beforeFirstWrite
+          ? { outcome: "discarded", adapterStoppedBeforeWrite: true }
+          : { outcome: "failed", fallbackUnsafe: true }),
+      };
+    }, undefined, { now: () => replacement, settled: async () => replacement });
+    await expect(f.owner.deliver(intent, binding)).resolves.toMatchObject({
+      outcome: beforeFirstWrite ? "presented" : "failed",
+    });
+    expect(f.trace).toEqual(beforeFirstWrite
+      ? ["flush", "replacement", "persist:presented"]
+      : ["flush", "persist:failed"]);
+  }), { numRuns: 8 });
 });

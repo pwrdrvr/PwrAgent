@@ -4,7 +4,7 @@ import type {
   ThreadIdentifier,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import { evictStaleStreamAnchors, type MessagingBindingRecord, type MessagingDeliveryResult, type MessagingImagePart, type MessagingInboundEvent, type MessagingStreamUpdateIntent, type MessagingSurfaceIntent, type MessagingSurfaceRef } from "@pwragent/messaging-interface";
-import { assistantItemIdForBackendEvent, assistantStreamKey, messagingSurfaceKey, turnIdForBackendEvent, type AssistantMessageDeliveryIdentity, type AssistantStreamDelta, type MessagingCancellationSignal, type MessagingDeliveryGuard } from "./messaging-backend-event-helpers";
+import { createMessagingTurnCancellation, assistantItemIdForBackendEvent, assistantStreamKey, messagingSurfaceKey, turnIdForBackendEvent, type AssistantMessageDeliveryIdentity, type AssistantStreamDelta, type MessagingCancellationSignal, type MessagingDeliveryGuard } from "./messaging-backend-event-helpers";
 import { isSameMessagingSurface } from "./messaging-callback-helpers";
 import { coalesceBackoffMs } from "./messaging-coalesce-backoff.js";
 import { isVisibleAssistantStreamDelivery } from "./messaging-agent-tool-helpers";
@@ -428,6 +428,7 @@ export class MessagingAssistantStreams {
     const result = await this.context.host.deliver(intent, binding, undefined, {
       isCancelled: cancellation.isCancelled,
       whenCancelled: cancellation.whenCancelled,
+      signal: cancellation.signal,
       onCancelledDelivery: async (cancelledResult) => {
         if (
           cancelledResult.surface
@@ -479,35 +480,9 @@ export class MessagingAssistantStreams {
     if (existing) {
       return existing;
     }
-    let cancelled = this.context.host.isTerminalPrivateResponseTurn(
-      binding.backend,
-      binding.threadId,
-      turnId,
+    const cancellation = createMessagingTurnCancellation(() =>
+      this.context.host.isTerminalPrivateResponseTurn(binding.backend, binding.threadId, turnId),
     );
-    let resolveCancellation!: () => void;
-    const whenCancelled = new Promise<void>((resolve) => {
-      resolveCancellation = resolve;
-    });
-    const cancellation: MessagingCancellationSignal = {
-      cancel: () => {
-        if (cancelled) {
-          return;
-        }
-        cancelled = true;
-        resolveCancellation();
-      },
-      isCancelled: () =>
-        cancelled
-        || this.context.host.isTerminalPrivateResponseTurn(
-          binding.backend,
-          binding.threadId,
-          turnId,
-        ),
-      whenCancelled,
-    };
-    if (cancelled) {
-      resolveCancellation();
-    }
     this.assistantStreamCancellationSignals.set(key, cancellation);
     return cancellation;
   }

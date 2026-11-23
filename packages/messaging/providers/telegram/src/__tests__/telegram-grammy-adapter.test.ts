@@ -23,6 +23,7 @@ import {
   type MessagingInboundEvent,
   type MessagingRejectedInboundEvent,
   type MessagingStatusIntent,
+  type MessagingStreamUpdateIntent,
 } from "@pwragent/messaging-interface";
 
 describe("adaptGrammyBot", () => {
@@ -261,6 +262,20 @@ describe("TelegramAdapter rich messages", () => {
     });
     adapters.push(adapter);
     return { api, adapter, send, edit, rich, store };
+  }
+
+  async function seedPreviewAnchors(
+    adapter: TelegramAdapter,
+    stream: MessagingStreamUpdateIntent,
+    advance: (ms: number) => void,
+    chunks = 2,
+  ) {
+    let result = await adapter.deliver(stream);
+    for (let index = 1; index < chunks; index += 1) {
+      advance(3100);
+      result = await adapter.deliver(stream);
+    }
+    return result;
   }
 
   it("combines text, photos, documents and a native footer in content order", async () => {
@@ -655,7 +670,7 @@ describe("TelegramAdapter rich messages", () => {
       audit: intent.audit, text: `# Downloads\n\n${"x".repeat(4200)}`, markdown: "markdown" as const,
       stream: { key: "rich-cleanup", sequence: 1, isFinal: false },
     };
-    await adapter.deliver(stream);
+    await seedPreviewAnchors(adapter, stream, (ms) => vi.setSystemTime(Date.now() + ms));
     const final = { ...stream, stream: { ...stream.stream, sequence: 2, isFinal: true } };
     const result = await adapter.deliver(final);
     expect(result.outcome).toBe("updated");
@@ -688,7 +703,7 @@ describe("TelegramAdapter rich messages", () => {
       audit: intent.audit, text, markdown: "markdown" as const,
       stream: { key: "contracting-stream", sequence: 1, isFinal: false },
     };
-    await adapter.deliver(stream);
+    await seedPreviewAnchors(adapter, stream, (ms) => { now += ms; });
     expect(send).toHaveBeenCalledTimes(2);
     now += 5000;
     const result = await adapter.deliver({
@@ -701,6 +716,8 @@ describe("TelegramAdapter rich messages", () => {
     if (!isFinal) {
       now += 5000;
       await adapter.deliver({ ...stream, stream: { ...stream.stream, sequence: 3 } });
+      now += 5000;
+      await adapter.deliver({ ...stream, stream: { ...stream.stream, sequence: 4 } });
       expect(send).toHaveBeenCalledTimes(3);
       expect(edit.mock.calls.some(([request]) => request.message_id === 201)).toBe(false);
     }
@@ -723,7 +740,7 @@ describe("TelegramAdapter rich messages", () => {
       audit: intent.audit, text, markdown: "markdown" as const,
       stream: { key: "retry-cleanup", sequence: 1, isFinal: false },
     };
-    await adapter.deliver(stream);
+    await seedPreviewAnchors(adapter, stream, (ms) => vi.setSystemTime(Date.now() + ms));
     const final = { ...stream, text: `${text})`, stream: { ...stream.stream, sequence: 2, isFinal: true } };
     const result = await adapter.deliver(final);
     expect(result).toMatchObject({ outcome: "updated", surface: { id: "200" } });
@@ -752,13 +769,15 @@ describe("TelegramAdapter rich messages", () => {
       audit: intent.audit, text: "x".repeat(4200), markdown: "plain" as const,
       stream: { key: "regrowth-cleanup", sequence: 1, isFinal: false },
     };
-    await adapter.deliver(stream);
+    await seedPreviewAnchors(adapter, stream, (ms) => { now += ms; });
     now += 5000;
     expect((await adapter.deliver({
       ...stream, text: "Short", stream: { ...stream.stream, sequence: 2 },
     })).outcome).toBe("updated");
     now += 5000;
     await adapter.deliver({ ...stream, stream: { ...stream.stream, sequence: 3 } });
+    now += 5000;
+    await adapter.deliver({ ...stream, stream: { ...stream.stream, sequence: 4 } });
     expect(send).toHaveBeenCalledTimes(3);
     expect(edit.mock.calls.some(([request]) => request.message_id === 201)).toBe(false);
     expect(remove.mock.calls).toEqual([
@@ -784,7 +803,7 @@ describe("TelegramAdapter rich messages", () => {
       audit: intent.audit, text: "x".repeat(8200), markdown: "plain" as const,
       stream: { key: "budget-cleanup", sequence: 1, isFinal: false },
     };
-    await adapter.deliver(stream);
+    await seedPreviewAnchors(adapter, stream, (ms) => vi.setSystemTime(Date.now() + ms), 3);
     for (let index = 0; index < 16; index += 1) {
       await adapter.deliver({
         ...stream, text: "Complete.",
@@ -824,7 +843,7 @@ describe("TelegramAdapter rich messages", () => {
       audit: intent.audit, text: "x".repeat(4200), markdown: "plain" as const,
       stream: { key: "stopped-cleanup", sequence: 1, isFinal: false },
     };
-    await adapter.deliver(stream);
+    await seedPreviewAnchors(adapter, stream, (ms) => vi.setSystemTime(Date.now() + ms));
     await adapter.deliver({ ...stream, text: "# Final", markdown: "markdown", stream: { ...stream.stream, isFinal: true, sequence: 2 } });
     await adapter.stop();
     await vi.advanceTimersByTimeAsync(60_000);
@@ -852,7 +871,7 @@ describe("TelegramAdapter rich messages", () => {
       audit: intent.audit, text: "x".repeat(4200), markdown: "plain" as const,
       stream: { key: "limited-cleanup", sequence: 1, isFinal: false },
     };
-    await adapter.deliver(stream);
+    await seedPreviewAnchors(adapter, stream, (ms) => vi.setSystemTime(Date.now() + ms));
     const result = await adapter.deliver({ ...stream, text: "Final", stream: { ...stream.stream, isFinal: true, sequence: 2 } });
     expect(result).toMatchObject({ outcome: "updated", surface: { id: "200" } });
     expect(result.rateLimit).toBeUndefined();
@@ -888,7 +907,7 @@ describe("TelegramAdapter rich messages", () => {
       audit: intent.audit, text: "x".repeat(4200), markdown: "plain" as const,
       stream: { key: "edit-only-cleanup", sequence: 1, isFinal: false },
     };
-    await adapter.deliver(stream);
+    await seedPreviewAnchors(adapter, stream, (ms) => vi.setSystemTime(Date.now() + ms));
     const result = await adapter.deliver({ ...stream, text: "Final", stream: { ...stream.stream, isFinal: true, sequence: 2 } });
     expect(result).toMatchObject({ outcome: "updated", surface: { id: "200" } });
     await vi.advanceTimersByTimeAsync(1000);
@@ -914,7 +933,7 @@ describe("TelegramAdapter rich messages", () => {
       audit: intent.audit, text: "x".repeat(8200), markdown: "plain" as const,
       stream: { key: "in-flight-cleanup", sequence: 1, isFinal: false },
     };
-    await adapter.deliver(stream);
+    await seedPreviewAnchors(adapter, stream, (ms) => vi.setSystemTime(Date.now() + ms), 3);
     const final = adapter.deliver({ ...stream, text: "# Final", markdown: "markdown", stream: { ...stream.stream, isFinal: true, sequence: 2 } });
     await vi.advanceTimersByTimeAsync(0);
     expect(remove).toHaveBeenCalledTimes(1);
@@ -939,7 +958,7 @@ describe("TelegramAdapter rich messages", () => {
       audit: intent.audit, text, markdown: "markdown" as const,
       stream: { key: "edit-cleanup", sequence: 1, isFinal: false },
     };
-    await adapter.deliver(stream);
+    await seedPreviewAnchors(adapter, stream, (ms) => { now += ms; });
     now += 5000;
     const result = await adapter.deliver({
       ...stream, text: `${text})`, stream: { ...stream.stream, sequence: 2, isFinal: true },
@@ -962,7 +981,7 @@ describe("TelegramAdapter rich messages", () => {
       audit: intent.audit, text: "x".repeat(4200), markdown: "plain" as const,
       stream: { key: "blank-stream", sequence: 1, isFinal: false },
     };
-    const first = await adapter.deliver(stream);
+    const first = await seedPreviewAnchors(adapter, stream, (ms) => { now += ms; });
     now += 5000;
     const result = await adapter.deliver({
       ...stream, text: " \n\t", targetSurface: first.surface,

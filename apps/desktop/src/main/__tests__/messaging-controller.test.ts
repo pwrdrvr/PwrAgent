@@ -21059,7 +21059,7 @@ describe("MessagingController", () => {
       await bindThread(harness);
       delivered.length = 0;
       const partial = `# Downloads\n\n${"x".repeat(4200)}`;
-      for (const delta of [partial, " continued"]) {
+      for (const delta of [partial, " continued", " and more"]) {
         await harness.controller.handleBackendEvent({
           backend: "codex",
           notification: {
@@ -21067,7 +21067,7 @@ describe("MessagingController", () => {
             params: { threadId: "thread-1", turnId: "turn-1", itemId: "item-1", delta },
           },
         } satisfies AgentEvent);
-        now += 1500;
+        now += 3500;
       }
       expect(api.sendMessage).toHaveBeenCalledTimes(2);
       await harness.controller.handleBackendEvent({

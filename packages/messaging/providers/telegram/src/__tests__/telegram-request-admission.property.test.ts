@@ -27,7 +27,7 @@ function message(topic: number, text: string): MessagingMessageIntent {
 
 type Call = { method: string; topic?: number; at: number; text?: string };
 
-function harness(onSend?: (call: Call, index: number) => void, botId = "123") {
+function harness(onSend?: (call: Call, index: number) => void, botId = "123", named = false) {
   const calls: Call[] = [];
   const request = (method: string, topic?: number, text?: string) => {
     const call = { method, topic, at: Date.now(), text };
@@ -36,6 +36,13 @@ function harness(onSend?: (call: Call, index: number) => void, botId = "123") {
     return { chat: { id: CHAT, type: "supergroup" as const }, message_id: calls.length };
   };
   const api = {
+    getMe: async () => ({ id: Number(botId), is_bot: true }),
+    getWebhookInfo: async () => ({ url: "" }),
+    deleteWebhook: async () => true,
+    setMyCommands: async () => true,
+    editMessageText: async (value) => ({
+      ...request("edit", value.message_thread_id, value.text), message_id: value.message_id,
+    }),
     sendMessage: async (value) => request("text", value.message_thread_id, value.text),
     sendPhoto: async (value) => request("photo", value.message_thread_id),
     sendDocument: async (value) => request("document", value.message_thread_id),
@@ -44,9 +51,21 @@ function harness(onSend?: (call: Call, index: number) => void, botId = "123") {
     calls,
     api,
     adapter: new TelegramAdapter({
-      api: api as TelegramBotApi,
-      config: { botToken: `${botId}:test-token`, channel: "telegram", authorizedActorIds: [], streamingResponses: true },
-      waitForReplyDelay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      api: api as unknown as TelegramBotApi,
+      config: {
+        botToken: `${botId}:test-token`, channel: "telegram", authorizedActorIds: [], streamingResponses: true,
+        ...(named ? { configuredConnectionId: "ops", expectedBotAccountId: botId, authorizedSupergroupIds: [{ id: String(CHAT), displayName: "" }] } : {}),
+      },
+      pollOnStart: false,
+      waitForReplyDelay: (ms, signal) => new Promise((resolve) => {
+        const settled = () => {
+          clearTimeout(timer);
+          signal.removeEventListener("abort", settled);
+          resolve();
+        };
+        const timer = setTimeout(settled, ms);
+        signal.addEventListener("abort", settled, { once: true });
+      }),
     }),
   };
 }
@@ -162,7 +181,7 @@ describe("Telegram reply request admission", () => {
     const stream = {
       id: "preview", kind: "stream_update" as const, createdAt: 1,
       audit: message(12, "").audit, text: "x".repeat(4200), markdown: "plain" as const,
-      stream: { key: "preview", sequence: 1, isFinal: false },
+      stream: { key: "preview", sequence: 1, isFinal: true },
     };
     const pending = adapter.deliver(stream);
     await vi.advanceTimersByTimeAsync(2000);
@@ -171,4 +190,93 @@ describe("Telegram reply request admission", () => {
     expect(await adapter.deliver(final)).toMatchObject({ outcome: "failed", fallbackUnsafe: true });
     expect(calls).toHaveLength(2);
   });
+  it("never writes to a revoked group after awaiting a slot or Retry-After", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), async (rateLimited) => {
+      vi.setSystemTime(1000);
+      const { adapter, calls } = harness((_call, index) => {
+        if (rateLimited && index === 1) throw { error_code: 429, parameters: { retry_after: 2 } };
+      }, "123", true);
+      await adapter.start(async () => {});
+      const reply = message(12, "x".repeat(4200));
+      reply.audit!.channel.connectionId = "ops";
+      const pending = adapter.deliver(reply);
+      await vi.advanceTimersByTimeAsync(rateLimited ? MIN_INTERVAL_MS : 0);
+      await adapter.updateAuthorization({ authorizedActorIds: [], authorizedConversationIds: [] });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(await pending).toMatchObject({ outcome: "failed", fallbackUnsafe: true });
+      expect(calls).toHaveLength(rateLimited ? 2 : 1);
+      await adapter.stop();
+    }), { numRuns: 4 });
+  });
+
+  it.each([false, true])("stops publishing as soon as a waiting turn is cancelled (stream=%s)", async (streaming) => {
+    const { adapter, calls } = harness();
+    const abort = new AbortController();
+    const text = "x".repeat(4200);
+    const reply = message(12, text);
+    const pending = adapter.deliver(streaming ? {
+      id: reply.id, kind: "stream_update", createdAt: reply.createdAt, audit: reply.audit, text,
+      stream: { key: "cancelled", sequence: 1, isFinal: true },
+    } : reply, {
+      signal: abort.signal, isCancelled: () => abort.signal.aborted,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    abort.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(await pending).toMatchObject(streaming
+      ? { outcome: "presented", surface: { id: "1" } }
+      : { outcome: "failed", fallbackUnsafe: true });
+    expect(calls).toHaveLength(1);
+  });
+
+  it.each([false, true])("reports a stopped reply as unsent only before its first write (partial=%s)", async (partial) => {
+    const { adapter, calls } = harness();
+    if (!partial) await adapter.deliver(message(10, "Earlier reply"));
+    const pending = adapter.deliver(message(12, "x".repeat(4200)));
+    await vi.advanceTimersByTimeAsync(0);
+    await adapter.stop();
+    expect(await pending).toMatchObject(partial
+      ? { outcome: "failed", fallbackUnsafe: true }
+      : { outcome: "discarded", adapterStoppedBeforeWrite: true });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("overwrites an uncertain edit in place even when final text matches the old anchor", async () => {
+    const { adapter, calls } = harness((_call, index) => {
+      if (index === 1) throw new Error("Socket closed after edit");
+    });
+    const preview = {
+      id: "dirty", kind: "stream_update" as const, createdAt: 1,
+      audit: message(12, "").audit, text: "Original",
+      stream: { key: "dirty", sequence: 1, isFinal: false },
+    };
+    await adapter.deliver(preview);
+    await vi.advanceTimersByTimeAsync(MIN_INTERVAL_MS);
+    expect(await adapter.deliver({ ...preview, text: "Uncertain" })).toMatchObject({ outcome: "failed" });
+    const final = adapter.deliver({ ...preview, stream: { ...preview.stream, sequence: 3, isFinal: true } });
+    await vi.advanceTimersByTimeAsync(MIN_INTERVAL_MS);
+    expect(await final).toMatchObject({ outcome: "updated", surface: { id: "1" } });
+    expect(calls.map(({ method, text }) => [method, text])).toEqual([
+      ["text", "Original"], ["edit", "Uncertain"], ["edit", "Original"],
+    ]);
+  });
+
+  it("yields a delayed preview continuation to the final answer while keeping the first anchor", async () => {
+    const { adapter, calls } = harness();
+    const preview = {
+      id: "yield", kind: "stream_update" as const, createdAt: 1,
+      audit: message(12, "").audit, text: "x".repeat(4200),
+      stream: { key: "yield", sequence: 1, isFinal: false },
+    };
+    const pending = adapter.deliver(preview);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(0);
+    await expect(pending).resolves.toMatchObject({ outcome: "presented", surface: { id: "1" } });
+    const final = adapter.deliver({ ...preview, text: "Final", stream: { ...preview.stream, sequence: 2, isFinal: true } });
+    await vi.advanceTimersByTimeAsync(MIN_INTERVAL_MS);
+    expect(await final).toMatchObject({ outcome: "updated", surface: { id: "1" } });
+    expect(calls.map(({ method }) => method)).toEqual(["text", "edit"]);
+  });
+
 });

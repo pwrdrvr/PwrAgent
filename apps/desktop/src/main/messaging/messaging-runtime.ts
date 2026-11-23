@@ -63,7 +63,6 @@ import type {
   MessagingChannelKind,
   MessagingClientRateLimitStrategy,
   MessagingCredentialValidationResult,
-  MessagingDeliveryResult,
   MessagingDeliveryScope,
   MessagingInboundEvent,
   MessagingInboundChannelMetadataListener,
@@ -145,7 +144,7 @@ export type DesktopMessagingAdapter = {
   clientRateLimitStrategy?: MessagingClientRateLimitStrategy;
   readCredentialMetadata?(): MessagingCredentialMetadata | undefined;
   resolveDirectConversation?: MessagingAdapter["resolveDirectConversation"];
-  deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
+  deliver: MessagingAdapter["deliver"];
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   downloadAttachment?: MessagingAdapter["downloadAttachment"];
   /**

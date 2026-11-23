@@ -76,6 +76,7 @@ import type {
 } from "@pwragent/shared/contracts/federation";
 import type { ListBackendsRequest, ListBackendsResponse } from "@pwragent/shared/contracts/backend";
 import type {
+  MessagingDeliveryControl,
   MessagingDeliveryResult,
   MessagingDeliveryScope,
   MessagingRateLimitInfo,
@@ -138,7 +139,7 @@ export type MessagingAdapter = {
   capabilityProfile: MessagingCapabilityProfile;
   clientRateLimitStrategy?: MessagingClientRateLimitStrategy;
   resolveDirectConversation?(userId: string): Promise<MessagingPrivateConversationResolveResult>;
-  deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
+  deliver(intent: MessagingSurfaceIntent, control?: MessagingDeliveryControl): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   updateAuthorization?(update: MessagingAdapterAuthorizationUpdate): Promise<void>;
   updateRenderingPreferences?(

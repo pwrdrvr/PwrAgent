@@ -594,6 +594,11 @@ that is still in progress; with no replacement, the send is discarded and
 other calls see an adapter with no optional methods. Only one adapter
 instance per platform talks to the provider at a time.
 
+An adapter that stops while waiting to make an intent's first request can
+return `adapterStoppedBeforeWrite`. The controller can then give the intent
+to the replacement or keep its reply receipt owed. An accepted or unconfirmed
+request must never produce this marker.
+
 The runtime never starts an adapter while an earlier adapter for the same
 platform may still be connected. Many providers allow one connection per bot
 (Telegram polling, Slack Socket Mode, a Discord gateway), and a second one
@@ -674,6 +679,10 @@ uses a slot before the regular fallback obtains its own. If a multipart reply
 has already written an accepted part, the adapter can retry the explicitly
 rejected operation once after Retry-After plus the shared safety buffer.
 An unconfirmed write stops delivery and marks any new-message fallback unsafe.
+Telegram rechecks the group grant and turn cancellation before issuing each
+reply request. A preview yields when a continuation would have to wait, and
+the next update can use its accepted anchors. A timed-out edit leaves the
+known anchor dirty so the next update overwrites it in place.
 
 Read the wait with `retryAfterMsFromHttpHeaders` from
 `@pwragent/messaging-interface`. It accepts `Retry-After` as delta-seconds or

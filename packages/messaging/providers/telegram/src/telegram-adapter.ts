@@ -17,6 +17,7 @@ import type {
   MessagingConversationTitleSupportRequest,
   MessagingConversationTitleUpdateRequest,
   MessagingConversationTitleUpdateResult,
+  MessagingDeliveryControl,
   MessagingDeliveryResult,
   MessagingDeliveryScope,
   MessagingDmPairingAddress,
@@ -118,13 +119,20 @@ type TelegramDeliveryTarget = {
   messageThreadId?: number;
 };
 
+type TelegramStreamAnchor = TelegramDeliveryTarget & { text: string; richHtml?: string; dirty?: true };
+
 type TelegramReplyDelivery = {
+  attempted: boolean;
   accepted: boolean;
-  ambiguous: boolean;
-  write<T>(operation: () => Promise<T>, minIntervalMs?: number): Promise<T>;
+  ambiguity?: "edit" | "send";
+  write<T>(operation: () => Promise<T>, minIntervalMs?: number, editAnchor?: TelegramStreamAnchor): Promise<T>;
 };
 
-class TelegramPreviewDeferred extends Error {}
+class TelegramReplyInterrupted extends Error {
+  constructor(readonly reason: "preview" | "cancelled" | "revoked" | "stopped") {
+    super(`Telegram reply interrupted (${reason}).`);
+  }
+}
 
 class TelegramReplyRateLimited extends Error {
   constructor(readonly info: MessagingRateLimitInfo, cause: unknown) {
@@ -631,7 +639,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   // final chunk lands.
   private streamSurfaces = new Map<
     string,
-    Array<TelegramDeliveryTarget & { text: string; richHtml?: string }> | "uncertain"
+    TelegramStreamAnchor[] | "uncertain"
   >();
   // Obsolete messages have separate ownership from the delivered answer.
   // Retrying their deletion must never turn final delivery into a failure.
@@ -1056,7 +1064,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     };
   }
 
-  async deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult> {
+  async deliver(intent: MessagingSurfaceIntent, control?: MessagingDeliveryControl): Promise<MessagingDeliveryResult> {
     const { configuredConnectionId, expectedBotAccountId } = this.options.config;
     if (configuredConnectionId !== undefined && (
       intent.audit?.channel.connectionId !== configuredConnectionId
@@ -1073,18 +1081,20 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         outcome: "failed",
       };
     }
-    const delivery = this.replyDelivery(target, intent);
+    const delivery = this.replyDelivery(target, intent, control);
     try {
       const result = await this.deliverSurface(intent, target, delivery);
       this.preparedReplyMarkup.delete(intent);
       return result;
     } catch (error) {
-      if (error instanceof TelegramPreviewDeferred) {
+      if (error instanceof TelegramReplyInterrupted && !delivery.accepted) {
+        this.preparedReplyMarkup.delete(intent);
         return {
           channel: this.channel, deliveredAt: this.now(), outcome: "discarded", surface: intent.targetSurface,
+          ...(error.reason === "stopped" && !delivery.attempted ? { adapterStoppedBeforeWrite: true } : {}),
         };
       }
-      if (intent.kind === "stream_update" && delivery.ambiguous) {
+      if (intent.kind === "stream_update" && delivery.ambiguity === "send") {
         this.streamSurfaces.set(this.streamSurfaceKey(intent, target), "uncertain");
         evictStaleStreamAnchors(this.streamSurfaces);
       }
@@ -1100,7 +1110,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         ...failure,
         outcome: "failed",
         ...(rateLimit ? { rateLimit } : {}),
-        ...(delivery.accepted || delivery.ambiguous ? { fallbackUnsafe: true } : {}),
+        ...(delivery.accepted || delivery.ambiguity ? { fallbackUnsafe: true } : {}),
         surface: intent.targetSurface,
       };
     }
@@ -1111,14 +1121,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     target: TelegramDeliveryTarget,
     delivery: TelegramReplyDelivery,
   ): Promise<MessagingDeliveryResult> {
-    // Pairing feedback must reach a group before it has an access grant.
-    const pairingFeedback = !intent.bindingId && !intent.audit?.bindingId && (
-      intent.audit?.action === "pairing.reply" || intent.audit?.action === "pairing.approved"
-      || intent.audit?.action === "pairing.rejected" || intent.audit?.action === "pairing.expired"
-    );
-    if (this.options.config.configuredConnectionId !== undefined && String(target.chatId).startsWith("-")
-      && !pairingFeedback
-      && !this.options.config.authorizedSupergroupIds?.some((contact) => contact.id === String(target.chatId))) {
+    if (!this.canWriteReply(target, intent)) {
       return { channel: this.channel, deliveredAt: this.now(), outcome: "discarded" };
     }
 
@@ -1339,7 +1342,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       ? richMessageForTelegramText(intent.text, intent.markdown, intent.attribution)
       : undefined;
     const headAnchor = anchors[0];
-    let richDelivered = Boolean(rich && headAnchor?.richHtml === rich.html);
+    let richDelivered = Boolean(rich && !headAnchor?.dirty && headAnchor?.richHtml === rich.html);
     if (rich && !richDelivered) {
       const message = await this.tryDeliverRichMessage(
         rich,
@@ -1347,6 +1350,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         textForTelegramIntent(intent),
         undefined,
         delivery,
+        headAnchor,
       );
       if (message) {
         anchors[0] = {
@@ -1363,54 +1367,64 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     // A final rich edit replaces the partial response in place. Reconcile
     // any extra partial chunks against that single durable message.
     if (richDelivered) chunks = [rich!.html];
-    for (let index = 0; !richDelivered && index < chunks.length; index += 1) {
-      const chunkText = chunks[index] ?? " ";
-      const anchor = anchors[index];
-      if (anchor?.messageId !== undefined) {
-        if (!anchor.richHtml && anchor.text === chunkText) {
+    try {
+      for (let index = 0; !richDelivered && index < chunks.length; index += 1) {
+        const chunkText = chunks[index] ?? " ";
+        const anchor = anchors[index];
+        if (anchor?.messageId !== undefined) {
+          if (!anchor.dirty && !anchor.richHtml && anchor.text === chunkText) {
+            firstOutcome ??= "updated";
+            continue;
+          }
+          await delivery.write(() => this.editReplyMessage({
+            chat_id: anchor.chatId,
+            disable_web_page_preview: true,
+            message_id: anchor.messageId!,
+            message_thread_id: anchor.messageThreadId,
+            parse_mode: "HTML",
+            text: chunkText,
+          }), undefined, anchor);
+          delete anchor.dirty;
+          anchor.text = chunkText;
+          delete anchor.richHtml;
           firstOutcome ??= "updated";
-          continue;
+        } else {
+          const message = await delivery.write(() => this.bot.api.sendMessage({
+            chat_id: target.chatId,
+            disable_web_page_preview: true,
+            message_thread_id: target.messageThreadId,
+            parse_mode: "HTML",
+            text: chunkText,
+          }));
+          anchors[index] = {
+            chatId: target.chatId,
+            messageId: message.message_id,
+            messageThreadId: target.messageThreadId,
+            text: chunkText,
+          };
+          firstOutcome ??= "presented";
         }
-        await delivery.write(() => this.editReplyMessage({
-          chat_id: anchor.chatId,
-          disable_web_page_preview: true,
-          message_id: anchor.messageId!,
-          message_thread_id: anchor.messageThreadId,
-          parse_mode: "HTML",
-          text: chunkText,
-        }));
-        anchor.text = chunkText;
-        delete anchor.richHtml;
-        firstOutcome ??= "updated";
-      } else {
-        const message = await delivery.write(() => this.bot.api.sendMessage({
-          chat_id: target.chatId,
-          disable_web_page_preview: true,
-          message_thread_id: target.messageThreadId,
-          parse_mode: "HTML",
-          text: chunkText,
-        }));
-        anchors[index] = {
-          chatId: target.chatId,
-          messageId: message.message_id,
-          messageThreadId: target.messageThreadId,
-          text: chunkText,
-        };
-        firstOutcome ??= "presented";
       }
+      // Transfer surplus messages out of the active stream before cleanup.
+      // Regrowth must create fresh chunks, never reuse a pending deletion.
+      for (const obsolete of anchors.splice(chunks.length).toReversed()) {
+        if (obsolete.messageId === undefined) continue;
+        const key = `${obsolete.chatId}:${obsolete.messageId}`;
+        this.streamCleanup.set(key, {
+          target: { chatId: obsolete.chatId, messageId: obsolete.messageId, messageThreadId: obsolete.messageThreadId },
+          retryAt: this.now(),
+          failures: 0,
+        });
+      }
+      await this.flushStreamCleanup();
+    } catch (error) {
+      if (!(error instanceof TelegramReplyInterrupted)
+        || (error.reason !== "preview" && error.reason !== "cancelled")
+        || !delivery.accepted) {
+        throw error;
+      }
+      // Keep accepted anchors. A final update can resume at its first missing chunk.
     }
-    // Transfer surplus messages out of the active stream before cleanup.
-    // Regrowth must create fresh chunks, never reuse a pending deletion.
-    for (const obsolete of anchors.splice(chunks.length).toReversed()) {
-      if (obsolete.messageId === undefined) continue;
-      const key = `${obsolete.chatId}:${obsolete.messageId}`;
-      this.streamCleanup.set(key, {
-        target: { chatId: obsolete.chatId, messageId: obsolete.messageId, messageThreadId: obsolete.messageThreadId },
-        retryAt: this.now(),
-        failures: 0,
-      });
-    }
-    await this.flushStreamCleanup();
     const head = anchors[0];
     if (!head) {
       // Keep an empty anchor set for a partial stream so a later update
@@ -1472,6 +1486,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       if (this.streamCleanupStopped || generation !== this.lifecycleGeneration) return;
       if (cleanup.retryAt > this.now()) continue;
       const { target } = cleanup;
+      if (!this.hasGroupGrant(target)) {
+        this.streamCleanup.delete(key);
+        continue;
+      }
       const admission = this.replyRateLimits.admit(this.replyRateLimitBucket(target, 0));
       if (!admission.admitted) {
         cleanup.retryAt = admission.retryAt;
@@ -1536,6 +1554,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     fallbackText: string,
     replyMarkup: TelegramInlineKeyboardMarkup | undefined,
     delivery: TelegramReplyDelivery,
+    editAnchor?: TelegramStreamAnchor,
   ): Promise<TelegramSentMessage | undefined> {
     if (!richMessage || !this.bot.api.sendRichMessage) return undefined;
     try {
@@ -1547,7 +1566,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           reply_markup: replyMarkup,
           rich_message: richMessage,
           text: fallbackText,
-        }));
+        }), undefined, editAnchor);
       }
       return await delivery.write(() => this.bot.api.sendRichMessage!({
         chat_id: target.chatId,
@@ -2766,7 +2785,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     signalId: number,
     source: "interval" | "start",
   ): Promise<void> {
-    if (this.replyRateLimits.isBlocked(this.rateLimitScopeForTarget(target).id)) return;
+    if (!this.hasGroupGrant(target) || this.replyRateLimits.isBlocked(this.rateLimitScopeForTarget(target).id)) return;
     this.options.logger?.debug(
       `telegram sendChatAction typing request signal=${signalId} source=${source} target=${this.compactTypingTarget(target)}`,
     );
@@ -2789,37 +2808,63 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     return `${target.chatId}:${target.messageThreadId ?? ""}`;
   }
 
+  private hasGroupGrant(target: TelegramDeliveryTarget): boolean {
+    const chatId = String(target.chatId);
+    return this.options.config.configuredConnectionId === undefined
+      || !chatId.startsWith("-")
+      || this.options.config.authorizedSupergroupIds?.some((contact) => contact.id === chatId) === true;
+  }
+
+  private canWriteReply(target: TelegramDeliveryTarget, intent: MessagingSurfaceIntent): boolean {
+    if (this.hasGroupGrant(target)) return true;
+    // Pairing feedback must reach a group before it has an access grant.
+    return !intent.bindingId && !intent.audit?.bindingId && (
+      intent.audit?.action === "pairing.reply" || intent.audit?.action === "pairing.approved"
+      || intent.audit?.action === "pairing.rejected" || intent.audit?.action === "pairing.expired"
+    );
+  }
+
   private replyDelivery(
     target: TelegramDeliveryTarget,
     intent: MessagingSurfaceIntent,
+    control?: MessagingDeliveryControl,
   ): TelegramReplyDelivery {
-    const signal = this.replyAbort.signal;
+    const shutdown = this.replyAbort.signal;
+    const signal = control?.signal ? AbortSignal.any([shutdown, control.signal]) : shutdown;
     const preview = intent.kind === "stream_update" && !intent.stream.isFinal;
-    let attempted = false;
     const delivery: TelegramReplyDelivery = {
+      attempted: false,
       accepted: false,
-      ambiguous: false,
-      write: async <T>(operation: () => Promise<T>, minIntervalMs = TELEGRAM_MESSAGE_MIN_SPACING_MS) => {
-        const discardIfDelayed = preview && !attempted;
-        const interval = discardIfDelayed
+      write: async <T>(
+        operation: () => Promise<T>,
+        minIntervalMs = TELEGRAM_MESSAGE_MIN_SPACING_MS,
+        editAnchor?: TelegramStreamAnchor,
+      ) => {
+        const interval = preview && !delivery.attempted
           ? String(target.chatId).startsWith("-") ? telegramGroupStreamMinIntervalMs : TELEGRAM_PREVIEW_MIN_INTERVAL_MS
           : minIntervalMs;
         const bucket = this.replyRateLimitBucket(target, interval);
         let retried = false;
         while (true) {
-          signal.throwIfAborted();
+          if (control?.signal?.aborted || control?.isCancelled()) throw new TelegramReplyInterrupted("cancelled");
+          if (shutdown.aborted) throw new TelegramReplyInterrupted("stopped");
+          if (!this.canWriteReply(target, intent)) throw new TelegramReplyInterrupted("revoked");
           const admission = this.replyRateLimits.admit(bucket);
           if (!admission.admitted) {
-            if (discardIfDelayed) throw new TelegramPreviewDeferred();
+            if (preview) throw new TelegramReplyInterrupted("preview");
             const delayMs = Math.max(0, admission.retryAt - this.now());
-            if (this.options.waitForReplyDelay) {
-              await this.options.waitForReplyDelay(delayMs, signal);
-            } else {
-              await wait(delayMs, undefined, { signal });
+            try {
+              if (this.options.waitForReplyDelay) {
+                await this.options.waitForReplyDelay(delayMs, signal);
+              } else {
+                await wait(delayMs, undefined, { signal });
+              }
+            } catch (error) {
+              if (!signal.aborted) throw error;
             }
             continue;
           }
-          attempted = true;
+          delivery.attempted = true;
           try {
             const result = await operation();
             delivery.accepted = true;
@@ -2827,11 +2872,15 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           } catch (error) {
             const info = this.recordReplyRateLimit(error, target, !delivery.accepted);
             if (!info) {
-              delivery.ambiguous = !isDefiniteTelegramReplyRejection(error);
+              if (!isDefiniteTelegramReplyRejection(error)) {
+                delivery.ambiguity = editAnchor ? "edit" : "send";
+                if (editAnchor) editAnchor.dirty = true;
+              }
               throw error;
             }
-            // The desktop may retry an intent with no accepted writes. After
-            // partial success, only this rejected request can be retried.
+            // A preview yields the next slot to newer content. Durable replies
+            // can retry the rejected request once after partial success.
+            if (preview && delivery.accepted) throw new TelegramReplyInterrupted("preview");
             if (!delivery.accepted || retried) throw new TelegramReplyRateLimited(info, error);
             retried = true;
           }
