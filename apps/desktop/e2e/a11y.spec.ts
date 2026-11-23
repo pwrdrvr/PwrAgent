@@ -518,7 +518,8 @@ for (const appearances of copyChipGroups) {
     ? initial.colorTheme ?? `tangerine-${initial.theme}`
     : "all appearances";
   test(`sidebar copy-chip fixture surface has no violations (${title})`, async () => {
-    const app = await launchAuditApp({ ...initial, fixturePath: COPY_CHIP_FIXTURE });
+    const app = await test.step("launch copy-chip fixture", () =>
+      launchAuditApp({ ...initial, fixturePath: COPY_CHIP_FIXTURE }));
     try {
       await scanCopyChips(app.window, initial);
       for (const appearance of appearances.slice(1)) {
@@ -539,7 +540,7 @@ for (const appearances of copyChipGroups) {
         await scanCopyChips(app.window, appearance);
       }
     } finally {
-      await app.close();
+      await test.step("close copy-chip fixture", () => app.close());
     }
   });
 }
