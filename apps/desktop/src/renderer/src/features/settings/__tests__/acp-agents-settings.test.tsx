@@ -68,7 +68,7 @@ function grokEntry(params?: {
 const MANAGED_VERSIONS = "/Users/me/.pwragent/agents/grok/versions";
 
 function acpSnapshot(
-  registryId: "grok" | "qwen",
+  registryId: "grok" | "qwen" | "gemini" | "antigravity",
   cliPath: string,
   source: "config" | "env" = "config",
   enabled = true,
@@ -84,6 +84,31 @@ function acpSnapshot(
     },
   } as unknown as DesktopSettingsSnapshot;
 }
+
+it.each(["gemini", "antigravity"] as const)("describes the selected %s path without promising thread launches during an account restriction", async (registryId) => {
+  const name = registryId === "gemini" ? "Gemini CLI" : "Antigravity CLI";
+  const command = `/opt/example/bin/${registryId}`;
+  const agent: AcpAgentSettingsEntry = {
+    ...geminiEntry(),
+    backendId: `acp:${registryId}`,
+    registryId,
+    name,
+    activeCommand: command,
+    instances: [{ command, version: "1.5.14", source: "override" }],
+    unavailableReason: "This account requires attention.",
+  };
+  render(
+    <AcpAgentsSettings
+      desktopApi={{ listAcpAgents: async () => ({ fetchedAt: 1, entries: [agent] }) } as unknown as DesktopApi}
+      snapshot={acpSnapshot(registryId, command)}
+      onCliPathChange={async () => true}
+    />,
+  );
+  const section = within(await screen.findByRole("region", { name }));
+  expect(section.getByText("Selected", { exact: true })).toBeVisible();
+  expect(section.getByText(/Selected path · v1\.5\.14/)).toBeVisible();
+  expect(section.queryByText(/runs new threads|Active for new threads/)).toBeNull();
+});
 
 describe("AcpAgentsSettings — Grok build channel", () => {
   it.each([

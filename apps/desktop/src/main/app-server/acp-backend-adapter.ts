@@ -122,6 +122,9 @@ import {
   ensureAcpRuntimeDiscoveryWorkspace,
   refreshAcpRuntimeCapabilities,
 } from "../acp/acp-capability-probe";
+import { acpDiscoveryActionRequiredMessage } from "../acp/acp-discovery-error";
+import { acpAgentLaunchIdentity } from "../acp/acp-launch-descriptor";
+import { ACP_LOCAL_AGENT_STRATEGIES } from "../acp/acp-local-strategies";
 import {
   checkGrokCliUpdate,
   grokUpdateChecksDisabled,
@@ -218,13 +221,12 @@ export function createLocalAcpAgentDiscovery(params: {
     // (same as the settings path), so the binary that launches is the
     // resolved active install (override → picked → first) and every agent's
     // cliPath override is honored — consistent with what Settings shows.
-    // Read + parse the config once for all four agents (override + enabled),
-    // not once per lookup.
+    // Read and parse provider settings once for discovery.
     const providers = params.configStore.read("providers");
     const preferences: Record<string, AcpAgentPreference> = {};
-    const enabledRegistryIds = ["gemini", "grok", "kimi", "qwen"].filter(
-      (registryId) => acpProviderEnabledFromSnapshot(providers, registryId),
-    );
+    const enabledRegistryIds = ACP_LOCAL_AGENT_STRATEGIES
+      .map((strategy) => strategy.id)
+      .filter((registryId) => acpProviderEnabledFromSnapshot(providers, registryId));
     for (const registryId of enabledRegistryIds) {
       const override = acpProviderCommandOverrideFromSnapshot(
         providers,
@@ -494,13 +496,15 @@ export function describeInstalledAcpBackend(
   agent: AcpInstalledAgentRecord,
 ): BackendSummary {
   const runtimeCapabilities = acpRuntimeCapabilitiesForAgent(agent);
+  const actionRequired = acpDiscoveryActionRequiredMessage(agent.registryId, agent.lastDiscoveryError);
   const available =
-    agent.installStatus === "installed" &&
-    (agent.authStatus === "not-required" || agent.authStatus === "authenticated");
+    agent.installStatus === "installed"
+    && (agent.authStatus === "not-required" || agent.authStatus === "authenticated")
+    && actionRequired === undefined;
   const unavailableReason =
     available
       ? undefined
-      : agent.lastError ??
+      : actionRequired ?? agent.lastError ??
         (agent.authStatus === "required"
           ? "ACP agent authentication required"
           : "ACP agent unavailable");
@@ -571,24 +575,6 @@ function normalizeInstalledAcpAgent(
     : { ...agent, runtimeCapabilities };
 }
 
-function acpAgentLaunchIdentity(agent: AcpInstalledAgentRecord): string {
-  const descriptor = agent.launchDescriptor;
-  return JSON.stringify({
-    activeCommand: agent.activeCommand,
-    launchDescriptor: descriptor
-      ? {
-          backendId: descriptor.backendId,
-          registryId: descriptor.registryId,
-          distributionKind: descriptor.distributionKind,
-          command: descriptor.command,
-          args: descriptor.args,
-          env: Object.fromEntries(Object.entries(descriptor.env).sort()),
-          cwd: descriptor.cwd,
-          installPath: descriptor.installPath,
-        }
-      : undefined,
-  });
-}
 function rewindPointShowsPrompt(
   point: { promptIndex: number; promptPreview: string },
   promptText: string,
@@ -3046,6 +3032,31 @@ export class AcpBackendAdapter {
     };
   }
 
+  private async recordSessionStartRejection(agent: AcpInstalledAgentRecord, error: unknown): Promise<void> {
+    const message = error instanceof Error ? error.message : String(error);
+    const restriction = acpDiscoveryActionRequiredMessage(agent.registryId, message);
+    if (!restriction || this.closed || !this.acpAgentStore) return;
+    const current = this.acpAgentStore.getInstalledAgent(agent.backendId);
+    if (current?.installStatus !== "installed" || current.version !== agent.version
+      || acpAgentLaunchIdentity(current) !== acpAgentLaunchIdentity(agent)
+      || acpDiscoveryActionRequiredMessage(current.registryId, current.lastDiscoveryError) === restriction) {
+      return;
+    }
+    this.acpAgentStore.upsertInstalledAgent({
+      ...current,
+      lastDiscoveryError: message,
+      runtimeCapabilities: undefined,
+      updatedAt: Math.max(Date.now(), current.updatedAt),
+    });
+    await this.emit({
+      backend: agent.backendId,
+      notification: {
+        method: "backend/acpRuntimeCapabilities/updated",
+        params: { backend: agent.backendId },
+      },
+    });
+  }
+
   private createDefaultClient(agent: AcpInstalledAgentRecord): AcpRuntimeClient {
     if (!agent.launchDescriptor) {
       throw new Error(`ACP backend ${agent.backendId} has no launch descriptor`);
@@ -3064,6 +3075,7 @@ export class AcpBackendAdapter {
       backendId: agent.backendId,
       agentDisplayName: agent.name,
       initialRuntimeCapabilities: acpRuntimeCapabilitiesForAgent(agent),
+      onSessionStartError: (error) => this.recordSessionStartRejection(agent, error),
       supportsTurnSteering: effectiveAcpAgentCapabilities(agent).steerTurn,
       rolloutStore: this.acpRolloutStore,
       store: this.acpSessionStore as AcpSessionStorage,

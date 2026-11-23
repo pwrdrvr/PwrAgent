@@ -173,6 +173,7 @@ import {
 import type { DesktopSecretStore } from "./desktop-secret-store";
 import {
   CHAT_REPLY_COMPOSER_ENV,
+  ACP_AGENTS_ANTIGRAVITY_CLI_PATH_ENV,
   ACP_AGENTS_GEMINI_CLI_PATH_ENV,
   ACP_AGENTS_GROK_CLI_PATH_ENV,
   ACP_AGENTS_KIMI_CLI_PATH_ENV,
@@ -1770,6 +1771,13 @@ export class DesktopSettingsService {
         },
       },
       acpAgents: {
+        antigravity: {
+          cliPath: this.resolveString(
+            config.acpAgents?.antigravity?.cliPath,
+            ACP_AGENTS_ANTIGRAVITY_CLI_PATH_ENV,
+          ),
+          enabled: config.acpAgents?.antigravity?.enabled ?? true,
+        },
         gemini: {
           cliPath: this.resolveString(
             config.acpAgents?.gemini?.cliPath,
@@ -4255,6 +4263,7 @@ export class DesktopSettingsService {
         federation: this.configStore.read("federation"),
         models: this.configStore.read("models"),
         acpAgents: {
+          antigravity: providerConfigSection(providers.antigravity),
           gemini: providerConfigSection(providers.gemini),
           grok: providerConfigSection(providers.grok),
           kimi: providerConfigSection(providers.kimi),

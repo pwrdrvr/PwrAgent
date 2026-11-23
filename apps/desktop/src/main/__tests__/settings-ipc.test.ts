@@ -1830,6 +1830,7 @@ describe("settings ipc", () => {
         "kimi",
         "grok",
         "qwen",
+        "antigravity",
       ]);
       for (const enabled of [true, false]) {
         await service.writeConfigPatchTargeted({ acpAgents: { grok: { enabled } } });
@@ -2011,7 +2012,9 @@ describe("settings ipc", () => {
       const response = await handlers.get(ACP_AGENTS_LIST_CHANNEL)!({}, { refresh: false }) as {
         entries: AcpAgentSettingsEntry[];
       };
-      expect(response.entries.map((entry) => entry.registryId).sort()).toEqual(["gemini", "grok", "kimi", "qwen"]);
+      expect(response.entries.map((entry) => entry.registryId).sort()).toEqual(["antigravity", "gemini", "grok", "kimi", "qwen"]);
+      expect(response.entries.find((entry) => entry.registryId === "antigravity")?.unavailableReason)
+        .toMatch(/enable Antigravity CLI.*Refresh/);
       expect(localAcpDiscoveryMock.discoverLocalAcpAgentRecords).not.toHaveBeenCalled();
       // Hiding a retired provider must not delete the user's persisted state.
       expect(store.getInstalledAgent("acp:claude-acp")).toBeDefined();
@@ -2516,7 +2519,7 @@ describe("settings ipc", () => {
         localAcpDiscoveryMock.discoverLocalAcpAgentRecords,
       ).toHaveBeenCalledWith(
         expect.objectContaining({
-          enabledRegistryIds: ["gemini", "grok", "kimi", "qwen"],
+          enabledRegistryIds: ["gemini", "grok", "kimi", "qwen", "antigravity"],
           managedGrok: {
             channel: "latest",
             enabled: true,
@@ -2661,7 +2664,7 @@ describe("settings ipc", () => {
         localAcpDiscoveryMock.discoverLocalAcpAgentRecords,
       ).toHaveBeenCalledWith(
         expect.objectContaining({
-          enabledRegistryIds: ["grok", "kimi", "qwen"],
+          enabledRegistryIds: ["grok", "kimi", "qwen", "antigravity"],
           preferences: {
             kimi: { overridePath: "/opt/pwragent/bin/kimi" },
           },
@@ -2943,7 +2946,7 @@ describe("settings ipc", () => {
         localAcpDiscoveryMock.discoverLocalAcpAgentRecords,
       ).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          enabledRegistryIds: ["grok", "kimi", "qwen"],
+          enabledRegistryIds: ["grok", "kimi", "qwen", "antigravity"],
         }),
       );
     } finally {
@@ -3067,6 +3070,7 @@ describe("settings ipc", () => {
         "grok",
         "kimi",
         "qwen",
+        "antigravity",
       ]);
 
       await vi.waitFor(async () => {

@@ -421,6 +421,7 @@ describe("desktop settings contracts", () => {
         },
       },
       acpAgents: {
+        antigravity: { cliPath: { value: "", source: "default" }, enabled: true },
         gemini: {
           cliPath: { value: "", source: "default" },
           enabled: true,

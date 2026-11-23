@@ -2905,6 +2905,7 @@ describe("App", () => {
         },
       },
       acpAgents: {
+        antigravity: { cliPath: { value: "", source: "default" }, enabled: true },
         gemini: { cliPath: { value: "", source: "default" }, enabled: true },
         grok: { cliPath: { value: "", source: "default" }, enabled: true },
         kimi: { cliPath: { value: "", source: "default" }, enabled: true },

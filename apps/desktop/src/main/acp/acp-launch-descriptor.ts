@@ -12,6 +12,28 @@ export type AcpLaunchDescriptor = {
   installPath?: string;
 };
 
+export function acpAgentLaunchIdentity(agent: {
+  activeCommand?: string;
+  launchDescriptor?: AcpLaunchDescriptor;
+}): string {
+  const descriptor = agent.launchDescriptor;
+  return JSON.stringify({
+    activeCommand: agent.activeCommand,
+    launchDescriptor: descriptor
+      ? {
+          backendId: descriptor.backendId,
+          registryId: descriptor.registryId,
+          distributionKind: descriptor.distributionKind,
+          command: descriptor.command,
+          args: descriptor.args,
+          env: Object.fromEntries(Object.entries(descriptor.env).sort()),
+          cwd: descriptor.cwd,
+          installPath: descriptor.installPath,
+        }
+      : undefined,
+  });
+}
+
 export function normalizeAcpLaunchDescriptor(
   descriptor: AcpLaunchDescriptor,
 ): AcpLaunchDescriptor {

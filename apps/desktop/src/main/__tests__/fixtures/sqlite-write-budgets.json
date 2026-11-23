@@ -1,4 +1,5 @@
 {
+  "acp-account-restriction-publication": {"commits": 1, "note": "One commit for the newly observed account restriction, including concurrent attempts with the same rejection", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1},
   "line-rich-menu-recover-absent-create": {"commits": 1, "note": "Recover an interrupted LINE rich-menu create that never reached LINE", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
   "line-rich-menu-lifecycle": {"commits": 7, "note": "One LINE rich-menu install, update, and removal", "observedWalBytes": 57712, "rowsChanged": 7, "statements": 7},
   "messaging-adapter-validation-rejection-burst": {"commits": 1, "note": "100 failures in one cooldown. At 48 commits/day per platform and reason, 20,600 bytes/commit projects to about 10.9 MB/day across all 11 wired combinations under sustained failures. No idle writes.", "observedWalBytes": 20600, "rowsChanged": 1, "statements": 1},

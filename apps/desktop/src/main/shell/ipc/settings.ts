@@ -190,15 +190,18 @@ import {
 import { isSafeExternalOpenUrl, isSlackAppDeepLink } from "../../external-url-policy";
 import { getMainLogger } from "../../log";
 import { timeStartupProfileOperation } from "../../diagnostics/startup-profile-events";
-import { BUILT_IN_ACP_STRATEGIES, type AcpAgentStrategy } from "@pwrdrvr/agent-acp/strategies";
+import type { AcpAgentStrategy } from "@pwrdrvr/agent-acp/strategies";
 import { AcpAgentService } from "../../acp/acp-agent-service";
 import { isBannedAcpRegistryId } from "../../acp/acp-agent-allowlist";
 import { discoverLocalAcpAgentRecords } from "../../acp/acp-instance-discovery";
+import { ACP_LOCAL_AGENT_STRATEGIES } from "../../acp/acp-local-strategies";
 import {
   ensureAcpRuntimeDiscoveryWorkspace,
   probeAcpRuntimeCapabilities,
 } from "../../acp/acp-capability-probe";
 import { shouldReprobeAcpCapabilities } from "../../acp/acp-capability-freshness";
+import { acpDiscoveryActionRequiredMessage } from "../../acp/acp-discovery-error";
+import { acpAgentLaunchIdentity } from "../../acp/acp-launch-descriptor";
 import { describeDistributionSource } from "../../acp/acp-install-provenance";
 import { isPwrAgentOwnedGrokRuntime } from "../../acp/grok-cli-update";
 import {
@@ -281,6 +284,7 @@ const LOCAL_ACP_AGENTS: Record<keyof DesktopSettingsSnapshot["acpAgents"], true>
   grok: true,
   kimi: true,
   qwen: true,
+  antigravity: true,
 };
 const LOCAL_ACP_REGISTRY_IDS = Object.keys(LOCAL_ACP_AGENTS) as Array<
   keyof DesktopSettingsSnapshot["acpAgents"]
@@ -538,14 +542,14 @@ async function listAcpAgentSettingsImpl(
     }
   }
 
-  // Always present every supported provider (Gemini/Grok/Kimi/Qwen) as its own
+  // Always present every supported provider as its own
   // section, even when nothing was discovered for it — they are known providers
   // we support via ACP, so an undiscovered one shows a "Not installed" status
   // instead of vanishing. Fill a placeholder for any built-in strategy that
   // neither the registry nor local discovery produced an entry for. This makes
   // the screen independent of registry availability (offline / cold start).
   const presentBackendIds = new Set(entries.map((entry) => entry.backendId));
-  for (const strategy of BUILT_IN_ACP_STRATEGIES) {
+  for (const strategy of ACP_LOCAL_AGENT_STRATEGIES) {
     if (
       isBannedAcpRegistryId(strategy.id) ||
       presentBackendIds.has(`acp:${strategy.id}`)
@@ -556,10 +560,9 @@ async function listAcpAgentSettingsImpl(
     presentBackendIds.add(`acp:${strategy.id}`);
   }
 
-  // Stable, predictable order: the built-in catalog order first (Gemini, Grok,
-  // Kimi, Qwen), any extra non-catalog entries after in their existing order.
+  // Local catalog order first, followed by extra entries in their existing order.
   const catalogOrder = new Map(
-    BUILT_IN_ACP_STRATEGIES.map((strategy, index) => [
+    ACP_LOCAL_AGENT_STRATEGIES.map((strategy, index) => [
       strategy.backendId,
       index,
     ]),
@@ -717,6 +720,9 @@ function placeholderAcpAgentSettingsEntry(
     installStatus: "not-installed",
     authStatus: "not-required",
     verificationStatus: "unverified-allowed",
+    ...(strategy.id === "antigravity"
+      ? { unavailableReason: "Install Antigravity CLI 1.5 or later, enable Antigravity CLI if it is off, then click Refresh under Re-probe." }
+      : {}),
     instances: [],
   };
 }
@@ -899,20 +905,24 @@ async function listInstalledAndLocalAcpAgents(
           current?.version !== undefined
           && record.version !== undefined
           && current.version !== record.version;
+        const runtimeChanged = runtimeVersionChanged
+          || (current !== undefined
+            && (record.registryId === "gemini" || record.registryId === "antigravity")
+            && acpAgentLaunchIdentity(current) !== acpAgentLaunchIdentity(record));
         const pwrAgentOwnedGrok = isPwrAgentOwnedGrokRuntime(record);
         const nextRecord = {
           ...record,
-          runtimeCapabilities: runtimeVersionChanged
+          runtimeCapabilities: runtimeChanged
             ? undefined
             : current?.runtimeCapabilities,
           update: pwrAgentOwnedGrok ? undefined : current?.update,
           updateCommand: pwrAgentOwnedGrok
             ? undefined
             : current?.updateCommand,
-          lastDiscoveredAt: runtimeVersionChanged
+          lastDiscoveredAt: runtimeChanged
             ? undefined
             : current?.lastDiscoveredAt,
-          lastDiscoveryError: runtimeVersionChanged
+          lastDiscoveryError: runtimeChanged
             ? undefined
             : current?.lastDiscoveryError,
           installedAt: current?.installedAt ?? record.installedAt,
@@ -932,7 +942,7 @@ async function listInstalledAndLocalAcpAgents(
         // Otherwise persist the merged record carrying the cached capabilities
         // without launching anything.
         if (
-          shouldReprobeAcpCapabilities(current, record.version, now, {
+          shouldReprobeAcpCapabilities(runtimeChanged ? undefined : current, record.version, now, {
             ...(options?.force === true ? { force: true } : {}),
           })
         ) {
@@ -966,7 +976,7 @@ async function listInstalledAndLocalAcpAgents(
       let storeFailure: unknown;
       for await (const outcome of probes) {
         try {
-          store.upsertInstalledAgent(outcome.record);
+          store.upsertInstalledAgent(keepConcurrentAcpRestriction(store, outcome));
         } catch (error) {
           storeFailure ??= error;
           continue;
@@ -1004,6 +1014,27 @@ async function listInstalledAndLocalAcpAgents(
         !isBannedAcpRegistryId(record.registryId),
     ),
   ];
+}
+
+function keepConcurrentAcpRestriction(
+  store: AcpAgentService,
+  { record, update }: AcpProbeOutcome,
+): AcpInstalledAgentRecord {
+  const { registryId } = record;
+  if ((registryId !== "gemini" && registryId !== "antigravity")
+    || update.status === "succeeded"
+    || acpDiscoveryActionRequiredMessage(registryId, record.lastDiscoveryError)) {
+    return record;
+  }
+  // An ordinary session may have learned the restriction after this probe
+  // started. An inconclusive result must keep it for the same runtime.
+  const current = store.getInstalledAgent(record.backendId);
+  if (!current || current.version !== record.version
+    || acpAgentLaunchIdentity(current) !== acpAgentLaunchIdentity(record)
+    || !acpDiscoveryActionRequiredMessage(registryId, current.lastDiscoveryError)) {
+    return record;
+  }
+  return { ...record, lastDiscoveryError: current.lastDiscoveryError, runtimeCapabilities: undefined };
 }
 
 function acpAgentSettingsEntry(params: {
@@ -1085,6 +1116,9 @@ export function installedAcpAgentSettingsEntry(
   // would still reach the renderer after the PwrAgent build became the runtime.
   // Drop it at the boundary: the runtime in effect owns the update story.
   const pwrAgentOwnedGrok = isPwrAgentOwnedGrokRuntime(record);
+  const actionRequired = record.installStatus === "installed"
+    ? acpDiscoveryActionRequiredMessage(record.registryId, record.lastDiscoveryError)
+    : undefined;
   return {
     backendId: record.backendId,
     registryId: record.registryId,
@@ -1107,7 +1141,8 @@ export function installedAcpAgentSettingsEntry(
     updatedAt: record.updatedAt,
     lastError: record.lastError,
     lastDiscoveredAt: record.lastDiscoveredAt,
-    lastDiscoveryError: record.lastDiscoveryError,
+    lastDiscoveryError: actionRequired ?? record.lastDiscoveryError,
+    ...(actionRequired ? { unavailableReason: actionRequired } : {}),
     runtime: record.runtimeCapabilities,
     update: pwrAgentOwnedGrok ? undefined : record.update,
     ...(pwrAgentOwnedGrok ? { pwrAgentManagedRuntime: true } : {}),
@@ -1688,7 +1723,7 @@ function createProviderCatalogRefresh(
       ).map((registryId) => ({
         id: registryId,
         label:
-          BUILT_IN_ACP_STRATEGIES.find((strategy) => strategy.id === registryId)
+          ACP_LOCAL_AGENT_STRATEGIES.find((strategy) => strategy.id === registryId)
             ?.displayName ?? registryId,
       }));
     },
