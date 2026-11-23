@@ -1,6 +1,18 @@
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createConnection } from "node:net";
 import path from "node:path";
+
+/** Waits for the test to release a captured observation. Closing cancels delivery. */
+export async function holdOwnerFixtureBoundary(port: string, sockets?: Set<ReturnType<typeof createConnection>>): Promise<boolean> {
+  return await new Promise<boolean>(resolve => {
+    const socket = createConnection(Number(port), "127.0.0.1");
+    sockets?.add(socket);
+    socket.once("data", () => { resolve(true); socket.destroy(); });
+    socket.once("error", () => socket.destroy());
+    socket.once("close", () => { sockets?.delete(socket); resolve(false); });
+  });
+}
 
 type FixtureTurn = { id: string; status: string; items: unknown[]; error: { message: string } | null };
 type FixtureThread = {
@@ -52,6 +64,7 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
   private get activeTurns() { return OwnerConformanceCodexTransport.activeTurns; }
   private readonly helpers = new Set<string>();
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
+  private readonly gates = new Set<ReturnType<typeof createConnection>>();
   private schedule(action: () => void, delay: number): void {
     const timer = setTimeout(() => { this.timers.delete(timer); action(); }, delay);
     this.timers.add(timer);
@@ -74,6 +87,8 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
   async close(): Promise<void> {
     for (const timer of this.timers) clearTimeout(timer);
     this.timers.clear();
+    for (const gate of this.gates) gate.destroy();
+    this.gates.clear();
     for (const threadId of this.ownedActiveTurns) {
       OwnerConformanceCodexTransport.heldCompletions.delete(threadId);
       this.activeTurns.delete(threadId);
@@ -283,6 +298,12 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
     if (recordsFile) writeFileSync(recordsFile, JSON.stringify(Object.fromEntries(threads)));
     this.handler(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));
     const next = followUp;
-    if (next) this.schedule(() => this.notify(next.method, next.params), 0);
+    if (next) this.schedule(() => {
+      const notify = () => this.notify(next.method, next.params);
+      const port = process.env.PWRAGENT_TEST_CODEX_TURN_STARTED_PORT;
+      if (next.method === "turn/started" && port) {
+        void holdOwnerFixtureBoundary(port, this.gates).then(released => { if (released) notify(); });
+      } else notify();
+    }, 0);
   }
 }
