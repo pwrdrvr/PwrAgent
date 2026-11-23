@@ -13,6 +13,8 @@ import type {
 import type { StarMapWorkspaceSnapshot } from "@pwragent/shared/contracts/star-map";
 import type { TaskMonitorUsageSnapshot } from "@pwragent/shared/contracts/task-monitor-tools";
 import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
+import { snapshotThreadAgentTrustPolicy } from "@pwragent/shared/contracts/navigation";
+import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import { buildTurnUsageActivityEntryFromLine } from "@pwragent/shared/thread-usage-display";
@@ -40,6 +42,10 @@ import {
   RUNTIME_LEASE_DEAD_OWNER_GRACE_MS,
 } from "../state/app-runtime-instance-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
+import { MessagingActivityLog } from "../storage/messaging-activity-log";
+import { MessagingAgentTrustAudit } from "../messaging/core/messaging-agent-trust";
+import { MessagingController } from "../messaging/core/messaging-controller";
+import { SqliteMessagingStore } from "../state/messaging-store-sqlite";
 import { DbBackedSafeStorageSecretStore } from "../state/secret-store-sqlite";
 import {
   measureSqliteWrites,
@@ -128,6 +134,78 @@ afterEach(() => {
 });
 
 describe("sqlite write metrics", () => {
+  it("bounds Agent trust rejection audit writes across a burst", async () => {
+    const log = new MessagingActivityLog(stateDb);
+    const audit = new MessagingAgentTrustAudit();
+    const { writes } = await measureSqliteWrites(async () => {
+      for (let index = 0; index < 1_000; index++) {
+        audit.record({
+          log: () => log, now: 100_000 + index, reason: "actor", target: {
+            backend: "codex", threadId: `agent-${index}`, policy: {},
+          },
+          event: {
+            kind: "text", id: `message-${index}`, text: "private body", receivedAt: 100_000 + index,
+            actor: { platformUserId: `user-${index}` },
+            channel: { channel: "slack", conversation: { kind: "channel", id: `C${index}` } },
+          },
+        });
+      }
+    });
+    expectSqliteWriteBudget({ scenario: "messaging-agent-trust-rejections", note: "One redacted audit commit in a burst of 1,000 mismatches across Agents and channels. Global cooldown is 120 seconds.", writes });
+    expect(log.list()).toEqual([expect.objectContaining({ threadId: "agent-0", payload: expect.objectContaining({
+      rejectionStage: "agent-trust", rejectionReason: "actor",
+    }) })]);
+  });
+
+  it("budgets the controller's generic Agent trust denial and its delivery", async () => {
+    const log = new MessagingActivityLog(stateDb);
+    const deliver = vi.fn(async () => ({ channel: "slack" as const, outcome: "presented" as const, deliveredAt: 100_000 }));
+    const controller = new MessagingController({
+      adapter: { capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE, deliver },
+      authorizedActorIds: ["fixture-user"],
+      channel: "slack",
+      backend: {
+        getNavigationSnapshot: async () => { throw new Error("Unexpected navigation read"); },
+        getThreadAdmissionState: async () => { throw new Error("Unexpected turn admission"); },
+        startTurn: async () => { throw new Error("Unexpected turn start"); },
+      },
+      now: () => 100_000,
+      store: new SqliteMessagingStore(stateDb),
+      activityLog: () => log,
+    });
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let index = 0; index < 1_000; index++) {
+          expect(await controller.admitAgentTrust({
+            kind: "text", id: `fixture-message-${index}`, text: "Secret request body", receivedAt: 100_000,
+            actor: { platformUserId: "fixture-user" },
+            channel: { channel: "slack", conversation: { kind: "channel", id: "C123" } },
+          }, {
+            backend: "codex", threadId: "fixture-agent",
+            policy: { version: 1, denialResponse: "generic", rules: [] },
+          })).toBe(false);
+        }
+      });
+      expect(deliver).toHaveBeenCalledOnce();
+      expectSqliteWriteBudget({ scenario: "messaging-agent-trust-generic-denial",
+        note: "Full generic denial through the controller, including audit, provider delivery record, and outbound activity summary. One sampled response across 1,000 denials.", writes });
+    } finally {
+      await controller.dispose();
+    }
+  });
+
+  it("persists an Agent policy through later identity edits in one commit per save", async () => {
+    const identity = { backend: "codex" as const, threadId: "release-notes-agent" };
+    await store.setThreadAgent({ ...identity, agent: { name: "Release Notes", instructions: "Summarize release notes" } });
+    const policy = { version: 1, denialResponse: "silent", rules: [] } as const;
+    const expectedRevision = snapshotThreadAgentTrustPolicy(undefined).revision;
+    const { writes } = await measureSqliteWrites(async () => await store.setThreadAgentTrustPolicy({ ...identity, policy, expectedRevision }));
+    expectSqliteWriteBudget({ scenario: "messaging-agent-trust-save", note: "One explicit trust policy save by the operator.", writes });
+    await store.setThreadAgent({ ...identity, agent: { name: "Release Desk" } });
+    await expect(store.getThreadOverlayState(identity)).resolves.toMatchObject({ agent: { name: "Release Desk", trustPolicy: policy } });
+    await expect(store.setThreadAgent({ ...identity, agent: null })).rejects.toThrow("invocation trust policy");
+  });
+
   it("budgets Claude branch adoption and unchanged Git monitoring", async () => {
     const cwd = path.join(tempDir, "repo");
     mkdirSync(cwd);

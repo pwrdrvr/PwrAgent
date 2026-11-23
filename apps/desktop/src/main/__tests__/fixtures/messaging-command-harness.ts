@@ -20,6 +20,7 @@ export function commandHarness(overrides: Partial<MessagingCommandHost> = {}) {
   const delivered: MessagingSurfaceIntent[] = [];
   const unexpected = (): never => { throw new Error("Unexpected workflow port"); };
   const host: MessagingCommandHost = {
+    admitBoundAgentTrust: async () => true,
     requirePermission: async () => { trace.push("permission"); return true; },
     requireRemoteScopeForBinding: async () => { trace.push("scope"); return true; },
     handleStatusCallback: async () => { trace.push("handoff"); },

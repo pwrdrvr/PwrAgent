@@ -19,13 +19,13 @@ import type {
   ThreadIdentifier,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
-import type { MessagingBindingRecord, MessagingActiveTurnSummary, MessagingApprovalDecision, MessagingDeliveryResult, MessagingInboundCallbackEvent, MessagingInboundTextEvent, MessagingPendingIntentRecord, MessagingQuestionnaireAnswer, MessagingQuestionnaireIntent, MessagingSurfaceAction, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
+import type { MessagingBindingRecord, MessagingActiveTurnSummary, MessagingApprovalDecision, MessagingDeliveryResult, MessagingInboundCallbackEvent, MessagingInboundEvent, MessagingInboundTextEvent, MessagingPendingIntentRecord, MessagingQuestionnaireAnswer, MessagingQuestionnaireIntent, MessagingSurfaceAction, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import { messagingQuestionnaireAnswerComplete, normalizeMessagingQuestionnaireIntent } from "@pwragent/messaging-interface";
 import type { MessagingThreadAdmissionState } from "./messaging-adapter.js";
 import { buildApprovalIntent, buildAsyncQuestionnaireIntent, buildConfirmationIntent, buildErrorIntent, buildQuestionnaireIntent } from "./messaging-renderer.js";
 import { buildMessagingAuditContext } from "./messaging-audit.js";
 import { threadKeyForBinding } from "./messaging-turn-admission.js";
-import { questionnaireAnswerValue, approvalBodyWithResponse } from "./messaging-pending-request-helpers";
+import { questionnaireAnswerValue, approvalBodyWithResponse, pendingRequestTarget } from "./messaging-pending-request-helpers";
 
 export class MessagingPendingRequestWorkflow {
   private readonly pendingRequestPresentations = new Map<string, Promise<void>>();
@@ -98,6 +98,7 @@ export class MessagingPendingRequestWorkflow {
       intent.bindingId = binding.id;
       intent.requestContext = {
         backend,
+        ...(federationTarget ? { federationTarget } : {}),
         method: request.method,
         requestId: request.params.requestId,
         threadId: request.params.threadId,
@@ -197,6 +198,7 @@ export class MessagingPendingRequestWorkflow {
     if (intent.phase !== "answering" || !question?.allowFreeform || !value) {
       return false;
     }
+    if (!await this.admitPendingRequestTrust(event, pendingIntent)) return true;
 
     const updated = this.questionnaireWithRecordedAnswer(intent, {
       kind: "custom",
@@ -219,6 +221,7 @@ export class MessagingPendingRequestWorkflow {
     if (pendingIntent.intent.kind !== "questionnaire") {
       return;
     }
+    if (!await this.admitPendingRequestTrust(event, pendingIntent)) return;
 
     const intent = normalizeMessagingQuestionnaireIntent(pendingIntent.intent);
     if (action.id === "questionnaire:skip") {
@@ -696,6 +699,12 @@ export class MessagingPendingRequestWorkflow {
     }
   }
 
+  async admitPendingRequestTrust(event: MessagingInboundEvent, pending: MessagingPendingIntentRecord): Promise<boolean> {
+    const binding = pending.bindingId ? await this.context.store.getBinding(pending.bindingId) : undefined;
+    const target = pendingRequestTarget(pending.intent, binding);
+    return !target || await this.context.host().admitAgentTrustForTarget(event, target);
+  }
+
   async submitQuestionnaireIntent(
     intent: MessagingQuestionnaireIntent,
   ): Promise<void> {
@@ -709,9 +718,7 @@ export class MessagingPendingRequestWorkflow {
 
     await this.context.backend.submitServerRequest({
       backend: requestContext.backend,
-      federationTarget: binding
-        ? federationTargetForBinding(binding)
-        : undefined,
+      federationTarget: pendingRequestTarget(intent, binding)?.federationTarget,
       threadId: requestContext.threadId,
       turnId: requestContext.turnId,
       requestId: requestContext.requestId,
@@ -744,9 +751,7 @@ export class MessagingPendingRequestWorkflow {
 
     await this.context.backend.submitServerRequest({
       backend: requestContext.backend,
-      federationTarget: binding
-        ? federationTargetForBinding(binding)
-        : undefined,
+      federationTarget: pendingRequestTarget(intent, binding)?.federationTarget,
       threadId: requestContext.threadId,
       turnId: requestContext.turnId,
       requestId: requestContext.requestId,

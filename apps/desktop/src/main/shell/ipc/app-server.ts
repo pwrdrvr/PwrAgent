@@ -1,5 +1,5 @@
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
-import { AGENT_MEMORY_CHANNEL } from "../../../shared/ipc";
+import { AGENT_MEMORY_CHANNEL, NAVIGATION_READ_THREAD_AGENT_TRUST_POLICY_CHANNEL, NAVIGATION_SET_THREAD_AGENT_TRUST_POLICY_CHANNEL } from "../../../shared/ipc";
 import type { OwnerNavigationRequest } from "../../../shared/owner-request";
 import { LocalOwnerNavigationTransport } from "../../federation/local-owner-navigation-transport";
 
@@ -134,6 +134,9 @@ import {
   type SetThreadParentRequest,
   type SetThreadParentResponse,
   type SetThreadAgentRequest,
+  type SetThreadAgentTrustPolicyRequest,
+  type ThreadAgentTrustPolicyTarget,
+  snapshotThreadAgentTrustPolicy,
   type SetThreadTokenMiserRequest,
   type SetThreadMonitorJobSuggestionsRequest,
   type SetThreadMonitorJobSuggestionsResponse,
@@ -1001,6 +1004,12 @@ export function registerAppServerIpcHandlers(): void {
     },
   );
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_READ_THREAD_AGENT_TRUST_POLICY_CHANNEL);
+  ipcMain.handle(NAVIGATION_READ_THREAD_AGENT_TRUST_POLICY_CHANNEL, async (_event, request: ThreadAgentTrustPolicyTarget) =>
+    snapshotThreadAgentTrustPolicy((await getDesktopBackendRegistry().getThreadAgentMetadata(request))?.trustPolicy));
+  ipcMain.removeHandler(NAVIGATION_SET_THREAD_AGENT_TRUST_POLICY_CHANNEL);
+  ipcMain.handle(NAVIGATION_SET_THREAD_AGENT_TRUST_POLICY_CHANNEL, async (_event, request: SetThreadAgentTrustPolicyRequest) =>
+    snapshotThreadAgentTrustPolicy((await getDesktopBackendRegistry().setThreadAgentTrustPolicy(request)).trustPolicy));
   ipcMain.handle(
     NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL,
     async (
@@ -1770,6 +1779,8 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_FORGET_THREAD_LOCK_NOTE_CHANNEL);
   ipcMain.removeHandler(AGENT_MEMORY_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_AGENT_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_READ_THREAD_AGENT_TRUST_POLICY_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_SET_THREAD_AGENT_TRUST_POLICY_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL);
   ipcMain.removeHandler(TRANSCRIPT_SET_PULL_REQUESTS_CHANNEL);

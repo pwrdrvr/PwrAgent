@@ -48,6 +48,10 @@ export class MessagingCallbackHandlers {
       return;
     }
 
+    if (action.kind !== "cancel"
+      && (!await this.context.host().admitBoundAgentTrust(event, entry.binding)
+        || (entry.event && !await this.context.host().admitBoundAgentTrust(entry.event, entry.binding)))) return;
+
     if (action.kind === "retry") {
       if (!entry.manualRetryRequired
         || !(await this.context.host().requirePermission(event, "message.reply", "queued-turn:retry"))
@@ -379,6 +383,7 @@ export class MessagingCallbackHandlers {
         if (await this.retireApprovalCallbackIfBackendIdle(pendingIntent, event)) {
           return;
         }
+        if (!await this.context.host().admitPendingRequestTrust(event, pendingIntent)) return;
         const decision = await this.context.host().submitApprovalAction(
           pendingIntent.intent,
           action.id,
@@ -2404,13 +2409,12 @@ export class MessagingCallbackHandlers {
       ...event,
       id: `${event.id}:private-reply:${action.optionIndex}`,
       kind: "text",
-      channel: binding.channel,
       routingState: binding.routingState,
       receivedAt: this.context.now(),
       text: option.text,
     };
     // Admission rechecks and acquires the claim after asynchronous validation.
-    if (!(await this.context.host().admitTurnInput({ binding, event: responseEvent }))) return;
+    if (!(await this.context.host().admitTurnInput({ binding, event: responseEvent, awaitAcceptance: true }))) return;
     await this.context.host().deliverPrivateReplyButtonState(
       event,
       "Response received. The Agent will continue in the original conversation.",

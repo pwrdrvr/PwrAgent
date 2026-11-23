@@ -940,6 +940,7 @@ export type MessagingBaseSurfaceIntent = {
   fallbackText?: string;
   requestContext?: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     method: string;
     requestId: string;
     threadId: ThreadIdentifier;
@@ -1564,6 +1565,13 @@ export type MessagingInboundBaseEvent = MessagingInboundReceipt & {
    * of a binding refresh.
    */
   sourceSurface?: MessagingSurfaceRef;
+};
+
+/** Fresh provider-authenticated assertion for one live inbound decision. */
+export type MessagingWorkspaceAdminEvidence = {
+  actorId: string;
+  workspaceId: string;
+  observedAt: number;
 };
 
 export type MessagingInboundChannelMetadataUpdate = {

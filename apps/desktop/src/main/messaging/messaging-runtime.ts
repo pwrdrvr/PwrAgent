@@ -119,6 +119,7 @@ import {
   type MessagingDeliveryPriority,
 } from "./core/messaging-delivery-budget";
 import { MessagingDeliveryLane } from "./core/messaging-delivery-lane";
+import { MessagingAgentTrustAudit, type MessagingAgentTrustAdmission } from "./core/messaging-agent-trust";
 import type {
   DynamicToolPermissionCheck,
   DynamicToolPermissionResult,
@@ -126,6 +127,7 @@ import type {
 } from "./messaging-agent-tool-service";
 
 export type DesktopMessagingAdapter = {
+  resolveWorkspaceAdmin?: MessagingAdapter["resolveWorkspaceAdmin"];
   retainedSourceConnectionId?: MessagingAdapter["retainedSourceConnectionId"];
   authorizeRetainedSource?: MessagingAdapter["authorizeRetainedSource"];
   authorizedActorIds: readonly string[];
@@ -228,6 +230,7 @@ export type DesktopMessagingConfigLoader = (
 
 export type MessagingAutomationInboundHandler = (
   event: Extract<MessagingInboundEvent, { kind: "media" | "text" }>,
+  admitTrust: MessagingAgentTrustAdmission,
 ) => Promise<boolean>;
 
 /**
@@ -468,6 +471,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   private automationsChangedUnsubscribe?: () => void;
   private previewScopesChangedUnsubscribe?: () => void;
   private controllers: MessagingController[] = [];
+  private readonly agentTrustAudit = new MessagingAgentTrustAudit();
   private readonly runningAdapters = new Map<
     MessagingChannelKind,
     RunningMessagingAdapter
@@ -1628,6 +1632,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       attachmentPolicy: config.attachmentPolicy,
       authorizedActorIds,
       rbacPolicy: getRbacPolicyService().providerFor(adapter.channel),
+      agentTrustAudit: this.agentTrustAudit,
       automationInboundHandler: this.options.automationInboundHandler,
       onInboundPreview: (event) => publishInboundPreview(event),
       backend: this.options.backendBridge,
@@ -1748,7 +1753,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
           );
           publishInboundPreview(event);
           if (automationMatched) {
-            await this.options.automationInboundHandler?.(event);
+            await this.options.automationInboundHandler?.(event, (target) => controller.admitAgentTrust(event, target));
           } else {
             messagingLog.debug(
               "observed-only message matched no automation filter",
@@ -3546,8 +3551,8 @@ export function initializeDesktopMessagingRuntime(
       ),
       config: config ?? (() => loadDesktopMessagingConfig()),
       readDevelopmentWorkingUpdatesDefault,
-      automationInboundHandler: (event) =>
-        getDesktopAutomationService().handleMessagingInboundEvent(event),
+      automationInboundHandler: (event, admitTrust) =>
+        getDesktopAutomationService().handleMessagingInboundEvent(event, admitTrust),
       automationInboundMatches: (event) =>
         getDesktopAutomationService().matchesInboundEvent(event),
       interruptedAutomationRunUpdates: () =>

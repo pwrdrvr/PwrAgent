@@ -32,6 +32,7 @@ import type {
 import type { DesktopGhDiscoverySnapshot, DesktopProviderModelDefaults } from "./settings";
 import type { BackendAcpSessionRuntimeState, StartupProviderRefreshStatus } from "./backend";
 import type { AutomationThreadSummary } from "./automations";
+import type { AgentTrustPolicy } from "./agent-trust-policy";
 import type { CelestialIconId } from "./celestial";
 import type { ThreadToolIncidentNoticeState } from "./tool-output-incidents";
 import type {
@@ -112,6 +113,7 @@ export type ThreadAgentInstructionsDelivery = "workspace-file";
 
 export type ThreadAgentMetadata = {
   name: string;
+  trustPolicy?: AgentTrustPolicy;
   instructions?: string;
   instructionsDelivery?: ThreadAgentInstructionsDelivery;
   instructionLineCount: number;
@@ -3121,6 +3123,26 @@ export type SetThreadAgentResponse = {
   agent?: ThreadAgentMetadata;
   agentChange?: ThreadAgentChangeStatus;
 };
+
+export type ThreadAgentTrustPolicyTarget = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+};
+
+export type SetThreadAgentTrustPolicyRequest = ThreadAgentTrustPolicyTarget & {
+  expectedRevision: string;
+  policy: AgentTrustPolicy | null;
+};
+
+export type ThreadAgentTrustPolicySnapshot = {
+  policy?: unknown;
+  revision: string;
+};
+
+/** Use the stored policy content as the edit revision, including its absence. */
+export function snapshotThreadAgentTrustPolicy(policy: unknown): ThreadAgentTrustPolicySnapshot {
+  return { policy, revision: JSON.stringify({ policy }) };
+}
 
 export type SetThreadTokenMiserRequest = {
   federationTarget?: FederationTarget;

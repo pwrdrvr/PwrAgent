@@ -7754,6 +7754,11 @@ async function withFederationNavigationConsumer<T>(
 }
 
 function localBackendOperations(): FederationBackendOperations {
+  const requireUnrestrictedAgent = async (request: { backend: AppServerBackendKind; threadId: string }) => {
+    if ((await getDesktopBackendRegistry().getThreadAgentMetadata(request))?.trustPolicy !== undefined) {
+      throw new Error("Use this Agent's owning profile for this action. The request cannot prove messaging trust.");
+    }
+  };
   const messagingBridge = new DesktopMessagingBackendBridge();
   return {
     async getNavigationQueryPage(request, rpcOptions) {
@@ -8311,10 +8316,12 @@ function localBackendOperations(): FederationBackendOperations {
       request: FederationStartTurnRequest,
       turnInputSource?: TurnInputSource,
     ): Promise<StartTurnResponse> {
+      const registry = getDesktopBackendRegistry();
+      if (request.messageOrigin?.kind === "messaging") await requireUnrestrictedAgent(request);
       // A peer agent's message into a paused project here is refused, as a
       // local agent's is; a remote operator's composer is not.
-      getDesktopBackendRegistry().assertProjectAcceptsThreadMessage(request);
-      const submitted = await getDesktopBackendRegistry().submitTurn({
+      registry.assertProjectAcceptsThreadMessage(request);
+      const submitted = await registry.submitTurn({
         ...request,
         origin: "manual",
       }, turnInputSource);
@@ -8341,6 +8348,7 @@ function localBackendOperations(): FederationBackendOperations {
     async startReview(
       request: StartReviewRequest,
     ): Promise<StartReviewResponse> {
+      await requireUnrestrictedAgent(request);
       return await getDesktopBackendRegistry().startReview(request);
     },
     async readQueuedTurn(request: ReadQueuedTurnRequest): Promise<ReadQueuedTurnResponse> {
@@ -8505,6 +8513,7 @@ function localBackendOperations(): FederationBackendOperations {
       return await getDesktopBackendRegistry().stopSubAgent(request);
     },
     async steerTurn(request: SteerTurnRequest, fallbackInputSource?: SteerFallbackInputSource): Promise<SteerTurnResponse> {
+      await requireUnrestrictedAgent(request);
       const registry = getDesktopBackendRegistry();
       const { admitSteerTurn } = await import(
         "../scheduled-actions/steer-turn-admission.js"
@@ -8577,6 +8586,7 @@ function localBackendOperations(): FederationBackendOperations {
     async submitServerRequest(
       request: SubmitServerRequestRequest,
     ): Promise<SubmitServerRequestResponse> {
+      await requireUnrestrictedAgent(request);
       return await getDesktopBackendRegistry().submitServerRequest(request);
     },
     async runCodexEnvironmentAction(

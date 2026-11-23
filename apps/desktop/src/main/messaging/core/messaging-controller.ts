@@ -16,6 +16,7 @@ import type { MessagingReviewHost } from "./messaging-review-context";
 import { MessagingQueueRecoveries, type MessagingQueuedTurnEntry } from "./messaging-queue-recoveries";
 import { MessagingTurns } from "./messaging-turn-state";
 import { MessagingAccessControl } from "./messaging-access-control";
+import { MessagingAgentTrust, MessagingAgentTrustAudit, type MessagingAgentTrustAdmission, type MessagingAgentTrustTarget } from "./messaging-agent-trust";
 import type { MessagingAccessHost } from "./messaging-access-context";
 import { MessagingCallbackHandlers } from "./messaging-callback-handlers";
 import { isMessagingInteractivePendingRequest } from "./messaging-pending-request";
@@ -138,7 +139,9 @@ export type MessagingControllerOptions = {
   rbacPolicy?: MessagingRbacPolicyProvider;
   automationInboundHandler?: (
     event: Extract<MessagingInboundEvent, { kind: "media" | "text" }>,
+    admitTrust: MessagingAgentTrustAdmission,
   ) => Promise<boolean>;
+  agentTrustAudit?: MessagingAgentTrustAudit;
   /**
    * Tap for the Automations editor live preview. Invoked for every authorized
    * text/media event before trigger matching, regardless of whether a trigger
@@ -359,6 +362,11 @@ export class MessagingController {
   private reviewHostPorts?: MessagingReviewHost;
 
   private readonly agentToolWorkflow: MessagingAgentTools;
+  private readonly agentTrust = new MessagingAgentTrust({
+    now: () => this.now(),
+    resolveWorkspaceAdmin: (event) => this.adapter.resolveWorkspaceAdmin?.(event) ?? Promise.resolve(undefined),
+  });
+  private readonly localAgentTrustAudit = new MessagingAgentTrustAudit();
   private agentToolHostPorts?: MessagingAgentToolHost;
   private readonly monitorWorkflow: MessagingMonitorWorkflow;
   private monitorHostPorts?: MessagingMonitorHost;
@@ -581,9 +589,7 @@ export class MessagingController {
     this.showStreamingOptionConfig = options.showStreamingOption ?? false;
     this.turnAdmission = new MessagingTurnAdmission({
       debounceMs: options.inputDebounceMs ?? DEFAULT_INPUT_DEBOUNCE_MS,
-      onBundleReady: async (bundle) => {
-        await this.inboundTurns.handleAdmittedTurnBundle(bundle);
-      },
+      onBundleReady: (bundle) => this.inboundTurns.handleAdmittedTurnBundle(bundle),
     });
     this.toolUpdatePolicy = new MessagingToolUpdatePolicy({
       now: this.now,
@@ -626,6 +632,7 @@ export class MessagingController {
   }
 
   async handleInboundEvent(event: MessagingInboundEvent): Promise<void> {
+    if (event.observedOnly === true) return;
     if (!this.accessControl.authorizeInboundAdmission(event)) {
       // In enforcing mode this fires for actors with no permission-granting
       // role (default-deny); record it so operators can see who was inert.
@@ -693,7 +700,7 @@ export class MessagingController {
       const automationMatched = await this.inboundTurns.measureHandledToRoutedSubspan(
         event,
         "handledAutomationInboundMs",
-        async () => await this.options.automationInboundHandler?.(event) ?? false,
+        async () => await this.options.automationInboundHandler?.(event, (target) => this.admitAgentTrust(event, target)) ?? false,
       );
       if (automationMatched) {
         return;
@@ -708,6 +715,55 @@ export class MessagingController {
     if (event.kind === "text") {
       await this.inboundTurns.handleText(event);
     }
+  }
+
+  async admitAgentTrust(event: MessagingInboundEvent, target: MessagingAgentTrustTarget): Promise<boolean> {
+    if (target.policy === undefined) return true;
+    // Observation can make a trigger eligible without admitting that actor for
+    // interactive use. In particular it never proves any RBAC bucket role.
+    const roleIds = event.observedOnly === true ? undefined : this.accessControl.resolveActorPermissions(event)?.roleIds;
+    const decision = target.remote
+      ? { allowed: false, reason: "remote-owner", respond: false } as const
+      : await this.agentTrust.evaluate(target.policy, event, roleIds);
+    if (decision.allowed) return true;
+
+    const record = (this.options.agentTrustAudit ?? this.localAgentTrustAudit).record({
+      log: () => this.options.activityLog?.(), now: this.now(), event, target, reason: decision.reason,
+    });
+    if (record && decision.respond && event.observedOnly !== true) {
+      await this.deliver(buildErrorIntent({
+        id: this.newIntentId("agent-trust-denied"),
+        createdAt: this.now(),
+        title: "Request declined",
+        body: "This request could not be accepted.",
+        recoverable: false,
+      }), undefined, event);
+    }
+    return false;
+  }
+
+  private async admitBoundAgentTrust(event: MessagingInboundEvent, binding: MessagingBindingRecord): Promise<boolean> {
+    const { backend, threadId } = binding;
+    return await this.admitAgentTrustForTarget(event, { backend, threadId, federationTarget: federationTargetForBinding(binding) });
+  }
+
+  private async admitAgentTrustForTarget(
+    event: MessagingInboundEvent,
+    target: Parameters<MessagingBackendBridge["getThreadAdmissionState"]>[0],
+  ): Promise<boolean> {
+    const { backend, threadId, federationTarget } = target;
+    const bridge = this.options.backend;
+    let policy: unknown;
+    try {
+      // Callback authorization does not depend on the thread's turn occupancy.
+      policy = bridge.getThreadAgentTrustPolicy
+        ? await bridge.getThreadAgentTrustPolicy(target)
+        : (await bridge.getThreadAdmissionState(target)).thread?.agent?.trustPolicy;
+    } catch (error) {
+      this.logger.warn?.("messaging Agent trust lookup failed", { backend, error });
+      return false;
+    }
+    return await this.admitAgentTrust(event, { backend, threadId, policy, remote: !!federationTarget });
   }
 
   async handleInboundChannelMetadata(
@@ -888,6 +944,7 @@ export class MessagingController {
       cycleToolUpdateMode: (...args) => this.threadSettings.cycleToolUpdateMode(...args),
       cycleStreamingResponseMode: (...args) => this.threadSettings.cycleStreamingResponseMode(...args),
       requirePermission: (...args) => this.accessControl.requirePermission(...args),
+      admitAgentTrust: (...args) => this.admitAgentTrust(...args),
       requireRemoteScopeForBinding: (...args) => this.accessControl.requireRemoteScopeForBinding(...args),
       get bindingService() { return readController().bindingService; },
       defaultAgentRouteBinding: (...args) => this.defaultAgentRouteBinding(...args),
@@ -973,6 +1030,7 @@ export class MessagingController {
 
   private pendingRequestHost(): MessagingPendingRequestHost {
     return this.pendingRequestHostPorts ??= {
+      admitAgentTrustForTarget: (...args) => this.admitAgentTrustForTarget(...args),
       filterBindingsForChannel: (...args) => this.filterBindingsForChannel(...args),
       bindingsForAgentTurn: (...args) => this.bindingsForAgentTurn(...args),
       readBackendThreadStatus: (...args) => this.readBackendThreadStatus(...args),
@@ -1016,6 +1074,7 @@ export class MessagingController {
 
   private reviewHost(): MessagingReviewHost {
     return this.reviewHostPorts ??= {
+      admitBoundAgentTrust: (...args) => this.admitBoundAgentTrust(...args),
       rememberHumanMessagingSource: (...args) => this.rememberHumanMessagingSource(...args),
       readBoundWorkspaceContext: (...args) => this.readBoundWorkspaceContext(...args),
       storePendingIntent: (...args) => this.storePendingIntent(...args),
@@ -1028,6 +1087,7 @@ export class MessagingController {
 
   private commandHost(): MessagingCommandHost {
     return this.commandHostPorts ??= {
+      admitBoundAgentTrust: (...args) => this.admitBoundAgentTrust(...args),
       requirePermission: (...args) => this.accessControl.requirePermission(...args),
       requireRemoteScopeForBinding: (...args) => this.accessControl.requireRemoteScopeForBinding(...args),
       handleStatusCallback: (...args) => this.callbackHandlers.handleStatusCallback(...args),
@@ -1088,6 +1148,7 @@ export class MessagingController {
   private callbackHost(): MessagingCallbackHost {
     const readController = () => this;
     return this.callbackHostPorts ??= {
+      admitBoundAgentTrust: (...args) => this.admitBoundAgentTrust(...args),
       get commandHandlers() { return readController().commandHandlers; },
       presentDefaultAgentAssignmentBrowser: (...args) => this.browse.presentDefaultAgentAssignmentBrowser(...args),
       clearDefaultAgentAssignment: (...args) => this.clearDefaultAgentAssignment(...args),
@@ -1102,6 +1163,7 @@ export class MessagingController {
       renderBindingStatus: (...args) => this.bindingService.renderBindingStatus(...args),
       repostLastAssistantMessageForResume: (...args) => this.repostLastAssistantMessageForResume(...args),
       submitApprovalAction: (...args) => this.pendingRequests.submitApprovalAction(...args),
+      admitPendingRequestTrust: (...args) => this.pendingRequests.admitPendingRequestTrust(...args),
       retireApprovalIntent: (...args) => this.pendingRequests.retireApprovalIntent(...args),
       resumeBindingForPendingIntent: (...args) => this.pendingRequests.resumeBindingForPendingIntent(...args),
       handleQuestionnaireAction: (...args) => this.pendingRequests.handleQuestionnaireAction(...args),

@@ -10,6 +10,7 @@ import type { MessagingTurnInputEvent } from "./messaging-turn-admission.js";
 import type { MonitorCommandAction } from "./messaging-command-helpers";
 
 export interface MessagingCommandHost {
+  readonly admitBoundAgentTrust: import("./messaging-agent-trust").BoundMessagingAgentTrustAdmission;
   readonly requirePermission: (event: MessagingInboundEvent, permission: MessagingPermissionId, auditAction: string, opts?: { notify?: boolean; }) => Promise<boolean>;
   readonly requireRemoteScopeForBinding: (event: MessagingInboundEvent, binding: MessagingBindingRecord | undefined, auditAction: string, opts?: { notify?: boolean; }) => Promise<boolean>;
   readonly handleStatusCallback: (event: MessagingInboundCallbackEvent, actionId: string) => Promise<void>;

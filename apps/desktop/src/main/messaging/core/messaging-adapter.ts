@@ -102,6 +102,7 @@ import type {
   MessagingPrivateConversationResolveResult,
   MessagingReconnectInfo,
   MessagingSurfaceIntent,
+  MessagingWorkspaceAdminEvidence,
 } from "@pwragent/messaging-interface";
 
 export type {
@@ -129,6 +130,7 @@ export type MessagingActiveBackendTurn = {
 export type MessagingThreadAdmissionState = ThreadAdmissionState;
 
 export type MessagingAdapter = {
+  resolveWorkspaceAdmin?(event: MessagingInboundEvent): Promise<MessagingWorkspaceAdminEvidence | undefined>;
   /** Stable provider account/workspace identity, never a credential or username. */
   retainedSourceConnectionId?(): string | undefined;
   /** Reapply provider admission to a retained source without dispatching a new inbound event. */
@@ -183,6 +185,11 @@ export type MessagingAdapter = {
 };
 
 export type MessagingBackendBridge = {
+  getThreadAgentTrustPolicy?(request: {
+    backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
+    threadId: string;
+  }): Promise<unknown>;
   listNavigationOwners?(): Promise<{ owners: Array<{ target?: Extract<FederationTarget, { scope: "remote" }>; label: string }>; omitted: number }>;
   getNavigationQueryPage?(request: NavigationQueryRequest): Promise<NavigationQueryPage>;
   getNavigationSelectedDetail?(request: NavigationSelectedDetailRequest): Promise<NavigationSelectedDetailResponse>;

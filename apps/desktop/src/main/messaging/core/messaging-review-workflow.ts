@@ -1305,6 +1305,7 @@ export class MessagingReviewWorkflow {
   }
 
   async submitMessagingReview(params: MessagingReviewSubmission): Promise<void> {
+    if (!await this.context.host().admitBoundAgentTrust(params.event, params.binding)) return;
     const submitReview = this.context.backend.submitReview?.bind(
       this.context.backend,
     );

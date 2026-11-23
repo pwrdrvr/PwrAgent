@@ -43,6 +43,35 @@ display-name, free-text, or other provider-property comparison.
 See [Slack users.info](https://docs.slack.dev/reference/methods/users.info/)
 and the [Slack user object](https://docs.slack.dev/reference/objects/user-object/).
 
+## Admission and audit
+
+Local interactive input is checked after existing provider and capability
+admission. Each fragment of a grouped reply is checked before preparing its
+input or downloading attachments. A matched inbound Automation goes through
+the same policy before creating or coalescing a run. Observed-only events can
+match actor IDs and verified properties, but never prove an Access Control
+role. They remain unable to submit interactive input and receive no denial
+reply. Historical replay supplies no live actor evidence and is disabled for
+restricted Agents. Local operator runs and scheduled runs have no inbound
+messaging actor.
+
+Concrete connections have no evidence issuer in the legacy runtime. These
+rules fail closed. Federation messaging cannot supply policy evidence on the
+destination profile. Restricted Agents therefore refuse peer messaging turns
+and peer reviews, steering and request answers until those paths can preserve
+the source authority. Changes apply to new admissions. Work already accepted
+into the owner queue runs under its original admission.
+
+Rejections mark the messaging activity log with the `agent-trust` stage,
+target thread, platform, conversation, and failure class. They contain no
+message, actor label, or verified property value. The lease owner samples at
+most one durable trust audit per two minutes across all Agents and providers.
+The same limit applies to generic interactive denial responses. Continuous
+mismatches can produce about 14.9 MB/day of WAL with silent denials (one commit,
+20,632 bytes) or 29.7 MB/day with generic responses (three commits, 41,232 bytes,
+including the delivery record and outbound activity summary). Idle profiles
+write nothing for trust decisions.
+
 ## Portable definitions
 
 Preserve the restricted state, provider kind, exact rule structure, and denial

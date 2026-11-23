@@ -1896,6 +1896,12 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   setThreadAgent?: (
     request: SetThreadAgentRequest
   ) => Promise<SetThreadAgentResponse>;
+  readThreadAgentTrustPolicy?: (
+    request: import("@pwragent/shared/contracts/navigation").ThreadAgentTrustPolicyTarget,
+  ) => Promise<import("@pwragent/shared/contracts/navigation").ThreadAgentTrustPolicySnapshot>;
+  setThreadAgentTrustPolicy?: (
+    request: import("@pwragent/shared/contracts/navigation").SetThreadAgentTrustPolicyRequest,
+  ) => Promise<import("@pwragent/shared/contracts/navigation").ThreadAgentTrustPolicySnapshot>;
   setThreadTokenMiser?: (
     request: SetThreadTokenMiserRequest
   ) => Promise<SetThreadTokenMiserResponse>;

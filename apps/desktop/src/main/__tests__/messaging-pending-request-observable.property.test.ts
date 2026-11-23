@@ -153,6 +153,49 @@ it("keeps approvals actionable until backend acceptance, then retires markup and
   }), { numRuns: 25 });
 });
 
+it.each(["approval", "questionnaire-button", "questionnaire-text"] as const)(
+  "enforces updated trust for a default-route %s without a persisted binding",
+  async (kind) => {
+    const f = await messagingPendingRequestHarness({ route: "default-agent" });
+    try {
+      await f.controller.handleInboundEvent(f.event());
+      expect(f.starts).toHaveLength(1);
+      const turnId = "fixture-turn-1";
+      await f.controller.handleBackendPendingRequest("codex", kind === "approval"
+        ? { method: "item/commandExecution/requestApproval", params: {
+          threadId: "fixture-thread", requestId: "fixture-request", turnId, command: "fixture-command", prompt: "Run fixture?",
+        } }
+        : f.request(1, "fixture-request", turnId));
+      const card = await f.pending();
+      if (!card?.bindingId || card.intent.kind !== "approval" && card.intent.kind !== "questionnaire") {
+        throw new Error("Missing default-route card");
+      }
+      expect(await f.store.getBinding(card.bindingId)).toBeUndefined();
+      const respond = () => {
+        if (kind === "questionnaire-text") return f.controller.handleInboundEvent(f.event("Fixture freeform"));
+        const action = card.intent.kind === "approval" ? card.intent.decisions[0]?.id
+          : card.intent.kind === "questionnaire" ? card.intent.questions[0]?.options[0]?.id : undefined;
+        if (!action) throw new Error("Missing default-route action");
+        return f.callback(action);
+      };
+      f.inputHooks.trustPolicy = async (threadId) => {
+        expect(threadId).toBe("fixture-thread");
+        return { version: 1, denialResponse: "silent", rules: [] };
+      };
+      await respond();
+      expect(f.submissions).toHaveLength(0);
+      expect((await f.pending())?.intent).toEqual(card.intent);
+
+      f.inputHooks.trustPolicy = undefined;
+      await respond();
+      expect(f.submissions).toHaveLength(1);
+      expect(f.submissions[0]?.threadId).toBe("fixture-thread");
+    } finally {
+      await f.close();
+    }
+  },
+);
+
 it("keeps presentation reservations and deliveries isolated by provider and owning instance", async () => {
   await fc.assert(fc.asyncProperty(fc.scheduler(), fc.constantFrom("telegram", "discord"), async (scheduler, channel) => {
     const f = await messagingPendingRequestHarness({ channel });
@@ -188,18 +231,19 @@ it("keeps presentation reservations and deliveries isolated by provider and owni
 });
 
 it("routes async replies through accepted steering or canonical admission and restores cards after refused sending", async () => {
-  const scenario = fc.constantFrom("idle-start", "idle-queued", "idle-failed", "busy-steer", "busy-fallback", "busy-failed", "admission-failed");
+  const scenario = fc.constantFrom("idle-start", "idle-queued", "idle-failed", "busy-steer", "busy-fallback", "busy-failed", "admission-failed", "trust-read-failed");
   await fc.assert(fc.asyncProperty(scenario, fc.constantFrom("telegram", "discord"), async (mode, channel) => {
     const f = await messagingPendingRequestHarness({ channel });
     try {
       await f.begin(); await f.presentAsync();
       const row = await f.asyncPending();
       if (row?.intent.kind !== "questionnaire") throw new Error("Missing fixture async question");
-      const expectsFailure = mode === "idle-failed" || mode === "busy-failed" || mode === "admission-failed";
+      const expectsFailure = mode === "idle-failed" || mode === "busy-failed" || mode === "admission-failed" || mode === "trust-read-failed";
       if (mode.startsWith("idle")) f.setThreadStatus("idle");
       if (mode === "idle-queued") f.inputHooks.outcome = "queued";
       if (mode === "idle-failed" || mode === "busy-failed") f.inputHooks.outcome = "failed";
       if (mode === "admission-failed") f.inputHooks.admission = async () => { throw new Error("Fixture admission read failure"); };
+      if (mode === "trust-read-failed") f.inputHooks.trustPolicy = async () => { throw new Error("Fixture trust lookup failure"); };
       f.hooks.steer = async () => {
         expect(await f.asyncPending()).toBeUndefined();
         if (mode === "busy-fallback" || mode === "busy-failed") throw new Error("Fixture steering failure");
@@ -210,7 +254,7 @@ it("routes async replies through accepted steering or canonical admission and re
       expect((await f.asyncPending()) !== undefined).toBe(expectsFailure);
       expect(f.questionnaires().at(-1)?.phase).toBe(expectsFailure ? "answering" : "submitted");
       expect(f.steers).toHaveLength(mode === "busy-steer" ? 1 : 0);
-      expect(f.starts).toHaveLength(mode === "busy-steer" || mode === "admission-failed" ? 0 : 1);
+      expect(f.starts).toHaveLength(mode === "busy-steer" || mode === "admission-failed" || mode === "trust-read-failed" ? 0 : 1);
       if (!expectsFailure) {
         const input = mode === "busy-steer" ? f.steers[0]!.input : f.starts[0]!.input;
         const itemId = JSON.stringify(["request_user_input_async", "async-fixture", 0]);
@@ -222,6 +266,27 @@ it("routes async replies through accepted steering or canonical admission and re
       }
     } finally { await f.close(); }
   }), { numRuns: 25 });
+});
+
+it("restores the async question after a failed dispatch admission read", async () => {
+  const f = await messagingPendingRequestHarness();
+  try {
+    await f.begin();
+    await f.presentAsync();
+    const row = await f.asyncPending();
+    if (row?.intent.kind !== "questionnaire") throw new Error("Missing fixture async question");
+    f.inputHooks.admission = async () => { throw new Error("Fixture admission read failure"); };
+
+    await f.callback(row.intent.questions[0]!.options[1]!.id);
+
+    expect(await f.asyncPending()).toBeDefined();
+    expect(f.questionnaires().at(-1)?.phase).toBe("answering");
+    expect(f.steers).toHaveLength(0);
+    expect(f.starts).toHaveLength(0);
+    expect(f.deliveries).toContainEqual(expect.objectContaining({ kind: "error", title: "Answer could not be sent" }));
+  } finally {
+    await f.close();
+  }
 });
 
 it("retires async cards after skip, invisible delivery or an owning-instance answer, without capturing later text", async () => {

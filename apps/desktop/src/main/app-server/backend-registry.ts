@@ -1,4 +1,6 @@
 import type { CheckoutToolHandler } from "../agent-tools/pwragent-resource-checkout-agent-tools";
+import { isAgentTrustPolicy } from "@pwragent/shared/contracts/agent-trust-policy";
+import type { SetThreadAgentTrustPolicyRequest } from "@pwragent/shared/contracts/navigation";
 import type { ThreadModelSettings } from "./thread-model-settings";
 import type { AcpSessionRuntimeOptions } from "./acp-session-runtime-options";
 import type { HeadlessAutomationTurns } from "./headless-automation-turns";
@@ -4254,6 +4256,12 @@ export class DesktopBackendRegistry {
     });
   }
 
+  private assertAgentDesignationCanChange(agent: NavigationLaunchpadAgent | null, overlay: ThreadOverlayState | undefined): void {
+    if (!agent && overlay?.agent?.trustPolicy !== undefined) {
+      throw new Error("Clear the Agent's invocation trust policy before removing its designation.");
+    }
+  }
+
   async setThreadAgent(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -4265,6 +4273,7 @@ export class DesktopBackendRegistry {
     }
     const result = await this.serializeCodexAgentChange(params.threadId, async () => {
       const current = await this.overlayStore.getThreadOverlayState(params);
+      this.assertAgentDesignationCanChange(params.agent, current);
       const sameAgent = (agent: typeof params.agent | undefined) =>
         (agent?.name ?? null) === (params.agent?.name ?? null)
         && (agent?.instructions ?? "") === (params.agent?.instructions ?? "");
@@ -4316,6 +4325,23 @@ export class DesktopBackendRegistry {
     return tools;
   }
 
+  async setThreadAgentTrustPolicy(params: SetThreadAgentTrustPolicyRequest): Promise<ThreadAgentMetadata> {
+    this.assertNotBootstrap("setThreadAgentTrustPolicy");
+    if (params.policy !== null && !isAgentTrustPolicy(params.policy)) {
+      throw new Error("Invalid Agent invocation trust policy.");
+    }
+    const save = async () => {
+      const current = await this.overlayStore.getThreadOverlayState(params);
+      if (!current?.agent || current.queuedAgentChange?.agent === null) {
+        throw new Error("Invocation trust requires a designated Agent thread.");
+      }
+      const state = await this.overlayStore.setThreadAgentTrustPolicy({ ...params, policy: params.policy ?? undefined });
+      await this.notifyThreadAgentChange(params.backend, params.threadId);
+      return state.agent!;
+    };
+    return params.backend === "codex" ? await this.serializeCodexAgentChange(params.threadId, save) : await save();
+  }
+
   private async applyThreadAgentChange(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -4332,6 +4358,7 @@ export class DesktopBackendRegistry {
         await this.flushQueuedExecutionModeIfPresent(params.threadId);
         await this.withCodexThreadClient(params.threadId, async (client) => {
           const overlay = await this.overlayStore.getThreadOverlayState(params);
+          this.assertAgentDesignationCanChange(params.agent, overlay);
           const dynamicTools = await this.requireCodexAgentRefreshTools(client, params.threadId, overlay);
           const instructions = providerDeliveredAgentInstructions(params.agent) ?? "";
           if (client.replaceThreadDeveloperInstructions

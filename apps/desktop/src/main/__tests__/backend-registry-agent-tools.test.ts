@@ -17,6 +17,8 @@ import { createDesktopBackendRegistry, registryModules } from "../app-server/bac
 import { getOwnerHostServices, installOwnerHostServices } from "../owner-host";
 import { createOutpostRuntimePolicy } from "../owner-runtime-policy";
 import fc from "fast-check";
+import { setImmediate as waitForImmediate } from "node:timers/promises";
+import { snapshotThreadAgentTrustPolicy } from "@pwragent/shared/contracts/navigation";
 import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { threadLockRefusalMessage } from "@pwragent/shared/thread-lock";
@@ -67,6 +69,50 @@ describe("DesktopBackendRegistry", () => {
     const agent = { name: "Fixture manager", instructions: "Manage requested messaging attachments." };
     const capabilities = { codeModeOutputReducer: { protocolVersion: 1 as const, dynamicToolsResumeField: "dynamicTools" as const } };
     const identity = { backend: "codex" as const, threadId: "existing-agent" };
+
+    it("checks trust after a preceding policy save settles and before removing a Codex Agent", async () => {
+      await fc.assert(fc.asyncProperty(fc.boolean(), async (occupied) => {
+        const overlayStore = createOverlayStoreMock();
+        const codexClient = new MockBackendClient({ threads: [], serverCapabilities: capabilities });
+        const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
+        const entered = Promise.withResolvers<void>();
+        const releaseSave = Promise.withResolvers<void>();
+        try {
+          await registry.setThreadAgent({ ...identity, agent });
+          codexClient.refreshThreadTools.mockClear();
+          if (occupied) {
+            await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: {
+              threadId: identity.threadId, turnId: "fixture-active", turn: { id: "fixture-active" },
+            } } });
+          }
+          const originalSave = overlayStore.setThreadAgentTrustPolicy;
+          vi.spyOn(overlayStore, "setThreadAgentTrustPolicy").mockImplementationOnce(async (request) => {
+            entered.resolve();
+            await releaseSave.promise;
+            return await originalSave(request);
+          });
+          const restriction = { version: 1, denialResponse: "silent", rules: [] } as const;
+          const save = registry.setThreadAgentTrustPolicy({
+            ...identity, expectedRevision: snapshotThreadAgentTrustPolicy(undefined).revision, policy: restriction,
+          });
+          await Promise.race([entered.promise, save.then(() => expect.fail("Policy save must reach the store"))]);
+          const removal = registry.setThreadAgent({ ...identity, agent: null });
+          const result = Promise.allSettled([save, removal]);
+          await waitForImmediate();
+          releaseSave.resolve();
+
+          expect(await result).toMatchObject([
+            { status: "fulfilled", value: { trustPolicy: restriction } },
+            { status: "rejected", reason: { message: expect.stringContaining("Clear the Agent") } },
+          ]);
+          expect(codexClient.refreshThreadTools).not.toHaveBeenCalled();
+          expect(await overlayStore.getThreadOverlayState(identity)).toMatchObject({ agent: { trustPolicy: restriction }, queuedAgentChange: undefined });
+        } finally {
+          releaseSave.resolve();
+          await registry.close();
+        }
+      }), { numRuns: 10, examples: [[false], [true]] });
+    });
 
     it.each([false, true])("refreshes, persists and authorizes promotion independently of discovery (%s)", async (discovery) => {
       const overlayStore = createOverlayStoreMock();

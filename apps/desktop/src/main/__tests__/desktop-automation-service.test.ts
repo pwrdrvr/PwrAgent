@@ -399,6 +399,28 @@ describe("DesktopAutomationService", () => {
     );
   });
 
+  it("requires Agent trust for a matching automation-only sender and refuses an unattributed replay", async () => {
+    const policy = { version: 1, denialResponse: "silent", rules: [{
+      provider: "slack", allOf: [{ kind: "actor-id", actorId: "B123" }],
+    }] } as const;
+    vi.mocked(registry.getThreadAgentMetadata).mockResolvedValue({ name: "Automation Agent", instructionLineCount: 0,
+      instructionsTooLong: false, updatedAt: 1_000, trustPolicy: policy });
+    const service = new DesktopAutomationService({ registry, store });
+    const automation = await service.create({ backend: "codex", threadId: "thread-1", name: "Alerts", taskPrompt: "Record the alert.",
+      triggers: [{ kind: "inbound_message", id: "alerts", name: "Alerts", conversation: { channel: "slack", conversationId: "C123" } }],
+      outputActions: [{ id: "agent", kind: "agent_context" }] });
+    const event = { kind: "text", id: "one", observedOnly: true, receivedAt: 2_000, text: "alert",
+      actor: { platformUserId: "B123", isBot: true }, channel: { channel: "slack", conversation: { kind: "channel", id: "C123" } } } as const;
+    const denied = vi.fn(async () => false);
+    await expect(service.handleMessagingInboundEvent(event, denied)).resolves.toBe(true);
+    expect(denied).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1", policy });
+    expect(registry.startAutomationHeadlessTurn).not.toHaveBeenCalled();
+    await expect(service.handleMessagingInboundEvent({ ...event, id: "two" }, async () => true)).resolves.toBe(true);
+    expect(registry.startAutomationHeadlessTurn).toHaveBeenCalledTimes(1);
+    await expect(service.replayInbound({ automationId: automation.automation.id, message: {} as never }))
+      .rejects.toThrow("restricted invocation trust");
+  });
+
   it("suppresses the binding broadcast for agent-only inbound automations", async () => {
     const service = new DesktopAutomationService({ registry, store });
     await service.create({

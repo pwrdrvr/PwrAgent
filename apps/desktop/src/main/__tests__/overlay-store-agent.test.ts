@@ -1,5 +1,6 @@
-import { AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE } from "@pwragent/shared/contracts/navigation";
+import { AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE, snapshotThreadAgentTrustPolicy } from "@pwragent/shared/contracts/navigation";
 import { type ThreadHandoffOrigin } from "@pwragent/shared/contracts/thread-orchestration-tools";
+import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
@@ -42,6 +43,28 @@ afterEach(() => {
 });
 
 describe("SqliteOverlayStore - thread Agent metadata", () => {
+  it("preserves rules removed by another viewer when a stale draft tries to save", async () => {
+    await fc.assert(fc.asyncProperty(fc.uuid(), async (actorId) => {
+      const identity = { backend: "codex" as const, threadId: `stale-policy-${actorId}` };
+      await store.setThreadAgent({ ...identity, agent: { name: "Release Desk" } });
+      const policy = {
+        version: 1, denialResponse: "silent",
+        rules: [{ provider: "telegram", allOf: [{ kind: "actor-id", actorId }] }],
+      } as const;
+      await store.setThreadAgentTrustPolicy({
+        ...identity, policy, expectedRevision: snapshotThreadAgentTrustPolicy(undefined).revision,
+      });
+      const expectedRevision = snapshotThreadAgentTrustPolicy(policy).revision;
+      const latest = { ...policy, rules: [] };
+      await store.setThreadAgentTrustPolicy({ ...identity, policy: latest, expectedRevision });
+
+      await expect(store.setThreadAgentTrustPolicy({
+        ...identity, policy: { ...policy, denialResponse: "generic" }, expectedRevision,
+      })).rejects.toThrow("Messaging access changed while you were editing");
+      await expect(store.getThreadOverlayState(identity)).resolves.toMatchObject({ agent: { trustPolicy: latest } });
+    }), { numRuns: 10 });
+  });
+
   it("sets and clears Agent metadata for a thread", async () => {
     const marked = await store.setThreadAgent({
       backend: "codex",

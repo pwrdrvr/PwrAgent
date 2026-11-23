@@ -1188,6 +1188,7 @@ describe("DesktopMessagingRuntime", () => {
 
     expect(automationInboundHandler).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "text", text: "ERROR something happened" }),
+      expect.any(Function),
     );
     // @mention-only mode still suppresses a normal agent reply.
     expect(

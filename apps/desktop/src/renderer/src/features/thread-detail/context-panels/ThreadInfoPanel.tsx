@@ -3,6 +3,7 @@ import type { AgentMemoryArgs } from "@pwragent/shared/contracts/agent-memory";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { AgentMemoryPanel } from "./AgentMemoryPanel";
+import { AgentMessagingTrust } from "./AgentMessagingTrust";
 import { PopoutIcon } from "../../../icons";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../../lib/federation-window";
@@ -136,6 +137,10 @@ export const ThreadInfoPanel = memo(function ThreadInfoPanel(props: ThreadInfoPa
             </button>
           </div>
         )}
+        {props.thread.agent && props.desktopApi && !federation && !readRendererFederationTarget() ? (
+          <AgentMessagingTrust key={JSON.stringify([source, id])} agentName={props.thread.agent.name} target={{ backend: source, threadId: id }}
+            revision={props.thread.agent.updatedAt} api={props.desktopApi} refresh={props.onRefreshNavigation} />
+        ) : null}
         {memoryAccess && props.thread.agent ? (
           <AgentMemoryPanel key={JSON.stringify([instanceId, source, id])}
             access={accessMemory}

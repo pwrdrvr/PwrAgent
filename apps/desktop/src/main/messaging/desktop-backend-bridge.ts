@@ -187,6 +187,15 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     return this.registry.getLocalFilePrivateStorageRoots();
   }
 
+  async getThreadAgentTrustPolicy(request: {
+    backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
+    threadId: string;
+  }): Promise<unknown> {
+    if (request.federationTarget) return (await this.getThreadAdmissionState(request)).thread?.agent?.trustPolicy;
+    return (await this.registry.getThreadAgentMetadata(request))?.trustPolicy;
+  }
+
   async getThreadAdmissionState(request: {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
