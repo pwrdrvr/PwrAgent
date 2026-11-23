@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, afterEach, describe, expect, it, onTestFailed } from "vitest";
+import { scanWindowsPipeRequests } from "./windows-pipe-observation.mjs";
 
 const require = createRequire(import.meta.url);
 const desktop = fileURLToPath(new URL("..", import.meta.url));
@@ -552,4 +553,48 @@ describe("real Playwright worker shutdown diagnostics", () => {
     const timeline = result.artifacts.find(({ file }) => file.endsWith("timeline.jsonl")).text;
     expect(timeline).toContain('"kind":"worker-end","failed":false');
   }, PROBE_TEST_TIMEOUT_MS);
+
+  it.each([false, true])("preserves completed sweep evidence with quiet=%s", async (quiet) => {
+    const root = createProbeRoot();
+    const config = path.join(root, "playwright.config.mjs");
+    const requests = path.join(root, "requests");
+    const sweep = new URL("../e2e/fixtures/detached-profile-instances.ts", import.meta.url).href;
+    writeFileSync(config, `export default { testDir: '.', workers: 1, reporter: 'list' };`);
+    writeFileSync(path.join(root, "probe.spec.mjs"), `
+      import playwright from ${JSON.stringify(pathToFileURL(require.resolve("@playwright/test")).href)};
+      import { killGraduatedProfileInstances } from ${JSON.stringify(sweep)};
+      const { test } = playwright;
+      test('completed profile sweep', async () => {
+        console.error('sweep probe reporter output');
+        const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+        Object.defineProperty(process, 'platform', { value: 'win32' });
+        try {
+          // An expired deadline exercises sweep reporting without querying or killing a process.
+          await killGraduatedProfileInstances('test2', ${JSON.stringify(root)}, 0);
+        } finally {
+          Object.defineProperty(process, 'platform', platform);
+        }
+      });
+    `);
+    const started = startProbe([cli, "test", "-c", config, ...(quiet ? ["--quiet"] : [])], {
+      cwd: desktop,
+      env: { ...process.env, PWRAGENT_WINDOWS_PIPE_REQUESTS: requests },
+      maxBuffer: 1024 * 1024,
+    }, root);
+    const result = await withinBudget(started, started.result, COLD_START_BUDGET_MS,
+      "Profile sweep logging probe did not finish within the cold-start budget.");
+    const output = result.stdout + result.stderr;
+    expect(result.code, output).toBe(0);
+    expect(output.includes("sweep probe reporter output")).toBe(!quiet);
+    // Use the controller's request reader so verbosity cannot affect its evidence.
+    const evidence = [];
+    scanWindowsPipeRequests(requests, new Set(), {
+      log: (kind, data) => evidence.push({ kind, ...data }),
+      handleRequest: (event) => { throw new Error(`Unexpected native query request: ${event.kind}`); },
+    });
+    expect(evidence).toEqual([expect.objectContaining({
+      kind: "windows-profile-sweep", processTableRead: false, matchedCount: 0, failedKillCount: 0,
+    })]);
+    expect(Buffer.byteLength(JSON.stringify(evidence[0]))).toBeLessThanOrEqual(8192);
+  }, COLD_START_BUDGET_MS + BACKSTOP_MS);
 });
