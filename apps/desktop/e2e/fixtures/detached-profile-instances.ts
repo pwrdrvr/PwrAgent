@@ -35,7 +35,11 @@ export async function killGraduatedProfileInstances(
   homeRoot: string,
   deadline: number,
 ): Promise<void> {
-  const pids = selectGraduatedProfilePids(await readProcessTable(deadline) ?? [], profile, homeRoot);
+  const startedAt = Date.now();
+  const rows = await readProcessTable(deadline);
+  const readAt = Date.now();
+  const pids = selectGraduatedProfilePids(rows ?? [], profile, homeRoot);
+  const failedKills: number[] = [];
   for (const pid of pids) {
     try {
       if (process.platform === "win32") {
@@ -45,10 +49,21 @@ export async function killGraduatedProfileInstances(
       }
     } catch {
       // Already gone, or not ours to kill.
+      failedKills.push(pid);
     }
   }
-  if (pids.length > 0) {
-    await waitForProfileInstancesToExit(profile, homeRoot, deadline);
+  const killsFinishedAt = Date.now();
+  const pollConfirmedNoMatches = pids.length > 0
+    ? await waitForProfileInstancesToExit(profile, homeRoot, deadline)
+    : undefined;
+  if (process.platform === "win32" && process.env.PWRAGENT_WINDOWS_PIPE_REQUESTS) {
+    console.error("[windows-profile-sweep] " + JSON.stringify({
+      workerPid: process.pid, startedAt, readAt, killsFinishedAt, finishedAt: Date.now(),
+      processTableRead: rows !== undefined,
+      matchedCount: pids.length, matchedPids: pids.slice(0, 8),
+      failedKillCount: failedKills.length, failedKillPids: failedKills.slice(0, 8),
+      pollConfirmedNoMatches,
+    }));
   }
 }
 
@@ -72,7 +87,7 @@ async function waitForProfileInstancesToExit(
   profile: string,
   homeRoot: string,
   deadline: number,
-): Promise<void> {
+): Promise<boolean> {
   while (performance.now() < deadline) {
     // A read that FAILED must not end the wait. `readProcessTable` answers
     // `undefined` for "I could not look", which is the one state that is
@@ -81,10 +96,11 @@ async function waitForProfileInstancesToExit(
     // this wait exists to prevent, now with the wait hiding it.
     const rows = await readProcessTable(deadline);
     if (rows && selectGraduatedProfilePids(rows, profile, homeRoot).length === 0) {
-      return;
+      return true;
     }
     await new Promise((resolve) => setTimeout(resolve, Math.min(100, Math.max(0, deadline - performance.now()))));
   }
+  return false;
 }
 
 export function selectGraduatedProfilePids(
