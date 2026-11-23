@@ -52,7 +52,7 @@ import { resolveActiveProfilePath } from "../profile";
 import { toTranscriptImageProtocolUrl } from "../transcript-images";
 import { ClaudeSessionReaderError, type ClaudeSessionReader, type ClaudeSessionReads } from "./claude-session-reader";
 import { buildClaudeSessionPrimer } from "./claude-session-primer";
-import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, signInWithClaudeCode, supportsClaudeMcpInitialize, type ClaudeInstallation } from "./claude-executable";
+import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, isClaudeInstallationAvailable, signInWithClaudeCode, supportsClaudeMcpInitialize, type ClaudeInstallation } from "./claude-executable";
 import {
   CLAUDE_EXIT_PLAN_TOOL, claudeAllowedTools, createClaudePermissionHandler, claudePermissionMode,
   threadExecutionModeForClaudePermission,
@@ -2573,7 +2573,7 @@ export class ClaudeBackend {
   }
 
   private available(): boolean {
-    return Boolean(this.installation.executable) && this.installation.authStatus !== "sign-in-required";
+    return isClaudeInstallationAvailable(this.installation);
   }
 
   /** Remembered limits describe a usable install; hide them while Claude is unavailable. */

@@ -500,6 +500,8 @@ import type {
   ReplaceDesktopSettingsSecretRequest,
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
+  LineRichMenuSetupRequest,
+  LineRichMenuSetupResponse,
   SettingsCredentialTestResult,
   InspectDiscordThreadPermissionsRequest,
   InspectDiscordThreadPermissionsResponse,
@@ -1343,6 +1345,7 @@ import {
   SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL,
   SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL,
   SETTINGS_TEST_CREDENTIALS_CHANNEL,
+  SETTINGS_LINE_RICH_MENU_CHANNEL,
   SETTINGS_WRITE_CONFIG_CHANNEL,
   THREAD_MIGRATION_LIST_SOURCES_CHANNEL,
   THREAD_MIGRATION_LIST_SOURCE_THREADS_CHANNEL,
@@ -2382,6 +2385,8 @@ const desktopApi = Object.freeze({
     request: SettingsCredentialTestRequest,
   ): Promise<SettingsCredentialTestResult> =>
     await ipcRenderer.invoke(SETTINGS_TEST_CREDENTIALS_CHANNEL, request),
+  lineRichMenuSetup: async (request: LineRichMenuSetupRequest): Promise<LineRichMenuSetupResponse> =>
+    await ipcRenderer.invoke(SETTINGS_LINE_RICH_MENU_CHANNEL, request),
   openSlackCreateApp: async (
     request?: SlackCreateAppRequest,
   ): Promise<SlackCreateAppResponse> =>

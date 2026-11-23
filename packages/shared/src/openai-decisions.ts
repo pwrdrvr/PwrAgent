@@ -10,6 +10,8 @@
  * Jev keep their own request shape, and neither is a fallback for the other.
  */
 
+import type { DecisionImageMimeType } from "./decision-models";
+
 export const OPENAI_DECISIONS_ORIGIN = "https://api.openai.com";
 export const OPENAI_DECISIONS_ENDPOINT = `${OPENAI_DECISIONS_ORIGIN}/v1/decisions`;
 /** The guide and the create reference list this as the only supported model. */
@@ -87,6 +89,17 @@ export type OpenAIDecisionQuestion =
 
 /** The JSON Schema subset a registered decision may declare for its input. */
 export type OpenAIDecisionInputSchema = Record<string, unknown>;
+
+export const DECISION_IMAGE_SCHEMA_KEY = "x-pwragent-images";
+
+export type DecisionImageInput = {
+  mimeType: DecisionImageMimeType;
+  dataUrl: string;
+};
+
+export function isDecisionImagePart(value: unknown): boolean {
+  return isPlainObject(value) && value.type === "input_image";
+}
 
 export type OpenAIDecisionDefinition = {
   questions: OpenAIDecisionQuestion[];
@@ -201,7 +214,7 @@ export function parseOpenAIDecisionRegistration(
   if (args.instructions !== undefined && typeof args.instructions !== "string") {
     return {
       ok: false,
-      message: "instructions must be a string. Image and JSON instruction parts are not supported.",
+      message: "instructions must be text. Send images in each invoke input.",
     };
   }
   const sharedInstructions = args.instructions as string | undefined;
@@ -243,7 +256,7 @@ export function parseOpenAIDecisionRegistration(
   let prefix: string | undefined;
   if (args.prefix !== undefined) {
     if (typeof args.prefix !== "string") {
-      return { ok: false, message: "prefix must be a string. Images are not supported." };
+      return { ok: false, message: "prefix must be text. Send images in each invoke input." };
     }
     if (args.prefix.length > OPENAI_DECISION_BOUNDS.prefixMaxLength) {
       return {
@@ -301,7 +314,7 @@ function parseQuestion(
   if (typeof instructions !== "string") {
     return {
       ok: false,
-      message: `${path} needs string instructions. Image and JSON instruction parts are not supported.`,
+      message: `${path} needs text instructions. Send images in each invoke input.`,
     };
   }
   if (
@@ -486,6 +499,10 @@ function schemaProblem(schema: unknown, path: string, depth: number): string | u
   }
   if (!isPlainObject(schema)) return `${path} must be an object.`;
   for (const key of Object.keys(schema)) {
+    if (depth === 0 && key === DECISION_IMAGE_SCHEMA_KEY) {
+      if (typeof schema[key] !== "boolean") return `${path}.${key} must be true or false.`;
+      continue;
+    }
     if (!SCHEMA_KEYWORDS.has(key)) return `${path}.${key} is not a supported schema keyword.`;
   }
   if (schema.$schema !== undefined && typeof schema.$schema !== "string") {
@@ -727,12 +744,17 @@ export function buildOpenAIDecisionsRequestBody(params: {
   questions: readonly OpenAIDecisionQuestion[];
   prefix?: string;
   input: unknown;
+  images?: readonly DecisionImageInput[];
   promptCacheKey: string;
   safetyIdentifier: string;
 }): OpenAIDecisionsRequestBody {
-  const userContent = typeof params.input === "string"
+  const userContent: Array<Record<string, unknown>> = typeof params.input === "string"
     ? [{ type: "input_text", text: params.input }]
     : [{ type: "input_json", data: params.input }];
+  if (params.input === "" && params.images?.length) userContent.pop();
+  for (const image of params.images ?? []) {
+    userContent.push({ type: "input_image", image_url: image.dataUrl });
+  }
   const prefix = params.prefix && params.prefix.length > 0 ? params.prefix : undefined;
   return {
     model: OPENAI_DECISIONS_MODEL,

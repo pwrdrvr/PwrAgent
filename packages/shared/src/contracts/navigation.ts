@@ -433,7 +433,7 @@ export type TokenMiserSubAgentAccounting = {
 
 export type ThreadActiveSubAgent = Pick<ThreadSubAgentSummary,
   | "monitorId" | "task" | "status" | "createdAt" | "updatedAt" | "monitorThreadId" | "monitorTurnId"
-  | "agentName" | "attemptId"
+  | "agentName" | "attemptId" | "displayTitle"
 >;
 
 export type ThreadSubAgentSummary = {
@@ -444,6 +444,8 @@ export type ThreadSubAgentSummary = {
   /** Set by producers that reuse a monitor ID for multiple attempts. */
   attemptId?: string;
   task: string;
+  /** Frozen card label for a PwrAgent Job Monitor. Older cards omit it. */
+  displayTitle?: string;
   status: ThreadSubAgentStatus;
   createdAt: number;
   updatedAt: number;
