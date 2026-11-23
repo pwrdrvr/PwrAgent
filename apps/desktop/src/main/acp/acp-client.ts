@@ -198,6 +198,7 @@ type AcpSessionLoadState = {
   lastTimestampedTranscriptAt?: number;
   replayedTranscript: boolean;
   suppressTranscriptReplay: boolean;
+  restoringAntigravityMode?: boolean;
 };
 
 type AcpSessionLoadReplay = {
@@ -1734,6 +1735,11 @@ export class AcpAgentClient {
     const fromSessionLoad = loadState !== undefined || isExplicitSessionReplay;
     const activeTurn = this.activeTurns.get(sessionId);
     const updateKind = readUpdateKind(update);
+    if (loadState?.restoringAntigravityMode
+      && (updateKind === "current_mode_update" || updateKind === "config_option_update")) {
+      // Publish the restored mode only after the restore reply confirms it.
+      return;
+    }
     if (!fromSessionLoad) this.observeNativeBackgroundWork(sessionId, updateKind, update);
     // Only a live update ends the turn. A prompt for an idle-closed session
     // reloads it while the turn is tracked, and session/load replays the
@@ -2173,6 +2179,11 @@ export class AcpAgentClient {
         mcpServers: toAcpMcpServerWireConfigs(mcpRegistration.servers),
         sessionId: protocolSessionId,
       });
+      const savedMode = metadata.acpRuntime?.currentModeId ?? metadata.acpRuntime?.configValues?.mode;
+      if (this.options.backendId === "acp:antigravity" && savedMode) {
+        loadState.restoringAntigravityMode = true;
+        result = await this.restoreAntigravitySessionMode(protocolSessionId, result, savedMode);
+      }
     } finally {
       this.loadingSessions.delete(protocolSessionId);
     }
@@ -2218,6 +2229,38 @@ export class AcpAgentClient {
     this.rememberAgentToolCatalogKey(metadata.sessionId, agentToolCatalogKey);
     this.touchSession(metadata.sessionId);
     return result;
+  }
+
+  private async restoreAntigravitySessionMode(
+    protocolSessionId: string,
+    loadResult: unknown,
+    savedMode: string,
+  ): Promise<unknown> {
+    // Antigravity 1.5.15's new worker reports Default in session/load,
+    // even after the previous worker acknowledged a different mode.
+    const mode = normalizeAcpRuntimeCapabilities({
+      value: loadResult,
+      now: this.now(),
+      source: "session-load",
+    })?.configOptions?.find((option) => option.id === "mode" && option.category === "mode");
+    if (!mode?.values.some((option) => option.value === savedMode) || mode.currentValue === savedMode) {
+      return loadResult;
+    }
+    const restored = await this.options.transport.request("session/set_config_option", {
+      sessionId: protocolSessionId,
+      configId: mode.id,
+      value: savedMode,
+    });
+    if (this.runtimeStateFromResponse(restored, this.now())?.configValues?.[mode.id] !== savedMode) {
+      throw new Error(`Antigravity did not restore the "${savedMode}" session mode.`);
+    }
+    const loaded = asRecord(loadResult);
+    const legacyModes = asRecord(loaded?.modes);
+    return {
+      ...loaded,
+      ...asRecord(restored),
+      ...(legacyModes ? { modes: { ...legacyModes, currentModeId: savedMode } } : {}),
+    };
   }
 
   private rememberAgentToolCatalogKey(sessionId: string, key: string | undefined): void {
