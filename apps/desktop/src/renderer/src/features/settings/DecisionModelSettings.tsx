@@ -6,6 +6,8 @@ import {
   DECISION_LOCAL_DEFAULT_MODEL,
   DECISION_PROVIDER_IDS,
   DECISION_PROVIDER_LINKS,
+  decisionImageCapabilities,
+  decisionImageCapabilityLabel,
   decisionLocalEndpointProblem,
   normalizeDecisionLocalEndpoint,
   resolveDecisionModelSettings,
@@ -301,7 +303,7 @@ export function DecisionProviderScreen(props: {
             />
             <DraftTextField
               label="Model"
-              sub="The model id the server expects. PwrSuiteLab's Clef runtime accepts only clef-flash."
+              sub={`PwrSuiteLab's Clef runtime uses clef-flash. ${decisionImageCapabilityLabel(decisionImageCapabilities("local", resolved.localModel))}.`}
               value={settings.local?.model ?? ""}
               placeholder={DECISION_LOCAL_DEFAULT_MODEL}
               disabled={props.saving}
@@ -341,7 +343,7 @@ export function DecisionProviderScreen(props: {
       <SettingsPanelHead
         eyebrow="AI Providers"
         title={name}
-        help="TypeSafe's hosted decision model. It takes text only, so camera frames never go to it. Agents can also run registered decisions on it with this key and model."
+        help="Agents can run registered decisions on TypeSafe's hosted model with this key and model. Live voice camera cues run locally."
       />
       <SettingsSection
         title="Connection"
@@ -375,7 +377,7 @@ export function DecisionProviderScreen(props: {
           />
           <DraftTextField
             label="Model"
-            sub="A Jev model id."
+            sub={decisionImageCapabilityLabel(decisionImageCapabilities("jev", resolved.jevModel))}
             value={settings.jev?.model ?? ""}
             placeholder={DECISION_JEV_DEFAULT_MODEL}
             disabled={props.saving}

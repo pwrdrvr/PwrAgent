@@ -2337,6 +2337,14 @@ export type MessagingCallbackHandleStore = {
   ): Promise<MessagingCallbackHandleRecord>;
 };
 
+export type MessagingProviderSetupStore<State> = {
+  /** Run setup exclusively for this account, durably recording each ownership change. */
+  withAccount<Result>(
+    accountId: string,
+    run: (state: State, save: (next: State) => Promise<void>, assertCurrent: () => void) => Promise<Result>,
+  ): Promise<Result>;
+};
+
 /* -----------------------------------------------------------------
  * Credential validation (Settings → Connection test)
  * -----------------------------------------------------------------

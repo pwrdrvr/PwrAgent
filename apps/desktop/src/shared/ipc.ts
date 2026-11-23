@@ -643,6 +643,7 @@ export const MESSAGING_SHUTDOWN_RUNTIME_CHANNEL =
  */
 export const SETTINGS_TEST_CREDENTIALS_CHANNEL =
   "settings:test-credentials";
+export const SETTINGS_LINE_RICH_MENU_CHANNEL = "settings:line-rich-menu";
 /**
  * Sibling channel for "what was the last result?" — driven on
  * settings-pane mount so the test block can render the previous

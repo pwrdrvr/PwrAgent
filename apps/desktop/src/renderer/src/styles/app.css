@@ -18233,6 +18233,20 @@ a.button {
   gap: 8px;
 }
 
+.settings-line-rich-menu {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-line-rich-menu__preview {
+  display: block;
+  max-width: 440px;
+  width: 100%;
+  height: auto;
+  border-radius: 6px;
+}
+
 /* ------------------------------------------------------------------
    PROVIDER REFRESH PROGRESS (Settings -> AI Providers -> Model catalog)
 

@@ -1,4 +1,6 @@
 {
+  "line-rich-menu-recover-absent-create": {"commits": 1, "note": "Recover an interrupted LINE rich-menu create that never reached LINE", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
+  "line-rich-menu-lifecycle": {"commits": 7, "note": "One LINE rich-menu install, update, and removal", "observedWalBytes": 57712, "rowsChanged": 7, "statements": 7},
   "messaging-agent-preset-picker-page": {"commits": 3, "note": "One page change, 41,200 WAL bytes or 0.41 MB/day at 10 pages/day.", "observedWalBytes": 41200, "rowsChanged": 3, "statements": 3},
   "messaging-agent-preset-picker-open": {"commits": 3, "note": "One picker open, 57,680 WAL bytes or 0.58 MB/day at 10 opens/day.", "observedWalBytes": 57680, "rowsChanged": 3, "statements": 3},
   "agent-preset-delete": {"commits": 1, "note": "One explicit delete. Listing and retrying the delete commit nothing.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},

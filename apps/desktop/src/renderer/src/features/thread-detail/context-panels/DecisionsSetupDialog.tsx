@@ -3,6 +3,8 @@ import { createPortal } from "react-dom";
 import {
   DECISION_JEV_ENDPOINT,
   DECISION_PROVIDER_LINKS,
+  decisionImageCapabilities,
+  decisionImageCapabilityLabel,
   resolveDecisionModelSettings,
   type DecisionProviderReadiness,
   type DecisionRunProvider,
@@ -70,6 +72,7 @@ export function DecisionsSetupDialog(props: {
         const resolved = resolveDecisionModelSettings(snapshot.models.decisionModels);
         const expanded = openCard === entry.provider;
         const card = PROVIDER_CARDS[entry.provider];
+        const model = entry.provider === "local" ? resolved.localModel : entry.provider === "jev" ? resolved.jevModel : undefined;
         const facts = entry.provider === "openai"
           ? ["gpt-6-luna", "bills your OpenAI API project"]
           : entry.provider === "jev"
@@ -107,6 +110,9 @@ export function DecisionsSetupDialog(props: {
             </div>
             <p className="decisions-setup__facts">
               {facts.map((fact) => <span key={fact}>{fact}</span>)}
+            </p>
+            <p className="decisions-setup__facts">
+              {decisionImageCapabilityLabel(decisionImageCapabilities(entry.provider, model))}
             </p>
             {entry.provider === "local" && chooseError ? (
               <p className="rail-card__error" role="alert">{chooseError}</p>

@@ -1,8 +1,10 @@
+import { randomUUID } from "node:crypto";
 import {
   redactOpenAIDecisionsText,
+  type DecisionImageInput,
   type OpenAIDecisionQuestion,
 } from "@pwragent/shared/openai-decisions";
-import { postSystemOne, systemOneErrorDetail, type SystemOneTarget } from "../decision/system-one";
+import { postSystemOne, systemOneErrorDetail, type SystemOneRequest, type SystemOneTarget } from "../decision/system-one";
 import type { OpenAIDecisionsFailureCode } from "./openai-decisions-client";
 
 /**
@@ -16,11 +18,11 @@ import type { OpenAIDecisionsFailureCode } from "./openai-decisions-client";
  *   score as the probability-weighted level index, which is what an OpenAI
  *   score answer reports, so both providers return one answer shape.
  *
- * The prefix and the input become the state. System One takes no images.
+ * The prefix and the input become the state. Clef accepts ordered data URLs
+ * alongside state, and Jev accepts assets referenced from state.
  */
 
-export type SystemOneDecisionRequest = {
-  state: string;
+export type SystemOneDecisionRequest = SystemOneRequest & {
   questions: Record<string, Record<string, unknown>>;
   /** The key each stored question was sent under, in stored order. */
   keys: string[];
@@ -63,6 +65,7 @@ export function buildSystemOneDecisionRequest(params: {
   questions: readonly OpenAIDecisionQuestion[];
   prefix?: string;
   input: unknown;
+  media?: { provider: "local" | "jev"; images: readonly DecisionImageInput[] };
 }): SystemOneDecisionRequest {
   const keys = systemOneQuestionKeys(params.questions);
   const inputText = typeof params.input === "string"
@@ -92,7 +95,25 @@ export function buildSystemOneDecisionRequest(params: {
       };
     }
   });
-  return { state, questions, keys };
+  const media = params.media;
+  if (!media?.images.length) return { state, questions, keys };
+  if (media.provider === "local") {
+    return { state, questions, keys, images: media.images.map((image) => image.dataUrl) };
+  }
+  const assets: NonNullable<SystemOneRequest["assets"]> = Object.fromEntries(media.images.map((image) => [
+    randomUUID(),
+    {
+      type: "image",
+      format: image.mimeType === "image/png" ? "png" : "jpg",
+      data_base64: image.dataUrl.slice(image.dataUrl.indexOf(",") + 1),
+    },
+  ]));
+  return {
+    state: { ...(params.prefix ? { prefix: params.prefix } : {}), input: params.input, images: Object.keys(assets) },
+    questions,
+    keys,
+    assets,
+  };
 }
 
 /**
@@ -177,7 +198,7 @@ export async function postSystemOneDecision(params: {
   try {
     response = await postSystemOne(
       params.target,
-      { state: params.request.state, questions: params.request.questions },
+      params.request,
       { signal, ...(params.fetch ? { fetch: params.fetch } : {}) },
     );
   } catch (error) {

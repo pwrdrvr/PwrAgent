@@ -609,6 +609,8 @@ import type {
   ReplaceDesktopSettingsSecretRequest,
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
+  LineRichMenuSetupRequest,
+  LineRichMenuSetupResponse,
   SettingsCredentialTestResult,
   InspectDiscordThreadPermissionsRequest,
   InspectDiscordThreadPermissionsResponse,
@@ -1722,6 +1724,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   testSettingsCredentials?: (
     request: SettingsCredentialTestRequest,
   ) => Promise<SettingsCredentialTestResult>;
+  lineRichMenuSetup?: (request: LineRichMenuSetupRequest) => Promise<LineRichMenuSetupResponse>;
   /** Open Slack's create-from-manifest page or existing-app management. */
   openSlackCreateApp?: (
     request?: SlackCreateAppRequest,
