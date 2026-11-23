@@ -1005,13 +1005,25 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     title: string;
     updatedAt: number;
   }> {
-    const channelId = request.channel.conversation.id;
+    const conversation = request.channel.conversation;
     const header = clampHeader(request.title);
+    if (!this.supportsConversationTitle(request)) {
+      return {
+        channel: this.channel,
+        conversation,
+        errorMessage: "Mattermost name sync needs a top-level channel or DM.",
+        outcome: "unsupported",
+        title: header,
+        updatedAt: this.now(),
+      };
+    }
+
+    const channelId = conversation.id;
     try {
       await this.client.patchChannel(channelId, { header });
       return {
         channel: this.channel,
-        conversation: request.channel.conversation,
+        conversation,
         outcome: "updated",
         title: header,
         updatedAt: this.now(),
@@ -1024,7 +1036,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       });
       return {
         channel: this.channel,
-        conversation: request.channel.conversation,
+        conversation,
         outcome: "failed",
         title: header,
         updatedAt: this.now(),
@@ -1034,9 +1046,13 @@ export class MattermostAdapter implements MattermostProviderAdapter {
   }
 
   supportsConversationTitle(
-    _request: MessagingConversationTitleSupportRequest,
+    request: MessagingConversationTitleSupportRequest,
   ): boolean {
-    return true;
+    const conversation = request.channel.conversation;
+    // A reply shares its channel ID. A root post ID still makes this a
+    // thread target on legacy references that carry kind "channel".
+    return (conversation.kind === "channel" || conversation.kind === "dm")
+      && !conversation.parentId;
   }
 
   // -------------------------------------------------------------
