@@ -37,6 +37,7 @@ import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import { resolvePrimaryThreadRepoKey } from "../pr-status/primary-thread-repository";
 import { PR_METADATA_PRIORITY, type PrMetadataDemand } from "../pr-status/pr-metadata-process";
 import { boundThreadPendingWakes } from "./thread-pending-wakes";
+import { resolveScratchProjectsRoots } from "./scratch-projects";
 
 /** The most records one selected-collection page holds, before the byte budget. */
 const SELECTED_COLLECTION_PAGE_RECORDS = 100;
@@ -403,6 +404,7 @@ export class NavigationDetailService {
       thread: summary,
       messagingBindingsByThreadKey,
       queuedExecutionMode: this.registry.getQueuedExecutionModeForThread(request.ref),
+      workspaceRoots: resolveScratchProjectsRoots(),
     });
     const canonical = projected
       ? await this.registry.canonicalizeNavigationThreadPullRequests([projected], prDemand) : [];

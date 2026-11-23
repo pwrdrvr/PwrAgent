@@ -2,6 +2,7 @@ import {
   DECISIONS_OPERATOR_STOP_CODE,
   type DecisionsRailDefinition,
   type DecisionsRailDefinitionQuestion,
+  type DecisionsRailInputImage,
 } from "@pwragent/shared/decisions-rail";
 import {
   looksLikeCredentialText,
@@ -31,6 +32,7 @@ export type DecisionItemRailFields = {
   inputTruncated?: true;
   /** The input looked like it held a credential, so no preview was kept. */
   inputRedacted?: true;
+  inputImages?: DecisionsRailInputImage[];
   /** From the item's start to its outcome, retries included. */
   durationMs?: number;
 };
@@ -84,6 +86,7 @@ export function toolBatchItem(item: DecisionBatchItem): DecisionBatchItem {
     inputPreview: _inputPreview,
     inputTruncated: _inputTruncated,
     inputRedacted: _inputRedacted,
+    inputImages: _inputImages,
     durationMs: _durationMs,
     ...rest
   } = item;

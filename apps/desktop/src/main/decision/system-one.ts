@@ -10,8 +10,10 @@ export type SystemOneTarget = { endpoint: string; model: string; apiKey?: string
 export type SystemOneRequest = {
   state: unknown;
   questions: Record<string, unknown>;
-  /** Clef's extension to the API: up to four inline images. Jev takes none. */
+  /** Clef expects ordered inline data URLs. */
   images?: string[];
+  /** TypeSafe's hosted image preview expects named assets referenced from state. */
+  assets?: Record<string, { type: "image"; format: "png" | "jpg"; data_base64: string }>;
 };
 
 export function systemOneHeaders(apiKey: string | undefined, json = false): Record<string, string> {
@@ -29,12 +31,16 @@ export function postSystemOne(
 ): Promise<Response> {
   return (init.fetch ?? globalThis.fetch)(`${target.endpoint}${DECISION_SYSTEM_ONE_PATH}`, {
     method: "POST",
-    headers: systemOneHeaders(target.apiKey, true),
+    headers: {
+      ...systemOneHeaders(target.apiKey, true),
+      ...(request.assets ? { "TypeSafe-Danger-Zone-Images": "true" } : {}),
+    },
     body: JSON.stringify({
       model: target.model,
       state: request.state,
       questions: request.questions,
       ...(request.images ? { images: request.images } : {}),
+      ...(request.assets ? { assets: request.assets } : {}),
     }),
     signal: init.signal,
     redirect: "error",

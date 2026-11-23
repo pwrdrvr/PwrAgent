@@ -113,7 +113,8 @@ describe("decision provider screens", () => {
         onReplaceSecret={vi.fn(async () => true)}
       />,
     );
-    expect(screen.getByText(/camera frames never go to it/)).toBeInTheDocument();
+    expect(screen.getByText(/Live voice camera cues run locally/)).toBeInTheDocument();
+    expect(screen.getByText(/Experimental image input/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Get an API key" })).toHaveAttribute("href", "https://console.typesafe.ai/");
     expect(screen.getByLabelText("API key")).toHaveValue("");
     const model = screen.getByRole("textbox", { name: "Model" });

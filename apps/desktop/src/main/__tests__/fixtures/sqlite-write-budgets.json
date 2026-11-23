@@ -1,4 +1,6 @@
 {
+  "line-rich-menu-recover-absent-create": {"commits": 1, "note": "Recover an interrupted LINE rich-menu create that never reached LINE", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
+  "line-rich-menu-lifecycle": {"commits": 7, "note": "One LINE rich-menu install, update, and removal", "observedWalBytes": 57712, "rowsChanged": 7, "statements": 7},
   "app-update-notice-ledger": {"commits": 1, "note": "One accepted notice plus its repeated event. Measures the new ledger write; provider delivery bookkeeping uses the existing path.", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
   "app-update-notice-opt-in": {"commits": 1, "note": "One operator opt-in, once per Agent. About 0 MB/day.", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
   "cold-collapsed-project-thread-creation": {"commits": 4, "note": "One new thread, including its automatic pin with no navigation snapshot. At 100 starts/day, about 5.4 MB/day. No idle writes.", "observedWalBytes": 53560, "rowsChanged": 4, "statements": 4},
