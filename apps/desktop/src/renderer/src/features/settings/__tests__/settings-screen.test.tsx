@@ -46,6 +46,7 @@ import type {
 import { buildProviderPickerEntries } from "@pwragent/shared/provider-picker";
 import { GIT_LFS_UNAVAILABLE_REASON } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { ProviderSetupStep } from "../guided-setup/MessagingSetupSteps";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import {
   CURRENT_CODEX_MODEL_LABELS,
@@ -7300,7 +7301,103 @@ describe("SettingsScreen", () => {
     ).toBeInTheDocument();
   });
 
-  it("clears a generated pairing message after the token is observed", async () => {
+  function pairingFixture(id: string, ttlMs = 60_000) {
+    const expiresAt = Date.now() + ttlMs;
+    const token = "123456789ABCDEFGHJKLMNPQRSTUVWXY";
+    const entry: MessagingPairingEntry = {
+      id, platform: "telegram", instanceId: "account:123456", scope: "user_dm",
+      status: "pending", generatedAt: Date.now(), expiresAt,
+    };
+    return { entry, expiresAt, token, message: `pair ${id}`, dmLink: {
+      url: `https://t.me/example_fixture_bot?start=pair_${token}`,
+      qrImage: "data:image/svg+xml,%3Csvg/%3E",
+    } };
+  }
+
+  it("regenerates a Telegram pairing in guided setup after approval rejects the old bot", async () => {
+    const first = pairingFixture("old-bot-pairing");
+    const replacement = pairingFixture("new-bot-pairing");
+    const listeners = new Set<(event: { at: number; entry: MessagingPairingEntry }) => void>();
+    const generate = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(replacement);
+    const desktopApi: DesktopApi = {
+      generateMessagingPairingToken: generate,
+      approveMessagingPairing: vi.fn().mockRejectedValue(new Error("This pairing request belongs to a different bot.")),
+      onMessagingPairingChanged: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    };
+    render(<ProviderSetupStep provider="telegram" settings={createSettingsState(createSnapshot())} desktopApi={desktopApi} />);
+    fireEvent.click(screen.getByRole("button", { name: "Generate pairing code" }));
+    expect(await screen.findByText(first.message)).toBeInTheDocument();
+    act(() => {
+      for (const listener of listeners) listener({ at: Date.now(), entry: {
+        ...first.entry, status: "observed", observedActor: { id: "5551234", displayName: "Fixture Contact" },
+      } });
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    expect(await screen.findByText("This pairing request belongs to a different bot.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Generate new code" }));
+    expect(await screen.findByText(replacement.message)).toBeInTheDocument();
+    expect(generate).toHaveBeenLastCalledWith({ platform: "telegram", scope: "user_dm" });
+  });
+
+  it("keeps a replacement Telegram pairing if the previous expiry callback already queued", async () => {
+    const snapshot = createSnapshot();
+    snapshot.messaging.telegram.enabled = { value: true, source: "config" };
+    const first = pairingFixture("first-code");
+    const replacement = pairingFixture("replacement-code", 120_000);
+    const nativeSetTimeout = globalThis.setTimeout;
+    let priorExpiry: (() => void) | undefined;
+    const timers = vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
+      if (delay !== undefined && delay > 30_000 && delay <= 60_000) priorExpiry = () => callback(...args);
+      return nativeSetTimeout(callback, delay, ...args);
+    });
+    try {
+      const desktopApi: DesktopApi = {
+        generateMessagingPairingToken: vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(replacement),
+        listMessagingPairingRequests: vi.fn(async () => ({ entries: [] })),
+      };
+      render(<SettingsScreen desktopApi={desktopApi} settings={createSettingsState(snapshot)}
+        initialSection="messaging" initialSubsection="telegram" onClose={() => undefined} />);
+      const generate = screen.getAllByRole("button", { name: "Generate" })[0]!;
+      fireEvent.click(generate);
+      expect(await screen.findByText(first.message)).toBeInTheDocument();
+      const expiry = priorExpiry;
+      expect(expiry).toBeDefined();
+      fireEvent.click(generate);
+      expect(await screen.findByText(replacement.message)).toBeInTheDocument();
+      act(() => expiry!());
+      expect(screen.getByText(replacement.message)).toBeInTheDocument();
+    } finally {
+      timers.mockRestore();
+    }
+  });
+
+  it("shows and revokes only the current bot's grants when an earlier lookup finishes late", async () => {
+    const original = { accountId: "123456", users: [{ id: "42", displayName: "Original bot contact" }], supergroups: [] };
+    const replacement = { accountId: "654321", users: [{ id: "42", displayName: "Replacement bot contact" }], supergroups: [] };
+    let finishOriginal!: (grants: typeof original) => void;
+    const originalLookup = new Promise<typeof original>((resolve) => { finishOriginal = resolve; });
+    const readTelegramPairingGrants = vi.fn().mockReturnValueOnce(originalLookup).mockResolvedValue(replacement);
+    const revokeTelegramPairingGrant = vi.fn(async () => undefined);
+    const desktopApi: DesktopApi = { readTelegramPairingGrants, revokeTelegramPairingGrant };
+    const pane = (snapshot: DesktopSettingsSnapshot) => (
+      <SettingsScreen desktopApi={desktopApi} settings={createSettingsState(snapshot)}
+        initialSection="messaging" initialSubsection="telegram" onClose={() => undefined} />
+    );
+    const { rerender } = render(pane(createSnapshot()));
+    expect(readTelegramPairingGrants).toHaveBeenCalledTimes(1);
+    rerender(pane(createSnapshot()));
+
+    const revoke = await screen.findByRole("button", { name: "Revoke pairing for Replacement bot contact" });
+    await act(async () => { finishOriginal(original); });
+    expect(screen.queryByRole("button", { name: "Revoke pairing for Original bot contact" })).not.toBeInTheDocument();
+    fireEvent.click(revoke);
+    await waitFor(() => expect(revokeTelegramPairingGrant).toHaveBeenCalledWith({
+      accountId: replacement.accountId, kind: "users", contactId: replacement.users[0]!.id,
+    }));
+    await waitFor(() => expect(revoke).not.toBeInTheDocument());
+  });
+
+  it("offers Telegram desktop and phone pairing and clears both when the token is observed", async () => {
     const snapshot = createSnapshot();
     const settings = createSettingsState({
       ...snapshot,
@@ -7313,6 +7410,8 @@ describe("SettingsScreen", () => {
       },
     });
     const pairingMessage = "pair 123456789ABCDEFGHJKLMNPQRSTUVWXY";
+    const url = "https://t.me/example_fixture_bot?start=pair_123456789ABCDEFGHJKLMNPQRSTUVWXY";
+    const expiresAt = Date.now() + 60_000;
     const entry: MessagingPairingEntry = {
       id: "pairing-1",
       platform: "telegram",
@@ -7320,7 +7419,7 @@ describe("SettingsScreen", () => {
       scope: "user_dm",
       status: "pending",
       generatedAt: 1,
-      expiresAt: 2,
+      expiresAt,
     };
     const pairingChangedCallbacks: Array<
       (event: { at: number; entry: MessagingPairingEntry }) => void
@@ -7328,9 +7427,10 @@ describe("SettingsScreen", () => {
     const desktopApi = {
       generateMessagingPairingToken: vi.fn(async () => ({
         entry,
-        expiresAt: 2,
+        expiresAt,
         message: pairingMessage,
         token: "123456789ABCDEFGHJKLMNPQRSTUVWXY",
+        dmLink: { url, qrImage: "data:image/svg+xml,%3Csvg/%3E" },
       })),
       listMessagingPairingRequests: vi.fn(async () => ({ entries: [] })),
       onMessagingPairingChanged: vi.fn((callback) => {
@@ -7352,6 +7452,10 @@ describe("SettingsScreen", () => {
     const initialPairingChangedCallbacks = [...pairingChangedCallbacks];
     fireEvent.click(screen.getAllByRole("button", { name: "Generate" })[0]!);
     expect(await screen.findByText(pairingMessage)).toBeInTheDocument();
+    const desktopLink = screen.getByRole("link", { name: "Open in Telegram" });
+    expect(desktopLink).toHaveAttribute("href", url);
+    expect(desktopLink).toHaveAttribute("target", "_blank");
+    const qr = screen.getByRole("img", { name: "QR code for Telegram pairing" });
     expect(pairingChangedCallbacks).toHaveLength(initialPairingChangedCallbacks.length);
 
     act(() => {
@@ -7368,6 +7472,8 @@ describe("SettingsScreen", () => {
         });
       }
     });
+    expect(desktopLink).not.toBeInTheDocument();
+    expect(qr).not.toBeInTheDocument();
 
     // Bumped from the default 1000ms because CI runners under load take
     // ~1600ms+ for the pairingChanged → React state update → DOM removal

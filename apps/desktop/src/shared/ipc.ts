@@ -589,6 +589,8 @@ export const MESSAGING_LIST_PAIRING_REQUESTS_CHANNEL =
   "messaging:list-pairing-requests";
 export const MESSAGING_APPROVE_PAIRING_CHANNEL = "messaging:approve-pairing";
 export const MESSAGING_REJECT_PAIRING_CHANNEL = "messaging:reject-pairing";
+export const MESSAGING_REVOKE_TELEGRAM_PAIRING_GRANT_CHANNEL = "messaging:revoke-telegram-pairing-grant";
+export const MESSAGING_READ_TELEGRAM_PAIRING_GRANTS_CHANNEL = "messaging:read-telegram-pairing-grants";
 export const MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL =
   "messaging:pairing-changed";
 export const AUTOMATIONS_LIST_CHANNEL = "automations:list";

@@ -3984,6 +3984,49 @@ describe("DesktopMessagingRuntime", () => {
     expect(rows[0]?.summary).not.toContain("critical_interactive");
   });
 
+  it.each([true, false])("pairs a Telegram link only with its original account (identity lookup available: %s)", async (canAdvertise) => {
+    let accountId = "1001";
+    let advertise = true;
+    const pairingIdentity = { readDmPairingAccountId: () => accountId };
+    const adapter = createAdapter("telegram", {
+      ...pairingIdentity,
+      readDmPairingAddress: () => advertise ? {
+        accountId,
+        linkForToken: (token) => `https://t.me/example_fixture_bot?start=pair_${token}`,
+      } : undefined,
+    });
+    const { runtime } = await createRuntimeHarness({ adapter });
+    await runtime.start();
+    const result = runtime.generatePairingToken({ platform: "telegram", scope: "user_dm" });
+    expect(result.dmLink?.url).toBe(`https://t.me/example_fixture_bot?start=pair_${result.token}`);
+    expect(result.dmLink?.qrImage).toMatch(/^data:image\/svg\+xml,/);
+    expect(runtime.generatePairingToken({ platform: "telegram", scope: "bucket" }).dmLink).toBeUndefined();
+
+    const receive = () => adapter.listener?.({
+      id: "telegram:update:40:message:41",
+      kind: "command",
+      actor: { platformUserId: "1234" },
+      channel: { channel: "telegram", conversation: { id: "1234", kind: "dm" } },
+      command: "pair",
+      args: [result.token],
+      rawText: "/pair",
+      receivedAt: 1000,
+    });
+    const entry = () => runtime.listPairingRequests({ platform: "telegram" }).entries
+      .find((candidate) => candidate.id === result.entry.id)!;
+
+    accountId = "1002";
+    advertise = canAdvertise;
+    await receive();
+    expect(entry().status).toBe("pending");
+    expect(runtime.getPairingAccountStatus(entry())).toBe("different");
+
+    accountId = "1001";
+    await receive();
+    expect(entry().status).toBe("observed");
+    expect(runtime.getPairingAccountStatus(entry())).toBe("current");
+  });
+
   it("logs Telegram topic pairing activity with supergroup parent metadata", async () => {
     const { runtime, adapter } = await createRuntimeHarness();
     await runtime.start();

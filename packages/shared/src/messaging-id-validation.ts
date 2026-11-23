@@ -30,6 +30,11 @@ export function validateTelegramPositiveId(value: unknown): IdentifierValidation
   return validateTelegramIntegerId(value, { allowNegative: false });
 }
 
+export function telegramBotAccountId(token: string | undefined): string | undefined {
+  const id = token?.match(/^([1-9]\d*):.+$/)?.[1];
+  return validateTelegramPositiveId(id).ok ? id : undefined;
+}
+
 export function validateTelegramGroupChatId(
   value: unknown,
 ): IdentifierValidationResult {

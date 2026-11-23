@@ -678,6 +678,12 @@ export type DesktopAuthorizedContact = {
   responseMode?: DesktopMessagingResponseMode;
 };
 
+export type DesktopTelegramPairingGrants = {
+  accountId: string;
+  users: DesktopAuthorizedContact[];
+  supergroups: DesktopAuthorizedContact[];
+};
+
 export type DesktopMessagingResponseMode = "every_message" | "mention_only";
 export type DesktopMessagingAuthorizationMode = "approved_only" | "allow_all";
 export type DesktopMessagingSlackDmAccessMode =
