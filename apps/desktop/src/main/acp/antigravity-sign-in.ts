@@ -1,5 +1,5 @@
 import { spawn, type SpawnOptions } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import path from "node:path";
 import { createCommandInvocation } from "@pwrdrvr/agent-transport";
@@ -12,7 +12,7 @@ import { AcpStdioJsonRpcTransport, type AcpStdioSpawn } from "./acp-stdio-transp
 const SIGN_IN_TIMEOUT_MS = 5 * 60_000;
 const PROCESS_STOP_OPTIONS = { gracefulTimeoutMs: 1_000, forceTimeoutMs: 2_000 };
 const MAX_AUTH_URL_LENGTH = 16_384;
-const MAX_STARTUP_OUTPUT_LENGTH = 128 * 1024;
+const MAX_STARTUP_OUTPUT_BYTES = 128 * 1024;
 const GOOGLE_AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/auth";
 const ANTIGRAVITY_CALLBACK = "https://antigravity.google/oauth-callback";
 const ALTERNATE_CREDENTIAL_ENV = new Set([
@@ -120,12 +120,14 @@ export class AntigravitySignIn {
   }
 
   private async runLogin(
-    launch: AcpLaunchDescriptor,
+    launch: AcpLaunchDescriptor & { cwd: string },
     signal: AbortSignal,
     input: LoginInput,
     onReady: () => void,
   ): Promise<void> {
-    const child = this.spawnLogin(launch);
+    const browserBin = process.platform === "darwin" ? await createMacBrowserShim(launch.cwd) : undefined;
+    signal.throwIfAborted();
+    const child = this.spawnLogin(launch, browserBin);
     const done = Promise.withResolvers<void>();
     const fail = (message: string) => done.reject(new Error(message));
     const abort = () => done.reject(signal.reason);
@@ -186,7 +188,7 @@ export class AntigravitySignIn {
     }
   }
 
-  private spawnLogin(launch: AcpLaunchDescriptor): ReturnType<AcpStdioSpawn> {
+  private spawnLogin(launch: AcpLaunchDescriptor, browserBin?: string): ReturnType<AcpStdioSpawn> {
     try {
       const env = personalAuthEnv(buildPwrAgentChildProcessEnv(process.env, launch.env));
       for (const key of Object.keys(env)) {
@@ -194,8 +196,9 @@ export class AntigravitySignIn {
           delete env[key];
         }
       }
-      // agy prints the link directly. Suppress its native browser helper so
-      // the only browser launch uses the validated URL below.
+      // agy prints the link directly, and on macOS it invokes `open` through
+      // PATH even when BROWSER is set. Suppress both launch paths.
+      if (browserBin) env.PATH = `${browserBin}${path.delimiter}${env.PATH ?? "/usr/bin:/bin"}`;
       const runtime = process.platform === "win32" ? process.execPath.replaceAll("\\", "/") : process.execPath;
       if (runtime.includes(path.delimiter) || /[\r\n\0]|%s/u.test(runtime)) {
         throw new Error("Unsupported browser helper path.");
@@ -221,22 +224,39 @@ export class AntigravitySignIn {
   }
 
   private async probe(launch: AcpLaunchDescriptor, signal: AbortSignal): Promise<void> {
+    const pipeFailure = Promise.withResolvers<never>();
+    const failPipe = () => pipeFailure.reject(new Error("Antigravity session probe pipe failed."));
     const transport = new AcpStdioJsonRpcTransport({
       launchDescriptor: { ...launch, args: [...launch.args, "--log-file", devNull] },
-      spawn: (command, args, options) => (this.options.spawn ?? spawn)(command, args, {
-        ...options,
-        env: personalAuthEnv(options.env ?? {}),
-      }),
+      spawn: (command, args, options) => {
+        const child = (this.options.spawn ?? spawn)(command, args, {
+          ...options,
+          env: personalAuthEnv(options.env ?? {}),
+        });
+        // Stream errors are independent of the child process's own error and
+        // exit events. Reject the probe even if the process stays alive.
+        child.stdin?.on("error", failPipe);
+        child.stdin?.on("close", failPipe);
+        child.stdout?.on("error", failPipe);
+        child.stderr?.on("error", failPipe);
+        return child;
+      },
     });
     const abort = () => void transport.close().catch(() => undefined);
     signal.addEventListener("abort", abort, { once: true });
     try {
       signal.throwIfAborted();
-      const initialized = await transport.request("initialize", { protocolVersion: 1 });
+      const initialized = await Promise.race([
+        transport.request("initialize", { protocolVersion: 1 }),
+        pipeFailure.promise,
+      ]);
       if ((initialized as { protocolVersion?: unknown } | null)?.protocolVersion !== 1) {
         throw new Error();
       }
-      const session = await transport.request("session/new", { cwd: launch.cwd, mcpServers: [] });
+      const session = await Promise.race([
+        transport.request("session/new", { cwd: launch.cwd, mcpServers: [] }),
+        pipeFailure.promise,
+      ]);
       const sessionId = (session as { sessionId?: unknown } | null)?.sessionId;
       if (typeof sessionId !== "string" || !sessionId.trim()) {
         throw new Error();
@@ -250,6 +270,20 @@ export class AntigravitySignIn {
         throw new Error("Could not stop the Antigravity session probe.");
       });
     }
+  }
+}
+
+async function createMacBrowserShim(cwd: string): Promise<string> {
+  const bin = path.join(cwd, "browser-bin");
+  try {
+    if (bin.includes(path.delimiter)) {
+      throw new Error("Browser shim path contains a PATH separator.");
+    }
+    await mkdir(bin, { mode: 0o700 });
+    await writeFile(path.join(bin, "open"), "#!/bin/sh\nexit 0\n", { flag: "wx", mode: 0o700 });
+    return bin;
+  } catch {
+    throw new Error("Could not suppress the Antigravity browser launcher.");
   }
 }
 
@@ -284,29 +318,36 @@ function readLoginUrl(
   fail: (message: string) => void,
 ): () => void {
   let pending = "";
-  let total = 0;
+  let bytesRead = 0;
   const stop = () => {
     pending = "";
     stdout.removeListener("data", read);
     stdout.resume();
   };
   const read = (chunk: string) => {
-    total += chunk.length;
-    if (total > MAX_STARTUP_OUTPUT_LENGTH) {
-      stop();
-      fail("Antigravity printed too much output before the sign-in link.");
-      return;
-    }
-    const lines = (pending + chunk).split("\n");
-    pending = lines.pop() ?? "";
-    for (const line of lines) {
-      const candidate = line.trim();
+    let start = 0;
+    while (start < chunk.length) {
+      const newline = chunk.indexOf("\n", start);
+      const fragment = chunk.slice(start, newline === -1 ? chunk.length : newline);
+      bytesRead += Buffer.byteLength(fragment) + (newline === -1 ? 0 : 1);
+      if (bytesRead > MAX_STARTUP_OUTPUT_BYTES) {
+        stop();
+        fail("Antigravity printed too much output before the sign-in link.");
+        return;
+      }
+      if (newline === -1) {
+        pending += fragment;
+        return;
+      }
+      const candidate = (pending + fragment).trim();
+      pending = "";
       if (/^https?:\/\//iu.test(candidate)) {
         stop();
         if (candidate.length <= MAX_AUTH_URL_LENGTH) onUrl(candidate);
         else fail("Antigravity returned an invalid Google sign-in link.");
         return;
       }
+      start = newline + 1;
     }
   };
   stdout.setEncoding("utf8");
