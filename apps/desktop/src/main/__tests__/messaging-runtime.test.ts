@@ -1177,6 +1177,54 @@ describe("DesktopMessagingRuntime", () => {
     text: "ERROR something happened",
   };
 
+  it("keeps an unregistered connection out of singleton admission, including automation-only traffic", async () => {
+    const automationInboundHandler = vi.fn(async () => true);
+    const automationInboundMatches = vi.fn(() => true);
+    const { adapter, bridge } = await startMentionOnlyRuntime({
+      automationInboundHandler,
+      automationInboundMatches,
+    });
+    for (const observedOnly of [false, true]) {
+      await adapter.listener?.({
+        ...ambientEvent,
+        observedOnly,
+        channel: { ...ambientEvent.channel, connectionId: "unknown-connection" },
+      });
+    }
+    expect(automationInboundMatches).not.toHaveBeenCalled();
+    expect(automationInboundHandler).not.toHaveBeenCalled();
+    expect(bridge.startTurn).not.toHaveBeenCalled();
+    expect(adapter.delivered).toEqual([]);
+
+    await adapter.listener?.(ambientEvent);
+    expect(automationInboundHandler).toHaveBeenCalledOnce();
+  });
+
+  it("admits only the singleton provider event to the restart reply path", async () => {
+    const { holdUpdateBlockingWork } = await import("../app-update-admission");
+    const { MessagingController } = await import("../messaging/core/messaging-controller");
+    const reportRestart = vi.spyOn(MessagingController.prototype, "reportUpdateRestarting");
+    const { adapter } = await startMentionOnlyRuntime({
+      automationInboundHandler: vi.fn(async () => false),
+      automationInboundMatches: vi.fn(() => false),
+    });
+    const release = holdUpdateBlockingWork();
+    try {
+      expect(release).toBeDefined();
+      for (const channel of [
+        { ...ambientEvent.channel, connectionId: "unknown-connection" },
+        { ...ambientEvent.channel, channel: "slack" as const },
+        ambientEvent.channel,
+      ]) {
+        await adapter.listener?.({ ...ambientEvent, channel });
+      }
+      expect(reportRestart).toHaveBeenCalledExactlyOnceWith(ambientEvent);
+    } finally {
+      release?.();
+      reportRestart.mockRestore();
+    }
+  });
+
   it("delivers @mention-only messages an automation filter matches", async () => {
     const automationInboundHandler = vi.fn(async () => false);
     // The automation's own filter matches this ambient (non-@mention) message,

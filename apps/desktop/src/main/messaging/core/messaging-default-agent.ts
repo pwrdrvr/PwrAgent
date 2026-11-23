@@ -5,6 +5,7 @@ import type {
   MessagingChannelRef,
   MessagingDefaultAgentScope,
 } from "@pwragent/messaging-interface";
+import { buildMessagingConversationKey } from "./messaging-channel-key.js";
 
 export type MessagingDefaultAgentScopeKind = MessagingDefaultAgentScope["kind"];
 export type MessagingDefaultAgentBackendSupport =
@@ -61,11 +62,13 @@ export function buildDefaultAgentScopeLookup(
     },
   ];
   if (channel.conversation.parentConversationId) {
-    scopes.push({
-      kind: "parent",
-      channel: channel.channel,
-      conversationId: channel.conversation.parentConversationId,
-    });
+    if (channel.connectionId === undefined) {
+      scopes.push({
+        kind: "parent",
+        channel: channel.channel,
+        conversationId: channel.conversation.parentConversationId,
+      });
+    }
     // A conversation default selected on a parent channel also governs its
     // child threads/topics unless the child has a more-specific exact or
     // explicit parent assignment. Adapters provide parentConversationId so
@@ -73,7 +76,7 @@ export function buildDefaultAgentScopeLookup(
     scopes.push({
       kind: "conversation",
       channel: {
-        channel: channel.channel,
+        ...channel,
         conversation: {
           id: channel.conversation.parentConversationId,
           kind: channel.conversation.isDirectMessage === true ? "dm" : "channel",
@@ -93,17 +96,19 @@ export function buildDefaultAgentScopeLookup(
       },
     });
   }
-  if (channel.conversation.workspaceId) {
-    scopes.push({
-      kind: "workspace",
-      channel: channel.channel,
-      workspaceId: channel.conversation.workspaceId,
-    });
+  if (channel.connectionId === undefined) {
+    if (channel.conversation.workspaceId) {
+      scopes.push({
+        kind: "workspace",
+        channel: channel.channel,
+        workspaceId: channel.conversation.workspaceId,
+      });
+    }
+    scopes.push(
+      { kind: "provider", channel: channel.channel },
+      { kind: "profile" },
+    );
   }
-  scopes.push(
-    { kind: "provider", channel: channel.channel },
-    { kind: "profile" },
-  );
   return scopes.map((scope) => ({
     key: buildMessagingDefaultAgentScopeKey(scope),
     scope,
@@ -117,13 +122,4 @@ export function defaultAgentScopeForChannel(
   return buildDefaultAgentScopeLookup(channel)
     .find((candidate) => candidate.scope.kind === kind)
     ?.scope;
-}
-
-function buildMessagingConversationKey(channel: MessagingChannelRef): string {
-  return [
-    channel.channel,
-    channel.conversation.kind,
-    channel.conversation.parentId ?? "",
-    channel.conversation.id,
-  ].join(":");
 }

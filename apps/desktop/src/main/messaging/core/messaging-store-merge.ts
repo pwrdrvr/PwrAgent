@@ -4,6 +4,7 @@ import type {
   MessagingChannelRef,
   MessagingManagedTopicRecord,
 } from "@pwragent/messaging-interface";
+import { buildMessagingConversationKey } from "./messaging-channel-key.js";
 
 export type MessagingBindingChannelMetadataUpdate = {
   ancestorTitle?: string;
@@ -28,8 +29,8 @@ export function mergeMessagingBindingChannelMetadata(
     !current
     || current.revokedAt
     || current.id !== update.bindingId
-    || messagingConversationKey(current.channel)
-      !== messagingConversationKey(update.channel)
+    || buildMessagingConversationKey(current.channel)
+      !== buildMessagingConversationKey(update.channel)
   ) {
     return undefined;
   }
@@ -113,13 +114,4 @@ function messagingAdapterStateEqual(
   right: MessagingAdapterState | undefined,
 ): boolean {
   return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
-}
-
-function messagingConversationKey(channel: MessagingChannelRef): string {
-  return [
-    channel.channel,
-    channel.conversation.kind,
-    channel.conversation.parentId ?? "",
-    channel.conversation.id,
-  ].join(":");
 }

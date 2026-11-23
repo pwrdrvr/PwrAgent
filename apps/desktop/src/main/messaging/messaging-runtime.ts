@@ -1784,6 +1784,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         });
       });
       unsubscribeInboundRejected = adapter.onInboundRejected?.(async (event) => {
+        if ("channel" in event && event.channel?.connectionId !== undefined) return;
         await this.handleRejectedInbound(adapter.channel, event, store);
       });
       unsubscribeInboundChannelMetadata = adapter.onInboundChannelMetadata?.(async (update) => {
@@ -1880,6 +1881,9 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         }
       };
       await this.startAdapterWithDeadline(adapter, async (event) => {
+        // Only singleton routes are registered. Reject out-of-scope events
+        // before the update gate or any downstream handler sees them.
+        if (event.channel.connectionId !== undefined || event.channel.channel !== adapter.channel) return;
         if (event.kind === "callback" && isAppUpdateCallback(event)) return await handleInbound(event);
         if (updateBlockingWorkIsHeld()) {
           await controller.reportUpdateRestarting(event);

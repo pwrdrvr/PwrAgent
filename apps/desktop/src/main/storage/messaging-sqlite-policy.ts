@@ -13,6 +13,7 @@ import type {
   MessagingMonitorSubscriptionRecord,
   MessagingPendingIntentRecord,
 } from "@pwragent/messaging-interface";
+import { scopeMessagingRoutingKey } from "@pwragent/messaging-interface";
 import { normalizeMessagingBindingTargetKind } from "@pwragent/shared/contracts/messaging";
 import type {
   MessagingDeliveryRecord,
@@ -31,6 +32,8 @@ import {
 } from "../messaging/core/messaging-store-merge.js";
 import { isBindingForThread } from "../messaging/core/messaging-binding-thread-match.js";
 import { isAsyncQuestionnaireForThread } from "../messaging/core/messaging-pending-intent-match.js";
+import { buildMessagingConversationKey, buildMessagingConversationLookupKeys } from "../messaging/core/messaging-channel-key.js";
+export { buildMessagingConversationKey } from "../messaging/core/messaging-channel-key.js";
 
 const SECRET_KEY_PATTERN = /token|secret|password|authorization|api[_-]?key/i;
 
@@ -66,70 +69,12 @@ export const messagingSqlitePolicy: SqliteMessagingPolicy<DesktopMessagingStorag
   snapshot(records) { return { version: CURRENT_MESSAGING_STORE_VERSION, ...records }; },
 };
 
-export function buildMessagingConversationKey(
-  channel: MessagingChannelRef,
-): string {
-  return [
-    channel.channel,
-    channel.conversation.kind,
-    channel.conversation.parentId ?? "",
-    channel.conversation.id,
-  ].join(":");
-}
-
-function buildMessagingConversationLookupKeys(
-  channel: MessagingChannelRef,
-): string[] {
-  const keys = new Set<string>([buildMessagingConversationKey(channel)]);
-  if (channel.conversation.kind === "thread") {
-    keys.add(buildMessagingConversationKey({
-      channel: channel.channel,
-      conversation: {
-        ...channel.conversation,
-        kind: "channel",
-      },
-    }));
-    // DM-only. Slack thread refs carry `id = channelId`, so a parentId-less
-    // `channel` root key would equal the parent channel's own binding key
-    // and every side thread in a bound channel would resolve to it — which
-    // makes `/bind` inside such a thread revoke the channel's binding.
-    if (channel.conversation.isDirectMessage) {
-      keys.add(buildMessagingConversationKey({
-        channel: channel.channel,
-        conversation: {
-          id: channel.conversation.id,
-          kind: "dm",
-        },
-      }));
-    }
-    if (
-      channel.conversation.parentConversationId
-      && channel.conversation.parentConversationId !== channel.conversation.id
-    ) {
-      // Reconstruct the parent's own key the way `messaging-default-agent`
-      // does: providers such as Discord store the parent channel under its
-      // guild `parentId`, so dropping it never matches.
-      keys.add(buildMessagingConversationKey({
-        channel: channel.channel,
-        conversation: {
-          id: channel.conversation.parentConversationId,
-          kind: channel.conversation.isDirectMessage ? "dm" : "channel",
-          ...(channel.conversation.parentConversationParentId
-            ? { parentId: channel.conversation.parentConversationParentId }
-            : {}),
-        },
-      }));
-    }
-  }
-  return [...keys];
-}
-
 function buildChannelId(channel: MessagingChannelRef): string {
-  return [
+  return scopeMessagingRoutingKey(channel.connectionId, [
     channel.conversation.kind,
     channel.conversation.parentId ?? "",
     channel.conversation.id,
-  ].join(":");
+  ].join(":"));
 }
 
 function sanitizeBinding(
@@ -187,7 +132,7 @@ function mergeObservedChannel(
     if (value !== undefined) conversation[key] = value;
   }
   return {
-    channel: next.channel,
+    ...next,
     conversation,
   };
 }

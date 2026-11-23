@@ -10,13 +10,14 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared/contracts/navigation";
 import type { MessagingStoreLike } from "./messaging-storage";
-import type { MessagingBindingRecord, MessagingChannelKind, MessagingDeliveryResult, MessagingInboundEvent, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
+import type { MessagingBindingRecord, MessagingChannelKind, MessagingChannelRef, MessagingDeliveryResult, MessagingInboundEvent, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
 import type { MessagingAdapter, MessagingBackendBridge } from "./messaging-adapter.js";
 
 export interface MessagingMonitorHost {
   readonly cleanupExpiredPrivateReplyContinuations: () => Promise<void>;
   readonly filterBindingsForChannel: (bindings: MessagingBindingRecord[]) => MessagingBindingRecord[];
+  readonly isChannelInScope: (channel: MessagingChannelRef) => boolean;
   readonly deliver: (intent: MessagingSurfaceIntent, binding?: MessagingBindingRecord, event?: MessagingInboundEvent, guard?: MessagingDeliveryGuard) => Promise<MessagingDeliveryResult>;
   readonly newIntentId: (prefix: string) => string;
   readonly monitorAuthorizedActorIds: (event: MessagingInboundEvent) => string[];

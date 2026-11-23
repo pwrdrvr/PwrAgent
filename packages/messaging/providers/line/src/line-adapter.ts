@@ -1535,6 +1535,7 @@ function lineCallbackRecordId(
         params.channelRef.conversation.id,
         params.channelRef.conversation.parentId ?? null,
         params.bindingId ?? null,
+        ...(params.channelRef.connectionId === undefined ? [] : [params.channelRef.connectionId]),
       ]),
     )
     .digest("base64url")

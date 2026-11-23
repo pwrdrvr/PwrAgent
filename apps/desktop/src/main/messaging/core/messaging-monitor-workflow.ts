@@ -1039,6 +1039,7 @@ export class MessagingMonitorWorkflow {
   ): void {
     if (
       this.context.disposed ||
+      !this.context.host().isChannelInScope(subscription.channel) ||
       subscription.revokedAt ||
       !subscription.monitor.enabled ||
       this.monitorTimersBySubscriptionId.has(subscription.id)
@@ -1097,7 +1098,7 @@ export class MessagingMonitorWorkflow {
   async runMonitorSubscriptionTick(scheduled: MessagingMonitorSubscriptionRecord): Promise<void> {
     const subscriptionId = scheduled.id;
     const key = channelMonitorRenderKey(scheduled.channel);
-    if (this.context.disposed || this.monitorRenders.has(key)) return;
+    if (this.context.disposed || !this.context.host().isChannelInScope(scheduled.channel) || this.monitorRenders.has(key)) return;
     await this.withMonitorRender(key, async (render) => {
       const subscription = await this.context.store.findActiveMonitorSubscriptionForChannel(scheduled.channel);
       if (

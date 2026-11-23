@@ -188,6 +188,8 @@ function mergeObservedSurfaces(
     firstSeenAt: number,
     lastSeenAt: number,
   ) => {
+    // The Settings picker saves singleton routes and cannot carry a named connection.
+    if (channel.connectionId !== undefined) return;
     const conversation = channel.conversation;
     const key = [
       channel.channel,

@@ -1174,6 +1174,41 @@ describe("TelegramAdapter callback persistence", () => {
     });
   });
 
+  it("persists separate records when two connections use the same callback handle", async () => {
+    const store = fakeCallbackStore();
+    const adapter = new TelegramAdapter({
+      api: fakeTelegramApi(),
+      config: { authorizedActorIds: [], botToken: "token", channel: "telegram" },
+      store,
+    });
+
+    for (const connectionId of ["connection-a", "connection-b", "connection-a"]) {
+      await adapter.deliver({
+        id: "shared-status",
+        kind: "status",
+        createdAt: 1,
+        status: "waiting",
+        text: "Choose",
+        audit: {
+          actor: { platformUserId: "user-1" },
+          channel: {
+            channel: "telegram",
+            connectionId,
+            conversation: { id: "1234", kind: "dm" },
+          },
+          occurredAt: 1,
+        },
+        actions: [{ id: "permissions", label: "Permissions" }],
+      });
+    }
+
+    expect(store.records).toHaveLength(3);
+    const [first, second, repeated] = store.records;
+    expect(first.handle).toBe(second.handle);
+    expect(first.id).not.toBe(second.id);
+    expect(repeated.id).toBe(first.id);
+  });
+
   it("uses long-lived sqlite callback handles for approval buttons", async () => {
     const store = fakeCallbackStore();
     const adapter = new TelegramAdapter({

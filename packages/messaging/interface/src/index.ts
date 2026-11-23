@@ -536,8 +536,15 @@ export type MessagingManagedConversationActionResult = {
 
 export type MessagingChannelRef = {
   channel: MessagingChannelKind;
+  /** Profile-local configured connection. Omitted on legacy singleton routes. */
+  connectionId?: string;
   conversation: MessagingConversationRef;
 };
+
+/** Namespace a persisted routing key while preserving the legacy key verbatim. */
+export function scopeMessagingRoutingKey(connectionId: string | undefined, key: string): string {
+  return connectionId === undefined ? key : JSON.stringify([connectionId, key]);
+}
 
 export type MessagingAdapterState = {
   /**

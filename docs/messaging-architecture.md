@@ -472,6 +472,14 @@ Why this shape:
 - A thread bound to both Telegram and Discord renders independently per channel — Discord users see Discord-native buttons, Telegram users see Telegram-native buttons. No cross-channel contamination.
 - Shared state lives only in the sqlite `MessagingStore` (bindings, browse sessions, callback handles). Both controllers read/write the same store but never reach into each other's runtime state.
 
+### Routing identity for multiple connections
+
+`MessagingChannelRef.connectionId` identifies a configured connection within a profile and provider. A connection keeps its opaque ID across display name edits and credential rotation for the same verified provider account. The ID is separate from a thread's Federation owner and from the provider account ID that protects retained request sources. Each stored binding and callback resolves within its own connection. Parent conversation lookup preserves that connection. Legacy records omit the ID and retain their established routing and deduplication keys.
+
+The current adapter registry still starts a singleton per provider. Enabling a second connection requires an authenticated adapter boundary that stamps the configured identity onto inbound messages, callbacks, observed surfaces, and retained sources. Outbound routing and adapter restart recovery must resolve the exact connection. A disabled or removed connection makes its routes unavailable. Replacing the provider account requires a fresh connection ID and new grants. Per-connection provider admission, pairing, RBAC, and automation filters need to ship with the first additional connection.
+
+The config transition should project only the original connection into the legacy TOML keys, while each new connection has independently encrypted secret slots and its own authorization settings. First save must preserve user-edited config comments and copy any legacy credentials before publishing a config that refers to their new slots. Preserve the legacy credentials for sequential rollback. A missing scoped credential leaves that connection disconnected. Keep the legacy routing namespace until an explicit migration can preserve existing binding and deduplication IDs. Older versions that ignore the new field can treat named records as singleton routes. Store live named routes where those versions cannot enumerate them before enabling a second connection. Test rollback, repeated saves, interrupted writes, unreadable credentials, rotation, and remove-and-readd alongside two same-provider connections with deliberately identical destination and actor IDs.
+
 ### Telegram pairing grants
 
 Telegram pairing codes use the bot account as their namespace. Approval checks the live adapter and rechecks the saved or environment-provided credential inside the profile database transaction that grants access and consumes the request. Both the active Settings writer and the bootstrap writer use that database for profile secrets.

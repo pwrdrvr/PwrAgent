@@ -1,9 +1,11 @@
-import type { MessagingChannelRef, MessagingInboundEvent } from "@pwragent/messaging-interface";
+import { scopeMessagingRoutingKey, type MessagingChannelRef, type MessagingInboundEvent } from "@pwragent/messaging-interface";
 
 export function messagingDestinationIdentity(channel: MessagingChannelRef): string {
   const c = channel.conversation;
-  return JSON.stringify([channel.channel, c.workspaceId ?? null, c.kind, c.id,
-    c.parentId ?? null, c.parentConversationId ?? null]);
+  return scopeMessagingRoutingKey(channel.connectionId, JSON.stringify([
+    channel.channel, c.workspaceId ?? null, c.kind, c.id,
+    c.parentId ?? null, c.parentConversationId ?? null,
+  ]));
 }
 
 function routingSnapshot(event: MessagingInboundEvent): MessagingInboundEvent {
@@ -36,6 +38,7 @@ export function projectMessagingRequest(input: MessagingInboundEvent) {
     eventId: event.id,
     platform: event.channel.channel,
     workspaceId: event.channel.conversation.workspaceId,
+    ...(event.channel.connectionId !== undefined ? { configuredConnectionId: event.channel.connectionId } : {}),
     actorId: event.actor.platformUserId,
     destinationIdentity: messagingDestinationIdentity(event.channel),
     receivedAt: event.receivedAt,
