@@ -123,7 +123,7 @@ describe("TelegramAdapter", () => {
     });
 
     expect(scope).toMatchObject({
-      id: "telegram:dm:777",
+      id: "telegram:bot:12345:dm:777",
       kind: "dm",
       budget: {
         limit: 60,
@@ -133,7 +133,7 @@ describe("TelegramAdapter", () => {
   });
 
   it("shares the DM budget with private topics and isolates different bot accounts", () => {
-    const scopeFor = (expectedBotAccountId: string, conversation: { id: string; kind: "dm" | "topic"; parentId?: string }) => {
+    const scopeFor = (expectedBotAccountId: string | undefined, conversation: { id: string; kind: "dm" | "topic"; parentId?: string }) => {
       const adapter = new TelegramAdapter({
         api: createApi() as unknown as TelegramBotApi,
         config: {
@@ -154,6 +154,7 @@ describe("TelegramAdapter", () => {
     const dm = { kind: "dm", id: "777" } as const;
     const topic = { kind: "topic", id: "101", parentId: "777" } as const;
     expect(scopeFor("12345", dm)).toEqual(scopeFor("12345", topic));
+    expect(scopeFor(undefined, dm)).toEqual(scopeFor("12345", dm));
     expect(scopeFor("12345", dm)?.id).not.toBe(scopeFor("23456", dm)?.id);
   });
 
@@ -2058,7 +2059,7 @@ describe("TelegramAdapter", () => {
   it("falls back to a new message when Telegram edit fails", async () => {
     const api = createApi();
     api.editMessageText.mockRejectedValueOnce(
-      new Error("message is not editable anymore"),
+      Object.assign(new Error("message is not editable anymore"), { error_code: 400 }),
     );
     const adapter = new TelegramAdapter({
       api: api as unknown as TelegramBotApi,

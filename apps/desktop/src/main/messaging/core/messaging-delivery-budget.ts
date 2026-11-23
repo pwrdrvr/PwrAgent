@@ -16,6 +16,7 @@ export type MessagingDeliveryAdmission =
   | {
       outcome: "admitted";
       slowMode: boolean;
+      releaseCapacity?: () => void;
     }
   | {
       outcome: "deferred";
@@ -37,7 +38,7 @@ export type MessagingDeliveryAdmission =
 type ScopeState = {
   coolOffUntil?: number;
   slowModeUntil?: number;
-  timestamps: number[];
+  timestamps: { at: number }[];
 };
 
 // A provider limit shared by several scopes, such as one bot account. It has
@@ -83,6 +84,7 @@ export class MessagingDeliveryBudget {
 
   admit(request: {
     consumeCapacity?: boolean;
+    releasable?: boolean;
     priority: MessagingDeliveryPriority;
     scope?: MessagingDeliveryScope;
   }): MessagingDeliveryAdmission {
@@ -137,7 +139,7 @@ export class MessagingDeliveryBudget {
       return { outcome: "dropped", reason: "budget-exhausted", slowMode };
     }
 
-    const last = state.timestamps.at(-1);
+    const last = state.timestamps.at(-1)?.at;
     const spacingMs = request.scope.budget?.minSpacingMs ?? 0;
     if (last !== undefined && last + spacingMs > now) {
       return DEFERABLE_PRIORITIES.has(request.priority)
@@ -145,8 +147,17 @@ export class MessagingDeliveryBudget {
         : { outcome: "dropped", reason: "pacing", slowMode };
     }
 
-    state.timestamps.push(now);
-    return { outcome: "admitted", slowMode };
+    const reservation = { at: now };
+    state.timestamps.push(reservation);
+    if (!request.releasable) return { outcome: "admitted", slowMode };
+    return {
+      outcome: "admitted",
+      slowMode,
+      releaseCapacity: () => {
+        const index = state.timestamps.indexOf(reservation);
+        if (index !== -1) state.timestamps.splice(index, 1);
+      },
+    };
   }
 
   recordRateLimit(info: MessagingRateLimitInfo): void {
@@ -222,7 +233,7 @@ export class MessagingDeliveryBudget {
   ): void {
     const intervalMs = budgetIntervalMs(scope);
     const cutoff = now - intervalMs;
-    state.timestamps = state.timestamps.filter((timestamp) => timestamp > cutoff);
+    state.timestamps = state.timestamps.filter(({ at }) => at > cutoff);
     if (state.coolOffUntil !== undefined && state.coolOffUntil <= now) {
       state.coolOffUntil = undefined;
     }
@@ -265,7 +276,7 @@ function nextWindowAt(
   state: ScopeState,
   now: number,
 ): number {
-  const oldest = state.timestamps[0];
+  const oldest = state.timestamps[0]?.at;
   return oldest === undefined ? now : oldest + budgetIntervalMs(scope);
 }
 

@@ -243,14 +243,15 @@ describe("TelegramAdapter rich messages", () => {
       chat: { id: -100123, type: "supergroup" as const }, message_id: 300,
     }));
     api.sendRichMessage = rich;
+    const store = fakeCallbackStore();
     const adapter = new TelegramAdapter({
       api,
       config: { botToken: "test-token", channel: "telegram", authorizedActorIds: [], streamingResponses: true },
       now,
-      store: fakeCallbackStore(),
+      store,
     });
     adapters.push(adapter);
-    return { api, adapter, send, edit, rich };
+    return { api, adapter, send, edit, rich, store };
   }
 
   it("combines text, photos, documents and a native footer in content order", async () => {
@@ -387,6 +388,42 @@ describe("TelegramAdapter rich messages", () => {
     expect(update.outcome).toBe("discarded");
     expect(send).not.toHaveBeenCalled();
     expect(rich).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])("never posts a replacement after an ambiguous or already-applied edit (%s)", async (alreadyApplied) => {
+    const { adapter, edit, send } = harness();
+    edit.mockRejectedValueOnce(alreadyApplied
+      ? Object.assign(new Error("message is not modified"), { error_code: 400 })
+      : new Error("socket timed out"));
+    send.mockRejectedValueOnce({ error_code: 429, parameters: { retry_after: 2 } });
+    const result = await adapter.deliver({
+      ...intent,
+      parts: [{ type: "text", markdown: "plain", text: "Updated" }],
+      delivery: { mode: "update", fallback: "present_new" },
+      targetSurface: { channel: "telegram", id: "7", state: { opaque: { chatId: -100123, messageId: 7 } } },
+    });
+    expect(result.outcome).toBe(alreadyApplied ? "updated" : "failed");
+    expect(result.rateLimit).toBeUndefined();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("writes callback handles once across any number of safe 429 retries", async () => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 8 }), async (retries) => {
+      const { adapter, send, store } = harness();
+      const upsert = vi.spyOn(store, "upsertCallbackHandle");
+      for (let attempt = 0; attempt < retries; attempt++) {
+        send.mockRejectedValueOnce({ error_code: 429, parameters: { retry_after: 2 } });
+      }
+      const button = { id: "confirm", label: "Confirm" };
+      const card = {
+        ...intent, kind: "confirmation" as const, title: "Confirm", body: "Confirm the action", actions: [button],
+      };
+      for (let attempt = 0; attempt < retries; attempt++) {
+        expect((await adapter.deliver(card)).rateLimit?.retryable).toBe(true);
+      }
+      expect((await adapter.deliver(card)).outcome).toBe("presented");
+      expect(upsert).toHaveBeenCalledTimes(1);
+    }), { numRuns: 12 });
   });
 
   it("hands an unexpired stream retry_after to the adapter that replaces it", async () => {

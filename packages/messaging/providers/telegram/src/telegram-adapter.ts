@@ -619,6 +619,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   private observedConversationIds = new Set<string>();
   private listener?: (event: MessagingInboundEvent) => Promise<void>;
   private streamRateLimits = new Map<string, TelegramStreamRateLimitState>();
+  private readonly preparedReplyMarkup = new WeakMap<MessagingSurfaceIntent, {
+    markup: TelegramInlineKeyboardMarkup;
+    expiresAt: number;
+  }>();
   // Per-stream sent messages, keyed by `intent.stream.key`. A response longer
   // than Telegram's 4096-byte limit rolls onto additional messages (element 1,
   // 2, …); `text` lets us skip re-editing an unchanged chunk. Cleared when the
@@ -1073,12 +1077,15 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     }
     const sentMessages: TelegramSentMessage[] = [];
     try {
-      return await this.deliverSurface(intent, sentMessages);
+      const result = await this.deliverSurface(intent, sentMessages);
+      this.preparedReplyMarkup.delete(intent);
+      return result;
     } catch (error) {
       const target = this.resolveTarget(intent);
       const rateLimit = target
         ? this.emitRateLimitFromError(error, target, { retryable: sentMessages.length === 0 })
         : undefined;
+      if (!rateLimit?.retryable) this.preparedReplyMarkup.delete(intent);
       const failure = telegramDeliveryFailure(error);
       this.options.logger?.warn?.(
         `telegram deliver failed kind=${intent.kind} target=${target ? this.compactTypingTarget(target) : "missing"} error=${failure.errorMessage}`,
@@ -1188,20 +1195,29 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         );
         outcome = "updated";
       } catch (error) {
-        if (intent.delivery.fallback !== "present_new" || telegramRetryAfterMs(error) !== undefined) {
+        const code = telegramErrorCode(error);
+        if (isTelegramMessageNotModifiedError(error)) {
+          sentMessages.push({ chat: { id: Number(target.chatId), type: "private" }, message_id: target.messageId });
+          outcome = "updated";
+        } else if (
+          intent.delivery.fallback !== "present_new"
+          || telegramRetryAfterMs(error) !== undefined
+          || (code !== 400 && code !== 403 && code !== 404)
+        ) {
           throw error;
+        } else {
+          sentMessages.push(
+            await this.bot.api.sendMessage({
+              chat_id: target.chatId,
+              disable_web_page_preview: true,
+              message_thread_id: target.messageThreadId,
+              parse_mode: "HTML",
+              reply_markup: replyMarkup,
+              text: text || " ",
+            }),
+          );
+          outcome = "presented_new";
         }
-        sentMessages.push(
-          await this.bot.api.sendMessage({
-            chat_id: target.chatId,
-            disable_web_page_preview: true,
-            message_thread_id: target.messageThreadId,
-            parse_mode: "HTML",
-            reply_markup: replyMarkup,
-            text: text || " ",
-          }),
-        );
-        outcome = "presented_new";
       }
     } else if (mediaParts.length > 0) {
       const caption = text && Buffer.byteLength(text, "utf8") <= 1024 ? text : undefined;
@@ -2486,6 +2502,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     intent: MessagingSurfaceIntent,
     actions: MessagingSurfaceAction[],
   ): Promise<TelegramInlineKeyboardMarkup | undefined> {
+    const now = this.now();
+    const prepared = this.preparedReplyMarkup.get(intent);
+    if (prepared && prepared.expiresAt > now) return prepared.markup;
     // Defensive caps from the adapter's own profile. Producers should
     // already have applied these via applyActionCapabilityLimits.
     const maxActions = this.capabilityProfile.actions?.maxActions ?? 100;
@@ -2510,12 +2529,15 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       return undefined;
     }
 
-    return {
+    const markup = {
       inline_keyboard: layoutMessagingActionRows(items, {
         defaultColumns: intent.actionLayout?.columns ?? 1,
         maxColumns,
       }),
     };
+    // The delivery queue replays the same routed intent after a safe 429.
+    this.preparedReplyMarkup.set(intent, { markup, expiresAt: now + MESSAGING_CALLBACK_HANDLE_TTL_MS });
+    return markup;
   }
 
   private async createCallbackData(
@@ -2918,7 +2940,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   ): MessagingDeliveryScope {
     const policy = this.streamRateLimitPolicy(target);
     const chatId = String(target.chatId);
-    const accountId = this.options.config.expectedBotAccountId;
+    const accountId = this.options.config.expectedBotAccountId ?? this.configuredBotId();
     return {
       platform: this.channel,
       id: accountId ? `telegram:bot:${accountId}:${policy}:${chatId}` : `telegram:${policy}:${chatId}`,

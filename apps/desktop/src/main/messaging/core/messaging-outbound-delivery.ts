@@ -537,16 +537,20 @@ export class MessagingOutboundDelivery {
       if (guard?.isCancelled()) {
         return cancelledResult();
       }
+      let releaseCapacity: (() => void) | undefined;
       if (this.deliveryBudget) {
         const budgetChannel = channel ?? scope?.platform ?? "telegram";
         if (scope && lane.lane?.isOccupied(scope.id) && !(await waitForTurn())) {
           return cancelledResult();
         }
-        let admission = this.deliveryBudget.admit({
+        const budget = this.deliveryBudget;
+        const admit = () => budget.admit({
           consumeCapacity: consumeDeliveryBudget,
           priority,
+          releasable: priority === "stream_partial" && scope?.budget?.countStreamPartials === true,
           scope,
         });
+        let admission = admit();
         while (admission.outcome === "deferred") {
           const budgetEvent: MessagingControllerDeliveryBudgetEvent = {
             at: this.context.now(),
@@ -581,11 +585,7 @@ export class MessagingOutboundDelivery {
             if (!(await waitForTurn())) {
               return cancelledResult();
             }
-            admission = this.deliveryBudget.admit({
-              consumeCapacity: consumeDeliveryBudget,
-              priority,
-              scope,
-            });
+            admission = admit();
             continue;
           }
           const delay = (this.options.sleepUntil ?? sleepUntil)(
@@ -600,11 +600,7 @@ export class MessagingOutboundDelivery {
           if (guard?.isCancelled()) {
             return cancelledResult();
           }
-          admission = this.deliveryBudget.admit({
-            consumeCapacity: consumeDeliveryBudget,
-            priority,
-            scope,
-          });
+          admission = admit();
         }
         if (admission.outcome !== "admitted") {
           const budgetEvent: MessagingControllerDeliveryBudgetEvent = {
@@ -641,15 +637,19 @@ export class MessagingOutboundDelivery {
             outcome: "discarded",
           };
         }
+        releaseCapacity = admission.releaseCapacity;
       }
       if (guard?.isCancelled()) {
+        releaseCapacity?.();
         return cancelledResult();
       }
       const adapter = await this.adapterForSend();
       if (guard?.isCancelled()) {
+        releaseCapacity?.();
         return cancelledResult();
       }
       if (!adapter) {
+        releaseCapacity?.();
         this.context.logger.info?.("messaging delivery discarded: adapter stopped and nothing replaced it", {
           bindingId: binding?.id ?? intent.bindingId,
           intentId: routedIntent.id,
@@ -659,6 +659,7 @@ export class MessagingOutboundDelivery {
         return cancelledResult();
       }
       if (this.options.isDeliveryAdapterAvailable?.(adapter) === false) {
+        releaseCapacity?.();
         if (receipt) receipt.notSent = "adapter-stopped";
         return cancelledResult();
       }
@@ -667,6 +668,7 @@ export class MessagingOutboundDelivery {
         receipt.notSent = undefined;
       }
       const result = await adapter.deliver(routedIntent);
+      if (result.outcome === "discarded") releaseCapacity?.();
       if (guard?.isCancelled()) {
         await guard.onCancelledDelivery?.(result);
         if (receipt) {
@@ -988,16 +990,17 @@ export function messagingDeliveryPriority(
       }
       return "user_command";
     case "status":
-      if (context?.userInitiated) {
+      if (context?.userInitiated || intent.id.startsWith("status-retire:")) {
         return "user_command";
       }
       if (intent.delivery?.mode === "present" && intent.delivery.pin === true) {
         return "user_command";
       }
       return "routine_status";
+    case "dismiss":
+      return intent.delivery?.unpin ? "user_command" : "routine_status";
     case "activity":
     case "progress":
-    case "dismiss":
       return "routine_status";
     case "thread_picker":
     case "project_picker":

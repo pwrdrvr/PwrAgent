@@ -202,6 +202,51 @@ it("counts a Telegram stream preview and a final reply in the same budget", asyn
   expect(attempts).toEqual([1_000, 2_100]);
 });
 
+it("queues retirement and unpin even when the old status just used the pacing slot", async () => {
+  const calls: string[] = [];
+  const sent = { chat: { id: -100777, type: "supergroup" as const }, message_id: 8 };
+  const f = telegramFixture({
+    sendMessage: async () => { calls.push("present"); return sent; },
+    editMessageText: async () => { calls.push("retire"); return sent; },
+    unpinChatMessage: async () => { calls.push("unpin"); return true; },
+  });
+  const targetSurface = { channel: "telegram" as const, id: "8", state: { opaque: { chatId: -100777, messageId: 8 } } };
+  await f.owner.deliver(intent, telegramBinding);
+  await f.owner.deliver({
+    id: "status-retire:fixture", kind: "status", createdAt: 1_000,
+    text: "Retired", status: "idle", actions: [], targetSurface, delivery: { mode: "update" },
+  }, telegramBinding);
+  await f.owner.deliver({
+    id: "status-unpin:fixture", kind: "dismiss", createdAt: 1_000, targetSurface, delivery: { mode: "dismiss", unpin: true },
+  }, telegramBinding);
+  expect(calls).toEqual(["present", "retire", "unpin"]);
+});
+
+it("releases the chat slot when Telegram throttles a preview before it reaches the API", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 1_100, max: 1_999 }), async (spacing) => {
+    const calls: number[] = [];
+    const f = telegramFixture({
+      sendMessage: async () => {
+        calls.push(f.now());
+        return { chat: { id: -100777, type: "supergroup" }, message_id: calls.length };
+      },
+    });
+    const preview: MessagingSurfaceIntent = {
+      id: "preview", createdAt: 1_000, kind: "stream_update", role: "assistant", policy: "enabled",
+      text: "Working", stream: { key: "preview", sequence: 1, isFinal: false },
+    };
+    for (let index = 0; index < 3; index++) {
+      await f.owner.deliver({ ...preview, stream: { ...preview.stream, key: String(index) } }, telegramBinding);
+      await f.options.sleepUntil(f.now() + spacing, f.now);
+    }
+    const finalAt = f.now();
+    await expect(f.owner.deliver(preview, telegramBinding)).resolves.toMatchObject({ outcome: "discarded" });
+    await f.owner.deliver(intent, telegramBinding);
+    expect(calls).toHaveLength(4);
+    expect(calls.at(-1)).toBe(finalAt);
+  }));
+});
+
 it("honors the provider deadline and records only the settled attempt", async () => {
   await fc.assert(fc.asyncProperty(
     fc.boolean(),
