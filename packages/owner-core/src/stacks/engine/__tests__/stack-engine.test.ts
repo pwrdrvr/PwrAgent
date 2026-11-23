@@ -26,6 +26,8 @@ test("a routed conflict records the verified rewritten parent and replays only d
   const owner = { backend: "codex" as const, threadId: "owner", title: "Layer owner", branch: "layer",
     active: false, locked: false, remote: false };
   let routed = 0;
+  let finishApply!: (result: { error?: unknown }) => void;
+  const applied = new Promise<{ error?: unknown }>((resolve) => { finishApply = resolve; });
   const coordinator = new StackCoordinator({
     newId: () => "resolved-conflict", now: () => 1, plan: (operation) => engine.plan(operation),
     participants: async (moves) => moves.some(({ branch }) => branch === owner.branch) ? [owner] : [],
@@ -34,7 +36,16 @@ test("a routed conflict records the verified rewritten parent and replays only d
       expect(prompt).toContain(rewritten);
       routed++;
     },
-    apply: (plan, id, when, hooks) => engine.apply(plan, id, when, hooks),
+    apply: async (plan, id, when, hooks) => {
+      try {
+        const receipt = await engine.apply(plan, id, when, hooks);
+        finishApply({});
+        return receipt;
+      } catch (error) {
+        finishApply({ error });
+        throw error;
+      }
+    },
     undo: () => { throw new Error("Unexpected undo"); }, receipt: () => { throw new Error("Unexpected receipt"); },
   });
   const operation = { kind: "restack" as const, root: "parent" };
@@ -57,6 +68,9 @@ test("a routed conflict records the verified rewritten parent and replays only d
   expect((await runner.run(cwd, ["merge-base", "--is-ancestor", oldParent, resolved])).exitCode).toBe(1);
   await expect(engine.plan(operation)).rejects.toThrow("recorded base");
   await coordinator.continue(owner, planId);
+  // Windows Git can outlast the polling budget. Wait for the real engine,
+  // then check that the coordinator publishes its terminal state.
+  expect(await applied).toEqual({});
   await expect.poll(() => coordinator.status(actor, planId).status).toBe("done");
   expect((await store.read(commonDir)).catalog.stacks[0]?.branches[1]).toMatchObject({ base: rewritten, head: resolved });
   expect(await git(cwd, "merge-base", "layer", "leaf")).toBe(resolved);
