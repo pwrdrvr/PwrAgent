@@ -43,6 +43,7 @@ type DeliveryOptions = ConstructorParameters<typeof MessagingOutboundDelivery>[0
 function fixture(
   deliver: DeliveryOptions["adapter"]["deliver"],
   resolveDeliveryScope: DeliveryOptions["adapter"]["resolveDeliveryScope"] = () => scope,
+  replacementAdapter?: DeliveryOptions["replacementAdapter"],
 ) {
   let time = 1_000;
   const now = () => time;
@@ -64,6 +65,7 @@ function fixture(
       deliver,
     },
     store: writes,
+    replacementAdapter,
     deliveryBudget: new MessagingDeliveryBudget({ now }),
     deliveryLane: new MessagingDeliveryLane(),
     sleepUntil: async (retryAt: number, clock: () => number) => {
@@ -72,7 +74,9 @@ function fixture(
       time = retryAt;
     },
   };
-  const owner = new MessagingOutboundDelivery(options, {
+  const context: Omit<ConstructorParameters<typeof MessagingOutboundDelivery>[1], "disposed"> & {
+    disposed: boolean;
+  } = {
     disposed: false,
     capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
     logger: {},
@@ -84,8 +88,9 @@ function fixture(
     recordBindingTransition: async (action) => { trace.push(action); },
     notifyBindingChanged: () => { trace.push("binding-changed"); },
     flagDeliveryCheck: async () => {},
-  });
-  return { owner, options, trace, now };
+  };
+  const owner = new MessagingOutboundDelivery(options, context);
+  return { owner, options, context, trace, now, advanceTime: (ms: number) => { time += ms; } };
 }
 
 const telegramBinding: MessagingBindingRecord = {
@@ -99,6 +104,7 @@ function telegramFixture(api: Partial<TelegramBotApi>) {
     api: api as TelegramBotApi,
     config: { channel: "telegram", botToken: "12345:fixture-token", authorizedActorIds: [] },
     now: f.now,
+    waitForReplyDelay: async (ms) => { f.advanceTime(ms); },
     pollOnStart: false,
   });
   return { ...f, adapter };
@@ -149,7 +155,7 @@ it("does not replay a Telegram timeout or a multipart reply with a delivered chu
     const sent = { chat: { id: -100777, type: "supergroup" as const }, message_id: 123 };
     const sendMessage = vi.fn<TelegramBotApi["sendMessage"]>();
     if (partial) sendMessage.mockResolvedValueOnce(sent);
-    sendMessage.mockRejectedValueOnce(partial
+    sendMessage.mockRejectedValue(partial
       ? Object.assign(new Error("Too Many Requests"), { error_code: 429, parameters: { retry_after: 11 } })
       : new Error("socket timeout"));
     const f = telegramFixture({ sendMessage });
@@ -158,7 +164,12 @@ it("does not replay a Telegram timeout or a multipart reply with a delivered chu
       parts: [{ type: "text", text: partial ? "x".repeat(5_000) : "Fixture reply" }],
     };
     await expect(f.owner.deliver(reply, telegramBinding)).resolves.toMatchObject({ outcome: "failed" });
-    expect(sendMessage).toHaveBeenCalledTimes(partial ? 2 : 1);
+    expect(sendMessage).toHaveBeenCalledTimes(partial ? 3 : 1);
+    if (partial) {
+      const [accepted, rejected, retry] = sendMessage.mock.calls.map(([request]) => request.text);
+      expect(rejected).not.toBe(accepted);
+      expect(retry).toBe(rejected);
+    }
     expect(f.trace).not.toContain("wait");
   }));
 });
@@ -338,4 +349,75 @@ it("uses the store installed while delivery was in flight", async () => {
   result.resolve({ channel: "telegram", outcome: "presented", deliveredAt: f.now() });
   await expect(send).resolves.toMatchObject({ outcome: "presented" });
   expect(f.trace).toEqual(["flush", "wrapped:presented"]);
+});
+
+it("paces local and federated topic replies against the same Telegram chat", async () => {
+  let now = 1000;
+  const calls: Array<{ at: number; chat: number | string; topic?: number }> = [];
+  const api = {
+    sendMessage: async (request) => {
+      calls.push({ at: now, chat: request.chat_id, topic: request.message_thread_id });
+      return {
+        chat: { id: Number(request.chat_id), type: "supergroup" },
+        message_id: calls.length,
+      };
+    },
+  } satisfies Partial<TelegramBotApi>;
+  const adapter = new TelegramAdapter({
+    api: api as TelegramBotApi,
+    config: { botToken: "123:test-token", channel: "telegram", authorizedActorIds: [] },
+    now: () => now,
+    waitForReplyDelay: async (ms) => { now += ms; },
+  });
+  const { owner, trace } = fixture(
+    (routed) => adapter.deliver(routed),
+    (routed) => adapter.resolveDeliveryScope(routed),
+  );
+  const local: MessagingBindingRecord = {
+    ...binding,
+    channel: { channel: "telegram", conversation: { kind: "topic", id: "10", parentId: "-100123" } },
+  };
+  const federated: MessagingBindingRecord = {
+    ...local,
+    id: "remote-binding",
+    channel: { channel: "telegram", conversation: { kind: "topic", id: "20", parentId: "-100123" } },
+    federatedThread: { backend: "codex", threadId: "fixture-thread", target: { scope: "remote", instanceId: "peer" } },
+  };
+  const reply = { ...intent, parts: [{ type: "text" as const, text: "x".repeat(4100) }] };
+  await owner.deliver(reply, local);
+  await owner.deliver({ ...reply, id: "remote-reply" }, federated);
+  expect(calls).toEqual([
+    { at: 1000, chat: -100123, topic: 10 },
+    { at: 2100, chat: -100123, topic: 10 },
+    { at: 3200, chat: -100123, topic: 20 },
+    { at: 4300, chat: -100123, topic: 20 },
+  ]);
+  expect(trace.filter((entry) => entry.startsWith("persist:"))).toEqual(["persist:presented", "persist:presented"]);
+});
+
+it("replays a stopped intent through a replacement only when no operation was attempted", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), async (beforeFirstWrite) => {
+    const replacement = {
+      capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
+      deliver: async (): Promise<MessagingDeliveryResult> => {
+        f.trace.push("replacement");
+        return { channel: "telegram", deliveredAt: f.now(), outcome: "presented" };
+      },
+    };
+    const f = fixture(async () => {
+      f.context.disposed = true;
+      return {
+        channel: "telegram", deliveredAt: f.now(),
+        ...(beforeFirstWrite
+          ? { outcome: "discarded", adapterStoppedBeforeWrite: true }
+          : { outcome: "failed", fallbackUnsafe: true }),
+      };
+    }, undefined, { now: () => replacement, settled: async () => replacement });
+    await expect(f.owner.deliver(intent, binding)).resolves.toMatchObject({
+      outcome: beforeFirstWrite ? "presented" : "failed",
+    });
+    expect(f.trace).toEqual(beforeFirstWrite
+      ? ["flush", "replacement", "persist:presented"]
+      : ["flush", "persist:failed"]);
+  }), { numRuns: 8 });
 });

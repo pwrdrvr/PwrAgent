@@ -23,6 +23,7 @@ import {
   type MessagingInboundEvent,
   type MessagingRejectedInboundEvent,
   type MessagingStatusIntent,
+  type MessagingStreamUpdateIntent,
 } from "@pwragent/messaging-interface";
 
 describe("adaptGrammyBot", () => {
@@ -235,7 +236,11 @@ describe("TelegramAdapter rich messages", () => {
     },
   };
 
-  function harness(now?: () => number) {
+  function harness(
+    now?: () => number,
+    advance?: (ms: number) => void | Promise<void>,
+  ) {
+    let clock = 1000;
     const api = fakeTelegramApi();
     const send = vi.spyOn(api, "sendMessage");
     const edit = vi.spyOn(api, "editMessageText");
@@ -247,11 +252,30 @@ describe("TelegramAdapter rich messages", () => {
     const adapter = new TelegramAdapter({
       api,
       config: { botToken: "test-token", channel: "telegram", authorizedActorIds: [], streamingResponses: true },
-      now,
+      now: now ?? (() => clock),
+      waitForReplyDelay: async (ms) => {
+        if (advance) await advance(ms);
+        else if (now) vi.setSystemTime(Date.now() + ms);
+        else clock += ms;
+      },
       store,
     });
     adapters.push(adapter);
     return { api, adapter, send, edit, rich, store };
+  }
+
+  async function seedPreviewAnchors(
+    adapter: TelegramAdapter,
+    stream: MessagingStreamUpdateIntent,
+    advance: (ms: number) => void,
+    chunks = 2,
+  ) {
+    let result = await adapter.deliver(stream);
+    for (let index = 1; index < chunks; index += 1) {
+      advance(3100);
+      result = await adapter.deliver(stream);
+    }
+    return result;
   }
 
   it("combines text, photos, documents and a native footer in content order", async () => {
@@ -549,7 +573,7 @@ describe("TelegramAdapter rich messages", () => {
   });
 
   it("uses one request for rich final content in the last group stream budget slot", async () => {
-    const { adapter, send, rich } = harness(() => 1000);
+    const { adapter, send, rich } = harness();
     for (let index = 0; index < 20; index += 1) {
       const result = await adapter.deliver({
         id: `stream-${index}`, kind: "stream_update", createdAt: 1,
@@ -579,7 +603,10 @@ describe("TelegramAdapter rich messages", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1000);
     try {
-      const { adapter, send, rich } = harness(() => Date.now());
+      const { adapter, send, rich } = harness(() => Date.now(), (ms) => {
+        if (ms <= 1100) vi.setSystemTime(Date.now() + ms);
+        else return new Promise<void>((resolve) => setTimeout(resolve, ms));
+      });
       rich.mockRejectedValue({ error_code: 400, description: "Unsupported rich message" });
       for (let index = 0; index < 19; index += 1) {
         await adapter.deliver({
@@ -643,7 +670,7 @@ describe("TelegramAdapter rich messages", () => {
       audit: intent.audit, text: `# Downloads\n\n${"x".repeat(4200)}`, markdown: "markdown" as const,
       stream: { key: "rich-cleanup", sequence: 1, isFinal: false },
     };
-    await adapter.deliver(stream);
+    await seedPreviewAnchors(adapter, stream, (ms) => vi.setSystemTime(Date.now() + ms));
     const final = { ...stream, stream: { ...stream.stream, sequence: 2, isFinal: true } };
     const result = await adapter.deliver(final);
     expect(result.outcome).toBe("updated");
@@ -662,7 +689,7 @@ describe("TelegramAdapter rich messages", () => {
 
   it.each([false, true])("deletes obsolete streamed messages when a link completes (final=%s)", async (isFinal) => {
     let now = 1000;
-    const { api, adapter, send, edit } = harness(() => now);
+    const { api, adapter, send, edit } = harness(() => now, (ms) => { now += ms; });
     let messageId = 200;
     send.mockImplementation(async (request) => ({
       chat: { id: Number(request.chat_id), type: "supergroup" },
@@ -676,7 +703,7 @@ describe("TelegramAdapter rich messages", () => {
       audit: intent.audit, text, markdown: "markdown" as const,
       stream: { key: "contracting-stream", sequence: 1, isFinal: false },
     };
-    await adapter.deliver(stream);
+    await seedPreviewAnchors(adapter, stream, (ms) => { now += ms; });
     expect(send).toHaveBeenCalledTimes(2);
     now += 5000;
     const result = await adapter.deliver({
@@ -689,6 +716,8 @@ describe("TelegramAdapter rich messages", () => {
     if (!isFinal) {
       now += 5000;
       await adapter.deliver({ ...stream, stream: { ...stream.stream, sequence: 3 } });
+      now += 5000;
+      await adapter.deliver({ ...stream, stream: { ...stream.stream, sequence: 4 } });
       expect(send).toHaveBeenCalledTimes(3);
       expect(edit.mock.calls.some(([request]) => request.message_id === 201)).toBe(false);
     }
@@ -711,7 +740,7 @@ describe("TelegramAdapter rich messages", () => {
       audit: intent.audit, text, markdown: "markdown" as const,
       stream: { key: "retry-cleanup", sequence: 1, isFinal: false },
     };
-    await adapter.deliver(stream);
+    await seedPreviewAnchors(adapter, stream, (ms) => vi.setSystemTime(Date.now() + ms));
     const final = { ...stream, text: `${text})`, stream: { ...stream.stream, sequence: 2, isFinal: true } };
     const result = await adapter.deliver(final);
     expect(result).toMatchObject({ outcome: "updated", surface: { id: "200" } });
@@ -728,7 +757,7 @@ describe("TelegramAdapter rich messages", () => {
   it("does not reuse a message owned by deferred cleanup when a partial response regrows", async () => {
     vi.useFakeTimers();
     let now = 1000;
-    const { api, adapter, send, edit } = harness(() => now);
+    const { api, adapter, send, edit } = harness(() => now, (ms) => { now += ms; });
     let messageId = 200;
     send.mockImplementation(async (request) => ({
       chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: messageId++,
@@ -740,13 +769,15 @@ describe("TelegramAdapter rich messages", () => {
       audit: intent.audit, text: "x".repeat(4200), markdown: "plain" as const,
       stream: { key: "regrowth-cleanup", sequence: 1, isFinal: false },
     };
-    await adapter.deliver(stream);
+    await seedPreviewAnchors(adapter, stream, (ms) => { now += ms; });
     now += 5000;
     expect((await adapter.deliver({
       ...stream, text: "Short", stream: { ...stream.stream, sequence: 2 },
     })).outcome).toBe("updated");
     now += 5000;
     await adapter.deliver({ ...stream, stream: { ...stream.stream, sequence: 3 } });
+    now += 5000;
+    await adapter.deliver({ ...stream, stream: { ...stream.stream, sequence: 4 } });
     expect(send).toHaveBeenCalledTimes(3);
     expect(edit.mock.calls.some(([request]) => request.message_id === 201)).toBe(false);
     expect(remove.mock.calls).toEqual([
@@ -772,7 +803,7 @@ describe("TelegramAdapter rich messages", () => {
       audit: intent.audit, text: "x".repeat(8200), markdown: "plain" as const,
       stream: { key: "budget-cleanup", sequence: 1, isFinal: false },
     };
-    await adapter.deliver(stream);
+    await seedPreviewAnchors(adapter, stream, (ms) => vi.setSystemTime(Date.now() + ms), 3);
     for (let index = 0; index < 16; index += 1) {
       await adapter.deliver({
         ...stream, text: "Complete.",
@@ -812,7 +843,7 @@ describe("TelegramAdapter rich messages", () => {
       audit: intent.audit, text: "x".repeat(4200), markdown: "plain" as const,
       stream: { key: "stopped-cleanup", sequence: 1, isFinal: false },
     };
-    await adapter.deliver(stream);
+    await seedPreviewAnchors(adapter, stream, (ms) => vi.setSystemTime(Date.now() + ms));
     await adapter.deliver({ ...stream, text: "# Final", markdown: "markdown", stream: { ...stream.stream, isFinal: true, sequence: 2 } });
     await adapter.stop();
     await vi.advanceTimersByTimeAsync(60_000);
@@ -840,7 +871,7 @@ describe("TelegramAdapter rich messages", () => {
       audit: intent.audit, text: "x".repeat(4200), markdown: "plain" as const,
       stream: { key: "limited-cleanup", sequence: 1, isFinal: false },
     };
-    await adapter.deliver(stream);
+    await seedPreviewAnchors(adapter, stream, (ms) => vi.setSystemTime(Date.now() + ms));
     const result = await adapter.deliver({ ...stream, text: "Final", stream: { ...stream.stream, isFinal: true, sequence: 2 } });
     expect(result).toMatchObject({ outcome: "updated", surface: { id: "200" } });
     expect(result.rateLimit).toBeUndefined();
@@ -876,7 +907,7 @@ describe("TelegramAdapter rich messages", () => {
       audit: intent.audit, text: "x".repeat(4200), markdown: "plain" as const,
       stream: { key: "edit-only-cleanup", sequence: 1, isFinal: false },
     };
-    await adapter.deliver(stream);
+    await seedPreviewAnchors(adapter, stream, (ms) => vi.setSystemTime(Date.now() + ms));
     const result = await adapter.deliver({ ...stream, text: "Final", stream: { ...stream.stream, isFinal: true, sequence: 2 } });
     expect(result).toMatchObject({ outcome: "updated", surface: { id: "200" } });
     await vi.advanceTimersByTimeAsync(1000);
@@ -902,7 +933,7 @@ describe("TelegramAdapter rich messages", () => {
       audit: intent.audit, text: "x".repeat(8200), markdown: "plain" as const,
       stream: { key: "in-flight-cleanup", sequence: 1, isFinal: false },
     };
-    await adapter.deliver(stream);
+    await seedPreviewAnchors(adapter, stream, (ms) => vi.setSystemTime(Date.now() + ms), 3);
     const final = adapter.deliver({ ...stream, text: "# Final", markdown: "markdown", stream: { ...stream.stream, isFinal: true, sequence: 2 } });
     await vi.advanceTimersByTimeAsync(0);
     expect(remove).toHaveBeenCalledTimes(1);
@@ -916,7 +947,7 @@ describe("TelegramAdapter rich messages", () => {
 
   it("clears stale text through the edit seam when an injected API cannot delete messages", async () => {
     let now = 1000;
-    const { adapter, send, edit } = harness(() => now);
+    const { adapter, send, edit } = harness(() => now, (ms) => { now += ms; });
     let messageId = 200;
     send.mockImplementation(async (request) => ({
       chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: messageId++,
@@ -927,7 +958,7 @@ describe("TelegramAdapter rich messages", () => {
       audit: intent.audit, text, markdown: "markdown" as const,
       stream: { key: "edit-cleanup", sequence: 1, isFinal: false },
     };
-    await adapter.deliver(stream);
+    await seedPreviewAnchors(adapter, stream, (ms) => { now += ms; });
     now += 5000;
     const result = await adapter.deliver({
       ...stream, text: `${text})`, stream: { ...stream.stream, sequence: 2, isFinal: true },
@@ -938,7 +969,7 @@ describe("TelegramAdapter rich messages", () => {
 
   it.each([false, true])("removes all previous stream messages when the response becomes blank (final=%s)", async (isFinal) => {
     let now = 1000;
-    const { api, adapter, send, edit } = harness(() => now);
+    const { api, adapter, send, edit } = harness(() => now, (ms) => { now += ms; });
     let messageId = 200;
     send.mockImplementation(async (request) => ({
       chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: messageId++,
@@ -950,7 +981,7 @@ describe("TelegramAdapter rich messages", () => {
       audit: intent.audit, text: "x".repeat(4200), markdown: "plain" as const,
       stream: { key: "blank-stream", sequence: 1, isFinal: false },
     };
-    const first = await adapter.deliver(stream);
+    const first = await seedPreviewAnchors(adapter, stream, (ms) => { now += ms; });
     now += 5000;
     const result = await adapter.deliver({
       ...stream, text: " \n\t", targetSurface: first.surface,
@@ -1064,6 +1095,7 @@ describe("TelegramAdapter callback persistence", () => {
   it("sends every assistant image", async () => {
     const api = fakeTelegramApi();
     const sendPhoto = vi.spyOn(api, "sendPhoto");
+    let now = 1_700_000_000_000;
     const adapter = new TelegramAdapter({
       api,
       config: {
@@ -1071,7 +1103,8 @@ describe("TelegramAdapter callback persistence", () => {
         botToken: "token",
         channel: "telegram",
       },
-      now: () => 1_700_000_000_000,
+      now: () => now,
+      waitForReplyDelay: async (ms) => { now += ms; },
       store: fakeCallbackStore(),
     });
 
