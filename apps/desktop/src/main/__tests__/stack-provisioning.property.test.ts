@@ -12,6 +12,7 @@ import { StackOperationsService } from "../stacks/stack-operations-service";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { SqliteOverlayStore } from "../storage/overlay-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
+import { traceStackProvisioning } from "./helpers/stack-provisioning-trace";
 
 const caseOverlay = new AsyncLocalStorage<SqliteOverlayStore>();
 
@@ -79,6 +80,9 @@ async function withProvisioning(fault: Fault, check: (fixture: Awaited<ReturnTyp
 }
 
 async function setupProvisioning(fault: Fault, root: string, storage: SqliteOverlayStore, service: StackOperationsService) {
+  const holdCheckout = fault === "lost acceptance" ? {
+    reached: Promise.withResolvers<void>(), release: Promise.withResolvers<void>(),
+  } : undefined;
   const cwd = join(root, "repo");
   const git = new StackGit(stackGitRunner, root);
   await git.output(["init", "-b", "main", cwd]);
@@ -108,12 +112,13 @@ async function setupProvisioning(fault: Fault, root: string, storage: SqliteOver
   }
   const repository = "github.com:fixture/stack";
   await repo.output(["remote", "add", "origin", "https://github.com/fixture/stack.git"]);
-  const commonDir = join(cwd, ".git");
+  const commonDir = await realpath(join(cwd, ".git"));
   const journalPath = join(commonDir, "pwragent-stack-op.json");
   const readJournal = async () => JSON.parse(await readFile(journalPath, "utf8")) as RuntimeJournal;
   await writeFile(join(commonDir, "gh-stack"), JSON.stringify({
     schemaVersion: 1, repository, stacks: [{ trunk: { branch: "main", head: tip }, branches: [{ branch: "parent", head: tip, base: tip }] }],
   }));
+  const trace = traceStackProvisioning(root, commonDir, fault);
   const directoryService = new GitDirectoryService({ resolveWorktreeStorage: () => "in-repo" });
   const workspaces = new Map<string, string>();
   const notices = new Map<string, string>();
@@ -126,17 +131,25 @@ async function setupProvisioning(fault: Fault, root: string, storage: SqliteOver
   });
   const accept = vi.fn(async () => {
     expect((await readJournal()).provisioning?.stage).toBe("admitting");
+    trace.phase("provider start");
     if (shouldCrash && fault === "definite refusal") throw new ThreadStartNotAdmittedError(crashed());
     const threadId = !shouldCrash && fault === "vanished empty session" ? "replacement" : child.threadId;
     workspaces.set(threadId, checkout!);
-    if (shouldCrash && fault === "lost acceptance") throw crashed();
+    if (shouldCrash && fault === "lost acceptance") {
+      trace.record("provider accepted without a receipt");
+      throw crashed();
+    }
     return { threadId, codexHome: root };
   });
   const start = vi.fn(async ({ stackWorktree }: Parameters<DesktopBackendRegistry["startThread"]>[0]) => {
+    trace.phase("prepare");
     const workspace = await stackWorktree!.prepare();
     checkout = workspace.cwd!;
+    trace.record("checkout and carry prepared");
     if (shouldCrash && fault === "after carry") throw crashed();
+    trace.phase("admission checks");
     await stackWorktree!.admit(accept);
+    trace.record("provider receipt persisted");
     if (shouldCrash && (fault === "after acceptance" || fault === "vanished empty session" || fault === "unlisted empty session")) throw crashed();
     return child;
   });
@@ -153,10 +166,16 @@ async function setupProvisioning(fault: Fault, root: string, storage: SqliteOver
         expect((await readJournal()).provisioning).toMatchObject({ stage: "reserved", worktree: reservation });
         if (!(await lstat(join(reservation.path, ".git")).catch(() => undefined))) {
           if (shouldCrash && fault === "before checkout") throw crashed();
+          if (shouldCrash && holdCheckout) {
+            trace.record("checkout held at reserved checkpoint");
+            holdCheckout.reached.resolve();
+            await holdCheckout.release.promise;
+          }
           workspaceWrites += 1;
         }
       }
       const workspace = await directoryService.prepareStackWorktree(...args);
+      trace.record("checkout verified", { create: options.create });
       if (options.create && shouldCrash && fault === "after checkout") throw crashed();
       return workspace;
     },
@@ -176,11 +195,32 @@ async function setupProvisioning(fault: Fault, root: string, storage: SqliteOver
   const scope = { repository, directories: [cwd], branch: "parent", infer: async () => [] };
   const { opId } = await service.call("apply_stack_operation",
     { operation: "add_branch", name: "child", newThread: true, carryChanges: fault !== "failed hook" }, actor, scope, registry) as { opId: string };
-  await service.drainBackgroundRuns();
-  await expect(service.call("manage_stack_operation", { action: "status", opId }, actor, scope, registry))
-    .resolves.toMatchObject({ status: "paused" });
-  const beforeRestart = (await readJournal()).provisioning;
-  expect(beforeRestart?.stage).not.toBe("pending");
+  const drained = service.drainBackgroundRuns();
+  if (holdCheckout) {
+    try {
+      await Promise.race([holdCheckout.reached.promise, drained.then(() => {
+        throw new Error("The attempt settled before reaching the reserved checkout.");
+      })]);
+      const state = await service.call("manage_stack_operation", { action: "status", opId }, actor, scope, registry);
+      trace.record("status while checkout is held", { state });
+      expect(state).toMatchObject({ status: "running", moved: [{ branch: "child", from: null, to: tip }] });
+      expect(await readJournal()).toMatchObject({ committed: true, provisioning: { stage: "reserved" } });
+    } finally { holdCheckout.release.resolve(); }
+  }
+  await drained;
+  const state = await service.call("manage_stack_operation", { action: "status", opId }, actor, scope, registry) as {
+    status: string; issue?: { code: string };
+  };
+  trace.record("attempt settled", { status: state.status, issue: state.issue?.code });
+  expect(state).toMatchObject({ status: "paused", issue: { code: "post_apply_failed" } });
+  const journal = await readJournal();
+  const stage = {
+    "before checkout": "reserved", "after checkout": "reserved", "after carry": "reserved",
+    "lost acceptance": "admitting", "after acceptance": "accepted", "unlisted empty session": "accepted",
+    "vanished empty session": "accepted", "definite refusal": "reserved", "failed hook": "checkout_failed",
+  }[fault];
+  expect(journal).toMatchObject({ committed: true, provisioning: { stage } });
+  const beforeRestart = journal.provisioning;
   const reservation = beforeRestart && "worktree" in beforeRestart ? beforeRestart.worktree : undefined;
   expect(reservation).toBeDefined();
   const checkoutPath = reservation!.path;
@@ -190,7 +230,10 @@ async function setupProvisioning(fault: Fault, root: string, storage: SqliteOver
     restart: async () => {
       shouldCrash = false;
       if (fault === "vanished empty session") workspaces.delete(child.threadId);
-      return await new StackOperationsService("restarted-owner").resumeInterrupted([cwd], registry);
+      trace.phase("restart");
+      const errors = await new StackOperationsService("restarted-owner").resumeInterrupted([cwd], registry);
+      trace.record("restart settled", { errors: errors.length, journalRetained: await new GhStackCatalogStore().hasJournal(commonDir) });
+      return errors;
     },
   };
 }
