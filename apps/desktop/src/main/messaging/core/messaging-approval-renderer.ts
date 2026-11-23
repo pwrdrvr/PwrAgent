@@ -32,7 +32,8 @@ export function buildApprovalIntent(params: {
     stringField(params.request.params.prompt)
     ?? stringField(params.request.params.message)
     ?? "Approve this action?";
-  const command = extractCommand(params.request.params);
+  const mcpToolName = params.request.params.acpMcpToolName;
+  const command = mcpToolName ? undefined : extractCommand(params.request.params);
   const context = buildPendingRequestApprovalContext(params.request, {
     directoryPaths: params.directoryPaths,
   });
@@ -55,9 +56,10 @@ export function buildApprovalIntent(params: {
     kind: "approval",
     ...(textResponseKey ? { textResponseKey } : {}),
     createdAt: params.createdAt,
-    title: titleForRequest(params.request),
+    title: mcpToolName ? "MCP Tool Approval" : titleForRequest(params.request),
     ...(context ? { context } : {}),
     body: [
+      mcpToolName ? ["```", mcpToolName, "```"].join("\n") : undefined,
       prompt,
       command
         ? ["Command:", "```shell", stripDisplayShellWrapper(command), "```"].join("\n")

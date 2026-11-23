@@ -2146,6 +2146,8 @@ export type AppServerPendingRequestNotification = {
     turnId?: string | null;
     requestId: string;
     prompt?: string;
+    /** Tool name reported by ACP. This is display metadata, not a grant. */
+    acpMcpToolName?: string;
     options?: string[];
     [key: string]: unknown;
   };

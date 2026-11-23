@@ -1,12 +1,14 @@
 import { mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildPendingRequestActions,
   buildPendingRequestResponse,
 } from "@pwragent/shared/pending-request-response";
 import { deriveInboxState } from "@pwragent/shared/inbox";
+import type { AppServerPendingRequestNotification } from "@pwragent/shared/contracts/normalized-app-server";
 import { AcpAgentClient } from "../acp/acp-client";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import { AcpSessionStore } from "../storage/acp-session-store";
@@ -1217,6 +1219,56 @@ describe("AcpAgentClient", () => {
     expect(
       readRawAcpSessionPayload("acp:gemini", "session-1")?.transcriptUpdates,
     ).toBeUndefined();
+  });
+
+  it("preserves Antigravity MCP approval choices and displays only reported MCP names as tools", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const onRequest = vi.fn((request: AppServerPendingRequestNotification) => {
+      const allow = buildPendingRequestActions(request).find((action) => action.decision === "accept")!;
+      return buildPendingRequestResponse(request, allow);
+    });
+    const client = new AcpAgentClient({ backendId: "acp:antigravity", store, transport, onRequest });
+    await client.initialize();
+    const session = await client.startSession({ cwd: "/repo", executionMode: "default" });
+
+    async function checkRequest(
+      name: string,
+      kind: string,
+      mcp: boolean,
+      title = `Run ${name}`,
+      content?: unknown,
+    ) {
+      const outcome = await transport.emitRequest("session/request_permission", {
+        sessionId: session.sessionId,
+        toolCall: { toolCallId: "tool", kind, name, title, content, status: "pending" },
+        options: [
+          { optionId: "allow", name: "Allow", kind: "allow_once" },
+          { optionId: "deny", name: "Deny", kind: "reject_once" },
+        ],
+      }, 1);
+      const request = onRequest.mock.lastCall![0];
+      expect(request.params.acpMcpToolName).toBe(mcp ? name : undefined);
+      expect(request.params.command).toBe(mcp ? undefined : title);
+      expect(outcome).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+      return request.params.prompt;
+    }
+
+    const tool = "mcp_pwragent_get_pull_request";
+    expect(await checkRequest(tool, "other", true)).toBe("Antigravity wants to use an MCP tool.");
+    expect(await checkRequest(tool, "other", true, "Read PR #42", [
+      { type: "content", content: { type: "text", text: "Check the release notes." } },
+    ])).toBe("Antigravity wants to use an MCP tool.\n\nRead PR #42\n\nCheck the release notes.");
+    await fc.assert(fc.asyncProperty(
+      fc.stringMatching(/^[a-z][a-z0-9_-]{2,40}$/),
+      fc.integer({ min: 1, max: 1000 }),
+      async (name, number) => {
+        const title = `Read PR #${number}`;
+        const prompt = await checkRequest(`mcp_${name}`, "other", true, title, title);
+        expect(prompt?.split(title)).toHaveLength(2);
+        await checkRequest(name, "other", false);
+        await checkRequest(`mcp_${name}`, "execute", false);
+      },
+    ));
   });
 
   it("maps generic session approvals to ACP allow-always options", async () => {

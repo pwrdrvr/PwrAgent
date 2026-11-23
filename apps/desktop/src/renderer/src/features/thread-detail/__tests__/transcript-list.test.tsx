@@ -5614,6 +5614,37 @@ Implementation notes remain in a readable bubble.`;
     ).not.toBeInTheDocument();
   });
 
+  it("renders a reported ACP MCP operation as a tool approval", () => {
+    render(
+      <TranscriptList
+        entries={[]}
+        loading={false}
+        loadingMore={false}
+        pendingRequest={{
+          method: "item/commandExecution/requestApproval",
+          params: {
+            threadId: "thread-1",
+            requestId: "approval-1",
+            prompt: "Antigravity wants to use an MCP tool.\n\nRead pull request #42.",
+            acpMcpToolName: "mcp_pwragent_get_pull_request",
+            acpPermissionOptions: [
+              { optionId: "allow", name: "Allow", kind: "allow_once" },
+              { optionId: "deny", name: "Deny", kind: "reject_once" },
+            ],
+          },
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByText("MCP tool approval")).toBeInTheDocument();
+    expect(screen.getByText("mcp_pwragent_get_pull_request")).toBeInTheDocument();
+    expect(screen.getByText("Read pull request #42.")).toBeInTheDocument();
+    expect(screen.queryByText("Command:")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument();
+  });
+
   it("shows command approval reason and command when no prompt is provided", () => {
     const { container } = render(
       <TranscriptList

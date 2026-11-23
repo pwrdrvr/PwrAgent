@@ -186,6 +186,9 @@ function waitForServerRequest(
 function approvalText(
   request: AppServerPendingRequestNotification,
 ): { title: string; detail?: string } {
+  if (request.params.acpMcpToolName) {
+    return { title: truncate(`Use ${request.params.acpMcpToolName}`), detail: "MCP tool" };
+  }
   const command = approvalDisplayCommand(request.params);
   if (command) {
     return { title: truncate(`Run ${firstLine(command)}`), detail: "command" };
