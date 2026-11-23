@@ -3492,6 +3492,7 @@ describe("MessagingController", () => {
     deliver?: (intent: MessagingSurfaceIntent) => Promise<MessagingDeliveryResult>;
     inboundText?: string;
     inputDebounceMs?: number;
+    getThreadAgentTrustPolicy?: MessagingBackendBridge["getThreadAgentTrustPolicy"];
     now?: () => number;
     resolveDeliveryScope?: MessagingAdapter["resolveDeliveryScope"];
     responseModeForConversation?: MessagingControllerOptions["responseModeForConversation"];
@@ -3593,6 +3594,7 @@ describe("MessagingController", () => {
     };
     const harness = await createHarness({
       channel: "slack",
+      backendOverrides: { getThreadAgentTrustPolicy: options?.getThreadAgentTrustPolicy },
       ...(options?.deliveryBudget
         ? { deliveryBudget: options.deliveryBudget }
         : {}),
@@ -4329,9 +4331,9 @@ describe("MessagingController", () => {
     harness.controller.dispose();
   });
 
-  async function createDebouncedPrivateButtonRequest(inputDebounceMs = 500) {
+  async function createDebouncedPrivateButtonRequest(inputDebounceMs = 500, getThreadAgentTrustPolicy?: MessagingBackendBridge["getThreadAgentTrustPolicy"]) {
     vi.useFakeTimers();
-    const { harness } = await createSlackPrivateResponseHarness({ inputDebounceMs });
+    const { harness } = await createSlackPrivateResponseHarness({ inputDebounceMs, getThreadAgentTrustPolicy });
     await vi.advanceTimersByTimeAsync(500);
     await vi.waitFor(() => expect(harness.startTurn).toHaveBeenCalledTimes(1));
     await harness.controller.handlePwrAgentMessagingRequest({
@@ -4399,6 +4401,28 @@ describe("MessagingController", () => {
       input: expect.arrayContaining([{ type: "text", text: "I completed the login." }]),
     }));
     harness.controller.dispose();
+  });
+
+  it.each(["cancel", "retry"] as const)("allows private request %s after trust denies the first answer", async (next) => {
+    let restricted = false;
+    const { harness, binding, callback } = await createDebouncedPrivateButtonRequest(500, async () =>
+      restricted ? { version: 1, denialResponse: "silent", rules: [] } : undefined);
+    try {
+      restricted = true;
+      await harness.controller.handleInboundEvent(callback(0));
+      await vi.advanceTimersByTimeAsync(500);
+      expect(harness.startTurn).toHaveBeenCalledTimes(1);
+      expect(harness.delivered).not.toContainEqual(expect.objectContaining({ body: expect.stringContaining("Response received") }));
+      expect((await harness.store.getBinding(binding.id))?.revokedAt).toBeUndefined();
+
+      restricted = false;
+      await harness.controller.handleInboundEvent(callback(next === "cancel" ? 2 : 1));
+      await vi.advanceTimersByTimeAsync(500);
+      expect(harness.startTurn).toHaveBeenCalledTimes(next === "cancel" ? 1 : 2);
+      expect((await harness.store.getBinding(binding.id))?.revokedAt).toEqual(expect.any(Number));
+    } finally {
+      harness.controller.dispose();
+    }
   });
 
   it.each([

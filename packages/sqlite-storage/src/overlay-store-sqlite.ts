@@ -45,7 +45,7 @@ import { sqliteUsageLedgerVersions } from "./sqlite-usage-ledger-change-version"
 import { PROJECT_CHECKOUT_GROUPS_META_KEY, sqliteNavigationChangeVersion } from "./sqlite-navigation-change-version";
 import { buildAppendPinRank, buildPrependPinRank } from "@pwragent/shared/thread-pins";
 import { insertSubthreadIdAfter, sortSubthreadSummaries } from "@pwragent/shared/subthreads";
-import { navigationLaunchpadProviderKey } from "@pwragent/shared/contracts/navigation";
+import { navigationLaunchpadProviderKey, snapshotThreadAgentTrustPolicy } from "@pwragent/shared/contracts/navigation";
 import {
   isDefaultProjectForgeAutomation,
   resolveProjectForgeAutomation,
@@ -5472,12 +5472,18 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   async setThreadAgentTrustPolicy(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
+    expectedRevision: string;
     policy: NonNullable<ThreadOverlayState["agent"]>["trustPolicy"];
   }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
     return this.stateDb.raw.transaction(() => {
       const current = this.getThread(threadKey);
-      if (!current?.agent) throw new Error("Invocation trust requires a designated Agent thread.");
+      if (!current?.agent || current.queuedAgentChange?.agent === null) {
+        throw new Error("Invocation trust requires a designated Agent thread.");
+      }
+      if (params.expectedRevision !== snapshotThreadAgentTrustPolicy(current.agent.trustPolicy).revision) {
+        throw new Error("Messaging access changed while you were editing. Reopen the editor to apply your changes.");
+      }
       const next = { ...current, agent: { ...current.agent, updatedAt: Date.now(), trustPolicy: params.policy } };
       this.putThread(threadKey, next);
       return next;

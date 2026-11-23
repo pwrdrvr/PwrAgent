@@ -940,6 +940,7 @@ export type MessagingBaseSurfaceIntent = {
   fallbackText?: string;
   requestContext?: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     method: string;
     requestId: string;
     threadId: ThreadIdentifier;

@@ -136,6 +136,7 @@ import {
   type SetThreadAgentRequest,
   type SetThreadAgentTrustPolicyRequest,
   type ThreadAgentTrustPolicyTarget,
+  snapshotThreadAgentTrustPolicy,
   type SetThreadTokenMiserRequest,
   type SetThreadMonitorJobSuggestionsRequest,
   type SetThreadMonitorJobSuggestionsResponse,
@@ -1005,10 +1006,10 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_READ_THREAD_AGENT_TRUST_POLICY_CHANNEL);
   ipcMain.handle(NAVIGATION_READ_THREAD_AGENT_TRUST_POLICY_CHANNEL, async (_event, request: ThreadAgentTrustPolicyTarget) =>
-    ({ policy: (await getDesktopBackendRegistry().getThreadAgentMetadata(request))?.trustPolicy }));
+    snapshotThreadAgentTrustPolicy((await getDesktopBackendRegistry().getThreadAgentMetadata(request))?.trustPolicy));
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_AGENT_TRUST_POLICY_CHANNEL);
   ipcMain.handle(NAVIGATION_SET_THREAD_AGENT_TRUST_POLICY_CHANNEL, async (_event, request: SetThreadAgentTrustPolicyRequest) =>
-    (await getDesktopBackendRegistry().setThreadAgentTrustPolicy(request)).trustPolicy ?? null);
+    snapshotThreadAgentTrustPolicy((await getDesktopBackendRegistry().setThreadAgentTrustPolicy(request)).trustPolicy));
   ipcMain.handle(
     NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL,
     async (

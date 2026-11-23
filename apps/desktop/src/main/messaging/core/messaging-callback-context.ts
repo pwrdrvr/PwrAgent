@@ -32,6 +32,7 @@ import type { AcpRuntimeRiskWarningContext, FullAccessEscalationContext, Prepare
 
 export interface MessagingCallbackHost {
   readonly admitBoundAgentTrust: import("./messaging-agent-trust").BoundMessagingAgentTrustAdmission;
+  readonly admitPendingRequestTrust: (event: MessagingInboundCallbackEvent, pendingIntent: MessagingPendingIntentRecord) => Promise<boolean>;
   readonly commandHandlers: Pick<MessagingCommandHandlers, "continueClaudeThreadInNewSession" | "handleCommand" | "presentHelp" | "handleMonitorTopicCommand">;
   readonly presentDefaultAgentAssignmentBrowser: (event: MessagingInboundEvent, scopeKind: MessagingDefaultAgentScopeKind) => Promise<void>;
   readonly clearDefaultAgentAssignment: (event: MessagingInboundEvent, scopeKind: MessagingDefaultAgentScopeKind) => Promise<void>;
@@ -147,7 +148,7 @@ export interface MessagingCallbackHost {
   readonly privateReplyClaims: Pick<MessagingPrivateReplyClaims, "has" | "claim" | "complete" | "release">;
   readonly deliverPrivateReplyButtonState: (event: MessagingInboundCallbackEvent, body: string) => Promise<void>;
   readonly completePrivateReplyContinuation: (bindingId: string) => Promise<void>;
-  readonly admitTurnInput: (params: { binding: MessagingBindingRecord; event: MessagingTurnInputEvent; }) => Promise<boolean>;
+  readonly admitTurnInput: (params: { binding: MessagingBindingRecord; event: MessagingTurnInputEvent; awaitAcceptance?: boolean; }) => Promise<boolean>;
 }
 
 export interface MessagingCallbackContext {

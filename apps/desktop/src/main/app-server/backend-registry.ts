@@ -4256,20 +4256,24 @@ export class DesktopBackendRegistry {
     });
   }
 
+  private assertAgentDesignationCanChange(agent: NavigationLaunchpadAgent | null, overlay: ThreadOverlayState | undefined): void {
+    if (!agent && overlay?.agent?.trustPolicy !== undefined) {
+      throw new Error("Clear the Agent's invocation trust policy before removing its designation.");
+    }
+  }
+
   async setThreadAgent(params: {
     backend: AppServerBackendKind;
     threadId: string;
     agent: NavigationLaunchpadAgent | null;
   }): Promise<ThreadOverlayState> {
     this.assertNotBootstrap("setThreadAgent");
-    if (!params.agent && (await this.getThreadAgentMetadata(params))?.trustPolicy !== undefined) {
-      throw new Error("Clear the Agent's invocation trust policy before removing its designation.");
-    }
     if (params.backend !== "codex") {
       return await this.applyThreadAgentChange(params);
     }
     const result = await this.serializeCodexAgentChange(params.threadId, async () => {
       const current = await this.overlayStore.getThreadOverlayState(params);
+      this.assertAgentDesignationCanChange(params.agent, current);
       const sameAgent = (agent: typeof params.agent | undefined) =>
         (agent?.name ?? null) === (params.agent?.name ?? null)
         && (agent?.instructions ?? "") === (params.agent?.instructions ?? "");
@@ -4354,6 +4358,7 @@ export class DesktopBackendRegistry {
         await this.flushQueuedExecutionModeIfPresent(params.threadId);
         await this.withCodexThreadClient(params.threadId, async (client) => {
           const overlay = await this.overlayStore.getThreadOverlayState(params);
+          this.assertAgentDesignationCanChange(params.agent, overlay);
           const dynamicTools = await this.requireCodexAgentRefreshTools(client, params.threadId, overlay);
           const instructions = providerDeliveredAgentInstructions(params.agent) ?? "";
           if (client.replaceThreadDeveloperInstructions

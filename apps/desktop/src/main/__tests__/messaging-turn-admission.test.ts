@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import type {
   MessagingBindingRecord,
   MessagingInboundTextEvent,
@@ -102,6 +103,30 @@ describe("MessagingTurnAdmission", () => {
     expect(threadKeyForBinding(remote)).toBe(
       "remote:client_one:codex:thread-1",
     );
+  });
+
+  it("keeps each debounce bundle on the conversation that supplied its input", async () => {
+    vi.useFakeTimers();
+    const onBundleReady = vi.fn();
+    const admission = new MessagingTurnAdmission({ debounceMs: 500, onBundleReady });
+    await fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { maxLength: 6 }), async (interleaving) => {
+      onBundleReady.mockClear();
+      for (const [index, shared] of [false, ...interleaving, true].entries()) {
+        const base = buildBinding();
+        const channel = { ...base.channel, conversation: { ...base.channel.conversation, id: shared ? "shared" : "private" } };
+        await admission.append({
+          binding: { ...base, channel, id: channel.conversation.id },
+          event: { ...buildTextEvent(`fixture-${index}`), channel },
+        });
+      }
+      await vi.advanceTimersByTimeAsync(500);
+      expect(onBundleReady).toHaveBeenCalledTimes(2);
+      for (const [bundle] of onBundleReady.mock.calls) {
+        expect(bundle.events.every((event: MessagingInboundTextEvent) =>
+          event.channel.conversation.id === bundle.binding.channel.conversation.id)).toBe(true);
+      }
+    }));
+    admission.dispose();
   });
 });
 

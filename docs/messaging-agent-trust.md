@@ -66,9 +66,11 @@ Rejections mark the messaging activity log with the `agent-trust` stage,
 target thread, platform, conversation, and failure class. They contain no
 message, actor label, or verified property value. The lease owner samples at
 most one durable trust audit per two minutes across all Agents and providers.
-The same limit applies to generic interactive denial responses. At the measured
-20,632 WAL bytes per recorded rejection, continuous mismatches could produce
-about 14.9 MB/day. Idle profiles write nothing for trust decisions.
+The same limit applies to generic interactive denial responses. Continuous
+mismatches can produce about 14.9 MB/day of WAL with silent denials (one commit,
+20,632 bytes) or 29.7 MB/day with generic responses (three commits, 41,232 bytes,
+including the delivery record and outbound activity summary). Idle profiles
+write nothing for trust decisions.
 
 ## Portable definitions
 

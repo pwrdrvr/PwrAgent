@@ -8,6 +8,7 @@ import { messagingInboundHarness } from "./messaging-inbound-harness";
 export async function messagingPendingRequestHarness(options: {
   channel?: "telegram" | "discord";
   backend?: "codex" | "claude";
+  route?: "default-agent";
   maxLabelLength?: number;
   clock?: () => number;
 } = {}) {

@@ -153,6 +153,49 @@ it("keeps approvals actionable until backend acceptance, then retires markup and
   }), { numRuns: 25 });
 });
 
+it.each(["approval", "questionnaire-button", "questionnaire-text"] as const)(
+  "enforces updated trust for a default-route %s without a persisted binding",
+  async (kind) => {
+    const f = await messagingPendingRequestHarness({ route: "default-agent" });
+    try {
+      await f.controller.handleInboundEvent(f.event());
+      expect(f.starts).toHaveLength(1);
+      const turnId = "fixture-turn-1";
+      await f.controller.handleBackendPendingRequest("codex", kind === "approval"
+        ? { method: "item/commandExecution/requestApproval", params: {
+          threadId: "fixture-thread", requestId: "fixture-request", turnId, command: "fixture-command", prompt: "Run fixture?",
+        } }
+        : f.request(1, "fixture-request", turnId));
+      const card = await f.pending();
+      if (!card?.bindingId || card.intent.kind !== "approval" && card.intent.kind !== "questionnaire") {
+        throw new Error("Missing default-route card");
+      }
+      expect(await f.store.getBinding(card.bindingId)).toBeUndefined();
+      const respond = () => {
+        if (kind === "questionnaire-text") return f.controller.handleInboundEvent(f.event("Fixture freeform"));
+        const action = card.intent.kind === "approval" ? card.intent.decisions[0]?.id
+          : card.intent.kind === "questionnaire" ? card.intent.questions[0]?.options[0]?.id : undefined;
+        if (!action) throw new Error("Missing default-route action");
+        return f.callback(action);
+      };
+      f.inputHooks.trustPolicy = async (threadId) => {
+        expect(threadId).toBe("fixture-thread");
+        return { version: 1, denialResponse: "silent", rules: [] };
+      };
+      await respond();
+      expect(f.submissions).toHaveLength(0);
+      expect((await f.pending())?.intent).toEqual(card.intent);
+
+      f.inputHooks.trustPolicy = undefined;
+      await respond();
+      expect(f.submissions).toHaveLength(1);
+      expect(f.submissions[0]?.threadId).toBe("fixture-thread");
+    } finally {
+      await f.close();
+    }
+  },
+);
+
 it("keeps presentation reservations and deliveries isolated by provider and owning instance", async () => {
   await fc.assert(fc.asyncProperty(fc.scheduler(), fc.constantFrom("telegram", "discord"), async (scheduler, channel) => {
     const f = await messagingPendingRequestHarness({ channel });

@@ -383,8 +383,7 @@ export class MessagingCallbackHandlers {
         if (await this.retireApprovalCallbackIfBackendIdle(pendingIntent, event)) {
           return;
         }
-        const binding = pendingIntent.bindingId ? await this.context.store.getBinding(pendingIntent.bindingId) : undefined;
-        if (binding && !await this.context.host().admitBoundAgentTrust(event, binding)) return;
+        if (!await this.context.host().admitPendingRequestTrust(event, pendingIntent)) return;
         const decision = await this.context.host().submitApprovalAction(
           pendingIntent.intent,
           action.id,
@@ -2410,13 +2409,12 @@ export class MessagingCallbackHandlers {
       ...event,
       id: `${event.id}:private-reply:${action.optionIndex}`,
       kind: "text",
-      channel: binding.channel,
       routingState: binding.routingState,
       receivedAt: this.context.now(),
       text: option.text,
     };
     // Admission rechecks and acquires the claim after asynchronous validation.
-    if (!(await this.context.host().admitTurnInput({ binding, event: responseEvent }))) return;
+    if (!(await this.context.host().admitTurnInput({ binding, event: responseEvent, awaitAcceptance: true }))) return;
     await this.context.host().deliverPrivateReplyButtonState(
       event,
       "Response received. The Agent will continue in the original conversation.",

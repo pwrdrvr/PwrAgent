@@ -22,33 +22,45 @@ type PendingWindow = {
   events: MessagingTurnInputEvent[];
   threadKey: string;
   timer?: ReturnType<typeof setTimeout>;
+  onSettled?: (accepted: boolean) => void;
 };
 
 export class MessagingTurnAdmission {
-  private readonly pendingByThreadActorKey = new Map<string, PendingWindow>();
+  private readonly pendingByRoute = new Map<string, PendingWindow>();
   private readonly startingThreadKeys = new Set<string>();
   private sequence = 0;
 
   constructor(
     private readonly options: {
       debounceMs: number;
-      onBundleReady: (bundle: MessagingTurnAdmissionBundle) => void | Promise<void>;
+      onBundleReady: (bundle: MessagingTurnAdmissionBundle) => boolean | void | Promise<boolean | void>;
     },
   ) {}
 
   async append(params: {
     binding: MessagingBindingRecord;
     event: MessagingTurnInputEvent;
+    immediate?: boolean;
+    onSettled?: (accepted: boolean) => void;
   }): Promise<void> {
     const threadKey = threadKeyForBinding(params.binding);
-    const pendingKey = pendingKeyForActor(
+    const { channel, conversation } = params.event.channel;
+    const pendingKey = JSON.stringify([
       threadKey,
+      params.binding.id,
+      channel,
+      conversation.kind,
+      conversation.id,
+      conversation.parentId,
+      conversation.workspaceId,
       params.event.actor.platformUserId,
-    );
-    const existing = this.pendingByThreadActorKey.get(pendingKey);
+      params.binding.privateReplyContinuation?.requestId,
+    ]);
+    const flushNow = params.immediate || this.options.debounceMs <= 0;
+    const existing = this.pendingByRoute.get(pendingKey);
     if (existing) {
       existing.events.push(params.event);
-      if (this.options.debounceMs <= 0) {
+      if (flushNow) {
         await this.flush(pendingKey);
         return;
       }
@@ -59,24 +71,26 @@ export class MessagingTurnAdmission {
       return;
     }
 
-    this.pendingByThreadActorKey.set(pendingKey, {
+    this.pendingByRoute.set(pendingKey, {
       binding: params.binding,
       events: [params.event],
       threadKey,
-      timer: this.options.debounceMs > 0 ? this.schedule(pendingKey) : undefined,
+      timer: flushNow ? undefined : this.schedule(pendingKey),
+      onSettled: params.onSettled,
     });
-    if (this.options.debounceMs <= 0) {
+    if (flushNow) {
       await this.flush(pendingKey);
     }
   }
 
   dispose(): void {
-    for (const pending of this.pendingByThreadActorKey.values()) {
+    for (const pending of this.pendingByRoute.values()) {
       if (pending.timer) {
         clearTimeout(pending.timer);
       }
+      pending.onSettled?.(false);
     }
-    this.pendingByThreadActorKey.clear();
+    this.pendingByRoute.clear();
   }
 
   isStarting(threadKey: string): boolean {
@@ -98,25 +112,26 @@ export class MessagingTurnAdmission {
   }
 
   private async flush(pendingKey: string): Promise<void> {
-    const pending = this.pendingByThreadActorKey.get(pendingKey);
+    const pending = this.pendingByRoute.get(pendingKey);
     if (!pending) {
       return;
     }
     if (pending.timer) {
       clearTimeout(pending.timer);
     }
-    this.pendingByThreadActorKey.delete(pendingKey);
-    await this.options.onBundleReady({
-      binding: pending.binding,
-      events: pending.events,
-      id: `bundle:${++this.sequence}`,
-      threadKey: pending.threadKey,
-    });
+    this.pendingByRoute.delete(pendingKey);
+    let accepted = false;
+    try {
+      accepted = await this.options.onBundleReady({
+        binding: pending.binding,
+        events: pending.events,
+        id: `bundle:${++this.sequence}`,
+        threadKey: pending.threadKey,
+      }) === true;
+    } finally {
+      pending.onSettled?.(accepted);
+    }
   }
-}
-
-function pendingKeyForActor(threadKey: string, platformUserId: string): string {
-  return JSON.stringify([threadKey, platformUserId]);
 }
 
 export function threadKeyForBinding(binding: MessagingBindingRecord): string {

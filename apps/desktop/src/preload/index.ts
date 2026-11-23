@@ -579,6 +579,7 @@ import type {
   SetThreadAgentRequest,
   SetThreadAgentTrustPolicyRequest,
   ThreadAgentTrustPolicyTarget,
+  ThreadAgentTrustPolicySnapshot,
   SetThreadTokenMiserRequest,
   SetThreadMonitorJobSuggestionsRequest,
   SetThreadTokenMiserResponse,
@@ -3243,9 +3244,9 @@ const desktopApi = Object.freeze({
     request: SetThreadAgentRequest,
   ): Promise<SetThreadAgentResponse> =>
     await ipcRenderer.invoke(NAVIGATION_SET_THREAD_AGENT_CHANNEL, request),
-  readThreadAgentTrustPolicy: async (request: ThreadAgentTrustPolicyTarget): Promise<{ policy?: unknown }> =>
+  readThreadAgentTrustPolicy: async (request: ThreadAgentTrustPolicyTarget): Promise<ThreadAgentTrustPolicySnapshot> =>
     await ipcRenderer.invoke(NAVIGATION_READ_THREAD_AGENT_TRUST_POLICY_CHANNEL, request),
-  setThreadAgentTrustPolicy: async (request: SetThreadAgentTrustPolicyRequest): Promise<import("@pwragent/shared/contracts/agent-trust-policy").AgentTrustPolicy | null> =>
+  setThreadAgentTrustPolicy: async (request: SetThreadAgentTrustPolicyRequest): Promise<ThreadAgentTrustPolicySnapshot> =>
     await ipcRenderer.invoke(NAVIGATION_SET_THREAD_AGENT_TRUST_POLICY_CHANNEL, request),
   setThreadTokenMiser: async (
     request: SetThreadTokenMiserRequest,

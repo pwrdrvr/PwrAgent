@@ -589,9 +589,7 @@ export class MessagingController {
     this.showStreamingOptionConfig = options.showStreamingOption ?? false;
     this.turnAdmission = new MessagingTurnAdmission({
       debounceMs: options.inputDebounceMs ?? DEFAULT_INPUT_DEBOUNCE_MS,
-      onBundleReady: async (bundle) => {
-        await this.inboundTurns.handleAdmittedTurnBundle(bundle);
-      },
+      onBundleReady: (bundle) => this.inboundTurns.handleAdmittedTurnBundle(bundle),
     });
     this.toolUpdatePolicy = new MessagingToolUpdatePolicy({
       now: this.now,
@@ -745,9 +743,15 @@ export class MessagingController {
   }
 
   private async admitBoundAgentTrust(event: MessagingInboundEvent, binding: MessagingBindingRecord): Promise<boolean> {
-    const federationTarget = federationTargetForBinding(binding);
     const { backend, threadId } = binding;
-    const target = { backend, threadId, federationTarget };
+    return await this.admitAgentTrustForTarget(event, { backend, threadId, federationTarget: federationTargetForBinding(binding) });
+  }
+
+  private async admitAgentTrustForTarget(
+    event: MessagingInboundEvent,
+    target: Parameters<MessagingBackendBridge["getThreadAdmissionState"]>[0],
+  ): Promise<boolean> {
+    const { backend, threadId, federationTarget } = target;
     const bridge = this.options.backend;
     let policy: unknown;
     try {
@@ -1026,7 +1030,7 @@ export class MessagingController {
 
   private pendingRequestHost(): MessagingPendingRequestHost {
     return this.pendingRequestHostPorts ??= {
-      admitBoundAgentTrust: (...args) => this.admitBoundAgentTrust(...args),
+      admitAgentTrustForTarget: (...args) => this.admitAgentTrustForTarget(...args),
       filterBindingsForChannel: (...args) => this.filterBindingsForChannel(...args),
       bindingsForAgentTurn: (...args) => this.bindingsForAgentTurn(...args),
       readBackendThreadStatus: (...args) => this.readBackendThreadStatus(...args),
@@ -1159,6 +1163,7 @@ export class MessagingController {
       renderBindingStatus: (...args) => this.bindingService.renderBindingStatus(...args),
       repostLastAssistantMessageForResume: (...args) => this.repostLastAssistantMessageForResume(...args),
       submitApprovalAction: (...args) => this.pendingRequests.submitApprovalAction(...args),
+      admitPendingRequestTrust: (...args) => this.pendingRequests.admitPendingRequestTrust(...args),
       retireApprovalIntent: (...args) => this.pendingRequests.retireApprovalIntent(...args),
       resumeBindingForPendingIntent: (...args) => this.pendingRequests.resumeBindingForPendingIntent(...args),
       handleQuestionnaireAction: (...args) => this.pendingRequests.handleQuestionnaireAction(...args),

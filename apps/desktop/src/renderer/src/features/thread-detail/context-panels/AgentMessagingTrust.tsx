@@ -11,7 +11,7 @@ import {
   type AgentTrustRule,
 } from "@pwragent/shared/contracts/agent-trust-policy";
 import type { MessagingActivityEntry } from "@pwragent/shared/contracts/messaging";
-import type { ThreadAgentTrustPolicyTarget } from "@pwragent/shared/contracts/navigation";
+import type { ThreadAgentTrustPolicySnapshot, ThreadAgentTrustPolicyTarget } from "@pwragent/shared/contracts/navigation";
 import { Select } from "../../../components/Select";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { useModalDialog } from "../../../lib/useModalDialog";
@@ -54,9 +54,9 @@ export function AgentMessagingTrust(props: {
   const { backend, threadId } = props.target;
   const read = props.api.readThreadAgentTrustPolicy;
   const save = props.api.setThreadAgentTrustPolicy;
-  const [snapshot, setSnapshot] = useState<{ policy?: unknown }>();
+  const [snapshot, setSnapshot] = useState<ThreadAgentTrustPolicySnapshot>();
   const [error, setError] = useState<string>();
-  const [open, setOpen] = useState(false);
+  const [draftBase, setDraftBase] = useState<ThreadAgentTrustPolicySnapshot>();
 
   useEffect(() => {
     if (!read) return;
@@ -81,12 +81,12 @@ export function AgentMessagingTrust(props: {
         <p className="context-list__label">Messaging access</p>
         <p className="context-list__meta">{status}</p>
       </div>
-      <button className="context-list__action" type="button" disabled={!snapshot || !!error} onClick={() => setOpen(true)}>Edit access</button>
-      {open ? <TrustDialog agentName={props.agentName} policy={policy} listActivity={props.api.listMessagingActivity} target={props.target}
-        onClose={() => setOpen(false)} onSave={async (next) => {
-          const saved = await save({ backend, threadId, policy: next });
-          setSnapshot({ policy: saved ?? undefined });
-          setOpen(false);
+      <button className="context-list__action" type="button" disabled={!snapshot || !!error} onClick={() => setDraftBase(snapshot)}>Edit access</button>
+      {draftBase ? <TrustDialog agentName={props.agentName} policy={draftBase.policy} listActivity={props.api.listMessagingActivity} target={props.target}
+        onClose={() => setDraftBase(undefined)} onSave={async (next) => {
+          const saved = await save({ backend, threadId, expectedRevision: draftBase.revision, policy: next });
+          setSnapshot(saved);
+          setDraftBase(undefined);
           void props.refresh?.();
         }} /> : null}
     </div>

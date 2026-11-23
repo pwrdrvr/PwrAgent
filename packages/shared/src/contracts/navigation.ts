@@ -3130,8 +3130,19 @@ export type ThreadAgentTrustPolicyTarget = {
 };
 
 export type SetThreadAgentTrustPolicyRequest = ThreadAgentTrustPolicyTarget & {
+  expectedRevision: string;
   policy: AgentTrustPolicy | null;
 };
+
+export type ThreadAgentTrustPolicySnapshot = {
+  policy?: unknown;
+  revision: string;
+};
+
+/** Use the stored policy content as the edit revision, including its absence. */
+export function snapshotThreadAgentTrustPolicy(policy: unknown): ThreadAgentTrustPolicySnapshot {
+  return { policy, revision: JSON.stringify({ policy }) };
+}
 
 export type SetThreadTokenMiserRequest = {
   federationTarget?: FederationTarget;

@@ -687,6 +687,7 @@ export class MessagingInboundTurns {
   async admitTurnInput(params: {
     binding: MessagingBindingRecord;
     event: MessagingTurnInputEvent;
+    awaitAcceptance?: boolean;
   }): Promise<boolean> {
     const requestId = params.binding.privateReplyContinuation?.requestId;
     // Claim synchronously before append can yield or buffer the response. Cancel
@@ -695,10 +696,19 @@ export class MessagingInboundTurns {
     if (requestId && !replyClaim) return false;
     this.markAdmissionStage(params.event, "routed");
     const startedAt = this.context.now();
+    let accepted = false;
     try {
-      await this.context.host().turnAdmission.append(params);
-      if (replyClaim) this.context.host().privateReplyClaims.complete(replyClaim);
-      return true;
+      await this.context.host().turnAdmission.append({
+        ...params,
+        immediate: params.awaitAcceptance,
+        onSettled: replyClaim ? (result) => {
+          accepted = result;
+          const claims = this.context.host().privateReplyClaims;
+          if (result) claims.complete(replyClaim);
+          else claims.release(replyClaim);
+        } : undefined,
+      });
+      return !params.awaitAcceptance || accepted;
     } catch (error) {
       if (replyClaim) this.context.host().privateReplyClaims.release(replyClaim);
       throw error;
@@ -875,7 +885,7 @@ export class MessagingInboundTurns {
 
   async handleAdmittedTurnBundle(
     bundle: MessagingTurnAdmissionBundle,
-  ): Promise<void> {
+  ): Promise<boolean> {
     this.markAdmissionStage(bundle.events[0], "bundleReady");
     // Only the first event of a bundle is carried forward to the start-turn
     // log, so the others' marks can never be consumed. Dropping them here is
@@ -909,7 +919,7 @@ export class MessagingInboundTurns {
       policy = await this.context.backend.getThreadAgentTrustPolicy?.(target);
     } catch (error) {
       this.context.logger.warn?.("messaging Agent trust lookup failed", { backend: target.backend, error });
-      return;
+      return false;
     }
     const allowedEvents: MessagingTurnInputEvent[] = [];
     for (const event of bundle.events) {
@@ -920,10 +930,10 @@ export class MessagingInboundTurns {
       this.context.host().rememberHumanMessagingSource(currentBinding, event);
     }
     const [firstEvent] = allowedEvents;
-    if (!firstEvent) return;
+    if (!firstEvent) return false;
     const prepared = await this.prepareTurnInput(allowedEvents, currentBinding, firstEvent);
     if (!prepared) {
-      return;
+      return false;
     }
     this.markAdmissionStage(firstEvent, "inputPrepared");
     const preparedWithSkill = this.prependPendingSkillSelection(
@@ -951,16 +961,13 @@ export class MessagingInboundTurns {
         consumedSkillBinding,
         firstEvent,
       );
-      return;
+      return false;
     }
 
     const latestPolicy = admissionState.thread?.agent?.trustPolicy;
     if (latestPolicy !== undefined && JSON.stringify(latestPolicy) !== JSON.stringify(policy)) {
       // Work already prepared against a different policy is no longer admissible.
-      return;
-    }
-    if (currentBinding.privateReplyContinuation) {
-      await this.context.host().completePrivateReplyContinuation(currentBinding.id);
+      return false;
     }
     this.markAdmissionStage(firstEvent, "occupancyResolved");
     const startResult = await this.startPreparedInput({
@@ -973,10 +980,19 @@ export class MessagingInboundTurns {
       event: firstEvent,
       admissionState,
     });
-    if (startResult !== "failed" && currentBinding.pendingSkillSelection) {
+    if (startResult === "failed") return false;
+    if (currentBinding.privateReplyContinuation) {
+      try {
+        await this.context.host().completePrivateReplyContinuation(currentBinding.id);
+      } catch (error) {
+        this.context.logger.warn?.("accepted private reply continuation could not be retired", { bindingId: currentBinding.id, error });
+      }
+    }
+    if (currentBinding.pendingSkillSelection) {
       const updatedBinding = await this.context.host().clearPendingSkillSelection(currentBinding);
       await this.context.host().bindingService.renderAutomaticBindingStatus(updatedBinding, firstEvent);
     }
+    return true;
   }
 
   prependPendingSkillSelection(
@@ -1438,7 +1454,7 @@ export class MessagingInboundTurns {
     threadKey: string;
   }): Promise<PreparedInputStartResult> {
     this.context.host().turnAdmission.markStarting(params.threadKey);
-    let turnStarted = false;
+    let acceptedStatus: "queued" | "started" | undefined;
     let startingOrigin: ActiveAgentMessagingOrigin | undefined;
     let preparingActivity: ReturnType<MessagingInboundHost["beginTurnPreparationActivity"]> | undefined;
     const startingThreadKey = agentMessagingThreadKey(
@@ -1608,6 +1624,7 @@ export class MessagingInboundTurns {
         messageOrigin: messageOriginForInboundEvent(params.event, startingOrigin?.source?.ref),
         ...turnSettings,
       });
+      acceptedStatus = started.queueStatus === "queued" ? "queued" : "started";
       const startTurnAcceptedAt = this.context.now();
       const acceptanceTiming = params.event
         ? {
@@ -1658,7 +1675,6 @@ export class MessagingInboundTurns {
         }
         return "queued";
       }
-      turnStarted = true;
       this.context.logger.info?.("messaging turn started", {
         bindingId: params.binding.id,
         threadId: params.binding.threadId,
@@ -1710,14 +1726,14 @@ export class MessagingInboundTurns {
       );
       return "started";
     } catch (error) {
-      await preparingActivity?.finish(turnStarted);
+      await preparingActivity?.finish(acceptedStatus === "started");
       preparingActivity = undefined;
-      if (turnStarted) {
-        this.context.logger.debug?.("messaging post-start update failed", {
+      if (acceptedStatus) {
+        this.context.logger.debug?.("messaging update after owner acceptance failed", {
           error: error instanceof Error ? error.message : String(error),
           threadId: params.binding.threadId,
         });
-        return "started";
+        return acceptedStatus;
       }
       // Recovery previously kept busy refusals silent. Preserve that error
       // boundary and write cost while retaining its input for explicit Retry.
@@ -1750,7 +1766,7 @@ export class MessagingInboundTurns {
       );
       return "failed";
     } finally {
-      await preparingActivity?.finish(turnStarted);
+      await preparingActivity?.finish(acceptedStatus === "started");
       this.context.host().turnAdmission.clearStarting(params.threadKey);
       if (
         startingOrigin

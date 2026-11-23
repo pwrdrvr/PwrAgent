@@ -1,4 +1,5 @@
 {
+  "messaging-agent-trust-generic-denial": {"commits": 3, "note": "Full generic denial through the controller, including audit, provider delivery record, and outbound activity summary. One sampled response across 1,000 denials.", "observedWalBytes": 41232, "rowsChanged": 3, "statements": 3},
   "messaging-agent-trust-save": {"commits": 1, "note": "One explicit trust policy save by the operator.", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
   "messaging-agent-trust-rejections": {"commits": 1, "note": "One redacted audit commit in a burst of 1,000 mismatches across Agents and channels. Global cooldown is 120 seconds.", "observedWalBytes": 20632, "rowsChanged": 1, "statements": 1},
   "cold-collapsed-project-thread-creation": {"commits": 4, "note": "One new thread, including its automatic pin with no navigation snapshot. At 100 starts/day, about 5.4 MB/day. No idle writes.", "observedWalBytes": 53560, "rowsChanged": 4, "statements": 4},
