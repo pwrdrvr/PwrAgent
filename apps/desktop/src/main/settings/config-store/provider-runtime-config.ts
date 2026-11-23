@@ -5,6 +5,7 @@ import type {
   ProviderProjection,
 } from "./config-domains";
 import {
+  ACP_AGENTS_ANTIGRAVITY_CLI_PATH_ENV,
   ACP_AGENTS_GEMINI_CLI_PATH_ENV,
   ACP_AGENTS_GROK_CLI_PATH_ENV,
   ACP_AGENTS_KIMI_CLI_PATH_ENV,
@@ -12,6 +13,7 @@ import {
 } from "../desktop-settings-env";
 
 const ACP_CLI_PATH_ENV_BY_ID: Readonly<Record<string, string>> = {
+  antigravity: ACP_AGENTS_ANTIGRAVITY_CLI_PATH_ENV,
   gemini: ACP_AGENTS_GEMINI_CLI_PATH_ENV,
   grok: ACP_AGENTS_GROK_CLI_PATH_ENV,
   kimi: ACP_AGENTS_KIMI_CLI_PATH_ENV,

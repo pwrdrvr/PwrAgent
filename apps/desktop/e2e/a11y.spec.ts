@@ -485,6 +485,37 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
       rules: options?.rules ?? (colorTheme ? COLOR_RULES : undefined),
     });
   test.describe(`desktop renderer accessibility (WCAG2 AA, ${theme} theme${colorThemeLabel})`, () => {
+    test("Job Monitors composer options have no violations", async () => {
+      const app = await launchAuditApp(appearance);
+      try {
+        await app.window.getByRole("button", { name: /Replay smoke thread/i }).first().click();
+        const trigger = app.window.getByRole("button", { name: "Thread options", exact: true });
+        await trigger.click();
+        const menu = app.window.getByRole("menu", { name: "Thread options", exact: true });
+        const monitors = menu.getByRole("menuitemcheckbox", { name: "Job Monitors", exact: true });
+        const include = ".composer-thread-options__menu";
+        await expect(monitors).toHaveAttribute("aria-checked", "true");
+        const mcpAccess = menu.getByRole("menuitem", { name: /^PwrAgent MCPs/ });
+        await expect(mcpAccess).toContainText("none selected");
+        await mcpAccess.hover();
+        await runAxe(app.window, "Job Monitors on", { include });
+        await monitors.click();
+        await expect(monitors).toHaveAttribute("aria-checked", "false");
+        await expect(monitors).not.toHaveAttribute("aria-busy", "true");
+        await expect(monitors).toContainText("The agent can't start new ones.");
+        const suggestions = menu.getByRole("menuitemcheckbox", { name: "Monitor job suggestions", exact: true });
+        await expect(suggestions).toHaveAttribute("aria-disabled", "true");
+        await expect(suggestions).toContainText("needs Job Monitors");
+        await runAxe(app.window, "Job Monitors off", { include });
+        await monitors.press("ArrowDown");
+        await expect(suggestions).toBeFocused();
+        await app.window.keyboard.press("Escape");
+        await expect(trigger).toBeFocused();
+      } finally {
+        await app.close();
+      }
+    });
+
     test("smoke fixture surfaces have no violations", async () => {
       const app = await launchAuditApp(appearance);
       try {

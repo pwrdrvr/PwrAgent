@@ -39,7 +39,7 @@ import {
 import type { DesktopSettingsConfig } from "../desktop-config";
 
 export const CONFIG_STORE_DURABLE_SCHEMA_VERSION = 1;
-export const PROVIDER_IDS = ["codex", "gemini", "grok", "kimi", "qwen"] as const;
+export const PROVIDER_IDS = ["codex", "antigravity", "gemini", "grok", "kimi", "qwen"] as const;
 
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 

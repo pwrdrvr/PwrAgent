@@ -1,6 +1,7 @@
 import { FORGE_KINDS, FORGE_PRODUCTS, type ForgeKind } from "@pwragent/shared/forge-product";
 import { FORGE_SETTINGS } from "./forge-settings";
-import type { GhStatus } from "@pwragent/shared/contracts/navigation";
+import type { GhStatus, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { SkillProfileDirectory } from "./CodexSkillProfilesSettings";
 import type { AcpAgentSettingsEntry, BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
@@ -86,6 +87,8 @@ import {
 } from "react";
 import { BrandLockup } from "../chrome/BrandLockup";
 
+import { AgentPresetsSettings } from "./AgentPresetsSettings";
+
 export type SettingsSection =
   | "general"
   | "keyboard"
@@ -100,6 +103,7 @@ export type SettingsSection =
   | "pricing"
   | "applications"
   | "plugins"
+  | "agent-presets"
   | "worktrees"
   | "environments"
   | "thread-management"
@@ -113,6 +117,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "updates", label: "Updates" },
   { id: "applications", label: "Applications" },
   { id: "plugins", label: "Plugins" },
+  { id: "agent-presets", label: "Agent Presets" },
   { id: "profiles", label: "Profiles" },
   { id: "models", label: "AI Providers" },
   { id: "pricing", label: "Usage & Pricing" },
@@ -150,7 +155,7 @@ const SETTINGS_NAV_CATEGORIES = [
     label: "App",
     sections: ["general", "keyboard", "updates", "applications", "profiles"],
   },
-  { id: "agents", label: "Agents", sections: ["models", "plugins", "pricing"] },
+  { id: "agents", label: "Agents", sections: ["models", "plugins", "agent-presets", "pricing"] },
   {
     id: "projects",
     label: "Projects",
@@ -338,6 +343,8 @@ const SECTION_LABELS = new Map(
 
 
 export function SettingsScreen(props: {
+  skillProfileDirectories?: readonly SkillProfileDirectory[];
+  skillProfileThreads?: readonly NavigationThreadSummary[];
   /** Live theme + density controller from the App root. Threaded down to
    *  Settings → General → Appearance. Optional so the fatal-settings
    *  early-return fallbacks (which render SettingsScreen alone) can omit
@@ -974,6 +981,8 @@ export function SettingsScreen(props: {
               <GuidedSetupLaunchProvider launch={setGuidedSetup}>
                 <SettingsSectionBody
                   acpAgents={acpCatalog.entries}
+                  skillProfileDirectories={props.skillProfileDirectories}
+                  skillProfileThreads={props.skillProfileThreads}
                   appearanceController={props.appearanceController}
                   cachedBackends={props.cachedBackends}
                   claudeSignIn={props.claudeSignIn}
@@ -1018,6 +1027,8 @@ export function SettingsScreen(props: {
 }
 
 function SettingsSectionBody(props: {
+  skillProfileDirectories?: readonly SkillProfileDirectory[];
+  skillProfileThreads?: readonly NavigationThreadSummary[];
   /** The ACP agent catalog the nav already read. */
   acpAgents?: AcpAgentSettingsEntry[];
   appearanceController?: AppearanceController;
@@ -1217,6 +1228,10 @@ function SettingsSectionBody(props: {
         }}
       />
     );
+  }
+
+  if (props.section === "agent-presets") {
+    return <AgentPresetsSettings desktopApi={props.desktopApi} />;
   }
 
   if (props.section === "pricing") {
@@ -1724,6 +1739,8 @@ function SettingsSectionBody(props: {
       claudeSignIn={props.claudeSignIn}
       desktopApi={props.desktopApi}
       focus={props.sub}
+      skillProfileDirectories={props.skillProfileDirectories}
+      skillProfileThreads={props.skillProfileThreads}
       onFocusChange={(focus) => props.onOpenRoute("models", focus)}
       saving={props.settings.saving}
       snapshot={props.snapshot}
@@ -1770,6 +1787,9 @@ function SettingsSectionBody(props: {
       onSaveCodexModelProviders={async (providers) => {
         return await props.settings.writeConfig({ models: { codex: { providers } } });
       }}
+      onSaveCodexSkillProfiles={async (skillProfiles) => {
+        return await props.settings.writeConfig({ models: { codex: { skillProfiles } } });
+      }}
       onSaveDecisionModels={async (decisionModels) => {
         return await props.settings.writeConfig({
           models: { decisionModels },
@@ -1800,7 +1820,7 @@ function SettingsSectionBody(props: {
         });
       }}
       onManagedCodexBuildChannelChange={async (managedBuildChannel) => {
-        return await props.settings.writeConfig({
+        return await props.settings.writeConfigWithSnapshot({
           models: {
             codex: { managedBuildChannel },
           },

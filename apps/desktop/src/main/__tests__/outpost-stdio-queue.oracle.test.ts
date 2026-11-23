@@ -148,7 +148,7 @@ models = ["proxy-model"]
     expect(effectCalls()).toHaveLength(2);
   });
 
-  it("uses the proxy preset when reading and sending stored OpenAI launchpads without saving it over their defaults", async () => {
+  it("uses the proxy preset for remote launches without consuming the owner's draft or changing defaults", async () => {
     const root = prepareProxyProfile(`
 [[models.codex.providers]]
 id = "proxy"
@@ -166,6 +166,7 @@ execution_mode = "default"
     const database = path.join(root, "profiles/t/state/state.db");
     const openai = { backend: "codex", executionMode: "full-access", model: "gpt-5.5" } as const;
     const proxy = { backend: "codex", executionMode: "default", codexModelProviderId: "proxy", model: "@proxy/proxy-model" } as const;
+    const ownerPrompt = "Continue the owner's saved draft";
     let host: OutpostDaemon | undefined;
     try {
       const db = StateDb.open(database);
@@ -174,7 +175,7 @@ execution_mode = "default"
         const store = new SqliteOverlayStore(db);
         before = await store.setLaunchpadDefaults(openai);
         await store.upsertDirectoryLaunchpad({ ...openai, directoryKey, directoryKind: "directory", directoryLabel: "Saved project",
-          directoryPath, workMode: "local", prompt: "Continue the saved draft", createdAt: 1, updatedAt: 1 });
+          directoryPath, workMode: "local", prompt: ownerPrompt, createdAt: 1, updatedAt: 1 });
       } finally { db.close(); }
       host = await startOutpostDaemon({ profileRoot: root, packageRoot: directory, fixturePreload: preload,
         capabilities: [...OUTPOST_VIEWER_CAPABILITIES, "launchpad_metadata"],
@@ -187,15 +188,27 @@ execution_mode = "default"
       expect.soft(ensured.defaults).toMatchObject(proxy);
       expect.soft(ensured.launchpad).toMatchObject(proxy);
 
-      // The stored draft has the same effective settings as the config read.
-      await expect.soft(host.client.materializeDirectoryLaunchpad({ directoryKey, releaseLaunchpadOnSubmit: true }))
-        .resolves.toMatchObject({ backend: "codex", executionMode: "default", turnId: expect.any(String) });
+      // Both launches use the owner's effective project settings. Only the
+      // viewer's explicit input may start a turn on a remote launch.
+      const request = { directoryKey, releaseLaunchpadOnSubmit: true };
+      const withoutInput = await host.client.materializeDirectoryLaunchpad(request);
+      expect.soft(withoutInput).toMatchObject({ backend: "codex", executionMode: "default" });
+      expect.soft(withoutInput.turnId).toBeUndefined();
+      const input = [{ type: "text" as const, text: "Run the viewer's request" }];
+      const withInput = await host.client.materializeDirectoryLaunchpad({ ...request, input });
+      expect.soft(withInput).toMatchObject({ backend: "codex", executionMode: "default", turnId: expect.any(String) });
+      const calls = fs.readFileSync(path.join(root, "f", "calls.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+      expect.soft(calls.filter(call => call.method === "turn/start")).toEqual([
+        expect.objectContaining({ params: expect.objectContaining({ threadId: withInput.threadId, model: "proxy-model",
+          input: [expect.objectContaining(input[0])] }) }),
+      ]);
       await host.close();
       host = undefined;
       const reopened = StateDb.open(database);
       try {
         const store = new SqliteOverlayStore(reopened);
         expect(await store.getLaunchpadDefaults()).toEqual(before);
+        expect(await store.getDirectoryLaunchpad({ directoryKey })).toMatchObject({ ...openai, prompt: ownerPrompt });
       } finally { reopened.close(); }
     } finally {
       await host?.close();

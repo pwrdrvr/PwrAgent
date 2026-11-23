@@ -1,6 +1,7 @@
 /** In-memory only. No timers, filesystem reads, or per-request log writes. */
 export type DirectoryEnrichmentCaller =
   | "thread-list"
+  | "verified-directory-list"
   | "selected-thread"
   | "missing-worktree-backfill"
   | "explicit-enrichment"

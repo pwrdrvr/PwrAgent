@@ -1,5 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { MessagingAdapterValidationRejection } from "@pwragent/messaging-interface";
 import {
   logMattermostInvalidIdentifier,
   validateMattermostId,
@@ -64,6 +65,7 @@ export type MattermostCallbackHandlerResult = {
 export type MattermostCallbackHandler = (
   body: MattermostInteractiveCallbackBody,
   rawBody: string,
+  receivedAt: number,
 ) => Promise<MattermostCallbackHandlerResult | void> | MattermostCallbackHandlerResult | void;
 
 /**
@@ -117,6 +119,7 @@ export type MattermostSlashCommandResult = {
 export type MattermostSlashCommandHandler = (
   body: MattermostSlashCommandBody,
   rawBody: string,
+  receivedAt: number,
 ) => Promise<MattermostSlashCommandResult | void> | MattermostSlashCommandResult | void;
 
 export type MattermostCallbackServerConfig = {
@@ -132,6 +135,8 @@ export type MattermostCallbackServerConfig = {
    */
   hmacSecret: string;
   handler: MattermostCallbackHandler;
+  now?: () => number;
+  onValidationRejected?: (event: MessagingAdapterValidationRejection) => void;
   /**
    * Optional slash-command handler. When set, POSTs whose Content-Type
    * is `application/x-www-form-urlencoded` are routed here after the
@@ -217,6 +222,7 @@ export function createMattermostCallbackServer(
     request: IncomingMessage,
     response: ServerResponse,
   ): Promise<void> => {
+    const receivedAt = (config.now ?? Date.now)();
     const respondInteractiveAck = (
       result?: MattermostCallbackHandlerResult,
     ): void => {
@@ -300,6 +306,7 @@ export function createMattermostCallbackServer(
     if (isFormEncoded) {
       await handleSlashCommand({
         rawBody,
+        receivedAt,
         config,
         respond: respondCommandAck,
       });
@@ -329,7 +336,7 @@ export function createMattermostCallbackServer(
       return;
     }
 
-    if (!intentId || !actionId || issuedAtRaw === undefined || !providedHmac) {
+    if (!intentId || !actionId || issuedAtRaw === undefined) {
       config.logger.warn("mattermost callback context missing required fields", {
         hasIntentId: Boolean(intentId),
         hasActionId: Boolean(actionId),
@@ -340,25 +347,26 @@ export function createMattermostCallbackServer(
       return;
     }
 
-    const expectedHmac = computeMattermostContextHmac({
+    if (!providedHmac || !safeEqual(providedHmac, computeMattermostContextHmac({
       hmacSecret: config.hmacSecret,
       intentId,
       actionId,
       issuedAt: issuedAtRaw,
-    });
-
-    if (!safeEqual(providedHmac, expectedHmac)) {
+    }))) {
       // Always respond 200 — never reveal verification status to attackers.
-      config.logger.warn("mattermost callback HMAC verification failed", {
-        issuedAt: issuedAtRaw,
-      });
+      config.logger.warn("mattermost callback HMAC verification failed", {});
       respondInteractiveAck();
+      config.onValidationRejected?.({
+        kind: "validation",
+        reason: "callback-signature",
+        receivedAt,
+      });
       return;
     }
 
     let handlerResult: MattermostCallbackHandlerResult | void = undefined;
     try {
-      handlerResult = await config.handler(body, rawBody);
+      handlerResult = await config.handler(body, rawBody, receivedAt);
     } catch (error) {
       config.logger.error("mattermost callback handler threw", {
         error: error instanceof Error ? error.message : String(error),
@@ -379,11 +387,12 @@ export function createMattermostCallbackServer(
    */
   const handleSlashCommand = async (params: {
     rawBody: string;
+    receivedAt: number;
     config: MattermostCallbackServerConfig;
     respond: (result?: MattermostSlashCommandResult) => void;
   }): Promise<void> => {
-    const { rawBody, config: cfg, respond } = params;
-    const body = parseSlashCommandBody(rawBody);
+    const { rawBody, receivedAt, config: cfg, respond } = params;
+    const body = parseSlashCommandFields(rawBody);
     if (!body) {
       cfg.logger.warn("mattermost slash command body unparseable; dropping", {
         bytes: rawBody.length,
@@ -404,23 +413,29 @@ export function createMattermostCallbackServer(
     }
     const validTokens = cfg.validSlashCommandTokens;
     if (!validTokens || validTokens.size === 0) {
-      cfg.logger.warn("mattermost slash command rejected — no tokens registered", {
-        command: body.command,
-      });
+      cfg.logger.warn("mattermost slash command rejected — no tokens registered", {});
       respond();
+      cfg.onValidationRejected?.({
+        kind: "validation",
+        reason: "command-authentication",
+        receivedAt,
+      });
       return;
     }
-    if (!isAcceptedSlashCommandToken(body.token, validTokens)) {
-      cfg.logger.warn("mattermost slash command token verification failed", {
-        command: body.command,
-        teamId: body.team_id,
-      });
+    const { token } = body;
+    if (!token || !isAcceptedSlashCommandToken(token, validTokens)) {
+      cfg.logger.warn("mattermost slash command token verification failed", {});
       respond();
+      cfg.onValidationRejected?.({
+        kind: "validation",
+        reason: "command-authentication",
+        receivedAt,
+      });
       return;
     }
     let result: MattermostSlashCommandResult | void = undefined;
     try {
-      result = await cfg.slashCommandHandler(body, rawBody);
+      result = await cfg.slashCommandHandler({ ...body, token }, rawBody, receivedAt);
     } catch (error) {
       cfg.logger.error("mattermost slash command handler threw", {
         error: error instanceof Error ? error.message : String(error),
@@ -532,11 +547,12 @@ function validateInteractiveCallbackIdentifiers(
 }
 
 function validateSlashCommandIdentifiers(
-  body: MattermostSlashCommandBody,
+  body: MattermostSlashCommandFields,
   logger: MattermostCallbackServerConfig["logger"],
 ): boolean {
   return (
-    validateMattermostIdentifier("token", body.token, validateMattermostOpaqueToken, logger)
+    (body.token === undefined
+      || validateMattermostIdentifier("token", body.token, validateMattermostOpaqueToken, logger))
     && validateMattermostIdentifier("team_id", body.team_id, validateMattermostId, logger)
     && validateMattermostIdentifier("channel_id", body.channel_id, validateMattermostId, logger)
     && validateMattermostIdentifier("user_id", body.user_id, validateMattermostId, logger)
@@ -594,6 +610,15 @@ function safeEqual(left: string, right: string): boolean {
 export function parseSlashCommandBody(
   rawBody: string,
 ): MattermostSlashCommandBody | undefined {
+  const fields = parseSlashCommandFields(rawBody);
+  return fields?.token ? { ...fields, token: fields.token } : undefined;
+}
+
+type MattermostSlashCommandFields = Omit<MattermostSlashCommandBody, "token"> & {
+  token?: string;
+};
+
+function parseSlashCommandFields(rawBody: string): MattermostSlashCommandFields | undefined {
   const params = new URLSearchParams(rawBody);
   const get = (key: string): string | undefined => {
     const value = params.get(key);
@@ -604,7 +629,7 @@ export function parseSlashCommandBody(
   const channelId = get("channel_id");
   const userId = get("user_id");
   const command = get("command");
-  if (!token || !teamId || !channelId || !userId || !command) {
+  if (!teamId || !channelId || !userId || !command) {
     return undefined;
   }
   return {

@@ -15,7 +15,7 @@ import { rankDirectoryMentionMatches } from "@pwragent/shared/directory-mention-
 import { rankThreadJumpMatches } from "@pwragent/shared/thread-jump-match";
 import { getHomeDir } from "../lib/tildify-path";
 
-type FixtureDirectory = Pick<NavigationDirectorySummary, "key" | "kind" | "label" | "path" | "latestUpdatedAt" | "pinnedRank" | "directoryThreadsCollapsed" | "gitStatus" | "launchpad" | "localAvailability" | "forgeAutomation" | "peerProject"> & {
+type FixtureDirectory = Pick<NavigationDirectorySummary, "key" | "kind" | "label" | "path" | "checkoutPaths" | "latestUpdatedAt" | "pinnedRank" | "directoryThreadsCollapsed" | "gitStatus" | "launchpad" | "localAvailability" | "forgeAutomation" | "peerProject"> & {
   threadKeys?: string[];
   repositoryKey?: string;
   repositoryKeys?: string[];
@@ -167,6 +167,7 @@ export function navigationQueryFixture(
         return !root.pinnedRank && !thread.codexNativeSubAgent;
       }).length;
       return { key: directory.key, kind: directory.kind, label: directory.label, path: directory.path,
+        ...(directory.checkoutPaths ? { checkoutPaths: directory.checkoutPaths } : {}),
         ...(directory.repositoryKey ? { repositoryKey: directory.repositoryKey } : {}),
         ...(directory.repositoryKeys ? { repositoryKeys: directory.repositoryKeys } : {}),
         pinnedRank: directory.pinnedRank, directoryThreadsCollapsed: directory.directoryThreadsCollapsed, localAvailability: directory.localAvailability,

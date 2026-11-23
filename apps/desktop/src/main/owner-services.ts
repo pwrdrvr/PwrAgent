@@ -8,7 +8,7 @@ import { initializeResearchRuntime, closeResearchRuntime } from "./research/rese
 import { bindResearchRegistry, createResearchRegistryPorts } from "./research/research-registry";
 import { researchToolsOffered } from "./agent-tools/pwragent-research-agent-tools";
 import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
-import { initializeDesktopAutomationService, disposeDesktopAutomationService } from "./automations/desktop-automation-service";
+import { initializeDesktopAutomationService, prepareDesktopAutomationShutdown, disposeDesktopAutomationService } from "./automations/desktop-automation-service";
 import { initializeScheduledThreadActionService } from "./scheduled-actions/scheduled-thread-action-service";
 import { setManagedGrokSignatureRejectionReporter } from "./acp/grok-managed-runtime";
 import { subscribeManagedRuntimeProgress } from "./managed-runtime-progress";
@@ -909,8 +909,13 @@ export function prepareOwnerShutdown(): void {
 
 export function disposeOwnerServicesSync(options: { releaseFederationLease?: boolean } = {}): void {
   void closeResearchOwner();
-  disposeDesktopAutomationService();
-  if (options.releaseFederationLease !== false) releaseOwnerFederationLeaseSync();
+  if (options.releaseFederationLease === false) {
+    // Electron's synchronous prelude is followed by the async registry drain.
+    prepareDesktopAutomationShutdown();
+  } else {
+    disposeDesktopAutomationService();
+    releaseOwnerFederationLeaseSync();
+  }
   // Detached env-action trees (`pnpm dev` and friends) were previously just
   // abandoned here. They keep their stdio pipes, so they *usually* died of
   // SIGPIPE once we went away — but a quiet one could outlive the app and hold
@@ -934,18 +939,23 @@ export function disposeOwnerServicesSync(options: { releaseFederationLease?: boo
 export async function disposeOwnerServices(source: string, remainingTimeoutMs?: number, disposeUnstartedHost?: () => Promise<void>): Promise<void> {
   ownerShutdownStarted = true;
   mainProcessShutdownPromise ??= (async () => {
-    disposeDesktopAutomationService();
+    prepareDesktopAutomationShutdown();
     const checkoutShutdown = disposeResourceCheckouts(remainingTimeoutMs === undefined ? undefined : Math.min(2_000, remainingTimeoutMs))
       .catch((error: unknown) => mainLog.warn("checkout shutdown failed", { error: String(error) }));
-    if (shutdownOwner) {
-      await shutdownOwner(source, remainingTimeoutMs);
-    } else {
-      // An interrupted shell boot may have no constructed owner at all.
-      // These disposers only release existing instances; they never call getters.
-      await disposeUnstartedHost?.();
-      await disposeDesktopMessagingRuntime();
-      await disposeDesktopFederationRuntime();
-      await closeDesktopSettingsCommandDiscovery();
+    try {
+      if (shutdownOwner) {
+        await shutdownOwner(source, remainingTimeoutMs);
+      } else {
+        // An interrupted shell boot may have no constructed owner at all.
+        // These disposers only release existing instances; they never call getters.
+        await disposeUnstartedHost?.();
+        await disposeDesktopMessagingRuntime();
+        await disposeDesktopFederationRuntime();
+        await closeDesktopSettingsCommandDiscovery();
+      }
+    } finally {
+      // The registry has published its buffered pricing on the clean path.
+      disposeDesktopAutomationService();
     }
     // Keep the scheduler subscribed until registry shutdown drains accepted work.
     disposeScheduledThreadActionService();

@@ -1,0 +1,27 @@
+.messaging-dm-pairing-link {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+  padding-block: 8px;
+}
+
+.messaging-dm-pairing-link img {
+  display: block;
+  flex: none;
+  border-radius: 4px;
+}
+
+.messaging-dm-pairing-link > div {
+  flex: 1 1 170px;
+}
+
+.messaging-dm-pairing-link a {
+  display: inline-flex;
+  text-decoration: none;
+}
+
+.messaging-dm-pairing-link p {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+}

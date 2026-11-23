@@ -33,6 +33,10 @@ describe("ACP config-store discovery", () => {
             cliPath: "/opt/pwragent/qwen",
             enabled: true,
           },
+          antigravity: {
+            cliPath: "/opt/pwragent/agy",
+            enabled: true,
+          },
         },
       },
     }).providers;
@@ -48,11 +52,12 @@ describe("ACP config-store discovery", () => {
     expect(readDesktopSettingsConfigSafe).not.toHaveBeenCalled();
     expect(discoverLocalAcpAgentRecords).toHaveBeenCalledWith(
       expect.objectContaining({
-        enabledRegistryIds: ["grok", "kimi", "qwen"],
+        enabledRegistryIds: ["kimi", "grok", "qwen", "antigravity"],
         managedGrok: expect.objectContaining({ enabled: false }),
         preferences: {
           grok: { overridePath: "/opt/pwragent/grok" },
           qwen: { overridePath: "/opt/pwragent/qwen" },
+          antigravity: { overridePath: "/opt/pwragent/agy" },
         },
       }),
     );

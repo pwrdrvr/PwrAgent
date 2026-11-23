@@ -2156,6 +2156,7 @@ export class ThreadUsageLedger {
     threadId: string,
   ): Promise<boolean> {
     const overlay = await this.context.stores.threads.getThreadOverlayState({ backend, threadId });
+    if (overlay?.jobMonitorCreationEnabled === false) return false;
     return overlay?.monitorJobSuggestionsEnabled
       ?? this.host().toolOutputAlertPolicy.monitorJobSuggestionsEnabled
       ?? true;

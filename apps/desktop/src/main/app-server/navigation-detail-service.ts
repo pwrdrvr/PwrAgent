@@ -29,6 +29,7 @@ import { getOwnerHostServices } from "../owner-host";
 import { buildMessagingBindingsByThreadKey } from "../messaging/messaging-bindings-snapshot";
 import { listCodexEnvironmentOptions } from "./codex-environment-config";
 import { NavigationQueryError } from "./navigation-query-store";
+import { redactLaunchpadAgentDraft } from "@pwragent/shared/contracts/navigation";
 import { describeHibernatedThreadWorkspace, detectMissingThreadWorkspace, primaryThreadWorktree } from "./missing-thread-workspace";
 import { normalizeWorktreePathForComparison } from "./linked-directory-identity";
 import { readMergedSubAgentPage } from "./thread-display";
@@ -37,6 +38,7 @@ import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import { resolvePrimaryThreadRepoKey } from "../pr-status/primary-thread-repository";
 import { PR_METADATA_PRIORITY, type PrMetadataDemand } from "../pr-status/pr-metadata-process";
 import { boundThreadPendingWakes } from "./thread-pending-wakes";
+import { resolveScratchProjectsRoots } from "./scratch-projects";
 
 /** The most records one selected-collection page holds, before the byte budget. */
 const SELECTED_COLLECTION_PAGE_RECORDS = 100;
@@ -99,17 +101,17 @@ function boundActiveSubAgents(cards: readonly ThreadSubAgentSummary[], maxBytes:
   moreInPanel: boolean;
 } {
   const projected = projectActiveThreadSubAgents(cards.toSorted(compareComposerSubAgents));
-  const rows: ThreadActiveSubAgent[] = [];
+  const admitted: Array<{ preview: ThreadActiveSubAgent; displayTitle?: string }> = [];
   let addedBytes = 0;
   let omittedLive = false;
-  for (const row of projected) {
+  for (const { displayTitle, ...row } of projected) {
     const failed = isFailedSubAgent(row);
-    if (rows.length >= ACTIVE_SUB_AGENT_PREVIEW_ROWS || (failed && omittedLive)) break;
+    if (admitted.length >= ACTIVE_SUB_AGENT_PREVIEW_ROWS || (failed && omittedLive)) break;
     const task = row.task.length > ACTIVE_SUB_AGENT_TASK_PREVIEW_CHARS
       ? `${row.task.slice(0, ACTIVE_SUB_AGENT_TASK_PREVIEW_CHARS - 1).replace(/[\uD800-\uDBFF]$/u, "")}…`
       : row.task;
     const preview = { ...row, task };
-    const separatorBytes = Number(rows.length > 0);
+    const separatorBytes = Number(admitted.length > 0);
     const available = maxBytes - addedBytes - separatorBytes;
     let size = responseBytes(preview);
     if (size > available) {
@@ -122,9 +124,18 @@ function boundActiveSubAgents(cards: readonly ThreadSubAgentSummary[], maxBytes:
       preview.task = fitSubAgentTask(task, available - withoutTask);
       size = responseBytes(preview);
     }
-    rows.push(preview);
+    admitted.push({ preview, displayTitle });
     addedBytes += size + separatorBytes;
   }
+  // Spend only the remaining budget on display titles. A title on one row
+  // must never displace another row's action or take bytes from its task.
+  const rows = admitted.map(({ preview, displayTitle }) => {
+    if (!displayTitle) return preview;
+    const extraBytes = responseBytes({ displayTitle }) - 1; // Drop two braces, add a comma.
+    if (addedBytes + extraBytes > maxBytes) return preview;
+    addedBytes += extraBytes;
+    return { ...preview, displayTitle };
+  });
   const incomplete = rows.length < projected.length;
   if (!incomplete) return { rows, addedBytes, incomplete, moreInPanel: false };
   const shownIds = new Set(rows.map((row) => row.monitorId));
@@ -194,6 +205,7 @@ export class NavigationDetailService {
 
   async readLaunchpadConfig(
     request: NavigationLaunchpadConfigRequest,
+    options?: { includeLocalAgentDraft?: boolean },
   ): Promise<NavigationLaunchpadConfigResponse> {
     if (request.protocol !== NAVIGATION_QUERY_PROTOCOL_VERSION
       || (request.directoryKey !== undefined
@@ -207,7 +219,9 @@ export class NavigationDetailService {
     ]);
     const useProxyModels = getOwnerHostServices().runtimePolicy?.codexOpenAiProviderEnabled === false;
     const defaults = useProxyModels ? this.registry.projectOutpostLaunchpadSettings(storedDefaults) : storedDefaults;
-    const storedLaunchpad = useProxyModels && rawLaunchpad ? this.registry.projectOutpostLaunchpadSettings(rawLaunchpad) : rawLaunchpad;
+    const projectedLaunchpad = useProxyModels && rawLaunchpad ? this.registry.projectOutpostLaunchpadSettings(rawLaunchpad) : rawLaunchpad;
+    const storedLaunchpad = projectedLaunchpad && !options?.includeLocalAgentDraft
+      ? redactLaunchpadAgentDraft(projectedLaunchpad) : projectedLaunchpad;
     const inspectPath = storedLaunchpad?.federationTarget?.scope === "remote" ? undefined : storedLaunchpad?.directoryPath;
     const [environmentOptions, directoryGitStatus] = inspectPath ? await Promise.all([
       listCodexEnvironmentOptions(inspectPath),
@@ -216,6 +230,7 @@ export class NavigationDetailService {
     const launchpad: NavigationLaunchpadConfiguration | undefined = storedLaunchpad ? {
       backend: storedLaunchpad.backend,
       codexModelProviderId: storedLaunchpad.codexModelProviderId,
+      codexSkillProfileId: storedLaunchpad.codexSkillProfileId,
       executionMode: storedLaunchpad.executionMode,
       workMode: storedLaunchpad.workMode,
       model: storedLaunchpad.model,
@@ -229,6 +244,8 @@ export class NavigationDetailService {
       directoryLabel: storedLaunchpad.directoryLabel,
       directoryPath: storedLaunchpad.directoryPath,
       agent: storedLaunchpad.agent,
+      agentPresetId: storedLaunchpad.agentPresetId,
+      agentDraftMcpSelection: storedLaunchpad.agentDraftMcpSelection,
       mcpConnectionIds: storedLaunchpad.mcpConnectionIds,
       registeredAt: storedLaunchpad.registeredAt,
       settingsTouchedAt: storedLaunchpad.settingsTouchedAt,
@@ -403,6 +420,7 @@ export class NavigationDetailService {
       thread: summary,
       messagingBindingsByThreadKey,
       queuedExecutionMode: this.registry.getQueuedExecutionModeForThread(request.ref),
+      workspaceRoots: resolveScratchProjectsRoots(),
     });
     const canonical = projected
       ? await this.registry.canonicalizeNavigationThreadPullRequests([projected], prDemand) : [];

@@ -32,7 +32,7 @@ import { useCloseOnOutsidePointer } from "../thread-todos/TodoFactMenu";
 import { placeAutomationRowMenu } from "./automation-row-menu-placement";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import {
-  formatCostTodayMicros,
+  formatAutomationCost,
   formatAutomationRelative,
   formatAutomationStatus,
   formatBacklogPolicy,
@@ -440,6 +440,7 @@ function AutomationTableRow(props: {
   const scheduleTriggered = props.automation.triggers.some(
     (trigger) => trigger.kind === "schedule",
   );
+  const cost = formatAutomationCost(props.automation);
 
   return (
     <div
@@ -496,9 +497,7 @@ function AutomationTableRow(props: {
             {formatAutomationStatus(props.automation.status)}
           </span>
           <p>{formatAutomationLatestRun(props.automation)}</p>
-          {formatCostTodayMicros(props.automation.costTodayMicros) ? (
-            <p>{formatCostTodayMicros(props.automation.costTodayMicros)}</p>
-          ) : null}
+          {cost ? <p>{cost}</p> : null}
         </div>
         <div className="automations-table__actions" role="cell">
           {inboundTriggered ? (

@@ -40,6 +40,7 @@ import {
   type DesktopMessagingContactLookupResponse,
   type DesktopSettingsSecretName,
   type DesktopSettingsSnapshot,
+  type DesktopTelegramPairingGrants,
   type DesktopMessagingFullAccessWarningGlobalPolicy,
   type DesktopMessagingFullAccessWarningUserPolicy,
   type InspectDiscordThreadPermissionsResponse,
@@ -48,11 +49,13 @@ import {
 } from "@pwragent/shared/contracts/settings";
 import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import {
+  type GenerateMessagingPairingTokenResponse,
   type MessagingChannelKind,
   type MessagingPairingApprovalTarget,
   type MessagingPairingEntry,
   type MessagingPairingScope,
   type MessagingToolUpdateMode,
+  type RevokeTelegramPairingGrantRequest,
 } from "@pwragent/shared/contracts/messaging";
 import {
   CheckIcon,
@@ -84,6 +87,7 @@ import {
   ToggleField,
   type SettingsChipTone,
 } from "./SettingsLayout";
+import { LineRichMenuSettings } from "./LineRichMenuSettings";
 import { SecretField } from "./SecretField";
 import { AutomationStage } from "../automations/AutomationFunnel";
 import {
@@ -102,6 +106,7 @@ import {
 } from "../messaging/SlackPairSteps";
 import { SLACK_EVENTS_API_UNIMPLEMENTED_NOTICE } from "../messaging/slack-connect-copy";
 import { slackCredentialProblem } from "../messaging/slack-token-shape";
+import { MessagingDmPairingLink } from "./MessagingDmPairingLink";
 import { SettingsTestBlock } from "./SettingsTestBlock";
 import { GuidedSetupButton } from "./guided-setup/GuidedSetupLauncher";
 import {
@@ -225,6 +230,7 @@ export function MessagingSettings(props: {
   }, [slack.inboundMode.source, slack.inboundMode.value]);
   const feishu = props.snapshot.messaging.feishu;
   const line = props.snapshot.messaging.line;
+  const [lineTokenVersion, setLineTokenVersion] = useState(0);
   const messagingEnabled = props.snapshot.messaging.enabled;
   const allowFullAccessEscalation =
     props.snapshot.messaging.allowFullAccessEscalation;
@@ -946,6 +952,12 @@ export function MessagingSettings(props: {
                 },
               });
             }}
+          />
+          <TelegramPairingGrantField
+            settings={telegram}
+            load={props.desktopApi?.readTelegramPairingGrants}
+            revoke={props.desktopApi?.revokeTelegramPairingGrant}
+            onChanged={props.onPairingSettingsChanged}
           />
         </div>
       </SettingsSection>
@@ -2116,8 +2128,16 @@ export function MessagingSettings(props: {
             sub="Stored in the system keychain. Create or issue this from the LINE Developers console."
             secret="lineChannelAccessToken"
             state={line.channelAccessToken}
-            onClearSecret={props.onClearSecret}
-            onReplaceSecret={props.onReplaceSecret}
+            onClearSecret={async (secret) => {
+              const saved = await props.onClearSecret(secret);
+              if (saved) setLineTokenVersion((version) => version + 1);
+              return saved;
+            }}
+            onReplaceSecret={async (secret, value) => {
+              const saved = await props.onReplaceSecret(secret, value);
+              if (saved) setLineTokenVersion((version) => version + 1);
+              return saved;
+            }}
           />
           <SecretField
             disabled={props.saving || !line.channelSecret.writable}
@@ -2140,6 +2160,12 @@ export function MessagingSettings(props: {
                 defaultSub="getBotInfo"
               />
             }
+          />
+          <LineRichMenuSettings
+            key={lineTokenVersion}
+            configured={line.channelAccessToken.configured}
+            disabled={props.saving}
+            setup={props.desktopApi?.lineRichMenuSetup}
           />
           <PairingTokenField
             desktopApi={props.desktopApi}
@@ -3013,8 +3039,9 @@ function PairingTokenField(props: {
   actions?: ReactNode;
 }) {
   const [scope, setScope] = useState<MessagingPairingScope>("user_dm");
-  const [message, setMessage] = useState<string | undefined>(undefined);
-  const [messageEntryId, setMessageEntryId] = useState<string | undefined>(undefined);
+  const [generated, setGenerated] = useState<GenerateMessagingPairingTokenResponse>();
+  const message = generated?.message;
+  const messageEntryId = generated?.entry.id;
   const messageEntryIdRef = useRef<string | undefined>(undefined);
   const [entries, setEntries] = useState<MessagingPairingEntry[]>([]);
   const [busyId, setBusyId] = useState<string | undefined>(undefined);
@@ -3032,10 +3059,9 @@ function PairingTokenField(props: {
   );
 
   const setGeneratedMessage = useCallback(
-    (nextMessage: string | undefined, nextEntryId: string | undefined) => {
-      messageEntryIdRef.current = nextEntryId;
-      setMessage(nextMessage);
-      setMessageEntryId(nextEntryId);
+    (next: GenerateMessagingPairingTokenResponse | undefined) => {
+      messageEntryIdRef.current = next?.entry.id;
+      setGenerated(next);
     },
     [],
   );
@@ -3053,7 +3079,7 @@ function PairingTokenField(props: {
     return props.desktopApi?.onMessagingPairingChanged?.((event) => {
       if (event.entry.platform !== props.platform) return;
       if (event.entry.id === messageEntryIdRef.current && event.entry.status !== "pending") {
-        setGeneratedMessage(undefined, undefined);
+        setGeneratedMessage(undefined);
       }
       void refresh();
     });
@@ -3061,7 +3087,7 @@ function PairingTokenField(props: {
 
   const selectScope = (nextScope: MessagingPairingScope) => {
     setScope(nextScope);
-    setGeneratedMessage(undefined, undefined);
+    setGeneratedMessage(undefined);
   };
 
   const observedEntries = entries.filter((entry) => entry.status === "observed");
@@ -3082,7 +3108,7 @@ function PairingTokenField(props: {
         platform: props.platform,
         scope: selectedScope,
       });
-      setGeneratedMessage(result.message, result.entry.id);
+      setGeneratedMessage(result);
       // Auto-copy the freshly generated code so the operator can paste it
       // straight into chat; best-effort, so a clipboard failure here is
       // silent and the Copy button remains as a manual fallback.
@@ -3111,7 +3137,7 @@ function PairingTokenField(props: {
           ...(consume === false ? { consume: false } : {}),
         });
         if (result?.entry.id === messageEntryId) {
-          setGeneratedMessage(undefined, undefined);
+          setGeneratedMessage(undefined);
         }
         if (result) {
           await props.onSettingsChanged?.();
@@ -3119,7 +3145,7 @@ function PairingTokenField(props: {
       } else {
         const result = await props.desktopApi?.rejectMessagingPairing?.({ entryId: entry.id });
         if (result?.entry.id === messageEntryId) {
-          setGeneratedMessage(undefined, undefined);
+          setGeneratedMessage(undefined);
         }
       }
       await refresh();
@@ -3150,7 +3176,7 @@ function PairingTokenField(props: {
         await props.onSettingsChanged?.();
       }
       if (entry.id === messageEntryId) {
-        setGeneratedMessage(undefined, undefined);
+        setGeneratedMessage(undefined);
       }
       await refresh();
     } catch (caught) {
@@ -3228,6 +3254,15 @@ function PairingTokenField(props: {
             </button>
             {props.actions}
           </div>
+          {generated?.dmLink ? (
+            <MessagingDmPairingLink
+              link={generated.dmLink}
+              expiresAt={generated.expiresAt}
+              onExpire={() => {
+                if (messageEntryIdRef.current === generated.entry.id) setGeneratedMessage(undefined);
+              }}
+            />
+          ) : null}
           {message ? (
             <div className="settings-pairing__message">
               <code>{message}</code>
@@ -3325,6 +3360,81 @@ function PairingTokenField(props: {
           ) : null}
         </div>
       }
+    />
+  );
+}
+
+function TelegramPairingGrantField(props: {
+  settings: DesktopSettingsSnapshot["messaging"]["telegram"];
+  load?: () => Promise<DesktopTelegramPairingGrants | undefined>;
+  revoke?: (request: RevokeTelegramPairingGrantRequest) => Promise<void>;
+  onChanged?: () => void | Promise<void>;
+}) {
+  const { load, settings } = props;
+  const [result, setResult] = useState<{
+    settings: typeof settings;
+    grants?: DesktopTelegramPairingGrants;
+    error?: string;
+  }>();
+  const [revoking, setRevoking] = useState(false);
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    if (!load) return;
+    let disposed = false;
+    void load().then(
+      (grants) => { if (!disposed) setResult({ settings, grants }); },
+      (caught) => {
+        if (!disposed) setResult({ settings, error: caught instanceof Error ? caught.message : String(caught) });
+      },
+    );
+    return () => { disposed = true; };
+  }, [load, settings]);
+
+  const current = result?.settings === settings ? result : undefined;
+  const grants = current?.grants;
+  if (!current?.error && (!grants || (grants.users.length === 0 && grants.supergroups.length === 0))) return null;
+
+  const revoke = async (kind: RevokeTelegramPairingGrantRequest["kind"], contactId: string) => {
+    if (!grants || !props.revoke || revoking) return;
+    setRevoking(true);
+    setError(undefined);
+    try {
+      await props.revoke({ accountId: grants.accountId, kind, contactId });
+      setResult((previous) => previous?.grants === grants ? {
+        ...previous,
+        grants: { ...grants, [kind]: grants[kind].filter((contact) => contact.id !== contactId) },
+      } : previous);
+      await props.onChanged?.();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setRevoking(false);
+    }
+  };
+
+  return (
+    <SettingsField
+      label="Paired access"
+      sub="Users and groups approved through pairing for this Telegram bot."
+      error={error ?? current?.error}
+      control={(
+        <div className="settings-pairing">
+          {(["users", "supergroups"] as const).flatMap((kind) => grants?.[kind].map((contact) => (
+            <div className="settings-pairing__controls" key={`${kind}:${contact.id}`}>
+              <span>{contact.displayName || (kind === "users" ? "Telegram user" : "Telegram group")} <code>{contact.id}</code></span>
+              <button
+                type="button"
+                className="button button--ghost"
+                aria-label={`Revoke pairing for ${contact.displayName || contact.id}`}
+                disabled={revoking || !props.revoke}
+                onClick={() => void revoke(kind, contact.id)}
+              >
+                Revoke
+              </button>
+            </div>
+          )) ?? [])}
+        </div>
+      )}
     />
   );
 }

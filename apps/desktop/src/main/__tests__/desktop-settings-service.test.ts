@@ -4475,18 +4475,25 @@ describe("DesktopSettingsService", () => {
 
     await service.writeConfigPatchTargeted({
       acpAgents: {
+        antigravity: { cliPath: "/custom/agy", enabled: false },
         grok: { cliPath: "/custom/grok" },
         qwen: { cliPath: "/custom/qwen" },
       },
     });
 
     const tomlOnDisk = fs.readFileSync(configPath, "utf8");
+    expect(tomlOnDisk).toContain("[acp_agents.antigravity]");
+    expect(tomlOnDisk).toContain('cli_path = "/custom/agy"');
     expect(tomlOnDisk).toContain("[acp_agents.grok]");
     expect(tomlOnDisk).toContain('cli_path = "/custom/grok"');
     expect(tomlOnDisk).toContain("[acp_agents.qwen]");
     expect(tomlOnDisk).toContain('cli_path = "/custom/qwen"');
 
     const snapshot = await service.readSettingsProjection();
+    expect(snapshot.acpAgents.antigravity).toEqual({
+      cliPath: { value: "/custom/agy", source: "config" },
+      enabled: false,
+    });
     expect(snapshot.acpAgents.grok.cliPath).toEqual({
       value: "/custom/grok",
       source: "config",
@@ -4964,6 +4971,7 @@ describe("DesktopSettingsService", () => {
   });
 
   it("rereads secret metadata without decrypting stored values", async () => {
+    const readTelegramGrants = vi.fn();
     const getSecret = vi.fn(async () => {
       throw new Error("secret values should not be decrypted for settings snapshots");
     });
@@ -4987,6 +4995,7 @@ describe("DesktopSettingsService", () => {
       configPath: path.join(createTempRoot(), "config.toml"),
       env: {},
       secretStore,
+      telegramPairingStorage: { readTelegramGrants, dismissTelegramGrantWarning: vi.fn() },
     });
 
     const snapshot = await service.readSettingsProjection();
@@ -5003,8 +5012,11 @@ describe("DesktopSettingsService", () => {
     );
     expect(hasSecret).toHaveBeenCalledWith("telegramBotToken");
     expect(hasSecret).toHaveBeenCalledTimes(secretMetadataReads * 2);
+    const messaging = await service.readMessagingProjection();
+    expect(messaging.messaging.telegram.botToken).toEqual(snapshot.messaging.telegram.botToken);
     expect(getSecret).not.toHaveBeenCalled();
     expect(getSecretSync).not.toHaveBeenCalled();
+    expect(readTelegramGrants).not.toHaveBeenCalled();
   });
 
   it("surfaces secret access errors on settings snapshots", async () => {

@@ -480,6 +480,12 @@ The current adapter registry still starts a singleton per provider. Enabling a s
 
 The config transition should project only the original connection into the legacy TOML keys, while each new connection has independently encrypted secret slots and its own authorization settings. First save must preserve user-edited config comments and copy any legacy credentials before publishing a config that refers to their new slots. Preserve the legacy credentials for sequential rollback. A missing scoped credential leaves that connection disconnected. Keep the legacy routing namespace until an explicit migration can preserve existing binding and deduplication IDs. Older versions that ignore the new field can treat named records as singleton routes. Store live named routes where those versions cannot enumerate them before enabling a second connection. Test rollback, repeated saves, interrupted writes, unreadable credentials, rotation, and remove-and-readd alongside two same-provider connections with deliberately identical destination and actor IDs.
 
+### Telegram pairing grants
+
+Telegram pairing codes use the bot account as their namespace. Approval checks the live adapter and rechecks the saved or environment-provided credential inside the profile database transaction that grants access and consumes the request. Both the active Settings writer and the bootstrap writer use that database for profile secrets.
+
+The runtime loads grants for the bot account on the same credential it passes to Telegram. Rotating that bot's token keeps its grants. A different bot gets its own grant set. Settings can revoke a grant for its exact account, and manual allowlists retain their existing profile-wide behavior. Pairing grants are stored separately from those allowlists, so an older client does not load them as profile-wide access. Requests lacking account evidence require a fresh code before approval.
+
 ## Callback delivery models
 
 Different platforms deliver button clicks back to the bot through different transports. The interface is the same on PwrAgent's side (`MessagingInboundEvent.kind = "callback"`), but the adapter has to bridge whatever the platform does:

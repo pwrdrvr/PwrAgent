@@ -1,3 +1,4 @@
+import { acpDiscoveryActionRequiredMessage } from "./acp-discovery-error.js";
 import type { AcpInstalledAgentRecord } from "./acp-registry-types.js";
 
 /**
@@ -21,6 +22,8 @@ export const ACP_CAPABILITY_MAX_AGE_MS = 48 * 60 * 60 * 1000; // 48 hours
  *  - a prior probe completed but produced no capabilities — treated as a
  *    degraded/transient result on purpose, so the agent self-heals on the next
  *    refresh instead of caching an empty capability set for `maxAgeMs`, OR
+ *  - the agent reported an authentication problem that the user can resolve
+ *    (including records cached before the failure cleared stale capabilities), OR
  *  - the installed CLI version changed since the last probe (capabilities may
  *    have changed), OR
  *  - the persisted probe is older than `maxAgeMs`.
@@ -45,7 +48,8 @@ export function shouldReprobeAcpCapabilities(
   if (
     cached === undefined ||
     cached.runtimeCapabilities === undefined ||
-    cached.lastDiscoveredAt === undefined
+    cached.lastDiscoveredAt === undefined ||
+    acpDiscoveryActionRequiredMessage(cached.registryId, cached.lastDiscoveryError)
   ) {
     return true;
   }
@@ -121,7 +125,43 @@ export function recordWithSessionRuntimeCapabilities(
 ): AcpInstalledAgentRecord {
   return {
     ...current,
-    runtimeCapabilities,
+    runtimeCapabilities: current.registryId === "antigravity"
+      ? withAntigravityModelCatalog(runtimeCapabilities, current.runtimeCapabilities)
+      : runtimeCapabilities,
     updatedAt: Math.max(current.updatedAt, now),
+  };
+}
+
+/** Modern agy exposes model families in configOptions and legacy model/effort
+ * aliases in models. The family IDs are what the session's model selector sends. */
+export function withAntigravityModelCatalog(
+  capabilities: AcpInstalledAgentRecord["runtimeCapabilities"],
+  prior?: AcpInstalledAgentRecord["runtimeCapabilities"],
+): AcpInstalledAgentRecord["runtimeCapabilities"] {
+  const modelOption = capabilities?.configOptions?.find((option) => option.category === "model");
+  if (!capabilities || !modelOption?.values.length) return capabilities;
+  const known = new Map((prior?.models?.availableModels ?? []).map((model) => [model.id, model]));
+  const reported = new Map((capabilities.models?.availableModels ?? []).map((model) => [model.id, model]));
+  const effort = capabilities.configOptions?.find((option) => option.category === "thought_level");
+  return {
+    ...capabilities,
+    models: {
+      currentModelId: modelOption.currentValue,
+      availableModels: modelOption.values.map((model) => {
+        const isCurrent = model.value === modelOption.currentValue;
+        const details = { ...known.get(model.value), ...reported.get(model.value) };
+        return {
+          ...details,
+          id: model.value,
+          label: model.label ?? details.label,
+          current: isCurrent,
+          ...(isCurrent ? {
+            reasoningEfforts: effort?.values.map((level) => level.value),
+            defaultReasoningEffort: effort?.currentValue,
+            supportsReasoning: (effort?.values.length ?? 0) > 1,
+          } : {}),
+        };
+      }),
+    },
   };
 }

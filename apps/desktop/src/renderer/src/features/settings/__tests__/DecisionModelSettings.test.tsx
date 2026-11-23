@@ -1,11 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DesktopDecisionModelSettings } from "@pwragent/shared/decision-models";
+import type { DecisionModelListing, DesktopDecisionModelSettings } from "@pwragent/shared/decision-models";
 import type {
   DesktopSettingsSecretState,
   DesktopSettingsSnapshot,
 } from "@pwragent/shared/contracts/settings";
+import type { DesktopApi } from "../../../lib/desktop-api";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import { DecisionModelDefaults, DecisionProviderScreen } from "../DecisionModelSettings";
 
@@ -85,23 +86,37 @@ describe("decision provider screens", () => {
     expect(screen.getByLabelText("API key")).toHaveAttribute("type", "password");
   });
 
-  it("keeps the local endpoint when the model changes, and drops the section when both are cleared", async () => {
+  it("keeps the local endpoint when the model changes, and drops the section when the default is chosen again", async () => {
     const onSave = vi.fn(async (_next: DesktopDecisionModelSettings) => undefined);
     const props = { provider: "local" as const, saving: false, onSave, onClearSecret: vi.fn(async () => true), onReplaceSecret: vi.fn(async () => true) };
     const result = render(<DecisionProviderScreen {...props} snapshot={snapshot({ local: { endpoint: "http://localhost:9911" } })} />);
-    const model = screen.getByRole("textbox", { name: "Model" });
-    expect(model).toHaveAttribute("placeholder", "clef-flash");
-    fireEvent.change(model, { target: { value: "clef-pro" } });
-    await act(async () => { fireEvent.blur(model); });
+    const model = screen.getByRole("combobox", { name: "Model" });
+    expect(model).toHaveTextContent("clef-flash (default)");
+    await chooseSelectOption(model, "Other model id…");
+    const abandoned = screen.getByRole("textbox", { name: "Model id" });
+    expect(abandoned).toHaveFocus();
+    // One Escape leaves the box, even with text typed, and saves nothing.
+    fireEvent.change(abandoned, { target: { value: "clef-typo" } });
+    fireEvent.keyDown(abandoned, { key: "Escape" });
+    expect(screen.queryByRole("textbox", { name: "Model id" })).not.toBeInTheDocument();
+    expect(onSave).not.toHaveBeenCalled();
+
+    await chooseSelectOption(model, "Other model id…");
+    const typed = screen.getByRole("textbox", { name: "Model id" });
+    fireEvent.change(typed, { target: { value: "clef-pro" } });
+    await act(async () => { fireEvent.keyDown(typed, { key: "Enter" }); });
     expect(onSave).toHaveBeenLastCalledWith({ local: { endpoint: "http://localhost:9911", model: "clef-pro" } });
+    expect(screen.queryByRole("textbox", { name: "Model id" })).not.toBeInTheDocument();
+
     result.rerender(<DecisionProviderScreen {...props} snapshot={snapshot({ local: { model: "clef-pro" } })} />);
-    const cleared = screen.getByRole("textbox", { name: "Model" });
-    fireEvent.change(cleared, { target: { value: "" } });
-    await act(async () => { fireEvent.blur(cleared); });
+    const saved = screen.getByRole("combobox", { name: "Model" });
+    expect(saved).toHaveTextContent("clef-pro");
+    expect(selectOptionLabels(saved)).toEqual(["clef-flash (default)", "clef-pro", "Other model id…"]);
+    await chooseSelectOption(saved, "clef-flash (default)");
     expect(onSave).toHaveBeenLastCalledWith({ local: undefined });
   });
 
-  it("keeps Jev's key write-only and its model editable", async () => {
+  it("offers Jev's known models with the key unsaved, and saves a choice", async () => {
     const onSave = vi.fn(async (_next: DesktopDecisionModelSettings) => undefined);
     render(
       <DecisionProviderScreen
@@ -113,14 +128,92 @@ describe("decision provider screens", () => {
         onReplaceSecret={vi.fn(async () => true)}
       />,
     );
-    expect(screen.getByText(/camera frames never go to it/)).toBeInTheDocument();
+    expect(screen.getByText(/Live voice camera cues run locally/)).toBeInTheDocument();
+    expect(screen.getByText(/Experimental image input/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Get an API key" })).toHaveAttribute("href", "https://console.typesafe.ai/");
     expect(screen.getByLabelText("API key")).toHaveValue("");
-    const model = screen.getByRole("textbox", { name: "Model" });
-    expect(model).toHaveAttribute("placeholder", "jev-latest");
-    fireEvent.change(model, { target: { value: "jev-preview" } });
-    await act(async () => { fireEvent.blur(model); });
+    const model = screen.getByRole("combobox", { name: "Model" });
+    expect(selectOptionLabels(model)).toEqual([
+      "jev-latest (default)",
+      "jev-preview",
+      "jev-1.14.0",
+      "jev-1.13.0",
+      "Other model id…",
+    ]);
+    await chooseSelectOption(model, "jev-preview");
     expect(onSave).toHaveBeenCalledWith({ jev: { model: "jev-preview" } });
+  });
+
+  it("lists the models the provider offers for the saved key, and reads them again when the key changes", async () => {
+    const listDecisionModels = vi.fn(async (): Promise<DecisionModelListing> => ({
+      ok: true,
+      models: [{ id: "jev-preview", description: "Preview build" }, { id: "jev-latest" }, { id: "jev-team-tuned" }],
+    }));
+    const desktopApi = { listDecisionModels } as unknown as DesktopApi;
+    const props = { provider: "jev" as const, saving: false, desktopApi, onSave: vi.fn(async () => undefined), onClearSecret: vi.fn(async () => true), onReplaceSecret: vi.fn(async () => true) };
+    const result = render(<DecisionProviderScreen {...props} snapshot={snapshot({}, true)} />);
+    expect(await screen.findByText(/Lists the models your key can use/)).toBeInTheDocument();
+    const model = screen.getByRole("combobox", { name: "Model" });
+    expect(selectOptionLabels(model)).toEqual([
+      "jev-latest (default)",
+      "jev-preview",
+      "jev-team-tuned",
+      "jev-1.14.0",
+      "jev-1.13.0",
+      "Other model id…",
+    ]);
+    expect(listDecisionModels).toHaveBeenCalledTimes(1);
+    expect(listDecisionModels).toHaveBeenCalledWith({ provider: "jev" });
+
+    listDecisionModels.mockResolvedValueOnce({ ok: false, detail: "TypeSafe rejected the API key." });
+    result.rerender(<DecisionProviderScreen {...props} snapshot={snapshot({}, false)} />);
+    expect(await screen.findByText("TypeSafe rejected the API key. Showing the models PwrAgent knows.")).toBeInTheDocument();
+    expect(listDecisionModels).toHaveBeenCalledTimes(2);
+    expect(selectOptionLabels(screen.getByRole("combobox", { name: "Model" }))).not.toContain("jev-team-tuned");
+  });
+
+  it("reads the model list again after a key is replaced in the same store", async () => {
+    const listDecisionModels = vi.fn(async (): Promise<DecisionModelListing> => ({ ok: false, detail: "TypeSafe rejected the API key." }));
+    const desktopApi = { listDecisionModels } as unknown as DesktopApi;
+    render(
+      <DecisionProviderScreen
+        provider="jev"
+        snapshot={snapshot({}, true)}
+        desktopApi={desktopApi}
+        saving={false}
+        onSave={vi.fn(async () => undefined)}
+        onClearSecret={vi.fn(async () => true)}
+        onReplaceSecret={vi.fn(async () => true)}
+      />,
+    );
+    expect(await screen.findByText(/TypeSafe rejected the API key/)).toBeInTheDocument();
+    listDecisionModels.mockResolvedValueOnce({ ok: true, models: [{ id: "jev-team-tuned" }] });
+    // The snapshot is unchanged: a replaced key stays configured, in the keychain.
+    const key = screen.getByLabelText("API key");
+    fireEvent.change(key, { target: { value: "sample-new-key" } });
+    await act(async () => { fireEvent.keyDown(key, { key: "Enter" }); });
+    expect(await screen.findByText(/Lists the models your key can use/)).toBeInTheDocument();
+    expect(listDecisionModels).toHaveBeenCalledTimes(2);
+    expect(selectOptionLabels(screen.getByRole("combobox", { name: "Model" }))).toContain("jev-team-tuned");
+  });
+
+  it("says when the local server does not offer the saved model", async () => {
+    const desktopApi = {
+      listDecisionModels: vi.fn(async (): Promise<DecisionModelListing> => ({ ok: true, models: [{ id: "clef-pro" }] })),
+    } as unknown as DesktopApi;
+    render(
+      <DecisionProviderScreen
+        provider="local"
+        snapshot={snapshot({ model: "local" })}
+        desktopApi={desktopApi}
+        saving={false}
+        onSave={vi.fn(async () => undefined)}
+        onClearSecret={vi.fn(async () => true)}
+        onReplaceSecret={vi.fn(async () => true)}
+      />,
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("The server does not offer clef-flash. Choose one it offers.");
+    expect(screen.getByText("The server offers 1 model.")).toBeInTheDocument();
   });
 });
 

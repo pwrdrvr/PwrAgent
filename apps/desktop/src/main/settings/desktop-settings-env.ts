@@ -6,6 +6,8 @@ import { isDesktopWorktreeStorageLocation } from "@pwragent/shared/contracts/set
 
 export const CHAT_REPLY_COMPOSER_ENV =
   "PWRAGENT_EXPERIMENTAL_CHAT_REPLY_COMPOSER";
+export const ACP_AGENTS_ANTIGRAVITY_CLI_PATH_ENV =
+  "PWRAGENT_ACP_AGENTS_ANTIGRAVITY_CLI_PATH";
 export const ACP_AGENTS_GEMINI_CLI_PATH_ENV =
   "PWRAGENT_ACP_AGENTS_GEMINI_CLI_PATH";
 export const ACP_AGENTS_GROK_CLI_PATH_ENV =

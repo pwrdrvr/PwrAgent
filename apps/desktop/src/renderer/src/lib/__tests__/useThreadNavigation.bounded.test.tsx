@@ -6,6 +6,7 @@ import {
   DEFAULT_PROJECT_FORGE_AUTOMATION,
   type ProjectForgeAutomation,
 } from "@pwragent/shared/project-forge-automation";
+import type { AppServerPendingThreadStartReport } from "@pwragent/shared/contracts/normalized-app-server";
 import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import {
   buildPullRequestStatusKey,
@@ -55,6 +56,68 @@ beforeEach(() => {
   vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
 });
 afterEach(() => vi.restoreAllMocks());
+
+it.each([true, false])("retains startup failures with or without a preview (preview=%s)", async (hasPreview) => {
+  const f = fixture();
+  const listeners = new Set<(event: AgentEvent) => void>();
+  const report: AppServerPendingThreadStartReport = {
+    phase: "starting",
+    start: {
+      startId: "card-start", backend: "codex", submittedAt: 1000, title: "Card title",
+      ...(hasPreview ? { prompt: "Check the recorder." } : {}), progressThread: { backend: "codex", threadId: "thread-0" },
+    },
+  };
+  const api: DesktopApi = { ...f.api,
+    listPendingThreadStarts: async () => [report],
+    onAgentEvent: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
+  };
+  const { result } = renderHook(() => useThreadNavigation(api));
+  await waitFor(() => expect(result.current.pendingThreadStartRows).toHaveLength(1));
+  const [starting] = result.current.pendingThreadStartRows;
+  expect(starting?.input).toEqual(hasPreview ? [{ type: "text", text: "Check the recorder." }] : []);
+  if (hasPreview) {
+    act(() => result.current.selectPendingLaunchpad(starting!.selectionKey));
+    expect(result.current.selectedItemKey).toBe(starting!.selectionKey);
+    expect(result.current.selectedThreadKey).toBeUndefined();
+  }
+  await act(async () => {
+    for (const listener of listeners) listener({ backend: "codex", notification: {
+      method: "thread/start/pending", params: { ...report, phase: "ended", createdThreadId: "thread-1",
+        setupFailure: { message: "Setup exited 1", phase: "setup", worktreeCleanupAvailable: true } },
+    } });
+  });
+  if (!hasPreview) await act(async () => { await result.current.showThread({ backend: "codex", threadId: "thread-1" }); });
+  expect(result.current.selectedThreadKey).toBe("codex:thread-1");
+  expect(result.current.selectedPendingThreadStartFailure).toMatchObject({ message: "Setup exited 1" });
+  act(() => result.current.dismissPendingThreadStartFailure());
+  expect(result.current.selectedPendingThreadStartFailure).toBeUndefined();
+});
+
+it("keeps a refused start gone when its in-flight snapshot arrives late", async () => {
+  const f = fixture();
+  const listeners = new Set<(event: AgentEvent) => void>();
+  const report: AppServerPendingThreadStartReport = {
+    phase: "starting", start: { startId: "refused", backend: "codex", submittedAt: 1000, title: "Card title" },
+  };
+  const snapshot = Promise.withResolvers<AppServerPendingThreadStartReport[]>();
+  const api: DesktopApi = { ...f.api,
+    listPendingThreadStarts: () => snapshot.promise,
+    onAgentEvent: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
+  };
+  const { result } = renderHook(() => useThreadNavigation(api));
+  const publish = (phase: "starting" | "ended") => {
+    for (const listener of listeners) listener({ backend: "codex", notification: {
+      method: "thread/start/pending", params: { ...report, phase },
+    } });
+  };
+  act(() => publish("starting"));
+  expect(result.current.pendingThreadStartRows).toHaveLength(1);
+  await act(async () => {
+    publish("ended");
+    snapshot.resolve([report]);
+  });
+  expect(result.current.pendingThreadStartRows).toHaveLength(0);
+});
 
 it("does not list the local viewer for repeated births or reconnects from an unmounted owner", async () => {
   const f = fixture();
@@ -134,6 +197,45 @@ it("keeps settled local directories mounted through local Git probes and notices
       expect(f.release).not.toHaveBeenCalled();
     }
   } finally { unmount(); vi.useRealTimers(); }
+});
+
+it("patches a working-state observation without scheduling the directory relationship refresh", async () => {
+  const f = fixture();
+  const originalRead = f.read.getMockImplementation()!;
+  const federationTarget = { scope: "remote" as const, instanceId: "peer" };
+  const link = { id: "checkout", kind: "worktree" as const, label: "checkout", path: "/repo", worktreePath: "/repo/checkout" };
+  f.read.mockImplementation(async (request, consumer) => {
+    const page = await originalRead(request, consumer);
+    return { ...page, entries: page.entries.map((entry) => ({ ...entry, row: { ...entry.row, linkedDirectories: [link],
+      ...(entry.row.id === "thread-1" ? { ref: { ...entry.row.ref, ownerInstanceId: federationTarget.instanceId },
+        federation: { ref: { backend: "codex" as const, threadId: entry.row.id, target: federationTarget }, instanceLabel: "Peer" } } : {}) } })) };
+  });
+  const listeners = new Set<(event: AgentEvent) => void>();
+  const api: DesktopApi = { ...f.api, onAgentEvent: (listener) => { listeners.add(listener); return () => listeners.delete(listener); } };
+  const scheduleNavigationRefresh = vi.fn(() => () => undefined);
+  const { result, unmount } = renderHook(() => useThreadNavigation(api, { scheduleNavigationRefresh }));
+  try {
+    await waitFor(() => expect(result.current.threads.map(({ id }) => id)).toEqual(expect.arrayContaining(["thread-0", "thread-1"])));
+    scheduleNavigationRefresh.mockClear();
+    f.read.mockClear();
+    const gitWorkingState = { dirtyFiles: 1, dirtyAdditions: 3, dirtyDeletions: 0, untrackedFiles: 0, unpushedCommits: 0 };
+    await act(async () => {
+      for (const fetchedAt of [2, 1]) for (const listener of listeners) listener({ backend: "codex", notification: {
+        method: "navigation/threadGitWorkingState/updated",
+        params: { worktreePath: link.worktreePath, fetchedAt, gitWorkingState: fetchedAt === 2 ? gitWorkingState : null },
+      } });
+    });
+    expect(result.current.threads.find(({ id }) => id === "thread-0")).toMatchObject({ gitWorkingState, gitWorkingStateFetchedAt: 2 });
+    expect(result.current.threads.find(({ id }) => id === "thread-1")?.gitWorkingStateFetchedAt).toBeUndefined();
+    expect(scheduleNavigationRefresh).not.toHaveBeenCalled();
+    expect(f.read).not.toHaveBeenCalled();
+    await act(async () => {
+      for (const listener of listeners) listener({ backend: "codex", notification: {
+        method: "navigation/threadDirectories/updated", params: { reason: "selected-thread", threadIds: ["thread-0"] },
+      } });
+    });
+    expect(scheduleNavigationRefresh).toHaveBeenCalledTimes(1);
+  } finally { unmount(); }
 });
 
 it("retains unchanged row projections while still publishing changed titles", async () => {

@@ -96,6 +96,8 @@ async function expectIdentityLookupToYield(firstFailureMs: number) {
     expect(poll).toHaveBeenCalledTimes(1);
     expect(api.getMe.mock.lastCall?.[0].aborted).toBe(true);
     expect(api.getWebhookInfo.mock.lastCall?.[0].aborted).toBe(false);
+    expect(adapter.readDmPairingAccountId()).toBe("1234567890");
+    expect(adapter.readDmPairingAddress()).toBeUndefined();
   } finally {
     await adapter.stop();
     await startup;

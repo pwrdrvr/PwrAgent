@@ -76,6 +76,7 @@ describe("messaging binding owner ports and effects", () => {
       const adapter: MessagingBindingContext["adapter"] = { get setConversationTitle() {
         reads++;
         return async function(this: MessagingBindingContext["adapter"], request: Parameters<NonNullable<MessagingBindingContext["adapter"]["setConversationTitle"]>>[0]): ReturnType<NonNullable<MessagingBindingContext["adapter"]["setConversationTitle"]>> {
+          expect(reads).toBe(2);
           expect(this).toBe(adapter);
           await setImmediate();
           return { outcome: "updated", channel: request.channel.channel, title: request.title,
@@ -84,7 +85,8 @@ describe("messaging binding owner ports and effects", () => {
       } };
       const owner = new MessagingBindingService({ ...context(f, () => messagingModules(f.controller).bindingHost()), adapter });
       await owner.syncConversationName(binding, f.event("status"));
-      expect(reads).toBe(2);
+      // The refreshed status card reads the setter to decide whether to offer Sync name.
+      expect(reads).toBe(3);
       expect((await f.active())?.channel.conversation.title).toBe("Fixture thread-a");
     } finally { await f.close(); }
   });

@@ -19,6 +19,7 @@ import {
   useManagedRuntimeProgress,
 } from "./ManagedRuntimeProgress";
 import { SettingsCopyValue } from "./SettingsCopyValue";
+import { AntigravitySetup } from "./AntigravitySetup";
 import { SettingsPathRow, type SettingsPathRowChip } from "./SettingsPathRow";
 import {
   acpRelativeTime,
@@ -221,6 +222,10 @@ export function AcpAgentsSettings(props: {
               props.onManagedGrokBuildChannelChange
             }
             onRefresh={() => refresh(true, true)}
+            onSetupChanged={() => {
+              void refresh(false);
+              window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+            }}
           />
         </Fragment>
       ))}
@@ -328,6 +333,10 @@ function LegacyKimiCompatibilityCard(props: {
   );
 }
 
+function UnmanagedAcpSetup({ children }: { children: ReactNode }) {
+  return children;
+}
+
 function AcpAgentSection(props: {
   entry: AcpAgentSettingsEntry;
   cliPathSnapshot: DesktopSettingsValue<string> | undefined;
@@ -348,8 +357,11 @@ function AcpAgentSection(props: {
     channel: DesktopUpdateChannel,
   ) => Promise<boolean>;
   onRefresh: () => Promise<boolean>;
+  onSetupChanged: () => void;
 }) {
   const { entry, enabled } = props;
+  const hasAntigravitySetup = entry.registryId === "antigravity" && Boolean(props.desktopApi?.antigravitySetup);
+  const Setup = hasAntigravitySetup ? AntigravitySetup : UnmanagedAcpSetup;
   const managedBuild = entry.managedBuild;
   const instances = entry.instances ?? [];
   const rejectedInstances = entry.rejectedInstances ?? [];
@@ -364,6 +376,7 @@ function AcpAgentSection(props: {
   const detail =
     entry.lastDiscoveryError ?? entry.lastError ?? entry.unavailableReason;
   const signInRequired = grokSignInRequired(entry);
+  const accountActionRequired = entry.installed && Boolean(entry.unavailableReason);
   const normalizedSavedPath = savedPath.trim();
   const envForced = props.cliPathSnapshot?.source === "env";
   const checkingPath = pathUpdating || props.refreshing === true;
@@ -381,7 +394,7 @@ function AcpAgentSection(props: {
       : checkingPath
         ? "Checking this path and provider capabilities…"
         : overrideActive
-          ? `Active for new threads${activeOverrideInstance?.version
+          ? `${accountActionRequired ? "Selected path" : "Active for new threads"}${activeOverrideInstance?.version
             ? ` · v${activeOverrideInstance.version}`
             : ""}.`
           : undefined;
@@ -451,7 +464,9 @@ function AcpAgentSection(props: {
       chip={enabled ? acpStatusLabel(entry) : "Disabled"}
       chipKind={
         enabled
-          ? (signInRequired ? "warn" : entry.installed ? "ok" : "muted")
+          ? (signInRequired || (entry.installed && entry.unavailableReason)
+              ? "warn"
+              : entry.installed ? "ok" : "muted")
           : "muted"
       }
     >
@@ -591,15 +606,18 @@ function AcpAgentSection(props: {
           />
         ) : null}
 
-        <SettingsField
+        <Setup desktopApi={props.desktopApi} entry={entry} onChanged={props.onSetupChanged}>
+          <SettingsField
           label="Detected paths"
           sub={
             enabled
-              ? "Binaries detected on this machine. The active one runs new threads — click Use to pick another."
+              ? accountActionRequired
+                ? "Binaries detected on this machine. Click Use to change the selected path."
+                : "Binaries detected on this machine. The active one runs new threads — click Use to pick another."
               : "Previously detected binaries. Enable this provider and Refresh before launching new threads."
           }
           source={`${instances.length + rejectedInstances.length} found`}
-          error={signInRequired ? undefined : detail}
+          error={signInRequired || (hasAntigravitySetup && (!entry.installed || entry.unavailableReason)) ? undefined : detail}
           control={
             <div className="settings-paths" aria-label={`${entry.name} installs`}>
               {instances.length === 0 && rejectedInstances.length === 0 ? (
@@ -660,7 +678,8 @@ function AcpAgentSection(props: {
                         path={instance.command}
                         chips={chips}
                         selected={active}
-                        selectedLabel="Using"
+                        selectedLabel={entry.unavailableReason ? "Selected" : "Using"}
+                        selectedTone={entry.unavailableReason ? "muted" : "ok"}
                         useLabel="Use"
                         disabled={pathControlsDisabled}
                         onUse={
@@ -700,7 +719,8 @@ function AcpAgentSection(props: {
               )}
             </div>
           }
-        />
+          />
+        </Setup>
 
         {props.onCliPathChange ? (
           <SettingsField
@@ -709,7 +729,9 @@ function AcpAgentSection(props: {
               envForced
                 ? "This path is controlled by an environment override set before PwrAgent launched."
                 : enabled
-                  ? "Enter an absolute path. Save checks it immediately and updates the binary used by new threads."
+                  ? accountActionRequired
+                    ? "Enter an absolute path. Save checks it immediately and updates the selected binary."
+                    : "Enter an absolute path. Save checks it immediately and updates the binary used by new threads."
                   : "Save an absolute path now. Enable this provider, then Refresh to verify it before use."
             }
             source={
@@ -718,7 +740,7 @@ function AcpAgentSection(props: {
                 : pinnedManagedBuild
                   ? "pinning a PwrAgent build"
                   : overrideActive
-                    ? "active override"
+                    ? accountActionRequired ? "selected override" : "active override"
                     : normalizedSavedPath
                       ? "saved override"
                       : undefined

@@ -1,4 +1,5 @@
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import { resolveDecisionModelSettings } from "@pwragent/shared/decision-models";
 import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { threadDecisionBatchDirectory } from "../app-server/thread-assets";
 import {
@@ -84,6 +85,10 @@ export function createOpenAIDecisionsAgentToolsHandler(params: {
       return { ...(organizationId ? { organizationId } : {}), ...(projectId ? { projectId } : {}) };
     },
     readSystemOneTarget: async (provider) => await readSystemOneTarget(params.settings, provider),
+    readProviderModel: (provider) => {
+      const settings = resolveDecisionModelSettings(params.settings.resolveDecisionModelSettings());
+      return provider === "local" ? settings.localModel : provider === "jev" ? settings.jevModel : undefined;
+    },
     resolveDefaultProvider: async () => await resolveDefaultDecisionProvider(params.settings),
     isProviderEnabled: (provider) => isDecisionProviderEnabled(params.settings, provider),
     profileId: () => resolveActiveProfileName(),

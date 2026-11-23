@@ -18,6 +18,7 @@ import type {
   MessagingConversationTitleUpdateResult,
   MessagingDeliveryResult,
   MessagingDeliveryScope,
+  MessagingDmPairingAddress,
   MessagingFilePart,
   MessagingImagePart,
   MessagingClientRateLimitStrategy,
@@ -32,6 +33,7 @@ import type {
   MessagingManagedConversationRightsResult,
   MessagingCommandVerb,
   MessagingRateLimitInfo,
+  MessagingAuthorizationRejection,
   MessagingRejectedInboundEvent,
   MessagingResponseMode,
   MessagingSurfaceAction,
@@ -44,6 +46,8 @@ import {
   layoutMessagingActionRows,
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
   MESSAGING_COMMAND_CATALOG,
+  MESSAGING_PAIRING_COMMAND,
+  MESSAGING_PAIRING_TOKEN_PATTERN,
   messagingInlineImageBytes,
   notifyEachListener,
   notifyEachListenerAsync,
@@ -72,6 +76,8 @@ import {
 } from "./validate-ids.ts";
 
 const TELEGRAM_ALLOWED_UPDATES = ["message", "callback_query"];
+const TELEGRAM_DM_PAIRING_PREFIX = "pair_";
+const TELEGRAM_DM_PAIRING_COMMAND = `/start ${TELEGRAM_DM_PAIRING_PREFIX}`;
 const TELEGRAM_STARTUP_RETRY_DELAYS_MS = [1_000, 3_000];
 const TELEGRAM_STARTUP_IDENTITY_TIMEOUT_MS = 5_000;
 const TELEGRAM_DEFAULT_TYPING_SIGNAL_LEASE_MS = 15_000;
@@ -488,6 +494,8 @@ export type TelegramProviderAdapter = {
   capabilityProfile: MessagingCapabilityProfile;
   channel: "telegram";
   clientRateLimitStrategy: MessagingClientRateLimitStrategy;
+  readDmPairingAddress(): MessagingDmPairingAddress | undefined;
+  readDmPairingAccountId(): string | undefined;
   resolveDirectConversation?(userId: string): Promise<MessagingPrivateConversationResolveResult>;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
@@ -589,6 +597,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
    * mention parsing is skipped (slash commands still work).
    */
   private botUsername?: string;
+  private authenticatedBotId?: number;
   /**
    * `getMe().can_read_all_group_messages`: false while the bot's Group
    * Privacy is on. Telegram then delivers only commands, mentions, and
@@ -697,6 +706,24 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       account: `@${this.botUsername}`,
       detail: "api.telegram.org",
     };
+  }
+
+  readDmPairingAddress(): MessagingDmPairingAddress | undefined {
+    const { authenticatedBotId, botUsername } = this;
+    if (authenticatedBotId === undefined || !botUsername || !/^[a-z0-9_]{5,32}$/.test(botUsername)) {
+      return undefined;
+    }
+    return {
+      accountId: String(authenticatedBotId),
+      linkForToken: (token) => `https://t.me/${botUsername}?start=${TELEGRAM_DM_PAIRING_PREFIX}${token}`,
+    };
+  }
+
+  readDmPairingAccountId(): string | undefined {
+    // Telegram bot tokens carry the stable account ID. Polling authenticates
+    // with that token even when the optional username lookup times out.
+    return this.authenticatedBotId === undefined
+      ? this.configuredBotId() : String(this.authenticatedBotId);
   }
 
   async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
@@ -819,6 +846,8 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     try {
       const me = await this.readStartupIdentity(api, signal, tokenDiagnostics);
       if (signal.aborted) return;
+      this.authenticatedBotId = me?.is_bot && Number.isSafeInteger(me.id) && me.id > 0
+        ? me.id : undefined;
       if (me?.username) {
         this.botUsername = me.username.toLowerCase();
         this.options.logger?.debug(
@@ -977,6 +1006,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       this.startPromise = undefined;
       this.listener = undefined;
       this.botUsername = undefined;
+      this.authenticatedBotId = undefined;
       this.runtimeErrorListeners.clear();
       this.stopping = false;
     }
@@ -1883,6 +1913,24 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       return;
     }
     if (this.hasMissingTopicId(updateId, message, message.from.id)) {
+      return;
+    }
+
+    if (message.text?.startsWith(TELEGRAM_DM_PAIRING_COMMAND)) {
+      const token = message.text.slice(TELEGRAM_DM_PAIRING_COMMAND.length);
+      if (message.chat.type === "private" && MESSAGING_PAIRING_TOKEN_PATTERN.test(token)) {
+        await listener({
+          id: `telegram:update:${updateId}:message:${message.message_id}`,
+          kind: "command",
+          actor: this.actorFromUser(message.from),
+          args: [token],
+          channel: this.channelFromMessage(message),
+          command: MESSAGING_PAIRING_COMMAND,
+          rawText: `/${MESSAGING_PAIRING_COMMAND}`,
+          ...receipt,
+          routingState: this.routingStateFromMessage(message),
+        });
+      }
       return;
     }
 
@@ -2944,10 +2992,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
   private rejectedEventFromMessage(
     message: TelegramMessage,
-    options: Pick<MessagingRejectedInboundEvent, "kind" | "reason"> & {
+    options: Pick<MessagingAuthorizationRejection, "kind" | "reason"> & {
       receipt: MessagingInboundReceipt;
     },
-  ): MessagingRejectedInboundEvent {
+  ): MessagingAuthorizationRejection {
     return {
       id: `telegram:message:${message.message_id}:rejected`,
       kind: options.kind,
@@ -2961,10 +3009,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
   private rejectedEventFromCallback(
     callbackQuery: TelegramCallbackQuery,
-    options: Pick<MessagingRejectedInboundEvent, "reason"> & {
+    options: Pick<MessagingAuthorizationRejection, "reason"> & {
       receipt: MessagingInboundReceipt;
     },
-  ): MessagingRejectedInboundEvent {
+  ): MessagingAuthorizationRejection {
     const message = callbackQuery.message;
     return {
       id: `telegram:callback:${callbackQuery.id}:rejected`,

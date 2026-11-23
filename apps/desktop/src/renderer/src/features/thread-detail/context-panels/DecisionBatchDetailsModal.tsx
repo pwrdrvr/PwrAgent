@@ -30,6 +30,7 @@ import {
 } from "./decisions-format";
 import { BatchTitle } from "./DecisionBatchTitle";
 import { RailStatusChip } from "./RailStatusChip";
+import { DecisionInputImages } from "./DecisionInputImages";
 
 const PAGE_SIZE = 100;
 const RUNNING_POLL_MS = 2_000;
@@ -479,7 +480,10 @@ function ItemRow(props: {
       onClick={props.onSelect}
     >
       <span className="decisions-review__index">{item.index}</span>
-      <span className="decisions-review__summary">{summary}</span>
+      <div>
+        <span className="decisions-review__summary">{summary}</span>
+        <DecisionInputImages images={item.inputImages} />
+      </div>
       {item.ok ? (
         answer?.value !== undefined ? (
           <span className={`decisions-review__chip${isLowConfidence(answer) ? " decisions-review__chip--low" : ""}`}>

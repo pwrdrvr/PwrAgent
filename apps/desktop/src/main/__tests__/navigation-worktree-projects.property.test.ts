@@ -8,6 +8,7 @@ import { buildDirectorySummaries, canonicalizeNavigationPath } from "@pwragent/s
 import { DEFAULT_PROJECT_FORGE_AUTOMATION } from "@pwragent/shared/project-forge-automation";
 import { projectNavigationQuery } from "@pwragent/owner-core/navigation-query-projection";
 import { resolveNavigationWorktreeProjects } from "../app-server/navigation-worktree-projects";
+import { resolvePendingWindowsDirectoryKey } from "../app-server/navigation-windows-directory-aliases";
 import { ProjectForgeAutomationIndex } from "../app-server/project-forge-automation-index";
 
 vi.mock("node:fs/promises", { spy: true });
@@ -136,6 +137,36 @@ it("uses the checkout group's stored spelling and exact membership for editing",
   expect((await resolveNavigationWorktreeProjects(dirs, { threads })).directories).toMatchObject([{
     path: "c:/aa", checkoutPaths,
   }]);
+});
+
+async function expectSecondaryCheckoutHome(name: string, layout: "alias" | "distinct" | "missing") {
+  const preferredPath = "C:/Main";
+  const checkoutPath = `C:/Checkouts/${name}`;
+  const reportedPath = checkoutPath.toLowerCase();
+  const projectKey = `directory:${preferredPath}`;
+  const checkoutGroups = [{ preferredPath, paths: [preferredPath, checkoutPath] }];
+  const threads = [thread("1", reportedPath)];
+  vi.mocked(realpath).mockImplementation(async (target) => {
+    if (layout === "missing" && target === reportedPath) throw new Error("ENOENT");
+    return layout === "alias" ? checkoutPath : String(target);
+  });
+  const pendingKey = await resolvePendingWindowsDirectoryKey(
+    `directory:${reportedPath.replaceAll("/", "\\")}`, new Map(), checkoutGroups,
+  );
+  const landed = await resolveNavigationWorktreeProjects(buildDirectorySummaries({ threads, checkoutGroups }), { threads });
+  expect(landed.directories.find((directory) => directory.threadKeys.includes("codex:1"))?.key)
+    .toBe(layout === "alias" ? projectKey : `directory:${reportedPath}`);
+  expect(pendingKey).toBe(layout === "alias" ? projectKey : undefined);
+}
+
+it("uses filesystem identity to place case variants of secondary checkouts before and after landing", async () => {
+  await fc.assert(fc.asyncProperty(
+    fc.stringMatching(/^[A-Z][a-z]{1,8}$/), fc.constantFrom("alias", "distinct", "missing"), expectSecondaryCheckoutHome,
+  ));
+});
+
+it("keeps a start from c:/checkouts/aa under C:/Main when it lands", async () => {
+  await expectSecondaryCheckoutHome("Aa", "alias");
 });
 
 it("shows the c:/aa thread inside an existing C:/Aa registration", async () => {

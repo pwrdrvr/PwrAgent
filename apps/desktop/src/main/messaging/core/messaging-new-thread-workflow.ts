@@ -13,7 +13,7 @@ import type { BackendAcpSessionRuntimeState, BackendSummary } from "@pwragent/sh
 import type { MessagingToolUpdateMode } from "@pwragent/shared/contracts/messaging";
 import type { UpdateDirectoryLaunchpadRequest } from "@pwragent/shared/contracts/agent";
 import type { MessagingBrowseSessionRecord, MessagingInboundCallbackEvent, MessagingInboundEvent } from "@pwragent/messaging-interface";
-import { MESSAGING_CALLBACK_HANDLE_TTL_MS } from "@pwragent/messaging-interface";
+import { capabilityProfilePageSize, MESSAGING_CALLBACK_HANDLE_TTL_MS } from "@pwragent/messaging-interface";
 import { buildConfirmationIntent, buildErrorIntent } from "./messaging-renderer.js";
 import { isNewAgentThreadLaunchAction, isNewThreadLaunchAction, selectProjectFromValue } from "./messaging-resume-browser.js";
 import { buildNewThreadEnvironmentPickerIntent, buildBranchPickerPage, formatMessagingToolUpdateModeLabel, formatPermissionsActionDisplayLabel, formatPermissionsLineDisplayLabel, messagingToolUpdateModeChoices, shouldShowStreamingControl } from "./messaging-status-card.js";
@@ -21,6 +21,7 @@ import { acpBackendDeclaresExecutionMode, acpBackendUsesExecutionModePermissions
 import { DEFAULT_MESSAGING_AGENT_NAME } from "./messaging-inbound-helpers";
 import type { MessagingNewThreadContext } from "./messaging-new-thread-context";
 import { readNullableStringValue, readThreadExecutionModeValue, readAcpRuntimeOptionSource } from "./messaging-callback-helpers";
+import { listMessagingAgentPresets, resolveMessagingAgentPreset } from "./messaging-agent-presets";
 
 const NEW_THREAD_PROMPT_CAPTURE_TTL_MS = MESSAGING_CALLBACK_HANDLE_TTL_MS;
 
@@ -30,6 +31,7 @@ function newThreadPromptGateBody(
   backend: BackendSummary,
   toolUpdateMode: MessagingToolUpdateMode,
   showStreaming: boolean,
+  preset?: Awaited<ReturnType<typeof resolveMessagingAgentPreset>>,
 ): string {
   const acpExecutionModePermissions =
     acpBackendUsesExecutionModePermissions(backend);
@@ -48,8 +50,11 @@ function newThreadPromptGateBody(
     `Send the first instruction for ${session.selectedProject?.label ?? "this project"}.`,
     "The thread will be created when that message arrives.",
     isNewAgentThreadLaunchAction(session.launchAction)
-      ? `Agent: ${DEFAULT_MESSAGING_AGENT_NAME}`
+      ? `Agent: ${preset?.agent.name ?? DEFAULT_MESSAGING_AGENT_NAME}`
       : undefined,
+    preset ? `Connections: ${preset.selectedNames.join(", ") || "None"}` : undefined,
+    preset?.skippedNames.length ? `Skipped: ${preset.skippedNames.join(", ")}` : undefined,
+    session.agentPresetId && !preset ? "The selected preset is unavailable. Choose an Agent preset before sending." : undefined,
     `Provider: ${backend.label}`,
     `Workspace: ${options.workMode === "worktree" ? "New Worktree" : "Local"}`,
     options.workMode === "worktree" ? `Base branch: ${options.branchName}` : undefined,
@@ -252,6 +257,7 @@ export class MessagingNewThreadWorkflow {
     navigation: MessagingNewThreadNavigation,
     project: NonNullable<ReturnType<typeof selectProjectFromValue>>,
   ): Promise<void> {
+    if (!await this.context.host().requirePermission(event, "thread.new", "messaging-project-create")) return;
     if (!await this.context.host().requireRemoteScope(event, project.federationTarget, "messaging-project-create")) return;
     if (!this.context.backend.materializeDirectoryLaunchpad && !this.context.backend.startThread) {
       await this.context.host().deliver(
@@ -299,6 +305,7 @@ export class MessagingNewThreadWorkflow {
           workMode,
           branchName: workMode === "worktree" ? session.branchName : undefined,
           selectedProject: { ...project, directoryKey: directory?.key ?? project.directoryKey },
+          agentPresetId: project.federationTarget?.scope === "remote" ? undefined : session.agentPresetId,
           updatedAt: this.context.now(),
           expiresAt: this.context.now() + this.context.pendingIntentTtlMs,
         }),
@@ -333,11 +340,65 @@ export class MessagingNewThreadWorkflow {
     };
   }
 
+  async handleAgentPresetPicker(session: MessagingBrowseSessionRecord, event: MessagingInboundCallbackEvent, actionId: string): Promise<void> {
+    const host = this.context.host();
+    if (session.mode !== "new_thread_options" || !isNewAgentThreadLaunchAction(session.launchAction)
+      || !session.selectedProject || session.selectedProject.federationTarget?.scope === "remote"
+      || !await host.requirePermission(event, "thread.new", "messaging-agent-preset")) return;
+    const presets = listMessagingAgentPresets(this.context.backend, session);
+    if (actionId === "browse:new:preset:set") {
+      const id = readStringValue(event.value, "presetId");
+      if (id !== "default" && !presets.some((preset) => preset.id === id)) {
+        await host.deliverInvalidBrowseSelection(event);
+        return;
+      }
+      await this.presentNewThreadPromptGate({ ...session, agentPresetId: id === "default" ? undefined : id }, event);
+      return;
+    }
+    const choices = [{ id: "default", name: DEFAULT_MESSAGING_AGENT_NAME }, ...presets];
+    const pageSize = Math.max(1, capabilityProfilePageSize(this.context.capabilityProfile, 3, 8));
+    const totalPages = Math.ceil(choices.length / pageSize);
+    const requestedPage = Number(readStringValue(event.value, "presetPage") ?? 0);
+    const page = Number.isSafeInteger(requestedPage) ? Math.max(0, Math.min(totalPages - 1, requestedPage)) : 0;
+    const pageChoices = choices.slice(page * pageSize, (page + 1) * pageSize).map((choice, index) => ({
+      id: "browse:new:preset:set",
+      label: choice.name.slice(0, 64),
+      fallbackText: String(page * pageSize + index + 1),
+      style: "secondary" as const,
+      value: { presetId: choice.id },
+    }));
+    const pageAction = (index: number, label: string) => ({
+      id: "browse:new:preset", label, fallbackText: label.toLowerCase(), style: "navigation" as const,
+      value: { presetPage: String(index) },
+    });
+    const intent = buildConfirmationIntent({
+      id: host.newIntentId("agent-preset"),
+      capabilityProfile: this.context.capabilityProfile,
+      browseSessionId: session.id,
+      createdAt: this.context.now(),
+      title: "Start from an Agent preset",
+      body: pageChoices.map((choice) => `${choice.fallbackText}. ${choice.label}`).join("\n"),
+      fallbackText: "Choose an Agent preset or reply with its number.",
+      targetSurface: session.surface,
+      delivery: session.surface ? { mode: "update", replaceMarkup: true } : undefined,
+      actions: [
+        ...pageChoices,
+        ...(page > 0 ? [pageAction(page - 1, "Previous")] : []),
+        ...(page + 1 < totalPages ? [pageAction(page + 1, "Next")] : []),
+        { id: "browse:new:options", label: "Back", style: "navigation", fallbackText: "back" },
+      ],
+    });
+    await host.storePendingIntent(intent, undefined, event);
+    const result = await host.deliver(intent, undefined, event);
+    if (result.surface) await this.context.store.upsertBrowseSession({ ...session, surface: result.surface, updatedAt: this.context.now() });
+  }
+
   async presentNewThreadPromptGate(
     session: MessagingBrowseSessionRecord,
     event: MessagingInboundEvent,
     _navigation?: MessagingNewThreadNavigation,
   ): Promise<void> {
+    if (!await this.context.host().requirePermission(event, "thread.new", "messaging-project-create")) return;
     let snapshot: MessagingNewThreadNavigation = await readMessagingLaunchpadContext({
       backend: this.context.backend, project: session.selectedProject,
     });
@@ -421,6 +482,8 @@ export class MessagingNewThreadWorkflow {
       await this.context.host().resolveShowStreamingOption(),
       effectiveSession.preferences?.streamingControlRevealed,
     );
+    const preset = await resolveMessagingAgentPreset(this.context.backend, effectiveSession);
+    const showPresetPicker = Boolean(effectiveSession.agentPresetId || listMessagingAgentPresets(this.context.backend, effectiveSession).length);
     await this.context.store.upsertBrowseSession(effectiveSession);
     const intent = buildConfirmationIntent({
       id: this.context.host().newIntentId("new-thread-ready"),
@@ -440,10 +503,12 @@ export class MessagingNewThreadWorkflow {
         selectedBackend,
         toolUpdateMode,
         showStreaming,
+        preset,
       ),
       fallbackText: "Send your first instruction, or use the option buttons before sending it.",
       targetSurface: effectiveSession.surface,
       actions: [
+        ...(showPresetPicker ? [{ id: "browse:new:preset", label: "Agent preset", fallbackText: "agent preset", style: "secondary" as const }] : []),
         ...(hasMultipleBackends
           ? [
               {

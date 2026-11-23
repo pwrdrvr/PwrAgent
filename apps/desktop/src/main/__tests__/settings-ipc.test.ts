@@ -361,6 +361,34 @@ describe("settings ipc", () => {
     } finally { disposeSettingsIpcHandlers(); }
   });
 
+  it("lists decision models through the Settings IPC handler with the saved key, and refuses an unknown provider", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    tempRoots.push(tempRoot);
+    const stateDb = openInMemoryStateDb(); stateDbs.push(stateDb);
+    const service = new DesktopSettingsService({ configPath: path.join(tempRoot, "config.toml"), env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      tokenMiserStore: new TokenMiserStore(path.join(tempRoot, "token-miser"), { storage: new SqliteTokenMiserStorage(stateDb) }) });
+    vi.spyOn(service, "resolveDecisionModelSettings").mockReturnValue({ local: { endpoint: "http://127.0.0.1:9911" } });
+    const resolveKey = vi.spyOn(service, "resolveDecisionApiKey").mockImplementation(async (provider) => provider === "jev" ? "fixture-jev-key" : undefined);
+    const fetch = vi.fn(async (url: string, _init?: RequestInit) => new Response(JSON.stringify({ models: [{ name: url.includes("typesafe") ? "jev-latest" : "clef-flash" }] })));
+    vi.stubGlobal("fetch", fetch);
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import("../shell/ipc/settings");
+    const { SETTINGS_LIST_DECISION_MODELS_CHANNEL } = await import("../../shared/ipc");
+    registerSettingsIpcHandlers(service);
+    try {
+      const list = (provider: unknown) => handlers.get(SETTINGS_LIST_DECISION_MODELS_CHANNEL)?.({}, { provider });
+      await expect(list("jev")).resolves.toEqual({ ok: true, models: [{ id: "jev-latest" }] });
+      expect(fetch).toHaveBeenLastCalledWith("https://api.typesafe.ai/v1/models", expect.objectContaining({
+        headers: { Authorization: "Bearer fixture-jev-key" },
+      }));
+      await expect(list("local")).resolves.toEqual({ ok: true, models: [{ id: "clef-flash" }] });
+      expect(fetch).toHaveBeenLastCalledWith("http://127.0.0.1:9911/v1/models", expect.objectContaining({ headers: {} }));
+      expect(resolveKey.mock.calls.map(([provider]) => provider)).toEqual(["jev", "local"]);
+      await expect(list("openai")).resolves.toEqual({ ok: false, detail: "Unknown decision provider." });
+      expect(fetch).toHaveBeenCalledTimes(2);
+    } finally { disposeSettingsIpcHandlers(); }
+  });
+
   it("refreshes provider catalogs through the owner's reader, and says so when Codex is not running", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
     tempRoots.push(tempRoot);
@@ -1802,6 +1830,7 @@ describe("settings ipc", () => {
         "kimi",
         "grok",
         "qwen",
+        "antigravity",
       ]);
       for (const enabled of [true, false]) {
         await service.writeConfigPatchTargeted({ acpAgents: { grok: { enabled } } });
@@ -1983,7 +2012,9 @@ describe("settings ipc", () => {
       const response = await handlers.get(ACP_AGENTS_LIST_CHANNEL)!({}, { refresh: false }) as {
         entries: AcpAgentSettingsEntry[];
       };
-      expect(response.entries.map((entry) => entry.registryId).sort()).toEqual(["gemini", "grok", "kimi", "qwen"]);
+      expect(response.entries.map((entry) => entry.registryId).sort()).toEqual(["antigravity", "gemini", "grok", "kimi", "qwen"]);
+      expect(response.entries.find((entry) => entry.registryId === "antigravity")?.unavailableReason)
+        .toMatch(/enable Antigravity CLI.*Refresh/);
       expect(localAcpDiscoveryMock.discoverLocalAcpAgentRecords).not.toHaveBeenCalled();
       // Hiding a retired provider must not delete the user's persisted state.
       expect(store.getInstalledAgent("acp:claude-acp")).toBeDefined();
@@ -2488,7 +2519,7 @@ describe("settings ipc", () => {
         localAcpDiscoveryMock.discoverLocalAcpAgentRecords,
       ).toHaveBeenCalledWith(
         expect.objectContaining({
-          enabledRegistryIds: ["gemini", "grok", "kimi", "qwen"],
+          enabledRegistryIds: ["gemini", "grok", "kimi", "qwen", "antigravity"],
           managedGrok: {
             channel: "latest",
             enabled: true,
@@ -2633,7 +2664,7 @@ describe("settings ipc", () => {
         localAcpDiscoveryMock.discoverLocalAcpAgentRecords,
       ).toHaveBeenCalledWith(
         expect.objectContaining({
-          enabledRegistryIds: ["grok", "kimi", "qwen"],
+          enabledRegistryIds: ["grok", "kimi", "qwen", "antigravity"],
           preferences: {
             kimi: { overridePath: "/opt/pwragent/bin/kimi" },
           },
@@ -2915,7 +2946,7 @@ describe("settings ipc", () => {
         localAcpDiscoveryMock.discoverLocalAcpAgentRecords,
       ).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          enabledRegistryIds: ["grok", "kimi", "qwen"],
+          enabledRegistryIds: ["grok", "kimi", "qwen", "antigravity"],
         }),
       );
     } finally {
@@ -3039,6 +3070,7 @@ describe("settings ipc", () => {
         "grok",
         "kimi",
         "qwen",
+        "antigravity",
       ]);
 
       await vi.waitFor(async () => {

@@ -15,6 +15,7 @@ import type {
   SettingsCredentialTestResult,
 } from "@pwragent/shared/contracts/settings";
 import type {
+  GenerateMessagingPairingTokenResponse,
   MessagingChannelKind,
   MessagingPairingApprovalTarget,
   MessagingPairingScope,
@@ -29,6 +30,7 @@ import { SlackConnectCard } from "../../messaging/SlackConnectCard";
 import { SLACK_EVENTS_API_UNIMPLEMENTED_NOTICE } from "../../messaging/slack-connect-copy";
 import { slackCredentialProblem } from "../../messaging/slack-token-shape";
 import type { DesktopSettingsState } from "../useDesktopSettings";
+import { MessagingDmPairingLink } from "../MessagingDmPairingLink";
 import { SecretStatusLine, useSecretRemoveConfirm } from "../SecretStatusLine";
 import { describeSecretField, secretStoreState } from "../secret-field-state";
 import {
@@ -270,11 +272,8 @@ const PROVIDER_SETUP_CONFIGS: Record<GuidedMessagingProvider, ProviderSetupConfi
         label: "Pair your DMs",
         help: (
           <>
-            From <strong>your</strong> Telegram account, open the chat with
-            your new bot and send the pairing message below. PwrAgent sees the
-            message land and finishes pairing automatically — you can use
-            Telegram on any device, the pairing is between your account and
-            the bot.
+            Generate a pairing code, then connect from your Telegram account.
+            You can also copy the pairing message and send it to the bot.
           </>
         ),
       },
@@ -1207,8 +1206,8 @@ function PairingBlock(props: {
   const [scope, setScope] = useState<MessagingPairingScope>(
     props.options[0]?.scope ?? "user_dm",
   );
-  const [message, setMessage] = useState<string | undefined>(undefined);
-  const [entryId, setEntryId] = useState<string | undefined>(undefined);
+  const [generated, setGeneratedState] = useState<GenerateMessagingPairingTokenResponse>();
+  const message = generated?.message;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
   const [copied, setCopied] = useState(false);
@@ -1254,7 +1253,10 @@ function PairingBlock(props: {
   // mode unless the operator re-clicks "Pair another".
   const [pairingAnother, setPairingAnother] = useState(false);
   const entryIdRef = useRef<string | undefined>(undefined);
-  entryIdRef.current = entryId;
+  const setGenerated = (result: GenerateMessagingPairingTokenResponse | undefined): void => {
+    entryIdRef.current = result?.entry.id;
+    setGeneratedState(result);
+  };
 
   const activeOption = props.options.find((o) => o.scope === scope) ?? props.options[0];
 
@@ -1292,8 +1294,7 @@ function PairingBlock(props: {
         chat: observedChatLabel,
       },
     ]);
-    setMessage(undefined);
-    setEntryId(undefined);
+    setGenerated(undefined);
     setObservedActorLabel(undefined);
     setObservedChatLabel(undefined);
     setObservedChatKind(undefined);
@@ -1380,8 +1381,7 @@ function PairingBlock(props: {
     // picker) so the operator can issue another pairing token.
     // Keeps the `paired` list intact above the surface so the
     // previously-approved entities stay visible.
-    setMessage(undefined);
-    setEntryId(undefined);
+    setGenerated(undefined);
     setResolution(undefined);
     setObservedActorLabel(undefined);
     setObservedChatLabel(undefined);
@@ -1402,8 +1402,7 @@ function PairingBlock(props: {
         platform: props.platform,
         scope,
       });
-      setMessage(result.message);
-      setEntryId(result.entry.id);
+      setGenerated(result);
       // Auto-copy the freshly generated code so the operator can paste it
       // straight into chat; best-effort.
       await copy(result.message);
@@ -1433,8 +1432,7 @@ function PairingBlock(props: {
     // Switching scope invalidates the in-flight pairing — the previous
     // token was scoped to the old kind. Clear it; the operator can
     // generate a new one for the freshly-selected scope.
-    setMessage(undefined);
-    setEntryId(undefined);
+    setGenerated(undefined);
     setResolution(undefined);
     setError(undefined);
     setObservedActorLabel(undefined);
@@ -1473,7 +1471,7 @@ function PairingBlock(props: {
             <span className="guided-setup__field-pill is-ok">✓ paired</span>
           ) : resolution === "observed" ? (
             <span className="guided-setup__field-pill is-ok">✓ message seen</span>
-          ) : entryId ? (
+          ) : generated ? (
             <span className="guided-setup__field-pill is-warn">
               waiting for message…
             </span>
@@ -1524,6 +1522,16 @@ function PairingBlock(props: {
             // `<p>` would be invalid HTML and React would silently
             // hoist children out, breaking the styling.
             <div className="guided-setup__field-sub">{activeOption.help}</div>
+          ) : null}
+          {generated?.dmLink && resolution !== "observed" && resolution !== "approved" ? (
+            <MessagingDmPairingLink
+              link={generated.dmLink}
+              expiresAt={generated.expiresAt}
+              onExpire={() => {
+                if (entryIdRef.current !== generated.entry.id) return;
+                setGenerated(undefined);
+              }}
+            />
           ) : null}
           {message && resolution !== "observed" ? (
             // Pairing tokens are one-time-use; once the bot has
@@ -1631,6 +1639,19 @@ function PairingBlock(props: {
                   {approving ? "Approving…" : "Approve"}
                 </button>
               )}
+              {generated?.dmLink ? (
+                <button
+                  type="button"
+                  className="guided-setup__btn guided-setup__btn--ghost"
+                  disabled={approving || busy || !props.desktopApi?.generateMessagingPairingToken}
+                  onClick={() => {
+                    pairAnother();
+                    void generate();
+                  }}
+                >
+                  Generate new code
+                </button>
+              ) : null}
             </div>
           ) : null}
         </>

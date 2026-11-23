@@ -8,6 +8,7 @@ import type { FederationEventSubscription } from "@pwragent/shared/contracts/fed
 import type { NavigationSnapshot } from "@pwragent/shared/contracts/navigation";
 import type {
   MessagingChannelKind,
+  MessagingAuthorizationRejection,
   MessagingDeliveryResult,
   MessagingDeliveryScope,
   MessagingAdapterDiagnosticListener,
@@ -77,6 +78,7 @@ vi.mock("../state/migration", () => ({
 // Only `app-state` and `migration` ask for "state/state.db"; every other
 // caller of `resolveActiveProfilePath` asks for a different relative path and
 // still lands inside the stubbed profile directory.
+let useFileBackedStateDb = false;
 vi.mock("../profile", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../profile")>();
   return {
@@ -85,7 +87,7 @@ vi.mock("../profile", async (importOriginal) => {
       relativePath: Parameters<typeof actual.resolveActiveProfilePath>[0],
       options?: Parameters<typeof actual.resolveActiveProfilePath>[1],
     ) =>
-      relativePath === "state/state.db"
+      relativePath === "state/state.db" && !useFileBackedStateDb
         ? ":memory:"
         : actual.resolveActiveProfilePath(relativePath, options),
   };
@@ -128,6 +130,7 @@ afterEach(async () => {
   await flushMicrotasks();
   const { resetAppStateForTests } = await import("../state/app-state");
   resetAppStateForTests();
+  useFileBackedStateDb = false;
   vi.unstubAllEnvs();
   vi.resetModules();
   await Promise.all(
@@ -3449,6 +3452,139 @@ describe("DesktopMessagingRuntime", () => {
     );
   });
 
+  // Adapter validation failures persist only the host-owned stage and reason.
+  // Repeats for that reason cannot consume another row until the cooldown ends.
+  it("records redacted adapter validation activity within a per-reason cooldown", async () => {
+    const { reject, bridge } = await createSlackRejectedRuntimeHarness();
+    const { getDesktopMessagingActivityLog } = await import("../messaging/desktop-messaging-activity-log");
+    const activity = getDesktopMessagingActivityLog();
+    const interval = 30 * 60 * 1000;
+    let clock = 0;
+    const monotonicNow = vi.spyOn(performance, "now").mockImplementation(() => clock);
+    try {
+      await fc.assert(fc.asyncProperty(
+        fc.array(fc.record({
+          reason: fc.constantFrom("callback-signature" as const, "callback-handle-unavailable" as const),
+          elapsed: fc.constantFrom(0, 1, interval - 1, interval, interval + 1),
+          requestData: fc.string(),
+        }), { minLength: 2, maxLength: 18 }),
+        async (steps) => {
+          clock += interval;
+          const sinceId = activity.list({ limit: 1 })[0]?.id ?? 0;
+          const expected: Array<{ at: number; receivedAt: number; reason: string }> = [];
+          for (const [index, step] of steps.entries()) {
+            clock += step.elapsed;
+            const receipt = 1_000 + index;
+            const previous = expected.findLast((row) => row.reason === step.reason);
+            if (!previous || clock - previous.at >= interval) {
+              expected.push({ at: clock, receivedAt: receipt, reason: step.reason });
+            }
+            const rejection = {
+              kind: "validation" as const,
+              reason: step.reason,
+              receivedAt: receipt,
+              id: step.requestData,
+              text: step.requestData,
+              signature: step.requestData,
+              channel: { conversation: { id: step.requestData } },
+              actor: { platformUserId: step.requestData },
+            };
+            await reject(rejection);
+            const rows = activity.list({ sinceId }).toReversed();
+            expect(rows.map((row) => row.createdAt)).toEqual(expected.map((row) => row.receivedAt));
+            expect(rows.map((row) => row.payload)).toEqual(expected.map(({ reason }) => ({
+              rejectionStage: "adapter-validation",
+              rejectionReason: reason,
+            })));
+            for (const row of rows) {
+              expect(row).toMatchObject({ platform: "slack", kind: "inbound-rejected" });
+              expect(row).toMatchObject({
+                actorId: undefined,
+                actorDisplayName: undefined,
+                conversationId: undefined,
+                conversationTitle: undefined,
+                backend: undefined,
+                bindingId: undefined,
+                threadId: undefined,
+              });
+            }
+          }
+        },
+      ), { numRuns: 25 });
+    } finally {
+      monotonicNow.mockRestore();
+    }
+    expect(bridge.startTurn).not.toHaveBeenCalled();
+  });
+
+  it("writes one activity commit for a burst of identical adapter validation failures", async () => {
+    const {
+      attachSqliteWriteMetrics,
+      measureSqliteWrites,
+      SQLITE_WRITE_METRICS_ENV,
+    } = await import("../state/sqlite-write-metrics");
+    // Attach the same collector that measures the feature after substrate
+    // setup. The suite resets modules between tests.
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "");
+    useFileBackedStateDb = true;
+    const { reject } = await createSlackRejectedRuntimeHarness();
+    const { getAppStateDb } = await import("../state/app-state");
+    const db = getAppStateDb().raw;
+    attachSqliteWriteMetrics({ db, dbPath: db.name });
+    const { expectSqliteWriteBudget } = await import("./fixtures/sqlite-write-budget");
+    const { writes } = await measureSqliteWrites(async () => {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        await reject({ kind: "validation", reason: "callback-signature", receivedAt: 1_000 + attempt });
+      }
+    });
+    expect(writes.commits).toBe(1);
+    expectSqliteWriteBudget({
+      scenario: "messaging-adapter-validation-rejection-burst",
+      note: "100 failures in one cooldown. At 48 commits/day per platform and reason, 20,600 bytes/commit projects to about 10.9 MB/day across all 11 wired combinations under sustained failures. No idle writes.",
+      writes,
+    });
+  });
+
+  // A storage failure only backs off retries. The full cooldown starts at
+  // the first successful write, even if the database recovers mid-burst.
+  it("retries adapter validation activity after a short write failure backoff", async () => {
+    const { reject } = await createSlackRejectedRuntimeHarness();
+    const {
+      getDesktopMessagingActivityLog,
+      setDesktopMessagingActivityLogForTests,
+    } = await import("../messaging/desktop-messaging-activity-log");
+    const activity = getDesktopMessagingActivityLog();
+    const record = vi.spyOn(activity, "record").mockImplementationOnce(() => {
+      throw new Error("database is locked");
+    });
+    setDesktopMessagingActivityLogForTests(activity);
+    let clock = 0;
+    const monotonicNow = vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const report = async (receivedAt: number) => {
+      await reject({ kind: "validation", reason: "callback-signature", receivedAt });
+    };
+    try {
+      await report(1);
+      expect(activity.list()).toEqual([]);
+      clock = 59_999;
+      await report(2);
+      expect(record).toHaveBeenCalledTimes(1);
+      clock = 60_000;
+      await report(3);
+      expect(activity.list().map((row) => row.createdAt)).toEqual([3]);
+      clock += 30 * 60 * 1000 - 1;
+      await report(4);
+      expect(record).toHaveBeenCalledTimes(2);
+      clock += 1;
+      await report(5);
+      expect(activity.list().map((row) => row.createdAt)).toEqual([5, 3]);
+    } finally {
+      monotonicNow.mockRestore();
+      record.mockRestore();
+      setDesktopMessagingActivityLogForTests(null);
+    }
+  });
+
   it("does not log or persist an unauthorized mention without a route", async () => {
     const { reject } = await createSlackRejectedRuntimeHarness();
     await reject(buildRejectedSlackEvent(
@@ -3869,6 +4005,49 @@ describe("DesktopMessagingRuntime", () => {
       .all("diagnostic") as { summary: string }[];
     expect(rows[0]?.summary).toContain("approval / interactive prompt");
     expect(rows[0]?.summary).not.toContain("critical_interactive");
+  });
+
+  it.each([true, false])("pairs a Telegram link only with its original account (identity lookup available: %s)", async (canAdvertise) => {
+    let accountId = "1001";
+    let advertise = true;
+    const pairingIdentity = { readDmPairingAccountId: () => accountId };
+    const adapter = createAdapter("telegram", {
+      ...pairingIdentity,
+      readDmPairingAddress: () => advertise ? {
+        accountId,
+        linkForToken: (token) => `https://t.me/example_fixture_bot?start=pair_${token}`,
+      } : undefined,
+    });
+    const { runtime } = await createRuntimeHarness({ adapter });
+    await runtime.start();
+    const result = runtime.generatePairingToken({ platform: "telegram", scope: "user_dm" });
+    expect(result.dmLink?.url).toBe(`https://t.me/example_fixture_bot?start=pair_${result.token}`);
+    expect(result.dmLink?.qrImage).toMatch(/^data:image\/svg\+xml,/);
+    expect(runtime.generatePairingToken({ platform: "telegram", scope: "bucket" }).dmLink).toBeUndefined();
+
+    const receive = () => adapter.listener?.({
+      id: "telegram:update:40:message:41",
+      kind: "command",
+      actor: { platformUserId: "1234" },
+      channel: { channel: "telegram", conversation: { id: "1234", kind: "dm" } },
+      command: "pair",
+      args: [result.token],
+      rawText: "/pair",
+      receivedAt: 1000,
+    });
+    const entry = () => runtime.listPairingRequests({ platform: "telegram" }).entries
+      .find((candidate) => candidate.id === result.entry.id)!;
+
+    accountId = "1002";
+    advertise = canAdvertise;
+    await receive();
+    expect(entry().status).toBe("pending");
+    expect(runtime.getPairingAccountStatus(entry())).toBe("different");
+
+    accountId = "1001";
+    await receive();
+    expect(entry().status).toBe("observed");
+    expect(runtime.getPairingAccountStatus(entry())).toBe("current");
   });
 
   it("logs Telegram topic pairing activity with supergroup parent metadata", async () => {
@@ -4683,7 +4862,7 @@ async function createSlackRejectedRuntimeHarness(): Promise<{
 function buildRejectedSlackEvent(
   id: string,
   botMention = false,
-): MessagingRejectedInboundEvent {
+): MessagingAuthorizationRejection {
   return {
     id,
     kind: "text",

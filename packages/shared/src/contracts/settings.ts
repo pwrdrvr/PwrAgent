@@ -1,3 +1,4 @@
+import type { CodexSkillProfile } from "./codex-skill-profiles";
 import type { HotCpuCaptureRules, HotCpuRulePlan } from "../hot-cpu-rules";
 import type { DesktopThreadArchivePolicy } from "../thread-archive-policy";
 import type { DesktopCheckoutHibernationPolicy } from "../checkout-hibernation-policy";
@@ -675,6 +676,12 @@ export type DesktopAuthorizedContact = {
   fullAccessWarningDismissed?: boolean;
   fullAccessWarningOverride?: DesktopMessagingFullAccessWarningUserPolicy;
   responseMode?: DesktopMessagingResponseMode;
+};
+
+export type DesktopTelegramPairingGrants = {
+  accountId: string;
+  users: DesktopAuthorizedContact[];
+  supergroups: DesktopAuthorizedContact[];
 };
 
 export type DesktopMessagingResponseMode = "every_message" | "mention_only";
@@ -1420,21 +1427,29 @@ export type DesktopTokenMiserUsage = {
   estimatedParentTokensSaved: number;
 };
 
+export type ManagedCodexTrackTags = {
+  /** Newest promoted tag observed in the release list. */
+  latestTag?: string;
+  /** Newest tag overall, promoted or not. */
+  prereleaseTag?: string;
+};
+
+export type ManagedCodexTrackLookup = ManagedCodexTrackTags & {
+  /** When GitHub last returned or revalidated the release list. */
+  observedAt: number;
+};
+
 export type DesktopSettingsSnapshot = {
   fetchedAt: number;
   configPath: string;
   configError?: string;
   runtime: {
     tokenMiser?: {
-      managedCodex?: {
+      managedCodex?: ManagedCodexTrackTags & {
         state: "pending-switch" | "ready" | "unavailable";
         reason?: string;
         version?: string;
         checkedAt?: number;
-        /** Newest promoted tag the last release check saw. */
-        latestTag?: string;
-        /** Newest tag overall the last release check saw, promoted or not. */
-        prereleaseTag?: string;
       };
       /**
        * Whether the Codex-side gate is actually installed. The feature fails
@@ -1707,6 +1722,7 @@ export type DesktopSettingsSnapshot = {
       managedBuildsRequiredBy?: "token-miser";
       versionAdvisory?: DesktopCodexVersionAdvisory;
       configOverrides?: DesktopSettingsValue<string[]>;
+      skillProfiles?: CodexSkillProfile[];
       localModelIds?: DesktopSettingsValue<string[]>;
       /** Endpoints Codex can run threads on besides its default provider. */
       providers?: DesktopCodexModelProvider[];
@@ -1715,6 +1731,10 @@ export type DesktopSettingsSnapshot = {
     };
   };
   acpAgents: {
+    antigravity: {
+      cliPath: DesktopSettingsValue<string>;
+      enabled: boolean;
+    };
     gemini: {
       /**
        * Optional override for the Gemini CLI executable path. When empty,
@@ -2072,6 +2092,8 @@ export type DesktopSettingsConfigPatch = {
       managedBuildChannel?: DesktopUpdateChannel;
       /** Ordered process-local Codex key=value overrides; never written to CODEX_HOME. */
       configOverrides?: string[];
+      /** Replaces the profile list for this PwrAgent instance. */
+      skillProfiles?: CodexSkillProfile[];
       /** Exact model IDs explicitly declared to have zero local API cost. */
       localModelIds?: string[];
       /**
@@ -2082,6 +2104,10 @@ export type DesktopSettingsConfigPatch = {
     };
   };
   acpAgents?: {
+    antigravity?: {
+      cliPath?: string;
+      enabled?: boolean;
+    };
     gemini?: {
       cliPath?: string;
       enabled?: boolean;
@@ -3042,6 +3068,19 @@ export type SettingsCredentialTestResult = {
 export type SettingsCredentialTestRequest = {
   kind: SettingsCredentialTestKind;
 };
+
+export type LineRichMenuSetupRequest =
+  | { action: "check" }
+  | { action: "install" | "remove"; accountId: string };
+
+export type LineRichMenuSetupResponse =
+  | { kind: "unconfigured" }
+  | { kind: "error"; reason: "busy" | "changed" | "recovery-required" | "request-failed" | "rolled-back" }
+  | ({ accountId: string; preview: string; version: string; cleanupRequired: boolean } & (
+    | { kind: "available" }
+    | { kind: "installed"; revision: string; updateAvailable: boolean }
+    | { kind: "blocked"; reason: "administrator" | "different-menu" }
+  ));
 
 /** Prepare the current Slack manifest for a new or existing app. */
 export type SlackCreateAppRequest = {

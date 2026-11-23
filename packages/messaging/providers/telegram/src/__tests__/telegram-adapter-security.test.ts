@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import { TelegramAdapter, type TelegramBotLike, type TelegramChatMember } from "../telegram-adapter.ts";
 import type { MessagingRejectedInboundEvent } from "@pwragent/messaging-interface";
 import { failingInboundRejectedListeners } from "@pwragent/messaging-interface/testing";
@@ -146,6 +147,45 @@ describe("TelegramAdapter inbound security boundary", () => {
       "telegram inbound ignored unauthorized actor",
       expect.anything(),
     );
+  });
+
+  it("dispatches valid pairing links from new DM actors and ignores their group or invalid form", async () => {
+    const listener = vi.fn();
+    const adapter = new TelegramAdapter({
+      bot: fakeBot(),
+      config: { authorizedActorIds: [], botToken: "token", channel: "telegram" },
+      pollOnStart: false,
+    });
+    await adapter.start(listener);
+    try {
+      await fc.assert(fc.asyncProperty(fc.string({
+        unit: fc.constantFrom(..."123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"),
+        minLength: 32,
+        maxLength: 32,
+      }), async (token) => {
+        listener.mockClear();
+        const link = new URL(adapter.readDmPairingAddress()!.linkForToken(token));
+        expect(link.origin + link.pathname).toBe("https://t.me/pwragentbot");
+        const text = `/start ${link.searchParams.get("start")}`;
+        const message = { message_id: 99, from: { id: 99, first_name: "Pairing User" } };
+        await adapter.handleUpdate({ update_id: 20, message: {
+          ...message, chat: { id: 99, type: "private" }, text: `${text}0`,
+        } });
+        await adapter.handleUpdate({ update_id: 21, message: {
+          ...message, chat: { id: -1009999999999, type: "supergroup" }, text,
+        } });
+        expect(listener).not.toHaveBeenCalled();
+        await adapter.handleUpdate({ update_id: 22, message: {
+          ...message, chat: { id: 99, type: "private" }, text,
+        } });
+        expect(listener).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+          kind: "command", command: "pair", args: [token], rawText: "/pair",
+        }));
+      }), { numRuns: 12 });
+    } finally {
+      await adapter.stop();
+    }
+    expect(adapter.readDmPairingAddress()).toBeUndefined();
   });
 
   it("dispatches mention pairing commands from unauthorized actors before allowlist checks", async () => {

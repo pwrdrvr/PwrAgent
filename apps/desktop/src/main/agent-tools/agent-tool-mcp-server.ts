@@ -13,7 +13,7 @@ import type {
   ServerNotification,
   ServerRequest,
 } from "@modelcontextprotocol/sdk/types.js";
-import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
+import { PWRAGENT_MCP_HTTP_MAX_REQUEST_BYTES, PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import { getMainLogger } from "../log.js";
 import { lazyModule } from "../lazy-module.js";
@@ -896,7 +896,7 @@ async function readRequestBody(request: IncomingMessage): Promise<Buffer> {
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     totalBytes += buffer.length;
-    if (totalBytes > 1024 * 1024) {
+    if (totalBytes > PWRAGENT_MCP_HTTP_MAX_REQUEST_BYTES) {
       throw new Error("MCP request body exceeds the 1 MiB limit.");
     }
     chunks.push(buffer);

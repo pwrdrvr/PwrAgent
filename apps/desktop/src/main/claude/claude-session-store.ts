@@ -316,6 +316,17 @@ export class ClaudeSessionStore {
     return await this.metadata.read(id);
   }
 
+  /** Point lookup with the same durable membership as list(). */
+  async readListedSession(id: string): Promise<ClaudeSession | undefined> {
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return undefined;
+    try {
+      return await this.metadata.read(id);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+  }
+
   async save(session: ClaudeSession): Promise<void> {
     if (session.ephemeral) {
       const held = this.memory.get(session.thread.id);

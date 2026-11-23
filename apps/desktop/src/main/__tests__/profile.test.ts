@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { parseTomlTables } from "../settings/toml-editor";
 import {
   PWRAGENT_HOME_ENV,
   PWRAGENT_PROFILE_AUTO_CREATE_ENV,
@@ -600,17 +601,23 @@ describe("PwrAgent profiles", () => {
       expect(result.profileDir).toBe(path.join(root, ".bootstrap"));
 
       const configPath = path.join(root, ".bootstrap", "config.toml");
-      const contents = fs.readFileSync(configPath, "utf8");
+      const tables = parseTomlTables(fs.readFileSync(configPath, "utf8"), configPath);
       // Without the marker the wizard wouldn't fire — it gates on
       // onboarding.completed === false. Bootstrap profile MUST look
       // like a fresh real profile to the wizard's perspective.
-      expect(contents).toContain("[onboarding]");
-      expect(contents).toContain("completed = false");
-      expect(contents).toContain("[acp_agents.gemini]");
-      expect(contents).toContain("[acp_agents.grok]");
-      expect(contents).toContain("[acp_agents.kimi]");
-      expect(contents).toContain("[acp_agents.qwen]");
-      expect(contents.match(/enabled = false/g)).toHaveLength(4);
+      expect(tables.onboarding?.completed).toBe(false);
+      const acpDefaults = Object.fromEntries(
+        Object.entries(tables)
+          .filter(([name]) => name.startsWith("acp_agents."))
+          .map(([name, table]) => [name, table.enabled]),
+      );
+      expect(acpDefaults).toEqual({
+        "acp_agents.antigravity": false,
+        "acp_agents.gemini": false,
+        "acp_agents.grok": false,
+        "acp_agents.kimi": false,
+        "acp_agents.qwen": false,
+      });
       expect(fs.existsSync(path.join(root, ".bootstrap", "state"))).toBe(true);
     });
 

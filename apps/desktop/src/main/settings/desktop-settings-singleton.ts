@@ -3,6 +3,7 @@ import { setGitCommandResolver, setManagedGitSelectionResolver } from "../git-co
 import { codexAuthState } from "../codex-auth-state";
 import { DesktopSettingsService } from "./desktop-settings-service";
 import { createDesktopSecretStorage, getAppStateMode } from "../storage/desktop-settings-storage";
+import { getDesktopMessagingPairingStore } from "../messaging/desktop-messaging-pairing-store";
 import { resolveBootstrapProfilePath } from "../profile";
 import {
   isE2eMemorySecretStorageEnabled,
@@ -62,6 +63,7 @@ export function initializeDesktopSettingsService(): DesktopSettingsService {
       ? new MemoryDesktopSecretStore()
       : createDesktopSecretStorage(safeStorage);
     desktopSettingsService = new DesktopSettingsService({
+      telegramPairingStorage: getDesktopMessagingPairingStore(),
       codexHome: getOwnerHostServices().runtimePolicy?.codexHome,
       defaultDeveloperMode: app.isPackaged === true ? false : true,
       configStore,

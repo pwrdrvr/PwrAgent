@@ -68,6 +68,23 @@ describe("DesktopConfigStore", () => {
     expect(() => readResearchHarnessConfig(restarted)).toThrow("invalid config.toml");
   });
 
+  it("preserves unrelated last-known-good settings when a schema-v1 snapshot predates Antigravity", () => {
+    fc.assert(fc.property(fc.constantFrom("dark", "light", "system"), (theme) => {
+      const fixture = createFixture(`[general.appearance]\ntheme = "${theme}"\n[acp_agents.gemini]\nenabled = false\n`);
+      fixture.createStore().dispose();
+      const storage = new DurableConfigSnapshotStore(fixture.db);
+      const snapshot = storage.readConfig()!;
+      const { antigravity, ...providers } = snapshot.domains.providers;
+      const oldDomains = { ...snapshot.domains, providers };
+      fixture.db.raw.prepare("UPDATE desktop_config_snapshots SET payload = ?").run(JSON.stringify(oldDomains));
+      fs.writeFileSync(fixture.configPath, "[invalid\n");
+      const restarted = fixture.createStore();
+      expect(restarted.fileStatus()).toMatchObject({ kind: "invalid", serving: "last-known-good" });
+      expect(restarted.read("general").appearance.theme).toBe(theme);
+      expect(restarted.read("providers")).toEqual({ ...providers, antigravity });
+    }), { numRuns: 3 });
+  });
+
   it("serves immutable domain reads without filesystem or sqlite work", () => {
     const fixture = createFixture(`
 [general.appearance]

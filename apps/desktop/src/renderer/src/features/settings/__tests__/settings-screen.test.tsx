@@ -46,6 +46,7 @@ import type {
 import { buildProviderPickerEntries } from "@pwragent/shared/provider-picker";
 import { GIT_LFS_UNAVAILABLE_REASON } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { ProviderSetupStep } from "../guided-setup/MessagingSetupSteps";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import {
   CURRENT_CODEX_MODEL_LABELS,
@@ -59,12 +60,45 @@ import {
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
 import type { AppearanceController } from "../../../lib/useAppearance";
 import { SettingsScreen } from "../SettingsScreen";
+import { CodexSkillProfilesSettings } from "../CodexSkillProfilesSettings";
 import { AppNoticeToast, type AppNoticeToastNotice } from "../../notifications/AppNoticeToast";
 import { CodexLaunchNotice } from "../../notifications/CodexLaunchNotice";
 import type { ConfirmSettingsLeave } from "../UnsavedSettingsChanges";
 import type { DesktopSettingsState } from "../useDesktopSettings";
 
 const originalScrollTo = window.scrollTo;
+
+it.each([false, true])("keeps the skill profile draft and untouched exclusions across deletion (skills edited: %s)", async (editSkills) => {
+  const profile = { id: "release", name: "Release", hiddenSkills: ["publish"] };
+  const desktopApi: DesktopApi = {
+    listSkills: async () => ({
+      backend: "codex", fetchedAt: 1,
+      data: [{ skills: [
+        { name: "publish", description: "Publish a release" },
+        { name: "deploy", description: "Deploy an app" },
+      ] }],
+    }),
+  };
+  const onSave = vi.fn(async () => true);
+  const { rerender } = render(<CodexSkillProfilesSettings desktopApi={desktopApi} profiles={[profile]} onSave={onSave} />);
+  fireEvent.click(screen.getByRole("button", { name: /^Edit$/ }));
+  const name = screen.getByRole("textbox", { name: "Name" });
+  const publish = await screen.findByRole("checkbox", { name: /publish a release/i });
+  const deploy = screen.getByRole("checkbox", { name: /deploy an app/i });
+  fireEvent.change(name, { target: { value: "My release" } });
+  if (editSkills) fireEvent.click(deploy);
+  rerender(<CodexSkillProfilesSettings desktopApi={desktopApi} profiles={[]} onSave={onSave} />);
+  expect(screen.getByRole("textbox", { name: "Name" })).toBe(name);
+  expect(name).toHaveValue("My release");
+  expect(publish).toBeChecked();
+  expect(deploy).toHaveProperty("checked", editSkills);
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Save as new profile" }));
+  });
+  expect(onSave).toHaveBeenCalledWith([
+    { id: expect.not.stringMatching(/^release$/), name: "My release", hiddenSkills: editSkills ? ["publish", "deploy"] : ["publish"] },
+  ]);
+});
 
 afterEach(() => {
   cleanup();
@@ -485,6 +519,7 @@ function createSnapshot(
       },
     },
     acpAgents: {
+      antigravity: { cliPath: { value: "", source: "default" }, enabled: true },
       gemini: { cliPath: { value: "", source: "default" }, enabled: true },
       grok: { cliPath: { value: "", source: "default" }, enabled: true },
       kimi: { cliPath: { value: "", source: "default" }, enabled: true },
@@ -592,6 +627,7 @@ function createSettingsState(
     saving: false,
     snapshot,
     writeConfig: vi.fn(async () => true),
+    writeConfigWithSnapshot: vi.fn(async () => snapshot),
   };
 }
 
@@ -2081,7 +2117,7 @@ describe("SettingsScreen", () => {
     ]);
     expect(categories).toEqual([
       ["App", ["General", "Keyboard", "Updates", "Applications", "Profiles"]],
-      ["Agents", ["AI Providers", "Plugins", "Usage & Pricing"]],
+      ["Agents", ["AI Providers", "Plugins", "Agent Presets", "Usage & Pricing"]],
       ["Projects", ["Git", "Worktrees", "Environments"]],
       ["Threads", ["Thread Management", "Archived Threads"]],
       ["Remote Access", ["Messaging", "Access Control", "Federation"]],
@@ -3841,8 +3877,8 @@ describe("SettingsScreen", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("groups active-profile scratch projects as Workspaces and hides inactive profile roots", async () => {
-    const activeWorkspaceRoot = "/Users/fixture-user/.pwragent/profiles/dev/projects";
+  it.each(["/Users/fixture-user/.pwragent", "/state"])("groups active-profile scratch projects under %s as Workspaces", async (profileHome) => {
+    const activeWorkspaceRoot = `${profileHome}/profiles/dev/projects`;
     const listThreads = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: 3_000,
@@ -3871,6 +3907,14 @@ describe("SettingsScreen", () => {
           createdAt: 1_000,
           updatedAt: 4_000,
           projectKey: `${activeWorkspaceRoot}/2026-05-10-883761`,
+          linkedDirectories: [],
+          source: "codex" as const,
+        },
+        {
+          id: "thread-inactive-workspace",
+          title: "Archived on another profile",
+          titleSource: "explicit" as const,
+          projectKey: `${profileHome}/profiles/other/projects/2026-05-10-991047`,
           linkedDirectories: [],
           source: "codex" as const,
         },
@@ -3916,6 +3960,7 @@ describe("SettingsScreen", () => {
       screen.queryByRole("heading", { name: "2026-05-10-883761" }),
     ).not.toBeInTheDocument();
     expect(screen.queryByText("Key Lime Pie yum")).not.toBeInTheDocument();
+    expect(screen.queryByText("Archived on another profile")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: "projects" }),
     ).not.toBeInTheDocument();
@@ -5219,6 +5264,164 @@ describe("SettingsScreen", () => {
     expect(screen.getByText(/checked just now/)).toBeInTheDocument();
   });
 
+  async function expectManagedCodexTrackRefresh(previous: number, published: number) {
+    const snapshot = createSnapshot();
+    snapshot.models.codex.managedBuilds = { value: true, source: "config" };
+    snapshot.runtime.tokenMiser = {
+      managedCodex: {
+        state: "ready",
+        version: `0.${previous}.0-pwragent.1`,
+        checkedAt: Date.now() - 21 * 24 * 60 * 60_000,
+        latestTag: `pwragent-v0.${previous}.0-pwragent.1`,
+        prereleaseTag: `pwragent-v0.${previous}.1-pwragent.1`,
+      },
+    };
+    const settings = createSettingsState(snapshot);
+    const readManagedCodexTrackTags = vi.fn(async () => ({
+      observedAt: Date.now(),
+      latestTag: `pwragent-v0.${published}.0-pwragent.1`,
+      prereleaseTag: `pwragent-v0.${published}.1-pwragent.1`,
+    }));
+    const refreshCodexDiscovery = vi.fn();
+    const listBackends = vi.fn(async () => ({ fetchedAt: Date.now(), backends: [] }));
+    const desktopApi = { listBackends, readManagedCodexTrackTags, refreshCodexDiscovery };
+    const view = render(
+      <SettingsScreen
+        desktopApi={desktopApi as unknown as DesktopApi}
+        initialSection="models"
+        initialSubsection="codex"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    try {
+      await act(async () => {});
+      const track = screen.getByRole("radiogroup", { name: "Build track" });
+      // Opening Codex Settings should show the releases reported by the
+      // publisher even when the last installed build is weeks old.
+      const latest = within(track).getByRole("radio", { name: /^Latest/ });
+      const prerelease = within(track).getByRole("radio", { name: /^Prerelease/ });
+      expect(latest).toHaveAttribute("aria-checked", "true");
+      expect(within(latest).getByText(`0.${published}.0-pwragent.1`)).toBeInTheDocument();
+      expect(within(prerelease).getByText(`0.${published}.1-pwragent.1`)).toBeInTheDocument();
+      expect(readManagedCodexTrackTags).toHaveBeenCalledOnce();
+      expect(refreshCodexDiscovery).not.toHaveBeenCalled();
+      expect(settings.writeConfig).not.toHaveBeenCalled();
+      expect(settings.writeConfigWithSnapshot).not.toHaveBeenCalled();
+      expect(listBackends).not.toHaveBeenCalledWith(expect.objectContaining({
+        refreshModels: "codex",
+      }));
+    } finally {
+      view.unmount();
+    }
+  }
+
+  it("updates weeks-old Codex track labels on open before switching tracks", async () => {
+    await expectManagedCodexTrackRefresh(162, 171);
+  });
+
+  it("shows the published Codex tracks on open for any older installed version", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.integer({ min: 150, max: 300 }),
+      fc.integer({ min: 1, max: 40 }),
+      async (previous, releasesSinceInstall) => {
+        await expectManagedCodexTrackRefresh(previous, previous + releasesSinceInstall);
+      },
+    ), { numRuns: 25 });
+  });
+
+  it.each([
+    {
+      lookupAge: 3000,
+      name: "an older REST result",
+      expectedLatest: "0.160.0-pwragent.1",
+      expectedPrerelease: "0.171.0-pwragent.1",
+    },
+    {
+      lookupAge: 1000,
+      name: "a fresh list with no promoted release",
+      expectedLatest: "Unavailable",
+      expectedPrerelease: "0.170.0-pwragent.1",
+    },
+    {
+      lookupAge: undefined,
+      name: "an unavailable release list",
+      expectedLatest: "0.160.0-pwragent.1",
+      expectedPrerelease: "0.171.0-pwragent.1",
+    },
+  ])("shows authoritative Codex tracks with $name", async ({ lookupAge, expectedLatest, expectedPrerelease }) => {
+    const now = Date.now();
+    const snapshot = createSnapshot();
+    snapshot.models.codex.managedBuilds = { value: true, source: "config" };
+    snapshot.runtime.tokenMiser = {
+      managedCodex: {
+        state: "ready",
+        version: "0.171.0-pwragent.1",
+        checkedAt: now - 2000,
+        latestTag: "pwragent-v0.160.0-pwragent.1",
+        prereleaseTag: "pwragent-v0.171.0-pwragent.1",
+      },
+    };
+    const readManagedCodexTrackTags = vi.fn(async () => lookupAge === undefined ? undefined : ({
+      observedAt: now - lookupAge,
+      prereleaseTag: "pwragent-v0.170.0-pwragent.1",
+    }));
+    render(
+      <SettingsScreen
+        desktopApi={{ readManagedCodexTrackTags }}
+        initialSection="models"
+        initialSubsection="codex"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+    await act(async () => {});
+    const track = within(screen.getByRole("radiogroup", { name: "Build track" }));
+    expect(track.getByRole("radio", { name: /^Latest/ })).toHaveTextContent(expectedLatest);
+    expect(track.getByRole("radio", { name: /^Prerelease/ })).toHaveTextContent(expectedPrerelease);
+  });
+
+  it("rediscovers models if a track switch installs a build newer than its advertised version", async () => {
+    const snapshot = createSnapshot();
+    snapshot.models.codex.managedBuilds = { value: true, source: "config" };
+    snapshot.models.codex.managedBuildChannel = { value: "prerelease", source: "config" };
+    snapshot.runtime.tokenMiser = {
+      managedCodex: {
+        state: "ready",
+        version: "0.160.0-pwragent.1",
+        latestTag: "pwragent-v0.160.0-pwragent.1",
+        prereleaseTag: "pwragent-v0.160.0-pwragent.1",
+      },
+    };
+    const savedSnapshot = {
+      ...snapshot,
+      runtime: {
+        ...snapshot.runtime,
+        tokenMiser: {
+          managedCodex: { state: "ready" as const, version: "0.171.0-pwragent.1" },
+        },
+      },
+    };
+    const settings = createSettingsState(snapshot);
+    vi.mocked(settings.writeConfigWithSnapshot).mockResolvedValue(savedSnapshot);
+    const listBackends = vi.fn(async () => ({ fetchedAt: Date.now(), backends: [] }));
+    render(
+      <SettingsScreen
+        desktopApi={{ listBackends }}
+        initialSection="models"
+        initialSubsection="codex"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+    await act(async () => {});
+    const track = within(screen.getByRole("radiogroup", { name: "Build track" }));
+    expect(track.getByRole("radio", { name: /^Latest/ })).toHaveTextContent("0.160.0-pwragent.1");
+    await act(async () => { fireEvent.click(track.getByRole("radio", { name: /^Latest/ })); });
+    expect(listBackends).toHaveBeenCalledWith(expect.objectContaining({ refreshModels: "codex" }));
+  });
+
   it("names both managed Codex tracks and switches to the one picked", async () => {
     const snapshot = createSnapshot();
     snapshot.models.codex.managedBuilds = { value: true, source: "config" };
@@ -5231,6 +5434,15 @@ describe("SettingsScreen", () => {
       },
     };
     const settings = createSettingsState(snapshot);
+    vi.mocked(settings.writeConfigWithSnapshot).mockResolvedValue({
+      ...snapshot,
+      runtime: {
+        ...snapshot.runtime,
+        tokenMiser: {
+          managedCodex: { state: "ready", version: "0.162.0-pwragent.1" },
+        },
+      },
+    });
     const listBackends = vi.fn(async () => ({ fetchedAt: Date.now(), backends: [] }));
 
     render(
@@ -5258,7 +5470,7 @@ describe("SettingsScreen", () => {
 
     fireEvent.click(within(track).getByRole("radio", { name: /Prerelease/ }));
 
-    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({
+    await waitFor(() => expect(settings.writeConfigWithSnapshot).toHaveBeenCalledWith({
       models: { codex: { managedBuildChannel: "prerelease" } },
     }));
     // The track's build is a different Codex, so its models are rediscovered.
@@ -5298,9 +5510,10 @@ describe("SettingsScreen", () => {
       within(track).getByRole("radio", { name: /Prerelease/ }),
     ).toBeEnabled());
     listBackends.mockClear();
-    fireEvent.click(within(track).getByRole("radio", { name: /Prerelease/ }));
-
-    await waitFor(() => expect(settings.refresh).toHaveBeenCalled());
+    await act(async () => {
+      fireEvent.click(within(track).getByRole("radio", { name: /Prerelease/ }));
+    });
+    expect(settings.writeConfigWithSnapshot).toHaveBeenCalledOnce();
     // The switch installed nothing, so there is nothing to rediscover.
     expect(listBackends).not.toHaveBeenCalledWith(expect.objectContaining({
       refreshModels: "codex",
@@ -5310,10 +5523,11 @@ describe("SettingsScreen", () => {
   it("offers no managed Codex track while the PwrAgent build is off", () => {
     const snapshot = createSnapshot();
     snapshot.models.codex.managedBuilds = { value: false, source: "config" };
+    const readManagedCodexTrackTags = vi.fn();
 
     render(
       <SettingsScreen
-        desktopApi={{} as unknown as DesktopApi}
+        desktopApi={{ readManagedCodexTrackTags }}
         initialSection="models"
         initialSubsection="codex"
         settings={createSettingsState(snapshot)}
@@ -5324,6 +5538,7 @@ describe("SettingsScreen", () => {
     expect(screen.getByText("PwrAgent build")).toBeInTheDocument();
     expect(screen.queryByRole("radiogroup", { name: "Build track" }))
       .not.toBeInTheDocument();
+    expect(readManagedCodexTrackTags).not.toHaveBeenCalled();
   });
 
   it("rediscovers Codex models after installing a newer managed build", async () => {
@@ -7086,7 +7301,103 @@ describe("SettingsScreen", () => {
     ).toBeInTheDocument();
   });
 
-  it("clears a generated pairing message after the token is observed", async () => {
+  function pairingFixture(id: string, ttlMs = 60_000) {
+    const expiresAt = Date.now() + ttlMs;
+    const token = "123456789ABCDEFGHJKLMNPQRSTUVWXY";
+    const entry: MessagingPairingEntry = {
+      id, platform: "telegram", instanceId: "account:123456", scope: "user_dm",
+      status: "pending", generatedAt: Date.now(), expiresAt,
+    };
+    return { entry, expiresAt, token, message: `pair ${id}`, dmLink: {
+      url: `https://t.me/example_fixture_bot?start=pair_${token}`,
+      qrImage: "data:image/svg+xml,%3Csvg/%3E",
+    } };
+  }
+
+  it("regenerates a Telegram pairing in guided setup after approval rejects the old bot", async () => {
+    const first = pairingFixture("old-bot-pairing");
+    const replacement = pairingFixture("new-bot-pairing");
+    const listeners = new Set<(event: { at: number; entry: MessagingPairingEntry }) => void>();
+    const generate = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(replacement);
+    const desktopApi: DesktopApi = {
+      generateMessagingPairingToken: generate,
+      approveMessagingPairing: vi.fn().mockRejectedValue(new Error("This pairing request belongs to a different bot.")),
+      onMessagingPairingChanged: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    };
+    render(<ProviderSetupStep provider="telegram" settings={createSettingsState(createSnapshot())} desktopApi={desktopApi} />);
+    fireEvent.click(screen.getByRole("button", { name: "Generate pairing code" }));
+    expect(await screen.findByText(first.message)).toBeInTheDocument();
+    act(() => {
+      for (const listener of listeners) listener({ at: Date.now(), entry: {
+        ...first.entry, status: "observed", observedActor: { id: "5551234", displayName: "Fixture Contact" },
+      } });
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    expect(await screen.findByText("This pairing request belongs to a different bot.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Generate new code" }));
+    expect(await screen.findByText(replacement.message)).toBeInTheDocument();
+    expect(generate).toHaveBeenLastCalledWith({ platform: "telegram", scope: "user_dm" });
+  });
+
+  it("keeps a replacement Telegram pairing if the previous expiry callback already queued", async () => {
+    const snapshot = createSnapshot();
+    snapshot.messaging.telegram.enabled = { value: true, source: "config" };
+    const first = pairingFixture("first-code");
+    const replacement = pairingFixture("replacement-code", 120_000);
+    const nativeSetTimeout = globalThis.setTimeout;
+    let priorExpiry: (() => void) | undefined;
+    const timers = vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
+      if (delay !== undefined && delay > 30_000 && delay <= 60_000) priorExpiry = () => callback(...args);
+      return nativeSetTimeout(callback, delay, ...args);
+    });
+    try {
+      const desktopApi: DesktopApi = {
+        generateMessagingPairingToken: vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(replacement),
+        listMessagingPairingRequests: vi.fn(async () => ({ entries: [] })),
+      };
+      render(<SettingsScreen desktopApi={desktopApi} settings={createSettingsState(snapshot)}
+        initialSection="messaging" initialSubsection="telegram" onClose={() => undefined} />);
+      const generate = screen.getAllByRole("button", { name: "Generate" })[0]!;
+      fireEvent.click(generate);
+      expect(await screen.findByText(first.message)).toBeInTheDocument();
+      const expiry = priorExpiry;
+      expect(expiry).toBeDefined();
+      fireEvent.click(generate);
+      expect(await screen.findByText(replacement.message)).toBeInTheDocument();
+      act(() => expiry!());
+      expect(screen.getByText(replacement.message)).toBeInTheDocument();
+    } finally {
+      timers.mockRestore();
+    }
+  });
+
+  it("shows and revokes only the current bot's grants when an earlier lookup finishes late", async () => {
+    const original = { accountId: "123456", users: [{ id: "42", displayName: "Original bot contact" }], supergroups: [] };
+    const replacement = { accountId: "654321", users: [{ id: "42", displayName: "Replacement bot contact" }], supergroups: [] };
+    let finishOriginal!: (grants: typeof original) => void;
+    const originalLookup = new Promise<typeof original>((resolve) => { finishOriginal = resolve; });
+    const readTelegramPairingGrants = vi.fn().mockReturnValueOnce(originalLookup).mockResolvedValue(replacement);
+    const revokeTelegramPairingGrant = vi.fn(async () => undefined);
+    const desktopApi: DesktopApi = { readTelegramPairingGrants, revokeTelegramPairingGrant };
+    const pane = (snapshot: DesktopSettingsSnapshot) => (
+      <SettingsScreen desktopApi={desktopApi} settings={createSettingsState(snapshot)}
+        initialSection="messaging" initialSubsection="telegram" onClose={() => undefined} />
+    );
+    const { rerender } = render(pane(createSnapshot()));
+    expect(readTelegramPairingGrants).toHaveBeenCalledTimes(1);
+    rerender(pane(createSnapshot()));
+
+    const revoke = await screen.findByRole("button", { name: "Revoke pairing for Replacement bot contact" });
+    await act(async () => { finishOriginal(original); });
+    expect(screen.queryByRole("button", { name: "Revoke pairing for Original bot contact" })).not.toBeInTheDocument();
+    fireEvent.click(revoke);
+    await waitFor(() => expect(revokeTelegramPairingGrant).toHaveBeenCalledWith({
+      accountId: replacement.accountId, kind: "users", contactId: replacement.users[0]!.id,
+    }));
+    await waitFor(() => expect(revoke).not.toBeInTheDocument());
+  });
+
+  it("offers Telegram desktop and phone pairing and clears both when the token is observed", async () => {
     const snapshot = createSnapshot();
     const settings = createSettingsState({
       ...snapshot,
@@ -7099,6 +7410,8 @@ describe("SettingsScreen", () => {
       },
     });
     const pairingMessage = "pair 123456789ABCDEFGHJKLMNPQRSTUVWXY";
+    const url = "https://t.me/example_fixture_bot?start=pair_123456789ABCDEFGHJKLMNPQRSTUVWXY";
+    const expiresAt = Date.now() + 60_000;
     const entry: MessagingPairingEntry = {
       id: "pairing-1",
       platform: "telegram",
@@ -7106,7 +7419,7 @@ describe("SettingsScreen", () => {
       scope: "user_dm",
       status: "pending",
       generatedAt: 1,
-      expiresAt: 2,
+      expiresAt,
     };
     const pairingChangedCallbacks: Array<
       (event: { at: number; entry: MessagingPairingEntry }) => void
@@ -7114,9 +7427,10 @@ describe("SettingsScreen", () => {
     const desktopApi = {
       generateMessagingPairingToken: vi.fn(async () => ({
         entry,
-        expiresAt: 2,
+        expiresAt,
         message: pairingMessage,
         token: "123456789ABCDEFGHJKLMNPQRSTUVWXY",
+        dmLink: { url, qrImage: "data:image/svg+xml,%3Csvg/%3E" },
       })),
       listMessagingPairingRequests: vi.fn(async () => ({ entries: [] })),
       onMessagingPairingChanged: vi.fn((callback) => {
@@ -7138,6 +7452,10 @@ describe("SettingsScreen", () => {
     const initialPairingChangedCallbacks = [...pairingChangedCallbacks];
     fireEvent.click(screen.getAllByRole("button", { name: "Generate" })[0]!);
     expect(await screen.findByText(pairingMessage)).toBeInTheDocument();
+    const desktopLink = screen.getByRole("link", { name: "Open in Telegram" });
+    expect(desktopLink).toHaveAttribute("href", url);
+    expect(desktopLink).toHaveAttribute("target", "_blank");
+    const qr = screen.getByRole("img", { name: "QR code for Telegram pairing" });
     expect(pairingChangedCallbacks).toHaveLength(initialPairingChangedCallbacks.length);
 
     act(() => {
@@ -7154,6 +7472,8 @@ describe("SettingsScreen", () => {
         });
       }
     });
+    expect(desktopLink).not.toBeInTheDocument();
+    expect(qr).not.toBeInTheDocument();
 
     // Bumped from the default 1000ms because CI runners under load take
     // ~1600ms+ for the pairingChanged → React state update → DOM removal
@@ -9947,6 +10267,7 @@ describe("SettingsScreen", () => {
       "Profiles",
       "AI Providers",
       "Plugins",
+      "Agent Presets",
       "Usage & Pricing",
       "Git",
       "Worktrees",

@@ -1,3 +1,4 @@
+import { canonicalizeNavigationPath, directoryIncludesCheckout } from "@pwragent/shared/directory-navigation";
 import {
   findRemoteHomeDirectoryIndex,
   remoteThreadPlaceholderDirectory,
@@ -12,6 +13,7 @@ import {
   type NavigationLaunchpadDraft,
   type NavigationThreadSummary,
 } from "@pwragent/shared/contracts/navigation";
+import { isWindowsFilesystemPath } from "@pwragent/shared/path-display";
 
 /** What a starting row carries that decides where it renders. */
 export type StartingThreadPlacement = {
@@ -22,7 +24,7 @@ export type StartingThreadPlacement = {
   target?: FederationTarget;
 };
 
-type HomeCandidate = Pick<NavigationDirectorySummary, "key" | "kind" | "label" | "localAvailability" | "path">;
+type HomeCandidate = Pick<NavigationDirectorySummary, "checkoutPaths" | "key" | "kind" | "label" | "localAvailability" | "path">;
 
 /**
  * Whether main files this starting thread by `findRemoteHomeDirectoryIndex`:
@@ -51,11 +53,17 @@ function isPeerThreadInLocalList(
 function startingPeerThread(
   creation: StartingThreadPlacement,
 ): Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey"> {
-  const keyPath = /^(?:directory|workspace):(.+)$/.exec(creation.directoryKey)?.[1] ?? "";
+  const [, directoryKind, keyPath = ""] = /^(directory|workspace):(.+)$/.exec(creation.directoryKey) ?? [];
   const path = creation.launchpad.directoryPath?.trim() || keyPath;
   if (!path) return { linkedDirectories: [] };
   return {
-    linkedDirectories: [{ id: creation.directoryKey, kind: "local", label: creation.directoryLabel, path }],
+    linkedDirectories: [{
+      id: creation.directoryKey,
+      kind: "local",
+      label: creation.directoryLabel,
+      path,
+      ...(directoryKind === "workspace" ? { scratchWorkspaceRoot: keyPath } : {}),
+    }],
     projectKey: path,
   };
 }
@@ -81,9 +89,19 @@ export function startingThreadHomeDirectoryKey(
   windowTarget?: FederationRemoteTarget,
 ): string | undefined {
   if (!isPeerThreadInLocalList(creation, windowTarget)) {
-    return directories.some((directory) => directory.key === creation.directoryKey)
-      ? creation.directoryKey
-      : undefined;
+    // A start from a linked checkout, such as a to-do card raised in a
+    // worktree thread, lands in the project that groups that checkout.
+    const exactKey = directories.find((directory) => directory.key === creation.directoryKey)?.key
+      ?? directories.find((directory) => directoryIncludesCheckout(directory, creation.directoryKey))?.key;
+    if (exactKey) return exactKey;
+
+    // The owner resolves verified case aliases. Only normalize separators here.
+    const [, checkoutPath] = /^directory:(.+)$/.exec(creation.directoryKey) ?? [];
+    if (!checkoutPath || !isWindowsFilesystemPath(checkoutPath)) return undefined;
+    const path = canonicalizeNavigationPath(checkoutPath);
+    return directories.find((directory) =>
+      canonicalizeNavigationPath(directory.key) === `directory:${path}`
+      || directory.checkoutPaths?.some((checkout) => canonicalizeNavigationPath(checkout) === path))?.key;
   }
   const index = findRemoteHomeDirectoryIndex(directories, startingPeerThread(creation));
   return index === undefined ? undefined : directories[index]!.key;

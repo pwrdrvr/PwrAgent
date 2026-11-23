@@ -678,6 +678,7 @@ export class LineAdapter implements LineProviderAdapter {
         bodyLength: body.byteLength,
         signaturePresent: typeof signature === "string",
       });
+      this.emitInboundRejected({ kind: "validation", reason: "webhook-authentication", receivedAt });
       return;
     }
 
@@ -875,7 +876,7 @@ export class LineAdapter implements LineProviderAdapter {
     receipt: MessagingInboundReceipt,
   ): Promise<void> {
     if (!this.listener) return;
-    const signed = this.parseSignedPostbackData(event.postback?.data);
+    const signed = this.parseSignedPostbackData(event.postback?.data, receipt.receivedAt);
     if (!signed) return;
     const handleValidation = validateLineCallbackHandle(signed.handle);
     if (!handleValidation.ok) {
@@ -901,6 +902,11 @@ export class LineAdapter implements LineProviderAdapter {
         actorId: actor.platformUserId,
         channelId: channel.conversation.id,
         handleHash: createHash("sha256").update(signed.handle).digest("hex").slice(0, 8),
+      });
+      this.emitInboundRejected({
+        kind: "validation",
+        reason: "callback-handle-unavailable",
+        receivedAt: receipt.receivedAt,
       });
       return;
     }
@@ -1205,6 +1211,7 @@ export class LineAdapter implements LineProviderAdapter {
 
   private parseSignedPostbackData(
     value: unknown,
+    receivedAt: number,
   ): { handle: string; issuedAt: number } | undefined {
     if (typeof value !== "string") return undefined;
     let parsed: unknown;
@@ -1232,6 +1239,7 @@ export class LineAdapter implements LineProviderAdapter {
       this.logger.warn?.("line callback signature rejected", {
         handleHash: createHash("sha256").update(record.h).digest("hex").slice(0, 8),
       });
+      this.emitInboundRejected({ kind: "validation", reason: "callback-signature", receivedAt });
       return undefined;
     }
     return { handle: record.h, issuedAt: record.t };

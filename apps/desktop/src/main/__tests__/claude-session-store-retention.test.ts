@@ -44,6 +44,25 @@ describe("Claude retention storage safeguards", () => {
     await expect(store.read(id)).resolves.toBeDefined();
   });
 
+  it("reads only requested active Claude metadata for a relative reorder and fails on unreadable candidates", async () => {
+    const { root, store, backend, session } = await fixture();
+    const unreadable = "e3333333-3333-4333-8333-333333333333";
+    const absent = "f3333333-3333-4333-8333-333333333333";
+    await store.save({ ...session, thread: { ...session.thread, id: otherId, archivedAt: undefined, createdAt: 2 } });
+    await writeFile(path.join(root, `${unreadable}.json`), "invalid metadata");
+    const list = vi.spyOn(store, "list");
+
+    const rows = await backend.readSubthreadOrderSummaries(new Set([id, otherId, absent, "non-Claude-ID"]));
+    expect(rows.map((row) => row.id)).toEqual([otherId]);
+    expect(list).not.toHaveBeenCalled();
+    await expect(backend.readSubthreadOrderSummaries(new Set([otherId, unreadable]))).rejects.toThrow();
+
+    await store.save({ ...session, thread: { ...session.thread, archivedAt: undefined, createdAt: 2 } });
+    const canonical = await backend.listThreads();
+    const tied = await backend.readSubthreadOrderSummaries(new Set(canonical.map((row) => row.id).reverse()));
+    expect(tied.map((row) => row.id)).toEqual(canonical.map((row) => row.id));
+  });
+
   it.each(["invalid", "directory", "present", "absent"])("confirms only an absent metadata file, retaining recovery state on %s", async (state) => {
     const { root, backend } = await fixture();
     const metadata = path.join(root, `${id}.json`);

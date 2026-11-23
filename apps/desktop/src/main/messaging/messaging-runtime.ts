@@ -3,6 +3,8 @@ import { validateMessagingFileMetadata } from "@pwragent/agent-tools/messaging-o
 import { matchesAutomationConversation } from "@pwragent/shared/contracts/automations";
 import { permissionForDynamicTool } from "@pwragent/shared/contracts/rbac";
 import { randomBytes, randomUUID } from "node:crypto";
+import { renderSVG } from "uqr";
+import type { MessagingDmPairingAddress } from "@pwragent/messaging-interface";
 import { createMessagingRequestStorage } from "../storage/desktop-messaging-storage";
 import { setFederationMessagingDestinationHandler } from "../federation/federation-messaging-tools";
 import type {
@@ -50,6 +52,8 @@ import type {
   MessagingAdapterAuthorizationUpdate,
   MessagingAdapterDiagnosticEvent,
   MessagingAdapterRenderingPreferencesUpdate,
+  MessagingAdapterValidationRejection,
+  MessagingAuthorizationRejection,
   MessagingCapabilityProfile,
   MessagingDirectoryActor,
   MessagingChannelRef,
@@ -126,6 +130,8 @@ import type {
 } from "./messaging-agent-tool-service";
 
 export type DesktopMessagingAdapter = {
+  readDmPairingAddress?(): MessagingDmPairingAddress | undefined;
+  readDmPairingAccountId?(): string | undefined;
   retainedSourceConnectionId?: MessagingAdapter["retainedSourceConnectionId"];
   authorizeRetainedSource?: MessagingAdapter["authorizeRetainedSource"];
   authorizedActorIds: readonly string[];
@@ -344,6 +350,7 @@ class AdapterStartTimeoutError extends Error {
 
 const messagingLog = getMainLogger("pwragent:messaging");
 const PAIRING_INSTANCE_ID = "default";
+const PAIRING_ACCOUNT_PREFIX = "account:";
 const DEFAULT_PAIRING_TTL_MS = 5 * 60 * 1000;
 const MIN_PAIRING_TTL_MS = 60 * 1000;
 const MAX_PAIRING_TTL_MS = 30 * 60 * 1000;
@@ -354,6 +361,14 @@ const RATE_LIMIT_HEALTH_BUFFER_MS = 2_000;
 const DELIVERY_BUDGET_WARNING_TTL_MS = 30_000;
 const DELIVERY_BUDGET_DIAGNOSTIC_THROTTLE_MS = 30_000;
 const REJECTED_ROUTE_AGENT_METADATA_TTL_MS = 60_000;
+const ADAPTER_VALIDATION_ACTIVITY_INTERVAL_MS = 30 * 60 * 1000;
+const ADAPTER_VALIDATION_ACTIVITY_RETRY_MS = 60 * 1000;
+const ADAPTER_VALIDATION_ACTIVITY_SUMMARY = {
+  "callback-signature": "Rejected callback with an invalid signature",
+  "callback-handle-unavailable": "Rejected callback with an unavailable action handle",
+  "command-authentication": "Rejected command with invalid authentication",
+  "webhook-authentication": "Rejected webhook with invalid authentication",
+} satisfies Record<MessagingAdapterValidationRejection["reason"], string>;
 const DEFAULT_ADAPTER_START_TIMEOUT_MS = 90_000;
 const FAILED_START_STOP_TIMEOUT_MS = 3_000;
 // How long a new start waits for an earlier adapter of the same platform to
@@ -497,6 +512,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     ReturnType<typeof setTimeout>
   >();
   private readonly deliveryBudgetDiagnosticLastLoggedAt = new Map<string, number>();
+  private readonly adapterValidationActivityNextAttemptAt = new Map<string, number>();
   // Rate-limit state outlives the adapter. A config change or a messaging
   // stop/start replaces the adapter and its controller, but the provider is
   // still limiting the bot, so the cool-off, slow mode and provider blocks
@@ -1226,10 +1242,21 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
 
   generatePairingToken(
     request: GenerateMessagingPairingTokenRequest,
+    configuredTelegramAccountId?: string,
   ): GenerateMessagingPairingTokenResponse {
     const now = Date.now();
     const ttlMs = clampPairingTtlMs(request.ttlMs);
-    const instanceId = request.instanceId ?? PAIRING_INSTANCE_ID;
+    const defaultInstance = request.instanceId === undefined || request.instanceId === PAIRING_INSTANCE_ID;
+    const adapter = this.runningAdapters.get(request.platform)?.adapter;
+    const accountId = request.platform === "telegram" && defaultInstance
+      ? configuredTelegramAccountId ?? adapter?.readDmPairingAccountId?.()
+      : undefined;
+    const address = request.scope === "user_dm" && accountId
+      ? adapter?.readDmPairingAddress?.()
+      : undefined;
+    const instanceId = accountId
+      ? `${PAIRING_ACCOUNT_PREFIX}${accountId}`
+      : request.instanceId ?? PAIRING_INSTANCE_ID;
     const store = getDesktopMessagingPairingStore();
     const outstanding = store.countOutstanding({
       platform: request.platform,
@@ -1242,6 +1269,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       );
     }
     const token = generatePairingToken();
+    const url = address && address.accountId === accountId ? address.linkForToken(token) : undefined;
+    const dmLink = url ? {
+      url,
+      qrImage: `data:image/svg+xml,${encodeURIComponent(renderSVG(url, { border: 4 }))}`,
+    } : undefined;
     const entry = store.create({
       token,
       platform: request.platform,
@@ -1257,6 +1289,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       token,
       expiresAt: entry.expiresAt,
       message: `${MESSAGING_PAIRING_COMMAND} ${token}`,
+      ...(dmLink ? { dmLink } : {}),
     };
   }
 
@@ -1278,7 +1311,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     options?: { text?: string },
   ): Promise<void> {
     const running = this.runningAdapters.get(entry.platform);
-    if (!running || !entry.observedActor || !entry.observedChat) return;
+    if (!running || !entry.observedActor || !entry.observedChat || this.getPairingAccountStatus(entry) !== "current") return;
     const text = options?.text
       ?? (outcome === "approved"
         ? "PwrAgent pairing approved."
@@ -1311,6 +1344,13 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         occurredAt: Date.now(),
       },
     });
+  }
+
+  getPairingAccountStatus(entry: MessagingPairingEntry): "current" | "different" | "unavailable" {
+    if (!entry.instanceId.startsWith(PAIRING_ACCOUNT_PREFIX)) return "current";
+    const accountId = this.runningAdapters.get(entry.platform)?.adapter.readDmPairingAccountId?.();
+    if (accountId === undefined) return "unavailable";
+    return entry.instanceId === `${PAIRING_ACCOUNT_PREFIX}${accountId}` ? "current" : "different";
   }
 
   /**
@@ -2984,12 +3024,13 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
 
     const now = Date.now();
     const store = getDesktopMessagingPairingStore();
-    const entry = store.findMatchingPending({
-      token,
-      platform: adapter.channel,
-      instanceId: PAIRING_INSTANCE_ID,
-      now,
+    const accountId = adapter.readDmPairingAccountId?.();
+    const lookup = { token, platform: adapter.channel, now };
+    const accountEntry = accountId === undefined ? undefined : store.findMatchingPending({
+      ...lookup,
+      instanceId: `${PAIRING_ACCOUNT_PREFIX}${accountId}`,
     });
+    const entry = accountEntry ?? store.findMatchingPending({ ...lookup, instanceId: PAIRING_INSTANCE_ID });
     if (!entry) {
       await this.deliverPairingReply(
         adapter,
@@ -3243,7 +3284,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
 
   private recordActivityFromRejected(
     platform: MessagingChannelKind,
-    event: MessagingRejectedInboundEvent,
+    event: MessagingAuthorizationRejection,
     route: RejectedInboundRoute,
   ): void {
     try {
@@ -3297,6 +3338,10 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     event: MessagingRejectedInboundEvent,
     store: MessagingStoreLike,
   ): Promise<void> {
+    if (event.kind === "validation") {
+      this.recordAdapterValidationRejection(platform, event);
+      return;
+    }
     if (!isActionableRejectedInbound(event)) {
       return;
     }
@@ -3338,9 +3383,53 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     }
   }
 
+  private recordAdapterValidationRejection(
+    platform: MessagingChannelKind,
+    event: MessagingAdapterValidationRejection,
+  ): void {
+    if (!Object.hasOwn(ADAPTER_VALIDATION_ACTIVITY_SUMMARY, event.reason)
+      || !Number.isFinite(event.receivedAt)) {
+      return;
+    }
+    // The runtime survives adapter replacement. Key only on a configured
+    // platform and a fixed reason, and use a monotonic clock for the limit.
+    const key = `${platform}:${event.reason}`;
+    const nextAttemptAt = this.adapterValidationActivityNextAttemptAt.get(key);
+    if (nextAttemptAt !== undefined && performance.now() < nextAttemptAt) {
+      return;
+    }
+
+    try {
+      getDesktopMessagingActivityLog().record({
+        platform,
+        kind: "inbound-rejected",
+        createdAt: event.receivedAt,
+        summary: ADAPTER_VALIDATION_ACTIVITY_SUMMARY[event.reason],
+        payload: {
+          rejectionStage: "adapter-validation",
+          rejectionReason: event.reason,
+        },
+      });
+    } catch (error) {
+      this.adapterValidationActivityNextAttemptAt.set(
+        key, performance.now() + ADAPTER_VALIDATION_ACTIVITY_RETRY_MS,
+      );
+      messagingLog.warn("messaging adapter validation activity log write failed", {
+        platform,
+        reason: event.reason,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    this.adapterValidationActivityNextAttemptAt.set(
+      key, performance.now() + ADAPTER_VALIDATION_ACTIVITY_INTERVAL_MS,
+    );
+    this.emitPlatformActivity(platform);
+  }
+
   private async resolveRejectedInboundRoute(
     store: MessagingStoreLike,
-    event: MessagingRejectedInboundEvent,
+    event: MessagingAuthorizationRejection,
   ): Promise<RejectedInboundRoute | undefined> {
     const binding = await store.findActiveBindingForChannel(event.channel);
     const assignment = binding
@@ -3967,7 +4056,7 @@ function describeRejectedConversation(
 }
 
 function isActionableRejectedInbound(
-  event: MessagingRejectedInboundEvent,
+  event: MessagingAuthorizationRejection,
 ): boolean {
   if (
     event.channel.conversation.kind === "dm"
