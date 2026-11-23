@@ -13,7 +13,7 @@ export interface CatalogStore {
 }
 
 export type StackOperation =
-  | { kind: "restack"; root: string; from?: string }
+  | { kind: "restack"; root: string; from?: string; stopBefore?: string }
   | { kind: "adopt"; stack: GhStack; repository: string }
   | { kind: "add_branch"; root: string; branch: string }
   | { kind: "remove"; root: string; branch: string; mode: "detach" | "forget" };
@@ -54,10 +54,16 @@ export interface StackReceipt {
   when: number;
 }
 
+export type StackJournal = {
+  direction: "apply" | "undo";
+  receipt: StackReceipt;
+  worktrees: WorktreeFollow[];
+};
+
 /** App-owned journal lifecycle stays with the host. The portable engine calls
  * these hooks under the catalog's operation lock and never opens a file. */
 export interface ApplyHooks {
   beforeTransaction?: () => Promise<void>;
-  begin?: (entry: { direction: "apply" | "undo"; receipt: StackReceipt; worktrees: WorktreeFollow[] }) => Promise<void>;
-  finish?: () => Promise<void>;
+  begin?: (entry: StackJournal) => Promise<void>;
+  finish?: (outcome: "committed" | "aborted", receipt: StackReceipt) => Promise<void>;
 }

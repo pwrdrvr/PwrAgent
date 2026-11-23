@@ -108,7 +108,7 @@ export class StackGit {
   }
 
   async requireMembership(moves: RefMove[], recorded: WorktreeFollow[]): Promise<void> {
-    const key = ({ branch, path }: WorktreeFollow) => JSON.stringify([branch, path]);
+    const key = ({ branch, path, old, next }: WorktreeFollow) => JSON.stringify([branch, path, old, next]);
     const current = await this.worktrees(moves);
     const keys = new Set(recorded.map(key));
     if (current.length !== recorded.length || current.some(worktree => !keys.has(key(worktree)))) {

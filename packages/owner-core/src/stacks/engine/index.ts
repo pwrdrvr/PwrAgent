@@ -1,7 +1,7 @@
 import { parseGhStackCatalog, requireWritableCatalog, type GhStackCatalog } from "./catalog";
 import { isOid, StackGit } from "./git";
 import { planStack } from "./plan";
-import type { ApplyHooks, CatalogStore, GitRunner, StackOperation, StackPlan, StackReceipt } from "./types";
+import type { ApplyHooks, CatalogStore, GitRunner, StackJournal, StackOperation, StackPlan, StackReceipt } from "./types";
 
 export * from "./catalog";
 export * from "./types";
@@ -61,7 +61,7 @@ export class StackEngine {
         const absent = await this.git.run(["show-ref", "--exists", `${prefix}/receipt`]).then(
           result => result.exitCode === 2, () => false,
         );
-        if (absent) await hooks.finish?.();
+        if (absent) await hooks.finish?.("aborted", receipt);
         throw error;
       }
       await this.finish("apply", receipt, sha256, receipt.moves, worktrees, hooks);
@@ -86,13 +86,17 @@ export class StackEngine {
       await hooks.beforeTransaction?.();
       const worktrees = await this.git.worktrees(moves);
       await this.checkWorktrees(worktrees);
+      const manifest = (await this.git.output(["rev-parse", "--verify", `${prefix}/receipt`])).trim();
+      if (!isOid(manifest)) throw new Error("Invalid undo receipt object");
       await hooks.begin?.({ direction: "undo", receipt, worktrees });
       try {
         await this.git.requireMembership(moves, worktrees);
-        await this.git.transaction(moves, {});
+        await this.git.transaction(moves, {}, [`create ${prefix}/undone ${manifest}`]);
       } catch (error) {
-        const unchanged = await this.tipsUnchanged(moves).catch(() => false);
-        if (unchanged) await hooks.finish?.();
+        const unchanged = await this.git.run(["show-ref", "--exists", `${prefix}/undone`]).then(
+          result => result.exitCode === 2, () => false,
+        );
+        if (unchanged) await hooks.finish?.("aborted", receipt);
         throw error;
       }
       await this.finish("undo", receipt, sha256, moves, worktrees, hooks);
@@ -100,9 +104,32 @@ export class StackEngine {
     });
   }
 
-  private async tipsUnchanged(moves: StackReceipt["moves"]): Promise<boolean> {
-    for (const { branch, old } of moves) if (await this.git.tip(branch) !== old) return false;
-    return true;
+  /** Called by the host under the operation lock, before releasing any recovery holds. */
+  async recover(entry: StackJournal, hooks: ApplyHooks): Promise<void> {
+    const { receipt, direction, worktrees } = entry;
+    const prefix = undoPrefix(receipt.id);
+    const marker = `${prefix}/${direction === "apply" ? "receipt" : "undone"}`;
+    const state = await this.git.run(["show-ref", "--exists", marker]);
+    if (state.exitCode === 2) {
+      await hooks.finish?.("aborted", receipt);
+      return;
+    }
+    if (state.exitCode !== 0) throw new Error("Cannot verify the stack operation's ref transaction");
+    const durable = JSON.parse(await this.git.output(["cat-file", "blob", marker])) as StackReceipt;
+    if (JSON.stringify(receipt) !== JSON.stringify(durable)) throw new Error("The stack journal differs from its undo receipt");
+    const { catalog, sha256 } = await this.store.read(this.commonDir);
+    requireWritableCatalog(catalog);
+    const before = direction === "apply" ? receipt.before : receipt.after;
+    const after = direction === "apply" ? receipt.after : receipt.before;
+    const moves = direction === "apply" ? receipt.moves : receipt.moves.map(({ branch, old, next }) => ({ branch, old: next, next: old }));
+    for (const { branch, next } of moves) {
+      if (await this.git.tip(branch) !== next) throw new Error(`Cannot recover stack operation after ${branch} moved again`);
+    }
+    if (!sameCatalog(catalog, before) && !sameCatalog(catalog, after)) throw new Error("Cannot recover after the stack catalog changed");
+    await this.git.requireMembership(moves, worktrees);
+    // git read-tree's two-tree update is safe to repeat after a partial follow.
+    // Equal catalogs also occur when a transaction only changed refs.
+    await this.finish(direction, receipt, sha256, moves, worktrees, hooks);
   }
 
   private async checkWorktrees(worktrees: StackPlan["worktrees"]) {
@@ -134,6 +161,6 @@ export class StackEngine {
       throw error;
     }
     await this.store.writeIfUnchanged(this.commonDir, direction === "apply" ? receipt.after : receipt.before, sha256);
-    await hooks.finish?.();
+    await hooks.finish?.("committed", receipt);
   }
 }

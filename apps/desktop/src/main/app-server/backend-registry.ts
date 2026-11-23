@@ -155,6 +155,8 @@ import {
 import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared/contracts/agent";
 import { buildIncomingWorkSummary } from "./thread-work-notification";
 import { ThreadCorrespondenceStore } from "./thread-correspondence-store";
+import type { StackNotice } from "@pwragent/shared/contracts/thread-system-messages";
+import type { StackThreadRef } from "@pwragent/owner-core/stacks/stack-coordinator";
 import { PendingEnvironmentLaunchStore } from "./pending-environment-launch-store";
 import { mergeCausalMessagingContext } from "./causal-messaging-context";
 import { rememberBoundedMap } from "../bounded-map";
@@ -3519,6 +3521,36 @@ export class DesktopBackendRegistry {
         });
       });
     }
+  }
+
+  publishStackNotice(thread: StackThreadRef, notice: StackNotice): void {
+    const id = `stack:${notice.opId}:${notice.branch}`;
+    const created = this.correspondenceStore.record({
+      id, source: thread, destination: thread, input: [], createdAt: Date.now(),
+      state: "started", stackNotice: notice,
+    });
+    if (created) this.publishCorrespondenceMessage(thread, id);
+  }
+
+  holdStackThread(thread: StackThreadRef): () => void {
+    return this.threadTurnQueue.suspendDispatch(thread);
+  }
+
+  stackThreadActive(thread: StackThreadRef): boolean {
+    const key = buildThreadIdentityKey(thread.backend, thread.threadId);
+    const active = this.getInProgressThreadSnapshot();
+    return this.threadHasActiveTurn(thread.threadId, thread.backend)
+      || this.threadTurnQueue.hasDispatchInFlight(thread)
+      || (active.subAgentThreadKeys?.includes(key) ?? false)
+      || (thread.backend === "claude" && this.claudeBackend.backgroundTaskThreadIds().includes(thread.threadId))
+      || this.getPendingRequestForThread(thread) !== undefined
+      || this.threadWorkspaceService.threadHasBlockingWorkspaceMove(thread)
+      || this.threadArchiveCoordinator.checkoutRestoreRecords.has(key);
+  }
+
+  withStackWorktreeMutation<T>(commonDir: string, operation: () => Promise<T>): Promise<T> {
+    this.assertThreadOwnership();
+    return this.gitDirectoryService.withStackWorktreeMutation(commonDir, operation);
   }
 
   private updateCorrespondenceStatus(
@@ -11311,7 +11343,19 @@ export class DesktopBackendRegistry {
 
   private async prepareAndStartTurn(params: Parameters<DesktopBackendRegistry["startTurnNow"]>[0]): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     this.assertThreadOwnership();
-    return await this.threadStarts.run(params, () => this.startTurnWithoutHandoff(params));
+    return await this.threadStarts.run(params, async () => {
+      // The first call establishes the per-turn context by calling startTurnNow
+      // again. Add the notice at its inner, actual admission boundary.
+      const notices = this.tokenMiserServerCapabilitiesForTurn.getStore()
+        ? this.correspondenceStore.pendingStackNotices(params) : [];
+      const result = await this.startTurnWithoutHandoff(notices.length ? {
+        ...params, input: [...notices.map(({ text }) => ({ type: "text" as const, text })), ...params.input],
+      } : params);
+      for (const { id } of notices) {
+        this.updateCorrespondenceStatus(params, id, { state: "started", stackDelivered: true });
+      }
+      return result;
+    });
   }
 
   private async startTurnWithoutHandoff(params: {

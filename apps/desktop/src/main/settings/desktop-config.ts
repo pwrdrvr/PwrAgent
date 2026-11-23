@@ -3592,7 +3592,7 @@ function readForgeAgentToolRuleEntry(item: unknown): ForgeAgentToolRuleEntryRead
     if (FORGE_AGENT_TOOL_RULE_TOML_KEYS.has(key)) continue;
     if (!isForgeAgentToolRuleGroup(key)) {
       problems.push(
-        `unknown key ${key}; rules set only pull_requests, comments, issues, ci and approve_merge`,
+        `unknown key ${key}; rules set only ${FORGE_AGENT_TOOL_RULE_GROUPS.join(", ")}`,
       );
     } else if (isForgeAgentToolAccess(key, level)) {
       access[key] = level;

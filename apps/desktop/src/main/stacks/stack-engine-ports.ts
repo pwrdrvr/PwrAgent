@@ -7,8 +7,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import {
   parseGhStackCatalog, requireWritableCatalog,
-  type ApplyHooks, type CatalogStore, type GhStackCatalog, type GitRunner,
+  type ApplyHooks, type CatalogStore, type GhStackCatalog, type GitRunner, type StackJournal,
 } from "@pwragent/owner-core/stacks/engine/index";
+import type { StackNotification } from "@pwragent/owner-core/stacks/stack-coordinator";
 import { runGitCommand } from "../app-server/git-executable";
 import { acquireNativeFileLock } from "../app-server/maintenance-native-lock";
 import { nativeRelayPath } from "../native-relay-path";
@@ -22,6 +23,14 @@ const foreignJournals = {
   "pwrgit-stack-op.json": "PwrGit has an unfinished stack operation in this clone.",
 };
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT";
+type RuntimeJournal = StackJournal & { notification: StackNotification };
+
+async function exists(filename: string): Promise<boolean> {
+  return await lstat(filename).then(() => true, (error: unknown) => {
+    if (missing(error)) return false;
+    throw error;
+  });
+}
 
 export const stackGitRunner: GitRunner = {
   async run(cwd, args, opts) {
@@ -88,16 +97,40 @@ export class GhStackCatalogStore implements CatalogStore {
 
   async withOperationLock<T>(commonDir: string, fn: () => Promise<T>): Promise<T> {
     return await this.withLock(commonDir, "gh-stack-operation.lock", async () => {
-      for (const [name, message] of Object.entries({
-        ...foreignJournals, [ownJournal]: "PwrAgent has an unfinished stack operation in this clone.",
-      })) {
-        const present = await lstat(join(commonDir, name)).then(() => true, (error: unknown) => {
-          if (missing(error)) return false;
-          throw error;
-        });
-        if (present) throw new StackCatalogError("gh_stack_busy", message);
+      await this.assertForeignJournalsAbsent(commonDir);
+      if (await this.hasJournal(commonDir)) {
+        throw new StackCatalogError("gh_stack_busy", "PwrAgent has an unfinished stack operation in this clone.");
       }
       return await fn();
+    });
+  }
+
+  hasJournal(commonDir: string): Promise<boolean> {
+    return exists(join(commonDir, ownJournal));
+  }
+
+  private async assertForeignJournalsAbsent(commonDir: string): Promise<void> {
+    for (const [name, message] of Object.entries(foreignJournals)) {
+      if (await exists(join(commonDir, name))) throw new StackCatalogError("gh_stack_busy", message);
+    }
+  }
+
+  async recover(commonDir: string, recover: (entry: RuntimeJournal) => Promise<void>): Promise<void> {
+    await this.withLock(commonDir, "gh-stack-operation.lock", async () => {
+      await this.assertForeignJournalsAbsent(commonDir);
+      const file = await open(join(commonDir, ownJournal), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+        .catch((error: unknown) => { if (!missing(error)) throw error; });
+      if (!file) return;
+      try {
+        const info = await file.stat();
+        if (!info.isFile() || info.size > 4 * 1024 * 1024) throw new Error("Invalid PwrAgent stack journal");
+        const entry = JSON.parse(await file.readFile("utf8")) as RuntimeJournal;
+        if (!entry.notification || (entry.direction !== "apply" && entry.direction !== "undo")) throw new Error("Invalid PwrAgent stack journal");
+        await recover(entry);
+      } finally {
+        await file.close();
+      }
+      await this.clearJournal(commonDir);
     });
   }
 
@@ -111,14 +144,16 @@ export class GhStackCatalogStore implements CatalogStore {
     });
   }
 
-  journalHooks(commonDir: string): ApplyHooks {
+  journalHooks(commonDir: string, notification?: StackNotification): ApplyHooks {
     return {
-      begin: async (entry) => await this.atomicWrite(commonDir, ownJournal, entry),
-      finish: async () => {
-        await unlink(join(commonDir, ownJournal));
-        await syncDirectory(commonDir);
-      },
+      begin: async (entry) => await this.atomicWrite(commonDir, ownJournal, { ...entry, notification }),
+      finish: async () => await this.clearJournal(commonDir),
     };
+  }
+
+  private async clearJournal(commonDir: string): Promise<void> {
+    await unlink(join(commonDir, ownJournal));
+    await syncDirectory(commonDir);
   }
 
   private async atomicWrite(commonDir: string, filename: "gh-stack" | typeof ownJournal, value: unknown): Promise<void> {

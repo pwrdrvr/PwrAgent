@@ -34,7 +34,7 @@ import { type OwnerHostServices, getOwnerHostServices, rendererSubscribers } fro
 import { initializeDesktopConfigStore } from "./settings/config-store/desktop-config-store-singleton";
 import { initializeDesktopSettingsService } from "./settings/desktop-settings-singleton";
 import { initializeDesktopBackendRegistry } from "./app-server/backend-registry";
-import { initializeDesktopAppServerService, startAppServerOwnerNavigation } from "./app-server/desktop-app-server-service";
+import { getDesktopAppServerService, initializeDesktopAppServerService, startAppServerOwnerNavigation } from "./app-server/desktop-app-server-service";
 import { initializeDesktopFederationRuntime } from "./federation/federation-runtime";
 import { initializeDesktopMessagingRuntime } from "./messaging/messaging-runtime";
 import { reconcileAppUpdateRestart, subscribeAgentUpdateNotices } from "./messaging/agent-update-notices";
@@ -246,9 +246,13 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
   });
   // Continuations a quiet restart left start once providers can take a
   // turn, a few threads at a time.
-  void startupProviderRefresh.then(() => {
+  void startupProviderRefresh.then(async () => {
     if (ownerShutdownStarted) return;
-    getExistingDesktopBackendRegistry()?.beginRestartContinuationDispatch();
+    try {
+      await getDesktopAppServerService().resumeInterruptedStackOperations();
+    } finally {
+      getExistingDesktopBackendRegistry()?.beginRestartContinuationDispatch();
+    }
   }).catch((error) => {
     mainLog.warn("restart continuation dispatch failed to start", {
       error: error instanceof Error ? error.message : String(error),

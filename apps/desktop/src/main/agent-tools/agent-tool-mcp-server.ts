@@ -53,6 +53,7 @@ export function buildPwrAgentMcpInstructions(toolNames: readonly string[]): stri
       ? " Own PR CI/merge: follow prAutomation.guidance and use watch_thread_pull_request."
       : "")
     + (has("list_stacks") ? " For stacked PRs, use list_stacks to check layer order and health before merging." : "")
+    + (has("plan_stack_operation") ? " Use plan_stack_operation to forecast local stack changes before applying them." : "")
     + (has("manage_thread_dependencies")
       ? " Use manage_thread_dependencies for prerequisites, ci_run for standalone CI, and local_file for watcher markers."
       : "")
