@@ -649,12 +649,15 @@ function rewindPointShowsPrompt(
 function effectiveAcpAgentCapabilities(
   agent: AcpInstalledAgentRecord,
 ): AcpAgentCapabilities {
+  const catalog = acpAgentCapabilitiesForRegistryId(agent.registryId);
   const configured = {
-    ...acpAgentCapabilitiesForRegistryId(agent.registryId),
+    ...catalog,
     ...agent.capabilities,
   };
   return {
     ...configured,
+    // PwrAgent owns managed review. Older discovery records can have a stale value.
+    managedReview: catalog.managedReview,
     // The extension is downstream-only. Ignore the unconditional steerTurn
     // value persisted by older catalog/discovery records for vendor Grok.
     steerTurn: agent.registryId === "grok"

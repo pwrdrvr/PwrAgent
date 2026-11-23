@@ -491,7 +491,7 @@ describe("describeInstalledAcpBackend", () => {
     expect(backend.methods).toContain("session/load");
   });
 
-  it("advertises managed review for Kimi and Grok but not other ACP providers", () => {
+  it("advertises managed review for Kimi and Grok while Gemini stays unsupported", () => {
     const kimi = describeInstalledAcpBackend({
       ...buildInstalledAgent(),
       backendId: "acp:kimi" as AcpBackendId,
@@ -509,6 +509,28 @@ describe("describeInstalledAcpBackend", () => {
     expect(kimi.capabilities.startReview).toBe(true);
     expect(grok.capabilities.startReview).toBe(true);
     expect(gemini.capabilities.startReview).toBe(false);
+  });
+
+  it("advertises Antigravity managed reviews for fresh and previously discovered installs", () => {
+    // Discovery metadata must not gate a built-in capability after an upgrade.
+    fc.assert(fc.property(fc.option(fc.boolean(), { nil: undefined }), (managedReview) => {
+      const antigravity = describeInstalledAcpBackend({
+        ...buildInstalledAgent(),
+        backendId: "acp:antigravity",
+        registryId: "antigravity",
+        name: "Antigravity",
+        ...(managedReview === undefined ? {} : {
+          capabilities: {
+            conversationRewind: false,
+            liveWorkspaceHandoff: false,
+            managedReview,
+            steerTurn: false,
+          },
+        }),
+      });
+
+      expect(antigravity.capabilities).toMatchObject({ startReview: true, reviewRunner: true });
+    }));
   });
 
   it.each([undefined, "1.0.50"])("does not advertise ACP steering for vendor Grok %s", (version) => {
