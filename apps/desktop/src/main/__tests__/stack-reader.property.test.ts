@@ -654,11 +654,51 @@ describe("stack checkout demand", () => {
       const { signal } = new AbortController();
       await expect(readStackClones([sandbox], { signal })).resolves.toHaveLength(1);
       expect(run.mock.calls[0]?.[2]).toMatchObject({
-        timeout: 3_000, purpose: "stack-checkout", ownProcessTree: process.platform === "win32",
+        timeout: 3_000, purpose: "stack-checkout", ownProcessTree: true,
       });
       expect(run.mock.calls[0]?.[2]?.signal).toBe(signal);
     } finally {
       run.mockRestore();
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("drains the descendant of a canceled POSIX stack checkout", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-owned-checkout-"));
+    const wrapper = path.join(sandbox, "git-wrapper");
+    const script = path.join(sandbox, "hold.cjs");
+    const pidFile = path.join(sandbox, "descendant.pid");
+    const quote = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'";
+    const controller = new AbortController();
+    let pid = 0;
+    try {
+      await writeFile(script, [
+        'require("node:fs").writeFileSync(process.argv[2], String(process.pid));',
+        "setInterval(() => {}, 1000);",
+      ].join("\n"));
+      await writeFile(wrapper, [
+        "#!/bin/sh",
+        'cd "$2" || exit',
+        `${quote(process.execPath)} ${quote(script)} ${quote(pidFile)} </dev/null >/dev/null 2>&1 &`,
+        "child=$!",
+        "trap 'wait \"$child\"; exit 130' TERM",
+        'wait "$child"',
+      ].join("\n") + "\n", { mode: 0o700 });
+      process.env.PWRAGENT_GIT_PATH = wrapper;
+      const reading = readStackClones([sandbox], { signal: controller.signal }).catch((error: unknown) => error);
+      await vi.waitFor(async () => {
+        pid = Number(await readFile(pidFile, "utf8"));
+        expect(pid).toBeGreaterThan(0);
+      }, { timeout: 2_000 });
+      const reason = new Error("Selection changed");
+      controller.abort(reason);
+      expect(await reading).toBe(reason);
+      expect(() => process.kill(pid, 0)).toThrow();
+    } finally {
+      controller.abort();
+      if (pid > 0) {
+        try { process.kill(pid, "SIGKILL"); } catch { /* The wrapper has reaped its child. */ }
+      }
       await rm(sandbox, { recursive: true, force: true });
     }
   });

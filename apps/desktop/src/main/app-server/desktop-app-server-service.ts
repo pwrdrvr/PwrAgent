@@ -3972,10 +3972,10 @@ class DesktopAppServerService {
       return { blocked: parents.length > 0, lowerKeys: parents.map(getPrStatusKey) };
     }
     const repository = { provider: "github" as const, host: ref.provider, owner: ref.org, repo: ref.repo };
-    const catalogs = (await this.stackReader.preflightCatalogs(
+    const preflight = await this.stackReader.preflightCatalogs(
       this.prReviewOfferDirectories(thread, pr), new StackReadObservation(),
-    ))
-      .flatMap((catalog) => catalog.status === "ok" ? [catalog.catalog] : []);
+    );
+    const catalogs = preflight.flatMap((catalog) => catalog.status === "ok" ? [catalog.catalog] : []);
     const ci = this.getForgeCiClient();
     const path = `repos/${encodeURIComponent(ref.org)}/${encodeURIComponent(ref.repo)}`;
     const lowerKeys = new Set<string>();
@@ -3993,8 +3993,9 @@ class DesktopAppServerService {
         }) as { data?: unknown }).data,
         (number) => lowerKeys.add(getPrStatusKey({ provider: pr.provider, org: pr.org, repo: pr.repo, number })),
       );
-      const changedBase = pr.baseRefName !== undefined && base !== pr.baseRefName;
-      return { blocked: changedBase, lowerKeys: [...lowerKeys], retryOnObservation: changedBase };
+      const retryOnObservation = (pr.baseRefName !== undefined && base !== pr.baseRefName)
+        || preflight.some(({ status }) => status === "unavailable");
+      return { blocked: retryOnObservation, lowerKeys: [...lowerKeys], retryOnObservation };
     } catch (error) {
       if (!(error instanceof ForgeReadError) || error.code !== "stack_parent_open") {
         appServerLog.debug("stack merge evidence unavailable", { pr: pr.url, error: String(error) });
