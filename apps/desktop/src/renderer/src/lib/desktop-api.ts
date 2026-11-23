@@ -1,4 +1,5 @@
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
+import type { DecisionModelListing, DecisionProviderId } from "@pwragent/shared/decision-models";
 import type {
   ReadWorktreeReflinkCapabilitiesRequest,
   ReadWorktreeReflinkCapabilitiesResponse,
@@ -1728,6 +1729,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
     request: SettingsCredentialTestRequest,
   ) => Promise<SettingsCredentialTestResult>;
   lineRichMenuSetup?: (request: LineRichMenuSetupRequest) => Promise<LineRichMenuSetupResponse>;
+  /** The models a decision provider offers, read with the saved key. Runs no decision. */
+  listDecisionModels?: (request: { provider: DecisionProviderId }) => Promise<DecisionModelListing>;
   /** Open Slack's create-from-manifest page or existing-app management. */
   openSlackCreateApp?: (
     request?: SlackCreateAppRequest,
