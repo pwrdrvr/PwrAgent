@@ -8,7 +8,7 @@ export type { ArchiveThreadNotice } from "./archive-cleanup-notice";
 import type { NavigationDiagnosticCause, NavigationRefreshCaller } from "../../../shared/navigation-diagnostic-cause";
 import type { CodexEnvironmentStartupFailure, LaunchpadCreationStatus } from "@pwragent/shared/contracts/agent";
 import type { NavigationAttentionScope, RemoteThreadPinPublication } from "@pwragent/shared/contracts/navigation";
-import { materializeObservableLaunchpad, LaunchpadStartupCancelledError } from "./launchpad-creation-client";
+import { materializeObservableLaunchpad, LaunchpadSkillProfilePersistenceError, LaunchpadStartupCancelledError } from "./launchpad-creation-client";
 import { readNavigationQueryRange } from "./read-navigation-query-range";
 import { applyCheckoutHibernationUpdate } from "./navigation-thread-event";
 import { readBridgedNavigationResumeState } from "./navigation-resume-state";
@@ -2718,6 +2718,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
   executionMode: ThreadExecutionMode;
   workMode: NavigationLaunchpadDraft["workMode"];
   codexEnvironmentRuntime?: NavigationThreadSummary["codexEnvironmentRuntime"];
+  codexSkillProfile?: NavigationThreadSummary["codexSkillProfile"];
   optimisticUserMessage?: NavigationThreadSummary["optimisticUserMessage"];
   optimisticActiveTurn?: NavigationThreadSummary["optimisticActiveTurn"];
   parentThreadId?: string;
@@ -2749,6 +2750,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
     serviceTier: params.launchpad.serviceTier,
     fastMode: params.launchpad.fastMode,
     tokenMiserEnabled: params.launchpad.tokenMiserEnabled,
+    ...(params.codexSkillProfile ? { codexSkillProfile: params.codexSkillProfile } : {}),
     ...(params.launchpad.agent
       ? {
           agent: {
@@ -8576,6 +8578,7 @@ export function useThreadNavigation(
           executionMode: response.executionMode,
           workMode: response.workMode,
           codexEnvironmentRuntime: response.codexEnvironmentRuntime,
+          codexSkillProfile: response.codexSkillProfile,
           optimisticUserMessage: response.turnStartFailure
             || response.scheduledAction
             ? undefined
@@ -8753,7 +8756,10 @@ export function useThreadNavigation(
             subthreadOrderTarget,
           );
         }
-        if (response.turnStartFailure) {
+        const skillProfileFailure = response.codexSkillProfilePersistenceFailure;
+        if (skillProfileFailure) {
+          publishThreadActionError("save-skill-profile", skillProfileFailure.message);
+        } else if (response.turnStartFailure) {
           setLaunchpadError(response.turnStartFailure.message);
         } else if (response.autoPinFailure) {
           setLaunchpadError(response.autoPinFailure.message);
@@ -8815,6 +8821,10 @@ export function useThreadNavigation(
         } catch (error) {
           setLaunchpadError(error instanceof Error ? error.message : String(error));
         }
+        if (skillProfileFailure) {
+          // The thread exists, but the composer still owns its unsent draft.
+          throw new LaunchpadSkillProfilePersistenceError(skillProfileFailure.message);
+        }
       } finally {
         pendingLaunchpadCreationsRef.current.delete(launchpadSelectionKey);
         setPendingLaunchpadCreations([...pendingLaunchpadCreationsRef.current.values()]);
@@ -8844,6 +8854,7 @@ export function useThreadNavigation(
       desktopApi,
       directories,
       insertSubthreadBelowSource,
+      publishThreadActionError,
       refresh,
       detachedSubthreadLaunchpadKeysRef,
       setFederatedLaunchpad,

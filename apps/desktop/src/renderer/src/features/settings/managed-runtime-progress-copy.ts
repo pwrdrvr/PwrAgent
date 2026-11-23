@@ -48,6 +48,7 @@ const STEP_LABELS: Record<ManagedRuntimeInstallPhase, string> = {
 };
 
 const RUNTIME_NAMES: Record<ManagedRuntimeId, string> = {
+  antigravity: "Google Antigravity",
   codex: "pwrdrvr/codex",
   grok: "pwrdrvr/grok-build",
   git: "PwrDrvr Git",
@@ -146,7 +147,9 @@ export function managedRuntimeProgressCopy(
         ...base,
         tone: "busy",
         eyebrow: "Checking for a build",
-        message: `Asking GitHub for the latest ${runtimeName} release…`,
+        message: progress.runtime === "antigravity"
+          ? "Checking Google’s release manifest…"
+          : `Asking GitHub for the latest ${runtimeName} release…`,
       };
     case "downloading": {
       const { receivedBytes, totalBytes } = progress;
@@ -167,9 +170,11 @@ export function managedRuntimeProgressCopy(
         ...base,
         tone: "busy",
         eyebrow: "Verifying",
-        message: progress.runtime === "git"
-          ? "Checking the archive against its published SHA-256…"
-          : "Checking the SHA-256 and the signature…",
+        message: progress.runtime === "antigravity"
+          ? "Checking the archive against Google’s published SHA-512…"
+          : progress.runtime === "git"
+            ? "Checking the archive against its published SHA-256…"
+            : "Checking the SHA-256 and the signature…",
       };
     case "unpacking":
       return {
@@ -185,7 +190,9 @@ export function managedRuntimeProgressCopy(
         ...base,
         tone: "busy",
         eyebrow: progress.runtime === "git" ? "Installing" : "Activating",
-        message: "Moving the verified build into place…",
+        message: progress.runtime === "antigravity"
+          ? "Checking ACP startup and activating the verified release…"
+          : "Moving the verified build into place…",
       };
     case "ready":
       if (progress.runtime === "git") {

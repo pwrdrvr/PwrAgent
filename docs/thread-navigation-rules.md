@@ -182,6 +182,7 @@ Read this before changing thread lenses, Attention membership/order, unread stat
 ### Starting rows
 
 - A thread that is still starting has a starting row in the slot its thread will take.
+- A Windows starting row can match a checkout spelled with different separators. The owner uses the same filesystem-verified case aliases for pending starts and landed rows, including aliases of a group's secondary checkouts. If the owner cannot verify a case variant, the start stays unplaced.
 - The thread's own row takes that slot once it renders (`selectUnlandedStartingThreads`). No frame shows both rows or neither.
 - A renderer launchpad draws its own starting row in the window that sent it. The owner leaves that row to the renderer for local and peer submissions, including older peer requests without an operation ID or a message origin.
 - The owner draws starting rows for to-do cards, prepared direct starts, and clean or fork-seeded handoffs that prepare a worktree or run setup.

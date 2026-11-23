@@ -518,6 +518,7 @@ export type GenerateMessagingPairingTokenResponse = {
   message: string;
   token: string;
   expiresAt: number;
+  dmLink?: { url: string; qrImage: string };
 };
 
 export type ListMessagingPairingRequestsRequest = {
@@ -545,6 +546,14 @@ export type ApproveMessagingPairingRequest = {
 export type ApproveMessagingPairingResponse = {
   entry: MessagingPairingEntry;
   added: boolean;
+};
+
+export type TelegramPairingGrantKind = "users" | "supergroups";
+
+export type RevokeTelegramPairingGrantRequest = {
+  accountId: string;
+  kind: TelegramPairingGrantKind;
+  contactId: string;
 };
 
 export type RejectMessagingPairingRequest = {

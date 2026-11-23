@@ -1,0 +1,401 @@
+import { createHash } from "node:crypto";
+import { constants, createWriteStream } from "node:fs";
+import { access, chmod, lstat, mkdir, mkdtemp, readlink, realpath, rename, rm, stat, symlink } from "node:fs/promises";
+import path from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import type { ManagedRuntimeProgressReporter } from "../managed-runtime-progress";
+import type { ReadableStream as NodeReadableStream } from "node:stream/web";
+import { lock } from "proper-lockfile";
+import { extract } from "tar";
+import { getMainLogger } from "../log.js";
+import { resolvePwragentRoot } from "../profile.js";
+import { ANTIGRAVITY_ACP_STRATEGY } from "./acp-local-strategies.js";
+import { AcpStdioJsonRpcTransport } from "./acp-stdio-transport.js";
+
+// Google's documented Unix bootstrapper (antigravity.google/cli/install.sh)
+// uses this manifest and verifies the archive's SHA-512 before extracting.
+const MANIFEST_URL =
+  "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/darwin_arm64.json";
+const ARCHIVE_BASE = "https://storage.googleapis.com/antigravity-public/antigravity-cli";
+const ACTIVE_LINK = "active";
+const ARCHIVE_ENTRY = "antigravity";
+const MAX_MANIFEST_BYTES = 8 * 1024;
+const MAX_RUNTIME_BYTES = 512 * 1024 * 1024;
+const DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
+const VALIDATION_TIMEOUT_MS = 90_000;
+const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+const ACTIVE_TARGET_PATTERN = /^versions\/([\d.]+)-[a-f0-9]{128}\/agy$/;
+const log = getMainLogger("pwragent:antigravity-managed-runtime");
+
+export const MANAGED_ANTIGRAVITY_ENV = { AGY_CLI_DISABLE_AUTO_UPDATE: "true" } as const;
+
+export type ManagedAntigravityRuntime = {
+  command: string;
+  version: string;
+};
+
+export type ManagedAntigravityStatus =
+  | { status: "unsupported" | "not-installed" }
+  | { status: "installed"; runtime: ManagedAntigravityRuntime };
+
+type RuntimeLocation = {
+  rootDir?: string;
+  platform?: NodeJS.Platform;
+  arch?: string;
+};
+
+type InstallOptions = RuntimeLocation & {
+  signal?: AbortSignal;
+  progress?: ManagedRuntimeProgressReporter;
+  /** Test seams. Production uses the official release feed and ACP stdio. */
+  fetch?: typeof globalThis.fetch;
+  verify?: typeof verifyRuntime;
+};
+
+type Release = { version: string; url: string; sha512: string };
+
+const activeInstalls = new Set<string>();
+
+function managedRoot(options?: RuntimeLocation): string {
+  return path.resolve(options?.rootDir ?? path.join(resolvePwragentRoot(), "agents", "antigravity"));
+}
+
+function supportsManagedInstall(options?: RuntimeLocation): boolean {
+  return (options?.platform ?? process.platform) === "darwin"
+    && (options?.arch ?? process.arch) === "arm64";
+}
+
+function isVersion(value: string): boolean {
+  return value.length <= 32 && value === value.trim() && VERSION_PATTERN.test(value);
+}
+
+type CommandEnvironment = { env?: NodeJS.ProcessEnv; cwd?: string };
+
+/** Resolve the executable as a POSIX probe or launch would. A relative PATH
+ * entry can surface as a bare command, for example when the entry is ".". */
+export async function resolveAntigravityCommandPath(
+  command: string,
+  { env = process.env, cwd = process.cwd() }: CommandEnvironment = {},
+): Promise<string | undefined> {
+  // Keep ".." for the filesystem to resolve after following any symlinks.
+  const fromCwd = (entry: string) => path.isAbsolute(entry) ? entry : `${cwd}${path.sep}${entry}`;
+  if (path.basename(command) !== command) {
+    return await realpath(fromCwd(command)).catch(() => undefined);
+  }
+  for (const directory of (env.PATH ?? "/usr/bin:/bin").split(path.delimiter)) {
+    const candidate = fromCwd(directory ? `${directory}${path.sep}${command}` : command);
+    try {
+      if (!(await stat(candidate)).isFile()) continue;
+      await access(candidate, constants.X_OK);
+      return await realpath(candidate);
+    } catch {
+      // Continue to the next PATH entry, as execFile does.
+    }
+  }
+  return undefined;
+}
+
+export async function isManagedAntigravityCommand(command: string, environment?: CommandEnvironment): Promise<boolean> {
+  const [root, target] = await Promise.all([
+    realpath(managedRoot()).catch(() => undefined),
+    resolveAntigravityCommandPath(command, environment),
+  ]);
+  if (!root || !target) return false;
+  const relative = path.relative(root, target);
+  return relative === relative.trim() && ACTIVE_TARGET_PATTERN.test(relative);
+}
+
+/** Read the installed runtime without launching it or contacting Google. */
+export async function readManagedAntigravityStatus(
+  options?: RuntimeLocation,
+): Promise<ManagedAntigravityStatus> {
+  if (!supportsManagedInstall(options)) return { status: "unsupported" };
+  const runtime = await readActiveRuntime(managedRoot(options));
+  return runtime ? { status: "installed", runtime } : { status: "not-installed" };
+}
+
+async function readActiveRuntime(root: string): Promise<ManagedAntigravityRuntime | undefined> {
+  try {
+    const target = await readlink(path.join(root, ACTIVE_LINK));
+    const version = ACTIVE_TARGET_PATTERN.exec(target)?.[1];
+    if (target !== target.trim() || !version || !isVersion(version)) {
+      return undefined;
+    }
+    const command = path.join(root, target);
+    const [rootInfo, versionsInfo, releaseInfo, binaryInfo] = await Promise.all([
+      lstat(root),
+      lstat(path.join(root, "versions")),
+      lstat(path.dirname(command)),
+      lstat(command),
+    ]);
+    if (rootInfo.isDirectory() && versionsInfo.isDirectory() && releaseInfo.isDirectory()
+      && binaryInfo.isFile() && (binaryInfo.mode & 0o100) !== 0) {
+      return { command, version };
+    }
+  } catch (error) {
+    if (!["ENOENT", "EINVAL", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+      throw error;
+    }
+  }
+  return undefined;
+}
+
+/** Explicitly install or reinstall Google's current release. The active link
+ * changes only after checksum, extraction and ACP initialization succeed. */
+export async function installManagedAntigravityRuntime(
+  options: InstallOptions = {},
+): Promise<ManagedAntigravityRuntime> {
+  if (!supportsManagedInstall(options)) {
+    throw new Error("Managed Antigravity installation requires macOS on Apple Silicon.");
+  }
+  options.signal?.throwIfAborted();
+  const root = managedRoot(options);
+  if (activeInstalls.has(root)) throw new Error("Antigravity installation is already in progress.");
+  activeInstalls.add(root);
+  try {
+    return await installRelease(root, options);
+  } finally {
+    activeInstalls.delete(root);
+  }
+}
+
+async function installRelease(root: string, options: InstallOptions): Promise<ManagedAntigravityRuntime> {
+  options.progress?.checking();
+  const previous = await readActiveRuntime(root);
+  const fetchRelease = options.fetch ?? globalThis.fetch;
+  const downloadTimeout = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
+  const downloadSignal = options.signal
+    ? AbortSignal.any([options.signal, downloadTimeout])
+    : downloadTimeout;
+  const manifest = await fetchBody(MANIFEST_URL, MAX_MANIFEST_BYTES, downloadSignal, fetchRelease);
+  const chunks: Buffer[] = [];
+  for await (const chunk of manifest) chunks.push(chunk);
+  const release = parseRelease(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  if (!(await lstat(root)).isDirectory()) throw new Error("Invalid managed Antigravity directory.");
+  const staging = await mkdtemp(path.join(root, ".install-"));
+  try {
+    const archive = path.join(staging, "release.tar.gz");
+    await downloadArchive(release, archive, downloadSignal, fetchRelease, options.progress);
+    options.progress?.unpacking(release.version);
+    const command = await extractBinary(archive, staging);
+    const verify = options.verify ?? verifyRuntime;
+    options.signal?.throwIfAborted();
+    options.progress?.activating(release.version);
+    await verify(command, release.version, staging, options.signal);
+    options.signal?.throwIfAborted();
+    return await activateRelease(root, staging, command, release, previous?.command, options.signal);
+  } finally {
+    await rm(staging, { recursive: true, force: true }).catch(() => {
+      log.warn("Could not clean up an Antigravity installation staging directory");
+    });
+  }
+}
+
+function parseRelease(value: unknown): Release {
+  const { version, url, sha512 } = (value ?? {}) as Partial<Record<keyof Release, unknown>>;
+  if (typeof version !== "string" || !isVersion(version)
+    || typeof sha512 !== "string" || sha512.length !== 128 || !/^[a-f0-9]+$/i.test(sha512)
+    || typeof url !== "string" || url !== url.trim()) {
+    throw new Error("Invalid Google Antigravity release manifest.");
+  }
+  const prefix = `${ARCHIVE_BASE}/${version}-`;
+  if (!url.startsWith(prefix) || !/^\d+\/darwin-arm\/cli_mac_arm64\.tar\.gz$/.test(url.slice(prefix.length))) {
+    throw new Error("Unexpected archive URL in the Google Antigravity release manifest.");
+  }
+  return { version, url, sha512: sha512.toLowerCase() };
+}
+
+async function* fetchBody(
+  url: string,
+  byteLimit: number,
+  signal: AbortSignal,
+  fetchRelease: typeof globalThis.fetch,
+): AsyncGenerator<Buffer> {
+  const response = await fetchRelease(url, { redirect: "error", signal });
+  if (!response.ok || !response.body || Number(response.headers.get("content-length")) > byteLimit) {
+    await response.body?.cancel();
+    throw new Error(`Antigravity release download failed or exceeded its size limit (HTTP ${response.status}).`);
+  }
+  const body = Readable.fromWeb(response.body as unknown as NodeReadableStream<Uint8Array>, { signal });
+  let bytesRead = 0;
+  for await (const chunk of body) {
+    bytesRead += chunk.length;
+    if (bytesRead > byteLimit) throw new Error("Antigravity release download exceeded its size limit.");
+    yield chunk;
+  }
+}
+
+async function downloadArchive(
+  release: Release,
+  archive: string,
+  signal: AbortSignal,
+  fetchRelease: typeof globalThis.fetch,
+  progress?: ManagedRuntimeProgressReporter,
+): Promise<void> {
+  const hash = createHash("sha512");
+  const reportBytes = progress?.downloading(release.version);
+  const source = fetchBody(release.url, MAX_RUNTIME_BYTES, signal, fetchRelease);
+  await pipeline(source, async function* (chunks) {
+    for await (const chunk of chunks) {
+      hash.update(chunk);
+      reportBytes?.(chunk.length);
+      yield chunk;
+    }
+  }, createWriteStream(archive, { flags: "wx", mode: 0o600 }), { signal });
+  progress?.verifying(release.version);
+  if (hash.digest("hex") !== release.sha512) {
+    throw new Error("Google Antigravity archive SHA-512 does not match the release manifest.");
+  }
+}
+
+async function extractBinary(archive: string, staging: string): Promise<string> {
+  let entries = 0;
+  let validEntry = false;
+  await extract({
+    file: archive,
+    cwd: staging,
+    preserveOwner: false,
+    strict: true,
+    filter: (name, entry) => {
+      entries += 1;
+      if (entries !== 1) return false;
+      validEntry = name === ARCHIVE_ENTRY && "type" in entry && entry.type === "File"
+        && entry.size > 0 && entry.size <= MAX_RUNTIME_BYTES;
+      return validEntry;
+    },
+  });
+  if (entries !== 1 || !validEntry) throw new Error("Unexpected Google Antigravity archive layout.");
+  const candidate = path.join(staging, ARCHIVE_ENTRY);
+  const command = path.join(staging, "agy");
+  await chmod(candidate, 0o700);
+  await rename(candidate, command);
+  return command;
+}
+
+async function verifyRuntime(
+  command: string,
+  version: string,
+  staging: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const scratch = path.join(staging, "verify");
+  await mkdir(scratch);
+  signal?.throwIfAborted();
+  const transport = new AcpStdioJsonRpcTransport({
+    launchDescriptor: {
+      backendId: "acp:antigravity",
+      registryId: "antigravity",
+      distributionKind: "local",
+      command,
+      args: [...ANTIGRAVITY_ACP_STRATEGY.spawn.args, "--gemini-dir", scratch],
+      cwd: scratch,
+      env: { ...MANAGED_ANTIGRAVITY_ENV },
+    },
+    // ACP initialize validates the runtime without opening an authenticated
+    // session. Give the process a fresh home and force CLI file storage.
+    baseEnv: {
+      HOME: scratch,
+      GEMINI_HOME: scratch,
+      TMPDIR: scratch,
+      PATH: "/usr/bin:/bin",
+      AGY_ACP_FORCE_FILE_STORAGE: "1",
+      SSH_CONNECTION: "127.0.0.1 0 127.0.0.1 0",
+    },
+    requestTimeoutMs: VALIDATION_TIMEOUT_MS,
+  });
+  const abort = () => { void transport.close().catch(() => undefined); };
+  signal?.addEventListener("abort", abort, { once: true });
+  try {
+    const result = await transport.request("initialize", {
+      protocolVersion: 1,
+      clientCapabilities: {},
+    }) as { protocolVersion?: unknown; agentInfo?: { name?: unknown; version?: unknown } } | null;
+    if (result?.protocolVersion !== 1
+      || result.agentInfo?.name !== "Antigravity ACP Server"
+      || result.agentInfo.version !== version) {
+      throw new Error("The downloaded CLI did not initialize as the expected Antigravity ACP release.");
+    }
+  } catch (error) {
+    signal?.throwIfAborted();
+    throw error;
+  } finally {
+    signal?.removeEventListener("abort", abort);
+    await transport.close();
+  }
+}
+
+async function activateRelease(
+  root: string,
+  staging: string,
+  command: string,
+  release: Release,
+  previousCommand: string | undefined,
+  signal?: AbortSignal,
+): Promise<ManagedAntigravityRuntime> {
+  // Only publication needs a cross-process lock. A different profile can
+  // finish downloading and validating while this installer is still staging.
+  let compromise: Error | undefined;
+  const unlock = await lock(path.join(root, "activate"), {
+    realpath: false,
+    stale: 60_000,
+    retries: { retries: 20, minTimeout: 25, maxTimeout: 25 },
+    onCompromised: (error) => { compromise = error; },
+  });
+  const assertCanPublish = () => {
+    signal?.throwIfAborted();
+    if (compromise) throw compromise;
+  };
+  try {
+    const active = await readActiveRuntime(root);
+    assertCanPublish();
+    if (active && keepActiveRuntime(active, release.version, previousCommand)) return active;
+    return await publishRelease(root, staging, command, release, assertCanPublish);
+  } finally {
+    await unlock().catch(() => log.warn("Could not release the Antigravity activation lock"));
+  }
+}
+
+function keepActiveRuntime(
+  active: ManagedAntigravityRuntime,
+  version: string,
+  previousCommand: string | undefined,
+): boolean {
+  const activeParts = active.version.split(".");
+  for (const [index, part] of version.split(".").entries()) {
+    const difference = BigInt(activeParts[index]) - BigInt(part);
+    if (difference !== 0n) return difference > 0n;
+  }
+  // Google can rebuild a version with a different digest. A concurrent
+  // activation wins that tie. An explicit reinstall can still replace it
+  // after reading the current active build on the next attempt.
+  return active.command !== previousCommand;
+}
+
+async function publishRelease(
+  root: string,
+  staging: string,
+  command: string,
+  release: Release,
+  assertCanPublish: () => void,
+): Promise<ManagedAntigravityRuntime> {
+  const relative = path.join("versions", `${release.version}-${release.sha512}`, "agy");
+  const installedCommand = path.join(root, relative);
+  const versionDir = path.dirname(installedCommand);
+  const versions = path.dirname(versionDir);
+  for (const dir of [versions, versionDir]) {
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    if (!(await lstat(dir)).isDirectory()) throw new Error("Invalid managed Antigravity version directory.");
+  }
+  const stagedLink = path.join(staging, ACTIVE_LINK);
+  await symlink(relative, stagedLink);
+  assertCanPublish();
+  // A reinstall of the same digest atomically replaces the same verified
+  // executable. Other releases keep their paths for existing selections.
+  await rename(command, installedCommand);
+  assertCanPublish();
+  await rename(stagedLink, path.join(root, ACTIVE_LINK));
+  return { command: installedCommand, version: release.version };
+}

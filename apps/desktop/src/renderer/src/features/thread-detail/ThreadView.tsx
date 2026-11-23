@@ -1,3 +1,4 @@
+import type { CodexSkillProfile } from "@pwragent/shared/contracts/codex-skill-profiles";
 import { ContinueAfterStatus } from "../thread-dependencies/ContinueAfterStatus";
 import type { ModelRoutingNotification } from "./model-routing-activity";
 import {
@@ -13,7 +14,7 @@ import {
 import { parseRemoteOperatorItemKey } from "@pwragent/shared/contracts/operator-requests";
 import { threadTodoThreadKey } from "@pwragent/shared/contracts/thread-todos";
 import { StartupTiming } from "../composer/StartupTiming";
-import { LaunchpadStartupCancelledError } from "../../lib/launchpad-creation-client";
+import { LaunchpadSkillProfilePersistenceError, LaunchpadStartupCancelledError } from "../../lib/launchpad-creation-client";
 import { ThreadServices } from "../federation/ThreadServices";
 import type { BackgroundTerminalsViewProps } from "./BackgroundTerminalsView";
 import type { AgentCommandsStatus } from "../../lib/useThreadSessionState";
@@ -860,6 +861,8 @@ export type ThreadViewProps = {
   updatingExecutionMode?: ThreadExecutionMode;
   onActiveTurnIdChange?: (turnId?: string) => void;
   onEnsureSkillsLoaded?: (options?: { force?: boolean }) => void | Promise<void>;
+  codexSkillProfiles?: readonly CodexSkillProfile[];
+  onOpenCodexSkillProfiles?: () => void;
   onDismissFullAccessRiskWarning?: () => Promise<void>;
   /** Forwarded to ThreadHeader -> MessagingStatusBar - opens Messaging Activity. */
   onOpenAutomations?: () => void;
@@ -1072,6 +1075,7 @@ export type ThreadViewProps = {
         | "imageAttachments"
         | "mcpConnectionIds"
         | "mcpProviderServersEnabled"
+        | "codexSkillProfileId"
         | "agent"
       >
     >,
@@ -3118,7 +3122,7 @@ export function ThreadView(props: ThreadViewProps) {
         scheduledFor,
       );
     } catch (error) {
-      if (error instanceof LaunchpadStartupCancelledError) {
+      if (error instanceof LaunchpadStartupCancelledError || error instanceof LaunchpadSkillProfilePersistenceError) {
         setLaunchpadMaterializing(false);
         setLaunchpadSubmittedInput([]);
         setLaunchpadMaterializeError(undefined);
@@ -3372,6 +3376,8 @@ export function ThreadView(props: ThreadViewProps) {
           props.onDismissFullAccessRiskWarning
         }
         onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
+        codexSkillProfiles={props.codexSkillProfiles}
+        onOpenCodexSkillProfiles={props.onOpenCodexSkillProfiles}
         onPickDirectoryForReference={props.onPickDirectoryForReference}
         pastedImageMaxPatches={props.pastedImageMaxPatches}
         pdfAnalysisEnabled={props.pdfAnalysisEnabled}

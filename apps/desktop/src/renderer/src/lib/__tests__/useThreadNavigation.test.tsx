@@ -7014,7 +7014,7 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedThread?.optimisticActiveTurn).toBeUndefined();
   });
 
-  it("selects a materialized thread without optimistic input when the first turn fails", async () => {
+  it.each([false, true])("keeps the accepted thread selected without optimistic input after a start failure (profile write: %s)", async (profileWriteFailed) => {
     const directoryKey = "directory:/Users/fixture-user/github/PwrAgent";
     const threadId = "thread-turn-failed";
     const input = [{ type: "text" as const, text: "Fix the model setting" }];
@@ -7052,13 +7052,15 @@ describe("useThreadNavigation", () => {
       },
     };
     const readPopulation = vi.fn().mockResolvedValue(initialSnapshot);
+    const message = profileWriteFailed ? "The thread was created, but its skill profile could not be saved." : "invalid model";
     const materializeDirectoryLaunchpad = vi.fn(async () => ({
       backend: "codex" as const,
       threadId,
       executionMode: "default" as const,
       workMode: "local" as const,
+      ...(profileWriteFailed ? { codexSkillProfilePersistenceFailure: { message } } : {}),
       turnStartFailure: {
-        message: "invalid model",
+        message,
         phase: "turn" as const,
       },
     }));
@@ -7069,7 +7071,8 @@ describe("useThreadNavigation", () => {
       onAgentEvent: () => () => undefined,
     };
 
-    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    const onThreadActionError = vi.fn();
+    const { result } = renderHook(() => useThreadNavigation(desktopApi, { onThreadActionError }));
 
     await waitFor(() => {
       expect(result.current.directories[0]?.launchpad?.prompt).toBe(
@@ -7078,12 +7081,18 @@ describe("useThreadNavigation", () => {
     });
 
     await act(async () => {
-      await result.current.materializeDirectoryLaunchpad(directoryKey, input);
+      const launch = result.current.materializeDirectoryLaunchpad(directoryKey, input);
+      if (profileWriteFailed) await expect(launch).rejects.toThrow(message);
+      else await launch;
     });
 
     expect(result.current.selectedThread?.id).toBe(threadId);
     expect(result.current.selectedThread?.optimisticUserMessage).toBeUndefined();
-    expect(result.current.launchpadError).toBe("invalid model");
+    if (profileWriteFailed) {
+      expect(onThreadActionError).toHaveBeenCalledWith({ kind: "save-skill-profile", message });
+    } else {
+      expect(result.current.launchpadError).toBe(message);
+    }
   });
 
   it("does not let a materialized thread refresh override a newer user thread selection", async () => {

@@ -2388,7 +2388,7 @@ describe("DesktopBackendRegistry", () => {
         localAcpDiscoveryMock.discoverLocalAcpAgentRecords,
       ).toHaveBeenCalledWith(
         expect.objectContaining({
-          enabledRegistryIds: ["grok", "kimi", "qwen"],
+          enabledRegistryIds: ["kimi", "grok", "qwen", "antigravity"],
           preferences: {
             kimi: { overridePath: "/opt/pwragent/bin/kimi" },
           },

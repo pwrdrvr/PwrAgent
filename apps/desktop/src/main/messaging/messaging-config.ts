@@ -364,7 +364,7 @@ export type DesktopMessagingSettingsSource = Pick<
   | "resolveFeishuVerificationTokenSync"
   | "resolveLineChannelAccessTokenSync"
   | "resolveLineChannelSecretSync"
->;
+> & Partial<Pick<DesktopSettingsService, "readTelegramPairingGrants" | "dismissTelegramPairingGrantWarning">>;
 
 export type DesktopMessagingConfigLoadOptions = {
   logStartupEligibility?: boolean;
@@ -763,12 +763,21 @@ export async function loadDesktopMessagingConfigFromSettings(
     ?? settings.resolveLineChannelAccessTokenSync();
   const lineChannelSecret =
     envConfig.line?.channelSecret ?? settings.resolveLineChannelSecretSync();
-  const telegramAuthorizedActorIds =
+  const telegramPairingGrants = settings.readTelegramPairingGrants?.(telegramBotToken);
+  const telegramConfiguredActorIds =
     envConfig.telegram?.authorizedActorIds
     ?? snapshot.messaging.telegram.authorizedUserIds.value;
-  const telegramAuthorizedSupergroupIds =
+  const telegramConfiguredSupergroupIds =
     envConfig.telegram?.authorizedSupergroupIds
     ?? snapshot.messaging.telegram.authorizedSupergroups.value;
+  const telegramPairedUsers = env[TELEGRAM_AUTHORIZED_USER_IDS_ENV] === undefined
+    && snapshot.messaging.telegram.authorizedUserIds.source !== "env"
+    ? telegramPairingGrants?.users ?? [] : [];
+  const telegramPairedSupergroups = env[TELEGRAM_AUTHORIZED_SUPERGROUPS_ENV] === undefined
+    && snapshot.messaging.telegram.authorizedSupergroups.source !== "env"
+    ? telegramPairingGrants?.supergroups ?? [] : [];
+  const telegramAuthorizedActorIds = mergeTelegramContacts(telegramConfiguredActorIds, telegramPairedUsers);
+  const telegramAuthorizedSupergroupIds = mergeTelegramContacts(telegramConfiguredSupergroupIds, telegramPairedSupergroups);
   const discordAuthorizedActorIds =
     envConfig.discord?.authorizedActorIds
     ?? snapshot.messaging.discord.authorizedUserIds.value;
@@ -1145,7 +1154,7 @@ export async function loadDesktopMessagingConfigFromSettings(
       allowThreadResume: snapshot.messaging.allowFullAccessThreadResume.value,
       warningPolicy: snapshot.messaging.fullAccessWarning.value,
       authorizedUsers: {
-        telegram: snapshot.messaging.telegram.authorizedUserIds.value,
+        telegram: mergeTelegramContacts(snapshot.messaging.telegram.authorizedUserIds.value, telegramPairedUsers),
         discord: snapshot.messaging.discord.authorizedUserIds.value,
         mattermost: snapshot.messaging.mattermost.authorizedUserIds.value,
         slack: snapshot.messaging.slack.authorizedUserIds.value,
@@ -1153,6 +1162,11 @@ export async function loadDesktopMessagingConfigFromSettings(
         line: snapshot.messaging.line.authorizedUserIds.value,
       },
       dismissWarning: async ({ actorId, channel }) => {
+        if (channel === "telegram" && telegramPairingGrants
+          && telegramPairedUsers.some((contact) => contact.id === actorId)) {
+          settings.dismissTelegramPairingGrantWarning?.(telegramPairingGrants.accountId, actorId);
+          if (!snapshot.messaging.telegram.authorizedUserIds.value.some((contact) => contact.id === actorId)) return;
+        }
         await dismissMessagingFullAccessWarning(
           settings,
           channel,
@@ -1160,7 +1174,8 @@ export async function loadDesktopMessagingConfigFromSettings(
         );
       },
       canDismissWarning: async ({ actorId, channel }) =>
-        await canPersistMessagingFullAccessWarningDismissal(
+        (channel === "telegram" && telegramPairedUsers.some((contact) => contact.id === actorId))
+        || await canPersistMessagingFullAccessWarningDismissal(
           settings,
           channel,
           actorId,
@@ -1353,6 +1368,14 @@ export function redactDesktopMessagingConfig(
       : undefined,
     attachmentPolicy: config.attachmentPolicy,
   };
+}
+
+function mergeTelegramContacts(
+  configured: DesktopAuthorizedContact[],
+  paired: DesktopAuthorizedContact[],
+): DesktopAuthorizedContact[] {
+  const configuredIds = new Set(configured.map((contact) => contact.id));
+  return [...configured, ...paired.filter((contact) => !configuredIds.has(contact.id))];
 }
 
 async function dismissMessagingFullAccessWarning(

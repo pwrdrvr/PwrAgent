@@ -1,3 +1,4 @@
+import type { CodexSkillProfile } from "./codex-skill-profiles";
 import type { HotCpuCaptureRules, HotCpuRulePlan } from "../hot-cpu-rules";
 import type { DesktopThreadArchivePolicy } from "../thread-archive-policy";
 import type { DesktopCheckoutHibernationPolicy } from "../checkout-hibernation-policy";
@@ -675,6 +676,12 @@ export type DesktopAuthorizedContact = {
   fullAccessWarningDismissed?: boolean;
   fullAccessWarningOverride?: DesktopMessagingFullAccessWarningUserPolicy;
   responseMode?: DesktopMessagingResponseMode;
+};
+
+export type DesktopTelegramPairingGrants = {
+  accountId: string;
+  users: DesktopAuthorizedContact[];
+  supergroups: DesktopAuthorizedContact[];
 };
 
 export type DesktopMessagingResponseMode = "every_message" | "mention_only";
@@ -1715,6 +1722,7 @@ export type DesktopSettingsSnapshot = {
       managedBuildsRequiredBy?: "token-miser";
       versionAdvisory?: DesktopCodexVersionAdvisory;
       configOverrides?: DesktopSettingsValue<string[]>;
+      skillProfiles?: CodexSkillProfile[];
       localModelIds?: DesktopSettingsValue<string[]>;
       /** Endpoints Codex can run threads on besides its default provider. */
       providers?: DesktopCodexModelProvider[];
@@ -1723,6 +1731,10 @@ export type DesktopSettingsSnapshot = {
     };
   };
   acpAgents: {
+    antigravity: {
+      cliPath: DesktopSettingsValue<string>;
+      enabled: boolean;
+    };
     gemini: {
       /**
        * Optional override for the Gemini CLI executable path. When empty,
@@ -2080,6 +2092,8 @@ export type DesktopSettingsConfigPatch = {
       managedBuildChannel?: DesktopUpdateChannel;
       /** Ordered process-local Codex key=value overrides; never written to CODEX_HOME. */
       configOverrides?: string[];
+      /** Replaces the profile list for this PwrAgent instance. */
+      skillProfiles?: CodexSkillProfile[];
       /** Exact model IDs explicitly declared to have zero local API cost. */
       localModelIds?: string[];
       /**
@@ -2090,6 +2104,10 @@ export type DesktopSettingsConfigPatch = {
     };
   };
   acpAgents?: {
+    antigravity?: {
+      cliPath?: string;
+      enabled?: boolean;
+    };
     gemini?: {
       cliPath?: string;
       enabled?: boolean;

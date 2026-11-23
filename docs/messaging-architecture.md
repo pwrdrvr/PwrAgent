@@ -472,6 +472,12 @@ Why this shape:
 - A thread bound to both Telegram and Discord renders independently per channel — Discord users see Discord-native buttons, Telegram users see Telegram-native buttons. No cross-channel contamination.
 - Shared state lives only in the sqlite `MessagingStore` (bindings, browse sessions, callback handles). Both controllers read/write the same store but never reach into each other's runtime state.
 
+### Telegram pairing grants
+
+Telegram pairing codes use the bot account as their namespace. Approval checks the live adapter and rechecks the saved or environment-provided credential inside the profile database transaction that grants access and consumes the request. Both the active Settings writer and the bootstrap writer use that database for profile secrets.
+
+The runtime loads grants for the bot account on the same credential it passes to Telegram. Rotating that bot's token keeps its grants. A different bot gets its own grant set. Settings can revoke a grant for its exact account, and manual allowlists retain their existing profile-wide behavior. Pairing grants are stored separately from those allowlists, so an older client does not load them as profile-wide access. Requests lacking account evidence require a fresh code before approval.
+
 ## Callback delivery models
 
 Different platforms deliver button clicks back to the bot through different transports. The interface is the same on PwrAgent's side (`MessagingInboundEvent.kind = "callback"`), but the adapter has to bridge whatever the platform does:

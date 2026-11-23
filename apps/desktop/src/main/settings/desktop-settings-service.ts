@@ -1,4 +1,6 @@
 import { assertHotCpuCaptureRules, primaryHotCpuRule } from "@pwragent/shared/hot-cpu-rules";
+import { telegramBotAccountId } from "@pwragent/shared/messaging-id-validation";
+import type { MessagingPairingStorage } from "@pwragent/owner-core/messaging-pairing-storage";
 import { resolveHotCpuRules } from "../diagnostics/hot-cpu-profile-config";
 import { CommandDiscoveryLifetime } from "./command-discovery-lifetime";
 import {
@@ -40,6 +42,7 @@ import type {
   DesktopApplicationsSnapshot,
   DesktopChatReplyComposer,
   DesktopAuthorizedContact,
+  DesktopTelegramPairingGrants,
   DesktopCodexAuthProfileDiscoverySnapshot,
   DesktopCodexCandidateSource,
   DesktopCodexDiscoverySnapshot,
@@ -173,6 +176,7 @@ import {
 import type { DesktopSecretStore } from "./desktop-secret-store";
 import {
   CHAT_REPLY_COMPOSER_ENV,
+  ACP_AGENTS_ANTIGRAVITY_CLI_PATH_ENV,
   ACP_AGENTS_GEMINI_CLI_PATH_ENV,
   ACP_AGENTS_GROK_CLI_PATH_ENV,
   ACP_AGENTS_KIMI_CLI_PATH_ENV,
@@ -356,6 +360,7 @@ function normalizeCodexProfilesSnapshot(
 }
 
 type DesktopSettingsServiceOptions = {
+  telegramPairingStorage?: Pick<MessagingPairingStorage, "readTelegramGrants" | "dismissTelegramGrantWarning">;
   tokenMiserStore?: TokenMiserStore;
   codexHome?: string;
   codexDiscoveryCoordinator?: Pick<
@@ -1740,6 +1745,7 @@ export class DesktopSettingsService {
             value: config.models?.codex?.configOverrides ?? [],
             source: config.models?.codex?.configOverrides === undefined ? "default" : "config",
           },
+          skillProfiles: config.models?.codex?.skillProfiles ?? [],
           providers: (config.models?.codex?.providers ?? []).map((provider) => ({
             ...provider,
             hasApiKey: codexModelProviderKeyIds.has(provider.id),
@@ -1769,6 +1775,13 @@ export class DesktopSettingsService {
         },
       },
       acpAgents: {
+        antigravity: {
+          cliPath: this.resolveString(
+            config.acpAgents?.antigravity?.cliPath,
+            ACP_AGENTS_ANTIGRAVITY_CLI_PATH_ENV,
+          ),
+          enabled: config.acpAgents?.antigravity?.enabled ?? true,
+        },
         gemini: {
           cliPath: this.resolveString(
             config.acpAgents?.gemini?.cliPath,
@@ -2908,7 +2921,18 @@ export class DesktopSettingsService {
   }
 
   resolveTelegramBotTokenSync(): string | undefined {
-    return this.resolveSecretSync("telegramBotToken", TELEGRAM_BOT_TOKEN_ENV);
+    return readEnvString(this.env, TELEGRAM_BOT_TOKEN_ENV)
+      ?? readEnvString(this.env, "TELEGRAM_BOT_TOKEN")
+      ?? this.options.secretStore.getSecretSync?.("telegramBotToken");
+  }
+
+  readTelegramPairingGrants(botToken: string | undefined): DesktopTelegramPairingGrants | undefined {
+    const accountId = telegramBotAccountId(botToken);
+    return accountId ? this.options.telegramPairingStorage?.readTelegramGrants(accountId) : undefined;
+  }
+
+  dismissTelegramPairingGrantWarning(accountId: string, actorId: string): void {
+    this.options.telegramPairingStorage?.dismissTelegramGrantWarning(accountId, actorId);
   }
 
   resolveDiscordBotTokenSync(): string | undefined {
@@ -4254,6 +4278,7 @@ export class DesktopSettingsService {
         federation: this.configStore.read("federation"),
         models: this.configStore.read("models"),
         acpAgents: {
+          antigravity: providerConfigSection(providers.antigravity),
           gemini: providerConfigSection(providers.gemini),
           grok: providerConfigSection(providers.grok),
           kimi: providerConfigSection(providers.kimi),

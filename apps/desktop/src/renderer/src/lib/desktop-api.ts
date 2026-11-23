@@ -50,7 +50,7 @@ import type {
   DecisionsRailThreadRequest,
 } from "@pwragent/shared/decisions-rail";
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared/contracts/agent";
-import type { DesktopWorktreeFolderCheck } from "@pwragent/shared/contracts/settings";
+import type { DesktopTelegramPairingGrants, DesktopWorktreeFolderCheck } from "@pwragent/shared/contracts/settings";
 import type { NativeVoiceApi } from "../../../shared/native-voice";
 import type { DictationApi } from "../../../shared/audio-transcription";
 import type { HtmlPreviewNavigationEvent } from "../../../shared/html-preview";
@@ -729,6 +729,7 @@ import type {
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
   RejectMessagingPairingRequest,
+  RevokeTelegramPairingGrantRequest,
   RejectMessagingPairingResponse,
   ResetMessagingToolUpdateBindingsRequest,
   ResetMessagingToolUpdateBindingsResponse,
@@ -1651,6 +1652,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   listAcpAgents?: (
     request?: ListAcpAgentSettingsRequest
   ) => Promise<ListAcpAgentSettingsResponse>;
+  antigravitySetup?: (
+    request: import("../../../shared/antigravity-setup").AntigravitySetupRequest,
+  ) => Promise<import("../../../shared/antigravity-setup").AntigravitySetupResult>;
   /** Start the Settings all-provider catalog refresh, or join the one running. */
   startProviderCatalogRefresh?: () => Promise<ProviderCatalogRefreshState>;
   cancelProviderCatalogRefresh?: (
@@ -2289,6 +2293,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   rejectMessagingPairing?: (
     request: RejectMessagingPairingRequest,
   ) => Promise<RejectMessagingPairingResponse>;
+  readTelegramPairingGrants?: () => Promise<DesktopTelegramPairingGrants | undefined>;
+  revokeTelegramPairingGrant?: (request: RevokeTelegramPairingGrantRequest) => Promise<void>;
   onMessagingPairingChanged?: (
     callback: (event: { at: number; entry: MessagingPairingEntry }) => void,
   ) => () => void;

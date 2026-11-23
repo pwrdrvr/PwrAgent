@@ -1,6 +1,7 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
 import { createSlice, aggregateSlices, expectedSlices, parseNotRun } from "./flake-report.mjs";
+import { unitGroups } from "./pr-test-impact.mjs";
 
 const unit = (tests, complete = true) => ({ complete, reason: "failed", unhandledErrors: 0, completion: { reportedTests: tests.length }, suites: [{ project: "desktop-main", file: "/repo/a.test.ts", errors: 0, tests }] });
 const item = (id, state) => ({ id, name: `suite > ${id}`, state, completed: true });
@@ -31,11 +32,11 @@ test("E2E identifies first unexpected outcomes and matches retry results by ID",
 
 test("aggregation preserves missing slices, attempts, and distinct diagnostic samples", () => {
   const expected = expectedSlices(3);
-  assert.equal(expected.length, 32);
+  assert.equal(expected.length, 34);
   const slice = createSlice({ kind: "e2e", platform: "windows", lane: 1, sample: 2, first: null, retries: [] });
   const report = aggregateSlices({ slices: [slice], samples: 3, runId: "123", attempt: "2" });
   assert.equal(report.slices.length, 1);
-  assert.equal(report.missingSlices.length, 31);
+  assert.equal(report.missingSlices.length, 33);
   assert.equal(report.slices.find((s) => s.key === slice.key).first.available, false);
   assert.equal(report.attempt, 2);
   assert.throws(() => aggregateSlices({ slices: [slice, slice], samples: 3 }), /duplicate/i);
@@ -61,19 +62,25 @@ test("platforms the classifier skipped are not reported as missing", () => {
   // A narrowed test plan runs fewer lanes. A lane it left out is not missing,
   // and a lane it ran still is when its slice does not arrive.
   const narrowed = aggregateSlices({
-    slices: [createSlice({ kind: "unit", platform: "linux", lane: 1, sample: 1, first: null, retries: [] })],
+    slices: [
+      createSlice({ kind: "unit", platform: "linux", lane: 1, sample: 1, first: null, retries: [] }),
+      createSlice({ kind: "unit", platform: "windows-main", lane: 3, sample: 1, first: null, retries: [] }),
+    ],
     notRun: ["unit-macos", "e2e-macos", "e2e-windows"],
-    lanes: { "unit-linux": [1], "unit-windows-main": [1], "unit-windows-renderer": [], "e2e-linux": [] },
+    lanes: { "unit-linux": [1], "unit-windows-main": [1, 2, 3], "unit-windows-renderer": [], "e2e-linux": [] },
   });
-  assert.equal(narrowed.expectedSlices, 2);
-  assert.deepEqual(narrowed.missingSlices.map((s) => s.key), ["unit-windows-main-lane-1-sample-1"]);
+  assert.equal(narrowed.expectedSlices, 4);
+  assert.deepEqual(narrowed.missingSlices.map((s) => s.key), [
+    "unit-windows-main-lane-1-sample-1",
+    "unit-windows-main-lane-2-sample-1",
+  ]);
   assert.deepEqual(parseNotRun(""), []);
   assert.deepEqual(parseNotRun(undefined), []);
   assert.deepEqual(parseNotRun("unit-macos,e2e-macos,e2e-windows"), ["unit-macos", "e2e-macos", "e2e-windows"]);
   assert.throws(() => parseNotRun("e2e-macOS"), /unknown not-run/i);
 });
 
-test("the expected slice inventory follows every configured workflow matrix", async () => {
+test("retry inventory, PR unit plans, and full test shards match their workflow matrices", async () => {
   const { readFileSync } = await import("node:fs");
   const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
   const jobs = [
@@ -87,7 +94,13 @@ test("the expected slice inventory follows every configured workflow matrix", as
     // A job that a pull request's test plan can narrow names its full lanes as the default.
     const lanes = section.match(/lane: (?:\$\{\{ fromJSON\(.+ \|\| ')?\[([\d, ]+)\]/)?.[1].split(",").map(Number);
     assert.ok(lanes, `missing matrix in ${job}`);
-    assert.deepEqual(expectedSlices().filter((s) => s.kind === kind && s.platform === platform).map((s) => s.lane), lanes);
+    assert.deepEqual(expectedSlices().filter((s) => s.kind === kind && s.platform === platform).map((s) => s.lane), lanes,
+      `retry inventory for ${job}`);
+    if (kind === "unit" && Object.hasOwn(unitGroups, platform)) {
+      assert.deepEqual(Array.from({ length: unitGroups[platform].lanes }, (_, index) => index + 1), lanes,
+        `PR test planner lanes for ${job}`);
+      assert.ok(section.includes(`--shard={0}/${lanes.length} `), `full test shard count for ${job}`);
+    }
     assert.match(section, new RegExp(`kind: ${kind}\\n\\s+platform: ${platform}\\n`));
     assert.match(section, /uses: \.\/\.github\/actions\/flake-slice/);
   }
@@ -116,14 +129,14 @@ test("the CLI produces a consolidated report including incomplete and absent sli
       const aggregate = spawnSync(process.execPath, [script, "aggregate"], { cwd, env: { ...env, FLAKE_SAMPLES: "1", GITHUB_RUN_ATTEMPT: "1" }, encoding: "utf8" });
       assert.equal(aggregate.status, 0, aggregate.stderr);
       const result = JSON.parse(readFileSync(join(cwd, ".local/ci/flake-report/flake-report.json")));
-      assert.equal(result.expectedSlices, 24);
-      assert.equal(result.missingSlices.length, 23);
+      assert.equal(result.expectedSlices, 26);
+      assert.equal(result.missingSlices.length, 25);
       const skipped = spawnSync(process.execPath, [script, "aggregate"], { cwd, env: { ...env, FLAKE_SAMPLES: "1", GITHUB_RUN_ATTEMPT: "1", FLAKE_NOT_RUN: "unit-macos,e2e-macos,e2e-windows" }, encoding: "utf8" });
       assert.equal(skipped.status, 0, skipped.stderr);
       assert.match(skipped.stdout, /Not run in this workflow run: unit-macos, e2e-macos, e2e-windows\./);
       const pr = JSON.parse(readFileSync(join(cwd, ".local/ci/flake-report/flake-report.json")));
-      assert.equal(pr.expectedSlices, 12);
-      assert.equal(pr.missingSlices.length, 11);
+      assert.equal(pr.expectedSlices, 14);
+      assert.equal(pr.missingSlices.length, 13);
       assert.equal(result.slices[0].first.complete, false);
       assert.equal(result.slices[0].failures[0].retry, "unknown");
     }
@@ -159,7 +172,7 @@ test("the job summary counts every unavailable or incomplete first report even w
       const result = spawnSync(process.execPath, [script, "aggregate"], { cwd, encoding: "utf8", env: { ...process.env, FLAKE_SAMPLES: "1", GITHUB_RUN_ATTEMPT: String(incomplete + 1), GITHUB_STEP_SUMMARY: summary } });
       assert.equal(result.status, 0, result.stderr);
       const content = readFileSync(summary, "utf8");
-      assert.match(content, /Slices received: 24\/24; missing: 0/);
+      assert.ok(content.includes(`Slices received: ${expected.length}/${expected.length}; missing: 0.`));
       assert.ok(content.includes(`Download the \`ci-flake-report-${incomplete + 1}\` artifact`));
       assert.match(content, new RegExp(`First reports unavailable or incomplete: ${incomplete}\\.`));
       if (incomplete > 0) assert.match(content, /failure counts may be incomplete/i);

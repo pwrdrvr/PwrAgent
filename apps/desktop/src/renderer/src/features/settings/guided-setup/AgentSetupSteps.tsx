@@ -31,7 +31,7 @@ import { SetupMark, type SetupMarkId } from "./SetupMark";
 
 /** An ACP agent PwrAgent supports: one per key of the settings contract's
  *  `acpAgents`. */
-type AcpAgentId = keyof DesktopSettingsSnapshot["acpAgents"];
+type AcpAgentId = Exclude<keyof DesktopSettingsSnapshot["acpAgents"], "antigravity">;
 
 export type AgentBackendId = "codex" | AcpAgentId;
 
@@ -109,11 +109,8 @@ const CODEX_BACKEND: AgentBackendDefinition = {
 };
 
 /**
- * The ACP agents, keyed by the settings contract's `acpAgents`. That
- * contract lists every ACP agent PwrAgent supports, and main discovers
- * exactly those, so the guided flow covers each by construction: an agent
- * added there fails typecheck here until it has its install copy, and its
- * tab follows. Key order is tab order.
+ * The ACP agents offered in guided setup. Antigravity is configured in
+ * AI Providers. Key order is tab order.
  */
 const ACP_AGENT_BACKENDS: Record<AcpAgentId, AgentBackendDefinition> = {
   gemini: {
@@ -1018,10 +1015,13 @@ export function AgentReviewStep(props: {
       props.discovery.claude,
     );
     const on = agentEnabled(id, snapshot);
-    const label = !found ? "Not installed" : on ? "Ready" : "Turned off";
-    return { id, name: agentTabName(id), found, on, label };
+    const actionRequired = id !== "codex" && id !== "claude"
+      && Boolean(acpEntryFor(props.discovery.acpEntries, id)?.unavailableReason);
+    const ready = found && on && !actionRequired;
+    const label = !found ? "Not installed" : !on ? "Turned off" : actionRequired ? "Action required" : "Ready";
+    return { id, name: agentTabName(id), ready, label };
   });
-  const ready = rows.filter((row) => row.found && row.on);
+  const ready = rows.filter((row) => row.ready);
   return (
     <ReviewSummary
       title={

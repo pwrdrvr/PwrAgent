@@ -1,4 +1,5 @@
 import type { ForgeCli } from "../forge-product";
+import type { CodexThreadSkillProfile } from "./codex-skill-profiles";
 import type { ProjectForgeAutomation } from "../project-forge-automation";
 import type { AppServerTurnInputItem } from "./normalized-app-server";
 import type {
@@ -129,6 +130,7 @@ export type NavigationLaunchpadAgent = Pick<
 >;
 
 export type NavigationThreadSummary = AppServerThreadSummary & {
+  codexSkillProfile?: CodexThreadSkillProfile;
   /** Owner-projected navigation group. Workspace paths still come from linkedDirectories. */
   checkoutProject?: NavigationCheckoutProject;
   /** Most recent completed probe for `gitWorkingState`, even when its value was unchanged. */
@@ -915,6 +917,7 @@ export type CodexEnvironmentOption = {
 
 export type NavigationLaunchpadDefaults = {
   backend: AppServerBackendKind;
+  codexSkillProfileId?: string | null;
   /** Keeps a Codex endpoint selected even while its model is unset. */
   codexModelProviderId?: string;
   executionMode: ThreadExecutionMode;
@@ -935,6 +938,7 @@ export function navigationLaunchpadProviderKey(launchpad: Pick<NavigationLaunchp
 }
 
 export type NavigationLaunchpadProviderSettings = {
+  codexSkillProfileId?: string | null;
   executionMode?: ThreadExecutionMode;
   model?: string;
   reasoningEffort?: string;
@@ -951,6 +955,7 @@ export type NavigationLaunchpadProviderSettings = {
 };
 
 const NAVIGATION_LAUNCHPAD_PROVIDER_SETTING_KEYS = [
+  "codexSkillProfileId",
   "executionMode",
   "model",
   "reasoningEffort",
@@ -1155,6 +1160,7 @@ function clearNavigationLaunchpadProviderFields<T extends NavigationLaunchpadDef
   return {
     ...launchpad,
     codexModelProviderId: undefined,
+    codexSkillProfileId: undefined,
     // Unset, not "default": the projection then resolves the new provider's
     // own default instead of carrying this one's access across.
     executionMode: undefined as unknown as ThreadExecutionMode,
@@ -1182,6 +1188,7 @@ export function projectNavigationLaunchpadProviderSettings<
     codexModelProviderId: launchpad.backend === "codex"
       ? parseProviderPickerValue(key).codexModelProviderId
       : undefined,
+    codexSkillProfileId: launchpad.backend === "codex" ? settings.codexSkillProfileId : undefined,
     executionMode:
       settings.executionMode
       ?? resolveDefaultLaunchpadExecutionMode(key),
@@ -2732,6 +2739,7 @@ export type NavigationMetadataDependencies = {
 export type NavigationLaunchpadConfiguration = Pick<NavigationLaunchpadDraft,
   | "backend"
   | "codexModelProviderId"
+  | "codexSkillProfileId"
   | "executionMode"
   | "workMode"
   | "model"
@@ -3670,6 +3678,7 @@ export type ThreadWorktreeRegistration = {
 };
 
 export type ThreadOverlayState = {
+  codexSkillProfile?: CodexThreadSkillProfile;
   /** Absent follows the profile default. */
   monitorJobSuggestionsEnabled?: boolean;
   jobMonitorCreationEnabled?: boolean;

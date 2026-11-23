@@ -63,6 +63,8 @@ import type {
   AgentToolMcpServerLike,
 } from "../agent-tools/agent-tool-mcp-server.js";
 import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
+import type { AcpLaunchDescriptor } from "../acp/acp-launch-descriptor";
+import { isManagedAntigravityCommand, MANAGED_ANTIGRAVITY_ENV } from "../acp/antigravity-managed-runtime";
 import type { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import {
   assertProviderDiscoveryPermit,
@@ -117,11 +119,15 @@ import {
 import {
   recordWithSessionRuntimeCapabilities,
   shouldProbeAcpCapabilitiesAtStartup,
+  withAntigravityModelCatalog,
 } from "../acp/acp-capability-freshness";
 import {
   ensureAcpRuntimeDiscoveryWorkspace,
   refreshAcpRuntimeCapabilities,
 } from "../acp/acp-capability-probe";
+import { acpDiscoveryActionRequiredMessage } from "../acp/acp-discovery-error";
+import { acpAgentLaunchIdentity } from "../acp/acp-launch-descriptor";
+import { ACP_LOCAL_AGENT_STRATEGIES } from "../acp/acp-local-strategies";
 import {
   checkGrokCliUpdate,
   grokUpdateChecksDisabled,
@@ -218,13 +224,12 @@ export function createLocalAcpAgentDiscovery(params: {
     // (same as the settings path), so the binary that launches is the
     // resolved active install (override → picked → first) and every agent's
     // cliPath override is honored — consistent with what Settings shows.
-    // Read + parse the config once for all four agents (override + enabled),
-    // not once per lookup.
+    // Read and parse provider settings once for discovery.
     const providers = params.configStore.read("providers");
     const preferences: Record<string, AcpAgentPreference> = {};
-    const enabledRegistryIds = ["gemini", "grok", "kimi", "qwen"].filter(
-      (registryId) => acpProviderEnabledFromSnapshot(providers, registryId),
-    );
+    const enabledRegistryIds = ACP_LOCAL_AGENT_STRATEGIES
+      .map((strategy) => strategy.id)
+      .filter((registryId) => acpProviderEnabledFromSnapshot(providers, registryId));
     for (const registryId of enabledRegistryIds) {
       const override = acpProviderCommandOverrideFromSnapshot(
         providers,
@@ -237,6 +242,7 @@ export function createLocalAcpAgentDiscovery(params: {
     const env = await params.resolveEnv?.();
     const records = await discoverLocalAcpAgentRecords({
       enabledRegistryIds,
+      useManagedAntigravity: true,
       managedGrok: {
         channel: managedGrokBuildChannelFromSnapshot(providers),
         enabled:
@@ -494,13 +500,15 @@ export function describeInstalledAcpBackend(
   agent: AcpInstalledAgentRecord,
 ): BackendSummary {
   const runtimeCapabilities = acpRuntimeCapabilitiesForAgent(agent);
+  const actionRequired = acpDiscoveryActionRequiredMessage(agent.registryId, agent.lastDiscoveryError);
   const available =
-    agent.installStatus === "installed" &&
-    (agent.authStatus === "not-required" || agent.authStatus === "authenticated");
+    agent.installStatus === "installed"
+    && (agent.authStatus === "not-required" || agent.authStatus === "authenticated")
+    && actionRequired === undefined;
   const unavailableReason =
     available
       ? undefined
-      : agent.lastError ??
+      : actionRequired ?? agent.lastError ??
         (agent.authStatus === "required"
           ? "ACP agent authentication required"
           : "ACP agent unavailable");
@@ -543,7 +551,27 @@ export function describeInstalledAcpBackend(
   };
 }
 
+async function withAcpSessionEnvironment(
+  descriptor: AcpLaunchDescriptor,
+  shellEnvironment?: Record<string, string>,
+): Promise<AcpLaunchDescriptor> {
+  const env = { ...descriptor.env, ...shellEnvironment };
+  // The shell can configure a standalone CLI. PwrAgent owns updates to its
+  // verified binaries even when a session supplies a different environment.
+  if (descriptor.backendId === "acp:antigravity"
+    && await isManagedAntigravityCommand(descriptor.command, {
+      cwd: descriptor.cwd,
+      env: { ...process.env, ...env },
+    })) {
+    Object.assign(env, MANAGED_ANTIGRAVITY_ENV);
+  }
+  return { ...descriptor, env };
+}
+
 function formatAcpAgentDisplayName(agent: AcpInstalledAgentRecord): string {
+  if (agent.registryId === "antigravity") {
+    return "Antigravity";
+  }
   if (agent.registryId === "gemini") {
     return "Gemini";
   }
@@ -571,24 +599,6 @@ function normalizeInstalledAcpAgent(
     : { ...agent, runtimeCapabilities };
 }
 
-function acpAgentLaunchIdentity(agent: AcpInstalledAgentRecord): string {
-  const descriptor = agent.launchDescriptor;
-  return JSON.stringify({
-    activeCommand: agent.activeCommand,
-    launchDescriptor: descriptor
-      ? {
-          backendId: descriptor.backendId,
-          registryId: descriptor.registryId,
-          distributionKind: descriptor.distributionKind,
-          command: descriptor.command,
-          args: descriptor.args,
-          env: Object.fromEntries(Object.entries(descriptor.env).sort()),
-          cwd: descriptor.cwd,
-          installPath: descriptor.installPath,
-        }
-      : undefined,
-  });
-}
 function rewindPointShowsPrompt(
   point: { promptIndex: number; promptPreview: string },
   promptText: string,
@@ -702,6 +712,9 @@ export function buildAcpLaunchpadOptions(
   runtimeCapabilities: BackendAcpRuntimeCapabilities | undefined,
   registryId?: string,
 ): BackendLaunchpadOptions | undefined {
+  if (registryId === "antigravity") {
+    runtimeCapabilities = withAntigravityModelCatalog(runtimeCapabilities);
+  }
   const modelOptions =
     runtimeCapabilities?.models?.availableModels.map(
       (model): BackendModelOption => {
@@ -1659,8 +1672,10 @@ export class AcpBackendAdapter {
     const previous = this.environmentClients.get(key);
     const agent = await this.resolveInstalledAgent(backend);
     if (!agent.launchDescriptor) throw new Error(`ACP backend ${backend} has no launch descriptor`);
-    const configuredAgent = { ...agent, launchDescriptor: { ...agent.launchDescriptor,
-      env: { ...agent.launchDescriptor.env, ...previous?.shellEnvironment } } };
+    const configuredAgent = {
+      ...agent,
+      launchDescriptor: await withAcpSessionEnvironment(agent.launchDescriptor, previous?.shellEnvironment),
+    };
     const client = this.createAcpClient(configuredAgent);
     const entry: AcpClientEntry = { client, launchIdentity: acpAgentLaunchIdentity(configuredAgent),
       promise: Promise.resolve(client), supportsSessionLoad: true };
@@ -2053,10 +2068,7 @@ export class AcpBackendAdapter {
     }
     const configuredAgent = {
       ...agent,
-      launchDescriptor: {
-        ...agent.launchDescriptor,
-        env: { ...agent.launchDescriptor.env, ...shellEnvironment },
-      },
+      launchDescriptor: await withAcpSessionEnvironment(agent.launchDescriptor, shellEnvironment),
     };
     const launchIdentity = acpAgentLaunchIdentity(configuredAgent);
     const environmentUnchanged = previous?.environmentKey === environmentKey;
@@ -3046,6 +3058,31 @@ export class AcpBackendAdapter {
     };
   }
 
+  private async recordSessionStartRejection(agent: AcpInstalledAgentRecord, error: unknown): Promise<void> {
+    const message = error instanceof Error ? error.message : String(error);
+    const restriction = acpDiscoveryActionRequiredMessage(agent.registryId, message);
+    if (!restriction || this.closed || !this.acpAgentStore) return;
+    const current = this.acpAgentStore.getInstalledAgent(agent.backendId);
+    if (current?.installStatus !== "installed" || current.version !== agent.version
+      || acpAgentLaunchIdentity(current) !== acpAgentLaunchIdentity(agent)
+      || acpDiscoveryActionRequiredMessage(current.registryId, current.lastDiscoveryError) === restriction) {
+      return;
+    }
+    this.acpAgentStore.upsertInstalledAgent({
+      ...current,
+      lastDiscoveryError: message,
+      runtimeCapabilities: undefined,
+      updatedAt: Math.max(Date.now(), current.updatedAt),
+    });
+    await this.emit({
+      backend: agent.backendId,
+      notification: {
+        method: "backend/acpRuntimeCapabilities/updated",
+        params: { backend: agent.backendId },
+      },
+    });
+  }
+
   private createDefaultClient(agent: AcpInstalledAgentRecord): AcpRuntimeClient {
     if (!agent.launchDescriptor) {
       throw new Error(`ACP backend ${agent.backendId} has no launch descriptor`);
@@ -3064,6 +3101,7 @@ export class AcpBackendAdapter {
       backendId: agent.backendId,
       agentDisplayName: agent.name,
       initialRuntimeCapabilities: acpRuntimeCapabilitiesForAgent(agent),
+      onSessionStartError: (error) => this.recordSessionStartRejection(agent, error),
       supportsTurnSteering: effectiveAcpAgentCapabilities(agent).steerTurn,
       rolloutStore: this.acpRolloutStore,
       store: this.acpSessionStore as AcpSessionStorage,
@@ -3436,9 +3474,15 @@ export class AcpBackendAdapter {
       }) => {
         const now = Date.now();
         const current = this.getInstalledAgent(agent.backendId) ?? agent;
-        this.acpAgentStore?.upsertInstalledAgent(
-          recordWithSessionRuntimeCapabilities(current, runtimeCapabilities, now),
-        );
+        // A turn still running on an old managed binary must not publish its
+        // catalog over the newly selected installation. Its session state is
+        // still authoritative for that thread.
+        if (agent.registryId !== "antigravity"
+          || current.launchDescriptor?.command === agent.launchDescriptor?.command) {
+          this.acpAgentStore?.upsertInstalledAgent(
+            recordWithSessionRuntimeCapabilities(current, runtimeCapabilities, now),
+          );
+        }
         await this.emit({
           backend: agent.backendId,
           notification: {

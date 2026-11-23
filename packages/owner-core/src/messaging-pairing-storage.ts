@@ -6,9 +6,24 @@ import type {
   MessagingPairingObservedChat,
   MessagingPairingScope,
   MessagingPairingStatus,
+  RevokeTelegramPairingGrantRequest,
 } from "@pwragent/shared/contracts/messaging";
+import type { DesktopAuthorizedContact, DesktopTelegramPairingGrants } from "@pwragent/shared/contracts/settings";
 
 export interface MessagingPairingStorage {
+  readTelegramGrants(accountId: string): DesktopTelegramPairingGrants;
+
+  approveTelegramPairing(params: {
+    entryId: string;
+    contact: DesktopAuthorizedContact;
+    now: number;
+    resolveCurrentAccountId: () => string | undefined;
+  }): { entry: MessagingPairingEntry; added: boolean } | "different-bot" | "unavailable";
+
+  revokeTelegramGrant(request: RevokeTelegramPairingGrantRequest): void;
+
+  dismissTelegramGrantWarning(accountId: string, contactId: string): void;
+
   create(params: {
     token: string;
     platform: MessagingChannelKind;

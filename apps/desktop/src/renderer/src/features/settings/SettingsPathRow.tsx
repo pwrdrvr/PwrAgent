@@ -83,6 +83,8 @@ export function SettingsPathRow(props: {
   useLabel?: string;
   /** Override the "Selected" chip text. Defaults to "Selected". */
   selectedLabel?: string;
+  /** Use a neutral selection chip when the selected executable needs setup. */
+  selectedTone?: "ok" | "muted";
   disabled?: boolean;
   /** Optional secondary action rendered before the selection/use action. */
   extraAction?: ReactNode;
@@ -199,7 +201,9 @@ export function SettingsPathRow(props: {
         <span className="settings-pathrow__action">{props.extraAction}</span>
       ) : null}
       {props.selected ? (
-        <span className="settings-pathrow__action settings-pathrow__chip settings-pathrow__chip--ok">
+        <span className={`settings-pathrow__action settings-pathrow__chip${
+          props.selectedTone === "muted" ? "" : " settings-pathrow__chip--ok"
+        }`}>
           {selectedLabel}
         </span>
       ) : props.onUse ? (

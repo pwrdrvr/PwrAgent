@@ -45,7 +45,7 @@ import type {
   ResearchHarnessStatus,
 } from "@pwragent/shared/research-harness";
 import type { ResearchProfileRunsPage, ResearchProfileRunsQuery } from "@pwragent/shared/research";
-import type { DesktopWorktreeFolderCheck } from "@pwragent/shared/contracts/settings";
+import type { DesktopTelegramPairingGrants, DesktopWorktreeFolderCheck } from "@pwragent/shared/contracts/settings";
 import { RESEARCH_PROFILE_RUNS_CHANNEL, RESEARCH_OPEN_WINDOW_CHANNEL, RESEARCH_WINDOW_SELECT_EVENT_CHANNEL } from "../shared/ipc";
 import { RESEARCH_HARNESS_STATUS_CHANNEL, RESEARCH_HARNESS_START_CHANNEL, RESEARCH_HARNESS_CHECK_CHANNEL, RESEARCH_HARNESS_RECONCILE_CHANNEL, RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL } from "../shared/ipc";
 import { RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_CHANGED_EVENT_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL, RESEARCH_WITHDRAW_CHANNEL, RESEARCH_EVENTS_CHANNEL, RESEARCH_CHANGES_CHANNEL } from "../shared/ipc";
@@ -558,6 +558,7 @@ import type {
   MessagingPlatformStatusEvent,
   MessagingPairingEntry,
   RejectMessagingPairingRequest,
+  RevokeTelegramPairingGrantRequest,
   RejectMessagingPairingResponse,
   ResetMessagingToolUpdateBindingsRequest,
   ResetMessagingToolUpdateBindingsResponse,
@@ -972,6 +973,7 @@ import {
   AGENT_TRUST_CODEX_PROJECT_CHANNEL,
   AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL,
   ACP_AGENTS_LIST_CHANNEL,
+  ANTIGRAVITY_SETUP_CHANNEL,
   ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL,
   PROVIDER_CATALOG_REFRESH_CANCEL_CHANNEL,
   PROVIDER_CATALOG_REFRESH_EVENT_CHANNEL,
@@ -1226,6 +1228,8 @@ import {
   MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL,
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
   MESSAGING_REJECT_PAIRING_CHANNEL,
+  MESSAGING_READ_TELEGRAM_PAIRING_GRANTS_CHANNEL,
+  MESSAGING_REVOKE_TELEGRAM_PAIRING_GRANT_CHANNEL,
   MESSAGING_RESET_TOOL_UPDATE_BINDINGS_CHANNEL,
   MESSAGING_SET_ENABLED_CHANNEL,
   MESSAGING_SET_DEFAULT_AGENT_CHANNEL,
@@ -2267,6 +2271,9 @@ const desktopApi = Object.freeze({
     request?: ListAcpAgentSettingsRequest,
   ): Promise<ListAcpAgentSettingsResponse> =>
     await ipcRenderer.invoke(ACP_AGENTS_LIST_CHANNEL, request),
+  antigravitySetup: (request: import("../shared/antigravity-setup").AntigravitySetupRequest):
+    Promise<import("../shared/antigravity-setup").AntigravitySetupResult> =>
+    ipcRenderer.invoke(ANTIGRAVITY_SETUP_CHANNEL, request),
   startProviderCatalogRefresh: async (): Promise<ProviderCatalogRefreshState> =>
     await ipcRenderer.invoke(PROVIDER_CATALOG_REFRESH_START_CHANNEL),
   cancelProviderCatalogRefresh: async (
@@ -4056,6 +4063,10 @@ const desktopApi = Object.freeze({
     request: RejectMessagingPairingRequest,
   ): Promise<RejectMessagingPairingResponse> =>
     await ipcRenderer.invoke(MESSAGING_REJECT_PAIRING_CHANNEL, request),
+  readTelegramPairingGrants: async (): Promise<DesktopTelegramPairingGrants | undefined> =>
+    await ipcRenderer.invoke(MESSAGING_READ_TELEGRAM_PAIRING_GRANTS_CHANNEL),
+  revokeTelegramPairingGrant: async (request: RevokeTelegramPairingGrantRequest): Promise<void> =>
+    await ipcRenderer.invoke(MESSAGING_REVOKE_TELEGRAM_PAIRING_GRANT_CHANNEL, request),
   openMessagingActivityWindow: async (): Promise<void> => {
     await ipcRenderer.invoke(MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL);
   },

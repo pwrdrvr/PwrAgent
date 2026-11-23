@@ -10,15 +10,20 @@ const runtimeMock = vi.hoisted(() => ({
   notifyBindingsChanged: vi.fn(),
   onBindingsChanged: vi.fn(() => vi.fn()),
   onPairingChanged: vi.fn(() => vi.fn()),
+  getPairingAccountStatus: vi.fn<() => "current" | "different" | "unavailable">(() => "current"),
   onPlatformStatus: vi.fn(() => vi.fn()),
   stop: vi.fn(async () => undefined),
 }));
 const settingsServiceMock = vi.hoisted(() => ({
   readMessagingSettings: vi.fn(),
+  readTelegramPairingGrants: vi.fn(),
   resolveSlackBotTokenSync: vi.fn(),
+  resolveTelegramBotTokenSync: vi.fn(() => "654321:replacement-bot"),
   writeConfigPatchTargeted: vi.fn(async () => ({ configPath: "/tmp/pwragent-config.toml" })),
 }));
 const pairingStoreMock = vi.hoisted(() => ({
+  approveTelegramPairing: vi.fn(),
+  revokeTelegramGrant: vi.fn(),
   markStatus: vi.fn(),
   recordApproval: vi.fn(),
 }));
@@ -33,6 +38,7 @@ const messagingConfigMocks = vi.hoisted(() => ({
   })),
 }));
 const leaseCoordinatorMock = vi.hoisted(() => ({
+  snapshot: vi.fn(() => ({ leaseHeld: false, leaseHolder: { instanceId: "messaging-owner" } })),
   applyLatestConfig: vi.fn(
     async (
       runtime: typeof runtimeMock,
@@ -165,6 +171,7 @@ describe("messaging status ipc", () => {
     runtimeMock.getPlatformStatuses.mockClear();
     runtimeMock.isEnabled.mockClear();
     runtimeMock.isEnabled.mockReturnValue(true);
+    runtimeMock.getPairingAccountStatus.mockReturnValue("current");
     runtimeMock.listPairingRequests.mockClear();
     runtimeMock.listPairingRequests.mockReturnValue({ entries: [] });
     runtimeMock.notifyBindingsChanged.mockClear();
@@ -354,6 +361,52 @@ describe("messaging status ipc", () => {
       expect.objectContaining({ enabled: true }),
       { allowStart: true },
     );
+  });
+
+  it("directs pairing approval to the instance that holds the messaging lease", async () => {
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    runtimeMock.listPairingRequests.mockReturnValue({ entries: [{
+      id: "fixture-pairing", platform: "telegram", instanceId: "account:123456", status: "observed",
+    }] });
+    runtimeMock.getPairingAccountStatus.mockReturnValueOnce("unavailable");
+    registerMessagingStatusIpcHandlers();
+
+    await expect(handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.({}, { entryId: "fixture-pairing" }))
+      .rejects.toThrow("Approve this pairing in the PwrAgent instance running Messaging for this profile.");
+    expect(settingsServiceMock.writeConfigPatchTargeted).not.toHaveBeenCalled();
+    expect(pairingStoreMock.markStatus).not.toHaveBeenCalled();
+  });
+
+  it("refuses an observed Telegram request when the saved token changed before the old adapter stopped", async () => {
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    runtimeMock.listPairingRequests.mockReturnValue({ entries: [{
+      id: "fixture-old-bot", platform: "telegram", instanceId: "account:123456",
+      scope: "user_dm", status: "observed", observedActor: { id: "42" },
+      observedChat: { id: "42", kind: "dm" },
+    }] });
+    settingsServiceMock.readMessagingSettings.mockReturnValue({
+      telegram: { authorizedUserIds: { value: [] } },
+    });
+    pairingStoreMock.approveTelegramPairing.mockImplementationOnce(({ resolveCurrentAccountId }) => {
+      expect(resolveCurrentAccountId()).toBe("654321");
+      return "different-bot";
+    });
+    registerMessagingStatusIpcHandlers();
+
+    await expect(handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.({}, { entryId: "fixture-old-bot" }))
+      .rejects.toThrow("This pairing request belongs to a different bot.");
+    expect(settingsServiceMock.writeConfigPatchTargeted).not.toHaveBeenCalled();
+    expect(pairingStoreMock.markStatus).not.toHaveBeenCalled();
+  });
+
+  it("reads only the grants for the saved Telegram credential on the dedicated request", async () => {
+    const { MESSAGING_READ_TELEGRAM_PAIRING_GRANTS_CHANNEL } = await import("../../shared/ipc");
+    const grants = { accountId: "654321", users: [{ id: "42", displayName: "Fixture contact" }], supergroups: [] };
+    settingsServiceMock.readTelegramPairingGrants.mockReturnValueOnce(grants);
+    registerMessagingStatusIpcHandlers();
+
+    expect(await handlers.get(MESSAGING_READ_TELEGRAM_PAIRING_GRANTS_CHANNEL)?.({})).toEqual(grants);
+    expect(settingsServiceMock.readTelegramPairingGrants).toHaveBeenCalledWith("654321:replacement-bot");
   });
 
   it("approves LINE user pairing into authorized users", async () => {

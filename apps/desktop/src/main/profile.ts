@@ -657,7 +657,7 @@ function writeInitialBootstrapConfig(configPath: string): void {
     ? fs.readFileSync(configPath, "utf8")
     : "[onboarding]\ncompleted = false\n";
   const tables = parseTomlTables(source, configPath);
-  const edits: TomlEdit[] = ["gemini", "grok", "kimi", "qwen"].flatMap(
+  const edits: TomlEdit[] = ["antigravity", "gemini", "grok", "kimi", "qwen"].flatMap(
     (registryId) =>
       tables[`acp_agents.${registryId}`]?.enabled === undefined
         ? [{

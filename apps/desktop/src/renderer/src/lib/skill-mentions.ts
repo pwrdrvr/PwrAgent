@@ -30,6 +30,11 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+export function skillLabelMatcher(names: readonly string[]): RegExp {
+  // Capture the leading boundary separately so a decoration starts at the $.
+  return new RegExp(`(^|\\s)(\\$(?:${names.map(escapeRegExp).join("|")}))${SKILL_TOKEN_BOUNDARY}`, "g");
+}
+
 export function buildSkillLabelToken(
   skill: Pick<AppServerSkillSummary, "name">
 ): string {

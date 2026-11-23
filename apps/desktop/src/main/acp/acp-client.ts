@@ -225,6 +225,7 @@ export type AcpAgentClientOptions = {
   store: AcpSessionStoreLike;
   transport: AcpJsonRpcTransport;
   now?: () => number;
+  onSessionStartError?: (error: unknown) => Promise<void>;
   onSessionUpdate?: (event: {
     assistantMessageItemId?: string;
     fromSessionLoad?: boolean;
@@ -894,6 +895,10 @@ export class AcpAgentClient {
       cwd,
       mcpServers: toAcpMcpServerWireConfigs(mcpRegistration.servers),
       ...(params.sessionMeta ? { _meta: params.sessionMeta } : {}),
+    }).catch(async (error: unknown) => {
+      // A failed publication must never replace the provider's error.
+      await this.options.onSessionStartError?.(error).catch(() => undefined);
+      throw error;
     });
     const now = this.now();
     const record = asRecord(result);
@@ -901,7 +906,7 @@ export class AcpAgentClient {
       source: "session-new",
       result,
     });
-    const runtimeState = acpSessionRuntimeStateFromResponse(result, now);
+    const runtimeState = this.runtimeStateFromResponse(result, now);
     const combinedRuntimeState =
       params.acpRuntime || runtimeState
         ? mergeAcpRuntimeState(params.acpRuntime, runtimeState ?? {})
@@ -1379,7 +1384,7 @@ export class AcpAgentClient {
       source: "session-load",
       result,
     });
-    const responseRuntimeState = acpSessionRuntimeStateFromResponse(result, now);
+    const responseRuntimeState = this.runtimeStateFromResponse(result, now);
     const modelConfigOption = this.runtimeConfigOption("model");
     const thoughtLevelConfigOption = this.runtimeConfigOption("thought_level");
     const requestedRuntimeState: BackendAcpSessionRuntimeState =
@@ -1441,6 +1446,10 @@ export class AcpAgentClient {
     return this.runtimeCapabilities?.configOptions?.find(
       (option) => option.category === category,
     );
+  }
+
+  private runtimeStateFromResponse(result: unknown, now: number) {
+    return acpSessionRuntimeStateFromResponse(result, now, this.options.backendId === "acp:antigravity");
   }
 
   private async setRuntimeOptionOnTransport(params: {
@@ -2121,7 +2130,7 @@ export class AcpAgentClient {
     });
     this.rememberSessionConfigOptions(protocolSessionId, result);
     await Promise.resolve(mcpRegistration.bindThread?.(metadata.sessionId));
-    const runtimeState = acpSessionRuntimeStateFromResponse(result, this.now());
+    const runtimeState = this.runtimeStateFromResponse(result, this.now());
     if (runtimeState) {
       this.updateSessionRuntimeState(metadata.sessionId, runtimeState, {
         touchActivity: false,
