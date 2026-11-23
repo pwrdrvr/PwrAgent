@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { chmod, link, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,10 +9,20 @@ import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { GitDirectoryService } from "../app-server/git-directory-service";
 import { GhStackCatalogStore, stackGitRunner, type RuntimeJournal } from "../stacks/stack-engine-ports";
 import { StackOperationsService } from "../stacks/stack-operations-service";
-import { resetDesktopOverlayStoreForTests, setDesktopOverlayStoreForTests } from "../storage/desktop-overlay-store";
+import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { SqliteOverlayStore } from "../storage/overlay-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
+const caseOverlay = new AsyncLocalStorage<SqliteOverlayStore>();
+
+vi.mock("../state/app-state", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../state/app-state")>(),
+  getAppOverlayStore: () => {
+    const storage = caseOverlay.getStore();
+    if (!storage) throw new Error("Stack provisioning requires a case-owned overlay store");
+    return storage;
+  },
+}));
 vi.mock("../native-relay-path", () => ({ nativeRelayPath: () => inject("nativeHelperFixtures").stackEngine!.relay }));
 vi.mock("../app-server/subthread-order-actions", () => ({ updateLocalSubthreadOrder: vi.fn() }));
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -25,18 +36,42 @@ type Fault = "before checkout" | "after checkout" | "after carry" | "lost accept
   | "unlisted empty session" | "vanished empty session" | "definite refusal" | "failed hook";
 const crashed = () => new Error("Injected host crash");
 
+it("keeps each case's overlay when an earlier case finishes late", async () => {
+  const earlierDb = openInMemoryStateDb();
+  const laterDb = openInMemoryStateDb();
+  const earlierStore = new SqliteOverlayStore(earlierDb);
+  const laterStore = new SqliteOverlayStore(laterDb);
+  const finishEarlier = Promise.withResolvers<void>();
+  const earlier = caseOverlay.run(earlierStore, async () => {
+    try {
+      await finishEarlier.promise;
+      return getDesktopOverlayStore();
+    } finally {
+      earlierDb.close();
+    }
+  });
+  try {
+    await caseOverlay.run(laterStore, async () => {
+      finishEarlier.resolve();
+      const earlierOverlay = await earlier;
+      expect(getDesktopOverlayStore()).toBe(laterStore);
+      expect(earlierOverlay).toBe(earlierStore);
+    });
+  } finally {
+    laterDb.close();
+  }
+});
+
 async function withProvisioning(fault: Fault, check: (fixture: Awaited<ReturnType<typeof setupProvisioning>>) => Promise<void>) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "pwragent-stack-provision-")));
   const db = openInMemoryStateDb();
   const storage = new SqliteOverlayStore(db);
   const service = new StackOperationsService();
-  setDesktopOverlayStoreForTests(storage);
-  const work = setupProvisioning(fault, root, storage, service).then(check);
+  const work = caseOverlay.run(storage, () => setupProvisioning(fault, root, storage, service).then(check));
   onTestFinished(async () => {
     // Vitest can finish a timed-out test while its async body still owns the fixture.
     await Promise.allSettled([work]);
     await service.drainBackgroundRuns();
-    resetDesktopOverlayStoreForTests();
     db.close();
     await rm(root, { recursive: true, force: true });
   });
