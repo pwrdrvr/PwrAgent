@@ -46,6 +46,7 @@ const MAX_DEMAND_BYTES = 1024 * 1024;
 const MAX_RETAINED_BYTES = 8 * 1024 * 1024;
 const MAX_RECENT_PIN_PUBLICATIONS = 64;
 const MAX_WORKING_STATE_PATHS_PER_READ = 32;
+const MAX_SEEN_THREADS_PER_READ = 32;
 /** One click loads a block of rows. Demand page sizes pace a first paint; an
  * explicit continuation is the operator asking for the rest, and answering it
  * with one transport page costs a click and a scroll for every page. */
@@ -84,8 +85,14 @@ type Resource = {
   token: string;
   value: NavigationWindowResource;
   pending?: Promise<void>;
-  /** Working-state changes observed after dispatch and awaiting the returned rows. */
-  workingStateRead?: { paths: Set<string>; batch?: number; cause?: NavigationDiagnosticCause; trigger?: string };
+  /** Metadata notices observed after dispatch and awaiting the replacement baseline. */
+  membershipRead?: {
+    paths: Set<string>;
+    batch?: number;
+    cause?: NavigationDiagnosticCause;
+    trigger?: string;
+    seen?: Map<string, number>;
+  };
   /** A correlated viewer pin publication is waiting for this resource. */
   pinPublicationPending?: boolean;
   refreshAfterPending: boolean;
@@ -211,7 +218,7 @@ export class NavigationWindowQueries {
     this.finishResume(resource);
     navigationListingDiagnostics.record({ ...this.diagnostic, phase: "cancel", logical: resource.diagnosticLogical, count: resource.pending ? 1 : 0 });
     resource.released = true;
-    resource.workingStateRead = undefined;
+    resource.membershipRead = undefined;
     // Every lifetime has its own token: a delayed release cannot cancel its successor.
     void this.api.releaseNavigationQuery?.(resource.token).catch(() => undefined);
     this.wakeReaders();
@@ -537,7 +544,7 @@ export class NavigationWindowQueries {
     const batch = ++this.nextDiagnosticBatch;
     const directoryScope = event ? readNavigationDirectoryScope(event.navigationDirectoryScope) : undefined;
     const notification = event?.notification;
-    const params = notification?.params as { sourceMethod?: unknown; worktreePath?: unknown; rowChanges?: unknown } | undefined;
+    const params = notification?.params as { sourceMethod?: unknown; threadId?: unknown; worktreePath?: unknown; rowChanges?: unknown } | undefined;
     const method = notification?.method === "navigation/invalidated" ? params?.sourceMethod : notification?.method;
     const workingState = method === "navigation/threadGitWorkingState/updated";
     const gitRevisions = notification?.method === "navigation/directoryGitStatus/updated"
@@ -553,7 +560,7 @@ export class NavigationWindowQueries {
         // A queued read already includes this observation. A discarded read
         // already owes a replacement, regardless of later Git notifications.
         if (resource.invalidated) continue;
-        const read = resource.workingStateRead;
+        const read = resource.membershipRead;
         if (read && resource.membershipUncertain && typeof params?.worktreePath === "string" && params.worktreePath && params.worktreePath.length <= 1_024
           && federationTargetsEqual(resource.value.state.request.federationTarget, event?.federationTarget)
           && (read.paths.size < MAX_WORKING_STATE_PATHS_PER_READ || read.paths.has(params.worktreePath))) {
@@ -566,7 +573,8 @@ export class NavigationWindowQueries {
           continue;
         }
       }
-      resource.diagnosticBatch = batch;
+      if (method === "navigation/thread/seen" && !resource.invalidated && event && typeof params?.threadId === "string"
+        && this.deferSeenDuringMembershipRead(resource, event, params.threadId, batch)) continue;
       const metadataRowChange = method === "navigation/remoteThreadPins/changed" && Array.isArray(params?.rowChanges);
       const childRowChange = resource.value.state.request.query.kind === "children"
         && (method === "thread/pin/added" || method === "thread/pin/removed"
@@ -580,20 +588,15 @@ export class NavigationWindowQueries {
       // old section must stop using it as an anchor before the next read,
       // including when another event has already invalidated that section.
       if (event && this.movePinAnchor(resource, event)) changed = true;
-      resource.diagnosticTrigger = navigationDiagnosticTrigger(event);
-      resource.diagnosticCause = navigationDiagnosticCause(event);
       resource.diagnosticInvalidations = (resource.diagnosticInvalidations ?? 0) + 1;
       // Fence each physical read once. Further events before its replacement
-      // carry no new presentation state and must not rerender every row.
+      // are covered at dispatch and keep their own diagnostic records.
       if (resource.invalidated) continue;
-      resource.invalidated = true;
+      resource.diagnosticBatch = batch;
+      resource.diagnosticTrigger = navigationDiagnosticTrigger(event);
+      resource.diagnosticCause = navigationDiagnosticCause(event);
+      this.fenceBaseline(resource);
       changed = true;
-      // Some canonical events patch settled rows without scheduling a read.
-      // If they fence a pending page, replace that discarded read so initial
-      // readiness and refreshed counts cannot remain stranded indefinitely.
-      if (resource.pending) resource.refreshAfterPending = true;
-      resource.value = { ...resource.value, state: { ...resource.value.state,
-        pendingSequence: resource.value.state.pendingSequence + 1, stale: true } };
     }
     navigationListingDiagnostics.record({ ...this.diagnostic, phase: "invalidate", batch, count,
       cause: navigationDiagnosticCause(event), trigger: navigationDiagnosticTrigger(event),
@@ -601,9 +604,65 @@ export class NavigationWindowQueries {
     if (changed) this.publish();
   }
 
+  private fenceBaseline(resource: Resource): void {
+    resource.invalidated = true;
+    // Some canonical events patch settled rows without scheduling a read.
+    // Replace any pending page they discard so its counts cannot be stranded.
+    if (resource.pending) resource.refreshAfterPending = true;
+    const { state } = resource.value;
+    resource.value = { ...resource.value, state: { ...state, stale: true, pendingSequence: state.pendingSequence + 1 } };
+  }
+
+  private deferSeenDuringMembershipRead(resource: Resource, event: AgentEvent, threadId: string, batch: number): boolean {
+    const read = resource.membershipRead;
+    const { request, page } = resource.value.state;
+    if (!read || request.query.kind !== "children" || page?.coverage.state !== "complete"
+      || !threadId || threadId.length > 1_024) return false;
+    const target = request.federationTarget;
+    const remote = target?.scope === "remote";
+    if (remote && !federationTargetsEqual(target, event.federationTarget)) return false;
+    const sourceOwner = event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : undefined;
+    const ref = { backend: event.backend, threadId, ownerInstanceId: sourceOwner };
+    const parent = request.query.parent;
+    if (navigationIdentitiesEqual(ref, { ...parent, ownerInstanceId: parent.ownerInstanceId ?? (remote ? target.instanceId : undefined) })) return false;
+    const key = navigationIdentityKey(remote ? { ...ref, ownerInstanceId: undefined } : ref);
+    const dependencies = this.ownerPageProofs.get(page)?.dependencies ?? this.metadataDependencies(page);
+    if (!dependencies || dependencies.threadKeys.includes(key)) return false;
+
+    // An old baseline can only nominate an apparently offscreen notice for
+    // verification. The replacement may add this child or count it through
+    // the enclosing directory, even if the returned rows do not show it.
+    const seen = read.seen ??= new Map();
+    if (seen.has(key)) return true;
+    if (seen.size >= MAX_SEEN_THREADS_PER_READ) return false;
+    seen.set(key, batch);
+    return true;
+  }
+
+  private needsSeenReplacement(resource: Resource, candidate?: RetainableState): boolean {
+    const read = resource.membershipRead;
+    if (!read?.seen || resource.invalidated) return false;
+    const { seen } = read;
+    const page = candidate?.state.page;
+    const dependencies = page?.coverage.state === "complete"
+      ? candidate?.ownerProof?.dependencies ?? this.metadataDependencies(page) : undefined;
+    const match = dependencies?.threadKeys.find((key) => seen.has(key));
+    if (dependencies && match === undefined) {
+      // The proof covers off-page counts for this entire cursor generation.
+      read.seen = undefined;
+      return false;
+    }
+    resource.diagnosticBatch = match === undefined ? seen.values().next().value : seen.get(match);
+    resource.diagnosticCause = "metadata";
+    resource.diagnosticTrigger = "navigation/thread/seen";
+    resource.diagnosticInvalidations = (resource.diagnosticInvalidations ?? 0) + seen.size;
+    this.fenceBaseline(resource);
+    return true;
+  }
+
   private needsWorkingStateReplacement(resource: Resource, candidate?: RetainableState,
     evidence: "require-exclusion" | "match-only" = "require-exclusion"): boolean {
-    const read = resource.workingStateRead;
+    const read = resource.membershipRead;
     if (!read?.paths.size || resource.invalidated) return false;
     const { request } = resource.value.state;
     const target = request.federationTarget;
@@ -626,10 +685,7 @@ export class NavigationWindowQueries {
     resource.diagnosticCause = read.cause;
     resource.diagnosticTrigger = read.trigger;
     resource.diagnosticInvalidations = (resource.diagnosticInvalidations ?? 0) + read.paths.size;
-    resource.invalidated = true;
-    resource.refreshAfterPending = true;
-    const { state } = resource.value;
-    resource.value = { ...resource.value, state: { ...state, stale: true, pendingSequence: state.pendingSequence + 1 } };
+    this.fenceBaseline(resource);
     return true;
   }
 
@@ -992,7 +1048,7 @@ export class NavigationWindowQueries {
         }
         resource.invalidated = false;
         resource.refreshAfterPending = false;
-        if (started.request.consumer === "main-sidebar" && resource.membershipUncertain) resource.workingStateRead = { paths: new Set() };
+        if (started.request.consumer === "main-sidebar" && resource.membershipUncertain) resource.membershipRead = { paths: new Set() };
         const diagnostic = { ...this.diagnostic, origin: navigationDiagnosticOrigin(), logical: ++this.nextLogical, attempt: 0,
           cause: continuation ? "continuation" as const : explicitAnchor || fromStart ? "rebaseline" as const : resource.diagnosticCause ?? reason ?? "refresh",
           invalidations: resource.diagnosticInvalidations ?? 0, trigger: resource.diagnosticTrigger, caller: resource.diagnosticCaller };
@@ -1141,6 +1197,9 @@ export class NavigationWindowQueries {
             gitBytes: prior.gitBytes, bytes: (next.ownerProof?.bytes ?? 0) + prior.gitBytes };
         }
         assertRetained(next.state);
+        // A complete-baseline acknowledgment reuses the previous page.
+        // Only a response with fresh dependency proof can exclude this notice.
+        if (this.needsSeenReplacement(resource, page.unchanged ? undefined : next)) return;
         if (resuming && next.state.page?.nextCursor && loadedRows(next.state.page) >= restoring
           && loadedRows(next.state.page) < wanted && this.canResumeExpansion(budget) && Date.now() < extendUntil) {
           // Saved expansion must not withhold the ordinary first page, nor
@@ -1159,6 +1218,7 @@ export class NavigationWindowQueries {
           const nextCursor = next.state.page.nextCursor;
           const before = loadedRows(next.state.page);
           const restoringDisplayed = before < restoring;
+          if (this.needsSeenReplacement(resource, next)) return;
           if ((!resuming || restoringDisplayed) && this.needsWorkingStateReplacement(resource, next, "match-only")) return;
           try {
             const continuationPage = await readPage({ ...started.request, cursor: nextCursor, pageSize: cursorPageSize(before) }, restoringDisplayed, next);
@@ -1175,22 +1235,22 @@ export class NavigationWindowQueries {
             // any growth delivered before the failure. Continuations also
             // retain their progress; both paths still report the error.
             if (!pageCursor && loadedRows(next.state.page) < restoring) throw error;
-            if (!this.needsWorkingStateReplacement(resource, next)) this.acceptState(resource, next);
+            if (!this.needsSeenReplacement(resource, next) && !this.needsWorkingStateReplacement(resource, next)) this.acceptState(resource, next);
             throw error;
           }
           extensions += 1;
         }
-        if (this.needsWorkingStateReplacement(resource, next)) return;
+        if (this.needsSeenReplacement(resource, next) || this.needsWorkingStateReplacement(resource, next)) return;
         this.acceptState(resource, next);
         resource.pinPublicationPending = false;
         resource.membershipUncertain = false;
         resource.prAttachmentsUncertain = false;
       } catch (error) {
         // An overtaken cursor cannot establish a new rebaseline requirement.
-        if (this.isCurrent(resource) && !this.needsWorkingStateReplacement(resource)) resource.value = { ...resource.value,
+        if (this.isCurrent(resource) && !this.needsSeenReplacement(resource) && !this.needsWorkingStateReplacement(resource)) resource.value = { ...resource.value,
           state: failNavigationPageRead(resource.value.state, started.pendingSequence, error) };
       } finally {
-        resource.workingStateRead = undefined;
+        resource.membershipRead = undefined;
         // An invalidation can discard the opening page before it is accepted.
         // Its coalesced replacement still owes the saved depth. Carry the same
         // budget into that read; a fenced response has not finished restoring.
