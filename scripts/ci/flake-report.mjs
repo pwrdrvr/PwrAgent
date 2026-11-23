@@ -11,7 +11,7 @@ export function expectedSlices(samples = 1) {
   };
   add("unit", "linux", 4);
   add("unit", "macos", 4);
-  add("unit", "windows-main", 2);
+  add("unit", "windows-main", 4);
   add("unit", "windows-renderer", 2);
   add("e2e", "linux", 4);
   add("e2e", "macos", 4);

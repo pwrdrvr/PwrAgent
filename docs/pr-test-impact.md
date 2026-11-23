@@ -26,8 +26,8 @@ Documentation-only pull requests still skip the test jobs.
   runs four. The lane uses the same reporter, completion check and retry step
   as a full lane.
 - `Windows desktop-main` and `Windows renderer + packages` run the selected
-  files of their projects, in at most two lanes each. A job with no selected
-  file does not start.
+  files of their projects, in at most four and two lanes respectively. A job
+  with no selected file does not start.
 - `Linux Desktop E2E (lane 1 of 4)` runs the selected specs. When the plan
   selects no spec, no lane starts and `Desktop E2E` reports the skip.
 

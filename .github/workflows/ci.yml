@@ -554,7 +554,7 @@ jobs:
         run: pnpm run build
 
   windows-desktop-main:
-    name: Windows desktop-main (lane ${{ matrix.lane }} of 2)
+    name: Windows desktop-main (lane ${{ matrix.lane }} of 4)
     runs-on: windows-latest
     needs: [changes, windows-install-deps, pr-test-impact-plan]
     # As on Linux, a pull request's test plan can narrow these lanes. A plan
@@ -566,7 +566,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: ${{ fromJSON(needs.pr-test-impact-plan.outputs.unit_windows_main_lanes || '[1, 2]') }}
+        lane: ${{ fromJSON(needs.pr-test-impact-plan.outputs.unit_windows_main_lanes || '[1, 2, 3, 4]') }}
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -609,7 +609,7 @@ jobs:
         run: >-
           ${{ needs.pr-test-impact-plan.outputs.unit_mode == 'selected'
           && format('pnpm exec node scripts/ci/run-pr-test-impact.mjs unit windows-main {0}', matrix.lane)
-          || format('pnpm test --project desktop-main --shard={0}/2 --reporter=default --reporter=./scripts/ci/vitest-ci-reporter.mjs', matrix.lane) }}
+          || format('pnpm test --project desktop-main --shard={0}/4 --reporter=default --reporter=./scripts/ci/vitest-ci-reporter.mjs', matrix.lane) }}
 
       - name: Verify the unit slice completed
         id: unit-completion

@@ -240,7 +240,7 @@ export function listAffectedE2eFiles(root, base, config = "apps/desktop/playwrig
 // across two jobs; Linux runs every project in one.
 export const unitGroups = {
   linux: { config: "vitest.linux-ci.mts", lanes: 4 },
-  "windows-main": { config: "vitest.workspace.mts", lanes: 2, projects: ["desktop-main"] },
+  "windows-main": { config: "vitest.workspace.mts", lanes: 4, projects: ["desktop-main"] },
   "windows-renderer": {
     config: "vitest.workspace.mts", lanes: 2,
     projects: ["desktop-renderer", "desktop-renderer-node", "messaging", "owner-core", "shared"],
