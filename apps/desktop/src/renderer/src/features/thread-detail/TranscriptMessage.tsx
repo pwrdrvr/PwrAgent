@@ -1727,6 +1727,9 @@ function labelForMessage(message: AppServerThreadMessageEntry): string {
   if (message.origin?.systemReason === "thread-correspondence") {
     return "Thread delivery";
   }
+  if (message.origin?.systemReason === "stack-notice") {
+    return "Stack operation";
+  }
   if (message.role === "assistant") {
     return "Assistant";
   }

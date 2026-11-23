@@ -37,6 +37,8 @@ import type { ForgePrToolArgs, ForgePrToolOperation } from "../pr-status/forge-p
 import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation } from "../pr-status/forge-tool-contract";
 import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
 import { StackReader, stackMemberships } from "../stacks/stack-reader";
+import { StackOperationsService } from "../stacks/stack-operations-service";
+import { StackOperationError } from "@pwragent/owner-core/stacks/stack-coordinator";
 import { githubStackRepository, isObservedStackParent } from "../stacks/stack-merge-guard";
 import { catalogMergeBlock, type StackSummary } from "@pwragent/shared/stacks/stack-status";
 import { readLocalHeadPastPrHead } from "../pr-status/local-pr-head";
@@ -1229,6 +1231,16 @@ class DesktopAppServerService {
   >();
   private readonly prStatusRegistry = new Map<string, PrStatusRegistryEntry>();
   private readonly stackReader = new StackReader();
+  private readonly stackOperations = new StackOperationsService();
+
+  async resumeInterruptedStackOperations(): Promise<void> {
+    const registry = getDesktopBackendRegistry();
+    const threads = await registry.listThreads({ callerReason: "stack-recovery" });
+    const directories = threads.flatMap((thread) => resolveThreadPullRequestDirectoryPaths(thread));
+    for (const error of await this.stackOperations.resumeInterrupted(directories, registry)) {
+      appServerLog.warn("Stack operation recovery paused", { error });
+    }
+  }
   private publishedStacks: readonly StackSummary[] = [];
   private readonly prActivity = new PrActivityJournal();
   /** Repository renames the forge has answered with. See its class. */
@@ -3867,6 +3879,21 @@ class DesktopAppServerService {
   /** Pull request and issue tools act only in the calling thread's own repositories. */
   async runForgePrToolForAgent(operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext): Promise<unknown> {
     const scope = await this.forgePrToolScope(context);
+    if (operation === "plan_stack_operation" || operation === "apply_stack_operation" || operation === "manage_stack_operation") {
+      if (!isAppServerBackendKind(context.backend)) throw new ForgeReadError("invalid_arguments", "Unknown PwrAgent backend.");
+      const repository = this.forgePrToolService().resolveRepository(args, scope);
+      if (repository.provider !== "github") throw new ForgeReadError("unsupported_provider", "Stack operations use the gh stack catalog for GitHub repositories.");
+      const actor = { backend: context.backend, threadId: context.threadId };
+      try {
+        return await this.stackOperations.call(operation, args, actor, {
+          directories: scope.directories, repository: githubStackRepository(repository), branch: scope.branch,
+          infer: async () => (await this.readScopedStacks(scope.directories, { ...actor, prs: this.canonicalizePrs(scope.attached) })).stacks,
+        }, getDesktopBackendRegistry());
+      } catch (error) {
+        if (error instanceof StackOperationError) throw new ForgeReadError(error.code, error.message);
+        throw error;
+      }
+    }
     if (operation === "list_stacks") {
       const repository = args.repository && this.forgePrToolService().resolveRepository(args, scope);
       const { stacks, catalogs } = await this.readScopedStacks(scope.directories, {

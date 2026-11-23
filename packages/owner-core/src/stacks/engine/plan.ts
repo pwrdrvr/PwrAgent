@@ -18,10 +18,10 @@ function requireTip(tips: StackPlan["expectedTips"], branch: string): string {
   return tip;
 }
 
-async function restack(git: StackGit, plan: StackPlan, stack: GhStack, first: number) {
+async function restack(git: StackGit, plan: StackPlan, stack: GhStack, first: number, end = stack.branches.length) {
   const tips = plan.expectedTips;
   const parentAt = (index: number) => stack.branches[index - 1] ?? stack.trunk;
-  for (let index = first; index < stack.branches.length; index += 1) {
+  for (let index = first; index < end; index += 1) {
     const layer = stack.branches[index];
     const parent = parentAt(index);
     const oldTip = requireTip(tips, layer.branch);
@@ -116,8 +116,11 @@ export async function planStack(git: StackGit, store: CatalogStore, commonDir: s
     const from = operation.kind === "restack" ? operation.from : undefined;
     const first = from === undefined ? 0 : stack.branches.findIndex(layer => layer.branch === from);
     if (first < 0) throw new Error("The starting branch is no longer in this stack");
-    if (first === 0) stack.trunk.head = requireTip(expectedTips, stack.trunk.branch);
-    await restack(git, plan, stack, first);
+    const stop = operation.kind === "restack" ? operation.stopBefore : undefined;
+    const end = stop === undefined ? stack.branches.length : stack.branches.findIndex(layer => layer.branch === stop);
+    if (end < first) throw new Error("The released branch no longer follows the starting layer");
+    if (first === 0 && end > first) stack.trunk.head = requireTip(expectedTips, stack.trunk.branch);
+    await restack(git, plan, stack, first, end);
   }
   plan.worktrees = await git.worktrees(plan.moves);
   plan.blocked = await git.dirtyOverlap(plan.worktrees);

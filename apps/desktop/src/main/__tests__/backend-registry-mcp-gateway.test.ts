@@ -245,7 +245,7 @@ describe("backend MCP gateway dispatch", () => {
     expect(tools).toEqual([
       "inject_progress", "complete_monitoring", "search_mcp_tools", "call_mcp_tool",
       "get_forge_status", "list_ci_runs", "get_ci_run", "get_ci_job", "read_ci_job_log", "get_commit_checks", "list_ci_artifacts", "download_ci_artifact",
-      "list_stacks", "get_pull_request", "list_pull_requests", "list_pull_request_files", "get_pull_request_diff", "list_pull_request_reviews", "list_pull_request_review_threads", "get_issue", "list_issue_comments", "search_issues",
+      "list_stacks", "plan_stack_operation", "get_pull_request", "list_pull_requests", "list_pull_request_files", "get_pull_request_diff", "list_pull_request_reviews", "list_pull_request_review_threads", "get_issue", "list_issue_comments", "search_issues",
     ]);
   });
 

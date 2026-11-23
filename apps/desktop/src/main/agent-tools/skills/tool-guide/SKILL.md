@@ -59,3 +59,10 @@ stacks list their branches bottom first, with known PRs, owning threads and
 layer health. Merge a stacked PR only after its lower layers have merged and
 its base is trunk. Follow the thread's `prAutomation.guidance` for its position
 and merge prerequisites.
+
+Use `plan_stack_operation` to forecast a local `restack`, `add_branch`,
+`adopt` or `remove`. Inspect conflicts, dirty overlaps and affected turns,
+then pass the plan ID to `apply_stack_operation`. Use the returned operation
+ID with `manage_stack_operation` to read status or undo a completed move.
+A waiting restack can be cancelled or shortened before a specific layer.
+The operation releases held queues after recording notices for moved layers.
