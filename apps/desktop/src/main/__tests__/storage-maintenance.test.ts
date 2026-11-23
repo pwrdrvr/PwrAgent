@@ -220,6 +220,7 @@ it("budgets archive lifecycle, daily bookkeeping and row-sliced deletion separat
     // The partial PR watch retry and history indexes add one root page each.
     // The To-dos membership index and legacy search schema add eight vacuum frames.
     // The two sparse v87 subthread indexes add one root page each.
+    // v88's pruned automation costs table and two indexes add three VACUUM pages.
     const budgetPath = new URL("./fixtures/storage-maintenance-page-budgets.json", import.meta.url);
     if (process.env.UPDATE_SQLITE_WRITE_BUDGETS) writeFileSync(budgetPath, JSON.stringify(measured, null, 2) + "\n");
     expect(measured).toEqual(JSON.parse(readFileSync(budgetPath, "utf8")));

@@ -280,22 +280,11 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "automation-pruned-run-cost-correction": {"commits": 1, "note": "One downward pricing correction after pruning and one replay: one debounced commit", "observedWalBytes": 8240, "rowsChanged": 2, "statements": 2},
   "automation-run-duplicate-lifecycle": {"commits":0,"note":"100 repeated started/queued acknowledgements and conflicting terminal outcomes: zero commits, 0 MB/day.","observedWalBytes":0,"rowsChanged":0,"statements":0},
   "automation-run-lifecycle": {"commits":4,"note":"One start, one terminal outcome and one late identity acknowledgement: 4 boundary commits, ~86.5 KB/run or ~8.7 MB/day at 100 runs/day; 0 MB/day idle.","observedWalBytes":86520,"rowsChanged":4,"statements":4},
-  "automation-run-prune-retain-usage-title": {
-    "commits": 2,
-    "note": "Creating a run and pruning an older run retains its usage title in the existing prune transaction",
-    "observedWalBytes": 78280,
-    "rowsChanged": 3,
-    "statements": 3
-  },
-  "automation-run-prune-without-usage": {
-    "commits": 2,
-    "note": "Creating a run and pruning an older execution with no visible usage writes no retained title",
-    "observedWalBytes": 70040,
-    "rowsChanged": 2,
-    "statements": 2
-  },
+  "automation-run-prune-retain-usage-title": {"commits": 2, "note": "Creating a run and pruning an older run retains the usage title and cost basis in the existing prune transaction", "observedWalBytes": 94760, "rowsChanged": 4, "statements": 4},
+  "automation-run-prune-without-usage": {"commits": 2, "note": "Creating a run and pruning an unpriced execution retains its turn for late pricing", "observedWalBytes": 86520, "rowsChanged": 3, "statements": 3},
   "automation-run-transcript-burst": {
     "commits": 1,
     "note": "250 completed tool items across 50 windows, one shutdown-boundary artifact write",
@@ -303,13 +292,7 @@
     "rowsChanged": 1,
     "statements": 1
   },
-  "automation-run-usage": {
-    "commits": 1,
-    "note": "50 cumulative pricing snapshots for one run, one debounced payload write",
-    "observedWalBytes": 16480,
-    "rowsChanged": 1,
-    "statements": 1
-  },
+  "automation-run-usage": {"commits": 1, "note": "50 cumulative pricing snapshots and one replay: one debounced commit for usage and lifetime cost", "observedWalBytes": 24720, "rowsChanged": 2, "statements": 2},
   "automation-run-usage-title-index": {
     "commits": 1,
     "note": "One automation run insert, including indexed owner and execution thread identities, remains one commit",
