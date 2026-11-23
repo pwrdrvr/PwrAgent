@@ -55,6 +55,7 @@ import { checkAgentAccessRequest, isAgentAccessRefusalMessage } from "../agent-t
 
 
 import type { ClaudeSelfStartedTurnSource } from "../claude/claude-self-started-turns";
+import { getReviewAutoFixRuns } from "../thread-reviews/review-auto-fix";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
 import type { ForgePrToolHandler, ForgePrToolPreflight } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import type { ForgeReadRequest } from "../pr-status/forge-tool-contract";
@@ -3631,6 +3632,10 @@ export class DesktopBackendRegistry {
       || (origin?.prAutomation?.kind === "watch" && origin.prAutomation.outcome === "failure")
       || origin?.reviewAutoFix !== undefined;
     if (isRepair(starting)) return true;
+    if (Object.values(getReviewAutoFixRuns().of(thread)).some(({ phase }) => phase === "queued")) return true;
+    for (const entry of this.threadTurnQueue.iterateQueuedEntries(thread)) {
+      if (isRepair(entry.messageOrigin)) return true;
+    }
     if (!active) return false;
     const messageId = buildTurnUserMessageOriginId(active.turnId);
     const origins = await this.overlayStore.readThreadMessageOrigins?.({ ...thread, messageIds: [messageId] });

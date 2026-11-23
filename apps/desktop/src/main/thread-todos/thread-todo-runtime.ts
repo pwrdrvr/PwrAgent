@@ -313,10 +313,13 @@ export function installThreadTodoRuntime(params: {
     checkingReviews.add(id);
     try {
       const review = reviews.get(id);
-      if (!review || registry.getThreadInfo(review)?.archived) {
+      const message = review && reviewAutoFixMessage(review);
+      if (!review || !message || registry.getThreadInfo(review)?.archived) {
         heldReviews.delete(id);
+        if (review) reviewAutoFixRuns.record(review, id, { kind: "queue", status: "cancelled", at: Date.now() });
         return;
       }
+      reviewAutoFixRuns.record(review, id, { kind: "queue", status: "held", at: Date.now() });
       const hold = await params.readReviewStackHold?.(review);
       if (hold) {
         if (heldReviews.get(id) !== hold) {
@@ -325,16 +328,34 @@ export function installThreadTodoRuntime(params: {
         heldReviews.set(id, hold);
         return;
       }
-      heldReviews.delete(id);
       const current = reviews.get(id);
-      const message = current && reviewAutoFixMessage(current);
-      if (!message) return;
-      await registry.submitTurn({
+      const latest = current && reviewAutoFixMessage(current);
+      if (!latest) {
+        heldReviews.delete(id);
+        reviewAutoFixRuns.record(review, id, { kind: "queue", status: "cancelled", at: Date.now() });
+        return;
+      }
+      const request = {
         backend: review.backend, threadId: review.threadId,
-        input: [{ type: "text", text: message.text }],
-        origin: "automation", messageOrigin: message.messageOrigin,
-      });
+        input: [{ type: "text" as const, text: latest.text }],
+        origin: "automation" as const, messageOrigin: latest.messageOrigin,
+      };
+      if (params.readReviewStackHold) {
+        // Keep ownership until admission. A queued start could otherwise
+        // outlive the observation that cleared the gate.
+        const result = await registry.submitTurnIfIdle({
+          ...request, canAdmit: async () => !await params.readReviewStackHold?.(review),
+        });
+        if (result.status === "busy") {
+          heldReviews.set(id, "Waiting for turn admission");
+          return;
+        }
+      } else {
+        await registry.submitTurn(request);
+      }
+      heldReviews.delete(id);
     } catch (error) {
+      heldReviews.delete(id);
       const reason = error instanceof Error ? error.message : String(error);
       const review = reviews.get(id);
       if (!review) return;
@@ -380,8 +401,10 @@ export function installThreadTodoRuntime(params: {
       params.broadcast({ at: Date.now() });
       return;
     }
+    const status = event.notification.method === "thread/status/changed" ? event.notification.params.status : undefined;
     if (event.notification.method === "pullRequest/status/updated"
-      || event.notification.method === "thread/stackHold/updated" || event.notification.method === "turn/completed") {
+      || event.notification.method === "thread/stackHold/updated" || event.notification.method === "turn/completed"
+      || (status && typeof status === "object" && "type" in status && status.type === "idle")) {
       for (const id of heldReviews.keys()) void sendReviewAutoFix(id);
     }
     const completed = completedThreadReview(event);
