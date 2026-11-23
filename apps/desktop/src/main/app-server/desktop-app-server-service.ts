@@ -6663,6 +6663,7 @@ class DesktopAppServerService {
     const index = await loadLocalNavigationQueryIndex({
       backend: "all",
       callerReason: "settings-bulk-pr-auto-dispatch",
+      requireVerifiedDirectories: true,
     });
     if (index.coverage && index.coverage.state !== "complete") {
       throw new Error("Thread discovery is incomplete. Wait for providers to finish loading before changing Auto-fix for all eligible threads.");

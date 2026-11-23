@@ -12,6 +12,7 @@ import type {
   DirectoryEnrichmentCaller,
 } from "./host";
 import type { NativeVoiceNotification } from "./native-voice-protocol";
+import { hydrateMissingLinkedDirectoriesFromSiblingRepos } from "./thread-directory-fallback";
 import { CODEX_GOAL_METHODS, type ThreadGoalView } from "@pwragent/shared/contracts/thread-goal";
 import type {
   ThreadGoal,
@@ -6868,91 +6869,12 @@ function buildThreadMetadataCacheKey(filter?: string): string {
   return filter?.trim() || "";
 }
 
-function normalizeGitOriginUrl(value?: string): string | undefined {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-
-  const sshMatch = trimmed.match(/^git@([^:]+):(.+)$/i);
-  const candidate = sshMatch
-    ? `${sshMatch[1]}/${sshMatch[2]}`
-    : trimmed.replace(/^[a-z]+:\/\//i, "");
-
-  const normalized = candidate
-    .replace(/\.git$/i, "")
-    .replace(/^ssh\//i, "")
-    .replace(/^\/+/, "")
-    .replace(/\/+$/, "")
-    .toLowerCase();
-
-  return normalized || undefined;
-}
-
 type EnrichedCodexThread = AppServerThreadSummary & {
   gitOriginUrl?: string;
 };
 
 const THREAD_DIRECTORY_ENRICHMENT_CONCURRENCY = 8;
 const THREAD_DIRECTORY_ENRICHMENT_MAX_UNREAD = 16;
-
-function hydrateMissingLinkedDirectoriesFromSiblingRepos(
-  threads: EnrichedCodexThread[]
-): EnrichedCodexThread[] {
-  const donorDirectoriesByOrigin = new Map<string, LinkedDirectorySummary[]>();
-
-  for (const thread of threads) {
-    if (thread.linkedDirectories.length === 0) {
-      continue;
-    }
-
-    const normalizedOrigin = normalizeGitOriginUrl(thread.gitOriginUrl);
-    if (!normalizedOrigin || donorDirectoriesByOrigin.has(normalizedOrigin)) {
-      continue;
-    }
-
-    const rootDirectories = thread.linkedDirectories.filter(
-      (directory) => !directory.worktreePath
-    );
-    donorDirectoriesByOrigin.set(
-      normalizedOrigin,
-      rootDirectories.length > 0 ? rootDirectories : thread.linkedDirectories
-    );
-  }
-
-  return threads.map((thread) => {
-    if (thread.linkedDirectories.length > 0) {
-      return thread;
-    }
-
-    const normalizedOrigin = normalizeGitOriginUrl(thread.gitOriginUrl);
-    if (!normalizedOrigin) {
-      return thread;
-    }
-
-    const donorDirectories = donorDirectoriesByOrigin.get(normalizedOrigin);
-    if (!donorDirectories || donorDirectories.length === 0) {
-      return thread;
-    }
-
-    const linkedDirectories = donorDirectories.map((directory) => {
-      if (!thread.projectKey || thread.projectKey === directory.path) {
-        return directory;
-      }
-
-      return {
-        ...directory,
-        worktreePath: thread.projectKey,
-        kind: "worktree" as const,
-      };
-    });
-
-    return {
-      ...thread,
-      linkedDirectories,
-    };
-  });
-}
 
 function normalizeCodexSandboxMode(
   value?: string
@@ -10107,6 +10029,7 @@ export class CodexAppServerClient {
   async listThreads(params?: {
     archived?: boolean;
     enrichDirectories?: boolean;
+    revalidateDirectories?: boolean;
     filter?: string;
     limit?: number;
     maxPages?: number;
@@ -10122,6 +10045,7 @@ export class CodexAppServerClient {
     const key = JSON.stringify([
       params?.archived ? this.archivedThreadListingGeneration : this.activeThreadListingGeneration,
       params?.archived === true, params?.enrichDirectories ?? true,
+      params?.revalidateDirectories === true,
       params?.filter?.trim() || "", params?.limit, params?.maxPages,
       params?.skipArchivedMetadataRefresh === true, params?.deadlineAt,
       params?.requireComplete === true,
@@ -10195,7 +10119,10 @@ export class CodexAppServerClient {
       : visible;
     if (refreshMetadata) this.scheduleArchivedThreadMetadataRefresh(params?.filter, diagnostics);
     return {
-      threads: await this.enrichThreads(threads, { enrichDirectories: params?.enrichDirectories ?? true }),
+      threads: await this.enrichThreads(threads, {
+        enrichDirectories: params?.enrichDirectories ?? true,
+        revalidateDirectories: params?.revalidateDirectories,
+      }),
       cursorExhausted,
     };
   }
@@ -10489,13 +10416,12 @@ export class CodexAppServerClient {
 
   private async enrichThreads(
     threads: RawCodexThreadSummary[],
-    options: { enrichDirectories: boolean },
+    options: { enrichDirectories: boolean; revalidateDirectories?: boolean },
   ): Promise<AppServerThreadSummary[]> {
     if (!options.enrichDirectories) {
       return threads.map((thread) => {
         const {
           codexThreadSourceKind: _codexThreadSourceKind,
-          gitOriginUrl: _gitOriginUrl,
           originator: _originator,
           path: _path,
           ...publicThread
@@ -10513,7 +10439,9 @@ export class CodexAppServerClient {
       });
     }
 
-    const enrichedThreads = await this.enrichRawThreadDirectories(threads, "thread-list");
+    const enrichedThreads = await this.enrichRawThreadDirectories(
+      threads, options.revalidateDirectories ? "verified-directory-list" : "thread-list",
+    );
 
     return hydrateMissingLinkedDirectoriesFromSiblingRepos(enrichedThreads);
   }

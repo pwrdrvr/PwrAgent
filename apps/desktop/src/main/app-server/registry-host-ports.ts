@@ -131,6 +131,7 @@ export interface RegistryHostPorts {
     backend?: AppServerBackendKind;
     callerReason?: ThreadListCallerReason;
     enrichDirectories?: boolean;
+    skipPendingDirectoryEnrichment?: boolean;
     filter?: string;
     forceRefresh?: boolean;
     limit?: number;

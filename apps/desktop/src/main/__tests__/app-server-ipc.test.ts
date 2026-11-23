@@ -2533,6 +2533,12 @@ describe("app server ipc", () => {
     await read({ kind: "directory-index" });
     const group = await read({ kind: "group-members", roots: [{ backend: "codex", threadId: "page-0" }], membershipOnly: true });
     expect(group.entries.map(({ row }) => row.id)).toEqual(["page-0"]);
+    const viewer = await handler({ sender: { id: 90490, once: vi.fn() } }, {
+      protocol: 2, consumer: "main-sidebar", inventory: "viewer", pageSize: 1,
+      query: { kind: "group-members", roots: [{ backend: "codex", threadId: "page-1" }], membershipOnly: true },
+    }) as NavigationQueryPage;
+    expect(viewer.entries.map(({ row }) => row.id)).toEqual(["page-1"]);
+    expect(listThreads).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ enrichDirectories: false }));
     expect(runner).not.toHaveBeenCalled();
     expect(readNavigationPullRequests).not.toHaveBeenCalled();
     const exact = (index: number) => ({ kind: "exact" as const, identities: [{ backend: "codex" as const, threadId: `page-${index}` }] });
