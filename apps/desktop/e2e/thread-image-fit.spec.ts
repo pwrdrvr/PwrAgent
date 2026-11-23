@@ -427,11 +427,18 @@ test("runs SVG flamegraph controls in an isolated lightbox frame", async () => {
       x: Math.floor(frameBox.x + frameBox.width / 2),
       y: Math.floor(frameBox.y + frameBox.height / 2),
     };
-    await expect.poll(() => nativeWindow.evaluate(async (window, point) => {
-      const image = await window.webContents.capturePage({ ...point, width: 1, height: 1 });
-      return [...image.toBitmap().subarray(0, 4)];
-    }, hoverPoint), { message: "Window compositor has presented the SVG hover target" })
-      .toEqual([0, 255, 0, 255]); // Opaque lime, in either RGBA or BGRA byte order.
+    const opaqueLime = [0, 255, 0, 255]; // The same bytes in RGBA and BGRA.
+    await expect.poll(async () => {
+      const pixel = await nativeWindow.evaluate(async (window, point) => {
+        const image = await window.webContents.capturePage({ ...point, width: 1, height: 1 });
+        return [...image.toBitmap().subarray(0, 4)];
+      }, hoverPoint);
+      // Software capture on macOS has returned [0, 255, 1, 255] for lime.
+      // Allow one level in RGB and still require full opacity.
+      return pixel.map((channel, index) =>
+        index < 3 && Math.abs(channel - opaqueLime[index]) <= 1 ? opaqueLime[index] : channel,
+      );
+    }, { message: "Window compositor has presented the SVG hover target" }).toEqual(opaqueLime);
     await frame.locator("#frame").hover();
     await expect(frame.locator("#details")).toHaveText("Function: frame");
     await frame.locator("#frame").click();
