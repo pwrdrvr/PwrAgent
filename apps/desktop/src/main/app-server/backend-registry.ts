@@ -4112,6 +4112,41 @@ export class DesktopBackendRegistry {
     return await promise;
   }
 
+  /** Provider membership for the known candidates in one local subthread group. */
+  async readSubthreadOrderProviderRows(
+    backend: AppServerBackendKind,
+    ids: ReadonlySet<string>,
+    preserveListingOrder = false,
+  ): Promise<AppServerThreadSummary[]> {
+    await this.subAgentStartupReconciliation;
+    if (this.isBootstrapModeFn()) return [];
+    if (backend === "codex") {
+      // The active Codex listing, including retained and pending threads and
+      // native worker classification, authorizes membership. A point
+      // thread/read cannot establish all of those facts.
+      const listing = await withCodexRequestActivity({ countsAsActivity: false }, () =>
+        this.listThreads({ backend, callerReason: "relative-child-move", enrichDirectories: false }));
+      if (this.isIncompleteThreadList(listing)) {
+        throw new Error("Wait for complete owner discovery before moving a child.");
+      }
+      return listing.filter((thread) => thread.source === backend && ids.has(thread.id));
+    }
+    if (backend === "claude") return this.claudeBackend.readSubthreadOrderSummaries(ids, preserveListingOrder);
+    if (!isAcpBackendId(backend)) return [];
+    const sessions = [...ids].flatMap((id) => {
+      const session = this.acpBackend.getSession(backend, id);
+      return session && !session.hidden && !session.archivedAt ? [session] : [];
+    }).sort((left, right) => right.updatedAt - left.updatedAt);
+    // The durable listing is ordered by updatedAt. Ties can affect legacy
+    // handoff repair even when sibling creation timestamps are distinct.
+    const ties = new Set(sessions.map(({ createdAt, updatedAt }) =>
+      preserveListingOrder ? updatedAt : `${createdAt}:${updatedAt}`));
+    const ordered = ties.size < sessions.length
+      ? this.acpBackend.listSessions(backend).filter((session) => ids.has(session.sessionId))
+      : sessions;
+    return ordered.map((session) => this.acpBackend.sessionToThreadSummary(session));
+  }
+
   /**
    * Resolve provider ownership for one thread. A process-lifetime observation
    * is not proof that the provider still owns it, so only the bounded query

@@ -3007,6 +3007,8 @@ export type SetThreadPinResponse = {
 export type RemoteThreadPin = {
   ref: FederatedThreadRef;
   addedAt: number;
+  /** Viewer-local mount identity, read only by archive-proof consumers. */
+  mountToken?: string;
   /** Peer display label captured at pin/refresh time. */
   instanceLabel: string;
   /** Last successfully fetched summary (unstamped), for offline rendering. */
