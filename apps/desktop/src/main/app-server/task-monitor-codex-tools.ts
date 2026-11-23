@@ -46,6 +46,7 @@ type LegacyTaskMonitorOperationName =
 
 export function buildTaskMonitorDynamicToolSpecs(
   role: "parent" | "monitor" | "all" = "all",
+  creationEnabled = true,
 ): DynamicToolSpec[] {
   const createTool: DynamicToolNamespaceTool = {
     type: "function",
@@ -70,12 +71,11 @@ export function buildTaskMonitorDynamicToolSpecs(
       deferLoading: false,
     },
   ];
-  const tools =
-    role === "parent"
-      ? [createTool]
-      : role === "monitor"
-        ? monitorTools
-        : [createTool, ...monitorTools];
+  const tools = [
+    ...(role !== "monitor" && creationEnabled ? [createTool] : []),
+    ...(role !== "parent" ? monitorTools : []),
+  ];
+  if (tools.length === 0) return [];
   return [
     {
       type: "namespace",

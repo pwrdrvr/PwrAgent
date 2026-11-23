@@ -83,7 +83,6 @@ import { getDesktopSettingsService } from "../settings/desktop-settings-singleto
 import { readRecord } from "./backend-registry-notification-values";
 import { acpRuntimeHasExecutionModeSelection } from "./backend-registry-notifications";
 import {
-  MCP_DEFAULTS_READ_BUDGET_MS,
   MCP_UPSTREAM_FORM_REQUEST_ID_PREFIX,
 } from "./backend-registry-runtime-helpers";
 import type {
@@ -104,6 +103,7 @@ import type { ForgeToolBridge } from "./forge-tool-bridge";
 import { resolveThreadWorkspaceCwd } from "./linked-directory-identity";
 import type { RegistryContext, RegistryHost } from "./registry-context";
 import { sameMcpConnectionIds } from "./thread-launchpad-helpers";
+import { readNewThreadMcpInventory } from "../mcp-connections/new-thread-mcp-inventory";
 import { acpRuntimeStateRequiresFullAccess } from "./thread-model-options";
 import { buildPendingRequestKey } from "./thread-turn-keys";
 
@@ -729,7 +729,7 @@ export class ThreadMcpConnections {
    * drafts that already exist.
    *
    * Failing to read the connections, or not reading them within
-   * `MCP_DEFAULTS_READ_BUDGET_MS`, leaves the draft as it is. A missing
+   * the inventory deadline, leaves the draft as it is. A missing
    * default is recoverable from the MCP access panel; a failed or stalled
    * ensure is a New thread screen that will not open.
    */
@@ -760,27 +760,15 @@ export class ThreadMcpConnections {
   async resolveNewThreadMcpConnectionIds(): Promise<string[] | undefined> {
     const service = this.host().mcpConnectionService;
     if (!service?.listConnections) return undefined;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const deadline = new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error(
-            `No answer within ${MCP_DEFAULTS_READ_BUDGET_MS} ms.`,
-          )),
-          MCP_DEFAULTS_READ_BUDGET_MS,
-        );
-        timer.unref?.();
-      });
       return mcpConnectionIdsForNewThread(
-        await Promise.race([service.listConnections({ cachedLocalStatus: true }), deadline]),
+        await readNewThreadMcpInventory(async () => await service.listConnections?.({ cachedLocalStatus: true }) ?? []),
       );
     } catch (error) {
       backendRegistryLog.warn("new_thread_mcp_defaults_unavailable", {
         error: error instanceof Error ? error.message : String(error),
       });
       return undefined;
-    } finally {
-      clearTimeout(timer);
     }
   }
 

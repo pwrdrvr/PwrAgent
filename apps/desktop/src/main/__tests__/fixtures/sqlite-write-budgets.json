@@ -2,8 +2,14 @@
   "telegram-pairing-grant-revoke": {"commits": 1, "note": "Remove one bot-scoped Telegram pairing grant.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
   "telegram-pairing-grant-dismiss-warning": {"commits": 1, "note": "Update the warning setting for one paired Telegram user.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
   "telegram-pairing-grant-approve": {"commits": 1, "note": "Upsert the bot-scoped grant and consume the observed request in one transaction.", "observedWalBytes": 16480, "rowsChanged": 2, "statements": 2},
+  "acp-account-restriction-publication": {"commits": 1, "note": "One commit for the newly observed account restriction, including concurrent attempts with the same rejection", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1},
   "line-rich-menu-recover-absent-create": {"commits": 1, "note": "Recover an interrupted LINE rich-menu create that never reached LINE", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
   "line-rich-menu-lifecycle": {"commits": 7, "note": "One LINE rich-menu install, update, and removal", "observedWalBytes": 57712, "rowsChanged": 7, "statements": 7},
+  "messaging-adapter-validation-rejection-burst": {"commits": 1, "note": "100 failures in one cooldown. At 48 commits/day per platform and reason, 20,600 bytes/commit projects to about 10.9 MB/day across all 11 wired combinations under sustained failures. No idle writes.", "observedWalBytes": 20600, "rowsChanged": 1, "statements": 1},
+  "messaging-agent-preset-picker-page": {"commits": 3, "note": "One page change, 41,200 WAL bytes or 0.41 MB/day at 10 pages/day.", "observedWalBytes": 41200, "rowsChanged": 3, "statements": 3},
+  "messaging-agent-preset-picker-open": {"commits": 3, "note": "One picker open, 57,680 WAL bytes or 0.58 MB/day at 10 opens/day.", "observedWalBytes": 57680, "rowsChanged": 3, "statements": 3},
+  "agent-preset-delete": {"commits": 1, "note": "One explicit delete. Listing and retrying the delete commit nothing.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
+  "agent-preset-save": {"commits": 1, "note": "One explicit preset save.", "observedWalBytes": 8272, "rowsChanged": 1, "statements": 1},
   "cold-collapsed-project-thread-creation": {"commits": 4, "note": "One new thread, including its automatic pin with no navigation snapshot. At 100 starts/day, about 5.4 MB/day. No idle writes.", "observedWalBytes": 53560, "rowsChanged": 4, "statements": 4},
   "navigation-remove-project-retain-case-alias-drafts": {"commits": 1, "note": "Removing a project hides the case aliases and retains their drafts in one commit. At 100 removals/day and 12,360 bytes/commit, about 1.24 MB/day; zero idle writes.", "observedWalBytes": 12360, "rowsChanged": 3, "statements": 3},
   "thread-todo-ci-approval-settled": {"commits": 1, "note": "The owner saw an approval card's gate cleared (approved anywhere) or its run end: the card is marked done.", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
@@ -282,22 +288,11 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "automation-pruned-run-cost-correction": {"commits": 1, "note": "One downward pricing correction after pruning and one replay: one debounced commit", "observedWalBytes": 8240, "rowsChanged": 2, "statements": 2},
   "automation-run-duplicate-lifecycle": {"commits":0,"note":"100 repeated started/queued acknowledgements and conflicting terminal outcomes: zero commits, 0 MB/day.","observedWalBytes":0,"rowsChanged":0,"statements":0},
   "automation-run-lifecycle": {"commits":4,"note":"One start, one terminal outcome and one late identity acknowledgement: 4 boundary commits, ~86.5 KB/run or ~8.7 MB/day at 100 runs/day; 0 MB/day idle.","observedWalBytes":86520,"rowsChanged":4,"statements":4},
-  "automation-run-prune-retain-usage-title": {
-    "commits": 2,
-    "note": "Creating a run and pruning an older run retains its usage title in the existing prune transaction",
-    "observedWalBytes": 78280,
-    "rowsChanged": 3,
-    "statements": 3
-  },
-  "automation-run-prune-without-usage": {
-    "commits": 2,
-    "note": "Creating a run and pruning an older execution with no visible usage writes no retained title",
-    "observedWalBytes": 70040,
-    "rowsChanged": 2,
-    "statements": 2
-  },
+  "automation-run-prune-retain-usage-title": {"commits": 2, "note": "Creating a run and pruning an older run retains the usage title and cost basis in the existing prune transaction", "observedWalBytes": 94760, "rowsChanged": 4, "statements": 4},
+  "automation-run-prune-without-usage": {"commits": 2, "note": "Creating a run and pruning an unpriced execution retains its turn for late pricing", "observedWalBytes": 86520, "rowsChanged": 3, "statements": 3},
   "automation-run-transcript-burst": {
     "commits": 1,
     "note": "250 completed tool items across 50 windows, one shutdown-boundary artifact write",
@@ -305,13 +300,7 @@
     "rowsChanged": 1,
     "statements": 1
   },
-  "automation-run-usage": {
-    "commits": 1,
-    "note": "50 cumulative pricing snapshots for one run, one debounced payload write",
-    "observedWalBytes": 16480,
-    "rowsChanged": 1,
-    "statements": 1
-  },
+  "automation-run-usage": {"commits": 1, "note": "50 cumulative pricing snapshots and one replay: one debounced commit for usage and lifetime cost", "observedWalBytes": 24720, "rowsChanged": 2, "statements": 2},
   "automation-run-usage-title-index": {
     "commits": 1,
     "note": "One automation run insert, including indexed owner and execution thread identities, remains one commit",
@@ -886,20 +875,9 @@
     "rowsChanged": 0,
     "statements": 0
   },
-  "navigation-relative-child-insertion": {
-    "commits": 1,
-    "note": "One owner-validated relative insertion among 101 children: one commit per explicit creation; at 100 creations/day and ~4 KiB/commit, ~0.4 MB/day; no idle writes",
-    "observedWalBytes": 0,
-    "rowsChanged": 1,
-    "statements": 1
-  },
-  "navigation-relative-child-move": {
-    "commits": 1,
-    "note": "One owner-validated move among 100 children: one commit per explicit drag; at 100 moves/day and ~4 KiB/commit, ~0.4 MB/day; no idle writes",
-    "observedWalBytes": 0,
-    "rowsChanged": 1,
-    "statements": 1
-  },
+  "navigation-relative-child-insertion": {"commits": 1, "note": "One owner-validated relative insertion among 101 children: one commit per explicit creation; at 100 creations/day and ~12 KiB/commit, ~1.2 MB/day; no idle writes", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "navigation-relative-child-move": {"commits": 1, "note": "One owner-validated move among 100 children: one commit per explicit drag; at 100 moves/day and ~12 KiB/commit, ~1.2 MB/day; no idle writes", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "navigation-relative-child-move-peer-refresh": {"commits": 1, "note": "One commit for a move and a changed peer snapshot, ~16.5 KB or 1.65 MB/day at 100 such moves/day. No periodic writes.", "observedWalBytes": 16480, "rowsChanged": 2, "statements": 2},
   "navigation-relative-thread-pin": {
     "commits": 1,
     "note": "One owner-revalidated move across 102 pins changes one rank in one commit; at 100 moves/day and ~4 KiB/commit, ~0.4 MB/day; no idle writes",
@@ -963,6 +941,7 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "navigation-viewer-pin-mount-token": {"commits": 2, "note": "The token shares the pin INSERT commit and target observation still commits separately. ~24.8 KB or 2.48 MB/day at 100 new mounts/day. No periodic writes.", "observedWalBytes": 24752, "rowsChanged": 2, "statements": 2},
   "navigation-viewer-pin-unchanged-reads": {
     "commits": 0,
     "note": "Twenty Attention and directory query pairs retain the same owner lifecycle: zero commits, 0 MB/day added WAL.",

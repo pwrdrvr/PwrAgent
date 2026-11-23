@@ -1,3 +1,7 @@
+import {
+  codexSkillProfileNameError,
+  type CodexSkillProfile,
+} from "@pwragent/shared/contracts/codex-skill-profiles";
 import desktopPackage from "../../../package.json" with { type: "json" };
 import {
   assertHotCpuCaptureRules,
@@ -120,6 +124,7 @@ import {
 import { DEFAULT_PASTED_IMAGE_MAX_PATCHES } from "../../shared/image-normalization";
 import { resolveActiveProfilePath } from "../profile";
 import {
+  ACP_AGENTS_ANTIGRAVITY_CLI_PATH_ENV,
   ACP_AGENTS_GEMINI_CLI_PATH_ENV,
   ACP_AGENTS_GROK_CLI_PATH_ENV,
   ACP_AGENTS_KIMI_CLI_PATH_ENV,
@@ -380,6 +385,7 @@ export type DesktopSettingsConfig = {
       /** Which pwrdrvr/codex track the managed runtime follows. */
       managedBuildChannel?: DesktopUpdateChannel;
       configOverrides?: string[];
+      skillProfiles?: CodexSkillProfile[];
       localModelIds?: string[];
       providers?: CodexModelProviderSettings[];
       /**
@@ -396,6 +402,10 @@ export type DesktopSettingsConfig = {
     };
   };
   acpAgents?: {
+    antigravity?: {
+      cliPath?: string;
+      enabled?: boolean;
+    };
     gemini?: {
       cliPath?: string;
       enabled?: boolean;
@@ -556,6 +566,7 @@ export function readDesktopSettingsConfig(
 }
 
 const ACP_CLI_PATH_ENV_BY_ID: Record<string, string> = {
+  antigravity: ACP_AGENTS_ANTIGRAVITY_CLI_PATH_ENV,
   gemini: ACP_AGENTS_GEMINI_CLI_PATH_ENV,
   grok: ACP_AGENTS_GROK_CLI_PATH_ENV,
   kimi: ACP_AGENTS_KIMI_CLI_PATH_ENV,
@@ -2061,37 +2072,7 @@ export function desktopSettingsPatchToEdits(
   if (patch.models?.audioTranscriptionEnabled !== undefined) {
     set(["models", "audio_transcription_enabled"], patch.models.audioTranscriptionEnabled);
   }
-  if (patch.models?.codex?.path !== undefined) {
-    set(["models", "codex", "path"], patch.models.codex.path);
-  }
-  if (patch.models?.codex?.profile !== undefined) {
-    set(["models", "codex", "profile"], patch.models.codex.profile);
-  }
-  if (patch.models?.codex?.configOverrides !== undefined) {
-    set(
-      ["models", "codex", "config_overrides"],
-      validateCodexConfigOverrides(patch.models.codex.configOverrides),
-    );
-  }
-  if (patch.models?.codex?.localModelIds !== undefined) {
-    set(["models", "codex", "local_model_ids"], validateLocalModelIds(patch.models.codex.localModelIds));
-  }
-  if (patch.models?.codex?.providers !== undefined) {
-    const providers = validateCodexModelProviders(patch.models.codex.providers);
-    edits.push(...codexModelProviderTableEdits(providers));
-  }
-  if (patch.models?.codex?.allowFast !== undefined) {
-    set(["models", "codex", "allow_fast"], patch.models.codex.allowFast);
-  }
-  if (patch.models?.codex?.managedBuilds !== undefined) {
-    set(["models", "codex", "managed_builds"], patch.models.codex.managedBuilds);
-  }
-  if (patch.models?.codex?.managedBuildChannel !== undefined) {
-    set(
-      ["models", "codex", "managed_build_channel"],
-      patch.models.codex.managedBuildChannel,
-    );
-  }
+  appendCodexSettingsEdits(patch.models?.codex, set, edits);
   if (patch.models?.providerDefaults !== undefined) {
     const providerDefaults = normalizeProviderModelDefaults(
       patch.models.providerDefaults,
@@ -2262,41 +2243,17 @@ export function desktopSettingsPatchToEdits(
       });
     }
   }
-  if (patch.acpAgents?.gemini?.cliPath !== undefined) {
-    set(["acp_agents", "gemini", "cli_path"], patch.acpAgents.gemini.cliPath);
-  }
-  if (patch.acpAgents?.gemini?.enabled !== undefined) {
-    set(["acp_agents", "gemini", "enabled"], patch.acpAgents.gemini.enabled);
-  }
-  if (patch.acpAgents?.grok?.cliPath !== undefined) {
-    set(["acp_agents", "grok", "cli_path"], patch.acpAgents.grok.cliPath);
-  }
-  if (patch.acpAgents?.grok?.enabled !== undefined) {
-    set(["acp_agents", "grok", "enabled"], patch.acpAgents.grok.enabled);
-  }
-  if (patch.acpAgents?.grok?.managedBuilds !== undefined) {
-    set(
-      ["acp_agents", "grok", "managed_builds"],
-      patch.acpAgents.grok.managedBuilds,
-    );
-  }
-  if (patch.acpAgents?.grok?.managedBuildChannel !== undefined) {
-    set(
-      ["acp_agents", "grok", "managed_build_channel"],
-      patch.acpAgents.grok.managedBuildChannel,
-    );
-  }
-  if (patch.acpAgents?.kimi?.cliPath !== undefined) {
-    set(["acp_agents", "kimi", "cli_path"], patch.acpAgents.kimi.cliPath);
-  }
-  if (patch.acpAgents?.kimi?.enabled !== undefined) {
-    set(["acp_agents", "kimi", "enabled"], patch.acpAgents.kimi.enabled);
-  }
-  if (patch.acpAgents?.qwen?.cliPath !== undefined) {
-    set(["acp_agents", "qwen", "cli_path"], patch.acpAgents.qwen.cliPath);
-  }
-  if (patch.acpAgents?.qwen?.enabled !== undefined) {
-    set(["acp_agents", "qwen", "enabled"], patch.acpAgents.qwen.enabled);
+  if (patch.acpAgents) {
+    for (const registryId of ["antigravity", "gemini", "grok", "kimi", "qwen"] as const) {
+      const agent = patch.acpAgents[registryId];
+      if (!agent) continue;
+      set(["acp_agents", registryId, "cli_path"], agent.cliPath);
+      set(["acp_agents", registryId, "enabled"], agent.enabled);
+      if (registryId === "grok") {
+        set(["acp_agents", "grok", "managed_builds"], patch.acpAgents.grok?.managedBuilds);
+        set(["acp_agents", "grok", "managed_build_channel"], patch.acpAgents.grok?.managedBuildChannel);
+      }
+    }
   }
 
   if (patch.git?.backgroundPrPolling !== undefined) {
@@ -2520,6 +2477,7 @@ function normalizeDesktopConfig(
   const codexAppServerRecycle = tables["models.codex.app_server_recycle"];
   const decision = tables["models.decision"];
   const openaiDecisions = tables["models.openai_decisions"];
+  const acpAgentsAntigravity = tables["acp_agents.antigravity"];
   const acpAgentsGemini = tables["acp_agents.gemini"];
   const acpAgentsGrok = tables["acp_agents.grok"];
   const acpAgentsKimi = tables["acp_agents.kimi"];
@@ -2943,6 +2901,7 @@ function normalizeDesktopConfig(
         configOverrides: codex?.config_overrides === undefined
           ? undefined
           : validateCodexConfigOverrides(codex.config_overrides),
+        skillProfiles: readCodexSkillProfiles(codex?.skill_profiles),
         ...(codexAppServerRecycle
           ? {
               appServerRecycle: {
@@ -2959,6 +2918,10 @@ function normalizeDesktopConfig(
       },
     },
     acpAgents: {
+      antigravity: {
+        cliPath: readString(acpAgentsAntigravity?.cli_path),
+        enabled: readBoolean(acpAgentsAntigravity?.enabled),
+      },
       gemini: {
         cliPath: readString(acpAgentsGemini?.cli_path),
         enabled: readBoolean(acpAgentsGemini?.enabled),
@@ -3392,17 +3355,22 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     };
   }
 
+  const acpAgentsAntigravity = config.acpAgents?.antigravity;
   const acpAgentsGemini = config.acpAgents?.gemini;
   const acpAgentsGrok = config.acpAgents?.grok;
   const acpAgentsKimi = config.acpAgents?.kimi;
   const acpAgentsQwen = config.acpAgents?.qwen;
   if (
+    (acpAgentsAntigravity && hasDefinedValue(acpAgentsAntigravity)) ||
     (acpAgentsGemini && hasDefinedValue(acpAgentsGemini)) ||
     (acpAgentsGrok && hasDefinedValue(acpAgentsGrok)) ||
     (acpAgentsKimi && hasDefinedValue(acpAgentsKimi)) ||
     (acpAgentsQwen && hasDefinedValue(acpAgentsQwen))
   ) {
     pruned.acpAgents = {
+      ...(acpAgentsAntigravity && hasDefinedValue(acpAgentsAntigravity)
+        ? { antigravity: acpAgentsAntigravity }
+        : {}),
       ...(acpAgentsGemini && hasDefinedValue(acpAgentsGemini)
         ? { gemini: acpAgentsGemini }
         : {}),
@@ -4018,8 +3986,6 @@ function normalizeHelperModelChoice(
   };
 }
 
-// Additive setting: older builds ignore these rows. Reading never rewrites
-// config, and saving replaces only this table array.
 /**
  * `[[models.codex.providers]]` holds endpoints and `[[models.codex.provider_rates]]`
  * their per-model prices, because a table-array entry cannot nest tables.
@@ -4076,6 +4042,86 @@ function readCodexModelProviders(
       ...(rates.length ? { rates } : {}),
     };
   }));
+}
+
+function appendCodexSettingsEdits(
+  codex: NonNullable<DesktopSettingsConfigPatch["models"]>["codex"],
+  set: (path: readonly string[], value: string | number | boolean | readonly string[] | undefined) => void,
+  edits: TomlEdit[],
+): void {
+  if (codex?.path !== undefined) {
+    set(["models", "codex", "path"], codex.path);
+  }
+  if (codex?.profile !== undefined) {
+    set(["models", "codex", "profile"], codex.profile);
+  }
+  if (codex?.configOverrides !== undefined) {
+    set(
+      ["models", "codex", "config_overrides"],
+      validateCodexConfigOverrides(codex.configOverrides),
+    );
+  }
+  if (codex?.skillProfiles !== undefined) {
+    const profiles = normalizeCodexSkillProfiles(codex.skillProfiles, true);
+    const path = ["models", "codex", "skill_profiles"];
+    edits.push(profiles.length
+      ? {
+          op: "setTableArray",
+          path,
+          value: profiles.map(({ id, name, hiddenSkills }) => ({ id, name, hidden_skills: hiddenSkills })),
+        }
+      : { op: "deleteTableArray", path });
+  }
+  if (codex?.localModelIds !== undefined) {
+    set(["models", "codex", "local_model_ids"], validateLocalModelIds(codex.localModelIds));
+  }
+  if (codex?.providers !== undefined) {
+    const providers = validateCodexModelProviders(codex.providers);
+    edits.push(...codexModelProviderTableEdits(providers));
+  }
+  if (codex?.allowFast !== undefined) {
+    set(["models", "codex", "allow_fast"], codex.allowFast);
+  }
+  if (codex?.managedBuilds !== undefined) {
+    set(["models", "codex", "managed_builds"], codex.managedBuilds);
+  }
+  if (codex?.managedBuildChannel !== undefined) {
+    set(
+      ["models", "codex", "managed_build_channel"],
+      codex.managedBuildChannel,
+    );
+  }
+}
+
+function normalizeCodexSkillProfiles(value: unknown, strict: boolean): CodexSkillProfile[] {
+  const profiles: CodexSkillProfile[] = [];
+  const invalid = "Invalid Codex skill profile.";
+  if (!Array.isArray(value)) {
+    if (strict) throw new Error(invalid);
+    return profiles;
+  }
+  for (const row of value) {
+    const id = typeof row?.id === "string" ? row.id.trim() : "";
+    const name = typeof row?.name === "string" ? row.name.trim() : "";
+    const error = codexSkillProfileNameError(name, profiles, id);
+    const hiddenSkills: unknown = row?.hiddenSkills;
+    if (!id || profiles.some((profile) => profile.id === id) || error
+      || !Array.isArray(hiddenSkills) || hiddenSkills.some((skill) => typeof skill !== "string" || !skill.trim())) {
+      if (strict) throw new Error(error ?? invalid);
+      continue;
+    }
+    profiles.push({ id, name, hiddenSkills: [...new Set(hiddenSkills.map((skill: string) => skill.trim()))] });
+  }
+  return profiles;
+}
+
+function readCodexSkillProfiles(value: unknown): CodexSkillProfile[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return normalizeCodexSkillProfiles(value.map((row) => ({
+    id: row?.id,
+    name: row?.name,
+    hiddenSkills: row?.hidden_skills ?? [],
+  })), false);
 }
 
 function codexModelProviderTableEdits(

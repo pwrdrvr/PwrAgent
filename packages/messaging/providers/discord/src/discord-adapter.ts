@@ -39,6 +39,7 @@ import type {
   MessagingRateLimitInfo,
   MessagingCallbackHandleStore,
   MessagingChannelRef,
+  MessagingAuthorizationRejection,
   MessagingRejectedInboundEvent,
   MessagingClientRateLimitStrategy,
   MessagingSurfaceAction,
@@ -2286,10 +2287,10 @@ export class DiscordAdapter implements DiscordProviderAdapter {
 
   private rejectedEventFromMessage(
     message: DiscordMessageCreateDispatch,
-    options: Pick<MessagingRejectedInboundEvent, "kind" | "reason"> & {
+    options: Pick<MessagingAuthorizationRejection, "kind" | "reason"> & {
       receipt: MessagingInboundReceipt;
     },
-  ): MessagingRejectedInboundEvent {
+  ): MessagingAuthorizationRejection {
     return {
       id: `discord:message:${message.id}:rejected`,
       kind: options.kind,
@@ -2311,10 +2312,10 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private rejectedEventFromInteraction(
     interaction: DiscordInteractionCreateDispatch,
     actor: DiscordUser,
-    options: Pick<MessagingRejectedInboundEvent, "reason"> & {
+    options: Pick<MessagingAuthorizationRejection, "reason"> & {
       receipt: MessagingInboundReceipt;
     },
-  ): MessagingRejectedInboundEvent {
+  ): MessagingAuthorizationRejection {
     const kind = interaction.data?.custom_id ? "callback" : "command";
     return {
       id: `discord:interaction:${interaction.id}:rejected`,

@@ -4737,6 +4737,32 @@ describe("CodexAppServerClient", () => {
 
     afterEach(() => vi.restoreAllMocks());
 
+    it.each([undefined, [], ["deploy"], ["deploy", "publish"]].map((hiddenSkills) => ({ hiddenSkills })))(
+      "restores the thread's settings on the first resume after history repair (%j)",
+      async ({ hiddenSkills }) => {
+        const { client, transport } = await fixture();
+        const previousConfig = MockTransport.configReadResult;
+        const launchRule = { name: "private", enabled: false };
+        MockTransport.configReadResult = {
+          layers: [{ name: { type: "sessionFlags" }, config: { skills: { config: [launchRule] } } }],
+        };
+        client.provideThreadSkillExclusions(async (requestedThread) =>
+          requestedThread === threadId ? hiddenSkills : undefined);
+        try {
+          await client.recoverInvalidPersistedResponseMessageIds(recoveryParams);
+          const requests = transport.sentMessages.map((message) => JSON.parse(message));
+          const resume = requests.find((request) => request.method === "thread/resume");
+          expect(resume?.params.threadId).toBe(threadId);
+          expect(resume?.params.config?.["skills.config"]).toEqual(hiddenSkills?.length
+            ? [launchRule, ...hiddenSkills.map((name) => ({ name, enabled: false }))]
+            : undefined);
+        } finally {
+          MockTransport.configReadResult = previousConfig;
+          await client.close();
+        }
+      },
+    );
+
     it("blocks reads and reviews through shutdown, repair, and resume", async () => {
       const stopped = deferred();
       const finishClose = deferred();
@@ -10613,7 +10639,7 @@ describe("CodexAppServerClient", () => {
     },
   );
 
-  it("consumes Codex native goal notifications without changing normalized thread state", async () => {
+  it("projects Codex Goal updates and clears onto the normalized notification stream", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     try {
@@ -10625,23 +10651,28 @@ describe("CodexAppServerClient", () => {
         method: "thread/status/changed",
         params: { threadId: "thread-2", status: { type: "active", activeFlags: [] } },
       };
+      const goal = {
+        threadId: "thread-2", objective: "Finish the fixture task", status: "active",
+        tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0, updatedAt: 2,
+      };
       codexClientLogWarn.mockClear();
       transport.emitInbound({
         jsonrpc: "2.0",
         method: "thread/goal/updated",
         params: {
           threadId: "thread-2",
-          goal: {
-            threadId: "thread-2", objective: "Finish the fixture task", status: "active",
-            tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0,
-          },
+          goal: { ...goal, createdAt: 1 },
         },
       });
       transport.emitInbound({ jsonrpc: "2.0", method: "thread/goal/cleared", params: { threadId: "thread-2" } });
       transport.emitInbound({ jsonrpc: "2.0", ...status });
 
       await vi.waitFor(() => expect(notifications).toContainEqual(status));
-      expect(notifications).toEqual([status]);
+      expect(notifications).toEqual([
+        { method: "thread/goal/updated", params: { threadId: "thread-2", goal } },
+        { method: "thread/goal/cleared", params: { threadId: "thread-2" } },
+        status,
+      ]);
       expect(codexClientLogWarn).not.toHaveBeenCalled();
     } finally {
       await client.close();

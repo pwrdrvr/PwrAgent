@@ -25,6 +25,11 @@ import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
 import { threadAssetRoot } from "../app-server/thread-assets";
+import { installedAcpAgentSettingsEntry } from "../shell/ipc/settings";
+import { AcpAgentStore } from "../storage/acp-agent-store";
+import { StateDb } from "../state/state-db";
+import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 
 const fixtureDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -119,6 +124,236 @@ describe("inputToAcpPrompt local image replay", () => {
 });
 
 describe("describeInstalledAcpBackend", () => {
+  it("writes once when session creation first learns an account restriction", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-acp-account-budget-"));
+    const db = StateDb.open(path.join(root, "state.db"));
+    const store = new AcpAgentStore(db);
+    const backendId = "acp:gemini";
+    store.upsertInstalledAgent({
+      ...buildInstalledAgent(),
+      launchDescriptor: { backendId, registryId: "gemini", distributionKind: "local", command: "/opt/example/gemini", args: [], env: {} },
+    });
+    const transport = new FakeAcpAgentTransport();
+    const request = transport.request.bind(transport);
+    const rejection = "This client is no longer supported for Gemini Code Assist for individuals.";
+    vi.spyOn(transport, "request").mockImplementation(async (method, params, timeout) => {
+      if (method === "session/new") throw new Error(rejection);
+      return await request(method, params, timeout);
+    });
+    const adapter = createTestAcpBackendAdapter({
+      acpAgentStore: store,
+      captureStores: [],
+      acpSessionStore: { getSession: () => undefined, listSessions: () => [], upsertSession: vi.fn() },
+      createAcpTransport: () => transport,
+      emit: async () => undefined,
+      handleServerRequest: async () => ({}),
+    });
+    try {
+      const client = await adapter.getClient(backendId);
+      const { writes } = await measureSqliteWrites(async () => {
+        const attempt = () => expect(client.startSession({ executionMode: "default" })).rejects.toThrow(rejection);
+        await Promise.all([attempt(), attempt(), attempt()]);
+      });
+      expectSqliteWriteBudget({
+        scenario: "acp-account-restriction-publication",
+        note: "One commit for the newly observed account restriction, including concurrent attempts with the same rejection",
+        writes,
+      });
+    } finally {
+      await adapter.close();
+      db.close();
+      await rm(root, { recursive: true, force: true });
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("records known Google account rejections from session/new for the currently selected runtime", async () => {
+    const gemini = "acp:gemini";
+    const antigravity = "acp:antigravity";
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom(gemini, antigravity),
+      fc.boolean(),
+      async (backendId, changedRuntime) => {
+        const registryId = backendId === gemini ? "gemini" : "antigravity";
+        const rejection = backendId === gemini
+          ? "json-rpc error (-32000): This client is no longer supported for Gemini Code Assist for individuals."
+          : "json-rpc error (-32000): Authentication required";
+        let current = {
+          ...buildInstalledAgent(), backendId, registryId,
+          launchDescriptor: {
+            backendId, registryId, distributionKind: "local" as const,
+            command: `/opt/example/${registryId}`, args: [], env: {},
+          },
+        };
+        const transport = new FakeAcpAgentTransport();
+        const request = transport.request.bind(transport);
+        vi.spyOn(transport, "request").mockImplementation(async (method, params, timeout) => {
+          if (method !== "session/new") return await request(method, params, timeout);
+          if (changedRuntime) current = { ...current, version: "999.0.0" };
+          throw new Error(rejection);
+        });
+        const emit = vi.fn(async (_event: AgentEvent) => undefined);
+        const adapter = createTestAcpBackendAdapter({
+          captureStores: [],
+          acpAgentStore: {
+            getInstalledAgent: () => current,
+            listInstalledAgents: () => [current],
+            upsertInstalledAgent: (agent) => { current = agent as typeof current; },
+          },
+          acpSessionStore: { getSession: () => undefined, listSessions: () => [], upsertSession: vi.fn() },
+          createAcpTransport: () => transport,
+          emit,
+          handleServerRequest: vi.fn(async () => ({})),
+        });
+        try {
+          const client = await adapter.getClient(backendId);
+          emit.mockClear();
+          await expect(client.startSession({ executionMode: "default" })).rejects.toThrow(rejection);
+          expect(describeInstalledAcpBackend(current).available).toBe(changedRuntime);
+          expect(installedAcpAgentSettingsEntry(current).unavailableReason !== undefined).toBe(!changedRuntime);
+          expect(emit.mock.calls.some(([event]) =>
+            event.notification.method === "backend/acpRuntimeCapabilities/updated")).toBe(!changedRuntime);
+        } finally {
+          await adapter.close();
+        }
+      },
+    ), { numRuns: 12 });
+  });
+
+  it("shows a sign-in action for Antigravity's observed logged-out response", () => {
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId: "acp:antigravity",
+      registryId: "antigravity",
+      name: "Antigravity CLI",
+      lastDiscoveryError: "json-rpc error (-32000): Authentication required",
+    };
+    const summary = describeInstalledAcpBackend(agent);
+    expect(summary.available).toBe(false);
+    expect(installedAcpAgentSettingsEntry(agent).unavailableReason).toBe(summary.unavailableReason);
+    expect(summary.unavailableReason).toContain("Run agy in your terminal");
+    expect(describeInstalledAcpBackend({ ...agent, lastDiscoveryError: undefined }).available).toBe(true);
+  });
+
+  it("reloads independently created Antigravity threads by their own ACP session IDs", async () => {
+    const backendId = "acp:antigravity";
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "antigravity",
+      name: "Antigravity CLI",
+      launchDescriptor: {
+        backendId,
+        registryId: "antigravity",
+        distributionKind: "local",
+        command: "agy",
+        args: ["acp", "--process-per-session"],
+        env: {},
+      },
+    };
+    await fc.assert(fc.asyncProperty(
+      fc.uniqueArray(fc.uuid(), { minLength: 2, maxLength: 4 }),
+      async (providerIds) => {
+        const transports: FakeAcpAgentTransport[] = [];
+        const sessions = new Map<string, AcpSessionMetadata>();
+        const createAdapter = () => createTestAcpBackendAdapter({
+          acpAgentStore: {
+            getInstalledAgent: () => agent,
+            listInstalledAgents: () => [agent],
+            upsertInstalledAgent: vi.fn(),
+          },
+          acpSessionStore: {
+            listSessions: () => [...sessions.values()],
+            getSession: (_backend, id) => sessions.get(id),
+            upsertSession: (session) => { sessions.set(session.sessionId, session); },
+          },
+          captureStores: [],
+          createAcpTransport: () => {
+            const transport = new FakeAcpAgentTransport({
+              initialize: {
+                protocolVersion: 1,
+                agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {}, close: {} } },
+              },
+            });
+            transports.push(transport);
+            const request = transport.request.bind(transport);
+            let nextProviderId = 0;
+            vi.spyOn(transport, "request").mockImplementation(async (method, params, timeout) => {
+              const providerId = method === "session/new" ? providerIds[nextProviderId++] : undefined;
+              const response = await request(method, params, timeout);
+              return providerId ? { sessionId: providerId } : response;
+            });
+            return transport;
+          },
+          emit: vi.fn(async () => undefined),
+          handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+        });
+        const writer = createAdapter();
+        try {
+          const client = await writer.getClient(backendId);
+          await Promise.all(providerIds.map((_id, index) => client.startSession({
+            sessionId: `thread-${index}`,
+            cwd: "/same-workspace",
+            executionMode: "default",
+          })));
+        } finally {
+          await writer.close();
+        }
+        expect(new Set([...sessions.values()].map((session) => session.agentSessionId)))
+          .toEqual(new Set(providerIds));
+        const reader = createAdapter();
+        try {
+          const client = await reader.getClient(backendId);
+          const coldSessions = [...sessions.values()].reverse();
+          await Promise.all(coldSessions.map((session) => client.ensureSession(session)));
+          const requests = transports[1]?.requests.slice(1);
+          expect(requests?.map(({ method }) => method)).toEqual(coldSessions.map(() => "session/load"));
+          expect(requests?.map(({ params }) => params?.sessionId).sort()).toEqual([...providerIds].sort());
+        } finally {
+          await reader.close();
+        }
+      },
+    ), { numRuns: 12 });
+  });
+
+  it("reports consumer deprecation only for Gemini CLI with the explicit account rejection", () => {
+    // An installed binary remains selectable for supported accounts. Both
+    // consumers of the discovery result must recognize the same rejection.
+    fc.assert(fc.property(
+      fc.constantFrom("gemini", "kimi", "grok"),
+      fc.constantFrom(undefined, "Authentication required", "Gemini request timed out"),
+      fc.constantFrom("", "json-rpc error (-32000): "),
+      fc.constantFrom("", "\nTo continue using Gemini, please migrate to the Antigravity suite of products."),
+      (registryId, unrelatedError, prefix, suffix) => {
+        const rejection = prefix
+          + "This client is no longer supported for Gemini Code Assist for individuals."
+          + suffix;
+        for (const lastDiscoveryError of [rejection, unrelatedError]) {
+          const record: AcpInstalledAgentRecord = {
+            ...buildInstalledAgent(),
+            backendId: `acp:${registryId}`,
+            registryId,
+            lastDiscoveryError,
+          };
+          const deprecated = registryId === "gemini" && lastDiscoveryError === rejection;
+          const summary = describeInstalledAcpBackend(record);
+          const settings = installedAcpAgentSettingsEntry(record);
+          expect(summary.kind).toBe(record.backendId);
+          expect(summary.available).toBe(!deprecated);
+          expect(settings.installed).toBe(true);
+          expect(settings.unavailableReason).toBe(summary.unavailableReason);
+          if (deprecated) {
+            expect(settings.lastDiscoveryError).toContain("Antigravity CLI");
+            expect(settings.lastDiscoveryError).toContain("Re-probe");
+          } else {
+            expect(settings.lastDiscoveryError).toBe(lastDiscoveryError);
+          }
+        }
+      },
+    ));
+  });
+
   it("does not advertise session/load when the agent reports it is unsupported", () => {
     const backend = describeInstalledAcpBackend({
       ...buildInstalledAgent(),

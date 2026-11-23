@@ -1,4 +1,5 @@
 import type { ForgeCli } from "../forge-product";
+import type { CodexThreadSkillProfile } from "./codex-skill-profiles";
 import type { ProjectForgeAutomation } from "../project-forge-automation";
 import type { AppServerTurnInputItem } from "./normalized-app-server";
 import type {
@@ -129,6 +130,7 @@ export type NavigationLaunchpadAgent = Pick<
 >;
 
 export type NavigationThreadSummary = AppServerThreadSummary & {
+  codexSkillProfile?: CodexThreadSkillProfile;
   /** Owner-projected navigation group. Workspace paths still come from linkedDirectories. */
   checkoutProject?: NavigationCheckoutProject;
   /** Most recent completed probe for `gitWorkingState`, even when its value was unchanged. */
@@ -202,6 +204,7 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   tokenMiserEnabled?: boolean;
   /** Absent follows the profile default. */
   monitorJobSuggestionsEnabled?: boolean;
+  jobMonitorCreationEnabled?: boolean;
   /** User-curated position in the pinned section. Lower ranks sort first. */
   pinnedRank?: string;
   /**
@@ -433,7 +436,7 @@ export type TokenMiserSubAgentAccounting = {
 
 export type ThreadActiveSubAgent = Pick<ThreadSubAgentSummary,
   | "monitorId" | "task" | "status" | "createdAt" | "updatedAt" | "monitorThreadId" | "monitorTurnId"
-  | "agentName" | "attemptId"
+  | "agentName" | "attemptId" | "displayTitle"
 >;
 
 export type ThreadSubAgentSummary = {
@@ -444,6 +447,8 @@ export type ThreadSubAgentSummary = {
   /** Set by producers that reuse a monitor ID for multiple attempts. */
   attemptId?: string;
   task: string;
+  /** Frozen card label for a PwrAgent Job Monitor. Older cards omit it. */
+  displayTitle?: string;
   status: ThreadSubAgentStatus;
   createdAt: number;
   updatedAt: number;
@@ -545,6 +550,8 @@ export type PrLegacyChipState = "merged" | "draft" | "closed";
 export type PrLifecycleState = "open" | "merged" | "closed";
 export type PrReviewState = "draft" | "ready_for_review";
 export type PrMergeState = "mergeable" | "conflicting" | "unknown";
+/** A way to land a PR. `ThreadTodoMergeMethod` is the same set. */
+export type PrMergeMethod = "squash" | "rebase" | "merge";
 
 /**
  * Where a PR stands in its base branch's merge queue (GitHub) or merge train
@@ -649,6 +656,12 @@ export type PrSummary = {
    * Absent from older builds and peers: treat absence as "no queue known".
    */
   mergeQueue?: PrMergeQueueStatus;
+  /**
+   * The merge methods the destination repository allows, read with the
+   * status poll. Absent from older builds, peers, GitLab and rows cached
+   * before it existed: treat absence as "not known", never as "none".
+   */
+  allowedMergeMethods?: PrMergeMethod[];
   /** Head commit observed with this status snapshot. */
   headSha?: string;
   /** Direct destination for the first failed CI check in this snapshot. */
@@ -904,6 +917,7 @@ export type CodexEnvironmentOption = {
 
 export type NavigationLaunchpadDefaults = {
   backend: AppServerBackendKind;
+  codexSkillProfileId?: string | null;
   /** Keeps a Codex endpoint selected even while its model is unset. */
   codexModelProviderId?: string;
   executionMode: ThreadExecutionMode;
@@ -924,6 +938,7 @@ export function navigationLaunchpadProviderKey(launchpad: Pick<NavigationLaunchp
 }
 
 export type NavigationLaunchpadProviderSettings = {
+  codexSkillProfileId?: string | null;
   executionMode?: ThreadExecutionMode;
   model?: string;
   reasoningEffort?: string;
@@ -940,6 +955,7 @@ export type NavigationLaunchpadProviderSettings = {
 };
 
 const NAVIGATION_LAUNCHPAD_PROVIDER_SETTING_KEYS = [
+  "codexSkillProfileId",
   "executionMode",
   "model",
   "reasoningEffort",
@@ -1144,6 +1160,7 @@ function clearNavigationLaunchpadProviderFields<T extends NavigationLaunchpadDef
   return {
     ...launchpad,
     codexModelProviderId: undefined,
+    codexSkillProfileId: undefined,
     // Unset, not "default": the projection then resolves the new provider's
     // own default instead of carrying this one's access across.
     executionMode: undefined as unknown as ThreadExecutionMode,
@@ -1171,6 +1188,7 @@ export function projectNavigationLaunchpadProviderSettings<
     codexModelProviderId: launchpad.backend === "codex"
       ? parseProviderPickerValue(key).codexModelProviderId
       : undefined,
+    codexSkillProfileId: launchpad.backend === "codex" ? settings.codexSkillProfileId : undefined,
     executionMode:
       settings.executionMode
       ?? resolveDefaultLaunchpadExecutionMode(key),
@@ -1401,6 +1419,10 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
    * default for each new draft.
    */
   agent?: NavigationLaunchpadAgent;
+  /** The saved preset copied into this draft, if any. Never part of an Agent thread. */
+  agentPresetId?: string;
+  /** This MCP selection belongs to the unsent Agent setup, including Custom. */
+  agentDraftMcpSelection?: true;
   /** MCP connections selected for the thread created from this launchpad. */
   mcpConnectionIds?: string[];
   /**
@@ -2717,6 +2739,7 @@ export type NavigationMetadataDependencies = {
 export type NavigationLaunchpadConfiguration = Pick<NavigationLaunchpadDraft,
   | "backend"
   | "codexModelProviderId"
+  | "codexSkillProfileId"
   | "executionMode"
   | "workMode"
   | "model"
@@ -2730,6 +2753,8 @@ export type NavigationLaunchpadConfiguration = Pick<NavigationLaunchpadDraft,
   | "directoryLabel"
   | "directoryPath"
   | "agent"
+  | "agentPresetId"
+  | "agentDraftMcpSelection"
   | "mcpConnectionIds"
   | "registeredAt"
   | "settingsTouchedAt"
@@ -2752,6 +2777,27 @@ export type NavigationLaunchpadConfiguration = Pick<NavigationLaunchpadDraft,
 >;
 
 /** Independent defaults and one explicitly selected launchpad; never a collection. */
+/** An applied Agent setup owns its connection choices for one launch. */
+export function hasAgentDraftMcpSelection(draft: Pick<NavigationLaunchpadDraft, "agentDraftMcpSelection" | "agentPresetId">): boolean {
+  return draft.agentDraftMcpSelection === true || draft.agentPresetId !== undefined;
+}
+
+export function redactLaunchpadAgentDraft<T extends Pick<NavigationLaunchpadDraft,
+  "agent" | "agentPresetId" | "agentDraftMcpSelection" | "mcpConnectionIds" | "mcpConnectionIdsFromDefaults">>(draft: T): T {
+  const { agent: _agent, agentPresetId: _presetId, agentDraftMcpSelection: _draftSelection, ...shared } = draft;
+  if (hasAgentDraftMcpSelection(draft) || (draft.agent && draft.mcpConnectionIdsFromDefaults !== true)) {
+    delete shared.mcpConnectionIds;
+    delete shared.mcpConnectionIdsFromDefaults;
+  }
+  return shared as T;
+}
+
+/** Only the viewer that composed an unsent draft may recover its input. */
+export function projectFederatedLaunchpad(draft: NavigationLaunchpadDraft): NavigationLaunchpadDraft {
+  const { editorDocument: _editor, imageAttachments: _images, fileAttachments: _files, ...configuration } = redactLaunchpadAgentDraft(draft);
+  return { ...configuration, prompt: "" };
+}
+
 export type NavigationLaunchpadConfigRequest = {
   protocol: typeof NAVIGATION_QUERY_PROTOCOL_VERSION;
   federationTarget?: FederationTarget;
@@ -2997,6 +3043,8 @@ export type SetThreadPinResponse = {
 export type RemoteThreadPin = {
   ref: FederatedThreadRef;
   addedAt: number;
+  /** Viewer-local mount identity, read only by archive-proof consumers. */
+  mountToken?: string;
   /** Peer display label captured at pin/refresh time. */
   instanceLabel: string;
   /** Last successfully fetched summary (unstamped), for offline rendering. */
@@ -3147,6 +3195,16 @@ export type SetThreadMonitorJobSuggestionsResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   monitorJobSuggestionsEnabled?: boolean;
+};
+
+export type SetThreadJobMonitorCreationRequest = {
+  threadId: ThreadIdentifier;
+  enabled: boolean;
+};
+
+export type SetThreadJobMonitorCreationResponse = {
+  threadId: ThreadIdentifier;
+  enabled: boolean;
 };
 
 /**
@@ -3377,6 +3435,71 @@ export type DetachThreadPullRequestResponse = {
   prs: PrSummary[];
 };
 
+/**
+ * A thread whose attached PR the operator merges from its PR card. A peer's
+ * thread names its owner, which reads the method and runs the merge.
+ */
+export type ThreadPullRequestMergeTarget = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /** Set for a peer's thread; its owner merges, as `THREAD_PULL_REQUEST_MERGE_CAPABILITY`. */
+  federationTarget?: FederationTarget;
+};
+
+/** The owner reads its project's method and merges a PR for a viewer. */
+export const THREAD_PULL_REQUEST_MERGE_CAPABILITY =
+  "thread_pull_request_merge_v1" satisfies FederationCapability;
+
+/**
+ * The merge method a thread's PR card starts on: the operator's last pick for
+ * the thread's project, which to-do merge cards share, then Settings' default.
+ */
+export type ReadThreadPullRequestMergeResponse = {
+  remembered?: PrMergeMethod;
+  fallback: PrMergeMethod;
+};
+
+export type MergeThreadPullRequestRequest = ThreadPullRequestMergeTarget & {
+  /** One of the thread's attached PRs; main refuses any other. */
+  url: string;
+  method: PrMergeMethod;
+  /** The pick came from the method list, so it becomes the project's. */
+  rememberMethod?: boolean;
+};
+
+export type MergeThreadPullRequestResponse = {
+  summary: string;
+  /** Added to the base branch's merge queue rather than merged. */
+  queued?: boolean;
+};
+
+/**
+ * A viewer's request to the thread's owner, as
+ * `backend.readThreadPullRequestMergeV1`. It names one of the owner's own
+ * threads, which answers with a `ReadThreadPullRequestMergeResponse`.
+ */
+export type FederationReadThreadPullRequestMergeRequestV1 = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+};
+
+/** A viewer's merge, as `backend.mergeThreadPullRequestV1`, run by the owner. */
+export type FederationMergeThreadPullRequestRequestV1 = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  url: string;
+  method: PrMergeMethod;
+  rememberMethod?: boolean;
+};
+
+/**
+ * The owner's answer to a viewer's merge. A refusal crosses as a result,
+ * not a thrown error, so the viewer shows the owner's own reason.
+ */
+export type FederationMergeThreadPullRequestResultV1 =
+  | ({ ok: true } & MergeThreadPullRequestResponse)
+  | { ok: false; message: string };
+
 export type AttachDirectoryToThreadRequest = {
   backend?: AppServerBackendKind;
   /** Route known remote directory paths to the instance that owns the thread. */
@@ -3555,8 +3678,10 @@ export type ThreadWorktreeRegistration = {
 };
 
 export type ThreadOverlayState = {
+  codexSkillProfile?: CodexThreadSkillProfile;
   /** Absent follows the profile default. */
   monitorJobSuggestionsEnabled?: boolean;
+  jobMonitorCreationEnabled?: boolean;
   /** Durable once-per-turn reminder claim, including failed delivery attempts. */
   monitorJobSuggestionTurnId?: string;
   backend: AppServerBackendKind;

@@ -225,6 +225,7 @@ export type AcpAgentClientOptions = {
   store: AcpSessionStoreLike;
   transport: AcpJsonRpcTransport;
   now?: () => number;
+  onSessionStartError?: (error: unknown) => Promise<void>;
   onSessionUpdate?: (event: {
     assistantMessageItemId?: string;
     fromSessionLoad?: boolean;
@@ -894,6 +895,10 @@ export class AcpAgentClient {
       cwd,
       mcpServers: toAcpMcpServerWireConfigs(mcpRegistration.servers),
       ...(params.sessionMeta ? { _meta: params.sessionMeta } : {}),
+    }).catch(async (error: unknown) => {
+      // A failed publication must never replace the provider's error.
+      await this.options.onSessionStartError?.(error).catch(() => undefined);
+      throw error;
     });
     const now = this.now();
     const record = asRecord(result);

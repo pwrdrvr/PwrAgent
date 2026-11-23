@@ -14,14 +14,15 @@ const ITEM =
  * "Start sub-thread in a new worktree" row while the worktree check runs).
  * Items of a nested submenu belong to that submenu's walk, not this one.
  */
-function menuItems(menu: HTMLElement | null): HTMLElement[] {
+function menuItems(menu: HTMLElement | null, includeAriaDisabled: boolean): HTMLElement[] {
   if (menu === null) return [];
   return [...menu.querySelectorAll<HTMLElement>(ITEM)].filter(
     (item) =>
       item.parentElement?.closest('[role="menu"]') === menu
       && !item.hasAttribute("disabled")
       && (
-        item.getAttribute("aria-disabled") !== "true"
+        includeAriaDisabled
+        || item.getAttribute("aria-disabled") !== "true"
         || item.hasAttribute("aria-haspopup")
       ),
   );
@@ -61,6 +62,7 @@ export function useMenuNavigation({
   menuRef,
   triggerRef,
   onClose,
+  includeAriaDisabled = false,
 }: {
   open: boolean;
   menuRef: RefObject<HTMLElement | null>;
@@ -70,6 +72,8 @@ export function useMenuNavigation({
    */
   triggerRef?: RefObject<HTMLElement | null>;
   onClose: () => void;
+  /** Reach disabled rows whose descriptions explain why the action is unavailable. */
+  includeAriaDisabled?: boolean;
 }): void {
   // Held in a ref so an inline callback does not rebuild the key listener
   // on every render.
@@ -106,7 +110,7 @@ export function useMenuNavigation({
     // time it closes.
     const trigger = triggerRef?.current;
     const menu = menuRef.current;
-    const first = menuItems(menu)[0];
+    const first = menuItems(menu, includeAriaDisabled)[0];
     (first ?? menu)?.focus();
     return () => {
       const heldFocus = heldFocusRef.current;
@@ -118,7 +122,7 @@ export function useMenuNavigation({
       if (active !== null && active !== document.body) return;
       if (trigger?.isConnected === true) trigger.focus();
     };
-  }, [open, menuRef, triggerRef]);
+  }, [open, menuRef, triggerRef, includeAriaDisabled]);
 
   useEffect(() => {
     if (!open) return;
@@ -147,7 +151,7 @@ export function useMenuNavigation({
       if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) {
         return;
       }
-      const items = menuItems(menu);
+      const items = menuItems(menu, includeAriaDisabled);
       if (items.length === 0) return;
       // -1 when focus is on the menu itself rather than an item.
       const at = items.indexOf(active as HTMLElement);
@@ -174,5 +178,5 @@ export function useMenuNavigation({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open, menuRef, triggerRef]);
+  }, [open, menuRef, triggerRef, includeAriaDisabled]);
 }

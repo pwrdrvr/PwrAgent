@@ -1003,6 +1003,8 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
           authorizeToolCall: (params) =>
             ports.authorizeAgentToolMcpCall(params),
           isToolAdvertised: async (name, context) => isAgentToolAdvertisedLocally(name)
+            && (name !== "create_monitor_delegation" || !context.threadId
+              || await ports.isJobMonitorCreationEnabled({ backend: context.backend, threadId: context.threadId }))
             && (name !== "manage_pwragent" || await ports.canManagePwrAgent(
               await ports.resolveAgentToolMcpCallContext(context) ?? context, true)),
           resolveToolResultReminder: (context) =>

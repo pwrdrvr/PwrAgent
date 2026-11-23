@@ -1581,7 +1581,7 @@ export type MessagingInboundRejectionReason =
   | "unauthorized-actor"
   | "unauthorized-conversation";
 
-export type MessagingRejectedInboundEvent = MessagingInboundReceipt & {
+export type MessagingAuthorizationRejection = MessagingInboundReceipt & {
   id: string;
   kind: MessagingInboundEventKind;
   actor: MessagingActorIdentity;
@@ -1595,6 +1595,23 @@ export type MessagingRejectedInboundEvent = MessagingInboundReceipt & {
   reason: MessagingInboundRejectionReason;
   routingState?: MessagingAdapterState;
 };
+
+export type MessagingAdapterValidationRejectionReason =
+  | "callback-signature"
+  | "callback-handle-unavailable"
+  | "command-authentication"
+  | "webhook-authentication";
+
+/** A terminal adapter check failed. Carry only the local receipt and a fixed reason. */
+export type MessagingAdapterValidationRejection = {
+  kind: "validation";
+  reason: MessagingAdapterValidationRejectionReason;
+  receivedAt: number;
+};
+
+export type MessagingRejectedInboundEvent =
+  | MessagingAuthorizationRejection
+  | MessagingAdapterValidationRejection;
 
 export type MessagingInboundRejectedListener = (
   event: MessagingRejectedInboundEvent,
@@ -2019,6 +2036,8 @@ export type MessagingBrowseSessionRecord = {
   launchAction: MessagingBrowseLaunchAction;
   defaultAgentScope?: MessagingDefaultAgentScope;
   mode: MessagingBrowseMode;
+  /** Profile-local preset chosen for this new Agent. Resolved again before starting. */
+  agentPresetId?: string;
   pageIndex: number;
   pageSize: number;
   preferences?: MessagingBindingPreferences;

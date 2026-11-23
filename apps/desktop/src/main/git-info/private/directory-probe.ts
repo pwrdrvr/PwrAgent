@@ -5,6 +5,7 @@ import { isToolManagedWorktreePath } from "@pwragent/shared/worktree-paths";
 import { buildPwrAgentChildProcessEnv } from "../../child-process-env";
 import { getMainLogger } from "../../log";
 import { runGitCommand } from "../../app-server/git-executable";
+import { readBoundedGitPointer } from "./directory-observation";
 
 import {
   directoryEnrichmentDiagnostics,
@@ -73,6 +74,24 @@ export function buildFallbackLinkedDirectory(currentPath: string): LinkedDirecto
   };
 }
 
+export function buildCheckoutLinkedDirectory(repositoryPath: string, worktreePath?: string): LinkedDirectorySummary {
+  return {
+    id: toDirectoryId(repositoryPath),
+    path: toDirectoryId(repositoryPath),
+    worktreePath: worktreePath && toDirectoryId(worktreePath),
+    label: path.basename(repositoryPath) || repositoryPath,
+    kind: worktreePath ? "worktree" : "local",
+  };
+}
+
+// These inputs can make the effective checkout differ from disk discovery.
+// Leave identity to an explicit Git read when the process sets one.
+export function hasGitDiscoveryOverrides(): boolean {
+  return Object.keys(process.env).some((key) =>
+    /^(?:GIT_DIR|GIT_COMMON_DIR|GIT_WORK_TREE|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM|GIT_IMPLICIT_WORK_TREE|GIT_CONFIG_COUNT|GIT_CONFIG_PARAMETERS)$/i.test(key),
+  );
+}
+
 export async function pathExists(targetPath: string): Promise<boolean> {
   try {
     await access(targetPath);
@@ -128,11 +147,8 @@ async function readGitMetadataEvidence(
     if (rootOnly) {
       const info = await stat(dotGitPath);
       if (info.isDirectory()) return { dotGitKind: "directory", dotGitPath };
-      if (!info.isFile() || info.size > GIT_DIRECTORY_PROBE_MAX_BUFFER_BYTES) {
-        return { dotGitKind: "unreadable", dotGitPath };
-      }
     }
-    const dotGitContent = await readFile(dotGitPath, "utf8");
+    const dotGitContent = rootOnly ? await readBoundedGitPointer(dotGitPath) : await readFile(dotGitPath, "utf8");
     const gitdirMatch = dotGitContent.match(/^gitdir:\s*(.+?)\s*$/m);
     const gitdirPath = gitdirMatch
       ? path.resolve(path.dirname(dotGitPath), gitdirMatch[1])
@@ -179,29 +195,34 @@ async function buildLinkedDirectoryFromGitMetadata(
   }
   return {
     evidence,
-    directory: {
-      id: toDirectoryId(repositoryPath),
-      path: toDirectoryId(repositoryPath),
-      worktreePath: toDirectoryId(worktreePath),
-      label: path.basename(repositoryPath) || repositoryPath,
-      kind: "worktree",
-    },
+    directory: buildCheckoutLinkedDirectory(repositoryPath, worktreePath),
   };
+}
+
+export async function readLiveWorktreeCommonDirectory(dotGit: string, admin: string): Promise<string | undefined> {
+  try {
+    const [backlink, common] = await Promise.all([
+      readBoundedGitPointer(path.join(admin, "gitdir")),
+      readBoundedGitPointer(path.join(admin, "commondir")),
+    ]);
+    if (!backlink.trim() || !common.trim()) return undefined;
+    const [linkedGit, namedGit, commonGit] = await Promise.all([
+      realpath(dotGit), realpath(path.resolve(admin, backlink.trim())), realpath(path.resolve(admin, common.trim())),
+    ]);
+    return linkedGit === namedGit ? commonGit : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function hasLiveWorktreeOwner(dotGit: string, admin: string, repository: string): Promise<boolean> {
   try {
-    const [backlink, common, primaryGit, hasHead] = await Promise.all([
-      readFile(path.join(admin, "gitdir"), "utf8"),
-      readFile(path.join(admin, "commondir"), "utf8"),
+    const [commonGit, primaryGit, hasHead] = await Promise.all([
+      readLiveWorktreeCommonDirectory(dotGit, admin),
       realpath(path.join(repository, ".git")),
       pathExists(path.join(repository, ".git", "HEAD")),
     ]);
-    if (!hasHead || !backlink.trim() || !common.trim()) return false;
-    const [linkedGit, namedGit, commonGit] = await Promise.all([
-      realpath(dotGit), realpath(path.resolve(admin, backlink.trim())), realpath(path.resolve(admin, common.trim())),
-    ]);
-    return linkedGit === namedGit && commonGit === primaryGit;
+    return hasHead && commonGit === primaryGit;
   } catch {
     return false;
   }
@@ -285,15 +306,7 @@ export async function loadThreadDirectoryEnrichment(
     }
 
     return {
-      linkedDirectories: [
-        {
-          id: toDirectoryId(repositoryPath),
-          path: toDirectoryId(repositoryPath),
-          worktreePath: isWorktree ? toDirectoryId(currentWorktreePath) : undefined,
-          label: path.basename(repositoryPath) || repositoryPath,
-          kind: isWorktree ? "worktree" : "local",
-        },
-      ],
+      linkedDirectories: [buildCheckoutLinkedDirectory(repositoryPath, isWorktree ? currentWorktreePath : undefined)],
       observedGitBranch: observedGitBranch?.trim() || undefined,
     };
   } catch (error) {

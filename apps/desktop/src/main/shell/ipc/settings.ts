@@ -124,6 +124,7 @@ import {
   SETTINGS_PICK_GIT_COMMAND_CHANNEL,
   SETTINGS_REFRESH_GIT_DISCOVERY_CHANNEL,
   SETTINGS_READ_CHANNEL,
+  SETTINGS_READ_MANAGED_CODEX_TRACK_TAGS_CHANNEL,
   MANAGED_RUNTIME_PROGRESS_READ_CHANNEL,
   TOKEN_MISER_READ_USAGE_CHANNEL,
   SETTINGS_READ_BOOTSTRAP_CHANNEL,
@@ -135,13 +136,15 @@ import {
   SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL,
   SETTINGS_TEST_CREDENTIALS_CHANNEL,
   SETTINGS_LINE_RICH_MENU_CHANNEL,
+  SETTINGS_LIST_DECISION_MODELS_CHANNEL,
   SETTINGS_WRITE_CONFIG_CHANNEL,
   SETTINGS_MANAGED_GIT_ACTION_CHANNEL,
 } from "../../../shared/ipc";
 import type { ManagedRuntimeProgress } from "../../../shared/managed-runtime-progress";
 import { readManagedRuntimeProgress } from "../../managed-runtime-progress";
 import type { DesktopSettingsService } from "../../settings/desktop-settings-service";
-import { checkDecisionProvider } from "../../decision/decision-provider-check";
+import { checkDecisionProvider, listDecisionModels } from "../../decision/decision-provider-check";
+import type { DecisionModelListing, DecisionProviderId } from "@pwragent/shared/decision-models";
 import {
   getDesktopConfigStore,
   getDesktopSettingsService,
@@ -187,15 +190,18 @@ import {
 import { isSafeExternalOpenUrl, isSlackAppDeepLink } from "../../external-url-policy";
 import { getMainLogger } from "../../log";
 import { timeStartupProfileOperation } from "../../diagnostics/startup-profile-events";
-import { BUILT_IN_ACP_STRATEGIES, type AcpAgentStrategy } from "@pwrdrvr/agent-acp/strategies";
+import type { AcpAgentStrategy } from "@pwrdrvr/agent-acp/strategies";
 import { AcpAgentService } from "../../acp/acp-agent-service";
 import { isBannedAcpRegistryId } from "../../acp/acp-agent-allowlist";
 import { discoverLocalAcpAgentRecords } from "../../acp/acp-instance-discovery";
+import { ACP_LOCAL_AGENT_STRATEGIES } from "../../acp/acp-local-strategies";
 import {
   ensureAcpRuntimeDiscoveryWorkspace,
   probeAcpRuntimeCapabilities,
 } from "../../acp/acp-capability-probe";
 import { shouldReprobeAcpCapabilities } from "../../acp/acp-capability-freshness";
+import { acpDiscoveryActionRequiredMessage } from "../../acp/acp-discovery-error";
+import { acpAgentLaunchIdentity } from "../../acp/acp-launch-descriptor";
 import { describeDistributionSource } from "../../acp/acp-install-provenance";
 import { isPwrAgentOwnedGrokRuntime } from "../../acp/grok-cli-update";
 import {
@@ -278,6 +284,7 @@ const LOCAL_ACP_AGENTS: Record<keyof DesktopSettingsSnapshot["acpAgents"], true>
   grok: true,
   kimi: true,
   qwen: true,
+  antigravity: true,
 };
 const LOCAL_ACP_REGISTRY_IDS = Object.keys(LOCAL_ACP_AGENTS) as Array<
   keyof DesktopSettingsSnapshot["acpAgents"]
@@ -535,14 +542,14 @@ async function listAcpAgentSettingsImpl(
     }
   }
 
-  // Always present every supported provider (Gemini/Grok/Kimi/Qwen) as its own
+  // Always present every supported provider as its own
   // section, even when nothing was discovered for it — they are known providers
   // we support via ACP, so an undiscovered one shows a "Not installed" status
   // instead of vanishing. Fill a placeholder for any built-in strategy that
   // neither the registry nor local discovery produced an entry for. This makes
   // the screen independent of registry availability (offline / cold start).
   const presentBackendIds = new Set(entries.map((entry) => entry.backendId));
-  for (const strategy of BUILT_IN_ACP_STRATEGIES) {
+  for (const strategy of ACP_LOCAL_AGENT_STRATEGIES) {
     if (
       isBannedAcpRegistryId(strategy.id) ||
       presentBackendIds.has(`acp:${strategy.id}`)
@@ -553,10 +560,9 @@ async function listAcpAgentSettingsImpl(
     presentBackendIds.add(`acp:${strategy.id}`);
   }
 
-  // Stable, predictable order: the built-in catalog order first (Gemini, Grok,
-  // Kimi, Qwen), any extra non-catalog entries after in their existing order.
+  // Local catalog order first, followed by extra entries in their existing order.
   const catalogOrder = new Map(
-    BUILT_IN_ACP_STRATEGIES.map((strategy, index) => [
+    ACP_LOCAL_AGENT_STRATEGIES.map((strategy, index) => [
       strategy.backendId,
       index,
     ]),
@@ -714,6 +720,9 @@ function placeholderAcpAgentSettingsEntry(
     installStatus: "not-installed",
     authStatus: "not-required",
     verificationStatus: "unverified-allowed",
+    ...(strategy.id === "antigravity"
+      ? { unavailableReason: "Install Antigravity CLI 1.5 or later, enable Antigravity CLI if it is off, then click Refresh under Re-probe." }
+      : {}),
     instances: [],
   };
 }
@@ -896,20 +905,24 @@ async function listInstalledAndLocalAcpAgents(
           current?.version !== undefined
           && record.version !== undefined
           && current.version !== record.version;
+        const runtimeChanged = runtimeVersionChanged
+          || (current !== undefined
+            && (record.registryId === "gemini" || record.registryId === "antigravity")
+            && acpAgentLaunchIdentity(current) !== acpAgentLaunchIdentity(record));
         const pwrAgentOwnedGrok = isPwrAgentOwnedGrokRuntime(record);
         const nextRecord = {
           ...record,
-          runtimeCapabilities: runtimeVersionChanged
+          runtimeCapabilities: runtimeChanged
             ? undefined
             : current?.runtimeCapabilities,
           update: pwrAgentOwnedGrok ? undefined : current?.update,
           updateCommand: pwrAgentOwnedGrok
             ? undefined
             : current?.updateCommand,
-          lastDiscoveredAt: runtimeVersionChanged
+          lastDiscoveredAt: runtimeChanged
             ? undefined
             : current?.lastDiscoveredAt,
-          lastDiscoveryError: runtimeVersionChanged
+          lastDiscoveryError: runtimeChanged
             ? undefined
             : current?.lastDiscoveryError,
           installedAt: current?.installedAt ?? record.installedAt,
@@ -929,7 +942,7 @@ async function listInstalledAndLocalAcpAgents(
         // Otherwise persist the merged record carrying the cached capabilities
         // without launching anything.
         if (
-          shouldReprobeAcpCapabilities(current, record.version, now, {
+          shouldReprobeAcpCapabilities(runtimeChanged ? undefined : current, record.version, now, {
             ...(options?.force === true ? { force: true } : {}),
           })
         ) {
@@ -963,7 +976,7 @@ async function listInstalledAndLocalAcpAgents(
       let storeFailure: unknown;
       for await (const outcome of probes) {
         try {
-          store.upsertInstalledAgent(outcome.record);
+          store.upsertInstalledAgent(keepConcurrentAcpRestriction(store, outcome));
         } catch (error) {
           storeFailure ??= error;
           continue;
@@ -1001,6 +1014,27 @@ async function listInstalledAndLocalAcpAgents(
         !isBannedAcpRegistryId(record.registryId),
     ),
   ];
+}
+
+function keepConcurrentAcpRestriction(
+  store: AcpAgentService,
+  { record, update }: AcpProbeOutcome,
+): AcpInstalledAgentRecord {
+  const { registryId } = record;
+  if ((registryId !== "gemini" && registryId !== "antigravity")
+    || update.status === "succeeded"
+    || acpDiscoveryActionRequiredMessage(registryId, record.lastDiscoveryError)) {
+    return record;
+  }
+  // An ordinary session may have learned the restriction after this probe
+  // started. An inconclusive result must keep it for the same runtime.
+  const current = store.getInstalledAgent(record.backendId);
+  if (!current || current.version !== record.version
+    || acpAgentLaunchIdentity(current) !== acpAgentLaunchIdentity(record)
+    || !acpDiscoveryActionRequiredMessage(registryId, current.lastDiscoveryError)) {
+    return record;
+  }
+  return { ...record, lastDiscoveryError: current.lastDiscoveryError, runtimeCapabilities: undefined };
 }
 
 function acpAgentSettingsEntry(params: {
@@ -1082,6 +1116,9 @@ export function installedAcpAgentSettingsEntry(
   // would still reach the renderer after the PwrAgent build became the runtime.
   // Drop it at the boundary: the runtime in effect owns the update story.
   const pwrAgentOwnedGrok = isPwrAgentOwnedGrokRuntime(record);
+  const actionRequired = record.installStatus === "installed"
+    ? acpDiscoveryActionRequiredMessage(record.registryId, record.lastDiscoveryError)
+    : undefined;
   return {
     backendId: record.backendId,
     registryId: record.registryId,
@@ -1104,7 +1141,8 @@ export function installedAcpAgentSettingsEntry(
     updatedAt: record.updatedAt,
     lastError: record.lastError,
     lastDiscoveredAt: record.lastDiscoveredAt,
-    lastDiscoveryError: record.lastDiscoveryError,
+    lastDiscoveryError: actionRequired ?? record.lastDiscoveryError,
+    ...(actionRequired ? { unavailableReason: actionRequired } : {}),
     runtime: record.runtimeCapabilities,
     update: pwrAgentOwnedGrok ? undefined : record.update,
     ...(pwrAgentOwnedGrok ? { pwrAgentManagedRuntime: true } : {}),
@@ -1685,7 +1723,7 @@ function createProviderCatalogRefresh(
       ).map((registryId) => ({
         id: registryId,
         label:
-          BUILT_IN_ACP_STRATEGIES.find((strategy) => strategy.id === registryId)
+          ACP_LOCAL_AGENT_STRATEGIES.find((strategy) => strategy.id === registryId)
             ?.displayName ?? registryId,
       }));
     },
@@ -2060,6 +2098,12 @@ export function registerSettingsIpcHandlers(
       ),
   );
 
+  ipcMain.removeHandler(SETTINGS_READ_MANAGED_CODEX_TRACK_TAGS_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_READ_MANAGED_CODEX_TRACK_TAGS_CHANNEL,
+    async () => await getService(service).readManagedCodexTrackTags(),
+  );
+
   ipcMain.removeHandler(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL);
   ipcMain.handle(
     SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
@@ -2362,6 +2406,22 @@ export function registerSettingsIpcHandlers(
     return await runLineRichMenuSetup(getService(service).resolveLineChannelAccessTokenSync(), request, imagePath);
   });
 
+  ipcMain.removeHandler(SETTINGS_LIST_DECISION_MODELS_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_LIST_DECISION_MODELS_CHANNEL,
+    async (_event, request: { provider?: unknown }): Promise<DecisionModelListing> => {
+      const provider: DecisionProviderId | undefined = request?.provider === "local" || request?.provider === "jev"
+        ? request.provider
+        : undefined;
+      if (!provider) return { ok: false, detail: "Unknown decision provider." };
+      const settings = getService(service);
+      return await listDecisionModels(provider, {
+        settings: settings.resolveDecisionModelSettings(),
+        apiKey: await settings.resolveDecisionApiKey(provider),
+      });
+    },
+  );
+
   ipcMain.removeHandler(SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL);
   ipcMain.handle(
     SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL,
@@ -2635,6 +2695,7 @@ export function disposeSettingsIpcHandlers(): void {
   ipcMain.removeHandler(SETTINGS_TEST_CODEX_MODEL_PROVIDER_CHANNEL);
   ipcMain.removeHandler(SETTINGS_REFRESH_CODEX_MODEL_PROVIDER_CATALOGS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_SCAN_CODEX_MODEL_PROVIDER_IMPORTS_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_READ_MANAGED_CODEX_TRACK_TAGS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL);
   ipcMain.removeHandler(SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL);
   ipcMain.removeHandler(SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL);
@@ -2647,6 +2708,7 @@ export function disposeSettingsIpcHandlers(): void {
   ipcMain.removeHandler(SETTINGS_INSPECT_CODE_SIGNATURES_CHANNEL);
   ipcMain.removeHandler(SETTINGS_TEST_CREDENTIALS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_LINE_RICH_MENU_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_LIST_DECISION_MODELS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL);
   ipcMain.removeHandler(SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL);
   ipcMain.removeHandler(SETTINGS_OPEN_SLACK_APP_SETTINGS_CHANNEL);

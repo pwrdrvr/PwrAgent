@@ -13,7 +13,9 @@ export type CodexProtocolCompatibility = {
   includePersistExtendedHistory: boolean;
   supportsOnFailureApprovalPolicy: boolean;
   supportsThreadScopedMcpServerStatus: boolean;
+  supportsThreadSkillExclusions: boolean;
   supportsThreadRevert: boolean;
+  supportsThreadGoals: boolean;
   supportsTurnAncestry: boolean;
 };
 
@@ -73,6 +75,8 @@ export function resolveCodexProtocolCompatibility(
     supportsThreadScopedMcpServerStatus:
       isAtLeast(THREAD_SCOPED_MCP_STATUS_MIN_VERSION),
     supportsThreadRevert: isAtLeast(THREAD_REVERT_MIN_VERSION),
+    supportsThreadSkillExclusions: isAtLeast([0, 164, 0]),
+    supportsThreadGoals: isAtLeast([0, 164, 0]),
     supportsTurnAncestry: isAtLeast([0, 164, 0]),
   };
 }

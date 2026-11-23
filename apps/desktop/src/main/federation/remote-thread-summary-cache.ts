@@ -90,6 +90,8 @@ export type ResolvedRemotePins = {
   /** Pins proven to be archived on a reachable owner. The viewer can safely
    *  remove these instead of preserving a permanently stale fallback row. */
   archived: RemoteThreadPin["ref"][];
+  /** Acknowledge only after the token-guarded removal commits. */
+  acknowledgeArchiveDeletion?: (mount: { ref: RemoteThreadPin["ref"]; mountToken: string }) => void;
 };
 
 /**
@@ -222,10 +224,10 @@ export class RemoteThreadSummaryCache {
   private readonly refreshFailures = new Set<string>();
   private readonly missingPinSignatures = new Map<string, string>();
   /**
-   * Thread keys a background pass proved archived on their owner, keyed by
-   * instance, awaiting report to the caller that removes the pin.
+   * Thread keys a background pass proved archived, keyed by instance and
+   * bound to the durable viewer mount that made the request.
    */
-  private readonly provenArchived = new Map<string, Set<string>>();
+  private readonly provenArchived = new Map<string, Map<string, string | undefined>>();
   /** Mounted pins own navigation demand until removed, independent of visible lens pages. */
   private pinnedByInstanceId = new Map<string, RemoteThreadPin[]>();
   /**
@@ -636,6 +638,10 @@ export class RemoteThreadSummaryCache {
     }
   }
 
+  async resolvePinnedThreads(pins: readonly RemoteThreadPin[]): Promise<ResolvedRemotePins> {
+    return this.readPinnedThreads(pins);
+  }
+
   /**
    * Never awaits a peer: navigation-refresh latency must stay independent
    * of peer responsiveness (a connected-but-slow owner used to stall every
@@ -652,9 +658,9 @@ export class RemoteThreadSummaryCache {
    * `provenArchived` and are reported by the next resolve — which the
    * refresh event triggers immediately.
    */
-  async resolvePinnedThreads(
+  readPinnedThreads(
     pins: readonly RemoteThreadPin[],
-  ): Promise<ResolvedRemotePins> {
+  ): ResolvedRemotePins {
     const threads: NavigationThreadSummary[] = [];
     const refreshed: ResolvedRemotePins["refreshed"] = [];
     const archived: ResolvedRemotePins["archived"] = [];
@@ -674,6 +680,15 @@ export class RemoteThreadSummaryCache {
     // old mount. Install the new demand before starting the replacement read.
     const previousDemand = new Map([...new Set([...this.pinnedByInstanceId.keys(), ...pinsByInstanceId.keys()])]
       .map((owner) => [owner, this.mountedSelectionKey(owner)]));
+    const previousTokens = new Map([...this.pinnedByInstanceId.values()].flatMap((group) =>
+      group.map((pin) => [federatedThreadIdentityKey(pin.ref), pin.mountToken] as const)));
+    const changedMounts = new Set<string>();
+    for (const [owner, group] of pinsByInstanceId) {
+      if (group.some((pin) => {
+        const key = federatedThreadIdentityKey(pin.ref);
+        return previousTokens.has(key) && previousTokens.get(key) !== pin.mountToken;
+      })) changedMounts.add(owner);
+    }
     // Retain identities only; persisted payloads must not become another long-lived detail cache.
     this.pinnedByInstanceId = new Map([...pinsByInstanceId].map(([owner, group]) => [
       owner,
@@ -681,9 +696,12 @@ export class RemoteThreadSummaryCache {
     ]));
     const changedOwners = [...previousDemand].filter(([owner, previous]) => this.hasMountedDemand(owner)
       && (previous
-        ? previous !== this.mountedSelectionKey(owner)
+        ? changedMounts.has(owner) || previous !== this.mountedSelectionKey(owner)
         : this.cache.get(owner)?.descendants || this.inFlight.get(owner)?.descendants))
       .map(([owner]) => owner);
+    for (const owner of this.provenArchived.keys()) {
+      if (!pinsByInstanceId.has(owner)) this.provenArchived.delete(owner);
+    }
     for (const owner of this.missingPinSignatures.keys()) {
       if (!pinsByInstanceId.has(owner)) this.missingPinSignatures.delete(owner);
     }
@@ -719,6 +737,7 @@ export class RemoteThreadSummaryCache {
           thread,
         ]),
       );
+      const proofs = this.provenArchived.get(instanceId);
       for (const pin of group) {
         const pinKey = federatedThreadIdentityKey(pin.ref);
         const threadKey = buildThreadIdentityKey(
@@ -743,7 +762,7 @@ export class RemoteThreadSummaryCache {
           }
           continue;
         }
-        if (this.consumeArchivedProof(instanceId, threadKey)) {
+        if (proofs?.has(threadKey) && proofs.get(threadKey) === pin.mountToken) {
           archived.push(pin.ref);
           continue;
         }
@@ -808,7 +827,10 @@ export class RemoteThreadSummaryCache {
         );
       }
     }
-    return { threads, refreshed, archived };
+    return {
+      threads, refreshed, archived,
+      ...(archived.length ? { acknowledgeArchiveDeletion: (mount) => this.acknowledgeArchiveDeletion(mount) } : {}),
+    };
   }
 
   /**
@@ -1007,21 +1029,14 @@ export class RemoteThreadSummaryCache {
     this.scheduleWatchedExpiry();
   }
 
-  /**
-   * Read-and-clear: a proof is spent the moment it is reported, so a
-   * thread the owner restored (and the viewer re-pinned) after the probe
-   * can never be deleted by yesterday's evidence. A still-archived thread
-   * simply earns a fresh proof on the next background pass.
-   */
-  private consumeArchivedProof(instanceId: string, threadKey: string): boolean {
+  private acknowledgeArchiveDeletion({ ref, mountToken }: { ref: RemoteThreadPin["ref"]; mountToken: string }): void {
+    if (ref.target.scope !== "remote") return;
+    const { instanceId } = ref.target;
     const proofs = this.provenArchived.get(instanceId);
-    if (!proofs?.delete(threadKey)) {
-      return false;
-    }
-    if (proofs.size === 0) {
-      this.provenArchived.delete(instanceId);
-    }
-    return true;
+    const key = buildThreadIdentityKey(ref.backend, ref.threadId);
+    if (!proofs || proofs.get(key) !== mountToken) return;
+    proofs.delete(key);
+    if (!proofs.size) this.provenArchived.delete(instanceId);
   }
 
   /**
@@ -1157,6 +1172,7 @@ export class RemoteThreadSummaryCache {
     pins: readonly RemoteThreadPin[],
     fresh: readonly NavigationThreadSummary[],
   ): Promise<boolean> {
+    const generation = this.generationFor(target.instanceId);
     const freshKeys = new Set(
       fresh.filter((thread) => isThreadOwnedByPeer(thread, target.instanceId))
         .map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
@@ -1175,31 +1191,26 @@ export class RemoteThreadSummaryCache {
     let proved = false;
     await Promise.all(
       [...backends].map(async (backend) => {
-        const candidateKeys = new Set(
-          missing
-            .filter((pin) => pin.ref.backend === backend)
-            .map((pin) =>
-              buildThreadIdentityKey(pin.ref.backend, pin.ref.threadId)
-            ),
-        );
+        const candidates = missing.filter((pin) => pin.ref.backend === backend);
+        const candidateKeys = new Set(candidates.map((pin) => buildThreadIdentityKey(pin.ref.backend, pin.ref.threadId)));
         try {
           const keys = await this.archivedThreadKeysForPeer(
             target,
             backend,
             candidateKeys,
             timeoutMs,
-            missing.filter((pin) => pin.ref.backend === backend).map((pin) => pin.ref.threadId),
+            candidates.map((pin) => pin.ref.threadId),
           );
-          for (const key of candidateKeys) {
-            if (!keys.has(key)) {
-              continue;
+          if (this.generationFor(target.instanceId) !== generation) return;
+          const proofs = this.provenArchived.get(target.instanceId) ?? new Map<string, string | undefined>();
+          for (const pin of candidates) {
+            const key = buildThreadIdentityKey(pin.ref.backend, pin.ref.threadId);
+            if (keys.has(key)) {
+              proofs.set(key, pin.mountToken);
+              proved = true;
             }
-            const proofs =
-              this.provenArchived.get(target.instanceId) ?? new Set<string>();
-            proofs.add(key);
-            this.provenArchived.set(target.instanceId, proofs);
-            proved = true;
           }
+          if (proofs.size) this.provenArchived.set(target.instanceId, proofs);
         } catch {
           // Archive detection is proof-based. If the lookup fails, keep the
           // cached row just as we do when the active fetch fails.

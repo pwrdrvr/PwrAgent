@@ -42,6 +42,8 @@ export type ComposerSkillToken = AppServerSkillSummary & {
    * itself rides on every skill chip that has one, for the hover card.
    */
   showOrigin?: boolean;
+  /** Derived for display from the thread's skill profile. */
+  hiddenByProfile?: boolean;
 };
 
 /**

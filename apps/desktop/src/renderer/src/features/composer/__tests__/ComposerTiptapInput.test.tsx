@@ -16,6 +16,38 @@ afterEach(() => {
   cleanup();
 });
 
+it("marks exact hidden skill names without changing the draft text", async () => {
+  const value = "Run $deploy. Then $deploy-more, $Deploy and $ce:preview.";
+  const onChange = vi.fn();
+  const hidden = ["deploy", "ce:preview"];
+  const view = render(
+    <ComposerTiptapInput
+      id="reply"
+      label="Reply"
+      onChange={onChange}
+      placeholder="Ask anything"
+      skillTokens={[]}
+      hiddenSkillNames={hidden}
+      value={value}
+    />,
+  );
+  const editor = await screen.findByRole("textbox", { name: "Reply" });
+  expect([...editor.querySelectorAll("[data-skill-hidden]")].map((chip) => chip.textContent)).toEqual(["$deploy", "$ce:preview"]);
+  expect(editor.textContent).toBe(value);
+  expect(onChange).not.toHaveBeenCalled();
+  view.rerender(
+    <ComposerTiptapInput
+      id="reply"
+      label="Reply"
+      onChange={onChange}
+      placeholder="Ask anything"
+      skillTokens={[]}
+      value={value}
+    />,
+  );
+  expect(editor.querySelector("[data-skill-hidden]")).toBeNull();
+});
+
 it.each(["", "**Keep this**"])("appends transcript text to draft %j without interpreting it as markup", async (draft) => {
   const input = createRef<ComposerInputHandle>();
   const onChange = vi.fn();

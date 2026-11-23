@@ -91,7 +91,7 @@ it("matches the owner population across direct pins, colliding relays and direct
         && summary.federation?.ref.target.scope === "remote" && ref.target.instanceId === summary.federation.ref.target.instanceId)).toBe(true);
       expect(result.archived).toEqual([]); expect(fetchArchivedThreads).not.toHaveBeenCalled();
       const saved = pins.map((pin) => ({ ...pin.summary!, pinnedRank: pin.localPinnedRank }));
-      const viewerRows = await loadViewerNavigationPins({ readRemoteThreadPinNavigationRows: async () => saved,
+      const viewerRows = await loadViewerNavigationPins({ readMountedRemoteThreadPinNavigationRows: async () => pins,
         updateRemoteThreadPinSnapshots: async () => false, removeRemoteThreadPin: async () => false }, cache);
       const viewerRanks = new Map(saved.map((thread) => [identity(thread), thread.pinnedRank]));
       expect(viewerRows.map(identity).sort()).toEqual([...expected.keys()].sort());

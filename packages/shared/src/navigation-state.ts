@@ -330,7 +330,9 @@ export function materializeNavigationThreads(params: {
       serviceTier: overlay?.serviceTier ?? thread.serviceTier,
       fastMode: overlay?.fastMode ?? thread.fastMode,
       tokenMiserEnabled: overlay?.tokenMiserEnabled,
+      codexSkillProfile: overlay?.codexSkillProfile,
       monitorJobSuggestionsEnabled: overlay?.monitorJobSuggestionsEnabled,
+      jobMonitorCreationEnabled: overlay?.jobMonitorCreationEnabled,
       prAutoDispatchEnabled: overlay?.prAutoDispatchEnabled ?? false,
       prAutoDispatchPending: overlay?.prAutoDispatchPending,
       codexEnvironmentRuntime:
@@ -583,6 +585,7 @@ export function serializeNavigationSnapshotForHash(params: {
       fastMode: thread.fastMode ?? null,
       tokenMiserEnabled: thread.tokenMiserEnabled ?? null,
       monitorJobSuggestionsEnabled: thread.monitorJobSuggestionsEnabled ?? null,
+      jobMonitorCreationEnabled: thread.jobMonitorCreationEnabled ?? null,
       scheduledStart: thread.scheduledStart
         ? {
             actionId: thread.scheduledStart.actionId,
@@ -727,6 +730,8 @@ export function serializeNavigationSnapshotForHash(params: {
         lifecycleState: pr.lifecycleState ?? null,
         reviewState: pr.reviewState ?? null,
         mergeState: pr.mergeState ?? null,
+        mergeQueue: pr.mergeQueue ?? null,
+        allowedMergeMethods: pr.allowedMergeMethods ?? null,
         url: pr.url,
       })),
       // Include the breadcrumb fields (parentTitle / ancestorTitle) in

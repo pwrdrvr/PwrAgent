@@ -5,9 +5,11 @@ import type {
   TerminateBackgroundTerminalResponse,
 } from "@pwragent/shared/contracts/background-terminals";
 import { registerResearchIpcHandlers, disposeResearchIpcHandlers } from "./research-ipc";
+import type { ThreadGoalRequest, ThreadGoalState } from "@pwragent/shared/contracts/thread-goal";
 import { registerDecisionsRailIpcHandlers, disposeDecisionsRailIpcHandlers } from "./decisions-rail-ipc";
 import {
   AGENT_LIST_BACKGROUND_TERMINALS_CHANNEL,
+  AGENT_CONTROL_THREAD_GOAL_CHANNEL,
   AGENT_TERMINATE_BACKGROUND_TERMINAL_CHANNEL,
 } from "../../../shared/ipc";
 import { projectThreadDisplayEvent } from "../../app-server/thread-display-events";
@@ -19,6 +21,7 @@ import { ipcMain, type IpcMainInvokeEvent } from "electron";
 import { issueProviderDiscoveryPermit } from "../../settings/provider-discovery-permit";
 import {
   federationTargetForChannelSubscriber,
+  isLocalMainWindowWebContents,
   subscribersForChannel,
 } from "../window-channels";
 import {
@@ -166,6 +169,7 @@ import {
   AGENT_CANCEL_THREAD_PR_AUTO_DISPATCH_CHANNEL,
   AGENT_SEND_THREAD_PR_AUTO_DISPATCH_NOW_CHANNEL,
   AGENT_TURN_OFF_CODEX_FAST_EVERYWHERE_CHANNEL,
+  AGENT_LIST_PENDING_THREAD_STARTS_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
   AGENT_START_REVIEW_CHANNEL,
   AGENT_START_TURN_CHANNEL,
@@ -557,6 +561,9 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(AGENT_LIST_PENDING_THREAD_STARTS_CHANNEL);
+  ipcMain.handle(AGENT_LIST_PENDING_THREAD_STARTS_CHANNEL, (event) =>
+    isLocalMainWindowWebContents(event.sender) ? registry.listPendingThreadStarts() : []);
   ipcMain.removeHandler(AGENT_START_THREAD_CHANNEL);
   ipcMain.handle(
     AGENT_START_THREAD_CHANNEL,
@@ -572,7 +579,7 @@ export function registerAgentIpcHandlers(): void {
           .remoteBackend(request.federationTarget)
           .startThread(stripFederationTarget(request));
       }
-      return await registry.startThread(request);
+      return await registry.startThreadWithoutLaunchpad(request);
     },
   );
 
@@ -873,6 +880,19 @@ export function registerAgentIpcHandlers(): void {
   );
 
   ipcMain.removeHandler(AGENT_COMPACT_THREAD_CHANNEL);
+  ipcMain.removeHandler(AGENT_CONTROL_THREAD_GOAL_CHANNEL);
+  ipcMain.handle(AGENT_CONTROL_THREAD_GOAL_CHANNEL, async (event, request: ThreadGoalRequest): Promise<ThreadGoalState> => {
+    if (federationTargetForChannelSubscriber(event.sender)?.scope === "remote") {
+      throw new Error("Goals are set on the machine that owns this thread.");
+    }
+    if (!request || typeof request.threadId !== "string" || !request.threadId
+      || !["read", "set", "pause", "resume", "clear", "cancel"].includes(request.action)
+      || (request.action === "set" && typeof request.objective !== "string")
+      || (request.confirmedObjective !== undefined && typeof request.confirmedObjective !== "string")) {
+      throw new Error("Invalid goal request.");
+    }
+    return await registry.controlThreadGoal(request);
+  });
   ipcMain.handle(
     AGENT_COMPACT_THREAD_CHANNEL,
     async (
@@ -1613,9 +1633,11 @@ export function registerAgentIpcHandlers(): void {
 }
 
 export function disposeAgentIpcHandlers(): void {
+  ipcMain.removeHandler(AGENT_CONTROL_THREAD_GOAL_CHANNEL);
   disposeResearchIpcHandlers();
   disposeDecisionsRailIpcHandlers();
   ipcMain.removeHandler(BACKEND_LIST_CHANNEL);
+  ipcMain.removeHandler(AGENT_LIST_PENDING_THREAD_STARTS_CHANNEL);
   ipcMain.removeHandler(AGENT_START_THREAD_CHANNEL);
   ipcMain.removeHandler(AGENT_FORK_THREAD_CHANNEL);
   ipcMain.removeHandler(AGENT_START_REVIEW_CHANNEL);

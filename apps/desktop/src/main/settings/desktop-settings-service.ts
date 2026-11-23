@@ -77,6 +77,7 @@ import type {
   DesktopUpdateTrain,
   DesktopWorktreeFolder,
   DesktopWorktreeStorageLocation,
+  ManagedCodexTrackLookup,
 } from "@pwragent/shared/contracts/settings";
 import type {
   DesktopHelperModelSettings,
@@ -89,7 +90,7 @@ import type { ThreadTodoMergeMethod } from "@pwragent/shared/contracts/thread-to
 import { execFile } from "node:child_process";
 import { readFile, realpath } from "node:fs/promises";
 import { accessSync, constants, statSync } from "node:fs";
-import { retainManagedCodexCommand } from "../codex-managed-runtime";
+import { readManagedCodexTrackTags, retainManagedCodexCommand } from "../codex-managed-runtime";
 import { managedCodexTagForCommand } from "../codex-build-channel";
 import { buildCodexVersionAdvisory } from "./codex-version-advisory";
 import path from "node:path";
@@ -175,6 +176,7 @@ import {
 import type { DesktopSecretStore } from "./desktop-secret-store";
 import {
   CHAT_REPLY_COMPOSER_ENV,
+  ACP_AGENTS_ANTIGRAVITY_CLI_PATH_ENV,
   ACP_AGENTS_GEMINI_CLI_PATH_ENV,
   ACP_AGENTS_GROK_CLI_PATH_ENV,
   ACP_AGENTS_KIMI_CLI_PATH_ENV,
@@ -1743,6 +1745,7 @@ export class DesktopSettingsService {
             value: config.models?.codex?.configOverrides ?? [],
             source: config.models?.codex?.configOverrides === undefined ? "default" : "config",
           },
+          skillProfiles: config.models?.codex?.skillProfiles ?? [],
           providers: (config.models?.codex?.providers ?? []).map((provider) => ({
             ...provider,
             hasApiKey: codexModelProviderKeyIds.has(provider.id),
@@ -1772,6 +1775,13 @@ export class DesktopSettingsService {
         },
       },
       acpAgents: {
+        antigravity: {
+          cliPath: this.resolveString(
+            config.acpAgents?.antigravity?.cliPath,
+            ACP_AGENTS_ANTIGRAVITY_CLI_PATH_ENV,
+          ),
+          enabled: config.acpAgents?.antigravity?.enabled ?? true,
+        },
         gemini: {
           cliPath: this.resolveString(
             config.acpAgents?.gemini?.cliPath,
@@ -2346,6 +2356,10 @@ export class DesktopSettingsService {
       this.resolveTokenMiserEnabled(),
       this.configStore.read("models").codex?.managedBuilds ?? false,
     );
+  }
+
+  async readManagedCodexTrackTags(): Promise<ManagedCodexTrackLookup | undefined> {
+    return this.resolveManagedCodexEnabled() ? await readManagedCodexTrackTags() : undefined;
   }
 
   /** Which pwrdrvr/codex track the managed runtime follows. */
@@ -4264,6 +4278,7 @@ export class DesktopSettingsService {
         federation: this.configStore.read("federation"),
         models: this.configStore.read("models"),
         acpAgents: {
+          antigravity: providerConfigSection(providers.antigravity),
           gemini: providerConfigSection(providers.gemini),
           grok: providerConfigSection(providers.grok),
           kimi: providerConfigSection(providers.kimi),

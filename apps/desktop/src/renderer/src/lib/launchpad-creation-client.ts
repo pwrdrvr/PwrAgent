@@ -6,6 +6,7 @@ import type {
 import type { DesktopApi } from "./desktop-api";
 
 export class LaunchpadStartupCancelledError extends Error {}
+export class LaunchpadSkillProfilePersistenceError extends Error {}
 
 /** Keep the RPC unlimited; snapshots recover dropped notifications/responses. */
 export async function materializeObservableLaunchpad(params: {

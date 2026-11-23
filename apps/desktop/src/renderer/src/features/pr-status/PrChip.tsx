@@ -1,12 +1,13 @@
 import {
   memo,
+  useCallback,
   useEffect,
   useRef,
   useState,
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
-import type { PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { PrSummary, ThreadPullRequestMergeTarget } from "@pwragent/shared/contracts/navigation";
 import { CloseIcon, EyeIcon, MergeQueueIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import {
@@ -19,7 +20,9 @@ import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { observeElementVisibility } from "../../lib/observe-element-visibility";
 import { statusPulseRef } from "../../lib/status-pulse";
 import type { PrChipWatch } from "../pr-watches/useThreadPrWatchIndicators";
+import { PrCardMergeControl } from "./PrCardMergeControl";
 import { PrChipContextMenu } from "./PrChipContextMenu";
+import type { PullRequestMergeService } from "./pull-request-merge-context";
 import type { PrBranchDrift } from "./pr-branch-drift";
 import {
   prChipModifierClasses,
@@ -71,6 +74,11 @@ type PrChipProps = {
    * Detach.
    */
   cardActions?: boolean;
+  /**
+   * The card's footer can merge the PR: a local thread's sidebar card in a
+   * window that merges. Keep its identity stable for unchanged data.
+   */
+  merge?: { thread: ThreadPullRequestMergeTarget; service: PullRequestMergeService };
   onVisibilityChange?: (visible: boolean) => void;
 };
 
@@ -118,6 +126,41 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
   // Only a supplied menu can stop a watch; the standalone menu copies.
   const watchStopHint = Boolean(props.onOpenContextMenu);
   const onDetach = props.onDetach;
+  const merge = cardActions ? props.merge : undefined;
+  // The merge control changes the card's height; placing it again keeps a
+  // card near the window's bottom edge on screen.
+  const relayoutCard = useCallback(() => {
+    updateTooltip(latestCardRef.current);
+  }, [updateTooltip]);
+  const copyButton = (
+    <button
+      type="button"
+      tabIndex={-1}
+      className="pr-status-card__action"
+      onClick={() => {
+        hideTooltip();
+        void copyText(pr.url);
+      }}
+    >
+      Copy URL
+    </button>
+  );
+  const detachButton = onDetach ? (
+    <button
+      type="button"
+      tabIndex={-1}
+      className="pr-status-card__action pr-status-card__action--detach"
+      onClick={() => {
+        // The detach warning returns focus to its opener: make that
+        // the chip, which outlives the card.
+        contextMenuInvokerRef.current?.focus();
+        hideTooltip();
+        onDetach(pr);
+      }}
+    >
+      Detach
+    </button>
+  ) : null;
   const card = (
     <>
       <PrStatusCard
@@ -132,35 +175,18 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
           menu. */}
       {/* Hidden from the chip's description: the keyboard cannot reach
           these, so they would announce controls it cannot use. */}
-      {cardActions ? (
+      {merge ? (
+        <PrCardMergeControl
+          pr={pr}
+          thread={merge.thread}
+          service={merge.service}
+          trailing={<>{copyButton}{detachButton}</>}
+          onLayoutChange={relayoutCard}
+        />
+      ) : cardActions ? (
         <div className="pr-status-card__actions" aria-hidden="true">
-          <button
-            type="button"
-            tabIndex={-1}
-            className="pr-status-card__action"
-            onClick={() => {
-              hideTooltip();
-              void copyText(pr.url);
-            }}
-          >
-            Copy URL
-          </button>
-          {onDetach ? (
-            <button
-              type="button"
-              tabIndex={-1}
-              className="pr-status-card__action pr-status-card__action--detach"
-              onClick={() => {
-                // The detach warning returns focus to its opener: make that
-                // the chip, which outlives the card.
-                contextMenuInvokerRef.current?.focus();
-                hideTooltip();
-                onDetach(pr);
-              }}
-            >
-              Detach
-            </button>
-          ) : null}
+          {copyButton}
+          {detachButton}
         </div>
       ) : null}
     </>
@@ -211,6 +237,19 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
     watchStopHint,
     cardActions,
     Boolean(onDetach),
+    // What the merge control offers.
+    merge?.thread.backend,
+    merge?.thread.threadId,
+    merge?.thread.federationTarget?.scope === "remote" ? merge.thread.federationTarget.instanceId : undefined,
+    Boolean(merge?.service),
+    pr.url,
+    pr.reviewState,
+    pr.mergeState,
+    pr.baseRefName,
+    pr.checksStillRunning,
+    pr.mergeQueue?.state,
+    pr.mergeQueue?.kind,
+    pr.allowedMergeMethods?.join(","),
   ].join("|");
   const pushedCardKeyRef = useRef<string | undefined>(undefined);
   useEffect(() => {

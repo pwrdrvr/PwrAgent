@@ -689,6 +689,59 @@ describe("DesktopAutomationService", () => {
     vi.useRealTimers();
   });
 
+  it.each([
+    { pruned: false, execution: "execution", publisher: "execution", source: "execution", counts: true },
+    { pruned: true, execution: "execution", publisher: "execution", source: "execution", counts: true },
+    { pruned: false, execution: "execution", publisher: "assigned", source: "assigned", counts: false },
+    { pruned: false, execution: "execution", publisher: "execution", source: "other", counts: false },
+    { pruned: true, execution: "assigned", publisher: "assigned", source: "assigned", counts: false },
+    { pruned: false, execution: "assigned", publisher: "assigned", source: "assigned", counts: false },
+  ])("accounts for cumulative-only prices by execution identity ($pruned, $execution, $publisher, $source)", async ({
+    pruned, execution, publisher, source, counts,
+  }) => {
+    vi.useFakeTimers();
+    const costStore = new AutomationStore(stateDb, { runHistoryLimit: 1 });
+    const service = new DesktopAutomationService({ registry, store: costStore });
+    try {
+      service.start();
+      costStore.createAutomation({
+        id: "costs", backend: "codex", threadId: "assigned", name: "Check email",
+        taskPrompt: "Check mail", schedule: { kind: "interval", every: 5, unit: "minutes" }, now: 1,
+      });
+      costStore.createRun({ id: "cost-run", automationId: "costs", trigger: "manual", now: 2 });
+      costStore.markRunStarted({
+        runId: "cost-run", backendThreadId: execution, backendTurnId: "cost-turn", now: 3,
+      });
+      costStore.markRunTerminal({ runId: "cost-run", status: "completed", now: Date.now() });
+      if (pruned) {
+        costStore.createRun({ id: "next", automationId: "costs", trigger: "manual", now: Date.now() + 1 });
+        expect(costStore.getRun("cost-run")).toBeUndefined();
+      }
+      await Promise.all(registryListeners.map((listener) => listener({
+        backend: "codex",
+        notification: {
+          method: "thread/pricing/updated",
+          params: {
+            threadId: publisher,
+            pricing: { summaries: [], lines: [{
+              backend: "codex", threadId: source, turnId: "cost-turn", scope: "turn",
+              turnUsageAttributed: false, totalCostMicros: 123, totalTokens: 20, currency: "USD",
+            }] },
+          },
+        },
+      } as unknown as AgentEvent)));
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(costStore.getAutomation("costs")?.lifetimeCost?.totalMicros).toBe(counts ? 123 : undefined);
+      if (!pruned) {
+        expect(costStore.getRun("cost-run")?.usage?.totalTokens).toBe(counts ? 20 : undefined);
+        expect(service.list().automations[0]?.costTodayMicros).toBe(counts ? 123 : undefined);
+      }
+    } finally {
+      service.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it.each([false, true])("bounds turn lookups as unrelated automation history grows (ANALYZE: %s)", async (analyzed) => {
     vi.useFakeTimers();
     const service = new DesktopAutomationService({ registry, store });

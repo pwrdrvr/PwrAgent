@@ -30,6 +30,7 @@ import type {
   NavigationLaunchpadImageAttachment,
 } from "./navigation";
 import type { FederationInstanceId, FederationTarget } from "./federation";
+import type { CodexThreadSkillProfile } from "./codex-skill-profiles";
 import type {
   ScheduledThreadAction,
   ScheduledThreadTurnPayload,
@@ -53,6 +54,7 @@ export type StartThreadRequest = {
   fastMode?: boolean;
   mcpConnectionIds?: string[];
   mcpProviderServersEnabled?: boolean;
+  codexSkillProfileId?: string;
   workMode?: LaunchpadWorkMode;
   branchName?: string;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
@@ -70,6 +72,8 @@ export type StartThreadResponse = {
   autoPinFailure?: ThreadAutoPinFailure;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   codexEnvironmentStartupFailure?: CodexEnvironmentStartupFailure;
+  codexSkillProfile?: CodexThreadSkillProfile;
+  codexSkillProfilePersistenceFailure?: { message: string };
 };
 
 export type CodexEnvironmentStartupFailure = {
@@ -1132,6 +1136,7 @@ export type UpdateDirectoryLaunchpadRequest = {
       | "imageAttachments"
       | "fileAttachments"
       | "mcpConnectionIds"
+      | "mcpConnectionIdsFromDefaults"
       | "mcpProviderServersEnabled"
       | "prompt"
       | "editorDocument"
@@ -1159,6 +1164,8 @@ export type UpdateDirectoryLaunchpadRequest = {
       | "directoryLabel"
       | "directoryPath"
       | "agent"
+      | "agentPresetId"
+      | "agentDraftMcpSelection"
     >
   >;
   stickySettingsChanged?: boolean;
@@ -1247,6 +1254,8 @@ export type MaterializedDirectoryLaunchpadThread = {
   workMode: LaunchpadWorkMode;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   codexEnvironmentStartupFailure?: CodexEnvironmentStartupFailure;
+  codexSkillProfile?: CodexThreadSkillProfile;
+  codexSkillProfilePersistenceFailure?: StartThreadResponse["codexSkillProfilePersistenceFailure"];
 };
 
 export type MaterializeDirectoryLaunchpadOptions = {

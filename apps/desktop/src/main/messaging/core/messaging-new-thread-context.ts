@@ -2,6 +2,7 @@ import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import type { MessagingToolUpdateMode } from "@pwragent/shared/contracts/messaging";
+import type { MessagingPermissionId } from "@pwragent/shared/contracts/rbac";
 import type { MessagingBindingRecord, MessagingBindingTargetKind, MessagingCapabilityProfile, MessagingDeliveryResult, MessagingInboundEvent, MessagingPendingIntentRecord, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import type { MessagingBackendBridge } from "./messaging-adapter";
 import type { MessagingControllerLogger, MessagingDeliveryGuard } from "./messaging-backend-event-helpers";
@@ -9,6 +10,7 @@ import type { AcpRuntimeRiskWarningContext, FullAccessEscalationContext, Messagi
 import type { MessagingStoreLike } from "./messaging-storage";
 
 export interface MessagingNewThreadHost {
+  readonly requirePermission: (event: MessagingInboundEvent, permission: MessagingPermissionId, auditAction: string) => Promise<boolean>;
   readonly resolveToolUpdateDefaultMode: (targetKind?: MessagingBindingTargetKind) => Promise<MessagingToolUpdateMode>;
   readonly resolveShowStreamingOption: () => Promise<boolean>;
   readonly requireRemoteScope: (event: MessagingInboundEvent, target: FederationTarget | undefined, auditAction: string, opts?: { notify?: boolean }) => Promise<boolean>;
@@ -24,7 +26,7 @@ export interface MessagingNewThreadHost {
 
 export interface MessagingNewThreadContext {
   readonly store: Pick<MessagingStoreLike, "upsertBrowseSession" | "upsertPendingIntent">;
-  readonly backend: Pick<MessagingBackendBridge, "updateDirectoryLaunchpad" | "listBackends" | "materializeDirectoryLaunchpad" | "startThread" | "getNavigationQueryPage" | "getNavigationLaunchpadConfig" | "ensureDirectoryLaunchpad">;
+  readonly backend: Pick<MessagingBackendBridge, "updateDirectoryLaunchpad" | "listBackends" | "materializeDirectoryLaunchpad" | "startThread" | "getNavigationQueryPage" | "getNavigationLaunchpadConfig" | "ensureDirectoryLaunchpad" | "listAgentPresets" | "listAgentPresetConnections">;
   readonly capabilityProfile: MessagingCapabilityProfile;
   readonly pendingIntentTtlMs: number;
   readonly streamingResponsesDefault: boolean;

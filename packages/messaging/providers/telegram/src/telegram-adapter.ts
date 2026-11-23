@@ -33,6 +33,7 @@ import type {
   MessagingManagedConversationRightsResult,
   MessagingCommandVerb,
   MessagingRateLimitInfo,
+  MessagingAuthorizationRejection,
   MessagingRejectedInboundEvent,
   MessagingResponseMode,
   MessagingSurfaceAction,
@@ -2991,10 +2992,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
   private rejectedEventFromMessage(
     message: TelegramMessage,
-    options: Pick<MessagingRejectedInboundEvent, "kind" | "reason"> & {
+    options: Pick<MessagingAuthorizationRejection, "kind" | "reason"> & {
       receipt: MessagingInboundReceipt;
     },
-  ): MessagingRejectedInboundEvent {
+  ): MessagingAuthorizationRejection {
     return {
       id: `telegram:message:${message.message_id}:rejected`,
       kind: options.kind,
@@ -3008,10 +3009,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
   private rejectedEventFromCallback(
     callbackQuery: TelegramCallbackQuery,
-    options: Pick<MessagingRejectedInboundEvent, "reason"> & {
+    options: Pick<MessagingAuthorizationRejection, "reason"> & {
       receipt: MessagingInboundReceipt;
     },
-  ): MessagingRejectedInboundEvent {
+  ): MessagingAuthorizationRejection {
     const message = callbackQuery.message;
     return {
       id: `telegram:callback:${callbackQuery.id}:rejected`,

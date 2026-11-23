@@ -25,6 +25,58 @@ function launchpad(project: number, remote: boolean): NavigationLaunchpadDraft {
 }
 
 describe("skill picker catalog freshness", () => {
+  it("reads the remote owner's current profiles on every visit without opening the skill picker", async () => {
+    await fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { minLength: 2, maxLength: 6 }), async (changes) => {
+      const remote = launchpad(0, true);
+      const local = launchpad(0, false);
+      const profile = (visit: number) => ({ id: "deploy", name: `Deploy ${visit}`, hiddenSkills: [`skill-${visit}`] });
+      let ownerProfiles = [profile(0)];
+      const listSkills = vi.fn(async () => ({
+        backend: "codex" as const, fetchedAt: 1, data: [], codexSkillProfiles: ownerProfiles,
+      }));
+      const desktopApi: DesktopApi = { listSkills };
+      const { result, rerender, unmount } = renderHook((selected) => useThreadSkills({
+        desktopApi, launchpad: selected, now: () => 1,
+      }), { initialProps: local });
+      try {
+        for (const [visit, deleted] of [false, false, true, ...changes].entries()) {
+          ownerProfiles = deleted ? [] : [profile(visit)];
+          await act(async () => { rerender(remote); });
+          expect(result.current.response?.codexSkillProfiles).toEqual(ownerProfiles);
+          await act(async () => { rerender({ ...remote }); });
+          expect(listSkills).toHaveBeenCalledTimes(visit + 1);
+          await act(async () => { rerender(local); });
+        }
+      } finally {
+        unmount();
+      }
+    }), { numRuns: 10 });
+  });
+
+  it("keeps the newer visit's profiles when the previous visit replies late", async () => {
+    const profile = { id: "deploy", name: "Deploy", hiddenSkills: ["publish"] };
+    const response = (codexSkillProfiles: typeof profile[]) => ({
+      backend: "codex" as const, fetchedAt: 1, data: [], codexSkillProfiles,
+    });
+    let resolvePrevious!: (value: ReturnType<typeof response>) => void;
+    const previous = new Promise<ReturnType<typeof response>>((resolve) => { resolvePrevious = resolve; });
+    const listSkills = vi.fn().mockReturnValueOnce(previous).mockResolvedValueOnce(response([]));
+    const desktopApi: DesktopApi = { listSkills };
+    const remote = launchpad(0, true);
+    const { result, rerender, unmount } = renderHook((launchpad) => useThreadSkills({
+      desktopApi, launchpad,
+    }), { initialProps: remote });
+    try {
+      await act(async () => { rerender(launchpad(0, false)); });
+      await act(async () => { rerender(remote); });
+      expect(result.current.response?.codexSkillProfiles).toEqual([]);
+      await act(async () => { resolvePrevious(response([profile])); });
+      expect(result.current.response?.codexSkillProfiles).toEqual([]);
+    } finally {
+      unmount();
+    }
+  });
+
   it("reuses a catalog for 30 seconds, while explicit refresh always reads the owner", async () => {
     await fc.assert(fc.asyncProperty(
       fc.array(fc.record({ elapsed: fc.integer({ min: 0, max: 60_000 }), force: fc.boolean() }), { maxLength: 12 }),

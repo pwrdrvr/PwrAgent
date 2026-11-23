@@ -1,3 +1,6 @@
+import type { CodexSkillProfile } from "@pwragent/shared/contracts/codex-skill-profiles";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { CodexSkillProfilesSettings, type SkillProfileDirectory } from "./CodexSkillProfilesSettings";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { buildProviderPickerEntries, providerPickerValue } from "@pwragent/shared/provider-picker";
 import { DECISION_PROVIDER_IDS, resolveDecisionModelSettings } from "@pwragent/shared/decision-models";
@@ -21,6 +24,7 @@ import type {
   DesktopSettingsSecretName,
   DesktopSettingsSnapshot,
   DesktopUpdateChannel,
+  ManagedCodexTrackLookup,
 } from "@pwragent/shared/contracts/settings";
 import type {
   DesktopHelperModelSettings,
@@ -86,7 +90,6 @@ import {
   acpStatusLabel,
   MANAGED_BUILD_TRACK_SUB,
   managedBuildTrackOptions,
-  managedBuildVersion,
 } from "./acp-agent-copy";
 import {
   acpAgentEnabledInSnapshot,
@@ -169,6 +172,9 @@ function migrationMatchesSelection(
 }
 
 export function ModelsSettings(props: {
+  skillProfileDirectories?: readonly SkillProfileDirectory[];
+  skillProfileThreads?: readonly NavigationThreadSummary[];
+  onSaveCodexSkillProfiles?: (profiles: CodexSkillProfile[]) => Promise<boolean>;
   cachedBackends?: BackendSummary[];
   claudeSignIn?: ClaudeSignInControls;
   desktopApi?: DesktopApi;
@@ -215,7 +221,7 @@ export function ModelsSettings(props: {
   /** Persist which pwrdrvr/codex track the managed runtime follows. */
   onManagedCodexBuildChannelChange?: (
     channel: DesktopUpdateChannel,
-  ) => Promise<boolean>;
+  ) => Promise<DesktopSettingsSnapshot | undefined>;
   /** Jump to Experimental, where Token Miser is switched. */
   onOpenTokenMiser?: () => void;
   /** Persist a per-ACP-agent CLI-path override (also pins a discovered install). */
@@ -253,6 +259,29 @@ export function ModelsSettings(props: {
   const managedCodexOn =
     managedCodexRequiredBy !== undefined
     || (codex.managedBuilds?.value ?? false);
+  const showCodexTrack = managedCodexOn && props.focus === "codex";
+  const [publishedCodexTrackTags, setPublishedCodexTrackTags] =
+    useState<ManagedCodexTrackLookup>();
+  const managedCodexCheckedAt = managedCodexRuntime?.checkedAt;
+  const checkingCodexReleaseList = managedCodexProgress?.phase === "checking";
+  useEffect(() => {
+    setPublishedCodexTrackTags(undefined);
+    if (!showCodexTrack || checkingCodexReleaseList) return;
+
+    let current = true;
+    void props.desktopApi?.readManagedCodexTrackTags?.().then((tags) => {
+      if (current) setPublishedCodexTrackTags(tags);
+    }).catch(() => {
+      // An unavailable release list leaves the last known tags visible.
+    });
+    return () => { current = false; };
+  }, [checkingCodexReleaseList, managedCodexCheckedAt, props.desktopApi, showCodexTrack]);
+  // Atom may have verified a prerelease more recently than the cached REST
+  // list. A current list owns both slots, including a missing release.
+  const managedCodexTrackTags = publishedCodexTrackTags
+    && publishedCodexTrackTags.observedAt >= (managedCodexCheckedAt ?? 0)
+    ? publishedCodexTrackTags
+    : managedCodexRuntime ?? {};
   const managedCodexInstalledAt =
     managedCodexProgress?.phase === "ready"
       ? managedCodexProgress.updatedAt
@@ -365,23 +394,11 @@ export function ModelsSettings(props: {
     channel: DesktopUpdateChannel,
   ): Promise<void> => {
     setManagedCodexCheckError(undefined);
-    // Between promotions both tracks name the build already running, and a
-    // switch installs nothing. Read before the write, which replaces the
-    // snapshot this closure sees.
-    const trackTag = channel === "latest"
-      ? managedCodexRuntime?.latestTag
-      : managedCodexRuntime?.prereleaseTag;
-    const sameBuild =
-      trackTag !== undefined
-      && managedBuildVersion(trackTag) === managedCodexRuntime?.version;
-    // The write holds until main has checked the track and installed its
-    // build, the same transaction as the PwrAgent build switch.
+    // Main can discover a new release while saving the track. Use the
+    // installed version from the write response to decide whether to probe.
     const saved = await props.onManagedCodexBuildChannelChange?.(channel);
-    if (!saved) {
-      return;
-    }
-    await props.onRefresh();
-    if (sameBuild) {
+    const installedVersion = saved?.runtime.tokenMiser?.managedCodex?.version;
+    if (installedVersion === undefined || installedVersion === managedCodexRuntime?.version) {
       return;
     }
     try {
@@ -503,7 +520,7 @@ export function ModelsSettings(props: {
               label="Build track"
               sub={MANAGED_BUILD_TRACK_SUB}
               disabled={props.saving || catalogBusy || checkingManagedCodex}
-              options={managedBuildTrackOptions(managedCodexRuntime ?? {})}
+              options={managedBuildTrackOptions(managedCodexTrackTags)}
               // Same wait as the switch above: the config write, then the
               // release check that installs and activates the track's build.
               pendingLabel="Downloading and installing…"
@@ -800,11 +817,12 @@ export function ModelsSettings(props: {
     );
   }
 
-  if (props.focus === "codex") {
+  if (props.focus === "codex" || props.focus === "codex-skill-profiles") {
     return (
       <SettingsSectionStack
         paneId="models-codex"
         aria-label="Codex provider settings"
+        focusSectionId={props.focus === "codex-skill-profiles" ? "skill-profiles" : undefined}
       >
         <SettingsPanelHead
           eyebrow="AI Providers"
@@ -847,6 +865,15 @@ export function ModelsSettings(props: {
                 }
               : undefined}
             onSave={props.onSaveCodexModelProviders}
+          />
+        ) : null}
+        {props.onSaveCodexSkillProfiles ? (
+          <CodexSkillProfilesSettings
+            profiles={props.snapshot.models.codex.skillProfiles ?? []}
+            desktopApi={props.desktopApi}
+            directories={props.skillProfileDirectories}
+            threads={props.skillProfileThreads}
+            onSave={props.onSaveCodexSkillProfiles}
           />
         ) : null}
         {props.onSaveUsageAccountGroups ? (
@@ -1002,7 +1029,7 @@ export function ModelsSettings(props: {
                   chipKind={
                     enabled
                       ? entry.installed
-                        ? "ok"
+                        ? (entry.unavailableReason ? "warn" : "ok")
                         : legacyOnly
                           ? "warn"
                           : "muted"

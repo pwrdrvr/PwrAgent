@@ -9,15 +9,13 @@ import { AgentSetupFlow } from "../AgentSetupFlow";
 
 afterEach(cleanup);
 
-// Every ACP agent the settings contract lists, written out by hand. The
-// `satisfies` makes an agent added to the contract fail typecheck here, so
-// this table, and the guided flow's catalogue, must grow with it.
+// Every ACP agent offered by guided setup, written out by hand.
 const ACP_AGENTS = {
   gemini: { cliPath: { value: "", source: "default" }, enabled: true },
   grok: { cliPath: { value: "", source: "default" }, enabled: true },
   kimi: { cliPath: { value: "", source: "default" }, enabled: true },
   qwen: { cliPath: { value: "", source: "default" }, enabled: true },
-} satisfies DesktopSettingsSnapshot["acpAgents"];
+} satisfies Omit<DesktopSettingsSnapshot["acpAgents"], "antigravity">;
 
 /** The oracle: what each agent's tab must say, independent of the module. */
 const EXPECTED: Record<keyof typeof ACP_AGENTS, { name: string; vendor: string }> = {
@@ -35,7 +33,10 @@ function snapshot(): DesktopSettingsSnapshot {
         profiles: { profiles: [] },
       },
     },
-    acpAgents: ACP_AGENTS,
+    acpAgents: {
+      ...ACP_AGENTS,
+      antigravity: { cliPath: { value: "", source: "default" }, enabled: true },
+    },
   } as unknown as DesktopSettingsSnapshot;
 }
 
@@ -108,6 +109,22 @@ function escapeRegExp(text: string): string {
 }
 
 describe("guided agent setup", () => {
+  it.each([true, false])("only counts installed Gemini as ready when its account is usable (%s)", async (blocked) => {
+    const dialog = await renderFlow(fakeApi(), [
+      entry("gemini", {
+        installed: true,
+        installStatus: "installed",
+        ...(blocked ? { unavailableReason: "Google ended Gemini CLI access for consumer Google accounts." } : {}),
+      }),
+    ]);
+    fireEvent.click(within(dialog).getByRole("tab", { name: /^Gemini CLI/ }));
+    const next = () => fireEvent.click(within(dialog).getByRole("button", { name: /Continue/ }));
+    next();
+    next();
+    expect(within(dialog).getByText(blocked ? "No agents ready yet" : "1 agent ready")).toBeVisible();
+    if (blocked) expect(within(dialog).getByText("Action required")).toBeVisible();
+  });
+
   it("has a tab for every ACP agent, with that agent's own install copy and notice", async () => {
     const dialog = await renderFlow(fakeApi());
     const tabs = within(dialog).getByRole("tablist", { name: "Agents" });

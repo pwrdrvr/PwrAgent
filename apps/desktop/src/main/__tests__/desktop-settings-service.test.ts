@@ -4475,18 +4475,25 @@ describe("DesktopSettingsService", () => {
 
     await service.writeConfigPatchTargeted({
       acpAgents: {
+        antigravity: { cliPath: "/custom/agy", enabled: false },
         grok: { cliPath: "/custom/grok" },
         qwen: { cliPath: "/custom/qwen" },
       },
     });
 
     const tomlOnDisk = fs.readFileSync(configPath, "utf8");
+    expect(tomlOnDisk).toContain("[acp_agents.antigravity]");
+    expect(tomlOnDisk).toContain('cli_path = "/custom/agy"');
     expect(tomlOnDisk).toContain("[acp_agents.grok]");
     expect(tomlOnDisk).toContain('cli_path = "/custom/grok"');
     expect(tomlOnDisk).toContain("[acp_agents.qwen]");
     expect(tomlOnDisk).toContain('cli_path = "/custom/qwen"');
 
     const snapshot = await service.readSettingsProjection();
+    expect(snapshot.acpAgents.antigravity).toEqual({
+      cliPath: { value: "/custom/agy", source: "config" },
+      enabled: false,
+    });
     expect(snapshot.acpAgents.grok.cliPath).toEqual({
       value: "/custom/grok",
       source: "config",

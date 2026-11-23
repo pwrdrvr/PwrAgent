@@ -45,6 +45,9 @@ export const CODEX_CLIENT_ROUTES: Record<keyof CodexAppServerClient, Route> = {
   getInitializeResult: "primary",
   isTokenMiserActivationNegotiated: "primary",
   readServerCapabilities: "primary",
+  readThreadGoal: "thread",
+  setThreadGoal: "thread",
+  clearThreadGoal: "thread",
   readCodexHome: "primary",
   trustProject: "primary",
   invalidateThreadListings: "all",
@@ -88,6 +91,7 @@ export const CODEX_CLIENT_ROUTES: Record<keyof CodexAppServerClient, Route> = {
   injectThreadItems: "thread",
   // Each runtime resumes its own threads, including one started later.
   provideThreadDeveloperInstructions: "subscribe",
+  provideThreadSkillExclusions: "subscribe",
   replaceThreadDeveloperInstructions: "thread",
   startThread: "model",
   forkThread: "thread",
@@ -124,6 +128,7 @@ const PERSISTED_OPERATIONS = new Set<Method>([
   "readThreadName", "readThreadSummary", "readThread", "readThreadProtocolResult", "readThreadModelSettings", "exportThreadForHandoff",
   "listBackgroundTerminals",
   "readThreadToolInvocation", "readTurnRoot",
+  "readThreadGoal", "setThreadGoal", "clearThreadGoal",
   "archiveThread", "renameThread", "restoreThread", "deleteThread", "updateThreadMetadata",
 ]);
 const PROVIDER_WORK = new Set<Method>([

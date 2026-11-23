@@ -38,8 +38,53 @@ import type { DesktopProviderThreadModelMigration } from "@pwragent/shared/contr
 import { buildCodexFastModeMismatchNotificationParams, getCodexFastModeMismatchWarning } from "../app-server/thread-model-options";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { AcpSessionMetadata } from "@pwragent/owner-core/acp-storage";
+import * as desktopSettings from "../settings/desktop-settings-singleton";
 
 describe("DesktopBackendRegistry", () => {
+  it.each([false, true])("only attaches a skill profile after its snapshot is saved (write fails: %s)", async (writeFails) => {
+    const profile = { id: "deploy", name: "Deploy", hiddenSkills: ["publish"] };
+    const snapshot = { profileId: profile.id, profileName: profile.name, hiddenSkills: profile.hiddenSkills };
+    const settings = vi.spyOn(desktopSettings, "getDesktopSettingsService").mockReturnValue({
+      readModelsConfig: () => ({ codex: { skillProfiles: [profile] } }),
+    } as ReturnType<typeof desktopSettings.getDesktopSettingsService>);
+    const codexClient = new MockBackendClient({ threads: [] });
+    const overlayStore = createOverlayStoreMock();
+    const persist = vi.spyOn(overlayStore, "setThreadExecutionMode");
+    if (writeFails) persist.mockRejectedValueOnce(new Error("disk full"));
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
+    try {
+      if (!writeFails) {
+        // A submitted ID can go stale between the remote picker and the owner.
+        await expect(registry.startThread({ backend: "codex", codexSkillProfileId: "deleted" }))
+          .rejects.toThrow(/skill profile is no longer available/i);
+        expect(codexClient.lastStartThreadParams).toBeUndefined();
+        expect(persist).not.toHaveBeenCalled();
+      }
+      const result = await registry.materializeDirectoryLaunchpad({
+        directoryKey: "subthread:codex:parent:skill-profile",
+        launchpad: {
+          directoryKey: "subthread:codex:parent:skill-profile",
+          directoryKind: "directory", directoryLabel: "Fixture",
+          backend: "codex", codexSkillProfileId: profile.id, executionMode: "default",
+          prompt: "Deploy the release.", workMode: "local", createdAt: 1, updatedAt: 1,
+        },
+      });
+      expect(result.threadId).toBe("thread-1");
+      expect(persist).toHaveBeenCalledWith(expect.objectContaining({ codexSkillProfile: snapshot }));
+      expect(result.codexSkillProfile).toEqual(writeFails ? undefined : snapshot);
+      if (writeFails) {
+        expect(result.turnStartFailure?.message).toMatch(/thread was created.*skill profile could not be saved/i);
+        expect(codexClient.lastStartTurnParams).toBeUndefined();
+      } else {
+        expect(result.turnStartFailure).toBeUndefined();
+        expect(codexClient.lastStartTurnParams?.threadId).toBe(result.threadId);
+      }
+    } finally {
+      await registry.close();
+      settings.mockRestore();
+    }
+  });
+
   it("passes the Codex default-mode question toggle to new and resumed threads", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
     const registry = createDesktopBackendRegistry({
@@ -2825,6 +2870,33 @@ describe("DesktopBackendRegistry", () => {
       fastMode: false,
     });
     await registry.close();
+  });
+
+  it.each([undefined, "review-preset"])("keeps a registered desktop draft when a messaging launch uses its project (%s)", async (agentPresetId) => {
+    const overlayStore = createOverlayStoreMock();
+    const project = {
+      directoryKey: "directory:/repo/app", directoryKind: "directory" as const, directoryLabel: "app",
+      directoryPath: "/repo/app", backend: "codex" as const, executionMode: "default" as const,
+      workMode: "worktree" as const, registeredAt: 1, createdAt: 1, updatedAt: 1,
+    };
+    const saved = { ...project, prompt: "Unsent desktop prompt", agent: { name: "Desktop Agent", instructions: "Keep this draft" },
+      agentPresetId, mcpConnectionIds: ["desktop-plugin"] };
+    await overlayStore.upsertDirectoryLaunchpad(saved);
+    const identity = { directoryKey: project.directoryKey };
+    const desktopDraft = await overlayStore.getDirectoryLaunchpad(identity);
+    expect(desktopDraft).toMatchObject({ agent: saved.agent, prompt: saved.prompt, mcpConnectionIds: saved.mcpConnectionIds });
+    const registry = createDesktopBackendRegistry({
+      codexClient: new MockBackendClient({ initializeResult: { methods: ["thread/start", "turn/start"] } }), overlayStore,
+      gitDirectoryService: { prepareLaunchpadWorkspace: vi.fn(async () => ({
+        cwd: "/repo/app/.worktrees/thread-1/app", repositoryPath: "/repo/app", workMode: "worktree" as const,
+      })), recordCodexWorktreeOwnerThread: vi.fn(async () => {}) } as never,
+    });
+    try {
+      await registry.materializeDirectoryLaunchpad({ directoryKey: "messaging:browse:fixture", launchpad: { ...project, prompt: "" },
+        input: [{ type: "text", text: "Messaging prompt" }] });
+      // An independently materialized thread has no claim on the saved draft.
+      expect(await overlayStore.getDirectoryLaunchpad(identity)).toEqual(desktopDraft);
+    } finally { await registry.close(); }
   });
 
   it("uses submitted launchpad Fast mode instead of stale persisted launchpad settings", async () => {

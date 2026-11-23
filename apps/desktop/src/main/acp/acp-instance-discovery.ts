@@ -14,11 +14,7 @@ import {
   type DiscoveredAcpAgentGroup,
   type LocalAcpDiscoveryOptions,
 } from "@pwrdrvr/agent-acp/discovery";
-import {
-  BUILT_IN_ACP_STRATEGIES,
-  strategyById,
-  type AcpAgentStrategy,
-} from "@pwrdrvr/agent-acp/strategies";
+import type { AcpAgentStrategy } from "@pwrdrvr/agent-acp/strategies";
 import { execFile as execFileCallback } from "node:child_process";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -32,6 +28,7 @@ import type { AcpBackendId } from "@pwragent/shared/contracts/normalized-app-ser
 import type { DesktopUpdateChannel } from "@pwragent/shared/contracts/settings";
 import { resolveActiveAcpInstance } from "./acp-instance-resolver.js";
 import { acpAgentCapabilitiesForRegistryId } from "./acp-agent-capabilities.js";
+import { ACP_LOCAL_AGENT_STRATEGIES } from "./acp-local-strategies.js";
 import { resolveBundledGrokCommand } from "./acp-bundled-agent.js";
 import {
   ensureManagedGrokRuntime,
@@ -54,7 +51,7 @@ const ACP_IDENTITY_PROBE_TIMEOUT_MS = 2_000;
 // installation. Match the stable product identity instead; the version probe
 // and successful help invocation still guard against unrelated `qwen`
 // executables.
-const ACP_DISCOVERY_STRATEGIES = BUILT_IN_ACP_STRATEGIES.map((strategy) =>
+const ACP_DISCOVERY_STRATEGIES = ACP_LOCAL_AGENT_STRATEGIES.map((strategy) =>
   strategy.id === "qwen"
     ? {
         ...strategy,
@@ -65,6 +62,10 @@ const ACP_DISCOVERY_STRATEGIES = BUILT_IN_ACP_STRATEGIES.map((strategy) =>
       }
     : strategy,
 );
+
+function strategyById(id: string): AcpAgentStrategy | undefined {
+  return ACP_DISCOVERY_STRATEGIES.find((strategy) => strategy.id === id);
+}
 
 export type AcpInstanceDiscovery = {
   /** Every installed instance, in candidate order (override → PATH → fallback). */
@@ -138,7 +139,7 @@ export type DiscoverAcpAgentInstancesOptions = {
 
 /**
  * Discover every installed instance of each ACP agent, keyed by registryId
- * (`gemini` / `grok` / `kimi` / `qwen`). Groups with no passing instance are
+ * defined by the local agent catalog. Groups with no passing instance are
  * omitted (the agent isn't installed). The user's `overridePath` is passed to
  * the kit as a per-strategy override so a manual path is probed first and
  * tagged `source: "override"`.
@@ -654,7 +655,7 @@ async function withPwrAgentGrok(
     return groups;
   }
 
-  const grokStrategy = (enabledStrategies ?? BUILT_IN_ACP_STRATEGIES).find(
+  const grokStrategy = (enabledStrategies ?? ACP_DISCOVERY_STRATEGIES).find(
     (strategy) => strategy.id === "grok",
   );
   if (!grokStrategy) {

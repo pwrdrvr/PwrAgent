@@ -67,6 +67,7 @@ export interface MessagingCallbackHost {
   readonly startNewThreadFromProject: (event: MessagingInboundCallbackEvent, session: MessagingBrowseSessionRecord, navigation: MessagingNewThreadNavigation, project: NonNullable<ReturnType<typeof selectProjectFromValue>>) => Promise<void>;
   readonly updateNewThreadStickySettings: (session: MessagingBrowseSessionRecord, patch: UpdateDirectoryLaunchpadRequest["patch"], stickySettingsChanged?: boolean) => Promise<void>;
   readonly presentNewThreadPromptGate: (session: MessagingBrowseSessionRecord, event: MessagingInboundEvent, _navigation?: MessagingNewThreadNavigation) => Promise<void>;
+  readonly handleAgentPresetPicker: (session: MessagingBrowseSessionRecord, event: MessagingInboundCallbackEvent, actionId: string) => Promise<void>;
   readonly presentNewThreadBranchPicker: (session: MessagingBrowseSessionRecord, navigation: MessagingNewThreadNavigation, event: MessagingInboundEvent, pageIndex?: number) => Promise<void>;
   readonly getBackendSummary: (backend: AppServerBackendKind, federationTarget?: FederationTarget) => Promise<BackendSummary | undefined>;
   readonly streamingResponsesDefault: boolean;
