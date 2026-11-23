@@ -7039,6 +7039,61 @@ a.button {
   margin-left: 14px;
 }
 
+.subthread-list--stack {
+  border-left-color: transparent;
+}
+
+.subthread-list--stack > .thread-row-shell > .thread-row[data-stack-tray-layer]::before {
+  position: absolute;
+  inset-block: -1px;
+  inset-inline-start: -11px;
+  border-inline-start: 1.5px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  content: "";
+  pointer-events: none;
+}
+
+.subthread-list--stack > .thread-row-shell > .thread-row[data-stack-tray-stale]::before {
+  border-inline-start-style: dashed;
+  border-inline-start-color: var(--status-warning);
+}
+
+.thread-row__chip.stack-position-chip {
+  min-height: 20px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-sidebar);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+button.stack-position-chip:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.thread-row__chip.stack-position-chip[data-stale] {
+  color: var(--status-warning-text);
+}
+
+.rail-card.stack-rail-card--inferred {
+  border-style: dashed;
+}
+
+.stack-rail-card__layers {
+  display: grid;
+  gap: 4px;
+  margin-block: 6px 0;
+  padding-inline-start: 22px;
+  font-size: 12px;
+}
+
+.stack-rail-card__layers li[data-stale] .stack-rail-card__branch {
+  color: var(--status-warning-text);
+}
+
+.stack-rail-card__layers .rail-card__meta {
+  display: block;
+}
+
 /* The tray's status text. `.sidebar-empty` is sidebar-level and sets 14px,
    which inside a sub-list lands above both the 13px `--sidebar-title-size`
    of the rows around it and the 12px paging control below it — so a
@@ -16476,6 +16531,37 @@ a.button {
   width: auto;
 }
 
+.settings-update-notices {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: -3px;
+  padding: 3px;
+  border: 0;
+}
+
+.settings-update-notices__row {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.settings-update-notices__text {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+  .settings-field:has(> .settings-field__control > .settings-update-notices) {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+}
+
 .settings-update-channel {
   display: flex;
   flex-direction: column;
@@ -23048,12 +23134,32 @@ a.button {
   fill: currentColor;
 }
 
-.star-map__links {
+.star-map__links,
+.star-map__stacks {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   pointer-events: none;
+}
+
+.star-map__stacks path {
+  fill: none;
+  stroke: color-mix(in srgb, var(--accent) 55%, transparent);
+  stroke-width: 1.5px;
+}
+
+.star-map__stacks path[data-inferred],
+.star-map__stacks path[data-state="stale"] {
+  stroke-dasharray: 4 5;
+}
+
+.star-map__stacks path[data-state="stale"] {
+  stroke: var(--status-warning);
+}
+
+.star-map__stacks path[data-state="merged"] {
+  stroke: var(--brand-purple);
 }
 
 .star-map__link {

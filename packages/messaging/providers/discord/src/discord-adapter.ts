@@ -1725,6 +1725,13 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     );
   }
 
+  isAuthorizedNoticeDestination(channel: MessagingChannelRef): boolean {
+    if (channel.channel !== this.channel) return false;
+    const { kind, isDirectMessage, workspaceId } = channel.conversation;
+    return kind === "dm" || isDirectMessage === true
+      || this.options.config.authorizedGuildIds?.some((guild) => guild.id === workspaceId) === true;
+  }
+
   private isAuthorizedDiscordConversation(params: {
     channelType?: number;
     guildId: string | undefined;

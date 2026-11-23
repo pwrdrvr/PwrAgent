@@ -776,6 +776,8 @@ export type AppServerThreadSummary = {
   reasoningEffort?: string;
   fastMode?: boolean;
   acpRuntime?: AppServerAcpSessionRuntimeState;
+  /** Owner-local ACP session with a verified HTTP Job Monitor catalog refresh. */
+  jobMonitorCreationControl?: true;
   workspaceHandoff?: {
     available: boolean;
     unavailableReason?: string;
@@ -830,7 +832,7 @@ export type AppServerThreadMessageOrigin = {
   causalMessagingAmbiguous?: boolean;
   /** Durable cross-thread prerequisite admission. */
   dependencyId?: string;
-  systemReason?: "monitor-job-suggestion" | "thread-correspondence" | "app-restart" | "compaction-recovery";
+  systemReason?: "monitor-job-suggestion" | "thread-correspondence" | "app-restart" | "compaction-recovery" | "stack-notice";
   /**
    * The operator sent this agent-routed message by acting on a to-do card,
    * so a paused project's refusal of messages from other threads skips it.

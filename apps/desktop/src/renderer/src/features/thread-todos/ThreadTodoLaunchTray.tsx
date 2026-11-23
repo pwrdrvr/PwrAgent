@@ -9,12 +9,13 @@ import { dismissThreadTodoLaunch, type ThreadTodoLaunch } from "./thread-todo-la
 export const THREAD_TODO_LAUNCH_DISMISS_MS = 6_000;
 /** The arrival wash's length; a row older than this is not new on mount. */
 const ARRIVE_MS = 600;
+const SHOW_CARD_AFTER_SECONDS = 60;
 
 export type ThreadTodoLaunchTrayProps = {
   launches: readonly ThreadTodoLaunch[];
   onOpenThread: (todo: ThreadTodo) => void;
-  /** Returns a failed card to the top of the deck. */
-  onReview: (id: string) => void;
+  onReturnCard: (launch: ThreadTodoLaunch) => void;
+  onClose: (launch: ThreadTodoLaunch) => void;
   /** The row a started card is still flying into; it shows once the card lands. */
   landingId?: string;
 };
@@ -57,7 +58,8 @@ export function ThreadTodoLaunchTray(props: ThreadTodoLaunchTrayProps) {
             landing={launch.id === props.landingId}
             paused={paused}
             onOpenThread={props.onOpenThread}
-            onReview={props.onReview}
+            onReturnCard={props.onReturnCard}
+            onClose={props.onClose}
           />
         ))}
       </ul>
@@ -70,7 +72,8 @@ function ThreadTodoLaunchRow(props: {
   landing: boolean;
   paused: boolean;
   onOpenThread: (todo: ThreadTodo) => void;
-  onReview: (id: string) => void;
+  onReturnCard: ThreadTodoLaunchTrayProps["onReturnCard"];
+  onClose: ThreadTodoLaunchTrayProps["onClose"];
 }) {
   const { launch } = props;
   const now = useNowWhileActive(launch.phase === "starting");
@@ -84,6 +87,9 @@ function ThreadTodoLaunchRow(props: {
     : launch.phase === "started" ? (started?.instanceLabel ? `Started on ${started.instanceLabel}` : "Started")
     : launch.phase === "setup_failed" ? "Started · setup failed"
     : "Could not start";
+  const returnLabel = launch.phase === "failed" ? "Review card"
+    : launch.phase === "starting" && elapsed >= SHOW_CARD_AFTER_SECONDS ? "Show card"
+    : undefined;
   return (
     <li
       className={`thread-todo-launches__row is-${launch.phase.replace("_", "-")}${
@@ -115,14 +121,14 @@ function ThreadTodoLaunchRow(props: {
             Open thread
           </button>
         ) : null}
-        {launch.phase === "failed" ? (
+        {returnLabel ? (
           <button
             type="button"
             className="thread-todo-launches__button"
-            aria-label={`Review card: ${launch.title}`}
-            onClick={() => props.onReview(launch.id)}
+            aria-label={`${returnLabel}: ${launch.title}`}
+            onClick={() => props.onReturnCard(launch)}
           >
-            Review card
+            {returnLabel}
           </button>
         ) : null}
         {launch.phase !== "starting" ? (
@@ -130,7 +136,7 @@ function ThreadTodoLaunchRow(props: {
             type="button"
             className="thread-todo-launches__close"
             aria-label={`Close: ${launch.title}`}
-            onClick={() => (launch.phase === "failed" ? props.onReview(launch.id) : dismissThreadTodoLaunch(launch.id))}
+            onClick={() => props.onClose(launch)}
           >
             <CloseIcon size={12} />
           </button>

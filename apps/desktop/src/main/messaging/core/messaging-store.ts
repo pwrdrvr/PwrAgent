@@ -802,7 +802,7 @@ export class MessagingStore {
             (handle) =>
               handle.handle === params.handle &&
               handle.expiresAt > now &&
-              handle.allowedActorIds.includes(params.actorId) &&
+              (handle.audience === "conversation" || handle.allowedActorIds.includes(params.actorId)) &&
               buildMessagingConversationKey(handle.channel) === channelKey,
           )
           .sort((a, b) => b.updatedAt - a.updatedAt)[0],

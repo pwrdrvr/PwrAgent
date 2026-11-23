@@ -31,6 +31,46 @@ describe("AgentToolMcpServer", () => {
     await Promise.all(openServers.splice(0).map(async (server) => server.close()));
   });
 
+  it("credits a catalog listing only to the registration that received it", async () => {
+    const listingEntered = Promise.withResolvers<void>();
+    const releaseListing = Promise.withResolvers<void>();
+    let visitsUntilBlocked = 0;
+    const router = new AgentToolRouter([{ namespace: "pwragent", name: "create_monitor_delegation",
+      description: "Fixture", inputSchema: { type: "object" }, dispatch: async () => agentToolSuccess({}) }]);
+    const server = new AgentToolMcpServer({
+      resolveCatalogs: () => [{ id: "thread_orchestration", router }],
+      resolveCallContext: () => undefined,
+      isToolAdvertised: async () => {
+        if (--visitsUntilBlocked === 0) {
+          listingEntered.resolve();
+          await releaseListing.promise;
+        }
+        return true;
+      },
+    });
+    openServers.push(server);
+    const context = { backend: "acp:grok", threadId: "thread", observeJobMonitorCatalog: true } as const;
+    const original = await server.registerClient(context);
+    const oldClient = await connectClient(original);
+    // Each request resolves the catalog for server metadata, then for the list itself.
+    visitsUntilBlocked = 2;
+    const oldListing = oldClient.listTools();
+    let replacementClient: Client | undefined;
+    try {
+      await listingEntered.promise;
+      const replacement = await server.registerClient(context);
+      releaseListing.resolve();
+      await oldListing;
+      expect(replacement.readListedJobMonitorCreation?.()).toBeUndefined();
+      replacementClient = await connectClient(replacement);
+      await replacementClient.listTools();
+      expect(replacement.readListedJobMonitorCreation?.()).toBe(true);
+    } finally {
+      releaseListing.resolve();
+      await Promise.all([oldClient.close(), replacementClient?.close()]);
+    }
+  });
+
   it.each(["codex", "claude", "acp:grok"] as const)("rechecks asynchronous lifecycle discovery and direct calls for %s", async (backend) => {
     let allowed = false;
     const denial = "App management requires messaging RBAC enforcement.";
@@ -107,7 +147,7 @@ describe("AgentToolMcpServer", () => {
         "search_threads", "read_thread", "get_thread_status",
         "get_forge_status", "list_ci_runs", "get_ci_run", "get_ci_job",
         "read_ci_job_log", "get_commit_checks", "list_ci_artifacts", "download_ci_artifact",
-        "get_pull_request", "list_pull_requests", "list_pull_request_files", "get_pull_request_diff",
+        "get_pull_request", "list_stacks", "plan_stack_operation", "list_pull_requests", "list_pull_request_files", "get_pull_request_diff",
         "list_pull_request_reviews", "list_pull_request_review_threads", "get_issue", "list_issue_comments", "search_issues",
         "get_current_messaging_surface", "list_messaging_surfaces", "list_messaging_attachments",
         "list_federation_instances", "list_instance_projects", "list_attention_threads", "search_federation_threads",

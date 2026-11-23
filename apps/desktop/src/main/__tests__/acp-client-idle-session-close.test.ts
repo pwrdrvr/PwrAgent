@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import { AcpAgentClient } from "../acp/acp-client";
 import { AcpSessionStore } from "../storage/acp-session-store";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
@@ -12,6 +13,7 @@ const GROK_INITIALIZE = {
   protocolVersion: 1,
   agentCapabilities: {
     loadSession: true,
+    mcpCapabilities: { http: true },
     sessionCapabilities: { close: {}, list: {}, resume: {} },
   },
 };
@@ -97,11 +99,175 @@ async function createClient(options: {
 }
 
 async function finishPrompt(client: AcpAgentClient, sessionId: string, prompt: string) {
-  client.startPrompt({ sessionId, prompt });
+  await client.startPrompt({ sessionId, prompt });
   await vi.waitFor(() => {
     expect(client.hasActiveTurns()).toBe(false);
   });
 }
+
+it("reloads exactly when a verified session's advertised Job Monitor preference changes", async () => {
+  await fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { minLength: 1, maxLength: 6 }), async (preferences) => {
+    let desired = true;
+    let listed: boolean | undefined;
+    let promptCatalog: boolean | undefined;
+    const transport = new GrokLikeTransport({ initialize: GROK_INITIALIZE, "session/new": { sessionId: "verified" } });
+    const request = transport.request.bind(transport);
+    transport.request = async (method, params, timeoutMs) => {
+      if (method === "session/new" || method === "session/load") listed = desired;
+      if (method === "session/prompt") promptCatalog = listed;
+      return await request(method, params, timeoutMs);
+    };
+    const client = new AcpAgentClient({
+      backendId: "acp:grok", store, transport,
+      readJobMonitorCreationPreference: async () => desired,
+      mcpServers: () => ({
+        servers: [{ type: "http", name: "pwragent", url: "http://127.0.0.1/mcp", headers: [] }],
+        readListedJobMonitorCreation: () => listed,
+      }),
+    });
+    try {
+      await client.initialize();
+      await client.startSession({ cwd: "/repo", executionMode: "default" });
+      let previous = true;
+      for (const enabled of preferences) {
+        const requestCount = transport.requests.length;
+        desired = enabled;
+        await finishPrompt(client, "verified", "next prompt");
+        expect(transport.methods().slice(requestCount)).toEqual(
+          enabled === previous ? ["session/prompt"] : ["session/close", "session/load", "session/prompt"],
+        );
+        expect(promptCatalog).toBe(enabled);
+        previous = enabled;
+      }
+    } finally {
+      await client.dispose();
+    }
+  }), { numRuns: 12, examples: [[[false, true, true, false]]] });
+});
+
+function jobMonitorRefreshFixture(
+  initialize: unknown = GROK_INITIALIZE,
+  backendId: "acp:grok" | "acp:antigravity" = "acp:grok",
+) {
+  let desired = true;
+  let listed: boolean | undefined;
+  const transport = new GrokLikeTransport({ initialize, "session/new": { sessionId: "verified" } });
+  const onPromptError = vi.fn();
+  const client = new AcpAgentClient({
+    backendId, store, transport, onPromptError,
+    initialRuntimeCapabilities: {
+      schemaVersion: 1, status: "discovered", source: "initialize",
+      agentCapabilities: { loadSession: true, mcp: { http: true }, session: { close: true } },
+    },
+    readJobMonitorCreationPreference: async () => desired,
+    mcpServers: () => ({
+      servers: [{ type: "http", name: "pwragent", url: "http://127.0.0.1/mcp", headers: [] }],
+      readListedJobMonitorCreation: () => listed,
+    }),
+  });
+  return {
+    client, transport, onPromptError,
+    toggleOff: () => { desired = false; },
+    listCurrentCatalog: () => { listed = desired; },
+  };
+}
+
+it.each([
+  {
+    backend: "acp:grok",
+    running: { sessionUpdate: "background_tasks", tasks: [{ task_id: "one", status: "running" }] },
+    ended: { sessionUpdate: "background_tasks", tasks: [] },
+  },
+  {
+    backend: "acp:antigravity",
+    running: { sessionUpdate: "tool_call", toolCallId: "one", name: "run_command", status: "in_progress" },
+    ended: { sessionUpdate: "tool_call_update", toolCallId: "one", status: "completed" },
+  },
+] as const)("keeps native background work open across idle sweeps and requested refresh on $backend", async ({ backend, running, ended }) => {
+  const { client, transport, onPromptError, toggleOff, listCurrentCatalog } = jobMonitorRefreshFixture(GROK_INITIALIZE, backend);
+  const request = transport.request.bind(transport);
+  transport.request = async (method, params, timeoutMs) => {
+    if (method === "session/load") listCurrentCatalog();
+    return await request(method, params, timeoutMs);
+  };
+  await client.initialize();
+  await client.startSession({ cwd: "/repo", executionMode: "default" });
+  transport.emitSessionUpdate("verified", running);
+  await expect(client.closeIdleSessions({ idleMs: 0 })).resolves.toEqual([]);
+  toggleOff();
+  await expect(client.startPrompt({ sessionId: "verified", prompt: "wait for work" })).rejects.toThrow("background work");
+  expect(onPromptError).not.toHaveBeenCalled();
+  expect(transport.methods()).toEqual(["initialize", "session/new"]);
+  transport.emitSessionUpdate("verified", ended);
+  await finishPrompt(client, "verified", "retry after work");
+  expect(transport.methods().slice(-3)).toEqual(["session/close", "session/load", "session/prompt"]);
+});
+
+it.each(["close", "load", "list"] as const)("withholds the prompt when catalog %s fails and retries from the same session", async (failure) => {
+  const { client, transport, onPromptError, toggleOff, listCurrentCatalog } = jobMonitorRefreshFixture();
+  const request = transport.request.bind(transport);
+  let fail = false;
+  transport.request = async (method, params, timeoutMs) => {
+    if (fail && method === `session/${failure}`) throw new Error("fixture failure");
+    if (method === "session/load" && (!fail || failure !== "list")) listCurrentCatalog();
+    return await request(method, params, timeoutMs);
+  };
+  await client.initialize();
+  await client.startSession({ cwd: "/repo", executionMode: "default" });
+  await finishPrompt(client, "verified", "existing turn");
+  const requestCount = transport.requests.length;
+  toggleOff();
+  fail = true;
+  await expect(client.startPrompt({ sessionId: "verified", prompt: "blocked turn" })).rejects.toThrow();
+  expect(onPromptError).not.toHaveBeenCalled();
+  expect(transport.methods().slice(requestCount)).not.toContain("session/prompt");
+  fail = false;
+  await finishPrompt(client, "verified", "retry");
+  expect(transport.requests.at(-1)).toMatchObject({
+    method: "session/prompt", params: { sessionId: "verified" },
+  });
+  expect(client.readReplay("verified").messages.filter(message => message.text === "existing turn")).toHaveLength(1);
+});
+
+it.each([
+  { loadSession: true, mcpCapabilities: { http: true } },
+  { sessionCapabilities: { close: {} }, mcpCapabilities: { http: true } },
+  { loadSession: true, sessionCapabilities: { close: {} } },
+])("requires fresh close, load and HTTP advertisements over cached capabilities (%j)", async (agentCapabilities) => {
+  const { client, transport, toggleOff } = jobMonitorRefreshFixture({ protocolVersion: 1, agentCapabilities });
+  await client.initialize();
+  await client.startSession({ cwd: "/repo", executionMode: "default" });
+  expect(client.supportsJobMonitorControl("verified")).toBe(false);
+  toggleOff();
+  await finishPrompt(client, "verified", "ordinary turn");
+  expect(transport.methods()).toEqual(["initialize", "session/new", "session/prompt"]);
+});
+
+it("cancels a send waiting for catalog refresh without cancelling the provider session", async () => {
+  const { client, transport, toggleOff, listCurrentCatalog } = jobMonitorRefreshFixture();
+  let finishClose!: () => void;
+  transport.closeGate = new Promise<void>(resolve => { finishClose = resolve; });
+  const request = transport.request.bind(transport);
+  transport.request = async (method, params, timeoutMs) => {
+    if (method === "session/load") listCurrentCatalog();
+    return await request(method, params, timeoutMs);
+  };
+  await client.initialize();
+  await client.startSession({ cwd: "/repo", executionMode: "default" });
+  toggleOff();
+  const cancelled = expect(client.startPrompt({ sessionId: "verified", prompt: "cancel this send" }))
+    .rejects.toThrow("cancelled before it was sent");
+  await vi.waitFor(() => expect(transport.methods()).toContain("session/close"));
+  await client.cancelSession("verified");
+  await cancelled;
+  await vi.waitFor(() => expect(client.hasActiveTurns()).toBe(false));
+  finishClose();
+  await vi.waitFor(() => expect(transport.methods()).toContain("session/load"));
+  expect(transport.methods()).not.toContain("session/prompt");
+  expect(transport.notifications).toEqual([]);
+  await finishPrompt(client, "verified", "subsequent send");
+  expect(transport.methods().filter(method => method === "session/prompt")).toHaveLength(1);
+});
 
 describe("AcpAgentClient idle session close", () => {
   it("closes a session idle past the grace period, once", async () => {

@@ -61,6 +61,8 @@ export type RequestQuitOptions = {
   quietRestart?: boolean;
   /** Trusted app-management authorization; never a renderer or model-supplied flag. */
   authorizeAgent?: () => Promise<boolean>;
+  /** Atomically hold new work for a chat-approved install. Undefined means work is already being admitted. */
+  holdIdleUpdateAdmission?: () => (() => void) | undefined;
 };
 
 export type QuitBlockerSnapshot = {
@@ -159,6 +161,9 @@ export function createQuitManager(
   };
 
   const requestQuit = async (options: RequestQuitOptions): Promise<boolean> => {
+    const holdIdleUpdateAdmission = options.holdIdleUpdateAdmission;
+    if (holdIdleUpdateAdmission && (options.source !== "update-install"
+      || !options.authorizeAgent || !options.beforeQuit || !options.performQuit || options.quietRestart)) return false;
     if (quitAllowed) return !options.performQuit || options.performQuit === committedPerformQuit;
     if (immediateDecisionInProgress) return false;
     if (options.quietRestart && !dependencies.quietForRestart) throw new Error("Quiet restart is unavailable on this host.");
@@ -188,14 +193,22 @@ export function createQuitManager(
       pendingPerformQuit = options.performQuit ?? dependencies.performQuit;
       const resumeAutomationDispatch = dependencies.quiesceAutomationDispatch?.();
       let quietPrepared = false;
+      let releaseIdleUpdateAdmission: (() => void) | undefined;
       const pending = Promise.resolve().then(async () => {
         if (options.authorizeAgent && !await options.authorizeAgent()) return false;
+        if (holdIdleUpdateAdmission) {
+          releaseIdleUpdateAdmission = holdIdleUpdateAdmission();
+          if (!releaseIdleUpdateAdmission || dependencies.getQuitBlockers().count > 0) return false;
+        }
         if (options.beforeQuit && !options.beforeQuit()) return false;
         if (options.quietRestart) {
           await dependencies.quietForRestart?.();
           quietPrepared = true;
         }
-        if (options.authorizeAgent && (!await options.authorizeAgent() || (options.beforeQuit && !options.beforeQuit()))) return false;
+        // The idle path checks authorization, holds admission and commits
+        // without yielding between the blocker snapshot and native handoff.
+        if (!holdIdleUpdateAdmission && options.authorizeAgent
+          && (!await options.authorizeAgent() || (options.beforeQuit && !options.beforeQuit()))) return false;
         dependencies.commitShutdown?.();
         committedPerformQuit = pendingPerformQuit;
         quitAllowed = true;
@@ -205,6 +218,7 @@ export function createQuitManager(
         promptPromise = undefined;
         pendingPerformQuit = undefined;
         if (!quitAllowed) {
+          releaseIdleUpdateAdmission?.();
           if (quietPrepared) dependencies.resumeAfterCancelledQuietRestart?.();
           dependencies.cancelShutdown?.();
           resumeAutomationDispatchAfterPrompt(resumeAutomationDispatch);
@@ -739,11 +753,11 @@ function splitQuitThreadKey(threadKey: string): {
 
 const quitLog = getMainLogger("pwragent:quit");
 
-export function getCurrentQuitBlockers(): QuitBlockerSnapshot {
+export function getCurrentQuitBlockers(options?: { includeIdleTerminals?: boolean }): QuitBlockerSnapshot {
   return buildQuitBlockerSnapshot({
     inProgressThreads:
       getDesktopBackendRegistry().getInProgressThreadSnapshotForQuit(),
-    terminalSessions: getIntegratedTerminalQuitSnapshot(),
+    terminalSessions: getIntegratedTerminalQuitSnapshot({ includeIdle: options?.includeIdleTerminals }),
     actionRuns: listRunningDetachedCommands(),
     archiveCleanupCount: getDesktopBackendRegistry().getArchiveCleanupCountForQuit(),
   });

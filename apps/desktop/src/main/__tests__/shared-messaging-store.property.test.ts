@@ -18,6 +18,29 @@ const binding = (id: string, at = 10): MessagingBindingRecord => ({
 });
 const construct = (db: StateDb, host: number) => host === 0 ? new SharedStore(db, messagingSqlitePolicy)
   : host === 1 ? new DesktopStore(db) : new CompatibilityStore(db);
+
+it("only widens a conversation callback to an admitted actor in the same unexpired conversation", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), fc.boolean(), fc.boolean(), fc.boolean(),
+    async (conversationAudience, originalActor, originalChannel, expired) => {
+      const db = openInMemoryStateDb();
+      try {
+        const target = binding("release-watch").channel;
+        for (const host of [0, 1, 2]) {
+          const store = construct(db, host);
+          await store.upsertCallbackHandle({
+            id: "update-action", handle: "update-handle", actionId: "app-update:review",
+            channel: target, allowedActorIds: ["original"], createdAt: 1, updatedAt: 1, expiresAt: 10,
+            ...(conversationAudience ? { audience: "conversation" as const } : {}),
+          });
+          const resolved = await store.resolveCallbackHandle({
+            actorId: originalActor ? "original" : "another-admitted-actor", handle: "update-handle",
+            channel: originalChannel ? target : binding("another-room").channel, now: expired ? 10 : 9,
+          });
+          expect(Boolean(resolved)).toBe(originalChannel && !expired && (originalActor || conversationAudience));
+        }
+      } finally { db.close(); }
+    }), { numRuns: 25 });
+});
 // Vitest's outer timeout does not cancel a generated assertion. Keep its
 // current WAL writer and all subsequent cases owned until teardown stops
 // admission and joins the assertion; only then restore process-wide state.

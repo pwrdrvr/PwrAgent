@@ -16,6 +16,7 @@ import type {
   AppUpdateCheckResult,
   AppUpdateDirection,
   AppUpdateInstallResult,
+  AppUpdateNotice,
   AppManualUpdateInstructions,
   AppUpdateReleaseInfo,
   AppUpdateReleaseVersions,
@@ -82,8 +83,10 @@ let updateCheckInFlight: Promise<AppUpdateCheckResult> | undefined;
 type UpdateSelectionKey = `${DesktopUpdateTrain}:${DesktopUpdateChannel}`;
 
 let updateCheckChannelInFlight: UpdateSelectionKey | undefined;
-type HeldDownloadedUpdate = { selection: UpdateSelectionKey; version: string };
+type HeldDownloadedUpdate = { selection: UpdateSelectionKey; version: string; replaces?: string };
 let heldDownloadedUpdate: HeldDownloadedUpdate | undefined;
+let stagedMacDownload: HeldDownloadedUpdate | undefined;
+let disposeFirstSquirrelNotice: (() => void) | undefined;
 /**
  * The downloaded update a newer release is downloading over.
  *
@@ -208,6 +211,7 @@ type GitHubReleaseAsset = {
 const MAC_UPDATE_CHANNEL_FILE = "latest-mac.yml";
 
 let updateStateGeneration = 0;
+const updateNoticeListeners = new Set<(notice: AppUpdateNotice) => void>();
 
 /** Process-local revision, including selection changes that leave the same version. */
 export function readAppUpdateStateToken(): string {
@@ -224,6 +228,59 @@ function setUpdateStatus(nextStatus: AppUpdateStatus): void {
     }
     window.webContents.send(APP_UPDATE_STATUS_EVENT_CHANNEL, nextStatus);
   }
+  publishAppUpdateNotice(nextStatus);
+}
+
+function publishAppUpdateNotice(status: AppUpdateStatus): void {
+  if (!updateNoticeListeners.size || !productionUpdatesEnabled()) return;
+  if ((status.status !== "available" && status.status !== "downloaded")
+    || status.direction === "downgrade" || !parseSemver(status.version)) return;
+  let selected: DesktopUpdateSelection;
+  try {
+    selected = currentUpdateSelection();
+  } catch (error) {
+    log.warn("could not resolve selection for app update notice", { error });
+    return;
+  }
+  const { train, channel } = selected;
+  const selection = updateSelectionKey(train, channel);
+  const held = heldDownloadedUpdate;
+  if (status.status === "available") {
+    if (pendingDownloadChannelsByVersion.get(status.version) !== selection) return;
+  } else if (held?.selection !== selection || held.version !== status.version
+    || (process.platform === "darwin" && stagedMacDownload !== held)) {
+    return;
+  }
+  const notice: AppUpdateNotice = {
+    phase: status.status === "available" ? "available" : "ready",
+    version: status.version,
+    currentVersion: app.getVersion(),
+    train: UPDATE_TRAIN_LABEL[train],
+    ...(status.status === "downloaded" && held?.replaces ? { replaces: held.replaces } : {}),
+  };
+  for (const listener of updateNoticeListeners) {
+    try {
+      listener(notice);
+    } catch (error) {
+      log.warn("app update notice listener failed", { error });
+    }
+  }
+}
+
+/** Observe main-process status without a renderer or another update check. */
+export function subscribeAppUpdateNotices(listener: (notice: AppUpdateNotice) => void): () => void {
+  updateNoticeListeners.add(listener);
+  return () => { updateNoticeListeners.delete(listener); };
+}
+
+export function readMessagingInstallTarget(): { version: string; selection: string } | undefined {
+  if (!app.isPackaged || !productionUpdatesEnabled() || (process.platform !== "darwin" && process.platform !== "win32")) return undefined;
+  const selection = currentUpdateSelectionKey();
+  const held = heldDownloadedUpdate;
+  if (!held || held.selection !== selection || updateStatus.status !== "downloaded"
+    || updateStatus.version !== held.version || updateStatus.direction === "downgrade"
+    || !parseSemver(held.version) || (process.platform === "darwin" && stagedMacDownload !== held)) return undefined;
+  return { version: held.version, selection };
 }
 
 /**
@@ -780,9 +837,34 @@ function recordPendingDownloadChannel(
 
 /** The newer release is installable: it becomes the Restart offer. */
 function promoteSupersede(next: HeldDownloadedUpdate): void {
+  if (supersedingDownload && supersedingDownload.version !== next.version) {
+    next.replaces = supersedingDownload.version;
+  }
   heldDownloadedUpdate = next;
   supersedingDownload = undefined;
   reconcileDownloadedUpdateEligibility();
+}
+
+/** The first Mac offer reaches the banner when the zip is on disk.
+ * Messaging waits for the native staged event without delaying the banner. */
+function observeFirstSquirrelNotice(next: HeldDownloadedUpdate): void {
+  disposeFirstSquirrelNotice?.();
+  const native = optionalNativeUpdater();
+  if (!native) return;
+  const dispose = (): void => {
+    native.removeListener("update-downloaded", onStaged);
+    native.removeListener("error", dispose);
+    disposeFirstSquirrelNotice = undefined;
+  };
+  const onStaged = (): void => {
+    dispose();
+    if (heldDownloadedUpdate !== next) return;
+    stagedMacDownload = next;
+    publishAppUpdateNotice(updateStatus);
+  };
+  disposeFirstSquirrelNotice = dispose;
+  native.once("update-downloaded", onStaged);
+  native.once("error", dispose);
 }
 
 /** The newer release did not arrive: the check found nothing to download, the
@@ -816,6 +898,7 @@ function abandonSupersede(reason: string): void {
  */
 function awaitSquirrelStage(next: HeldDownloadedUpdate): void {
   const native = optionalNativeUpdater();
+  disposeFirstSquirrelNotice?.();
   if (native === undefined) {
     log.warn("cannot observe Squirrel.Mac staging; offering the newer update now", {
       version: next.version,
@@ -843,6 +926,7 @@ function awaitSquirrelStage(next: HeldDownloadedUpdate): void {
       return;
     }
     log.info("Squirrel.Mac staged the newer update", { version: next.version });
+    stagedMacDownload = next;
     promoteSupersede(next);
   };
   const onStaged = (): void => settle(true, "staged");
@@ -2039,6 +2123,7 @@ export function initAutoUpdater(): void {
         awaitSquirrelStage(next);
         return;
       }
+      if (process.platform === "darwin") observeFirstSquirrelNotice(next);
       promoteSupersede(next);
       return;
     }
@@ -2255,6 +2340,7 @@ export function registerAppUpdateIpcHandlers(options?: {
 }
 
 export function disposeAppUpdateIpcHandlers(): void {
+  disposeFirstSquirrelNotice?.();
   ipcMain.removeHandler(APP_UPDATE_CHECK_CHANNEL);
   ipcMain.removeHandler(APP_UPDATE_STATUS_READ_CHANNEL);
   ipcMain.removeHandler(APP_UPDATE_INSTALL_CHANNEL);

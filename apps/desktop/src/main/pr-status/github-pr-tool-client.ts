@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { discoverGhCommands } from "../settings/gh-discovery";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import { assertGithubStackMergeAllowed, assertStackMergeBaseUnchanged } from "../stacks/stack-merge-guard";
 import { redactForgeLog, type ForgeCiClient } from "./forge-ci-client";
 import { describeMergeQueueRemoval, describeMergeQueueState } from "@pwragent/shared/pr-merge-queue";
 import { type PrMergeQueueStatus } from "@pwragent/shared/contracts/navigation";
@@ -483,14 +484,17 @@ export class GithubPrToolClient {
       }
       case "merge_pull_request": {
         ctx.assertCanMerge?.(r, args.number!);
+        const checkedBase = await assertGithubStackMergeAllowed(r, args.number!, ctx.stackCatalogs ?? [], (route) => call("GET", route));
         // Read the queue only when it can matter. A queue read that fails
         // never blocks a merge: GitHub itself refuses a direct merge past one.
         const readGate = async () => {
           providerRequests++;
-          return await this.mergeQueueGate(r, args.number!, ctx.signal).catch((error: unknown) => {
+          const gate = await this.mergeQueueGate(r, args.number!, ctx.signal).catch((error: unknown) => {
             if (ctx.signal?.aborted) throw error;
             return undefined;
           });
+          if (gate) assertStackMergeBaseUnchanged(checkedBase, gate.baseRef);
+          return gate;
         };
         const enqueue = async (gate: GithubMergeQueueGate) => {
           // Never a direct merge here, with or without bypass rights.

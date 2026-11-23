@@ -942,6 +942,10 @@ export class GitDirectoryService {
   // mutate that directory at once, so a repository owns its whole launchpad
   // worktree transaction. Different repositories still proceed in parallel.
   private readonly worktreeMutationLocks = new PerKeyAsyncLock();
+
+  withStackWorktreeMutation<T>(commonDir: string, operation: () => Promise<T>): Promise<T> {
+    return this.worktreeMutationLocks.run(commonDir, operation);
+  }
   private readonly cacheTtlMs: number;
   private readonly statusConcurrency: number;
   private readonly statusMaxUnread: number;

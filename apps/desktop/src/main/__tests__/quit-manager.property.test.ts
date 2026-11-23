@@ -62,6 +62,45 @@ beforeEach(() => {
 });
 
 describe("quit operation ownership", () => {
+  it("only hands a messaging update to the native installer while authorized and idle under the admission hold", async () => {
+    await fc.assert(fc.asyncProperty(fc.record({
+      authorized: fc.boolean(),
+      canHoldAdmission: fc.boolean(),
+      blockers: fc.nat({ max: 3 }),
+      nativeReady: fc.boolean(),
+    }), async ({ authorized, canHoldAdmission, blockers, nativeReady }) => {
+      let admissionHeld = false;
+      const release = vi.fn(() => { admissionHeld = false; });
+      const holdIdleUpdateAdmission = vi.fn(() => {
+        if (!canHoldAdmission) return undefined;
+        admissionHeld = true;
+        return release;
+      });
+      const beforeQuit = vi.fn(() => {
+        expect(admissionHeld).toBe(true);
+        return nativeReady;
+      });
+      const performQuit = vi.fn(() => expect(admissionHeld).toBe(true));
+      const manager = createQuitManager({
+        getConfirmationEnabled: () => false,
+        getQuitBlockers: () => {
+          expect(admissionHeld).toBe(true);
+          return { count: blockers, threadIds: [], terminalSessionCount: 0, terminalThreadKeys: [], actionRunCount: 0, items: [] };
+        },
+        performQuit: vi.fn(), log: {},
+      });
+      const canCallNative = authorized && canHoldAdmission && blockers === 0;
+      const accepted = canCallNative && nativeReady;
+      expect(await manager.requestQuit({
+        source: "update-install", authorizeAgent: async () => authorized,
+        holdIdleUpdateAdmission, beforeQuit, performQuit,
+      })).toBe(accepted);
+      expect(beforeQuit).toHaveBeenCalledTimes(Number(canCallNative));
+      expect(performQuit).toHaveBeenCalledTimes(Number(accepted));
+      expect(release).toHaveBeenCalledTimes(Number(authorized && canHoldAdmission && !accepted));
+    }));
+  });
+
   it("uses an authorized chat request without a desktop decision and rechecks before shutdown", async () => {
     await fc.assert(fc.asyncProperty(fc.boolean(), fc.integer({ min: 1, max: 4 }), async (revoke, peers) => {
       let allowed = true;

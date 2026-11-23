@@ -103,7 +103,7 @@ function isExited(child: OwnedChildProcess): boolean {
   return child.exitCode !== null || child.signalCode !== null;
 }
 
-function isOwnedProcessTreeAlive(child: OwnedChildProcess): boolean {
+export function isOwnedProcessTreeAlive(child: OwnedChildProcess): boolean {
   if (process.platform !== "win32" && child.pid) {
     try {
       process.kill(-child.pid, 0);

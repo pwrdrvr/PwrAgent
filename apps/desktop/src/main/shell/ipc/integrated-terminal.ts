@@ -234,8 +234,8 @@ export function disposeIntegratedTerminalIpcHandlers(): Promise<void> {
   return serviceDisposalPromise;
 }
 
-export function getIntegratedTerminalQuitSnapshot(): IntegratedTerminalQuitSnapshot {
-  const local: IntegratedTerminalQuitSnapshot = service?.getQuitSnapshot() ?? {
+export function getIntegratedTerminalQuitSnapshot(options?: { includeIdle?: boolean }): IntegratedTerminalQuitSnapshot {
+  const local: IntegratedTerminalQuitSnapshot = service?.getQuitSnapshot(options) ?? {
     count: 0,
     sessionIds: [],
     threads: [],
@@ -245,7 +245,7 @@ export function getIntegratedTerminalQuitSnapshot(): IntegratedTerminalQuitSnaps
   // a long command on another machine dies without the prompt its local
   // equivalent would get. They cannot be foreground-filtered like local
   // sessions: the process lives on the owner.
-  const remote = federationBridge?.quitSnapshotSessions() ?? [];
+  const remote = federationBridge?.quitSnapshotSessions(options) ?? [];
   if (remote.length === 0) {
     return local;
   }

@@ -12,12 +12,14 @@ import {
   JsonRpcConnection,
   type JsonRpcId,
   type JsonRpcObserver,
+  type JsonRpcObserverEvent,
   type JsonRpcTransport,
 } from "@pwrdrvr/agent-transport";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env.js";
 import { prependBundledToolsToPath } from "../bundled-tools.js";
 import { getMainLogger } from "../log.js";
 import {
+  isOwnedProcessTreeAlive,
   terminateOwnedProcessTree,
   type OwnedChildProcess,
 } from "../process-tree.js";
@@ -83,9 +85,14 @@ function appendExecutableSearchPaths(env: NodeJS.ProcessEnv, home: string | unde
   };
 }
 
+type AcpStdioConnection = {
+  line: AcpLineStdioTransport;
+  rpc: JsonRpcConnection;
+  ready: Promise<void>;
+};
+
 export class AcpStdioJsonRpcTransport implements AcpJsonRpcTransport {
-  private readonly lineTransport: AcpLineStdioTransport;
-  private readonly connection: JsonRpcConnection;
+  private current?: AcpStdioConnection;
   private readonly notificationListeners = new Set<
     (method: string, params: Record<string, unknown>) => void
   >();
@@ -97,46 +104,72 @@ export class AcpStdioJsonRpcTransport implements AcpJsonRpcTransport {
       ) => Promise<unknown> | unknown)
     | undefined;
   private closed = false;
+  private reconnect = true;
 
-  constructor(options: AcpStdioJsonRpcTransportOptions) {
-    this.lineTransport = new AcpLineStdioTransport({
-      launchDescriptor: options.launchDescriptor,
-      baseEnv: options.baseEnv,
-      spawn: options.spawn,
-      platform: options.platform,
-      bundledToolsDirectory: options.bundledToolsDirectory,
-    });
-    this.connection = new JsonRpcConnection(
-      this.lineTransport,
+  constructor(private readonly options: AcpStdioJsonRpcTransportOptions) {}
+
+  get disconnected(): boolean {
+    return this.current?.line.stopped ?? false;
+  }
+
+  disableReconnect(): void {
+    this.reconnect = false;
+  }
+
+  private startConnection(): AcpStdioConnection {
+    const { options } = this;
+    const line = new AcpLineStdioTransport(options);
+    const observer = options.observer;
+    // A response from an asynchronous agent request belongs to the child
+    // that sent it, even if a replacement child has already connected.
+    const rpc = new JsonRpcConnection(
+      line,
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      options.observer,
+      observer && { onMessage: (event) => line.observe(event) },
       {
         logContext: { backend: options.launchDescriptor.backendId },
         logger: getMainLogger("pwragent:json-rpc"),
       },
     );
-    this.connection.setNotificationHandler((method, params) => {
+    rpc.setNotificationHandler((method, params) => {
+      if (line.stopped) return;
       const normalizedParams = asRecord(params) ?? {};
       for (const listener of this.notificationListeners) {
         listener(method, normalizedParams);
       }
     });
-    this.connection.setRequestHandler(async (method, params, id) => {
+    rpc.setRequestHandler(async (method, params, id) => {
+      line.assertOpen();
       if (!this.requestHandler) {
         throw new Error(`ACP request handler unavailable for ${method}`);
       }
       return await this.requestHandler(method, asRecord(params) ?? {}, id);
     });
+    return { line, rpc, ready: Promise.resolve().then(() => rpc.connect()) };
+  }
+
+  private async connectToChild(): Promise<AcpStdioConnection> {
+    this.assertOpen();
+    while (this.current?.line.stopped) {
+      const previous = this.current;
+      if (!this.reconnect) previous.line.assertOpen();
+      await previous.line.close();
+      this.assertOpen();
+      if (this.current === previous) this.current = undefined;
+    }
+    const child = this.current ??= this.startConnection();
+    await child.ready;
+    child.line.assertOpen();
+    return child;
   }
 
   async connect(): Promise<void> {
-    this.assertOpen();
-    await this.connection.connect();
+    await this.connectToChild();
   }
 
   async close(): Promise<void> {
     this.closed = true;
-    await this.connection.close();
+    await this.current?.line.close();
   }
 
   async request(
@@ -144,15 +177,15 @@ export class AcpStdioJsonRpcTransport implements AcpJsonRpcTransport {
     params?: Record<string, unknown>,
     timeoutMs?: number,
   ): Promise<unknown> {
-    this.assertOpen();
-    await this.connection.connect();
-    return await this.connection.request(method, params, timeoutMs);
+    const { line, rpc } = await this.connectToChild();
+    line.assertOpen();
+    return await rpc.request(method, params, timeoutMs);
   }
 
   async notify(method: string, params?: Record<string, unknown>): Promise<void> {
-    this.assertOpen();
-    await this.connection.connect();
-    await this.connection.notify(method, params);
+    const { line } = await this.connectToChild();
+    line.assertOpen();
+    await line.notify(method, params);
   }
 
   onNotification(
@@ -190,22 +223,13 @@ class AcpLineStdioTransport implements JsonRpcTransport {
   private childProcess: AcpStdioChildProcess | null = null;
   private messageHandler: (message: string) => void = () => undefined;
   private closeHandler: (error?: Error) => void = () => undefined;
-  private closed = false;
+  private failure?: Error;
   private closePromise?: Promise<void>;
-  private connectPromise?: Promise<void>;
-  private launchError?: Error;
-  private lifecycleGeneration = 0;
-  private stderrPreview = "";
+  private stopReading?: () => void;
+  private readonly outboundObservers = new Set<() => void>();
+  private readonly notificationWrites = new Set<(error?: Error | null) => void>();
 
-  constructor(
-    private readonly options: {
-      launchDescriptor: AcpLaunchDescriptor;
-      baseEnv?: NodeJS.ProcessEnv;
-      spawn?: AcpStdioSpawn;
-      platform?: NodeJS.Platform;
-      bundledToolsDirectory?: string;
-    },
-  ) {}
+  constructor(private readonly options: AcpStdioJsonRpcTransportOptions) {}
 
   setMessageHandler(handler: (message: string) => void): void {
     this.messageHandler = handler;
@@ -215,25 +239,27 @@ class AcpLineStdioTransport implements JsonRpcTransport {
     this.closeHandler = handler;
   }
 
+  get stopped(): boolean {
+    return this.failure !== undefined;
+  }
+
+  assertOpen(): void {
+    if (this.failure) throw this.failure;
+  }
+
   async connect(): Promise<void> {
-    if (this.closed) {
-      throw new Error("ACP stdio transport is closed");
-    }
-    if (this.connectPromise) return await this.connectPromise;
-    if (this.childProcess) return;
-    this.connectPromise = this.connectChild();
+    this.assertOpen();
     try {
-      await this.connectPromise;
-    } finally {
-      this.connectPromise = undefined;
+      await this.launchChild();
+      this.assertOpen();
+    } catch (error) {
+      this.disconnect(asError(error), true);
+      await this.closePromise;
+      throw error;
     }
   }
 
-  private async connectChild(): Promise<void> {
-    const generation = ++this.lifecycleGeneration;
-    this.stderrPreview = "";
-    this.launchError = undefined;
-
+  private async launchChild(): Promise<void> {
     const descriptor = normalizeAcpLaunchDescriptor(this.options.launchDescriptor);
     const baseEnv = this.options.baseEnv ?? process.env;
     const env = prependBundledToolsToPath(
@@ -250,38 +276,25 @@ class AcpLineStdioTransport implements JsonRpcTransport {
         ...(this.options.platform ? { platform: this.options.platform } : {}),
       },
     );
-    const start = (command: string, managed: boolean) => this.startChild(
-      descriptor, command, managed ? { ...env, ...MANAGED_ANTIGRAVITY_ENV } : env, generation,
-    );
-    const child = descriptor.backendId === "acp:antigravity" && process.platform !== "win32"
-      ? await spawnWithAntigravityRuntimeHold(descriptor.command, { env, cwd: descriptor.cwd },
-        start, () => {
-          if (this.closed || generation !== this.lifecycleGeneration) {
-            throw new Error("ACP stdio transport is closed");
-          }
-        }, descriptor.managedAntigravityFallback)
-      : start(descriptor.command, false);
-
-    if (this.closed || generation !== this.lifecycleGeneration) {
-      await this.close();
-      throw new Error("ACP stdio transport is closed");
+    if (descriptor.backendId === "acp:antigravity" && process.platform !== "win32") {
+      await spawnWithAntigravityRuntimeHold(
+        descriptor.command,
+        { env, cwd: descriptor.cwd },
+        (command, managed) => this.spawnChild(
+          descriptor, command, managed ? { ...env, ...MANAGED_ANTIGRAVITY_ENV } : env,
+        ),
+        () => this.assertOpen(),
+        descriptor.managedAntigravityFallback,
+      );
+      return;
     }
-    if (this.childProcess !== child) {
-      throw this.launchError ?? unexpectedAcpExitError({
-        code: child.exitCode,
-        descriptor,
-        signal: child.signalCode,
-        stderr: this.stderrPreview,
-      });
-    }
-    if (!child.stdin || !child.stdout || !child.stderr) {
-      await this.close();
-      throw new Error("ACP stdio pipes unavailable");
-    }
+    this.spawnChild(descriptor, descriptor.command, env);
   }
 
-  private startChild(
-    descriptor: AcpLaunchDescriptor, command: string, env: NodeJS.ProcessEnv, generation: number,
+  private spawnChild(
+    descriptor: AcpLaunchDescriptor,
+    command: string,
+    env: NodeJS.ProcessEnv,
   ): AcpStdioChildProcess {
     const invocation = createCommandInvocation({
       command,
@@ -296,6 +309,7 @@ class AcpLineStdioTransport implements JsonRpcTransport {
       distributionKind: descriptor.distributionKind,
       registryId: descriptor.registryId,
     });
+
     const child = spawnProcess(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
       env,
@@ -303,68 +317,158 @@ class AcpLineStdioTransport implements JsonRpcTransport {
       detached: process.platform !== "win32",
       windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     });
-    this.childProcess = child;
 
-    if (child.stdout) readJsonRpcLines(child.stdout, (line) => this.messageHandler(line));
-    child.stderr?.on("data", (chunk: Buffer | string) => {
-      this.stderrPreview = appendStderrPreview(this.stderrPreview, String(chunk));
-    });
-    child.on("error", (error: Error) => {
-      if (this.childProcess === child && child.pid === undefined) {
-        this.launchError = error;
-        this.childProcess = null;
+    this.childProcess = child;
+    const { stdin, stdout, stderr } = child;
+    const failPipe = (error: Error): void => this.disconnect(error, true);
+    // Keep error listeners through teardown. Streams can emit independently
+    // of the child process and even after its close event.
+    stdin?.on("error", failPipe);
+    stdout?.on("error", failPipe);
+    stderr?.on("error", failPipe);
+    child.on("error", (error) => this.disconnect(error, child.pid !== undefined));
+    if (!stdin || !stdout || !stderr) {
+      this.disconnect(new Error("ACP stdio pipes unavailable"), true);
+      return child;
+    }
+    if (this.stopped) return child;
+
+    stdin.on("close", () => {
+      if (child.exitCode === null && child.signalCode === null) {
+        failPipe(new Error("ACP stdio stdin closed"));
       }
-      this.closeHandler(error);
+    });
+    this.stopReading = readJsonRpcLines(stdout, (line) => {
+      if (!this.stopped) this.messageHandler(line);
+    });
+    let stderrPreview = "";
+    stderr.on("data", (chunk: Buffer | string) => {
+      stderrPreview = appendStderrPreview(stderrPreview, String(chunk));
     });
     child.on("close", () => {
-      if (this.childProcess === child) {
-        this.childProcess = null;
-      }
-      if (this.closed || generation !== this.lifecycleGeneration) {
-        this.closeHandler();
-        return;
-      }
-      this.closeHandler(
+      if (this.stopped) return;
+      this.disconnect(
         unexpectedAcpExitError({
           code: child.exitCode,
           descriptor,
           signal: child.signalCode,
-          stderr: this.stderrPreview,
+          stderr: stderrPreview,
         }),
+        false,
       );
     });
     return child;
   }
 
   async close(): Promise<void> {
-    this.closed = true;
-    this.lifecycleGeneration += 1;
-    if (this.closePromise) {
-      return await this.closePromise;
-    }
-    const child = this.childProcess;
-    if (!child) {
-      return;
-    }
-    this.closePromise = terminateOwnedProcessTree(child, {
-      gracefulTimeoutMs: PROCESS_CLOSE_TIMEOUT_MS,
-      forceTimeoutMs: PROCESS_FORCE_CLOSE_TIMEOUT_MS,
-    }).finally(() => {
-      if (this.childProcess === child) {
-        this.childProcess = null;
-      }
+    this.disconnect(new Error("json-rpc transport closed"), true);
+    try {
+      await this.closePromise;
+    } catch (error) {
+      // Retain a timed-out child until the same process-tree liveness check
+      // used by termination confirms it has gone.
+      if (this.childProcess && isOwnedProcessTreeAlive(this.childProcess)) throw error;
+      this.childProcess = null;
       this.closePromise = undefined;
-    });
-    return await this.closePromise;
+    }
   }
 
-  send(message: string): void {
-    const child = this.childProcess;
-    if (!child?.stdin) {
-      throw new Error("ACP stdio transport not connected");
+  async observe(event: JsonRpcObserverEvent): Promise<void> {
+    const observer = this.options.observer;
+    if (!observer || this.stopped) return;
+    try {
+      if (event.direction === "inbound") {
+        await observer.onMessage(event);
+        return;
+      }
+      const { promise, resolve } = Promise.withResolvers<void>();
+      this.outboundObservers.add(resolve);
+      try {
+        await Promise.race([observer.onMessage(event), promise]);
+      } finally {
+        this.outboundObservers.delete(resolve);
+      }
+    } catch (error) {
+      getMainLogger("pwragent:json-rpc").error("json-rpc observer failed", {
+        backend: this.options.launchDescriptor.backendId,
+        direction: event.direction,
+        message: event.envelope.method ?? event.envelope.id ?? "message",
+        error: asError(error).message,
+      });
     }
-    child.stdin.write(`${message}\n`);
   }
+
+  async notify(method: string, params?: Record<string, unknown>): Promise<void> {
+    const envelope = { jsonrpc: "2.0", method, params: params ?? {} };
+    const raw = JSON.stringify(envelope);
+    await this.observe({ direction: "outbound", envelope, raw });
+    this.assertOpen();
+    // The kit's send method is synchronous. Notifications have no reply,
+    // so their caller needs the write callback to know if delivery failed.
+    const { promise, resolve, reject } = Promise.withResolvers<void>();
+    const complete = (error?: Error | null): void => {
+      if (!this.notificationWrites.delete(complete)) return;
+      if (error) reject(error);
+      else resolve();
+    };
+    this.notificationWrites.add(complete);
+    this.send(raw, complete);
+    await promise;
+  }
+
+  private disconnect(error: Error, reap: boolean): void {
+    if (this.stopped) return;
+    this.failure = error;
+    this.stopReading?.();
+    this.stopReading = undefined;
+    for (const release of this.outboundObservers) release();
+    for (const complete of this.notificationWrites) complete(error);
+    // JsonRpcConnection awaits send before attaching to its reply promise.
+    // Release paused sends and let them reach that await before rejecting them.
+    const flush = new Promise<void>((resolve) => setImmediate(() => {
+      this.closeHandler(error);
+      resolve();
+    }));
+    const cleanup = Promise.resolve().then(async () => {
+      const child = this.childProcess;
+      if (reap && child) {
+        await terminateOwnedProcessTree(child, {
+          gracefulTimeoutMs: PROCESS_CLOSE_TIMEOUT_MS,
+          forceTimeoutMs: PROCESS_FORCE_CLOSE_TIMEOUT_MS,
+        });
+      }
+      this.childProcess = null;
+    });
+    this.closePromise = Promise.all([flush, cleanup]).then(() => undefined);
+    void this.closePromise.catch((error: unknown) => {
+      acpTransportLog.warn("failed to stop ACP agent", {
+        backendId: this.options.launchDescriptor.backendId,
+        error: asError(error).message,
+      });
+    });
+  }
+
+  send(message: string, onWrite?: (error?: Error | null) => void): void {
+    if (this.stopped) return;
+    const complete = (error?: Error | null): void => {
+      if (error) this.disconnect(error, true);
+      onWrite?.(error);
+    };
+    const stdin = this.childProcess?.stdin;
+    if (!stdin?.writable) {
+      complete(new Error("ACP stdio stdin is not writable"));
+      return;
+    }
+    try {
+      stdin.write(`${message}\n`, complete);
+    } catch (error) {
+      complete(asError(error));
+    }
+  }
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 function appendStderrPreview(current: string, chunk: string): string {

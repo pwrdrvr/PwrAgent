@@ -34,9 +34,13 @@ import { type OwnerHostServices, getOwnerHostServices, rendererSubscribers } fro
 import { initializeDesktopConfigStore } from "./settings/config-store/desktop-config-store-singleton";
 import { initializeDesktopSettingsService } from "./settings/desktop-settings-singleton";
 import { initializeDesktopBackendRegistry } from "./app-server/backend-registry";
-import { initializeDesktopAppServerService, startAppServerOwnerNavigation } from "./app-server/desktop-app-server-service";
+import { getDesktopAppServerService, initializeDesktopAppServerService, startAppServerOwnerNavigation } from "./app-server/desktop-app-server-service";
 import { initializeDesktopFederationRuntime } from "./federation/federation-runtime";
 import { initializeDesktopMessagingRuntime } from "./messaging/messaging-runtime";
+import { reconcileAppUpdateRestart, subscribeAgentUpdateNotices } from "./messaging/agent-update-notices";
+import { MessagingAppUpdateControls, sameTarget } from "./messaging/app-update-controls";
+import { pendingUpdateBlockingWork } from "./app-update-admission";
+import { createAppUpdateNoticeStore } from "./storage/desktop-messaging-storage";
 import { DEFAULT_DEVELOPMENT_WORKING_UPDATES_MODE } from "@pwragent/shared/contracts/messaging";
 import { initializeRuntimeLeaseManager } from "./runtime-lease-manager";
 import { initializeRuntimeFederationLeaseCoordinator } from "./runtime-federation-lease";
@@ -242,9 +246,13 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
   });
   // Continuations a quiet restart left start once providers can take a
   // turn, a few threads at a time.
-  void startupProviderRefresh.then(() => {
+  void startupProviderRefresh.then(async () => {
     if (ownerShutdownStarted) return;
-    getExistingDesktopBackendRegistry()?.beginRestartContinuationDispatch();
+    try {
+      await getDesktopAppServerService().resumeInterruptedStackOperations();
+    } finally {
+      getExistingDesktopBackendRegistry()?.beginRestartContinuationDispatch();
+    }
   }).catch((error) => {
     mainLog.warn("restart continuation dispatch failed to start", {
       error: error instanceof Error ? error.message : String(error),
@@ -648,6 +656,10 @@ wireOwnerRendererEvents();
   getDesktopBackendRegistry().setMessagingAgentToolService(messagingRuntime);
   if (bootMode === "active-profile") registry.setMessagingWorkingUpdatesSettings(settings);
   wireOwnerMessagingServices(messagingRuntime);
+  if (host.updates.subscribeToNotices && bootMode === "active-profile") {
+    ownerSubscriptions.add(wireMessagingAppUpdates({ host, registry, messagingRuntime,
+      subscribe: host.updates.subscribeToNotices, readMachine: () => config.read("federation").instanceLabel }));
+  }
 
 
   if (bootMode === "active-profile") {
@@ -842,6 +854,64 @@ wireOwnerRendererEvents();
           });
       }
     },
+  };
+}
+
+function wireMessagingAppUpdates(options: {
+  host: OwnerHostServices;
+  registry: ReturnType<typeof getDesktopBackendRegistry>;
+  messagingRuntime: DesktopMessagingRuntime;
+  subscribe: NonNullable<OwnerHostServices["updates"]["subscribeToNotices"]>;
+  readMachine(): string | undefined;
+}): () => void {
+  const { host, registry, messagingRuntime } = options;
+  const selectDelivery = (binding: Parameters<DesktopMessagingRuntime["selectAppUpdateNoticeDelivery"]>[0]) =>
+    messagingRuntime.selectAppUpdateNoticeDelivery(binding);
+  const readMachine = () => options.readMachine();
+  const onConnection = (listener: () => void) => messagingRuntime.onPlatformStatus((event) => {
+    if (event.kind === "health-changed" && event.health === "enabled") listener();
+  });
+  const unsubscribe = subscribeAgentUpdateNotices({ subscribe: options.subscribe, selectDelivery, readMachine, onConnection,
+    restoreReadyCards: Boolean(host.updates.messagingInstallTarget) });
+  const { messagingInstallTarget, messagingInstallBlockerCount } = host.updates;
+  if (!messagingInstallTarget || !messagingInstallBlockerCount) return unsubscribe;
+  const runtimeId = registry.getAppManagementRuntimeId();
+  const blockers = () => messagingInstallBlockerCount() + pendingUpdateBlockingWork()
+    + messagingRuntime.countUnsubmittedUpdateBlockingWork();
+  const controls = new MessagingAppUpdateControls({
+    runtimeId, readTarget: messagingInstallTarget,
+    blockerCount: () => Math.max(blockers(), Number(registry.hasDispatchBlockingIdleUpdate())),
+    async install({ target, authorize, beforeHandoff }) {
+      let busy = false;
+      const result = await host.updates.install({
+        expectedVersion: target.version,
+        requestQuit: (performQuit, beforeQuit) => host.updates.requestQuit({
+          source: "update-install", performQuit, authorizeAgent: authorize,
+          holdIdleUpdateAdmission: () => {
+            const release = blockers() === 0 ? registry.holdAdmissionForIdleUpdate() : undefined;
+            busy = !release;
+            return release;
+          },
+          beforeQuit: () => sameTarget(target, messagingInstallTarget()) && beforeQuit?.() === true && beforeHandoff(),
+        }),
+      });
+      return result.status === "restarting" ? "accepted" : busy ? "busy" : "refused";
+    },
+    saveReceipt: (receipt) => createAppUpdateNoticeStore().saveRestartReceipt(receipt),
+    clearReceipt: (receipt) => createAppUpdateNoticeStore().clearRestartReceipt(receipt),
+  });
+  messagingRuntime.setAppUpdateControls(controls);
+  const unsubscribeRestart = reconcileAppUpdateRestart({
+    runtimeId, currentVersion: () => host.application.getVersion(),
+    selectDelivery, readMachine,
+    isSameConnection: (binding, connectionId) => messagingRuntime.isAppUpdateConnectionCurrent(binding, connectionId),
+    onConnection,
+  });
+  return () => {
+    unsubscribe();
+    unsubscribeRestart();
+    controls.dispose();
+    messagingRuntime.setAppUpdateControls(undefined);
   };
 }
 

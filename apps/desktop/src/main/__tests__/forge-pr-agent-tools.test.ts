@@ -112,6 +112,7 @@ describe("GitHub tool catalog", () => {
     ["read back the pull request", "get_pull_request"],
     ["reply to review comment", "reply_to_review_comment"],
     ["pull request diff", "get_pull_request_diff"],
+    ["stacked PR", "list_stacks"],
   ])("finds %s through tool search", (query, name) => {
     const dynamic = resolveAgentToolCatalogs({}).flatMap((c) => c.dynamicTools);
     expect(searchPwrAgentTools(dynamic, query).map((tool) => tool.name)).toContain(name);
@@ -230,9 +231,27 @@ describe("GitHub tool client", () => {
   });
 
   it("merges only the head the agent checked", async () => {
-    const { calls, client } = harness(() => json({ message: "Head branch was modified. Review and try the merge again." }, 409));
+    const { calls, client } = harness(({ method }) => method === "GET"
+      ? json(pull(9, { base: { ref: "main", repo: { default_branch: "main" } } }))
+      : json({ message: "Head branch was modified. Review and try the merge again." }, 409));
     await expect(client.execute("merge_pull_request", { number: 9, expectedHeadSha: "c".repeat(40) }, ctx())).rejects.toMatchObject({ code: "head_changed" });
-    expect(calls[0]).toMatchObject({ method: "PUT", body: { merge_method: "squash", sha: "c".repeat(40) } });
+    expect(calls[1]).toMatchObject({ method: "PUT", body: { merge_method: "squash", sha: "c".repeat(40) } });
+  });
+
+  it("refuses an inferred child when its parent merged while it still targets the parent branch", async () => {
+    const { calls, client } = harness((call) => {
+      if (call.method !== "GET") return json({ merged: true });
+      if (call.url.includes("/pulls?")) return json([pull(8, {
+        state: "closed", merged_at: "2026-11-22T12:00:00Z",
+      })]);
+      return json(pull(9, {
+        created_at: "2026-11-22T10:00:00Z",
+        base: { ref: "topic", repo: { default_branch: "main" } },
+      }));
+    });
+    await expect(client.execute("merge_pull_request", { number: 9, expectedHeadSha: "a".repeat(40) }, ctx()))
+      .rejects.toMatchObject({ code: "stack_parent_open" });
+    expect(calls.map((call) => call.method)).toEqual(["GET", "GET"]);
   });
 
   it("resolves only review threads in this repository", async () => {

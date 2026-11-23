@@ -136,7 +136,7 @@ import {
   shouldCheckGrokCliUpdate,
 } from "../acp/grok-cli-update";
 import { getMainLogger } from "../log";
-import { localMemberRole } from "../member-containment";
+import { isAgentToolAdvertisedLocally, localMemberRole } from "../member-containment";
 import {
   getAppStateMode,
   isAppStateInitialized,
@@ -169,15 +169,19 @@ export type AcpRuntimeClient = Pick<
   | "loadSession"
   | "readReplay"
   | "refreshSession"
-  | "startPrompt"
   | "startSession"
-> &
+> & {
+  startPrompt(
+    params: Parameters<AcpAgentClient["startPrompt"]>[0],
+  ): ReturnType<AcpAgentClient["startPrompt"]> | Awaited<ReturnType<AcpAgentClient["startPrompt"]>>;
+} &
   Partial<
     Pick<
       AcpAgentClient,
       | "closeIdleSessions"
       | "closeSessionForArchive"
       | "didSessionLoadReplayHistory"
+      | "disconnected"
       | "configureWorkflowBudget"
       | "hasActiveOperations"
       | "hasActiveTurns"
@@ -190,6 +194,7 @@ export type AcpRuntimeClient = Pick<
       | "setRuntimeOption"
       | "steerSession"
       | "supportsArchivedSessionRestore"
+      | "supportsJobMonitorControl"
       | "supportsSessionLoad"
       | "supportsTurnSteering"
       | "rewindSession"
@@ -331,6 +336,7 @@ export type AcpBackendAdapterOptions = {
   acpSessionStore?: AcpSessionStoreLike | null;
   captureStores: ProtocolCaptureStore[];
   agentToolMcpServer?: AgentToolMcpServerLike;
+  readJobMonitorCreationPreference?: (backend: AcpBackendId, sessionId: string) => Promise<boolean>;
   createAcpClient?: AcpClientFactory;
   assertOwnerAdmission?: () => void;
   createAcpTransport?: AcpTransportFactory;
@@ -591,6 +597,13 @@ function acpRuntimeCapabilitiesForAgent(
   agent: AcpInstalledAgentRecord,
 ): BackendAcpRuntimeCapabilities | undefined {
   return agent.runtimeCapabilities;
+}
+
+/** These builds fetched and used the HTTP catalog after close/load. See protocol-captures.md. */
+function verifiedJobMonitorCatalogBuild(agent: AcpInstalledAgentRecord): boolean {
+  return (agent.backendId === "acp:antigravity" && agent.version === "1.5.14")
+    || (agent.backendId === "acp:grok"
+      && (agent.version === "1.0.45-pwragent.2" || agent.version === "1.0.77"));
 }
 
 function normalizeInstalledAcpAgent(
@@ -1205,6 +1218,7 @@ export class AcpBackendAdapter {
   private readonly acpSessionStore?: AcpSessionStoreLike;
   private readonly captureStores: ProtocolCaptureStore[];
   private readonly agentToolMcpServer?: AgentToolMcpServerLike;
+  private readonly readJobMonitorCreationPreference?: AcpBackendAdapterOptions["readJobMonitorCreationPreference"];
   private readonly createAcpClient: AcpClientFactory;
   private readonly createAcpTransport?: AcpTransportFactory;
   private readonly discoverLocalAcpAgents: LocalAcpDiscovery;
@@ -1287,6 +1301,7 @@ export class AcpBackendAdapter {
     });
     this.captureStores = options.captureStores;
     this.agentToolMcpServer = options.agentToolMcpServer;
+    this.readJobMonitorCreationPreference = options.readJobMonitorCreationPreference;
     this.emit = options.emit;
     this.handleServerRequest = options.handleServerRequest;
     this.resolveMcpConnectionServers = options.resolveMcpConnectionServers;
@@ -1764,7 +1779,20 @@ export class AcpBackendAdapter {
     const capabilities = agent
       ? effectiveAcpAgentCapabilities(agent)
       : undefined;
-    return acpSessionToThreadSummary(session, capabilities);
+    const summary = acpSessionToThreadSummary(session, capabilities);
+    return this.sessionSupportsJobMonitorControl(session)
+      ? { ...summary, jobMonitorCreationControl: true } : summary;
+  }
+
+  supportsJobMonitorControl(backend: AcpBackendId, sessionId: string): boolean {
+    const session = this.getSession(backend, sessionId);
+    return !!session && this.sessionSupportsJobMonitorControl(session);
+  }
+
+  private sessionSupportsJobMonitorControl(session: AcpSessionMetadata): boolean {
+    return !session.hidden && session.archivedAt === undefined
+      && isAgentToolAdvertisedLocally("create_monitor_delegation")
+      && this.findSessionOwner(session.backendId, session.sessionId)?.client.supportsJobMonitorControl?.(session.sessionId) === true;
   }
 
   getLaunchpadOptions(
@@ -2088,17 +2116,18 @@ export class AcpBackendAdapter {
     };
     const launchIdentity = acpAgentLaunchIdentity(configuredAgent);
     const environmentUnchanged = previous?.environmentKey === environmentKey;
-    if (environmentUnchanged && previous.entry.launchIdentity === launchIdentity) {
+    const disconnected = previous?.entry.client.disconnected === true;
+    if (environmentUnchanged && previous.entry.launchIdentity === launchIdentity && !disconnected) {
       return;
     }
     const owner = previous
       ? await previous.entry.promise
       : await this.getClientForSession(backend, sessionId);
-    if (
+    if (!disconnected && (
       session.status === "active"
       || owner.hasActiveTurns?.() === true
       || owner.hasActiveOperations?.() === true
-    ) {
+    )) {
       // Settings changes take effect once the owning process is idle. Keep
       // cancellation and other live-session RPCs on that process meanwhile.
       if (environmentUnchanged) {
@@ -2109,6 +2138,7 @@ export class AcpBackendAdapter {
     if (!(owner.supportsSessionLoad?.() ?? acpRuntimeSupportsSessionLoad(agent.runtimeCapabilities))) {
       throw new Error("This ACP provider cannot reload an existing session with a new environment. Clear the environment selection to continue.");
     }
+    if (disconnected) await this.disposeAcpClient(previous.entry);
     const client = this.createAcpClient(configuredAgent);
     const entry: AcpClientEntry = {
       client,
@@ -2139,7 +2169,7 @@ export class AcpBackendAdapter {
       shellEnvironment: shellEnvironment ? { ...shellEnvironment } : undefined,
       entry,
     });
-    if (previous) {
+    if (previous && !disconnected) {
       await this.disposeAcpClient(previous.entry);
     }
   }
@@ -2162,7 +2192,7 @@ export class AcpBackendAdapter {
     }
     for (const [entry, backend] of owners) {
       if (this.closed) return;
-      if (entry.disposePromise || !entry.client.closeIdleSessions) continue;
+      if (entry.client.disconnected || entry.disposePromise || !entry.client.closeIdleSessions) continue;
       try {
         await entry.client.closeIdleSessions({
           idleMs: params.idleMs,
@@ -2191,7 +2221,7 @@ export class AcpBackendAdapter {
     }
     const owner =
       this.findSessionOwner(backend, sessionId) ?? this.acpClients.get(backend);
-    if (!owner) {
+    if (!owner || owner.client.disconnected) {
       return false;
     }
     await owner.client.cancelSession(sessionId);
@@ -2214,7 +2244,7 @@ export class AcpBackendAdapter {
         } catch (error) {
           // As with shared clients, a broken replacement must not strand the
           // original session. Turn preparation still reports the launch error.
-          if (this.closed) {
+          if (this.closed || previous.entry.client.disconnected) {
             throw error;
           }
           return await previous.entry.promise;
@@ -2229,7 +2259,7 @@ export class AcpBackendAdapter {
       // A broken replacement path must not strand a session whose original
       // process is still alive. New sessions still observe the launch failure.
       const owner = this.findSessionOwner(backend, sessionId);
-      if (owner) {
+      if (owner && !owner.client.disconnected) {
         return await owner.promise;
       }
       throw error;
@@ -2238,7 +2268,7 @@ export class AcpBackendAdapter {
       return current;
     }
     const owner = this.findSessionOwner(backend, sessionId);
-    return owner ? await owner.promise : current;
+    return owner && !owner.client.disconnected ? await owner.promise : current;
   }
 
   private async resolveClient(backend: AcpBackendId): Promise<AcpRuntimeClient> {
@@ -2247,7 +2277,14 @@ export class AcpBackendAdapter {
       throw new Error("ACP backend adapter is closed");
     }
     const launchIdentity = acpAgentLaunchIdentity(agent);
-    const cached = this.acpClients.get(backend);
+    let cached = this.acpClients.get(backend);
+    if (cached?.client.disconnected) {
+      // Keep the dead owner fenced until its process tree has been reaped.
+      await this.disposeAcpClient(cached);
+      if (this.closed) throw new Error("ACP backend adapter is closed");
+      this.acpClients.delete(backend);
+      cached = undefined;
+    }
     if (cached?.launchIdentity === launchIdentity) {
       return await cached.promise;
     }
@@ -2299,7 +2336,7 @@ export class AcpBackendAdapter {
     this.ownedAcpClients.set(entry, backend);
     this.acpClients.set(backend, entry);
     entry.promise.catch(() => {
-      if (this.acpClients.get(backend) === entry) {
+      if (this.acpClients.get(backend) === entry && !entry.client.disconnected) {
         this.acpClients.delete(backend);
       }
     });
@@ -2997,6 +3034,9 @@ export class AcpBackendAdapter {
     entry.disposePromise ??= Promise.resolve().then(async () => {
       await entry.client.dispose();
       this.ownedAcpClients.delete(entry);
+    }).catch((error: unknown) => {
+      entry.disposePromise = undefined;
+      throw error;
     });
     return entry.disposePromise;
   }
@@ -3113,6 +3153,8 @@ export class AcpBackendAdapter {
     if (acpCapture) {
       this.captureStores.push(acpCapture.store);
     }
+    const readPreference = this.readJobMonitorCreationPreference;
+    const observeJobMonitorCatalog = !!readPreference && verifiedJobMonitorCatalogBuild(agent);
     return new AcpAgentClient({
       backendId: agent.backendId,
       agentDisplayName: agent.name,
@@ -3576,6 +3618,15 @@ export class AcpBackendAdapter {
         await this.handleServerRequest(agent.backendId, request),
       // The agent tool server lists tools by this member's containment.
       agentToolCatalogKey: localMemberRole,
+      ...(observeJobMonitorCatalog ? {
+        readJobMonitorCreationPreference: async (sessionId) =>
+          isAgentToolAdvertisedLocally("create_monitor_delegation")
+          && (!sessionId || await readPreference(agent.backendId, sessionId)),
+        onJobMonitorControlReady: async (threadId) => await this.emit({
+          backend: agent.backendId,
+          notification: { method: "thread/agent/updated", params: { threadId } },
+        }),
+      } : {}),
       mcpServers: async ({
         backendId,
         runtimeCapabilities,
@@ -3589,10 +3640,14 @@ export class AcpBackendAdapter {
               backend: backendId,
               threadId: sessionId,
               ...(!http ? { memoryOnly: true } : {}),
+              ...(http && observeJobMonitorCatalog ? { observeJobMonitorCatalog: true } : {}),
             });
             baseRegistration = {
               servers: [http ? registration.server : buildAgentMemoryStdioServer(registration.server)],
               bindThread: registration.bindThread,
+              ...(http && observeJobMonitorCatalog ? {
+                readListedJobMonitorCreation: registration.readListedJobMonitorCreation,
+              } : {}),
             };
           } catch (error) {
             acpBackendAdapterLog.warn("agent_tool_mcp_start_failed", {

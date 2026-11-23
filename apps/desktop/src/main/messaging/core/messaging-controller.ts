@@ -70,6 +70,10 @@ import type { MessagingRequestSource, MessagingRequestStore, MessagingStoreLike 
 import type { MessagingBindingRecord, MessagingActiveTurnSummary, MessagingChannelKind, MessagingChannelRef, MessagingConfirmationIntent, MessagingDeliveryResult, MessagingInboundCallbackEvent, MessagingInboundChannelMetadataUpdate, MessagingInboundEvent, MessagingInboundTextEvent, MessagingImagePart, MessagingAdapterState, MessagingJsonValue, MessagingPendingIntentRecord, MessagingPrivateReplySource, MessagingResponseMode, MessagingSurfaceRef, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import { MESSAGING_CALLBACK_HANDLE_TTL_MS } from "@pwragent/messaging-interface";
 import { buildMessagingConversationKey } from "./messaging-store.js";
+import { beginUpdateBlockingWork } from "../../app-update-admission";
+import { localAgentToolRefusal } from "../../member-containment";
+import { createAppUpdateNoticeStore } from "../../storage/desktop-messaging-storage";
+import { isAppUpdateCallback, type AppUpdateNoticeDeliveryResult, type MessagingAppUpdateControls, type ReadyAppUpdateNotice } from "../app-update-controls";
 import { type MessagingOutboundFileAccess } from "./messaging-outbound-file.js";
 import { defaultAgentScopeForChannel, type MessagingDefaultAgentScopeKind } from "./messaging-default-agent.js";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
@@ -126,6 +130,7 @@ type AutomationTurnMessagingContext = {
 };
 
 export type MessagingControllerOptions = {
+  appUpdateControls?: () => MessagingAppUpdateControls | undefined;
   requestStore?: MessagingRequestStore;
   sourceInstanceId?: string;
   adapter: MessagingAdapter;
@@ -582,7 +587,9 @@ export class MessagingController {
     this.turnAdmission = new MessagingTurnAdmission({
       debounceMs: options.inputDebounceMs ?? DEFAULT_INPUT_DEBOUNCE_MS,
       onBundleReady: async (bundle) => {
-        await this.inboundTurns.handleAdmittedTurnBundle(bundle);
+        const endUpdateBlockingWork = beginUpdateBlockingWork();
+        try { await this.inboundTurns.handleAdmittedTurnBundle(bundle); }
+        finally { endUpdateBlockingWork(); }
       },
     });
     this.toolUpdatePolicy = new MessagingToolUpdatePolicy({
@@ -671,7 +678,8 @@ export class MessagingController {
     }
 
     if (event.kind === "callback") {
-      await this.callbackHandlers.handleCallback(event);
+      if (isAppUpdateCallback(event)) await this.handleAppUpdateCallback(event);
+      else await this.callbackHandlers.handleCallback(event);
       return;
     }
 
@@ -1282,6 +1290,103 @@ export class MessagingController {
 
   handleBackendEvent(event: AgentEvent): Promise<void> {
     return this.backendEventRouter.handleBackendEvent(event);
+  }
+
+  deliverAppUpdateNotice(
+    binding: MessagingBindingRecord,
+    text: string,
+    machine: string | undefined,
+    guard: MessagingDeliveryGuard,
+    ready?: ReadyAppUpdateNotice,
+  ): Promise<AppUpdateNoticeDeliveryResult> {
+    const liveGuard = { ...guard, isCancelled: () => this.disposed || guard.isCancelled() };
+    const controls = this.options.appUpdateControls?.();
+    const connectionId = this.adapter.retainedSourceConnectionId?.();
+    const actions = this.adapter.capabilityProfile.actions;
+    if (ready && controls && connectionId && this.adapter.authorizeRetainedSource && !binding.federatedThread
+      && actions && actions.maxActions >= 2 && this.options.rbacPolicy?.isEnforcing()
+      && !localAgentToolRefusal("manage_pwragent") && !controls.hasCard(binding, ready.version, connectionId)) {
+      const previous = ready.previousCard;
+      const surface = previous?.connectionId === connectionId && previous.surface.channel === binding.channel.channel
+        ? previous.surface : undefined;
+      const interactive = controls.present(binding, ready.version, text, connectionId, async (presentation) => {
+        const current = await this.currentAppUpdateBinding(binding);
+        if (!current || liveGuard.isCancelled()) return { outcome: "discarded", channel: binding.channel.channel, deliveredAt: this.now() };
+        return await this.deliver({
+          id: this.newIntentId("app-update-controls"), kind: "confirmation", bindingId: current.id,
+          title: presentation.title, body: presentation.body, actions: presentation.actions,
+          targetSurface: presentation.surface,
+          delivery: presentation.surface ? { mode: "update", fallback: "present_new", replaceMarkup: true } : undefined,
+          callbackAudience: "conversation", createdAt: this.now(),
+          attribution: { label: "PwrAgent updates", hint: machine },
+          fallbackText: [presentation.title, presentation.body].join("\n"),
+        }, current, undefined, liveGuard);
+      }, surface);
+      if (interactive) return interactive.then((result) => result.surface
+        ? { ...result, card: { connectionId, surface: result.surface } } : result);
+    }
+    if (ready?.restore) return Promise.resolve({ outcome: "discarded", channel: binding.channel.channel, deliveredAt: this.now() });
+    return this.deliver({
+      id: this.newIntentId("app-update-notice"),
+      kind: "message",
+      bindingId: binding.id,
+      createdAt: this.now(),
+      role: "system",
+      attribution: { label: "PwrAgent updates", hint: machine },
+      parts: [{ type: "text", text, markdown: "plain" }],
+    }, binding, undefined, liveGuard);
+  }
+
+  hasUnsubmittedUpdateBlockingWork(): boolean {
+    return this.turnAdmission.hasPendingWork() || this.inboundTurns.pendingNewThreadPrompts.size > 0
+      || this.inboundTurns.hasLiveFullAccessPrompt();
+  }
+
+  async reportUpdateRestarting(event: MessagingInboundEvent): Promise<void> {
+    if (event.observedOnly || this.disposed || !this.accessControl.authorizeInboundAdmission(event)) return;
+    await this.deliver({
+      id: this.newIntentId("app-update-restart-pending"), kind: "message", createdAt: this.now(), role: "system",
+      parts: [{ type: "text", markdown: "plain", text: "PwrAgent is restarting. Your request was not accepted. Please resend it after PwrAgent is back." }],
+    }, undefined, event);
+  }
+
+  private async handleAppUpdateCallback(event: MessagingInboundCallbackEvent): Promise<void> {
+    const reply = (text: string) => this.deliver({
+      id: this.newIntentId("app-update-answer"), kind: "message", createdAt: this.now(),
+      role: "system", parts: [{ type: "text", text, markdown: "plain" }],
+    }, undefined, event);
+    const controls = this.options.appUpdateControls?.();
+    const connectionId = this.adapter.retainedSourceConnectionId?.();
+    if (!controls || !connectionId) {
+      await reply("This update action is unavailable. Use Settings → Updates to install on the desktop.");
+      return;
+    }
+    const isLive = () => !this.disposed && this.options.appUpdateControls?.() === controls
+      && this.adapter.retainedSourceConnectionId?.() === connectionId;
+    await controls.handle(event, connectionId, isLive, async (previousBinding) => {
+      const explicitlyAuthorized = () => {
+        if (!isLive() || event.actor.isBot
+          || localAgentToolRefusal("manage_pwragent") || !this.isChannelInScope(event.channel)) return false;
+        const resolution = this.accessControl.resolveActorPermissions(event);
+        const missing = (["tools.instance_management", "tools.instance_lifecycle"] as const)
+          .find((permission) => !resolution?.permissions.has(permission));
+        if (!missing) return !resolution?.rejected;
+        this.accessControl.recordCapabilityDenied(event, missing, resolution?.roleIds ?? [], event.actionId ?? "app-update");
+        return false;
+      };
+      if (!explicitlyAuthorized() || await this.adapter.authorizeRetainedSource?.(event, true) !== true) return false;
+      const binding = await this.currentAppUpdateBinding(previousBinding);
+      return !!binding && explicitlyAuthorized();
+    }, reply);
+  }
+
+  private async currentAppUpdateBinding(previous: MessagingBindingRecord): Promise<MessagingBindingRecord | undefined> {
+    const binding = await this.options.store.findActiveBindingForChannel(previous.channel);
+    if (!binding || binding.revokedAt || binding.federatedThread || binding.privateReplyContinuation
+      || binding.id !== previous.id || binding.backend !== previous.backend || binding.threadId !== previous.threadId
+      || buildMessagingConversationKey(binding.channel) !== buildMessagingConversationKey(previous.channel)
+      || !createAppUpdateNoticeStore().isEnabled(binding)) return undefined;
+    return binding;
   }
 
   private async refreshStatusSurfacesForBackend(

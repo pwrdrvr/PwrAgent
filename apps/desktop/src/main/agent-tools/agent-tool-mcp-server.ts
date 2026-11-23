@@ -52,6 +52,8 @@ export function buildPwrAgentMcpInstructions(toolNames: readonly string[]): stri
     + (has("watch_thread_pull_request")
       ? " Own PR CI/merge: follow prAutomation.guidance and use watch_thread_pull_request."
       : "")
+    + (has("list_stacks") ? " For stacked PRs, use list_stacks to check layer order and health before merging." : "")
+    + (has("plan_stack_operation") ? " Use plan_stack_operation to forecast local stack changes before applying them." : "")
     + (has("manage_thread_dependencies")
       ? " Use manage_thread_dependencies for prerequisites, ci_run for standalone CI, and local_file for watcher markers."
       : "")
@@ -74,6 +76,7 @@ type CallToolExtra = RequestHandlerExtra<ServerRequest, ServerNotification>;
 const LOOPBACK_HOST = "127.0.0.1";
 const MCP_PATH = "/mcp";
 const MCP_SESSION_HEADER = "Mcp-Session-Id";
+const JOB_MONITOR_CATALOG_SCOPE = "jobMonitorCatalog";
 // These tools key mutation admission or receipts by the internal call ID.
 const MCP_TOOLS_REQUIRING_SESSION = new Set([
   "handoff_task",
@@ -106,6 +109,7 @@ export type AgentToolMcpClientContext = {
   backend: AppServerBackendKind;
   threadId?: string;
   memoryOnly?: boolean;
+  observeJobMonitorCatalog?: boolean;
 };
 
 export type ResolvedAgentToolMcpCallContext = {
@@ -127,7 +131,10 @@ export type AgentToolHttpMcpServerConfig = {
 export type AgentToolMcpRegistration = {
   server: AgentToolHttpMcpServerConfig;
   bindThread: (threadId: string) => void;
+  readListedJobMonitorCreation?: () => boolean | undefined;
 };
+
+type JobMonitorCatalogListing = { scope: string; enabled?: boolean };
 
 export type AgentToolMcpServerLike = {
   registerClient(
@@ -181,6 +188,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     AgentToolMcpClientContext
   >();
   private readonly tokensByBoundThread = new Map<string, string>();
+  private readonly jobMonitorListings = new Map<string, JobMonitorCatalogListing>();
   private readonly sessionSigningKey = randomBytes(32);
   private readonly connectionsWithoutRequests = new Set<Socket>();
   /** Ends each open standalone event stream (a client's GET). */
@@ -200,6 +208,11 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     }
     await this.ensureStarted();
     const token = this.tokenForContext(context);
+    const listing: JobMonitorCatalogListing | undefined = context.observeJobMonitorCatalog
+      ? { scope: randomUUID() } : undefined;
+    if (listing) this.jobMonitorListings.set(token, listing);
+    const url = new URL(`http://${LOOPBACK_HOST}:${this.port}${MCP_PATH}`);
+    if (listing) url.searchParams.set(JOB_MONITOR_CATALOG_SCOPE, listing.scope);
     agentToolMcpLog.info("registered MCP client", {
       backend: context.backend,
       threadId: context.threadId ?? null,
@@ -208,7 +221,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       server: {
         name: PWRAGENT_TOOL_NAMESPACE,
         type: "http",
-        url: `http://${LOOPBACK_HOST}:${this.port}${MCP_PATH}`,
+        url: url.toString(),
         headers: [
           {
             name: "Authorization",
@@ -216,6 +229,9 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
           },
         ],
       },
+      ...(listing ? {
+        readListedJobMonitorCreation: () => this.jobMonitorListings.get(token) === listing ? listing.enabled : undefined,
+      } : {}),
       bindThread: (threadId) => {
         const normalizedThreadId = threadId.trim();
         const current = this.contextsByToken.get(token);
@@ -267,6 +283,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     this.port = undefined;
     this.contextsByToken.clear();
     this.tokensByBoundThread.clear();
+    this.jobMonitorListings.clear();
   }
 
   private tokenForContext(context: AgentToolMcpClientContext): string {
@@ -367,8 +384,15 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     clientContext: AgentToolMcpClientContext;
     responseFlushed?: Promise<void>;
   }): Promise<Response> {
+    // A reload gets a distinct URL scope even when the thread keeps its
+    // bearer. Sign the MCP session for that scope so another connection's
+    // listing cannot satisfy the reload, including an in-flight old list.
+    const scope = new URL(params.request.url).searchParams.get(JOB_MONITOR_CATALOG_SCOPE);
+    const sessionKey = scope ? `${params.token}:${scope}` : params.token;
+    const listing = this.jobMonitorListings.get(params.token);
+    const observedListing = listing?.scope === scope ? listing : undefined;
     const sessionId = params.request.headers.get(MCP_SESSION_HEADER);
-    const sessionNonce = sessionId === null ? undefined : this.verifySession(sessionId, params.token);
+    const sessionNonce = sessionId === null ? undefined : this.verifySession(sessionId, sessionKey);
     if (sessionId !== null && !sessionNonce) {
       return Response.json({ jsonrpc: "2.0", error: { code: -32001, message: "Session not found" }, id: null }, { status: 404 });
     }
@@ -406,7 +430,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     // verify the signed identity here and keep their isolated transports.
     const transport = new WebStandardStreamableHTTPServerTransport({
       enableJsonResponse: !streamed,
-      sessionIdGenerator: initializing ? () => this.createSession(params.token) : undefined,
+      sessionIdGenerator: initializing ? () => this.createSession(sessionKey) : undefined,
     });
     const toolCalls: Promise<unknown>[] = [];
     const clientGone = new AbortController();
@@ -462,9 +486,13 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       }
       return { contents: [content] };
     });
-    mcpServer.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: await this.resolveMcpTools(params.clientContext),
-    }));
+    mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
+      const tools = await this.resolveMcpTools(params.clientContext);
+      if (observedListing && sessionNonce) {
+        observedListing.enabled = tools.some(({ name }) => name === "create_monitor_delegation");
+      }
+      return { tools };
+    });
     mcpServer.setRequestHandler(
       CallToolRequestSchema,
       async (request, extra) => {

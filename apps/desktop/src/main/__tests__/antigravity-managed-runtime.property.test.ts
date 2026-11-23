@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -215,7 +216,8 @@ describe.skipIf(process.platform === "win32")("managed Antigravity activation", 
         try {
           await Promise.all([...transports.map((transport) => transport.connect()), transports[0].connect()]);
           expect(started).toHaveBeenCalledTimes(2);
-          const owner = started.mock.results[0].value?.pid;
+          const firstChild = started.mock.results[0].value;
+          const owner = firstChild.pid;
           expect(owner).toBeTypeOf("number");
           const root = path.join(directory, "agents", "antigravity");
           const busy = path.join(root, `.install-${owner}-abcdef`);
@@ -226,6 +228,12 @@ describe.skipIf(process.platform === "win32")("managed Antigravity activation", 
           await install(2);
           expect(await readFile(held.command, "utf8")).toBe(fixtureBinary);
           expect(await readdir(busy)).toEqual([]);
+          // Broken-pipe recovery reaps the managed process and drops its hold
+          // while the other ACP process still protects the release.
+          const exited = once(firstChild, "close");
+          firstChild.stdout.emit("error", Object.assign(new Error("fixture broken pipe"), { code: "EPIPE" }));
+          await exited;
+          expect(transports[0].disconnected).toBe(true);
           await transports[0].close();
           await install(3);
           expect(await readFile(held.command, "utf8")).toBe(fixtureBinary);

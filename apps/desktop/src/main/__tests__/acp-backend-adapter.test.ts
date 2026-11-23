@@ -1,7 +1,9 @@
+import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import fc from "fast-check";
@@ -22,6 +24,7 @@ import {
   type AcpSessionMetadata,
 } from "../app-server/acp-backend-adapter";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
+import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
 import { threadAssetRoot } from "../app-server/thread-assets";
@@ -314,6 +317,103 @@ describe("describeInstalledAcpBackend", () => {
           await reader.close();
         }
       },
+    ), { numRuns: 12 });
+  });
+
+  async function checkDisconnectedOwnerRecovery(withEnvironment: boolean, pipe: "stdin" | "stdout" | "stderr"): Promise<void> {
+    const backendId = "acp:gemini";
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      launchDescriptor: {
+        backendId, registryId: "gemini", distributionKind: "local",
+        command: "fixture", args: [], env: {},
+      },
+    };
+    const sessions = new Map<string, AcpSessionMetadata>();
+    function createChild() {
+      const requests: Array<{ method: string; params: { sessionId?: string } }> = [];
+      const child = Object.assign(new EventEmitter(), {
+        stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
+        exitCode: null, signalCode: null as NodeJS.Signals | null,
+        requests,
+        kill(signal: NodeJS.Signals = "SIGTERM") {
+          child.signalCode = signal;
+          child.emit("close");
+          return true;
+        },
+      });
+      child.stdin.on("data", (line) => {
+        const { method, params, id } = JSON.parse(String(line));
+        requests.push({ method, params });
+        const result = method === "initialize"
+          ? { protocolVersion: 1, agentCapabilities: { loadSession: true } }
+          : method === "session/new" ? { sessionId: "provider-session" } : {};
+        child.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
+      });
+      return child;
+    }
+    const children: Array<ReturnType<typeof createChild>> = [];
+    const adapter = createTestAcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => [...sessions.values()],
+        getSession: (_backend, id) => sessions.get(id),
+        upsertSession: (session) => { sessions.set(session.sessionId, session); },
+      },
+      acpRolloutStore: null,
+      captureStores: [],
+      createAcpTransport: (agent) => new AcpStdioJsonRpcTransport({
+        launchDescriptor: agent.launchDescriptor!,
+        spawn: () => {
+          const child = createChild();
+          children.push(child);
+          return child;
+        },
+      }),
+      emit: async () => {},
+      handleServerRequest: async () => ({}),
+    });
+    try {
+      const original = await adapter.getClient(backendId);
+      await original.startSession({ sessionId: "thread", cwd: "/fixture", executionMode: "default" });
+      if (withEnvironment) await adapter.prepareSessionEnvironment(backendId, "thread", { TEST_ENV: "1" });
+      const owner = await adapter.getClientForSession(backendId, "thread");
+      const failed = children.at(-1)!;
+      const previousCount = children.length;
+      failed[pipe].emit("error", new Error("fixture EPIPE"));
+      await expect(adapter.cancelRunningSession(backendId, "thread")).resolves.toBe(false);
+      await expect(owner.cancelSession("thread")).rejects.toThrow("fixture EPIPE");
+      expect(children).toHaveLength(previousCount);
+      const clients = await Promise.all([
+        adapter.getClientForSession(backendId, "thread"),
+        adapter.getClientForSession(backendId, "thread"),
+      ]);
+      const [replacement] = clients;
+      expect(replacement).not.toBe(owner);
+      expect(clients[1]).toBe(replacement);
+      expect(failed.signalCode).toBe("SIGTERM");
+      expect(children).toHaveLength(previousCount + 1);
+      await replacement.ensureSession(sessions.get("thread")!);
+      expect(children.at(-1)!.requests.map(({ method }) => method)).toEqual(["initialize", "session/load"]);
+      expect(children.at(-1)!.requests[1].params.sessionId).toBe("provider-session");
+    } finally {
+      await adapter.close();
+    }
+  }
+
+  it("replaces the pooled ACP client after an stdin pipe failure", async () => {
+    await checkDisconnectedOwnerRecovery(false, "stdin");
+  });
+
+  it("initializes a replacement ACP client before loading a lost session", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.boolean(),
+      fc.constantFrom("stdin", "stdout", "stderr"),
+      checkDisconnectedOwnerRecovery,
     ), { numRuns: 12 });
   });
 
@@ -2830,7 +2930,7 @@ describe("AcpBackendAdapter", () => {
 
     const client = await adapter.getClient(backendId);
     const session = await client.startSession({ cwd: "/repo", executionMode: "default" });
-    const { turnId } = client.startPrompt({ sessionId: session.sessionId, prompt: "Summarize" });
+    const { turnId } = await client.startPrompt({ sessionId: session.sessionId, prompt: "Summarize" });
     expect(turnId).toMatch(new RegExp(`^pending:${session.sessionId}:\\d+$`));
     const [firstCall] = JSON.parse(
       readFileSync(path.join(fixtureDir, "qwen-tool-usage.json"), "utf8"),

@@ -52,8 +52,8 @@ describe("PwrAgent task monitor agent tools", () => {
     // 95 with explicit register_thread_worktree, 100 with the five
     // OpenAI Decisions tools, 102 with original attachment listing and export,
     // 104 with decisions_batch_results and decisions_batch_cancel,
-    // 105 with schedule_follow_up, 106 with agent_memory.
-    expect(dynamicTools).toHaveLength(106);
+    // 105 with schedule_follow_up, 106 with agent_memory, 107 with list_stacks, 110 with local stack operations.
+    expect(dynamicTools).toHaveLength(110);
     for (const name of [
       "agent_memory",
       "scan_thread_maintenance",
@@ -61,6 +61,10 @@ describe("PwrAgent task monitor agent tools", () => {
       "open_thread_maintenance",
       "list_messaging_attachments",
       "export_messaging_attachment",
+      "list_stacks",
+      "plan_stack_operation",
+      "apply_stack_operation",
+      "manage_stack_operation",
     ]) {
       expect(dynamicTools.map((tool) => tool.name)).toContain(name);
       expect(mcpTools.map((tool) => tool.name)).toContain(name);

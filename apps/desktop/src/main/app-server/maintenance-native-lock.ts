@@ -10,7 +10,15 @@ export async function acquireMaintenanceLock(
   lockPath: string,
   helperPath = nativeRelayPath(),
 ): Promise<MaintenanceLock | undefined> {
-  const child = spawn(helperPath, ["--maintenance-lock", lockPath], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+  return await acquireNativeFileLock("--maintenance-lock", lockPath, helperPath);
+}
+
+export async function acquireNativeFileLock(
+  command: "--maintenance-lock" | "--stack-lock",
+  lockPath: string,
+  helperPath = nativeRelayPath(),
+): Promise<MaintenanceLock | undefined> {
+  const child = spawn(helperPath, [command, lockPath], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
   child.stdin.on("error", () => { child.kill(); });
   let exited = false;
   const closed = new Promise<void>((resolve) => { child.once("close", () => { exited = true; resolve(); }); });

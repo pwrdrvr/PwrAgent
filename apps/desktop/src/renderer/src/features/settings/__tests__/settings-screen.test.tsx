@@ -547,6 +547,7 @@ function createSnapshot(
           comments: { value: "auto", source: "default" },
           issues: { value: "auto", source: "default" },
           ci: { value: "auto", source: "default" },
+          stacks: { value: "auto", source: "default" },
           approve_merge: { value: "ask", source: "default" },
         },
       },
@@ -7358,12 +7359,14 @@ describe("SettingsScreen", () => {
       render(<SettingsScreen desktopApi={desktopApi} settings={createSettingsState(snapshot)}
         initialSection="messaging" initialSubsection="telegram" onClose={() => undefined} />);
       const generate = screen.getAllByRole("button", { name: "Generate" })[0]!;
-      fireEvent.click(generate);
-      expect(await screen.findByText(first.message)).toBeInTheDocument();
+      // Flush the passive effect that installs the expiry timer as well as
+      // the render that displays the generated pairing message.
+      await act(async () => { fireEvent.click(generate); });
+      expect(screen.getByText(first.message)).toBeInTheDocument();
       const expiry = priorExpiry;
       expect(expiry).toBeDefined();
-      fireEvent.click(generate);
-      expect(await screen.findByText(replacement.message)).toBeInTheDocument();
+      await act(async () => { fireEvent.click(generate); });
+      expect(screen.getByText(replacement.message)).toBeInTheDocument();
       act(() => expiry!());
       expect(screen.getByText(replacement.message)).toBeInTheDocument();
     } finally {

@@ -570,7 +570,7 @@ export class ThreadTurnQueue {
     edit: () => T | Promise<T>,
   ): Promise<T> {
     const key = this.keyFor(params);
-    this.dispatchSuspensions.set(key, (this.dispatchSuspensions.get(key) ?? 0) + 1);
+    const resume = this.suspendDispatch(params);
     const previous = this.mutationTails.get(key) ?? Promise.resolve();
     let unlock!: () => void;
     const tail = new Promise<void>((resolve) => { unlock = resolve; });
@@ -581,13 +581,25 @@ export class ThreadTurnQueue {
     } finally {
       unlock();
       if (this.mutationTails.get(key) === tail) this.mutationTails.delete(key);
-      const remaining = (this.dispatchSuspensions.get(key) ?? 1) - 1;
+      resume();
+    }
+  }
+
+  /** Pause dispatch across a turn boundary while keeping queue edits available. */
+  suspendDispatch(params: { backend: AppServerBackendKind; threadId: ThreadIdentifier }): () => void {
+    const key = this.keyFor(params);
+    this.dispatchSuspensions.set(key, (this.dispatchSuspensions.get(key) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const remaining = this.dispatchSuspensions.get(key)! - 1;
       if (remaining) this.dispatchSuspensions.set(key, remaining);
       else {
         this.dispatchSuspensions.delete(key);
         this.scheduleDrain(key);
       }
-    }
+    };
   }
 
   /**
@@ -962,6 +974,10 @@ export class ThreadTurnQueue {
 
   getAllQueuedEntries(): ThreadTurnQueueEntry[] {
     return [...this.queuedEntries.values()].flatMap((queue) => [...queue]);
+  }
+
+  hasDispatchInProgress(): boolean {
+    return this.admissions.size > 0 || this.steerPreflights.size > 0 || this.runningEntries.size > 0;
   }
 
   cancelEntry(entryId: string, reason?: string, options?: { retainQueueHold?: boolean }): ThreadTurnQueueEntry | undefined {

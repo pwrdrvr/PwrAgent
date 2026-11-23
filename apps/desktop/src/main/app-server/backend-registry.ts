@@ -26,6 +26,7 @@ import type { RegistryDependencies } from "./backend-registry-construction";
 import { assertOutpostCodexProvider, assertOwnerCodexModelSelection, assertOwnerExecutionPolicy, ownerSandboxForMode, type OwnerExecutionRequest } from "../owner-runtime-policy";
 import { countAgentTools, filterAdvertisedAgentTools, isAgentToolCallAllowed } from "../headless/outpost-agent-tools";
 import { isAgentToolAdvertisedLocally, localAgentToolAllowlist, localAgentToolRefusal, localMemberRole } from "../member-containment";
+import { beginUpdateBlockingWork, holdUpdateBlockingWork } from "../app-update-admission";
 import { buildPwrAgentMessagingPdfToolRouter } from "../agent-tools/pwragent-messaging-agent-tools";
 import { requestShowThread, ownerNotifications as getDesktopNotificationService, getOwnerHostServices } from "../owner-host";
 import { ThreadCreationLifecycle, type PreparedThreadCreation, type ThreadCreationPreparation } from "@pwragent/owner-core/thread-creation-lifecycle";
@@ -154,6 +155,8 @@ import {
 import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared/contracts/agent";
 import { buildIncomingWorkSummary } from "./thread-work-notification";
 import { ThreadCorrespondenceStore } from "./thread-correspondence-store";
+import type { StackNotice } from "@pwragent/shared/contracts/thread-system-messages";
+import type { StackThreadRef } from "@pwragent/owner-core/stacks/stack-coordinator";
 import { PendingEnvironmentLaunchStore } from "./pending-environment-launch-store";
 import { mergeCausalMessagingContext } from "./causal-messaging-context";
 import { rememberBoundedMap } from "../bounded-map";
@@ -3520,6 +3523,36 @@ export class DesktopBackendRegistry {
     }
   }
 
+  publishStackNotice(thread: StackThreadRef, notice: StackNotice): void {
+    const id = `stack:${notice.opId}:${notice.branch}`;
+    const created = this.correspondenceStore.record({
+      id, source: thread, destination: thread, input: [], createdAt: Date.now(),
+      state: "started", stackNotice: notice,
+    });
+    if (created) this.publishCorrespondenceMessage(thread, id);
+  }
+
+  holdStackThread(thread: StackThreadRef): () => void {
+    return this.threadTurnQueue.suspendDispatch(thread);
+  }
+
+  stackThreadActive(thread: StackThreadRef): boolean {
+    const key = buildThreadIdentityKey(thread.backend, thread.threadId);
+    const active = this.getInProgressThreadSnapshot();
+    return this.threadHasActiveTurn(thread.threadId, thread.backend)
+      || this.threadTurnQueue.hasDispatchInFlight(thread)
+      || (active.subAgentThreadKeys?.includes(key) ?? false)
+      || (thread.backend === "claude" && this.claudeBackend.backgroundTaskThreadIds().includes(thread.threadId))
+      || this.getPendingRequestForThread(thread) !== undefined
+      || this.threadWorkspaceService.threadHasBlockingWorkspaceMove(thread)
+      || this.threadArchiveCoordinator.checkoutRestoreRecords.has(key);
+  }
+
+  withStackWorktreeMutation<T>(commonDir: string, operation: () => Promise<T>): Promise<T> {
+    this.assertThreadOwnership();
+    return this.gitDirectoryService.withStackWorktreeMutation(commonDir, operation);
+  }
+
   private updateCorrespondenceStatus(
     ...args: Parameters<ThreadCorrespondenceStore["update"]>
   ): void {
@@ -6124,7 +6157,7 @@ export class DesktopBackendRegistry {
     });
 
     try {
-      const result = client.startPrompt({
+      const result = await client.startPrompt({
         sessionId: params.threadId,
         prompt: promptPayload.prompt,
         promptContent: promptPayload.promptContent,
@@ -8306,29 +8339,34 @@ export class DesktopBackendRegistry {
     descriptor: PendingThreadStartDescriptor | undefined,
     run: (pending?: PendingThreadStartReporter) => Promise<T>,
   ): Promise<T> {
-    if (!descriptor) return await run();
-    // A start this owner refuses outright draws no row.
-    this.assertThreadOwnership();
-    this.assertNotBootstrap("startThread");
-    const cwd = source.cwd?.trim();
-    const checkoutKey = descriptor.directoryKey ?? (cwd ? `directory:${cwd}` : undefined);
-    let directoryKey: string | undefined;
-    if (process.platform === "win32" && checkoutKey?.startsWith("directory:")) {
-      try {
-        directoryKey = await resolvePendingWindowsDirectoryKey(
-          checkoutKey, this.navigationDirectoriesByKey, this.overlayStore.readProjectCheckoutGroups?.(),
-        );
-      } catch (error) {
-        backendRegistryLog.warn("pending thread directory lookup failed", { startId: descriptor.startId, error: String(error) });
-      }
-    }
-    const pending = this.beginPendingThreadStart(source, directoryKey ? { ...descriptor, directoryKey } : descriptor);
+    const endUpdateBlockingWork = beginUpdateBlockingWork();
     try {
-      await pending.report("starting");
-      return await run(pending);
+      if (!descriptor) return await run();
+      // A start this owner refuses outright draws no row.
+      this.assertThreadOwnership();
+      this.assertNotBootstrap("startThread");
+      const cwd = source.cwd?.trim();
+      const checkoutKey = descriptor.directoryKey ?? (cwd ? `directory:${cwd}` : undefined);
+      let directoryKey: string | undefined;
+      if (process.platform === "win32" && checkoutKey?.startsWith("directory:")) {
+        try {
+          directoryKey = await resolvePendingWindowsDirectoryKey(
+            checkoutKey, this.navigationDirectoriesByKey, this.overlayStore.readProjectCheckoutGroups?.(),
+          );
+        } catch (error) {
+          backendRegistryLog.warn("pending thread directory lookup failed", { startId: descriptor.startId, error: String(error) });
+        }
+      }
+      const pending = this.beginPendingThreadStart(source, directoryKey ? { ...descriptor, directoryKey } : descriptor);
+      try {
+        await pending.report("starting");
+        return await run(pending);
+      } finally {
+        // Last, after any workspace rollback.
+        await pending.report("ended");
+      }
     } finally {
-      // Last, after any workspace rollback.
-      await pending.report("ended");
+      endUpdateBlockingWork();
     }
   }
 
@@ -9905,6 +9943,27 @@ export class DesktopBackendRegistry {
     return this.listQuietRestartTargets();
   }
 
+  holdAdmissionForIdleUpdate(): (() => void) | undefined {
+    if (this.hasDispatchBlockingIdleUpdate()) return undefined;
+    const release = holdUpdateBlockingWork();
+    if (!release) return undefined;
+    try {
+      this.beginQuietRestart();
+    } catch (error) {
+      release();
+      this.cancelQuietRestart();
+      throw error;
+    }
+    return () => {
+      release();
+      this.cancelQuietRestart();
+    };
+  }
+
+  hasDispatchBlockingIdleUpdate(): boolean {
+    return this.isRestartGateClosed() || this.threadTurnQueue.hasDispatchInProgress();
+  }
+
   /** Restore admission, and recover checkpointed work if preparation had already quieted it. */
   cancelQuietRestart(resumeCheckpoint = false): void {
     if (resumeCheckpoint) {
@@ -11268,18 +11327,35 @@ export class DesktopBackendRegistry {
     agentMessages?: ThreadTurnQueueEntry["agentMessages"];
     invalidIdRecoveryAttempted?: boolean;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
-    assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
-    await this.assertThreadCodexInferenceAvailable(params);
-    if (params.id && scheduledActionIdFromTurnQueueEntry(params.id)
-      && this.durableRestartContinuations.has(params.id)) {
-      await this.assertThreadNotLocked(params.backend, params.threadId);
+    const endUpdateBlockingWork = beginUpdateBlockingWork();
+    try {
+      assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
+      await this.assertThreadCodexInferenceAvailable(params);
+      if (params.id && scheduledActionIdFromTurnQueueEntry(params.id)
+        && this.durableRestartContinuations.has(params.id)) {
+        await this.assertThreadNotLocked(params.backend, params.threadId);
+      }
+      return await listingDiagnostics.trace("workflow", { query: "submit-acceptance" }, () => this.prepareAndStartTurn(params));
+    } finally {
+      endUpdateBlockingWork();
     }
-    return await listingDiagnostics.trace("workflow", { query: "submit-acceptance" }, () => this.prepareAndStartTurn(params));
   }
 
   private async prepareAndStartTurn(params: Parameters<DesktopBackendRegistry["startTurnNow"]>[0]): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     this.assertThreadOwnership();
-    return await this.threadStarts.run(params, () => this.startTurnWithoutHandoff(params));
+    return await this.threadStarts.run(params, async () => {
+      // The first call establishes the per-turn context by calling startTurnNow
+      // again. Add the notice at its inner, actual admission boundary.
+      const notices = this.tokenMiserServerCapabilitiesForTurn.getStore()
+        ? this.correspondenceStore.pendingStackNotices(params) : [];
+      const result = await this.startTurnWithoutHandoff(notices.length ? {
+        ...params, input: [...notices.map(({ text }) => ({ type: "text" as const, text })), ...params.input],
+      } : params);
+      for (const { id } of notices) {
+        this.updateCorrespondenceStatus(params, id, { state: "started", stackDelivered: true });
+      }
+      return result;
+    });
   }
 
   private async startTurnWithoutHandoff(params: {
@@ -15998,32 +16074,36 @@ export class DesktopBackendRegistry {
   }
 
   async setThreadJobMonitorCreation({ backend = "codex", threadId, enabled }: {
-    backend?: "codex" | "claude";
+    backend?: "codex" | "claude" | AcpBackendId;
     threadId: string;
     enabled: boolean;
   }): Promise<{ threadId: string; enabled: boolean }> {
-    if ((backend !== "codex" && backend !== "claude")
+    if ((backend !== "codex" && backend !== "claude" && (typeof backend !== "string" || !isAcpBackendId(backend)))
       || typeof threadId !== "string" || !threadId.trim() || typeof enabled !== "boolean") {
       throw new Error("Changing Job Monitor creation requires a thread and an enabled state.");
     }
     const identity = { backend, threadId };
-    const deferredTurnId = enabled && !(await this.isJobMonitorCreationEnabled(identity))
-      ? this.jobMonitorCreationTurnId(identity) : undefined;
+    const acpBackend = isAcpBackendId(backend) ? backend : undefined;
+    if (acpBackend) this.assertThreadOwnership();
+    const clearingOptOut = enabled && !(await this.isJobMonitorCreationEnabled(identity));
+    if (acpBackend && !this.acpBackend.supportsJobMonitorControl(acpBackend, threadId)) {
+      const session = clearingOptOut ? this.acpBackend.getSession(acpBackend, threadId) : undefined;
+      if (!session || session.hidden || session.archivedAt !== undefined) {
+        throw new Error("This ACP session doesn't support changing Job Monitors.");
+      }
+    }
+    const deferredTurnId = clearingOptOut ? this.jobMonitorCreationTurnId(identity) : undefined;
     this.overlayStore.setThreadJobMonitorCreation({ ...identity, enabled });
     if (deferredTurnId) {
       // Retain this turn's availability while saving On for the next turn.
       this.jobMonitorCreationDeferredTurns.add(buildActiveTurnKey(identity.backend, threadId, deferredTurnId));
     }
-    await this.publishLocalEvent({
-      backend: identity.backend,
-      notification: { method: "thread/agent/updated", params: { threadId } },
-    });
+    await this.notifyThreadAgentChange(backend, threadId);
     return { threadId, enabled };
   }
 
   private jobMonitorCreationTurnId(identity: { backend: AppServerBackendKind; threadId: string }): string | undefined {
-    if (identity.backend === "claude") return this.getActiveTurnForThread(identity)?.turnId;
-    if (identity.backend !== "codex") return undefined;
+    if (identity.backend !== "codex") return this.getActiveTurnForThread(identity)?.turnId;
     const pendingId = buildPendingTurnId(identity.threadId);
     return this.context.turnState.pendingStartedTurnId(identity.threadId)
       ?? this.getActiveTurnForThread(identity)?.turnId
