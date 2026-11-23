@@ -9455,6 +9455,22 @@ export class DesktopBackendRegistry {
     messageOrigin?: AppServerThreadMessageOrigin;
     delivery?: "new_turn";
   }, turnInputSource?: TurnInputSource): Promise<ThreadTurnQueueSubmissionResult> {
+    if (!params.messageOrigin?.reviewAutoFix) return await this.admitTurnSubmission(params, turnInputSource);
+    // Claim the review handoff before any asynchronous validation. An idle
+    // notification can arrive while the fix still has no queue entry.
+    const resume = this.threadTurnQueue.suspendDispatch(params);
+    try {
+      return await this.admitTurnSubmission(params, turnInputSource, 0);
+    } finally {
+      resume();
+    }
+  }
+
+  private async admitTurnSubmission(
+    params: Parameters<DesktopBackendRegistry["submitTurn"]>[0],
+    turnInputSource?: TurnInputSource,
+    queueIndex?: number,
+  ): Promise<ThreadTurnQueueSubmissionResult> {
     assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
     await this.assertThreadCodexInferenceAvailable(params);
     await this.assertAgentMessageWithinThreadAccess(params);
@@ -9483,7 +9499,7 @@ export class DesktopBackendRegistry {
       // messaging app's send keeps its own turn.
       return isSteerableAgentTraffic(entry.messageOrigin) && delivery !== "new_turn" && !hasTurnSettings
         ? this.threadTurnQueue.submitSteer(prepared, { onAdmission })
-        : this.threadTurnQueue.submit(prepared, { onAdmission });
+        : this.threadTurnQueue.submit(prepared, { onAdmission, queueIndex });
     });
   }
 
@@ -13302,9 +13318,10 @@ export class DesktopBackendRegistry {
       await this.assertThreadNotLocked(request.backend, request.threadId);
     },
     isRestartGateClosed: () => this.isRestartGateClosed(),
+    isReviewAutoFixActive: (request) => this.threadTurnQueue.hasActiveReviewAutoFix(request),
     queue: async (params, messageOrigin, origin) => {
       // Recovery belongs only to the compacted assignment, never a later turn.
-      if (messageOrigin.systemReason === "compaction-recovery") throw new CompactionRecoveryRevoked();
+      if (messageOrigin?.systemReason === "compaction-recovery") throw new CompactionRecoveryRevoked();
       const queued = await this.admitThreadAttachments(
         { backend: params.backend, threadId: params.threadId, input: params.input },
         (input, onAdmission) => this.threadTurnQueue.submitSteer({
@@ -21416,24 +21433,27 @@ export class DesktopBackendRegistry {
     return this.threadArchiveCoordinator.withArchiveWorkspaceWrite(paths, work);
   }
 
-  private readonly transcriptImageWork = new Map<string, Promise<void>>();
+  private readonly orderedThreadEventWork = new Map<string, Promise<void>>();
 
   private emitWithTranscriptImages(event: AgentEvent, codexStatusSequence?: number, codexStartDelivery?: CodexStartDeliveryReceipt): Promise<void> {
     const notification = event.notification;
     if (!("threadId" in notification.params) || typeof notification.params.threadId !== "string") return this.emitEvent(event, codexStatusSequence, codexStartDelivery);
     const threadId = notification.params.threadId;
     const key = `${event.backend}:${threadId}`;
-    const previous = this.transcriptImageWork.get(key);
+    const previous = this.orderedThreadEventWork.get(key);
     const item = notification.method === "item/completed" ? readRecord(notification.params.item) : undefined;
     const materializeImages = item?.type === "agentMessage" || item?.type === "imageView"
       || item?.type === "mcpToolCall" || item?.type === "dynamicToolCall";
+    const reviewResult = item?.type === "exitedReviewMode";
     // Keep lifecycle bookkeeping (including queue release) and subsequent
     // transcript events behind image work, in arrival order. Extend the chain
     // through delivery, so idle or the next turn cannot overtake a held terminal.
     const orderedNotification = notification.method.startsWith("turn/")
       || notification.method === "thread/status/changed"
       || notification.method.startsWith("item/");
-    if (!materializeImages && (!previous || !orderedNotification)) {
+    // A review result owns the Auto-fix handoff. A concurrent terminal must
+    // wait for result listeners to claim it before retiring the arm.
+    if (!materializeImages && !reviewResult && (!previous || !orderedNotification)) {
       return this.emitEvent(event, codexStatusSequence, codexStartDelivery);
     }
     const work = (async () => {
@@ -21451,9 +21471,9 @@ export class DesktopBackendRegistry {
       }) : event;
       await this.emitEvent(materialized, codexStatusSequence, codexStartDelivery);
     })();
-    this.transcriptImageWork.set(key, work);
+    this.orderedThreadEventWork.set(key, work);
     void work.finally(() => {
-      if (this.transcriptImageWork.get(key) === work) this.transcriptImageWork.delete(key);
+      if (this.orderedThreadEventWork.get(key) === work) this.orderedThreadEventWork.delete(key);
     }).catch(() => undefined);
     return work;
   }

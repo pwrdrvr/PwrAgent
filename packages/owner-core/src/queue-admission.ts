@@ -1,13 +1,15 @@
 export type QueueTerminal = { turnId: string; status?: string; errorMessage?: string };
 
+type QueueAdmissionKind = "start" | "steer" | "review-auto-fix";
+
 /** Admission owns the async handoff, independently of the FIFO and its holds. */
 export type QueueAdmission =
   | { phase: "idle" }
-  | { phase: "starting"; attempt: symbol; kind: "start" | "steer"; terminals: ReadonlyMap<string, QueueTerminal> }
-  | { phase: "acknowledged"; attempt: symbol; kind: "start" | "steer"; terminals: ReadonlyMap<string, QueueTerminal>; turnId: string; terminal?: QueueTerminal };
+  | { phase: "starting"; attempt: symbol; kind: QueueAdmissionKind; terminals: ReadonlyMap<string, QueueTerminal> }
+  | { phase: "acknowledged"; attempt: symbol; kind: QueueAdmissionKind; terminals: ReadonlyMap<string, QueueTerminal>; turnId: string; terminal?: QueueTerminal };
 
 export type QueueAdmissionEvent =
-  | { type: "begin"; attempt: symbol; kind?: "start" | "steer" }
+  | { type: "begin"; attempt: symbol; kind?: QueueAdmissionKind }
   | { type: "terminal"; terminal: QueueTerminal }
   | { type: "acknowledge"; attempt: symbol; turnId: string }
   | { type: "settle"; attempt: symbol };
