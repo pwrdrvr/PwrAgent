@@ -3832,12 +3832,15 @@ class DesktopAppServerService {
       && stack.layers.some((layer) => layer.pullRequest?.number === pr.number);
     const directories = this.prStackDirectories(pr);
     if (!directories.length) return this.publishedStacks.filter(matches);
-    const catalogs = await observation.presentCatalogs(directories, true);
+    const catalogs = await this.stackReader.preflightCatalogs(directories, observation);
+    if (catalogs.some(({ status }) => status === "unavailable")) throw new Error("Stack catalog evidence is unavailable.");
     const tracked = catalogs.some((read) => read.status === "ok" && read.catalog.repository.toLowerCase() === repository
       && read.catalog.stacks.some((stack) => stack.branches.some((layer) =>
         layer.pullRequest?.number === pr.number || layer.branch === pr.headRefName)));
     if (!tracked && !this.knownStackPullRequests().some((lower) => isObservedStackParent(lower, pr))) return [];
-    return (await this.readScopedStacks(directories, undefined, observation)).stacks.filter(matches);
+    const scoped = await this.readScopedStacks(directories, undefined, observation);
+    if (scoped.catalogs.some(({ status }) => status === "unavailable")) throw new Error("Stack catalog evidence is unavailable.");
+    return scoped.stacks.filter(matches);
   }
 
   private async prStackHoldEvidence(pr: PrSummary): Promise<{ reason: string; lowerKey?: string } | undefined> {

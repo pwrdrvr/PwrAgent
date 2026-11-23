@@ -8,8 +8,9 @@ import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as gitExecutable from "../app-server/git-executable";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
+import { PR_METADATA_PRIORITY } from "../pr-status/pr-metadata-process";
 import { StackOperationsService } from "../stacks/stack-operations-service";
-import { StackReader, StackReadObservation, readStackClones } from "../stacks/stack-reader";
+import { StackReader, StackReadObservation, readGhStackCatalog, readStackClones } from "../stacks/stack-reader";
 import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -101,7 +102,7 @@ describe("stack checkout demand", () => {
       await symlink(first, alias, "junction");
       const firstKey = await read(first);
       const observation = new StackReadObservation();
-      expect((await observation.presentCatalogs([alias], true))[0]?.status).toBe("ok");
+      expect((await observation.preflightCatalogs([alias]))[0]?.status).toBe("ok");
       await rm(alias);
       await symlink(second, alias, "junction");
       await observation.revalidateAfterListing();
@@ -418,7 +419,7 @@ describe("stack checkout demand", () => {
       const rows = [row(sandbox, "preflight")];
       const project = async () => {
         const observation = new StackReadObservation();
-        expect((await observation.presentCatalogs([sandbox], true))[0]?.status).toBe("ok");
+        expect((await observation.preflightCatalogs([sandbox]))[0]?.status).toBe("ok");
         await observation.revalidateAfterListing();
         expect((await reader.read(rows, [], [sandbox], undefined, observation)).stacks).toHaveLength(1);
       };
@@ -470,6 +471,62 @@ describe("stack checkout demand", () => {
       now += 31_000;
       expect((await reader.read(rows, [])).stacks).toHaveLength(2);
       expect(count()).toBe(3);
+    } finally {
+      start.mockRestore();
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("reopens the published catalog when an atomic replacement races the first handle", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-replaced-catalog-"));
+    const originalOpen = vi.mocked(open).getMockImplementation()!;
+    try {
+      initialize(sandbox);
+      await writeCatalog(sandbox, "before");
+      const common = path.join(sandbox, ".git");
+      const catalogPath = path.join(common, "gh-stack");
+      const replacement = catalogPath + ".new";
+      await writeFile(replacement, (await readFile(catalogPath, "utf8")).replace("fixture/before", "fixture/after"));
+      let replaced = false;
+      vi.mocked(open).mockImplementation(async (...args) => {
+        const handle = await originalOpen(...args);
+        if (String(args[0]) === catalogPath && !replaced) {
+          const stat = handle.stat.bind(handle);
+          vi.spyOn(handle, "stat").mockImplementationOnce(async (...options) => {
+            const info = await stat(...options);
+            await rename(replacement, catalogPath);
+            replaced = true;
+            return info;
+          });
+        }
+        return handle;
+      });
+      expect(await readGhStackCatalog(common)).toMatchObject({ status: "ok", catalog: { repository: "github.com:fixture/after" } });
+      expect(replaced).toBe(true);
+    } finally {
+      vi.mocked(open).mockImplementation(originalOpen);
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("shares installed-Git checkout evidence across background preflights only", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-shared-preflight-"));
+    const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    try {
+      initialize(sandbox);
+      process.env.PWRAGENT_GIT_PATH = await gitExecutable.resolveGitExecutable();
+      const reader = new StackReader();
+      const count = () => start.mock.calls.filter(([, args]) => args[0] === "rev-parse").length;
+      const background = () => reader.preflightCatalogs([sandbox], new StackReadObservation());
+      expect(await Promise.all(Array.from({ length: 4 }, background))).toEqual(Array.from({ length: 4 }, () => [{ status: "missing" }]));
+      expect(count()).toBe(1);
+      await background();
+      expect(count()).toBe(1);
+      await writeCatalog(sandbox, "new");
+      expect(await background()).toMatchObject([{ status: "ok" }]);
+      expect(count()).toBe(1);
+      await reader.preflightCatalogs([sandbox], new StackReadObservation({ priority: () => PR_METADATA_PRIORITY.selected }));
+      expect(count()).toBe(2);
     } finally {
       start.mockRestore();
       await rm(sandbox, { recursive: true, force: true });

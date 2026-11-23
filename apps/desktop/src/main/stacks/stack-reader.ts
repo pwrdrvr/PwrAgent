@@ -11,7 +11,7 @@ import {
 } from "@pwragent/shared/stacks/stack-status";
 import { resolveCheckState } from "@pwragent/shared/pull-request-rollup";
 import { stackAutomationGates } from "@pwragent/shared/stacks/stack-automation";
-import { PR_METADATA_PRIORITY, runPrMetadataFileProbe, runPrMetadataGit, type PrMetadataDemand } from "../pr-status/pr-metadata-process";
+import { PR_METADATA_PRIORITY, runPrMetadataFileProbe, runPrMetadataGit, SharedPrMetadataRead, type PrMetadataDemand } from "../pr-status/pr-metadata-process";
 import { createStackCheckoutHints, STACK_CHECKOUT_SCAN_LIMITS } from "../git-info/stack-checkout-store";
 
 type CatalogRead = GhStackCatalogRead | { status: "missing" | "unavailable" };
@@ -25,18 +25,18 @@ function catalogVersion(info: BigIntStats): string {
   return [info.dev, info.ino, info.mode, info.size, info.mtimeNs, info.ctimeNs].join(":");
 }
 
-async function observeCatalog(commonDir: string): Promise<CatalogObservation> {
+async function readCatalogFile(catalogPath: string): Promise<CatalogObservation | undefined> {
   try {
-    const file = await open(path.join(commonDir, "gh-stack"), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const file = await open(catalogPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
       const stat = await file.stat({ bigint: true });
       if (!stat.isFile() || stat.size > CATALOG_BYTES) return { catalog: { status: "catalog_invalid" } };
       const bytes = Buffer.alloc(Number(stat.size) + 1);
       const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
       const version = catalogVersion(stat);
-      if (bytesRead !== Number(stat.size) || version !== catalogVersion(await file.stat({ bigint: true }))) {
-        return { catalog: { status: "catalog_invalid" } };
-      }
+      if (bytesRead !== Number(stat.size) || version !== catalogVersion(await file.stat({ bigint: true }))) return undefined;
+      const published = await lstat(catalogPath, { bigint: true }).catch(() => undefined);
+      if (!published || version !== catalogVersion(published)) return undefined;
       return { catalog: parseGhStackCatalog(bytes.toString("utf8", 0, bytesRead)), version };
     } finally {
       await file.close();
@@ -44,6 +44,13 @@ async function observeCatalog(commonDir: string): Promise<CatalogObservation> {
   } catch (error) {
     return { catalog: { status: (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "unavailable" } };
   }
+}
+
+async function observeCatalog(commonDir: string): Promise<CatalogObservation> {
+  const catalogPath = path.join(commonDir, "gh-stack");
+  // A concurrent write can replace the published inode while the old handle
+  // still reads its bytes. Close it, then reopen the path once.
+  return await readCatalogFile(catalogPath) ?? await readCatalogFile(catalogPath) ?? { catalog: { status: "unavailable" } };
 }
 
 export async function readGhStackCatalog(commonDir: string): Promise<CatalogRead> {
@@ -120,9 +127,10 @@ export class StackReadObservation {
     return (await read).catalog;
   }
 
-  private async recordCheckout(cwd: string): Promise<Checkout | undefined> {
+  private async recordCheckout(cwd: string, lookup?: (cwd: string) => Promise<Checkout | undefined>): Promise<Checkout | undefined> {
     const before = await this.hints.checkoutIdentity(cwd);
-    const checkout = await this.checkout(cwd);
+    const checkout = await (lookup ? lookup(cwd) : this.checkout(cwd));
+    this.checkouts.set(cwd, Promise.resolve(checkout));
     if (before && checkout?.root === before.root && checkout.commonDir === before.commonDir
       && (await this.hints.checkoutIdentity(cwd))?.version === before.version) {
       this.checkoutVersions.set(cwd, before.version);
@@ -130,16 +138,15 @@ export class StackReadObservation {
     return checkout;
   }
 
-  async checkoutsByClone(directories: readonly string[], recordIdentity = false): Promise<Checkout[]> {
-    const checkouts = await Promise.all([...new Set(directories)]
-      .map((cwd) => recordIdentity ? this.recordCheckout(cwd) : this.checkout(cwd)));
+  async checkoutsByClone(directories: readonly string[], lookup = (cwd: string) => this.checkout(cwd)): Promise<Checkout[]> {
+    const checkouts = await Promise.all([...new Set(directories)].map(lookup));
     this.demand.signal?.throwIfAborted();
     const clones = new Map(checkouts.flatMap((entry) => entry ? [[entry.commonDir, entry] as const] : []));
     return [...clones.values()];
   }
 
-  async clones(directories: readonly string[], recordIdentity = false): Promise<Clone[]> {
-    const clones = await this.checkoutsByClone(directories, recordIdentity);
+  async clones(directories: readonly string[], lookup?: (cwd: string) => Promise<Checkout | undefined>): Promise<Clone[]> {
+    const clones = await this.checkoutsByClone(directories, lookup);
     const catalogs = await Promise.all(clones.map(async (clone) => ({
       ...clone, catalog: await this.catalog(clone.commonDir),
     })));
@@ -147,8 +154,13 @@ export class StackReadObservation {
     return catalogs;
   }
 
-  async presentCatalogs(directories: readonly string[], recordIdentity = false): Promise<CatalogRead[]> {
-    return (await this.clones(await this.hints.markerCandidates(directories), recordIdentity)).map(({ catalog }) => catalog);
+  async presentCatalogs(directories: readonly string[]): Promise<CatalogRead[]> {
+    return (await this.clones(await this.hints.markerCandidates(directories))).map(({ catalog }) => catalog);
+  }
+
+  async preflightCatalogs(directories: readonly string[], lookup?: (cwd: string) => Promise<Checkout | undefined>): Promise<CatalogRead[]> {
+    const candidates = await this.hints.markerCandidates(directories);
+    return (await this.clones(candidates, (cwd) => this.recordCheckout(cwd, lookup))).map(({ catalog }) => catalog);
   }
 
   async revalidateAfterListing(): Promise<void> {
@@ -404,14 +416,45 @@ function possibleInferredLayers(threads: readonly StackThreadRow[], knownPrs: re
 }
 
 export class StackReader {
+  private readonly pendingPreflights = new Map<string, SharedPrMetadataRead<Checkout | undefined>>();
   private readonly inventoryCheckouts = new Map<string, {
     version: string; checkout: Checkout | undefined; expiresAt: number;
   }>();
 
   constructor(private readonly now: () => number = () => performance.now()) {}
 
+  async preflightCatalogs(directories: readonly string[], observation: StackReadObservation): Promise<CatalogRead[]> {
+    if ((observation.demand.priority?.() ?? PR_METADATA_PRIORITY.background) !== PR_METADATA_PRIORITY.background
+      || !observation.hints.installedGitVersion) {
+      return await observation.preflightCatalogs(directories);
+    }
+    return await observation.preflightCatalogs(directories, async (cwd) => {
+      const candidates = await observation.hints.possibleCommonDirs(cwd);
+      return candidates ? await this.readInventoryCheckout(cwd, observation, candidates, true) : await observation.checkout(cwd);
+    });
+  }
+
+  private async sharedPreflight(
+    cwd: string, version: string, demand: PrMetadataDemand, load: (demand: PrMetadataDemand) => Promise<Checkout | undefined>,
+  ): Promise<Checkout | undefined> {
+    const key = JSON.stringify([cwd, version]);
+    let pending = this.pendingPreflights.get(key);
+    if (!pending || pending.signal.aborted) {
+      const read = new SharedPrMetadataRead(async (sharedDemand) => {
+        try {
+          return await load(sharedDemand);
+        } finally {
+          if (this.pendingPreflights.get(key) === read) this.pendingPreflights.delete(key);
+        }
+      });
+      this.pendingPreflights.set(key, read);
+      pending = read;
+    }
+    return await pending.read(demand);
+  }
+
   private async readInventoryCheckout(
-    cwd: string, observation: StackReadObservation, candidates: readonly string[],
+    cwd: string, observation: StackReadObservation, candidates: readonly string[], sharePreflight = false,
   ): Promise<Checkout | undefined> {
     const { hints, inventoryDemand } = observation;
     const identity = candidates.length ? await hints.checkoutIdentity(cwd) : undefined;
@@ -421,15 +464,22 @@ export class StackReader {
     if (version && cached?.version === version && cached.expiresAt > this.now()) return cached.checkout;
     this.inventoryCheckouts.delete(cwd);
 
-    const checkout = await observation.checkout(cwd, inventoryDemand);
-    const agreed = before ? checkout?.root === before.root && checkout.commonDir === before.commonDir
-      && (await hints.checkoutIdentity(cwd))?.version === version : !checkout;
-    if (version && agreed) {
-      const expiresAt = hints.installedGitVersion ? this.now() + 30_000 : Infinity;
-      this.inventoryCheckouts.set(cwd, { version, checkout, expiresAt });
-      if (this.inventoryCheckouts.size > 2_048) this.inventoryCheckouts.delete(this.inventoryCheckouts.keys().next().value!);
-    }
-    return checkout;
+    const read = async (demand: PrMetadataDemand, locate: () => Promise<Checkout | undefined>, currentHints = hints) => {
+      const checkout = await locate();
+      const agreed = before ? checkout?.root === before.root && checkout.commonDir === before.commonDir
+        && (await currentHints.checkoutIdentity(cwd))?.version === version : !checkout;
+      demand.signal?.throwIfAborted();
+      if (version && agreed) {
+        const expiresAt = hints.installedGitVersion ? this.now() + 30_000 : Infinity;
+        this.inventoryCheckouts.set(cwd, { version, checkout, expiresAt });
+        if (this.inventoryCheckouts.size > 2_048) this.inventoryCheckouts.delete(this.inventoryCheckouts.keys().next().value!);
+      }
+      return checkout;
+    };
+    return sharePreflight && version
+      ? await this.sharedPreflight(cwd, version, inventoryDemand,
+        (demand) => read(demand, () => locateCheckout(cwd, demand), createStackCheckoutHints(demand)))
+      : await read(inventoryDemand, () => observation.checkout(cwd, inventoryDemand));
   }
 
   async read(threads: readonly StackThreadRow[], knownPrs: readonly PrSummary[], directories?: readonly string[],

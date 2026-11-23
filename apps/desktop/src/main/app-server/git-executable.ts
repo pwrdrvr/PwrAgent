@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import { noteBundledGitCommand } from "../bundled-git-lfs-advisory";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { gitRuntimeEnvironment, resolveRuntimeGitExecutable } from "../git-runtime";
-import { startWindowsJobReadyPoll, wrapCommandInWindowsJob } from "../windows-job-wrapper";
+import { formatWindowsJobStartupTimeout, startWindowsJobReadyPoll, wrapCommandInWindowsJob } from "../windows-job-wrapper";
 import { collectProcessTreeIds, isProcessIdAlive, terminateOwnedProcessTree } from "../process-tree";
 import { gitSubprocessDiagnostics, type GitSubprocessPurpose } from "../diagnostics/git-subprocess-diagnostics";
 
@@ -67,6 +67,7 @@ export async function runGitCommand(
     if (options.ownProcessTree) {
       const result = await runOwnedGitProcess({
         launch,
+        windowsJob: windowsJobLaunch,
         input: options.input,
         maxBuffer: options.maxBuffer ?? 1024 * 1024 * 10,
         signal: options.signal,
@@ -112,12 +113,13 @@ export async function runGitCommand(
  */
 async function runOwnedGitProcess(params: {
   launch: { command: string; args: string[]; env: NodeJS.ProcessEnv };
+  windowsJob?: ReturnType<typeof wrapCommandInWindowsJob>;
   input?: string;
   maxBuffer: number;
   signal?: AbortSignal;
   timeout: number;
 }): Promise<{ stdout: string; stderr: string }> {
-  const { launch, signal } = params;
+  const { launch, signal, windowsJob } = params;
   const cmd = [launch.command, ...launch.args].join(" ");
   const child = spawn(launch.command, launch.args, {
     env: launch.env,
@@ -131,8 +133,15 @@ async function runOwnedGitProcess(params: {
     let stderr = "";
     let failure: Error | undefined;
     let termination: Promise<void> | undefined;
+    let timer: NodeJS.Timeout | undefined;
+    let readyPoll: ReturnType<typeof startWindowsJobReadyPoll> | undefined;
+    const cancelDeadline = () => {
+      clearTimeout(timer);
+      readyPoll?.cancel();
+    };
     const stop = (reason: Error) => {
       if (termination) return;
+      cancelDeadline();
       failure = reason;
       termination = stopOwnedGitProcessTree(child);
       // Awaited once Git closes; a failure before then is not unhandled.
@@ -142,10 +151,23 @@ async function runOwnedGitProcess(params: {
       new Error("The operation was aborted", { cause: signal?.reason }),
       { name: "AbortError", code: "ABORT_ERR" },
     ));
-    const timer = setTimeout(() => stop(Object.assign(
-      new Error(`Command failed: ${cmd}`),
-      { killed: true, code: null, signal: "SIGTERM", cmd },
-    )), params.timeout);
+    const timedOut = (message: string) => stop(Object.assign(new Error(message), {
+      killed: true, code: null, signal: "SIGTERM", cmd,
+    }));
+    const startCommandTimeout = () => {
+      timer = setTimeout(() => timedOut(`Command failed: ${cmd}`), params.timeout);
+    };
+    // Job startup has its own progress-aware deadline. Start the command's
+    // timeout only once the Job has launched its target.
+    if (windowsJob) {
+      readyPoll = startWindowsJobReadyPoll({
+        launch: windowsJob,
+        onReady: startCommandTimeout,
+        onTimeout: (timeout) => timedOut(formatWindowsJobStartupTimeout(timeout)),
+      });
+    } else {
+      startCommandTimeout();
+    }
     signal?.addEventListener("abort", onAbort, { once: true });
     const collect = (stream: "stdout" | "stderr", chunk: string) => {
       const text = (stream === "stdout" ? stdout : stderr) + chunk;
@@ -168,7 +190,7 @@ async function runOwnedGitProcess(params: {
     child.stdin.on("error", () => undefined);
     child.stdin.end(params.input);
     const finish = () => {
-      clearTimeout(timer);
+      cancelDeadline();
       signal?.removeEventListener("abort", onAbort);
     };
     child.once("error", (error) => {
