@@ -3518,6 +3518,9 @@ export function ThreadView(props: ThreadViewProps) {
               onDoHere={doTodoHere}
               findOpen={props.findOpen}
               revealRequest={props.threadTodoRevealRequest}
+              onFocusTranscript={() => {
+                transcriptPanelRef.current?.querySelector<HTMLElement>(".transcript-list__items")?.focus();
+              }}
             />
           ) : null}
           {props.findOpen ? (

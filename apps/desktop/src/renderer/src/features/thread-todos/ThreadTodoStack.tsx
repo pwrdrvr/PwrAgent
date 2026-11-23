@@ -8,6 +8,8 @@ import {
   dismissThreadTodoLaunch,
   followDeckSelection,
   launchThreadTodo,
+  showStartingThreadTodoCard,
+  type ThreadTodoLaunch,
   useThreadTodoLaunches,
 } from "./thread-todo-launches";
 import { ThreadTodoLaunchTray } from "./ThreadTodoLaunchTray";
@@ -61,6 +63,8 @@ export type ThreadTodoStackProps = {
   findOpen?: boolean;
   /** A thread row's to-do chip asked to show this thread's cards. */
   revealRequest?: ThreadTodoRevealRequest;
+  /** Where focus goes when a close leaves neither a deck nor a tray action. */
+  onFocusTranscript?: () => void;
 };
 
 /**
@@ -69,7 +73,7 @@ export type ThreadTodoStackProps = {
  * leaves a count chip in the same corner.
  */
 export function ThreadTodoStack(props: ThreadTodoStackProps) {
-  const { threadKey, view } = props;
+  const { threadKey, view, onFocusTranscript } = props;
   const [selectedId, setSelectedId] = useState<string>();
   const launches = useThreadTodoLaunches(threadKey);
   // A started card is in the tray, not the deck, until its row is closed.
@@ -80,6 +84,9 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
   const [risingId, setRisingId] = useState<string>();
   const sectionRef = useRef<HTMLElement>(null);
   const deckRef = useRef<HTMLDivElement>(null);
+  const cardRef = useRef<HTMLElement>(null);
+  const chipRef = useRef<HTMLButtonElement>(null);
+  const launchFocusRef = useRef<{ threadKey: string; closedRowIndex?: number }>(undefined);
   const ghostRef = useRef<HTMLDivElement>(null);
   const [, setCollapseVersion] = useState(0);
   const [notice, setNotice] = useState<ResolvedNotice>();
@@ -128,6 +135,33 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
     todos.findIndex((todo) => todo.id === shownId),
   );
   const todo = todos[selectedIndex];
+
+  // A tray action can replace the focused control and mount a new card in
+  // the same commit. Wait for those DOM changes before handing off focus.
+  useLayoutEffect(() => {
+    const focus = launchFocusRef.current;
+    launchFocusRef.current = undefined;
+    if (!focus || focus.threadKey !== threadKey) return;
+    if (focus.closedRowIndex !== undefined && sectionRef.current) {
+      const rows = Array.from(sectionRef.current.querySelectorAll("[data-launch-id]"));
+      const next = rows.slice(focus.closedRowIndex);
+      const previous = rows.slice(0, focus.closedRowIndex).reverse();
+      for (const row of [...next, ...previous]) {
+        const button = row.querySelector<HTMLButtonElement>("button:not(:disabled)");
+        if (button) {
+          button.focus();
+          return;
+        }
+      }
+    }
+    const card = cardRef.current;
+    const primary = card?.querySelector<HTMLButtonElement>(
+      "button:is(.todo-split__primary, .button--primary):not(:disabled)",
+    );
+    const target = primary ?? card ?? chipRef.current;
+    if (target) target.focus();
+    else onFocusTranscript?.();
+  }, [launches, threadKey, onFocusTranscript]);
 
   // The ghost runs from the card's box to its new tray row's box.
   useLayoutEffect(() => {
@@ -241,15 +275,30 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
       }
     : undefined;
   const className = `thread-todo-stack${props.findOpen ? " is-below-find" : ""}`;
+  const returnCard = (launch: ThreadTodoLaunch): void => {
+    launchFocusRef.current = { threadKey };
+    collapsedIdsByThreadKey.delete(threadKey);
+    setRisingId(launch.id);
+    setSelectedId(launch.id);
+    if (launch.phase === "starting") showStartingThreadTodoCard(launch.id);
+    else dismissThreadTodoLaunch(launch.id);
+  };
   const tray = (
     <ThreadTodoLaunchTray
       launches={launches}
       {...(flight ? { landingId: flight.id } : {})}
       onOpenThread={view.openStartedThread}
-      onReview={(id) => {
-        dismissThreadTodoLaunch(id);
-        setRisingId(id);
-        setSelectedId(id);
+      onReturnCard={returnCard}
+      onClose={(launch) => {
+        if (launch.phase === "failed") {
+          returnCard(launch);
+          return;
+        }
+        launchFocusRef.current = {
+          threadKey,
+          closedRowIndex: launches.indexOf(launch),
+        };
+        dismissThreadTodoLaunch(launch.id);
       }}
     />
   );
@@ -260,8 +309,9 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
     // several cards one fraction would not say whose it is.
     const progress = count === 1 ? threadTodoItemProgress(todo) : undefined;
     return (
-      <div className={className}>
+      <section ref={sectionRef} className={className} aria-label="To-dos for this thread">
         <button
+          ref={chipRef}
           type="button"
           className="thread-todo-stack__chip"
           aria-expanded={false}
@@ -285,7 +335,7 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
           ) : null}
         </button>
         {tray}
-      </div>
+      </section>
     );
   }
 
@@ -305,6 +355,7 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
             }}
           >
             <ThreadTodoCard
+              cardRef={cardRef}
               todo={todo}
               running={view.runningIds.has(todo.id)}
               threadRunning={props.threadRunning}

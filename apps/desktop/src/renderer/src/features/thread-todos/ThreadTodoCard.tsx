@@ -14,6 +14,7 @@ import {
   type ComponentType,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  type Ref,
 } from "react";
 import type { PrMergeQueueStatus } from "@pwragent/shared/contracts/navigation";
 import type { ThreadReviewItem } from "@pwragent/shared/contracts/thread-reviews";
@@ -150,6 +151,7 @@ export type ThreadTodoCardHandlers = {
 };
 
 export type ThreadTodoCardProps = ThreadTodoCardHandlers & {
+  cardRef?: Ref<HTMLElement>;
   todo: ThreadTodo;
   running: boolean;
   /** The owning thread has an active turn; another repair must wait. */
@@ -1124,6 +1126,8 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
       data-kind={todo.kind}
       data-todo-id={todo.id}
       aria-labelledby={titleId}
+      ref={props.cardRef}
+      tabIndex={props.cardRef ? -1 : undefined}
       onMouseDown={copying.onMouseDown}
       onContextMenu={copying.onContextMenu}
     >
