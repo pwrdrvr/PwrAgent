@@ -42494,6 +42494,15 @@ div.composer-error-row__toggle {
   color: var(--accent);
 }
 
+.waiting-for-panel__hold--neutral {
+  border-color: var(--border-subtle);
+  background: var(--bg-panel-elevated);
+}
+
+.waiting-for-panel__hold--neutral .waiting-for-panel__hold-icon {
+  color: var(--text-muted);
+}
+
 .waiting-for-panel__hold-text {
   display: flex;
   flex: 1 1 auto;
@@ -47386,6 +47395,10 @@ button.composer__subthread-source-parent:hover {
   min-width: min(204px, calc(100vw - 32px));
   padding: 4px;
   overflow: visible;
+}
+
+.composer-thread-options__menu--job-monitors {
+  min-width: min(288px, calc(100vw - 32px));
 }
 
 /* An action menu, so it takes the thread context menu's native density

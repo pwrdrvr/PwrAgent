@@ -2391,7 +2391,9 @@ function ComposerThreadOptionsMenu(props: {
       {open ? (
         <div
           aria-label="Thread options"
-          className="composer-dropdown__menu composer-thread-options__menu"
+          className={`composer-dropdown__menu composer-thread-options__menu${
+            props.onJobMonitorCreationChange ? " composer-thread-options__menu--job-monitors" : ""
+          }`}
           id={menuId}
           ref={menuRef}
           role="menu"

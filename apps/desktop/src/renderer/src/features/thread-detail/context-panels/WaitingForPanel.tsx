@@ -226,7 +226,7 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
           </div>
         ) : null}
         {jobMonitorCreationOff ? (
-          <div className="waiting-for-panel__hold" role="note">
+          <div className="waiting-for-panel__hold waiting-for-panel__hold--neutral" role="note">
             <span className="waiting-for-panel__hold-icon" aria-hidden="true"><PauseIcon size={12} /></span>
             <span className="waiting-for-panel__hold-text">
               <span className="waiting-for-panel__hold-title">New Job Monitors off</span>
