@@ -473,6 +473,7 @@ import {
   getNavigationDirectorySetAnnouncer,
   loadLocalNavigationQueryIndex,
   navigationPullRequestProjection,
+  navigationQueryShowsStacks,
 } from "../app-server/navigation-query-source";
 import { resolveNavigationWorktreeProjects } from "../app-server/navigation-worktree-projects";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
@@ -7789,7 +7790,7 @@ function localBackendOperations(): FederationBackendOperations {
             loadIndex: async () => {
               await awaitStartupProviderCoverage({ query: request.query, deadlineAt, signal });
               return loadLocalNavigationQueryIndex({ backend: request.backend,
-                callerReason: "federation-navigation-query", signal });
+                callerReason: "federation-navigation-query", includeStacks: navigationQueryShowsStacks(request.query), signal });
             },
             request, scopeKey,
           }),

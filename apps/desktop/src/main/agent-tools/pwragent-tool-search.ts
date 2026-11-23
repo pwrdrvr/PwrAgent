@@ -54,6 +54,7 @@ const SEARCH_ALIASES: Record<string, string> = {
   create_issue: "github gitlab issue open create new file bug",
   update_issue: "github gitlab issue edit update close reopen labels",
   merge_pull_request: "github gitlab mr merge request pr pull request merge squash rebase land",
+  list_stacks: "stack restack gh stack rebase stack stacked PR stacked pull requests layer order catalog",
   handoff_task: "delegate delegation child subagent split parallel tasks worktree",
   create_monitor_delegation: "job monitor polling long running command parallel tasks collect results",
   watch_thread_pull_request: "wake notify stop cancel list watches watching",

@@ -53,6 +53,7 @@ export type PrReviewOfferPorts = {
   threadPrKeys(thread: PrReviewOfferThread): string[];
   /** The status registry's current PR. No forge request is made. */
   getPr(prKey: string): PrSummary | undefined;
+  stackBlocksMerge?(thread: PrReviewOfferThread, pr: PrSummary): Promise<boolean>;
   /** Checkouts where Git can read this PR's commits; the first one is used. */
   directories(thread: PrReviewOfferThread, pr: PrSummary): string[];
   /**
@@ -301,6 +302,7 @@ export class PrReviewOfferCoordinator {
   async mergeOfferRefusal(thread: PrReviewOfferThread, prKey: string): Promise<string | undefined> {
     const pr = this.ports.getPr(prKey);
     if (!pr) return undefined;
+    if (await this.ports.stackBlocksMerge?.(thread, pr)) return `#${pr.number} is waiting for its lower stack layers to merge and its base to be trunk.`;
     const assessment = await this.assessPr(thread, pr, true, false);
     if (!assessment.headSha || assessment.readiness === "closed") return undefined;
     if (assessment.headCovered && (assessment.openFindings ?? 0) === 0) return undefined;
@@ -333,8 +335,9 @@ export class PrReviewOfferCoordinator {
     // The review side holds while CI runs, so the merge-card gate still sees
     // open findings then.
     const standing = deriveReviewStanding(coverage.reviews);
+    const stackBlocked = standing.readiness === "ready_to_merge" && await this.ports.stackBlocksMerge?.(thread, pr);
     return {
-      readiness: gate ?? standing.readiness,
+      readiness: stackBlocked ? "stack_parent_open" : gate ?? standing.readiness,
       standing: standing.readiness,
       headSha: head!,
       headCovered: coverage.reviews.some((review) => review.coversHead),

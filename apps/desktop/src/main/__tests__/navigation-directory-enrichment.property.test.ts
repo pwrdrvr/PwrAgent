@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { buildDirectorySummaries } from "@pwragent/shared/directory-navigation";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
@@ -11,10 +12,14 @@ import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-so
 import { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 import { createThreadDirectoryEnricher, readNavigationCheckout } from "../git-info/directory-store";
+import { StackReader } from "../stacks/stack-reader";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
-const overlays = vi.hoisted(() => ({ current: undefined as SqliteOverlayStore | undefined }));
+const overlays = vi.hoisted(() => ({
+  current: undefined as SqliteOverlayStore | undefined,
+  readPrs: vi.fn((threads: Parameters<SqliteOverlayStore["readNavigationPullRequests"]>[0]): PrSummary[][] => threads.map(() => [])),
+}));
 
 vi.mock("../app-server/backend-registry", () => ({}));
 vi.mock("../app-server/scratch-projects", () => ({ resolveScratchProjectsRoots: () => [] }));
@@ -29,6 +34,7 @@ vi.mock("../storage/desktop-overlay-store", () => {
     },
     readDirectoryGitStatusCache: async () => ({}),
     listAllActivePrStatusWatches: async () => [],
+    readNavigationPullRequests: overlays.readPrs,
   };
   return { getDesktopOverlayStore: () => overlays.current ?? store };
 });
@@ -36,7 +42,7 @@ vi.mock("../storage/desktop-overlay-store", () => {
 const normalize = (cwd: string) => cwd.replace(/\\/g, "/");
 const originUrl = "https://github.com/example/project.git";
 
-function navigationFixture(paths: string[], now?: () => number) {
+function navigationFixture(paths: string[], now?: () => number, canonicalize?: (prs: PrSummary[]) => Promise<PrSummary[]>) {
   const rows = paths.map((cwd, index) => ({
     id: `thread-${index}`, cwd, preview: `Thread ${index}`, source: "cli",
     updatedAt: paths.length - index, gitInfo: { branch: "recorded", originUrl },
@@ -60,14 +66,48 @@ function navigationFixture(paths: string[], now?: () => number) {
     hydrateThreadGitWorkingStates: async (threads: unknown[]) => threads,
     withNavigationSubAgentActivity: (threads: unknown[]) => threads,
     getNavigationInputRequestThreadKeys: () => new Set<string>(),
+    canonicalizeNavigationPullRequests: canonicalize,
   } as unknown as DesktopBackendRegistry;
   return {
     client, rows,
-    read: (refreshProviders = false) =>
-      loadLocalNavigationQueryIndex({ registry, callerReason: "renderer-navigation-query", refreshProviders }),
+    read: (refreshProviders = false, includeStacks = false) =>
+      loadLocalNavigationQueryIndex({ registry, callerReason: "renderer-navigation-query", refreshProviders, includeStacks }),
     verify: () => loadLocalNavigationQueryIndex({ registry, callerReason: "remove-navigation-directory", requireVerifiedDirectories: true }),
   };
 }
+
+it("validates stack attachments per thread only when the caller requests stack membership", async () => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-demand-")));
+  const stackRead = vi.spyOn(StackReader.prototype, "read").mockResolvedValue({ stacks: [], catalogs: [] });
+  try {
+    execFileSync("git", ["-C", root, "init", "--initial-branch=main"], { stdio: "pipe" });
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 5 }), async (count) => {
+      const attachment = (number: number): PrSummary => ({
+        number, provider: "github.com", org: "example", repo: "project", state: "passing",
+        url: `https://github.com/example/project/pull/${number}`,
+      });
+      const batches = Array.from({ length: count }, (_, i) => [attachment(i * 2 + 1), attachment(i * 2 + 2)]);
+      overlays.readPrs.mockClear().mockReturnValue(batches);
+      stackRead.mockClear();
+      const canonicalize = vi.fn(async (prs: PrSummary[]) => prs.slice(1));
+      const { client, read } = navigationFixture(Array.from({ length: count }, () => root), undefined, canonicalize);
+      try {
+        await read();
+        expect(overlays.readPrs).not.toHaveBeenCalled();
+        expect(stackRead).not.toHaveBeenCalled();
+        await read(false, true);
+        expect(canonicalize.mock.calls.map(([batch]) => batch)).toEqual(batches);
+        expect(stackRead.mock.calls[0]?.[0].map((row) => row.prs)).toEqual(batches.map((batch) => batch.slice(1)));
+      } finally {
+        await client.close();
+      }
+    }), { numRuns: 7, examples: [[1]] });
+  } finally {
+    overlays.readPrs.mockReset();
+    stackRead.mockRestore();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 it("keeps navigation inventory independent of historical checkout discovery and refreshes the selected checkout", async () => {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-navigation-enrichment-")));

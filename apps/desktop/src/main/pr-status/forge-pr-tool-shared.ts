@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { ForgeReadError, repositoryUrl, type ForgeRepository } from "./forge-tool-contract";
 import type { ForgeAttachment, ForgePrToolArgs } from "./forge-pr-tool-contract";
+import type { GhStackCatalog } from "@pwragent/shared/stacks/catalog";
 
 /** What each provider client needs about the calling thread. */
 export type ForgePrToolContext = {
@@ -19,6 +20,7 @@ export type ForgePrToolContext = {
   privateRoots: readonly string[];
   defaultMergeMethod: () => "merge" | "squash" | "rebase";
   assertCanMerge?: (repository: ForgeRepository, number: number) => void;
+  stackCatalogs?: readonly GhStackCatalog[];
   signal?: AbortSignal;
 };
 

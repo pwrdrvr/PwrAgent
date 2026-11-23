@@ -20,6 +20,7 @@ export type PrReviewReadiness =
   | "ci_untested"
   | "needs_review"
   | "findings_open"
+  | "stack_parent_open"
   | "ready_to_merge";
 
 /** One review of this PR, judged against the PR's current head. */
@@ -225,6 +226,7 @@ export function planPrOffer(params: {
     || readiness === "findings_open"
     || readiness === "draft"
     || readiness === "conflicting"
+    || readiness === "stack_parent_open"
     || (params.standing !== undefined && params.standing !== "ready_to_merge")
     || open.headSha !== params.headSha
   ) {
@@ -279,6 +281,7 @@ export function describePrReviewReadiness(params: {
   const name = `#${params.prNumber}`;
   const at = params.headSha ? ` at ${params.headSha.slice(0, 7)}` : "";
   if (params.readiness === "closed") return `${name} is closed.`;
+  if (params.readiness === "stack_parent_open") return `${name} is waiting for its lower stack layers to merge and its base to be trunk.`;
   if ((params.openFindings ?? 0) > 0) {
     return `${name}'s latest review has ${params.openFindings} unsettled finding(s). Commit and push each fix, then settle the finding with update_review_item. PwrAgent offers the merge when every finding is settled and CI is green.`;
   }
