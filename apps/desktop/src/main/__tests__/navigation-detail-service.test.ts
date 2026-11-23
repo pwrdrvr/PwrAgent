@@ -273,8 +273,12 @@ describe("NavigationDetailService", () => {
   }
 
   it("preserves live stop controls when workspace metadata leaves little room for escaped or multibyte labels", async () => {
-    await fc.assert(fc.asyncProperty(fc.integer({ min: 750, max: 900 }), fc.constantFrom("💡", "\"\\\n", "\0"),
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 700, max: 900 }), fc.constantFrom("💡", "\"\\\n", "\0"),
       checkLiveWorkerAtResponseBoundary), { numRuns: 25 });
+  });
+
+  it("keeps a live stop control when its escaped title alone would exceed the remaining budget", async () => {
+    await checkLiveWorkerAtResponseBoundary(750, "\0");
   });
 
   it("shortens an escaped live label before admitting a short failed alert", async () => {

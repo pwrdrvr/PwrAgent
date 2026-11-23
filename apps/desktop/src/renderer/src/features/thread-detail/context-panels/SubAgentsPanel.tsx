@@ -6,6 +6,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import { hasStoppableSubAgentRun } from "@pwragent/shared/subagent-kind";
+import { taskMonitorDisplayTitle } from "@pwragent/shared/task-monitor-display-title";
 import {
   type NavigationThreadSummary,
   type ThreadSubAgentSummary,
@@ -264,6 +265,7 @@ export const SubAgentsPanel = memo(function SubAgentsPanel(props: SubAgentsPanel
               subAgent.lastMessage && subAgent.lastMessage !== originSentence
                 ? subAgent.lastMessage
                 : undefined;
+            const title = taskMonitorDisplayTitle(subAgent) ?? subAgent.task;
             const stopping = stoppingIds.has(subAgent.monitorId);
             const canStop =
               (subAgent.status === "pending"
@@ -285,8 +287,8 @@ export const SubAgentsPanel = memo(function SubAgentsPanel(props: SubAgentsPanel
                     {subAgent.agentName}
                   </p>
                 ) : null}
-                <p className="rail-card__title" title={subAgent.task}>
-                  {subAgent.task}
+                <p className="rail-card__title" title={title}>
+                  {title}
                 </p>
                 <p className="rail-card__runtime">
                   <span className="rail-card__provider-chip">

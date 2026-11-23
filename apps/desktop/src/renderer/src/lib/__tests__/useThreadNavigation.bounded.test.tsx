@@ -136,6 +136,45 @@ it("keeps settled local directories mounted through local Git probes and notices
   } finally { unmount(); vi.useRealTimers(); }
 });
 
+it("patches a working-state observation without scheduling the directory relationship refresh", async () => {
+  const f = fixture();
+  const originalRead = f.read.getMockImplementation()!;
+  const federationTarget = { scope: "remote" as const, instanceId: "peer" };
+  const link = { id: "checkout", kind: "worktree" as const, label: "checkout", path: "/repo", worktreePath: "/repo/checkout" };
+  f.read.mockImplementation(async (request, consumer) => {
+    const page = await originalRead(request, consumer);
+    return { ...page, entries: page.entries.map((entry) => ({ ...entry, row: { ...entry.row, linkedDirectories: [link],
+      ...(entry.row.id === "thread-1" ? { ref: { ...entry.row.ref, ownerInstanceId: federationTarget.instanceId },
+        federation: { ref: { backend: "codex" as const, threadId: entry.row.id, target: federationTarget }, instanceLabel: "Peer" } } : {}) } })) };
+  });
+  const listeners = new Set<(event: AgentEvent) => void>();
+  const api: DesktopApi = { ...f.api, onAgentEvent: (listener) => { listeners.add(listener); return () => listeners.delete(listener); } };
+  const scheduleNavigationRefresh = vi.fn(() => () => undefined);
+  const { result, unmount } = renderHook(() => useThreadNavigation(api, { scheduleNavigationRefresh }));
+  try {
+    await waitFor(() => expect(result.current.threads.map(({ id }) => id)).toEqual(expect.arrayContaining(["thread-0", "thread-1"])));
+    scheduleNavigationRefresh.mockClear();
+    f.read.mockClear();
+    const gitWorkingState = { dirtyFiles: 1, dirtyAdditions: 3, dirtyDeletions: 0, untrackedFiles: 0, unpushedCommits: 0 };
+    await act(async () => {
+      for (const fetchedAt of [2, 1]) for (const listener of listeners) listener({ backend: "codex", notification: {
+        method: "navigation/threadGitWorkingState/updated",
+        params: { worktreePath: link.worktreePath, fetchedAt, gitWorkingState: fetchedAt === 2 ? gitWorkingState : null },
+      } });
+    });
+    expect(result.current.threads.find(({ id }) => id === "thread-0")).toMatchObject({ gitWorkingState, gitWorkingStateFetchedAt: 2 });
+    expect(result.current.threads.find(({ id }) => id === "thread-1")?.gitWorkingStateFetchedAt).toBeUndefined();
+    expect(scheduleNavigationRefresh).not.toHaveBeenCalled();
+    expect(f.read).not.toHaveBeenCalled();
+    await act(async () => {
+      for (const listener of listeners) listener({ backend: "codex", notification: {
+        method: "navigation/threadDirectories/updated", params: { reason: "selected-thread", threadIds: ["thread-0"] },
+      } });
+    });
+    expect(scheduleNavigationRefresh).toHaveBeenCalledTimes(1);
+  } finally { unmount(); }
+});
+
 it("retains unchanged row projections while still publishing changed titles", async () => {
   const f = fixture();
   const originalRead = f.read.getMockImplementation()!;

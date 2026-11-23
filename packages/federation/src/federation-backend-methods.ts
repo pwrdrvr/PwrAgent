@@ -63,6 +63,9 @@ export const FEDERATION_BACKEND_METHODS = {
   sendThreadPrAutoDispatchNow: "backend.sendThreadPrAutoDispatchNow",
   // A new method, so an owner that predates it answers method_not_found.
   manageThreadPrWatchesV1: "backend.manageThreadPrWatchesV1",
+  // New methods, so an owner that predates them answers method_not_found.
+  readThreadPullRequestMergeV1: "backend.readThreadPullRequestMergeV1",
+  mergeThreadPullRequestV1: "backend.mergeThreadPullRequestV1",
   setProjectForgeAutomation: "backend.setProjectForgeAutomation",
   listProjectHeldWakeups: "backend.listProjectHeldWakeups",
   resolveProjectHeldWakeups: "backend.resolveProjectHeldWakeups",
@@ -236,6 +239,10 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   // A watch wakes the thread with an agent turn, and stopping one cancels
   // that wake, so both sit with Auto-fix under turn control.
   [FEDERATION_BACKEND_METHODS.manageThreadPrWatchesV1]: "turn_control",
+  // A merge acts on the PR as a to-do card's merge does, which sits with
+  // turn control; reading the method it starts on only serves that merge.
+  [FEDERATION_BACKEND_METHODS.readThreadPullRequestMergeV1]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.mergeThreadPullRequestV1]: "turn_control",
   [FEDERATION_BACKEND_METHODS.manageThreadDependencies]: "turn_control",
   // A project's Forge Automation decides which turns the owner starts on its
   // own, and a held wake-up's Send starts one, so all three take the
@@ -413,6 +420,8 @@ export const FEDERATION_BACKEND_CONTAINED_DECISIONS = {
   [FEDERATION_BACKEND_METHODS.cancelThreadPrAutoDispatch]: "deny",
   [FEDERATION_BACKEND_METHODS.sendThreadPrAutoDispatchNow]: "deny",
   [FEDERATION_BACKEND_METHODS.manageThreadPrWatchesV1]: "deny",
+  [FEDERATION_BACKEND_METHODS.readThreadPullRequestMergeV1]: "deny",
+  [FEDERATION_BACKEND_METHODS.mergeThreadPullRequestV1]: "deny",
   [FEDERATION_BACKEND_METHODS.setProjectForgeAutomation]: "deny",
   [FEDERATION_BACKEND_METHODS.listProjectHeldWakeups]: "deny",
   [FEDERATION_BACKEND_METHODS.resolveProjectHeldWakeups]: "deny",

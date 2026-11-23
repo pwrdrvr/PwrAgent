@@ -433,7 +433,7 @@ export type TokenMiserSubAgentAccounting = {
 
 export type ThreadActiveSubAgent = Pick<ThreadSubAgentSummary,
   | "monitorId" | "task" | "status" | "createdAt" | "updatedAt" | "monitorThreadId" | "monitorTurnId"
-  | "agentName" | "attemptId"
+  | "agentName" | "attemptId" | "displayTitle"
 >;
 
 export type ThreadSubAgentSummary = {
@@ -444,6 +444,8 @@ export type ThreadSubAgentSummary = {
   /** Set by producers that reuse a monitor ID for multiple attempts. */
   attemptId?: string;
   task: string;
+  /** Frozen card label for a PwrAgent Job Monitor. Older cards omit it. */
+  displayTitle?: string;
   status: ThreadSubAgentStatus;
   createdAt: number;
   updatedAt: number;
@@ -545,6 +547,8 @@ export type PrLegacyChipState = "merged" | "draft" | "closed";
 export type PrLifecycleState = "open" | "merged" | "closed";
 export type PrReviewState = "draft" | "ready_for_review";
 export type PrMergeState = "mergeable" | "conflicting" | "unknown";
+/** A way to land a PR. `ThreadTodoMergeMethod` is the same set. */
+export type PrMergeMethod = "squash" | "rebase" | "merge";
 
 /**
  * Where a PR stands in its base branch's merge queue (GitHub) or merge train
@@ -649,6 +653,12 @@ export type PrSummary = {
    * Absent from older builds and peers: treat absence as "no queue known".
    */
   mergeQueue?: PrMergeQueueStatus;
+  /**
+   * The merge methods the destination repository allows, read with the
+   * status poll. Absent from older builds, peers, GitLab and rows cached
+   * before it existed: treat absence as "not known", never as "none".
+   */
+  allowedMergeMethods?: PrMergeMethod[];
   /** Head commit observed with this status snapshot. */
   headSha?: string;
   /** Direct destination for the first failed CI check in this snapshot. */
@@ -3376,6 +3386,71 @@ export type DetachThreadPullRequestResponse = {
   detachedPrKeys: string[];
   prs: PrSummary[];
 };
+
+/**
+ * A thread whose attached PR the operator merges from its PR card. A peer's
+ * thread names its owner, which reads the method and runs the merge.
+ */
+export type ThreadPullRequestMergeTarget = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /** Set for a peer's thread; its owner merges, as `THREAD_PULL_REQUEST_MERGE_CAPABILITY`. */
+  federationTarget?: FederationTarget;
+};
+
+/** The owner reads its project's method and merges a PR for a viewer. */
+export const THREAD_PULL_REQUEST_MERGE_CAPABILITY =
+  "thread_pull_request_merge_v1" satisfies FederationCapability;
+
+/**
+ * The merge method a thread's PR card starts on: the operator's last pick for
+ * the thread's project, which to-do merge cards share, then Settings' default.
+ */
+export type ReadThreadPullRequestMergeResponse = {
+  remembered?: PrMergeMethod;
+  fallback: PrMergeMethod;
+};
+
+export type MergeThreadPullRequestRequest = ThreadPullRequestMergeTarget & {
+  /** One of the thread's attached PRs; main refuses any other. */
+  url: string;
+  method: PrMergeMethod;
+  /** The pick came from the method list, so it becomes the project's. */
+  rememberMethod?: boolean;
+};
+
+export type MergeThreadPullRequestResponse = {
+  summary: string;
+  /** Added to the base branch's merge queue rather than merged. */
+  queued?: boolean;
+};
+
+/**
+ * A viewer's request to the thread's owner, as
+ * `backend.readThreadPullRequestMergeV1`. It names one of the owner's own
+ * threads, which answers with a `ReadThreadPullRequestMergeResponse`.
+ */
+export type FederationReadThreadPullRequestMergeRequestV1 = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+};
+
+/** A viewer's merge, as `backend.mergeThreadPullRequestV1`, run by the owner. */
+export type FederationMergeThreadPullRequestRequestV1 = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  url: string;
+  method: PrMergeMethod;
+  rememberMethod?: boolean;
+};
+
+/**
+ * The owner's answer to a viewer's merge. A refusal crosses as a result,
+ * not a thrown error, so the viewer shows the owner's own reason.
+ */
+export type FederationMergeThreadPullRequestResultV1 =
+  | ({ ok: true } & MergeThreadPullRequestResponse)
+  | { ok: false; message: string };
 
 export type AttachDirectoryToThreadRequest = {
   backend?: AppServerBackendKind;

@@ -36,6 +36,7 @@ import type {
   DecisionsRailSnapshot,
   DecisionsRailThreadRequest,
 } from "@pwragent/shared/decisions-rail";
+import type { DecisionModelListing, DecisionProviderId } from "@pwragent/shared/decision-models";
 import type {
   ResearchHarnessCheck,
   ResearchHarnessReconcileRequest,
@@ -500,6 +501,8 @@ import type {
   ReplaceDesktopSettingsSecretRequest,
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
+  LineRichMenuSetupRequest,
+  LineRichMenuSetupResponse,
   SettingsCredentialTestResult,
   InspectDiscordThreadPermissionsRequest,
   InspectDiscordThreadPermissionsResponse,
@@ -642,6 +645,10 @@ import type {
   GlabStatus,
   GhStatus,
   DetachThreadPullRequestRequest,
+  MergeThreadPullRequestRequest,
+  MergeThreadPullRequestResponse,
+  ReadThreadPullRequestMergeResponse,
+  ThreadPullRequestMergeTarget,
   DetachThreadPullRequestResponse,
   RefreshThreadPullRequestsRequest,
   RefreshThreadGitWorkingStateRequest,
@@ -892,6 +899,8 @@ import {
   THREAD_TODOS_LIST_PROJECTS_CHANNEL,
   THREAD_TODOS_RESOLVE_CHANNEL,
   THREAD_TODOS_RUN_ACTION_CHANNEL,
+  THREAD_PULL_REQUEST_MERGE_CHANNEL,
+  THREAD_PULL_REQUEST_READ_MERGE_CHANNEL,
   THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL,
   THREAD_TODOS_REVIEW_CI_DEPLOYMENT_CHANNEL,
   THREAD_TODOS_SET_PROJECT_CHANNEL,
@@ -914,6 +923,7 @@ import {
   APPEARANCE_CHANGED_EVENT_CHANNEL,
   AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_COMPACT_THREAD_CHANNEL,
+  AGENT_CONTROL_THREAD_GOAL_CHANNEL,
   AGENT_CONFIGURE_GROK_WORKFLOW_BUDGET_CHANNEL,
   AGENT_LIST_THREAD_MCP_SERVERS_CHANNEL,
   AGENT_RELOAD_CODEX_MCP_CONFIG_CHANNEL,
@@ -1343,6 +1353,8 @@ import {
   SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL,
   SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL,
   SETTINGS_TEST_CREDENTIALS_CHANNEL,
+  SETTINGS_LINE_RICH_MENU_CHANNEL,
+  SETTINGS_LIST_DECISION_MODELS_CHANNEL,
   SETTINGS_WRITE_CONFIG_CHANNEL,
   THREAD_MIGRATION_LIST_SOURCES_CHANNEL,
   THREAD_MIGRATION_LIST_SOURCE_THREADS_CHANNEL,
@@ -2382,6 +2394,10 @@ const desktopApi = Object.freeze({
     request: SettingsCredentialTestRequest,
   ): Promise<SettingsCredentialTestResult> =>
     await ipcRenderer.invoke(SETTINGS_TEST_CREDENTIALS_CHANNEL, request),
+  lineRichMenuSetup: async (request: LineRichMenuSetupRequest): Promise<LineRichMenuSetupResponse> =>
+    await ipcRenderer.invoke(SETTINGS_LINE_RICH_MENU_CHANNEL, request),
+  listDecisionModels: async (request: { provider: DecisionProviderId }): Promise<DecisionModelListing> =>
+    await ipcRenderer.invoke(SETTINGS_LIST_DECISION_MODELS_CHANNEL, request),
   openSlackCreateApp: async (
     request?: SlackCreateAppRequest,
   ): Promise<SlackCreateAppResponse> =>
@@ -2775,6 +2791,18 @@ const desktopApi = Object.freeze({
     request: CompactThreadRequest
   ): Promise<CompactThreadResponse> =>
     await ipcRenderer.invoke(AGENT_COMPACT_THREAD_CHANNEL, request),
+  readThreadGoal: async (threadId: string) =>
+    await ipcRenderer.invoke(AGENT_CONTROL_THREAD_GOAL_CHANNEL, { threadId, action: "read" }),
+  setThreadGoal: async (threadId: string, objective: string, confirmedObjective?: string) =>
+    await ipcRenderer.invoke(AGENT_CONTROL_THREAD_GOAL_CHANNEL, { threadId, objective, confirmedObjective, action: "set" }),
+  pauseThreadGoal: async (threadId: string) =>
+    await ipcRenderer.invoke(AGENT_CONTROL_THREAD_GOAL_CHANNEL, { threadId, action: "pause" }),
+  resumeThreadGoal: async (threadId: string) =>
+    await ipcRenderer.invoke(AGENT_CONTROL_THREAD_GOAL_CHANNEL, { threadId, action: "resume" }),
+  clearThreadGoal: async (threadId: string, confirmedObjective?: string) =>
+    await ipcRenderer.invoke(AGENT_CONTROL_THREAD_GOAL_CHANNEL, { threadId, confirmedObjective, action: "clear" }),
+  cancelThreadGoalActivation: async (threadId: string) =>
+    await ipcRenderer.invoke(AGENT_CONTROL_THREAD_GOAL_CHANNEL, { threadId, action: "cancel" }),
   listThreadMcpServers: async (
     request: ListThreadMcpServersRequest,
   ): Promise<ListThreadMcpServersResponse> =>
@@ -3391,6 +3419,14 @@ const desktopApi = Object.freeze({
     request: DetachThreadPullRequestRequest,
   ): Promise<DetachThreadPullRequestResponse> =>
     await ipcRenderer.invoke(NAVIGATION_DETACH_THREAD_PR_CHANNEL, request),
+  readThreadPullRequestMerge: async (
+    request: ThreadPullRequestMergeTarget,
+  ): Promise<ReadThreadPullRequestMergeResponse> =>
+    await ipcRenderer.invoke(THREAD_PULL_REQUEST_READ_MERGE_CHANNEL, request),
+  mergeThreadPullRequest: async (
+    request: MergeThreadPullRequestRequest,
+  ): Promise<MergeThreadPullRequestResponse> =>
+    await ipcRenderer.invoke(THREAD_PULL_REQUEST_MERGE_CHANNEL, request),
   refreshDirectoryGitStatuses: async (
     request: RefreshDirectoryGitStatusesRequest,
   ): Promise<RefreshDirectoryGitStatusesResponse> =>

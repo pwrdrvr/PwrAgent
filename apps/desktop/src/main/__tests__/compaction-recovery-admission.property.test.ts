@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest";
 import type { AppServerThreadMessageOrigin } from "@pwragent/shared/contracts/normalized-app-server";
 import type { SteerTurnRequest } from "@pwragent/shared/contracts/agent";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { ThreadGoalControl } from "../app-server/thread-goal-control";
 import { CodexAppServerClient } from "@pwragent/owner-core/codex-app-server/client";
 import { buildPwrAgentThreadToolDefinitions } from "../agent-tools/pwragent-thread-agent-tools";
 
@@ -21,10 +22,12 @@ function runtime(change: string, boundary: string) {
   let restarting = false;
   let reads = 0;
   const registry = Object.create(DesktopBackendRegistry.prototype) as DesktopBackendRegistry;
+  const stops: Array<ReturnType<DesktopBackendRegistry["interruptTurn"]>> = [];
+  const interrupted = vi.fn(async (target: { backend: "codex"; threadId: string; turnId: string }) => target);
   const provider = vi.fn(async (_params) => ({ threadId: "worker", turnId: "assignment" }));
   const mutate = (at: string) => {
     if (at !== boundary) return;
-    if (change === "stop") void registry.interruptTurn({ backend: "codex", threadId: "worker", turnId: "assignment" });
+    if (change === "stop") stops.push(registry.interruptTurn({ backend: "codex", threadId: "worker", turnId: "assignment" }));
     if (change === "archive" || change === "pause" || change === "cancel") permitted = false;
     if (change === "end") active = undefined;
     if (change === "replace") active = "new-assignment";
@@ -49,7 +52,20 @@ function runtime(change: string, boundary: string) {
   });
   Object.assign(registry, {
     compactionRecoveryStops: new Map(), compactionRecoveryAdmissions: new Map(),
-    threadInterruption: { interruptTurn: vi.fn(async (target) => target) },
+    threadInterruption: { interruptTurn: interrupted },
+    threadGoals: new ThreadGoalControl({
+      read: async () => null,
+      set: async () => { throw new Error("The compaction fixture has no Goal to mutate."); },
+      clear: async () => false,
+      submit: async () => false,
+      cancel: () => undefined,
+      retry: async (entryId) => ({ disposition: "not_found", entryId }),
+      hasWaitingMessages: () => false,
+      assertCanActivate: async () => undefined,
+      isAdmissionRefusal: () => false,
+      publish: async () => undefined,
+      warn: () => undefined,
+    }),
     getActiveTurnForThread: () => active ? { turnId: active } : undefined,
     isRestartGateClosed: () => restarting,
     isThreadLocked: async () => { mutate(++reads === 1 ? "initial-lock" : reads === 2 ? "final-lock" : "rpc-lock"); return locked; },
@@ -68,7 +84,7 @@ function runtime(change: string, boundary: string) {
     },
   });
   mutate("before");
-  return { registry, provider, canSubmit: () => permitted };
+  return { registry, provider, interrupted, settleStops: () => Promise.all(stops), canSubmit: () => permitted };
 }
 
 // Rule: revocation before provider admission cannot steer, start or queue work.
@@ -77,12 +93,21 @@ it("stop, cancellation, pause, archive and assignment changes win before provide
     fc.constantFrom("stop", "cancel", "pause", "archive", "end", "replace", "lock", "restart"),
     fc.constantFrom("before", "initial-lock", "prepare", "client", "final-lock", "initialize", "resume", "input", "rpc-barrier", "resume-replay", "rpc-lock"),
     async (change, boundary) => {
-      const { registry, provider, canSubmit } = runtime(change, boundary);
+      const { registry, provider, canSubmit, settleStops } = runtime(change, boundary);
       const result = await registry.steerCompactionRecovery(request, origin, canSubmit);
+      await settleStops();
       expect(provider).not.toHaveBeenCalled();
       expect(["busy", "discarded"]).toContain(result.status);
     },
   ));
+});
+
+it("forwards Stop during steer preparation and revokes compaction recovery before the provider call", async () => {
+  const { registry, provider, interrupted, canSubmit, settleStops } = runtime("stop", "prepare");
+  expect((await registry.steerCompactionRecovery(request, origin, canSubmit)).status).toBe("discarded");
+  await settleStops();
+  expect(interrupted).toHaveBeenCalledExactlyOnceWith({ backend: "codex", threadId: "worker", turnId: "assignment" });
+  expect(provider).not.toHaveBeenCalled();
 });
 
 it.each(["pause", "lock"])("a %s during resume cannot pass the actual steer RPC boundary", async (change) => {

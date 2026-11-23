@@ -334,6 +334,21 @@ describe("mapGraphqlPrNode", () => {
     expect(mapGraphqlPrNode(node({ isDraft: true })).reviewState).toBe("draft");
   });
 
+  it("reads the repository's merge methods in the to-do card's order, and only when GitHub answered all three", () => {
+    // The poll asks for them with the status, at no rate-limit cost.
+    expect(buildBatchedPrQuery([{ owner: "pwrdrvr", repo: "PwrAgent", number: 1 }]).query)
+      .toContain("baseRepository { squashMergeAllowed rebaseMergeAllowed mergeCommitAllowed }");
+    const settings = (squash: boolean | null, rebase: boolean | null, merge: boolean | null) => node({
+      baseRepository: { squashMergeAllowed: squash, rebaseMergeAllowed: rebase, mergeCommitAllowed: merge },
+    });
+    expect(mapGraphqlPrNode(settings(true, false, true)).allowedMergeMethods).toEqual(["squash", "merge"]);
+    expect(mapGraphqlPrNode(settings(false, true, false)).allowedMergeMethods).toEqual(["rebase"]);
+    // Unknown is not "none": the card falls back to the forge's list.
+    expect(mapGraphqlPrNode(settings(true, null, true))).not.toHaveProperty("allowedMergeMethods");
+    expect(mapGraphqlPrNode(settings(false, false, false))).not.toHaveProperty("allowedMergeMethods");
+    expect(mapGraphqlPrNode(node())).not.toHaveProperty("allowedMergeMethods");
+  });
+
   it("keys fork contributions by the destination repository", () => {
     // Queried against base pwrdrvr/PwrAgent, but the PR came from a fork.
     const summary = mapGraphqlPrNode(

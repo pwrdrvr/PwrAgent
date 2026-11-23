@@ -51,11 +51,17 @@ function isPeerThreadInLocalList(
 function startingPeerThread(
   creation: StartingThreadPlacement,
 ): Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey"> {
-  const keyPath = /^(?:directory|workspace):(.+)$/.exec(creation.directoryKey)?.[1] ?? "";
+  const [, directoryKind, keyPath = ""] = /^(directory|workspace):(.+)$/.exec(creation.directoryKey) ?? [];
   const path = creation.launchpad.directoryPath?.trim() || keyPath;
   if (!path) return { linkedDirectories: [] };
   return {
-    linkedDirectories: [{ id: creation.directoryKey, kind: "local", label: creation.directoryLabel, path }],
+    linkedDirectories: [{
+      id: creation.directoryKey,
+      kind: "local",
+      label: creation.directoryLabel,
+      path,
+      ...(directoryKind === "workspace" ? { scratchWorkspaceRoot: keyPath } : {}),
+    }],
     projectKey: path,
   };
 }

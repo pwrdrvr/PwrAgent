@@ -191,6 +191,9 @@ export function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean
       candidate.lifecycleState === pr.lifecycleState &&
       candidate.reviewState === pr.reviewState &&
       candidate.mergeState === pr.mergeState &&
+      JSON.stringify(candidate.mergeQueue ?? null) === JSON.stringify(pr.mergeQueue ?? null) &&
+      JSON.stringify(candidate.allowedMergeMethods ?? null)
+        === JSON.stringify(pr.allowedMergeMethods ?? null) &&
       candidate.baseRefName === pr.baseRefName &&
       candidate.headRefName === pr.headRefName &&
       candidate.headSha === pr.headSha &&

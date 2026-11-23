@@ -128,6 +128,7 @@ export function railItem(item: DecisionBatchItem): DecisionsRailItem {
     ...(item.inputPreview !== undefined ? { inputPreview: item.inputPreview } : {}),
     ...(item.inputTruncated ? { inputTruncated: true } : {}),
     ...(item.inputRedacted ? { inputRedacted: true } : {}),
+    ...(item.inputImages?.length ? { inputImages: item.inputImages } : {}),
     ...(isDuration(item.durationMs) ? { durationMs: Math.round(item.durationMs) } : {}),
   };
   if (!item.ok) return { index: item.index, ok: false, code: item.code, message: item.message, ...preview };
