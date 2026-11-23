@@ -111,6 +111,9 @@ export function createGitDirectoryObserver(options: { navigation?: boolean; requ
 
   async function isBareBoundary(directory: string, signal?: AbortSignal): Promise<boolean> {
     const headPath = path.join(directory, "HEAD");
+    // For checkout reuse, even a dangling HEAD symlink can change Git's
+    // discovery boundary. Leave any intervening HEAD entry to Git.
+    if (options.requireRegularHead) return Boolean(await fileState(headPath, signal, false));
     const head = await fileState(headPath, signal);
     if (!head?.file) return false;
     const objects = await fileState(path.join(directory, "objects"), signal);
@@ -151,7 +154,9 @@ export function createGitDirectoryObserver(options: { navigation?: boolean; requ
     // A bare repository can stop Git before an enclosing .git entry. Paths
     // with no enclosing checkout already use the ordinary directory fallback.
     for (const directory of belowCheckout) {
-      if (await isBareBoundary(directory, signal)) return options.navigation ? unversioned() : undefined;
+      if (await isBareBoundary(directory, signal)) {
+        return options.navigation && !options.requireRegularHead ? unversioned() : undefined;
+      }
     }
     onCheckoutBoundary?.(parent);
     const link = dotGit.directory ? "" : await pointer(dotGitPath, dotGit, signal);
