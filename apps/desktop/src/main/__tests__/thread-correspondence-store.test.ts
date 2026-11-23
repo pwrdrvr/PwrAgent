@@ -7,7 +7,7 @@ import type {
   AppServerThreadReplay,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import { parseThreadCorrespondenceMessage } from "@pwragent/shared/contracts/thread-system-messages";
-import { ThreadCorrespondenceStore, type CorrespondenceRecord } from "../app-server/thread-correspondence-store";
+import { stackFileReadsFromItem, ThreadCorrespondenceStore, type CorrespondenceRecord } from "../app-server/thread-correspondence-store";
 import { extractThreadReplayFromReadResult } from "../codex-app-server/desktop-client";
 
 const emptyReplay: AppServerThreadReplay = {
@@ -30,6 +30,38 @@ function record(): CorrespondenceRecord {
 }
 
 describe("PwrAgent correspondence persistence", () => {
+  it("records successful provider-reported file reads and ignores searches and failed reads", () => {
+    const item = { type: "commandExecution", commandActions: [
+      { type: "read", path: "src/example.ts" }, { type: "search", path: "src" },
+    ] };
+    expect(stackFileReadsFromItem({ ...item, exitCode: 0 })).toEqual(["src/example.ts"]);
+    expect(stackFileReadsFromItem({ ...item, exitCode: 1 })).toEqual([]);
+    expect(stackFileReadsFromItem({ toolName: "read_file", arguments: { file_path: "README.md" } })).toEqual(["README.md"]);
+    expect(stackFileReadsFromItem({ toolName: "write_file", data: { path: "README.md" } })).toEqual([]);
+  });
+  it("replays file-read provenance and deduplicates stack notices across a restart", () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "pwragent-stack-notice-"));
+    onTestFinished(() => rmSync(directory, { recursive: true, force: true }));
+    const message = record();
+    const store = new ThreadCorrespondenceStore(directory);
+    store.rememberStackReads(message.source, ["old.ts", "old.ts"]);
+    store.flushStackReads(message.source);
+    const reopened = new ThreadCorrespondenceStore(directory);
+    expect(reopened.readStackPaths(message.source)).toEqual(["old.ts"]);
+    const notice: CorrespondenceRecord = { ...message, id: "stack:op:layer", input: [], state: "started", stackNotice: {
+      opId: "op", kind: "restack", branch: "layer", stack: "stack", by: { threadId: "lead", actor: "agent" },
+      from: "old", to: "new", changedFiles: ["old.ts"], staleReads: ["old.ts"], undo: "refs/pwragent/undo/op",
+    } };
+    expect(reopened.record(notice)).toBe(true);
+    reopened.rememberStackReads(message.source, ["new.ts"]);
+    reopened.flushStackReads(message.source);
+    const final = new ThreadCorrespondenceStore(directory);
+    expect(final.record(notice)).toBe(false);
+    expect(final.readStackPaths(message.source)).toEqual(["new.ts"]);
+    expect(final.pendingStackNotices(message.source)).toEqual([
+      { id: notice.id, text: expect.stringContaining('Reread "old.ts"') },
+    ]);
+  });
   it("bounds legacy receipts on older pages without pricing for newer turns", () => {
     const store = new ThreadCorrespondenceStore();
     const message = record();

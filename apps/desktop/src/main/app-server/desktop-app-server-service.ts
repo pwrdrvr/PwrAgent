@@ -2451,7 +2451,8 @@ class DesktopAppServerService {
         });
       });
 
-    const { stacks } = await this.stackReader.read(threadsWithWorkingState, this.knownStackPullRequests());
+    const { stacks } = await this.stackReader.read(threadsWithWorkingState, this.knownStackPullRequests(), undefined,
+      (row) => getDesktopBackendRegistry().stackThreadHeld?.({ backend: row.source, threadId: row.id }) ?? false);
     if (replaceThreadPrAttachments) this.publishedStacks = stacks;
     const memberships = stackMemberships(stacks);
     const threadsWithStacks = threadsWithWorkingState.map((thread) => {
@@ -3851,7 +3852,8 @@ class DesktopAppServerService {
         prs: isScope ? scope.prs : this.canonicalizePrs(attachment?.prs ?? attached[index] ?? []),
       };
     });
-    return await this.stackReader.read(rows, this.knownStackPullRequests(), directories);
+    return await this.stackReader.read(rows, this.knownStackPullRequests(), directories,
+      (row) => getDesktopBackendRegistry().stackThreadHeld({ backend: row.source, threadId: row.id }));
   }
 
   private forgePrToolService(context?: AgentToolCallContext): ForgePrToolService {

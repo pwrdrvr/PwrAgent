@@ -38,6 +38,7 @@ export type OwnerThreadMetadata = {
   parent?: OwnerThreadIdentity & { instanceId?: string };
   subthreadOrder?: string[];
   subthreadsCollapsed?: boolean;
+  stackLead?: string[];
   /** Provider thread was created with the messaging file-tool catalog. */
   messagingFileTools?: boolean;
   /** False confirms native membership; true records complete-discovery retirement. */
@@ -81,7 +82,7 @@ export const OWNER_THREAD_METADATA_FIELDS = [
   "title", "createdAt", "updatedAt", "cwd", "pinnedRank", "seenAt", "seenUpdatedAt",
   "executionMode", "model", "reasoningEffort", "serviceTier", "fastMode",
   "executionModeUpdatedAt", "reasoningEffortsByModel", "modelMigrationRevision", "modelSettingsManuallyUpdatedAt",
-  "archived", "archivedAt", "restoredAt", "archiveRetentionStartedAt", "parent", "subthreadOrder", "subthreadsCollapsed", "messagingFileTools", "nativeMembershipRetired",
+  "archived", "archivedAt", "restoredAt", "archiveRetentionStartedAt", "parent", "subthreadOrder", "subthreadsCollapsed", "messagingFileTools", "nativeMembershipRetired", "stackLead",
 ] as const satisfies readonly (keyof OwnerThreadMetadata)[];
 
 /** Storage-only patch semantics; no lifecycle policy or I/O. */

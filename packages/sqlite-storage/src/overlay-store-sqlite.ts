@@ -1628,6 +1628,37 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return rows.map((row) => ownerThreadRecord(JSON.parse(row.payload)));
   }
 
+  /** Transfer one clone-qualified stack lead without overwriting another
+   * stack assignment or leaving two owners after a restart. */
+  setStackLead(stackKey: string, lead: OwnerThreadIdentity): void {
+    this.stateDb.raw.transaction(() => {
+      const leadKey = buildThreadIdentityKey(lead.backend, lead.threadId);
+      const rows = this.stateDb.raw.prepare(
+        "SELECT payload FROM threads WHERE EXISTS (SELECT 1 FROM json_each(threads.payload, '$.stackLead') WHERE value = ?)",
+      ).all(stackKey) as { payload: string }[];
+      for (const { payload } of rows) {
+        const owner = JSON.parse(payload) as ThreadOverlayState;
+        if (buildThreadIdentityKey(owner.backend, owner.threadId) !== leadKey) {
+          this.mergeOwnerThreadMetadata(owner, { stackLead: owner.stackLead?.filter((key) => key !== stackKey) });
+        }
+      }
+      const current = this.getThread(leadKey);
+      if (!current?.stackLead?.includes(stackKey)) {
+        this.mergeOwnerThreadMetadata(lead, { stackLead: [...current?.stackLead ?? [], stackKey] });
+      }
+    }).immediate();
+  }
+
+  markStackUpdateUnread(thread: OwnerThreadIdentity, updatedAt: number): number | undefined {
+    return this.stateDb.raw.transaction(() => {
+      const current = this.getThread(buildThreadIdentityKey(thread.backend, thread.threadId));
+      if (updatedAt <= 0 || (current?.lastSeenUpdatedAt !== undefined && current.lastSeenUpdatedAt < updatedAt)) return undefined;
+      const seenUpdatedAt = updatedAt - 1;
+      this.mergeOwnerThreadMetadata(thread, { seenUpdatedAt });
+      return seenUpdatedAt;
+    }).immediate();
+  }
+
   readUnreadBaseline(): Readonly<Record<string, number>> {
     return structuredClone(this.readNavigationUnreadBaseline()?.seenUpdatedAt ?? {});
   }
@@ -11807,6 +11838,7 @@ const OWNER_OVERLAY_FIELDS = [
   ["archivedAt", "archiveTombstonedAt"], ["restoredAt", "archiveRestoredAt"],
   ["archiveRetentionStartedAt", "archiveRetentionStartedAt"],
   ["subthreadOrder", "subthreadOrder"], ["subthreadsCollapsed", "subthreadsCollapsed"],
+  ["stackLead", "stackLead"],
   ["messagingFileTools", "messagingFileTools"],
   ["nativeMembershipRetired", "nativeMembershipRetired"],
 ] as const;

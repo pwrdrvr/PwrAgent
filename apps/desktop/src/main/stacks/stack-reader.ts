@@ -251,7 +251,8 @@ export class StackReader {
     return await Promise.all([...commonDirs].map(readGhStackCatalog));
   }
 
-  async read(threads: readonly StackThreadRow[], knownPrs: readonly PrSummary[], directories?: readonly string[]) {
+  async read(threads: readonly StackThreadRow[], knownPrs: readonly PrSummary[], directories?: readonly string[],
+    held?: (row: StackThreadRow) => boolean) {
     const paths = new Set([...threads.filter((row) => !row.federation).flatMap(threadDirectories), ...directories ?? []]);
     const located = await Promise.all([...paths].sort().map((cwd) => this.checkout(cwd)));
     const checkouts = new Map(located.flatMap((entry) => entry ? [[entry.cwd, entry] as const] : []));
@@ -282,7 +283,12 @@ export class StackReader {
         stacks: await projectClone({ ...checkout, catalog }, cloneThreads.get(checkout.commonDir) ?? [], knownPrs),
       };
     }));
-    return { stacks: results.flatMap(({ stacks }) => stacks), catalogs: results.map(({ catalog }) => catalog) };
+    const heldKeys = new Set(held ? threads.filter(held).map((row) => buildThreadIdentityKey(row.source, row.id)) : []);
+    return { stacks: results.flatMap(({ stacks }) => stacks).map((stack) => ({
+      ...stack,
+      layers: stack.layers.map((layer) => layer.thread && heldKeys.has(layer.thread.key)
+        ? { ...layer, health: "held" as const } : layer),
+    })), catalogs: results.map(({ catalog }) => catalog) };
   }
 }
 

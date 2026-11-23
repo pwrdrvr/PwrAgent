@@ -172,3 +172,120 @@ it("holds affected queues until active layers settle, then moves and notifies on
     expect(held.size).toBe(0);
   }), { numRuns: 25 });
 });
+
+it("waits for the operator's interrupt receipt and retries completion without repeating the ref transaction", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), async (failAfterCommit) => {
+    const actor = { backend: "codex" as const, threadId: "actor" };
+    const worker: StackParticipant = { backend: "codex", threadId: "layer", title: "Layer", branch: "layer",
+      active: true, locked: false, remote: false };
+    const catalog = { schemaVersion: 1, repository: "github.com:fixture/project", stacks: [] };
+    const plan: StackPlan = { operation: { kind: "restack", root: "layer" }, catalogHash: "catalog", before: catalog,
+      after: catalog, expectedTips: {}, steps: [], moves: [{ branch: "layer", old: "old", next: "new" }],
+      worktrees: [], blocked: [] };
+    const receipt = { id: "plan", when: 1, moves: plan.moves, before: catalog, after: catalog };
+    const listeners = new Set<() => void>();
+    let finishInterrupt!: () => void;
+    const interrupted = new Promise<void>((resolve) => { finishInterrupt = resolve; });
+    let holds = 0;
+    let writes = 0;
+    let attempts = 0;
+    const coordinator = new StackCoordinator({
+      newId: () => "plan", now: () => 1, plan: async () => plan,
+      participants: async () => [{ ...worker }],
+      hold: () => { holds++; return () => { holds--; }; },
+      subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+      exclusive: async (work) => await work(),
+      apply: async (_plan, _id, _when, hooks, notification) => {
+        await hooks.beforeTransaction?.();
+        expect(holds).toBe(1);
+        expect(notification.interrupted).toEqual([expect.objectContaining({ threadId: worker.threadId })]);
+        writes++;
+        return receipt;
+      },
+      undo: async () => receipt, receipt: async () => receipt,
+      interrupt: async () => {
+        worker.active = false;
+        for (const listener of listeners) listener();
+        await interrupted;
+      },
+      complete: async () => {
+        expect(holds).toBe(0);
+        attempts++;
+        if (failAfterCommit && attempts === 1) throw new Error("provider start failed");
+        return { backend: "codex", threadId: "child" };
+      },
+    });
+    const { planId } = await coordinator.plan(actor, plan.operation);
+    coordinator.apply(actor, planId);
+    await expect.poll(() => coordinator.status(actor, planId).waiting?.length, { interval: 0 }).toBe(1);
+    const requested = coordinator.interrupt(actor, planId);
+    await Promise.resolve();
+    expect(writes).toBe(0);
+    finishInterrupt();
+    await requested;
+    await expect.poll(() => coordinator.status(actor, planId).status, { interval: 0 }).toBe(failAfterCommit ? "paused" : "done");
+    if (failAfterCommit) {
+      expect(coordinator.status(actor, planId).issue?.code).toBe("post_apply_failed");
+      await coordinator.continue(actor, planId);
+    }
+    expect(coordinator.status(actor, planId).child?.threadId).toBe("child");
+    expect(writes).toBe(1);
+    expect(attempts).toBe(failAfterCommit ? 2 : 1);
+  }), { numRuns: 10, examples: [[true]] });
+});
+
+it("routes only to the affected owner and does not apply an unsettled forecast", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), fc.boolean(), async (conflict, unrelatedTipMoved) => {
+    const actor = { backend: "codex" as const, threadId: "lead" };
+    const layer: StackParticipant = { backend: "codex", threadId: "layer", title: "Layer", branch: "layer", path: "/fixture/child",
+      active: false, locked: false, remote: false };
+    const catalog = { schemaVersion: 1, repository: "github.com:fixture/project", stacks: [] };
+    const operation = { kind: "restack" as const, root: "layer" };
+    let blocked = true;
+    let requests = 0;
+    let applied = 0;
+    const plan = (): StackPlan => ({
+      operation, catalogHash: "catalog", before: catalog, after: catalog,
+      expectedTips: { trunk: !blocked && unrelatedTipMoved ? "moved" : "base", layer: conflict && !blocked ? "resolved" : "old" },
+      steps: [{ branch: "layer", parent: "trunk", oldBase: "base", newBase: "base", oldTip: "old",
+        ...(conflict && blocked ? { conflict: { commit: "conflicting", files: ["fixture"] } } : {}) }],
+      moves: conflict && blocked ? [] : [{ branch: "layer", old: "old", next: "new" }],
+      worktrees: [], blocked: !conflict && blocked ? [{ path: "/fixture/child", files: ["fixture"] }] : [],
+    });
+    const coordinator = new StackCoordinator({
+      newId: () => "operation", now: () => 1, plan: async () => plan(),
+      participants: async (moves) => moves.some(({ branch }) => branch === layer.branch) ? [layer] : [],
+      hold: () => () => undefined, subscribe: () => () => undefined, exclusive: async (work) => await work(),
+      requestWork: async (sender, owner, prompt, _key, signal) => {
+        expect(sender).toEqual(actor);
+        expect(owner.threadId).toBe(layer.threadId);
+        expect(prompt).toContain('"fixture"');
+        expect(Boolean(signal)).toBe(!conflict);
+        expect(applied).toBe(0);
+        requests++;
+        blocked = false;
+      },
+      apply: async (fresh, id, when, hooks) => {
+        await hooks.beforeTransaction?.();
+        expect(blocked).toBe(false);
+        applied++;
+        return { id, when, moves: fresh.moves, before: catalog, after: catalog };
+      },
+      undo: async () => { throw new Error("Unexpected undo"); }, receipt: async () => { throw new Error("Unexpected receipt"); },
+    });
+    const { planId } = await coordinator.plan(actor, operation, { askToSettle: !conflict });
+    coordinator.apply(actor, planId);
+    if (conflict) {
+      await expect.poll(() => coordinator.status(actor, planId).status, { interval: 0 }).toBe("paused");
+      expect(requests).toBe(0);
+      await coordinator.routeConflict(actor, planId);
+      await coordinator.continue({ backend: layer.backend, threadId: layer.threadId }, planId).then(
+        () => expect(unrelatedTipMoved).toBe(false),
+        (error: unknown) => { expect(unrelatedTipMoved).toBe(true); expect(error).toMatchObject({ code: "stale_plan" }); },
+      );
+    }
+    await expect.poll(() => coordinator.status(actor, planId).status, { interval: 0 }).toBe(unrelatedTipMoved ? "paused" : "done");
+    expect(requests).toBe(1);
+    expect(applied).toBe(unrelatedTipMoved ? 0 : 1);
+  }), { numRuns: 12, examples: [[true, false], [false, true]] });
+});

@@ -1,4 +1,4 @@
-import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { AppServerBackendKind, ThreadWorkspaceHandoffStashSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type { ApplyHooks, RefMove, StackOperation, StackPlan, StackReceipt } from "./engine/types";
 
 export type StackThreadRef = { backend: AppServerBackendKind; threadId: string };
@@ -8,13 +8,22 @@ export type StackParticipant = StackThreadRef & {
   active: boolean;
   locked: boolean;
   remote: boolean;
+  path?: string;
 };
+
+export type StackApplyOptions = { newThread?: boolean; carryChanges?: boolean; askToSettle?: boolean };
 
 export type StackNotification = {
   opId: string;
   actor: StackThreadRef;
   kind: StackOperation["kind"] | "undo";
   participants: StackParticipant[];
+  options?: StackApplyOptions;
+  operation?: StackOperation;
+  steps?: StackPlan["steps"];
+  moves?: RefMove[];
+  carry?: ThreadWorkspaceHandoffStashSummary;
+  interrupted?: StackThreadRef[];
 };
 
 export type StackCoordinatorPort = {
@@ -28,6 +37,9 @@ export type StackCoordinatorPort = {
   apply(plan: StackPlan, id: string, now: number, hooks: ApplyHooks, notification: StackNotification): Promise<StackReceipt>;
   undo(id: string, hooks: ApplyHooks, notification: StackNotification): Promise<StackReceipt>;
   receipt(id: string): Promise<StackReceipt>;
+  requestWork?(actor: StackThreadRef, owner: StackParticipant, prompt: string, key: string, settleSignal?: AbortSignal): Promise<void>;
+  complete?(receipt: StackReceipt, notification: StackNotification): Promise<StackThreadRef | undefined>;
+  interrupt?(thread: StackThreadRef, opId: string): Promise<void>;
 };
 
 export class StackOperationError extends Error {
@@ -54,16 +66,22 @@ type StackRunState = {
   waiting?: Array<StackParticipant & { reason: "active_turn" }>;
   moved?: Array<{ branch: string; from: string | null; to: string | null }>;
   undo?: string;
+  child?: StackThreadRef;
   issue?: { code: string; message: string };
 };
 
-type PlanEntry = { plan: StackPlan; actor: StackThreadRef };
+type PlanEntry = { plan: StackPlan; actor: StackThreadRef; options?: StackApplyOptions };
 type StackRun = {
   actor: StackThreadRef;
   state: StackRunState;
   abort: AbortController;
   plan?: StackPlan;
+  options?: StackApplyOptions;
   cutBefore?: string;
+  routedConflict?: StackParticipant;
+  interrupted: Map<string, StackThreadRef>;
+  interrupting?: Promise<void>;
+  completion?: () => Promise<StackThreadRef | undefined>;
 };
 
 function threadKey(thread: StackThreadRef) {
@@ -90,11 +108,11 @@ export class StackCoordinator {
 
   constructor(private readonly port: StackCoordinatorPort) {}
 
-  async plan(actor: StackThreadRef, operation: StackOperation): Promise<StackForecast> {
+  async plan(actor: StackThreadRef, operation: StackOperation, options?: StackApplyOptions): Promise<StackForecast> {
     const plan = await this.port.plan(operation);
-    const participants = await this.port.participants(plan.moves, plan.before);
+    const participants = await this.port.participants(this.affectedMoves(plan), plan.before);
     const planId = this.port.newId();
-    this.plans.set(planId, { plan, actor });
+    this.plans.set(planId, { plan, actor, options });
     if (this.plans.size > 64) this.plans.delete(this.plans.keys().next().value!);
     return {
       planId,
@@ -114,9 +132,9 @@ export class StackCoordinator {
   apply(actor: StackThreadRef, planId: string): StackRunState {
     const entry = this.plans.get(planId);
     if (!entry || threadKey(entry.actor) !== threadKey(actor)) throw new StackOperationError("stale_plan", "Plan this operation in the calling thread before applying it.");
-    this.assertForecast(entry.plan);
+    if (!entry.plan.steps.some((step) => step.conflict) && !entry.options?.askToSettle) this.assertForecast(entry.plan);
     this.plans.delete(planId);
-    return this.start(actor, planId, (run) => this.runApply(run, entry.plan), entry.plan);
+    return this.start(actor, planId, (run) => this.runApply(run, entry.plan), entry.plan, entry.options);
   }
 
   async undo(actor: StackThreadRef, opId: string): Promise<StackRunState> {
@@ -153,15 +171,76 @@ export class StackCoordinator {
     return run.state;
   }
 
-  async continue(actor: StackThreadRef, opId: string): Promise<StackRunState> {
+  async interrupt(actor: StackThreadRef, opId: string): Promise<StackRunState> {
     const run = this.run(actor, opId);
+    const waiting = run.state.waiting;
+    if (!this.port.interrupt || run.state.status !== "waiting" || !waiting?.length) {
+      throw new StackOperationError("invalid_arguments", "There are no waiting layer turns to interrupt.");
+    }
+    run.interrupting ??= (async () => {
+      for (const thread of waiting) {
+        await this.port.interrupt!(thread, opId);
+        run.interrupted.set(threadKey(thread), thread);
+      }
+    })();
+    try { await run.interrupting; } finally { run.interrupting = undefined; }
+    return run.state;
+  }
+
+  async routeConflict(actor: StackThreadRef, opId: string): Promise<StackRunState> {
+    const run = this.run(actor, opId);
+    const plan = run.plan;
+    const step = plan?.steps.find((candidate) => candidate.conflict);
+    if (!plan || !step?.conflict || run.state.status !== "paused" || !this.port.requestWork) {
+      throw new StackOperationError("invalid_arguments", "This operation has no paused conflict to route.");
+    }
+    if (run.routedConflict) return run.state;
+    const owner = (await this.port.participants(this.affectedMoves(plan), plan.before)).find((thread) => thread.branch === step.branch);
+    if (!owner || threadKey(owner) === threadKey(actor)) {
+      throw new StackOperationError("forecast_conflict", "Resolve the conflict in the checkout that owns the affected branch, then re-plan.");
+    }
+    this.assertAvailable([owner]);
+    if (run.routedConflict) return run.state;
+    run.routedConflict = owner;
+    try {
+      await this.port.requestWork(actor, owner, [
+        `Resolve the stack conflict on ${JSON.stringify(step.branch)} against parent ${JSON.stringify(step.parent)} (${step.newBase}).`,
+        `Conflicting commit ${step.conflict.commit}. Files: ${step.conflict.files.map((file) => JSON.stringify(file)).join(", ")}.`,
+        `Resolve the rebase in this worktree, then call manage_stack_operation with { action: "continue", opId: "${opId}" }.`,
+      ].join("\n"), `stack-conflict:${opId}`);
+    } catch (error) {
+      run.routedConflict = undefined;
+      throw error;
+    }
+    return run.state;
+  }
+
+  async continue(actor: StackThreadRef, opId: string): Promise<StackRunState> {
+    const candidate = this.runs.get(opId);
+    const run = candidate?.routedConflict && threadKey(candidate.routedConflict) === threadKey(actor)
+      ? candidate : this.run(actor, opId);
+    if (run.state.status === "paused" && run.completion) {
+      run.state = { ...run.state, status: "running", issue: undefined };
+      try {
+        const child = await run.completion();
+        run.completion = undefined;
+        run.state = { ...run.state, status: "done", ...(child ? { child } : {}) };
+      } catch (error) {
+        run.state = { ...run.state, status: "paused", issue: { code: "post_apply_failed", message: String(error) } };
+      }
+      return run.state;
+    }
     if (run.state.status !== "paused" || !run.plan || !["dirty_overlap", "forecast_conflict", "stale_plan"].includes(run.state.issue?.code ?? "")) {
       throw new StackOperationError("invalid_arguments", "This operation cannot be continued. Plan a new operation.");
     }
     const plan = await this.port.plan(run.plan.operation);
     this.assertForecast(plan);
-    if (forecastSignature(plan) !== forecastSignature(run.plan)) throw new StackOperationError("stale_plan", "The forecast changed. Plan and approve it again.");
-    return this.start(actor, opId, (next) => this.runApply(next, plan), plan);
+    const changed = forecastSignature(plan) !== forecastSignature(run.plan);
+    if (changed && (!run.routedConflict || plan.catalogHash !== run.plan.catalogHash
+      || Object.entries(run.plan.expectedTips).some(([branch, tip]) => branch !== run.routedConflict?.branch && plan.expectedTips[branch] !== tip))) {
+      throw new StackOperationError("stale_plan", "The forecast changed. Plan and approve it again.");
+    }
+    return this.start(run.actor, opId, (next) => this.runApply(next, plan), plan, run.options);
   }
 
   private run(actor: StackThreadRef, opId: string) {
@@ -170,11 +249,11 @@ export class StackCoordinator {
     return run;
   }
 
-  private start(actor: StackThreadRef, opId: string, work: (run: StackRun) => Promise<void>, plan?: StackPlan): StackRunState {
+  private start(actor: StackThreadRef, opId: string, work: (run: StackRun) => Promise<void>, plan?: StackPlan, options?: StackApplyOptions): StackRunState {
     if ([...this.runs.values()].some(({ state }) => state.status === "waiting" || state.status === "running")) {
       throw new StackOperationError("gh_stack_busy", "This clone already has a pending stack operation.");
     }
-    const run: StackRun = { actor, state: { opId, status: "waiting" }, abort: new AbortController(), plan };
+    const run: StackRun = { actor, state: { opId, status: "waiting" }, abort: new AbortController(), plan, options, interrupted: new Map() };
     this.runs.set(opId, run);
     if (this.runs.size > 64) this.runs.delete(this.runs.keys().next().value!);
     void work(run).catch(async (error: unknown) => {
@@ -188,7 +267,7 @@ export class StackCoordinator {
           const prefix = { ...plan, steps: plan.steps.filter(({ branch }) => allowed.has(branch)), moves: plan.moves.filter(({ branch }) => allowed.has(branch)) };
           if (forecastSignature(continued) !== forecastSignature(prefix)) throw new StackOperationError("stale_plan", "The remaining forecast changed. Plan again.");
           run.state = { opId, status: "paused" };
-          this.start(actor, opId, (next) => this.runApply(next, continued), continued);
+          this.start(actor, opId, (next) => this.runApply(next, continued), continued, run.options);
           return;
         } catch (failure) {
           error = failure;
@@ -213,12 +292,37 @@ export class StackCoordinator {
   }
 
   private async runApply(run: StackRun, original: StackPlan): Promise<void> {
+    if (original.blocked.length && run.options?.askToSettle && this.port.requestWork) {
+      const owners = await this.port.participants(this.affectedMoves(original), original.before);
+      this.assertAvailable(owners);
+      const destinations = original.blocked.map(({ path, files }) => ({ files, owner: owners.find((thread) => thread.path === path) }));
+      if (destinations.every(({ owner }) => owner && threadKey(owner) !== threadKey(run.actor))) {
+        for (const { owner, files } of destinations) {
+          await this.port.requestWork(run.actor, owner!, [
+            `Settle local changes on ${JSON.stringify(owner!.branch)} before the stack operation.`,
+            `Commit or stash the overlapping files: ${files.map((file) => JSON.stringify(file)).join(", ")}.`,
+            "Keep other local changes intact.",
+          ].join("\n"), `stack-settle:${run.state.opId}:${owner!.branch}`, run.abort.signal);
+        }
+        await this.waitForTurns(run, owners, this.affectedMoves(original), original.before);
+        const settled = await this.port.plan(original.operation);
+        this.assertForecast(settled);
+        const cleanOriginal = { ...original, blocked: [] };
+        if (forecastSignature(settled) !== forecastSignature(cleanOriginal)) {
+          throw new StackOperationError("stale_plan", "Settling local work changed the forecast. Plan again.");
+        }
+        original = settled;
+      }
+    }
+    this.assertForecast(original);
+    let committed: { receipt: StackReceipt; notification: StackNotification } | undefined;
     await this.runHeld(run, original.moves, original.before, async (participants) => {
       const current = await this.port.plan(original.operation);
       this.assertForecast(current);
       if (forecastSignature(current) !== forecastSignature(original)) {
         throw new StackOperationError("stale_plan", "The stack forecast changed while waiting. Plan again.");
       }
+      const notification = { ...this.notification(run, participants, original.operation.kind), moves: current.moves };
       const receipt = await this.port.apply(current, run.state.opId, this.port.now(), {
         beforeTransaction: async () => {
           const fresh = await this.port.plan(original.operation);
@@ -228,9 +332,17 @@ export class StackCoordinator {
           }
           await this.assertParticipants(run, participants, fresh.moves, fresh.before);
         },
-      }, this.notification(run, participants, original.operation.kind));
+      }, notification);
+      committed = { receipt, notification };
       return receipt.moves;
-    });
+    }, async () => committed ? await this.port.complete?.(committed.receipt, committed.notification) : undefined);
+  }
+
+  private affectedMoves(plan: StackPlan): RefMove[] {
+    const conflict = plan.steps.find((step) => step.conflict);
+    return conflict && !plan.moves.some(({ branch }) => branch === conflict.branch)
+      ? [...plan.moves, { branch: conflict.branch, old: conflict.oldTip, next: conflict.oldTip }]
+      : plan.moves;
   }
 
   private async runHeld(
@@ -238,6 +350,7 @@ export class StackCoordinator {
     moves: readonly RefMove[],
     catalog: StackPlan["before"],
     operate: (participants: StackParticipant[]) => Promise<RefMove[]>,
+    complete?: () => Promise<StackThreadRef | undefined>,
   ): Promise<void> {
     const initial = await this.port.participants(moves, catalog);
     this.assertAvailable(initial);
@@ -248,6 +361,7 @@ export class StackCoordinator {
       const unique = new Map(initial.map((thread) => [threadKey(thread), thread]));
       for (const thread of unique.values()) release.push(this.port.hold(thread, run.state.opId));
       await this.waitForTurns(run, initial, moves, catalog);
+      await run.interrupting;
       run.abort.signal.throwIfAborted();
       run.state = { opId: run.state.opId, status: "running" };
       moved = await this.port.exclusive(async () => await operate(initial));
@@ -256,9 +370,17 @@ export class StackCoordinator {
     }
     const opId = run.state.opId;
     run.state = {
-      opId, status: "done", moved: moved.map(({ branch, old, next }) => ({ branch, from: old, to: next })),
+      opId, status: "running", moved: moved.map(({ branch, old, next }) => ({ branch, from: old, to: next })),
       ...(run.plan ? { undo: `refs/pwragent/undo/${opId}` } : {}),
     };
+    run.completion = complete;
+    try {
+      const child = await complete?.();
+      run.completion = undefined;
+      run.state = { ...run.state, status: "done", ...(child ? { child } : {}) };
+    } catch (error) {
+      run.state = { ...run.state, status: "paused", issue: { code: "post_apply_failed", message: String(error) } };
+    }
   }
 
   private async assertParticipants(run: StackRun, original: StackParticipant[], moves: readonly RefMove[], catalog: StackPlan["before"]) {
@@ -307,6 +429,7 @@ export class StackCoordinator {
   }
 
   private notification(run: StackRun, participants: StackParticipant[], kind: StackNotification["kind"]): StackNotification {
-    return { opId: run.state.opId, actor: run.actor, kind, participants: participants.filter((participant) => threadKey(participant) !== threadKey(run.actor)) };
+    return { opId: run.state.opId, actor: run.actor, kind, participants: participants.filter((participant) => threadKey(participant) !== threadKey(run.actor)),
+      options: run.options, operation: run.plan?.operation, steps: run.plan?.steps, interrupted: [...run.interrupted.values()] };
   }
 }

@@ -5,7 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { classifyDirectory } from "@pwragent/shared/directory-navigation";
-import { GitWorkspaceHandoffService } from "../app-server/git-workspace-handoff-service";
+import { applyStackLayerEdits, captureStackLayerEdits, GitWorkspaceHandoffService } from "../app-server/git-workspace-handoff-service";
 import type { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 
 const execFileAsync = promisify(execFile);
@@ -63,6 +63,33 @@ async function createRepo(): Promise<string> {
   await git(repoPath, ["commit", "-m", "feature"]);
   return repoPath;
 }
+
+it("copies staged, unstaged and untracked stack edits without changing the source, stash list or ignored files", async () => {
+  const repo = await createRepo();
+  const checkout = path.join(path.dirname(repo), "layer");
+  const head = await git(repo, ["rev-parse", "HEAD"]);
+  await writeFile(path.join(repo, "README.md"), "staged\n");
+  await git(repo, ["add", "README.md"]);
+  await writeFile(path.join(repo, "README.md"), "staged plus unstaged\n");
+  await writeFile(path.join(repo, "new.txt"), "untracked\n");
+  await mkdir(path.join(repo, "node_modules"));
+  await writeFile(path.join(repo, "node_modules", "ignored"), "ignored\n");
+  const before = await git(repo, ["status", "--porcelain", "--untracked-files=all"]);
+  const stashBefore = await git(repo, ["stash", "list"]);
+  await expect(captureStackLayerEdits(repo, "0".repeat(40), [{ path: repo }])).rejects.toThrow(/parent tip/);
+  const captured = await captureStackLayerEdits(repo, head, [{ path: repo }]);
+  expect(captured).toBeDefined();
+  await git(repo, ["worktree", "add", "-b", "layer", checkout, head]);
+  await applyStackLayerEdits(checkout, captured!, head);
+  expect(await git(repo, ["status", "--porcelain", "--untracked-files=all"])).toBe(before);
+  expect(await git(checkout, ["status", "--porcelain", "--untracked-files=all"])).toBe(before);
+  expect(await git(checkout, ["show", ":README.md"])).toBe("staged");
+  expect(await readFile(path.join(checkout, "README.md"), "utf8")).toBe("staged plus unstaged\n");
+  expect(await readFile(path.join(checkout, "new.txt"), "utf8")).toBe("untracked\n");
+  expect(await pathExists(path.join(checkout, "node_modules", "ignored"))).toBe(false);
+  expect(await git(repo, ["stash", "list"])).toBe(stashBefore);
+  await expect(applyStackLayerEdits(checkout, captured!, head)).rejects.toThrow(/changed/);
+});
 
 afterEach(async () => {
   await Promise.all(

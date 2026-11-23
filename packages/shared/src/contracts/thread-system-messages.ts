@@ -16,17 +16,36 @@ export type StackNotice = {
   parent?: string;
   position?: [number, number];
   changedFiles: string[];
+  proof?: { patchIdsMatch: true; dropped: string[] };
+  below?: { branch: string; added: number; removed: number; files: string[] }[];
+  staleReads?: string[];
+  worktree?: { followed: "reset --keep" | "not checked out"; keptDirty: string[] };
+  interruptedBy?: "operator";
+  completion?: { child?: string };
   undo: string;
 };
 
 export function formatStackNotice(notice: StackNotice): string {
   const short = (sha: string | null) => sha?.slice(0, 12) ?? "absent";
+  if (notice.completion) return [
+    `PwrAgent completed a stack operation: ${notice.kind} (${notice.opId}).`,
+    ...(notice.completion.child ? [`Created layer thread ${notice.completion.child}.`] : []),
+    ...(notice.kind !== "undo" ? [`Undo receipt: ${notice.undo}.`] : []),
+  ].join("\n");
   return [
     `${THREAD_STACK_NOTICE_INTRO}: ${notice.branch} (${notice.stack})`,
     `${notice.kind}: ${short(notice.from)} → ${short(notice.to)}${notice.parent ? ` on ${notice.parent}` : ""}.`,
     ...(notice.changedFiles.length ? [`Files touched: ${notice.changedFiles.map((file) => JSON.stringify(file)).join(", ")}.`] : []),
+    ...(notice.below ?? []).map(({ branch, added, removed, files }) =>
+      `Lower layer ${branch}: +${added} / −${removed}. ${files.map((file) => JSON.stringify(file)).join(", ")}`),
+    ...(notice.proof ? [`Patch IDs match. Dropped commits: ${notice.proof.dropped.map(short).join(", ") || "none"}.`] : []),
+    ...(notice.worktree ? [`Worktree: ${notice.worktree.followed}. Retained edits: ${notice.worktree.keptDirty.map((file) => JSON.stringify(file)).join(", ") || "none"}.`] : []),
+    ...(notice.interruptedBy ? ["The operator interrupted the layer's active turn."] : []),
     `Undo receipt: ${notice.undo}.`,
-    "Call plan_stack_operation instead of rebasing this branch by hand. Reread any listed files before relying on earlier reads.",
+    "Call plan_stack_operation instead of rebasing this branch by hand.",
+    notice.staleReads?.length
+      ? `Reread ${notice.staleReads.map((file) => JSON.stringify(file)).join(", ")} before relying on earlier reads.`
+      : "Reread any changed files you previously inspected before relying on earlier reads.",
   ].join("\n");
 }
 

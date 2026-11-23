@@ -23,7 +23,7 @@ const foreignJournals = {
   "pwrgit-stack-op.json": "PwrGit has an unfinished stack operation in this clone.",
 };
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT";
-type RuntimeJournal = StackJournal & { notification: StackNotification };
+type RuntimeJournal = StackJournal & { notification: StackNotification; committed?: true };
 
 async function exists(filename: string): Promise<boolean> {
   return await lstat(filename).then(() => true, (error: unknown) => {
@@ -115,7 +115,7 @@ export class GhStackCatalogStore implements CatalogStore {
     }
   }
 
-  async recover(commonDir: string, recover: (entry: RuntimeJournal) => Promise<void>): Promise<void> {
+  async recover(commonDir: string, recover: (entry: RuntimeJournal) => Promise<void | "retain">): Promise<void> {
     await this.withLock(commonDir, "gh-stack-operation.lock", async () => {
       await this.assertForeignJournalsAbsent(commonDir);
       const file = await open(join(commonDir, ownJournal), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
@@ -126,7 +126,7 @@ export class GhStackCatalogStore implements CatalogStore {
         if (!info.isFile() || info.size > 4 * 1024 * 1024) throw new Error("Invalid PwrAgent stack journal");
         const entry = JSON.parse(await file.readFile("utf8")) as RuntimeJournal;
         if (!entry.notification || (entry.direction !== "apply" && entry.direction !== "undo")) throw new Error("Invalid PwrAgent stack journal");
-        await recover(entry);
+        if (await recover(entry) === "retain") return;
       } finally {
         await file.close();
       }
@@ -149,6 +149,10 @@ export class GhStackCatalogStore implements CatalogStore {
       begin: async (entry) => await this.atomicWrite(commonDir, ownJournal, { ...entry, notification }),
       finish: async () => await this.clearJournal(commonDir),
     };
+  }
+
+  async markJournalCommitted(commonDir: string, entry: StackJournal, notification: StackNotification): Promise<void> {
+    await this.atomicWrite(commonDir, ownJournal, { ...entry, notification, committed: true });
   }
 
   private async clearJournal(commonDir: string): Promise<void> {

@@ -7,9 +7,9 @@ export const StackRailContext = createContext<((thread: NavigationThreadSummary)
 export function StackPositionChips({ thread }: { thread: NavigationThreadSummary }) {
   const openRail = useContext(StackRailContext);
   return readCompactStackMemberships(thread).map(({ key, position, count, inferred, name, health }) => {
-    const text = `${position}/${count}`;
+    const text = health === "held" ? `${position}/${count} · Held` : `${position}/${count}`;
     const detail = `${text} in ${inferred ? "inferred " : ""}stack ${name} · ${health.replaceAll("_", " ")}`;
-    const className = "thread-row__chip thread-row__chip--persistent thread-row__chip--essential stack-position-chip tooltip-target";
+    const className = `thread-row__chip thread-row__chip--persistent thread-row__chip--essential stack-position-chip tooltip-target${health === "held" ? " thread-row__chip--held" : ""}`;
     const stale = isStaleStackLayer(health) ? true : undefined;
     return openRail
       ? <button key={key} type="button" className={className} data-stale={stale} data-tooltip={detail} aria-label={`Open stack ${detail}`} onClick={(event) => {

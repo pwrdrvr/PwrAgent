@@ -129,6 +129,28 @@ afterEach(() => {
   }
 });
 
+it("budgets stack lead transfer and the unread notice watermark", async () => {
+  const first = { backend: "codex" as const, threadId: "lead" };
+  const second = { backend: "codex" as const, threadId: "layer" };
+  await store.updateThreadMetadata(first, { stackLead: ["fixture", "other"] });
+  await store.updateThreadMetadata(second, { seenUpdatedAt: 100 });
+  const transfer = await measureSqliteWrites(() => store.setStackLead("fixture", second));
+  expect((await store.getThreadMetadata(first))?.stackLead).toEqual(["other"]);
+  expect((await store.getThreadMetadata(second))?.stackLead).toEqual(["fixture"]);
+  expectSqliteWriteBudget({ scenario: "stack-lead-transfer", writes: transfer.writes,
+    note: "A stack lead transfer edits both owner overlays in one commit." });
+  const notice = await measureSqliteWrites(() => store.markStackUpdateUnread(second, 100));
+  expect((await store.getThreadMetadata(second))?.seenUpdatedAt).toBe(99);
+  expectSqliteWriteBudget({ scenario: "stack-notice-unread", writes: notice.writes,
+    note: "One commit moves the watermark for a previously read thread. Already unread threads need no write." });
+  const replay = await measureSqliteWrites(() => {
+    store.setStackLead("fixture", second);
+    store.markStackUpdateUnread(second, 100);
+  });
+  expectSqliteWriteBudget({ scenario: "stack-owner-metadata-replay", writes: replay.writes,
+    note: "Restart replay of a lead transfer and an unread notice makes no additional commits." });
+});
+
 describe("sqlite write metrics", () => {
   it("budgets opening and paging the messaging Agent preset picker", async () => {
     const real = await messagingNewThreadHarness({ dbPath: path.join(tempDir, "preset-messaging.db"), maxActions: 8 });

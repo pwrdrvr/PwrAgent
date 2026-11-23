@@ -154,7 +154,7 @@ import {
 } from "./thread-display";
 import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared/contracts/agent";
 import { buildIncomingWorkSummary } from "./thread-work-notification";
-import { ThreadCorrespondenceStore } from "./thread-correspondence-store";
+import { stackFileReadsFromItem, ThreadCorrespondenceStore } from "./thread-correspondence-store";
 import type { StackNotice } from "@pwragent/shared/contracts/thread-system-messages";
 import type { StackThreadRef } from "@pwragent/owner-core/stacks/stack-coordinator";
 import { PendingEnvironmentLaunchStore } from "./pending-environment-launch-store";
@@ -3523,8 +3523,16 @@ export class DesktopBackendRegistry {
     }
   }
 
-  publishStackNotice(thread: StackThreadRef, notice: StackNotice): void {
+  async publishStackNotice(thread: StackThreadRef, notice: StackNotice): Promise<void> {
     const id = `stack:${notice.opId}:${notice.branch}`;
+    if (this.correspondenceStore.hasStackNotice(thread, id)) return;
+    const updatedAt = this.getCachedThreadSummary(thread)?.updatedAt;
+    const seenUpdatedAt = updatedAt === undefined ? undefined : this.overlayStore.markStackUpdateUnread?.(thread, updatedAt);
+    if (seenUpdatedAt !== undefined) {
+      await this.publishLocalEvent({ backend: thread.backend, notification: {
+        method: "navigation/thread/seen", params: { threadId: thread.threadId, seenUpdatedAt },
+      } });
+    }
     const created = this.correspondenceStore.record({
       id, source: thread, destination: thread, input: [], createdAt: Date.now(),
       state: "started", stackNotice: notice,
@@ -3532,8 +3540,75 @@ export class DesktopBackendRegistry {
     if (created) this.publishCorrespondenceMessage(thread, id);
   }
 
-  holdStackThread(thread: StackThreadRef): () => void {
-    return this.threadTurnQueue.suspendDispatch(thread);
+  hasStackNotice(thread: StackThreadRef, opId: string, branch = ""): boolean {
+    return this.correspondenceStore.hasStackNotice(thread, `stack:${opId}:${branch}`);
+  }
+
+  async publishStackCompletion(thread: StackThreadRef, opId: string, kind: StackNotice["kind"], child?: StackThreadRef): Promise<void> {
+    await this.publishStackNotice(thread, {
+      opId, kind, branch: "", stack: "", by: { threadId: thread.threadId, actor: "agent" },
+      from: null, to: null, changedFiles: [], undo: `refs/pwragent/undo/${opId}`,
+      completion: child ? { child: buildThreadIdentityKey(child.backend, child.threadId) } : {},
+    });
+  }
+
+  readStackPaths(thread: StackThreadRef): string[] {
+    return this.correspondenceStore.readStackPaths(thread);
+  }
+
+  async requestStackLayerWork(actor: StackThreadRef, owner: StackThreadRef, prompt: string, key: string, settleSignal?: AbortSignal): Promise<void> {
+    let wake: (() => void) | undefined;
+    const invalidate = () => wake?.();
+    const unsubscribe = settleSignal && this.onEvent(invalidate);
+    settleSignal?.addEventListener("abort", invalidate);
+    try {
+      settleSignal?.throwIfAborted();
+      const response = await this.deliverMessageToThread({
+        operation: "send_message_to_thread", context: actor,
+        args: { ...owner, includeRemote: false, prompt },
+      });
+      if (!response.ok) throw new Error(`${key}: ${response.error.message}`);
+      if (settleSignal) {
+        const queueEntryId = readOptionalString(readRecord(response.data), ["queueEntryId"]);
+        for (;;) {
+          settleSignal.throwIfAborted();
+          if (!this.stackThreadActive(owner) && !this.threadTurnQueue.getQueuedEntries(owner).some((entry) => entry.id === queueEntryId)) break;
+          await new Promise<void>((resolve) => { wake = resolve; });
+        }
+      }
+    } finally {
+      unsubscribe?.();
+      settleSignal?.removeEventListener("abort", invalidate);
+    }
+  }
+
+  async interruptStackLayer(thread: StackThreadRef, opId: string): Promise<void> {
+    const response = await this.controlActiveTurn({ ...thread, operation: "stop", requestId: `stack:${opId}:${thread.threadId}` });
+    if (!response.ok && response.error.code !== "no_active_turn") throw new Error(response.error.message);
+  }
+
+  private readonly stackHolds = new Map<string, Set<string>>();
+
+  stackThreadHeld(thread: StackThreadRef): boolean {
+    return Boolean(this.stackHolds.get(buildThreadIdentityKey(thread.backend, thread.threadId))?.size);
+  }
+
+  holdStackThread(thread: StackThreadRef, opId: string): () => void {
+    const key = buildThreadIdentityKey(thread.backend, thread.threadId);
+    const holds = this.stackHolds.get(key) ?? new Set<string>();
+    holds.add(opId);
+    this.stackHolds.set(key, holds);
+    const release = this.threadTurnQueue.suspendDispatch(thread);
+    const publish = (held: boolean) => void this.publishLocalEvent({
+      backend: thread.backend, notification: { method: "thread/stackHold/updated", params: { threadId: thread.threadId, opId, held } },
+    }).catch((error: unknown) => backendRegistryLog.warn("Could not publish stack hold", { error: String(error) }));
+    publish(true);
+    return () => {
+      holds.delete(opId);
+      if (holds.size === 0) this.stackHolds.delete(key);
+      release();
+      publish(holds.size > 0);
+    };
   }
 
   stackThreadActive(thread: StackThreadRef): boolean {
@@ -8297,6 +8372,7 @@ export class DesktopBackendRegistry {
     /** Base for a new worktree when `branchName` is unset. */
     worktreeBase?: WorktreeBaseSource;
     requiredWorkMode?: NavigationLaunchpadDraft["workMode"];
+    prepareNewWorktree?: (cwd: string) => Promise<void>;
     parentThreadId?: string;
     parentThreadBackend?: AppServerBackendKind;
     parentThreadInstanceId?: string;
@@ -8534,6 +8610,9 @@ export class DesktopBackendRegistry {
         rollback: undefined,
         backend,
       });
+    }
+    if (request.prepareNewWorktree && effectiveWorkMode === "worktree" && cwd) {
+      await request.prepareNewWorktree(cwd);
     }
     let codexEnvironmentRuntime = request.codexEnvironmentRuntime;
     let codexEnvironmentStartupFailure: CodexEnvironmentStartupFailure | undefined;
@@ -21462,6 +21541,19 @@ export class DesktopBackendRegistry {
     const notification = event.notification;
     const isTerminal = notification.method === "turn/completed"
       || notification.method === "turn/failed" || notification.method === "turn/cancelled";
+    if (!event.federationTarget) {
+      try {
+        if (notification.method === "item/completed") {
+          const { threadId } = notification.params;
+          const paths = stackFileReadsFromItem(notification.params.item);
+          if (paths.length) this.correspondenceStore.rememberStackReads({ backend: event.backend, threadId }, paths);
+        } else if (isTerminal) {
+          this.correspondenceStore.flushStackReads({ backend: event.backend, threadId: notification.params.threadId });
+        }
+      } catch (error) {
+        backendRegistryLog.warn("Could not retain stack file-read provenance", { error: String(error) });
+      }
+    }
     const terminalDelivery = isTerminal ? Promise.withResolvers<void>() : undefined;
     // Register before observers can unregister the turn, and before any
     // await so a shutdown starting mid-delivery can still drain it.

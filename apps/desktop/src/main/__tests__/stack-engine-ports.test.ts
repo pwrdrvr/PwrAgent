@@ -33,3 +33,25 @@ it("keeps gh stack lock inodes, rejects foreign journals and compares catalog by
     await expect(store.read(dir)).resolves.toMatchObject({ catalog: next });
   });
 });
+
+it("retains an already-committed journal through a failed completion and clears it on acknowledgment", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pwragent-stack-ack-"));
+  onTestFinished(async () => await rm(dir, { recursive: true, force: true }));
+  const store = new GhStackCatalogStore(inject("nativeHelperFixtures").stackEngine!.relay);
+  const catalog = { schemaVersion: 1 as const, repository: "", stacks: [] };
+  const notice = { opId: "fixture", actor: { backend: "codex" as const, threadId: "lead" }, kind: "add_branch" as const, participants: [] };
+  const journal = { direction: "apply" as const, worktrees: [], receipt: { id: "fixture", when: 1, before: catalog, after: catalog, moves: [] } };
+  await store.withOperationLock(dir, async () => {
+    await store.journalHooks(dir, notice).begin?.(journal);
+    await store.markJournalCommitted(dir, journal, notice);
+  });
+  await store.recover(dir, async (entry) => {
+    expect(entry.committed).toBe(true);
+    return "retain";
+  });
+  await expect(store.withOperationLock(dir, async () => undefined)).rejects.toMatchObject({ code: "gh_stack_busy" });
+  await expect(store.recover(dir, async () => { throw new Error("provider offline"); })).rejects.toThrow("provider offline");
+  expect(await store.hasJournal(dir)).toBe(true);
+  await store.recover(dir, async (entry) => expect(entry.notification.opId).toBe(notice.opId));
+  expect(await store.hasJournal(dir)).toBe(false);
+});

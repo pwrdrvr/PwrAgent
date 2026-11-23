@@ -21,6 +21,22 @@ import {
 import { buildThreadMarkdownLink } from "@pwragent/shared/contracts/thread-link";
 import { readUuidV7Timestamp } from "@pwragent/shared/uuid-v7";
 import { isUsageActivityEntry, usageActivityScope } from "./overlay-transcript-entries";
+import { readOptionalString, readRecord } from "./backend-registry-notification-values";
+
+export function stackFileReadsFromItem(value: unknown): string[] {
+  const item = readRecord(value);
+  if (!item || item.success === false || item.status === "failed" || item.status === "declined"
+    || item.status === "cancelled" || (typeof item.exitCode === "number" && item.exitCode !== 0)) return [];
+  const paths = (Array.isArray(item.commandActions) ? item.commandActions : []).flatMap((action) => {
+    const entry = readRecord(action);
+    return entry?.type === "read" && typeof entry.path === "string" ? [entry.path] : [];
+  });
+  if (item.commandAction === "read" || /^(?:read|read_file|view_file)$/i.test(readOptionalString(item, ["toolName"]) ?? "")) {
+    const file = readOptionalString(readRecord(item.arguments ?? item.data), ["path", "file_path", "filePath"]);
+    if (file) paths.push(file);
+  }
+  return paths;
+}
 
 type ThreadRef = { backend: AppServerBackendKind; threadId: string; instanceId?: string; title?: string };
 export type CorrespondenceRecord = {
@@ -38,11 +54,14 @@ export type CorrespondenceRecord = {
   stackDelivered?: boolean;
 };
 type Status = Pick<CorrespondenceRecord, "state"> & Partial<Pick<CorrespondenceRecord, "destination" | "queueEntryId" | "turnId" | "stackDelivered">>;
-type Event = { type: "message"; record: CorrespondenceRecord } | { type: "status"; id: string; status: Status };
+type Event = { type: "message"; record: CorrespondenceRecord } | { type: "status"; id: string; status: Status }
+  | { type: "stackReads"; paths: string[] };
 
 /** PwrAgent-owned supplemental correspondence, never provider history or SQLite. */
 export class ThreadCorrespondenceStore {
   private readonly records = new Map<string, Map<string, CorrespondenceRecord>>();
+  private readonly stackReads = new Map<string, Set<string>>();
+  private readonly pendingStackReads = new Map<string, Set<string>>();
   // Retain only turn timing metadata across page reads, never transcript rows.
   // A newer page's turn start bounds the last turn of the next older page.
   private readonly turnTimings = new Map<string, Map<string, AppServerThreadTurnMetadata>>();
@@ -70,7 +89,12 @@ export class ThreadCorrespondenceStore {
         let event: Event;
         try { event = JSON.parse(line) as Event; }
         catch { throw new Error(`Invalid PwrAgent correspondence record at ${file}:${index + 1}`); }
-        if (event.type === "message") records.set(event.record.id, event.record);
+        if (event.type === "message") {
+          records.set(event.record.id, event.record);
+          if (event.record.stackNotice && !event.record.stackNotice.completion) this.stackReads.delete(key);
+        } else if (event.type === "stackReads") {
+          this.stackReads.set(key, new Set(event.paths.slice(-256)));
+        }
         else if (event.type === "status") {
           const record = records.get(event.id);
           if (record) records.set(event.id, { ...record, ...event.status });
@@ -92,12 +116,54 @@ export class ThreadCorrespondenceStore {
     if (record.stackNotice && records.has(record.id)) return false;
     this.append(record.source, { type: "message", record }, Boolean(record.stackNotice));
     records.set(record.id, structuredClone(record));
+    if (record.stackNotice && !record.stackNotice.completion) {
+      this.stackReads.delete(this.key(record.source));
+      this.pendingStackReads.delete(this.key(record.source));
+    }
     return true;
   }
 
   pendingStackNotices(source: ThreadRef): Array<{ id: string; text: string }> {
     return [...this.load(source).values()].flatMap((record) =>
-      record.stackNotice && !record.stackDelivered ? [{ id: record.id, text: formatStackNotice(record.stackNotice) }] : []);
+      record.stackNotice && !record.stackNotice.completion && !record.stackDelivered ? [{ id: record.id, text: formatStackNotice(record.stackNotice) }] : []);
+  }
+
+  hasStackNotice(source: ThreadRef, id: string): boolean {
+    return Boolean(this.load(source).get(id)?.stackNotice);
+  }
+
+  rememberStackReads(source: ThreadRef, paths: readonly string[]): void {
+    const key = this.key(source);
+    const next = this.pendingStackReads.get(key) ?? new Set<string>();
+    for (const file of paths) {
+      if (!file || file.length > 4096 || file.includes("\0")) continue;
+      next.delete(file);
+      next.add(file);
+      if (next.size > 256) next.delete(next.values().next().value!);
+    }
+    if (!next.size) return;
+    this.pendingStackReads.set(key, next);
+    if (this.pendingStackReads.size > 128) this.pendingStackReads.delete(this.pendingStackReads.keys().next().value!);
+  }
+
+  flushStackReads(source: ThreadRef): void {
+    const key = this.key(source);
+    const pending = this.pendingStackReads.get(key);
+    if (!pending) return;
+    this.load(source);
+    const previous = this.stackReads.get(key) ?? new Set<string>();
+    if ([...pending].some((file) => !previous.has(file))) {
+      const paths = [...previous, ...[...pending].filter((file) => !previous.has(file))].slice(-256);
+      this.append(source, { type: "stackReads", paths });
+      this.stackReads.set(key, new Set(paths));
+    }
+    this.pendingStackReads.delete(key);
+  }
+
+  readStackPaths(source: ThreadRef): string[] {
+    this.load(source);
+    const key = this.key(source);
+    return [...new Set([...(this.stackReads.get(key) ?? []), ...(this.pendingStackReads.get(key) ?? [])])].slice(-256);
   }
 
   update(source: ThreadRef, id: string, status: Status, receipt = false): void {
