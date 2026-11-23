@@ -1,4 +1,4 @@
-import { isGithubEnterpriseLogin, normalizeGithubEnterpriseHost } from "@pwragent/shared/github-enterprise-hosts";
+import { isGithubEnterpriseLogin, mergeGithubEnterpriseHosts } from "@pwragent/shared/github-enterprise-hosts";
 import type { DesktopSettingsConfigPatch } from "@pwragent/shared/contracts/settings";
 import {
   DEFAULT_GITHUB_ENTERPRISE_HOSTS,
@@ -38,16 +38,17 @@ export function writeBootstrapConfigToProfile(
     // The bootstrap projection describes a different file. Use the
     // destination's revision so a concurrent edit there is still protected.
     const current = readDesktopSettingsConfig(configPath).git?.githubEnterpriseHosts ?? DEFAULT_GITHUB_ENTERPRISE_HOSTS;
-    const allowed = githubEnterpriseHosts.value.map(normalizeGithubEnterpriseHost);
-    const accounts = githubEnterpriseAccounts?.filter((pin) => allowed.includes(pin.host));
-    if (accounts?.some((pin) => !isGithubEnterpriseLogin(pin.login))) {
-      throw new Error("Resolve the invalid pinned GitHub Enterprise account before copying the bootstrap settings.");
+    if (current.repairable !== false) {
+      const { servers } = mergeGithubEnterpriseHosts(githubEnterpriseHosts.value, [], URL);
+      // A broken pin must not turn into an active-account authorization on copy.
+      const brokenPins = new Set(githubEnterpriseAccounts?.filter((pin) => !isGithubEnterpriseLogin(pin.login)).map((pin) => pin.host));
+      const hosts = servers.filter(({ host }) => !brokenPins.has(host)).map(({ host }) => host);
+      patch.git = {
+        ...git,
+        githubEnterpriseHosts: { hosts, expectedRevision: current.revision },
+        githubEnterpriseAccounts: githubEnterpriseAccounts?.filter((pin) => hosts.includes(pin.host)),
+      };
     }
-    patch.git = {
-      ...git,
-      githubEnterpriseHosts: { hosts: githubEnterpriseHosts.value, expectedRevision: current.revision },
-      githubEnterpriseAccounts: accounts,
-    };
   }
   applyDesktopSettingsPatch(configPath, patch, { omitUnacknowledgedProviderEnables: true });
 }

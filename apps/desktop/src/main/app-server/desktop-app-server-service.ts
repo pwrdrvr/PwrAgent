@@ -9111,11 +9111,11 @@ class DesktopAppServerService {
       throw new CiDeploymentReviewRefusal("not_allowed", `${setting} in Settings → Git → Agent forge tools, so PwrAgent does not approve deployments. Review it on GitHub, or change the setting.`);
     }
     const client = this.getForgeCiClient();
-    const approved = await approveGithubCiDeployment({
-      request: async (repository, request) => await client.requestGithub(repository, request),
+    const approved = await client.withCiDeploymentCredential((request) => approveGithubCiDeployment({
+      request,
       reviewed,
       urls: this.ciRunUrlOptions(),
-    });
+    }));
     appServerLog.info("approved a GitHub deployment gate from a card", {
       repository: reviewed.repository, runId: reviewed.runId, attempt: reviewed.attempt, environments: approved.environments,
     });

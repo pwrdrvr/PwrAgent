@@ -18,7 +18,7 @@ import { parseCiRunUrl, type CiRunUrlOptions } from "../app-server/thread-depend
 /** One GitHub REST request through the owner's forge client. */
 export type CiDeploymentGithubRequest = (
   repository: ForgeRepository,
-  request: { method?: "GET" | "POST"; path: string; body?: unknown },
+  request: { method?: "GET" | "POST"; path: string; body?: unknown; enterpriseCi: true },
 ) => Promise<unknown>;
 
 /** A review the owner refused before writing; its message is the card's. */
@@ -105,11 +105,12 @@ export async function approveGithubCiDeployment(params: {
   // commit, and a rerun keeps the environment ids, so the run read last is
   // what proves the gates still belong to the attempt the operator reviewed.
   // Attempts only increase, so a match there cannot hide a rerun in between.
-  const pending = await params.request(ref.repository, { path: `${base}/pending_deployments` });
-  const run = await params.request(ref.repository, { path: base });
+  const pending = await params.request(ref.repository, { path: `${base}/pending_deployments`, enterpriseCi: true });
+  const run = await params.request(ref.repository, { path: base, enterpriseCi: true });
   const environmentIds = verifyCiDeploymentReview(reviewed, run, pending);
   await params.request(ref.repository, {
     method: "POST",
+    enterpriseCi: true,
     path: `${base}/pending_deployments`,
     body: { environment_ids: environmentIds, state: "approved", comment: CI_DEPLOYMENT_APPROVAL_COMMENT },
   });

@@ -48,3 +48,19 @@ it("discards credential material and keeps inactive signed-in accounts without m
   } }));
   expect(servers).toEqual([{ host: "ghe.example.com", accounts: ["build-bot"], activeLogin: undefined }]);
 });
+
+
+it("keeps legacy status tokens for unpinned hosts without exposing enterprise env credentials", async () => {
+  await fc.assert(fc.asyncProperty(fc.nat(), async (id) => {
+    const host = `ghe${id}.example.com`;
+    const run = vi.fn(async (_command: string, args: string[]) => {
+      if (args[1] === "token") throw new Error("unknown command");
+      return "Token: ghp_fixture";
+    });
+    expect(await readEnterpriseGithubToken("gh", host, undefined, {
+      GH_HOST: "elsewhere.example.com", GH_ENTERPRISE_TOKEN: "wrong-identity",
+    }, run)).toBe("ghp_fixture");
+    expect(run).toHaveBeenLastCalledWith("gh", ["auth", "status", "--hostname", host, "--show-token"],
+      expect.objectContaining({ GH_ENTERPRISE_TOKEN: "", GITHUB_ENTERPRISE_TOKEN: "" }));
+  }));
+});

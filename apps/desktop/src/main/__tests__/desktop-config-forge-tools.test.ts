@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import fc from "fast-check";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -101,6 +102,23 @@ describe("GitHub Enterprise hosts in settings", () => {
     });
     expect((await service.readSettingsProjection()).git.githubEnterpriseHosts?.error).toBeUndefined();
     expect(service.resolveGithubEnterpriseHosts()).toEqual(replacement);
+  });
+
+  it("refuses conflicting host tables and preserves their bytes", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom(
+      "git.github_enterprise_hosts", "git . github_enterprise_hosts",
+      '"git"."github_enterprise_hosts"', "git.github_enterprise_hosts.extra",
+    ), fc.boolean(), async (section, clear) => {
+      const contents = `[${section}]\nowner = "operator"\n`;
+      const { service, configPath } = createService(contents);
+      const setting = (await service.readSettingsProjection()).git.githubEnterpriseHosts!;
+      await expect(service.writeConfigPatchTargeted({
+        git: { githubEnterpriseHosts: { hosts: clear ? [] : ["ghe.example.com"], expectedRevision: setting.revision } },
+      })).rejects.toThrow(/TOML table/);
+      expect(setting).toMatchObject({ value: [], repairable: false });
+      expect(service.resolveGithubEnterpriseHosts()).toEqual([]);
+      expect(fs.readFileSync(configPath, "utf8")).toBe(contents);
+    }), { numRuns: 12 });
   });
 
   it("removes one unused entry at a time and saves pins separately from approval", async () => {

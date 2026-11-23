@@ -739,7 +739,7 @@ describe("profile IPC helpers", () => {
       expect(readProfileConfigFile(targetPath).git?.githubEnterpriseHosts?.value).toEqual(["target.example.com"]);
 
       fs.appendFileSync(bootstrapPath, [
-        'github_enterprise_hosts = ["staged.example.com"]',
+        'github_enterprise_hosts = ["staged.example.com", "*.example.com"]',
         '[[git.github_enterprise_accounts]]',
         'host = "staged.example.com"',
         'login = "build-bot"',

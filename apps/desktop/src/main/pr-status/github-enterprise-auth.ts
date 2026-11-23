@@ -8,6 +8,7 @@ import {
 } from "@pwragent/shared/github-enterprise-hosts";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { discoverGhCommands } from "../settings/gh-discovery";
+import { readGithubAuthToken } from "./github-graphql-client";
 
 const execFileAsync = promisify(execFile);
 const ENTERPRISE_TOKEN_NAMES = ["GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"] as const;
@@ -48,14 +49,16 @@ export async function readEnterpriseGithubToken(
   run: RunGh = runGh,
 ): Promise<string | null> {
   if (exactHost(host) !== host || (login !== undefined && !isGithubEnterpriseLogin(login))) return null;
-  if (login === undefined) {
-    const credential = environmentCredential(host, env);
-    if (credential) return credential.token;
-  }
+  const clean = ghEnvironment(env);
   try {
-    return (await run(command, [
-      "auth", "token", "--hostname", host, ...(login === undefined ? [] : ["--user", login]),
-    ], ghEnvironment(env))).trim() || null;
+    if (login === undefined) {
+      const credential = environmentCredential(host, env);
+      if (credential) return credential.token;
+      return await readGithubAuthToken(command, host, async (executable, args) => ({
+        stdout: await run(executable, args, clean),
+      }));
+    }
+    return (await run(command, ["auth", "token", "--hostname", host, "--user", login], clean)).trim() || null;
   } catch {
     // Subprocess errors can contain credential output. Never surface them.
     return null;

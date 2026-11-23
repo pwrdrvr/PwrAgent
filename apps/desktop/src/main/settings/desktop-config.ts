@@ -2331,7 +2331,7 @@ export function desktopSettingsPatchToEdits(
   if (patch.git?.watchMergeBuilds !== undefined) {
     set(["git", "watch_merge_builds"], patch.git.watchMergeBuilds);
   }
-  if (patch.git) edits.push(...githubEnterpriseSettingsEdits(patch.git, currentTables.git ?? {}));
+  if (patch.git) edits.push(...githubEnterpriseSettingsEdits(patch.git, currentTables));
   if (patch.git?.prAutoDispatchBudgetCapacity !== undefined) {
     set(
       ["git", "pr_auto_dispatch_budget_capacity"],
@@ -3007,7 +3007,7 @@ function normalizeDesktopConfig(
         git?.pause_pr_auto_dispatch_when_budget_empty,
       ),
       defaultMergeMethod: readMergeMethod(git?.default_merge_method),
-      githubEnterpriseHosts: readGithubEnterpriseHostsSetting(git?.github_enterprise_hosts),
+      githubEnterpriseHosts: readGithubEnterpriseHostsFromTables(tables),
       githubEnterpriseAccounts: readGithubEnterpriseAccounts(git?.github_enterprise_accounts),
       agentTools: {
         enabled: readBoolean(gitAgentTools?.enabled),
@@ -4018,18 +4018,30 @@ export const DEFAULT_GITHUB_ENTERPRISE_HOSTS: DesktopGithubEnterpriseHostsSettin
   revision: "unset",
 };
 
+const GITHUB_ENTERPRISE_HOSTS_TABLE = /^(?:git|"git"|'git')\s*\.\s*(?:github_enterprise_hosts|"github_enterprise_hosts"|'github_enterprise_hosts')(?=\s*(?:\.|$))/;
+const HOST_TABLE_ERROR = "config.toml declares GitHub Enterprise hosts as a TOML table. Replace that table with a list under [git].";
+
+function readGithubEnterpriseHostsFromTables(tables: TomlTables): DesktopGithubEnterpriseHostsSetting {
+  if (Object.keys(tables).some((section) => GITHUB_ENTERPRISE_HOSTS_TABLE.test(section))) {
+    return { value: [], source: "config", revision: "conflicting-table", error: HOST_TABLE_ERROR, repairable: false };
+  }
+  return readGithubEnterpriseHostsSetting(tables.git?.github_enterprise_hosts);
+}
+
 function githubEnterpriseSettingsEdits(
   git: NonNullable<DesktopSettingsConfigPatch["git"]>,
-  current: TomlTables[string],
+  tables: TomlTables,
 ): TomlEdit[] {
   const edits: TomlEdit[] = [];
+  const current = tables.git ?? {};
   if (git.githubEnterpriseHosts !== undefined) {
     const update = git.githubEnterpriseHosts;
     if (!Array.isArray(update?.hosts)) {
       throw new Error("GitHub Enterprise hosts must be a list of hostnames.");
     }
     const raw = current.github_enterprise_hosts;
-    const saved = readGithubEnterpriseHostsSetting(raw);
+    const saved = readGithubEnterpriseHostsFromTables(tables);
+    if (saved.repairable === false) throw new Error(HOST_TABLE_ERROR);
     if (saved.revision !== update.expectedRevision) {
       throw new Error(GITHUB_ENTERPRISE_HOSTS_CONFLICT);
     }
@@ -4087,7 +4099,7 @@ function readGithubEnterpriseAccounts(raw: TomlScalar | undefined): GithubEnterp
   return [...pins.values()];
 }
 
-function readGithubEnterpriseHostsSetting(raw: TomlScalar | undefined): DesktopGithubEnterpriseHostsSetting {
+export function readGithubEnterpriseHostsSetting(raw: TomlScalar | undefined): DesktopGithubEnterpriseHostsSetting {
   if (raw === undefined) return DEFAULT_GITHUB_ENTERPRISE_HOSTS;
   const value = readStringArray(raw);
   return {

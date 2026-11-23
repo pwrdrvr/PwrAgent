@@ -11951,7 +11951,7 @@ describe("SettingsScreen", () => {
   });
 
   describe("GitHub Enterprise hosts", () => {
-    function setup(hosts: string[], options?: { error?: string; login?: string; discoveryMissing?: boolean }) {
+    function setup(hosts: string[], options?: { error?: string; login?: string; discoveryMissing?: boolean; inactiveOnly?: boolean }) {
       const settings = createSettingsState();
       const snapshot = settings.snapshot!;
       settings.snapshot = {
@@ -11966,17 +11966,20 @@ describe("SettingsScreen", () => {
         ? { state: "missing" as const, servers: [] }
         : {
             state: "ready" as const,
-            servers: [{ host: "ghe.example.com", accounts: ["alice", "build-bot"], activeLogin: "alice" }],
+            servers: [options?.inactiveOnly
+              ? { host: "ghe.example.com", accounts: ["build-bot"] }
+              : { host: "ghe.example.com", accounts: ["alice", "build-bot"], activeLogin: "alice" }],
           });
-      render(
+      const screenElement = () => (
         <SettingsScreen
           initialSection="git"
           desktopApi={{ discoverGithubEnterpriseAccounts }}
           settings={settings}
           onClose={() => undefined}
-        />,
+        />
       );
-      return { settings, discoverGithubEnterpriseAccounts };
+      const { rerender } = render(screenElement());
+      return { settings, discoverGithubEnterpriseAccounts, refreshView: () => rerender(screenElement()) };
     }
 
     it("lists discovered hosts as opt-in and writes the exact switch without losing focus", async () => {
@@ -12033,6 +12036,45 @@ describe("SettingsScreen", () => {
       await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({
         git: { githubEnterpriseAccounts: [{ host: "ghe.example.com", login: "build-bot" }] },
       }));
+    });
+
+    it.each([undefined, "build-bot"])("offers the only stored account and the active choice with pin %s", async (login) => {
+      const { settings } = setup(["ghe.example.com"], { inactiveOnly: true, login });
+      const picker = await screen.findByRole("combobox", { name: "GitHub account for ghe.example.com" });
+      chooseSelectOption(picker, login ? "Active gh account" : "build-bot");
+      await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({
+        git: { githubEnterpriseAccounts: [{ host: "ghe.example.com", login: login ? "" : "build-bot" }] },
+      }));
+    });
+
+    it("uses an exact-host environment credential hint for a port-qualified host", async () => {
+      setup(["ghe.internal.example:8443"]);
+      expect(await screen.findByText("GH_HOST=ghe.internal.example:8443")).toBeInTheDocument();
+      expect(screen.getByText("GH_ENTERPRISE_TOKEN")).toBeInTheDocument();
+      expect(screen.queryByText("gh auth login --hostname ghe.internal.example:8443")).not.toBeInTheDocument();
+    });
+
+    it("restores focus when switching off a saved-only host removes its row", async () => {
+      const { settings, refreshView } = setup(["ghe.internal.example", "ghe.next.example"]);
+      vi.mocked(settings.writeConfig).mockImplementation(async (patch) => {
+        const snapshot = settings.snapshot!;
+        settings.snapshot = { ...snapshot, git: {
+          ...snapshot.git,
+          githubEnterpriseHosts: { ...snapshot.git.githubEnterpriseHosts!, value: patch.git!.githubEnterpriseHosts!.hosts },
+        } };
+        refreshView();
+        return true;
+      });
+      const control = await screen.findByRole("switch", { name: "Allow Continue After on ghe.internal.example" });
+      act(() => control.focus());
+      fireEvent.click(control);
+      await waitFor(() => expect(screen.getByRole("switch", { name: "Allow Continue After on ghe.next.example" })).toHaveFocus());
+    });
+
+    it("counts the effective sign-in when a pin is missing", async () => {
+      setup(["ghe.example.com"], { login: "former-user" });
+      expect(await screen.findByText(/former-user is not signed in/)).toBeInTheDocument();
+      expect(screen.getByText("0 servers signed in, 1 not signed in.")).toBeInTheDocument();
     });
 
     it("keeps authorization locked until malformed config is explicitly cleared", async () => {

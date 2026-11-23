@@ -223,6 +223,28 @@ export class ForgeCiClient {
     return this.admit(r, signal, () => this.github(r, request, signal));
   }
 
+  /** Bind the preflight and approval to one credential for the life of a card action. */
+  withCiDeploymentCredential<T>(
+    review: (request: (repository: ForgeRepository, request: GithubRequest) => Promise<unknown>) => Promise<T>,
+  ): Promise<T> {
+    let credential: { host: string; login?: string; token: Promise<string | null> } | undefined;
+    return review(async (repository, request) => {
+      if (repository.provider !== "github") throw new ForgeReadError("unsupported_provider", "CI deployment review requires GitHub.");
+      if (repository.host === "github.com") return await this.requestGithub(repository, request);
+      return await this.admit(repository, undefined, () => this.github(
+        repository, { ...request, enterpriseCi: true }, undefined, async () => {
+          const host = repository.host;
+          const login = getDesktopSettingsService().resolveGithubEnterpriseAccount(host);
+          credential ??= { host, login, token: this.readToken(host, true) };
+          if (credential.host !== host || credential.login !== login) {
+            throw new ForgeReadError("unauthenticated", "The GitHub account changed during approval. Review the deployment again.");
+          }
+          return await credential.token;
+        },
+      ));
+    });
+  }
+
   /** A GitLab GET through the same admission as CI reads. `endpoint` is built by first-party code, never an agent. */
   async readGitlab(r: ForgeRepository, endpoint: string, signal?: AbortSignal): Promise<unknown> {
     if (r.provider !== "gitlab") throw new ForgeReadError("unsupported_provider", "This read supports GitLab projects only.");
@@ -266,11 +288,16 @@ export class ForgeCiClient {
     } finally { this.active--; }
   }
 
-  private async github(r: ForgeRepository, request: GithubRequest, signal?: AbortSignal): Promise<unknown> {
+  private async github(
+    r: ForgeRepository,
+    request: GithubRequest,
+    signal?: AbortSignal,
+    readToken: () => Promise<string | null> = () => this.readToken(r.host, request.enterpriseCi),
+  ): Promise<unknown> {
     const raw = request.raw === true;
     const checkHost = request.enterpriseCi && r.host !== "github.com";
     if (checkHost) this.assertEnterpriseCiHost(r.host);
-    const token = this.options.githubToken ? await this.options.githubToken(r.host) : await this.token(r.host, request.enterpriseCi);
+    const token = await readToken();
     if (!token) throw new ForgeReadError("unauthenticated", `Sign in with GitHub CLI for ${r.host} in Settings → Git.`);
     signal?.throwIfAborted();
     if (!this.options.enabled("github")) throw new ForgeReadError("provider_disabled", "GitHub was disabled before the request started.");
@@ -358,6 +385,10 @@ export class ForgeCiClient {
       throw new ForgeReadError("forbidden", "This GitHub Enterprise host is no longer allowed in Settings → Git.");
     }
   }
+  private readToken(host: string, enterpriseCi?: boolean): Promise<string | null> {
+    return this.options.githubToken ? this.options.githubToken(host) : this.token(host, enterpriseCi);
+  }
+
   private async token(host: string, enterpriseCi?: boolean): Promise<string | null> {
     const discovery = await discoverGhCommands({ configuredCommand: getDesktopSettingsService().resolveGhCommandPreference() });
     if (!discovery.selectedCommand) throw new ForgeReadError("unavailable", "Install GitHub CLI or select its path in Settings → Git.");

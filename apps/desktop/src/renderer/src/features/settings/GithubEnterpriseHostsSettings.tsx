@@ -43,6 +43,11 @@ export function GithubEnterpriseHostsSettings(props: {
   const [nextFocus, setNextFocus] = useState<{ index: number; row?: Element }>();
   const saved = props.hosts?.value ?? [];
   const { servers, unused, slotsUsed } = mergeGithubEnterpriseHosts(saved, discovery?.servers ?? [], URL);
+  const rows = servers.map((server) => {
+    const pin = props.accounts?.find((entry) => entry.host === server.host)?.login;
+    const login = pin === undefined ? server.activeLogin : server.accounts.find((account) => account === pin);
+    return { server, pin, login };
+  });
   const busy = props.saving || pending;
   const canWrite = !!props.hosts && !props.hosts.error;
 
@@ -110,7 +115,7 @@ export function GithubEnterpriseHostsSettings(props: {
     }
   };
 
-  const signedIn = servers.filter((server) => !!server.activeLogin || server.accounts.length > 0).length;
+  const signedIn = rows.filter(({ login }) => !!login).length;
   const notSignedIn = servers.length - signedIn;
   const status = discovery?.state === "ready" ? `${signedIn} ${signedIn === 1 ? "server" : "servers"} signed in, ${notSignedIn} not signed in.`
     : discovery?.state === "missing" ? "GitHub CLI is unavailable. See GitHub CLI (gh) above."
@@ -143,30 +148,38 @@ export function GithubEnterpriseHostsSettings(props: {
       {props.hosts?.error ? (
         <SettingsField
           label="Saved hosts"
-          sub={<span className="settings-row__error" role="alert">{MALFORMED}</span>}
-          control={
+          sub={
+            <span className="settings-row__error" role="alert">
+              {props.hosts.repairable === false ? props.hosts.error : MALFORMED}
+            </span>
+          }
+          control={props.hosts.repairable !== false ? (
             <div className="settings-inline-actions">
               <button className="button button--secondary" disabled={busy} type="button" onClick={() => void writeHosts([])}>
                 Clear saved hosts
               </button>
             </div>
-          }
+          ) : null}
         />
       ) : null}
       {alert ? <div className="settings-button-row"><span className="settings-row__error" role="alert">{alert}</span></div> : null}
       <div ref={listRef} role="list" aria-label="GitHub Enterprise hosts" className="settings-fields settings-enterprise-host-list">
-        {servers.map((server) => {
+        {rows.map(({ server, pin, login }) => {
           const remaining = saved.filter((entry) => normalizeGithubEnterpriseHost(entry) !== server.host);
           return (
             <div role="listitem" key={server.host}>
               <EnterpriseServerRow
                 server={server}
-                pin={props.accounts?.find((entry) => entry.host === server.host)?.login}
+                pin={pin}
+                login={login}
                 discoveryReady={discovery?.state === "ready"}
                 locked={busy || !canWrite}
                 atLimit={!server.allowed && slotsUsed >= CI_RUN_MAX_GITHUB_ENTERPRISE_HOSTS}
                 desktopApi={props.desktopApi}
-                onToggle={(allowed) => void writeHosts(allowed ? [...saved, server.host] : remaining, server.host)}
+                onToggle={(allowed, row) => {
+                  const disappears = !allowed && !discovery?.servers.some((entry) => entry.host === server.host);
+                  void writeHosts(allowed ? [...saved, server.host] : remaining, server.host, disappears ? row : undefined);
+                }}
                 onRemove={(row) => void writeHosts(remaining, server.host, row)}
                 onAccountChange={(login) => void writeAccount(server.host, login)}
               />
@@ -213,20 +226,20 @@ export function GithubEnterpriseHostsSettings(props: {
 function EnterpriseServerRow(props: {
   server: GithubEnterpriseServer & { allowed: boolean };
   pin?: string;
+  login?: string;
   discoveryReady: boolean;
   locked: boolean;
   atLimit: boolean;
   desktopApi?: DesktopApi;
-  onToggle: (allowed: boolean) => void;
+  onToggle: (allowed: boolean, row?: HTMLElement) => void;
   onRemove: (row: HTMLElement) => void;
   onAccountChange: (login: string) => void;
 }) {
   const helpId = useId();
   const { host, allowed, accounts, activeLogin, environmentToken } = props.server;
-  const pinnedLogin = props.pin === undefined ? undefined
-    : accounts.find((login) => login === props.pin);
-  const missingPin = props.discoveryReady && props.pin !== undefined && !pinnedLogin;
-  const login = props.pin === undefined ? activeLogin : pinnedLogin;
+  const { login } = props;
+  const missingPin = props.discoveryReady && props.pin !== undefined && !login;
+  const showPicker = props.discoveryReady && accounts.length > 0;
   const connected = !!login;
   const status = !props.discoveryReady ? "Unknown" : connected ? "Signed in" : "Not signed in";
   const tone = !props.discoveryReady ? "neutral" : connected ? "ok" : "warn";
@@ -240,7 +253,7 @@ function EnterpriseServerRow(props: {
           <span className={`settings-pill settings-pill--${tone}`}>{status}</span>
           {missingPin ? <span> {props.pin || "The pinned account"} is not signed in.</span>
             : !props.discoveryReady && props.pin ? <span> Pinned account: {props.pin}.</span>
-            : login && accounts.length < 2 ? <span> Reads use {login}.</span>
+            : login && !showPicker ? <span> Reads use {login}.</span>
             : props.discoveryReady && !login && accounts.length > 0 ? <span> No active gh sign-in.</span> : null}
           {environmentToken && props.pin === undefined ? <span> Token from {environmentToken}</span> : null}
         </>
@@ -256,19 +269,23 @@ function EnterpriseServerRow(props: {
               aria-disabled={locked || undefined}
               aria-describedby={props.atLimit ? helpId : undefined}
               onChange={(event) => {
-                if (!locked) props.onToggle(event.currentTarget.checked);
+                if (!locked) props.onToggle(
+                  event.currentTarget.checked,
+                  event.currentTarget.closest<HTMLElement>('[role="listitem"]') ?? undefined,
+                );
               }}
             />
             <span aria-hidden="true" className="settings-switch__track"><span className="settings-switch__thumb" /></span>
             <span aria-hidden="true">{allowed ? "Allowed" : "Off"}</span>
           </label>
           {props.atLimit ? <span className="settings-field__sub" id={helpId}>Turn another host off first</span> : null}
-          {props.discoveryReady && accounts.length > 1 && !missingPin ? (
+          {showPicker ? (
             <Select
               className="settings-select settings-select--chip"
               aria-label={`GitHub account for ${host}`}
               disabled={props.locked}
-              value={pinnedLogin ?? ""}
+              value={props.pin ?? ""}
+              placeholder="Choose a signed-in account"
               options={[{ value: "", label: activeOption }, ...accounts.map((account) => ({ value: account, label: account }))]}
               onChange={props.onAccountChange}
             />
@@ -295,7 +312,13 @@ function EnterpriseServerRow(props: {
         </div>
       }
       actions={allowed && props.discoveryReady && !activeLogin && !accounts.length ? (
-        <SettingsCopyValue desktopApi={props.desktopApi} label={`Sign in to ${host}`} value={`gh auth login --hostname ${host}`} compact />
+        host.includes(":") ? (
+          <span className="settings-field__sub">
+            Set <code>GH_HOST={host}</code> and <code>GH_ENTERPRISE_TOKEN</code> in the environment that launches PwrAgent.
+          </span>
+        ) : (
+          <SettingsCopyValue desktopApi={props.desktopApi} label={`Sign in to ${host}`} value={`gh auth login --hostname ${host}`} compact />
+        )
       ) : undefined}
     />
   );

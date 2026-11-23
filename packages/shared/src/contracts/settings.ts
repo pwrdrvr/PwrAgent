@@ -627,6 +627,8 @@ export type DesktopSettingsValue<T> = {
 export type DesktopGithubEnterpriseHostsSetting = DesktopSettingsValue<string[]> & {
   /** Identifies the saved field value the editor started from. */
   revision: string;
+  /** A conflicting TOML table requires a manual edit. */
+  repairable?: false;
 };
 
 export type DesktopGithubEnterpriseHostsPatch = {

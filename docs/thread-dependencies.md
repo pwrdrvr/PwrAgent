@@ -461,10 +461,13 @@ github_enterprise_hosts = ["github.example.com", "ghe.internal.example:8443"]
 - Reads use `https://<host>/api/v3` and the active GitHub CLI account by
   default. Choose a specific account to pin it. The pin is saved separately
   under `[[git.github_enterprise_accounts]]` as a `host` and `login`. A missing
-  pinned sign-in fails the read. PwrAgent stores only the account name.
+  pinned sign-in fails the read. A deployment approval from a CI card
+  uses the selected credential for both its preflight and approval.
+  PwrAgent stores only the account name.
 - An unpinned host can use `GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN`
-  when `GH_HOST` names that exact host. Settings identifies an environment
-  token by its variable name.
+  when `GH_HOST` names that exact host. For a server on a nondefault port,
+  include the port in `GH_HOST` in the environment that launches PwrAgent.
+  Settings identifies an environment token by its variable name.
 - The list authorizes `ci_run` reads only. It does not change automatic
   transcript PR reads, which stay on github.com and gitlab.com.
 
