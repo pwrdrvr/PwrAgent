@@ -13571,6 +13571,12 @@ export class DesktopBackendRegistry {
             backend: acpBackend,
             content: promptPayload.promptContent,
             interjectionId: params.requestId,
+            ...(acpBackend === "acp:antigravity"
+              ? {
+                  prompt: promptPayload.prompt,
+                  ...(promptPayload.parts.length > 0 ? { parts: promptPayload.parts } : {}),
+                }
+              : {}),
             sessionId: params.threadId,
             text,
           });

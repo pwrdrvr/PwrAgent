@@ -18,7 +18,7 @@ const ACP_AGENT_CAPABILITY_CATALOG: Record<string, AcpAgentCapabilities> = {
     conversationRewind: false,
     liveWorkspaceHandoff: false,
     managedReview: true,
-    steerTurn: false,
+    steerTurn: true,
   },
   gemini: {
     conversationRewind: false,

@@ -376,6 +376,38 @@ export class AcpSessionReplayNormalizer {
     return this.replay();
   }
 
+  /**
+   * Records a mid-turn steer message inside the active turn without replacing
+   * the initial prompt (`user:<turnId>`), resetting assistant numbering, or
+   * clearing in-flight tool tracking. Closes the open assistant bubble so later
+   * chunks start a new message after the operator's steering text.
+   */
+  recordSteeredUserPrompt(params: {
+    sessionId: string;
+    messageId: string;
+    prompt: string;
+    parts?: AppServerThreadMessagePart[];
+    turnId?: string;
+    receivedAt?: number;
+  }): AppServerThreadReplay {
+    const createdAt = params.receivedAt ?? Date.now();
+    const normalizedPrompt = normalizeUserPrompt(params.prompt, params.parts);
+    const activeTurnId = params.turnId ?? this.currentTurnId;
+    if (activeTurnId) {
+      this.removeAgentWaitingActivity(activeTurnId);
+    }
+    this.endActiveAssistantMessage();
+    this.upsertMessage({
+      id: params.messageId,
+      role: "user",
+      text: normalizedPrompt.text,
+      ...(normalizedPrompt.parts?.length ? { parts: normalizedPrompt.parts } : {}),
+      createdAt,
+    });
+    this.status = "active";
+    return this.replay();
+  }
+
   recordTurnFinished(
     turnId?: string,
     completedAt = Date.now(),
@@ -654,6 +686,18 @@ export class AcpSessionReplayNormalizer {
           turnId: readString(update.update, "turnId") ?? buildPendingTurnId(update.sessionId),
           receivedAt: createdAt,
           waitingForAgent: readBoolean(update.update, "waitingForAgent"),
+        });
+      } else if (kind === "pwragent_steered_user_prompt") {
+        const turnId = readString(update.update, "turnId") ?? this.currentTurnId;
+        this.recordSteeredUserPrompt({
+          sessionId: update.sessionId,
+          messageId:
+            readString(update.update, "messageId")
+            ?? `user:${turnId ?? update.sessionId}:steer:${createdAt}:${this.generatedMessageSequence++}`,
+          prompt: readString(update.update, "prompt") ?? "",
+          parts: readMessageParts(update.update),
+          ...(turnId ? { turnId } : {}),
+          receivedAt: createdAt,
         });
       } else if (kind === "pwragent_rewind_marker") {
         this.rewindToPromptIndex(

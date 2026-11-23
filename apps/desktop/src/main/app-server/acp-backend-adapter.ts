@@ -401,6 +401,39 @@ function observedAcpSessionHistoryReplay(
   return client.didSessionLoadReplayHistory?.(sessionId);
 }
 
+function acpSteeredUserMessageNotification(params: {
+  threadId: string;
+  turnId: string;
+  update: Record<string, unknown>;
+}): AppServerNotification {
+  const messageId =
+    typeof params.update.messageId === "string" && params.update.messageId.trim()
+      ? params.update.messageId
+      : `user:${params.turnId}:steer`;
+  const text = typeof params.update.prompt === "string" ? params.update.prompt : "";
+  const content = Array.isArray(params.update.parts)
+    ? (params.update.parts as AppServerThreadMessagePart[])
+    : undefined;
+  const createdAt =
+    typeof params.update.createdAt === "number" && Number.isFinite(params.update.createdAt)
+      ? params.update.createdAt
+      : undefined;
+  return {
+    method: "item/completed",
+    params: {
+      threadId: params.threadId,
+      turnId: params.turnId,
+      item: {
+        id: messageId,
+        type: "userMessage",
+        text,
+        ...(content?.length ? { content } : {}),
+        ...(createdAt !== undefined ? { createdAt } : {}),
+      },
+    },
+  };
+}
+
 export function readKimiYoloExecutionModeFromText(
   text: string,
 ): ThreadExecutionMode | undefined {
@@ -660,13 +693,16 @@ function effectiveAcpAgentCapabilities(
     ...configured,
     // PwrAgent owns managed review. Older discovery records can have a stale value.
     managedReview: catalog.managedReview,
-    // The extension is downstream-only. Ignore the unconditional steerTurn
-    // value persisted by older catalog/discovery records for vendor Grok.
-    steerTurn: agent.registryId === "grok"
-      && (isPwrAgentOwnedGrokRuntime(agent)
-        || isPwrAgentGrokBuildVersion(
-          agent.runtimeCapabilities?.agentInfo?.version ?? agent.version,
-        )),
+    // Grok's steering extension is downstream-only. Ignore the unconditional
+    // steerTurn value persisted by older catalog/discovery records for vendor
+    // Grok. Antigravity steers natively through overlapping session/prompt.
+    steerTurn:
+      agent.registryId === "antigravity"
+      || (agent.registryId === "grok"
+        && (isPwrAgentOwnedGrokRuntime(agent)
+          || isPwrAgentGrokBuildVersion(
+            agent.runtimeCapabilities?.agentInfo?.version ?? agent.version,
+          ))),
     liveWorkspaceHandoff:
       configured.liveWorkspaceHandoff ||
       agent.runtimeCapabilities?.agentCapabilities?.loadSession === true,
@@ -2059,10 +2095,12 @@ export class AcpBackendAdapter {
     backend: AcpBackendId;
     content: AcpPromptContentBlock[];
     interjectionId: string;
+    parts?: AppServerThreadMessagePart[];
+    prompt?: string;
     sessionId: string;
     text: string;
   }): Promise<{ delivery: "currentTurn" | "nextTurn" }> {
-    if (params.backend !== "acp:grok") {
+    if (params.backend !== "acp:grok" && params.backend !== "acp:antigravity") {
       throw new Error(`ACP backend ${params.backend} does not support turn steering`);
     }
     const session = this.getSession(params.backend, params.sessionId);
@@ -2070,18 +2108,25 @@ export class AcpBackendAdapter {
       throw new Error(`ACP session not found: ${params.sessionId}`);
     }
     if (session.status !== "active") {
-      throw new Error("The Grok turn finished before steering was accepted");
+      const label = params.backend === "acp:antigravity" ? "Antigravity" : "Grok";
+      throw new Error(`The ${label} turn finished before steering was accepted`);
     }
     const client = await this.getClientForSession(
       params.backend,
       params.sessionId,
     );
     if (!client.steerSession || client.supportsTurnSteering?.() !== true) {
-      throw new Error("Installed Grok Build does not support turn steering over ACP");
+      throw new Error(
+        params.backend === "acp:antigravity"
+          ? "Installed Antigravity CLI does not support turn steering over ACP"
+          : "Installed Grok Build does not support turn steering over ACP",
+      );
     }
     return await client.steerSession({
       sessionId: params.sessionId,
       text: params.text,
+      ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
+      ...(params.parts?.length ? { parts: params.parts } : {}),
       content: params.content,
       interjectionId: params.interjectionId,
     });
@@ -3449,6 +3494,20 @@ export class AcpBackendAdapter {
               },
             });
           }
+        }
+        if (
+          updateKind === "pwragent_steered_user_prompt"
+          && turnId
+          && !fromSessionLoad
+        ) {
+          await this.emit({
+            backend: agent.backendId,
+            notification: acpSteeredUserMessageNotification({
+              threadId: sessionId,
+              turnId,
+              update,
+            }),
+          });
         }
         if (
           turnId &&

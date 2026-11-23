@@ -11852,6 +11852,63 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("steers an active Antigravity turn and passes prompt and parts for live user-message publication", async () => {
+    const backend = "acp:antigravity" as AcpBackendId;
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: backend,
+        sessionId: "agy-session-1",
+        title: "Ocean poem",
+        createdAt: 1000,
+        updatedAt: 2000,
+        executionMode: "default",
+        status: "active",
+      },
+    ];
+    const installedAgent = {
+      ...createKimiAgentRecord(backend),
+      registryId: "antigravity",
+      name: "Antigravity",
+      version: "1.5.15",
+    };
+    const { registry, steerSession } = createKimiAcpRegistry({
+      acpBackendId: backend,
+      installedAgent,
+      sessions,
+      supportsTurnSteering: true,
+    });
+    const pendingTurnId = "pending:agy-session-1:1000";
+    await emitStartedTurn(
+      registry,
+      backend,
+      "agy-session-1",
+      pendingTurnId,
+    );
+
+    await expect(registry.steerTurn({
+      backend,
+      threadId: "agy-session-1",
+      expectedTurnId: pendingTurnId,
+      input: [{ type: "text", text: "Reply ONLY with PINEAPPLE" }],
+      requestId: "agy-steer-1",
+    })).resolves.toEqual({
+      backend,
+      threadId: "agy-session-1",
+      turnId: pendingTurnId,
+      disposition: "steered",
+    });
+    expect(steerSession).toHaveBeenCalledWith({
+      sessionId: "agy-session-1",
+      text: "Reply ONLY with PINEAPPLE",
+      prompt: "Reply ONLY with PINEAPPLE",
+      parts: [{ type: "text", text: "Reply ONLY with PINEAPPLE" }],
+      content: [{ type: "text", text: "Reply ONLY with PINEAPPLE" }],
+      interjectionId: "agy-steer-1",
+    });
+
+    await registry.close();
+  });
+
   it("rejects a stale Grok steer before it can reach a replacement turn", async () => {
     const backend = "acp:grok" as AcpBackendId;
     const sessions: AcpSessionMetadata[] = [{
