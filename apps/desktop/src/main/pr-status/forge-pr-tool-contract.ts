@@ -4,6 +4,7 @@ import {
   type ForgeAgentWriteToolName,
 } from "@pwragent/shared/contracts/forge-agent-tools";
 import { ForgeReadError, type ForgeRepository } from "./forge-tool-contract";
+import type { StackToolArgs } from "../stacks/stack-operations-service";
 
 /**
  * Pull request (GitLab merge request), issue and CI write tools for GitHub and GitLab.
@@ -13,6 +14,7 @@ import { ForgeReadError, type ForgeRepository } from "./forge-tool-contract";
  */
 export const FORGE_PR_READ_OPERATIONS = [
   "list_stacks",
+  "plan_stack_operation",
   "get_pull_request",
   "list_pull_requests",
   "list_pull_request_files",
@@ -30,7 +32,7 @@ export type ForgePrToolOperation = ForgePrReadOperation | ForgeAgentWriteToolNam
 
 export type ForgeAttachment = { path: string; alt?: string };
 export type ForgeReviewComment = { path: string; line: number; side?: "LEFT" | "RIGHT"; startLine?: number; startSide?: "LEFT" | "RIGHT"; body: string };
-export type ForgePrToolArgs = {
+export type ForgePrToolArgs = StackToolArgs & {
   repository?: ForgeRepository;
   runId?: number;
   number?: number;
@@ -77,6 +79,9 @@ const LABEL_MAX = 50;
 
 const FIELDS: Record<ForgePrToolOperation, string[]> = {
   list_stacks: [],
+  plan_stack_operation: ["operation", "stack", "branch", "from", "mode", "branches", "name"],
+  apply_stack_operation: ["planId", "operation", "stack", "branch", "from", "mode", "branches", "name"],
+  manage_stack_operation: ["opId", "action", "threadId"],
   get_pull_request: ["number", "url", "branch"],
   list_pull_requests: ["state", "head", "base", "page", "perPage"],
   list_pull_request_files: ["number", "includePatch", "page", "perPage"],
@@ -98,6 +103,8 @@ const FIELDS: Record<ForgePrToolOperation, string[]> = {
   rerun_failed_ci_jobs: ["runId"],
 };
 const REQUIRED: Partial<Record<ForgePrToolOperation, string[]>> = {
+  plan_stack_operation: ["operation"],
+  manage_stack_operation: ["opId", "action"],
   list_pull_request_files: ["number"],
   get_pull_request_diff: ["number"],
   list_pull_request_reviews: ["number"],
@@ -169,6 +176,21 @@ export function validateForgePrToolArgs(operation: string, value: unknown): asse
   const unknown = Object.keys(args).find((key) => !allowed.includes(key));
   if (unknown) fail(`Unknown argument for ${operation}: ${unknown}.`);
   for (const key of forgePrToolRequiredFields(operation)) if (args[key] === undefined) fail(`${operation} requires ${key}.`);
+  if (operation.endsWith("_stack_operation")) {
+    oneOf(args, "operation", ["restack", "adopt", "add_branch", "remove"]);
+    oneOf(args, "action", ["status", "abort", "undo", "continue", "release_thread"]);
+    oneOf(args, "mode", ["detach", "forget"]);
+    for (const key of ["stack", "from", "name"]) text(args, key, 255);
+    if (typeof args.name === "string" && !isSafeRefName(args.name)) fail("Use a valid branch name.");
+    text(args, "threadId", 500);
+    if (args.action === "release_thread" && !args.threadId) fail("release_thread requires threadId.");
+    for (const key of ["planId", "opId"]) {
+      if (args[key] !== undefined && (typeof args[key] !== "string" || !/^[a-z0-9-]{1,80}$/.test(args[key] as string))) fail(`${key} must be a stack operation ID.`);
+    }
+    if (args.branches !== undefined && (!Array.isArray(args.branches) || args.branches.length < 2 || args.branches.length > 100
+      || args.branches.some((branch) => typeof branch !== "string" || !isSafeRefName(branch)))) fail("Use two to 100 branch names in bottom-first order.");
+    if (operation === "apply_stack_operation" && ((args.planId === undefined) === (args.operation === undefined))) fail("Pass exactly one of planId or operation.");
+  }
   integer(args, "number", 1, Number.MAX_SAFE_INTEGER);
   integer(args, "runId", 1, Number.MAX_SAFE_INTEGER);
   integer(args, "commentId", 1, Number.MAX_SAFE_INTEGER);

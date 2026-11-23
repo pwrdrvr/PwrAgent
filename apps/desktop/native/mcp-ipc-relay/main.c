@@ -128,7 +128,10 @@ static DWORD WINAPI copy_bytes(void *arg) {
 
 int wmain(int argc, wchar_t **argv) {
   if (argc == 4 && !wcscmp(argv[1], L"--local-file-marker")) return local_file_marker(argv[2], argv[3]);
-  if (argc == 3 && !wcscmp(argv[1], L"--maintenance-lock")) return maintenance_lock(argv[2]);
+  if (argc == 3 && !wcscmp(argv[1], L"--maintenance-lock")) return file_lock(argv[2], 0);
+  if (argc == 3 && !wcscmp(argv[1], L"--stack-lock")) return file_lock(argv[2], 1);
+  if (argc == 4 && !wcscmp(argv[1], L"--stack-replace"))
+    return MoveFileExW(argv[2], argv[3], MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) ? 0 : 1;
   if (argc >= 3 && !wcscmp(argv[1], L"--maintenance-allocation")) return maintenance_allocation(argc - 2, argv + 2);
   if (argc != 2) fail("expected one endpoint");
   HANDLE pipe = verified_pipe(argv[1]);
@@ -318,7 +321,8 @@ static void transfer_write(int fd, Buffer *buffer) {
 }
 int main(int argc, char **argv) {
   if (argc == 4 && !strcmp(argv[1], "--local-file-marker")) return local_file_marker(argv[2], argv[3]);
-  if (argc == 3 && !strcmp(argv[1], "--maintenance-lock")) return maintenance_lock(argv[2]);
+  if (argc == 3 && !strcmp(argv[1], "--maintenance-lock")) return file_lock(argv[2], 0);
+  if (argc == 3 && !strcmp(argv[1], "--stack-lock")) return file_lock(argv[2], 1);
   if (argc != 2) { errno = EINVAL; fail("expected one endpoint"); }
   signal(SIGPIPE, SIG_IGN);
   int fd = verified_socket(argv[1]);

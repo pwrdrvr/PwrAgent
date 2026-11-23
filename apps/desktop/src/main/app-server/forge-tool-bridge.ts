@@ -311,6 +311,12 @@ export class ForgeToolBridge {
     }
     if (!this.forgePrToolHandler) throw new ForgeReadError("unavailable", "Forge tools are unavailable on this instance.");
     const result = withForgeApprovalNotes(await this.forgePrToolHandler(operation, target, context), notes);
+    if (operation === "plan_stack_operation" && result && typeof result === "object") {
+      const repository = (await this.forgePrToolPreflight?.(operation, args, context))?.repository ?? args.repository;
+      const identity = await this.resolveForgeAgentIdentity(context);
+      const { level } = resolveForgeAgentToolAccess(this.resolveForgeToolPolicy(), "stacks", repository, identity);
+      return { ...result, approval: level === "off" ? "disabled" : "none" };
+    }
     if (operation === "create_pull_request") return await this.attachCreatedPullRequest(result, context);
     return result;
   };

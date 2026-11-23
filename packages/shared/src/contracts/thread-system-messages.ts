@@ -3,6 +3,33 @@ import {
 } from "./thread-dependencies";
 import { parseThreadUrl, type ThreadLinkRef } from "./thread-link";
 
+export const THREAD_STACK_NOTICE_INTRO = "PwrAgent moved a stack layer";
+
+export type StackNotice = {
+  opId: string;
+  kind: "restack" | "add_branch" | "adopt" | "remove" | "undo";
+  stack: string;
+  by: { threadId: string; actor: "agent" | "operator" | "automation" };
+  branch: string;
+  from: string | null;
+  to: string | null;
+  parent?: string;
+  position?: [number, number];
+  changedFiles: string[];
+  undo: string;
+};
+
+export function formatStackNotice(notice: StackNotice): string {
+  const short = (sha: string | null) => sha?.slice(0, 12) ?? "absent";
+  return [
+    `${THREAD_STACK_NOTICE_INTRO}: ${notice.branch} (${notice.stack})`,
+    `${notice.kind}: ${short(notice.from)} → ${short(notice.to)}${notice.parent ? ` on ${notice.parent}` : ""}.`,
+    ...(notice.changedFiles.length ? [`Files touched: ${notice.changedFiles.map((file) => JSON.stringify(file)).join(", ")}.`] : []),
+    `Undo receipt: ${notice.undo}.`,
+    "Call plan_stack_operation instead of rebasing this branch by hand. Reread any listed files before relying on earlier reads.",
+  ].join("\n");
+}
+
 /*
  * PwrAgent writes two transcript messages for another model to read: the
  * Continue-after prompt that resumes a thread when its dependency fires, and

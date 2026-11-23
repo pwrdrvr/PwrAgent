@@ -14,6 +14,8 @@ import type {
 } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   buildThreadCorrespondenceHeading,
+  formatStackNotice,
+  type StackNotice,
   type ThreadCorrespondenceState,
 } from "@pwragent/shared/contracts/thread-system-messages";
 import { buildThreadMarkdownLink } from "@pwragent/shared/contracts/thread-link";
@@ -32,8 +34,10 @@ export type CorrespondenceRecord = {
   turnId?: string;
   sourceTurnId?: string;
   sourceItemId?: string;
+  stackNotice?: StackNotice;
+  stackDelivered?: boolean;
 };
-type Status = Pick<CorrespondenceRecord, "state"> & Partial<Pick<CorrespondenceRecord, "destination" | "queueEntryId" | "turnId">>;
+type Status = Pick<CorrespondenceRecord, "state"> & Partial<Pick<CorrespondenceRecord, "destination" | "queueEntryId" | "turnId" | "stackDelivered">>;
 type Event = { type: "message"; record: CorrespondenceRecord } | { type: "status"; id: string; status: Status };
 
 /** PwrAgent-owned supplemental correspondence, never provider history or SQLite. */
@@ -77,16 +81,23 @@ export class ThreadCorrespondenceStore {
     return records;
   }
 
-  private append(source: ThreadRef, event: Event): void {
+  private append(source: ThreadRef, event: Event, flush = false): void {
     if (!this.directory) return;
     mkdirSync(this.directory, { recursive: true, mode: 0o700 });
-    appendFileSync(path.join(this.directory, `${this.key(source)}.jsonl`), `${JSON.stringify(event)}\n`, { mode: 0o600 });
+    appendFileSync(path.join(this.directory, `${this.key(source)}.jsonl`), `${JSON.stringify(event)}\n`, { mode: 0o600, flush });
   }
 
-  record(record: CorrespondenceRecord): void {
+  record(record: CorrespondenceRecord): boolean {
     const records = this.load(record.source);
-    this.append(record.source, { type: "message", record });
+    if (record.stackNotice && records.has(record.id)) return false;
+    this.append(record.source, { type: "message", record }, Boolean(record.stackNotice));
     records.set(record.id, structuredClone(record));
+    return true;
+  }
+
+  pendingStackNotices(source: ThreadRef): Array<{ id: string; text: string }> {
+    return [...this.load(source).values()].flatMap((record) =>
+      record.stackNotice && !record.stackDelivered ? [{ id: record.id, text: formatStackNotice(record.stackNotice) }] : []);
   }
 
   update(source: ThreadRef, id: string, status: Status, receipt = false): void {
@@ -139,6 +150,14 @@ export class ThreadCorrespondenceStore {
     if (records.length === 0) return replay;
     records.sort((left, right) => left.createdAt - right.createdAt);
     const messages: AppServerThreadMessageEntry[] = records.map((record) => {
+      if (record.stackNotice) {
+        const text = formatStackNotice(record.stackNotice);
+        return {
+          type: "message", id: record.id, role: "assistant", createdAt: record.createdAt,
+          origin: { kind: "pwragent", systemReason: "stack-notice" },
+          text, parts: [{ type: "text", text }],
+        };
+      }
       const destination = buildThreadMarkdownLink({ ...record.destination, ...(record.turnId ? { messageId: `user:${record.turnId}` } : {}) });
       // The transcript collapses this message by parsing the heading back.
       const heading = buildThreadCorrespondenceHeading(destination, record.state);

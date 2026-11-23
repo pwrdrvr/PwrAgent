@@ -581,6 +581,10 @@ export function forgeToolApprovalMessage(
   const issue = args.number ? ` #${args.number}` : "";
   const commentTarget = gitlab && args.kind === "pr" ? pr : issue;
   switch (operation) {
+    case "apply_stack_operation": return "Allow the agent to apply changes to the local stack?";
+    case "manage_stack_operation": return args.action === "undo"
+      ? "Allow the agent to undo a local stack operation?"
+      : "Allow the agent to manage a local stack operation?";
     case "rerun_failed_ci_jobs": return gitlab
       ? `Allow the agent to retry failed and canceled jobs in GitLab pipeline ${args.runId}?`
       : `Allow the agent to rerun failed jobs and their dependents in GitHub Actions run ${args.runId}?`;

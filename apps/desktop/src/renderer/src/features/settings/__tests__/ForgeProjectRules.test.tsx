@@ -58,6 +58,7 @@ function policyWith(
       comments: "auto",
       issues: "auto",
       ci: "auto",
+      stacks: "auto",
       approve_merge: "ask",
       ...overrides,
     },
