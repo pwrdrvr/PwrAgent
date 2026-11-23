@@ -21,6 +21,7 @@ export type ThreadGoalState = {
   goal: ThreadGoalView | null;
   pausedForMessage?: boolean;
   activationQueued?: boolean;
+  activationHoldReason?: string;
   confirmationRequired?: boolean;
   refusal?: string;
 };

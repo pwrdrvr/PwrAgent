@@ -6,7 +6,7 @@ import {
   type ThreadGoalView,
 } from "@pwragent/shared/contracts/thread-goal";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
-import { ThreadTurnQueueDispatchCancelled } from "@pwragent/owner-core/thread-turn-queue";
+import { ThreadTurnQueueDispatchCancelled, type ThreadTurnQueueReleaseResult } from "@pwragent/owner-core/thread-turn-queue";
 
 export type ThreadGoalGate = "message" | "lock" | "stop" | "hibernate" | "drift" | "turn-control";
 
@@ -19,7 +19,7 @@ export function isGoalActivationEntry(entryId?: string): boolean {
 type GoalControl = {
   goal?: ThreadGoalView | null;
   pausedForMessage?: boolean;
-  activation?: { entryId: string; queued: boolean };
+  activation?: { entryId: string; queued: boolean; clearOnCancel: boolean; holdReason?: string };
   holdingReplacement?: boolean;
   arming?: boolean;
 };
@@ -30,11 +30,12 @@ type GoalPorts = {
   clear: (threadId: string) => Promise<boolean>;
   submit: (threadId: string, entryId: string, text: string) => Promise<boolean>;
   cancel: (entryId: string) => void;
+  retry: (entryId: string) => Promise<ThreadTurnQueueReleaseResult>;
   hasWaitingMessages: (threadId: string) => boolean;
   assertCanActivate: (threadId: string) => Promise<void>;
   isAdmissionRefusal: (error: unknown) => boolean;
   publish: (threadId: string, state: ThreadGoalState) => Promise<void>;
-  warn: (threadId: string, message: string) => void;
+  warn: (threadId: string, message: string, operation?: "pause") => void;
 };
 
 export class ThreadGoalControl {
@@ -48,6 +49,7 @@ export class ThreadGoalControl {
       supported: control?.goal !== undefined,
       goal: control?.goal ?? null,
       ...(control?.activation?.queued ? { activationQueued: true } : {}),
+      ...(control?.activation?.holdReason ? { activationHoldReason: control.activation.holdReason } : {}),
       ...(control?.pausedForMessage ? { pausedForMessage: true } : {}),
     };
   }
@@ -67,8 +69,18 @@ export class ThreadGoalControl {
     return control;
   }
 
-  hasActiveGoal(threadId: string): boolean {
-    return this.controls.get(threadId)?.goal?.status === "active";
+  private async refresh(threadId: string, control: GoalControl): Promise<void> {
+    const previous = control.goal;
+    const read = await this.ports.read(threadId);
+    if (read === undefined || control.goal === previous) control.goal = read;
+  }
+
+  async hasActiveGoalOnLockedThread(threadId: string): Promise<boolean> {
+    return await this.locks.run(threadId, async () => {
+      const control = this.get(threadId);
+      if (control.goal?.status !== "active") await this.refresh(threadId, control);
+      return control.goal?.status === "active";
+    });
   }
 
   assertActivationPending(threadId: string, entryId: string | undefined): void {
@@ -99,6 +111,17 @@ export class ThreadGoalControl {
     });
   }
 
+  activationWaiting(threadId: string, entryId: string, holdReason?: string): void {
+    const control = this.controls.get(threadId);
+    const activation = control?.activation;
+    if (!control || activation?.entryId !== entryId) return;
+    if (activation.queued && activation.holdReason === holdReason) return;
+    activation.queued = true;
+    activation.holdReason = holdReason;
+    control.holdingReplacement = false;
+    void this.publish(threadId, control).catch(() => undefined);
+  }
+
   *activeThreads(): IterableIterator<string> {
     for (const [threadId, control] of this.controls) {
       if (control.goal?.status === "active" || control.pausedForMessage || control.activation || control.arming) yield threadId;
@@ -122,11 +145,10 @@ export class ThreadGoalControl {
     }
 
     let activation: GoalControl["activation"];
+    let retryEntryId: string | undefined;
     const state = await this.locks.run(threadId, async () => {
       const control = this.get(threadId);
-      const previous = control.goal;
-      const read = await this.ports.read(threadId);
-      if (read === undefined || control.goal === previous) control.goal = read;
+      await this.refresh(threadId, control);
       if (control.goal === undefined || action === "read") return this.state(control);
       if (action !== "set" && !control.goal) throw new Error("No goal on this thread.");
       if (action === "cancel" && !control.activation) return this.state(control);
@@ -134,15 +156,22 @@ export class ThreadGoalControl {
         && (action === "clear" || (action === "set" && objective !== control.goal.objective))) {
         return { ...this.state(control), confirmationRequired: true };
       }
-      if (control.activation) {
-        this.ports.cancel(control.activation.entryId);
+      const pending = control.activation;
+      if (action === "resume" && pending?.holdReason) {
+        retryEntryId = pending.entryId;
+        return this.state(control);
+      }
+      if (pending) {
+        this.ports.cancel(pending.entryId);
         control.activation = undefined;
         control.holdingReplacement = false;
       }
       control.pausedForMessage = false;
       if (action === "clear" || action === "cancel") {
-        await this.ports.clear(threadId);
-        control.goal = null;
+        if (action === "clear" || pending?.clearOnCancel) {
+          await this.ports.clear(threadId);
+          control.goal = null;
+        }
       } else if (action === "pause") {
         control.goal = await this.ports.set(threadId, "paused");
       } else {
@@ -151,12 +180,13 @@ export class ThreadGoalControl {
         }
         control.holdingReplacement = true;
         try {
+          const clearOnCancel = action === "set" && control.goal?.objective !== objective;
           if (action === "set" && control.goal && control.goal.objective !== objective) {
             await this.ports.clear(threadId);
             control.goal = null;
           }
           control.goal = await this.ports.set(threadId, "paused", action === "set" ? objective : undefined);
-          activation = { entryId: `${ACTIVATION_PREFIX}${randomUUID()}`, queued: false };
+          activation = { entryId: `${ACTIVATION_PREFIX}${randomUUID()}`, queued: false, clearOnCancel };
           control.activation = activation;
           return this.state(control);
         } catch (error) {
@@ -167,6 +197,15 @@ export class ThreadGoalControl {
       }
       return this.publish(threadId, control);
     });
+    if (retryEntryId) {
+      const result = await this.ports.retry(retryEntryId);
+      const next = this.state(this.get(threadId));
+      if (result.disposition === "not_head") return { ...next, refusal: "Retry the earlier queued message first." };
+      if (result.disposition === "busy" && next.activationHoldReason) {
+        return { ...next, refusal: "The thread is busy. Retry the goal when it is idle." };
+      }
+      return next;
+    }
     if (!activation) return state;
 
     const { entryId } = activation;
@@ -177,7 +216,7 @@ export class ThreadGoalControl {
       if (queued) {
         await this.locks.run(threadId, async () => {
           const control = this.get(threadId);
-          if (control.activation?.entryId !== entryId) return;
+          if (control.activation?.entryId !== entryId || control.activation.queued) return;
           control.activation.queued = true;
           control.holdingReplacement = false;
           await this.publish(threadId, control);
@@ -209,9 +248,16 @@ export class ThreadGoalControl {
     // pause is needed or an activation RPC already crossed the wire.
     if (gate === "message" && current?.goal?.status !== "active" && !current?.arming) return await commit();
     return await this.locks.run(threadId, async () => {
-      const control = this.controls.get(threadId);
+      const control = gate === "lock" ? this.get(threadId) : this.controls.get(threadId);
+      if (gate === "lock" && control && control.goal === undefined) await this.refresh(threadId, control);
       if (control?.goal?.status === "active") {
-        control.goal = await this.ports.set(threadId, "paused");
+        try {
+          control.goal = await this.ports.set(threadId, "paused");
+        } catch (error) {
+          if (gate !== "stop") throw error;
+          this.ports.warn(threadId, error instanceof Error ? error.message : String(error), "pause");
+          return await commit();
+        }
         control.pausedForMessage = gate === "message";
         await this.publish(threadId, control);
       } else if (control && gate !== "message" && (control.activation || control.pausedForMessage)) {

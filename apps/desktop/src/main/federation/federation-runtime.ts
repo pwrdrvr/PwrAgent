@@ -2494,13 +2494,13 @@ export class DesktopFederationRuntime {
       throw new Error("Federation peer is not enrolled.");
     }
     const revokedAt = Date.now();
-    if (peer.capabilities.includes("turn_control")) {
-      await getDesktopBackendRegistry().withGoalTurnControlRevocation(() => store.revokePeer(peerId, revokedAt));
-    } else {
-      store.revokePeer(peerId, revokedAt);
-    }
+    store.revokePeer(peerId, revokedAt);
     this.server?.closePeer(peerId);
     this.unregisterPeer(peerId);
+    if (peer.capabilities.includes("turn_control")) {
+      void Promise.resolve().then(() => getDesktopBackendRegistry().pauseGoalsAfterTurnControlRevocation())
+        .catch((error) => log.warn("Could not clean up Codex goals after peer access was revoked", { peerId, error }));
+    }
     this.remotePeerDirectory.delete(peerId);
     this.publishPeerStatus(peerId, "revoked");
     this.broadcastPeerDirectory();

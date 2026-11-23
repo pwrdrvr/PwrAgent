@@ -948,6 +948,10 @@ export class ThreadTurnQueue {
     return [...this.queueFor(this.keyFor(params))];
   }
 
+  hasWaitingEntries(params: { backend: AppServerBackendKind; threadId: ThreadIdentifier }): boolean {
+    return hasWaitingEntry(this.queuedEntries.get(this.keyFor(params)) ?? []);
+  }
+
   /** Synchronous projection reads borrow entries without cloning the complete FIFO. */
   *iterateQueuedEntries(params: {
     backend: AppServerBackendKind;

@@ -60,7 +60,7 @@ type Confirmation = {
 
 export function useComposerGoal(api: DesktopApi | undefined, threadId: string | undefined) {
   const [snapshot, setSnapshot] = useState<{ threadId: string; state: ThreadGoalState }>();
-  const [request, setRequest] = useState<{ threadId: string; action: GoalAction }>();
+  const [requests, setRequests] = useState<ReadonlyMap<string, GoalCommand>>(() => new Map());
   const [error, setError] = useState<{ threadId: string; entry: ComposerErrorEntry }>();
   const [confirmation, setConfirmation] = useState<{ threadId: string; value: Confirmation }>();
   const [showCount, setShowCount] = useState(0);
@@ -69,7 +69,7 @@ export function useComposerGoal(api: DesktopApi | undefined, threadId: string | 
     scope.current = { threadId, revision: 0, busy: false, occurrence: 0 };
   }
   const state = snapshot?.threadId === threadId ? snapshot?.state : undefined;
-  const busy = request?.threadId === threadId ? request?.action : undefined;
+  const busy = threadId ? requests.get(threadId)?.action : undefined;
 
   useEffect(() => {
     if (!threadId) return;
@@ -112,7 +112,7 @@ export function useComposerGoal(api: DesktopApi | undefined, threadId: string | 
     confirmedObjective?: string,
   ): Promise<void> => {
     const current = scope.current;
-    if (!threadId || current.busy) return;
+    if (!threadId || current.busy || busy) return;
     if (state?.supported === false || !api?.readThreadGoal) {
       notice("This Codex version doesn’t support goals.");
       return;
@@ -136,7 +136,8 @@ export function useComposerGoal(api: DesktopApi | undefined, threadId: string | 
     }
     current.busy = true;
     const revision = current.revision;
-    setRequest({ threadId, action: command.action });
+    const request = { ...command };
+    setRequests((pending) => new Map(pending).set(threadId, request));
     setError(undefined);
     try {
       const result = await requestGoal(api, threadId, command, confirmedObjective);
@@ -172,10 +173,13 @@ export function useComposerGoal(api: DesktopApi | undefined, threadId: string | 
         retry: { label: "Retry", onClick: () => void run(command, notice, onAccepted, confirmedObjective) },
       } });
     } finally {
-      if (scope.current === current) {
-        current.busy = false;
-        setRequest(undefined);
-      }
+      current.busy = false;
+      setRequests((pending) => {
+        if (pending.get(threadId) !== request) return pending;
+        const remaining = new Map(pending);
+        remaining.delete(threadId);
+        return remaining;
+      });
     }
   };
 
@@ -209,6 +213,7 @@ export function ComposerGoalStrip(props: {
   goal: ThreadGoalView;
   pausedForMessage?: boolean;
   activationQueued?: boolean;
+  activationHoldReason?: string;
   busy?: GoalAction;
   showCount: number;
   onCommand: (command: GoalCommand) => void;
@@ -217,9 +222,10 @@ export function ComposerGoalStrip(props: {
   const [open, setOpen] = useState(false);
   const [openAt, setOpenAt] = useState(props.showCount);
   const detailId = useId();
-  const status = props.activationQueued ? "Starts after this turn"
+  const status = props.activationHoldReason ? "Start held"
+    : props.activationQueued ? "Starts after this turn"
     : props.pausedForMessage ? "Paused for your message" : statusLabels[goal.status];
-  const warning = goal.status === "blocked" || goal.status === "usageLimited" || goal.status === "budgetLimited";
+  const warning = !!props.activationHoldReason || goal.status === "blocked" || goal.status === "usageLimited" || goal.status === "budgetLimited";
   const expanded = props.showCount !== openAt || open;
   const usage = compactNumber.format(goal.tokensUsed)
     + (goal.tokenBudget === null ? "" : ` / ${compactNumber.format(goal.tokenBudget)}`);
@@ -235,7 +241,7 @@ export function ComposerGoalStrip(props: {
       >
         <span className="composer__queued-env-action-chevron" aria-hidden="true" />
         <span className="composer__queued-label">{status ? `Goal · ${status}` : "Goal"}</span>
-        <span className="composer__queued-text">{goal.objective}</span>
+        <span className="composer__queued-text">{props.activationHoldReason ?? goal.objective}</span>
       </button>
       {!props.activationQueued && (
         <span className="composer-goal__usage">
@@ -244,8 +250,16 @@ export function ComposerGoalStrip(props: {
       )}
       <div className="composer-goal__actions">
         {props.activationQueued ? (
-          <button className="composer__secondary-action" disabled={!!props.busy} type="button"
-            onClick={() => props.onCommand({ action: "cancel" })}>Cancel</button>
+          <>
+            {props.activationHoldReason && (
+              <button className="composer__secondary-action" disabled={!!props.busy} type="button"
+                onClick={() => props.onCommand({ action: "resume" })}>
+                {props.busy === "resume" ? "Retrying…" : "Retry"}
+              </button>
+            )}
+            <button className="composer__secondary-action" disabled={!!props.busy} type="button"
+              onClick={() => props.onCommand({ action: "cancel" })}>Cancel</button>
+          </>
         ) : (
           <>
             {!props.pausedForMessage && goal.status !== "complete" && (
@@ -264,7 +278,7 @@ export function ComposerGoalStrip(props: {
       </div>
       <div id={detailId} className="composer-goal__detail" hidden={!expanded}
         key={props.showCount} data-show={props.showCount > 0 || undefined}>
-        {goal.objective}
+        {props.activationHoldReason ? `${props.activationHoldReason}\n${goal.objective}` : goal.objective}
       </div>
     </div>
   );
@@ -289,14 +303,16 @@ export function ComposerGoalConfirmation(props: {
       <section ref={dialog} role="dialog" aria-modal="true" aria-labelledby={title}
         aria-describedby={description} className="rename-thread-dialog composer-goal-dialog">
         <h2 id={title}>{replacement === undefined ? "Clear this goal?" : "Replace the current goal?"}</h2>
-        <p id={description}>{replacement === undefined
-          ? "Codex stops working toward this goal and loses its time and token counts. The running turn continues."
-          : "Codex stops working toward the current goal and starts on the new one."}</p>
-        <dl>
-          <dt>{replacement === undefined ? "Goal" : "Now"}</dt>
-          <dd>{props.confirmation.objective}</dd>
-          {replacement !== undefined && <><dt>New</dt><dd>{replacement}</dd></>}
-        </dl>
+        <div className="composer-goal-dialog__content" role="region" aria-label="Goal details" tabIndex={0}>
+          <p id={description}>{replacement === undefined
+            ? "Codex stops working toward this goal and loses its time and token counts. The running turn continues."
+            : "Codex stops working toward the current goal and starts on the new one."}</p>
+          <dl>
+            <dt>{replacement === undefined ? "Goal" : "Now"}</dt>
+            <dd>{props.confirmation.objective}</dd>
+            {replacement !== undefined && <><dt>New</dt><dd>{replacement}</dd></>}
+          </dl>
+        </div>
         <div className="rename-thread-dialog__actions">
           <button ref={cancel} className="button button--secondary" type="button" onClick={props.onCancel}>Cancel</button>
           <button ref={confirm} className="button button--primary" type="button" onClick={props.onConfirm}>

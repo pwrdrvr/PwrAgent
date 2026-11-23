@@ -44670,6 +44670,21 @@ button.pricing-token-miser__folded:focus-visible {
   }
 }
 
+.composer-goal-dialog {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  max-height: calc(100vh - 2 * var(--dialog-backdrop-inset));
+  overflow-y: auto;
+}
+
+.composer-goal-dialog__content {
+  overflow: auto;
+}
+
+.composer-goal-dialog__content:focus-visible {
+  outline-offset: -2px;
+}
+
 .composer-goal-dialog dt {
   color: var(--text-muted);
   font-size: 11px;

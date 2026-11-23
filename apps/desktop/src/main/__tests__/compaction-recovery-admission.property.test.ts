@@ -59,6 +59,7 @@ function runtime(change: string, boundary: string) {
       clear: async () => false,
       submit: async () => false,
       cancel: () => undefined,
+      retry: async (entryId) => ({ disposition: "not_found", entryId }),
       hasWaitingMessages: () => false,
       assertCanActivate: async () => undefined,
       isAdmissionRefusal: () => false,

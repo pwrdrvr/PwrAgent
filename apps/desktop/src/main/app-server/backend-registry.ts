@@ -1241,7 +1241,8 @@ export class DesktopBackendRegistry {
       return result.status === "queued";
     },
     cancel: (entryId) => { this.threadTurnQueue.cancelEntry(entryId); },
-    hasWaitingMessages: (threadId) => !this.threadTurnQueue.iterateQueuedEntries({ backend: "codex", threadId }).next().done,
+    retry: (entryId) => this.threadTurnQueue.releaseEntryWithDisposition(entryId),
+    hasWaitingMessages: (threadId) => this.threadTurnQueue.hasWaitingEntries({ backend: "codex", threadId }),
     assertCanActivate: async (threadId) => {
       const identity = { backend: "codex" as const, threadId };
       await this.assertThreadNotLocked(identity.backend, threadId);
@@ -1255,11 +1256,12 @@ export class DesktopBackendRegistry {
       backend: "codex",
       notification: { method: "thread/goal/controlChanged", params: { threadId, state } },
     }),
-    warn: (threadId, message) => {
-      backendRegistryLog.warn("Codex goal activation failed", { threadId, message });
+    warn: (threadId, message, operation) => {
+      const summary = operation === "pause" ? "Goal not paused. Codex may continue after this turn." : "Goal not resumed.";
+      backendRegistryLog.warn(summary, { threadId, message });
       void this.emit({
         backend: "codex",
-        notification: { method: "warning", params: { threadId, message: `Goal not resumed. ${message}` } },
+        notification: { method: "warning", params: { threadId, message: `${summary} ${message}` } },
       });
     },
   });
@@ -3520,7 +3522,11 @@ export class DesktopBackendRegistry {
     event: ThreadTurnQueueLifecycleEvent,
   ): Promise<void> {
     if (isGoalActivationEntry(event.entry.id)) {
-      if (event.type === "cancelled" && event.reason) {
+      if (event.type === "blocked") {
+        this.threadGoals.activationWaiting(event.entry.threadId, event.entry.id, event.error.message);
+      } else if (event.type === "held" || event.type === "queued") {
+        this.threadGoals.activationWaiting(event.entry.threadId, event.entry.id, event.entry.holdReason);
+      } else if (event.type === "cancelled" && event.reason) {
         void this.threadGoals.activationRefused(event.entry.threadId, event.entry.id, event.reason).catch(() => undefined);
       }
       return;
@@ -8643,6 +8649,19 @@ export class DesktopBackendRegistry {
     return Boolean(await this.readThreadLock(params.backend, params.threadId));
   }
 
+  private async guardLockedGoalTurn(started: Extract<AppServerNotification, { method: "turn/started" }>): Promise<void> {
+    const { threadId } = started.params;
+    const turnId = turnIdFromStartedNotification(started);
+    const target = { backend: "codex" as const, threadId, turnId };
+    try {
+      if (!await this.isThreadLocked(target) || !await this.threadGoals.hasActiveGoalOnLockedThread(threadId)) return;
+      backendRegistryLog.warn("Codex started a goal turn on a locked thread", { threadId, turnId });
+      await this.interruptTurn(target);
+    } catch (error) {
+      backendRegistryLog.warn("Could not guard a goal turn against its thread lock", { threadId, turnId, error });
+    }
+  }
+
   /**
    * What keeps the thread's wakes from starting a turn now, for its Waiting
    * for list. A lock outranks a paused project, as it does at admission.
@@ -9105,13 +9124,16 @@ export class DesktopBackendRegistry {
       : await commit();
   }
 
-  async withGoalTurnControlRevocation<T>(commit: () => T): Promise<T> {
+  async pauseGoalsAfterTurnControlRevocation(): Promise<void> {
     this.goalTurnControlRevocations++;
     try {
-      for (const threadId of this.threadGoals.activeThreads()) {
-        await this.threadGoals.withGate(threadId, "turn-control", async () => undefined);
-      }
-      return commit();
+      await Promise.all([...this.threadGoals.activeThreads()].map(async (threadId) => {
+        try {
+          await this.threadGoals.withGate(threadId, "turn-control", async () => undefined);
+        } catch (error) {
+          backendRegistryLog.warn("Could not pause Codex goal after peer access was revoked", { threadId, error });
+        }
+      }));
     } finally {
       this.goalTurnControlRevocations--;
     }
@@ -10199,6 +10221,9 @@ export class DesktopBackendRegistry {
       this.forgetDurableProjectHeldWakeup(entry.id);
     }
     if (result.disposition === "updated" && current) {
+      if (current.backend === "codex" && current.paused) {
+        void this.threadGoals.messageAbandoned(current.threadId).catch(() => undefined);
+      }
       this.refreshRestartQueuedEntries();
       await this.emit({
         backend: current.backend,
@@ -13301,6 +13326,7 @@ export class DesktopBackendRegistry {
   *iterateQueuedTurnSummaries(ref: { backend: AppServerBackendKind; threadId: string }): IterableIterator<ThreadQueuedTurnSummary> {
     let position = 0;
     for (const entry of this.threadTurnQueue.iterateQueuedEntries(ref)) {
+      if (isGoalActivationEntry(entry.id)) continue;
       yield {
         queueEntryId: entry.id,
         origin: entry.origin,
@@ -13323,6 +13349,7 @@ export class DesktopBackendRegistry {
   getQueuedTurnsSnapshot(): Record<string, ThreadQueuedTurnSummary[]> {
     const snapshot: Record<string, ThreadQueuedTurnSummary[]> = {};
     for (const entry of this.threadTurnQueue.getAllQueuedEntries()) {
+      if (isGoalActivationEntry(entry.id)) continue;
       const threadKey = buildThreadIdentityKey(entry.backend, entry.threadId);
       const queue = snapshot[threadKey] ?? [];
       queue.push({
@@ -16213,14 +16240,7 @@ export class DesktopBackendRegistry {
           // exit can arrive while lifecycle delivery is still in progress.
           if (backend === "codex" && notification.method === "turn/started") {
             const started = notification as Extract<AppServerNotification, { method: "turn/started" }>;
-            const { threadId } = started.params;
-            if (this.threadGoals.hasActiveGoal(threadId) && await this.isThreadLocked({ backend, threadId })) {
-              const turnId = turnIdFromStartedNotification(started);
-              backendRegistryLog.warn("Codex started a goal turn on a locked thread", { threadId, turnId });
-              void this.interruptTurn({ backend, threadId, turnId }).catch((error) => {
-                backendRegistryLog.warn("Could not stop a goal turn on a locked thread", { threadId, turnId, error });
-              });
-            }
+            void this.guardLockedGoalTurn(started);
             const candidate = this.context.turnState.retryOperation(started.params.threadId);
             if (candidate?.kind === "compact") {
               this.context.turnState.updateRetry(candidate, {

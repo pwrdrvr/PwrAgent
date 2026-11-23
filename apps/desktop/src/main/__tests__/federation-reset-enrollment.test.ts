@@ -26,6 +26,7 @@ const countRemoteThreadPinsByInstance = vi.hoisted(() =>
   ),
 );
 const publishLocalEvent = vi.hoisted(() => vi.fn(async () => undefined));
+const pauseGoals = vi.hoisted(() => vi.fn<() => Promise<void>>());
 
 vi.mock("../state/app-state", () => ({
   getAppStateDb: () => ({
@@ -52,6 +53,7 @@ vi.mock("../app-server/backend-registry", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   getDesktopBackendRegistry: () => ({
     publishLocalEvent,
+    pauseGoalsAfterTurnControlRevocation: pauseGoals,
   }),
 }));
 
@@ -340,13 +342,14 @@ describe("federation revokePeer — remote pin disposition", () => {
 
   type RevokeHarness = {
     store: () => unknown;
+    server?: { closePeer: (peerId: string) => void };
     revokePeer: (
       peerId: string,
       request?: { pinDisposition?: "forget" | "remember" },
     ) => Promise<{ status: string }>;
   };
 
-  function createRevokeHarness(): RevokeHarness {
+  function createRevokeHarness(capabilities: string[] = [], revokePeer = vi.fn()): RevokeHarness {
     const runtime = new DesktopFederationRuntime() as unknown as RevokeHarness;
     runtime.store = () => ({
       getPeer: (peerId: string) => ({
@@ -354,13 +357,30 @@ describe("federation revokePeer — remote pin disposition", () => {
         label: "Old laptop",
         role: "client",
         status: "connected",
-        capabilities: [],
+        capabilities,
         canRevoke: true,
       }),
-      revokePeer: () => undefined,
+      revokePeer,
     });
     return runtime;
   }
+
+  it("commits revocation and closes the connection independently of the Goal cleanup result", async () => {
+    const revoke = vi.fn();
+    const closePeer = vi.fn();
+    const failure = new Error("Goal pause failed");
+    pauseGoals.mockRejectedValueOnce(failure);
+    const runtime = createRevokeHarness(["turn_control"], revoke);
+    runtime.server = { closePeer };
+
+    const peer = await runtime.revokePeer("client_one");
+
+    expect(peer.status).toBe("revoked");
+    expect(revoke).toHaveBeenCalledWith("client_one", expect.any(Number));
+    expect(closePeer).toHaveBeenCalledWith("client_one");
+    expect(pauseGoals).toHaveBeenCalledOnce();
+    expect(closePeer.mock.invocationCallOrder[0]!).toBeLessThan(pauseGoals.mock.invocationCallOrder[0]!);
+  });
 
   it("tombstones the revoked instance's pins by default", async () => {
     const peer = await createRevokeHarness().revokePeer("client_one");

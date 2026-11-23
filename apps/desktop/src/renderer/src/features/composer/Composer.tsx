@@ -13707,6 +13707,7 @@ function useComposerController(props: ComposerProps) {
           goal={goalControls.state.goal}
           pausedForMessage={goalControls.state.pausedForMessage}
           activationQueued={goalControls.state.activationQueued}
+          activationHoldReason={goalControls.state.activationHoldReason}
           busy={goalControls.busy}
           showCount={goalControls.showCount}
           onCommand={(command) => { void goalControls.run(command, goalNotice); }}
