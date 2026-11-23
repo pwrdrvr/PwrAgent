@@ -256,7 +256,7 @@ export class StackOperationsService {
           const receipt = await this.runJournalled(clone, registry, store, engine, git, {
             beforeTransaction: async () => { await request.readGate(); signal?.throwIfAborted(); },
           }, notification, (journal) => engine.apply(plan, opId, Date.now(), journal));
-          await this.complete(clone, registry, store, git, receipt, notification);
+          await this.completeUnderWorktreeLock(clone, registry, store, git, notification);
           previous = tip;
           head = receipt.moves.find((move) => move.branch === branch.branch)?.next ?? tip;
         }
@@ -370,28 +370,35 @@ export class StackOperationsService {
     if (abandoning) return abandoning.then(() => this.complete(clone, registry, store, git, notification));
     const active = this.finishing.get(clone.commonDir);
     if (active) return active;
-    const work = registry.withStackWorktreeMutation(clone.commonDir, async () => {
-      let child: StackThreadRef | undefined;
-      let found = false;
-      await store.recover(clone.commonDir, async (entry) => {
-        if (!entry.committed || entry.notification.opId !== notification.opId) {
-          throw new StackOperationError("gh_stack_busy", "Another stack operation owns this journal.");
-        }
-        found = true;
-        const saved = entry.notification;
-        if (!registry.hasStackNotice(saved.actor, saved.opId)) {
-          if (!saved.provisioningAbandoned) child = await this.provision(clone, registry, store, git, entry);
-          await registry.publishStackCompletion(saved.actor, saved.opId, saved.kind, child, saved.provisioningAbandoned);
-        }
-        if (!saved.provisioningAbandoned || entry.provisioning?.stage === "pending") await this.releaseCarry(git, saved);
-      });
-      if (!found && !registry.hasStackNotice(notification.actor, notification.opId)) {
-        throw new StackOperationError("not_found", "The stack completion journal is unavailable.");
-      }
-      return child;
-    }).finally(() => { this.finishing.delete(clone.commonDir); });
+    const work = registry.withStackWorktreeMutation(clone.commonDir, () =>
+      this.completeUnderWorktreeLock(clone, registry, store, git, notification))
+      .finally(() => { this.finishing.delete(clone.commonDir); });
     this.finishing.set(clone.commonDir, work);
     return work;
+  }
+
+  // A publish keeps the worktree lock through its remote lease. The normal
+  // coordinator acquires that lock for the completion phase separately.
+  private async completeUnderWorktreeLock(clone: { cwd: string; commonDir: string }, registry: DesktopBackendRegistry,
+    store: GhStackCatalogStore, git: StackGit, notification: StackNotification): Promise<StackThreadRef | undefined> {
+    let child: StackThreadRef | undefined;
+    let found = false;
+    await store.recover(clone.commonDir, async (entry) => {
+      if (!entry.committed || entry.notification.opId !== notification.opId) {
+        throw new StackOperationError("gh_stack_busy", "Another stack operation owns this journal.");
+      }
+      found = true;
+      const saved = entry.notification;
+      if (!registry.hasStackNotice(saved.actor, saved.opId)) {
+        if (!saved.provisioningAbandoned) child = await this.provision(clone, registry, store, git, entry);
+        await registry.publishStackCompletion(saved.actor, saved.opId, saved.kind, child, saved.provisioningAbandoned);
+      }
+      if (!saved.provisioningAbandoned || entry.provisioning?.stage === "pending") await this.releaseCarry(git, saved);
+    });
+    if (!found && !registry.hasStackNotice(notification.actor, notification.opId)) {
+      throw new StackOperationError("not_found", "The stack completion journal is unavailable.");
+    }
+    return child;
   }
 
   private async abandonProvisioning(clone: { commonDir: string }, registry: DesktopBackendRegistry,
