@@ -1649,6 +1649,20 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     }).immediate();
   }
 
+  moveStackLead(previous: string, next: string): void {
+    if (previous === next) return;
+    this.stateDb.raw.transaction(() => {
+      const result = this.stateDb.raw.prepare(
+        "SELECT payload FROM threads WHERE EXISTS (SELECT 1 FROM json_each(threads.payload, '$.stackLead') WHERE value = ?)",
+      ).get(previous) as { payload: string } | undefined;
+      if (!result) return;
+      const owner = JSON.parse(result.payload) as ThreadOverlayState;
+      this.setStackLead(next, owner);
+      const current = this.getThread(buildThreadIdentityKey(owner.backend, owner.threadId));
+      this.mergeOwnerThreadMetadata(owner, { stackLead: current?.stackLead?.filter((key) => key !== previous) });
+    }).immediate();
+  }
+
   markStackUpdateUnread(thread: OwnerThreadIdentity, updatedAt: number): number | undefined {
     return this.stateDb.raw.transaction(() => {
       const current = this.getThread(buildThreadIdentityKey(thread.backend, thread.threadId));

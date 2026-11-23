@@ -1,4 +1,5 @@
 {
+  "stack-lead-root-migration": {"commits": 1, "note": "A surviving stack keeps its lead in one SQLite commit. At 30 removals/day and 12,360 WAL bytes each, about 0.37 MB/day.", "observedWalBytes": 12360, "rowsChanged": 2, "statements": 2},
   "stack-owner-metadata-replay": {"commits": 0, "note": "Restart replay of a lead transfer and an unread notice makes no additional commits.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "stack-notice-unread": {"commits": 1, "note": "One commit moves the watermark for a previously read thread. Already unread threads need no write.", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
   "stack-lead-transfer": {"commits": 1, "note": "A stack lead transfer edits both owner overlays in one commit.", "observedWalBytes": 12360, "rowsChanged": 2, "statements": 2},

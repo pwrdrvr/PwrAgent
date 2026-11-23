@@ -149,6 +149,12 @@ it("budgets stack lead transfer and the unread notice watermark", async () => {
   });
   expectSqliteWriteBudget({ scenario: "stack-owner-metadata-replay", writes: replay.writes,
     note: "Restart replay of a lead transfer and an unread notice makes no additional commits." });
+  const move = await measureSqliteWrites(() => store.moveStackLead("fixture", "new-bottom"));
+  expect((await store.getThreadMetadata(second))?.stackLead).toEqual(["new-bottom"]);
+  expectSqliteWriteBudget({ scenario: "stack-lead-root-migration", writes: move.writes,
+    note: "A surviving stack keeps its lead in one SQLite commit. At 30 removals/day and 12,360 WAL bytes each, about 0.37 MB/day." });
+  const recoveredMove = await measureSqliteWrites(() => store.moveStackLead("fixture", "new-bottom"));
+  expect(recoveredMove.writes.commits).toBe(0);
 });
 
 describe("sqlite write metrics", () => {

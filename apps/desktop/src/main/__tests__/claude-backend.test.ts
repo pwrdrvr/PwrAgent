@@ -2362,6 +2362,12 @@ describe("Claude SDK backend", () => {
     const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
     await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Read the file" }] });
     await f.waitForTurn();
+    expect(f.events.map(({ notification }) => notification)).toContainEqual(expect.objectContaining({
+      method: "item/completed", params: expect.objectContaining({
+        item: expect.objectContaining({ id: "read-only", status: "completed", commandAction: "read",
+          arguments: { file_path: "fixture.txt" } }),
+      }),
+    }));
     expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
   });
 

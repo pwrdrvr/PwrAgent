@@ -96,13 +96,13 @@ it("models turn completion, agent commits, and cancellation around stack applica
         scheduler.schedule(Promise.resolve(), "owner turn event").then(() => listeners.forEach((listener) => listener()));
       },
       advanceTip: () => { tip = "agent commit"; },
-      abort: () => { coordinator.abort(actor, planId); },
+      abort: () => { void coordinator.abort(actor, planId); },
     } }), sequence);
     await scheduler.waitAll();
     if (model.active.some(Boolean) && !model.stopped) {
       expect(writes).toBe(0);
       expect(held.size).toBe(3);
-      coordinator.abort(actor, planId);
+      await coordinator.abort(actor, planId);
       model.stopped = true;
     }
     await expect.poll(() => coordinator.status(actor, planId).status, { interval: 0 }).toBe(model.committed ? "done" : "paused");
@@ -173,8 +173,8 @@ it("holds affected queues until active layers settle, then moves and notifies on
   }), { numRuns: 25 });
 });
 
-it("waits for the operator's interrupt receipt and retries completion without repeating the ref transaction", async () => {
-  await fc.assert(fc.asyncProperty(fc.boolean(), async (failAfterCommit) => {
+it("waits for the interrupt receipt and retries or abandons completion without repeating the ref transaction", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), fc.boolean(), async (failAfterCommit, abandon) => {
     const actor = { backend: "codex" as const, threadId: "actor" };
     const worker: StackParticipant = { backend: "codex", threadId: "layer", title: "Layer", branch: "layer",
       active: true, locked: false, remote: false };
@@ -189,6 +189,7 @@ it("waits for the operator's interrupt receipt and retries completion without re
     let holds = 0;
     let writes = 0;
     let attempts = 0;
+    let abandoned = 0;
     const coordinator = new StackCoordinator({
       newId: () => "plan", now: () => 1, plan: async () => plan,
       participants: async () => [{ ...worker }],
@@ -214,6 +215,13 @@ it("waits for the operator's interrupt receipt and retries completion without re
         if (failAfterCommit && attempts === 1) throw new Error("provider start failed");
         return { backend: "codex", threadId: "child" };
       },
+      abandon: async (caller, opId) => {
+        expect(caller).toEqual(actor);
+        expect(opId).toBe("plan");
+        expect(writes).toBe(1);
+        abandoned++;
+        return true;
+      },
     });
     const { planId } = await coordinator.plan(actor, plan.operation);
     coordinator.apply(actor, planId);
@@ -226,12 +234,15 @@ it("waits for the operator's interrupt receipt and retries completion without re
     await expect.poll(() => coordinator.status(actor, planId).status, { interval: 0 }).toBe(failAfterCommit ? "paused" : "done");
     if (failAfterCommit) {
       expect(coordinator.status(actor, planId).issue?.code).toBe("post_apply_failed");
-      await coordinator.continue(actor, planId);
+      if (abandon) await coordinator.abort(actor, planId);
+      else await coordinator.continue(actor, planId);
     }
-    expect(coordinator.status(actor, planId).child?.threadId).toBe("child");
+    expect(coordinator.status(actor, planId)).toMatchObject({ status: "done", undo: "refs/pwragent/undo/plan" });
+    expect(coordinator.status(actor, planId).child?.threadId).toBe(failAfterCommit && abandon ? undefined : "child");
     expect(writes).toBe(1);
-    expect(attempts).toBe(failAfterCommit ? 2 : 1);
-  }), { numRuns: 10, examples: [[true]] });
+    expect(attempts).toBe(failAfterCommit && !abandon ? 2 : 1);
+    expect(abandoned).toBe(Number(failAfterCommit && abandon));
+  }), { numRuns: 10, examples: [[true, false], [true, true]] });
 });
 
 it("routes only to the affected owner and does not apply an unsettled forecast", async () => {

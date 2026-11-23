@@ -78,3 +78,5 @@ to stop turns that are holding up the operation. A paused conflict can be
 sent to its owner with `action: "route_conflict"`. The owner can resolve the
 conflict in its worktree and call `action: "continue"`. After a provisioning
 failure, the caller can continue the operation without repeating its ref moves.
+Use `action: "abort"` to abandon failed child provisioning. The Git changes
+and their undo receipt remain available.

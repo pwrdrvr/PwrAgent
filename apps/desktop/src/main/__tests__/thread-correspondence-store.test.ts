@@ -55,12 +55,36 @@ describe("PwrAgent correspondence persistence", () => {
     expect(reopened.record(notice)).toBe(true);
     reopened.rememberStackReads(message.source, ["new.ts"]);
     reopened.flushStackReads(message.source);
+    const names = readdirSync(directory);
+    expect(names.filter((name) => name.endsWith(".stack-reads.json"))).toHaveLength(1);
+    for (const name of names.filter((name) => name.endsWith(".jsonl"))) {
+      const entries = readFileSync(path.join(directory, name), "utf8").trim().split("\n");
+      expect(entries.every((entry) => ["message", "status"].includes(JSON.parse(entry).type))).toBe(true);
+    }
     const final = new ThreadCorrespondenceStore(directory);
     expect(final.record(notice)).toBe(false);
     expect(final.readStackPaths(message.source)).toEqual(["new.ts"]);
     expect(final.pendingStackNotices(message.source)).toEqual([
       { id: notice.id, text: expect.stringContaining('Reread "old.ts"') },
     ]);
+  });
+  it("replays a completion after the terminal turn as a standalone system item", () => {
+    const turn = { id: "closed", startedAt: 10, completedAt: 30 };
+    const entry: AppServerThreadMessageEntry = { type: "message", id: "response", role: "assistant", text: "Done", turn };
+    const replay = { ...emptyReplay, messages: [entry], entries: [entry],
+      pagination: { supportsPagination: true, hasPreviousPage: false } };
+    for (const backend of ["codex", "claude", "acp:grok"] as const) {
+      const source = { backend, threadId: "fixture" };
+      const store = new ThreadCorrespondenceStore();
+      store.record({ ...record(), id: "stack:op:", source, destination: source, createdAt: 50,
+        input: [], state: "started", stackNotice: { opId: "op", kind: "add_branch", branch: "", stack: "",
+          by: { threadId: source.threadId, actor: "agent" }, from: null, to: null, changedFiles: [],
+          undo: "refs/pwragent/undo/op", completion: {} } });
+      const merged = store.appendToReplay(source, replay);
+      expect(merged.entries.map(({ id }) => id)).toEqual(["response", "stack:op:"]);
+      expect(merged.entries[1]?.turn).toBeUndefined();
+      expect(store.appendToReplay(source, replay, undefined, [], { before: "older" })).toEqual(replay);
+    }
   });
   it("bounds legacy receipts on older pages without pricing for newer turns", () => {
     const store = new ThreadCorrespondenceStore();

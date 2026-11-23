@@ -1,7 +1,7 @@
 import { pathToFileURL } from "node:url";
 import { toTranscriptImageProtocolUrl } from "../transcript-images";
-import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { appendFileSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type {
   AppServerBackendKind,
@@ -54,13 +54,13 @@ export type CorrespondenceRecord = {
   stackDelivered?: boolean;
 };
 type Status = Pick<CorrespondenceRecord, "state"> & Partial<Pick<CorrespondenceRecord, "destination" | "queueEntryId" | "turnId" | "stackDelivered">>;
-type Event = { type: "message"; record: CorrespondenceRecord } | { type: "status"; id: string; status: Status }
-  | { type: "stackReads"; paths: string[] };
+type Event = { type: "message"; record: CorrespondenceRecord } | { type: "status"; id: string; status: Status };
 
 /** PwrAgent-owned supplemental correspondence, never provider history or SQLite. */
 export class ThreadCorrespondenceStore {
   private readonly records = new Map<string, Map<string, CorrespondenceRecord>>();
   private readonly stackReads = new Map<string, Set<string>>();
+  private readonly lastStackMove = new Map<string, string>();
   private readonly pendingStackReads = new Map<string, Set<string>>();
   // Retain only turn timing metadata across page reads, never transcript rows.
   // A newer page's turn start bounds the last turn of the next older page.
@@ -86,12 +86,15 @@ export class ThreadCorrespondenceStore {
       }
       for (const [index, line] of data.split("\n").entries()) {
         if (!line) continue;
-        let event: Event;
-        try { event = JSON.parse(line) as Event; }
+        let event: Event | { type: "stackReads"; paths: string[] };
+        try { event = JSON.parse(line) as typeof event; }
         catch { throw new Error(`Invalid PwrAgent correspondence record at ${file}:${index + 1}`); }
         if (event.type === "message") {
           records.set(event.record.id, event.record);
-          if (event.record.stackNotice && !event.record.stackNotice.completion) this.stackReads.delete(key);
+          if (event.record.stackNotice && !event.record.stackNotice.completion) {
+            this.lastStackMove.set(key, event.record.id);
+            this.stackReads.delete(key);
+          }
         } else if (event.type === "stackReads") {
           this.stackReads.set(key, new Set(event.paths.slice(-256)));
         }
@@ -99,6 +102,16 @@ export class ThreadCorrespondenceStore {
           const record = records.get(event.id);
           if (record) records.set(event.id, { ...record, ...event.status });
         } else throw new Error(`Invalid PwrAgent correspondence event at ${file}:${index + 1}`);
+      }
+      try {
+        const saved = JSON.parse(readFileSync(path.join(this.directory, `${key}.stack-reads.json`), "utf8")) as {
+          after?: string; paths?: unknown;
+        };
+        if (saved.after === this.lastStackMove.get(key) && Array.isArray(saved.paths)) {
+          this.stackReads.set(key, new Set(saved.paths.slice(-256).filter((file): file is string => typeof file === "string")));
+        }
+      } catch {
+        // Read provenance is optional and must not block transcript loading.
       }
     }
     this.records.set(key, records);
@@ -117,6 +130,7 @@ export class ThreadCorrespondenceStore {
     this.append(record.source, { type: "message", record }, Boolean(record.stackNotice));
     records.set(record.id, structuredClone(record));
     if (record.stackNotice && !record.stackNotice.completion) {
+      this.lastStackMove.set(this.key(record.source), record.id);
       this.stackReads.delete(this.key(record.source));
       this.pendingStackReads.delete(this.key(record.source));
     }
@@ -154,7 +168,17 @@ export class ThreadCorrespondenceStore {
     const previous = this.stackReads.get(key) ?? new Set<string>();
     if ([...pending].some((file) => !previous.has(file))) {
       const paths = [...previous, ...[...pending].filter((file) => !previous.has(file))].slice(-256);
-      this.append(source, { type: "stackReads", paths });
+      if (this.directory) {
+        mkdirSync(this.directory, { recursive: true, mode: 0o700 });
+        const destination = path.join(this.directory, `${key}.stack-reads.json`);
+        const temporary = `${destination}.${randomUUID()}.tmp`;
+        try {
+          writeFileSync(temporary, JSON.stringify({ after: this.lastStackMove.get(key), paths }), { mode: 0o600, flag: "wx", flush: true });
+          renameSync(temporary, destination);
+        } finally {
+          rmSync(temporary, { force: true });
+        }
+      }
       this.stackReads.set(key, new Set(paths));
     }
     this.pendingStackReads.delete(key);
@@ -207,9 +231,8 @@ export class ThreadCorrespondenceStore {
     knownTurns: AppServerThreadTurnMetadata[] = [],
     page: { before?: string; limit?: number } = {},
   ): AppServerThreadReplay {
-    if (!onlyId && (page.limit === 0
-      || (replay.entries.length === 0 && replay.messages.length === 0
-        && (replay.pagination.supportsPagination || page.before !== undefined)))) return replay;
+    if (!onlyId && (page.limit === 0 || (page.before !== undefined
+      && replay.entries.length === 0 && replay.messages.length === 0))) return replay;
     const stored = this.load(source);
     const selected = onlyId ? stored.get(onlyId) : undefined;
     const records = onlyId ? (selected ? [selected] : []) : [...stored.values()];
@@ -296,12 +319,23 @@ export class ThreadCorrespondenceStore {
     const insertions = new Map<number, AppServerThreadMessageEntry[]>();
     const cursors = new Map<string | undefined, number>();
     const allIndexes = providerEntries.map((_entry, index) => index);
+    const pageTurns = timedTurns.filter((turn) => indexesByTurn.has(turn.id));
+    const firstPageTurn = pageTurns[0]?.time;
+    const lastPageTurn = pageTurns.at(-1)?.time;
+    const nextPageTurn = lastPageTurn === undefined ? undefined : timedTurns.find((turn) => turn.time > lastPageTurn)?.time;
     let turnIndex = -1;
     for (let index = 0; index < records.length; index += 1) {
       const record = records[index]!;
       const message = messages[index]!;
       while (turnIndex + 1 < timedTurns.length && timedTurns[turnIndex + 1]!.time <= record.createdAt) turnIndex += 1;
-      const sourceTurnId = record.sourceTurnId ?? timedTurns[turnIndex]?.id;
+      const completion = Boolean(record.stackNotice?.completion);
+      if (!onlyId && completion) {
+        if ((firstPageTurn !== undefined && record.createdAt < firstPageTurn && (replay.pagination.hasPreviousPage || page.before !== undefined))
+          || (page.before !== undefined && (nextPageTurn === undefined || record.createdAt >= nextPageTurn))) continue;
+      } else if (!onlyId && replay.entries.length === 0 && replay.messages.length === 0 && replay.pagination.supportsPagination) {
+        continue;
+      }
+      const sourceTurnId = completion ? undefined : record.sourceTurnId ?? timedTurns[turnIndex]?.id;
       const turnIndexes = sourceTurnId ? indexesByTurn.get(sourceTurnId) : undefined;
       // A page owns its source turns. Never attach the thread's entire send
       // history to the newest page, where provider rows may have no dates.

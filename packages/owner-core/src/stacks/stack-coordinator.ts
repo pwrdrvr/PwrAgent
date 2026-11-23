@@ -23,6 +23,7 @@ export type StackNotification = {
   steps?: StackPlan["steps"];
   moves?: RefMove[];
   carry?: ThreadWorkspaceHandoffStashSummary;
+  provisioningAbandoned?: boolean;
   interrupted?: StackThreadRef[];
 };
 
@@ -39,6 +40,7 @@ export type StackCoordinatorPort = {
   receipt(id: string): Promise<StackReceipt>;
   requestWork?(actor: StackThreadRef, owner: StackParticipant, prompt: string, key: string, settleSignal?: AbortSignal): Promise<void>;
   complete?(receipt: StackReceipt, notification: StackNotification): Promise<StackThreadRef | undefined>;
+  abandon?(actor: StackThreadRef, opId: string): Promise<boolean>;
   interrupt?(thread: StackThreadRef, opId: string): Promise<void>;
 };
 
@@ -154,9 +156,18 @@ export class StackCoordinator {
     return this.run(actor, opId).state;
   }
 
-  abort(actor: StackThreadRef, opId: string): StackRunState {
-    const run = this.run(actor, opId);
+  async abort(actor: StackThreadRef, opId: string): Promise<StackRunState> {
+    const run = this.runs.get(opId);
+    if (!run) {
+      if (await this.port.abandon?.(actor, opId)) return { opId, status: "done", undo: `refs/pwragent/undo/${opId}` };
+      return this.status(actor, opId);
+    }
+    this.run(actor, opId);
     if (run.state.status === "waiting") run.abort.abort(new StackOperationError("aborted", "Stack operation cancelled."));
+    if (run.state.status === "paused" && run.completion && await this.port.abandon?.(actor, opId)) {
+      run.completion = undefined;
+      run.state = { ...run.state, status: "done", issue: undefined };
+    }
     return run.state;
   }
 
@@ -200,11 +211,17 @@ export class StackCoordinator {
       throw new StackOperationError("forecast_conflict", "Resolve the conflict in the checkout that owns the affected branch, then re-plan.");
     }
     this.assertAvailable([owner]);
+    const refreshed = await this.port.plan(plan.operation);
+    if (forecastSignature(refreshed) !== forecastSignature(plan)) {
+      throw new StackOperationError("stale_plan", "The stack forecast changed. Plan again before routing this conflict.");
+    }
     if (run.routedConflict) return run.state;
+    const verified = refreshed.steps.find((candidate) => candidate.branch === step.branch)!;
+    run.plan = refreshed;
     run.routedConflict = owner;
     try {
       await this.port.requestWork(actor, owner, [
-        `Resolve the stack conflict on ${JSON.stringify(step.branch)} against parent ${JSON.stringify(step.parent)} (${step.newBase}).`,
+        `Resolve the stack conflict on ${JSON.stringify(step.branch)}. Verify the branch is still at ${verified.oldTip}, then rebase from ${verified.oldBase} onto ${verified.newBase} for parent ${JSON.stringify(verified.parent)}.`,
         `Conflicting commit ${step.conflict.commit}. Files: ${step.conflict.files.map((file) => JSON.stringify(file)).join(", ")}.`,
         `Resolve the rebase in this worktree, then call manage_stack_operation with { action: "continue", opId: "${opId}" }.`,
       ].join("\n"), `stack-conflict:${opId}`);
@@ -233,7 +250,11 @@ export class StackCoordinator {
     if (run.state.status !== "paused" || !run.plan || !["dirty_overlap", "forecast_conflict", "stale_plan"].includes(run.state.issue?.code ?? "")) {
       throw new StackOperationError("invalid_arguments", "This operation cannot be continued. Plan a new operation.");
     }
-    const plan = await this.port.plan(run.plan.operation);
+    const conflict = run.routedConflict && run.plan.steps.find((step) => step.branch === run.routedConflict?.branch && step.conflict);
+    const operation = conflict ? { ...run.plan.operation, conflictResolution: {
+      branch: conflict.branch, base: conflict.newBase, previousTip: conflict.oldTip,
+    } } : run.plan.operation;
+    const plan = await this.port.plan(operation);
     this.assertForecast(plan);
     const changed = forecastSignature(plan) !== forecastSignature(run.plan);
     if (changed && (!run.routedConflict || plan.catalogHash !== run.plan.catalogHash

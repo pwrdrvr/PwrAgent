@@ -3544,11 +3544,12 @@ export class DesktopBackendRegistry {
     return this.correspondenceStore.hasStackNotice(thread, `stack:${opId}:${branch}`);
   }
 
-  async publishStackCompletion(thread: StackThreadRef, opId: string, kind: StackNotice["kind"], child?: StackThreadRef): Promise<void> {
+  async publishStackCompletion(thread: StackThreadRef, opId: string, kind: StackNotice["kind"], child?: StackThreadRef,
+    provisioningAbandoned = false): Promise<void> {
     await this.publishStackNotice(thread, {
       opId, kind, branch: "", stack: "", by: { threadId: thread.threadId, actor: "agent" },
       from: null, to: null, changedFiles: [], undo: `refs/pwragent/undo/${opId}`,
-      completion: child ? { child: buildThreadIdentityKey(child.backend, child.threadId) } : {},
+      completion: provisioningAbandoned ? { provisioningAbandoned } : child ? { child: buildThreadIdentityKey(child.backend, child.threadId) } : {},
     });
   }
 
@@ -3557,7 +3558,10 @@ export class DesktopBackendRegistry {
   }
 
   async requestStackLayerWork(actor: StackThreadRef, owner: StackThreadRef, prompt: string, key: string, settleSignal?: AbortSignal): Promise<void> {
+    const refusal = this.agentMessageProjectRefusal(owner);
+    if (refusal) throw new Error(refusal);
     let wake: (() => void) | undefined;
+    let queueEntryId: string | undefined;
     const invalidate = () => wake?.();
     const unsubscribe = settleSignal && this.onEvent(invalidate);
     settleSignal?.addEventListener("abort", invalidate);
@@ -3565,11 +3569,11 @@ export class DesktopBackendRegistry {
       settleSignal?.throwIfAborted();
       const response = await this.deliverMessageToThread({
         operation: "send_message_to_thread", context: actor,
-        args: { ...owner, includeRemote: false, prompt },
+        args: { ...owner, includeRemote: false, prompt, ...(settleSignal ? { delivery: "new_turn" as const } : {}) },
       });
       if (!response.ok) throw new Error(`${key}: ${response.error.message}`);
       if (settleSignal) {
-        const queueEntryId = readOptionalString(readRecord(response.data), ["queueEntryId"]);
+        queueEntryId = readOptionalString(readRecord(response.data), ["queueEntryId"]);
         for (;;) {
           settleSignal.throwIfAborted();
           if (!this.stackThreadActive(owner) && !this.threadTurnQueue.getQueuedEntries(owner).some((entry) => entry.id === queueEntryId)) break;
@@ -3577,6 +3581,10 @@ export class DesktopBackendRegistry {
         }
       }
     } finally {
+      if (settleSignal?.aborted && queueEntryId
+        && this.threadTurnQueue.getQueuedEntries(owner).some((entry) => entry.id === queueEntryId)) {
+        this.cancelQueuedTurn(queueEntryId, "The stack operation was cancelled.");
+      }
       unsubscribe?.();
       settleSignal?.removeEventListener("abort", invalidate);
     }
@@ -7491,7 +7499,10 @@ export class DesktopBackendRegistry {
         threadId: request.threadId,
         messageIds,
       }) ?? {};
-      const replay = mergeThreadMessageOrigins(pagedReplay, origins);
+      const withOrigins = mergeThreadMessageOrigins(pagedReplay, origins);
+      const replay = request.includeTurns === false ? withOrigins : this.correspondenceStore.appendToReplay(
+        { backend, threadId: request.threadId }, withOrigins, undefined, [], request,
+      );
       const pendingRequest = this.getPendingRequestForThread({ backend, threadId: request.threadId });
       return { backend, threadId: request.threadId, fetchedAt: Date.now(), replay, pendingRequest, threadStatus: replay.threadStatus };
     }

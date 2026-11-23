@@ -19,9 +19,9 @@ export type StackNotice = {
   proof?: { patchIdsMatch: true; dropped: string[] };
   below?: { branch: string; added: number; removed: number; files: string[] }[];
   staleReads?: string[];
-  worktree?: { followed: "reset --keep" | "not checked out"; keptDirty: string[] };
+  worktree?: { followed: "reset --keep" | "not checked out"; keptDirty?: string[] };
   interruptedBy?: "operator";
-  completion?: { child?: string };
+  completion?: { child?: string; provisioningAbandoned?: boolean };
   undo: string;
 };
 
@@ -30,6 +30,7 @@ export function formatStackNotice(notice: StackNotice): string {
   if (notice.completion) return [
     `PwrAgent completed a stack operation: ${notice.kind} (${notice.opId}).`,
     ...(notice.completion.child ? [`Created layer thread ${notice.completion.child}.`] : []),
+    ...(notice.completion.provisioningAbandoned ? ["Child provisioning was abandoned. The Git changes remain applied."] : []),
     ...(notice.kind !== "undo" ? [`Undo receipt: ${notice.undo}.`] : []),
   ].join("\n");
   return [
@@ -39,7 +40,7 @@ export function formatStackNotice(notice: StackNotice): string {
     ...(notice.below ?? []).map(({ branch, added, removed, files }) =>
       `Lower layer ${branch}: +${added} / −${removed}. ${files.map((file) => JSON.stringify(file)).join(", ")}`),
     ...(notice.proof ? [`Patch IDs match. Dropped commits: ${notice.proof.dropped.map(short).join(", ") || "none"}.`] : []),
-    ...(notice.worktree ? [`Worktree: ${notice.worktree.followed}. Retained edits: ${notice.worktree.keptDirty.map((file) => JSON.stringify(file)).join(", ") || "none"}.`] : []),
+    ...(notice.worktree ? [`Worktree: ${notice.worktree.followed}. Retained edits: ${notice.worktree.keptDirty?.map((file) => JSON.stringify(file)).join(", ") || (notice.worktree.keptDirty ? "none" : "unavailable")}.`] : []),
     ...(notice.interruptedBy ? ["The operator interrupted the layer's active turn."] : []),
     `Undo receipt: ${notice.undo}.`,
     "Call plan_stack_operation instead of rebasing this branch by hand.",

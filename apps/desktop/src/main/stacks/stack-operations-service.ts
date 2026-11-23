@@ -49,6 +49,7 @@ function stackLeadKey(commonDir: string, root: string): string {
 export class StackOperationsService {
   private readonly sessions = new Map<string, StackCoordinator>();
   private readonly finishing = new Map<string, Promise<StackThreadRef | undefined>>();
+  private readonly abandoning = new Map<string, Promise<boolean>>();
 
   async resumeInterrupted(directories: readonly string[], registry: DesktopBackendRegistry): Promise<string[]> {
     const results = await Promise.allSettled((await readStackClones(directories))
@@ -106,12 +107,12 @@ export class StackOperationsService {
         }));
       }
       if (args.action === "undo") return await session.undo(actor, args.opId!);
-      if (args.action === "abort") return session.abort(actor, args.opId!);
       if (args.action === "release_thread") return session.releaseThread(actor, args.opId!, args.threadId!);
       if (args.action === "interrupt") return await session.interrupt(actor, args.opId!);
       if (args.action === "route_conflict") return await session.routeConflict(actor, args.opId!);
       const opId = args.opId!;
       try {
+        if (args.action === "abort") return await session.abort(actor, opId);
         return args.action === "continue" ? await session.continue(actor, opId) : session.status(actor, opId);
       } catch (error) {
         if (!(error instanceof StackOperationError) || error.code !== "not_found") throw error;
@@ -182,6 +183,7 @@ export class StackOperationsService {
       requestWork: (actor, owner, prompt, key, signal) => registry.requestStackLayerWork(actor, owner, prompt, key, signal),
       interrupt: (thread, opId) => registry.interruptStackLayer(thread, opId),
       complete: (receipt, notification) => this.complete(clone, registry, store, git, receipt, notification),
+      abandon: (actor, opId) => this.abandonProvisioning(clone, registry, store, git, actor, opId),
       apply: (plan, id, now, hooks, notification) => this.runJournalled(clone, registry, store, engine, git, hooks, notification,
         (journal) => engine.apply(plan, id, now, journal)),
       undo: (id, hooks, notification) => this.runJournalled(clone, registry, store, engine, git, hooks, notification,
@@ -197,18 +199,65 @@ export class StackOperationsService {
 
   private complete(clone: { cwd: string; commonDir: string }, registry: DesktopBackendRegistry, store: GhStackCatalogStore,
     git: StackGit, receipt: StackReceipt, notification: StackNotification): Promise<StackThreadRef | undefined> {
+    const abandoning = this.abandoning.get(clone.commonDir);
+    if (abandoning) return abandoning.then(() => this.complete(clone, registry, store, git, receipt, notification));
     const active = this.finishing.get(clone.commonDir);
     if (active) return active;
     const work = (async () => {
-      const child = await this.provision(clone, registry, git, receipt, notification);
-      await registry.publishStackCompletion(notification.actor, notification.opId, notification.kind, child);
+      let committed: StackNotification | undefined;
+      await store.recover(clone.commonDir, async (entry) => {
+        if (!entry.committed || entry.notification.opId !== notification.opId) {
+          throw new StackOperationError("gh_stack_busy", "Another stack operation owns this journal.");
+        }
+        committed = entry.notification;
+        return "retain";
+      });
+      if (!committed && !registry.hasStackNotice(notification.actor, notification.opId)) {
+        throw new StackOperationError("not_found", "The stack completion journal is unavailable.");
+      }
+      const saved = committed ?? notification;
+      const child = saved.provisioningAbandoned || registry.hasStackNotice(saved.actor, saved.opId)
+        ? undefined : await this.provision(clone, registry, git, receipt, saved);
+      await registry.publishStackCompletion(saved.actor, saved.opId, saved.kind, child, saved.provisioningAbandoned);
       await store.recover(clone.commonDir, async (entry) => {
         if (entry.notification.opId !== notification.opId) throw new StackOperationError("gh_stack_busy", "Another stack operation owns this journal.");
+        await this.releaseCarry(git, saved);
       });
       return child;
     })().finally(() => { this.finishing.delete(clone.commonDir); });
     this.finishing.set(clone.commonDir, work);
     return work;
+  }
+
+  private async abandonProvisioning(clone: { commonDir: string }, registry: DesktopBackendRegistry,
+    store: GhStackCatalogStore, git: StackGit, actor: StackThreadRef, opId: string): Promise<boolean> {
+    if (this.finishing.has(clone.commonDir) || this.abandoning.has(clone.commonDir)) {
+      throw new StackOperationError("gh_stack_busy", "Stack completion is already running.");
+    }
+    let abandoned = false;
+    const work = registry.withStackWorktreeMutation(clone.commonDir, () => store.recover(clone.commonDir, async (entry) => {
+      const { notification, receipt } = entry;
+      if (!entry.committed || notification.kind !== "add_branch" || !notification.options?.newThread
+        || notification.opId !== opId || notification.actor.backend !== actor.backend || notification.actor.threadId !== actor.threadId) return "retain";
+      if (!registry.hasStackNotice(actor, opId)) {
+        notification.provisioningAbandoned = true;
+        await store.markJournalCommitted(clone.commonDir, entry, notification);
+        await this.notify(clone.commonDir, registry, git, receipt, notification);
+        await registry.publishStackCompletion(actor, opId, notification.kind, undefined, true);
+      }
+      await this.releaseCarry(git, notification);
+      abandoned = true;
+    })).then(() => abandoned).finally(() => { this.abandoning.delete(clone.commonDir); });
+    this.abandoning.set(clone.commonDir, work);
+    return await work;
+  }
+
+  private async releaseCarry(git: StackGit, notification: StackNotification): Promise<void> {
+    if (!notification.carry?.ref) return;
+    const ref = `refs/pwragent/stack-carry/${notification.opId}`;
+    const observed = await git.run(["show-ref", "--exists", ref]);
+    if (observed.exitCode === 2) return;
+    await git.output(["update-ref", "-d", ref, notification.carry.ref]);
   }
 
   private async provision(clone: { cwd: string; commonDir: string }, registry: DesktopBackendRegistry, git: StackGit,
@@ -277,7 +326,20 @@ export class StackOperationsService {
     notification.carry = await captureStackLayerEdits(source, move.next, worktrees);
   }
 
-  private async notify(registry: DesktopBackendRegistry, git: StackGit, receipt: StackReceipt, { opId, kind, actor, participants, steps, interrupted }: StackNotification) {
+  private async notify(commonDir: string, registry: DesktopBackendRegistry, git: StackGit, receipt: StackReceipt, { opId, kind, actor, participants, steps, interrupted }: StackNotification) {
+    if (kind === "remove" || kind === "undo") {
+      const [before, after] = kind === "undo" ? [receipt.after, receipt.before] : [receipt.before, receipt.after];
+      const rootsByBranch = new Map(after.stacks.flatMap((stack) =>
+        stack.branches.map(({ branch }) => [branch, stackRoot(stack)!] as const)));
+      for (const stack of before.stacks) {
+        const root = stackRoot(stack);
+        const surviving = stack.branches.find(({ branch }) => rootsByBranch.has(branch));
+        const nextRoot = surviving && rootsByBranch.get(surviving.branch);
+        if (root && nextRoot && root !== nextRoot) {
+          getDesktopOverlayStore().moveStackLead(stackLeadKey(commonDir, root), stackLeadKey(commonDir, nextRoot));
+        }
+      }
+    }
     for (const participant of participants) {
       const moved = receipt.moves.find((entry) => entry.branch === participant.branch);
       if (!moved || moved.old === moved.next || registry.hasStackNotice(participant, opId, participant.branch)) continue;
@@ -301,7 +363,8 @@ export class StackOperationsService {
         if (lower.files.length < 100) lower.files.push(match[3]!);
       }
       const cwd = participant.path;
-      const status = cwd ? await git.output(["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"], undefined, cwd) : "";
+      const status = cwd ? await git.output(["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"], undefined, cwd)
+        .catch(() => undefined) : "";
       const readPaths = new Set(cwd ? registry.readStackPaths(participant)
         .map((file) => pathKey(path.relative(cwd, path.resolve(cwd, file)))) : []);
       const staleReads = (lower.files.length ? lower.files : files).filter((file) => readPaths.has(pathKey(file)));
@@ -312,7 +375,7 @@ export class StackOperationsService {
         ...(stats.length ? { below: [lower] } : {}),
         staleReads,
         worktree: { followed: cwd ? "reset --keep" : "not checked out",
-          keptDirty: status.split("\0").filter(Boolean).slice(0, 100).map((entry) => entry.slice(3)) },
+          keptDirty: status?.split("\0").filter(Boolean).slice(0, 100).map((entry) => entry.slice(3)) },
         ...(interrupted?.some((thread) => thread.backend === participant.backend && thread.threadId === participant.threadId)
           ? { interruptedBy: "operator" } : {}),
         ...(stack && index >= 0 ? { position: [index + 1, stack.branches.length], parent: stack.branches[index - 1]?.branch ?? stack.trunk.branch } : {}),
@@ -339,9 +402,10 @@ export class StackOperationsService {
       finish: async (outcome, receipt) => {
         if (outcome === "committed") {
           if (currentEntry) await store.markJournalCommitted(clone.commonDir, currentEntry, notification);
-          await this.notify(registry, git, receipt, notification);
+          await this.notify(clone.commonDir, registry, git, receipt, notification);
         }
         if (outcome !== "committed" || notification.kind === "undo") {
+          if (outcome === "aborted") await this.releaseCarry(git, notification);
           if (outcome === "committed") await registry.publishStackCompletion(notification.actor, notification.opId, notification.kind);
           await journal.finish?.(outcome, receipt);
         }
@@ -353,6 +417,9 @@ export class StackOperationsService {
         await applyHooks.begin?.(entry);
         currentEntry = entry;
         operationStarted = true;
+        if (notification.carry?.ref) {
+          await git.output(["update-ref", `refs/pwragent/stack-carry/${notification.opId}`, notification.carry.ref, ""]);
+        }
       } });
     } catch (error) {
       if (operationStarted && await store.hasJournal(clone.commonDir)) {
@@ -360,9 +427,9 @@ export class StackOperationsService {
         await store.recover(clone.commonDir, async (entry) => {
           if (entry.notification.opId !== notification.opId) throw error;
           const finish = async (outcome: "committed" | "aborted", receipt: StackReceipt) => {
-            if (outcome === "aborted") return;
+            if (outcome === "aborted") return await this.releaseCarry(git, notification);
             if (!entry.committed) await store.markJournalCommitted(clone.commonDir, entry, notification);
-            await this.notify(registry, git, receipt, notification);
+            await this.notify(clone.commonDir, registry, git, receipt, notification);
             if (notification.kind === "undo") await registry.publishStackCompletion(notification.actor, notification.opId, notification.kind);
             recovered = receipt;
           };
@@ -389,7 +456,7 @@ export class StackOperationsService {
         if (opId && (notification.opId !== opId || notification.actor.backend !== actor?.backend
           || notification.actor.threadId !== actor.threadId)) return "retain";
         if (entry.committed) {
-          await this.notify(registry, git, receipt, notification);
+          await this.notify(clone.commonDir, registry, git, receipt, notification);
           if (notification.kind === "undo") {
             await registry.publishStackCompletion(notification.actor, notification.opId, notification.kind);
             return;
@@ -406,9 +473,10 @@ export class StackOperationsService {
           release.push(registry.holdStackThread(thread, notification.opId));
         }
         await engine.recover(entry, { finish: async (outcome) => {
-          if (outcome === "committed") {
+          if (outcome === "aborted") await this.releaseCarry(git, notification);
+          else {
             await store.markJournalCommitted(clone.commonDir, entry, notification);
-            await this.notify(registry, git, receipt, notification);
+            await this.notify(clone.commonDir, registry, git, receipt, notification);
             if (notification.kind === "undo") await registry.publishStackCompletion(notification.actor, notification.opId, notification.kind);
             else pending = { receipt, notification };
           }
