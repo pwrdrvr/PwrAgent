@@ -3759,7 +3759,9 @@ function claudeActivityItem(entry: AppServerThreadActivityEntry, output?: string
   const args = detail ? claudeToolCallArguments(detail) : undefined;
   return {
     id: entry.id, status: entry.status, type: "dynamicToolCall", toolName: tool ?? entry.summary,
-    ...(args ? { arguments: args } : {}),
+    ...(detail?.kind === "read" && detail.path
+      ? { commandAction: "read" as const, arguments: { file_path: detail.path } }
+      : args ? { arguments: args } : {}),
     ...(contentItems.length ? { contentItems } : {}),
   };
 }

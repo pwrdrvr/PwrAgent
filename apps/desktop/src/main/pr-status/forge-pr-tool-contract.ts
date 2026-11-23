@@ -79,9 +79,9 @@ const LABEL_MAX = 50;
 
 const FIELDS: Record<ForgePrToolOperation, string[]> = {
   list_stacks: [],
-  plan_stack_operation: ["operation", "stack", "branch", "from", "mode", "branches", "name"],
-  apply_stack_operation: ["planId", "operation", "stack", "branch", "from", "mode", "branches", "name"],
-  manage_stack_operation: ["opId", "action", "threadId"],
+  plan_stack_operation: ["operation", "stack", "branch", "from", "mode", "branches", "name", "newThread", "carryChanges", "askToSettle"],
+  apply_stack_operation: ["planId", "operation", "stack", "branch", "from", "mode", "branches", "name", "newThread", "carryChanges", "askToSettle"],
+  manage_stack_operation: ["opId", "action", "threadId", "stack"],
   get_pull_request: ["number", "url", "branch"],
   list_pull_requests: ["state", "head", "base", "page", "perPage"],
   list_pull_request_files: ["number", "includePatch", "page", "perPage"],
@@ -104,7 +104,7 @@ const FIELDS: Record<ForgePrToolOperation, string[]> = {
 };
 const REQUIRED: Partial<Record<ForgePrToolOperation, string[]>> = {
   plan_stack_operation: ["operation"],
-  manage_stack_operation: ["opId", "action"],
+  manage_stack_operation: ["action"],
   list_pull_request_files: ["number"],
   get_pull_request_diff: ["number"],
   list_pull_request_reviews: ["number"],
@@ -178,18 +178,27 @@ export function validateForgePrToolArgs(operation: string, value: unknown): asse
   for (const key of forgePrToolRequiredFields(operation)) if (args[key] === undefined) fail(`${operation} requires ${key}.`);
   if (operation.endsWith("_stack_operation")) {
     oneOf(args, "operation", ["restack", "adopt", "add_branch", "remove"]);
-    oneOf(args, "action", ["status", "abort", "undo", "continue", "release_thread"]);
+    oneOf(args, "action", ["status", "abort", "undo", "continue", "release_thread", "interrupt", "route_conflict", "set_lead"]);
     oneOf(args, "mode", ["detach", "forget"]);
     for (const key of ["stack", "from", "name"]) text(args, key, 255);
     if (typeof args.name === "string" && !isSafeRefName(args.name)) fail("Use a valid branch name.");
     text(args, "threadId", 500);
     if (args.action === "release_thread" && !args.threadId) fail("release_thread requires threadId.");
+    if (operation === "manage_stack_operation") {
+      if (args.action === "set_lead") {
+        if (!args.stack || !args.threadId || args.opId) fail("set_lead requires stack and threadId.");
+      } else if (!args.opId || args.stack) fail("This action requires opId.");
+    }
     for (const key of ["planId", "opId"]) {
       if (args[key] !== undefined && (typeof args[key] !== "string" || !/^[a-z0-9-]{1,80}$/.test(args[key] as string))) fail(`${key} must be a stack operation ID.`);
     }
     if (args.branches !== undefined && (!Array.isArray(args.branches) || args.branches.length < 2 || args.branches.length > 100
       || args.branches.some((branch) => typeof branch !== "string" || !isSafeRefName(branch)))) fail("Use two to 100 branch names in bottom-first order.");
     if (operation === "apply_stack_operation" && ((args.planId === undefined) === (args.operation === undefined))) fail("Pass exactly one of planId or operation.");
+    for (const key of ["newThread", "carryChanges", "askToSettle"]) bool(args, key);
+    if (args.planId && ["newThread", "carryChanges", "askToSettle"].some((key) => args[key] !== undefined)) fail("Provisioning and settlement options belong to the plan.");
+    if ((args.newThread || args.carryChanges) && args.operation !== "add_branch") fail("Child worktree options apply to add_branch.");
+    if (args.carryChanges && !args.newThread) fail("carryChanges requires newThread.");
   }
   integer(args, "number", 1, Number.MAX_SAFE_INTEGER);
   integer(args, "runId", 1, Number.MAX_SAFE_INTEGER);

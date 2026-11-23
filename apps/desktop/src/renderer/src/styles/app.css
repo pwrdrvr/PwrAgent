@@ -7057,12 +7057,15 @@ a.button {
   border-inline-start-color: var(--status-warning);
 }
 
-.thread-row__chip.stack-position-chip {
+.stack-position-chip {
   min-height: 20px;
+  font-variant-numeric: tabular-nums;
+}
+
+.thread-row__chip.stack-position-chip:not(.thread-row__chip--held) {
   border: 1px solid var(--border-subtle);
   background: var(--bg-sidebar);
   color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
 }
 
 button.stack-position-chip:hover {
@@ -7070,7 +7073,7 @@ button.stack-position-chip:hover {
   color: var(--text-primary);
 }
 
-.thread-row__chip.stack-position-chip[data-stale] {
+.thread-row__chip.stack-position-chip[data-stale]:not(.thread-row__chip--held) {
   color: var(--status-warning-text);
 }
 

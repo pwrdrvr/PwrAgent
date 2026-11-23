@@ -3322,6 +3322,10 @@ export type AppServerNotification =
       params: { threadId: string; seenUpdatedAt?: number };
     }
   | {
+      method: "thread/stackHold/updated";
+      params: { threadId: string; opId: string; held: boolean };
+    }
+  | {
       method: "navigation/directory/seen";
       params: { directoryKey: string; changedCount: number };
     }

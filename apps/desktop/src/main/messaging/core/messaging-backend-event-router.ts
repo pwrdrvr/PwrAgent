@@ -357,6 +357,7 @@ export class MessagingBackendEventRouter {
       event.notification.method === "thread/executionMode/updated" ||
       event.notification.method === "thread/modelSettings/updated" ||
       event.notification.method === "thread/lock/updated" ||
+      event.notification.method === "thread/stackHold/updated" ||
       event.notification.method === "thread/rewound" ||
       event.notification.method === "thread/prAutoDispatch/updated" ||
       event.notification.method === "thread/prAutoDispatch/pendingUpdated" ||

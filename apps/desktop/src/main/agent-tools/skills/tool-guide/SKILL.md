@@ -66,3 +66,17 @@ then pass the plan ID to `apply_stack_operation`. Use the returned operation
 ID with `manage_stack_operation` to read status or undo a completed move.
 A waiting restack can be cancelled or shortened before a specific layer.
 The operation releases held queues after recording notices for moved layers.
+
+Plan `add_branch` with `newThread: true` for an attached worktree and a child
+of the stack lead. Add `carryChanges: true` to copy the caller's staged,
+unstaged and untracked changes. The source keeps its edits. A stack lead can
+transfer ownership with `manage_stack_operation` and `action: "set_lead"`.
+
+Plan with `askToSettle: true` to ask a layer's thread to settle overlapping
+edits before applying. Use `action: "interrupt"` to request operator approval
+to stop turns that are holding up the operation. A paused conflict can be
+sent to its owner with `action: "route_conflict"`. The owner can resolve the
+conflict in its worktree and call `action: "continue"`. After a provisioning
+failure, the caller can continue the operation without repeating its ref moves.
+Use `action: "abort"` to abandon failed child provisioning. The Git changes
+and their undo receipt remain available.

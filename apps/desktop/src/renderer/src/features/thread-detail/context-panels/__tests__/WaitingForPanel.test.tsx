@@ -391,6 +391,20 @@ describe("WaitingForPanel", () => {
     expect(screen.queryByText("0")).not.toBeInTheDocument();
   });
 
+  it("shows a stack hold only while the layer queue is held", () => {
+    const showTab = vi.fn();
+    const state = controller(ready([], []));
+    const { rerender } = render(<WaitingForPanel thread={{ ...thread, stackMemberships: [{
+      key: "sample", name: "Example stack", inferred: false, position: 2, count: 3, health: "held",
+    }] }} controller={state} now={NOW} onShowTab={showTab} />);
+    expect(screen.getByRole("note")).toHaveTextContent("Held for a stack operation");
+    expect(screen.queryByText("Nothing will wake this thread.")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "View stack" }));
+    expect(showTab).toHaveBeenCalledWith("prs");
+    rerender(<WaitingForPanel thread={thread} controller={state} now={NOW} onShowTab={showTab} />);
+    expect(screen.queryByText("Held for a stack operation")).not.toBeInTheDocument();
+  });
+
   it("lists Auto-fix on a merged PR as idle, uncounted, and still turnable off", async () => {
     const merged: ThreadPendingWake = {
       kind: "pr_auto_fix", key: "pr_auto_fix:github/acme/widgets#3204", prKey: "github/acme/widgets#3204",

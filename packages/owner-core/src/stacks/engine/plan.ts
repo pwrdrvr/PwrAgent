@@ -26,7 +26,19 @@ async function restack(git: StackGit, plan: StackPlan, stack: GhStack, first: nu
     const parent = parentAt(index);
     const oldTip = requireTip(tips, layer.branch);
     const newBase = plan.moves.find(move => move.branch === parent.branch)?.next ?? requireTip(tips, parent.branch);
-    const oldBase = layer.base || (await git.output(["merge-base", newBase, oldTip])).trim();
+    const resolution = plan.operation.conflictResolution?.branch === layer.branch ? plan.operation.conflictResolution : undefined;
+    if (resolution) {
+      if (oldTip === resolution.previousTip || !await git.ancestor(resolution.base, oldTip)) {
+        throw new Error(`Resolve ${layer.branch} on the requested base before continuing`);
+      }
+      // A preview replay can regenerate the same parent tree with new commit
+      // IDs. Keep the owner's resolved range and replay it onto the new IDs.
+      if (newBase !== resolution.base &&
+        (await git.run(["diff", "--quiet", "--no-ext-diff", resolution.base, newBase, "--"])).exitCode !== 0) {
+        throw new Error(`The parent tree of ${layer.branch} changed after conflict routing`);
+      }
+    }
+    const oldBase = resolution?.base ?? (layer.base || (await git.output(["merge-base", newBase, oldTip])).trim());
     if (!isOid(oldBase)) throw new Error(`Cannot find the base of ${layer.branch}`);
     if (oldBase === newBase && await git.ancestor(oldBase, oldTip)) {
       layer.head = oldTip;
