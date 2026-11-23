@@ -273,6 +273,16 @@ export function subscribeAppUpdateNotices(listener: (notice: AppUpdateNotice) =>
   return () => { updateNoticeListeners.delete(listener); };
 }
 
+export function readMessagingInstallTarget(): { version: string; selection: string } | undefined {
+  if (!app.isPackaged || !productionUpdatesEnabled() || (process.platform !== "darwin" && process.platform !== "win32")) return undefined;
+  const selection = currentUpdateSelectionKey();
+  const held = heldDownloadedUpdate;
+  if (!held || held.selection !== selection || updateStatus.status !== "downloaded"
+    || updateStatus.version !== held.version || updateStatus.direction === "downgrade"
+    || !parseSemver(held.version) || (process.platform === "darwin" && stagedMacDownload !== held)) return undefined;
+  return { version: held.version, selection };
+}
+
 /**
  * Broadcast the outcome of a check the *operator* asked for.
  *

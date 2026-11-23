@@ -2456,6 +2456,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         id: telegramCallbackRecordId(handle, intent),
         actionId: action.id,
         allowedActorIds: callbackAllowedActorIds(intent),
+        ...(intent.kind === "confirmation" && intent.callbackAudience ? { audience: intent.callbackAudience } : {}),
         bindingId: callbackBindingId(intent),
         channel: intent.audit.channel,
         createdAt: now,

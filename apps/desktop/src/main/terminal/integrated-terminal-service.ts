@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { RendererEventTarget } from "../owner-host";
+import { beginUpdateBlockingWork, updateBlockingWorkIsHeld } from "../app-update-admission";
 
 export interface TerminalEventTarget extends RendererEventTarget {
   once(event: "destroyed", listener: () => void): unknown;
@@ -363,10 +364,14 @@ export class IntegratedTerminalService {
       this.subscribe(session, webContents);
       return this.toCreateResponse(session);
     }
+    const endUpdateBlockingWork = beginUpdateBlockingWork();
     const creation = this.createSession(request, webContents);
     this.pendingCreates.set(key, { request, promise: creation });
     try { return await creation; }
-    finally { this.pendingCreates.delete(key); }
+    finally {
+      this.pendingCreates.delete(key);
+      endUpdateBlockingWork();
+    }
   }
 
   private async createSession(
@@ -555,6 +560,7 @@ export class IntegratedTerminalService {
   }
 
   write(request: IntegratedTerminalWriteRequest): void {
+    if (updateBlockingWorkIsHeld()) throw new Error("PwrAgent is restarting. Retry after it relaunches.");
     this.sessionsById.get(request.sessionId)?.pty.write(request.data);
   }
 
@@ -696,9 +702,9 @@ export class IntegratedTerminalService {
     return this.disposePromise;
   }
 
-  getQuitSnapshot(): IntegratedTerminalQuitSnapshot {
+  getQuitSnapshot(options?: { includeIdle?: boolean }): IntegratedTerminalQuitSnapshot {
     const sessions = [...this.sessionsById.values()].filter((session) =>
-      this.hasForegroundCommand(session),
+      options?.includeIdle || this.hasForegroundCommand(session),
     );
     return {
       count: sessions.length,

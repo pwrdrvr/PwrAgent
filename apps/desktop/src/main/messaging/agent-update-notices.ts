@@ -7,6 +7,7 @@ import { getDesktopMessagingStore } from "./desktop-messaging-store";
 import { rememberBoundedKey, type MessagingDeliveryGuard } from "./core/messaging-backend-event-helpers";
 import { buildMessagingConversationKey } from "./core/messaging-store";
 import { isAcceptedDeliveryOutcome } from "./core/messaging-reply-receipts";
+import type { AppUpdateRestartReceipt } from "@pwragent/sqlite-storage/app-update-notice-store";
 
 const log = getMainLogger("pwragent:agent-update-notices");
 
@@ -61,6 +62,7 @@ type NoticeDelivery = (
   text: string,
   machine: string | undefined,
   guard: MessagingDeliveryGuard,
+  readyVersion?: string,
 ) => Promise<MessagingDeliveryResult>;
 
 /** Snapshot eligibility at the updater event. A later opt-in never replays it. */
@@ -118,7 +120,7 @@ export function subscribeAgentUpdateNotices(options: {
             || buildMessagingConversationKey(current.channel) !== destination
             || destinations.has(destination)) return;
           destinations.add(destination);
-          const result = await deliver(current, text, machine, guard);
+          const result = await deliver(current, text, machine, guard, phase === "ready" ? version : undefined);
           if (!recordAcceptedDelivery(result) && !guard.isCancelled()) {
             log.warn("app update notice delivery failed", { bindingId: binding.id, outcome: result.outcome, version, phase });
           }
@@ -132,4 +134,58 @@ export function subscribeAgentUpdateNotices(options: {
     shutdown.abort();
     unsubscribe();
   };
+}
+
+export function reconcileAppUpdateRestart(options: {
+  runtimeId: string;
+  currentVersion(): string;
+  selectDelivery(binding: MessagingBindingRecord): NoticeDelivery | undefined;
+  readMachine(): string | undefined;
+  onConnection(listener: () => void): () => void;
+  isSameConnection(binding: MessagingBindingRecord, connectionId: string): boolean;
+}): () => void {
+  const shutdown = new AbortController();
+  const whenCancelled = new Promise<void>((resolve) => {
+    shutdown.signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+  let reconciling = false;
+  const finish = async (receipt: AppUpdateRestartReceipt): Promise<void> => {
+    const ledger = createAppUpdateNoticeStore();
+    const binding = await getDesktopMessagingStore().getBinding(receipt.bindingId);
+    if (shutdown.signal.aborted) return;
+    if (!binding || !isLocalBinding(binding) || !ledger.isEnabled(binding)
+      || binding.backend !== receipt.backend || binding.threadId !== receipt.threadId
+      || buildMessagingConversationKey(binding.channel) !== receipt.destination) {
+      ledger.clearRestartReceipt(receipt);
+      return;
+    }
+    const deliver = options.selectDelivery(binding);
+    if (!deliver) return;
+    if (!options.isSameConnection(binding, receipt.connectionId)) {
+      ledger.clearRestartReceipt(receipt);
+      return;
+    }
+    const installed = options.currentVersion() === receipt.version;
+    const text = installed
+      ? `PwrAgent update installed · v${receipt.version}\nPwrAgent restarted and v${receipt.version} is running.`
+      : `PwrAgent update did not install · v${receipt.version}\nPwrAgent restarted and is running v${options.currentVersion()}. To try again on the desktop, use Settings → Updates.`;
+    const result = await deliver(binding, text, options.readMachine(),
+      { isCancelled: () => shutdown.signal.aborted, whenCancelled }, installed ? undefined : receipt.version);
+    if (isAcceptedDeliveryOutcome(result.outcome)) ledger.clearRestartReceipt(receipt);
+  };
+  const onConnection = () => {
+    if (reconciling || shutdown.signal.aborted) return;
+    try {
+      const receipt = createAppUpdateNoticeStore().readRestartReceipt();
+      if (!receipt || receipt.runtimeId === options.runtimeId) return;
+      reconciling = true;
+      void finish(receipt).catch((error: unknown) => log.warn("app update restart result could not be delivered", { error }))
+        .finally(() => { reconciling = false; });
+    } catch (error) {
+      log.warn("app update restart receipt could not be read", { error });
+    }
+  };
+  const unsubscribe = options.onConnection(onConnection);
+  onConnection();
+  return () => { shutdown.abort(); unsubscribe(); };
 }

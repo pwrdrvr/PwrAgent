@@ -35,6 +35,7 @@ export interface SqliteMessagingStorageRecords<Records extends MessagingStorageR
   browseSession: TimedRecord & { bindingId?: string; channel: Records["channel"]; expiresAt: number; allowedActorIds: string[] };
   callbackHandle: TimedRecord & {
     bindingId?: string; browseSessionId?: string; channel: Records["channel"]; expiresAt: number; allowedActorIds: string[]; handle: string;
+    audience?: "conversation";
   };
   delivery: { id: string; bindingId?: string; deliveredAt?: number };
 }
@@ -1170,7 +1171,7 @@ export class SqliteMessagingStore<Records extends SqliteMessagingStorageRecords<
       .filter(
         (handle) =>
           handle.handle === params.handle &&
-          handle.allowedActorIds.includes(params.actorId) &&
+          (handle.audience === "conversation" || handle.allowedActorIds.includes(params.actorId)) &&
           this.policy.buildMessagingConversationKey(handle.channel) === channelKey,
       )
       .sort((a, b) => b.updatedAt - a.updatedAt);

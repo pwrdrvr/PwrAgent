@@ -37,7 +37,10 @@ import { initializeDesktopBackendRegistry } from "./app-server/backend-registry"
 import { initializeDesktopAppServerService, startAppServerOwnerNavigation } from "./app-server/desktop-app-server-service";
 import { initializeDesktopFederationRuntime } from "./federation/federation-runtime";
 import { initializeDesktopMessagingRuntime } from "./messaging/messaging-runtime";
-import { subscribeAgentUpdateNotices } from "./messaging/agent-update-notices";
+import { reconcileAppUpdateRestart, subscribeAgentUpdateNotices } from "./messaging/agent-update-notices";
+import { MessagingAppUpdateControls, sameTarget } from "./messaging/app-update-controls";
+import { pendingUpdateBlockingWork } from "./app-update-admission";
+import { createAppUpdateNoticeStore } from "./storage/desktop-messaging-storage";
 import { DEFAULT_DEVELOPMENT_WORKING_UPDATES_MODE } from "@pwragent/shared/contracts/messaging";
 import { initializeRuntimeLeaseManager } from "./runtime-lease-manager";
 import { initializeRuntimeFederationLeaseCoordinator } from "./runtime-federation-lease";
@@ -650,11 +653,8 @@ wireOwnerRendererEvents();
   if (bootMode === "active-profile") registry.setMessagingWorkingUpdatesSettings(settings);
   wireOwnerMessagingServices(messagingRuntime);
   if (host.updates.subscribeToNotices && bootMode === "active-profile") {
-    ownerSubscriptions.add(subscribeAgentUpdateNotices({
-      subscribe: host.updates.subscribeToNotices,
-      selectDelivery: (binding) => messagingRuntime.selectAppUpdateNoticeDelivery(binding),
-      readMachine: () => config.read("federation").instanceLabel,
-    }));
+    ownerSubscriptions.add(wireMessagingAppUpdates({ host, registry, messagingRuntime,
+      subscribe: host.updates.subscribeToNotices, readMachine: () => config.read("federation").instanceLabel }));
   }
 
 
@@ -850,6 +850,62 @@ wireOwnerRendererEvents();
           });
       }
     },
+  };
+}
+
+function wireMessagingAppUpdates(options: {
+  host: OwnerHostServices;
+  registry: ReturnType<typeof getDesktopBackendRegistry>;
+  messagingRuntime: DesktopMessagingRuntime;
+  subscribe: NonNullable<OwnerHostServices["updates"]["subscribeToNotices"]>;
+  readMachine(): string | undefined;
+}): () => void {
+  const { host, registry, messagingRuntime } = options;
+  const selectDelivery = (binding: Parameters<DesktopMessagingRuntime["selectAppUpdateNoticeDelivery"]>[0]) =>
+    messagingRuntime.selectAppUpdateNoticeDelivery(binding);
+  const readMachine = () => options.readMachine();
+  const unsubscribe = subscribeAgentUpdateNotices({ subscribe: options.subscribe, selectDelivery, readMachine });
+  const { messagingInstallTarget, messagingInstallBlockerCount } = host.updates;
+  if (!messagingInstallTarget || !messagingInstallBlockerCount) return unsubscribe;
+  const runtimeId = registry.getAppManagementRuntimeId();
+  const blockers = () => messagingInstallBlockerCount() + pendingUpdateBlockingWork()
+    + messagingRuntime.countUnsubmittedUpdateBlockingWork();
+  const controls = new MessagingAppUpdateControls({
+    runtimeId, readTarget: messagingInstallTarget,
+    blockerCount: () => Math.max(blockers(), Number(registry.hasDispatchBlockingIdleUpdate())),
+    async install({ target, authorize, beforeHandoff }) {
+      let busy = false;
+      const result = await host.updates.install({
+        expectedVersion: target.version,
+        requestQuit: (performQuit, beforeQuit) => host.updates.requestQuit({
+          source: "update-install", performQuit, authorizeAgent: authorize,
+          holdIdleUpdateAdmission: () => {
+            const release = blockers() === 0 ? registry.holdAdmissionForIdleUpdate() : undefined;
+            busy = !release;
+            return release;
+          },
+          beforeQuit: () => sameTarget(target, messagingInstallTarget()) && beforeQuit?.() === true && beforeHandoff(),
+        }),
+      });
+      return result.status === "restarting" ? "accepted" : busy ? "busy" : "refused";
+    },
+    saveReceipt: (receipt) => createAppUpdateNoticeStore().saveRestartReceipt(receipt),
+    clearReceipt: (receipt) => createAppUpdateNoticeStore().clearRestartReceipt(receipt),
+  });
+  messagingRuntime.setAppUpdateControls(controls);
+  const unsubscribeRestart = reconcileAppUpdateRestart({
+    runtimeId, currentVersion: () => host.application.getVersion(),
+    selectDelivery, readMachine,
+    isSameConnection: (binding, connectionId) => messagingRuntime.isAppUpdateConnectionCurrent(binding, connectionId),
+    onConnection: (listener) => messagingRuntime.onPlatformStatus((event) => {
+      if (event.kind === "health-changed" && event.health === "enabled") listener();
+    }),
+  });
+  return () => {
+    unsubscribe();
+    unsubscribeRestart();
+    controls.dispose();
+    messagingRuntime.setAppUpdateControls(undefined);
   };
 }
 

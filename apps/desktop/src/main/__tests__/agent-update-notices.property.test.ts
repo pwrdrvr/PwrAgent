@@ -4,7 +4,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { AppUpdateNoticeStore } from "@pwragent/sqlite-storage/app-update-notice-store";
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
 import type { AppUpdateNotice } from "../../shared/app-metadata";
-import { listAgentUpdateNoticeSettings, setAgentUpdateNoticeSetting, subscribeAgentUpdateNotices } from "../messaging/agent-update-notices";
+import { listAgentUpdateNoticeSettings, reconcileAppUpdateRestart, setAgentUpdateNoticeSetting, subscribeAgentUpdateNotices } from "../messaging/agent-update-notices";
+import { buildMessagingConversationKey } from "../messaging/core/messaging-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
@@ -135,6 +136,51 @@ it("budgets one opted-in Agent and the successful notice ledger write", async ()
     expectSqliteWriteBudget({ scenario: "app-update-notice-ledger",
       note: "One accepted notice plus its repeated event. Measures the new ledger write; provider delivery bookkeeping uses the existing path.", writes: notice.writes });
     subscriber.stop();
+  } finally {
+    db.close();
+    rmSync(fixture.tempDir, { recursive: true, force: true });
+    db = openInMemoryStateDb();
+  }
+});
+
+it("reports a handed-off version only after relaunch and budgets the receipt and its consumption", async () => {
+  const fixture = createTempStateDb("app-update-restart-budget-");
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  db.close();
+  db = StateDb.open(fixture.dbPath);
+  try {
+    await seedAgents();
+    setAgentUpdateNoticeSetting(first, true);
+    const target = binding(first, "release-watch", "releases");
+    bindings = [target];
+    const ledger = new AppUpdateNoticeStore(db);
+    const receipt = { ...first, runtimeId: "original", version: selected.version, connectionId: "workspace:release-bot",
+      bindingId: target.id, destination: buildMessagingConversationKey(target.channel) };
+    const { writes } = await measureSqliteWrites(async () => {
+      expect(ledger.saveRestartReceipt(receipt)).toBe(true);
+      expect(ledger.saveRestartReceipt({ ...receipt, runtimeId: "competing" })).toBe(false);
+    });
+    expectSqliteWriteBudget({ scenario: "app-update-restart-receipt", note: "Persist one accepted native handoff and refuse a competing write.", writes });
+    const deliver = vi.fn(async (_target: MessagingBindingRecord, _text: string) => ({
+      channel: "slack" as const, outcome: "presented" as const, deliveredAt: 1,
+    }));
+    const reconcile = (runtimeId: string, currentVersion: string) => reconcileAppUpdateRestart({
+      runtimeId, currentVersion: () => currentVersion, selectDelivery: () => deliver,
+      readMachine: () => undefined, onConnection: () => () => undefined,
+      isSameConnection: (_binding, connectionId) => connectionId === receipt.connectionId,
+    });
+    const stopOld = reconcile(receipt.runtimeId, selected.currentVersion);
+    await settleNotices();
+    expect(deliver).not.toHaveBeenCalled();
+    stopOld();
+    const outcome = await measureSqliteWrites(async () => {
+      const stopNew = reconcile("relaunched", selected.version);
+      await settleNotices();
+      stopNew();
+    });
+    expect(deliver.mock.calls[0]?.[1]).toContain(`v${selected.version} is running`);
+    expect(ledger.readRestartReceipt()).toBeUndefined();
+    expectSqliteWriteBudget({ scenario: "app-update-restart-outcome", note: "Consume the restart receipt after the provider accepts the outcome.", writes: outcome.writes });
   } finally {
     db.close();
     rmSync(fixture.tempDir, { recursive: true, force: true });

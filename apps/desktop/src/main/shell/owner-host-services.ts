@@ -15,8 +15,8 @@ import { subscribersForChannel } from "./window-channels";
 import { requestShowThread } from "./window-show-thread";
 import { requestOpenThreadMaintenance } from "./window-open-thread-maintenance";
 import { getDesktopNotificationService } from "./notifications/desktop-notification-service";
-import { cancelAppUpdateDownload, checkForAppUpdatesNow, downloadAppUpdate, installDownloadedAppUpdate, readAppUpdateStateToken, readAppUpdateStatus, reserveAppUpdateQuit, subscribeAppUpdateNotices } from "./auto-updater";
-import { requestQuit } from "./quit-manager";
+import { cancelAppUpdateDownload, checkForAppUpdatesNow, downloadAppUpdate, installDownloadedAppUpdate, readAppUpdateStateToken, readAppUpdateStatus, readMessagingInstallTarget, reserveAppUpdateQuit, subscribeAppUpdateNotices } from "./auto-updater";
+import { getCurrentQuitBlockers, requestQuit } from "./quit-manager";
 import { sendStarMapCommand } from "./star-map/star-map-command-bus";
 import { readStarMapView } from "./star-map/star-map-view-registry";
 import { readOperatorFocus } from "./native-voice/operator-focus-registry";
@@ -87,6 +87,8 @@ export function createDesktopOwnerHostServices(): OwnerHostServices {
     updates: { reserveQuit: () => reserveAppUpdateQuit(), stateToken: () => readAppUpdateStateToken(), check: (source) => checkForAppUpdatesNow(source),
       download: (options) => downloadAppUpdate(options), cancelDownload: (version) => cancelAppUpdateDownload(version),
       read: () => readAppUpdateStatus(), subscribeToNotices: (listener) => subscribeAppUpdateNotices(listener),
+      messagingInstallTarget: readMessagingInstallTarget,
+      messagingInstallBlockerCount: () => getCurrentQuitBlockers({ includeIdleTerminals: true }).count,
       install: (options) => installDownloadedAppUpdate(options), requestQuit: (options) => requestQuit(options) },
     workers: {
       forkClaudeSessionReader: async (path, env) => forkOwnerWorker(path, env),

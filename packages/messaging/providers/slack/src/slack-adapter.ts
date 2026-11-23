@@ -2978,6 +2978,8 @@ export class SlackAdapter implements SlackProviderAdapter {
         id: slackCallbackRecordId(handle, params),
         actionId: action.id,
         allowedActorIds: params.allowedActorIds,
+        ...(params.intent.kind === "confirmation" && params.intent.callbackAudience
+          ? { audience: params.intent.callbackAudience } : {}),
         bindingId: params.bindingId,
         channel: params.channelRef,
         createdAt: issuedAt,

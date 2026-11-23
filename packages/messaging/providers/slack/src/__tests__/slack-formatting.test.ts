@@ -35,6 +35,21 @@ const profile: MessagingCapabilityProfile = {
 };
 
 describe("Slack formatting", () => {
+  it("renders a source-labeled update confirmation and native action buttons", () => {
+    const intent: MessagingSurfaceIntent = {
+      id: "update-fixture", kind: "confirmation", createdAt: 1, title: "PwrAgent update ready · v1.4.20",
+      body: "Downloaded on Test Workstation.\nRelease notes: https://example.com/releases/1.4.20",
+      attribution: { label: "PwrAgent updates", hint: "Test Workstation" },
+      actions: [{ id: "app-update:review", label: "Install and restart", style: "primary" },
+        { id: "app-update:dismiss", label: "Not now", style: "secondary" }],
+    };
+    expect(buildSlackBlocksForIntent({ intent, text: textForSlackIntent(intent) })).toContainEqual({
+      type: "context", elements: [{ type: "plain_text", text: "PwrAgent updates · Test Workstation", emoji: true }],
+    });
+    const actions = buildSlackActionBlocks({ actions: intent.actions, capabilityProfile: profile, buildCallbackValue: (action) => action.id });
+    expect(actions?.flatMap((row) => row.elements.map((button) => button.text.text))).toEqual(["Install and restart", "Not now"]);
+  });
+
   it("translates common Markdown to Slack mrkdwn", () => {
     expect(
       markdownToSlackMrkdwn("Read **this** at [PwrAgent](https://example.com?a=1&b=2) <ok>"),

@@ -30,6 +30,7 @@ import { type MessagingTurnAdmissionBundle, type MessagingTurnInputEvent } from 
 import { threadContextForAdmissionState, isDefaultAgentRouteBinding } from "./messaging-binding-helpers";
 import { parseTextCommand, parseTextCommandArgs, parseMentionCommand, bindingWithInboundRoutingState, isToolsFallbackText, isStreamFallbackText, type MessagingHandledToRoutedSubspan, type MessagingAdmissionTimingRecord, type MessagingAdmissionStage, type MessagingInputPreparationSpan, ADMISSION_STAGE_MARK_LIMIT, bindingWithoutPendingSkillSelection, DEFAULT_INPUT_DEBOUNCE_MS, PRIVATE_REPLY_COMPLETION_INSTRUCTION, requestsExplicitPrivateResponse, PRIVATE_RESPONSE_FALLBACK_INSTRUCTION, originalAttachmentActorKey, formatAttachmentRejections, agentMessagingThreadKey, resolveExecutionModeForThread, turnSettingsForThread, isPromiseLike, isTurnInProgressStartError, isMissingTurnTargetStartError, buildMessagingStartedThreadContext, agentForNewThreadSession, launchpadForMessagingProject, messagingLaunchpadMaterializationKey, buildMessagingEnvironmentSetupProgressBody, isTerminalCodexEnvironmentSetupProgress, MESSAGING_ENVIRONMENT_SETUP_PROGRESS_INTERVAL_MS, buildMessagingEnvironmentSetupFailureBody, buildMessagingEnvironmentSetupSuccessBody } from "./messaging-inbound-helpers";
 import type { MessagingInboundContext, MessagingInboundHost } from "./messaging-inbound-context";
+import { beginUpdateBlockingWork } from "../../app-update-admission";
 
 export class MessagingInboundTurns {
   constructor(private readonly context: MessagingInboundContext) {}
@@ -1058,6 +1059,7 @@ export class MessagingInboundTurns {
     if (pending.timer) {
       clearTimeout(pending.timer);
     }
+    const endUpdateBlockingWork = beginUpdateBlockingWork();
     this.pendingNewThreadPrompts.delete(key);
     try {
       await this.createNewThreadFromPromptBundle({
@@ -1071,6 +1073,8 @@ export class MessagingInboundTurns {
         sessionId: pending.session.id,
       });
       await this.deliverNewThreadPromptFailure(pending, error);
+    } finally {
+      endUpdateBlockingWork();
     }
   }
 

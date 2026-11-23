@@ -1403,6 +1403,9 @@ export type MessagingReviewStartNotification = {
 
 export type MessagingConfirmationIntent = MessagingBaseSurfaceIntent & {
   kind: "confirmation";
+  attribution?: MessagingResponseAttribution;
+  /** The workflow checks the admitted actor independently on every callback. */
+  callbackAudience?: "conversation";
   browseSessionId?: string;
   title: string;
   body: string;
@@ -2066,6 +2069,7 @@ export type MessagingCallbackHandleRecord = {
   id: string;
   actionId: string;
   allowedActorIds: string[];
+  audience?: "conversation";
   bindingId?: string;
   browseSessionId?: string;
   channel: MessagingChannelRef;

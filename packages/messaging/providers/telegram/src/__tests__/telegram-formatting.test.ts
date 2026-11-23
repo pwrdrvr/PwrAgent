@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  actionsForTelegramIntent,
   buildTelegramKeyboard,
   escapeTelegramHtml,
   renderTelegramHtml,
@@ -13,6 +14,17 @@ import {
 } from "../telegram-formatting.ts";
 
 describe("telegram formatting", () => {
+  it("renders a source-labeled update confirmation and compact inline buttons", () => {
+    const intent = {
+      id: "update-fixture", kind: "confirmation", createdAt: 1, title: "PwrAgent update ready · v1.4.20",
+      body: "Downloaded on Test Workstation.", attribution: { label: "PwrAgent updates", hint: "Test Workstation" },
+      actions: [{ id: "app-update:review", label: "Install and restart" }, { id: "app-update:dismiss", label: "Not now" }],
+    } satisfies Parameters<typeof textForTelegramIntent>[0];
+    expect(textForTelegramIntent(intent)).toContain("<i>PwrAgent updates · Test Workstation</i>");
+    const keyboard = buildTelegramKeyboard(actionsForTelegramIntent(intent), (action) => `tg:${action.id.slice(11).padStart(18, "a")}`);
+    expect(keyboard?.inline_keyboard.flat().map((button) => button.text)).toEqual(["Install and restart", "Not now"]);
+  });
+
   it("keeps bare repo plan paths as text instead of explicit links", () => {
     const planPath =
       "docs/plans/2026-05-02-001-feat-messaging-tool-update-verbosity-plan.md";

@@ -5,6 +5,15 @@ import type { StateDb } from "./state-db";
 type AgentIdentity = { backend: AppServerBackendKind; threadId: string };
 type NoticeIdentity = { destination: string; version: string; phase: "available" | "ready" };
 
+const RESTART_RECEIPT_KEY = "messaging-app-update-restart";
+export type AppUpdateRestartReceipt = AgentIdentity & {
+  runtimeId: string;
+  version: string;
+  bindingId: string;
+  destination: string;
+  connectionId: string;
+};
+
 export const APP_UPDATE_NOTICE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS app_update_notice_agents (
   thread_key TEXT PRIMARY KEY REFERENCES threads(thread_id) ON DELETE CASCADE ON UPDATE CASCADE
@@ -84,5 +93,21 @@ export class AppUpdateNoticeStore {
     this.stateDb.raw.prepare(`INSERT OR IGNORE INTO app_update_notice_deliveries
       (destination, version, phase, thread_key, binding_id) VALUES (?, ?, ?, ?, ?)`)
       .run(notice.destination, notice.version, notice.phase, storageKey(identity), bindingId);
+  }
+
+  readRestartReceipt(): AppUpdateRestartReceipt | undefined {
+    const row = this.stateDb.getMeta(RESTART_RECEIPT_KEY);
+    return row ? JSON.parse(row) as AppUpdateRestartReceipt : undefined;
+  }
+
+  saveRestartReceipt(receipt: AppUpdateRestartReceipt): boolean {
+    if (this.stateDb.getMeta(RESTART_RECEIPT_KEY) !== undefined) return false;
+    return this.stateDb.raw.prepare("INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING")
+      .run(RESTART_RECEIPT_KEY, JSON.stringify(receipt)).changes === 1;
+  }
+
+  clearRestartReceipt(receipt: AppUpdateRestartReceipt): void {
+    this.stateDb.raw.prepare("DELETE FROM meta WHERE key = ? AND value = ?")
+      .run(RESTART_RECEIPT_KEY, JSON.stringify(receipt));
   }
 }
