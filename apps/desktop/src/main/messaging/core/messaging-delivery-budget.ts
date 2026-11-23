@@ -2,6 +2,7 @@ import type {
   MessagingDeliveryScope,
   MessagingRateLimitInfo,
 } from "@pwragent/messaging-interface";
+import { MESSAGING_RATE_LIMIT_SAFETY_BUFFER_MS } from "@pwragent/messaging-interface";
 
 export type MessagingDeliveryPriority =
   | "critical_interactive"
@@ -18,7 +19,7 @@ export type MessagingDeliveryAdmission =
     }
   | {
       outcome: "deferred";
-      reason: "cool-off" | "budget-exhausted";
+      reason: "cool-off" | "budget-exhausted" | "pacing";
       retryAt: number;
       slowMode: boolean;
     }
@@ -28,6 +29,7 @@ export type MessagingDeliveryAdmission =
         | "cool-off"
         | "slow-mode"
         | "budget-exhausted"
+        | "pacing"
         | "missing-scope";
       slowMode: boolean;
     };
@@ -48,7 +50,6 @@ type BucketState = {
 const DEFAULT_INTERVAL_MS = 60_000;
 const DEFAULT_LIMIT = 60;
 const DEFAULT_RESERVED = 1;
-const RATE_LIMIT_SAFETY_BUFFER_MS = 2_000;
 const SLOW_MODE_RECOVERY_MS = 5 * 60_000;
 const SLOW_MODE_MINIMUM_MS = 5_000;
 
@@ -136,6 +137,14 @@ export class MessagingDeliveryBudget {
       return { outcome: "dropped", reason: "budget-exhausted", slowMode };
     }
 
+    const last = state.timestamps.at(-1);
+    const spacingMs = request.scope.budget?.minSpacingMs ?? 0;
+    if (last !== undefined && last + spacingMs > now) {
+      return DEFERABLE_PRIORITIES.has(request.priority)
+        ? { outcome: "deferred", reason: "pacing", retryAt: last + spacingMs, slowMode }
+        : { outcome: "dropped", reason: "pacing", slowMode };
+    }
+
     state.timestamps.push(now);
     return { outcome: "admitted", slowMode };
   }
@@ -143,7 +152,7 @@ export class MessagingDeliveryBudget {
   recordRateLimit(info: MessagingRateLimitInfo): void {
     const now = info.observedAt ?? this.now();
     const retryAfterMs = Math.max(0, Math.floor(info.retryAfterMs ?? 0));
-    const coolOffUntil = now + retryAfterMs + RATE_LIMIT_SAFETY_BUFFER_MS;
+    const coolOffUntil = now + retryAfterMs + MESSAGING_RATE_LIMIT_SAFETY_BUFFER_MS;
     const targets: Array<ScopeState | BucketState> = [this.stateFor(info.scope)];
     const key = info.appliesTo === "bucket" ? bucketKey(info.scope) : undefined;
     if (key !== undefined) {

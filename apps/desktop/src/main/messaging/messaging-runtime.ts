@@ -3008,6 +3008,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   private async handleDeliveryBudgetEvent(
     event: MessagingControllerDeliveryBudgetEvent,
   ): Promise<void> {
+    // Normal inter-message spacing is not a platform degradation.
+    if (event.reason === "pacing") return;
     const scopeId = event.scope?.id ?? "unknown";
     const reason = event.reason ?? (event.outcome === "deferred" ? "deferred" : "dropped");
     const retryDelayMs = event.retryAt !== undefined

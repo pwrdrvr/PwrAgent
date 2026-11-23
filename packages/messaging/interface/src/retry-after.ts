@@ -3,6 +3,7 @@
  * hostile server could otherwise freeze a delivery scope indefinitely.
  */
 export const MESSAGING_RETRY_AFTER_MAX_MS = 60 * 60_000;
+export const MESSAGING_RATE_LIMIT_SAFETY_BUFFER_MS = 2_000;
 
 /** Case-insensitive header lookup, as on the Fetch API `Headers` object. */
 export type MessagingHttpHeaderReader = {

@@ -378,7 +378,7 @@ describe("TelegramAdapter rich messages", () => {
     adapter.onRateLimit(onRateLimit);
     rich.mockRejectedValue({ error_code: 429, parameters: { retry_after: 2 } });
     expect((await adapter.deliver(intent)).outcome).toBe("failed");
-    expect(onRateLimit).toHaveBeenCalledWith(expect.objectContaining({ retryAfterMs: 2000, retryable: false }));
+    expect(onRateLimit).toHaveBeenCalledWith(expect.objectContaining({ retryAfterMs: 2000, retryable: true }));
     const update = await adapter.deliver({
       id: "next-stream", kind: "stream_update", createdAt: 1,
       audit: intent.audit, text: "Working", markdown: "markdown",

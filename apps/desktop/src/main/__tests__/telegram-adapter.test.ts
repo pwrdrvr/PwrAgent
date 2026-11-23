@@ -132,6 +132,31 @@ describe("TelegramAdapter", () => {
     });
   });
 
+  it("shares the DM budget with private topics and isolates different bot accounts", () => {
+    const scopeFor = (expectedBotAccountId: string, conversation: { id: string; kind: "dm" | "topic"; parentId?: string }) => {
+      const adapter = new TelegramAdapter({
+        api: createApi() as unknown as TelegramBotApi,
+        config: {
+          channel: "telegram", botToken: "12345:test-token", expectedBotAccountId,
+          authorizedActorIds: [],
+        },
+        pollOnStart: false,
+      });
+      return adapter.resolveDeliveryScope({
+        id: "reply", kind: "message", role: "assistant", createdAt: 1_000, parts: [],
+        audit: {
+          actor: { platformUserId: "42" },
+          channel: { channel: "telegram", conversation },
+          occurredAt: 1_000,
+        },
+      });
+    };
+    const dm = { kind: "dm", id: "777" } as const;
+    const topic = { kind: "topic", id: "101", parentId: "777" } as const;
+    expect(scopeFor("12345", dm)).toEqual(scopeFor("12345", topic));
+    expect(scopeFor("12345", dm)?.id).not.toBe(scopeFor("23456", dm)?.id);
+  });
+
   it("registers a Telegram bot error handler for polling middleware failures", async () => {
     const api = createApi();
     const logger = {
@@ -1369,7 +1394,7 @@ describe("TelegramAdapter", () => {
       outcome: "discarded",
     });
 
-    now += 1100;
+    now += 3000;
     await expect(
       adapter.deliver({
         ...baseIntent,

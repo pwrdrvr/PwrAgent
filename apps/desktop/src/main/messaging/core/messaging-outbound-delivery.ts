@@ -55,7 +55,7 @@ export type MessagingControllerDeliveryBudgetEvent = {
   intentKind: MessagingSurfaceIntent["kind"];
   outcome: "deferred" | "dropped";
   priority: MessagingDeliveryPriority;
-  reason?: "cool-off" | "slow-mode" | "budget-exhausted" | "missing-scope";
+  reason?: "cool-off" | "slow-mode" | "budget-exhausted" | "pacing" | "missing-scope";
   retryAt?: number;
   scope?: MessagingDeliveryScope;
   slowMode: boolean;
@@ -440,7 +440,6 @@ export class MessagingOutboundDelivery {
       };
     }
     const routedIntent = this.withRoutingAudit(displayIntent, binding, event);
-    const consumeDeliveryBudget = shouldConsumeDeliveryBudget(routedIntent);
     // A disposed controller budgets against the adapter that will send, not
     // the stopped-adapter stub, which has no scope and would skip cool-off.
     const scopeAdapter = this.context.disposed
@@ -458,6 +457,7 @@ export class MessagingOutboundDelivery {
       };
     }
     const scope = scopeAdapter.resolveDeliveryScope?.(routedIntent);
+    const consumeDeliveryBudget = shouldConsumeDeliveryBudget(routedIntent, scope);
     const priority = messagingDeliveryPriority(routedIntent, {
       userInitiated: isUserInitiatedDeliveryEvent(event),
     });
@@ -804,6 +804,9 @@ export class MessagingOutboundDelivery {
       intentId: intent.id,
       intentKind: intent.kind,
       outcome: result.outcome,
+      retryAfterMs: result.rateLimit?.retryAfterMs,
+      retryable: result.rateLimit?.retryable,
+      scopeId: result.rateLimit?.scope.id,
       surfaceId: result.surface?.id,
       threadId: binding?.threadId,
     };
@@ -943,9 +946,12 @@ function stripCodexGitActionDirectivesFromMessagingIntent(
   return intent;
 }
 
-export function shouldConsumeDeliveryBudget(intent: MessagingSurfaceIntent): boolean {
+export function shouldConsumeDeliveryBudget(
+  intent: MessagingSurfaceIntent,
+  scope?: MessagingDeliveryScope,
+): boolean {
   if (intent.kind === "stream_update" && !intent.stream.isFinal) {
-    return false;
+    return scope?.budget?.countStreamPartials === true && intent.policy !== "disabled";
   }
   return intent.kind !== "activity";
 }
@@ -1034,6 +1040,7 @@ function shouldRetryArtifactInline(
 ): boolean {
   return (
     intent.artifactDelivery.mode === "attachment_summary" &&
+    !result.rateLimit &&
     (result.outcome === "failed" || result.outcome === "unsupported")
   );
 }
