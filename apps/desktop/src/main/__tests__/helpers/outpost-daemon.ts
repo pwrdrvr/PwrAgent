@@ -56,6 +56,7 @@ export async function startOutpostDaemon(options: {
   hostKind?: "desktop" | "headless";
   fixturePreload?: string;
   env?: NodeJS.ProcessEnv;
+  waitForCodexCommand?: boolean;
 } = {}): Promise<OutpostDaemon> {
   // The outpost listens on $PWRAGENT_HOME/profiles/t/state/headless/rpc.sock
   // and refuses a socket path over 100 bytes (the Unix sun_path limit). A
@@ -157,6 +158,11 @@ export async function startOutpostDaemon(options: {
       await delay(20);
     }
     const viewer = await enrollViewer(options.capabilities ?? OUTPOST_VIEWER_CAPABILITIES);
+    if (options.waitForCodexCommand) {
+      // Serving RPCs and enrolling a viewer can finish while a cold profile
+      // selects its Codex executable. Status awaits the owner's selection.
+      await promisify(execFile)(process.execPath, [cli, "status"], { env });
+    }
     return { ...viewer, workspace, cli, env, enrollViewer, close };
   } catch (error) {
     await close();
