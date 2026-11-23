@@ -1482,7 +1482,7 @@ describe("StarMapScreen", () => {
       screen.getByRole("button", { name: "Open thread: Thread t1" }),
     );
     const stop = await screen.findByRole("button", {
-      name: "Stop sub-agent: Watch production",
+      name: "Stop sub-agent: production",
     });
     fireEvent.click(stop);
 

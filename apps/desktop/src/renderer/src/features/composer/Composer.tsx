@@ -285,6 +285,7 @@ import {
 } from "../../lib/useFederatedThreadSearch";
 import { useExecutionModeSelection } from "../../lib/useExecutionModeSelection";
 import { useModalDialog } from "../../lib/useModalDialog";
+import { AgentPresetDialog } from "./AgentPresetDialog";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
   findSkillTrigger,
@@ -331,6 +332,13 @@ import {
 import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
 import { SkillPickerHeader } from "./SkillPickerHeader";
 import { ComposerErrorRail, type ComposerErrorEntry } from "./ComposerErrorRail";
+import {
+  ComposerGoalConfirmation,
+  ComposerGoalStrip,
+  GOAL_ARGUMENT_HINT,
+  parseGoalCommand,
+  useComposerGoal,
+} from "./ComposerGoal";
 import {
   ComposerTerminalToggle,
   type ComposerTerminalToggleProps,
@@ -646,6 +654,10 @@ export type ComposerProps = {
         | "imageAttachments"
         | "fileAttachments"
         | "agent"
+        | "agentPresetId"
+        | "agentDraftMcpSelection"
+        | "mcpConnectionIds"
+        | "mcpConnectionIdsFromDefaults"
       >
     >,
     options?: {
@@ -1140,9 +1152,9 @@ function providerCommandToSlashSuggestion(
   const commandName = command.name.startsWith("/")
     ? command.name.slice(1)
     : command.name;
-  const sourceLabel = command.backend
-    ? formatBackendLabel(command.backend, backends)
-    : "Provider";
+  const sourceLabel = command.backend === "codex" && commandName === "goal"
+    ? "Codex"
+    : command.backend ? formatBackendLabel(command.backend, backends) : "Provider";
   return {
     id: `provider:${command.backend ?? "unknown"}:${commandName}`,
     label: `/${commandName}`,
@@ -2222,6 +2234,7 @@ function ComposerThreadOptionsMenu(props: {
    */
   mcpConnectionCount?: number;
   onAgentThreadChange?: (agentThread: boolean) => void;
+  onAgentPresets?: () => void;
   onShowMcpInventory?: () => void;
   /** Whose own MCP config the inventory row opens. */
   mcpInventoryAgent?: "codex" | "claude";
@@ -2373,6 +2386,12 @@ function ComposerThreadOptionsMenu(props: {
               </span>
             </button>
           </div>
+          {props.onAgentPresets ? (
+            <button className="composer-dropdown__option" disabled={props.disabled} role="menuitem" type="button"
+              onClick={() => { hideMenuTooltip(); setOpen(false); props.onAgentPresets?.(); }}>
+              Start from preset…
+            </button>
+          ) : null}
           {props.onMonitorJobSuggestionsChange ? (
             <>
               <button
@@ -3297,6 +3316,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 });
 
 function useComposerController(props: ComposerProps) {
+  const [agentPresetScope, setAgentPresetScope] = useState<string>();
   // These unconditional local hooks keep the original controller lifetime
   // and hook order. Their snapshots belong to this render; JSX runs after
   // the controller returns.
@@ -4285,6 +4305,15 @@ function useComposerController(props: ComposerProps) {
     () => serializeDraftWithSkillTokens(draft, skillTokens),
     [draft, skillTokens]
   );
+  const codexGoalCommands = (props.launchpad?.backend ?? props.thread?.source) === "codex";
+  const localGoalThreadId = codexGoalCommands && filesystemFederationTarget?.scope !== "remote"
+    ? props.thread?.id
+    : undefined;
+  const goalControls = useComposerGoal(props.desktopApi, localGoalThreadId);
+  const goalCommand = codexGoalCommands ? parseGoalCommand(canonicalDraft) : undefined;
+  const goalNotice = (message: string, title = "Codex goal") => {
+    showComposerNotice({ title, message });
+  };
   const canonicalReferenceTokens = useMemo(
     () =>
       hydrateComposerDraft(
@@ -6020,9 +6049,10 @@ function useComposerController(props: ComposerProps) {
   });
   const slashCommandSuggestions = useMemo(() => {
     const commands =
-      props.providerCommands?.map((command) =>
-        providerCommandToSlashSuggestion(command, props.backends)
-      ) ?? [];
+      props.providerCommands?.filter((command) =>
+        command.backend !== "codex" || command.name.replace(/^\//, "") !== "goal"
+        || (localGoalThreadId && goalControls.state?.supported !== false)
+      ).map((command) => providerCommandToSlashSuggestion(command, props.backends)) ?? [];
     const localCommands = supportsReview ? [...SLASH_COMMANDS] : [];
     if (supportsMcpInventory) {
       localCommands.push(...CODEX_MCP_SLASH_COMMANDS);
@@ -6035,6 +6065,8 @@ function useComposerController(props: ComposerProps) {
     }
     return [...localCommands, ...commands];
   }, [
+    goalControls.state?.supported,
+    localGoalThreadId,
     props.backends,
     props.providerCommands,
     supportsLockCommand,
@@ -9959,6 +9991,26 @@ function useComposerController(props: ComposerProps) {
     // A slash command is not a message: it runs as typed and leaves dictation
     // alone, so a transcript is never appended to the command.
     const submitsCommand = (inputRef.current?.value ?? draft).trimStart().startsWith("/");
+    if (goalCommand) {
+      if (filesystemFederationTarget?.scope === "remote") {
+        goalNotice("Goals are set on the machine that owns this thread.");
+      } else if (!localGoalThreadId) {
+        goalNotice("Start the thread first.");
+      } else if (imageAttachments.length || fileAttachments.length || remoteFileUploads.uploads.length) {
+        goalNotice("/goal does not accept attachments.");
+      } else {
+        const snapshot = latestDraftSnapshotRef.current.snapshot;
+        await goalControls.run(goalCommand, goalNotice, () => {
+          if (activeComposerScopeKeyRef.current === composerScopeKey
+            && latestDraftSnapshotRef.current.snapshot.draft === snapshot.draft
+            && latestDraftSnapshotRef.current.snapshot.imageAttachments.length === 0
+            && !latestDraftSnapshotRef.current.snapshot.fileAttachments?.length) {
+            resetComposerDraftAndState(composerScopeKey);
+          }
+        });
+      }
+      return;
+    }
     if (dictation.phase !== "idle" && !submitsCommand) {
       // Send finishes dictation first. Nothing has been heard while
       // connecting, so that session is dropped and the draft goes as it is.
@@ -12375,6 +12427,7 @@ function useComposerController(props: ComposerProps) {
     // before they reach the draft.
     const sendButtonDisabled =
       sendBlocked ||
+      Boolean(goalCommand && goalControls.busy) ||
       (nothingToSend && dictation.phase !== "listening" && dictation.phase !== "finishing");
     // A scheduled send would leave without the transcript.
     const scheduleButtonDisabled =
@@ -12385,7 +12438,7 @@ function useComposerController(props: ComposerProps) {
       (!props.thread && !props.launchpad) ||
       Boolean(props.launchpad && !props.onMaterializeLaunchpad) ||
       isCompactCommand || Boolean(forkCommand) ||
-      lockCommandNote !== undefined;
+      lockCommandNote !== undefined || Boolean(goalCommand);
     // Only surface the schedule caret where scheduling actually applies. In the
     // compact command or a thread-less composer there is nothing to schedule,
     // so the split collapses to a plain Send pill instead of parking a
@@ -12396,7 +12449,7 @@ function useComposerController(props: ComposerProps) {
       Boolean(
         props.thread
         || (props.launchpad && props.onMaterializeLaunchpad)
-      ) && !isCompactCommand && !forkCommand && lockCommandNote === undefined;
+      ) && !isCompactCommand && !forkCommand && !goalCommand && lockCommandNote === undefined;
     // A pending draft schedule (e.g. after editing a scheduled item) surfaces as
     // a checkable toggle between the caret and Send rather than hijacking the
     // Send label into a countdown. Armed → Send keeps the schedule; unarmed →
@@ -12431,7 +12484,7 @@ function useComposerController(props: ComposerProps) {
       ? "Forking…"
       : forkCommand
         ? "Fork"
-        : turnSubmitButtonLabel;
+        : goalCommand ? goalControls.label(goalCommand) : turnSubmitButtonLabel;
     // The command menu owns the "/fork" row until it closes; after that the
     // input draws the parameters still available as muted text after the caret.
     const forkInlineHint =
@@ -12447,7 +12500,7 @@ function useComposerController(props: ComposerProps) {
     // draft that starts with one of their commands draws it as a chip and, until
     // an argument is typed, the arguments it takes.
     const commandBackend = props.launchpad?.backend ?? props.thread?.source;
-    const { chip: commandChip, hint: commandInlineHint } = describeLeadingCommand({
+    const { chip: commandChip, hint: providerCommandInlineHint } = describeLeadingCommand({
       commands: props.providerCommands?.filter((command) =>
         backendDrawsCommandChips(command.backend ?? commandBackend)
       ) ?? [],
@@ -12459,6 +12512,10 @@ function useComposerController(props: ComposerProps) {
         && !preparingSend,
       skillTokens,
     });
+    const commandInlineHint = goalCommand?.action === "read"
+      && autocompleteKind !== "slash" && goalControls.state?.supported
+      ? GOAL_ARGUMENT_HINT
+      : providerCommandInlineHint;
     // Queue is the primary mid-turn; the steer chord is its keyboard-only
     // sibling, so the button is where it gets named.
     const submitButtonSteerHint =
@@ -13421,6 +13478,7 @@ function useComposerController(props: ComposerProps) {
         : undefined;
 
     const composerErrorEntries: readonly ComposerErrorEntry[] = [
+      ...(goalControls.error ? [goalControls.error] : []),
       { id: "skills", label: "Couldn't load skills", message: props.skillError },
       { id: "launchpad", label: "Couldn't start thread", message: props.launchpadError },
       {
@@ -13655,6 +13713,31 @@ function useComposerController(props: ComposerProps) {
         desktopApi={props.desktopApi}
         entries={composerErrorEntries}
       />
+
+      {goalControls.state?.goal && (
+        <ComposerGoalStrip
+          key={localGoalThreadId}
+          goal={goalControls.state.goal}
+          pausedForMessage={goalControls.state.pausedForMessage}
+          activationQueued={goalControls.state.activationQueued}
+          activationHoldReason={goalControls.state.activationHoldReason}
+          busy={goalControls.busy}
+          showCount={goalControls.showCount}
+          onCommand={(command) => { void goalControls.run(command, goalNotice); }}
+        />
+      )}
+      {goalControls.confirmation && (
+        <ComposerGoalConfirmation
+          confirmation={goalControls.confirmation}
+          onCancel={goalControls.dismissConfirmation}
+          onConfirm={() => {
+            const confirmation = goalControls.confirmation;
+            if (!confirmation) return;
+            goalControls.dismissConfirmation();
+            void goalControls.run(confirmation.command, goalNotice, confirmation.onAccepted, confirmation.objective);
+          }}
+        />
+      )}
 
       {pendingSteer ? (
         <div
@@ -15316,6 +15399,8 @@ function useComposerController(props: ComposerProps) {
   }
 
   function renderComposerToolbar(): ReactNode {
+    const localPresetLaunchpad = props.desktopApi?.manageAgentPresets && props.onUpdateLaunchpad
+      && filesystemFederationTarget?.scope !== "remote" ? props.launchpad : undefined;
     return (
       props.launchpad || props.thread ? (
         <div
@@ -16072,6 +16157,7 @@ function useComposerController(props: ComposerProps) {
                     }
                   : undefined
             }
+            onAgentPresets={localPresetLaunchpad ? () => setAgentPresetScope(localPresetLaunchpad.directoryKey) : undefined}
             mcpInventoryAgent={mcpInventoryAgent}
             onShowMcpInventory={
               mcpInventoryAgent
@@ -16110,6 +16196,22 @@ function useComposerController(props: ComposerProps) {
             mcpConnectionCount={props.mcpConnectionCount}
             onShowMcpAccess={props.onShowMcpAccess}
           />
+          {localPresetLaunchpad?.agent ? (
+            <button className="button button--ghost composer-agent-preset-chip" disabled={launchpadSubmitting} type="button"
+              onClick={() => setAgentPresetScope(localPresetLaunchpad.directoryKey)}>Agent · {localPresetLaunchpad.agent.name}</button>
+          ) : null}
+          {localPresetLaunchpad && props.desktopApi && agentPresetScope === localPresetLaunchpad.directoryKey ? (
+            <AgentPresetDialog key={agentPresetScope} launchpad={localPresetLaunchpad} desktopApi={props.desktopApi}
+              onClose={() => setAgentPresetScope(undefined)} onApply={async (values, agentPresetId) => {
+                await props.onUpdateLaunchpad?.(localPresetLaunchpad.directoryKey, {
+                  agent: { name: values.name, instructions: values.instructions },
+                  agentPresetId,
+                  agentDraftMcpSelection: true,
+                  mcpConnectionIds: values.mcpConnectionIds,
+                  mcpConnectionIdsFromDefaults: false,
+                }, { owner: { scope: "local" } });
+              }} />
+          ) : null}
         </div>
       ) : null
     );

@@ -183,6 +183,9 @@ export type MessagingAdapter = {
 };
 
 export type MessagingBackendBridge = {
+  listAgentPresets?(): import("@pwragent/shared/contracts/agent-presets").AgentPreset[];
+  listAgentPresetConnections?(): Promise<Array<Pick<import("@pwragent/shared/contracts/mcp-connections").McpConnectionStatus,
+    "id" | "displayName" | "enabled" | "configured" | "state">>>;
   listNavigationOwners?(): Promise<{ owners: Array<{ target?: Extract<FederationTarget, { scope: "remote" }>; label: string }>; omitted: number }>;
   getNavigationQueryPage?(request: NavigationQueryRequest): Promise<NavigationQueryPage>;
   getNavigationSelectedDetail?(request: NavigationSelectedDetailRequest): Promise<NavigationSelectedDetailResponse>;

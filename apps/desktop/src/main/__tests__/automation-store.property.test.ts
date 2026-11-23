@@ -22,6 +22,56 @@ const turnRow = (
   payload = "{}",
 ) => ({ backend, turnId, status, updatedAt, payload });
 
+it("sums each run's latest price even when its history has been pruned", () => {
+  const db = openInMemoryStateDb();
+  try {
+    fc.assert(fc.property(
+      fc.nat(100),
+      fc.array(fc.tuple(fc.integer({ min: 0, max: 2 }), fc.nat(100)), {
+        minLength: 8,
+        maxLength: 25,
+      }),
+      (firstCost, updates) => {
+        db.raw.exec("DELETE FROM automations");
+        const store = new AutomationStore(db, { runHistoryLimit: 1 });
+        const automation = store.createAutomation({
+          id: "cost", backend: "codex", threadId: "owner", name: "Costs",
+          taskPrompt: "Check.", schedule: { kind: "interval", every: 5, unit: "minutes" },
+          now: 1,
+        });
+        const latest = new Map([[0, firstCost]]);
+        for (const index of [0, 1, 2]) {
+          const id = `run-${index}`;
+          const now = index + 2;
+          store.createRun({ id, automationId: automation.id, trigger: "manual", now });
+          store.markRunStarted({ runId: id, backendTurnId: `turn-${index}`, now });
+          store.markRunTerminal({ runId: id, status: "completed", now });
+          if (index === 0) {
+            store.setRunUsage({ runId: id, usage: { totalCostMicros: firstCost }, now });
+          }
+        }
+        expect(store.listRunsForAutomation(automation.id).map((run) => run.id)).toEqual(["run-2"]);
+        expect(store.getAutomation(automation.id)?.lifetimeCost).toEqual({ since: 1, totalMicros: firstCost });
+
+        for (const [step, [index, micros]] of updates.entries()) {
+          latest.set(index, micros);
+          for (let repeat = 0; repeat < 2; repeat += 1) {
+            store.setRunUsage({ runId: `run-${index}`, usage: { totalCostMicros: micros }, now: step + 10 });
+            expect(store.getAutomation(automation.id)).toMatchObject({
+              lifetimeCost: {
+                since: 1,
+                totalMicros: [...latest.values()].reduce((sum, cost) => sum + cost, 0),
+              },
+            });
+          }
+        }
+      },
+    ), { numRuns: 30 });
+  } finally {
+    db.close();
+  }
+});
+
 it("resolves turn ids by backend, update time, rowid, and running precedence", () => {
   fc.assert(fc.property(
     fc.array(fc.record({

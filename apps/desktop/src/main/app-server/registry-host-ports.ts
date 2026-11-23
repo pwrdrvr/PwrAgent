@@ -5,6 +5,7 @@ import type {
   AppServerBackendKind,
   AppServerPendingRequestNotification,
   AppServerReadThreadRequest,
+  AppServerPendingThreadStart,
   AppServerReadThreadResponse,
   AppServerThreadMessageOrigin,
   AppServerThreadSummary,
@@ -66,6 +67,10 @@ export type RegistryReadThreadRequest = AppServerReadThreadRequest & {
  * this contract must stay independent of the registry and its domain modules.
  */
 export interface RegistryHostPorts {
+  withGoalHibernation<T>(
+    identity: { backend: AppServerBackendKind; threadId: string },
+    work: () => Promise<T>,
+  ): Promise<T>;
   admitNewThreadModelSettings(
     backend: AppServerBackendKind,
     settings: ModelSettings & { acpRuntime?: BackendAcpSessionRuntimeState },
@@ -126,6 +131,7 @@ export interface RegistryHostPorts {
     backend?: AppServerBackendKind;
     callerReason?: ThreadListCallerReason;
     enrichDirectories?: boolean;
+    skipPendingDirectoryEnrichment?: boolean;
     filter?: string;
     forceRefresh?: boolean;
     limit?: number;
@@ -231,6 +237,12 @@ export interface RegistryHostPorts {
      */
     rerunCodexEnvironmentSetup?: boolean;
     linkedDirectories?: LinkedDirectorySummary[];
+    /**
+     * Report the start to every list while its workspace is prepared, as a
+     * starting row (`thread/start/pending`). For callers with no row of
+     * their own: a launchpad draws its own.
+     */
+    pendingStart?: Pick<AppServerPendingThreadStart, "startId" | "title" | "directoryKey" | "directoryLabel" | "progressThread">;
   }): Promise<StartThreadResponse>;
   startTurn(params: {
     backend: AppServerBackendKind;

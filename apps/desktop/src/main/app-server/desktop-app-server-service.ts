@@ -432,7 +432,7 @@ import {
 } from "../app-server/project-forge-automation-requests";
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import { searchNavigationOwners } from "../app-server/navigation-jump-search";
-import { appendViewerNavigationPins, attachRemoteThreadsToLocalDirectories, loadViewerNavigationPins, loadViewerWatchedNavigationRows } from "../app-server/navigation-viewer-pins";
+import { appendViewerNavigationPins, archivedRemoteThreadPinMounts, attachRemoteThreadsToLocalDirectories, loadViewerNavigationPins, loadViewerWatchedNavigationRows } from "../app-server/navigation-viewer-pins";
 import { awaitStartupProviderCoverage, loadLocalNavigationQueryIndex, navigationPullRequestProjection } from "../app-server/navigation-query-source";
 import { reconcileWindowsDirectoryAliases } from "../app-server/navigation-windows-directory-aliases";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
@@ -2138,7 +2138,7 @@ class DesktopAppServerService {
           if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
             return getDesktopFederationRuntime().remoteNavigationLaunchpadConfig(request.federationTarget, request, options);
           }
-          return getDesktopNavigationDetailService().readLaunchpadConfig(request);
+          return getDesktopNavigationDetailService().readLaunchpadConfig(request, { includeLocalAgentDraft: true });
         },
       });
     } finally { if (!consumerId) navigationQueryPool.release(token); }
@@ -2545,7 +2545,7 @@ class DesktopAppServerService {
       const overlayStore = this.getOverlayStore();
       const pins =
         typeof overlayStore.listRemoteThreadPins === "function"
-          ? await overlayStore.listRemoteThreadPins()
+          ? await overlayStore.listRemoteThreadPins({ includeMountTokens: true })
           : [];
       if (pins.length > 0) {
         const cache = getDesktopFederationRuntime().remoteThreadSummaries();
@@ -2577,8 +2577,8 @@ class DesktopAppServerService {
         };
         if (resolution.archived.length > 0) {
           await Promise.all(
-            resolution.archived.map(async (ref) => {
-              await this.getOverlayStore().removeRemoteThreadPin({ ref });
+            archivedRemoteThreadPinMounts(pins, resolution.archived).map(async (mount) => {
+              if (await overlayStore.removeRemoteThreadPin(mount)) resolution.acknowledgeArchiveDeletion?.(mount);
             }),
           );
         }
@@ -6754,6 +6754,7 @@ class DesktopAppServerService {
     const index = await loadLocalNavigationQueryIndex({
       backend: "all",
       callerReason: "settings-bulk-pr-auto-dispatch",
+      requireVerifiedDirectories: true,
     });
     if (index.coverage && index.coverage.state !== "complete") {
       throw new Error("Thread discovery is incomplete. Wait for providers to finish loading before changing Auto-fix for all eligible threads.");

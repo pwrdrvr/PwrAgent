@@ -159,8 +159,19 @@ type AssistantImageRequest = Parameters<
   NonNullable<MessagingBackendBridge["resolveAssistantMessageImages"]>
 >[0];
 
+import { getMcpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
+import { manageDesktopAgentPresets } from "../storage/desktop-agent-presets";
+
 export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
   readonly ownsTurnQueue = true;
+
+  listAgentPresets() {
+    return manageDesktopAgentPresets({ action: "list" }).filter((preset) => preset.availableInMessaging === true);
+  }
+
+  listAgentPresetConnections() {
+    return getMcpConnectionGatewayService().listConnections({ cachedLocalStatus: true });
+  }
 
   async readQueuedTurn(request: ReadQueuedTurnRequest): Promise<ReadQueuedTurnResponse> {
     const remote = this.remoteBackend(request.federationTarget);
@@ -331,7 +342,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
             await awaitStartupProviderCoverage({ query: request.query, deadlineAt: options.deadlineAt,
               registry: this.registry, signal: options.signal });
             return loadLocalNavigationQueryIndex({ backend: request.backend,
-              callerReason: "messaging-bounded-navigation", registry: this.registry });
+              callerReason: "messaging-bounded-navigation", registry: this.registry, signal: options.signal });
           } });
       } }));
     } finally { pool.release(consumerId); }

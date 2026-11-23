@@ -1,3 +1,5 @@
+import type { DecisionImageMimeType } from "./decision-models";
+
 /**
  * What the thread's Decisions tab shows: the decisions visible to the
  * thread and the decisions_invoke batches it ran. The owner builds these
@@ -128,6 +130,16 @@ export type DecisionsRailAnswer = {
   reason?: string;
 };
 
+export const DECISION_IMAGE_THUMBNAIL_MAX_LENGTH = 16 * 1024;
+
+export type DecisionsRailInputImage = {
+  mimeType: DecisionImageMimeType;
+  width: number;
+  height: number;
+  /** A bounded, re-encoded JPEG data URL with metadata removed. */
+  thumbnail?: string;
+};
+
 export type DecisionsRailItem = {
   index: number;
   ok: boolean;
@@ -137,6 +149,7 @@ export type DecisionsRailItem = {
   inputTruncated?: boolean;
   /** The input looked like it held a credential, so no preview was kept. */
   inputRedacted?: boolean;
+  inputImages?: DecisionsRailInputImage[];
   durationMs?: number;
   code?: string;
   message?: string;

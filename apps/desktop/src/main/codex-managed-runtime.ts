@@ -1,5 +1,5 @@
 import { fetchGitHubReleaseMetadata, ReleaseCheckDeferredError } from "./github-release-cache.js";
-import type { DesktopUpdateChannel } from "@pwragent/shared/contracts/settings";
+import type { DesktopUpdateChannel, ManagedCodexTrackLookup } from "@pwragent/shared/contracts/settings";
 import {
   MANAGED_CODEX_BUILD_CHANNEL_DEFAULT,
   parseDesktopUpdateChannel,
@@ -347,7 +347,7 @@ async function ensureManagedCodexRuntimeInner(
   const progress = createManagedRuntimeProgressReporter("codex");
   progress.checking();
   try {
-    const slots = await fetchCompatibleReleaseSlots(options, channel);
+    const { slots } = await fetchCompatibleReleaseSlots(options, channel);
     const release = slots[channel];
     if (!release) {
       throw new Error(
@@ -438,28 +438,48 @@ function isCachedForOtherTrack(
     && cached.metadata.channel !== channel;
 }
 
+type ReleaseLookupOptions = Pick<
+  ManagedCodexRuntimeOptions,
+  "arch" | "checkMode" | "fetch" | "platform" | "signal"
+>;
+
+/** Read published versions without probing or installing a runtime. */
+export async function readManagedCodexTrackTags(
+  options: Pick<ReleaseLookupOptions, "arch" | "platform"> = {},
+): Promise<ManagedCodexTrackLookup | undefined> {
+  const { slots, observedAt } = await fetchCompatibleReleaseSlots(options);
+  if (observedAt === undefined) return undefined;
+  return { observedAt, latestTag: slots.latest?.tag, prereleaseTag: slots.prerelease?.tag };
+}
+
 async function fetchCompatibleReleaseSlots(
-  options: ManagedCodexRuntimeOptions,
-  channel: DesktopUpdateChannel,
-): Promise<ManagedCodexReleaseSlots> {
+  options: ReleaseLookupOptions,
+  channel?: DesktopUpdateChannel,
+): Promise<{ slots: ManagedCodexReleaseSlots; observedAt?: number }> {
   const assetPlatform = managedCodexAssetPlatform(
     options.platform ?? process.platform,
     options.arch ?? process.arch,
   );
   if (!assetPlatform) {
-    return {};
+    return { slots: {} };
   }
   const fetchImpl = options.fetch ?? globalThis.fetch;
-  const response = await (options.fetch ?? ((url, init) => fetchGitHubReleaseMetadata(String(url), init, {
-    manual: options.checkMode === "force", ttlMs: 24 * 60 * 60_000,
-  })))(MANAGED_CODEX_RELEASES_URL, {
+  const init = {
     headers: {
       Accept: "application/vnd.github+json",
       "User-Agent": "PwrAgent-managed-codex-runtime",
       "X-GitHub-Api-Version": "2022-11-28",
     },
     signal: managedCodexFetchSignal(options.signal),
-  }).catch((error: unknown) => {
+  };
+  const response = await (options.fetch
+    ? options.fetch(MANAGED_CODEX_RELEASES_URL, init)
+    : fetchGitHubReleaseMetadata(MANAGED_CODEX_RELEASES_URL, init, {
+      manual: options.checkMode === "force",
+      ttlMs: MANAGED_CODEX_CHECK_TTL_MS,
+      waitForReservation: true,
+    })
+  ).catch((error: unknown) => {
     if (error instanceof ReleaseCheckDeferredError && error.reason === "rate-limit") {
       // A persisted limit has the same feed fallback as a live 429, without REST.
       return new Response(null, { status: 429 });
@@ -471,13 +491,21 @@ async function fetchCompatibleReleaseSlots(
     if (!Array.isArray(releases)) {
       throw new Error("GitHub release check returned an invalid response.");
     }
-    return selectManagedCodexReleaseSlots(releases, assetPlatform);
+    return {
+      slots: selectManagedCodexReleaseSlots(releases, assetPlatform),
+      observedAt: "observedAt" in response && typeof response.observedAt === "number"
+        ? response.observedAt
+        : undefined,
+    };
   }
   if (response.status !== 403 && response.status !== 429) {
     throw new Error(
       `GitHub release check failed with HTTP ${response.status}.`,
     );
   }
+  // Settings labels require a release record with the platform's assets.
+  // Only an install may use the feed and verify the publication itself.
+  if (channel === undefined) return { slots: {} };
 
   const feedResponse = await fetchImpl(MANAGED_CODEX_RELEASES_FEED_URL, {
     headers: { "User-Agent": "PwrAgent-managed-codex-runtime" },
@@ -495,7 +523,7 @@ async function fetchCompatibleReleaseSlots(
   );
   // The feed answers one track. Reporting the other track's slot from it
   // would be a guess, and Settings would print that guess as a version.
-  return fromFeed ? { [channel]: fromFeed } : {};
+  return { slots: fromFeed ? { [channel]: fromFeed } : {} };
 }
 
 /**

@@ -5,9 +5,11 @@ import type {
   TerminateBackgroundTerminalResponse,
 } from "@pwragent/shared/contracts/background-terminals";
 import { registerResearchIpcHandlers, disposeResearchIpcHandlers } from "./research-ipc";
+import type { ThreadGoalRequest, ThreadGoalState } from "@pwragent/shared/contracts/thread-goal";
 import { registerDecisionsRailIpcHandlers, disposeDecisionsRailIpcHandlers } from "./decisions-rail-ipc";
 import {
   AGENT_LIST_BACKGROUND_TERMINALS_CHANNEL,
+  AGENT_CONTROL_THREAD_GOAL_CHANNEL,
   AGENT_TERMINATE_BACKGROUND_TERMINAL_CHANNEL,
 } from "../../../shared/ipc";
 import { projectThreadDisplayEvent } from "../../app-server/thread-display-events";
@@ -873,6 +875,19 @@ export function registerAgentIpcHandlers(): void {
   );
 
   ipcMain.removeHandler(AGENT_COMPACT_THREAD_CHANNEL);
+  ipcMain.removeHandler(AGENT_CONTROL_THREAD_GOAL_CHANNEL);
+  ipcMain.handle(AGENT_CONTROL_THREAD_GOAL_CHANNEL, async (event, request: ThreadGoalRequest): Promise<ThreadGoalState> => {
+    if (federationTargetForChannelSubscriber(event.sender)?.scope === "remote") {
+      throw new Error("Goals are set on the machine that owns this thread.");
+    }
+    if (!request || typeof request.threadId !== "string" || !request.threadId
+      || !["read", "set", "pause", "resume", "clear", "cancel"].includes(request.action)
+      || (request.action === "set" && typeof request.objective !== "string")
+      || (request.confirmedObjective !== undefined && typeof request.confirmedObjective !== "string")) {
+      throw new Error("Invalid goal request.");
+    }
+    return await registry.controlThreadGoal(request);
+  });
   ipcMain.handle(
     AGENT_COMPACT_THREAD_CHANNEL,
     async (
@@ -1613,6 +1628,7 @@ export function registerAgentIpcHandlers(): void {
 }
 
 export function disposeAgentIpcHandlers(): void {
+  ipcMain.removeHandler(AGENT_CONTROL_THREAD_GOAL_CHANNEL);
   disposeResearchIpcHandlers();
   disposeDecisionsRailIpcHandlers();
   ipcMain.removeHandler(BACKEND_LIST_CHANNEL);

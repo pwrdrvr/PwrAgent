@@ -1,6 +1,9 @@
-import type { AppServerBackendScope } from "@pwragent/shared/contracts/normalized-app-server";
+import path from "node:path";
+import type { AppServerBackendScope, AppServerThreadSummary, LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type { NavigationDirectorySummary, NavigationQueryRequest, PrSummary } from "@pwragent/shared/contracts/navigation";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { navigationPathIdentity } from "@pwragent/shared/directory-navigation";
+import { isWorkspaceHandoffDirectory } from "@pwragent/shared/navigation-state";
 import {
   NAVIGATION_DIRECTORY_SET_CHANGED_METHOD,
   navigationQueryEventRequiresRefresh,
@@ -8,6 +11,7 @@ import {
 import { getDesktopBackendRegistry, type DesktopBackendRegistry } from "./backend-registry";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
+import { hydrateMissingLinkedDirectoriesFromSiblingRepos } from "@pwragent/owner-core/codex-app-server/thread-directory-fallback";
 import { createNavigationQuerySnapshot } from "@pwragent/owner-core/navigation-query-projection";
 import type { NavigationPullRequestProjection } from "@pwragent/owner-core/navigation-query-store";
 import { resolveScratchProjectsRoots } from "./scratch-projects";
@@ -24,8 +28,11 @@ import { getMainLogger } from "../log";
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
 import { PR_METADATA_PRIORITY } from "../pr-status/pr-metadata-process";
 import { StackReader, stackMemberships } from "../stacks/stack-reader";
+import { readNavigationCheckout } from "../git-info/directory-store";
+import { collectConcurrent } from "../../shared/concurrent-work";
 
 const indexReads = new NavigationIndexReadPool(1_000);
+const actionIndexReads = new NavigationIndexReadPool();
 const stackReader = new StackReader();
 
 export function navigationPullRequestProjection(options: {
@@ -109,6 +116,8 @@ export async function loadLocalNavigationQueryIndex(params: {
   callerReason: string;
   /** List provider threads afresh rather than from the thread-list cache. */
   refreshProviders?: boolean;
+  /** Actions that use checkout membership as authority need live Git verification. */
+  requireVerifiedDirectories?: boolean;
   registry?: DesktopBackendRegistry;
   signal?: AbortSignal;
   /** Viewer projection shares this pass's fences, lifetime and byte budget.
@@ -121,6 +130,8 @@ export async function loadLocalNavigationQueryIndex(params: {
   const registry = params.registry ?? getDesktopBackendRegistry();
   const overlayStore = getDesktopOverlayStore();
   const backend = params.backend ?? "all";
+  const reads = params.requireVerifiedDirectories ? actionIndexReads : indexReads;
+  const publishesSidebar = backend === "all" && !params.requireVerifiedDirectories;
   // A refresh reads under its own key: it must not be served a retained or
   // in-flight index that predates it, nor overtake other readers' scans.
   const key = JSON.stringify([sourceId(registry), sourceId(overlayStore), backend,
@@ -132,7 +143,7 @@ export async function loadLocalNavigationQueryIndex(params: {
   // before the pool's (owner PR metadata) would join the stale index.
   const version = `${overlayStore.readNavigationSourceVersion?.() ?? ""}|${
     registry.getStartupProviderRefreshStatus?.()?.state ?? ""}`;
-  return indexReads.read(key, async (signal, checkpoint) => {
+  return reads.read(key, async (signal, checkpoint) => {
     let navigationChanged = false;
     // An event during a scan stops later readers from joining it; they share
     // one follow-up scan. Each run owns its listener, because the pool can
@@ -146,7 +157,7 @@ export async function loadLocalNavigationQueryIndex(params: {
         && navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params))
         || (params.viewer && event.notification.method === "federation/peerStatus/changed")) {
         navigationChanged = true;
-        indexReads.invalidate(key);
+        reads.invalidate(key);
       }
     });
     // The pool owns this listener through its bounded completed reuse window.
@@ -166,9 +177,9 @@ export async function loadLocalNavigationQueryIndex(params: {
     // listings for a boundary before it tells listeners, so this listing
     // reflects every boundary observed before this value.
     const observedAt = nextNavigationObservation();
-    const visibilitySourceVersion = backend === "all" ? overlayStore.readNavigationSourceVersion?.() : undefined;
-    const directoryScopeCheckpoint = registry.navigationDirectoryScope?.checkpoint();
-    if (backend === "all") latestVisibilityScanByRegistry.set(registry, observedAt);
+    const visibilitySourceVersion = publishesSidebar ? overlayStore.readNavigationSourceVersion?.() : undefined;
+    const directoryScopeCheckpoint = publishesSidebar ? registry.navigationDirectoryScope?.checkpoint() : undefined;
+    if (publishesSidebar) latestVisibilityScanByRegistry.set(registry, observedAt);
     const index = { ...await buildLocalNavigationQueryIndex({ ...params, registry, signal, checkpoint }), observedAt };
     // Creation uses the same complete membership that the sidebar just read.
     // Waiting for owner PR metadata work can leave visibility uninitialized
@@ -176,7 +187,7 @@ export async function loadLocalNavigationQueryIndex(params: {
     // Normal and forced-refresh scans have independent pool keys. Only the
     // latest scan may publish, and an intervening mutation also makes its
     // membership and pin ranks obsolete even when its coverage is complete.
-    if (backend === "all"
+    if (publishesSidebar
       && latestVisibilityScanByRegistry.get(registry) === observedAt
       && !navigationChanged
       && visibilitySourceVersion === overlayStore.readNavigationSourceVersion?.()) {
@@ -184,11 +195,102 @@ export async function loadLocalNavigationQueryIndex(params: {
       if (index.coverage?.state === "complete") registry.rememberNavigationVisibilityIndex?.(index);
     }
     // Only the whole-owner index is what viewers read as its directory set.
-    if (backend === "all" && !params.registry) {
+    if (publishesSidebar && !params.registry) {
       getNavigationDirectorySetAnnouncer().observe(index.directories);
     }
     return createNavigationQuerySnapshot(index);
   }, params.signal, version, params.viewer ? "projection" : "source");
+}
+
+async function projectNavigationCheckoutDirectories(
+  threads: AppServerThreadSummary[],
+  signal: AbortSignal,
+  checkpoint: NavigationIndexCheckpoint,
+  options: { requireVerifiedDirectories?: boolean; refreshProviders?: boolean },
+) {
+  const verified = options.requireVerifiedDirectories === true;
+  const fresh = verified || options.refreshProviders === true;
+  const candidates = new Map<string, AppServerThreadSummary[]>();
+  for (const thread of threads) {
+    // Recheck provider-derived relationships, including remembered Git roots.
+    // The overlay projection below still owns explicit attachments.
+    if (thread.source !== "codex" || !thread.projectKey || thread.workspaceHandoff || thread.linkedDirectories.length > 1) continue;
+    const [directory] = thread.linkedDirectories;
+    if (directory && (isWorkspaceHandoffDirectory(directory) || directory.worktreeOwnership
+      || (directory.kind === "worktree" && !directory.worktreePath))) continue;
+    const cwd = path.resolve(thread.projectKey);
+    const rows = candidates.get(cwd) ?? [];
+    rows.push(thread);
+    candidates.set(cwd, rows);
+  }
+  const observed = await collectConcurrent([...candidates], 16, async ([cwd, rows]) => {
+    signal.throwIfAborted();
+    checkpoint();
+    return { cwd, rows, checkout: await readNavigationCheckout(cwd, fresh) };
+  });
+  // Git does not record the primary checkout path in a separate git-dir.
+  // Join only to a primary established in this inventory, even when its row
+  // follows the linked checkout. Multiple primary paths are ambiguous.
+  const primaryByCommon = new Map<string, LinkedDirectorySummary | null>();
+  for (const { rows, checkout } of observed) {
+    const separate = checkout?.separateGit;
+    const primary = separate?.primary;
+    if (!primary || !separate) continue;
+    if (verified && !rows.some((row) => {
+      const [directory] = row.linkedDirectories;
+      return directory?.kind === "local" && path.relative(primary.path, directory.path) === "";
+    })) continue;
+    const previous = primaryByCommon.get(separate.commonDirectory);
+    if (previous === undefined) primaryByCommon.set(separate.commonDirectory, primary);
+    else if (previous && path.relative(previous.path, primary.path) !== "") primaryByCommon.set(separate.commonDirectory, null);
+  }
+
+  const projected = new Map<AppServerThreadSummary, AppServerThreadSummary>();
+  const worktreeRepositoryAliases = new Map<string, { adminPath: string; path: string; label: string }>();
+  for (const { cwd, rows, checkout } of observed) {
+    if (!checkout) continue;
+    const separate = checkout.separateGit;
+    const primary = separate && !separate.primary && primaryByCommon.get(separate.commonDirectory);
+    const linked = primary && separate
+      ? { ...primary, worktreePath: separate.checkoutRoot, kind: "worktree" as const }
+      : undefined;
+    for (const row of rows) {
+      const [previous] = row.linkedDirectories;
+      if (linked && separate && (!verified || (previous?.worktreePath
+        && path.relative(previous.worktreePath, linked.worktreePath) === ""
+        && path.relative(previous.path, separate.commonDirectory) === ""))) {
+        worktreeRepositoryAliases.set(navigationPathIdentity(linked.worktreePath, process.platform === "win32"),
+          { adminPath: separate.commonDirectory, path: linked.path, label: linked.label });
+        const sameWorktree = previous?.worktreePath && path.relative(previous.worktreePath, linked.worktreePath) === "";
+        projected.set(row, { ...row, linkedDirectories: [linked], observedGitBranch: sameWorktree ? row.observedGitBranch : undefined });
+        continue;
+      }
+      if (verified) continue;
+      let directories = checkout.directories;
+      if (!directories && previous && checkout.provisional) {
+        const relative = path.relative(previous.worktreePath ?? previous.path, checkout.provisional.root);
+        if (relative && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
+          directories = [checkout.provisional.directory];
+        }
+      }
+      if (!directories) continue;
+      const [current] = directories;
+      // A missing cwd can retire a provisional folder. Keep the last known
+      // repository and branch of an unavailable checkout for status polling.
+      if (!current && (!previous || row.observedGitBranch || path.relative(cwd, previous.id) !== ""
+        || path.relative(cwd, previous.path) !== ""
+        || path.relative(cwd, previous.worktreePath ?? previous.path) !== "")) continue;
+      if (current && previous && current.kind === previous.kind
+        && path.relative(current.path, previous.path) === ""
+        && path.relative(current.worktreePath ?? current.path, previous.worktreePath ?? previous.path) === "") continue;
+      projected.set(row, { ...row, linkedDirectories: directories, observedGitBranch: undefined });
+    }
+  }
+  const rows = threads.map((thread) => projected.get(thread) ?? thread);
+  return {
+    threads: verified ? rows : hydrateMissingLinkedDirectoriesFromSiblingRepos(rows),
+    ...(worktreeRepositoryAliases.size ? { worktreeRepositoryAliases } : {}),
+  };
 }
 
 const directorySetLog = getMainLogger("pwragent:navigation-directory-set");
@@ -228,6 +330,7 @@ async function buildLocalNavigationQueryIndex(params: {
   backend?: AppServerBackendScope;
   callerReason: string;
   refreshProviders?: boolean;
+  requireVerifiedDirectories?: boolean;
   registry: DesktopBackendRegistry;
   signal: AbortSignal;
   checkpoint: NavigationIndexCheckpoint;
@@ -241,16 +344,21 @@ async function buildLocalNavigationQueryIndex(params: {
     registry.listThreads({
       backend: backend === "all" ? undefined : backend,
       callerReason: params.callerReason,
-      enrichDirectories: true,
-      ...(params.refreshProviders ? { forceRefresh: true } : {}),
+      enrichDirectories: params.requireVerifiedDirectories === true,
+      skipPendingDirectoryEnrichment: !params.requireVerifiedDirectories,
+      ...(params.refreshProviders || params.requireVerifiedDirectories ? { forceRefresh: true } : {}),
     }));
   params.signal?.throwIfAborted();
   // An overtaken scan whose follow-up already has readers hands them over
   // here instead of spending CPU on a projection nobody would keep.
   params.checkpoint();
+  const checkoutProjection = await projectNavigationCheckoutDirectories(
+    listedThreads, params.signal, params.checkpoint, params,
+  );
+  params.signal.throwIfAborted();
   const index = overlayStore.readNavigationQueryIndex({
     backend,
-    threads: listedThreads,
+    ...checkoutProjection,
     workspaceRoots: resolveScratchProjectsRoots(),
   });
   params.signal?.throwIfAborted();

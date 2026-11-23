@@ -5,10 +5,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   discoverRecentProjects,
+  RECENT_PROJECT_CLAUDE_TIMEOUT_MS,
   RECENT_PROJECT_MAX_FOLDERS,
   RECENT_PROJECT_MAX_PROJECTS,
   type RecentProjectDiscoveryDeps,
 } from "../onboarding/recent-project-discovery";
+import { readRecentClaudeCodeDirectories, RECENT_PROJECT_CLAUDE_SESSION_LIMIT } from "../claude/claude-recent-projects";
 import {
   importOnboardingProjectSeed,
   ONBOARDING_PROJECT_SEED_FILE,
@@ -37,6 +39,113 @@ function deps(overrides: Partial<RecentProjectDiscoveryDeps>): RecentProjectDisc
 }
 
 describe("discoverRecentProjects", () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it("finds Claude Code folders when the bootstrap profile has no PwrAgent threads", async () => {
+    const result = await discoverRecentProjects(deps({
+      readClaudeCodeDirectories: async () => ({
+        directories: [{ cwd: "/home/dev/.worktrees/shop", updatedAt: 8 }],
+        complete: true,
+      }),
+      resolveProjectRoot: async () => "/home/dev/shop",
+    }));
+    expect(result.sources.filter(({ agent }) => agent === "claude")).toEqual([
+      { agent: "claude", label: "Claude Code", status: "complete" },
+    ]);
+    expect(result.observations).toEqual([{ path: "/home/dev/shop", agent: "claude", lastActiveAt: 8 }]);
+  });
+
+  it("reports a capped Claude history read even when some sessions have no folder or are archived", async () => {
+    const lastModified = 8;
+    const listSessions = vi.fn(async () => Array.from({ length: RECENT_PROJECT_CLAUDE_SESSION_LIMIT }, (_, index) => ({
+      sessionId: String(index),
+      summary: "Contrived summary",
+      lastModified,
+      cwd: index === 0 ? "/home/dev/shop" : index === 1 ? undefined : "/home/dev/archived",
+      archived: index > 1,
+    })));
+    const result = await discoverRecentProjects(deps({
+      readClaudeCodeDirectories: async () => await readRecentClaudeCodeDirectories(listSessions),
+      listPwrAgentThreads: async () => [thread({ projectKey: "/home/dev/shop", updatedAt: 2 })],
+    }));
+    expect(listSessions).toHaveBeenCalledWith({ limit: RECENT_PROJECT_CLAUDE_SESSION_LIMIT, includeProgrammatic: false });
+    expect(result.sources.filter(({ agent }) => agent === "claude")).toEqual([
+      { agent: "claude", label: "Claude Code", status: "partial", detail: expect.stringContaining("Older projects may be missing.") },
+    ]);
+    expect(result.observations).toEqual([{ path: "/home/dev/shop", agent: "claude", lastActiveAt: lastModified }]);
+  });
+
+  it("keeps PwrAgent's Claude projects when the Claude Code read fails", async () => {
+    const result = await discoverRecentProjects(deps({
+      readClaudeCodeDirectories: async () => { throw new Error("worker exited"); },
+      listPwrAgentThreads: async () => [thread({ projectKey: "/home/dev/shop", updatedAt: 2 })],
+    }));
+    expect(result.sources.filter(({ agent }) => agent === "claude")).toEqual([
+      { agent: "claude", label: "Claude Code", status: "failed", detail: "worker exited" },
+    ]);
+    expect(result.observations).toEqual([{ path: "/home/dev/shop", agent: "claude", lastActiveAt: 2 }]);
+  });
+
+  it("times out a hung Claude Code read and still returns other agents' projects", async () => {
+    vi.useFakeTimers();
+    const readClaudeCodeDirectories = vi.fn((_signal: AbortSignal) => new Promise<never>(() => {}));
+    const discovery = discoverRecentProjects(deps({
+      readClaudeCodeDirectories,
+      readCodexDirectories: async () => ({ directories: [{ cwd: "/home/dev/codex", updatedAt: 1 }], complete: true }),
+    }));
+    await vi.advanceTimersByTimeAsync(RECENT_PROJECT_CLAUDE_TIMEOUT_MS);
+    const result = await discovery;
+    expect(readClaudeCodeDirectories.mock.calls[0]?.[0].aborted).toBe(true);
+    expect(result.sources.filter(({ agent }) => agent === "claude")).toEqual([
+      { agent: "claude", label: "Claude Code", status: "failed", detail: "Claude Code session discovery timed out." },
+    ]);
+    expect(result.observations).toEqual([{ path: "/home/dev/codex", agent: "codex", lastActiveAt: 1 }]);
+  });
+
+  it("releases a cancelled Claude Code read even when it never answers", async () => {
+    const controller = new AbortController();
+    const started = Promise.withResolvers<AbortSignal>();
+    const discovery = discoverRecentProjects(deps({
+      signal: controller.signal,
+      readClaudeCodeDirectories: (signal) => {
+        started.resolve(signal);
+        return new Promise<never>(() => {});
+      },
+    }));
+    const signal = await started.promise;
+    controller.abort(new Error("superseded"));
+    const result = await discovery;
+    expect(signal.aborted).toBe(true);
+    expect(result.sources.filter(({ agent }) => agent === "claude")).toEqual([
+      { agent: "claude", label: "Claude Code", status: "failed", detail: "superseded" },
+    ]);
+  });
+
+  it("skips unavailable Claude Code when PwrAgent also has no Claude projects", async () => {
+    const result = await discoverRecentProjects(deps({
+      readClaudeCodeDirectories: async () => undefined,
+      listPwrAgentThreads: async () => [],
+    }));
+    expect(result.sources.filter(({ agent }) => agent === "claude")).toEqual([
+      { agent: "claude", label: "Claude Code", status: "skipped" },
+    ]);
+    expect(result.observations).toEqual([]);
+  });
+
+  it("downgrades a complete Claude Code read when the folder budget leaves projects unchecked", async () => {
+    const total = RECENT_PROJECT_MAX_PROJECTS + 1;
+    const result = await discoverRecentProjects(deps({
+      readClaudeCodeDirectories: async () => ({
+        complete: true,
+        directories: Array.from({ length: total }, (_, index) => ({ cwd: `/home/dev/p${index}`, updatedAt: index })),
+      }),
+    }));
+    expect(result.observations).toHaveLength(RECENT_PROJECT_MAX_PROJECTS);
+    expect(result.sources.filter(({ agent }) => agent === "claude")).toEqual([
+      { agent: "claude", label: "Claude Code", status: "partial", detail: expect.stringContaining("Older projects may be missing.") },
+    ]);
+  });
+
   it("reports Codex as partial when its page budget ran out", async () => {
     const result = await discoverRecentProjects(deps({
       readCodexDirectories: async () => ({
@@ -45,7 +154,7 @@ describe("discoverRecentProjects", () => {
       }),
     }));
     expect(result.observations).toEqual([{ path: "/home/dev/shop", agent: "codex", lastActiveAt: 5 }]);
-    expect(result.sources).toEqual([expect.objectContaining({ agent: "codex", status: "partial" })]);
+    expect(result.sources).toContainEqual(expect.objectContaining({ agent: "codex", status: "partial" }));
   });
 
   it("reports a Codex read that failed, and still returns other agents' projects", async () => {
@@ -64,7 +173,7 @@ describe("discoverRecentProjects", () => {
     const readCodexDirectories = vi.fn();
     const result = await discoverRecentProjects(deps({ includeCodex: false, readCodexDirectories }));
     expect(readCodexDirectories).not.toHaveBeenCalled();
-    expect(result.sources).toEqual([expect.objectContaining({ agent: "codex", status: "skipped" })]);
+    expect(result.sources).toContainEqual(expect.objectContaining({ agent: "codex", status: "skipped" }));
   });
 
   it("skips Codex threads and archived threads from PwrAgent's own lists", async () => {
@@ -114,7 +223,7 @@ describe("discoverRecentProjects", () => {
     expect(resolveProjectRoot).toHaveBeenCalledTimes(RECENT_PROJECT_MAX_PROJECTS);
     expect(result.observations.some((observation) => observation.path === "/home/dev/p0")).toBe(false);
     expect(result.observations.some((observation) => observation.path === `/home/dev/p${total - 1}`)).toBe(true);
-    expect(result.sources).toEqual([expect.objectContaining({ agent: "codex", status: "partial" })]);
+    expect(result.sources).toContainEqual(expect.objectContaining({ agent: "codex", status: "partial" }));
   });
 
   it("does not spend the project budget on deleted folders or extra worktrees", async () => {
@@ -135,7 +244,7 @@ describe("discoverRecentProjects", () => {
       "/home/dev/repo-5", "/home/dev/repo-6", "/home/dev/repo-7", "/home/dev/repo-8", "/home/dev/repo-9",
       "/home/dev/shop",
     ]);
-    expect(result.sources).toEqual([{ agent: "codex", label: "Codex", status: "complete" }]);
+    expect(result.sources).toContainEqual({ agent: "codex", label: "Codex", status: "complete" });
   });
 
   it("stops after checking the folder budget, and says so", async () => {
@@ -148,7 +257,7 @@ describe("discoverRecentProjects", () => {
       resolveProjectRoot,
     }));
     expect(resolveProjectRoot).toHaveBeenCalledTimes(RECENT_PROJECT_MAX_FOLDERS);
-    expect(result.sources).toEqual([expect.objectContaining({ agent: "codex", status: "partial" })]);
+    expect(result.sources).toContainEqual(expect.objectContaining({ agent: "codex", status: "partial" }));
   });
 
   it("does not call a read partial for a thread started at the filesystem root", async () => {
@@ -159,7 +268,7 @@ describe("discoverRecentProjects", () => {
       }),
     }));
     expect(result.observations).toEqual([{ path: "/home/dev/shop", agent: "codex", lastActiveAt: 1 }]);
-    expect(result.sources).toEqual([{ agent: "codex", label: "Codex", status: "complete" }]);
+    expect(result.sources).toContainEqual({ agent: "codex", label: "Codex", status: "complete" });
   });
 });
 

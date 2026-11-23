@@ -11,7 +11,7 @@ import { messagingInboundHarness } from "./messaging-inbound-harness";
 
 // The actual controller, query owner and SQLite store handle the protocol.
 // Only provider transport and backend API responses use contrived data.
-export async function messagingNewThreadHarness(options: { channel?: "telegram" | "discord"; maxActions?: number; branches?: number; clock?: () => number } = {}) {
+export async function messagingNewThreadHarness(options: { channel?: "telegram" | "discord"; maxActions?: number; branches?: number; clock?: () => number; dbPath?: string } = {}) {
   const real = await messagingInboundHarness({ ...options, route: "unbound" });
   const requests: Array<Parameters<NonNullable<MessagingBackendBridge["materializeDirectoryLaunchpad"]>>[0]> = [];
   const sticky: Array<Parameters<NonNullable<MessagingBackendBridge["updateDirectoryLaunchpad"]>>[0]> = [];

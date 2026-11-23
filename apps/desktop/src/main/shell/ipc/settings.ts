@@ -1,4 +1,9 @@
+import { addAbortListener } from "node:events";
+import { join } from "node:path";
 import { codexAuthState } from "../../codex-auth-state";
+import { claudeEnvironment, inspectClaudeInstallation, isClaudeInstallationAvailable } from "../../claude/claude-executable";
+import { openClaudeSessionReader } from "../../claude/claude-session-reader";
+import { getOwnerHostServices } from "../../owner-host";
 import { registerReceivingFolderIpc } from "./receiving-folder";
 import { registerWorktreeFolderIpc } from "./worktree-folder";
 import { CodexAppServerClient } from "../../codex-app-server/desktop-client";
@@ -119,6 +124,7 @@ import {
   SETTINGS_PICK_GIT_COMMAND_CHANNEL,
   SETTINGS_REFRESH_GIT_DISCOVERY_CHANNEL,
   SETTINGS_READ_CHANNEL,
+  SETTINGS_READ_MANAGED_CODEX_TRACK_TAGS_CHANNEL,
   MANAGED_RUNTIME_PROGRESS_READ_CHANNEL,
   TOKEN_MISER_READ_USAGE_CHANNEL,
   SETTINGS_READ_BOOTSTRAP_CHANNEL,
@@ -129,13 +135,16 @@ import {
   SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL,
   SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL,
   SETTINGS_TEST_CREDENTIALS_CHANNEL,
+  SETTINGS_LINE_RICH_MENU_CHANNEL,
+  SETTINGS_LIST_DECISION_MODELS_CHANNEL,
   SETTINGS_WRITE_CONFIG_CHANNEL,
   SETTINGS_MANAGED_GIT_ACTION_CHANNEL,
 } from "../../../shared/ipc";
 import type { ManagedRuntimeProgress } from "../../../shared/managed-runtime-progress";
 import { readManagedRuntimeProgress } from "../../managed-runtime-progress";
 import type { DesktopSettingsService } from "../../settings/desktop-settings-service";
-import { checkDecisionProvider } from "../../decision/decision-provider-check";
+import { checkDecisionProvider, listDecisionModels } from "../../decision/decision-provider-check";
+import type { DecisionModelListing, DecisionProviderId } from "@pwragent/shared/decision-models";
 import {
   getDesktopConfigStore,
   getDesktopSettingsService,
@@ -1162,8 +1171,8 @@ const recentProjectDiscoveryRuns = new RecentProjectDiscoveryRuns();
  * Get started's recent projects. Codex answers `thread/list` from a
  * one-off App Server on the login the new profile will use: the registry's
  * own lists serve no thread data in the bootstrap profile, by design, and
- * defer Codex until first run ends. Claude Code and ACP threads come from
- * PwrAgent's lists, which the bootstrap profile does not have.
+ * defer Codex until first run ends. Claude Code answers through the Agent
+ * SDK, which can read history during bootstrap too.
  */
 async function discoverRecentProjectsForOnboarding(
   service: DesktopSettingsService,
@@ -1171,17 +1180,21 @@ async function discoverRecentProjectsForOnboarding(
   signal: AbortSignal,
 ): Promise<DiscoverRecentProjectsResponse> {
   const bootstrap = isBootstrapProfile();
-  const command = request.includeCodex
+  // The Claude Code history part reads nothing else, so it waits on nothing else.
+  const readsAgents = request.part !== "claude-history";
+  const includeCodex = request.part !== "claude-history" && request.includeCodex;
+  const command = includeCodex
     ? await resolveCodexCommandForProfileWorkflow(service).catch(() => undefined)
     : undefined;
   const codexHome = bootstrap
     ? resolveDefaultCodexHome()
     : service.readCodexProfiles().effectiveCodexHome;
   const deadlineAt = Date.now() + RECENT_PROJECT_DISCOVERY_TIMEOUT_MS;
-  const registry = bootstrap ? undefined : getDesktopBackendRegistry();
+  const registry = bootstrap || !readsAgents ? undefined : getDesktopBackendRegistry();
   const acpLabels = new Map<string, string>();
   const response = await discoverRecentProjects({
-    includeCodex: request.includeCodex,
+    part: request.part,
+    includeCodex,
     platform: process.platform,
     signal,
     readCodexDirectories: command
@@ -1193,6 +1206,28 @@ async function discoverRecentProjectsForOnboarding(
         { deadlineAt, signal },
       )
       : undefined,
+    readClaudeCodeDirectories: async (claudeSignal) => {
+      const policy = getOwnerHostServices().runtimePolicy;
+      if (policy && !policy.enabledBackends.includes("claude")) return undefined;
+      // The backend uses this same login-shell environment for its profile
+      // account. Per-thread shell overrides apply only to those threads.
+      const env = claudeEnvironment(await service.resolveTerminalSpawnEnvAsync());
+      claudeSignal.throwIfAborted();
+      const installation = await inspectClaudeInstallation({ env, signal: claudeSignal });
+      claudeSignal.throwIfAborted();
+      if (!isClaudeInstallationAvailable(installation)) return undefined;
+      // Use the worker even when CLAUDE_CONFIG_DIR matches, so a cancelled
+      // or timed-out discovery can stop reading immediately.
+      const reader = openClaudeSessionReader(env, {
+        workerPath: join(__dirname, "claude-session-reader-worker.js"),
+      });
+      using _abort = addAbortListener(claudeSignal, () => reader.close());
+      try {
+        return await reader.listRecentDirectories();
+      } finally {
+        reader.close();
+      }
+    },
     listPwrAgentThreads: registry
       ? async () => {
         const [threads, backends] = await Promise.all([
@@ -2028,6 +2063,12 @@ export function registerSettingsIpcHandlers(
       ),
   );
 
+  ipcMain.removeHandler(SETTINGS_READ_MANAGED_CODEX_TRACK_TAGS_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_READ_MANAGED_CODEX_TRACK_TAGS_CHANNEL,
+    async () => await getService(service).readManagedCodexTrackTags(),
+  );
+
   ipcMain.removeHandler(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL);
   ipcMain.handle(
     SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
@@ -2130,6 +2171,7 @@ export function registerSettingsIpcHandlers(
       try {
         return await recentProjectDiscoveryRuns.run(
           owner,
+          request.part ?? "all",
           async (signal) => await discoverRecentProjectsForOnboarding(getService(service), request, signal),
         );
       } finally {
@@ -2317,6 +2359,31 @@ export function registerSettingsIpcHandlers(
     ): Promise<SettingsCredentialTestResult> => {
       const tester = getCredentialTester(service);
       return await tester.test(request.kind);
+    },
+  );
+
+  ipcMain.removeHandler(SETTINGS_LINE_RICH_MENU_CHANNEL);
+  ipcMain.handle(SETTINGS_LINE_RICH_MENU_CHANNEL, async (_event, request) => {
+    const [{ runLineRichMenuSetup }, { default: imagePath }] = await Promise.all([
+      import("../../messaging/line-rich-menu-setup"),
+      import("@pwragent/messaging-provider-line/rich-menu.png?asset"),
+    ]);
+    return await runLineRichMenuSetup(getService(service).resolveLineChannelAccessTokenSync(), request, imagePath);
+  });
+
+  ipcMain.removeHandler(SETTINGS_LIST_DECISION_MODELS_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_LIST_DECISION_MODELS_CHANNEL,
+    async (_event, request: { provider?: unknown }): Promise<DecisionModelListing> => {
+      const provider: DecisionProviderId | undefined = request?.provider === "local" || request?.provider === "jev"
+        ? request.provider
+        : undefined;
+      if (!provider) return { ok: false, detail: "Unknown decision provider." };
+      const settings = getService(service);
+      return await listDecisionModels(provider, {
+        settings: settings.resolveDecisionModelSettings(),
+        apiKey: await settings.resolveDecisionApiKey(provider),
+      });
     },
   );
 
@@ -2593,6 +2660,7 @@ export function disposeSettingsIpcHandlers(): void {
   ipcMain.removeHandler(SETTINGS_TEST_CODEX_MODEL_PROVIDER_CHANNEL);
   ipcMain.removeHandler(SETTINGS_REFRESH_CODEX_MODEL_PROVIDER_CATALOGS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_SCAN_CODEX_MODEL_PROVIDER_IMPORTS_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_READ_MANAGED_CODEX_TRACK_TAGS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL);
   ipcMain.removeHandler(SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL);
   ipcMain.removeHandler(SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL);
@@ -2604,6 +2672,8 @@ export function disposeSettingsIpcHandlers(): void {
   ipcMain.removeHandler(SETTINGS_REFRESH_GIT_DISCOVERY_CHANNEL);
   ipcMain.removeHandler(SETTINGS_INSPECT_CODE_SIGNATURES_CHANNEL);
   ipcMain.removeHandler(SETTINGS_TEST_CREDENTIALS_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_LINE_RICH_MENU_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_LIST_DECISION_MODELS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL);
   ipcMain.removeHandler(SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL);
   ipcMain.removeHandler(SETTINGS_OPEN_SLACK_APP_SETTINGS_CHANNEL);

@@ -267,13 +267,17 @@ export class MessagingBindingService {
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
   ): Promise<void> {
-    if (!this.context.adapter.setConversationTitle) {
+    const target = this.conversationTitleTarget(binding, event);
+    if (
+      !this.context.adapter.setConversationTitle
+      || this.context.adapter.supportsConversationTitle?.(target) === false
+    ) {
       await this.context.host().deliver(
         buildErrorIntent({
           id: this.context.host().newIntentId("status-sync-name-unavailable"),
           createdAt: this.context.now(),
           title: "Name sync unavailable",
-          body: "This messaging provider does not support syncing the conversation name.",
+          body: `This ${conversationKindLabel(binding.channel.conversation.kind)} cannot be renamed from messaging.`,
           recoverable: true,
         }),
         binding,
@@ -305,9 +309,7 @@ export class MessagingBindingService {
     }
 
     const result = await this.context.adapter.setConversationTitle({
-      actor: event.actor,
-      channel: binding.channel,
-      routingState: event.routingState ?? binding.routingState,
+      ...target,
       title: threadTitle,
     });
     if (result.outcome !== "updated") {
@@ -353,6 +355,14 @@ export class MessagingBindingService {
       event,
     );
     await this.renderBindingStatus(updatedBinding, event);
+  }
+
+  private conversationTitleTarget(binding: MessagingBindingRecord, event?: MessagingInboundEvent) {
+    return {
+      actor: event?.actor,
+      channel: binding.channel,
+      routingState: event?.routingState ?? binding.routingState,
+    };
   }
 
   async updateBindingPreferences(
@@ -698,6 +708,8 @@ export class MessagingBindingService {
         .allowEscalation,
       backendSummary,
       binding,
+      canSyncName: Boolean(this.context.adapter.setConversationTitle)
+        && this.context.adapter.supportsConversationTitle?.(this.conversationTitleTarget(binding, event)) !== false,
       capabilityProfile: this.context.capabilityProfile,
       contextUsageSummary: this.context.host().contextUsageSummaryForBinding(binding),
       createdAt: this.context.now(),

@@ -441,6 +441,10 @@ vi.mock("../shell/ipc/thread-todos-ipc", () => ({
   registerThreadTodoIpcHandlers: vi.fn(),
 }));
 
+vi.mock("../shell/ipc/thread-pull-request-merge-ipc", () => ({
+  registerThreadPullRequestMergeIpcHandlers: vi.fn(),
+}));
+
 vi.mock("../shell/ipc/codex-environment-editor-ipc", () => ({
   registerCodexEnvironmentEditorIpcHandlers: vi.fn(),
 }));
@@ -3650,5 +3654,6 @@ vi.mock("../app-server/desktop-app-server-service", () => {
 
 vi.mock("../automations/desktop-automation-service", () => ({
   initializeDesktopAutomationService: () => ({ start: startDesktopAutomationServiceMock, onSchedulingStatusChanged: () => () => undefined }),
+  prepareDesktopAutomationShutdown: vi.fn(),
   disposeDesktopAutomationService: vi.fn(),
 }));

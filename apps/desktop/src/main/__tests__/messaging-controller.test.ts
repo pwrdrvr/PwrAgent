@@ -5656,6 +5656,52 @@ describe("MessagingController", () => {
     ).resolves.toBeUndefined();
   });
 
+  it.each([false, true])("starts only a currently available messaging Agent preset (withdrawn %s)", async (withdrawn) => {
+    const preset = { id: "fixture-review", name: "Release reviewer", instructions: "Check the change log.",
+      mcpConnectionIds: ["ready", "missing"], availableInMessaging: true as const };
+    let available = true;
+    const harness = await createHarness({ backendOverrides: {
+      listAgentPresets: () => available ? [preset] : [],
+      listAgentPresetConnections: async () => [{ id: "ready", displayName: "Release notes", enabled: true, configured: true, state: "ready" }],
+    } });
+    await harness.controller.handleInboundEvent(buildCommandEvent("/agent --new"));
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "browse:select-project", value: {
+      directoryKey: "directory:pwragent", label: "PwrAgent", path: "/repo/pwragent",
+    } }));
+    expect(harness.delivered.at(-1)).toMatchObject({ actions: expect.arrayContaining([expect.objectContaining({ id: "browse:new:preset" })]) });
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "browse:new:preset" }));
+    expect(harness.delivered.at(-1)).toMatchObject({ title: "Start from an Agent preset" });
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "browse:new:preset:set", value: { presetId: preset.id } }));
+    expect(harness.delivered.at(-1)).toMatchObject({ body: expect.stringContaining("Agent: Release reviewer\nConnections: Release notes\nSkipped: missing") });
+
+    available = !withdrawn;
+    await harness.controller.handleInboundEvent(buildTextEvent("Check the queue"));
+    if (withdrawn) {
+      expect(harness.materializeDirectoryLaunchpad).not.toHaveBeenCalled();
+      expect(harness.delivered.at(-1)).toMatchObject({ title: "Agent preset unavailable" });
+    } else {
+      expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
+        agent: { name: preset.name, instructions: preset.instructions },
+        launchpad: expect.objectContaining({ mcpConnectionIds: ["ready"] }),
+      }), expect.anything());
+    }
+  });
+
+  it("admits an Agent's first prompt only while thread creation permission is current", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), fc.constantFrom("/agent --new", "/resume --new"), async (keepGrant, command) => {
+      const permissions: MessagingPermissionId[] = ["thread.resume", "message.reply", "thread.new"];
+      const harness = await createHarness({ rbacPolicy: rbacProviderGranting(permissions) });
+      await harness.controller.handleInboundEvent(buildCommandEvent(command));
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "browse:select-project", value: {
+        directoryKey: "directory:pwragent", label: "PwrAgent", path: "/repo/pwragent",
+      } }));
+      expect(harness.delivered.at(-1)).toMatchObject({ title: "Ready to start" });
+      if (!keepGrant) permissions.pop();
+      await harness.controller.handleInboundEvent(buildTextEvent("Check the queue"));
+      expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledTimes(keepGrant ? 1 : 0);
+    }), { numRuns: 12 });
+  });
+
   it("starts a new Agent thread from /agent --new and binds it as an Agent target", async () => {
     const harness = await createHarness();
 
@@ -28662,6 +28708,89 @@ describe("MessagingController", () => {
       body: expect.stringContaining("does not expose"),
     });
   });
+
+  it.each([
+    { kind: "thread", canRename: false },
+    { kind: "channel", canRename: true },
+    { kind: "dm", canRename: true },
+  ] as const)(
+    "honors conversation rename support for a Mattermost $kind",
+    async ({ kind, canRename }) => {
+      const setConversationTitle = vi.fn<NonNullable<MessagingAdapter["setConversationTitle"]>>(
+        async ({ channel, title }) => ({
+          channel: "mattermost",
+          conversation: channel.conversation,
+          outcome: "updated",
+          title,
+          updatedAt: 1000,
+        }),
+      );
+      const harness = await createHarness({
+        channel: "mattermost",
+        setConversationTitle,
+        supportsConversationTitle: () => canRename,
+      });
+      const channel: MessagingChannelRef = {
+        channel: "mattermost",
+        conversation: {
+          id: "channel-id",
+          kind,
+          title: kind === "thread" ? "How much wood?" : "Workshop",
+          ...(kind === "thread" ? { parentId: "root-post-id" } : {}),
+          ...(kind === "dm" ? { isDirectMessage: true } : {}),
+        },
+      };
+      await harness.store.upsertBinding({
+        id: "binding-mattermost",
+        authorizedActorIds: ["user-1"],
+        backend: "codex",
+        channel,
+        createdAt: 1000,
+        threadId: "thread-1",
+        updatedAt: 1000,
+      });
+      await harness.controller.handleInboundEvent(buildCallbackEvent({
+        actionId: "status:refresh",
+        channel,
+      }));
+
+      const status = harness.delivered.at(-1);
+      expect(status?.kind).toBe("status");
+      expect(status?.kind === "status" && (status.actions ?? []).some(({ id }) => id === "status:sync-name"))
+        .toBe(canRename);
+
+      // An already-published card can still send the callback after the upgrade.
+      await harness.controller.handleInboundEvent(buildCallbackEvent({
+        actionId: "status:sync-name",
+        channel,
+      }));
+      expect(harness.delivered).toContainEqual(expect.objectContaining(canRename
+        ? { kind: "confirmation", title: "Name synced" }
+        : { kind: "error", title: "Name sync unavailable" }));
+      expect(setConversationTitle).toHaveBeenCalledTimes(canRename ? 1 : 0);
+      setConversationTitle.mockClear();
+
+      await harness.controller.handleInboundEvent(buildTextEvent("Rename this conversation", { channel }));
+      const context = { backend: "codex", threadId: "thread-1", turnId: "turn-1" } as const;
+      await expect(harness.controller.handlePwrAgentMessagingRequest({
+        operation: "get_current_messaging_surface",
+        context,
+        args: {},
+      })).resolves.toMatchObject({
+        ok: true,
+        data: { location: { conversationCapabilities: { rename: { supported: canRename } } } },
+      });
+      await expect(harness.controller.handlePwrAgentMessagingRequest({
+        operation: "rename_current_messaging_conversation",
+        context,
+        args: { title: "Wood chuck joke" },
+      })).resolves.toMatchObject(canRename
+        ? { ok: true, data: { title: "Wood chuck joke" } }
+        : { ok: false, error: { code: "unsupported_operation" } });
+      expect(setConversationTitle).toHaveBeenCalledTimes(canRename ? 1 : 0);
+      harness.controller.dispose();
+    },
+  );
 
   it("syncs the platform conversation name from the bound thread title", async () => {
     const setConversationTitle = vi.fn(

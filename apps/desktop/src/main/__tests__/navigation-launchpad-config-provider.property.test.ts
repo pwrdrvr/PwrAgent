@@ -37,6 +37,21 @@ async function expectProviderRoundTrip(provider: string, reset: boolean): Promis
 }
 
 describe("launchpad configuration provider round trip", () => {
+  it("projects the same peer configuration when only the private Agent draft changes", async () => {
+    await expectProviderRoundTrip("mathos", false);
+    const draft = stored.launchpad!;
+    const request = { protocol: 2 as const, directoryKey: draft.directoryKey };
+    const publicConfig = await service.readLaunchpadConfig(request);
+    await fc.assert(fc.asyncProperty(fc.string({ minLength: 1 }), fc.boolean(), async (instructions, saved) => {
+      stored.launchpad = { ...draft, agent: { name: "Local reviewer", instructions },
+        agentPresetId: saved ? "local-preset" : undefined, agentDraftMcpSelection: true,
+        mcpConnectionIds: ["local-plugin"], mcpConnectionIdsFromDefaults: false };
+      expect(await service.readLaunchpadConfig(request)).toEqual(publicConfig);
+      expect((await service.readLaunchpadConfig(request, { includeLocalAgentDraft: true })).launchpad)
+        .toMatchObject({ agent: stored.launchpad.agent, agentDraftMcpSelection: true, mcpConnectionIds: ["local-plugin"] });
+    }));
+  });
+
   it("preserves any endpoint identity with or without a selected model", async () => {
     await fc.assert(fc.asyncProperty(fc.integer({ min: 0, max: 1000 }), fc.boolean(), async (id, reset) => {
       await expectProviderRoundTrip(`endpoint-${id}`, reset);

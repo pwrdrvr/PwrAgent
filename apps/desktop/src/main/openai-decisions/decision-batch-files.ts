@@ -1,6 +1,8 @@
 import { appendFile, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { isRegisteredDecisionProvider } from "@pwragent/shared/openai-decisions";
+import { DECISION_IMAGE_MAX_COUNT } from "@pwragent/shared/decision-models";
+import { DECISION_IMAGE_THUMBNAIL_MAX_LENGTH, type DecisionsRailInputImage } from "@pwragent/shared/decisions-rail";
 import {
   parseBatchDefinition,
   recordBatchItem,
@@ -20,7 +22,8 @@ import {
  * with its own tools, and decisions_batch_results reads it after a
  * restart. Whole inputs are not written: the caller has them, and a batch's
  * can total 4 MB. Each item line keeps only a preview of its input, cut to
- * about 2 KB (decisionInputPreview), for the thread's Decisions tab.
+ * about 2 KB (decisionInputPreview), and bounded re-encoded thumbnails
+ * for the thread's Decisions tab.
  * Credentials never reach the file: registration refuses a definition whose
  * questions or prefix look like a key, validation refuses credential-named
  * input properties, an input whose text looks like a key keeps no preview,
@@ -277,14 +280,30 @@ function definitionField(definition: ReturnType<typeof parseBatchDefinition>) {
 }
 
 function parseItem(entry: Record<string, unknown>, count: number): DecisionBatchItem | undefined {
-  const { type: _type, ...item } = entry;
+  const { type: _type, inputImages: _inputImages, ...item } = entry;
   const index = item.index;
   if (typeof index !== "number" || !Number.isInteger(index) || index < 0 || index >= count) return undefined;
-  if (item.ok === true) return item as DecisionBatchItem;
+  const inputImages = readInputImages(entry.inputImages);
+  const images = inputImages.length ? { inputImages } : {};
+  if (item.ok === true) return { ...item, ...images } as DecisionBatchItem;
   if (item.ok === false && typeof item.code === "string" && typeof item.message === "string") {
-    return { index, ok: false, code: item.code, message: item.message, ...railFields(item) };
+    return { index, ok: false, code: item.code, message: item.message, ...railFields(item), ...images };
   }
   return undefined;
+}
+
+function readInputImages(value: unknown): DecisionsRailInputImage[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, DECISION_IMAGE_MAX_COUNT).flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const { mimeType, width, height, thumbnail } = item as Partial<DecisionsRailInputImage>;
+    if ((mimeType !== "image/png" && mimeType !== "image/jpeg")
+      || typeof width !== "number" || !Number.isSafeInteger(width) || width < 1
+      || typeof height !== "number" || !Number.isSafeInteger(height) || height < 1) return [];
+    const preview = typeof thumbnail === "string" && thumbnail.length <= DECISION_IMAGE_THUMBNAIL_MAX_LENGTH
+      && /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(thumbnail) ? { thumbnail } : {};
+    return [{ mimeType, width, height, ...preview }];
+  });
 }
 
 /** A failed item's preview and duration, when its line has well-formed ones. */

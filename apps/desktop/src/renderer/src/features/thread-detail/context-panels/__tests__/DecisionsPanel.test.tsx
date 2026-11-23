@@ -15,6 +15,7 @@ afterEach(cleanup);
 
 const NOW = new Date(2026, 10, 19, 14, 4, 41).getTime();
 const THREAD = { backend: "codex", threadId: "thread-1" };
+const THUMBNAIL = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAABAAEDAREAAhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAACP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/xAAVAQEBAAAAAAAAAAAAAAAAAAAHCf/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/ADoDFU3/2Q==";
 
 const running: DecisionsRailBatch = {
   batchId: "batch_run-1",
@@ -94,6 +95,7 @@ function page(request: DecisionsRailBatchRequest): DecisionsRailBatchPage {
       index: 0,
       ok: true,
       inputPreview: "{\"title\":\"Sidebar flickers when a thread finishes\"}",
+      inputImages: [{ mimeType: "image/jpeg", width: 1, height: 1, thumbnail: THUMBNAIL }],
       durationMs: 402,
       answers: [
         { type: "predicate", name: "relevant", value: "yes", probability: 0.93 },
@@ -238,6 +240,7 @@ it("opens a batch for review: its prompt, its items as fields, answers with prob
   const options = within(list).getAllByRole("option");
   expect(options).toHaveLength(2);
   expect(within(options[0]!).getByText("Sidebar flickers when a thread finishes")).toBeInTheDocument();
+  expect(within(options[0]!).getByAltText("Image 1 · JPEG · 1 × 1")).toHaveAttribute("src", THUMBNAIL);
   expect(within(options[0]!).getByText("yes · 0.93")).toBeInTheDocument();
   expect(within(options[1]!).getByText("rate_limited")).toBeInTheDocument();
   expect(within(dialog).queryByText(/\{"title"/)).not.toBeInTheDocument();
@@ -325,6 +328,22 @@ it("pitches decisions and opens setup when no provider is ready", async () => {
   expect(onOpenSettings).toHaveBeenCalledWith(undefined);
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   expect(api.onDetailsModalOpenChange).toHaveBeenLastCalledWith(false);
+});
+
+it.each([
+  ["jev-preview", "clef-flash", /^Experimental image input/, /^Image input/],
+  ["jev-1.12.0", "text-only", /^Images unavailable/, /^Images unavailable/],
+])("discloses image input for the configured %s and %s models", async (jev, local, jevLabel, localLabel) => {
+  const settings = setupSettings(settingsSnapshot({
+    decisionModels: { jev: { model: jev }, local: { model: local } },
+  }));
+  renderPanel({ snapshot: { now: NOW, decisions: [], batches: [] }, settings });
+  fireEvent.click(screen.getByRole("button", { name: "Set up decisions" }));
+  const dialog = within(await screen.findByRole("dialog", { name: "Choose where decisions run" }));
+  const card = (name: string) => within(dialog.getByRole("heading", { name }).closest("li")!);
+  expect(card("OpenAI Decisions").getByText(/^Image input.*PNG or JPEG/)).toBeInTheDocument();
+  expect(card("TypeSafe Jev").getByText(jevLabel)).toBeInTheDocument();
+  expect(card("Local decision model").getByText(localLabel)).toBeInTheDocument();
 });
 
 it("suggests something to ask once a provider is ready", () => {

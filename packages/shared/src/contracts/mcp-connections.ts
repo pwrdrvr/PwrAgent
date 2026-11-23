@@ -1049,11 +1049,17 @@ export function mcpConnectionIdsForNewThread(
   return connections
     .filter((connection) =>
       connection.selectForNewThreads === true
-      && connection.enabled
-      && connection.configured
-      && connection.state !== "disconnected"
-      && connection.state !== "reauthorization_required")
+      && canSeedNewThreadMcpConnection(connection))
     .map((connection) => connection.id);
+}
+
+export function canSeedNewThreadMcpConnection(
+  connection: Pick<McpConnectionStatus, "enabled" | "configured" | "state">,
+): boolean {
+  return connection.enabled
+    && connection.configured
+    && connection.state !== "disconnected"
+    && connection.state !== "reauthorization_required";
 }
 
 /**

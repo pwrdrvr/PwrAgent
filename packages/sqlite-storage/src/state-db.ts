@@ -5,6 +5,7 @@ import {
 import { OWNER_JOB_SCHEMA } from "./owner-job-schema";
 import { RESEARCH_SCHEMA, ensureResearchProjections } from "./research-store";
 import { removeUsageActivityIndex } from "./usage-activity-index";
+import { hasSubthreadGroupIndexes, SUBTHREAD_GROUP_INDEXES } from "./subthread-group-sqlite";
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
@@ -46,7 +47,7 @@ import {
 import { ensureThreadPricingSummaryDeltas } from "./thread-pricing-summary-schema";
 import { ensureThreadManagedMembershipSchema, reclaimEmptyLegacyMembershipIndex } from "./thread-managed-membership";
 
-export const CURRENT_STATE_DB_USER_VERSION = 86;
+export const CURRENT_STATE_DB_USER_VERSION = 88;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -558,6 +559,42 @@ CREATE TABLE IF NOT EXISTS automation_run_artifacts (
 CREATE INDEX IF NOT EXISTS idx_automation_run_artifacts_automation_updated
   ON automation_run_artifacts(automation_id, updated_at DESC);
 `;
+
+const AUTOMATION_PRUNED_RUN_COST_SCHEMA = `
+CREATE TABLE IF NOT EXISTS automation_pruned_run_costs (
+  run_id              TEXT PRIMARY KEY,
+  automation_id       TEXT NOT NULL REFERENCES automations(automation_id) ON DELETE CASCADE,
+  backend             TEXT NOT NULL,
+  backend_turn_id     TEXT NOT NULL,
+  execution_thread_id TEXT,
+  total_cost_micros   INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_automation_pruned_run_costs_turn
+  ON automation_pruned_run_costs(backend, backend_turn_id);
+`;
+
+function ensureAutomationCostAccounting(db: BetterSqlite3.Database): void {
+  if ((db.pragma("user_version", { simple: true }) as number) >= 88
+    && tableColumnExists(db, "automations", "cost_since")
+    && tableColumnExists(db, "automation_pruned_run_costs", "execution_thread_id")
+    && !db.prepare("SELECT 1 FROM automations WHERE cost_since IS NULL LIMIT 1").get()) return;
+
+  db.transaction(() => {
+    if (!tableColumnExists(db, "automations", "cost_since")) {
+      db.exec(`ALTER TABLE automations ADD COLUMN cost_since INTEGER;
+               ALTER TABLE automations ADD COLUMN total_cost_micros INTEGER;
+               ALTER TABLE automation_runs ADD COLUMN accounted_cost_micros INTEGER;`);
+    }
+    db.exec(AUTOMATION_PRUNED_RUN_COST_SCHEMA);
+    if (!tableColumnExists(db, "automation_pruned_run_costs", "execution_thread_id")) {
+      db.exec("ALTER TABLE automation_pruned_run_costs ADD COLUMN execution_thread_id TEXT");
+    }
+    // Retained history is partial. Start coverage now for both migrated rows
+    // and rows inserted by older versions that left cost_since unset.
+    db.prepare("UPDATE automations SET cost_since = ? WHERE cost_since IS NULL").run(Date.now());
+    if ((db.pragma("user_version", { simple: true }) as number) < 88) db.pragma("user_version = 88");
+  }).immediate();
+}
 
 const SCHEDULED_THREAD_ACTION_SCHEMA = `
 CREATE TABLE IF NOT EXISTS scheduled_thread_actions (
@@ -1401,6 +1438,34 @@ function ensureRemoteThreadPinRevokedAtColumn(
   if (!tableColumnExists(db, "remote_thread_pins", "revoked_at")) {
     db.exec("ALTER TABLE remote_thread_pins ADD COLUMN revoked_at INTEGER");
   }
+}
+
+const REMOTE_THREAD_PIN_MOUNT_TRIGGERS = `
+CREATE TRIGGER IF NOT EXISTS remote_thread_pin_mount_insert
+AFTER INSERT ON remote_thread_pins BEGIN
+  UPDATE remote_thread_pins SET mount_token = randomblob(16) WHERE rowid = NEW.rowid;
+END;
+CREATE TRIGGER IF NOT EXISTS remote_thread_pin_mount_update
+AFTER UPDATE OF instance_id, backend, thread_id, revoked_at ON remote_thread_pins
+WHEN OLD.instance_id IS NOT NEW.instance_id OR OLD.backend IS NOT NEW.backend
+  OR OLD.thread_id IS NOT NEW.thread_id OR OLD.revoked_at IS NOT NEW.revoked_at BEGIN
+  UPDATE remote_thread_pins SET mount_token = randomblob(16) WHERE rowid = NEW.rowid;
+END;
+`;
+
+function hasRemoteThreadPinMountTokens(db: BetterSqlite3.Database): boolean {
+  return tableColumnExists(db, "remote_thread_pins", "mount_token")
+    && db.prepare(`SELECT count(*) FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = 'remote_thread_pins'
+      AND name IN ('remote_thread_pin_mount_insert', 'remote_thread_pin_mount_update')`).pluck().get() === 2;
+}
+
+function ensureRemoteThreadPinMountTokens(db: BetterSqlite3.Database): void {
+  if (!tableColumnExists(db, "remote_thread_pins", "mount_token")) {
+    // Existing rows keep their default token until their mount changes.
+    db.exec("ALTER TABLE remote_thread_pins ADD COLUMN mount_token BLOB NOT NULL DEFAULT X''");
+  }
+  // Persistent triggers also cover a profile shared with an older writer.
+  db.exec(REMOTE_THREAD_PIN_MOUNT_TRIGGERS);
 }
 
 export const FEDERATION_SCHEMA = `
@@ -2283,6 +2348,20 @@ export class StateDb {
           if ((db.pragma("user_version", { simple: true }) as number) < 86) db.pragma("user_version = 86");
         }).immediate();
       }
+      const hasThreads = tableExists(db, "threads");
+      const hasRemotePins = tableExists(db, "remote_thread_pins");
+      if ((db.pragma("user_version", { simple: true }) as number) < 87
+        || (hasThreads && !hasSubthreadGroupIndexes(db))
+        || (hasRemotePins && !hasRemoteThreadPinMountTokens(db))) {
+        db.transaction(() => {
+          // Atomically backfill the indexes. A profile from another branch
+          // can already have this version or a newer one without them.
+          if (hasThreads) db.exec(SUBTHREAD_GROUP_INDEXES);
+          if (hasRemotePins) ensureRemoteThreadPinMountTokens(db);
+          if ((db.pragma("user_version", { simple: true }) as number) < 87) db.pragma("user_version = 87");
+        }).immediate();
+      }
+      ensureAutomationCostAccounting(db);
       db.exec(OWNER_JOB_SCHEMA);
       // Converge a profile whose v79 or v80 came from another branch. On a
       // current profile every statement is IF NOT EXISTS and writes nothing.
@@ -2300,7 +2379,7 @@ export class StateDb {
       db.exec(PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX);
       // Additive index for current-version profiles too. Partial-schema repair
       // fixtures may omit threads; normal profiles always have this table.
-      if (tableExists(db, "threads")) {
+      if (hasThreads) {
         db.exec(`CREATE INDEX IF NOT EXISTS idx_threads_pending_spend_alert
           ON threads(thread_id)
           WHERE CASE WHEN json_valid(payload) THEN json_type(payload, '$.threadSpendAlertPending') END = 'object'`);
@@ -4563,7 +4642,9 @@ function tableColumnExists(
   db: BetterSqlite3.Database,
   tableName:
     | "app_runtime_instances"
+    | "automation_pruned_run_costs"
     | "automation_runs"
+    | "automations"
     | "openai_decision_versions"
     | "pr_lookup_cache"
     | "pr_status_cache"
@@ -4605,7 +4686,9 @@ function readTableInfo(
   db: BetterSqlite3.Database,
   tableName:
     | "app_runtime_instances"
+    | "automation_pruned_run_costs"
     | "automation_runs"
+    | "automations"
     | "openai_decision_versions"
     | "pr_lookup_cache"
     | "pr_status_cache"
@@ -4631,10 +4714,14 @@ function readTableInfo(
       return db.prepare("PRAGMA table_info(app_runtime_instances)").all() as Array<{
         name: string;
       }>;
+    case "automation_pruned_run_costs":
+      return db.prepare("PRAGMA table_info(automation_pruned_run_costs)").all() as Array<{ name: string }>;
     case "automation_runs":
       return db.prepare("PRAGMA table_info(automation_runs)").all() as Array<{
         name: string;
       }>;
+    case "automations":
+      return db.prepare("PRAGMA table_info(automations)").all() as Array<{ name: string }>;
     case "pr_lookup_cache":
       return db.prepare("PRAGMA table_info(pr_lookup_cache)").all() as Array<{
         name: string;

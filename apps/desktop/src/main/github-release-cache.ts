@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { lockSync } from "proper-lockfile";
 import { resolvePwragentRoot } from "./profile";
 
@@ -8,6 +9,7 @@ export const RELEASE_FIRST_CHECK_DELAY_MS = 10 * 60_000;
 export const RELEASE_AUTOMATIC_TTL_MS = 60 * 60_000;
 export const RELEASE_AUTOMATIC_HOURLY_BUDGET = 6;
 const REQUEST_LEASE_MS = 30_000;
+const REQUEST_LEASE_POLL_MS = 100;
 
 type Entry = {
   lastAttempt?: number;
@@ -33,6 +35,15 @@ type Options = {
   fetch?: typeof fetch;
   manual?: boolean;
   ttlMs?: number;
+  waitForReservation?: boolean;
+};
+
+type Reservation = {
+  entry: Entry;
+  blockedUntil: number;
+  rateLimited: boolean;
+  pending: boolean;
+  leaseUntil?: number;
 };
 
 export class ReleaseCheckDeferredError extends Error {
@@ -41,6 +52,8 @@ export class ReleaseCheckDeferredError extends Error {
     this.name = "ReleaseCheckDeferredError";
   }
 }
+
+class ReleaseCacheLockBusyError extends ReleaseCheckDeferredError {}
 
 /** One public-release cache per PwrAgent root, independent of profile/version. */
 function withState<T>(options: Options, operation: (state: State, now: number) => { value: T; changed?: boolean }): T {
@@ -55,7 +68,7 @@ function withState<T>(options: Options, operation: (state: State, now: number) =
     unlock = lockSync(file, { realpath: false, retries: 0, stale: 30_000 });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ELOCKED") {
-      throw new ReleaseCheckDeferredError(now + REQUEST_LEASE_MS);
+      throw new ReleaseCacheLockBusyError(now + REQUEST_LEASE_MS);
     }
     throw error;
   }
@@ -102,11 +115,38 @@ export function reserveAppReleaseCheck(manual: boolean, options: Options = {}): 
   if (retryAt) throw new ReleaseCheckDeferredError(retryAt);
 }
 
-function cachedResponse(entry: Entry): Response {
-  return new Response(entry.body, { headers: {
+type ReleaseMetadataResponse = Response & { observedAt?: number };
+
+function cachedResponse(entry: Entry): ReleaseMetadataResponse {
+  const response = new Response(entry.body, { headers: {
     "Content-Type": "application/json",
     ...(entry.etag ? { etag: entry.etag } : {}),
   } });
+  return Object.assign(response, { observedAt: entry.lastSuccess });
+}
+
+async function coordinateReleaseCache<T>(
+  options: Options,
+  operation: () => T,
+  pending?: (result: T) => boolean,
+  signal?: AbortSignal | null,
+): Promise<T> {
+  // Wait outside the storage lock. Both the HTTP reservation and lock
+  // contention can come from another PwrAgent process.
+  const deadline = performance.now() + REQUEST_LEASE_MS;
+  for (;;) {
+    signal?.throwIfAborted();
+    try {
+      const result = operation();
+      if (!options.waitForReservation || !pending?.(result) || performance.now() >= deadline) {
+        return result;
+      }
+    } catch (error) {
+      if (!options.waitForReservation || !(error instanceof ReleaseCacheLockBusyError)
+        || performance.now() >= deadline) throw error;
+    }
+    await delay(REQUEST_LEASE_POLL_MS, undefined, { signal: signal ?? undefined });
+  }
 }
 
 /** Persist reservations before HTTP so crashes/restarts cannot reset the budget. */
@@ -114,10 +154,10 @@ export async function fetchGitHubReleaseMetadata(
   url: string,
   init: RequestInit = {},
   options: Options = {},
-): Promise<Response> {
+): Promise<ReleaseMetadataResponse> {
   const key = createHash("sha256").update(url).digest("hex");
   const ttl = options.ttlMs ?? RELEASE_AUTOMATIC_TTL_MS;
-  const reservation = withState(options, (state, now) => {
+  const reservation = await coordinateReleaseCache(options, () => withState<Reservation>(options, (state, now) => {
     const entry = state.entries[key] ?? {};
     const attempts = state.automaticAttempts.filter((at) => at > now - RELEASE_AUTOMATIC_TTL_MS);
     const budgetUntil = attempts.length >= RELEASE_AUTOMATIC_HOURLY_BUDGET
@@ -125,13 +165,16 @@ export async function fetchGitHubReleaseMetadata(
     const blockedUntil = Math.max(state.rateLimitUntil ?? 0, entry.pendingUntil ?? 0,
       options.manual ? 0 : Math.max(freshRootDelay(state, now), entry.nextAttempt ?? 0, budgetUntil));
     if (now < blockedUntil) {
-      return { value: { entry, blockedUntil, rateLimited: now < (state.rateLimitUntil ?? 0) } };
+      const rateLimited = now < (state.rateLimitUntil ?? 0);
+      const pending = now < (entry.pendingUntil ?? 0);
+      return { value: { entry, blockedUntil, rateLimited, pending } };
     }
-    state.entries[key] = { ...entry, lastAttempt: now, pendingUntil: now + REQUEST_LEASE_MS,
+    const leaseUntil = now + REQUEST_LEASE_MS;
+    state.entries[key] = { ...entry, lastAttempt: now, pendingUntil: leaseUntil,
       nextAttempt: now + ttl };
     state.automaticAttempts = options.manual ? attempts : [...attempts, now];
-    return { value: { entry, blockedUntil: 0, rateLimited: false }, changed: true };
-  });
+    return { value: { entry, blockedUntil: 0, rateLimited: false, pending: false, leaseUntil }, changed: true };
+  }), (result) => result.pending && !result.rateLimited, init.signal);
   if (reservation.blockedUntil) {
     if (reservation.entry.body !== undefined && !options.manual) return cachedResponse(reservation.entry);
     throw new ReleaseCheckDeferredError(reservation.blockedUntil, reservation.rateLimited ? "rate-limit" : "cooldown");
@@ -149,8 +192,9 @@ export async function fetchGitHubReleaseMetadata(
     const success = (response.ok || response.status === 304) && body !== undefined;
     // Validate before persisting: a proxy's HTML error page is not a release list.
     if (success) JSON.parse(body);
-    withState(options, (state, now) => {
+    const observedAt = await coordinateReleaseCache(options, () => withState(options, (state, now) => {
       const entry = state.entries[key];
+      if (!entry || entry.pendingUntil !== reservation.leaseUntil) return { value: undefined };
       entry.pendingUntil = undefined;
       if (success) {
         entry.body = body;
@@ -169,17 +213,18 @@ export async function fetchGitHubReleaseMetadata(
             Number.isFinite(retryAt) ? retryAt : 0);
         }
       }
-      return { value: undefined, changed: true };
-    });
-    if (success) return cachedResponse({ body, etag: response.headers.get("etag") ?? reservation.entry.etag });
+      return { value: success ? now : undefined, changed: true };
+    }));
+    if (success) return cachedResponse({ body, etag: response.headers.get("etag") ?? reservation.entry.etag, lastSuccess: observedAt });
     return response;
   } catch (error) {
-    withState(options, (state, now) => {
+    await coordinateReleaseCache(options, () => withState(options, (state, now) => {
       const entry = state.entries[key];
+      if (!entry || entry.pendingUntil !== reservation.leaseUntil) return { value: undefined };
       entry.pendingUntil = undefined;
       recordFailure(entry, now);
       return { value: undefined, changed: true };
-    });
+    }));
     throw error;
   }
 }
