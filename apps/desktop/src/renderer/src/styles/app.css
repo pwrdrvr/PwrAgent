@@ -24107,6 +24107,10 @@ button.stack-position-chip:hover {
 }
 
 .star-map-card__menu-button {
+  /* WCAG 2.5.8 at the default map zoom: the open-thread target fills
+     the card behind this button, so there is no spacing exception. */
+  min-width: 24px;
+  min-height: 24px;
   padding: 1px 6px;
   border: 1px solid var(--border-subtle);
   border-radius: 5px;

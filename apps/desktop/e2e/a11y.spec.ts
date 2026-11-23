@@ -1675,6 +1675,7 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
         });
         const starMapCard = starMap.getByRole("button", {
           name: "Open thread: Star map attention thread",
+          exact: true,
         });
 
         await test.step("star map window", async () => {
@@ -1682,6 +1683,21 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
           // Gate on a card rather than only the map body: cards populate
           // after the window mounts, and an empty map skips the card contrast.
           await expect(starMapCard).toBeVisible();
+          // The menu trigger is transparent until hover or focus. Reveal it
+          // before axe so coverage doesn't depend on where the native window
+          // opens relative to the pointer.
+          const secondCard = starMap.getByRole("button", {
+            name: "Open thread: Second star map attention thread",
+            exact: true,
+          });
+          const secondCardMenu = starMap.locator(".star-map-card__menu").filter({
+            has: mapWindow.getByRole("button", {
+              name: "Actions for Second star map attention thread",
+              exact: true,
+            }),
+          });
+          await secondCard.hover({ position: { x: 4, y: 4 } });
+          await expect(secondCardMenu).toHaveCSS("opacity", "1");
           await runAxe(mapWindow, "star map window");
         });
 
