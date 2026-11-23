@@ -3184,9 +3184,9 @@ export class AcpBackendAdapter {
         update,
       }) => {
         const updateKind = readAcpUpdateKind(update);
-        const usageEnvelope = readAcpUsageEnvelope(update);
+        const usageEnvelope = readAcpUsageEnvelope(update, agent.backendId);
         let liveUsageNotification: AppServerNotification | undefined;
-        if (usageEnvelope && turnId) {
+        if (usageEnvelope && turnId && !fromSessionLoad) {
           const usageKey = [agent.backendId, sessionId, turnId].join(":");
           const previousUsage = this.liveTurnUsage.get(usageKey);
           const model =
@@ -3213,7 +3213,7 @@ export class AcpBackendAdapter {
           // That is the ACP convention; Codex sends a session-cumulative total
           // in the same field. See the note on `AcpUsageEnvelope` before
           // changing this payload's shape.
-          if (usageEnvelope.scope === "model-call" && !fromSessionLoad) {
+          if (usageEnvelope.scope === "model-call") {
             liveUsageNotification = acpUsageNotification({
               envelope: {
                 ...(model ? { model } : {}),
@@ -3228,6 +3228,7 @@ export class AcpBackendAdapter {
         }
         const promptSettledTurnFinished =
           updateKind === "turn_finished"
+          && !fromSessionLoad
           && replay.threadStatus !== "active";
         const completedUsage =
           promptSettledTurnFinished && turnId

@@ -1820,7 +1820,15 @@ export function isCodexLimitObservation(reading: UsageLimitObservation): boolean
 }
 
 export function fallbackUsageProvider(backend: AppServerBackendKind): string {
-  return backend === "claude" ? "anthropic" : backend === "acp:qwen" ? "qwen" : backend === "acp:grok" ? "xai" : "openai";
+  return backend === "claude"
+    ? "anthropic"
+    : backend === "acp:qwen"
+      ? "qwen"
+      : backend === "acp:grok"
+        ? "xai"
+        : backend === "acp:antigravity" || backend === "acp:gemini"
+          ? "google"
+          : "openai";
 }
 
 /**

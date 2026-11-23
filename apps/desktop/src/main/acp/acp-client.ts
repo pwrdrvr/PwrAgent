@@ -52,6 +52,8 @@ import {
 } from "./acp-rollout-store.js";
 import {
   foldAcpTurnUsage,
+  readAcpPromptResultUsage,
+  readAcpPromptResultUsageEnvelope,
   readAcpSelectedModel,
   readAcpUsageEnvelope,
   type AcpTokenUsage,
@@ -1235,6 +1237,10 @@ export class AcpAgentClient {
         // stopReason cancelled. Carry that through, so the transcript and
         // the terminal event say the turn was interrupted, not completed.
         const cancelled = promptWasCancelled(result);
+        const promptUsage = readAcpPromptResultUsage(
+          result,
+          this.options.backendId,
+        );
         const finished = this.finishTrackedTurn(
           params.sessionId,
           receivedAt,
@@ -1245,6 +1251,7 @@ export class AcpAgentClient {
           ...(finished.turnId ? { turnId: finished.turnId } : {}),
           outputText: finished.assistantText,
           ...(cancelled ? { stopReason: "cancelled" } : {}),
+          ...(promptUsage ? { usage: promptUsage } : {}),
         });
         void this.notifySessionUpdate({
           sessionId: params.sessionId,
@@ -1254,6 +1261,7 @@ export class AcpAgentClient {
             kind: "turn_finished",
             outputText: finished.assistantText,
             ...(cancelled ? { stopReason: "cancelled" } : {}),
+            ...(promptUsage ? { usage: promptUsage } : {}),
           },
         });
       })
@@ -1341,7 +1349,7 @@ export class AcpAgentClient {
     };
     this.suppressedControlPromptSessions.set(protocolSessionId, suppression);
     try {
-      await this.options.transport.request(
+      const result = await this.options.transport.request(
         "session/prompt",
         {
           sessionId: protocolSessionId,
@@ -1349,6 +1357,17 @@ export class AcpAgentClient {
         },
         ACP_CONTROL_PROMPT_REQUEST_TIMEOUT_MS,
       );
+      const promptUsage = readAcpPromptResultUsageEnvelope(
+        result,
+        this.options.backendId,
+      );
+      if (promptUsage) {
+        suppression.tokenUsage = foldAcpTurnUsage(
+          suppression.tokenUsage,
+          promptUsage,
+        );
+        suppression.model = promptUsage.model ?? suppression.model;
+      }
       return {
         text:
           suppression.finalTextChunks.join("").trim() ||
@@ -1714,7 +1733,7 @@ export class AcpAgentClient {
           suppressedControlPrompt.fallbackOutputText = text;
         }
       }
-      const usage = readAcpUsageEnvelope(update);
+      const usage = readAcpUsageEnvelope(update, this.options.backendId);
       if (usage) {
         suppressedControlPrompt.tokenUsage = foldAcpTurnUsage(
           suppressedControlPrompt.tokenUsage,
