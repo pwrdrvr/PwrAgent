@@ -384,7 +384,7 @@ test("production usage warning settles without sustaining compositor frames", as
 });
 
 test("status dots dip from one shared timer and leave offscreen dots still", async () => {
-  // Five captures, 25 seconds of tracing in all.
+  // Four captures, 18 seconds of tracing in all.
   test.setTimeout(90_000);
   const app = await launchElectronApp({
     fixturePath: path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/smoke/replay.fixture.json"),
@@ -408,7 +408,7 @@ test("status dots dip from one shared timer and leave offscreen dots still", asy
       threadId: "thread-smoke",
     });
     await app.window.reload();
-    await app.window.emulateMedia({ reducedMotion: "no-preference" });
+    await app.window.emulateMedia({ reducedMotion: "reduce" });
     await app.window.getByRole("button", { name: /Replay smoke thread/i }).first().click();
     const strip = app.window.getByRole("button", { name: /^Active sub-agents, 6$/ });
     await strip.click();
@@ -455,27 +455,17 @@ test("status dots dip from one shared timer and leave offscreen dots still", asy
     };
 
     // Baseline: the preference holds every dot at rest.
-    await app.window.emulateMedia({ reducedMotion: "reduce" });
-    const still = await capture(5);
+    const still = await capture(3);
     expect(still.animations.filter(([, , playState, infinite]) => infinite && playState === "running")).toEqual([]);
 
-    // Two full 4.5s periods, so the capture holds two dips whatever its phase.
+    // A 4.5s period plus the 1.6s dip fits regardless of the starting phase.
     await app.window.emulateMedia({ reducedMotion: "no-preference" });
-    const pulses = await capture(9);
+    const pulses = await capture(7);
     expect(pulses.animations).toContainEqual(["status-blink", ".status-dot", "running", false, true]);
     expect(pulses.animations.some(([, , , infinite]) => infinite)).toBe(false);
 
-    // The former rule, restored in the same window.
-    await app.window.evaluate(() => {
-      const style = document.createElement("style");
-      style.id = "former-blink";
-      style.textContent = `@keyframes former-status-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
-        .status-dot--blink { animation: former-status-blink 1.6s ease-in-out infinite; }`;
-      document.head.append(style);
-    });
-    const formerLoop = await capture(3);
-
-    // Every dot offscreen, as in a scrolled-away row or rail card.
+    // Move both versions of the dots offscreen in the same renderer. The
+    // former CSS loop is the positive control for unnecessary frame wakes.
     await app.window.evaluate(() => {
       const style = document.createElement("style");
       style.textContent = ".live-strip__list .status-dot--blink { translate: 0 -10000px; }";
@@ -483,17 +473,28 @@ test("status dots dip from one shared timer and leave offscreen dots still", asy
     });
     await expect.poll(() => dots.evaluateAll((elements) =>
       elements.every((element) => element.getBoundingClientRect().bottom < 0))).toBe(true);
-    const formerOffscreen = await capture(3);
-    await app.window.evaluate(() => document.getElementById("former-blink")!.remove());
+    // Wait out any dip that started before the move, using the actual animation.
+    await app.window.evaluate(async () => {
+      await Promise.all(document.getAnimations()
+        .filter((animation) => animation.id === "status-blink")
+        .map((animation) => animation.finished));
+    });
     const pulsesOffscreen = await capture(5);
+    await app.window.evaluate(() => {
+      const style = document.createElement("style");
+      style.textContent = `@keyframes former-status-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+        .status-dot--blink { animation: former-status-blink 1.6s ease-in-out infinite; }`;
+      document.head.append(style);
+    });
+    const formerOffscreen = await capture(3);
 
     console.log(JSON.stringify({ statusPulseFramesPerSecond: {
-      still, pulses, formerLoop, formerOffscreen, pulsesOffscreen,
+      still, pulses, formerOffscreen, pulsesOffscreen,
     } }, (key, value) => key === "animations" ? undefined : value));
 
     // The dips draw, and the compositor sleeps between them.
     expect(pulses.drawFrames).toBeGreaterThan(still.drawFrames + 5);
-    expect(formerLoop.beginFrames).toBeGreaterThan(pulses.beginFrames * 1.6);
+    expect(formerOffscreen.beginFrames).toBeGreaterThan(pulses.beginFrames * 1.6);
     // Offscreen, the former loop drew nothing and still woke every refresh;
     // the shared timer starts no animation there at all.
     expect(formerOffscreen.beginFrames).toBeGreaterThan(30);
