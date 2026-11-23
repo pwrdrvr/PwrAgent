@@ -163,7 +163,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  '@pwrdrvr/agent-transport': 0.1.8
+  '@pwrdrvr/agent-transport': 0.1.9
   '@babel/core': 7.29.6
   '@hono/node-server': 2.1.7
   '@types/node': ^24.12.4
@@ -330,14 +330,14 @@ importers:
         specifier: ^0.17.0
         version: 0.17.0(zod@4.6.7)
       '@pwrdrvr/agent-client':
-        specifier: ^0.8.2
-        version: 0.8.2
+        specifier: ^0.8.3
+        version: 0.8.3
       '@pwrdrvr/agent-core':
         specifier: ^0.2.0
         version: 0.2.0
       '@pwrdrvr/agent-transport':
-        specifier: 0.1.8
-        version: 0.1.8
+        specifier: 0.1.9
+        version: 0.1.9
       '@pwrdrvr/codex-app-server-protocol':
         specifier: 0.164.0
         version: 0.164.0
@@ -682,8 +682,8 @@ importers:
         specifier: workspace:*
         version: link:../shared
       '@pwrdrvr/agent-transport':
-        specifier: 0.1.8
-        version: 0.1.8
+        specifier: 0.1.9
+        version: 0.1.9
       '@pwrdrvr/codex-app-server-protocol':
         specifier: 0.164.0
         version: 0.164.0
@@ -1911,14 +1911,14 @@ packages:
   '@pwrdrvr/agent-acp@0.17.0':
     resolution: {integrity: sha512-8Jf/A8CwC0ggmXwfgTP+HnDsJmP7v6xfK/YXbU7DkjcLNp81IU1qwmo0bGsH68ze9I0LV1MHW0i3bE+xK5Wn4w==}
 
-  '@pwrdrvr/agent-client@0.8.2':
-    resolution: {integrity: sha512-/g6jEVvRr+vH1iUThORoPUGuEXUN9B3iDWxPmsHmEiLbTo+Eni1YT4fgbL4xQsCcSD8N2g+rYZG4GwoPFoa2ww==}
+  '@pwrdrvr/agent-client@0.8.3':
+    resolution: {integrity: sha512-o52AtUEeWltal0FN4l/qAb7e2Y4uRpKvvA+Kkncec5I5uv/sdsELgd377B58TcBOxDqvp4CxdtFtfM9cE7698w==}
 
   '@pwrdrvr/agent-core@0.2.0':
     resolution: {integrity: sha512-zTo7vJGekyZX2h9xWYiZfQvt+qKTPhuciWyCouow1shaKgg0Bn6B8S5lTRvMzxvT7feKOZ7zy/To2Cu6+1i1+A==}
 
-  '@pwrdrvr/agent-transport@0.1.8':
-    resolution: {integrity: sha512-pTXRXU3QdzaFw6nngPaZ9KYBVTW5tIxzsxcO6uyUQuS0Z8WLwZvhDaEyKBv4x5EQx4fsPoVQsRcMuu3blmnsNA==}
+  '@pwrdrvr/agent-transport@0.1.9':
+    resolution: {integrity: sha512-YwUmSXmuufZs5DZYCiV9Y606U5UXl2MPBuq3BH9bvMMXksODZZMOaW1zYJ6AoxzZKnYPBY8278CfMoB7U79czA==}
 
   '@pwrdrvr/codex-app-server-protocol@0.144.0':
     resolution: {integrity: sha512-WmURXzmmNEY8lmnNZunNQj/Bnn3yjzS6Rc0gzlDU7sBHMd0kvtskXE9BCMcR+E7sVJ53V/gwjfksRUli0xUgdA==}
@@ -7168,21 +7168,21 @@ snapshots:
     dependencies:
       '@agentclientprotocol/sdk': 1.3.0(zod@4.6.7)
       '@pwrdrvr/agent-core': 0.2.0
-      '@pwrdrvr/agent-transport': 0.1.8
+      '@pwrdrvr/agent-transport': 0.1.9
     transitivePeerDependencies:
       - zod
 
-  '@pwrdrvr/agent-client@0.8.2':
+  '@pwrdrvr/agent-client@0.8.3':
     dependencies:
       '@pwrdrvr/agent-core': 0.2.0
-      '@pwrdrvr/agent-transport': 0.1.8
+      '@pwrdrvr/agent-transport': 0.1.9
       '@pwrdrvr/codex-app-server-protocol': 0.144.0
       '@pwrdrvr/codex-discovery': 0.4.0
       zod: 4.6.7
 
   '@pwrdrvr/agent-core@0.2.0': {}
 
-  '@pwrdrvr/agent-transport@0.1.8':
+  '@pwrdrvr/agent-transport@0.1.9':
     dependencies:
       '@pwrdrvr/agent-core': 0.2.0
 
@@ -7193,7 +7193,7 @@ snapshots:
   '@pwrdrvr/codex-discovery@0.4.0':
     dependencies:
       '@pwrdrvr/agent-core': 0.2.0
-      '@pwrdrvr/agent-transport': 0.1.8
+      '@pwrdrvr/agent-transport': 0.1.9
 
   '@rolldown/binding-android-arm-eabi@1.2.14':
     optional: true

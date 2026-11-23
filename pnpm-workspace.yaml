@@ -114,11 +114,12 @@ minimumReleaseAgeExclude:
   # GHSA-jr5w-w6x2-84p9 eMudhra fix; published 2026-10-21T03:31:39.419Z.
   - 'electron@44.9.3'
   - '@pwrdrvr/agent-core'
-  # First-party LF framing fix, released 2026-11-16 from agent-kit PR #43.
-  - '@pwrdrvr/agent-transport@0.1.8'
+  # First-party stdio disconnect fix, released 2026-11-23 from agent-kit PR #45.
+  - '@pwrdrvr/agent-transport@0.1.9'
   - '@pwrdrvr/codex-discovery'
   - '@pwrdrvr/agent-acp'
-  - '@pwrdrvr/agent-client'
+  # First-party chat interrupt fix, released 2026-11-23.
+  - '@pwrdrvr/agent-client@0.8.3'
   - '@babel/core@7.29.6'
   - '@esbuild/aix-ppc64@0.28.1'
   - '@esbuild/android-arm64@0.28.1'
@@ -171,7 +172,7 @@ allowBuilds:
 
 overrides:
   # Keep transitive agent-client/discovery callers on the same fixed transport.
-  "@pwrdrvr/agent-transport": "0.1.8"
+  "@pwrdrvr/agent-transport": "0.1.9"
   "@babel/core": "7.29.6"
   "@hono/node-server": "2.1.7"
   "@types/node": "^24.12.4"
