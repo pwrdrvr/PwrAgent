@@ -32,6 +32,7 @@ import type {
   PendingRequestApprovalFileContext,
 } from "@pwragent/shared/pending-request-response";
 import type {
+  NavigationThreadSummary,
   ThreadMessagingBindingTransition,
   ThreadPermissionTransition,
   ThreadQuestionnaireActivity,
@@ -47,6 +48,7 @@ import {
   buildPendingRequestApprovalContext,
 } from "@pwragent/shared/pending-request-response";
 import { parseCodexAsyncQuestionReply } from "@pwragent/shared/codex-async-questions";
+import { TranscriptPrContextProvider } from "../pr-status/transcript-pr-context";
 import { injectMessagingBindingTransitions } from "./messaging-binding-transition-entries";
 import { injectPermissionTransitions } from "./permission-transition-entries";
 import { injectQuestionnaireActivities } from "./questionnaire-activity-entries";
@@ -101,6 +103,7 @@ type TranscriptViewport = {
 };
 
 type TranscriptListProps = {
+  prContextThread?: NavigationThreadSummary;
   /**
    * Rewind controls: the prompts a rewind can target, the stable opener, why
    * the control is unavailable right now, and the confirmation to render
@@ -1521,7 +1524,7 @@ export function TranscriptList(props: TranscriptListProps) {
     return <p className="transcript-empty">No thread history yet.</p>;
   }
 
-  return (
+  const content = (
     <div
       className="transcript-list"
       // Issue #240: scroll-edge fades. The fade gradients are always
@@ -1906,4 +1909,5 @@ export function TranscriptList(props: TranscriptListProps) {
       ) : null}
     </div>
   );
+  return <TranscriptPrContextProvider thread={props.prContextThread}>{content}</TranscriptPrContextProvider>;
 }

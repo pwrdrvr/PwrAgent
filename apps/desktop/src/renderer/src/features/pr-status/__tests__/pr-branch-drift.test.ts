@@ -76,19 +76,19 @@ describe("findBranchDriftPr", () => {
 });
 
 describe("readPrBranchDrift", () => {
-  const url = "https://github.com/acme/orbit/pull/2";
+  const prKey = "github.com/acme/orbit#2";
 
   it("keeps whole, non-negative counts and drops the rest", () => {
-    expect(readPrBranchDrift({ url, baseBranch: "main", behind: 4.7, ahead: -2 }))
+    expect(readPrBranchDrift({ prKey, baseBranch: "main", behind: 4.7, ahead: -2 }))
       .toEqual({ baseBranch: "main", behind: 4, ahead: undefined });
-    expect(readPrBranchDrift({ url, baseBranch: "main" })).toBeUndefined();
-    expect(readPrBranchDrift({ url, baseBranch: "", behind: 1 })).toBeUndefined();
+    expect(readPrBranchDrift({ prKey, baseBranch: "main" })).toBeUndefined();
+    expect(readPrBranchDrift({ prKey, baseBranch: "", behind: 1 })).toBeUndefined();
   });
 
   it("names only a branch that is behind in the rollup's short form", () => {
-    expect(prBranchBehindLabel({ url, baseBranch: "main", behind: 1200, ahead: 1 }))
+    expect(prBranchBehindLabel({ prKey, baseBranch: "main", behind: 1200, ahead: 1 }))
       .toBe("1,200 behind main");
-    expect(prBranchBehindLabel({ url, baseBranch: "main", behind: 0, ahead: 3 }))
+    expect(prBranchBehindLabel({ prKey, baseBranch: "main", behind: 0, ahead: 3 }))
       .toBeUndefined();
   });
 });

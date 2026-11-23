@@ -135,10 +135,10 @@ export function resolveThreadAutoFixRepository(
 }
 
 export function useThreadAutoFixRepository(
-  thread: Pick<NavigationThreadSummary, "prAutoDispatchEnabled" | "primaryGitRepository" | "federation">,
+  thread: Pick<NavigationThreadSummary, "prAutoDispatchEnabled" | "primaryGitRepository" | "federation"> | undefined,
 ): string | undefined {
   const context = useContext(ThreadPrWatchIndicatorsContext);
-  return resolveThreadAutoFixRepository(thread, context?.autoFixAvailable);
+  return thread && resolveThreadAutoFixRepository(thread, context?.autoFixAvailable);
 }
 
 /**

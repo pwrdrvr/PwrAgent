@@ -3,6 +3,7 @@ import { useCallback, useState, type ReactNode } from "react";
 import { useTranscriptPullRequest } from "../../lib/transcript-pr-status";
 import { useLivePullRequestNumber } from "../../lib/pull-request-links";
 import { PrChip } from "./PrChip";
+import { useTranscriptPrContext } from "./transcript-pr-context";
 
 export function PullRequestLinkChip(props: { pr: PrSummary }) {
   const key = buildPullRequestStatusKey(props.pr);
@@ -16,11 +17,14 @@ export function PullRequestLinkChip(props: { pr: PrSummary }) {
   }, [key]);
   const pr = useTranscriptPullRequest(props.pr,
     interest.key === key ? interest : { seen: false, visible: false });
+  const { branchDrift, watch } = useTranscriptPrContext(pr, key);
 
   return (
     <PrChip
       pr={pr}
       showRepoPrefix
+      branchDrift={branchDrift}
+      watch={watch}
       onOpen={openPullRequest}
       onVisibilityChange={onVisibilityChange}
     />

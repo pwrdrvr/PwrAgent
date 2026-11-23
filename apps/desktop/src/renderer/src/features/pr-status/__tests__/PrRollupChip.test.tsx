@@ -1,4 +1,5 @@
 import "@testing-library/jest-dom/vitest";
+import fc from "fast-check";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -11,6 +12,7 @@ import type { DesktopApi } from "../../../lib/desktop-api";
 import { TOOLTIP_HOVER_DELAY_MS } from "../../../lib/useViewportTooltip";
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { PrRollupChip } from "../PrRollupChip";
+import { PrChip } from "../PrChip";
 import { summarizeThreadPrWatches } from "../../pr-watches/useThreadPrWatchIndicators";
 
 afterEach(() => {
@@ -58,6 +60,47 @@ function renderRollup(prs: PrSummary[], onRowClick = vi.fn()) {
 }
 
 describe("PrRollupChip", () => {
+  it("offers the same footer as a standalone sidebar chip for every PR in the list", () => {
+    fc.assert(fc.property(fc.shuffledSubarray([passing, failing, merged], {
+      minLength: 2,
+      maxLength: 3,
+    }), fc.boolean(), (prs, overflow) => {
+      const target = prs.at(-1)!;
+      const onDetach = vi.fn();
+      const onOpen = vi.fn();
+      const { container } = render(
+        <>
+          <PrChip pr={target} showRepoPrefix={false} onOpen={onOpen} onDetach={onDetach} cardActions />
+          <PrRollupChip prs={prs} repoPrefixedUrls="" threadTitle="Orbit refactor"
+            onOpen={onOpen} onDetach={onDetach} variant={overflow ? "overflow" : "rollup"} />
+        </>,
+      );
+      try {
+        const footer = (card: HTMLElement) => [...card.querySelectorAll(".pr-status-card__action")]
+          .map((button) => button.textContent);
+        const lead = container.querySelector<HTMLElement>("[data-pr-chip]")!;
+        fireEvent.focus(lead);
+        const expected = footer(screen.getByRole("tooltip"));
+        expect(expected).toEqual(["Copy URL", "Detach"]);
+        fireEvent.blur(lead);
+        const trigger = container.querySelector<HTMLElement>("[data-pr-rollup]")!;
+        fireEvent.click(trigger);
+        const row = within(screen.getByRole("group")).getByRole("button", {
+          name: new RegExp(`^Open acme/orbit#${target.number}\\b`),
+        });
+        fireEvent.focus(row);
+        const card = screen.getByRole("tooltip");
+        expect(footer(card)).toEqual(expected);
+        fireEvent.pointerDown(card);
+        expect(trigger).toHaveAttribute("aria-expanded", "true");
+        fireEvent.click(card.querySelector<HTMLElement>(".pr-status-card__action--detach")!);
+        expect(onDetach).toHaveBeenCalledExactlyOnceWith(target);
+      } finally {
+        cleanup();
+      }
+    }), { numRuns: 16 });
+  });
+
   it("renders a lone PR as the ordinary chip", () => {
     const { container } = renderRollup([failing]);
     expect(container.querySelector("[data-pr-chip]")).toHaveTextContent("#11");
@@ -274,7 +317,7 @@ describe("PrRollupChip", () => {
         prs={[passing, failing]}
         repoPrefixedUrls=""
         threadTitle="Orbit refactor"
-        branchDrift={{ url: failing.url, baseBranch: "main", behind: 4, ahead: 2 }}
+        branchDrift={{ prKey: buildPullRequestStatusKey(failing), baseBranch: "main", behind: 4, ahead: 2 }}
         onHoverStart={onHoverStart}
         onHoverEnd={onHoverEnd}
         onOpen={vi.fn()}
@@ -331,7 +374,7 @@ describe("PrRollupChip", () => {
         prs={[passing, failing]}
         repoPrefixedUrls=""
         threadTitle="Orbit refactor"
-        branchDrift={{ url: failing.url, baseBranch: "main", behind: 4, ahead: 2 }}
+        branchDrift={{ prKey: buildPullRequestStatusKey(failing), baseBranch: "main", behind: 4, ahead: 2 }}
         onOpen={vi.fn()}
       />,
     );
@@ -391,7 +434,7 @@ describe("PrRollupChip", () => {
       prs: [passing, failing],
       repoPrefixedUrls: "",
       threadTitle: "Orbit refactor",
-      branchDrift: { url: failing.url, baseBranch: "main", behind: 4, ahead: 2 },
+      branchDrift: { prKey: buildPullRequestStatusKey(failing), baseBranch: "main", behind: 4, ahead: 2 },
       onOpen: vi.fn(),
     };
     const { container, rerender } = render(<PrRollupChip {...props} />);

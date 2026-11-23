@@ -7,9 +7,8 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
-import type { PrSummary, ThreadPullRequestMergeTarget } from "@pwragent/shared/contracts/navigation";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { CloseIcon, EyeIcon, MergeQueueIcon } from "../../icons";
-import { copyText } from "../../lib/copy-text";
 import {
   cardIsBesideSidebar,
   sidebarAnchorRect,
@@ -20,9 +19,8 @@ import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { observeElementVisibility } from "../../lib/observe-element-visibility";
 import { statusPulseRef } from "../../lib/status-pulse";
 import type { PrChipWatch } from "../pr-watches/useThreadPrWatchIndicators";
-import { PrCardMergeControl } from "./PrCardMergeControl";
+import { PrCardActions, type PrCardMerge } from "./PrCardActions";
 import { PrChipContextMenu } from "./PrChipContextMenu";
-import type { PullRequestMergeService } from "./pull-request-merge-context";
 import type { PrBranchDrift } from "./pr-branch-drift";
 import {
   prChipModifierClasses,
@@ -78,7 +76,7 @@ type PrChipProps = {
    * The card's footer can merge the PR: a local thread's sidebar card in a
    * window that merges. Keep its identity stable for unchanged data.
    */
-  merge?: { thread: ThreadPullRequestMergeTarget; service: PullRequestMergeService };
+  merge?: PrCardMerge;
   onVisibilityChange?: (visible: boolean) => void;
 };
 
@@ -132,35 +130,6 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
   const relayoutCard = useCallback(() => {
     updateTooltip(latestCardRef.current);
   }, [updateTooltip]);
-  const copyButton = (
-    <button
-      type="button"
-      tabIndex={-1}
-      className="pr-status-card__action"
-      onClick={() => {
-        hideTooltip();
-        void copyText(pr.url);
-      }}
-    >
-      Copy URL
-    </button>
-  );
-  const detachButton = onDetach ? (
-    <button
-      type="button"
-      tabIndex={-1}
-      className="pr-status-card__action pr-status-card__action--detach"
-      onClick={() => {
-        // The detach warning returns focus to its opener: make that
-        // the chip, which outlives the card.
-        contextMenuInvokerRef.current?.focus();
-        hideTooltip();
-        onDetach(pr);
-      }}
-    >
-      Detach
-    </button>
-  ) : null;
   const card = (
     <>
       <PrStatusCard
@@ -170,24 +139,19 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
         watch={props.watch}
         watchStopHint={watchStopHint}
       />
-      {/* Pointer shortcuts, out of the Tab order like the chip's ✕: the
-          keyboard detaches with Delete on the chip, and copies from its
-          menu. */}
-      {/* Hidden from the chip's description: the keyboard cannot reach
-          these, so they would announce controls it cannot use. */}
-      {merge ? (
-        <PrCardMergeControl
+      {cardActions ? (
+        <PrCardActions
           pr={pr}
-          thread={merge.thread}
-          service={merge.service}
-          trailing={<>{copyButton}{detachButton}</>}
+          merge={merge}
+          onDismiss={hideTooltip}
+          onDetach={onDetach ? () => {
+            // The detach warning returns focus to the chip, which outlives the card.
+            contextMenuInvokerRef.current?.focus();
+            hideTooltip();
+            onDetach(pr);
+          } : undefined}
           onLayoutChange={relayoutCard}
         />
-      ) : cardActions ? (
-        <div className="pr-status-card__actions" aria-hidden="true">
-          {copyButton}
-          {detachButton}
-        </div>
       ) : null}
     </>
   );

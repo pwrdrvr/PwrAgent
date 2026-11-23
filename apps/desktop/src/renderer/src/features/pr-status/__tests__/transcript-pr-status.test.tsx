@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildPullRequestStatusKey,
@@ -11,6 +12,51 @@ import { TranscriptPrStatusStore } from "../../../lib/transcript-pr-status";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { PullRequestLinkChip } from "../PullRequestLinkChip";
 import { PullRequestLinkProvider } from "../../../lib/pull-request-links";
+import { TranscriptPrContextProvider } from "../transcript-pr-context";
+
+it("shows the thread's local branch and Auto-fix only on its matching PR, including deep links", () => {
+  fc.assert(fc.property(
+    fc.integer({ min: 0, max: 100 }),
+    fc.constantFrom("", "/files", "#discussion_r123"),
+    (behind, suffix) => {
+      const attached: PrSummary = { ...pr, state: "passing", lifecycleState: "open",
+        headRefName: "feature", baseRefName: "main" };
+      const unrelated = { ...attached, number: 43, url: "https://github.com/example/project/pull/43" };
+      const thread = {
+        id: "thread",
+        source: "codex",
+        primaryGitRepository: "github.com/example/project",
+        gitBranch: "feature",
+        gitWorkingState: { baseBranch: "main", baseBehindCommitCount: behind },
+        prAutoDispatchEnabled: true,
+        prs: [attached],
+      } as NavigationThreadSummary;
+      const authoredUrl = url + suffix;
+      const { container } = render(
+        <TranscriptPrContextProvider thread={thread}>
+          <PullRequestLinkChip pr={{ ...attached, url: authoredUrl }} />
+          <PullRequestLinkChip pr={unrelated} />
+        </TranscriptPrContextProvider>,
+      );
+      try {
+        const [matching, other] = container.querySelectorAll("[data-pr-chip]");
+        expect(matching).toHaveAttribute("data-pr-url", authoredUrl);
+        fireEvent.focus(matching!);
+        const card = within(screen.getByRole("tooltip"));
+        expect(card.getByText("Local branch")).toBeInTheDocument();
+        expect(card.getByText(`${behind} commit${behind === 1 ? "" : "s"}`)).toBeInTheDocument();
+        expect(card.getByText("Auto-fix")).toBeInTheDocument();
+        fireEvent.blur(matching!);
+        fireEvent.focus(other!);
+        const otherCard = within(screen.getByRole("tooltip"));
+        expect(otherCard.queryByText("Local branch")).toBeNull();
+        expect(otherCard.queryByText("Wakes this thread")).toBeNull();
+      } finally {
+        cleanup();
+      }
+    },
+  ), { numRuns: 15 });
+});
 
 const url = "https://github.com/example/project/pull/42";
 const pr: PrSummary = { provider: "github.com", org: "example", repo: "project", number: 42, url, state: "unknown" };
