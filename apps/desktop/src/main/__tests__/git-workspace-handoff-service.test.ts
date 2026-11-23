@@ -88,7 +88,10 @@ it("copies staged, unstaged and untracked stack edits without changing the sourc
   expect(await readFile(path.join(checkout, "new.txt"), "utf8")).toBe("untracked\n");
   expect(await pathExists(path.join(checkout, "node_modules", "ignored"))).toBe(false);
   expect(await git(repo, ["stash", "list"])).toBe(stashBefore);
+  await expect(applyStackLayerEdits(checkout, captured!, head)).resolves.toBeUndefined();
+  await writeFile(path.join(checkout, "new.txt"), "different local edits\n");
   await expect(applyStackLayerEdits(checkout, captured!, head)).rejects.toThrow(/changed/);
+  expect(await readFile(path.join(checkout, "new.txt"), "utf8")).toBe("different local edits\n");
 });
 
 afterEach(async () => {

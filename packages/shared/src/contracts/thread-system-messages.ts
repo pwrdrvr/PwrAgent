@@ -21,12 +21,13 @@ export type StackNotice = {
   staleReads?: string[];
   worktree?: { followed: "reset --keep" | "not checked out"; keptDirty?: string[] };
   interruptedBy?: "operator";
-  completion?: { child?: string; provisioningAbandoned?: boolean };
+  completion?: { child?: string; provisioningAbandoned?: boolean; provisioningIssue?: string };
   undo: string;
 };
 
 export function formatStackNotice(notice: StackNotice): string {
   const short = (sha: string | null) => sha?.slice(0, 12) ?? "absent";
+  if (notice.completion?.provisioningIssue) return notice.completion.provisioningIssue;
   if (notice.completion) return [
     `PwrAgent completed a stack operation: ${notice.kind} (${notice.opId}).`,
     ...(notice.completion.child ? [`Created layer thread ${notice.completion.child}.`] : []),

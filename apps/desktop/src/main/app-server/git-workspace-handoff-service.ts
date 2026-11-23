@@ -362,7 +362,21 @@ export async function applyStackLayerEdits(
   target: string, stash: ThreadWorkspaceHandoffStashSummary, expectedHead: string,
 ): Promise<void> {
   const head = trim((await runGit(target, ["rev-parse", "--verify", "HEAD"])).stdout);
-  if (head !== expectedHead || await getDirtyStatus(target)) throw new Error("The new layer worktree changed before local edits could be carried.");
+  const changed = () => new Error("The new layer worktree changed before local edits could be carried. Its files were kept.");
+  if (head !== expectedHead) throw changed();
+  if (await getDirtyStatus(target)) {
+    // Recover a crash after stash apply by comparing Git's trees, including
+    // the index and untracked parent. Never replay onto different edits.
+    const worktrees = (await runGit(target, ["worktree", "list", "--porcelain", "-z"])).stdout.split("\0\0")
+      .flatMap((record) => record.startsWith("worktree ") ? [{ path: record.split("\0")[0]!.slice(9) }] : []);
+    const current = await snapshotWorktreeEdits({ sourcePath: target, headSha: head, worktrees }, stash.message, undefined);
+    const trees = async (ref: string) => {
+      const [, ...parents] = trim((await runGit(target, ["rev-list", "--parents", "-1", ref])).stdout).split(" ");
+      return trim((await runGit(target, ["rev-parse", ...[ref, ...parents].map((sha) => `${sha}^{tree}`)])).stdout);
+    };
+    if (!current.ref || !stash.ref || await trees(current.ref) !== await trees(stash.ref)) throw changed();
+    return;
+  }
   await applyWorktreeEdits(target, stash, undefined);
 }
 
