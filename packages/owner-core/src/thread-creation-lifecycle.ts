@@ -6,6 +6,13 @@ import {
 } from "@pwragent/shared/contracts/agent";
 
 export type CreatedThreadIdentity = { backend: AppServerBackendKind; threadId: string };
+
+/** The provider adapter failed before making any attempt to create a thread. */
+export class ThreadStartNotAdmittedError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+  }
+}
 export type CreatedThreadParent = { parentThreadId: string; parentThreadBackend?: AppServerBackendKind };
 export type ThreadCreationStage = "workspace" | "revoke-connections" | "rollback-workspace" | "pdf" | "connections" | "pending"
   | "placeholder" | "worktree" | "invalidate" | "execution" | "token-miser" | "pdf-catalog" | "git"

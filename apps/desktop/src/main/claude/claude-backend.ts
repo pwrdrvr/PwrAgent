@@ -1,4 +1,5 @@
 import { projectClaudeSessionThread } from "@pwragent/owner-core/claude-profile-storage";
+import { ThreadStartNotAdmittedError } from "@pwragent/owner-core/thread-creation-lifecycle";
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import { createHash, randomUUID } from "node:crypto";
 import { readFile, rm } from "node:fs/promises";
@@ -861,7 +862,7 @@ export class ClaudeBackend {
      */
     ephemeral?: { title: string };
   }): Promise<{ threadId: string }> {
-    await this.requireInstallation();
+    await this.requireInstallation().catch((error: unknown) => { throw new ThreadStartNotAdmittedError(error); });
     const id = randomUUID();
     const now = Date.now();
     const session: ClaudeSession = {

@@ -157,6 +157,25 @@ it("budgets stack lead transfer and the unread notice watermark", async () => {
   expect(recoveredMove.writes.commits).toBe(0);
 });
 
+it("budgets registration of a provider-accepted stack thread after restart", async () => {
+  const child = { backend: "claude" as const, threadId: "accepted-stack-thread" };
+  const lead = { backend: "codex" as const, threadId: "stack-lead" };
+  const registry = createDesktopBackendRegistry({
+    codexClient: createStubBackendClient(), overlayStore: store,
+    agentToolMcpServer: null, pdfToolMcpServer: null,
+  });
+  try {
+    const register = () => registry.registerStackLayerThread(child, lead, tempDir);
+    const { writes } = await measureSqliteWrites(register);
+    expect(await store.getThreadOverlayState(child)).toMatchObject({ parentThreadId: lead.threadId, parentThreadBackend: lead.backend });
+    expectSqliteWriteBudget({ scenario: "stack-child-registration-recovery", writes,
+      note: "One parent registration through the normal storage path; replay with the same parent makes no commits." });
+    expect((await measureSqliteWrites(register)).writes.commits).toBe(0);
+  } finally {
+    await registry.close();
+  }
+});
+
 describe("sqlite write metrics", () => {
   it("budgets opening and paging the messaging Agent preset picker", async () => {
     const real = await messagingNewThreadHarness({ dbPath: path.join(tempDir, "preset-messaging.db"), maxActions: 8 });

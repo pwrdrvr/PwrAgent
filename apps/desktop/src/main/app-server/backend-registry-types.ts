@@ -355,7 +355,8 @@ export type BackendClient = {
     threadSource?: CodexThreadSource;
     pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation;
     developerInstructions?: string;
-  }): Promise<{ threadId: string }>;
+    includeStartScope?: boolean;
+  }): Promise<{ threadId: string; codexHome?: string }>;
   forkThread?(params: {
     skillExclusions?: readonly string[];
     threadId: string;

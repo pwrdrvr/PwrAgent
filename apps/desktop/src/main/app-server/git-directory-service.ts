@@ -1,4 +1,6 @@
-import { mkdir, realpath, rmdir, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import type { BigIntStats } from "node:fs";
+import { link, lstat, mkdir, open, readFile, readdir, realpath, rmdir, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
@@ -26,7 +28,8 @@ import { readStatusWithoutNestedWorktrees } from "@pwragent/shared/nested-worktr
 import { WORKTREE_FOLDER_CODEX_SUBFOLDER } from "@pwragent/shared/worktree-paths";
 import { userHomeWorktreesRoot } from "../settings/desktop-config";
 import { checkWorktreeFolder, markWorktreeFolder } from "../settings/worktree-folder-check";
-import { addManagedWorktree, removeManagedWorktree } from "./managed-worktree";
+import { addManagedWorktree, lockExternallyAddedWorktree, removeManagedWorktree } from "./managed-worktree";
+import { readWorktreeLockHolder } from "./worktree-volume-lock";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import { GitReadCache, type GitReadRequest } from "../git-info/read-cache";
 import { runGitCommand } from "./git-executable";
@@ -80,6 +83,36 @@ export type PreparedLaunchpadWorkspace = {
   rollback?: () => Promise<void>;
   workMode: LaunchpadWorkMode;
 };
+
+export type StackWorktreeReservation = {
+  path: string;
+  directory: WorktreePathIdentity;
+  commonDir: string;
+  branch: string;
+  tip: string;
+};
+
+export type StackWorktreeStart = {
+  prepare(): Promise<PreparedLaunchpadWorkspace>;
+  admit(submit: () => Promise<{ threadId: string; codexHome?: string }>): Promise<{ threadId: string }>;
+};
+
+type WorktreePathIdentity = { dev: string; ino: string; birthtimeNs: string };
+
+function worktreePathIdentity(stats: BigIntStats): WorktreePathIdentity {
+  return { dev: String(stats.dev), ino: String(stats.ino), birthtimeNs: String(stats.birthtimeNs) };
+}
+
+function matchesWorktreePathIdentity(stats: BigIntStats, expected: WorktreePathIdentity): boolean {
+  const actual = worktreePathIdentity(stats);
+  return actual.dev === expected.dev && actual.ino === expected.ino && actual.birthtimeNs === expected.birthtimeNs;
+}
+
+async function statIfPresent(filename: string) {
+  return await lstat(filename, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT") throw error;
+  });
+}
 
 export class WorktreeBranchAlreadyCheckedOutError extends Error {
   constructor(readonly branch: string, readonly worktreePath: string) {
@@ -237,6 +270,7 @@ export async function recordCodexWorktreeOwnerThread(params: {
   threadId: string;
   gitEnv?: NodeJS.ProcessEnv;
   runGit?: GitCommandRunner;
+  preserveExisting?: boolean;
 }): Promise<void> {
   const worktreePath = params.worktreePath.trim();
   const threadId = params.threadId.trim();
@@ -255,11 +289,34 @@ export async function recordCodexWorktreeOwnerThread(params: {
   }
 
   await mkdir(path.dirname(ownerFile), { recursive: true });
-  await writeFile(
-    ownerFile,
-    `${JSON.stringify({ version: 1, ownerThreadId: threadId }, null, 2)}\n`,
-    "utf8",
-  );
+  const content = `${JSON.stringify({ version: 1, ownerThreadId: threadId }, null, 2)}\n`;
+  if (!params.preserveExisting) {
+    await writeFile(ownerFile, content, "utf8");
+    return;
+  }
+  const temporary = `${ownerFile}.${randomUUID()}.tmp`;
+  const file = await open(temporary, "wx", 0o600);
+  try {
+    try {
+      await file.writeFile(content, "utf8");
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+    // A same-directory hard link publishes the completed file without
+    // replacing an owner which claimed this checkout concurrently.
+    await link(temporary, ownerFile).catch(async (error: NodeJS.ErrnoException) => {
+      if (error.code !== "EEXIST" || !await matchesStackWorktreeOwner(ownerFile, threadId)) throw error;
+    });
+  } finally {
+    await unlink(temporary);
+  }
+}
+
+async function matchesStackWorktreeOwner(ownerFile: string, threadId?: string): Promise<boolean> {
+  const stat = await statIfPresent(ownerFile);
+  return !stat || (stat.isFile() && stat.size <= 4096n && Boolean(threadId)
+    && JSON.parse(await readFile(ownerFile, "utf8")).ownerThreadId === threadId);
 }
 
 function sanitizeBranchName(value: string): string {
@@ -1371,6 +1428,85 @@ export class GitDirectoryService {
     });
   }
 
+  // Stack callers hold the clone's worktree mutation lock and the operation
+  // journal lock across reservation, checkout creation and provider admission.
+  async reserveStackWorktree(params: {
+    cwd: string; commonDir: string; backend: AppServerBackendKind; branch: string; tip: string;
+  }): Promise<StackWorktreeReservation> {
+    const { cwd, commonDir, backend, branch, tip } = params;
+    const [primary] = await readWorktreeEntries({ repoRoot: cwd, runGit: this.runGitCommand, gitEnv: this.gitEnv });
+    const repoRoot = primary?.path;
+    if (!repoRoot) throw new Error("Cannot locate the primary checkout for the stack worktree.");
+    const allocated = await computeWorktreePath({
+      backend, repoRoot, codexHome: backend === "codex" ? this.codexHome : undefined,
+      storage: await this.resolveStorage(), worktreeFolder: await this.resolveWorktreeFolder(), homeDir: this.homeDir,
+    });
+    const parent = await realpath(path.dirname(allocated));
+    const checkout = path.join(parent, path.basename(allocated));
+    // Git can populate an existing empty directory without replacing it.
+    // Persist its identity before Git runs so a replacement is never ours.
+    await mkdir(checkout, { mode: 0o700 });
+    return {
+      path: checkout,
+      directory: worktreePathIdentity(await lstat(checkout, { bigint: true })),
+      commonDir, branch, tip,
+    };
+  }
+
+  async prepareStackWorktree(cwd: string, reservation: StackWorktreeReservation, options: {
+    create: boolean; ownerThreadId?: string; onAddFailed?: () => Promise<void>;
+  }): Promise<Required<Pick<PreparedLaunchpadWorkspace, "cwd" | "repositoryPath" | "workMode">>> {
+    const { path: checkout, commonDir, branch, tip, directory } = reservation;
+    const git = (at: string, args: string[]) => this.runGitCommand(at, args, this.gitEnv);
+    const verifyClone = async (at: string) => path.relative(commonDir,
+      await realpath((await git(at, ["rev-parse", "--path-format=absolute", "--git-common-dir"])).trim())) === "";
+    const refused = () => new Error(`Cannot verify the reserved stack worktree at ${checkout}. Its files were kept.`);
+    const directoryMatches = async () => {
+      const stat = await statIfPresent(checkout);
+      return stat?.isDirectory() && matchesWorktreePathIdentity(stat, directory)
+        && path.relative(checkout, await realpath(checkout)) === "";
+    };
+    if (!path.isAbsolute(checkout) || !await directoryMatches() || !await verifyClone(cwd)) throw refused();
+
+    const readEntries = () => readWorktreeEntries({ repoRoot: cwd, runGit: this.runGitCommand, gitEnv: this.gitEnv });
+    let entries = await readEntries();
+    const repoRoot = entries[0]?.path;
+    if (!repoRoot || path.relative(repoRoot, checkout) === "") throw refused();
+    const branchRef = `refs/heads/${branch}`;
+    if ((await git(cwd, ["rev-parse", "--verify", branchRef])).trim() !== tip) throw refused();
+    const pointer = path.join(checkout, ".git");
+    let added = false;
+    if (!await statIfPresent(pointer)) {
+      if (!options.create || entries.some((entry) => entry.branch === branch
+        || path.relative(checkout, entry.path) === "") || (await readdir(checkout)).length !== 0) throw refused();
+      // Never detach another checkout or force-remove a partial checkout. Git
+      // can finish the add before the host sees its result (e.g. a checkout hook).
+      try {
+        await addManagedWorktree({ repoRoot, worktreePath: checkout, addArgs: ["--", checkout, branch], git: (args) => git(repoRoot, args) });
+      } catch (error) {
+        // A failing post-checkout hook can leave a valid-looking checkout.
+        if (await statIfPresent(pointer)) await options.onAddFailed?.();
+        throw error;
+      }
+      added = true;
+      entries = await readEntries();
+    }
+    const branchEntries = entries.filter((entry) => entry.branch === branch);
+    if (!await directoryMatches() || branchEntries.length !== 1 || path.relative(checkout, branchEntries[0]!.path) !== ""
+      || !(await statIfPresent(pointer))?.isFile() || !await verifyClone(checkout)
+      || path.relative(checkout, await realpath((await git(checkout, ["rev-parse", "--show-toplevel"])).trim())) !== ""
+      || (await git(checkout, ["symbolic-ref", "HEAD"])).trim() !== branchRef
+      || (await git(checkout, ["rev-parse", "--verify", "HEAD"])).trim() !== tip) throw refused();
+    const gitDir = (await git(checkout, ["rev-parse", "--absolute-git-dir"])).trim();
+    if (!(await statIfPresent(path.join(gitDir, "index")))?.isFile() || await readWorktreeLockHolder(gitDir) === "other") throw refused();
+    const ownerFile = path.join(gitDir, "codex-thread.json");
+    if (!await matchesStackWorktreeOwner(ownerFile, options.ownerThreadId)) throw refused();
+    // A crash can leave Git's checkout in place before the managed add locks
+    // it against pruning on removal of an external drive.
+    if (options.create && !added) await lockExternallyAddedWorktree({ repoRoot, worktreePath: checkout, git: (args) => git(repoRoot, args) });
+    return { cwd: toForwardSlashes(checkout), repositoryPath: toForwardSlashes(repoRoot), workMode: "worktree" };
+  }
+
   async prepareLaunchpadWorkspace(
     launchpad: Pick<
       NavigationLaunchpadDraft,
@@ -1692,6 +1828,7 @@ export class GitDirectoryService {
   async recordCodexWorktreeOwnerThread(params: {
     worktreePath: string;
     threadId: string;
+    preserveExisting?: boolean;
   }): Promise<void> {
     await recordCodexWorktreeOwnerThread({
       ...params,

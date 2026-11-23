@@ -17658,6 +17658,8 @@ command = "pnpm dev"
       const call = desktopNotificationServiceMock.notifyTerminal.mock.calls[0]?.[0];
       expect(call).toMatchObject({
         key: "codex:thread-2:turn-terminal",
+        status: "completed",
+        turnId: "turn-1",
         title: "PwrAgent turn completed",
       });
       expect(call.body).toContain("PwrAgent > My Investigation");
@@ -17786,6 +17788,7 @@ command = "pnpm dev"
       });
 
       const call = desktopNotificationServiceMock.notifyTerminal.mock.calls[0]?.[0];
+      expect(call.status).toBe("failed");
       expect(call.title).toBe("PwrAgent turn failed");
       expect(call.body).not.toContain("undefined");
       expect(call.body).toContain("failed");

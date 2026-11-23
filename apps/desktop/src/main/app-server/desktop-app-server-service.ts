@@ -1235,7 +1235,7 @@ class DesktopAppServerService {
   private readonly stackPublishAttempts = new Map<string, string>();
   private readonly stackPublishActive = new Map<string, AbortController>();
   private readonly stackPublishAwaitingObservation = new Map<string, string>();
-  private readonly stackOperations = new StackOperationsService(async (cwd) => (await this.readScopedStacks([cwd])).stacks);
+  private readonly stackOperations = new StackOperationsService(undefined, async (cwd) => (await this.readScopedStacks([cwd])).stacks);
 
   async resumeInterruptedStackOperations(): Promise<void> {
     const registry = getDesktopBackendRegistry();

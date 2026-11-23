@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import type { MessagingApprovalIntent } from "@pwragent/messaging-interface";
 import { DesktopNotificationService } from "../shell/notifications/desktop-notification-service";
 
@@ -162,6 +163,165 @@ describe("DesktopNotificationService", () => {
     getAllWindows.mockReturnValue([]);
   });
 
+  it("shows two routine notices and all three approvals across 30 completions in 30 minutes", () => {
+    let now = 0;
+    const service = new DesktopNotificationService(() => now);
+
+    for (let minute = 0; minute < 30; minute++) {
+      now = minute === 1 ? 0 : minute * 60_000;
+      service.notifyTerminal({
+        enabled: true,
+        key: `codex:thread-${minute}:turn-terminal`,
+        status: "completed",
+        title: "PwrAgent turn completed",
+        body: `Thread ${minute} completed`,
+      });
+      if (minute === 7 || minute === 14 || minute === 21) {
+        service.notifyApproval({
+          enabled: true,
+          key: `codex:approval-${minute}`,
+          intent: approvalIntent({ body: `Request ${minute}` }),
+        });
+      }
+    }
+
+    expect(shownNotifications.map(({ body }) => body)).toEqual([
+      "Thread 0 completed",
+      "Command Approval: Request 7",
+      "Command Approval: Request 14",
+      "Thread 15 completed",
+      "Command Approval: Request 21",
+    ]);
+  });
+
+  it("spends the shared 15-minute cooldown only on eligible, fresh routine terminal notifications", () => {
+    const cooldownMs = 15 * 60_000;
+    const event = fc.record({
+      kind: fc.constantFrom("completed", "cancelled", "failed", "input"),
+      enabled: fc.boolean(),
+      focused: fc.boolean(),
+      supported: fc.boolean(),
+      elapsed: fc.oneof(fc.nat(cooldownMs), fc.constantFrom(0, cooldownMs - 1, cooldownMs)),
+      redeliver: fc.boolean(),
+    });
+
+    fc.assert(fc.property(fc.array(event, { maxLength: 30, size: "max" }), (events) => {
+      shownNotifications.length = 0;
+      let now = 0;
+      let lastRoutine: number | undefined;
+      const expected: string[] = [];
+      const service = new DesktopNotificationService(() => now);
+
+      for (const [index, event] of events.entries()) {
+        now += event.elapsed;
+        const notice = {
+          key: `thread-${index}`,
+          enabled: event.enabled,
+          title: event.kind,
+          body: `Event ${index}`,
+        };
+        getAllWindows.mockReturnValue([
+          { isDestroyed: () => false, isFocused: () => event.focused, isMinimized: () => false },
+        ]);
+        MockNotification.isSupported.mockReturnValue(event.supported);
+
+        if (event.kind === "input") {
+          service.notifyAttention(notice);
+        } else {
+          service.notifyTerminal({ ...notice, turnId: "turn-1", status: event.kind });
+        }
+
+        if (event.enabled && !event.focused && event.supported) {
+          if (event.kind === "input" || event.kind === "failed") {
+            expected.push(notice.body);
+          } else if (lastRoutine === undefined || now - lastRoutine >= cooldownMs) {
+            expected.push(notice.body);
+            lastRoutine = now;
+          } else if (event.redeliver) {
+            now = lastRoutine + cooldownMs;
+            service.notifyTerminal({ ...notice, turnId: "turn-1", status: event.kind });
+          }
+        }
+      }
+
+      expect(shownNotifications.map(({ body }) => body)).toEqual(expected);
+    }));
+  });
+
+  it("drops a repeated ACP cancellation after cooldown without swallowing fresh turns or failures", () => {
+    const cooldownMs = 15 * 60_000;
+    let now = 0;
+    const service = new DesktopNotificationService(() => now);
+    const cancellation = {
+      enabled: true,
+      key: "acp:grok:thread-1:turn-terminal",
+      turnId: "turn-1",
+      status: "cancelled" as const,
+      title: "Turn cancelled",
+      body: "Cancelled",
+    };
+    const otherThread = { ...cancellation, key: "acp:grok:thread-2:turn-terminal" };
+    service.notifyTerminal({
+      enabled: true,
+      status: "completed",
+      title: "Turn completed",
+      body: "First completion",
+    });
+
+    now = cooldownMs - 1;
+    service.notifyTerminal(cancellation);
+    service.notifyTerminal(otherThread);
+    service.notifyTerminal({ ...otherThread, status: "failed", title: "Turn failed", body: "Failure" });
+
+    now = cooldownMs;
+    service.clearAttentionKey(cancellation.key);
+    service.notifyTerminal(cancellation);
+    service.notifyTerminal({
+      ...cancellation,
+      turnId: "turn-2",
+      status: "completed",
+      title: "Turn completed",
+      body: "Fresh completion",
+    });
+
+    expect(shownNotifications.map(({ body }) => body)).toEqual([
+      "First completion",
+      "Failure",
+      "Fresh completion",
+    ]);
+  });
+
+  it.each([-3_600_000, 3_600_000])("expires at 15 elapsed minutes when the wall clock shifts by %i ms", (shiftMs) => {
+    const cooldownMs = 15 * 60_000;
+    let elapsedMs = 0;
+    let wallAdjustmentMs = 0;
+    const wallClock = vi.spyOn(Date, "now")
+      .mockImplementation(() => 1_700_000_000_000 + elapsedMs + wallAdjustmentMs);
+    const elapsedClock = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+    try {
+      const service = new DesktopNotificationService();
+      const notify = (body: string) => service.notifyTerminal({
+        enabled: true,
+        status: "completed",
+        title: "Turn completed",
+        body,
+      });
+      notify("First completion");
+
+      elapsedMs = cooldownMs - 1;
+      wallAdjustmentMs = shiftMs;
+      notify("Early completion");
+
+      elapsedMs = cooldownMs;
+      notify("On-time completion");
+
+      expect(shownNotifications.map(({ body }) => body)).toEqual(["First completion", "On-time completion"]);
+    } finally {
+      elapsedClock.mockRestore();
+      wallClock.mockRestore();
+    }
+  });
+
   it("emits attention notifications only once per key", () => {
     const service = new DesktopNotificationService();
     getAllWindows.mockReturnValue([
@@ -196,6 +356,7 @@ describe("DesktopNotificationService", () => {
       kind: "terminal",
       notify: (service: DesktopNotificationService) => service.notifyTerminal({
         enabled: true,
+        status: "completed",
         title: "Turn completed",
         body: "Done",
       }),
@@ -230,7 +391,8 @@ describe("DesktopNotificationService", () => {
   });
 
   it("renders terminal notifications as body-click notifications until explicit cleanup", () => {
-    const service = new DesktopNotificationService();
+    let now = 0;
+    const service = new DesktopNotificationService(() => now);
     const onShow = vi.fn();
     getAllWindows.mockReturnValue([
       { isDestroyed: () => false, isFocused: () => false, isMinimized: () => false },
@@ -250,6 +412,7 @@ describe("DesktopNotificationService", () => {
     service.notifyTerminal({
       enabled: true,
       key: "codex:thread-1:turn-terminal",
+      status: "completed",
       title: "PwrAgent turn completed",
       body: "PwrAgent > npm view eslint · turn completed.",
       onShow,
@@ -273,9 +436,11 @@ describe("DesktopNotificationService", () => {
       ),
     ).toBe(true);
 
+    now += 15 * 60_000;
     service.notifyTerminal({
       enabled: true,
       key: "codex:thread-1:turn-terminal",
+      status: "completed",
       title: "PwrAgent turn completed",
       body: "PwrAgent > npm view eslint · turn completed again.",
       onShow,
@@ -465,6 +630,7 @@ describe("DesktopNotificationService", () => {
 
     service.notifyTerminal({
       enabled: true,
+      status: "completed",
       title: "Turn complete",
       body: "Fixture thread finished.",
     });
