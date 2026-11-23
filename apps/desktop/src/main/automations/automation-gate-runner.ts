@@ -1,10 +1,7 @@
-import { randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import type { AutomationGateConfig, AutomationGateRunResult } from "@pwragent/shared/contracts/automations";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
-import { isEnvironmentGroupGone } from "../resource-checkouts/checkout-machine-evidence";
-import { getResourceCheckoutService } from "../resource-checkouts/checkout-runtime";
-import { windowsJobCleanupVerified, wrapCommandInWindowsJob } from "../windows-job-wrapper";
+import { wrapCommandInWindowsJob } from "../windows-job-wrapper";
 import { resolveWindowsBashShell } from "../windows-shell";
 
 const DEFAULT_GATE_TIMEOUT_MS = 60_000;
@@ -55,7 +52,6 @@ function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunRe
             command: shell,
             cwd: config.cwd,
             env: childEnv,
-            keepDrainEvidenceOnStop: !!getResourceCheckoutService(),
           })
         : undefined;
   } catch (error) {
@@ -74,17 +70,6 @@ function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunRe
     env: childEnv,
   };
 
-  let checkout;
-  try {
-    checkout = getResourceCheckoutService()?.admitMachineJob(randomUUID(), "Automation gate");
-  } catch (error) {
-    windowsJobLaunch?.cleanup();
-    return Promise.resolve({
-      status: "failed", command, cwd: config.cwd, durationMs: Date.now() - startedAt, output: "",
-      errorMessage: error instanceof Error ? error.message : String(error),
-    });
-  }
-
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>;
     try {
@@ -96,7 +81,6 @@ function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunRe
         windowsHide: true,
       });
     } catch (error) {
-      checkout?.finish(true);
       windowsJobLaunch?.cleanup();
       resolve({
         status: "failed", command, cwd: config.cwd, durationMs: Date.now() - startedAt, output: "",
@@ -108,10 +92,7 @@ function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunRe
     let output = "";
     let outputTruncated = false;
     let settled = false;
-    let closed = false;
     let timedOut = false;
-    let groupPoll: ReturnType<typeof setInterval> | undefined;
-    let checkoutFinished = false;
     let forceSettleHandle: ReturnType<typeof setTimeout> | undefined;
     const appendOutput = (chunk: Buffer): void => {
       output += chunk.toString("utf8");
@@ -124,37 +105,26 @@ function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunRe
     const finish = (result: AutomationGateRunResult): void => {
       if (settled) return;
       settled = true;
-      if (!groupPoll) clearTimeout(timeoutHandle);
+      clearTimeout(timeoutHandle);
       if (forceSettleHandle) {
         clearTimeout(forceSettleHandle);
         forceSettleHandle = undefined;
       }
+      windowsJobLaunch?.cleanup();
       resolve(result);
     };
 
-    const finishCheckout = () => {
-      if (!checkout || checkoutFinished) return;
-      if (!windowsJobLaunch && child.pid && !isEnvironmentGroupGone(child.pid)) return;
-      checkoutFinished = true;
-      clearInterval(groupPoll);
-      if (settled) clearTimeout(timeoutHandle);
-      checkout.finish(!windowsJobLaunch || !child.pid || windowsJobCleanupVerified(windowsJobLaunch));
-    };
-
-    const terminateChildTree = (force = false): void => {
-      if (!child.pid || checkoutFinished) {
+    const terminateChildTree = (): void => {
+      if (!child.pid) {
         return;
       }
       try {
         if (windowsJobLaunch) {
           // The wrapper owns the shell and all descendants in a
           // KILL_ON_JOB_CLOSE Job, so terminating this one process is atomic.
-          if (checkout && windowsJobLaunch.requestStop) windowsJobLaunch.requestStop();
-          else child.kill("SIGKILL");
+          child.kill("SIGKILL");
         } else if (process.platform !== "win32") {
-          if (closed) finishCheckout();
-          if (checkoutFinished) return;
-          process.kill(-child.pid, force ? "SIGKILL" : "SIGTERM");
+          process.kill(-child.pid, "SIGTERM");
         } else {
           // child.kill only terminates the immediate bash.exe; its children
           // (the actual gate command, e.g. `pnpm test`) linger, which keeps the
@@ -175,8 +145,7 @@ function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunRe
 
     const timeoutHandle = setTimeout(() => {
       timedOut = true;
-      terminateChildTree(settled);
-      if (settled) return;
+      terminateChildTree();
       forceSettleHandle = setTimeout(() => {
         finish({
           status: "failed",
@@ -191,15 +160,6 @@ function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunRe
       forceSettleHandle.unref?.();
     }, timeoutMs);
     timeoutHandle.unref?.();
-
-    let checkoutStopped = false;
-    if (checkout) {
-      checkout.watch(() => {
-        checkoutStopped = true;
-        terminateChildTree(true);
-      });
-      child.once("spawn", () => checkout.active(windowsJobLaunch ? undefined : child.pid));
-    }
 
     child.stdout?.on("data", appendOutput);
     child.stderr?.on("data", appendOutput);
@@ -217,19 +177,7 @@ function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunRe
     });
 
     child.once("close", (code, signal) => {
-      closed = true;
-      finishCheckout();
-      if (checkout && !checkoutFinished && !windowsJobLaunch) {
-        groupPoll = setInterval(finishCheckout, 50);
-        groupPoll.unref();
-      }
-      windowsJobLaunch?.cleanup();
       const durationMs = Date.now() - startedAt;
-      if (checkoutStopped) {
-        finish({ status: "failed", command, cwd: config.cwd, durationMs, output, outputTruncated,
-          errorMessage: "Automation gate stopped because its machine checkout ended." });
-        return;
-      }
       if (timedOut) {
         finish({
           status: "failed",

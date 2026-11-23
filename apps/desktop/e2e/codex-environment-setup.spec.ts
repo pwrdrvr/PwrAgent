@@ -627,7 +627,7 @@ test("thread environment Run command uses the current cwd after workspace handof
       const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
       return (await api.readResourceCheckouts!()).resources.find((resource) => resource.placement === "machine");
     });
-    expect(machine).toMatchObject({ condition: "available", allocations: [], cleanup: { state: "verified" } });
+    expect(machine).toMatchObject({ condition: "available", allocations: [], cleanup: { state: "not_applicable" } });
 
     await app.window.getByLabel(/^Workspace mode(?::|$)/).click();
     await app.window.getByRole("menuitem", { name: "Handoff to Local" }).click();
