@@ -251,6 +251,7 @@ const CODEX_THREAD_TITLE_CONFIG_READ_REASON = "thread-title-mcp-inventory";
 /** Wire method Codex uses to invoke a dynamic tool the client advertised. */
 const CODEX_DYNAMIC_TOOL_CALL_METHOD = "item/tool/call";
 const CODEX_CONNECTION_MCP_CONFIG_READ_REASON = "connection-mcp-inventory";
+const CODEX_SKILL_PROFILE_CONFIG_READ_REASON = "skill-profile-session-flags";
 const CODEX_THREAD_MCP_RUNTIME_PREPARATION_REASON = "thread-mcp-runtime-preparation";
 const CODEX_THREAD_TITLE_WORKSPACE_DIR = path.join(
   tmpdir(),
@@ -612,6 +613,7 @@ type CodexTurnStartPayload = Omit<
 type SkillCatalogEntry = {
   commands?: AppServerAvailableCommandSummary[];
   cwd?: string;
+  errors?: string[];
   skills: AppServerSkillSummary[];
 };
 
@@ -857,6 +859,32 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
+function readCodexSkillLaunchRules(value: unknown): Array<
+  { name: string; enabled: boolean } | { path: string; enabled: boolean }
+> {
+  const layers = asRecord(value)?.layers;
+  if (!Array.isArray(layers)) {
+    throw new Error("Codex did not report the configuration layers needed to apply the skill profile.");
+  }
+  const flags = layers.map(asRecord).find((layer) => asRecord(layer?.name)?.type === "sessionFlags");
+  const config = asRecord(asRecord(flags?.config)?.skills)?.config;
+  if (config === undefined) return [];
+  if (!Array.isArray(config)) {
+    throw new Error("Codex returned invalid skill launch rules.");
+  }
+  return config.flatMap((value): Array<{ name: string; enabled: boolean } | { path: string; enabled: boolean }> => {
+    const rule = asRecord(value);
+    if (!rule || typeof rule.enabled !== "boolean") return [];
+    if (typeof rule.name === "string" && rule.path === undefined) {
+      return [{ name: rule.name, enabled: rule.enabled }];
+    }
+    if (typeof rule.path === "string" && rule.name === undefined) {
+      return [{ path: rule.path, enabled: rule.enabled }];
+    }
+    return [];
+  });
+}
+
 /**
  * Codex recursively merges `mcp_servers`, so an empty table does not erase
  * servers configured in lower layers. Pin every inventoried server off in the
@@ -934,6 +962,7 @@ function createCodexObserverWithConfigReadRedaction(
           redactedEvent.diagnostics?.callerReason === CODEX_THREAD_TITLE_CONFIG_READ_REASON
           || redactedEvent.diagnostics?.callerReason === CODEX_CONNECTION_MCP_CONFIG_READ_REASON
           || redactedEvent.diagnostics?.callerReason === CODEX_THREAD_MCP_RUNTIME_PREPARATION_REASON
+          || redactedEvent.diagnostics?.callerReason === CODEX_SKILL_PROFILE_CONFIG_READ_REASON
         )
         && requestKey
       ) {
@@ -5957,11 +5986,18 @@ function extractSkillCatalog(value: unknown): SkillCatalogEntry[] {
       const normalized = extractAvailableCommandSummary(command);
       return normalized ? [normalized] : [];
     });
+    const errors = Array.isArray(entryRecord.errors)
+      ? entryRecord.errors.flatMap((entry) => {
+          const message = pickString(asRecord(entry) ?? {}, ["message"]);
+          return message ? [message] : [];
+        })
+      : [];
 
     return [
       {
         ...(commands.length > 0 ? { commands } : {}),
         cwd: pickString(entryRecord, ["cwd"]),
+        ...(errors.length ? { errors } : {}),
         skills
       }
     ];
@@ -8103,6 +8139,13 @@ export class CodexAppServerClient {
   private threadDeveloperInstructionsResolver:
     | ((threadId: string) => Promise<string | undefined>)
     | undefined;
+  private threadSkillExclusionsResolver:
+    | ((threadId: string) => Promise<readonly string[] | undefined>)
+    | undefined;
+  private skillLaunchRules?: {
+    generation: number;
+    rules: Promise<Array<{ name: string; enabled: boolean } | { path: string; enabled: boolean }>>;
+  };
   /**
    * Threads whose loaded session still holds replaced developer instructions
    * because they had no rollout to reload from when the change arrived.
@@ -9405,11 +9448,15 @@ export class CodexAppServerClient {
         throw recoveryError;
       }
 
+      const [, resumePayload] = await this.withThreadResumeSettings([
+        "thread/resume",
+        { threadId: params.threadId, excludeTurns: true } satisfies CodexThreadResumeParams,
+      ]);
       assertNotClosed();
       await requestWithFallbacks({
         client: this.rawConnection,
         methods: ["thread/resume"],
-        payloads: [{ threadId: params.threadId, excludeTurns: true } satisfies CodexThreadResumeParams],
+        payloads: [resumePayload],
         timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       });
       return { recovered: recoveryResult! };
@@ -11506,6 +11553,7 @@ export class CodexAppServerClient {
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     config?: CodexThreadStartParams["config"];
+    skillExclusions?: readonly string[];
     defaultModeRequestUserInput?: boolean;
     dynamicTools?: CodexDynamicToolSpec[];
     threadSource?: CodexThreadStartParams["threadSource"];
@@ -11517,7 +11565,9 @@ export class CodexAppServerClient {
     await this.ensureInitialized();
 
     const startPayload = buildThreadStartPayload({
-      ...params, bundledToolsDirectory: this.options.bundledToolsDirectory,
+      ...params,
+      config: await this.withSkillExclusions(params.config, params.skillExclusions),
+      bundledToolsDirectory: this.options.bundledToolsDirectory,
       buildShellEnvironment: this.host.buildShellEnvironment,
     }, this.getProtocolCompatibility());
     const result = await requestWithFallbacks({
@@ -11563,6 +11613,7 @@ export class CodexAppServerClient {
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     config?: CodexThreadForkParams["config"];
+    skillExclusions?: readonly string[];
   }): Promise<{ threadId: string }> {
     params = this.withAgentEnvironmentPolicy(params);
     await this.ensureInitialized();
@@ -11574,6 +11625,7 @@ export class CodexAppServerClient {
         buildThreadForkPayload(
           {
             ...params,
+            config: await this.withSkillExclusions(params.config, params.skillExclusions),
             bundledToolsDirectory: this.options.bundledToolsDirectory,
             buildShellEnvironment: this.host.buildShellEnvironment,
           },
@@ -12746,7 +12798,7 @@ export class CodexAppServerClient {
     }
     return this.runAdmittedRequest(async () => {
       const closeGeneration = this.closeGeneration;
-      const resume = await this.withThreadDeveloperInstructions(args);
+      const resume = await this.withThreadResumeSettings(args);
       if (this.pendingCloses > 0 || closeGeneration !== this.closeGeneration) {
         throw new Error("codex app server client closed");
       }
@@ -12780,6 +12832,66 @@ export class CodexAppServerClient {
     return [method, { ...params, developerInstructions: instructions }, ...rest];
   }
 
+  private async withThreadResumeSettings(
+    args: Parameters<JsonRpcConnection["request"]>,
+  ): Promise<Parameters<JsonRpcConnection["request"]>> {
+    const resume = await this.withThreadDeveloperInstructions(args);
+    const [method, payload, ...rest] = resume;
+    const params = asRecord(payload);
+    const threadId = params && pickString(params, ["threadId"]);
+    if (!params || !threadId || !this.threadSkillExclusionsResolver) return resume;
+    const names = await this.threadSkillExclusionsResolver(threadId);
+    if (!names?.length) return resume;
+    const config = await this.withSkillExclusions(params.config as CodexThreadStartParams["config"], names);
+    return [method, { ...params, config }, ...rest];
+  }
+
+  private async withSkillExclusions(
+    config: CodexThreadStartParams["config"],
+    names: readonly string[] | undefined,
+  ): Promise<CodexThreadStartParams["config"]> {
+    if (!names?.length) return config;
+    if (!this.getProtocolCompatibility().supportsThreadSkillExclusions) {
+      throw new Error("Update Codex to 0.164.0 or later to use skill profiles.");
+    }
+    // Request rules and App Server launch flags occupy the same Codex layer.
+    // Preserve the launch rules and use the dotted key to leave its siblings alone.
+    if (this.skillLaunchRules?.generation !== this.serverGeneration) {
+      const pending = {
+        generation: this.serverGeneration,
+        rules: requestWithFallbacks({
+          client: this.rawConnection,
+          diagnostics: { callerReason: CODEX_SKILL_PROFILE_CONFIG_READ_REASON },
+          methods: ["config/read"],
+          payloads: [{ includeLayers: true }],
+          timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        }).then(readCodexSkillLaunchRules).catch((error: unknown) => {
+          if (this.skillLaunchRules === pending) this.skillLaunchRules = undefined;
+          throw error;
+        }),
+      };
+      this.skillLaunchRules = pending;
+    }
+    return {
+      ...config,
+      "skills.config": [
+        ...await this.skillLaunchRules.rules,
+        ...names.map((name) => ({ name, enabled: false })),
+      ],
+    };
+  }
+
+  provideThreadSkillExclusions(
+    resolver: (threadId: string) => Promise<readonly string[] | undefined>,
+  ): () => void {
+    this.threadSkillExclusionsResolver = resolver;
+    return () => {
+      if (this.threadSkillExclusionsResolver === resolver) {
+        this.threadSkillExclusionsResolver = undefined;
+      }
+    };
+  }
+
   /**
    * The registry supplies each thread's current Agent instructions. Returns a
    * function that withdraws the resolver, like a subscription, so a client
@@ -12810,7 +12922,7 @@ export class CodexAppServerClient {
         const closeGeneration = this.closeGeneration;
         const request = async (...requestArgs: Parameters<JsonRpcConnection["request"]>) => {
           const sendArgs = requestArgs[0] === "thread/resume"
-            ? await this.withThreadDeveloperInstructions(requestArgs)
+            ? await this.withThreadResumeSettings(requestArgs)
             : requestArgs;
           const submit = () => {
             if (this.pendingCloses > 0 || closeGeneration !== this.closeGeneration) {

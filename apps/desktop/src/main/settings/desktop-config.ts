@@ -1,3 +1,7 @@
+import {
+  codexSkillProfileNameError,
+  type CodexSkillProfile,
+} from "@pwragent/shared/contracts/codex-skill-profiles";
 import desktopPackage from "../../../package.json" with { type: "json" };
 import {
   assertHotCpuCaptureRules,
@@ -380,6 +384,7 @@ export type DesktopSettingsConfig = {
       /** Which pwrdrvr/codex track the managed runtime follows. */
       managedBuildChannel?: DesktopUpdateChannel;
       configOverrides?: string[];
+      skillProfiles?: CodexSkillProfile[];
       localModelIds?: string[];
       providers?: CodexModelProviderSettings[];
       /**
@@ -2061,37 +2066,7 @@ export function desktopSettingsPatchToEdits(
   if (patch.models?.audioTranscriptionEnabled !== undefined) {
     set(["models", "audio_transcription_enabled"], patch.models.audioTranscriptionEnabled);
   }
-  if (patch.models?.codex?.path !== undefined) {
-    set(["models", "codex", "path"], patch.models.codex.path);
-  }
-  if (patch.models?.codex?.profile !== undefined) {
-    set(["models", "codex", "profile"], patch.models.codex.profile);
-  }
-  if (patch.models?.codex?.configOverrides !== undefined) {
-    set(
-      ["models", "codex", "config_overrides"],
-      validateCodexConfigOverrides(patch.models.codex.configOverrides),
-    );
-  }
-  if (patch.models?.codex?.localModelIds !== undefined) {
-    set(["models", "codex", "local_model_ids"], validateLocalModelIds(patch.models.codex.localModelIds));
-  }
-  if (patch.models?.codex?.providers !== undefined) {
-    const providers = validateCodexModelProviders(patch.models.codex.providers);
-    edits.push(...codexModelProviderTableEdits(providers));
-  }
-  if (patch.models?.codex?.allowFast !== undefined) {
-    set(["models", "codex", "allow_fast"], patch.models.codex.allowFast);
-  }
-  if (patch.models?.codex?.managedBuilds !== undefined) {
-    set(["models", "codex", "managed_builds"], patch.models.codex.managedBuilds);
-  }
-  if (patch.models?.codex?.managedBuildChannel !== undefined) {
-    set(
-      ["models", "codex", "managed_build_channel"],
-      patch.models.codex.managedBuildChannel,
-    );
-  }
+  appendCodexSettingsEdits(patch.models?.codex, set, edits);
   if (patch.models?.providerDefaults !== undefined) {
     const providerDefaults = normalizeProviderModelDefaults(
       patch.models.providerDefaults,
@@ -2943,6 +2918,7 @@ function normalizeDesktopConfig(
         configOverrides: codex?.config_overrides === undefined
           ? undefined
           : validateCodexConfigOverrides(codex.config_overrides),
+        skillProfiles: readCodexSkillProfiles(codex?.skill_profiles),
         ...(codexAppServerRecycle
           ? {
               appServerRecycle: {
@@ -4018,8 +3994,6 @@ function normalizeHelperModelChoice(
   };
 }
 
-// Additive setting: older builds ignore these rows. Reading never rewrites
-// config, and saving replaces only this table array.
 /**
  * `[[models.codex.providers]]` holds endpoints and `[[models.codex.provider_rates]]`
  * their per-model prices, because a table-array entry cannot nest tables.
@@ -4076,6 +4050,86 @@ function readCodexModelProviders(
       ...(rates.length ? { rates } : {}),
     };
   }));
+}
+
+function appendCodexSettingsEdits(
+  codex: NonNullable<DesktopSettingsConfigPatch["models"]>["codex"],
+  set: (path: readonly string[], value: string | number | boolean | readonly string[] | undefined) => void,
+  edits: TomlEdit[],
+): void {
+  if (codex?.path !== undefined) {
+    set(["models", "codex", "path"], codex.path);
+  }
+  if (codex?.profile !== undefined) {
+    set(["models", "codex", "profile"], codex.profile);
+  }
+  if (codex?.configOverrides !== undefined) {
+    set(
+      ["models", "codex", "config_overrides"],
+      validateCodexConfigOverrides(codex.configOverrides),
+    );
+  }
+  if (codex?.skillProfiles !== undefined) {
+    const profiles = normalizeCodexSkillProfiles(codex.skillProfiles, true);
+    const path = ["models", "codex", "skill_profiles"];
+    edits.push(profiles.length
+      ? {
+          op: "setTableArray",
+          path,
+          value: profiles.map(({ id, name, hiddenSkills }) => ({ id, name, hidden_skills: hiddenSkills })),
+        }
+      : { op: "deleteTableArray", path });
+  }
+  if (codex?.localModelIds !== undefined) {
+    set(["models", "codex", "local_model_ids"], validateLocalModelIds(codex.localModelIds));
+  }
+  if (codex?.providers !== undefined) {
+    const providers = validateCodexModelProviders(codex.providers);
+    edits.push(...codexModelProviderTableEdits(providers));
+  }
+  if (codex?.allowFast !== undefined) {
+    set(["models", "codex", "allow_fast"], codex.allowFast);
+  }
+  if (codex?.managedBuilds !== undefined) {
+    set(["models", "codex", "managed_builds"], codex.managedBuilds);
+  }
+  if (codex?.managedBuildChannel !== undefined) {
+    set(
+      ["models", "codex", "managed_build_channel"],
+      codex.managedBuildChannel,
+    );
+  }
+}
+
+function normalizeCodexSkillProfiles(value: unknown, strict: boolean): CodexSkillProfile[] {
+  const profiles: CodexSkillProfile[] = [];
+  const invalid = "Invalid Codex skill profile.";
+  if (!Array.isArray(value)) {
+    if (strict) throw new Error(invalid);
+    return profiles;
+  }
+  for (const row of value) {
+    const id = typeof row?.id === "string" ? row.id.trim() : "";
+    const name = typeof row?.name === "string" ? row.name.trim() : "";
+    const error = codexSkillProfileNameError(name, profiles, id);
+    const hiddenSkills: unknown = row?.hiddenSkills;
+    if (!id || profiles.some((profile) => profile.id === id) || error
+      || !Array.isArray(hiddenSkills) || hiddenSkills.some((skill) => typeof skill !== "string" || !skill.trim())) {
+      if (strict) throw new Error(error ?? invalid);
+      continue;
+    }
+    profiles.push({ id, name, hiddenSkills: [...new Set(hiddenSkills.map((skill: string) => skill.trim()))] });
+  }
+  return profiles;
+}
+
+function readCodexSkillProfiles(value: unknown): CodexSkillProfile[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return normalizeCodexSkillProfiles(value.map((row) => ({
+    id: row?.id,
+    name: row?.name,
+    hiddenSkills: row?.hidden_skills ?? [],
+  })), false);
 }
 
 function codexModelProviderTableEdits(

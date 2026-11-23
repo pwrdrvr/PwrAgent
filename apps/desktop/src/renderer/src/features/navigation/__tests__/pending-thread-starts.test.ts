@@ -123,6 +123,33 @@ describe("pending thread starts in the list", () => {
     }));
   });
 
+  function expectLatestProgress(outputs: [string, string], snapshotFirst: boolean) {
+    const report = (sequence: number, output: string): PendingThreadStartReport => ({
+      start: { ...start(0), prompt: "Review the fixture." }, phase: "setup",
+      setupProgress: { directoryKey: start(0).startId, environmentId: "env", environmentName: "Fixtures",
+        command: "echo ready", phase: "stdout", at: sequence, sequence, output },
+    });
+    const older = report(1, outputs[0]);
+    const newer = report(2, outputs[1]);
+    const order = snapshotFirst ? [older, newer] : [newer, older];
+    const starts = order.reduce<readonly PendingThreadStart[]>(
+      (current, next) => applyPendingThreadStartReport(current, next, new Set()), [],
+    );
+    expect(pendingThreadStartRows(starts, undefined)[0]).toMatchObject({
+      input: [{ type: "text", text: "Review the fixture." }],
+      setupProgress: { output: outputs[1] },
+    });
+  }
+
+  it("projects the submitted message and the newest setup output regardless of snapshot delivery order", () => {
+    fc.assert(fc.property(fc.tuple(fc.string(), fc.string()), fc.boolean(), expectLatestProgress));
+  });
+
+  it("keeps live setup output when an older snapshot arrives afterwards", () => {
+    expectLatestProgress(["", ""], false);
+    expectLatestProgress(["", "ready"], false);
+  });
+
   it("files a sub-thread start under its parent and keys its landed thread", () => {
     let starts = applyPendingThreadStartReport([], { start: start(0), phase: "starting" }, new Set());
     expect(pendingThreadStartRows(starts, undefined)).toEqual([expect.objectContaining({

@@ -4737,6 +4737,32 @@ describe("CodexAppServerClient", () => {
 
     afterEach(() => vi.restoreAllMocks());
 
+    it.each([undefined, [], ["deploy"], ["deploy", "publish"]].map((hiddenSkills) => ({ hiddenSkills })))(
+      "restores the thread's settings on the first resume after history repair (%j)",
+      async ({ hiddenSkills }) => {
+        const { client, transport } = await fixture();
+        const previousConfig = MockTransport.configReadResult;
+        const launchRule = { name: "private", enabled: false };
+        MockTransport.configReadResult = {
+          layers: [{ name: { type: "sessionFlags" }, config: { skills: { config: [launchRule] } } }],
+        };
+        client.provideThreadSkillExclusions(async (requestedThread) =>
+          requestedThread === threadId ? hiddenSkills : undefined);
+        try {
+          await client.recoverInvalidPersistedResponseMessageIds(recoveryParams);
+          const requests = transport.sentMessages.map((message) => JSON.parse(message));
+          const resume = requests.find((request) => request.method === "thread/resume");
+          expect(resume?.params.threadId).toBe(threadId);
+          expect(resume?.params.config?.["skills.config"]).toEqual(hiddenSkills?.length
+            ? [launchRule, ...hiddenSkills.map((name) => ({ name, enabled: false }))]
+            : undefined);
+        } finally {
+          MockTransport.configReadResult = previousConfig;
+          await client.close();
+        }
+      },
+    );
+
     it("blocks reads and reviews through shutdown, repair, and resume", async () => {
       const stopped = deferred();
       const finishClose = deferred();

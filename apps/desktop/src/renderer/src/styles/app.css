@@ -7539,6 +7539,10 @@ button.stack-position-chip:hover {
   cursor: pointer;
 }
 
+.thread-row-shell--starting .thread-row:not(:has(.thread-row__open)) {
+  cursor: default;
+}
+
 .thread-row--compact {
   flex-direction: row;
   align-items: baseline;
@@ -38978,6 +38982,12 @@ div.composer-error-row__toggle {
   border: 1px solid var(--border-subtle);
 }
 
+.skill-chip[data-skill-hidden] {
+  border-style: dashed;
+  color: var(--text-secondary);
+  text-decoration: line-through;
+}
+
 .skill-chip--transcript {
   cursor: pointer;
   -webkit-user-select: none;
@@ -42831,6 +42841,15 @@ div.composer-error-row__toggle {
   flex: 0 0 auto;
   margin-top: 1px;
   color: var(--accent);
+}
+
+.waiting-for-panel__hold--neutral {
+  border-color: var(--border-subtle);
+  background: var(--bg-panel-elevated);
+}
+
+.waiting-for-panel__hold--neutral .waiting-for-panel__hold-icon {
+  color: var(--text-muted);
 }
 
 .waiting-for-panel__hold-text {
@@ -47803,7 +47822,9 @@ button.composer__subthread-source-parent:hover {
    `--text-muted` on it falls to 4.37:1 in Tangerine. It goes one step up
    the text ladder instead, as `.select-option__description` does. */
 .composer-dropdown__option:hover:not([aria-disabled="true"]) .composer-dropdown__option-description,
-.composer-dropdown__option:focus-visible:not([aria-disabled="true"]) .composer-dropdown__option-description {
+.composer-dropdown__option:focus-visible:not([aria-disabled="true"]) .composer-dropdown__option-description,
+.composer-dropdown__option:hover:not([aria-disabled="true"]) .composer-thread-options__note,
+.composer-dropdown__option:focus-visible:not([aria-disabled="true"]) .composer-thread-options__note {
   color: var(--text-secondary);
 }
 
@@ -47833,6 +47854,10 @@ button.composer__subthread-source-parent:hover {
   min-width: min(204px, calc(100vw - 32px));
   padding: 4px;
   overflow: visible;
+}
+
+.composer-thread-options__menu--job-monitors {
+  min-width: min(288px, calc(100vw - 32px));
 }
 
 /* An action menu, so it takes the thread context menu's native density
@@ -47870,6 +47895,16 @@ button.composer__subthread-source-parent:hover {
   font-weight: 400;
 }
 
+.composer-thread-options__note--dependency {
+  display: inline-block;
+  max-width: 100%;
+}
+
+.composer-thread-options__detail {
+  display: block;
+  margin-top: 3px;
+}
+
 .composer-thread-options__toggle {
   width: 28px;
   height: 16px;
@@ -47904,6 +47939,15 @@ button.composer__subthread-source-parent:hover {
   .composer-thread-options__toggle-thumb {
   transform: translateX(12px);
   background: var(--button-text);
+}
+
+.composer-thread-options__toggle.is-saving {
+  opacity: 0.65;
+}
+
+.composer-thread-options__toggle.is-saving .composer-thread-options__toggle-thumb {
+  background: transparent;
+  border: 1px solid var(--text-primary);
 }
 
 /* ==============================================}
@@ -50111,6 +50155,59 @@ button.composer__subthread-source-parent:hover {
   margin: 6px 4px;
   color: var(--text-secondary);
   font-size: 12px;
+}
+
+.composer__autocomplete-option--hidden {
+  cursor: default;
+}
+
+.skill-profile-editor {
+  padding: 12px;
+}
+
+.skill-profile-editor__catalog {
+  max-height: 280px;
+  overflow: auto;
+}
+
+.skill-profile-editor__group,
+.skill-profile-editor__footer,
+.skill-profile-editor__skill {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-block: 4px;
+}
+
+.skill-profile-editor__skill input {
+  appearance: none;
+  display: inline-grid;
+  place-items: center;
+  inline-size: 14px;
+  block-size: 14px;
+  margin: 0;
+  border: 1px solid var(--text-muted);
+  border-radius: 3px;
+  background: var(--bg-input);
+}
+
+.skill-profile-editor__skill input:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.skill-profile-editor__skill input:checked::after {
+  content: "";
+  inline-size: 4px;
+  block-size: 7px;
+  border: solid var(--button-text);
+  border-width: 0 2px 2px 0;
+  transform: translateY(-1px) rotate(45deg);
+}
+
+.skill-profile-editor__skill:has(input:checked) .skill-profile-editor__name {
+  text-decoration: line-through;
 }
 
 .composer__skill-picker-options,

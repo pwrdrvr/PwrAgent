@@ -1,3 +1,4 @@
+import { snapshotCodexSkillProfile } from "@pwragent/shared/contracts/codex-skill-profiles";
 import type { CheckoutToolHandler } from "../agent-tools/pwragent-resource-checkout-agent-tools";
 import type { ThreadModelSettings } from "./thread-model-settings";
 import type { AcpSessionRuntimeOptions } from "./acp-session-runtime-options";
@@ -65,7 +66,7 @@ import { buildPendingTurnId, isPendingTurnId } from "@pwragent/shared/turn-place
 import { findAcpPermissionModeConfigOption } from "@pwragent/shared/acp-permission-mode";
 import { lowerThreadExecutionMode } from "@pwragent/shared/thread-execution-mode";
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
-import { TASK_MONITOR_TOOL_NAMESPACE } from "@pwragent/shared/contracts/task-monitor-tools";
+import { TASK_MONITOR_TOOL_NAMESPACE, type TaskMonitorRequest, type TaskMonitorResponse } from "@pwragent/shared/contracts/task-monitor-tools";
 import { type DesktopCheckoutHibernationPolicy } from "@pwragent/shared/checkout-hibernation-policy";
 import {
   type DesktopThreadArchivePolicy,
@@ -207,6 +208,7 @@ import {
   type AppServerNotification,
   type AppServerPendingThreadStart,
   type AppServerPendingThreadStartPhase,
+  type AppServerPendingThreadStartReport,
   type AppServerPendingRequestNotification,
   type AppServerReadThreadRequest,
   type AppServerReadThreadResponse,
@@ -744,6 +746,9 @@ import {
   type ArchivedWorktreeRepairReport,
   type BackendClient,
   type BackendRegistryForkThreadRequest,
+  type PendingThreadStartDescriptor,
+  type PendingThreadStartReporter,
+  type PendingThreadStartSource,
   type BackendRegistryMcpConnectionService,
   type BackendRegistryOverlayStoreLike,
   type CodexDiscoveryObserver,
@@ -1001,12 +1006,6 @@ class CompactionRecoveryRevoked extends Error {
   constructor(readonly status: "busy" | "discarded" = "discarded") { super("Compaction recovery admission was revoked"); }
 }
 
-/** One start's `thread/start/pending` reports; see `beginPendingThreadStart`. */
-type PendingThreadStartReporter = {
-  report(phase: Exclude<AppServerPendingThreadStartPhase, "landed">): Promise<void>;
-  land(threadId: string): Promise<void>;
-};
-
 type IdleSubmission = {
   backend: AppServerBackendKind;
   threadId: string;
@@ -1022,6 +1021,7 @@ type JoinedSubmissionResult =
 
 export class DesktopBackendRegistry {
   readonly context: RegistryContext;
+  private readonly jobMonitorCreationDeferredTurns = new Set<string>();
   /** The PR and forge domain: forge tools, PR bindings and PR attachment. Importers use the facade below. */
   private readonly forgeToolBridge: ForgeToolBridge;
   /** The thread inspection, mutation and maintenance Agent tools. Importers use the facade below. */
@@ -1154,6 +1154,8 @@ export class DesktopBackendRegistry {
   private readonly restartGateStatusListeners = new Set<(status: RestartGateStatus) => void>();
   private restartDispatchStarted = false;
   private readonly restartDispatchPlanOptions: Omit<RestartDispatchPlanOptions, "now">;
+  private readonly reportedCodexForks = new Map<BackendClient, Set<Promise<void>>>();
+  private readonly inFlightThreadStarts = new Map<string, AppServerPendingThreadStartReport>();
   private readonly pendingStartedThreads = new Map<string, AppServerThreadSummary>();
   private readonly acceptedHandoffTaskRequests = new Map<
     string,
@@ -1878,6 +1880,7 @@ export class DesktopBackendRegistry {
     connect: (ports: ReturnType<DesktopBackendRegistry["constructionPorts"]>) => void,
   ) {
     this.context = dependencies.context;
+    this.context.turnState.onTurnUnregistered((key) => { this.jobMonitorCreationDeferredTurns.delete(key); });
     this.turnEventObservers = dependencies.turnEventObservers;
     this.ownerAdmission = dependencies.ownerAdmission;
     this.configStore = dependencies.configStore;
@@ -2007,6 +2010,9 @@ export class DesktopBackendRegistry {
       providerDeliveredAgentInstructions(
         (await this.overlayStore.getThreadOverlayState({ backend: "codex", threadId }))?.agent,
       ));
+    this.codexClient.provideThreadSkillExclusions?.(async (threadId) =>
+      (await this.overlayStore.getThreadOverlayState({ backend: "codex", threadId }))
+        ?.codexSkillProfile?.hiddenSkills);
 
     this.subAgentStartupReconciliation =
       this.subAgentMonitorService.reconcileOrphanedThreadSubAgentsAtStartup().catch((error) => {
@@ -2150,7 +2156,9 @@ export class DesktopBackendRegistry {
       get gitDirectoryService() { return current().gitDirectoryService; },
       get gitWorkingStateService() { return current().gitWorkingStateService; },
       handleAgentMcpConnectionRequest: (...args: Parameters<ThreadMcpConnections["handleAgentMcpConnectionRequest"]>) => this.threadMcpConnections.handleAgentMcpConnectionRequest(...args),
-      handleAgentTaskMonitorRequest: (...args: Parameters<SubAgentMonitorService["handleAgentTaskMonitorRequest"]>) => this.subAgentMonitorService.handleAgentTaskMonitorRequest(...args),
+      handleAgentTaskMonitorRequest: (request: TaskMonitorRequest) => this.handleAgentTaskMonitorRequest(request),
+      isJobMonitorCreationEnabled: (context: { backend: AppServerBackendKind; threadId: string }) =>
+        this.isJobMonitorCreationEnabled({ ...context, turnId: this.jobMonitorCreationTurnId(context) }),
       handleCodexAppServerUnexpectedExit: (...args: Parameters<typeof this.codexRuntimeSupervisor.handleCodexAppServerUnexpectedExit>) => this.codexRuntimeSupervisor.handleCodexAppServerUnexpectedExit(...args),
       handleServerRequest: (...args: Parameters<typeof this.handleServerRequest>) => this.handleServerRequest(...args),
       handoffThreadWorkspace: (...args: Parameters<ThreadWorkspaceService["handoffThreadWorkspace"]>) => this.threadWorkspaceService.handoffThreadWorkspace(...args),
@@ -2289,6 +2297,7 @@ export class DesktopBackendRegistry {
       startAcpTurn: (...args: Parameters<typeof this.startAcpTurn>) => this.startAcpTurn(...args),
       startReview: (...args: Parameters<typeof this.startReview>) => this.startReview(...args),
       startThread: (...args: Parameters<typeof this.startThread>) => this.startThread(...args),
+      withPendingThreadStart: <T>(...args: Parameters<typeof this.withPendingThreadStart<T>>) => this.withPendingThreadStart(...args),
       startTurn: (...args: Parameters<typeof this.startTurn>) => this.startTurn(...args),
       startTurnNow: (...args: Parameters<typeof this.startTurnNow>) => this.startTurnNow(...args),
       prepareQueuedTurnInput: (entry: ThreadTurnQueueEntry) => this.prepareQueuedTurnInput(entry),
@@ -8245,6 +8254,7 @@ export class DesktopBackendRegistry {
     fastMode?: boolean;
     mcpConnectionIds?: string[];
     mcpProviderServersEnabled?: boolean;
+    codexSkillProfileId?: string;
     agent?: StartThreadRequest["agent"];
     acpRuntime?: BackendAcpSessionRuntimeState;
     workMode?: NavigationLaunchpadDraft["workMode"];
@@ -8270,36 +8280,61 @@ export class DesktopBackendRegistry {
      * starting row (`thread/start/pending`). For callers with no row of
      * their own: a launchpad draws its own.
      */
-    pendingStart?: Pick<AppServerPendingThreadStart, "startId" | "title" | "directoryKey" | "directoryLabel" | "progressThread">;
-  }): Promise<StartThreadResponse> {
+    pendingStart?: PendingThreadStartDescriptor;
+  }, preparedStart?: PendingThreadStartReporter): Promise<StartThreadResponse> {
     assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
+    return await this.withPendingThreadStart(params, preparedStart ? undefined : params.pendingStart, async (pending) =>
+      await listingDiagnostics.trace("workflow", { query: "thread-start" }, () => this.startThreadPrepared(params, preparedStart ?? pending)));
+  }
+
+  startThreadWithoutLaunchpad(request: StartThreadRequest): Promise<StartThreadResponse> {
+    return this.startThread({
+      ...request,
+      ...(request.workMode === "worktree" && request.cwd?.trim() ? {
+        pendingStart: {
+          startId: randomUUID(),
+          title: shortenDerivedThreadTitle(request.agent?.name) ?? "New thread",
+          directoryKey: request.directoryKey,
+        },
+      } : {}),
+    });
+  }
+
+  private async withPendingThreadStart<T>(
+    source: PendingThreadStartSource,
+    descriptor: PendingThreadStartDescriptor | undefined,
+    run: (pending?: PendingThreadStartReporter) => Promise<T>,
+  ): Promise<T> {
+    if (!descriptor) return await run();
     // A start this owner refuses outright draws no row.
-    if (params.pendingStart) {
-      this.assertThreadOwnership();
-      this.assertNotBootstrap("startThread");
-    }
-    const pending = params.pendingStart ? this.beginPendingThreadStart(params, params.pendingStart) : undefined;
+    this.assertThreadOwnership();
+    this.assertNotBootstrap("startThread");
+    const pending = this.beginPendingThreadStart(source, descriptor);
     try {
-      if (pending) await pending.report("starting");
-      return await listingDiagnostics.trace("workflow", { query: "thread-start" }, () => this.startThreadPrepared(params, pending));
+      await pending.report("starting");
+      return await run(pending);
     } finally {
-      // Last, after a refused start has rolled its worktree back.
-      if (pending) await pending.report("ended");
+      // Last, after any workspace rollback.
+      await pending.report("ended");
     }
+  }
+
+  listPendingThreadStarts(): AppServerPendingThreadStartReport[] {
+    return [...this.inFlightThreadStarts.values()];
   }
 
   /**
    * One start's `thread/start/pending` reports. `landed` is reported from
-   * `rememberPending`, the first effect after the provider names the
-   * thread, so it precedes every event this owner sends about the thread.
+   * `rememberPending`, before this owner announces the created thread.
    */
   private beginPendingThreadStart(
-    params: Parameters<DesktopBackendRegistry["startThread"]>[0],
-    descriptor: NonNullable<Parameters<DesktopBackendRegistry["startThread"]>[0]["pendingStart"]>,
-  ): PendingThreadStartReporter {
+    params: PendingThreadStartSource,
+    descriptor: PendingThreadStartDescriptor,
+  ): PendingThreadStartReporter & { report(phase: "starting" | "ended"): Promise<void> } {
     const start: AppServerPendingThreadStart = {
       startId: descriptor.startId,
       title: descriptor.title,
+      ...(descriptor.prompt !== undefined ? { prompt: descriptor.prompt } : {}),
       submittedAt: Date.now(),
       backend: params.backend,
       ...(params.model ? { model: params.model } : {}),
@@ -8317,23 +8352,44 @@ export class DesktopBackendRegistry {
         : {}),
     };
     let createdThreadId: string | undefined;
-    const report = async (phase: AppServerPendingThreadStartPhase): Promise<void> => {
-      try {
-        await this.emit({ backend: params.backend, notification: { method: "thread/start/pending", params: {
-          start, phase, ...(createdThreadId ? { createdThreadId } : {}),
-        } } });
-      } catch (error) {
-        // A list that misses the row still gets the thread; never fail the start.
+    let setupProgress: CodexEnvironmentSetupProgressEvent | undefined;
+    let setupFailure: CodexEnvironmentStartupFailure | undefined;
+    let delivery = Promise.resolve();
+    const report = (phase: AppServerPendingThreadStartPhase): Promise<void> => {
+      const snapshot: AppServerPendingThreadStartReport = {
+        start, phase,
+        ...(createdThreadId ? { createdThreadId } : {}),
+        ...(setupProgress ? { setupProgress } : {}),
+        ...(setupFailure ? { setupFailure } : {}),
+      };
+      if (phase === "ended") this.inFlightThreadStarts.delete(start.startId);
+      else this.inFlightThreadStarts.set(start.startId, snapshot);
+      // Queue delivery per start so output cannot overtake its lifecycle reports.
+      delivery = delivery.then(() => this.emit({
+        backend: params.backend,
+        notification: { method: "thread/start/pending", params: snapshot },
+      })).catch((error: unknown) => {
         backendRegistryLog.warn("pending thread start report failed", {
           phase, startId: start.startId, error: error instanceof Error ? error.message : String(error),
         });
-      }
+      });
+      return delivery;
     };
     return {
       report,
-      land: async (threadId) => {
+      setupProgress: ({ chunk, ...event }) => {
+        setupProgress = {
+          ...event,
+          directoryKey: start.startId,
+          sequence: (setupProgress?.sequence ?? 0) + 1,
+          output: (event.output ?? `${setupProgress?.output ?? ""}${chunk ?? ""}`).slice(-32_000),
+        };
+        void report("setup");
+      },
+      land: async (threadId, failure) => {
         if (createdThreadId) return;
         createdThreadId = threadId;
+        setupFailure = failure;
         await report("landed");
       },
     };
@@ -8347,7 +8403,7 @@ export class DesktopBackendRegistry {
     });
   }
 
-  private async prepareThreadCreation(params: Parameters<DesktopBackendRegistry["startThread"]>[0], resources: ThreadCreationPreparation, pending?: PendingThreadStartReporter): Promise<PreparedThreadCreation<Pick<StartThreadResponse, "executionMode" | "codexEnvironmentRuntime" | "codexEnvironmentStartupFailure">>> {
+  private async prepareThreadCreation(params: Parameters<DesktopBackendRegistry["startThread"]>[0], resources: ThreadCreationPreparation, pending?: PendingThreadStartReporter): Promise<PreparedThreadCreation<Omit<StartThreadResponse, "backend" | "threadId" | "pinnedRank" | "autoPinFailure">>> {
     this.assertThreadOwnership();
     this.assertNotBootstrap("startThread");
     const {
@@ -8367,10 +8423,18 @@ export class DesktopBackendRegistry {
       tokenMiserEnabled: tokenMiserOverride,
       mcpConnectionIds: requestedMcpConnectionIds,
       mcpProviderServersEnabled,
+      codexSkillProfileId,
       rerunCodexEnvironmentSetup,
       pendingStart: _pendingStart,
       ...request
     } = params;
+    const skillProfile = backend === "codex" && codexSkillProfileId
+      ? getDesktopSettingsService().readModelsConfig().codex?.skillProfiles?.find(({ id }) => id === codexSkillProfileId)
+      : undefined;
+    if (backend === "codex" && codexSkillProfileId && !skillProfile) {
+      throw new Error("That skill profile is no longer available. Choose another profile or Codex skills and try again.");
+    }
+    const codexSkillProfile = skillProfile ? snapshotCodexSkillProfile(skillProfile) : undefined;
     // A launchpad's access defaults to Auto for Codex and Claude. A Codex older
     // than 0.153.0 cannot run Auto, so start on Default Access instead of
     // sending a mode the runtime does not have.
@@ -8429,6 +8493,7 @@ export class DesktopBackendRegistry {
         codexEnvironmentRuntime = await this.threadDirectoryService.buildForkedCodexEnvironmentRuntime({
             cwd,
             forceSetup: rerunCodexEnvironmentSetup,
+            onSetupProgress: pending?.setupProgress,
             sourceRuntime: request.codexEnvironmentRuntime,
             workMode: effectiveWorkMode ?? "local",
           });
@@ -8502,7 +8567,7 @@ export class DesktopBackendRegistry {
       messagingHandler: this.messagingHandler,
       messagingWorkingUpdatesHandler: this.messagingWorkingUpdatesHandler,
       taskMonitorHandler: async (request) =>
-        await this.subAgentMonitorService.handleAgentTaskMonitorRequest(request),
+        await this.handleAgentTaskMonitorRequest(request),
       threadInspectionHandler: this.threadInspectionHandler,
       forgeReadHandler: this.forgeToolBridge.gatedForgeReadHandler,
       forgePrToolHandler: this.forgeToolBridge.gatedForgePrToolHandler,
@@ -8605,6 +8670,9 @@ export class DesktopBackendRegistry {
     const agentName = request.agent?.name?.trim();
     let gitBranch: string | undefined;
     let currentMigration: DesktopProviderThreadModelMigration | undefined;
+    const metadata: Omit<StartThreadResponse, "backend" | "threadId" | "pinnedRank" | "autoPinFailure"> = {
+      executionMode: effectiveExecutionMode, codexEnvironmentRuntime, codexEnvironmentStartupFailure,
+    };
     return { options: {
       backend,
       systemPlaceholder: !agentName,
@@ -8642,6 +8710,7 @@ export class DesktopBackendRegistry {
                   defaultModeRequestUserInput:
                     this.resolveCodexDefaultModeRequestUserInputFn(),
                   developerInstructions: providerDeliveredAgentInstructions(request.agent),
+                  ...(codexSkillProfile ? { skillExclusions: codexSkillProfile.hiddenSkills } : {}),
                   threadSource: "user" as CodexThreadSource,
                   ...(codexThreadConfig ? { config: codexThreadConfig } : {}),
                   ...(pwrdrvrTokenMiser
@@ -8659,7 +8728,7 @@ export class DesktopBackendRegistry {
       bindPdf: ({ threadId }) => { pdfMcpRegistration?.bindThread(threadId); },
       rememberPending: async ({ threadId }) => {
         // Before the thread can reach a list, so its starting row hands over.
-        await pending?.land(threadId);
+        await pending?.land(threadId, codexEnvironmentStartupFailure);
         const startedAt = Date.now();
         const pendingThreadKey = buildThreadIdentityKey(backend, threadId);
         gitBranch = cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined;
@@ -8696,7 +8765,22 @@ export class DesktopBackendRegistry {
         await this.recordCodexWorktreeOwnerThread({ ...identity, worktreePath: cwd });
       },
       invalidate: ({ threadId }) => { this.invalidateThreadListCache(backend, true, threadId, cwd ? [cwd] : []); },
-      persistExecutionMode: async (identity) => await this.overlayStore.setThreadExecutionMode({ ...identity, executionMode: effectiveExecutionMode }),
+      persistExecutionMode: async (identity) => {
+        try {
+          await this.overlayStore.setThreadExecutionMode({
+            ...identity, executionMode: effectiveExecutionMode,
+            ...(codexSkillProfile ? { codexSkillProfile } : {}),
+          });
+          metadata.codexSkillProfile = codexSkillProfile;
+        } catch (error) {
+          if (codexSkillProfile) {
+            metadata.codexSkillProfilePersistenceFailure = {
+              message: "The thread was created, but its skill profile could not be saved. Start a new thread to use the profile.",
+            };
+          }
+          throw error;
+        }
+      },
       persistTokenMiser: async (identity) => await this.overlayStore.setThreadTokenMiser?.({ ...identity, enabled: tokenMiserOverride! }),
       persistPdfCatalog: async (identity) => await this.overlayStore.setThreadMessagingPdfToolCatalogVersion?.({
         ...identity, version: PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
@@ -8747,7 +8831,7 @@ export class DesktopBackendRegistry {
           error: error instanceof Error ? error.message : String(error),
         });
       },
-    }, metadata: { executionMode: effectiveExecutionMode, codexEnvironmentRuntime, codexEnvironmentStartupFailure } };
+    }, metadata };
   }
 
   /**
@@ -8875,6 +8959,18 @@ export class DesktopBackendRegistry {
       throw new Error("Thread forking is supported by the Codex and Claude backends.");
     }
 
+    return await this.withPendingThreadStart(
+      { ...request, backend, cwd: request.directoryPath },
+      request.pendingStart,
+      async (pending) => await this.forkThreadPrepared(request, backend, pending),
+    );
+  }
+
+  private async forkThreadPrepared(
+    request: BackendRegistryForkThreadRequest,
+    backend: "codex" | "claude",
+    pending?: PendingThreadStartReporter,
+  ): Promise<ForkThreadResponse> {
     const executionMode = request.executionMode ?? "default";
     const modeSettings = executionModeSettings(executionMode);
     const modelSettings = await this.admitNewThreadModelSettings(backend, request);
@@ -8950,38 +9046,36 @@ export class DesktopBackendRegistry {
         throw error;
       }
     } else {
-      const client = this.getClient(backend, executionMode);
-      if (!client.forkThread) {
-        await preparedWorkspace.rollback?.();
-        request.onPreparedWorkspaceRollback?.(undefined);
-        throw new Error("Selected backend does not support thread/fork.");
-      }
-      const sourceHasPdfMcpToolCatalog = this.hasPdfMcpToolCatalog(sourceOverlay);
-      pdfMcpRegistration =
-        sourceHasPdfMcpToolCatalog && this.resolvePdfAnalysisEnabledFn()
-          ? await this.registerPdfMcpClient({})
-          : undefined;
-      const pdfMcpConfig = sourceHasPdfMcpToolCatalog
-        ? pdfMcpRegistration
-          ? buildCodexPdfMcpConfig(pdfMcpRegistration)
-          : buildCodexPdfMcpDisabledConfig()
-        : undefined;
-      const tokenMiserEnabled = this.resolveTokenMiserEnabledForOverride(
-        sourceOverlay?.tokenMiserEnabled,
-      );
-      if (tokenMiserEnabled) {
-        await this.prepareTokenMiserRuntime();
-      }
-      const tokenMiserConfig = await this.buildSupportedCodexTokenMiserConfig({
-        client,
-        enabled: tokenMiserEnabled,
-      });
-      const codexThreadConfig = mergeCodexThreadConfigs(
-        pdfMcpConfig,
-        tokenMiserConfig,
-      );
-
       try {
+        const client = this.getClient(backend, executionMode);
+        if (!client.forkThread) {
+          throw new Error("Selected backend does not support thread/fork.");
+        }
+        const sourceHasPdfMcpToolCatalog = this.hasPdfMcpToolCatalog(sourceOverlay);
+        pdfMcpRegistration =
+          sourceHasPdfMcpToolCatalog && this.resolvePdfAnalysisEnabledFn()
+            ? await this.registerPdfMcpClient({})
+            : undefined;
+        const pdfMcpConfig = sourceHasPdfMcpToolCatalog
+          ? pdfMcpRegistration
+            ? buildCodexPdfMcpConfig(pdfMcpRegistration)
+            : buildCodexPdfMcpDisabledConfig()
+          : undefined;
+        const tokenMiserEnabled = this.resolveTokenMiserEnabledForOverride(
+          sourceOverlay?.tokenMiserEnabled,
+        );
+        if (tokenMiserEnabled) {
+          await this.prepareTokenMiserRuntime();
+        }
+        const tokenMiserConfig = await this.buildSupportedCodexTokenMiserConfig({
+          client,
+          enabled: tokenMiserEnabled,
+        });
+        const codexThreadConfig = mergeCodexThreadConfigs(
+          pdfMcpConfig,
+          tokenMiserConfig,
+        );
+
         try {
           const sourceRuntime = directoryKind === "workspace"
             ? undefined
@@ -8991,8 +9085,9 @@ export class DesktopBackendRegistry {
           forkedCodexEnvironmentRuntime = await this.threadDirectoryService.buildForkedCodexEnvironmentRuntime({
             cwd,
             forceSetup: request.rerunCodexEnvironmentSetup,
-            onSetupProgress: request.onCodexEnvironmentSetupProgress
+            onSetupProgress: pending || request.onCodexEnvironmentSetupProgress
               ? (event) => {
+                  pending?.setupProgress(event);
                   request.onCodexEnvironmentSetupProgress?.({
                     directoryKey:
                       request.codexEnvironmentSetupProgressKey ??
@@ -9015,7 +9110,7 @@ export class DesktopBackendRegistry {
             worktreeCleanupAvailable: preparedWorkspace.workMode === "worktree",
           };
         }
-        result = await this.withArchiveWorkspaceWrite([cwd ?? "", ...linkedDirectories.map((directory) => linkedDirectoryWorktreePath(directory) ?? directory.path)], async () => await client.forkThread!({
+        result = await this.withArchiveWorkspaceWrite([cwd ?? "", ...linkedDirectories.map((directory) => linkedDirectoryWorktreePath(directory) ?? directory.path)], async () => await this.forkCodexThreadWithPendingStart(client, {
           threadId: request.sourceThreadId,
           ...(request.sourceThreadPath?.trim()
             ? { path: request.sourceThreadPath.trim() }
@@ -9026,8 +9121,9 @@ export class DesktopBackendRegistry {
           approvalsReviewer: modeSettings.approvalsReviewer,
           sandbox: ownerSandboxForMode(getOwnerHostServices().runtimePolicy, executionMode, request.sandbox, modeSettings.sandbox),
           codexEnvironmentRuntime: forkedCodexEnvironmentRuntime,
+          skillExclusions: sourceOverlay?.codexSkillProfile?.hiddenSkills,
           ...(codexThreadConfig ? { config: codexThreadConfig } : {}),
-        }));
+        }, pending, codexEnvironmentStartupFailure));
         pdfMcpRegistration?.bindThread(result.threadId);
       } catch (error) {
         await preparedWorkspace.rollback?.();
@@ -9035,6 +9131,7 @@ export class DesktopBackendRegistry {
         throw error;
       }
     }
+    if (backend === "claude") await pending?.land(result.threadId, codexEnvironmentStartupFailure);
     let gitBranch: string | undefined;
     try {
       const forkedAt = Date.now();
@@ -9084,6 +9181,9 @@ export class DesktopBackendRegistry {
         backend,
         threadId: result.threadId,
         executionMode,
+        ...(backend === "codex" && sourceOverlay?.codexSkillProfile
+          ? { codexSkillProfile: sourceOverlay.codexSkillProfile }
+          : {}),
       });
       if (backend === "codex" && sourceOverlay?.tokenMiserEnabled !== undefined) {
         await this.overlayStore.setThreadTokenMiser({
@@ -9205,6 +9305,32 @@ export class DesktopBackendRegistry {
       codexEnvironmentRuntime: forkedCodexEnvironmentRuntime,
       codexEnvironmentStartupFailure,
     };
+  }
+
+  private async forkCodexThreadWithPendingStart(
+    client: BackendClient,
+    request: Parameters<NonNullable<BackendClient["forkThread"]>>[0],
+    pending?: PendingThreadStartReporter,
+    failure?: CodexEnvironmentStartupFailure,
+  ): Promise<{ threadId: string }> {
+    if (!pending) return await client.forkThread!(request);
+
+    let activeForks = this.reportedCodexForks.get(client);
+    if (!activeForks) {
+      activeForks = new Set();
+      this.reportedCodexForks.set(client, activeForks);
+    }
+    const announced = Promise.withResolvers<void>();
+    activeForks.add(announced.promise);
+    try {
+      const result = await client.forkThread!(request);
+      await pending.land(result.threadId, failure);
+      return result;
+    } finally {
+      activeForks.delete(announced.promise);
+      if (activeForks.size === 0) this.reportedCodexForks.delete(client);
+      announced.resolve();
+    }
   }
 
   /** Reserve submission order until the queue claims a position, not until
@@ -11578,6 +11704,7 @@ export class DesktopBackendRegistry {
               client,
               threadId: params.threadId,
               tokenMiserEnabled: tokenMiserEnabledForThread,
+              turnId: syntheticStartedTurnId,
             });
           const pwrdrvrTokenMiser =
             await this.buildSupportedPwrdrvrTokenMiserActivation({
@@ -11663,6 +11790,7 @@ export class DesktopBackendRegistry {
     const result = submitted.turn;
     const retryTerminalObserved = () => retryableCodexTurnStart
       ? this.context.turnState.retryReceipt(retryableCodexTurnStart).terminalObserved ?? false : false;
+    if (!retryTerminalObserved()) this.bindDeferredJobMonitorCreation(result.threadId, result.turnId);
     return await this.threadStarts.finalizeCodex({
       identity: params, turn: result, settings: turnParams, executionMode: params.executionMode,
       bindOrigin: () => this.bindStartingTurnOrigin(startingOrigin, result, retryTerminalObserved()),
@@ -15852,12 +15980,87 @@ export class DesktopBackendRegistry {
       : undefined;
   }
 
+  async setThreadJobMonitorCreation({ threadId, enabled }: {
+    threadId: string;
+    enabled: boolean;
+  }): Promise<{ threadId: string; enabled: boolean }> {
+    if (typeof threadId !== "string" || !threadId.trim() || typeof enabled !== "boolean") {
+      throw new Error("Changing Job Monitor creation requires a thread and an enabled state.");
+    }
+    const identity = { backend: "codex", threadId } as const;
+    const deferredTurnId = enabled && !(await this.isJobMonitorCreationEnabled(identity))
+      ? this.jobMonitorCreationTurnId(identity) : undefined;
+    this.overlayStore.setThreadJobMonitorCreation({ ...identity, enabled });
+    if (deferredTurnId) {
+      // Retain this turn's availability while saving On for the next turn.
+      this.jobMonitorCreationDeferredTurns.add(buildActiveTurnKey(identity.backend, threadId, deferredTurnId));
+    }
+    await this.publishLocalEvent({
+      backend: identity.backend,
+      notification: { method: "thread/agent/updated", params: { threadId } },
+    });
+    return { threadId, enabled };
+  }
+
+  private jobMonitorCreationTurnId(identity: { backend: AppServerBackendKind; threadId: string }): string | undefined {
+    if (identity.backend !== "codex") return undefined;
+    const pendingId = buildPendingTurnId(identity.threadId);
+    return this.context.turnState.pendingStartedTurnId(identity.threadId)
+      ?? this.getActiveTurnForThread(identity)?.turnId
+      ?? (this.context.turnState.hasRegisteredTurn({ ...identity, turnId: pendingId }) ? pendingId : undefined);
+  }
+
+  private bindDeferredJobMonitorCreation(threadId: string, turnId: string): void {
+    const pendingId = buildPendingTurnId(threadId);
+    if (turnId !== pendingId && this.jobMonitorCreationDeferredTurns.delete(buildActiveTurnKey("codex", threadId, pendingId))) {
+      this.jobMonitorCreationDeferredTurns.add(buildActiveTurnKey("codex", threadId, turnId));
+    }
+  }
+
+  private async isJobMonitorCreationEnabled(context: { backend: AppServerBackendKind; threadId: string; turnId?: string }): Promise<boolean> {
+    return await this.jobMonitorCreationAvailability(context) === "enabled";
+  }
+
+  private async jobMonitorCreationAvailability({ backend, threadId, turnId }: {
+    backend: AppServerBackendKind; threadId: string; turnId?: string;
+  }): Promise<"enabled" | "off" | "next-turn"> {
+    if ((await this.overlayStore.getThreadOverlayState({ backend, threadId }))?.jobMonitorCreationEnabled === false) return "off";
+    return turnId && this.jobMonitorCreationDeferredTurns.has(buildActiveTurnKey(backend, threadId, turnId))
+      ? "next-turn" : "enabled";
+  }
+
+  private handleAgentTaskMonitorRequest(request: TaskMonitorRequest): Promise<TaskMonitorResponse> {
+    if (request.operation !== "create_monitor_delegation") {
+      return this.subAgentMonitorService.handleAgentTaskMonitorRequest(request);
+    }
+    return this.jobMonitorCreationAvailability(request.context).then<TaskMonitorResponse>((availability) => {
+      if (availability === "enabled") return this.subAgentMonitorService.handleAgentTaskMonitorRequest(request);
+      return {
+        ok: false,
+        operation: request.operation,
+        error: {
+          code: "forbidden",
+          message: availability === "next-turn"
+            ? "Job Monitors will be available from the next turn. Use Continue After or ask for a sub-agent instead. Existing monitors still report back."
+            : "Job Monitors are off for this thread. The operator turned them off. Use Continue After or ask for a sub-agent instead. Existing monitors still report back.",
+        },
+      };
+    });
+  }
+
   private async buildCodexParentDynamicTools(
     tokenMiserEnabled: boolean,
-    discoveryEnabled = this.resolveCodexToolDiscoveryFn(),
-    eagerTools?: ReadonlySet<string>,
-    caller?: import("@pwragent/shared/contracts/app-tools").PwrAgentAppManagementContext,
+    options: {
+      discoveryEnabled?: boolean;
+      eagerTools?: ReadonlySet<string>;
+      caller?: import("@pwragent/shared/contracts/app-tools").PwrAgentAppManagementContext;
+      jobMonitorCreationEnabled?: boolean;
+    } = {},
   ): Promise<CodexDynamicToolSpec[]> {
+    const { caller, discoveryEnabled = this.resolveCodexToolDiscoveryFn(), eagerTools } = options;
+    const jobMonitorCreationEnabled = options.jobMonitorCreationEnabled ?? (caller?.threadId
+      ? await this.isJobMonitorCreationEnabled({ backend: "codex", threadId: caller.threadId, turnId: caller.turnId })
+      : true);
     const tools = withPwrAgentToolDiscovery(buildCodexParentDynamicToolSpecs(
       resolveAgentToolCatalogs({
         currentTurnInputSource: this.currentTurnInputSource,
@@ -15871,7 +16074,7 @@ export class DesktopBackendRegistry {
         messagingHandler: this.messagingHandler,
         messagingWorkingUpdatesHandler: this.messagingWorkingUpdatesHandler,
         taskMonitorHandler: async (request) =>
-          await this.subAgentMonitorService.handleAgentTaskMonitorRequest(request),
+          await this.handleAgentTaskMonitorRequest(request),
         threadInspectionHandler: this.threadInspectionHandler,
         forgeReadHandler: this.forgeToolBridge.gatedForgeReadHandler,
         forgePrToolHandler: this.forgeToolBridge.gatedForgePrToolHandler,
@@ -15883,7 +16086,7 @@ export class DesktopBackendRegistry {
         openAIDecisionsHandler: this.openAIDecisionsHandler,
         researchHandler: this.advertisedResearchHandler,
         checkoutHandler: this.checkoutHandler,
-      }),
+      }, { jobMonitorCreationEnabled }),
     ), discoveryEnabled, eagerTools);
     // Tool search reads this catalog too, so it must not name refused tools.
     const allowlist = localAgentToolAllowlist();
@@ -15894,19 +16097,20 @@ export class DesktopBackendRegistry {
     client: BackendClient;
     threadId: string;
     tokenMiserEnabled: boolean;
+    turnId?: string;
   }): Promise<CodexDynamicToolSpec[] | undefined> {
     if (!(await this.supportsTokenMiserDynamicToolsResume(params.client))) {
       return undefined;
     }
     const discoveryEnabled = this.resolveCodexToolDiscoveryFn();
-    return this.buildCodexParentDynamicTools(
-      params.tokenMiserEnabled,
+    return this.buildCodexParentDynamicTools(params.tokenMiserEnabled, {
       discoveryEnabled,
-      discoveryEnabled
+      eagerTools: discoveryEnabled
         ? await this.resolveEagerPwrAgentTools(params.threadId)
         : undefined,
-      { backend: "codex", threadId: params.threadId },
-    );
+      caller: { backend: "codex", threadId: params.threadId },
+      jobMonitorCreationEnabled: await this.isJobMonitorCreationEnabled({ backend: "codex", threadId: params.threadId, turnId: params.turnId }),
+    });
   }
 
   /**
@@ -16347,6 +16551,12 @@ export class DesktopBackendRegistry {
           this.context.turnState.observeTurnTerminal(notification.params.threadId, turnIdFromTerminalNotification(notification));
         }
         try {
+          if (backend === "codex" && notification.method === "thread/started") {
+            const activeForks = this.reportedCodexForks.get(client);
+            // A fork already has history, so a read triggered by this event
+            // can list it immediately. Wait for its RPC to pair the two rows.
+            if (activeForks) await Promise.all(activeForks);
+          }
           logBackendLifecycleNotification(backend, notification);
           // The registry announces its own revert once the rewind is recorded,
           // so the marker arrives with the event.
@@ -16812,6 +17022,13 @@ export class DesktopBackendRegistry {
             })
           : Promise.resolve([]),
       ]);
+    if (!params.archived && this.reportedCodexForks.size > 0) {
+      // A provider page can already contain a fork while its RPC is still
+      // finishing. Pair the start before publishing any of those rows to an
+      // independently refreshed list. A fork begun after these reads cannot
+      // be in their results.
+      await Promise.all([...this.reportedCodexForks.values()].flatMap((forks) => [...forks]));
+    }
     const providerFilteredThreadIds = new Set(
       providerFilteredThreads.map((thread) => thread.id),
     );
@@ -17706,10 +17923,12 @@ export class DesktopBackendRegistry {
               sandbox: modeSettings.sandbox,
               defaultModeRequestUserInput: this.resolveCodexDefaultModeRequestUserInputFn(),
             };
-            // A newly created director has the ordinary discovery catalog.
-            // Eager director tools are a latency optimization, not authority.
+            // Stock Codex keeps the creation-time catalog. The dispatch gate
+            // still enforces the thread setting when its registered tool is called.
             const initialTools = await this.buildCodexParentDynamicTools(
               this.resolveTokenMiserEnabledForOverride(overlay?.tokenMiserEnabled),
+              { jobMonitorCreationEnabled: overlay?.jobMonitorCreationEnabled !== false
+                || !(await this.supportsTokenMiserDynamicToolsResume(client)) },
             );
             const fresh = await client.prepareFreshNativeVoiceThread?.({ ...admission, dynamicTools: initialTools });
             if (!fresh) {
@@ -18786,7 +19005,10 @@ export class DesktopBackendRegistry {
       }
       const tokenMiserEnabled = await this.isTokenMiserDynamicToolCallEnabled(backend, hostToolCall);
       const router = new AgentToolRouter([buildPwrAgentToolSearchDefinition(
-        await this.buildCodexParentDynamicTools(tokenMiserEnabled, false, undefined, { backend, threadId: hostToolCall.threadId, turnId: hostToolCall.turnId }),
+        await this.buildCodexParentDynamicTools(tokenMiserEnabled, {
+          discoveryEnabled: false,
+          caller: { backend, threadId: hostToolCall.threadId, turnId: hostToolCall.turnId },
+        }),
         tokenMiserEnabled ? this.tokenMiserStore : undefined,
       )]);
       return await router.handleDynamicToolCall({ backend, call: hostToolCall });
@@ -18846,7 +19068,7 @@ export class DesktopBackendRegistry {
         messagingHandler: this.messagingHandler,
         messagingWorkingUpdatesHandler: this.messagingWorkingUpdatesHandler,
         taskMonitorHandler: async (monitorRequest) =>
-          await this.subAgentMonitorService.handleAgentTaskMonitorRequest(monitorRequest),
+          await this.handleAgentTaskMonitorRequest(monitorRequest),
         threadInspectionHandler: this.threadInspectionHandler,
         forgeReadHandler: this.forgeToolBridge.gatedForgeReadHandler,
         forgePrToolHandler: this.forgeToolBridge.gatedForgePrToolHandler,
@@ -18963,7 +19185,7 @@ export class DesktopBackendRegistry {
         backend,
         call: taskMonitorToolCall,
         handler: async (monitorRequest) =>
-          await this.subAgentMonitorService.handleAgentTaskMonitorRequest(monitorRequest),
+          await this.handleAgentTaskMonitorRequest(monitorRequest),
       });
     }
 
@@ -21455,6 +21677,7 @@ export class DesktopBackendRegistry {
         const pendingModeKey = buildActiveTurnModeKey(threadId, pendingTurnId);
         const canTransferPending = this.context.turnState.transferPendingCodexTurnInputSource(threadId, turnId,
           this.codexMessageContextTurnObservations.get(threadId)?.get(turnId));
+        if (canTransferPending) this.bindDeferredJobMonitorCreation(threadId, turnId);
         const collaborationMode = canTransferPending ? this.context.turnState.collaborationMode(pendingActiveKey) : undefined;
         const pendingMode = collaborationMode ? this.context.turnState.executionMode(pendingModeKey) : undefined;
         if (collaborationMode) {

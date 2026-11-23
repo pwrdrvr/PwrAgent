@@ -1131,6 +1131,31 @@ describe("DesktopBackendRegistry", () => {
     } finally { await registry.close(); }
   });
 
+  it("admits stock Live Voice with the creation-time catalog while Job Monitors are off", async () => {
+    const codexClient = voiceClient({ initializeResult: { userAgent: "codex/0.160.0" }, serverCapabilities: {} });
+    const prepare = vi.fn(async (params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]) =>
+      JSON.stringify(params.dynamicTools) === JSON.stringify(codexClient.lastStartThreadParams?.dynamicTools));
+    const registry = createDesktopBackendRegistry({
+      codexClient: Object.assign(codexClient, { prepareFreshNativeVoiceThread: prepare }),
+      overlayStore: {
+        ...createOverlayStoreMock(),
+        getThreadOverlayState: async ({ backend, threadId }) => ({
+          backend, threadId, executionMode: "default", extraLinkedDirectories: [], jobMonitorCreationEnabled: false,
+        }),
+      },
+      resolveCodexToolDiscovery: () => false,
+      threadTitleGenerationService: null,
+    });
+    try {
+      const { threadId } = await registry.startThread({ backend: "codex", tokenMiserEnabled: false });
+      expect(JSON.stringify(codexClient.lastStartThreadParams?.dynamicTools)).toContain("create_monitor_delegation");
+      const voice = await registry.acquireNativeVoiceBackend(threadId);
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(codexClient.refreshThreadTools).not.toHaveBeenCalled();
+      voice.release();
+    } finally { await registry.close(); }
+  });
+
   it("requires refresh for catalog drift and reports accurate recovery for unknown stock ownership", async () => {
     const client = Object.assign(voiceClient({ initializeResult: { userAgent: "codex/0.160.0" }, serverCapabilities: {} }), {
       prepareFreshNativeVoiceThread: vi.fn(async () => false),

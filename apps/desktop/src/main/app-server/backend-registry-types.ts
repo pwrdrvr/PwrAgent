@@ -46,6 +46,7 @@ import {
   type ArchiveThreadResponse,
   type AppServerListSkillsResponse,
   type AppServerNotification,
+  type AppServerPendingThreadStart,
   type AppServerPendingRequestNotification,
   type AppServerReadThreadResponse,
   type AppServerThreadActivityEntry,
@@ -85,6 +86,7 @@ import {
 import {
   type AppServerCollaborationModeRequest,
   type CodexEnvironmentSetupProgressEvent,
+  type CodexEnvironmentStartupFailure,
   type ControlActiveTurnResponse,
   type ForkThreadRequest,
   type ListThreadMcpServersResponse,
@@ -331,10 +333,12 @@ export type BackendClient = {
   refreshThreadTools?(params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]): Promise<void>;
   injectThreadItems?(params: { threadId: string; items: unknown[] }): Promise<void>;
   provideThreadDeveloperInstructions?: CodexAppServerClient["provideThreadDeveloperInstructions"];
+  provideThreadSkillExclusions?: CodexAppServerClient["provideThreadSkillExclusions"];
   replaceThreadDeveloperInstructions?(
     params: Parameters<CodexAppServerClient["replaceThreadDeveloperInstructions"]>[0],
   ): Promise<void>;
   startThread(params: {
+    skillExclusions?: readonly string[];
     cwd?: string;
     ephemeral?: boolean;
     model?: string;
@@ -353,6 +357,7 @@ export type BackendClient = {
     developerInstructions?: string;
   }): Promise<{ threadId: string }>;
   forkThread?(params: {
+    skillExclusions?: readonly string[];
     threadId: string;
     path?: string;
     cwd?: string;
@@ -495,7 +500,21 @@ export type BackendClient = {
   }): Promise<{ projectPath: string; configPath?: string }>;
 };
 
+export type PendingThreadStartDescriptor = Pick<AppServerPendingThreadStart,
+  "startId" | "title" | "directoryKey" | "directoryLabel" | "progressThread" | "prompt"
+>;
+
+export type PendingThreadStartSource = Pick<AppServerPendingThreadStart,
+  "backend" | "cwd" | "model" | "workMode" | "parentThreadId" | "parentThreadBackend" | "parentThreadInstanceId"
+>;
+
+export type PendingThreadStartReporter = {
+  setupProgress: (event: Omit<CodexEnvironmentSetupProgressEvent, "directoryKey">) => void;
+  land(threadId: string, failure?: CodexEnvironmentStartupFailure): Promise<void>;
+};
+
 export type BackendRegistryForkThreadRequest = ForkThreadRequest & {
+  pendingStart?: PendingThreadStartDescriptor;
   importedWorktree?: { repositoryPath: string; worktreePath: string };
   rejectOccupiedBranch?: boolean;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;

@@ -397,6 +397,7 @@ import type {
   AppServerListSkillsResponse,
   AppServerListThreadsRequest,
   AppServerListThreadsResponse,
+  AppServerPendingThreadStartReport,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   GetThreadFileDiffRequest,
@@ -528,6 +529,8 @@ import type {
   SetThreadMonitorJobSuggestionsRequest,
   SetThreadTokenMiserResponse,
   SetThreadMonitorJobSuggestionsResponse,
+  SetThreadJobMonitorCreationRequest,
+  SetThreadJobMonitorCreationResponse,
   SetThreadAgentResponse,
   SetNavigationBrowseModeRequest,
   SetNavigationBrowseModeResponse,
@@ -1381,6 +1384,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   renameThread?: (
     request: RenameThreadRequest
   ) => Promise<RenameThreadResponse>;
+  listPendingThreadStarts?: () => Promise<AppServerPendingThreadStartReport[]>;
   startThread?: (request: StartThreadRequest) => Promise<StartThreadResponse>;
   forkThread?: (request: ForkThreadRequest) => Promise<ForkThreadResponse>;
   startReview?: (request: StartReviewRequest) => Promise<StartReviewResponse>;
@@ -1921,6 +1925,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   setThreadMonitorJobSuggestions?: (
     request: SetThreadMonitorJobSuggestionsRequest
   ) => Promise<SetThreadMonitorJobSuggestionsResponse>;
+  setThreadJobMonitorCreation?: (
+    request: SetThreadJobMonitorCreationRequest
+  ) => Promise<SetThreadJobMonitorCreationResponse>;
   reorderThreadPins?: (
     request: ReorderThreadPinsRequest
   ) => Promise<ReorderThreadPinsResponse>;

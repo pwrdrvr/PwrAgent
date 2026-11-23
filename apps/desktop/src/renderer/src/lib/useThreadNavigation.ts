@@ -6,9 +6,9 @@ import { resolveBackgroundCleanupThread } from "./background-archive-cleanup-thr
 import type { AppNoticeToastNotice } from "../features/notifications/AppNoticeToast";
 export type { ArchiveThreadNotice } from "./archive-cleanup-notice";
 import type { NavigationDiagnosticCause, NavigationRefreshCaller } from "../../../shared/navigation-diagnostic-cause";
-import type { LaunchpadCreationStatus } from "@pwragent/shared/contracts/agent";
+import type { CodexEnvironmentStartupFailure, LaunchpadCreationStatus } from "@pwragent/shared/contracts/agent";
 import type { NavigationAttentionScope, RemoteThreadPinPublication } from "@pwragent/shared/contracts/navigation";
-import { materializeObservableLaunchpad, LaunchpadStartupCancelledError } from "./launchpad-creation-client";
+import { materializeObservableLaunchpad, LaunchpadSkillProfilePersistenceError, LaunchpadStartupCancelledError } from "./launchpad-creation-client";
 import { readNavigationQueryRange } from "./read-navigation-query-range";
 import { applyCheckoutHibernationUpdate } from "./navigation-thread-event";
 import { readBridgedNavigationResumeState } from "./navigation-resume-state";
@@ -31,6 +31,8 @@ import { readNavigationActionDetail, readNavigationActionThread } from "./naviga
 import { applyLaunchpadEnvironmentSetupProgress, type LaunchpadEnvironmentSetupProgress } from "./launchpad-setup-progress";
 import {
   applyPendingThreadStartReport,
+  isPendingThreadStartSelectionKey,
+  pendingThreadStartSelectionKey,
   pendingThreadStartOpenTarget,
   pendingThreadStartRows,
   retirePendingThreadStart,
@@ -2716,6 +2718,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
   executionMode: ThreadExecutionMode;
   workMode: NavigationLaunchpadDraft["workMode"];
   codexEnvironmentRuntime?: NavigationThreadSummary["codexEnvironmentRuntime"];
+  codexSkillProfile?: NavigationThreadSummary["codexSkillProfile"];
   optimisticUserMessage?: NavigationThreadSummary["optimisticUserMessage"];
   optimisticActiveTurn?: NavigationThreadSummary["optimisticActiveTurn"];
   parentThreadId?: string;
@@ -2747,6 +2750,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
     serviceTier: params.launchpad.serviceTier,
     fastMode: params.launchpad.fastMode,
     tokenMiserEnabled: params.launchpad.tokenMiserEnabled,
+    ...(params.codexSkillProfile ? { codexSkillProfile: params.codexSkillProfile } : {}),
     ...(params.launchpad.agent
       ? {
           agent: {
@@ -2963,6 +2967,8 @@ export type PendingLaunchpadCreation = {
    * creation's slot as soon as it renders there.
    */
   threadKey?: string;
+  /** Status-only until an owner start has a view or an openable thread. */
+  selectable?: boolean;
   title: string;
   input: AppServerTurnInputItem[];
 };
@@ -3098,12 +3104,10 @@ export function useThreadNavigation(
   recentThreads: NavigationThreadSummary[];
   launchpadError?: string;
   pendingLaunchpadCreations: PendingLaunchpadCreation[];
-  /**
-   * Starts this machine reports while it prepares their workspaces, as
-   * starting rows. They open no starting view: selecting one opens its
-   * thread once it has landed.
-   */
+  /** This owner's in-flight starts, shown as sidebar rows. */
   pendingThreadStartRows: PendingLaunchpadCreation[];
+  selectedPendingThreadStartFailure?: CodexEnvironmentStartupFailure;
+  dismissPendingThreadStartFailure: () => void;
   /** The thread a pending start's row opens; see `pendingThreadStartOpenTarget`. */
   pendingThreadStartTarget: (selectionKey: string) => { backend: AppServerBackendKind; threadId: string } | undefined;
   /** Sub-thread launchpads being written in this window, in no set order. */
@@ -3509,7 +3513,7 @@ export function useThreadNavigation(
     // Materialization remains main-owned, but its old hook's pending row and
     // completion callback cannot be rebound to the recovered subtree. Return
     // to the ordinary empty selection instead of retaining an unresolved key.
-    (saved) => isStartingLaunchpadSelectionKey(saved) ? undefined : saved,
+    (saved) => isStartingLaunchpadSelectionKey(saved) || isPendingThreadStartSelectionKey(saved) ? undefined : saved,
   );
   const initialSelectionEstablishedRef = useRecoverableRef("navigation.initialSelectionEstablished", Boolean(resumeState));
   const restoringSelectionKeyRef = useRef(resumeState?.selection ? navigationThreadSelectionKey(resumeState.selection) : undefined);
@@ -3584,6 +3588,8 @@ export function useThreadNavigation(
   // Starts the owner reports while it prepares their workspaces (to-do cards).
   const [pendingThreadStarts, setPendingThreadStarts] = useState<readonly PendingThreadStart[]>([]);
   const retiredPendingThreadStartIdsRef = useRef(new Set<string>());
+  const [pendingThreadStartFailures, setPendingThreadStartFailures] =
+    useState<ReadonlyMap<string, CodexEnvironmentStartupFailure>>(() => new Map());
   // The directory whose launchpad a selection shows, including a thread that
   // is still starting from one.
   const getLaunchpadSelectionDirectoryKey = useCallback(
@@ -3887,7 +3893,7 @@ export function useThreadNavigation(
   }, []);
 
   const attentionViewId = useId();
-  const selectedIdentity = useMemo(() => selectedItemKey
+  const selectedIdentity = useMemo(() => selectedItemKey && !isPendingThreadStartSelectionKey(selectedItemKey)
     ? navigationIdentityFromThreadKey(selectedItemKey, rendererFederationTarget)
     : undefined, [selectedItemKey, rendererFederationTarget]);
   const selectedDetail = useNavigationSelectedDetail({
@@ -4502,17 +4508,26 @@ export function useThreadNavigation(
         if (event.federationTarget || (windowTarget && isRemoteFederationTarget(windowTarget))) return;
         const report = event.notification.params as PendingThreadStartReport;
         const startId = report.start.startId;
-        setPendingThreadStarts((current) =>
-          applyPendingThreadStartReport(current, report, retiredPendingThreadStartIdsRef.current));
-        if (report.phase !== "ended") return;
-        if (!report.createdThreadId) {
-          // React runs the updater above lazily, after this line has marked
-          // the start retired, so that updater skips the report. Remove the
-          // row here instead.
-          retiredPendingThreadStartIdsRef.current.add(startId);
-          setPendingThreadStarts((current) => retirePendingThreadStart(current, startId));
-          return;
+        const retired = retiredPendingThreadStartIdsRef.current;
+        if (retired.has(startId)) return;
+        if (report.phase === "ended") {
+          if (report.createdThreadId && report.setupFailure) {
+            const threadKey = buildThreadIdentityKey(report.start.backend, report.createdThreadId);
+            const setupFailure = report.setupFailure;
+            setPendingThreadStartFailures((current) => new Map(current).set(threadKey, setupFailure));
+          }
+          const destination = report.createdThreadId
+            ? buildThreadIdentityKey(report.start.backend, report.createdThreadId)
+            : report.start.progressThread && buildThreadIdentityKey(report.start.progressThread.backend, report.start.progressThread.threadId);
+          setSelectedItemKey((current) => current === pendingThreadStartSelectionKey(startId) ? destination : current);
+          if (!report.createdThreadId) {
+            retired.add(startId);
+            setPendingThreadStarts((current) => retirePendingThreadStart(current, startId));
+            return;
+          }
         }
+        setPendingThreadStarts((current) => applyPendingThreadStartReport(current, report, retired));
+        if (report.phase !== "ended") return;
         // The thread's row replaces the starting row once a read brings it
         // in; until then the starting row holds the slot, so nothing blinks.
         const retire = () => {
@@ -5545,6 +5560,23 @@ export function useThreadNavigation(
     presentArchiveCleanup,
   ]);
 
+  // Subscribe before reading. Live reports may overtake the IPC reply, so
+  // merge it through the same reducer, including its retired-start guard.
+  useEffect(() => {
+    if (!enabled || isRendererFederationWindow || !desktopApi?.listPendingThreadStarts) return;
+    let active = true;
+    void desktopApi.listPendingThreadStarts().then((reports) => {
+      if (!active) return;
+      setPendingThreadStarts((current) => reports.reduce(
+        (starts, report) => applyPendingThreadStartReport(starts, report, retiredPendingThreadStartIdsRef.current),
+        current,
+      ));
+    }).catch((error: unknown) => {
+      if (active) console.warn("Reading pending thread starts failed.", error);
+    });
+    return () => { active = false; };
+  }, [desktopApi, enabled, isRendererFederationWindow]);
+
   // Binding chips are projected in row pages but can be mutated outside
   // the agent-event bus (a Telegram callback creates a binding, a
   // /sync name renames it, a /detach revokes it — none of those emit
@@ -5746,6 +5778,7 @@ export function useThreadNavigation(
 
   const initialSavedResume = useMemo(() => resumeState ? JSON.stringify(resumeState) : undefined, [resumeState]);
   const lastSavedResumeRef = useRef(initialSavedResume);
+  const lastResumeSelectionRef = useRef(resumeState?.selection ?? null);
   useEffect(() => {
     const restoring = restoringSelectionKeyRef.current;
     if (!restoring) return;
@@ -5769,8 +5802,11 @@ export function useThreadNavigation(
   useEffect(() => {
     if (!enabled || isRendererFederationWindow || !desktopApi?.setNavigationResumeState
       || !initialSelectionEstablishedRef.current || initialFallbackSelectionKey) return;
+    if (!isPendingThreadStartSelectionKey(selectedItemKey)) {
+      lastResumeSelectionRef.current = selectedItemKey ? navigationIdentityFromThreadKey(selectedItemKey) ?? null : null;
+    }
     const snapshot = normalizeNavigationResumeState({
-      version: 1, selection: selectedItemKey ? navigationIdentityFromThreadKey(selectedItemKey) ?? null : null,
+      version: 1, selection: lastResumeSelectionRef.current,
       expandedByKey: directoryDisclosure.expandedByKey,
       unpinnedExpandedByKey: directoryDisclosure.unpinnedExpandedByKey,
       loadedRowsByQuery,
@@ -5802,12 +5838,23 @@ export function useThreadNavigation(
       && !getDirectoryKeyFromLaunchpadSelection(displaySelectionKey)
       && !isFederatedLaunchpadSelectionKey(displaySelectionKey)
       && !isStartingLaunchpadSelectionKey(displaySelectionKey)
+      && !isPendingThreadStartSelectionKey(displaySelectionKey)
     ) {
       return displaySelectionKey;
     }
 
     return undefined;
   }, [displaySelectionKey]);
+
+  const dismissPendingThreadStartFailure = useCallback(() => {
+    if (!selectedThreadKey) return;
+    setPendingThreadStartFailures((current) => {
+      if (!current.has(selectedThreadKey)) return current;
+      const next = new Map(current);
+      next.delete(selectedThreadKey);
+      return next;
+    });
+  }, [selectedThreadKey]);
 
   const selectedRow = useMemo<NavigationThreadSummary | undefined>(
     () =>
@@ -6396,11 +6443,15 @@ export function useThreadNavigation(
   }, [setSelectedItemKey]);
 
   const selectPendingLaunchpad = useCallback((selectionKey: string): void => {
+    if (isPendingThreadStartSelectionKey(selectionKey)) {
+      if (pendingThreadStartRowList.some((row) => row.selectionKey === selectionKey)) setSelectedItemKey(selectionKey);
+      return;
+    }
     const creation = pendingLaunchpadCreationsRef.current.get(selectionKey);
     if (!creation) return;
     if (creation.federatedSession) setFederatedLaunchpad(creation.federatedSession);
     setSelectedItemKey(creation.selectionKey);
-  }, [setFederatedLaunchpad, setSelectedItemKey]);
+  }, [pendingThreadStartRowList, setFederatedLaunchpad, setSelectedItemKey]);
 
   const createThread = useCallback(
     async (
@@ -8532,6 +8583,7 @@ export function useThreadNavigation(
           executionMode: response.executionMode,
           workMode: response.workMode,
           codexEnvironmentRuntime: response.codexEnvironmentRuntime,
+          codexSkillProfile: response.codexSkillProfile,
           optimisticUserMessage: response.turnStartFailure
             || response.scheduledAction
             ? undefined
@@ -8709,7 +8761,10 @@ export function useThreadNavigation(
             subthreadOrderTarget,
           );
         }
-        if (response.turnStartFailure) {
+        const skillProfileFailure = response.codexSkillProfilePersistenceFailure;
+        if (skillProfileFailure) {
+          publishThreadActionError("save-skill-profile", skillProfileFailure.message);
+        } else if (response.turnStartFailure) {
           setLaunchpadError(response.turnStartFailure.message);
         } else if (response.autoPinFailure) {
           setLaunchpadError(response.autoPinFailure.message);
@@ -8771,6 +8826,10 @@ export function useThreadNavigation(
         } catch (error) {
           setLaunchpadError(error instanceof Error ? error.message : String(error));
         }
+        if (skillProfileFailure) {
+          // The thread exists, but the composer still owns its unsent draft.
+          throw new LaunchpadSkillProfilePersistenceError(skillProfileFailure.message);
+        }
       } finally {
         pendingLaunchpadCreationsRef.current.delete(launchpadSelectionKey);
         setPendingLaunchpadCreations([...pendingLaunchpadCreationsRef.current.values()]);
@@ -8800,6 +8859,7 @@ export function useThreadNavigation(
       desktopApi,
       directories,
       insertSubthreadBelowSource,
+      publishThreadActionError,
       refresh,
       detachedSubthreadLaunchpadKeysRef,
       setFederatedLaunchpad,
@@ -10529,6 +10589,8 @@ export function useThreadNavigation(
     launchpadError,
     pendingLaunchpadCreations,
     pendingThreadStartRows: pendingThreadStartRowList,
+    selectedPendingThreadStartFailure: selectedThreadKey ? pendingThreadStartFailures.get(selectedThreadKey) : undefined,
+    dismissPendingThreadStartFailure,
     pendingThreadStartTarget,
     subthreadLaunchpadDrafts,
     detachSubthreadLaunchpad,

@@ -208,6 +208,7 @@ export const PROVIDER_CATALOG_REFRESH_READ_CHANNEL =
   "provider-catalog-refresh:read";
 export const PROVIDER_CATALOG_REFRESH_EVENT_CHANNEL =
   "provider-catalog-refresh:event";
+export const AGENT_LIST_PENDING_THREAD_STARTS_CHANNEL = "agent:list-pending-thread-starts";
 export const AGENT_START_THREAD_CHANNEL = "agent:start-thread";
 export const AGENT_FORK_THREAD_CHANNEL = "agent:fork-thread";
 export const AGENT_START_TURN_CHANNEL = "agent:start-turn";
@@ -471,6 +472,8 @@ export const NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL =
   "navigation:set-thread-token-miser";
 export const NAVIGATION_SET_THREAD_MONITOR_JOB_SUGGESTIONS_CHANNEL =
   "navigation:set-thread-monitor-job-suggestions";
+export const NAVIGATION_SET_THREAD_JOB_MONITOR_CREATION_CHANNEL =
+  "navigation:set-thread-job-monitor-creation";
 export const NAVIGATION_REORDER_THREAD_PINS_CHANNEL =
   "navigation:reorder-thread-pins";
 export const NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL =

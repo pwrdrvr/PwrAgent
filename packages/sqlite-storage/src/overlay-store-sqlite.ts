@@ -5638,6 +5638,26 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return nextState;
   }
 
+  setThreadJobMonitorCreation(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    enabled: boolean;
+  }): void {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    this.stateDb.raw.transaction(() => {
+      const current: ThreadOverlayState = this.getThread(threadKey) ?? {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+      };
+      if ((current.jobMonitorCreationEnabled !== false) !== params.enabled) {
+        const { jobMonitorCreationEnabled: _cleared, ...rest } = current;
+        this.putThread(threadKey, params.enabled ? rest : { ...rest, jobMonitorCreationEnabled: false });
+      }
+    }).immediate();
+  }
+
   async setThreadHandoffOrigin(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -7018,6 +7038,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     threadId: string;
     executionMode: ThreadExecutionMode;
     updatedAt?: number;
+    codexSkillProfile?: ThreadOverlayState["codexSkillProfile"];
   }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
     const stored = this.getThread(threadKey);
@@ -7030,6 +7051,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       ...current,
       executionMode: params.executionMode,
       executionModeUpdatedAt: params.updatedAt ?? Date.now(),
+      ...(params.codexSkillProfile ? { codexSkillProfile: params.codexSkillProfile } : {}),
     };
     // Every turn start re-asserts the mode. Only an ACP thread reads the
     // timestamp (to rank the overlay against a provider snapshot), so an
@@ -7037,6 +7059,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     if (
       stored
       && stored.executionMode === nextState.executionMode
+      && stored.codexSkillProfile === nextState.codexSkillProfile
       && (
         !isAcpBackendId(params.backend)
         || stored.executionModeUpdatedAt === nextState.executionModeUpdatedAt
@@ -13040,6 +13063,7 @@ export type OverlayStoreLike = Pick<
   | "setThreadTokenMiser"
   | "setThreadKeepCheckoutAwake"
   | "setThreadMonitorJobSuggestions"
+  | "setThreadJobMonitorCreation"
   | "claimMonitorJobSuggestion"
   | "setThreadHandoffOrigin"
   | "setThreadForkOrigin"
