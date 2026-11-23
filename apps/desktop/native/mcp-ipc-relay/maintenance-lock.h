@@ -3,9 +3,9 @@
  * truncate, unlink or follow a symlink. Cargo uses this lock for build output.
  */
 #ifdef _WIN32
-static int maintenance_lock(const wchar_t *path) {
-  HANDLE file = CreateFileW(path, GENERIC_READ,
-    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+static int file_lock(const wchar_t *path, int stack) {
+  HANDLE file = CreateFileW(path, stack ? GENERIC_READ | GENERIC_WRITE : GENERIC_READ,
+    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, stack ? OPEN_ALWAYS : OPEN_EXISTING,
     FILE_FLAG_OPEN_REPARSE_POINT, NULL);
   BY_HANDLE_FILE_INFORMATION info;
   if (file == INVALID_HANDLE_VALUE) return 1;
@@ -15,7 +15,7 @@ static int maintenance_lock(const wchar_t *path) {
   }
   OVERLAPPED operation = {0};
   if (!LockFileEx(file, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
-    0, MAXDWORD, MAXDWORD, &operation)) {
+    0, stack ? 1 : MAXDWORD, stack ? 0 : MAXDWORD, &operation)) {
     DWORD error = GetLastError();
     CloseHandle(file);
     return error == ERROR_LOCK_VIOLATION ? 2 : 1;
@@ -27,8 +27,8 @@ static int maintenance_lock(const wchar_t *path) {
 }
 #else
 #include <sys/file.h>
-static int maintenance_lock(const char *path) {
-  int file = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+static int file_lock(const char *path, int stack) {
+  int file = open(path, (stack ? O_RDWR | O_CREAT : O_RDONLY) | O_NOFOLLOW | O_CLOEXEC, 0600);
   struct stat info, current;
   if (file < 0) return 1;
   if (fstat(file, &info) || !S_ISREG(info.st_mode)) { close(file); return 1; }

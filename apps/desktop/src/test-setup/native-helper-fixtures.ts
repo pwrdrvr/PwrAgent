@@ -9,6 +9,7 @@ const consumers = {
   maintenanceAllocation: "maintenance-disk-usage.property.test.ts",
   mcpIpc: "mcp-ipc-http.test.ts",
   markerProbe: "thread-dependency-marker-probe.property.test.ts",
+  stackEngine: "stack-engine-ports.test.ts",
 } as const;
 type Consumer = keyof typeof consumers;
 type HelperPaths = { relay: string; identity?: string };
