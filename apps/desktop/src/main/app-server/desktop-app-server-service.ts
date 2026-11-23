@@ -36,7 +36,7 @@ import { GitlabPrToolClient } from "../pr-status/gitlab-pr-tool-client";
 import type { ForgePrToolArgs, ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
 import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation, type ForgeRepository } from "../pr-status/forge-tool-contract";
 import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
-import { readStackClones, StackReader, StackReadObservation, stackMemberships } from "../stacks/stack-reader";
+import { StackReader, StackReadObservation, stackMemberships } from "../stacks/stack-reader";
 import { StackOperationsService } from "../stacks/stack-operations-service";
 import { StackOperationError } from "@pwragent/owner-core/stacks/stack-coordinator";
 import { assertGithubStackMergeAllowed, githubStackRepository, isObservedStackParent } from "../stacks/stack-merge-guard";
@@ -3970,10 +3970,9 @@ class DesktopAppServerService {
       return { blocked: parents.length > 0, lowerKeys: parents.map(getPrStatusKey) };
     }
     const repository = { provider: "github" as const, host: ref.provider, owner: ref.org, repo: ref.repo };
-    const catalogs = (await readStackClones(this.prReviewOfferDirectories(thread, pr), {
-      priority: () => PR_METADATA_PRIORITY.background,
-    }))
-      .flatMap(({ catalog }) => catalog.status === "ok" ? [catalog.catalog] : []);
+    const observation = new StackReadObservation();
+    const catalogs = (await observation.presentCatalogs(this.prReviewOfferDirectories(thread, pr)))
+      .flatMap((catalog) => catalog.status === "ok" ? [catalog.catalog] : []);
     const ci = this.getForgeCiClient();
     const path = `repos/${encodeURIComponent(ref.org)}/${encodeURIComponent(ref.repo)}`;
     const lowerKeys = new Set<string>();

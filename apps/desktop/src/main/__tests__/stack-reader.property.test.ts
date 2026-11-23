@@ -155,6 +155,33 @@ describe("stack checkout demand", () => {
     }
   });
 
+  it.each(["refs", "objects"])("follows Git discovery when a warmed nested repository loses %s", async (entry) => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-discovery-change-"));
+    try {
+      initialize(sandbox);
+      const nested = path.join(sandbox, "nested");
+      await mkdir(nested);
+      initialize(nested);
+      await Promise.all([writeCatalog(sandbox, "outer"), writeCatalog(nested, "nested")]);
+      const reader = new StackReader();
+      const rows = [row(nested, "nested")];
+      const observedRepository = async () => {
+        const top = await realpath(git(nested, "rev-parse", "--show-toplevel"));
+        return top === await realpath(nested) ? "github.com:fixture/nested" : "github.com:fixture/outer";
+      };
+      expect((await reader.read(rows, [])).stacks.map(({ repository }) => repository)).toEqual([await observedRepository()]);
+      const metadata = path.join(nested, ".git", entry);
+      await rename(metadata, metadata + ".saved");
+      expect(await observedRepository()).toBe("github.com:fixture/outer");
+      expect((await reader.read(rows, [])).stacks.map(({ repository }) => repository)).toEqual([await observedRepository()]);
+      await rename(metadata + ".saved", metadata);
+      expect(await observedRepository()).toBe("github.com:fixture/nested");
+      expect((await reader.read(rows, [])).stacks.map(({ repository }) => repository)).toEqual([await observedRepository()]);
+    } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
   it("checks a catalog created after a negative fleet read and uses Git under discovery overrides", async () => {
     const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-admission-"));
     try {
@@ -296,6 +323,24 @@ describe("stack checkout demand", () => {
       expect(vi.mocked(open).mock.calls.filter(([file]) => path.basename(String(file)) === "gh-stack")).toHaveLength(1);
       await project();
       expect(checkoutStarts()).toHaveLength(2);
+    } finally {
+      start.mockRestore();
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps ordinary catalog preflights launch-free until a catalog appears", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-ordinary-offer-"));
+    const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    try {
+      initialize(sandbox);
+      for (let pass = 0; pass < 3; pass++) {
+        expect(await new StackReadObservation().presentCatalogs([sandbox])).toEqual([]);
+      }
+      expect(start).not.toHaveBeenCalled();
+      await writeCatalog(sandbox, "offer");
+      expect(await new StackReadObservation().presentCatalogs([sandbox])).toMatchObject([{ status: "ok" }]);
+      expect(start.mock.calls.map(([, args]) => args[0])).toEqual(["rev-parse"]);
     } finally {
       start.mockRestore();
       await rm(sandbox, { recursive: true, force: true });

@@ -1,4 +1,5 @@
-import { lstat, realpath } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
 import { createGitDirectoryObserver, readBoundedGitPointer } from "./private/directory-observation";
@@ -145,6 +146,12 @@ export function createStackCheckoutHints(demand: PrMetadataDemand) {
         if (!observed?.repository || !observed.checkoutRoot || !observed.commonDirectory) return undefined;
         signal.throwIfAborted();
         const commonDir = await realpath(observed.commonDirectory);
+        // Git can skip a nested .git directory when either discovery
+        // directory is no longer searchable, even if HEAD is unchanged.
+        for (const name of ["objects", "refs"]) {
+          signal.throwIfAborted();
+          await access(path.join(commonDir, name), constants.X_OK);
+        }
         return {
           root: observed.checkoutRoot,
           commonDir,
