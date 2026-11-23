@@ -182,6 +182,16 @@ export type UpsertAutomationRunArtifactInput = {
 };
 
 /** Automation persistence at the owner/application boundary; contains no database handles. */
+/** The execution thread is present only when it differs from the assigned thread. */
+export type AutomationRunPricingTarget = AutomationRunSummary & { headlessThreadId?: ThreadIdentifier };
+
+export type PrunedAutomationRunCost = {
+  runId: string;
+  automationId: string;
+  headlessThreadId?: ThreadIdentifier;
+  totalCostMicros?: number;
+};
+
 export interface AutomationStorage {
   getAutomationLoadIssues(): AutomationLoadIssue[];
   createAutomation(input: CreateAutomationInput): AutomationRecord;
@@ -297,11 +307,11 @@ export interface AutomationStorage {
   findRunsByBackendTurnIds(params: {
     backend: AppServerBackendKind;
     backendTurnIds: readonly string[];
-  }): Map<string, AutomationRunSummary>;
+  }): Map<string, AutomationRunPricingTarget>;
   findPrunedRunCostsByBackendTurnIds(params: {
     backend: AppServerBackendKind;
     backendTurnIds: readonly string[];
-  }): Map<string, { runId: string; automationId: string; totalCostMicros?: number }>;
+  }): Map<string, PrunedAutomationRunCost>;
   upsertRunArtifact(input: UpsertAutomationRunArtifactInput): AutomationRunArtifact | undefined;
   appendRunTranscriptEvent(params: {
     runId: string;

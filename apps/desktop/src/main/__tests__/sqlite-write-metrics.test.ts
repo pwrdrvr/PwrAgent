@@ -3473,7 +3473,7 @@ describe("sqlite write metrics", () => {
         schedule: { kind: "interval", every: 5, unit: "minutes" },
       });
       const { run } = await service.runNow({ automationId: created.automation.id });
-      const emitPricing = async (observation: number) => {
+      const emitPricing = async (observation: number, cumulativeOnly = false) => {
         await Promise.all(registryListeners.map((listener) => listener({
           backend: "codex",
           notification: {
@@ -3483,8 +3483,11 @@ describe("sqlite write metrics", () => {
               pricing: {
                 summaries: [],
                 lines: [{
+                  backend: "codex",
+                  threadId: "headless-1",
                   scope: "turn",
                   turnId: "turn-1",
+                  turnUsageAttributed: !cumulativeOnly,
                   model: "gpt-5",
                   uncachedInputTokens: observation * 100,
                   outputTokens: observation * 10,
@@ -3523,9 +3526,9 @@ describe("sqlite write metrics", () => {
       automationStore.createRun({ automationId: created.automation.id, trigger: "manual" });
       expect(automationStore.getRun(run.id)).toBeUndefined();
       const late = await measureSqliteWrites(async () => {
-        await emitPricing(40);
+        await emitPricing(40, true);
         await vi.advanceTimersByTimeAsync(1_000);
-        await emitPricing(40);
+        await emitPricing(40, true);
         await vi.advanceTimersByTimeAsync(1_000);
       });
       expect(automationStore.getAutomation(created.automation.id)?.lifetimeCost?.totalMicros)

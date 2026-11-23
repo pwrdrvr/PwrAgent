@@ -50,7 +50,7 @@ import {
 } from "@pwragent/shared/contracts/navigation";
 import type { StateDb } from "./state-db.js";
 import { mergeTranscriptEvents } from "@pwragent/owner-core/automation-transcript-merge";
-import type { AutomationRunAdmission, AutomationStorage, AutomationRecord, CreateAutomationInput, UpdateAutomationInput, CreateAutomationRunInput, StartupReconciliationInput, StartupReconciliationResult, UpsertAutomationRunArtifactInput } from "@pwragent/owner-core/automation-storage";
+import type { AutomationRunAdmission, AutomationRunPricingTarget, AutomationStorage, AutomationRecord, CreateAutomationInput, UpdateAutomationInput, CreateAutomationRunInput, PrunedAutomationRunCost, StartupReconciliationInput, StartupReconciliationResult, UpsertAutomationRunArtifactInput } from "@pwragent/owner-core/automation-storage";
 export type { AutomationRunAdmission, AutomationRecord, CreateAutomationInput, UpdateAutomationInput, CreateAutomationRunInput, StartupReconciliationInput, StartupReconciliationResult, UpsertAutomationRunArtifactInput } from "@pwragent/owner-core/automation-storage";
 
 const DEFAULT_RUN_HISTORY_LIMIT = 200;
@@ -133,6 +133,7 @@ type PrunedRunCostRow = {
   run_id: string;
   automation_id: string;
   backend_turn_id: string;
+  execution_thread_id: string | null;
   total_cost_micros: number | null;
 };
 
@@ -905,8 +906,8 @@ export class AutomationStore implements AutomationStorage {
   findRunsByBackendTurnIds(params: {
     backend: AppServerBackendKind;
     backendTurnIds: readonly string[];
-  }): Map<string, AutomationRunSummary> {
-    const runs = new Map<string, AutomationRunSummary>();
+  }): Map<string, AutomationRunPricingTarget> {
+    const runs = new Map<string, AutomationRunPricingTarget>();
     if (params.backendTurnIds.length === 0) return runs;
     const rows = this.stateDb.raw
       .prepare(
@@ -927,7 +928,10 @@ export class AutomationStore implements AutomationStorage {
     }
     for (const [turnId, row] of chosen) {
       const run = this.runFromRow(row);
-      if (run) runs.set(turnId, run);
+      if (run) runs.set(turnId, {
+        ...run,
+        headlessThreadId: run.backendThreadId === row.thread_id ? undefined : run.backendThreadId,
+      });
     }
     return runs;
   }
@@ -935,11 +939,11 @@ export class AutomationStore implements AutomationStorage {
   findPrunedRunCostsByBackendTurnIds(params: {
     backend: AppServerBackendKind;
     backendTurnIds: readonly string[];
-  }): Map<string, { runId: string; automationId: string; totalCostMicros?: number }> {
-    const runs = new Map<string, { runId: string; automationId: string; totalCostMicros?: number }>();
+  }): Map<string, PrunedAutomationRunCost> {
+    const runs = new Map<string, PrunedAutomationRunCost>();
     if (params.backendTurnIds.length === 0) return runs;
     const rows = this.stateDb.raw.prepare(`
-      SELECT run_id, automation_id, backend_turn_id, total_cost_micros
+      SELECT run_id, automation_id, backend_turn_id, execution_thread_id, total_cost_micros
         FROM automation_pruned_run_costs
        WHERE backend = ?
          AND backend_turn_id IN (SELECT value FROM json_each(?))
@@ -949,6 +953,7 @@ export class AutomationStore implements AutomationStorage {
       runs.set(row.backend_turn_id, {
         runId: row.run_id,
         automationId: row.automation_id,
+        headlessThreadId: row.execution_thread_id ?? undefined,
         totalCostMicros: row.total_cost_micros ?? undefined,
       });
     }
@@ -1765,9 +1770,12 @@ export class AutomationStore implements AutomationStorage {
       if (costRunIds.length > 0) {
         this.stateDb.raw.prepare(`
           INSERT INTO automation_pruned_run_costs (
-            run_id, automation_id, backend, backend_turn_id, total_cost_micros
+            run_id, automation_id, backend, backend_turn_id, execution_thread_id, total_cost_micros
           )
-          SELECT run_id, automation_id, backend, backend_turn_id, accounted_cost_micros
+          SELECT run_id, automation_id, backend, backend_turn_id,
+                 CASE WHEN json_valid(payload)
+                   THEN NULLIF(json_extract(payload, '$.backendThreadId'), thread_id) END,
+                 accounted_cost_micros
             FROM automation_runs WHERE run_id IN (SELECT value FROM json_each(?))
         `).run(JSON.stringify(costRunIds));
       }

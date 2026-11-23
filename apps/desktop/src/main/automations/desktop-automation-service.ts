@@ -174,6 +174,10 @@ export function initializeDesktopAutomationService(
   return service;
 }
 
+export function prepareDesktopAutomationShutdown(): void {
+  service?.prepareForShutdown();
+}
+
 export function disposeDesktopAutomationService(): void {
   service?.dispose();
   service = null;
@@ -183,6 +187,7 @@ export class DesktopAutomationService {
   private readonly scheduler: AutomationScheduler;
   private readonly inspectionBus: AutomationInspectionBus;
   private unsubscribeRegistryEvents?: () => void;
+  private shuttingDown = false;
   private unsubscribeRestartGate?: () => void;
   /** Held while a quiet restart's continuations go first. */
   private releaseRestartGateHold?: () => Promise<void>;
@@ -272,6 +277,7 @@ export class DesktopAutomationService {
   }
 
   start(): void {
+    if (this.shuttingDown) return;
     this.options.registry.setAutomationInspectionHandler?.(async (request) => {
       const agent = await this.options.registry.getThreadAgentMetadata({
         backend: request.context.backend,
@@ -414,15 +420,12 @@ export class DesktopAutomationService {
       });
   }
 
-  dispose(): void {
+  /** Stop dispatch while the registry still owes us its last pricing events. */
+  prepareForShutdown(): void {
+    if (this.shuttingDown) return;
+    this.shuttingDown = true;
     this.scheduler.stop();
     this.schedulingLeaseRetry.cancel();
-    if (this.schedulingLeaseHeld) {
-      this.schedulingLeaseHeld = false;
-      this.schedulingLeaseManager()?.release("background");
-    }
-    this.unsubscribeRegistryEvents?.();
-    this.unsubscribeRegistryEvents = undefined;
     this.unsubscribeRestartGate?.();
     this.unsubscribeRestartGate = undefined;
     this.releaseRestartGateHold = undefined;
@@ -431,6 +434,16 @@ export class DesktopAutomationService {
       this.runOwnerRecheckTimer = undefined;
     }
     this.unconfirmedStartupOwnerIds.clear();
+  }
+
+  dispose(): void {
+    this.prepareForShutdown();
+    if (this.schedulingLeaseHeld) {
+      this.schedulingLeaseHeld = false;
+      this.schedulingLeaseManager()?.release("background");
+    }
+    this.unsubscribeRegistryEvents?.();
+    this.unsubscribeRegistryEvents = undefined;
     if (this.pendingRunUsageTimer) {
       clearTimeout(this.pendingRunUsageTimer);
       this.pendingRunUsageTimer = undefined;
@@ -1162,14 +1175,13 @@ export class DesktopAutomationService {
     // registry's emitThreadPricingUpdated nests readThreadPricing's result
     // under `pricing`, it does not spread it.
     const params = event.notification.params as
-      | { pricing?: { lines?: Array<Record<string, unknown>> } }
+      | { threadId?: string; pricing?: { lines?: Array<Record<string, unknown>> } }
       | undefined;
     const lines = params?.pricing?.lines;
     if (!Array.isArray(lines)) return;
     const turnLines = lines.filter((line): line is Record<string, unknown> & { turnId: string } =>
       line.scope === "turn"
       && line.status !== "superseded"
-      && line.turnUsageAttributed !== false
       && typeof line.turnId === "string");
     // The event carries the thread's whole ledger. Resolve its turn ids in
     // one batched lookup.
@@ -1186,13 +1198,9 @@ export class DesktopAutomationService {
       backendTurnIds: backendTurnIds.filter((id) => !runs?.has(id)),
     });
     for (const line of turnLines) {
-      const total = line.totalCostMicros;
-      const cost = line.priceStatus !== "unpriced"
-        && (line.currency === undefined || line.currency === "USD")
-        && typeof total === "number" && Number.isSafeInteger(total) && total >= 0
-        ? total : undefined;
+      const matched = runs?.get(line.turnId);
       const run = runs
-        ? runs.get(line.turnId)
+        ? matched
         : store.findRunningRunByBackendTurnId({
             backend: event.backend,
             backendTurnId: line.turnId,
@@ -1201,8 +1209,20 @@ export class DesktopAutomationService {
             backend: event.backend,
             backendTurnId: line.turnId,
           });
+      const archived = run ? undefined : pruned?.get(line.turnId);
+      if (line.turnUsageAttributed === false) {
+        // A dedicated run owns the thread's full usage. A snapshot published
+        // for another thread or from a related ledger may include other turns.
+        const headlessThreadId = matched?.headlessThreadId ?? archived?.headlessThreadId;
+        if (!headlessThreadId || params?.threadId !== headlessThreadId
+          || line.threadId !== headlessThreadId || line.backend !== event.backend) continue;
+      }
+      const total = line.totalCostMicros;
+      const cost = line.priceStatus !== "unpriced"
+        && (line.currency === undefined || line.currency === "USD")
+        && typeof total === "number" && Number.isSafeInteger(total) && total >= 0
+        ? total : undefined;
       if (!run) {
-        const archived = pruned?.get(line.turnId);
         if (archived && cost !== undefined) {
           this.bufferRunUsage(
             { id: archived.runId, usage: { totalCostMicros: archived.totalCostMicros } },
@@ -1282,7 +1302,7 @@ export class DesktopAutomationService {
     for (const [id, pending] of this.pendingRunUsage) {
       this.options.store.setRunUsage({ runId: id, usage: pending.usage });
       this.pendingRunUsage.delete(id);
-      if (pending.lateAutomationId) changed.add(pending.lateAutomationId);
+      if (!this.shuttingDown && pending.lateAutomationId) changed.add(pending.lateAutomationId);
     }
     // The terminal run event refreshed the list before these prices arrived.
     for (const id of changed) {
@@ -1297,6 +1317,7 @@ export class DesktopAutomationService {
       this.captureRunUsageFromPricingEvent(event);
       return;
     }
+    if (this.shuttingDown) return;
     if (event.notification.method !== "thread/turnQueue/updated") {
       await this.captureAutomationRunTranscriptEvent(event);
       if (isTerminalTurnNotification(event.notification)) {

@@ -91,6 +91,57 @@ describe("AutomationStore", () => {
     }
   });
 
+  it("starts coverage on re-upgrade for rows inserted by a downgraded writer", () => {
+    const { dbPath, tempDir } = createTempStateDb("pwragent-automation-cost-downgrade-");
+    let db = StateDb.open(dbPath);
+    try {
+      let reopened = new AutomationStore(db);
+      reopened.createAutomation({
+        id: "tracked", backend: "codex", threadId: "thread-1", name: "Previously tracked",
+        taskPrompt: "Check.", schedule: { kind: "interval", every: 5, unit: "minutes" }, now: 1,
+      });
+      reopened.createRun({ id: "tracked-run", automationId: "tracked", trigger: "manual", now: 2 });
+      reopened.setRunUsage({ runId: "tracked-run", usage: { totalCostMicros: 70 }, now: 2 });
+      db.close();
+
+      db = StateDb.open(dbPath);
+      // The older build uses the same profile and omits the new cost columns
+      // from INSERT. It leaves the upgraded schema version in place.
+      db.raw.exec(`
+        INSERT INTO automations (
+          automation_id, backend, thread_id, name, status, backlog_policy, created_at, updated_at, payload
+        )
+        SELECT 'downgraded', backend, thread_id, 'Added during downgrade', status,
+               backlog_policy, 3, 3, payload FROM automations WHERE automation_id = 'tracked'
+      `);
+      reopened = new AutomationStore(db);
+      reopened.createRun({ id: "uncovered-run", automationId: "downgraded", trigger: "manual", now: 4 });
+      reopened.setRunUsage({ runId: "uncovered-run", usage: { totalCostMicros: 300 }, now: 4 });
+      db.close();
+
+      const before = Date.now();
+      db = StateDb.open(dbPath);
+      const after = Date.now();
+      reopened = new AutomationStore(db);
+      reopened.setRunUsage({ runId: "uncovered-run", usage: { totalCostMicros: 320 } });
+      expect(reopened.getAutomation("downgraded")?.lifetimeCost).toBeUndefined();
+      reopened.createRun({ id: "covered-run", automationId: "downgraded", trigger: "manual", now: after + 1 });
+      reopened.setRunUsage({ runId: "covered-run", usage: { totalCostMicros: 90 } });
+      const coverage = reopened.getAutomation("downgraded")?.lifetimeCost;
+      expect(coverage?.totalMicros).toBe(90);
+      expect(coverage?.since).toBeGreaterThanOrEqual(before);
+      expect(coverage?.since).toBeLessThanOrEqual(after);
+      expect(reopened.getAutomation("tracked")?.lifetimeCost).toEqual({ since: 1, totalMicros: 70 });
+      db.close();
+
+      db = StateDb.open(dbPath);
+      expect(new AutomationStore(db).getAutomation("downgraded")?.lifetimeCost).toEqual(coverage);
+    } finally {
+      if (db.raw.open) db.close();
+      removeTempStateDbDir(tempDir);
+    }
+  });
+
   it("keeps a run running when its queued acknowledgement arrives late", () => {
     createRun();
     store.markRunStarted({ runId: "run-1", backendTurnId: "turn-1", now: 100 });
