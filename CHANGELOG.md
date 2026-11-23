@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.5.0-prerelease.1 - 2026-11-23
+
+- Stacked Pull Requests - See stack order, health, and merge prerequisites in thread and PR views. Add, adopt, remove, and restack local layers, with optional separate worktrees for new layers. Layer merges wait for lower layers to merge and for the PR to target trunk.
+- Reviews and CI - Review changes before merging, merge from the sidebar PR card, and watch the build for the resulting merge commit. Review GitHub deployment gates from approval cards using an explicit confirmation.
+- Agent Setup and Presets - Get started from a recent project or one discovered from Claude Code. Use guided Settings flows for agent, profile, and messaging setup. Save Agent instructions and MCP selections as reusable presets, with an explicit option to offer a preset in messaging.
+- Antigravity and Codex - Add Antigravity as a provider with managed Apple Silicon setup and Google sign-in. Save named Codex skill profiles for future threads and use `/goal` on supported local Codex threads to set, pause, or resume a goal from the composer.
+- Messaging - Run separately configured Telegram bots for different audiences on one profile, each with its own pairing grants and routing. Pair in Telegram with an app link or QR code, and optionally install a LINE rich menu. Enable **Notify Agents** to send update notices to selected Agents' messaging bindings. Eligible Slack and Telegram accounts can confirm an install and restart on macOS and Windows when Access Control is enforced.
+- To-dos and Job Monitors - Start a new thread from a message to-do and see pending launches in the sidebar. Control new monitor creation on supported threads, cancel running monitors from **Waiting for**, and see shorter monitor card titles.
+- Decisions and Resources - Set up decision providers from the Decisions tab, pick a model from a list, and inspect batch prompts, item inputs, and answer probabilities. Open Resources in its own window to see CPU reservations and queue requests for a specific number of slots.
+- Responsiveness - Reduce Git subprocesses for PR discovery and avoid redundant sidebar reads. Recover interrupted stack worktree setup and handle Windows path casing more consistently when grouping projects and threads.
+
 ## v1.4.16 - 2026-11-21
 
 - Boat Sandboxes - Manage a thread's sandboxes from its MCP access panel. See cost, auto-stop time, and open port forwards, and close a forward, stop a sandbox, or confirm deletion. Settings and the thread tile show why another sandbox cannot start, including account limits and billing.

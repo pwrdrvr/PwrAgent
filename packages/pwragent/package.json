@@ -1,6 +1,6 @@
 {
   "name": "pwragent",
-  "version": "1.4.16",
+  "version": "1.5.0-prerelease.1",
   "private": false,
   "type": "module",
   "description": "PwrAgent owner services under Node, with a foreground Outpost daemon and local CLI.",
@@ -44,7 +44,7 @@
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org",
-    "tag": "latest"
+    "tag": "next"
   },
   "bin": {
     "pwragent": "bin/pwragent.js"
