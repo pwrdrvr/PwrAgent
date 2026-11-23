@@ -11560,9 +11560,11 @@ export class CodexAppServerClient {
     pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation;
     /** The thread's Agent instructions, sent as Codex developer instructions. */
     developerInstructions?: string;
-  }): Promise<{ threadId: string }> {
+    includeStartScope?: boolean;
+  }): Promise<{ threadId: string; codexHome?: string }> {
     params = this.withAgentEnvironmentPolicy(params);
     await this.ensureInitialized();
+    const codexHome = params.includeStartScope ? extractStringProperty(this.initializeResult, "codexHome", "codex_home") : undefined;
 
     const startPayload = buildThreadStartPayload({
       ...params,
@@ -11598,6 +11600,7 @@ export class CodexAppServerClient {
 
     return {
       threadId,
+      ...(codexHome ? { codexHome } : {}),
     };
   }
 

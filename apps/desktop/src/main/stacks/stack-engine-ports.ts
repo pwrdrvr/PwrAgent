@@ -9,7 +9,8 @@ import {
   parseGhStackCatalog, requireWritableCatalog,
   type ApplyHooks, type CatalogStore, type GhStackCatalog, type GitRunner, type StackJournal,
 } from "@pwragent/owner-core/stacks/engine/index";
-import type { StackNotification } from "@pwragent/owner-core/stacks/stack-coordinator";
+import type { StackNotification, StackThreadRef } from "@pwragent/owner-core/stacks/stack-coordinator";
+import type { StackWorktreeReservation } from "../app-server/git-directory-service";
 import { runGitCommand } from "../app-server/git-executable";
 import { acquireNativeFileLock } from "../app-server/maintenance-native-lock";
 import { nativeRelayPath } from "../native-relay-path";
@@ -23,7 +24,17 @@ const foreignJournals = {
   "pwrgit-stack-op.json": "PwrGit has an unfinished stack operation in this clone.",
 };
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT";
-type RuntimeJournal = StackJournal & { notification: StackNotification; committed?: true };
+export type StackProvisioning =
+  | { stage: "pending" }
+  | { stage: "reserved" | "admitting" | "checkout_failed"; worktree: StackWorktreeReservation; lead: StackThreadRef }
+  | { stage: "accepted"; worktree: StackWorktreeReservation; lead: StackThreadRef; child: StackThreadRef;
+      codex?: { home: string; ownerEpoch: string } };
+export type RuntimeJournal = StackJournal & { notification: StackNotification; committed?: true; provisioning?: StackProvisioning };
+
+function initialProvisioning(notification?: StackNotification): StackProvisioning | undefined {
+  if (notification?.kind === "add_branch" && notification.options?.newThread) return { stage: "pending" };
+  return undefined;
+}
 
 async function exists(filename: string): Promise<boolean> {
   return await lstat(filename).then(() => true, (error: unknown) => {
@@ -149,13 +160,22 @@ export class GhStackCatalogStore implements CatalogStore {
 
   journalHooks(commonDir: string, notification?: StackNotification): ApplyHooks {
     return {
-      begin: async (entry) => await this.atomicWrite(commonDir, ownJournal, { ...entry, notification }),
+      begin: async (entry) => await this.atomicWrite(commonDir, ownJournal, {
+        ...entry, notification, provisioning: initialProvisioning(notification),
+      }),
       finish: async () => await this.clearJournal(commonDir),
     };
   }
 
   async markJournalCommitted(commonDir: string, entry: StackJournal, notification: StackNotification): Promise<void> {
-    await this.atomicWrite(commonDir, ownJournal, { ...entry, notification, committed: true });
+    await this.atomicWrite(commonDir, ownJournal, {
+      provisioning: initialProvisioning(notification), ...entry, notification, committed: true,
+    });
+  }
+
+  async writeProvisioning(commonDir: string, entry: RuntimeJournal, provisioning: StackProvisioning): Promise<void> {
+    await this.atomicWrite(commonDir, ownJournal, { ...entry, provisioning });
+    entry.provisioning = provisioning;
   }
 
   private async clearJournal(commonDir: string): Promise<void> {

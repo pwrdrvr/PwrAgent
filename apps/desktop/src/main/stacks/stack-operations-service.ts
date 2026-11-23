@@ -5,13 +5,14 @@ import { StackEngine, requireWritableCatalog, type ApplyHooks, type GhStackCatal
 import { stackRoot } from "@pwragent/owner-core/stacks/engine/plan";
 import { StackGit } from "@pwragent/owner-core/stacks/engine/git";
 import { StackCoordinator, StackOperationError, type StackApplyOptions, type StackNotification, type StackParticipant, type StackThreadRef } from "@pwragent/owner-core/stacks/stack-coordinator";
+import { ThreadStartNotAdmittedError } from "@pwragent/owner-core/thread-creation-lifecycle";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
 import { stackLayerBinding, type StackSummary } from "@pwragent/shared/stacks/stack-status";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
-import { GhStackCatalogStore, stackGitRunner } from "./stack-engine-ports";
+import { GhStackCatalogStore, stackGitRunner, type RuntimeJournal, type StackProvisioning } from "./stack-engine-ports";
 import { readStackClones } from "./stack-reader";
 import { applyStackLayerEdits, captureStackLayerEdits } from "../app-server/git-workspace-handoff-service";
 import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
@@ -46,10 +47,14 @@ function stackLeadKey(commonDir: string, root: string): string {
   return createHash("sha256").update(JSON.stringify([commonDir, root])).digest("hex");
 }
 
+const ownerEpoch = randomUUID();
+
 export class StackOperationsService {
   private readonly sessions = new Map<string, StackCoordinator>();
   private readonly finishing = new Map<string, Promise<StackThreadRef | undefined>>();
   private readonly abandoning = new Map<string, Promise<boolean>>();
+
+  constructor(private readonly epoch: string = ownerEpoch) {}
 
   async resumeInterrupted(directories: readonly string[], registry: DesktopBackendRegistry): Promise<string[]> {
     const results = await Promise.allSettled((await readStackClones(directories))
@@ -182,7 +187,7 @@ export class StackOperationsService {
       exclusive: (fn) => registry.withStackWorktreeMutation(clone.commonDir, fn),
       requestWork: (actor, owner, prompt, key, signal) => registry.requestStackLayerWork(actor, owner, prompt, key, signal),
       interrupt: (thread, opId) => registry.interruptStackLayer(thread, opId),
-      complete: (receipt, notification) => this.complete(clone, registry, store, git, receipt, notification),
+      complete: (_receipt, notification) => this.complete(clone, registry, store, git, notification),
       abandon: (actor, opId) => this.abandonProvisioning(clone, registry, store, git, actor, opId),
       apply: (plan, id, now, hooks, notification) => this.runJournalled(clone, registry, store, engine, git, hooks, notification,
         (journal) => engine.apply(plan, id, now, journal)),
@@ -198,33 +203,31 @@ export class StackOperationsService {
   }
 
   private complete(clone: { cwd: string; commonDir: string }, registry: DesktopBackendRegistry, store: GhStackCatalogStore,
-    git: StackGit, receipt: StackReceipt, notification: StackNotification): Promise<StackThreadRef | undefined> {
+    git: StackGit, notification: StackNotification): Promise<StackThreadRef | undefined> {
     const abandoning = this.abandoning.get(clone.commonDir);
-    if (abandoning) return abandoning.then(() => this.complete(clone, registry, store, git, receipt, notification));
+    if (abandoning) return abandoning.then(() => this.complete(clone, registry, store, git, notification));
     const active = this.finishing.get(clone.commonDir);
     if (active) return active;
-    const work = (async () => {
-      let committed: StackNotification | undefined;
+    const work = registry.withStackWorktreeMutation(clone.commonDir, async () => {
+      let child: StackThreadRef | undefined;
+      let found = false;
       await store.recover(clone.commonDir, async (entry) => {
         if (!entry.committed || entry.notification.opId !== notification.opId) {
           throw new StackOperationError("gh_stack_busy", "Another stack operation owns this journal.");
         }
-        committed = entry.notification;
-        return "retain";
+        found = true;
+        const saved = entry.notification;
+        if (!registry.hasStackNotice(saved.actor, saved.opId)) {
+          if (!saved.provisioningAbandoned) child = await this.provision(clone, registry, store, git, entry);
+          await registry.publishStackCompletion(saved.actor, saved.opId, saved.kind, child, saved.provisioningAbandoned);
+        }
+        if (!saved.provisioningAbandoned || entry.provisioning?.stage === "pending") await this.releaseCarry(git, saved);
       });
-      if (!committed && !registry.hasStackNotice(notification.actor, notification.opId)) {
+      if (!found && !registry.hasStackNotice(notification.actor, notification.opId)) {
         throw new StackOperationError("not_found", "The stack completion journal is unavailable.");
       }
-      const saved = committed ?? notification;
-      const child = saved.provisioningAbandoned || registry.hasStackNotice(saved.actor, saved.opId)
-        ? undefined : await this.provision(clone, registry, git, receipt, saved);
-      await registry.publishStackCompletion(saved.actor, saved.opId, saved.kind, child, saved.provisioningAbandoned);
-      await store.recover(clone.commonDir, async (entry) => {
-        if (entry.notification.opId !== notification.opId) throw new StackOperationError("gh_stack_busy", "Another stack operation owns this journal.");
-        await this.releaseCarry(git, saved);
-      });
       return child;
-    })().finally(() => { this.finishing.delete(clone.commonDir); });
+    }).finally(() => { this.finishing.delete(clone.commonDir); });
     this.finishing.set(clone.commonDir, work);
     return work;
   }
@@ -245,7 +248,9 @@ export class StackOperationsService {
         await this.notify(clone.commonDir, registry, git, receipt, notification);
         await registry.publishStackCompletion(actor, opId, notification.kind, undefined, true);
       }
-      await this.releaseCarry(git, notification);
+      // The snapshot may be the only complete copy after a partial carry.
+      // Leaving provisioning does not authorize removal of its checkout.
+      if (entry.provisioning?.stage === "pending") await this.releaseCarry(git, notification);
       abandoned = true;
     })).then(() => abandoned).finally(() => { this.abandoning.delete(clone.commonDir); });
     this.abandoning.set(clone.commonDir, work);
@@ -260,8 +265,9 @@ export class StackOperationsService {
     await git.output(["update-ref", "-d", ref, notification.carry.ref]);
   }
 
-  private async provision(clone: { cwd: string; commonDir: string }, registry: DesktopBackendRegistry, git: StackGit,
-    receipt: StackReceipt, notification: StackNotification): Promise<StackThreadRef | undefined> {
+  private async provision(clone: { cwd: string; commonDir: string }, registry: DesktopBackendRegistry, store: GhStackCatalogStore,
+    git: StackGit, entry: RuntimeJournal): Promise<StackThreadRef | undefined> {
+    const { receipt, notification } = entry;
     const operation = notification.operation;
     if (!operation || (operation.kind !== "adopt" && operation.kind !== "add_branch")) return undefined;
     const root = operation.kind === "adopt" ? stackRoot(operation.stack) : operation.root;
@@ -279,33 +285,139 @@ export class StackOperationsService {
     }
     if (operation.kind !== "add_branch" || !notification.options?.newThread) return undefined;
     const move = receipt.moves.find(({ branch }) => branch === operation.branch);
-    if (!move?.next || await git.tip(move.branch) !== move.next) {
+    const tip = move?.next;
+    if (!move || !tip || await git.tip(move.branch) !== tip) {
       throw new StackOperationError("stale_plan", "The new branch changed before its worktree could be provisioned.");
     }
-    const owners = await this.participants(git, [{ ...move, old: move.next }], receipt.after, registry);
-    const owner = owners[0];
-    const existing = owner && await storage.getThreadMetadata(owner);
-    if (owner && (existing?.parent?.backend !== lead.backend || existing.parent.threadId !== lead.threadId)) {
-      throw new StackOperationError("ambiguous_layer", "The new layer is already checked out by another thread.");
+    const checkpoint = (provisioning: StackProvisioning) => store.writeProvisioning(clone.commonDir, entry, provisioning);
+    let state = entry.provisioning;
+    if (state?.stage === "checkout_failed") {
+      throw new StackOperationError("stack_checkout_failed",
+        `The checkout setup failed at ${state.worktree.path}. Its files were kept. Inspect the checkout and abandon provisioning before starting a thread manually.`);
     }
-    let child: StackThreadRef = owner ?? { backend: notification.actor.backend, threadId: "" };
-    if (!owner) {
-      const edits = notification.carry;
-      const started = await registry.startThread({
-        backend: notification.actor.backend, cwd: clone.cwd, workMode: "worktree", requiredWorkMode: "worktree",
-        branchName: move.branch, worktreeBranchMode: "attached", parentThreadId: lead.threadId, parentThreadBackend: lead.backend,
-        pendingStart: { startId: notification.opId, title: move.branch },
-        ...(edits ? { prepareNewWorktree: (cwd: string) => applyStackLayerEdits(cwd, edits, move.next!) } : {}),
-      });
-      child = { backend: started.backend, threadId: started.threadId };
+    if (state?.stage !== "pending" && state?.stage !== "reserved" && state?.stage !== "accepted") {
+      throw await this.provisioningUncertain(registry, entry, state?.stage === "admitting" ? state.worktree.path : undefined);
     }
-    const leadOverlay = await storage.getThreadOverlayState(lead);
+    const backend = notification.actor.backend;
+    const parent = state.stage === "pending" ? { backend: lead.backend, threadId: lead.threadId } : state.lead;
+    const assertOwner = async (child?: StackThreadRef) => {
+      const [owner] = await this.participants(git, [{ ...move, old: tip }], receipt.after, registry, true);
+      if (owner && (owner.backend !== child?.backend || owner.threadId !== child.threadId)) {
+        throw new StackOperationError("ambiguous_layer", "The new layer is already checked out by another thread.");
+      }
+      return owner;
+    };
+    if (state.stage !== "pending" && (path.relative(clone.commonDir, state.worktree.commonDir) !== ""
+      || state.worktree.branch !== move.branch || state.worktree.tip !== move.next)) {
+      throw new StackOperationError("stale_plan", "The reserved worktree no longer matches the stack operation.");
+    }
+    const inspectAccepted = async (accepted: Extract<StackProvisioning, { stage: "accepted" }>) => {
+      const { child, worktree, codex } = accepted;
+      if (child.backend !== backend || !child.threadId) return "unverified";
+      await registry.prepareStackWorktree(clone.cwd, worktree, { create: false, ownerThreadId: backend === "codex" ? child.threadId : undefined });
+      if (await assertOwner(child)) return "present";
+      if (backend !== "codex") return "unverified";
+      // A live owner may still have the child in an older App Server
+      // generation. Absence can authorize replacement only after owner restart.
+      const home = codex && codex.ownerEpoch !== this.epoch ? codex.home : undefined;
+      const observed = await registry.inspectCodexStackThread(child, worktree.path, home);
+      return observed === "missing" && !home ? "unverified" : observed;
+    };
+    let acceptedPresent = false;
+    if (state.stage === "accepted") {
+      const observed = await inspectAccepted(state);
+      if (observed === "missing" && !(await storage.getThreadMetadata(state.child))?.parent) {
+        // A previously registered child (including a marker installed before
+        // the parent write) cannot be replaced by this operation.
+        await registry.prepareStackWorktree(clone.cwd, state.worktree, { create: false });
+        const reserved = { stage: "reserved" as const, worktree: state.worktree, lead: parent };
+        await checkpoint(reserved);
+        state = reserved;
+      } else if (observed === "present") {
+        acceptedPresent = true;
+      } else {
+        throw await this.provisioningUncertain(registry, entry, state.worktree.path);
+      }
+    }
+    if (state.stage !== "accepted") {
+      let reservation = state.stage === "reserved" ? state.worktree : undefined;
+      try {
+        await registry.startThread({
+          backend, cwd: clone.cwd, workMode: "worktree", requiredWorkMode: "worktree",
+          branchName: move.branch, worktreeBranchMode: "attached", parentThreadId: parent.threadId, parentThreadBackend: parent.backend,
+          pendingStart: { startId: notification.opId, title: move.branch },
+          stackWorktree: {
+            prepare: async () => {
+              if (!reservation) {
+                reservation = await registry.reserveStackWorktree({ ...clone, backend, branch: move.branch, tip });
+                await checkpoint({ stage: "reserved", worktree: reservation, lead: parent });
+              }
+              const worktree = reservation;
+              const workspace = await registry.prepareStackWorktree(clone.cwd, worktree, {
+                create: true,
+                onAddFailed: () => checkpoint({ stage: "checkout_failed", worktree, lead: parent }),
+              });
+              await assertOwner();
+              if (notification.carry) await applyStackLayerEdits(workspace.cwd, notification.carry, tip);
+              return workspace;
+            },
+            admit: async (submit) => {
+              if (!reservation) throw new Error("The stack worktree was not prepared.");
+              await registry.prepareStackWorktree(clone.cwd, reservation, { create: false });
+              await assertOwner();
+              await checkpoint({ stage: "admitting", worktree: reservation, lead: parent });
+              const worktree = reservation;
+              const result = await submit().catch(async (error: unknown) => {
+                if (error instanceof ThreadStartNotAdmittedError) await checkpoint({ stage: "reserved", worktree, lead: parent });
+                throw error;
+              });
+              await checkpoint({
+                stage: "accepted", worktree, lead: parent, child: { backend, threadId: result.threadId },
+                ...(backend === "codex" && result.codexHome ? { codex: { home: result.codexHome, ownerEpoch: this.epoch } } : {}),
+              });
+              return result;
+            },
+          },
+        });
+      } catch (error) {
+        if (entry.provisioning?.stage === "admitting") {
+          throw await this.provisioningUncertain(registry, entry, entry.provisioning.worktree.path);
+        }
+        throw error;
+      }
+      state = entry.provisioning;
+    }
+    if (state?.stage !== "accepted" || state.child.backend !== backend || !state.child.threadId) {
+      throw await this.provisioningUncertain(registry, entry);
+    }
+    const { child, worktree } = state;
+    if (!acceptedPresent && await inspectAccepted(state) !== "present") throw await this.provisioningUncertain(registry, entry, worktree.path);
+    await registry.registerStackLayerThread(child, parent, worktree.path);
+    const existing = await storage.getThreadMetadata(child);
+    const leadOverlay = await storage.getThreadOverlayState(parent);
     if (leadOverlay?.subthreadOrder?.[0] !== child.threadId) {
-      await updateLocalSubthreadOrder({ backend: lead.backend, parentThreadId: lead.threadId,
+      await updateLocalSubthreadOrder({ backend: parent.backend, parentThreadId: parent.threadId,
         threadIds: [child.threadId, ...(leadOverlay?.subthreadOrder ?? []).filter((id) => id !== child.threadId)] });
     }
     if (existing?.title?.text !== move.branch) await registry.renameThread({ ...child, name: move.branch });
     return child;
+  }
+
+  private async provisioningUncertain(registry: DesktopBackendRegistry, { notification, provisioning }: RuntimeJournal, checkout?: string) {
+    const { actor, opId, carry } = notification;
+    const message = [
+      `PwrAgent could not confirm the provider start for stack operation ${opId}.`,
+      ...(provisioning?.stage === "accepted" ? [`The provider reported thread ${provisioning.child.threadId}.`] : []),
+      checkout ? `Inspect the checkout at ${checkout} and the provider's thread list.` : "Inspect the branch checkout and the provider's thread list.",
+      "To abandon provisioning and keep the Git changes, ask this thread to run manage_stack_operation with action \"abort\" and the operation ID.",
+      ...(carry ? [`The saved edits are at refs/pwragent/stack-carry/${opId}.`] : []),
+    ].join(" ");
+    await registry.publishStackNotice(actor, {
+      opId, kind: "add_branch", branch: ":provisioning", stack: "", by: { threadId: actor.threadId, actor: "agent" },
+      from: null, to: null, changedFiles: [], undo: `refs/pwragent/undo/${opId}`,
+      completion: { provisioningIssue: message },
+    });
+    return new StackOperationError("stack_provisioning_uncertain", message);
   }
 
   private async prepareCarry(registry: DesktopBackendRegistry, git: StackGit, notification: StackNotification): Promise<void> {
@@ -448,7 +560,7 @@ export class StackOperationsService {
     if (!await store.hasJournal(clone.commonDir)) return;
     const git = new StackGit(stackGitRunner, clone.cwd);
     const engine = new StackEngine(stackGitRunner, store, clone.cwd, clone.commonDir);
-    let pending: { receipt: StackReceipt; notification: StackNotification } | undefined;
+    let pending: StackNotification | undefined;
     await registry.withStackWorktreeMutation(clone.commonDir, () => store.recover(clone.commonDir, async (entry) => {
       const release: Array<() => void> = [];
       try {
@@ -461,7 +573,7 @@ export class StackOperationsService {
             await registry.publishStackCompletion(notification.actor, notification.opId, notification.kind);
             return;
           }
-          pending = { receipt, notification };
+          pending = notification;
           return "retain";
         }
         const moves = direction === "apply" ? receipt.moves : receipt.moves.map(({ branch, old, next }) => ({ branch, old: next, next: old }));
@@ -478,7 +590,7 @@ export class StackOperationsService {
             await store.markJournalCommitted(clone.commonDir, entry, notification);
             await this.notify(clone.commonDir, registry, git, receipt, notification);
             if (notification.kind === "undo") await registry.publishStackCompletion(notification.actor, notification.opId, notification.kind);
-            else pending = { receipt, notification };
+            else pending = notification;
           }
         } });
         return pending ? "retain" : undefined;
@@ -486,13 +598,14 @@ export class StackOperationsService {
         for (const unlock of release.reverse()) unlock();
       }
     }));
-    if (pending) await this.complete(clone, registry, store, git, pending.receipt, pending.notification);
+    if (pending) await this.complete(clone, registry, store, git, pending);
   }
 
-  private async participants(git: StackGit, moves: readonly RefMove[], catalog: GhStackCatalog, registry: DesktopBackendRegistry): Promise<StackParticipant[]> {
+  private async participants(git: StackGit, moves: readonly RefMove[], catalog: GhStackCatalog, registry: DesktopBackendRegistry,
+    forceRefresh = false): Promise<StackParticipant[]> {
     if (!moves.length) return [];
     const worktrees = await git.worktrees([...moves]);
-    const threads = await registry.listThreads({ callerReason: "stack-operation" });
+    const threads = await registry.listThreads({ callerReason: "stack-operation", forceRefresh });
     if (registry.isIncompleteThreadList(threads)) throw new StackOperationError("ambiguous_layer", "Complete local thread ownership is unavailable.");
     const overlays = await Promise.all(threads.map(async (thread) => {
       const ref = { backend: thread.source, threadId: thread.id };

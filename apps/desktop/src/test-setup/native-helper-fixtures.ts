@@ -9,7 +9,7 @@ const consumers = {
   maintenanceAllocation: "maintenance-disk-usage.property.test.ts",
   mcpIpc: "mcp-ipc-http.test.ts",
   markerProbe: "thread-dependency-marker-probe.property.test.ts",
-  stackEngine: "stack-engine-ports.test.ts",
+  stackEngine: ["stack-engine-ports.test.ts", "stack-provisioning.property.test.ts"],
 } as const;
 type Consumer = keyof typeof consumers;
 type HelperPaths = { relay: string; identity?: string };
@@ -22,9 +22,8 @@ declare module "vitest" {
 
 export function nativeHelperConsumers(files: readonly string[]): Consumer[] {
   const selected = new Set(files.map((file) => path.resolve(file)));
-  return (Object.keys(consumers) as Consumer[]).filter((consumer) => selected.has(
-    path.join(desktop, "src/main/__tests__", consumers[consumer]),
-  ));
+  return (Object.keys(consumers) as Consumer[]).filter((consumer) => [consumers[consumer]].flat()
+    .some((filename) => selected.has(path.join(desktop, "src/main/__tests__", filename))));
 }
 
 async function buildHelpers(root: string, identity: boolean): Promise<HelperPaths> {
