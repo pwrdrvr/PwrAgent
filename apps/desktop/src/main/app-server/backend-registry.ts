@@ -2154,7 +2154,7 @@ export class DesktopBackendRegistry {
       handleAgentMcpConnectionRequest: (...args: Parameters<ThreadMcpConnections["handleAgentMcpConnectionRequest"]>) => this.threadMcpConnections.handleAgentMcpConnectionRequest(...args),
       handleAgentTaskMonitorRequest: (request: TaskMonitorRequest) => this.handleAgentTaskMonitorRequest(request),
       isJobMonitorCreationEnabled: (context: { backend: AppServerBackendKind; threadId: string }) =>
-        this.isJobMonitorCreationEnabled({ ...context, turnId: this.jobMonitorCreationTurnId(context) }),
+        this.isJobMonitorCreationEnabled({ ...context, turnId: this.jobMonitorCreationTurnId(context) }, { forCatalog: true }),
       handleCodexAppServerUnexpectedExit: (...args: Parameters<typeof this.codexRuntimeSupervisor.handleCodexAppServerUnexpectedExit>) => this.codexRuntimeSupervisor.handleCodexAppServerUnexpectedExit(...args),
       handleServerRequest: (...args: Parameters<typeof this.handleServerRequest>) => this.handleServerRequest(...args),
       handoffThreadWorkspace: (...args: Parameters<ThreadWorkspaceService["handoffThreadWorkspace"]>) => this.threadWorkspaceService.handoffThreadWorkspace(...args),
@@ -15988,16 +15988,20 @@ export class DesktopBackendRegistry {
     }
   }
 
-  private async isJobMonitorCreationEnabled(context: { backend: AppServerBackendKind; threadId: string; turnId?: string }): Promise<boolean> {
-    return await this.jobMonitorCreationAvailability(context) === "enabled";
+  private async isJobMonitorCreationEnabled(
+    context: { backend: AppServerBackendKind; threadId: string; turnId?: string },
+    options?: { forCatalog: boolean },
+  ): Promise<boolean> {
+    return await this.jobMonitorCreationAvailability(context, options) === "enabled";
   }
 
   private async jobMonitorCreationAvailability({ backend, threadId, turnId }: {
     backend: AppServerBackendKind; threadId: string; turnId?: string;
-  }): Promise<"enabled" | "off" | "next-turn"> {
+  }, options?: { forCatalog: boolean }): Promise<"enabled" | "off" | "next-turn"> {
     if ((await this.overlayStore.getThreadOverlayState({ backend, threadId }))?.jobMonitorCreationEnabled === false) return "off";
     return turnId && (this.jobMonitorCreationDeferredTurns.has(buildActiveTurnKey(backend, threadId, turnId))
-      || (backend === "claude" && this.claudeBackend.jobMonitorCreationEnabledForTurn(threadId, turnId) === false))
+      // A reconnect must be able to list the desired catalog before calls can use it.
+      || (!options?.forCatalog && backend === "claude" && this.claudeBackend.jobMonitorCreationEnabledForTurn(threadId, turnId) === false))
       ? "next-turn" : "enabled";
   }
 

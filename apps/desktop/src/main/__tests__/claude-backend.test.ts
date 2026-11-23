@@ -3043,10 +3043,12 @@ describe("Claude SDK backend", () => {
     await f.backend.close();
   });
 
-  it("reconnects the Job Monitor catalog before a later prompt and preserves live tasks", async () => {
+  it.each(["system", "loop_wakeup", "schedule_wakeup"])("reconnects the Job Monitor catalog for submitted and native prompts (%s)", async (source) => {
     let listed = true;
     let requested = true;
     let reloadWorks = true;
+    const nativeWake = Promise.withResolvers<void>();
+    const wakeCompleted = Promise.withResolvers<void>();
     const snapshots: boolean[] = [];
     const reconnectMcpServer = vi.fn(async () => { if (reloadWorks) listed = requested; });
     const mcpServerStatus = vi.fn(async (): Promise<Awaited<ReturnType<Query["mcpServerStatus"]>>> => [{
@@ -3054,19 +3056,32 @@ describe("Claude SDK backend", () => {
         { name: "cancel_monitor_delegation" }, ...(listed ? [{ name: "create_monitor_delegation" }] : []),
       ],
     }]);
-    const f = await fixture(async function* (_options, prompt) {
+    const f = await fixture(async function* (options, prompt) {
       yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
       yield { type: "system", subtype: "task_started", task_id: "task-1", description: "Fixture job", task_type: "local_bash", is_backgrounded: true } as SDKMessage;
       for await (const message of prompt) {
         snapshots.push(listed);
         yield { type: "result", subtype: "success", is_error: false, result: "OK",
           user_message_uuids: [message.uuid] } as unknown as SDKMessage;
+        if (snapshots.length === 2) {
+          await Promise.race([nativeWake.promise, new Promise<void>((resolve) => {
+            options.abortController!.signal.addEventListener("abort", () => resolve(), { once: true });
+          })]);
+          if (options.abortController!.signal.aborted) return;
+          // Claude can announce a follow-up before requesting the prompt hook.
+          yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+          await runPromptSubmit(options, { prompt: "Fixture native wake", source });
+          snapshots.push(listed);
+          yield { type: "result", subtype: "success", is_error: false, result: "OK" } as SDKMessage;
+          wakeCompleted.resolve();
+        }
       }
     }, { reconnectMcpServer, mcpServerStatus, setMcpServers: vi.fn().mockResolvedValue({ added: [], removed: [], errors: {} }) });
+    const backend = f.openBackend({ ...f.backendOptions, readJobMonitorCreationPreference: async () => requested });
     try {
-      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
       const mcpServers = { pwragent: { type: "http" as const, url: "http://127.0.0.1:9/mcp" } };
-      const turn = () => f.backend.startTurn({ threadId, input: [{ type: "text", text: "Continue" }],
+      const turn = () => backend.startTurn({ threadId, input: [{ type: "text", text: "Continue" }],
         mcpServers, jobMonitorCreationEnabled: requested });
       await turn();
       await f.waitForTurn();
@@ -3076,21 +3091,40 @@ describe("Claude SDK backend", () => {
       await expect(turn()).rejects.toThrow("could not confirm the Job Monitors tool catalog");
       expect(snapshots).toEqual([true]);
       expect(f.close).not.toHaveBeenCalled();
-      expect(f.backend.listBackgroundTasks(threadId).terminals).toHaveLength(1);
+      expect(backend.listBackgroundTasks(threadId).terminals).toHaveLength(1);
 
       reloadWorks = true;
       await turn();
       await f.waitForTurn();
-      await turn();
-      await f.waitForTurn();
       requested = true;
+      nativeWake.resolve();
+      await wakeCompleted.promise;
       await turn();
       await f.waitForTurn();
-      expect(snapshots).toEqual([true, false, false, true]);
+      expect(snapshots).toEqual([true, false, true, true]);
       expect(reconnectMcpServer.mock.calls).toEqual([["pwragent"], ["pwragent"], ["pwragent"]]);
       expect(f.run).toHaveBeenCalledOnce();
       expect(f.close).not.toHaveBeenCalled();
     } finally {
+      await backend.close();
+    }
+  });
+
+  it("releases the first prompt when the optional Job Monitor status probe never answers", async () => {
+    const status = Promise.withResolvers<Awaited<ReturnType<Query["mcpServerStatus"]>>>();
+    const f = await fixture(undefined, { mcpServerStatus: () => status.promise,
+      setMcpServers: vi.fn().mockResolvedValue({ added: [], removed: [], errors: {} }) });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    let accepted = false;
+    const starting = f.backend.startTurn({ threadId, input: [{ type: "text", text: "Continue" }],
+      mcpServers: { pwragent: { type: "http", url: "http://127.0.0.1:9/mcp" } }, jobMonitorCreationEnabled: true })
+      .then(() => { accepted = true; });
+    try {
+      await vi.waitFor(() => expect(accepted).toBe(true), { timeout: 3_000 });
+      await f.waitForTurn();
+    } finally {
+      status.resolve([]);
+      await starting;
       await f.backend.close();
     }
   });

@@ -773,6 +773,7 @@ export type FederationBackendOperations = NavigationBackendOperations & {
     request: ResolveThreadRequest,
     rpcOptions?: FederationRpcRequestOptions,
   ): Promise<ResolveThreadResponse>;
+  isCodexThreadActive?(threadId: string): Promise<boolean>;
   resolveThreadAdmissionState?(request: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -2054,8 +2055,7 @@ export function registerFederationBackendHandlers(params: {
       throw new Error("Changing Job Monitors requires an owner-local Codex thread and an enabled state.");
     }
     const { threadId, enabled } = request;
-    const { thread } = await params.backend.resolveThread({ backend: "codex", threadId });
-    if (thread?.id !== threadId || thread.source !== "codex" || thread.archivedAt !== undefined) {
+    if (!await params.backend.isCodexThreadActive?.(threadId)) {
       throw new Error("The Codex thread is no longer available on the owning instance.");
     }
     if (envelope.deadlineAt !== undefined && envelope.deadlineAt <= Date.now()) {

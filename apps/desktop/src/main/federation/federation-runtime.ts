@@ -7886,6 +7886,9 @@ function localBackendOperations(): FederationBackendOperations {
       const thread = await getDesktopBackendRegistry().resolveThread(request);
       return thread ? { thread } : {};
     },
+    async isCodexThreadActive(threadId) {
+      return await getDesktopBackendRegistry().isThreadActiveForService({ backend: "codex", threadId });
+    },
     async resolveThreadAdmissionState(request) {
       return await new DesktopMessagingBackendBridge()
         .getThreadAdmissionState(request);

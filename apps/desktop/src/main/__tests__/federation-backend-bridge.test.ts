@@ -656,13 +656,16 @@ describe("federation backend bridge", () => {
             });
             const resolveThread = vi.fn(async ({ threadId: id }) => {
               if (id === "missing") return {};
-              if (id === "expired") now += 60_000;
               return { thread: { id, source: id === "other-provider" ? "claude" : "codex",
-                ...(id === "archived" ? { archivedAt: 1 } : {}), title: "Fixture", titleSource: "explicit", linkedDirectories: [] } };
+                title: "Fixture", titleSource: "explicit", linkedDirectories: [] } };
+            });
+            const isCodexThreadActive = vi.fn(async (id: string) => {
+              if (id === "expired") now += 60_000;
+              return id === threadId || id === "expired";
             });
             const setThreadJobMonitorCreation = vi.fn(async (request) => { enabled = request.enabled; return request; });
             registerFederationBackendHandlers({ router, backend: {
-              resolveThread, setThreadJobMonitorCreation,
+              resolveThread, isCodexThreadActive, setThreadJobMonitorCreation,
             } as unknown as FederationBackendOperations });
             return { routes, value: () => enabled, setThreadJobMonitorCreation };
           });
@@ -692,6 +695,7 @@ describe("federation backend bridge", () => {
     ), { numRuns: 30, examples: [[[
       { owner: 0, enabled: false, request: "current" },
       { owner: 1, enabled: false, request: "no-grant" },
+      { owner: 0, enabled: true, request: "archived" },
       { owner: 0, enabled: true, request: "expired" },
     ]]] });
   });

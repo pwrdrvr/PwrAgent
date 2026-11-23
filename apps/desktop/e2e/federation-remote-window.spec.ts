@@ -367,7 +367,14 @@ test.describe("federation remote window", () => {
       await expect(ownerOptions).toHaveAttribute("aria-checked", "false");
       await ownerOptions.click();
       await expect(remote).toHaveAttribute("aria-checked", "true");
+      await remote.click();
+      await expect(remote).toContainText("The agent can't start new ones.");
       await viewer.window.keyboard.press("Escape");
+      await viewer.window.getByRole("tab", { name: "Waiting for", exact: true }).click();
+      const turnOn = viewer.window.getByRole("button", { name: "Turn on Job Monitors", exact: true });
+      await turnOn.click();
+      await expect(turnOn).toHaveCount(0);
+      await expect(ownerOptions).toHaveAttribute("aria-checked", "true");
       await expect(await openOptions(viewer.window, "Local release notes")).toHaveAttribute("aria-checked", "true");
     } finally {
       await viewer?.close();
