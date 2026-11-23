@@ -1,9 +1,12 @@
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
+import { IterableMapper } from "@shutterstock/p-map-iterable";
 import { readBoundedGitPointer } from "./private/directory-observation";
 import { hasGitDiscoveryOverrides } from "./private/directory-probe";
 import { gitCommandPreference } from "../git-runtime";
 import { runPrMetadataFileProbe, type PrMetadataDemand } from "../pr-status/pr-metadata-process";
+
+export const STACK_CHECKOUT_SCAN_LIMITS = { concurrency: 8, maxUnread: 8 };
 
 async function status(file: string) {
   try {
@@ -29,7 +32,7 @@ export function createStackCheckoutHints(demand: PrMetadataDemand) {
   const useGit = gitCommandPreference(process.env) || hasGitDiscoveryOverrides();
   const ancestors = new Map<string, Promise<readonly string[] | undefined>>();
   const paths = new Map<string, Promise<readonly string[] | undefined>>();
-  const catalogPresence = new Map<string, Promise<boolean>>();
+  const markerPresence = new Map<string, Promise<boolean>>();
 
   async function probe<T>(read: (signal: AbortSignal) => Promise<T>): Promise<T> {
     const result = await runPrMetadataFileProbe(read, demand);
@@ -116,28 +119,31 @@ export function createStackCheckoutHints(demand: PrMetadataDemand) {
     return observed;
   }
 
-  function hasCatalog(commonDir: string): Promise<boolean> {
+  function hasMarker(commonDir: string, marker = "gh-stack"): Promise<boolean> {
     demand.signal?.throwIfAborted();
-    let observed = catalogPresence.get(commonDir);
+    const file = path.join(commonDir, marker);
+    let observed = markerPresence.get(file);
     if (!observed) {
-      observed = probe(() => status(path.join(commonDir, "gh-stack"))).then(Boolean, () => true);
-      catalogPresence.set(commonDir, observed);
+      observed = probe(() => status(file)).then(Boolean, () => true);
+      markerPresence.set(file, observed);
     }
     return observed;
   }
 
   return {
     possibleCommonDirs,
-    hasCatalog,
-    async catalogCandidates(directories: readonly string[]): Promise<string[]> {
-      const eligible = await Promise.all([...new Set(directories)].map(async (cwd) => {
+    hasMarker,
+    async markerCandidates(directories: readonly string[], marker = "gh-stack"): Promise<string[]> {
+      const scan = new IterableMapper(new Set(directories), async (cwd) => {
         const commonDirs = await possibleCommonDirs(cwd);
-        if (!commonDirs) return cwd;
-        const catalogs = await Promise.all(commonDirs.map(hasCatalog));
-        return catalogs.some(Boolean) ? cwd : undefined;
-      }));
+        if (!commonDirs) return { cwd, present: true };
+        const markers = await Promise.all(commonDirs.map((commonDir) => hasMarker(commonDir, marker)));
+        return { cwd, present: markers.some(Boolean) };
+      }, STACK_CHECKOUT_SCAN_LIMITS);
+      const eligible: string[] = [];
+      for await (const { cwd, present } of scan) if (present) eligible.push(cwd);
       demand.signal?.throwIfAborted();
-      return eligible.filter((cwd) => cwd !== undefined);
+      return eligible;
     },
   };
 }

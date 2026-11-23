@@ -12,9 +12,9 @@ import { stackLayerBinding, type StackSummary } from "@pwragent/shared/stacks/st
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
-import { GhStackCatalogStore, stackGitRunner, type RuntimeJournal, type StackProvisioning } from "./stack-engine-ports";
+import { GhStackCatalogStore, STACK_OPERATION_JOURNAL, stackGitRunner, type RuntimeJournal, type StackProvisioning } from "./stack-engine-ports";
 import { PR_METADATA_PRIORITY } from "../pr-status/pr-metadata-process";
-import { readStackClones } from "./stack-reader";
+import { readStackClones, StackReadObservation } from "./stack-reader";
 import { applyStackLayerEdits, captureStackLayerEdits } from "../app-server/git-workspace-handoff-service";
 import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
 
@@ -129,8 +129,12 @@ export class StackOperationsService {
   }
 
   async resumeInterrupted(directories: readonly string[], registry: DesktopBackendRegistry): Promise<string[]> {
-    const results = await Promise.allSettled((await readStackClones(directories))
-      .map((clone) => this.recoverClone(clone, registry)));
+    const observation = new StackReadObservation();
+    // Recovery keys on the journal because an interrupted adoption may not
+    // have written its catalog yet. The locked recovery still verifies it.
+    const candidates = await observation.hints.markerCandidates(directories, STACK_OPERATION_JOURNAL);
+    const clones = await observation.checkoutsByClone(candidates);
+    const results = await Promise.allSettled(clones.map((clone) => this.recoverClone(clone, registry)));
     return results.flatMap((result) => result.status === "rejected" ? [String(result.reason)] : []);
   }
 
