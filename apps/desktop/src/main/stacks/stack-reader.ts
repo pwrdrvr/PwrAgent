@@ -515,10 +515,12 @@ export class StackReader {
     const { demand, hints, inventoryDemand } = observation;
     demand.signal?.throwIfAborted();
     const local = threads.filter((row) => !row.federation);
-    const anchors = await Promise.all([...new Set(directories)].map((cwd) => observation.checkout(cwd)));
+    const anchorLookups = await Promise.all([...new Set(directories)].map((cwd) => observation.checkoutLookup(cwd)));
+    const anchors = anchorLookups.filter((entry) => entry !== undefined && entry !== "unavailable");
+    const unavailable: CatalogRead[] = anchorLookups.includes("unavailable") ? [{ status: "unavailable" }] : [];
     const anchorPaths = new Set(directories);
-    const scopedClones = new Map(anchors.flatMap((entry) => entry ? [[entry.commonDir, entry] as const] : []));
-    if (directories && !scopedClones.size) return { stacks: [], catalogs: [] };
+    const scopedClones = new Map(anchors.map((entry) => [entry.commonDir, entry] as const));
+    if (directories && !scopedClones.size) return { stacks: [], catalogs: unavailable };
 
     const eligible = possibleInferredLayers(local, knownPrs);
     const wanted = new Set<string>();
@@ -587,7 +589,7 @@ export class StackReader {
     }, STACK_CHECKOUT_SCAN_LIMITS);
     const verified = new Map<string, Checkout>();
     for await (const checkout of verify) if (checkout) verified.set(checkout.cwd, checkout);
-    const checkouts = new Map(anchors.flatMap((entry) => entry ? [[entry.cwd, entry] as const] : []));
+    const checkouts = new Map(anchors.map((entry) => [entry.cwd, entry] as const));
     // Keep the existing path order regardless of which probes finish first.
     for (const cwd of paths) {
       const checkout = verified.get(cwd);
@@ -645,7 +647,7 @@ export class StackReader {
         };
       }));
       return { ...stack, layers: layers.map((layer, index) => ({ ...layer, ...gates[index] })) };
-    }), catalogs: results.map(({ catalog }) => catalog) };
+    }), catalogs: [...results.map(({ catalog }) => catalog), ...unavailable] };
   }
 }
 
