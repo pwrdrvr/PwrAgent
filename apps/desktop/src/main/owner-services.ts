@@ -694,6 +694,7 @@ wireOwnerRendererEvents();
   const queues = startOwnerQueues(federationRuntime, {
     registry,
     readDefaultMergeMethod: () => settings.resolveDefaultMergeMethod(),
+    readReviewStackHold: (thread) => getDesktopAppServerService().automationStackHold(thread),
     // Clicking a card approves the mode it shows, so these handlers skip the agent access ceiling.
     federation: createFederationAgentToolsHandler({ ...federationAgentToolOptions, operatorApproved: true }),
     federationWithOrigin: (messageOrigin: AppServerThreadMessageOrigin) => createFederationAgentToolsHandler({

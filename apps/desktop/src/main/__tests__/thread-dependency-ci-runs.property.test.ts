@@ -580,6 +580,28 @@ describe("Continue After a CI run", () => {
   });
   afterEach(() => { db.close(); removeTempStateDbDir(tempDir); vi.unstubAllEnvs(); });
 
+  it("holds a ready CI wake without repeatedly committing, then admits it on a fresh PR observation", async () => {
+    let held = true;
+    const agent = coordinator({ stackHold: async () => held ? "Held by #41: needs restack" : undefined });
+    await create(agent);
+    const milestone = observation({
+      status: "waiting", gates: [{ environment: "windows-signing", reviewers: ["release-team"] }],
+    });
+    await agent.handleCiRunObservation(RUN_URL, milestone);
+    expect(store.active()[0]?.status).toBe("ready");
+    expect(submit).not.toHaveBeenCalled();
+    const { writes } = await measureSqliteWrites(async () => {
+      for (let index = 0; index < 10; index++) await agent.handlePrEvent("https://github.com/example/app/pull/41");
+    });
+    expectSqliteWriteBudget({ scenario: "stack-held-continue-after-ci", writes,
+      note: "A ready CI prerequisite waits through repeated lower-stack observations without further commits. 0 MB/day." });
+    held = false;
+    await agent.handlePrEvent("https://github.com/example/app/pull/41");
+    await agent.handlePrEvent("https://github.com/example/app/pull/41");
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(store.active()).toEqual([]);
+  });
+
   it("waits through running checks, wakes once at the named gate, and stops asking for checks", async () => {
     const agent = coordinator();
     const response = await create(agent);

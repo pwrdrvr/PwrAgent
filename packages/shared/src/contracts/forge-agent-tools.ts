@@ -18,6 +18,7 @@ export const FORGE_AGENT_TOOL_GROUPS = [
   "issues",
   "ci",
   "stacks",
+  "stack_publish",
   "approve_merge",
 ] as const;
 
@@ -59,6 +60,7 @@ export const DEFAULT_FORGE_AGENT_TOOL_POLICY: ForgeAgentToolPolicy = {
     issues: "auto",
     ci: "auto",
     stacks: "auto",
+    stack_publish: "ask",
     approve_merge: "ask",
   },
   rules: [],
@@ -71,6 +73,7 @@ export const FORGE_AGENT_TOOL_GROUP_LABELS: Record<ForgeAgentToolGroup, string> 
   issues: "Issues",
   ci: "CI reruns",
   stacks: "Stacks",
+  stack_publish: "Stack publishing",
   approve_merge: "Approve and merge",
 };
 
@@ -107,6 +110,7 @@ export const FORGE_AGENT_WRITE_TOOL_GROUPS = {
   update_issue: "issues",
   rerun_failed_ci_jobs: "ci",
   apply_stack_operation: "stacks",
+  publish_stack_layer: "stack_publish",
   manage_stack_operation: "stacks",
   merge_pull_request: "approve_merge",
 } as const satisfies Record<string, Exclude<ForgeAgentToolGroup, "read">>;
@@ -131,6 +135,7 @@ export const FORGE_AGENT_TOOL_RULE_GROUPS = [
   "issues",
   "ci",
   "stacks",
+  "stack_publish",
   "approve_merge",
 ] as const satisfies readonly Exclude<ForgeAgentToolGroup, "read">[];
 
@@ -770,6 +775,7 @@ export const FORGE_AGENT_TOOL_GROUP_ACTIONS: Record<ForgeAgentToolGroup, { base:
   issues: { base: "open or update issues", gerund: "opening or updating issues" },
   ci: { base: "rerun failed CI jobs", gerund: "rerunning failed CI jobs" },
   approve_merge: { base: "approve or merge pull requests", gerund: "approving or merging pull requests" },
+  stack_publish: { base: "publish stack layers", gerund: "publishing stack layers" },
   stacks: { base: "change local stacks", gerund: "changing local stacks" },
 };
 

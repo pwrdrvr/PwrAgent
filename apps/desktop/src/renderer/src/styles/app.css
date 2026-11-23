@@ -7062,10 +7062,16 @@ a.button {
   font-variant-numeric: tabular-nums;
 }
 
-.thread-row__chip.stack-position-chip:not(.thread-row__chip--held) {
+.thread-row__chip.stack-position-chip:not([data-held]) {
   border: 1px solid var(--border-subtle);
   background: var(--bg-sidebar);
   color: var(--text-secondary);
+}
+
+.thread-row__chip.stack-position-chip[data-held] {
+  border-color: color-mix(in srgb, var(--status-warning) 32%, var(--border-subtle));
+  background: color-mix(in srgb, var(--status-warning) 9%, var(--bg-sidebar));
+  color: var(--status-warning-text);
 }
 
 button.stack-position-chip:hover {
@@ -7073,7 +7079,7 @@ button.stack-position-chip:hover {
   color: var(--text-primary);
 }
 
-.thread-row__chip.stack-position-chip[data-stale]:not(.thread-row__chip--held) {
+.thread-row__chip.stack-position-chip[data-stale]:not([data-held]) {
   color: var(--status-warning-text);
 }
 
@@ -7095,6 +7101,32 @@ button.stack-position-chip:hover {
 
 .stack-rail-card__layers .rail-card__meta {
   display: block;
+}
+
+.stack-rail-card__layers li[data-held] .rail-card__meta {
+  color: var(--status-warning-text);
+}
+
+.stack-rail-card__trunk {
+  margin-block: 8px 0;
+  padding-block-start: 6px;
+  border-block-start: 1px solid var(--border-subtle);
+}
+
+.stack-notice-card {
+  padding: 10px 12px;
+  border-inline-start: 2px solid var(--accent-border);
+}
+
+.stack-notice-card ul {
+  margin-block: 6px;
+  padding-inline-start: 20px;
+  overflow-wrap: anywhere;
+}
+
+.stack-notice-card__range {
+  margin-block: 6px;
+  color: var(--text-secondary);
 }
 
 /* The tray's status text. `.sidebar-empty` is sidebar-level and sets 14px,
@@ -23149,20 +23181,25 @@ button.stack-position-chip:hover {
 .star-map__stacks path {
   fill: none;
   stroke: color-mix(in srgb, var(--accent) 55%, transparent);
-  stroke-width: 1.5px;
+  stroke-width: 2px;
 }
 
-.star-map__stacks path[data-inferred],
-.star-map__stacks path[data-state="stale"] {
+.star-map__stacks [data-inferred] .star-map__stack-edge,
+.star-map__stacks [data-state="stale"] .star-map__stack-edge {
   stroke-dasharray: 4 5;
 }
 
-.star-map__stacks path[data-state="stale"] {
+.star-map__stacks [data-state="stale"] path {
   stroke: var(--status-warning);
 }
 
-.star-map__stacks path[data-state="merged"] {
+.star-map__stacks [data-state="merged"] path {
   stroke: var(--brand-purple);
+}
+
+.star-map__stacks path.star-map__stack-halo {
+  stroke: var(--bg-panel);
+  stroke-width: 5px;
 }
 
 .star-map__link {

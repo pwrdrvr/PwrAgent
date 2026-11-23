@@ -46,6 +46,7 @@ type PrChipProps = {
    * draft / conflict on the chip itself, since there are no pills there.
    */
   withStatusPills?: boolean;
+  statusOverride?: string;
   /**
    * The thread branch's base drift, when this is the PR on that branch. The
    * card shows it as its Local branch section.
@@ -115,11 +116,11 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
   bridgeCardRef.current.hide = hideTooltip;
   const updateTooltip = tooltipController.update;
   const label = prNumberLabel(pr, props.showRepoPrefix);
-  const presentation = resolvePrChipPresentation(pr, {
-    withStatusPills: props.withStatusPills,
-  });
+  const presentation = props.statusOverride
+    ? { chipState: "unknown" as const, hasFailingChecksStillRunning: false, isConflicting: false, isDraft: false }
+    : resolvePrChipPresentation(pr, { withStatusPills: props.withStatusPills });
   const chipState = presentation.chipState;
-  const status = prStatusLabel(pr);
+  const status = props.statusOverride ?? prStatusLabel(pr);
   // Creating this element is not rendering it: it stays an inert object until
   // `show` hands it to the portal on hover/focus, so a sidebar full of chips
   // mounts exactly zero cards.
@@ -282,7 +283,7 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
   // composer's Tiptap-rendered chip reaches the same classes from the same
   // reading of the PR.
   const isDraft = presentation.isDraft;
-  const queueBadge = resolvePrChipQueueBadge(pr);
+  const queueBadge = props.statusOverride ? undefined : resolvePrChipQueueBadge(pr);
   const className = ["pr-chip", ...prChipModifierClasses(presentation)].join(" ");
 
   // role="button" span (not a real <button>) so the chip is legal HTML
@@ -397,7 +398,7 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
         <span
           className="pr-chip__dot"
           aria-hidden="true"
-          ref={presentation.hasFailingChecksStillRunning ? statusPulseRef : undefined}
+          ref={!props.statusOverride && presentation.hasFailingChecksStillRunning ? statusPulseRef : undefined}
         />
         <span className="pr-chip__label">{label}</span>
         {queueBadge ? (

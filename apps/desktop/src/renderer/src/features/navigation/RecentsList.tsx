@@ -35,7 +35,7 @@ import { KeepAtTopSlot } from "./KeepAtTopSlot";
 import { SidebarShowMore } from "./SidebarShowMore";
 import { renderSubthreadPages, subthreadPageResources } from "./SubthreadPagination";
 import { ThreadRow, type ThreadRowRef } from "./ThreadRow";
-import { visibleStackTray } from "../stacks/stack-presentation";
+import { orderStackTray, stackGroupSelectionOrder, stackTrayPrecedesLead, visibleStackTray } from "../stacks/stack-presentation";
 import { isRenamingRow, type RenamingThreadRow } from "./thread-action-hotkeys";
 import { AttentionReviewReadout, AttentionTurnReadouts, describeAttentionCounts } from "./AttentionSignals";
 import { isThreadActive, isThreadAwaitingReview, isThreadRemoteWork } from "./ThreadRowStatus";
@@ -395,7 +395,7 @@ export function RecentsList(props: RecentsListProps) {
         {nativeSubAgentCount > 0 ? (
           <NativeSubAgentsDisclosure thread={parent} />
         ) : null}
-        {trayEntries.flatMap((entry) => {
+        {orderStackTray(trayEntries, stackTrayKey).flatMap((entry) => {
           if (entry.kind === "starting") {
             return [
               <PendingThreadRow
@@ -496,14 +496,8 @@ export function RecentsList(props: RecentsListProps) {
   const pinnedGroupCollapsed = Boolean(props.pinnedGroupCollapsed);
   const selectionOrder = [...(pinnedGroupCollapsed ? [] : pinnedRoots), ...(recentsCollapsed ? [] : topLevelThreads)].flatMap((thread) => {
     const threadKey = threadSummaryIdentityKey(thread);
-    return [
-      threadKey,
-      ...(isSubthreadSectionCollapsed(thread)
-        ? []
-        : trays.subtree(threadKey).map((child) =>
-            threadSummaryIdentityKey(child),
-          )),
-    ];
+    const children = isSubthreadSectionCollapsed(thread) ? [] : trays.subtree(threadKey);
+    return stackGroupSelectionOrder(thread, children).map(threadSummaryIdentityKey);
   });
 
   // One handler for every row rather than a closure per row: a closure per
@@ -585,8 +579,11 @@ export function RecentsList(props: RecentsListProps) {
     const subthreadCount = getSubthreadDisclosureCount(thread, children.length) + (holdsDraft ? 1 : 0);
     const subthreadsCollapsed = isSubthreadSectionCollapsed(thread) && !holdsDraft;
     const tray = renderSubthreads(thread);
+    const traySlot = tray ? <div className="thread-group__subthreads-slot" role="listitem">{tray}</div> : null;
+    const trayFirst = stackTrayPrecedesLead(thread, children);
     return (
       <div key={key} className="thread-group">
+        {trayFirst ? traySlot : null}
         <ThreadRow
           {...topLevelRowProps(thread)}
           subthreadCount={subthreadCount}
@@ -604,14 +601,7 @@ export function RecentsList(props: RecentsListProps) {
               : undefined
           }
         />
-        {/* `.thread-group` carries no role, so the tray would sit straight
-            inside the `role="list"` below, and a list owns only listitem.
-            The Directories lens wraps its trays the same way. */}
-        {tray ? (
-          <div className="thread-group__subthreads-slot" role="listitem">
-            {tray}
-          </div>
-        ) : null}
+        {trayFirst ? null : traySlot}
       </div>
     );
   };

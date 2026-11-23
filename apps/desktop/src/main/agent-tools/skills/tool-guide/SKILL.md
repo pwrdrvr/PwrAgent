@@ -60,11 +60,18 @@ layer health. Merge a stacked PR only after its lower layers have merged and
 its base is trunk. Follow the thread's `prAutomation.guidance` for its position
 and merge prerequisites.
 
-Use `plan_stack_operation` to forecast a local `restack`, `add_branch`,
-`adopt` or `remove`. Inspect conflicts, dirty overlaps and affected turns,
+When guidance names a lower blocker, let that layer settle before rebasing,
+repairing CI or pushing the held layer. PwrAgent advances one tracked layer
+at a time. Use `publish_stack_layer` for an operator-authorized retry of
+the next eligible layer. A publishing call can retarget the PR after its
+parent merges and publishes through an exact lease.
+
+Use `plan_stack_operation` to forecast a local `restack`, `sync`,
+`add_branch`, `adopt` or `remove`. Inspect conflicts, dirty overlaps and affected turns,
 then pass the plan ID to `apply_stack_operation`. Use the returned operation
 ID with `manage_stack_operation` to read status or undo a completed move.
-A waiting restack can be cancelled or shortened before a specific layer.
+Use `from` and `stopBefore` to select a bounded local restack. A waiting
+restack can be cancelled or shortened before a specific layer.
 The operation releases held queues after recording notices for moved layers.
 
 Plan `add_branch` with `newThread: true` for an attached worktree and a child

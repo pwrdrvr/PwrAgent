@@ -35,7 +35,7 @@ import type {
   MarkdownFileViewerContext,
 } from "@pwragent/shared/contracts/settings";
 import type { LinearPasteLayout } from "@pwragent/shared/linear-paste";
-import type { ThreadCorrespondenceState } from "@pwragent/shared/contracts/thread-system-messages";
+import type { StackNotice, ThreadCorrespondenceState } from "@pwragent/shared/contracts/thread-system-messages";
 import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
 import { HistoryIcon } from "../../icons/HistoryIcon";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -251,6 +251,10 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
         onActivate: () => onRewind(props.message),
       }
     : undefined;
+
+  if (origin?.systemReason === "stack-notice" && origin.stackNotice) {
+    return <StackNoticeCard notice={origin.stackNotice} />;
+  }
 
   if (deliveryMembers) {
     return renderCombinedDelivery({
@@ -1715,6 +1719,31 @@ function firstPreviewLine(text: string): string | undefined {
       .trim())
     .find(Boolean);
   return line || undefined;
+}
+
+const stackNoticeVerbs: Record<StackNotice["kind"], string> = {
+  restack: "Restacked", sync: "Synced", add_branch: "Added", adopt: "Adopted", remove: "Removed", undo: "Restored",
+};
+
+function StackNoticeCard({ notice }: { notice: StackNotice }) {
+  const { branch, stack, parent, position, from, to, changedFiles, staleReads, worktree, completion, below } = notice;
+  const action = stackNoticeVerbs[notice.kind];
+  const heading = completion ? (completion.child ? "Stack layer thread created" : `${action} stack`) : `${action} ${branch}`;
+  const files = changedFiles.slice(0, 5);
+  const short = (sha: string | null) => sha?.slice(0, 7) ?? "—";
+  return (
+    <article className="transcript-message transcript-message--injected stack-notice-card">
+      <p className="rail-card__title">{heading}</p>
+      {stack ? <p className="rail-card__meta">{stack}{position ? ` · Layer ${position[0]} of ${position[1]}` : ""}</p> : null}
+      {from || to ? <p className="stack-notice-card__range"><code>{short(from)} → {short(to)}</code>{parent ? ` on ${parent}` : ""}</p> : null}
+      {below?.map(({ branch: lower, added, removed }) => <p key={lower} className="rail-card__meta">{lower} · +{added} / −{removed}</p>)}
+      {files.length ? <ul>{files.map((file) => <li key={file}><code>{file}</code></li>)}</ul> : null}
+      {changedFiles.length > files.length ? <p className="rail-card__meta">{changedFiles.length - files.length} more files changed</p> : null}
+      {staleReads?.length ? <p className="rail-card__meta">Previously read files changed</p> : null}
+      {worktree?.keptDirty?.length ? <p className="rail-card__meta">Kept local edits in {worktree.keptDirty.length} {worktree.keptDirty.length === 1 ? "file" : "files"}</p> : null}
+      {completion?.provisioningAbandoned ? <p className="rail-card__meta">Stopped creating the layer thread</p> : null}
+    </article>
+  );
 }
 
 function messageToneClass(message: AppServerThreadMessageEntry): string {

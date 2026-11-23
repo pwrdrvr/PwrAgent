@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import path from "node:path";
-import { StackEngine, requireWritableCatalog, type ApplyHooks, type GhStackCatalog, type RefMove, type StackJournal, type StackOperation, type StackReceipt } from "@pwragent/owner-core/stacks/engine/index";
+import { StackEngine, requireWritableCatalog, type ApplyHooks, type GhStackCatalog, type RefMove, type StackJournal, type StackOperation, type StackReceipt, type StackPlan } from "@pwragent/owner-core/stacks/engine/index";
 import { stackRoot } from "@pwragent/owner-core/stacks/engine/plan";
-import { StackGit } from "@pwragent/owner-core/stacks/engine/git";
+import { isOid, StackGit } from "@pwragent/owner-core/stacks/engine/git";
 import { StackCoordinator, StackOperationError, type StackApplyOptions, type StackNotification, type StackParticipant, type StackThreadRef } from "@pwragent/owner-core/stacks/stack-coordinator";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
@@ -16,12 +16,32 @@ import { readStackClones } from "./stack-reader";
 import { applyStackLayerEdits, captureStackLayerEdits } from "../app-server/git-workspace-handoff-service";
 import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
 
+import { pushStackLayers } from "@pwragent/owner-core/stacks/engine/publish";
+import type { StackLayer } from "@pwragent/shared/stacks/stack-status";
+import { describeStackAutomationBlock } from "@pwragent/shared/stacks/stack-automation";
+import type { ForgeCiClient } from "../pr-status/forge-ci-client";
+import type { ForgeRepository } from "../pr-status/forge-tool-contract";
+import { completeStackPublication, readStackTrunk, readStackPublishTarget, stackPublishRemote } from "./github-stack-publish";
+
+type StackPublishRequest = {
+  number: number;
+  actor: StackThreadRef;
+  repository: ForgeRepository;
+  directories: readonly string[];
+  expectedHead?: string;
+  automated: boolean;
+  signal?: AbortSignal;
+  readGate: () => Promise<{ layer: StackLayer; stack: StackSummary }>;
+  github: ForgeCiClient["requestGithub"];
+};
+
 export type StackToolArgs = StackApplyOptions & {
   operation?: StackOperation["kind"];
   stack?: string;
   branch?: string;
   name?: string;
   from?: string;
+  stopBefore?: string;
   mode?: "detach" | "forget";
   branches?: string[];
   planId?: string;
@@ -35,6 +55,11 @@ type StackScope = {
   repository: string;
   branch?: string;
   infer(): Promise<StackSummary[]>;
+  sync?: {
+    repository: ForgeRepository;
+    github: ForgeCiClient["requestGithub"];
+    signal?: AbortSignal;
+  };
 };
 
 function pathKey(value: string) {
@@ -46,10 +71,27 @@ function stackLeadKey(commonDir: string, root: string): string {
   return createHash("sha256").update(JSON.stringify([commonDir, root])).digest("hex");
 }
 
+function stackPublishProofRef(repository: string, branch: string): string {
+  const hash = createHash("sha256").update(JSON.stringify([repository.toLowerCase(), branch])).digest("hex");
+  return `refs/pwragent/stack-publish/${hash}`;
+}
+
 export class StackOperationsService {
   private readonly sessions = new Map<string, StackCoordinator>();
   private readonly finishing = new Map<string, Promise<StackThreadRef | undefined>>();
   private readonly abandoning = new Map<string, Promise<boolean>>();
+
+  constructor(private readonly readStacks?: (cwd: string) => Promise<readonly StackSummary[]>) {}
+
+  private async validateLayerApply(cwd: string, plan: StackPlan): Promise<void> {
+    const { operation } = plan;
+    if (!this.readStacks || (operation.kind !== "restack" && operation.kind !== "sync")) return;
+    const stack = (await this.readStacks(cwd)).find((entry) => !entry.inferred
+      && entry.name === operation.root && entry.repository === plan.before.repository.toLowerCase());
+    const moved = new Set([...plan.moves, ...plan.steps].map(({ branch }) => branch));
+    const held = stack?.layers.find((layer) => moved.has(layer.branch) && layer.heldBy)?.heldBy;
+    if (held) throw new StackOperationError("stack_parent_open", describeStackAutomationBlock(held));
+  }
 
   async resumeInterrupted(directories: readonly string[], registry: DesktopBackendRegistry): Promise<string[]> {
     const results = await Promise.allSettled((await readStackClones(directories))
@@ -129,6 +171,113 @@ export class StackOperationsService {
     return tool === "apply_stack_operation" ? session.apply(actor, forecast.planId) : forecast;
   }
 
+  async publish(request: StackPublishRequest, registry: DesktopBackendRegistry): Promise<{ head: string; pushed: boolean }> {
+    const { actor, automated, directories, github, number, repository, signal } = request;
+    const repoKey = `${repository.host}:${repository.owner}/${repository.repo}`.toLowerCase();
+    const initial = await request.readGate();
+    const candidates = (await readStackClones(directories, signal)).filter(({ catalog }) => catalog.status === "ok"
+      && catalog.catalog.repository.toLowerCase() === repoKey
+      && catalog.catalog.stacks.some(({ branches }) => branches.some((layer) => layer.branch === initial.layer.branch)));
+    if (candidates.length !== 1) throw new Error("Publishing requires one tracked checkout for this layer");
+    const clone = candidates[0]!;
+    const { commonDir } = clone;
+    const store = new GhStackCatalogStore();
+    const git = new StackGit(stackGitRunner, clone.cwd);
+    const engine = new StackEngine(stackGitRunner, store, clone.cwd, commonDir);
+    const opId = randomUUID();
+
+    return await registry.withStackWorktreeMutation(commonDir, async () => {
+      signal?.throwIfAborted();
+      const current = await request.readGate();
+      const { layer } = current;
+      if (layer.branch !== initial.layer.branch || current.stack.key !== initial.stack.key) throw new Error("Stack moved before publishing");
+      const { catalog } = await store.read(commonDir);
+      requireWritableCatalog(catalog);
+      const stack = catalog.stacks.find(({ branches }) => branches.some(({ branch }) => branch === layer.branch));
+      if (!stack) throw new Error("Stack moved before publishing");
+      const index = stack.branches.findIndex(({ branch }) => branch === layer.branch);
+      const branch = stack.branches[index]!;
+      const tip = await git.tip(branch.branch);
+      if (!tip) throw new Error("The layer's local branch is missing");
+      const owners = await this.participants(git, [{ branch: branch.branch, old: tip, next: tip }], catalog, registry);
+      if (owners.length !== 1 || owners[0]!.backend !== actor.backend || owners[0]!.threadId !== actor.threadId
+        || owners[0]!.locked || (automated && owners[0]!.active)) {
+        throw new StackOperationError("ambiguous_layer", "Publishing needs the local layer owner's available worktree.");
+      }
+
+      const release = registry.holdStackThread(actor, opId);
+      try {
+        const remote = await stackPublishRemote(git, repository);
+        const observedParent = current.stack.layers[index - 1]?.pullRequest?.number;
+        const target = await readStackPublishTarget(repository, stack, index, number, github, signal, observedParent);
+        const { remoteHead, merged } = target;
+        if (layer.health === "parent_merged" && !merged) throw new Error("The parent merge could not be verified");
+        if (request.expectedHead && remoteHead !== request.expectedHead) throw new Error("The pull request head changed before approval was used");
+        const parent = stack.branches[index - 1];
+        if (!merged && parent && target.parentHead !== await git.tip(parent.branch)) {
+          throw new Error("The parent PR no longer matches its local branch");
+        }
+
+        // A retry after local commit uses the exact journalled rewrite. A
+        // remote update that was never contained in the pre-replay tip fails
+        // here even if the live PR currently names it.
+        const proofRef = stackPublishProofRef(repoKey, branch.branch);
+        const existingProof = await git.run(["show-ref", "--verify", "--hash", proofRef]);
+        const saved = existingProof.exitCode === 0
+          ? JSON.parse(await git.output(["cat-file", "blob", existingProof.stdout.trim()])) as StackReceipt : undefined;
+        const rewrite = saved?.moves.find((move) => move.branch === branch.branch && move.next === tip);
+        let previous = await git.ancestor(remoteHead, tip) ? tip : rewrite?.old;
+        if (!previous || !await git.ancestor(remoteHead, previous)) throw new Error("Remote head contains work outside the local replay");
+
+        let operation: StackOperation | undefined;
+        const root = stackRoot(stack)!;
+        if (merged && (!parent?.pullRequest?.merged || branch.base !== stack.trunk.head)) {
+          operation = { kind: "sync", root, branch: branch.branch, onto: await readStackTrunk(git, remote, stack.trunk.branch, true), merged };
+        } else if (!merged && layer.health === "needs_restack") {
+          operation = { kind: "restack", root, from: branch.branch, stopBefore: stack.branches[index + 1]?.branch };
+        }
+
+        // Finish stale replays before sending any check-triggering update.
+        let head = tip;
+        if (operation) {
+          if (previous !== tip) throw new Error("Publish the outstanding replay before planning another");
+          const plan = await engine.plan(operation);
+          const conflict = plan.steps.find((step) => step.conflict);
+          if (conflict) throw new StackOperationError("forecast_conflict", `Replay of ${conflict.branch} conflicts in ${conflict.conflict!.files.join(", ")}.`);
+          if (plan.blocked.length) throw new StackOperationError("dirty_overlap", "Local changes overlap the replay.");
+          await request.readGate();
+          const notification: StackNotification = { opId, actor, kind: operation.kind, operation,
+            participants: owners, steps: plan.steps, moves: plan.moves };
+          const receipt = await this.runJournalled(clone, registry, store, engine, git, {
+            beforeTransaction: async () => { await request.readGate(); signal?.throwIfAborted(); },
+          }, notification, (journal) => engine.apply(plan, opId, Date.now(), journal));
+          await this.complete(clone, registry, store, git, receipt, notification);
+          previous = tip;
+          head = receipt.moves.find((move) => move.branch === branch.branch)?.next ?? tip;
+        }
+
+        await store.withOperationLock(commonDir, async () => {
+          if (existingProof.exitCode === 0 && saved && rewrite?.old === previous && previous !== head && !operation) {
+            const durable = await git.output(["rev-parse", "--verify", `refs/pwragent/undo/${saved.id}/receipt`]);
+            if (durable.trim() !== existingProof.stdout.trim()) throw new Error("The replay was not committed");
+          }
+          const freshRemote = await stackPublishRemote(git, repository);
+          if (freshRemote !== remote) throw new Error("The stack's remote changed");
+          await request.readGate();
+          signal?.throwIfAborted();
+          await completeStackPublication(() => target.retarget(), async () => {
+            await request.readGate();
+            signal?.throwIfAborted();
+            await pushStackLayers(git, remote, [{ branch: branch.branch, expected: remoteHead, previous, next: head }]);
+          });
+        });
+        return { head, pushed: head !== remoteHead };
+      } finally {
+        release();
+      }
+    });
+  }
+
   private async resolveOperation(args: StackToolArgs, scope: StackScope, commonDir: string, store: GhStackCatalogStore, git: StackGit): Promise<StackOperation> {
     const { catalog } = await store.read(commonDir);
     requireWritableCatalog(catalog);
@@ -162,7 +311,19 @@ export class StackOperationsService {
       || stack.branches.some((layer) => layer.branch === selector));
     const root = matched.length === 1 ? stackRoot(matched[0]!) : undefined;
     if (!root) throw new StackOperationError("ambiguous_layer", "Select one tracked stack by its bottom branch or a member branch.");
-    if (args.operation === "restack") return { kind: "restack", root, from: args.from };
+    if (args.operation === "sync" && branch && scope.sync) {
+      const stack = matched[0]!;
+      const index = stack.branches.findIndex((entry) => entry.branch === branch);
+      const number = stack.branches[index]?.pullRequest?.number;
+      if (index < 1 || !number) throw new StackOperationError("ambiguous_layer", "Select the tracked child pull request.");
+      const { repository, github, signal } = scope.sync;
+      const remote = await stackPublishRemote(git, repository);
+      const target = await readStackPublishTarget(repository, stack, index, number, github, signal);
+      if (!target.merged) throw new StackOperationError("invalid_arguments", "The child's parent PR has not merged.");
+      const onto = await readStackTrunk(git, remote, stack.trunk.branch);
+      return { kind: "sync", root, branch, onto, merged: target.merged };
+    }
+    if (args.operation === "restack") return { kind: "restack", root, from: args.from, stopBefore: args.stopBefore };
     if (args.operation === "add_branch" && (args.name || args.branch)) return { kind: "add_branch", root, branch: (args.name ?? args.branch)! };
     if (args.operation === "remove" && branch) return { kind: "remove", root, branch, mode: args.mode ?? "forget" };
     throw new StackOperationError("invalid_arguments", "Specify the operation and its branch.");
@@ -176,6 +337,7 @@ export class StackOperationsService {
       newId: randomUUID,
       now: Date.now,
       plan: (operation) => engine.plan(operation),
+      validateApply: (plan) => this.validateLayerApply(clone.cwd, plan),
       participants: async (moves, catalog) => await this.participants(git, moves, catalog, registry),
       hold: (thread, opId) => registry.holdStackThread(thread, opId),
       subscribe: (listener) => registry.onEvent(listener),
@@ -414,6 +576,15 @@ export class StackOperationsService {
     let operationStarted = false;
     try {
       return await operate({ ...applyHooks, begin: async (entry) => {
+        // A proof pointer is harmless if the ref transaction never commits:
+        // publishing also requires the atomically created undo receipt.
+        if ((notification.kind === "restack" || notification.kind === "sync") && entry.receipt.moves.length) {
+          const blob = (await git.output(["hash-object", "-w", "--stdin"], JSON.stringify(entry.receipt))).trim();
+          if (!isOid(blob)) throw new Error("Invalid publish receipt");
+          for (const move of entry.receipt.moves) {
+            await git.output(["update-ref", stackPublishProofRef(entry.receipt.before.repository, move.branch), blob]);
+          }
+        }
         await applyHooks.begin?.(entry);
         currentEntry = entry;
         operationStarted = true;

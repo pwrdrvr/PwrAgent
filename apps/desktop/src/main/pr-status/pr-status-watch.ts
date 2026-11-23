@@ -35,6 +35,7 @@ type PrStatusWatchRegistry = {
     origin: "automation";
     messageOrigin: AppServerThreadMessageOrigin;
     joinRunningTurn: true;
+    canAdmit?: () => Promise<boolean>;
   }): Promise<{ status: "started" | "queued" | "busy"; turnId?: string }>;
 };
 
@@ -82,6 +83,8 @@ export class PrStatusWatchCoordinator {
        * (Forge Automation). A refused claim is released without spending an
        * attempt, so the watch still fires once the project allows it.
        */
+      stackHold?: (pr: PrSummary) => Promise<string | undefined>;
+      currentPr?: (key: string) => PrSummary | undefined;
       allowsWatchDispatch?: (watch: ThreadPullRequestWatchSummary) => boolean;
       /** Reads merge details from the forge; a throw falls back to cached status. */
       fetchTerminalDetails?: (pr: PrSummary) => Promise<PullRequestTerminalDetails | undefined>;
@@ -135,7 +138,7 @@ export class PrStatusWatchCoordinator {
       now: observedAt,
     });
     await this.notifyWatchesChanged(advanced.threads);
-    if (!outcome) return dispatched;
+    if (!outcome || await this.options.stackHold?.(pr)) return dispatched;
 
     const now = this.now();
     const failedCheckUrl = outcome === "failure" ? pr.failedCheckUrl : undefined;
@@ -335,6 +338,7 @@ export class PrStatusWatchCoordinator {
       || !outcome
       || this.options.isBackgroundPollingEnabled?.() === false
       || this.options.allowsWatchDispatch?.(claim.watch) === false
+      || (outcome === "dequeued" && Boolean(await this.options.stackHold?.(pr)))
     ) {
       await release(false);
       return;
@@ -398,6 +402,10 @@ export class PrStatusWatchCoordinator {
       await this.releaseClaim(claim, false);
       return;
     }
+    if (await this.options.stackHold?.(pr)) {
+      await this.releaseClaim(claim, false);
+      return;
+    }
     const failedCheckUrl = outcome === "failure" ? pr.failedCheckUrl : undefined;
     const finish = async () => {
       const threads = await this.options.store.finishThreadPrStatusWatch({
@@ -430,6 +438,11 @@ export class PrStatusWatchCoordinator {
         }],
         origin: "automation",
         // The wake joins the thread's running turn instead of waiting for it.
+        canAdmit: async () => {
+          const fresh = this.options.currentPr?.(claim.watch.prKey) ?? pr;
+          return fresh.headSha === pr.headSha && getPrStatusWatchOutcome(fresh) === outcome
+            && !await this.options.stackHold?.(fresh);
+        },
         joinRunningTurn: true,
         messageOrigin: {
           kind: "pwragent",

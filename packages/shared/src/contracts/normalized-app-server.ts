@@ -832,6 +832,7 @@ export type AppServerThreadMessageOrigin = {
   causalMessagingAmbiguous?: boolean;
   /** Durable cross-thread prerequisite admission. */
   dependencyId?: string;
+  stackNotice?: import("./thread-system-messages").StackNotice;
   systemReason?: "monitor-job-suggestion" | "thread-correspondence" | "app-restart" | "compaction-recovery" | "stack-notice";
   /**
    * The operator sent this agent-routed message by acting on a to-do card,

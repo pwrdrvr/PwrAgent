@@ -194,3 +194,44 @@ have:
   the forge. They act only for the one live thread that owns the PR. Read
   [PR review readiness](../../docs/pr-review-readiness.md) before changing
   `PrReviewOfferCoordinator`, its triggers, or its Git work.
+
+### Stack settlement and publishing
+
+The shared gate projects a tracked stack bottom-first. A live layer settles
+when its recorded replay base matches the parent tip, its local and PR heads
+match, mergeability is known clear, and its repair turns and stack operations
+have finished. Pending CI and any other still-running checks keep the gate
+closed. Inconclusive status also waits for evidence. A merged layer stops
+blocking once its operation finishes. Its immediate child becomes eligible
+for sync. A PR closed without a merge requires an explicit stack change.
+
+PR Auto-fix, review Auto-fix, watches, Continue After CI, and forge offers use
+the same gate as the stack projection. The lowest unsettled layer supplies the
+reason. A stale layer waits for its own new published head before dispatchers
+use its CI. Held snapshots spend no repair attempts. Inferred GitHub chains can
+hold automation, and adopting the chain gives the operation engine a catalog
+and an exact replay boundary.
+
+The owner advances at most one eligible layer per stack. A push can start CI,
+so the next layer waits for the new head's result. A chain of *n* layers
+therefore needs at most *n*−1 upper replays and pushes after a bottom fix that
+settles without further repair. The stack publisher uses the normal Git
+agent-tool policy under **Stack publishing**, which defaults to Ask and
+supports repository and agent rules. Project Forge Automation can pause the
+background publisher. A local sync forecast reads the remote trunk tip and
+requires that commit to be available locally. The publisher fetches it.
+
+Sync proves trunk contains the parent's merge commit and excludes the parent's
+branch commits from the replay. If the child was already replayed on an earlier
+integrated trunk, Git ancestry verifies that boundary. GitHub retargets bases
+owned by its Stack API. For an unlinked stack, PwrAgent confirms the child PR's
+trunk base before pushing. It leaves base branches in place. Each pushed ref
+has an exact lease. A rewrite uses the journalled pre-replay local tip to prove
+the observed remote history was already present. Any new remote work or a
+changed lease stops publication.
+
+A held observation costs zero SQLite commits. Publishing reuses the
+stack-notice unread watermark, which commits at most once for the moved
+owner. The existing measured watermark cost is 12,360 bytes. At 100 previously
+read layers moved per day, that is about 1.24 MB/day of WAL. The Git catalog,
+journal and publish receipt live in the clone and do not use SQLite.

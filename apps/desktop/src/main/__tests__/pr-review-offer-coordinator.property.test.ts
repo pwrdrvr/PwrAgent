@@ -70,6 +70,7 @@ class World {
   lifecycle: "open" | "merged" = "open";
   base = "main";
   stackUnavailable = false;
+  heldBy?: string;
   lowerPolled = true;
   readonly lowers = new Map<number, "open" | "merged">();
   readonly evaluatedOwners: string[] = [];
@@ -183,6 +184,7 @@ function createHarness(
     },
     threadPrKeys: () => [PR_KEY],
     getPr: () => world.pr(),
+    stackHold: async () => world.heldBy,
     stackMergeEvidence: async () => ({
       blocked: world.stackUnavailable || world.base !== "main" || [...world.lowers.values()].includes("open"),
       lowerKeys: [...world.lowers.keys()].map(prKeyFor),
@@ -240,6 +242,33 @@ async function transition(harness: Harness, changed: PrStatusTransitionChanges):
   });
   await harness.coordinator.idle();
 }
+
+it("retracts a stale review offer, holds merge offers, and rechecks once the lower layer settles", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const temp = createTempStateDb("pwragent-held-review-offer-");
+  const harness = createHarness(StateDb.open(temp.dbPath));
+  const { world, coordinator, todos } = harness;
+  try {
+    world.ci = "passing";
+    await coordinator.evaluate(THREAD, PR_KEY);
+    expect(todos.list({ ...THREAD, status: "open" })).toHaveLength(1);
+    world.heldBy = "Held by #6: CI running";
+    const retired = await measureSqliteWrites(async () => await coordinator.evaluate(THREAD, PR_KEY));
+    expect(retired.result).toMatchObject({ readiness: "stack_parent_open", retired: true });
+    expectSqliteWriteBudget({ scenario: "stack-held-withdraw-review-offer", writes: retired.writes,
+      note: "Withdraw an existing offer once when a lower layer becomes unsettled. At 100 withdrawals/day and 12,360 bytes each, about 1.24 MB/day." });
+    expect(todos.list({ ...THREAD, status: "open" })).toHaveLength(0);
+    recordReview(world, 0);
+    await expect(coordinator.mergeOfferRefusal(THREAD, PR_KEY)).resolves.toBe(world.heldBy);
+    await coordinator.evaluate(THREAD, PR_KEY);
+    expect(todos.list({ ...THREAD, status: "open" })).toHaveLength(0);
+    world.heldBy = undefined;
+    await expect(coordinator.evaluate(THREAD, PR_KEY)).resolves.toMatchObject({ raised: "merge" });
+  } finally {
+    harness.close();
+    removeTempStateDbDir(temp.tempDir);
+  }
+});
 
 async function push(harness: Harness, change: string): Promise<void> {
   const { world } = harness;

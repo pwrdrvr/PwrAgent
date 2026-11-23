@@ -106,6 +106,7 @@ type Options = {
     input: { type: "text"; text: string }[];
     origin: "automation";
     messageOrigin: AppServerThreadMessageOrigin;
+    canAdmit?: () => Promise<boolean>;
   }): Promise<{
     /**
      * `held` and `discarded`: the consumer's project is paused, and its
@@ -119,6 +120,8 @@ type Options = {
     turnId?: string;
   }>;
   changed(dependency: ThreadDependency): Promise<void>;
+  onPrObservation?: (urls?: ReadonlySet<string>) => void;
+  stackHold?: (dependency: ThreadDependency) => Promise<string | undefined>;
   canDispatch?: (dependency: ThreadDependency) => boolean;
   /**
    * The consumer's owner confirms it is idle: no turn this instance started
@@ -741,6 +744,7 @@ export class ThreadDependencyCoordinator {
     if (urls?.size === 0) return Promise.resolve();
     return this.serialize(async () => {
       const observed = urls && new Set([...urls].map((url) => this.canonicalizePrUrl(url)));
+      this.options.onPrObservation?.(observed);
       // A URL saved under a renamed repository's old name, before the forge
       // has named it this session, still takes the event: evaluation asks.
       const named = (url: string | undefined) => {
@@ -751,7 +755,9 @@ export class ThreadDependencyCoordinator {
             && [...observed!].some((entry) => isSameNumberInAnotherRepository(entry, current)));
       };
       for (const item of this.options.store.active()) {
-        if (item.conditions.some((condition) => ["pr_attached", "ci_passed", "pr_merged", "merge_build"].includes(condition.when))
+        if (item.status === "ready" && item.conditions.some((condition) => condition.ciRun)) {
+          await this.evaluate(item);
+        } else if (item.conditions.some((condition) => ["pr_attached", "ci_passed", "pr_merged", "merge_build"].includes(condition.when))
           && (!observed || item.conditions.some((condition) => named(condition.prUrl))
             || item.evidence.some((entry) => named(entry.prUrl)))) await this.evaluate(item);
       }
@@ -936,6 +942,7 @@ export class ThreadDependencyCoordinator {
     if (this.options.store.active().some((other) => identity(other) === identity(current)
       && other.status === "dispatching" && other.error)) return;
     if ((current.conditions[0]?.localFile || current.conditions[0]?.resourceCheckout) && this.options.canClaimLocalFileWake?.() === false) return;
+    if (await this.options.stackHold?.(current)) return;
     const claim = { ...current, status: "dispatching" as const, dispatchOwnerPid: process.pid, updatedAt: this.now() };
     if (!this.options.store.replace(current, claim)) return;
     await this.options.changed(claim);
@@ -945,6 +952,7 @@ export class ThreadDependencyCoordinator {
     try {
       const result = await this.options.submit({
         backend: claim.backend, threadId: claim.threadId,
+        ...(this.options.stackHold ? { canAdmit: async () => !await this.options.stackHold?.(claim) } : {}),
         input: [{ type: "text", text: buildDependencyPrompt(claim) }],
         origin: "automation", messageOrigin: { kind: "pwragent", dependencyId: claim.id,
           causalMessagingSource: claim.causalMessagingSource, causalMessagingAmbiguous: claim.causalMessagingAmbiguous },

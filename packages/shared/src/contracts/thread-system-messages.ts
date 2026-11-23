@@ -7,7 +7,7 @@ export const THREAD_STACK_NOTICE_INTRO = "PwrAgent moved a stack layer";
 
 export type StackNotice = {
   opId: string;
-  kind: "restack" | "add_branch" | "adopt" | "remove" | "undo";
+  kind: "restack" | "sync" | "add_branch" | "adopt" | "remove" | "undo";
   stack: string;
   by: { threadId: string; actor: "agent" | "operator" | "automation" };
   branch: string;

@@ -121,6 +121,7 @@ export function prRepairDecisionTone(status: string): PrActivityTone | undefined
     case "scheduled":
     case "dispatched":
       return "active";
+    case "stack-held":
     case "deferred":
     case "missing-head":
     case "disabled":

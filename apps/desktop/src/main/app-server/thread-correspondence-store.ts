@@ -243,7 +243,7 @@ export class ThreadCorrespondenceStore {
         const text = formatStackNotice(record.stackNotice);
         return {
           type: "message", id: record.id, role: "assistant", createdAt: record.createdAt,
-          origin: { kind: "pwragent", systemReason: "stack-notice" },
+          origin: { kind: "pwragent", systemReason: "stack-notice", stackNotice: record.stackNotice },
           text, parts: [{ type: "text", text }],
         };
       }

@@ -53,6 +53,7 @@ export type PrReviewOfferPorts = {
   threadPrKeys(thread: PrReviewOfferThread): string[];
   /** The status registry's current PR. No forge request is made. */
   getPr(prKey: string): PrSummary | undefined;
+  stackHold?(pr: PrSummary): Promise<string | undefined>;
   stackMergeEvidence?(thread: PrReviewOfferThread, pr: PrSummary): Promise<{ blocked: boolean; lowerKeys: string[]; retryOnObservation?: boolean }>;
   isLowerPolled?(prKey: string): boolean;
   now?: () => number;
@@ -340,7 +341,7 @@ export class PrReviewOfferCoordinator {
     if (recoveryOnly && assessment.standing !== "ready_to_merge") return undefined;
     // A transient transport failure defers a new offer. A previously
     // verified card stays put; executing it always rechecks live evidence.
-    if (assessment.retryOnObservation && open?.kind === "merge" && open.headSha === pr.headSha) return undefined;
+    if (assessment.retryOnObservation && !assessment.stackHold && open?.kind === "merge" && open.headSha === pr.headSha) return undefined;
     const { readiness, reviewId, headContentId, headCovered, standing } = assessment;
     const desired = desiredPrOffer({
       prKey,
@@ -348,7 +349,8 @@ export class PrReviewOfferCoordinator {
       ...(pr.headSha ? { headSha: pr.headSha } : {}),
       ...(headContentId ? { headContentId } : {}),
     });
-    const plan = planPrOffer({
+    const plan = assessment.stackHold && open
+      ? { retire: { cardId: open.cardId, reason: "stale" as const }, raise: undefined } : planPrOffer({
       open,
       desired,
       readiness,
@@ -407,6 +409,8 @@ export class PrReviewOfferCoordinator {
   async mergeOfferRefusal(thread: PrReviewOfferThread, prKey: string): Promise<string | undefined> {
     const pr = this.ports.getPr(prKey);
     if (!pr) return undefined;
+    const hold = await this.ports.stackHold?.(pr);
+    if (hold) return hold;
     const assessment = await this.assessPr(thread, pr, true, false);
     if (assessment.readiness === "stack_parent_open") return `#${pr.number} is waiting for its lower stack layers to merge and its base to be trunk.`;
     if (!assessment.headSha || assessment.readiness === "closed") return undefined;
@@ -435,9 +439,14 @@ export class PrReviewOfferCoordinator {
     pr: PrSummary,
     coverageWhileWaiting: boolean,
     forOffer: boolean,
-  ): Promise<PrReviewAssessment & { lowerKeys?: string[]; retryOnObservation?: boolean }> {
+  ): Promise<PrReviewAssessment & { lowerKeys?: string[]; retryOnObservation?: boolean; stackHold?: string }> {
     const gate = prGateReadiness(pr);
     const head = pr.headSha;
+    const hold = gate !== "closed" && await this.ports.stackHold?.(pr);
+    if (hold) {
+      this.ports.log?.(hold, { prKey: buildPullRequestStatusKey(pr), threadId: thread.threadId });
+      return { readiness: "stack_parent_open", headSha: head, headCovered: false, retryOnObservation: true, stackHold: hold };
+    }
     if (gate && (!coverageWhileWaiting || !head || gate === "closed" || gate === "no_head")) {
       return { readiness: gate, ...(head ? { headSha: head } : {}), headCovered: false };
     }

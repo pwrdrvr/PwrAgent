@@ -60,7 +60,7 @@ describe("stack catalog reads", () => {
           number: 2, provider: "github.com", org: "fixture", repo: "project", state: "passing", lifecycleState: "open",
           headRefName: "feature/upper", headSha: nextTrunk, baseRefName: "main", url: "https://github.com/fixture/project/pull/2",
         }]);
-        expect(retargeted.stacks[0]?.layers[1]).toMatchObject({ parent: "feature/model", activeBase: "main", health: "in_sync" });
+        expect(retargeted.stacks[0]?.layers[1]).toMatchObject({ parent: "feature/model", activeBase: "main", health: "parent_merged" });
       }
     } finally {
       await rm(sandbox, { recursive: true, force: true });

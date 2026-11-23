@@ -3,6 +3,7 @@ import { useEventCallback } from "../../lib/useEventCallback";
 import { buildThreadIdentityKey, type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { type CelestialIconId } from "@pwragent/shared/contracts/celestial";
 import { CelestialIcon } from "../../icons";
+import { stackHoldForPr } from "../stacks/stack-presentation";
 import { PrChip } from "../pr-status/PrChip";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
@@ -208,6 +209,7 @@ const StarMapThreadCardContent = memo(function StarMapThreadCardContent(
 ) {
   const thread = props.thread;
   const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+  const inStack = Boolean(thread.stackMemberships?.length || thread.stacks?.length);
   const status = getThreadRowStatus(
     thread,
     props.sessionKeys?.thinkingThreadKeys,
@@ -267,7 +269,7 @@ const StarMapThreadCardContent = memo(function StarMapThreadCardContent(
     >
       {/* Top-right, and large: the next card covers this one's bottom, so
           the mark has to live in the strip that stays visible. */}
-      {props.instanceIcon ? (
+      {props.instanceIcon && !inStack ? (
         <span className="star-map-card__watermark" aria-hidden="true">
           <CelestialIcon icon={props.instanceIcon} size={104} />
         </span>
@@ -343,7 +345,7 @@ const StarMapThreadCardContent = memo(function StarMapThreadCardContent(
                 : 1,
             }}
           />
-          {visiblePullRequests(thread.prs, props.cardFields).map((pr) => (
+          {visiblePullRequests(thread.prs, props.cardFields).filter((pr) => !stackHoldForPr(thread, pr)).map((pr) => (
             <PrChip
               key={`${pr.org}/${pr.repo}#${pr.number}`}
               pr={pr}

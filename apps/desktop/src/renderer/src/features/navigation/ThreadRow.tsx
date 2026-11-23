@@ -36,6 +36,7 @@ import { ThreadRowPrChip, ThreadRowPrRollupChip } from "./ThreadRowPrChips";
 import { ThreadRowDensityContext } from "./thread-row-density";
 import { ReactionPicker } from "./ReactionPicker";
 import { ThreadMetaChips } from "./ThreadMetaChips";
+import { stackHoldForPr } from "../stacks/stack-presentation";
 import { isStaleStackLayer, readCompactStackMemberships } from "@pwragent/shared/stacks/stack-status";
 import {
   getThreadRowStatus,
@@ -273,7 +274,10 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
     && props.thread.federation?.ref.target.scope !== "remote";
   // Compact rows serve the chips immediately. The disclosure reads the
   // owner's full collection when the row only carries a preview.
-  const prs = props.thread.prs ?? [];
+  const attachedPrs = props.thread.prs ?? [];
+  // The stack chip is the primary signal while a lower layer holds this PR.
+  const prs = readCompactStackMemberships(props.thread).some(({ heldBy }) => heldBy)
+    ? attachedPrs.filter((pr) => !stackHoldForPr(props.thread, pr)) : attachedPrs;
   const attachmentThread = props.thread.prsTruncated ? props.thread : undefined;
   // The chips line's one PR chip; the rest sit behind a `+N PRs` chip.
   const leadPr = prs.length > 1 ? resolvePrOverflow(prs)!.lead : prs[0];
@@ -485,8 +489,8 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
       <div
         ref={rowRef}
         data-stack-tray-layer={props.stackTrayKey && readCompactStackMemberships(props.thread).find(({ key }) => key === props.stackTrayKey)?.key}
-        data-stack-tray-stale={props.stackTrayKey && readCompactStackMemberships(props.thread).some(({ key, health }) =>
-          key === props.stackTrayKey && isStaleStackLayer(health)) || undefined}
+        data-stack-tray-stale={props.stackTrayKey && readCompactStackMemberships(props.thread).some(({ key, health, heldBy }) =>
+          key === props.stackTrayKey && !heldBy && isStaleStackLayer(health)) || undefined}
         className={`thread-row${props.compact ? " thread-row--compact" : ""}${
           selected ? " is-selected" : ""
         }${

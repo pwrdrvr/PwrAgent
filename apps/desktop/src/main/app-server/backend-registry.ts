@@ -60,8 +60,7 @@ import type { ForgePrToolHandler, ForgePrToolPreflight } from "../agent-tools/pw
 import type { ForgeReadRequest } from "../pr-status/forge-tool-contract";
 import type { ThreadPrAutoDispatchPreferenceChange } from "../pr-status/pr-auto-dispatch";
 import type { PrMetadataDemand } from "../pr-status/pr-metadata-process";
-import {
-} from "../pr-status/forge-pr-tool-contract";
+import type { ForgePrToolArgs } from "../pr-status/forge-pr-tool-contract";
 import type { MaintenanceDiscoveryProgress } from "./unreferenced-worktrees";
 import { PlanLimitStore, planLimitKey } from "./plan-limit-store";
 import { buildPendingTurnId, isPendingTurnId } from "@pwragent/shared/turn-placeholder";
@@ -1016,6 +1015,7 @@ type IdleSubmission = {
   input: AppServerTurnInputItem[];
   origin?: ThreadTurnQueueOrigin;
   messageOrigin?: AppServerThreadMessageOrigin;
+  canAdmit?: () => boolean | Promise<boolean>;
 };
 
 /** What `submitTurnIfIdle` returns when a wake may join a running turn. */
@@ -1574,6 +1574,10 @@ export class DesktopBackendRegistry {
 
   setForgePrToolHandler(handler: ForgePrToolHandler, preflight?: ForgePrToolPreflight): void {
     this.forgeToolBridge.setForgePrToolHandler(handler, preflight);
+  }
+
+  publishStackLayer(args: ForgePrToolArgs, context: AgentToolCallContext): Promise<unknown> {
+    return this.forgeToolBridge.gatedForgePrToolHandler("publish_stack_layer", args, context);
   }
 
   setForgeToolPolicyResolver(resolve: () => ForgeAgentToolPolicy): void {
@@ -3617,6 +3621,20 @@ export class DesktopBackendRegistry {
       release();
       publish(holds.size > 0);
     };
+  }
+
+  async stackRepairActive(thread: StackThreadRef): Promise<boolean> {
+    const active = this.getActiveTurnForThread(thread);
+    const starting = this.findStartingTurnOrigin(active ?? thread)?.origin;
+    const isRepair = (origin?: AppServerThreadMessageOrigin) =>
+      origin?.prAutomation?.kind === "auto-fix"
+      || (origin?.prAutomation?.kind === "watch" && origin.prAutomation.outcome === "failure")
+      || origin?.reviewAutoFix !== undefined;
+    if (isRepair(starting)) return true;
+    if (!active) return false;
+    const messageId = buildTurnUserMessageOriginId(active.turnId);
+    const origins = await this.overlayStore.readThreadMessageOrigins?.({ ...thread, messageIds: [messageId] });
+    return isRepair(origins?.[messageId]);
   }
 
   stackThreadActive(thread: StackThreadRef): boolean {
@@ -10459,7 +10477,7 @@ export class DesktopBackendRegistry {
     joinRunningTurn?: boolean;
   }): Promise<JoinedSubmissionResult> {
     this.assertThreadNotHandingOff(params.backend, params.threadId);
-    const { origin = "manual", joinRunningTurn = false, ...entry } = params;
+    const { origin = "manual", joinRunningTurn = false, canAdmit, ...entry } = params;
     const join = joinRunningTurn && isSteerableAgentTraffic(entry.messageOrigin);
     const overlay = await this.overlayStore.getThreadOverlayState({ backend: params.backend, threadId: params.threadId });
     // The durable archive observation also covers watches restored at startup,
@@ -10480,9 +10498,9 @@ export class DesktopBackendRegistry {
       return { status: "busy" };
     }
     try {
-      return await this.admitThreadAttachments(entry, (input, onAdmission): Promise<JoinedSubmissionResult> => {
-        // Attachment preparation can yield to an archive notification.
-        if (isArchived()) return Promise.resolve({ status: "busy" as const });
+      return await this.admitThreadAttachments(entry, async (input, onAdmission): Promise<JoinedSubmissionResult> => {
+        // Attachment preparation can yield to a new stack or archive observation.
+        if (await canAdmit?.() === false || isArchived()) return { status: "busy" };
         return join
           ? this.threadTurnQueue.submitSteer({ ...entry, input, origin }, { onAdmission })
           : this.threadTurnQueue.submitIfIdle({

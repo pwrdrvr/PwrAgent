@@ -68,6 +68,7 @@ const RULE_GROUP_COLUMN_LABELS: Record<ForgeAgentToolRuleGroup, string> = {
   issues: "Issues",
   ci: "CI reruns",
   stacks: "Stacks",
+  stack_publish: "Stack publishing",
   approve_merge: "Approve and merge",
 };
 

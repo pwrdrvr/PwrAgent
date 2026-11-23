@@ -14,6 +14,7 @@ export interface CatalogStore {
 
 export type StackOperation = (
   | { kind: "restack"; root: string; from?: string; stopBefore?: string }
+  | { kind: "sync"; root: string; branch: string; onto: string; merged: { number: number; head: string; commit: string } }
   | { kind: "adopt"; stack: GhStack; repository: string }
   | { kind: "add_branch"; root: string; branch: string }
   | { kind: "remove"; root: string; branch: string; mode: "detach" | "forget" }

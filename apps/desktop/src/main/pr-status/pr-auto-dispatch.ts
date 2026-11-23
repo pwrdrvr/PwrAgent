@@ -61,6 +61,7 @@ export type PrAutoDispatchOutcome = {
     | "gate-off"
     | "not-actionable"
     | "deferred"
+    | "stack-held"
     | "missing-head"
     | "disabled"
     | "project-off"
@@ -73,6 +74,7 @@ export type PrAutoDispatchOutcome = {
     | "failed";
   fingerprint?: string;
   error?: string;
+  stackHold?: string;
 };
 
 type PrAutoDispatchRegistry = {
@@ -82,6 +84,7 @@ type PrAutoDispatchRegistry = {
     input: AppServerTurnInputItem[];
     origin: "automation";
     messageOrigin: AppServerThreadMessageOrigin;
+    canAdmit?: () => Promise<boolean>;
   }): Promise<
     | { status: "started"; turnId: string }
     | { status: "busy" }
@@ -113,6 +116,7 @@ export class PrAutoDispatchCoordinator {
         threadId: string;
         prKey: string;
       }) => boolean | Promise<boolean>;
+      stackHold?: (pr: PrSummary) => string | undefined | Promise<string | undefined>;
       getCurrentPr?: (prKey: string) => PrSummary | undefined;
       /**
        * Whether the thread's project lets Auto-fix act on this kind of
@@ -221,6 +225,11 @@ export class PrAutoDispatchCoordinator {
         continue;
       }
 
+      const stackHold = await this.options.stackHold?.(params.pr);
+      if (stackHold) {
+        outcomes.push({ threadKey, status: "stack-held", stackHold });
+        continue;
+      }
       const pending: ThreadPrAutoDispatchPending = {
         fingerprint: event.fingerprint,
         prKey: event.prKey,
@@ -455,6 +464,12 @@ export class PrAutoDispatchCoordinator {
       return;
     }
 
+    const stackHold = currentPr && await this.options.stackHold?.(currentPr);
+    if (stackHold) {
+      activity(stackHold, "warning");
+      return;
+    }
+
     const now = this.now();
     const begin = await this.options.store.beginThreadPrAutoDispatch({
       ...identity,
@@ -525,11 +540,30 @@ export class PrAutoDispatchCoordinator {
       return;
     }
 
+    let admissionHold: string | undefined;
+    const canAdmit = async () => {
+      const latest = this.options.getCurrentPr?.(record.pending.prKey);
+      const latestEvent = latest && buildPrAutoDispatchEvent(latest, this.kindFilter(identity));
+      if (latest && latestEvent?.fingerprint === fingerprint) {
+        admissionHold = await this.options.stackHold?.(latest);
+        return !admissionHold;
+      }
+      return false;
+    };
+    const lateHold = !await canAdmit();
+    if (lateHold) {
+      await this.restoreAfterBusy(identity, fingerprint, this.now());
+      this.clearTimer(this.threadKey(identity));
+      activity(admissionHold ?? "The PR observation changed before repair admission", "warning");
+      return;
+    }
+
     const stopLeaseHeartbeat = this.startLeaseHeartbeat(identity, fingerprint);
     let submission: Awaited<ReturnType<PrAutoDispatchRegistry["submitTurnIfIdle"]>>;
     try {
       submission = await this.options.registry.submitTurnIfIdle({
         ...identity,
+        canAdmit,
         input: [{
           type: "text",
           text: [
@@ -579,7 +613,8 @@ export class PrAutoDispatchCoordinator {
 
     if (submission.status === "busy") {
       if (await this.restoreAfterBusy(identity, fingerprint, this.now())) {
-        activity("Thread busy: repair refunded, retrying in 30 seconds", "warning", { delta: 1 });
+        if (admissionHold) this.clearTimer(this.threadKey(identity));
+        activity(admissionHold ?? "Thread busy: repair refunded, retrying in 30 seconds", "warning", { delta: 1 });
       }
       return;
     }

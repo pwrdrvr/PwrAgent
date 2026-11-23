@@ -31,6 +31,7 @@ export type StackCoordinatorPort = {
   newId(): string;
   now(): number;
   plan(operation: StackOperation): Promise<StackPlan>;
+  validateApply?(plan: StackPlan): Promise<void>;
   participants(moves: readonly RefMove[], catalog: StackPlan["before"]): Promise<StackParticipant[]>;
   hold(thread: StackThreadRef, opId: string): () => void;
   subscribe(listener: () => void): () => void;
@@ -206,6 +207,7 @@ export class StackCoordinator {
       throw new StackOperationError("invalid_arguments", "This operation has no paused conflict to route.");
     }
     if (run.routedConflict) return run.state;
+    await this.port.validateApply?.(plan);
     const owner = (await this.port.participants(this.affectedMoves(plan), plan.before)).find((thread) => thread.branch === step.branch);
     if (!owner || threadKey(owner) === threadKey(actor)) {
       throw new StackOperationError("forecast_conflict", "Resolve the conflict in the checkout that owns the affected branch, then re-plan.");
@@ -313,6 +315,7 @@ export class StackCoordinator {
   }
 
   private async runApply(run: StackRun, original: StackPlan): Promise<void> {
+    await this.port.validateApply?.(original);
     if (original.blocked.length && run.options?.askToSettle && this.port.requestWork) {
       const owners = await this.port.participants(this.affectedMoves(original), original.before);
       this.assertAvailable(owners);
@@ -346,6 +349,7 @@ export class StackCoordinator {
       const notification = { ...this.notification(run, participants, original.operation.kind), moves: current.moves };
       const receipt = await this.port.apply(current, run.state.opId, this.port.now(), {
         beforeTransaction: async () => {
+          await this.port.validateApply?.(current);
           const fresh = await this.port.plan(original.operation);
           this.assertForecast(fresh);
           if (forecastSignature(fresh) !== forecastSignature(current)) {

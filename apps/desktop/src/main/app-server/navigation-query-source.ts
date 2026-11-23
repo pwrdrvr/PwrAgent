@@ -2,7 +2,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import type { AppServerBackendScope, AppServerThreadSummary, LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type { NavigationDirectorySummary, NavigationIdentity, NavigationQueryRequest, PrSummary } from "@pwragent/shared/contracts/navigation";
-import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { buildThreadIdentityKey, parseThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { navigationPathIdentity } from "@pwragent/shared/directory-navigation";
 import { isWorkspaceHandoffDirectory } from "@pwragent/shared/navigation-state";
 import {
@@ -359,7 +359,13 @@ async function projectNavigationStacks(
   })));
   signal.throwIfAborted();
   const { stacks } = await stackReader.read(rows, [], undefined,
-    (row) => registry.stackThreadHeld?.({ backend: row.source, threadId: row.id }) ?? false);
+    async (key) => {
+      const thread = parseThreadIdentityKey(key);
+      if (!thread) return {};
+      const held = registry.stackThreadHeld?.(thread) ?? false;
+      return { held, repair: !held && (Boolean(await getDesktopOverlayStore().getThreadPrAutoDispatchPending(thread))
+        || await registry.stackRepairActive?.(thread) === true) };
+    });
   signal.throwIfAborted();
   return projectBoundNavigationStacks(threads, stacks);
 }

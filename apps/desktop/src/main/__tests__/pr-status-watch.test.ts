@@ -137,6 +137,21 @@ function createHarness(
   };
 }
 
+it("preserves a held failure watch until a fresh eligible check result", async () => {
+  const watch = await registerWatch(store, ["failure"]);
+  const observe = vi.fn<() => Promise<string | undefined>>().mockResolvedValue("Held by #1104: CI running");
+  const submitTurnIfIdle = vi.fn(async () => ({ status: "started" as const, turnId: "fresh-watch" }));
+  const coordinator = new PrStatusWatchCoordinator({
+    store, registry: { submitTurnIfIdle }, stackHold: observe, now: () => now,
+  });
+  await expect(coordinator.handleStatusSnapshot(pr(), now)).resolves.toBe(0);
+  expect(submitTurnIfIdle).not.toHaveBeenCalled();
+  expect(await store.listActiveThreadPrStatusWatches(watch)).toMatchObject([{ watchId: watch.watchId }]);
+  observe.mockResolvedValue(undefined);
+  await coordinator.handleStatusSnapshot(pr({ state: "passing", checkState: "passing" }), now + 1);
+  expect(submitTurnIfIdle).not.toHaveBeenCalled();
+});
+
 describe("PrStatusWatchCoordinator", () => {
   it("migrates a legacy fork-keyed watch and completes it only for its destination", async () => {
     const dbPath = useFileStateDb();
