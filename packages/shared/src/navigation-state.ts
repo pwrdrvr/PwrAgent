@@ -332,7 +332,8 @@ export function materializeNavigationThreads(params: {
       tokenMiserEnabled: overlay?.tokenMiserEnabled,
       codexSkillProfile: overlay?.codexSkillProfile,
       monitorJobSuggestionsEnabled: overlay?.monitorJobSuggestionsEnabled,
-      jobMonitorCreationEnabled: overlay?.jobMonitorCreationEnabled,
+      jobMonitorCreationEnabled: thread.source === "codex" || thread.source === "claude" || thread.jobMonitorCreationControl
+        ? overlay?.jobMonitorCreationEnabled : undefined,
       prAutoDispatchEnabled: overlay?.prAutoDispatchEnabled ?? false,
       prAutoDispatchPending: overlay?.prAutoDispatchPending,
       codexEnvironmentRuntime:
@@ -586,6 +587,7 @@ export function serializeNavigationSnapshotForHash(params: {
       tokenMiserEnabled: thread.tokenMiserEnabled ?? null,
       monitorJobSuggestionsEnabled: thread.monitorJobSuggestionsEnabled ?? null,
       jobMonitorCreationEnabled: thread.jobMonitorCreationEnabled ?? null,
+      jobMonitorCreationControl: thread.jobMonitorCreationControl ?? null,
       scheduledStart: thread.scheduledStart
         ? {
             actionId: thread.scheduledStart.actionId,

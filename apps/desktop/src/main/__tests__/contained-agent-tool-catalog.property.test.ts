@@ -11,6 +11,7 @@ import { type FederationPeerRole } from "@pwragent/shared/contracts/federation";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { AcpAgentClient } from "../acp/acp-client";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
+import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { agentToolSuccess } from "../agent-tools/agent-tool-definition";
 import { AgentToolMcpServer, type AgentToolHttpMcpServerConfig } from "../agent-tools/agent-tool-mcp-server";
 import { AgentToolRouter } from "../agent-tools/agent-tool-router";
@@ -26,7 +27,10 @@ import {
 } from "../member-containment";
 import type { StateDb } from "../state/state-db";
 import { AcpSessionStore } from "../storage/acp-session-store";
+import { AcpAgentStore } from "../storage/acp-agent-store";
+import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { createAcpPromptSettlement } from "./fixtures/acp-prompt-settlement";
+import { createOverlayStoreMock, MockBackendClient } from "./helpers/backend-registry-fixture";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 // Rule: when this member's containment changes while a session is open, the
@@ -52,9 +56,70 @@ const GROK_INITIALIZE = {
   protocolVersion: 1,
   agentCapabilities: {
     loadSession: true,
+    mcpCapabilities: { http: true },
     sessionCapabilities: { close: {}, list: {}, resume: {} },
   },
 };
+
+it("uses the ACP owner's saved catalog and denies cached monitor calls through the shared dispatch gate", async () => {
+  const backend = "acp:grok";
+  const agentStore = new AcpAgentStore(stateDb);
+  const overlayStore = new SqliteOverlayStore(stateDb);
+  agentStore.upsertInstalledAgent({
+    backendId: backend, registryId: "grok", name: "Grok", version: "1.0.77",
+    distributionKind: "local", distributionSource: "grok",
+    installStatus: "installed", authStatus: "not-required", verificationStatus: "not-applicable",
+    allowlistRuleId: "fixture-grok", installedAt: 1, updatedAt: 1,
+    launchDescriptor: { backendId: backend, registryId: "grok", distributionKind: "local",
+      command: "/fixture/grok", args: [], env: {} },
+  });
+  const transport = new ListingAgentTransport({ initialize: GROK_INITIALIZE });
+  const registry = createDesktopBackendRegistry({
+    codexClient: new MockBackendClient({}),
+    acpAgentStore: agentStore,
+    acpSessionStore: new AcpSessionStore(stateDb),
+    createAcpTransport: () => transport,
+    overlayStore: {
+      ...createOverlayStoreMock(),
+      getThreadOverlayState: identity => overlayStore.getThreadOverlayState(identity),
+      setThreadJobMonitorCreation: request => overlayStore.setThreadJobMonitorCreation(request),
+    },
+  });
+  try {
+    const adapter = registry.constructionPorts().acpBackend;
+    const client = await adapter.getClient(backend);
+    const { sessionId: threadId } = await client.startSession({ cwd: "/repo", executionMode: "default" });
+    const turnState = registryModules(registry).turnState;
+    const turn = { backend, threadId, turnId: "running-turn" } as const;
+    turnState.registerTurn(turn);
+    const original = transport.sessions.get(threadId)!;
+    expect(original.tools).toContain("create_monitor_delegation");
+    const toggle = (enabled: boolean) => registry.setThreadJobMonitorCreation({ backend, threadId, enabled });
+    const staleCall = () => original.client.callTool({
+      name: "create_monitor_delegation", arguments: { task: "Watch the fixture build." },
+    });
+    await toggle(false);
+    await expect(staleCall()).resolves.toMatchObject({ isError: true,
+      content: [expect.objectContaining({ text: expect.stringContaining("Job Monitors are off") })] });
+    await toggle(true);
+    await expect(staleCall()).resolves.toMatchObject({ isError: true,
+      content: [expect.objectContaining({ text: expect.stringContaining("next turn") })] });
+    turnState.unregisterTurn(turn);
+    await toggle(false);
+    expect((await overlayStore.getThreadOverlayState({ backend, threadId }))?.jobMonitorCreationEnabled).toBe(false);
+    client.startPrompt({ sessionId: threadId, prompt: "next prompt" });
+    await vi.waitFor(() => expect(transport.promptTools).toHaveLength(1));
+    expect(transport.promptTools[0]).not.toContain("create_monitor_delegation");
+    expect(adapter.sessionToThreadSummary(adapter.getSession(backend, threadId)!)).toMatchObject({
+      jobMonitorCreationControl: true,
+    });
+    await expect(registry.setThreadJobMonitorCreation({ backend, threadId: "unknown", enabled: false }))
+      .rejects.toThrow("doesn't support");
+  } finally {
+    await transport.closeAll();
+    await registry.close();
+  }
+});
 
 type AgentSideSession = { client: Client; tools: string[] };
 

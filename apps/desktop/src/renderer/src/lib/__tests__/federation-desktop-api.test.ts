@@ -6,6 +6,22 @@ import { scopeDesktopApiToFederationTarget } from "../federation-desktop-api";
 import { threadJobMonitorControl } from "../job-monitor-control";
 
 describe("scopeDesktopApiToFederationTarget", () => {
+  it("exposes the Job Monitor toggle for a verified ACP session on its local owner", async () => {
+    const thread: NavigationThreadSummary = { source: "acp:grok", id: "grok-thread",
+      title: "Fixture", titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: true } };
+    const setThreadJobMonitorCreation = vi.fn(async () => ({ threadId: thread.id, enabled: false }));
+    const api = { setThreadJobMonitorCreation };
+    expect(threadJobMonitorControl(api, thread, undefined)).toBeUndefined();
+    const verified = { ...thread, jobMonitorCreationControl: true } as const;
+    expect(threadJobMonitorControl(api, verified, { scope: "remote", instanceId: "peer" })).toBeUndefined();
+    const toggle = threadJobMonitorControl(api, verified, undefined);
+    expect(toggle).toBeDefined();
+    await toggle?.(false);
+    expect(setThreadJobMonitorCreation).toHaveBeenCalledExactlyOnceWith({
+      backend: thread.source, threadId: thread.id, enabled: false,
+    });
+  });
+
   it("binds a Job Monitor toggle to a capable thread owner even after selection changes", async () => {
     await fc.assert(fc.asyncProperty(
       fc.string({ minLength: 1 }), fc.boolean(), fc.boolean(), fc.boolean(),

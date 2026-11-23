@@ -7171,7 +7171,9 @@ class DesktopAppServerService {
   ): Promise<SetThreadJobMonitorCreationResponse> {
     const { federationTarget, ...ownerRequest } = request;
     if (federationTarget && isRemoteFederationTarget(federationTarget)) {
-      if (ownerRequest.backend === "claude") throw new Error("Federated Job Monitor controls require a Codex thread.");
+      if (ownerRequest.backend !== undefined && ownerRequest.backend !== "codex") {
+        throw new Error("Federated Job Monitor controls require a Codex thread.");
+      }
       const runtime = getDesktopFederationRuntime();
       if (!runtime.remoteTargetSupportsCapability(federationTarget, "thread_job_monitor_control")
         || !runtime.remoteTargetSupportsCapability(federationTarget, "turn_control")) {

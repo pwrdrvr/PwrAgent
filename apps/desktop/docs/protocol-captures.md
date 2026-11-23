@@ -62,6 +62,45 @@ Two things to know before running it:
   are rewritten, but an agent can echo anything it read into a transcript.
   Read a capture before committing it as a fixture.
 
+### ACP Job Monitor catalog refresh
+
+The November 22, 2026 macOS 27.2.1 probes connected real ACP binaries to
+PwrAgent's `AgentToolMcpServer` over loopback HTTP. A proxy recorded the ACP
+requests and MCP `tools/list` replies and `tools/call` requests. The MCP
+tools were contrived and started no Job Monitors. Grok used a deterministic
+local model endpoint that selected tools through Grok's search and call
+interface. Antigravity used its normal inference path with
+`acp --process-per-session`.
+
+| Build | List and use after close/load | Work on a second session |
+| --- | --- | --- |
+| Antigravity 1.5.14 | Both new lists arrived before the corresponding prompt. The agent used the remaining tool while creation was off and the restored tool after turning it back on. | A held MCP call completed after both parent reloads. |
+| Grok 1.0.45-pwragent.2 | Same result, through Grok's tool search. | A held MCP call completed after both parent reloads. |
+| Grok 1.0.77 | Same result, through Grok's tool search. | A held MCP call completed after both parent reloads. |
+| Kimi 2.1.0 | Advertised HTTP, close, and load. The isolated profile required authentication at `session/new`. | Unverified. |
+| Qwen 0.26.1 | Advertised HTTP and load. Its initialize response omitted close. | Unverified. |
+
+For each successful sequence, the server first advertised
+`create_monitor_delegation` and the agent called it. The driver then changed
+the list, closed and loaded the same ACP session ID, and waited for the load
+response before sending the next prompt. The same session passed a marker from
+the first prompt to the remaining tool without receiving the marker again.
+The driver restored creation through a second close/load and observed a
+second creation-tool call. The held MCP call stayed on a separate session
+throughout, as PwrAgent Job Monitors do.
+
+Separate probes started a 12-second background command on the parent itself.
+Closing that session before the command finished interrupted it on all three
+builds. Grok reported a running `background_tasks` snapshot and Antigravity
+reported an in-progress `run_command` tool call. With the session kept open,
+Antigravity reported completion and wrote the expected marker before reload.
+PwrAgent requires the live native work to finish before attempting the
+catalog refresh. The same guard protects idle close.
+
+Raw captures belong under the ignored
+`apps/desktop/.local/protocol-captures/job-monitor-refresh/`. Keep only
+contrived or sanitized evidence in version control.
+
 ## Capturing Codex Account Protocol
 
 `scripts/capture-codex-usage-protocol.ts` records a complete Codex App Server

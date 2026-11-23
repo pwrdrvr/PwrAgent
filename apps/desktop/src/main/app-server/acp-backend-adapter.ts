@@ -136,7 +136,7 @@ import {
   shouldCheckGrokCliUpdate,
 } from "../acp/grok-cli-update";
 import { getMainLogger } from "../log";
-import { localMemberRole } from "../member-containment";
+import { isAgentToolAdvertisedLocally, localMemberRole } from "../member-containment";
 import {
   getAppStateMode,
   isAppStateInitialized,
@@ -190,6 +190,7 @@ export type AcpRuntimeClient = Pick<
       | "setRuntimeOption"
       | "steerSession"
       | "supportsArchivedSessionRestore"
+      | "supportsJobMonitorControl"
       | "supportsSessionLoad"
       | "supportsTurnSteering"
       | "rewindSession"
@@ -328,6 +329,7 @@ export type AcpBackendAdapterOptions = {
   acpSessionStore?: AcpSessionStoreLike | null;
   captureStores: ProtocolCaptureStore[];
   agentToolMcpServer?: AgentToolMcpServerLike;
+  readJobMonitorCreationPreference?: (backend: AcpBackendId, sessionId: string) => Promise<boolean>;
   createAcpClient?: AcpClientFactory;
   assertOwnerAdmission?: () => void;
   createAcpTransport?: AcpTransportFactory;
@@ -588,6 +590,13 @@ function acpRuntimeCapabilitiesForAgent(
   agent: AcpInstalledAgentRecord,
 ): BackendAcpRuntimeCapabilities | undefined {
   return agent.runtimeCapabilities;
+}
+
+/** These builds fetched and used the HTTP catalog after close/load. See protocol-captures.md. */
+function verifiedJobMonitorCatalogBuild(agent: AcpInstalledAgentRecord): boolean {
+  return (agent.backendId === "acp:antigravity" && agent.version === "1.5.14")
+    || (agent.backendId === "acp:grok"
+      && (agent.version === "1.0.45-pwragent.2" || agent.version === "1.0.77"));
 }
 
 function normalizeInstalledAcpAgent(
@@ -1189,6 +1198,7 @@ export class AcpBackendAdapter {
   private readonly acpSessionStore?: AcpSessionStoreLike;
   private readonly captureStores: ProtocolCaptureStore[];
   private readonly agentToolMcpServer?: AgentToolMcpServerLike;
+  private readonly readJobMonitorCreationPreference?: AcpBackendAdapterOptions["readJobMonitorCreationPreference"];
   private readonly createAcpClient: AcpClientFactory;
   private readonly createAcpTransport?: AcpTransportFactory;
   private readonly discoverLocalAcpAgents: LocalAcpDiscovery;
@@ -1271,6 +1281,7 @@ export class AcpBackendAdapter {
     });
     this.captureStores = options.captureStores;
     this.agentToolMcpServer = options.agentToolMcpServer;
+    this.readJobMonitorCreationPreference = options.readJobMonitorCreationPreference;
     this.emit = options.emit;
     this.handleServerRequest = options.handleServerRequest;
     this.resolveMcpConnectionServers = options.resolveMcpConnectionServers;
@@ -1748,7 +1759,20 @@ export class AcpBackendAdapter {
     const capabilities = agent
       ? effectiveAcpAgentCapabilities(agent)
       : undefined;
-    return acpSessionToThreadSummary(session, capabilities);
+    const summary = acpSessionToThreadSummary(session, capabilities);
+    return this.sessionSupportsJobMonitorControl(session)
+      ? { ...summary, jobMonitorCreationControl: true } : summary;
+  }
+
+  supportsJobMonitorControl(backend: AcpBackendId, sessionId: string): boolean {
+    const session = this.getSession(backend, sessionId);
+    return !!session && this.sessionSupportsJobMonitorControl(session);
+  }
+
+  private sessionSupportsJobMonitorControl(session: AcpSessionMetadata): boolean {
+    return !session.hidden && session.archivedAt === undefined
+      && isAgentToolAdvertisedLocally("create_monitor_delegation")
+      && this.findSessionOwner(session.backendId, session.sessionId)?.client.supportsJobMonitorControl?.(session.sessionId) === true;
   }
 
   getLaunchpadOptions(
@@ -3097,6 +3121,8 @@ export class AcpBackendAdapter {
     if (acpCapture) {
       this.captureStores.push(acpCapture.store);
     }
+    const readPreference = this.readJobMonitorCreationPreference;
+    const observeJobMonitorCatalog = !!readPreference && verifiedJobMonitorCatalogBuild(agent);
     return new AcpAgentClient({
       backendId: agent.backendId,
       agentDisplayName: agent.name,
@@ -3560,6 +3586,15 @@ export class AcpBackendAdapter {
         await this.handleServerRequest(agent.backendId, request),
       // The agent tool server lists tools by this member's containment.
       agentToolCatalogKey: localMemberRole,
+      ...(observeJobMonitorCatalog ? {
+        readJobMonitorCreationPreference: async (sessionId) =>
+          isAgentToolAdvertisedLocally("create_monitor_delegation")
+          && (!sessionId || await readPreference(agent.backendId, sessionId)),
+        onJobMonitorControlReady: async (threadId) => await this.emit({
+          backend: agent.backendId,
+          notification: { method: "thread/agent/updated", params: { threadId } },
+        }),
+      } : {}),
       mcpServers: async ({
         backendId,
         runtimeCapabilities,
@@ -3573,10 +3608,14 @@ export class AcpBackendAdapter {
               backend: backendId,
               threadId: sessionId,
               ...(!http ? { memoryOnly: true } : {}),
+              ...(http && observeJobMonitorCatalog ? { observeJobMonitorCatalog: true } : {}),
             });
             baseRegistration = {
               servers: [http ? registration.server : buildAgentMemoryStdioServer(registration.server)],
               bindThread: registration.bindThread,
+              ...(http && observeJobMonitorCatalog ? {
+                readListedJobMonitorCreation: registration.readListedJobMonitorCreation,
+              } : {}),
             };
           } catch (error) {
             acpBackendAdapterLog.warn("agent_tool_mcp_start_failed", {

@@ -15998,13 +15998,19 @@ export class DesktopBackendRegistry {
   }
 
   async setThreadJobMonitorCreation({ backend = "codex", threadId, enabled }: {
-    backend?: "codex" | "claude";
+    backend?: "codex" | "claude" | AcpBackendId;
     threadId: string;
     enabled: boolean;
   }): Promise<{ threadId: string; enabled: boolean }> {
-    if ((backend !== "codex" && backend !== "claude")
+    if ((backend !== "codex" && backend !== "claude" && (typeof backend !== "string" || !isAcpBackendId(backend)))
       || typeof threadId !== "string" || !threadId.trim() || typeof enabled !== "boolean") {
       throw new Error("Changing Job Monitor creation requires a thread and an enabled state.");
+    }
+    if (isAcpBackendId(backend)) {
+      this.assertThreadOwnership();
+      if (!this.acpBackend.supportsJobMonitorControl(backend, threadId)) {
+        throw new Error("This ACP session doesn't support changing Job Monitors.");
+      }
     }
     const identity = { backend, threadId };
     const deferredTurnId = enabled && !(await this.isJobMonitorCreationEnabled(identity))
@@ -16014,16 +16020,12 @@ export class DesktopBackendRegistry {
       // Retain this turn's availability while saving On for the next turn.
       this.jobMonitorCreationDeferredTurns.add(buildActiveTurnKey(identity.backend, threadId, deferredTurnId));
     }
-    await this.publishLocalEvent({
-      backend: identity.backend,
-      notification: { method: "thread/agent/updated", params: { threadId } },
-    });
+    await this.notifyThreadAgentChange(backend, threadId);
     return { threadId, enabled };
   }
 
   private jobMonitorCreationTurnId(identity: { backend: AppServerBackendKind; threadId: string }): string | undefined {
-    if (identity.backend === "claude") return this.getActiveTurnForThread(identity)?.turnId;
-    if (identity.backend !== "codex") return undefined;
+    if (identity.backend !== "codex") return this.getActiveTurnForThread(identity)?.turnId;
     const pendingId = buildPendingTurnId(identity.threadId);
     return this.context.turnState.pendingStartedTurnId(identity.threadId)
       ?? this.getActiveTurnForThread(identity)?.turnId

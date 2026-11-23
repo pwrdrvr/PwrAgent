@@ -106,6 +106,7 @@ export type AgentToolMcpClientContext = {
   backend: AppServerBackendKind;
   threadId?: string;
   memoryOnly?: boolean;
+  observeJobMonitorCatalog?: boolean;
 };
 
 export type ResolvedAgentToolMcpCallContext = {
@@ -127,6 +128,7 @@ export type AgentToolHttpMcpServerConfig = {
 export type AgentToolMcpRegistration = {
   server: AgentToolHttpMcpServerConfig;
   bindThread: (threadId: string) => void;
+  readListedJobMonitorCreation?: () => boolean | undefined;
 };
 
 export type AgentToolMcpServerLike = {
@@ -181,6 +183,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     AgentToolMcpClientContext
   >();
   private readonly tokensByBoundThread = new Map<string, string>();
+  private readonly jobMonitorListings = new Map<string, { enabled: boolean }>();
   private readonly sessionSigningKey = randomBytes(32);
   private readonly connectionsWithoutRequests = new Set<Socket>();
   /** Ends each open standalone event stream (a client's GET). */
@@ -200,6 +203,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     }
     await this.ensureStarted();
     const token = this.tokenForContext(context);
+    const previousListing = this.jobMonitorListings.get(token);
     agentToolMcpLog.info("registered MCP client", {
       backend: context.backend,
       threadId: context.threadId ?? null,
@@ -216,6 +220,12 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
           },
         ],
       },
+      ...(context.observeJobMonitorCatalog ? {
+        readListedJobMonitorCreation: () => {
+          const listing = this.jobMonitorListings.get(token);
+          return listing !== previousListing ? listing?.enabled : undefined;
+        },
+      } : {}),
       bindThread: (threadId) => {
         const normalizedThreadId = threadId.trim();
         const current = this.contextsByToken.get(token);
@@ -267,6 +277,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     this.port = undefined;
     this.contextsByToken.clear();
     this.tokensByBoundThread.clear();
+    this.jobMonitorListings.clear();
   }
 
   private tokenForContext(context: AgentToolMcpClientContext): string {
@@ -275,6 +286,10 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       const key = boundThreadKey(context, normalizedThreadId);
       const existing = this.tokensByBoundThread.get(key);
       if (existing) {
+        if (context.observeJobMonitorCatalog) {
+          const registered = this.contextsByToken.get(existing);
+          if (registered) registered.observeJobMonitorCatalog = true;
+        }
         return existing;
       }
     }
@@ -282,6 +297,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     const normalizedContext = {
       backend: context.backend,
       ...(context.memoryOnly ? { memoryOnly: true } : {}),
+      ...(context.observeJobMonitorCatalog ? { observeJobMonitorCatalog: true } : {}),
       ...(normalizedThreadId ? { threadId: normalizedThreadId } : {}),
     };
     this.contextsByToken.set(token, normalizedContext);
@@ -462,9 +478,15 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       }
       return { contents: [content] };
     });
-    mcpServer.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: await this.resolveMcpTools(params.clientContext),
-    }));
+    mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
+      const tools = await this.resolveMcpTools(params.clientContext);
+      if (params.clientContext.observeJobMonitorCatalog) {
+        this.jobMonitorListings.set(params.token, {
+          enabled: tools.some(({ name }) => name === "create_monitor_delegation"),
+        });
+      }
+      return { tools };
+    });
     mcpServer.setRequestHandler(
       CallToolRequestSchema,
       async (request, extra) => {

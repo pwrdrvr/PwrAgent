@@ -776,6 +776,8 @@ export type AppServerThreadSummary = {
   reasoningEffort?: string;
   fastMode?: boolean;
   acpRuntime?: AppServerAcpSessionRuntimeState;
+  /** Owner-local ACP session with a verified HTTP Job Monitor catalog refresh. */
+  jobMonitorCreationControl?: true;
   workspaceHandoff?: {
     available: boolean;
     unavailableReason?: string;
