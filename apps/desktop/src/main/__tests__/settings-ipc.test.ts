@@ -1922,6 +1922,8 @@ describe("settings ipc", () => {
         entries: AcpAgentSettingsEntry[];
       };
       expect(response.entries.map((entry) => entry.registryId).sort()).toEqual(["antigravity", "gemini", "grok", "kimi", "qwen"]);
+      expect(response.entries.find((entry) => entry.registryId === "antigravity")?.unavailableReason)
+        .toMatch(/enable Antigravity CLI.*Refresh/);
       expect(localAcpDiscoveryMock.discoverLocalAcpAgentRecords).not.toHaveBeenCalled();
       // Hiding a retired provider must not delete the user's persisted state.
       expect(store.getInstalledAgent("acp:claude-acp")).toBeDefined();

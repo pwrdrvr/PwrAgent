@@ -1015,10 +1015,13 @@ export function AgentReviewStep(props: {
       props.discovery.claude,
     );
     const on = agentEnabled(id, snapshot);
-    const label = !found ? "Not installed" : on ? "Ready" : "Turned off";
-    return { id, name: agentTabName(id), found, on, label };
+    const actionRequired = id !== "codex" && id !== "claude"
+      && Boolean(acpEntryFor(props.discovery.acpEntries, id)?.unavailableReason);
+    const ready = found && on && !actionRequired;
+    const label = !found ? "Not installed" : !on ? "Turned off" : actionRequired ? "Action required" : "Ready";
+    return { id, name: agentTabName(id), ready, label };
   });
-  const ready = rows.filter((row) => row.found && row.on);
+  const ready = rows.filter((row) => row.ready);
   return (
     <ReviewSummary
       title={

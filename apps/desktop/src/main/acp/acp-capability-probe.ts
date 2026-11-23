@@ -73,11 +73,12 @@ export async function probeAcpRuntimeCapabilities(
     options?.signal?.throwIfAborted();
     const message = error instanceof Error ? error.message : String(error);
     const actionRequired = acpDiscoveryActionRequiredMessage(record.registryId, message);
+    const previousRestriction = acpDiscoveryActionRequiredMessage(record.registryId, record.lastDiscoveryError);
     return {
       record: {
         ...record,
-        ...(actionRequired ? { runtimeCapabilities: undefined } : {}),
-        lastDiscoveryError: message,
+        ...(actionRequired || previousRestriction ? { runtimeCapabilities: undefined } : {}),
+        lastDiscoveryError: previousRestriction && !actionRequired ? record.lastDiscoveryError : message,
         updatedAt: Math.max(record.updatedAt, now),
       },
       error: actionRequired ?? message,

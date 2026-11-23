@@ -1,4 +1,5 @@
 import os from "node:os";
+import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import { shouldReprobeAcpCapabilities } from "../acp/acp-capability-freshness";
 import { probeAcpRuntimeCapabilities } from "../acp/acp-capability-probe";
@@ -40,6 +41,16 @@ it("recovers Gemini CLI after the consumer account is replaced", async () => {
   expect(shouldReprobeAcpCapabilities(
     { ...previouslyDiscovered, lastDiscoveryError: rejection }, previouslyDiscovered.version, now,
   )).toBe(true);
+
+  await fc.assert(fc.asyncProperty(
+    fc.constantFrom("ACP request timed out", "ACP transport closed", "Could not start executable"),
+    async (inconclusiveError) => {
+      discover.mockRejectedValueOnce(new Error(inconclusiveError));
+      const recheck = await probeAcpRuntimeCapabilities(failure.record, os.tmpdir());
+      expect(recheck.error).toBe(inconclusiveError);
+      expect(recheck.record.lastDiscoveryError).toBe(rejection);
+    },
+  ));
 
   // Even a successful session with no model catalog proves auth recovered.
   discover.mockResolvedValueOnce({});

@@ -26,6 +26,10 @@ import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
 import { threadAssetRoot } from "../app-server/thread-assets";
 import { installedAcpAgentSettingsEntry } from "../shell/ipc/settings";
+import { AcpAgentStore } from "../storage/acp-agent-store";
+import { StateDb } from "../state/state-db";
+import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 
 const fixtureDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -120,6 +124,103 @@ describe("inputToAcpPrompt local image replay", () => {
 });
 
 describe("describeInstalledAcpBackend", () => {
+  it("writes once when session creation first learns an account restriction", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-acp-account-budget-"));
+    const db = StateDb.open(path.join(root, "state.db"));
+    const store = new AcpAgentStore(db);
+    const backendId = "acp:gemini";
+    store.upsertInstalledAgent({
+      ...buildInstalledAgent(),
+      launchDescriptor: { backendId, registryId: "gemini", distributionKind: "local", command: "/opt/example/gemini", args: [], env: {} },
+    });
+    const transport = new FakeAcpAgentTransport();
+    const request = transport.request.bind(transport);
+    const rejection = "This client is no longer supported for Gemini Code Assist for individuals.";
+    vi.spyOn(transport, "request").mockImplementation(async (method, params, timeout) => {
+      if (method === "session/new") throw new Error(rejection);
+      return await request(method, params, timeout);
+    });
+    const adapter = createTestAcpBackendAdapter({
+      acpAgentStore: store,
+      captureStores: [],
+      acpSessionStore: { getSession: () => undefined, listSessions: () => [], upsertSession: vi.fn() },
+      createAcpTransport: () => transport,
+      emit: async () => undefined,
+      handleServerRequest: async () => ({}),
+    });
+    try {
+      const client = await adapter.getClient(backendId);
+      const { writes } = await measureSqliteWrites(async () => {
+        const attempt = () => expect(client.startSession({ executionMode: "default" })).rejects.toThrow(rejection);
+        await Promise.all([attempt(), attempt(), attempt()]);
+      });
+      expectSqliteWriteBudget({
+        scenario: "acp-account-restriction-publication",
+        note: "One commit for the newly observed account restriction, including concurrent attempts with the same rejection",
+        writes,
+      });
+    } finally {
+      await adapter.close();
+      db.close();
+      await rm(root, { recursive: true, force: true });
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("records known Google account rejections from session/new for the currently selected runtime", async () => {
+    const gemini = "acp:gemini";
+    const antigravity = "acp:antigravity";
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom(gemini, antigravity),
+      fc.boolean(),
+      async (backendId, changedRuntime) => {
+        const registryId = backendId === gemini ? "gemini" : "antigravity";
+        const rejection = backendId === gemini
+          ? "json-rpc error (-32000): This client is no longer supported for Gemini Code Assist for individuals."
+          : "json-rpc error (-32000): Authentication required";
+        let current = {
+          ...buildInstalledAgent(), backendId, registryId,
+          launchDescriptor: {
+            backendId, registryId, distributionKind: "local" as const,
+            command: `/opt/example/${registryId}`, args: [], env: {},
+          },
+        };
+        const transport = new FakeAcpAgentTransport();
+        const request = transport.request.bind(transport);
+        vi.spyOn(transport, "request").mockImplementation(async (method, params, timeout) => {
+          if (method !== "session/new") return await request(method, params, timeout);
+          if (changedRuntime) current = { ...current, version: "999.0.0" };
+          throw new Error(rejection);
+        });
+        const emit = vi.fn(async (_event: AgentEvent) => undefined);
+        const adapter = createTestAcpBackendAdapter({
+          captureStores: [],
+          acpAgentStore: {
+            getInstalledAgent: () => current,
+            listInstalledAgents: () => [current],
+            upsertInstalledAgent: (agent) => { current = agent as typeof current; },
+          },
+          acpSessionStore: { getSession: () => undefined, listSessions: () => [], upsertSession: vi.fn() },
+          createAcpTransport: () => transport,
+          emit,
+          handleServerRequest: vi.fn(async () => ({})),
+        });
+        try {
+          const client = await adapter.getClient(backendId);
+          emit.mockClear();
+          await expect(client.startSession({ executionMode: "default" })).rejects.toThrow(rejection);
+          expect(describeInstalledAcpBackend(current).available).toBe(changedRuntime);
+          expect(installedAcpAgentSettingsEntry(current).unavailableReason !== undefined).toBe(!changedRuntime);
+          expect(emit.mock.calls.some(([event]) =>
+            event.notification.method === "backend/acpRuntimeCapabilities/updated")).toBe(!changedRuntime);
+        } finally {
+          await adapter.close();
+        }
+      },
+    ), { numRuns: 12 });
+  });
+
   it("shows a sign-in action for Antigravity's observed logged-out response", () => {
     const agent: AcpInstalledAgentRecord = {
       ...buildInstalledAgent(),

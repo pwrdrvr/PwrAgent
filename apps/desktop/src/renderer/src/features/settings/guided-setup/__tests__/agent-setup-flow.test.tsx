@@ -109,6 +109,22 @@ function escapeRegExp(text: string): string {
 }
 
 describe("guided agent setup", () => {
+  it.each([true, false])("only counts installed Gemini as ready when its account is usable (%s)", async (blocked) => {
+    const dialog = await renderFlow(fakeApi(), [
+      entry("gemini", {
+        installed: true,
+        installStatus: "installed",
+        ...(blocked ? { unavailableReason: "Google ended Gemini CLI access for consumer Google accounts." } : {}),
+      }),
+    ]);
+    fireEvent.click(within(dialog).getByRole("tab", { name: /^Gemini CLI/ }));
+    const next = () => fireEvent.click(within(dialog).getByRole("button", { name: /Continue/ }));
+    next();
+    next();
+    expect(within(dialog).getByText(blocked ? "No agents ready yet" : "1 agent ready")).toBeVisible();
+    if (blocked) expect(within(dialog).getByText("Action required")).toBeVisible();
+  });
+
   it("has a tab for every ACP agent, with that agent's own install copy and notice", async () => {
     const dialog = await renderFlow(fakeApi());
     const tabs = within(dialog).getByRole("tablist", { name: "Agents" });

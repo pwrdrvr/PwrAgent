@@ -192,6 +192,7 @@ import {
 } from "../../acp/acp-capability-probe";
 import { shouldReprobeAcpCapabilities } from "../../acp/acp-capability-freshness";
 import { acpDiscoveryActionRequiredMessage } from "../../acp/acp-discovery-error";
+import { acpAgentLaunchIdentity } from "../../acp/acp-launch-descriptor";
 import { describeDistributionSource } from "../../acp/acp-install-provenance";
 import { isPwrAgentOwnedGrokRuntime } from "../../acp/grok-cli-update";
 import {
@@ -711,7 +712,7 @@ function placeholderAcpAgentSettingsEntry(
     authStatus: "not-required",
     verificationStatus: "unverified-allowed",
     ...(strategy.id === "antigravity"
-      ? { unavailableReason: "Install Antigravity CLI 1.5 or later, then click Refresh under Re-probe." }
+      ? { unavailableReason: "Install Antigravity CLI 1.5 or later, enable Antigravity CLI if it is off, then click Refresh under Re-probe." }
       : {}),
     instances: [],
   };
@@ -895,20 +896,24 @@ async function listInstalledAndLocalAcpAgents(
           current?.version !== undefined
           && record.version !== undefined
           && current.version !== record.version;
+        const runtimeChanged = runtimeVersionChanged
+          || (current !== undefined
+            && (record.registryId === "gemini" || record.registryId === "antigravity")
+            && acpAgentLaunchIdentity(current) !== acpAgentLaunchIdentity(record));
         const pwrAgentOwnedGrok = isPwrAgentOwnedGrokRuntime(record);
         const nextRecord = {
           ...record,
-          runtimeCapabilities: runtimeVersionChanged
+          runtimeCapabilities: runtimeChanged
             ? undefined
             : current?.runtimeCapabilities,
           update: pwrAgentOwnedGrok ? undefined : current?.update,
           updateCommand: pwrAgentOwnedGrok
             ? undefined
             : current?.updateCommand,
-          lastDiscoveredAt: runtimeVersionChanged
+          lastDiscoveredAt: runtimeChanged
             ? undefined
             : current?.lastDiscoveredAt,
-          lastDiscoveryError: runtimeVersionChanged
+          lastDiscoveryError: runtimeChanged
             ? undefined
             : current?.lastDiscoveryError,
           installedAt: current?.installedAt ?? record.installedAt,
@@ -928,7 +933,7 @@ async function listInstalledAndLocalAcpAgents(
         // Otherwise persist the merged record carrying the cached capabilities
         // without launching anything.
         if (
-          shouldReprobeAcpCapabilities(current, record.version, now, {
+          shouldReprobeAcpCapabilities(runtimeChanged ? undefined : current, record.version, now, {
             ...(options?.force === true ? { force: true } : {}),
           })
         ) {
@@ -962,7 +967,7 @@ async function listInstalledAndLocalAcpAgents(
       let storeFailure: unknown;
       for await (const outcome of probes) {
         try {
-          store.upsertInstalledAgent(outcome.record);
+          store.upsertInstalledAgent(keepConcurrentAcpRestriction(store, outcome));
         } catch (error) {
           storeFailure ??= error;
           continue;
@@ -1000,6 +1005,27 @@ async function listInstalledAndLocalAcpAgents(
         !isBannedAcpRegistryId(record.registryId),
     ),
   ];
+}
+
+function keepConcurrentAcpRestriction(
+  store: AcpAgentService,
+  { record, update }: AcpProbeOutcome,
+): AcpInstalledAgentRecord {
+  const { registryId } = record;
+  if ((registryId !== "gemini" && registryId !== "antigravity")
+    || update.status === "succeeded"
+    || acpDiscoveryActionRequiredMessage(registryId, record.lastDiscoveryError)) {
+    return record;
+  }
+  // An ordinary session may have learned the restriction after this probe
+  // started. An inconclusive result must keep it for the same runtime.
+  const current = store.getInstalledAgent(record.backendId);
+  if (!current || current.version !== record.version
+    || acpAgentLaunchIdentity(current) !== acpAgentLaunchIdentity(record)
+    || !acpDiscoveryActionRequiredMessage(registryId, current.lastDiscoveryError)) {
+    return record;
+  }
+  return { ...record, lastDiscoveryError: current.lastDiscoveryError, runtimeCapabilities: undefined };
 }
 
 function acpAgentSettingsEntry(params: {

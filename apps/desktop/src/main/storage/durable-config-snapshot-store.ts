@@ -3,6 +3,7 @@ import {
   CONFIG_STORE_DURABLE_SCHEMA_VERSION,
   PROVIDER_IDS,
   deepFreeze,
+  normalizeConfigDomains,
   type ConfigDomainMap,
   type ProviderId,
   type ProviderProjection,
@@ -155,13 +156,18 @@ function parseConfigDomains(payload: string): ConfigDomainMap | undefined {
   ) {
     return undefined;
   }
+  const providers = { ...parsed.providers };
+  // Schema-v1 snapshots written before Antigravity did not have its projection.
+  if (!Object.hasOwn(providers, "antigravity")) {
+    providers.antigravity = normalizeConfigDomains({ config: {} }).providers.antigravity;
+  }
   for (const provider of PROVIDER_IDS) {
-    if (!parseProviderProjectionValue(parsed.providers[provider])) {
+    if (!parseProviderProjectionValue(providers[provider])) {
       return undefined;
     }
   }
   // Schema-v1 snapshots written before Harness settings have no research domain.
-  return deepFreeze({ ...parsed, research: parsed.research ?? {} } as ConfigDomainMap);
+  return deepFreeze({ ...parsed, providers, research: parsed.research ?? {} } as ConfigDomainMap);
 }
 
 function parseProviderProjection(payload: string): ProviderProjection | undefined {
