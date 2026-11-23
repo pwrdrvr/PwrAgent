@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import fc from "fast-check";
+import { buildAcpLaunchpadOptions } from "../app-server/acp-backend-adapter";
 import {
   ACP_CAPABILITY_MAX_AGE_MS,
   recordWithSessionRuntimeCapabilities,
@@ -171,6 +173,35 @@ describe("shouldProbeAcpCapabilitiesAtStartup", () => {
 });
 
 describe("recordWithSessionRuntimeCapabilities", () => {
+  it("keeps the Antigravity model catalog selectable after a live reply advertises legacy IDs", () => {
+    fc.assert(fc.property(fc.constantFrom("gemini-4-neon", "gemini-4-carbon", "claude-opus-5-5"),
+      (selected) => {
+        const ids = ["gemini-4-neon", "gemini-4-carbon", "claude-opus-5-5", "gemini-pro-orchestrator"];
+        const knownEfforts = ["low", "medium", "high", "xhigh"];
+        const initial = {
+          schemaVersion: 1, status: "discovered", source: "session-load", discoveredAt: NOW, checkedAt: NOW,
+          configOptions: [{ id: "model", label: "Model", type: "select", category: "model", currentValue: ids[0],
+            values: ids.map((value) => ({ value })) }],
+          models: { availableModels: ids.map((id) => ({
+            id, ...(id === ids[0] ? { reasoningEfforts: knownEfforts } : {}),
+          })) },
+        } satisfies NonNullable<AcpInstalledAgentRecord["runtimeCapabilities"]>;
+        const live = {
+          ...initial,
+          configOptions: initial.configOptions.map((option) => ({ ...option, currentValue: selected })),
+          models: { currentModelId: `${selected}-high`, availableModels: ids.map((id) => ({ id: `${id}-high` })) },
+        };
+        const updated = recordWithSessionRuntimeCapabilities(record({
+          registryId: "antigravity", backendId: "acp:antigravity", runtimeCapabilities: initial,
+        }), live, NOW);
+        const catalog = buildAcpLaunchpadOptions(updated.runtimeCapabilities, "antigravity")?.models;
+        expect(catalog?.map((m) => m.id)).toEqual(ids);
+        expect(catalog?.find((m) => m.current)?.id).toBe(selected);
+        if (selected !== ids[0]) expect(catalog?.[0]?.reasoningEfforts).toEqual(knownEfforts);
+        expect(buildAcpLaunchpadOptions(live, "antigravity")?.models?.map((m) => m.id)).toEqual(ids);
+      }));
+  });
+
   it("does not let a live session renew the probe clock", () => {
     // Measured: a Kimi record catalogued before #2219 still listed `on` among
     // K3's thought levels, and named it K3's default, a day after that fix

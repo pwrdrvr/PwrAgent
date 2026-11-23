@@ -194,7 +194,8 @@ import type { AcpAgentStrategy } from "@pwrdrvr/agent-acp/strategies";
 import { AcpAgentService } from "../../acp/acp-agent-service";
 import { isBannedAcpRegistryId } from "../../acp/acp-agent-allowlist";
 import { discoverLocalAcpAgentRecords } from "../../acp/acp-instance-discovery";
-import { ACP_LOCAL_AGENT_STRATEGIES } from "../../acp/acp-local-strategies";
+import { ACP_LOCAL_AGENT_STRATEGIES, ANTIGRAVITY_ACP_STRATEGY } from "../../acp/acp-local-strategies";
+import { registerAntigravitySetupIpc } from "./antigravity-setup";
 import {
   ensureAcpRuntimeDiscoveryWorkspace,
   probeAcpRuntimeCapabilities,
@@ -274,6 +275,7 @@ type InFlightAcpRefresh = {
   probeCapabilities: boolean;
   registryIds: ReadonlySet<string>;
   promise: Promise<ListAcpAgentSettingsResponse>;
+  antigravityRevision: number;
 };
 
 // One per key of the settings contract's `acpAgents`, which Settings and
@@ -290,6 +292,8 @@ const LOCAL_ACP_REGISTRY_IDS = Object.keys(LOCAL_ACP_AGENTS) as Array<
   keyof DesktopSettingsSnapshot["acpAgents"]
 >;
 const inFlightAcpRefreshes = new Set<InFlightAcpRefresh>();
+let antigravityDiscoveryRevision = 0;
+let disposeAntigravitySetup: (() => void) | undefined;
 const recentAcpRefreshes = new Set<
   InFlightAcpRefresh & {
     completedAt: number;
@@ -343,6 +347,27 @@ function invalidateRecentAcpRefreshes(
   }
 }
 
+async function refreshAntigravitySetup(settingsService: DesktopSettingsService, probeCapabilities: boolean) {
+  antigravityDiscoveryRevision += 1;
+  const registryIds = ["antigravity"];
+  invalidateRecentAcpRefreshes(new Set(registryIds));
+  const registry = getDesktopBackendRegistry();
+  registry.invalidateProviderRuntimeSelections({ acp: true, acpRegistryIds: registryIds, codex: false });
+  const store = new AcpAgentService();
+  const env = await settingsService.resolveTerminalSpawnEnvAsync().catch(() => undefined);
+  const records = await listInstalledAndLocalAcpAgents(store, {
+    permit: issueProviderDiscoveryPermit("settings-user-action"),
+    providers: settingsService.readProvidersConfig(),
+    refreshLocal: true,
+    registryIds,
+    probeCapabilities,
+    force: probeCapabilities,
+    env,
+  });
+  registry.invalidateProviderRuntimeSelections({ acp: true, acpRegistryIds: registryIds, codex: false });
+  return records.find((record) => record.registryId === "antigravity" && record.installStatus === "installed")?.launchDescriptor;
+}
+
 function permitAcpDiscoveryRequest(
   request: ListAcpAgentSettingsRequest,
 ): ProviderDiscoveryPermit | undefined {
@@ -372,8 +397,10 @@ async function listAcpAgentSettings(
   }
   const probeCapabilities = request.probeCapabilities !== false;
   const registryIds = acpRefreshRegistryIds(request);
+  const antigravityRevision = antigravityDiscoveryRevision;
   const compatible = [...inFlightAcpRefreshes].filter(
-    (active) => active.probeCapabilities === probeCapabilities,
+    (active) => active.probeCapabilities === probeCapabilities
+      && (!active.registryIds.has("antigravity") || active.antigravityRevision === antigravityRevision),
   );
   const superset = compatible.find((active) =>
     setContainsAll(active.registryIds, registryIds),
@@ -437,6 +464,7 @@ async function listAcpAgentSettings(
     probeCapabilities,
     registryIds,
     promise: run,
+    antigravityRevision,
   };
   inFlightAcpRefreshes.add(active);
   // A cancelled pass skips the probes it has not finished. Nothing may join
@@ -447,7 +475,8 @@ async function listAcpAgentSettings(
   progress?.signal.addEventListener("abort", detach, { once: true });
   try {
     const response = await run;
-    if (!progress?.signal.aborted) {
+    if (!progress?.signal.aborted
+      && (!registryIds.has("antigravity") || antigravityRevision === antigravityDiscoveryRevision)) {
       recentAcpRefreshes.add({
         ...active,
         completedAt: Date.now(),
@@ -801,6 +830,9 @@ async function listInstalledAndLocalAcpAgents(
     progress?: ProviderCatalogRefreshProgress;
   },
 ): Promise<AcpInstalledAgentRecord[]> {
+  const antigravityRevision = antigravityDiscoveryRevision;
+  const superseded = (registryId: string) => registryId === "antigravity"
+    && antigravityRevision !== antigravityDiscoveryRevision;
   const installed = store.listInstalledAgents();
   let discovered: AcpInstalledAgentRecord[] = [];
   const progress = options?.progress;
@@ -888,6 +920,7 @@ async function listInstalledAndLocalAcpAgents(
         : undefined;
       const toProbe: AcpInstalledAgentRecord[] = [];
       for (const record of discovered) {
+        if (superseded(record.registryId)) continue;
         if (record.installStatus !== "installed") {
           // Compatibility diagnostics (for example a legacy Python kimi-cli)
           // are durable records but must never inherit the previous usable
@@ -976,6 +1009,7 @@ async function listInstalledAndLocalAcpAgents(
       // agents are still being probed, inviting a second copy of each.
       let storeFailure: unknown;
       for await (const outcome of probes) {
+        if (superseded(outcome.record.registryId)) continue;
         try {
           store.upsertInstalledAgent(keepConcurrentAcpRestriction(store, outcome));
         } catch (error) {
@@ -1012,6 +1046,7 @@ async function listInstalledAndLocalAcpAgents(
     ...discovered.filter(
       (record) =>
         !installedBackendIds.has(record.backendId) &&
+        !superseded(record.registryId) &&
         !isBannedAcpRegistryId(record.registryId),
     ),
   ];
@@ -1123,7 +1158,7 @@ export function installedAcpAgentSettingsEntry(
   return {
     backendId: record.backendId,
     registryId: record.registryId,
-    name: record.name,
+    name: record.registryId === "antigravity" ? ANTIGRAVITY_ACP_STRATEGY.displayName : record.name,
     description: agent?.description,
     version: record.version,
     license: agent?.license,
@@ -1799,6 +1834,10 @@ export function registerSettingsIpcHandlers(
 ): void {
   registerReceivingFolderIpc();
   registerWorktreeFolderIpc(() => getService(service).resolveWorktreeFolder());
+  disposeAntigravitySetup?.();
+  disposeAntigravitySetup = registerAntigravitySetupIpc({
+    refresh: (probeCapabilities) => refreshAntigravitySetup(getService(service), probeCapabilities),
+  });
   recentAcpRefreshes.clear();
   ipcMain.removeHandler(ACP_AGENTS_LIST_CHANNEL);
   ipcMain.handle(
@@ -2674,6 +2713,8 @@ export function registerSettingsIpcHandlers(
 }
 
 export function disposeSettingsIpcHandlers(): void {
+  disposeAntigravitySetup?.();
+  disposeAntigravitySetup = undefined;
   codexLoginManager.dispose();
   pendingCodexProviderRecovery.clear();
   recentAcpRefreshes.clear();

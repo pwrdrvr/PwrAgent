@@ -125,7 +125,43 @@ export function recordWithSessionRuntimeCapabilities(
 ): AcpInstalledAgentRecord {
   return {
     ...current,
-    runtimeCapabilities,
+    runtimeCapabilities: current.registryId === "antigravity"
+      ? withAntigravityModelCatalog(runtimeCapabilities, current.runtimeCapabilities)
+      : runtimeCapabilities,
     updatedAt: Math.max(current.updatedAt, now),
+  };
+}
+
+/** Modern agy exposes model families in configOptions and legacy model/effort
+ * aliases in models. The family IDs are what the session's model selector sends. */
+export function withAntigravityModelCatalog(
+  capabilities: AcpInstalledAgentRecord["runtimeCapabilities"],
+  prior?: AcpInstalledAgentRecord["runtimeCapabilities"],
+): AcpInstalledAgentRecord["runtimeCapabilities"] {
+  const modelOption = capabilities?.configOptions?.find((option) => option.category === "model");
+  if (!capabilities || !modelOption?.values.length) return capabilities;
+  const known = new Map((prior?.models?.availableModels ?? []).map((model) => [model.id, model]));
+  const reported = new Map((capabilities.models?.availableModels ?? []).map((model) => [model.id, model]));
+  const effort = capabilities.configOptions?.find((option) => option.category === "thought_level");
+  return {
+    ...capabilities,
+    models: {
+      currentModelId: modelOption.currentValue,
+      availableModels: modelOption.values.map((model) => {
+        const isCurrent = model.value === modelOption.currentValue;
+        const details = { ...known.get(model.value), ...reported.get(model.value) };
+        return {
+          ...details,
+          id: model.value,
+          label: model.label ?? details.label,
+          current: isCurrent,
+          ...(isCurrent ? {
+            reasoningEfforts: effort?.values.map((level) => level.value),
+            defaultReasoningEffort: effort?.currentValue,
+            supportsReasoning: (effort?.values.length ?? 0) > 1,
+          } : {}),
+        };
+      }),
+    },
   };
 }

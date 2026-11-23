@@ -9,7 +9,7 @@ import { terminateOwnedProcessTree } from "../process-tree.js";
 import type { AcpLaunchDescriptor } from "./acp-launch-descriptor.js";
 import { AcpStdioJsonRpcTransport, type AcpStdioSpawn } from "./acp-stdio-transport.js";
 
-const SIGN_IN_TIMEOUT_MS = 5 * 60_000;
+export const ANTIGRAVITY_SIGN_IN_TIMEOUT_MS = 5 * 60_000;
 const PROCESS_STOP_OPTIONS = { gracefulTimeoutMs: 1_000, forceTimeoutMs: 2_000 };
 const MAX_AUTH_URL_LENGTH = 16_384;
 const MAX_STARTUP_OUTPUT_BYTES = 128 * 1024;
@@ -29,6 +29,8 @@ export type AntigravitySignInAttempt = {
   /** Resolves after a fresh ACP process opens a session. */
   completed: Promise<void>;
   submitCode(code: string): void;
+  openPage(): Promise<void>;
+  copyLink(writeText: (url: string) => void): void;
   cancel(): Promise<void>;
 };
 
@@ -38,7 +40,7 @@ export type AntigravitySignInOptions = {
   scheduleTimeout?: (expire: () => void, delayMs: number) => () => void;
 };
 
-type LoginInput = { writeCode?: (code: string) => void };
+type LoginInput = { writeCode?: (code: string) => void; url?: string };
 
 /** Keep one controller per desktop owner and the attempt handle with its initiating client. */
 export class AntigravitySignIn {
@@ -53,7 +55,7 @@ export class AntigravitySignIn {
     }
     if (launch.backendId !== "acp:antigravity" || launch.registryId !== "antigravity"
       || !path.isAbsolute(launch.command) || launch.args[0] !== "acp") {
-      throw new Error("Select a discovered Antigravity CLI before signing in.");
+      throw new Error("Select an Antigravity installation before signing in.");
     }
     const selected = { ...launch, args: [...launch.args], env: { ...launch.env } };
     const controller = new AbortController();
@@ -61,7 +63,7 @@ export class AntigravitySignIn {
     const input: LoginInput = {};
     const stopTimeout = (this.options.scheduleTimeout ?? scheduleTimeout)(() => {
       controller.abort(new Error("Antigravity sign-in timed out."));
-    }, SIGN_IN_TIMEOUT_MS);
+    }, ANTIGRAVITY_SIGN_IN_TIMEOUT_MS);
     this.active = true;
     const completed = this.run(selected, controller.signal, input, ready.resolve)
       .catch((error: unknown) => {
@@ -88,7 +90,22 @@ export class AntigravitySignIn {
         }
         const writeCode = input.writeCode;
         input.writeCode = undefined;
+        input.url = undefined;
         writeCode(code);
+      },
+      openPage: async () => {
+        if (!input.url || controller.signal.aborted) {
+          throw new Error("Start Antigravity sign-in again for a new link.");
+        }
+        await this.options.openExternal(input.url).catch(() => {
+          throw new Error("Could not open the Google sign-in page.");
+        });
+      },
+      copyLink: (writeText) => {
+        if (!input.url || controller.signal.aborted) {
+          throw new Error("Start Antigravity sign-in again for a new link.");
+        }
+        writeText(input.url);
       },
       cancel: async () => {
         controller.abort(new Error("Antigravity sign-in was cancelled."));
@@ -161,6 +178,7 @@ export class AntigravitySignIn {
           if (exited || signal.aborted) return;
           await this.options.openExternal(url);
           if (exited || signal.aborted) return;
+          input.url = url;
           input.writeCode = (code) => {
             submitted = true;
             // The code is passed only through the CLI's private stdin pipe.
@@ -178,6 +196,7 @@ export class AntigravitySignIn {
     } finally {
       exited = true;
       input.writeCode = undefined;
+      input.url = undefined;
       stopReading?.();
       signal.removeEventListener("abort", abort);
       // Error handlers can still run during teardown, including on missing pipes.

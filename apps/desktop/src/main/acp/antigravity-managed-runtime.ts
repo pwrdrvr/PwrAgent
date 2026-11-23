@@ -4,6 +4,7 @@ import { access, chmod, lstat, mkdir, mkdtemp, readlink, realpath, rename, rm, s
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import type { ManagedRuntimeProgressReporter } from "../managed-runtime-progress";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { lock } from "proper-lockfile";
 import { extract } from "tar";
@@ -46,6 +47,7 @@ type RuntimeLocation = {
 
 type InstallOptions = RuntimeLocation & {
   signal?: AbortSignal;
+  progress?: ManagedRuntimeProgressReporter;
   /** Test seams. Production uses the official release feed and ACP stdio. */
   fetch?: typeof globalThis.fetch;
   verify?: typeof verifyRuntime;
@@ -159,6 +161,7 @@ export async function installManagedAntigravityRuntime(
 }
 
 async function installRelease(root: string, options: InstallOptions): Promise<ManagedAntigravityRuntime> {
+  options.progress?.checking();
   const previous = await readActiveRuntime(root);
   const fetchRelease = options.fetch ?? globalThis.fetch;
   const downloadTimeout = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
@@ -175,10 +178,12 @@ async function installRelease(root: string, options: InstallOptions): Promise<Ma
   const staging = await mkdtemp(path.join(root, ".install-"));
   try {
     const archive = path.join(staging, "release.tar.gz");
-    await downloadArchive(release, archive, downloadSignal, fetchRelease);
+    await downloadArchive(release, archive, downloadSignal, fetchRelease, options.progress);
+    options.progress?.unpacking(release.version);
     const command = await extractBinary(archive, staging);
     const verify = options.verify ?? verifyRuntime;
     options.signal?.throwIfAborted();
+    options.progress?.activating(release.version);
     await verify(command, release.version, staging, options.signal);
     options.signal?.throwIfAborted();
     return await activateRelease(root, staging, command, release, previous?.command, options.signal);
@@ -228,15 +233,19 @@ async function downloadArchive(
   archive: string,
   signal: AbortSignal,
   fetchRelease: typeof globalThis.fetch,
+  progress?: ManagedRuntimeProgressReporter,
 ): Promise<void> {
   const hash = createHash("sha512");
+  const reportBytes = progress?.downloading(release.version);
   const source = fetchBody(release.url, MAX_RUNTIME_BYTES, signal, fetchRelease);
   await pipeline(source, async function* (chunks) {
     for await (const chunk of chunks) {
       hash.update(chunk);
+      reportBytes?.(chunk.length);
       yield chunk;
     }
   }, createWriteStream(archive, { flags: "wx", mode: 0o600 }), { signal });
+  progress?.verifying(release.version);
   if (hash.digest("hex") !== release.sha512) {
     throw new Error("Google Antigravity archive SHA-512 does not match the release manifest.");
   }

@@ -198,6 +198,7 @@ export const THREAD_MIGRATION_START_CHANNEL = "thread-migration:start";
 export const THREAD_MIGRATION_RETRY_CHANNEL = "thread-migration:retry";
 export const BACKEND_LIST_CHANNEL = "backend:list";
 export const ACP_AGENTS_LIST_CHANNEL = "acp-agents:list";
+export const ANTIGRAVITY_SETUP_CHANNEL = "antigravity:setup";
 export const ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL =
   "acp-agents:acknowledge-update";
 export const PROVIDER_CATALOG_REFRESH_START_CHANNEL =
