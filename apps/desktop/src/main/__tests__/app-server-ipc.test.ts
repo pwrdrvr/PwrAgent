@@ -5808,7 +5808,10 @@ describe("app server ipc", () => {
       expect(owner.parentId).toBe(navigation.id);
       const execution = events.find((event) => event.stage === "owner-read" && event.phase === "start")!;
       expect(execution.parentId).toBe(owner.id);
-      expect(events.some((event) => event.stage === "index" && (event.parentId === execution.id || event.id === execution.id))).toBe(true);
+      // Lens reads enrich the shared membership index in a separate projection.
+      const projection = events.find((event) => event.stage === "viewer-index" && event.phase === "start")!;
+      expect(projection.parentId).toBe(execution.id);
+      expect(events.some((event) => event.stage === "index" && (event.parentId === projection.id || event.id === projection.id))).toBe(true);
     } finally { listingDiagnostics.setEnabled(false); }
   });
 
