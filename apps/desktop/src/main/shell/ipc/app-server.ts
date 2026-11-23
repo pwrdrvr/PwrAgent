@@ -93,6 +93,7 @@ import {
   type RemoveLockedThreadWorktreesResponse,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import {
+  isAcpBackendId,
   type AttachDirectoryToThreadRequest,
   type AttachDirectoryToThreadResponse,
   type DetachDirectoryFromThreadRequest,
@@ -1035,9 +1036,13 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     NAVIGATION_SET_THREAD_JOB_MONITOR_CREATION_CHANNEL,
     async (
-      _event,
+      event,
       request: SetThreadJobMonitorCreationRequest,
     ): Promise<SetThreadJobMonitorCreationResponse> => {
+      if (typeof request?.backend === "string" && isAcpBackendId(request.backend)
+        && isFederationWindowWebContents(event.sender)) {
+        throw new Error("Change Job Monitors for an ACP thread in a local window on its owning instance.");
+      }
       return await appServerService.setThreadJobMonitorCreation(request);
     },
   );

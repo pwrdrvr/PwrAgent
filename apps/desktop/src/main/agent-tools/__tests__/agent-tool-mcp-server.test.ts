@@ -31,6 +31,46 @@ describe("AgentToolMcpServer", () => {
     await Promise.all(openServers.splice(0).map(async (server) => server.close()));
   });
 
+  it("credits a catalog listing only to the registration that received it", async () => {
+    const listingEntered = Promise.withResolvers<void>();
+    const releaseListing = Promise.withResolvers<void>();
+    let visitsUntilBlocked = 0;
+    const router = new AgentToolRouter([{ namespace: "pwragent", name: "create_monitor_delegation",
+      description: "Fixture", inputSchema: { type: "object" }, dispatch: async () => agentToolSuccess({}) }]);
+    const server = new AgentToolMcpServer({
+      resolveCatalogs: () => [{ id: "thread_orchestration", router }],
+      resolveCallContext: () => undefined,
+      isToolAdvertised: async () => {
+        if (--visitsUntilBlocked === 0) {
+          listingEntered.resolve();
+          await releaseListing.promise;
+        }
+        return true;
+      },
+    });
+    openServers.push(server);
+    const context = { backend: "acp:grok", threadId: "thread", observeJobMonitorCatalog: true } as const;
+    const original = await server.registerClient(context);
+    const oldClient = await connectClient(original);
+    // Each request resolves the catalog for server metadata, then for the list itself.
+    visitsUntilBlocked = 2;
+    const oldListing = oldClient.listTools();
+    let replacementClient: Client | undefined;
+    try {
+      await listingEntered.promise;
+      const replacement = await server.registerClient(context);
+      releaseListing.resolve();
+      await oldListing;
+      expect(replacement.readListedJobMonitorCreation?.()).toBeUndefined();
+      replacementClient = await connectClient(replacement);
+      await replacementClient.listTools();
+      expect(replacement.readListedJobMonitorCreation?.()).toBe(true);
+    } finally {
+      releaseListing.resolve();
+      await Promise.all([oldClient.close(), replacementClient?.close()]);
+    }
+  });
+
   it.each(["codex", "claude", "acp:grok"] as const)("rechecks asynchronous lifecycle discovery and direct calls for %s", async (backend) => {
     let allowed = false;
     const denial = "App management requires messaging RBAC enforcement.";

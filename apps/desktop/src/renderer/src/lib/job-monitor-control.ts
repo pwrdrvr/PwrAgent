@@ -1,5 +1,9 @@
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
-import type { NavigationThreadSummary, SetThreadJobMonitorCreationResponse } from "@pwragent/shared/contracts/navigation";
+import {
+  isAcpBackendId,
+  type NavigationThreadSummary,
+  type SetThreadJobMonitorCreationResponse,
+} from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "./desktop-api";
 
 /** A remote window without owner metadata cannot establish capability. */
@@ -9,12 +13,18 @@ export function threadJobMonitorControl(
   windowTarget: FederationTarget | undefined,
 ): ((enabled: boolean) => Promise<SetThreadJobMonitorCreationResponse>) | undefined {
   const setJobMonitorCreation = desktopApi?.setThreadJobMonitorCreation;
-  if (!setJobMonitorCreation || (thread?.source !== "codex" && thread?.source !== "claude")) return undefined;
+  if (!setJobMonitorCreation || !thread) return undefined;
   const federation = thread.federation;
   const target = federation?.ref.target ?? windowTarget;
-  if (target?.scope !== "remote") return (enabled) => setJobMonitorCreation({
-    threadId: thread.id, enabled, ...(thread.source === "claude" ? { backend: "claude" } : {}),
-  });
+  if (target?.scope !== "remote") {
+    const backend = thread.source;
+    if (backend !== "codex" && backend !== "claude"
+      && !(isAcpBackendId(backend) && thread.archivedAt === undefined
+        && (thread.jobMonitorCreationControl || thread.jobMonitorCreationEnabled === false))) return undefined;
+    return (enabled) => setJobMonitorCreation({
+      threadId: thread.id, enabled, ...(backend !== "codex" ? { backend } : {}),
+    });
+  }
   if (thread.source !== "codex" || federation?.ref.target.scope !== "remote" || federation.ref.threadId !== thread.id
     || federation.ref.backend !== thread.source
     || (federation.peerStatus !== undefined && federation.peerStatus !== "connected")

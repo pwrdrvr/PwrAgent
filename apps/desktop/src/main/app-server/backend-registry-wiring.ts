@@ -1084,6 +1084,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     acpRolloutStore: options?.acpRolloutStore,
     acpSessionStore: options?.acpSessionStore,
     agentToolMcpServer,
+    readJobMonitorCreationPreference: (backend, threadId) => ports.isJobMonitorCreationEnabled({ backend, threadId }),
     captureStores: captureStores,
     createAcpClient: options?.createAcpClient,
     createAcpTransport: options?.createAcpTransport,
@@ -1121,6 +1122,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       : undefined,
     emit: async (event) => {
       ports.rememberAcpAvailableCommands(event);
+      if (event.notification.method === "thread/agent/updated") ports.invalidateThreadListCache(event.backend);
       await ports.emit(event);
     },
     handleServerRequest: async (backend, request) =>

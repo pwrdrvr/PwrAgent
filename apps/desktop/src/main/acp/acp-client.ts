@@ -112,6 +112,7 @@ export type { AcpMcpServerConfig, AcpMcpServerWireConfig } from "@pwrdrvr/agent-
 export type AcpMcpServerRegistration = {
   servers: AcpMcpServerConfig[];
   bindThread?: (threadId: string) => Promise<void> | void;
+  readListedJobMonitorCreation?: () => boolean | undefined;
 };
 
 export function mergeMcpServerRegistrations(
@@ -123,6 +124,7 @@ export function mergeMcpServerRegistrations(
   );
   return {
     servers: present.flatMap((registration) => registration.servers),
+    readListedJobMonitorCreation: present.find((entry) => entry.readListedJobMonitorCreation)?.readListedJobMonitorCreation,
     bindThread: async (threadId) => {
       for (const registration of present) {
         await registration.bindThread?.(threadId);
@@ -270,10 +272,21 @@ export type AcpAgentClientOptions = {
    * its next prompt.
    */
   agentToolCatalogKey?: () => string;
+  readJobMonitorCreationPreference?: (sessionId?: string) => Promise<boolean>;
+  onJobMonitorControlReady?: (sessionId: string) => Promise<void>;
+};
+
+type AcpJobMonitorCatalog = {
+  enabled: boolean;
+  readListed: () => boolean | undefined;
+  fromLoad: boolean;
 };
 
 export class AcpAgentClient {
   private readonly normalizers = new Map<string, AcpSessionReplayNormalizer>();
+  private readonly jobMonitorCatalogs = new Map<string, AcpJobMonitorCatalog>();
+  private readonly grokBackgroundSessions = new Set<string>();
+  private readonly antigravityBackgroundCommands = new Map<string, Set<string>>();
   private readonly activeTurns = new Map<string, AcpActiveTurn>();
   private readonly loadedSessionCwds = new Map<string, string | undefined>();
   // The option menus each session's own latest reply reported, by protocol
@@ -329,6 +342,7 @@ export class AcpAgentClient {
   private unsubscribeRequest?: () => void;
   private runtimeCapabilities?: BackendAcpRuntimeCapabilities;
   private archiveRestoreSupported = false;
+  private jobMonitorCatalogRefreshSupported = false;
   private readonly normalizerOptions: AcpSessionReplayNormalizerOptions;
   private activeOperations = 0;
 
@@ -395,9 +409,12 @@ export class AcpAgentClient {
     });
     // Destructive archive eligibility must use this process's advertisement,
     // rather than inheriting a cached capability from an older executable.
-    this.archiveRestoreSupported = normalizeAcpRuntimeCapabilities({
+    const advertised = normalizeAcpRuntimeCapabilities({
       value: result, now: this.now(), source: "initialize",
-    })?.agentCapabilities?.loadSession === true;
+    })?.agentCapabilities;
+    this.archiveRestoreSupported = advertised?.loadSession === true;
+    this.jobMonitorCatalogRefreshSupported = advertised?.loadSession === true
+      && advertised.session?.close === true && advertised.mcp?.http === true;
     const runtimeCapabilities = this.captureRuntimeCapabilities({
       source: "initialize",
       result,
@@ -457,6 +474,10 @@ export class AcpAgentClient {
 
   private supportsSessionClose(): boolean {
     return this.runtimeCapabilities?.agentCapabilities?.session?.close === true;
+  }
+
+  supportsJobMonitorControl(sessionId: string): boolean {
+    return this.jobMonitorCatalogRefreshSupported && this.jobMonitorCatalogs.has(sessionId);
   }
 
   /**
@@ -522,6 +543,7 @@ export class AcpAgentClient {
       || this.pendingPermissionRequests.has(sessionId)
       || this.loadingSessions.has(protocolSessionId)
       || this.suppressedControlPromptSessions.has(protocolSessionId)
+      || this.hasNativeBackgroundWork(sessionId)
     ) {
       return false;
     }
@@ -638,6 +660,9 @@ export class AcpAgentClient {
     this.pendingPermissionRequests.delete(sessionId);
     this.sessionsWithoutFaithfulReload.delete(sessionId);
     this.sessionAgentToolCatalogKeys.delete(sessionId);
+    this.jobMonitorCatalogs.delete(sessionId);
+    this.grokBackgroundSessions.delete(sessionId);
+    this.antigravityBackgroundCommands.delete(sessionId);
   }
 
   supportsTurnSteering(): boolean {
@@ -674,6 +699,9 @@ export class AcpAgentClient {
     this.pendingPermissionRequests.clear();
     this.idleClosedSessions.clear();
     this.sessionsWithoutFaithfulReload.clear();
+    this.jobMonitorCatalogs.clear();
+    this.grokBackgroundSessions.clear();
+    this.antigravityBackgroundCommands.clear();
     this.sessionAgentToolCatalogKeys.clear();
     await this.options.transport.close?.();
   }
@@ -880,6 +908,8 @@ export class AcpAgentClient {
     const cwd = params.cwd ?? process.cwd();
     // Read before the servers are built, so a change meanwhile reads as stale.
     const agentToolCatalogKey = this.options.agentToolCatalogKey?.();
+    const jobMonitorCreationEnabled = this.jobMonitorCatalogRefreshSupported
+      ? await this.options.readJobMonitorCreationPreference?.(params.sessionId) : undefined;
     const defaultMcpRegistration =
       params.mcpServers === "none"
         ? { servers: [] }
@@ -945,6 +975,9 @@ export class AcpAgentClient {
     this.touchSession(appSessionId);
     if (params.sessionMeta || params.mcpServers === "none") {
       this.sessionsWithoutFaithfulReload.add(appSessionId);
+    }
+    if (!params.hidden && !this.sessionsWithoutFaithfulReload.has(appSessionId)) {
+      this.rememberJobMonitorCatalog(appSessionId, mcpRegistration, jobMonitorCreationEnabled, false);
     }
     this.rememberAgentToolCatalogKey(appSessionId, agentToolCatalogKey);
     this.rememberSessionConfigOptions(sessionId, result);
@@ -1133,6 +1166,7 @@ export class AcpAgentClient {
     await this.loadSessionFromAgent(metadata, options);
   }
 
+  /** Acknowledge dispatch after preflight. Completion still arrives through turn events. */
   startPrompt(params: {
     sessionId: string;
     prompt: string;
@@ -1146,26 +1180,11 @@ export class AcpAgentClient {
      */
     agentInstructions?: string;
     readAgentMemory?: () => Promise<string | undefined>;
-  }): { sessionId: string; turnId: string } {
+  }): Promise<{ sessionId: string; turnId: string }> {
     const turnId = params.turnId ?? `pending:${params.sessionId}:${this.now()}`;
-    const receivedAt = this.now();
     this.startTrackedTurn(params.sessionId, turnId);
-    this.normalizerFor(params.sessionId).recordUserPrompt({
-      sessionId: params.sessionId,
-      prompt: params.prompt,
-      parts: params.parts,
-      turnId,
-      receivedAt,
-      waitingForAgent: true,
-    });
-    this.appendHistoryUpdate(params.sessionId, receivedAt, {
-      kind: "pwragent_user_prompt",
-      prompt: params.prompt,
-      ...(params.parts?.length ? { parts: params.parts } : {}),
-      turnId,
-      waitingForAgent: true,
-    });
-    this.markSessionHasConversationHistory(params.sessionId, receivedAt);
+    const acceptance = Promise.withResolvers<{ sessionId: string; turnId: string }>();
+    let dispatched = false;
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
     const promptRequest = this.requestPromptWithTerminalGuard({
       protocolSessionId,
@@ -1174,9 +1193,33 @@ export class AcpAgentClient {
       turnId,
       agentInstructions: params.agentInstructions?.trim(),
       readAgentMemory: params.readAgentMemory,
+      onDispatch: () => {
+        const receivedAt = this.now();
+        this.normalizerFor(params.sessionId).recordUserPrompt({
+          sessionId: params.sessionId,
+          prompt: params.prompt,
+          parts: params.parts,
+          turnId,
+          receivedAt,
+          waitingForAgent: true,
+        });
+        this.appendHistoryUpdate(params.sessionId, receivedAt, {
+          kind: "pwragent_user_prompt",
+          prompt: params.prompt,
+          ...(params.parts?.length ? { parts: params.parts } : {}),
+          turnId,
+          waitingForAgent: true,
+        });
+        this.markSessionHasConversationHistory(params.sessionId, receivedAt);
+        dispatched = true;
+        acceptance.resolve({ sessionId: params.sessionId, turnId });
+      },
     });
     void promptRequest
       .then((result) => {
+        if (!dispatched) {
+          throw new Error("The ACP prompt was cancelled before it was sent.");
+        }
         this.assertPromptProducedResponse(params.sessionId, result);
         const receivedAt = this.now();
         // A prompt that session/cancel stopped settles normally, with
@@ -1206,6 +1249,13 @@ export class AcpAgentClient {
         });
       })
       .catch(async (error) => {
+        if (!dispatched) {
+          this.activeTurns.delete(params.sessionId);
+          this.touchSession(params.sessionId);
+          this.updateSessionStatus(params.sessionId, "idle");
+          acceptance.reject(error);
+          return;
+        }
         if (promptMayStillBeRunning(error)) {
           // The agent never answered this prompt, so it may still be working
           // and asking for approvals. Cancel it while the turn is still
@@ -1225,10 +1275,7 @@ export class AcpAgentClient {
           }),
         ).catch(() => undefined);
       });
-    return {
-      sessionId: params.sessionId,
-      turnId,
-    };
+    return acceptance.promise;
   }
 
   async cancelSession(sessionId: string): Promise<void> {
@@ -1678,6 +1725,7 @@ export class AcpAgentClient {
     const fromSessionLoad = loadState !== undefined || isExplicitSessionReplay;
     const activeTurn = this.activeTurns.get(sessionId);
     const updateKind = readUpdateKind(update);
+    if (!fromSessionLoad) this.observeNativeBackgroundWork(sessionId, updateKind, update);
     // Only a live update ends the turn. A prompt for an idle-closed session
     // reloads it while the turn is tracked, and session/load replays the
     // earlier turns' terminal updates.
@@ -2095,10 +2143,15 @@ export class AcpAgentClient {
     const cwd = metadata.cwd ?? process.cwd();
     const protocolSessionId = protocolSessionIdForMetadata(metadata);
     const agentToolCatalogKey = this.options.agentToolCatalogKey?.();
+    const jobMonitorCreationEnabled = this.jobMonitorCatalogRefreshSupported
+      ? await this.options.readJobMonitorCreationPreference?.(metadata.sessionId) : undefined;
     const mcpRegistration = await this.buildMcpServers({
       cwd,
       sessionId: metadata.sessionId,
     });
+    if (this.supportsJobMonitorControl(metadata.sessionId) && !mcpRegistration.readListedJobMonitorCreation) {
+      throw new Error("Couldn't reconnect PwrAgent's Job Monitor tools. Try sending the prompt again.");
+    }
     const loadState: AcpSessionLoadState = {
       replayedTranscript: false,
       suppressTranscriptReplay: options.suppressTranscriptReplay === true,
@@ -2150,6 +2203,9 @@ export class AcpAgentClient {
       runtimeState,
     });
     this.loadedSessionCwds.set(protocolSessionId, cwd);
+    if (!metadata.hidden && !this.sessionsWithoutFaithfulReload.has(metadata.sessionId)) {
+      this.rememberJobMonitorCatalog(metadata.sessionId, mcpRegistration, jobMonitorCreationEnabled, true);
+    }
     this.rememberAgentToolCatalogKey(metadata.sessionId, agentToolCatalogKey);
     this.touchSession(metadata.sessionId);
     return result;
@@ -2158,6 +2214,55 @@ export class AcpAgentClient {
   private rememberAgentToolCatalogKey(sessionId: string, key: string | undefined): void {
     if (key === undefined) this.sessionAgentToolCatalogKeys.delete(sessionId);
     else this.sessionAgentToolCatalogKeys.set(sessionId, key);
+  }
+
+  private rememberJobMonitorCatalog(
+    sessionId: string,
+    registration: AcpMcpServerRegistration,
+    enabled: boolean | undefined,
+    fromLoad: boolean,
+  ): void {
+    if (enabled !== undefined && registration.readListedJobMonitorCreation) {
+      const firstRegistration = !this.jobMonitorCatalogs.has(sessionId);
+      this.jobMonitorCatalogs.set(sessionId, {
+        enabled,
+        readListed: registration.readListedJobMonitorCreation,
+        fromLoad,
+      });
+      if (firstRegistration) {
+        void this.options.onJobMonitorControlReady?.(sessionId).catch(() => undefined);
+      }
+    } else {
+      this.jobMonitorCatalogs.delete(sessionId);
+    }
+  }
+
+  private hasNativeBackgroundWork(sessionId: string): boolean {
+    return this.grokBackgroundSessions.has(sessionId) || this.antigravityBackgroundCommands.has(sessionId);
+  }
+
+  /** Closing either provider's session stops its native background work. */
+  private observeNativeBackgroundWork(sessionId: string, kind: string | undefined, update: Record<string, unknown>): void {
+    if (this.options.backendId === "acp:grok" && kind === "background_tasks" && Array.isArray(update.tasks)) {
+      const active = update.tasks.some((task: unknown) => {
+        const status = asRecord(task)?.status;
+        return status === "running" || status === "pending";
+      });
+      if (active) this.grokBackgroundSessions.add(sessionId);
+      else this.grokBackgroundSessions.delete(sessionId);
+    }
+    if (this.options.backendId !== "acp:antigravity" || (kind !== "tool_call" && kind !== "tool_call_update")
+      || typeof update.toolCallId !== "string") return;
+    const active = this.antigravityBackgroundCommands.get(sessionId);
+    if (update.name !== "run_command" && !active?.has(update.toolCallId)) return;
+    if (update.status === "in_progress" || update.status === "pending") {
+      const commands = active ?? new Set<string>();
+      commands.add(update.toolCallId);
+      this.antigravityBackgroundCommands.set(sessionId, commands);
+    } else if (update.status === "completed" || update.status === "failed" || update.status === "cancelled") {
+      active?.delete(update.toolCallId);
+      if (active?.size === 0) this.antigravityBackgroundCommands.delete(sessionId);
+    }
   }
 
   /**
@@ -2174,7 +2279,7 @@ export class AcpAgentClient {
     return current !== undefined
       && current !== advertised
       && this.supportsSessionClose()
-      && this.supportsSessionLoad()
+      && this.runtimeCapabilities?.agentCapabilities?.loadSession === true
       && !this.sessionsWithoutFaithfulReload.has(sessionId)
       && this.loadedSessionCwds.has(this.protocolSessionIdFor(sessionId));
   }
@@ -2184,14 +2289,40 @@ export class AcpAgentClient {
    * MCP servers again and lists the current tools. A close that fails keeps
    * the session as it was.
    */
-  private async refreshAgentToolCatalog(sessionId: string): Promise<void> {
+  private async refreshAgentToolCatalog(sessionId: string): Promise<boolean> {
+    const protocolSessionId = this.protocolSessionIdFor(sessionId);
+    if (!this.loadedSessionCwds.has(protocolSessionId)
+      || this.pendingPermissionRequests.has(sessionId)
+      || this.loadingSessions.has(protocolSessionId)
+      || this.suppressedControlPromptSessions.has(protocolSessionId)
+      || this.hasNativeBackgroundWork(sessionId)) return false;
     acpClientLog.info("reloading ACP session for a new agent tool catalog", {
       backendId: this.options.backendId,
       sessionId,
     });
-    if (await this.closeIdleSession(sessionId)) {
-      await this.reopenIdleClosedSession(sessionId);
+    if (!await this.closeIdleSession(sessionId)) return false;
+    await this.reopenIdleClosedSession(sessionId);
+    return true;
+  }
+
+  private async prepareJobMonitorCatalog(sessionId: string): Promise<void> {
+    const catalog = this.jobMonitorCatalogs.get(sessionId);
+    const readPreference = this.options.readJobMonitorCreationPreference;
+    if (!catalog || !readPreference) return;
+    const enabled = await readPreference(sessionId);
+    if (catalog.enabled === enabled
+      && !this.agentToolCatalogIsStale(sessionId)
+      && (!catalog.fromLoad || catalog.readListed() === enabled)) return;
+    if (this.hasNativeBackgroundWork(sessionId)) {
+      throw new Error("Wait for the agent's background work to finish, then send the prompt again to refresh its Job Monitor tools.");
     }
+    if (this.supportsJobMonitorControl(sessionId) && await this.refreshAgentToolCatalog(sessionId)) {
+      const refreshed = this.jobMonitorCatalogs.get(sessionId);
+      const currentPreference = await readPreference(sessionId);
+      if (refreshed?.enabled === currentPreference && refreshed.readListed() === currentPreference
+        && !this.agentToolCatalogIsStale(sessionId)) return;
+    }
+    throw new Error("The agent couldn't refresh its Job Monitor tools. Try sending the prompt again.");
   }
 
   private isSessionLoaded(metadata: AcpSessionMetadata): boolean {
@@ -2237,6 +2368,7 @@ export class AcpAgentClient {
     turnId: string;
     agentInstructions?: string;
     readAgentMemory?: () => Promise<string | undefined>;
+    onDispatch?: () => void;
   }): Promise<unknown> {
     const activeTurn = this.activeTurns.get(params.sessionId);
     const terminalResponseGuard = new Promise<never>((_resolve, reject) => {
@@ -2262,7 +2394,11 @@ export class AcpAgentClient {
         resolve(cancelled);
       };
     });
+    // The tracked turn prevents a new idle close. Wait for one already in
+    // flight before using the session, then check the catalog at dispatch.
+    const reload = this.reloadBeforeRequest(params.sessionId);
     const sendPrompt = async () => {
+      if (reload) await reload;
       if (cancelledBeforePrompt) return cancelled;
       // The agent keeps the block in the session's history, so a session
       // loaded again (after an idle close or an app restart) is not sent it
@@ -2278,6 +2414,13 @@ export class AcpAgentClient {
         )?.agentInstructionsDigest;
       const memory = params.readAgentMemory ? await params.readAgentMemory() : undefined;
       if (cancelledBeforePrompt) return cancelled;
+      if (this.jobMonitorCatalogs.has(params.sessionId)) {
+        await this.prepareJobMonitorCatalog(params.sessionId);
+      } else if (this.agentToolCatalogIsStale(params.sessionId)) {
+        await this.refreshAgentToolCatalog(params.sessionId);
+      }
+      if (cancelledBeforePrompt) return cancelled;
+      params.onDispatch?.();
       if (activeTurn) {
         activeTurn.cancelBeforePrompt = undefined;
         activeTurn.sentAgentMemory = Boolean(memory);
@@ -2301,15 +2444,8 @@ export class AcpAgentClient {
       }
       return result;
     };
-    // The turn is already tracked, so no idle close can start now; one that
-    // already released the session is undone first. A session whose MCP
-    // servers list another agent tool catalog is reloaded the same way.
-    const reload = this.reloadBeforeRequest(params.sessionId)
-      ?? (this.agentToolCatalogIsStale(params.sessionId)
-        ? this.refreshAgentToolCatalog(params.sessionId)
-        : undefined);
     return Promise.race([
-      reload ? reload.then(sendPrompt) : sendPrompt(),
+      sendPrompt(),
       terminalResponseGuard,
       localCancellation,
     ]);

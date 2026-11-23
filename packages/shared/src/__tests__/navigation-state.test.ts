@@ -115,6 +115,21 @@ describe("materializeNavigationThreads", () => {
     expect(materialized?.tokenMiserEnabled).toBe(true);
   });
 
+  it("projects an ACP opt-out even when the session has no verified refresh", () => {
+    const thread = { ...appServerThread(), source: "acp:grok" } as const;
+    const overlay: ThreadOverlayState = {
+      backend: thread.source, threadId: thread.id, executionMode: "default", extraLinkedDirectories: [],
+    };
+    const project = (jobMonitorCreationEnabled: boolean | undefined) => materializeNavigationThreads({
+      firstSnapshot: false,
+      overlayByThreadKey: { [`acp:grok:${thread.id}`]: { ...overlay, jobMonitorCreationEnabled } },
+      previousKnownThreadKeys: [], threads: [thread],
+    })[0]?.jobMonitorCreationEnabled;
+    expect(project(false)).toBe(false);
+    expect(project(true)).toBeUndefined();
+    expect(project(undefined)).toBeUndefined();
+  });
+
   it("marks a hibernated checkout and Keep it awake on the row, and both move the hash", () => {
     const thread = {
       ...appServerThread(),

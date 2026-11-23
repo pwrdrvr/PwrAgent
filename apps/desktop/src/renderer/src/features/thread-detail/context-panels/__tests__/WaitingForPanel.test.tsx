@@ -258,13 +258,15 @@ describe("WaitingForPanel", () => {
     }
   });
 
-  it("explains that new Job Monitors are off while keeping the running monitor's Cancel action", async () => {
+  it.each(["codex", "acp:grok"] as const)("keeps the owner-local monitor cancellable with creation off on %s", async (source) => {
     const monitor = WAKES.find((wake) => wake.kind === "monitor")!;
     const onTurnOnJobMonitors = vi.fn(async () => undefined);
-    render(<WaitingForPanel thread={{ ...thread, source: "codex", jobMonitorCreationEnabled: false }}
-      controller={controller(ready([monitor], []))} now={NOW} onTurnOnJobMonitors={onTurnOnJobMonitors} />);
+    const stop = vi.fn(async (): Promise<ThreadPendingWakesResponse> => ({ ok: true, stopped: true }));
+    render(<WaitingForPanel thread={{ ...thread, source, jobMonitorCreationEnabled: false }}
+      controller={controller(ready([monitor], []), stop)} now={NOW} onTurnOnJobMonitors={onTurnOnJobMonitors} />);
     expect(screen.getByText("New Job Monitors off")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Cancel: Monitor: Staging deploy reports healthy" })).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Cancel: Monitor: Staging deploy reports healthy" })); });
+    expect(stop).toHaveBeenCalledExactlyOnceWith(monitor.key);
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Turn on Job Monitors" })); });
     expect(onTurnOnJobMonitors).toHaveBeenCalledOnce();
   });

@@ -6157,7 +6157,7 @@ export class DesktopBackendRegistry {
     });
 
     try {
-      const result = client.startPrompt({
+      const result = await client.startPrompt({
         sessionId: params.threadId,
         prompt: promptPayload.prompt,
         promptContent: promptPayload.promptContent,
@@ -16074,32 +16074,36 @@ export class DesktopBackendRegistry {
   }
 
   async setThreadJobMonitorCreation({ backend = "codex", threadId, enabled }: {
-    backend?: "codex" | "claude";
+    backend?: "codex" | "claude" | AcpBackendId;
     threadId: string;
     enabled: boolean;
   }): Promise<{ threadId: string; enabled: boolean }> {
-    if ((backend !== "codex" && backend !== "claude")
+    if ((backend !== "codex" && backend !== "claude" && (typeof backend !== "string" || !isAcpBackendId(backend)))
       || typeof threadId !== "string" || !threadId.trim() || typeof enabled !== "boolean") {
       throw new Error("Changing Job Monitor creation requires a thread and an enabled state.");
     }
     const identity = { backend, threadId };
-    const deferredTurnId = enabled && !(await this.isJobMonitorCreationEnabled(identity))
-      ? this.jobMonitorCreationTurnId(identity) : undefined;
+    const acpBackend = isAcpBackendId(backend) ? backend : undefined;
+    if (acpBackend) this.assertThreadOwnership();
+    const clearingOptOut = enabled && !(await this.isJobMonitorCreationEnabled(identity));
+    if (acpBackend && !this.acpBackend.supportsJobMonitorControl(acpBackend, threadId)) {
+      const session = clearingOptOut ? this.acpBackend.getSession(acpBackend, threadId) : undefined;
+      if (!session || session.hidden || session.archivedAt !== undefined) {
+        throw new Error("This ACP session doesn't support changing Job Monitors.");
+      }
+    }
+    const deferredTurnId = clearingOptOut ? this.jobMonitorCreationTurnId(identity) : undefined;
     this.overlayStore.setThreadJobMonitorCreation({ ...identity, enabled });
     if (deferredTurnId) {
       // Retain this turn's availability while saving On for the next turn.
       this.jobMonitorCreationDeferredTurns.add(buildActiveTurnKey(identity.backend, threadId, deferredTurnId));
     }
-    await this.publishLocalEvent({
-      backend: identity.backend,
-      notification: { method: "thread/agent/updated", params: { threadId } },
-    });
+    await this.notifyThreadAgentChange(backend, threadId);
     return { threadId, enabled };
   }
 
   private jobMonitorCreationTurnId(identity: { backend: AppServerBackendKind; threadId: string }): string | undefined {
-    if (identity.backend === "claude") return this.getActiveTurnForThread(identity)?.turnId;
-    if (identity.backend !== "codex") return undefined;
+    if (identity.backend !== "codex") return this.getActiveTurnForThread(identity)?.turnId;
     const pendingId = buildPendingTurnId(identity.threadId);
     return this.context.turnState.pendingStartedTurnId(identity.threadId)
       ?? this.getActiveTurnForThread(identity)?.turnId

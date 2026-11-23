@@ -2786,7 +2786,7 @@ describe("AcpBackendAdapter", () => {
 
     const client = await adapter.getClient(backendId);
     const session = await client.startSession({ cwd: "/repo", executionMode: "default" });
-    const { turnId } = client.startPrompt({ sessionId: session.sessionId, prompt: "Summarize" });
+    const { turnId } = await client.startPrompt({ sessionId: session.sessionId, prompt: "Summarize" });
     expect(turnId).toMatch(new RegExp(`^pending:${session.sessionId}:\\d+$`));
     const [firstCall] = JSON.parse(
       readFileSync(path.join(fixtureDir, "qwen-tool-usage.json"), "utf8"),

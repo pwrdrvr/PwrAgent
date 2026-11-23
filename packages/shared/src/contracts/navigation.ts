@@ -3201,7 +3201,7 @@ export type SetThreadMonitorJobSuggestionsResponse = {
 };
 
 export type SetThreadJobMonitorCreationRequest = {
-  backend?: "codex" | "claude";
+  backend?: "codex" | "claude" | AcpBackendId;
   threadId: ThreadIdentifier;
   enabled: boolean;
   federationTarget?: FederationTarget;
