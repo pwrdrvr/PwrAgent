@@ -29,7 +29,7 @@ export function desktopThreadPullRequestMergeDeps(
     assertNotHeld: (thread, url) => assertMergeNotHeld(createThreadDependencyStorage().active(), {
       ...thread, pullRequest: url,
     }, (owner) => overlay.readThreadPullRequestUrls(owner)),
-    merge: async (params) => await new GithubPrFetcher().mergePullRequest(params),
+    merge: async (params) => await new GithubPrFetcher().mergePullRequest({ ...params, checkStackOrder: true }),
     refresh,
     onRefreshFailed: (error) => mergeLog.warn("could not refresh PR status after a merge", {
       error: error instanceof Error ? error.message : String(error),

@@ -5922,6 +5922,7 @@ export function useThreadNavigation(
           ...hydrated,
           ...(row.ordinaryChildCount !== undefined ? { ordinaryChildCount: row.ordinaryChildCount } : {}),
           stacks: row.stacks,
+          stackMemberships: row.stackMemberships,
         }
       : hydrated;
     return rendererFederationTarget?.scope !== "remote" && configured.federation?.ref.target.scope === "remote"

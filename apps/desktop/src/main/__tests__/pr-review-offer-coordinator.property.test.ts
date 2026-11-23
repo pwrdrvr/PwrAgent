@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PrSummary } from "@pwragent/shared/contracts/navigation";
+import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
 import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import {
@@ -10,7 +10,7 @@ import {
 import type { PrChangeIdentitySource } from "../pr-status/pr-change-identity";
 import { PrReviewOfferCoordinator, type PrReviewOfferThread } from "../pr-status/pr-review-offer-coordinator";
 import { selectPrReviewOfferOwner, type PrReviewOfferCandidate } from "../pr-status/pr-review-offer-owner";
-import type { PrStatusTransitionChanges } from "../pr-status/pr-transitions";
+import { computePrStatusTransition, type PrStatusTransitionChanges } from "../pr-status/pr-transitions";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { StateDb } from "../state/state-db";
 import { SqliteThreadReviewStorage } from "../storage/thread-review-storage-sqlite";
@@ -50,7 +50,8 @@ import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./
 afterEach(() => vi.unstubAllEnvs());
 
 const THREAD = { backend: "codex" as const, threadId: "thread-1" };
-const PR_KEY = "github.com:example/project#7";
+const prKeyFor = (number: number) => buildPullRequestStatusKey({ provider: "github.com", org: "example", repo: "project", number });
+const PR_KEY = prKeyFor(7);
 const PR_URL = "https://github.com/example/project/pull/7";
 
 type Ci = "pending" | "passing" | "failing";
@@ -67,6 +68,11 @@ class World {
   head: string;
   ci: Ci = "pending";
   lifecycle: "open" | "merged" = "open";
+  base = "main";
+  stackUnavailable = false;
+  lowerPolled = true;
+  readonly lowers = new Map<number, "open" | "merged">();
+  readonly evaluatedOwners: string[] = [];
   readonly reviews: ModelReview[] = [];
   /**
    * The oracle's own record of each review's fixed-through head: the head
@@ -103,7 +109,7 @@ class World {
       url: PR_URL,
       title: "Add the thing",
       headRefName: "feature",
-      baseRefName: "main",
+      baseRefName: this.base,
       headSha: this.head,
       state: this.ci,
       checkState: this.ci,
@@ -155,6 +161,7 @@ type Harness = {
   world: World;
   todos: ThreadTodoService;
   coordinator: PrReviewOfferCoordinator;
+  restart: () => void;
   close: () => void;
 };
 
@@ -169,10 +176,20 @@ function createHarness(
     now: () => world.clock,
     newId: () => `todo-${++ids}`,
   });
-  const coordinator = new PrReviewOfferCoordinator({
-    ownerThread: async () => await ownerThread(world),
+  const buildCoordinator = () => new PrReviewOfferCoordinator({
+    ownerThread: async (key) => {
+      world.evaluatedOwners.push(key);
+      return key === PR_KEY ? await ownerThread(world) : undefined;
+    },
     threadPrKeys: () => [PR_KEY],
     getPr: () => world.pr(),
+    stackMergeEvidence: async () => ({
+      blocked: world.stackUnavailable || world.base !== "main" || [...world.lowers.values()].includes("open"),
+      lowerKeys: [...world.lowers.keys()].map(prKeyFor),
+      retryOnObservation: world.stackUnavailable,
+    }),
+    isLowerPolled: () => world.lowerPolled,
+    now: () => world.clock,
     directories: () => ["/work/project"],
     listReviews: () => world.reviews.map((entry) => entry.review),
     recordFixedThrough: (reviewId, commit, settledAt) => {
@@ -182,7 +199,27 @@ function createHarness(
     cards: todos,
     identity: identity(world),
   });
-  return { world, todos, coordinator, close: () => db.close() };
+  const harness = { world, todos, coordinator: buildCoordinator(), restart() {
+    this.coordinator.close();
+    this.coordinator = buildCoordinator();
+  }, close: () => db.close() };
+  return harness;
+}
+
+async function retarget(harness: Harness): Promise<void> {
+  const before = harness.world.pr();
+  harness.world.base = "main";
+  const event = computePrStatusTransition(before, harness.world.pr());
+  if (event) harness.coordinator.handleTransition(event);
+  await harness.coordinator.idle();
+}
+
+async function mergeLower(harness: Harness, number: number): Promise<void> {
+  if (harness.world.lowers.has(number)) harness.world.lowers.set(number, "merged");
+  const parent = { ...harness.world.pr(), number, url: `https://github.com/example/project/pull/${number}`, lifecycleState: "open" as const };
+  const event = computePrStatusTransition(parent, { ...parent, lifecycleState: "merged" });
+  harness.coordinator.handleTransition(event!);
+  await harness.coordinator.idle();
 }
 
 function openOfferCards(todos: ThreadTodoService, thread: PrReviewOfferThread = THREAD): ThreadTodo[] {
@@ -596,6 +633,153 @@ describe("PR review and merge offers", () => {
       expect(openOfferCards(harness.todos).map((card) => card.action?.type)).toEqual(["start_review"]);
     } finally {
       harness.close();
+    }
+  });
+
+  it("reconciles a green reviewed child on its retarget and the last tracked lower merge in either order", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), fc.boolean(), fc.integer({ min: 2, max: 6 }), async (retargetFirst, restart, lowerCount) => {
+      const harness = createHarness();
+      try {
+        harness.world.ci = "passing";
+        harness.world.base = "parent";
+        for (let lower = 1; lower <= lowerCount; lower++) harness.world.lowers.set(lower, "open");
+        await reviewChanged(harness, recordReview(harness.world, 0));
+        if (restart) {
+          harness.restart();
+          harness.coordinator.handleObservations([harness.world.pr()]);
+          await harness.coordinator.idle();
+        }
+        if (retargetFirst) await retarget(harness);
+        harness.world.evaluatedOwners.length = 0;
+        await mergeLower(harness, 123);
+        expect(harness.world.evaluatedOwners).toEqual([prKeyFor(123)]);
+        for (let lower = 1; lower < lowerCount; lower++) {
+          await mergeLower(harness, lower);
+          expect(openOfferCards(harness.todos)).toEqual([]);
+        }
+        await mergeLower(harness, lowerCount);
+        if (!retargetFirst) {
+          expect(openOfferCards(harness.todos)).toEqual([]);
+          await retarget(harness);
+        }
+        expect(openOfferCards(harness.todos).map((card) => card.action?.type)).toEqual(["merge_pull_request"]);
+      } finally {
+        harness.close();
+      }
+    }), { numRuns: 25, examples: [[true, false, 2], [false, true, 2]] });
+  });
+
+  it("preserves a merge card during a failed stack read only for the card's exact head", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), async (headMoved) => {
+      const harness = createHarness();
+      try {
+        const { world } = harness;
+        world.ci = "passing";
+        await reviewChanged(harness, recordReview(world, 0));
+        expect(openOfferCards(harness.todos)).toHaveLength(1);
+        const previous = world.head;
+        world.stackUnavailable = true;
+        if (headMoved) world.head = world.commit(world.changeOf.get(previous)!);
+        await transition(harness, { headSha: { from: previous, to: world.head } });
+        expect(openOfferCards(harness.todos)).toHaveLength(headMoved ? 0 : 1);
+      } finally { harness.close(); }
+    }), { examples: [[true]] });
+  });
+
+  it("rechecks an uncovered hold on unchanged child polls within a bounded cadence", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), fc.integer({ min: 1, max: 6 }), async (polled, duplicatePolls) => {
+      const harness = createHarness();
+      try {
+        const { world } = harness;
+        world.ci = "passing";
+        world.lowerPolled = polled;
+        world.lowers.set(1, "open");
+        await reviewChanged(harness, recordReview(world, 0));
+        world.lowers.set(1, "merged");
+        for (let i = 0; i < duplicatePolls; i++) {
+          harness.coordinator.handleObservations([world.pr()]);
+          await harness.coordinator.idle();
+          expect(openOfferCards(harness.todos)).toHaveLength(0);
+        }
+        world.clock += 10 * 60_000;
+        harness.coordinator.handleObservations([world.pr()]);
+        await harness.coordinator.idle();
+        expect(openOfferCards(harness.todos)).toHaveLength(polled ? 0 : 1);
+      } finally { harness.close(); }
+    }), { examples: [[false, 1]] });
+  });
+
+  it("budgets card writes from stack transitions and duplicate deliveries", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    for (const trigger of ["base", "lower"] as const) {
+      const temp = createTempStateDb(`pwragent-stack-offer-${trigger}-`);
+      const harness = createHarness(StateDb.open(temp.dbPath));
+      try {
+        harness.world.ci = "passing";
+        harness.world.base = trigger === "base" ? "parent" : "main";
+        harness.world.lowers.set(1, trigger === "lower" ? "open" : "merged");
+        await reviewChanged(harness, recordReview(harness.world, 0));
+        const previous = harness.world.pr();
+        const baseChange = computePrStatusTransition(previous, { ...previous, baseRefName: "main" });
+        const event = async () => {
+          if (trigger === "lower") {
+            await mergeLower(harness, 1);
+          } else {
+            harness.world.base = "main";
+            harness.coordinator.handleTransition(baseChange!);
+            await harness.coordinator.idle();
+          }
+        };
+        const { writes } = await measureSqliteWrites(event);
+        expect(openOfferCards(harness.todos)).toHaveLength(1);
+        expectSqliteWriteBudget({ scenario: `pr-review-stack-${trigger}-offer`, writes,
+          note: "One eligible child becomes ready: one card commit. At 100 child offers/day and ~29 KB WAL/offer, ~2.9 MB/day." });
+        const repeat = await measureSqliteWrites(event);
+        expectSqliteWriteBudget({ scenario: `pr-review-stack-${trigger}-repeat`, writes: repeat.writes,
+          note: "A repeated observation after the offer is open costs 0 MB/day." });
+      } finally {
+        harness.close();
+        removeTempStateDbDir(temp.tempDir);
+      }
+    }
+  });
+
+  it("budgets writes for uncovered holds and stale offers during transport failure", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("pwragent-stack-review-recheck-");
+    const harness = createHarness(StateDb.open(temp.dbPath));
+    try {
+      const { world } = harness;
+      world.ci = "passing";
+      world.lowerPolled = false;
+      world.lowers.set(1, "open");
+      await reviewChanged(harness, recordReview(world, 0));
+      const observe = async () => {
+        harness.coordinator.handleObservations([world.pr()]);
+        await harness.coordinator.idle();
+      };
+      world.clock += 10 * 60_000;
+      const unchanged = await measureSqliteWrites(observe);
+      expectSqliteWriteBudget({ scenario: "pr-review-stack-uncovered-still-blocked", writes: unchanged.writes,
+        note: "An unchanged child recheck while its unpolled lower remains open writes nothing." });
+      world.lowers.set(1, "merged");
+      world.clock += 10 * 60_000;
+      const offered = await measureSqliteWrites(observe);
+      expect(openOfferCards(harness.todos)).toHaveLength(1);
+      expectSqliteWriteBudget({ scenario: "pr-review-stack-uncovered-offer", writes: offered.writes,
+        note: "One newly eligible child writes one offer commit on a recheck. At 100 offers/day and ~29 KB WAL each, ~2.9 MB/day." });
+      const before = world.head;
+      world.head = world.commit(world.changeOf.get(before)!);
+      world.stackUnavailable = true;
+      const retired = await measureSqliteWrites(async () => {
+        await transition(harness, { headSha: { from: before, to: world.head } });
+      });
+      expect(openOfferCards(harness.todos)).toHaveLength(0);
+      expectSqliteWriteBudget({ scenario: "pr-review-stack-stale-offer-unavailable", writes: retired.writes,
+        note: "One commit withdraws an old-head offer during a failed verification. At 100 withdrawals/day and ~12 KB WAL each, ~1.2 MB/day." });
+    } finally {
+      harness.close();
+      removeTempStateDbDir(temp.tempDir);
     }
   });
 

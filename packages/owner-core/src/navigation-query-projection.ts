@@ -28,6 +28,7 @@ import type {
   PrSummary,
 } from "@pwragent/shared/contracts/navigation";
 import type { NavigationStarMapSignals } from "@pwragent/shared/navigation-star-map-filters";
+import { readCompactStackMemberships, type StackSummary } from "@pwragent/shared/stacks/stack-status";
 import {
   buildThreadIdentityKey,
   isNavigationThreadRunning,
@@ -78,6 +79,8 @@ export type NavigationQueryMaterialization = {
 
 /** Complete compact owner inventory used to answer bounded queries. */
 export type NavigationQueryIndex = {
+  /** Exact stack detail, stored once per owner inventory. */
+  stacks?: StackSummary[];
   localInstanceId?: string;
   coverage?: NavigationQueryCoverage;
   directories: NavigationDirectorySummary[];
@@ -510,6 +513,26 @@ export function projectNavigationPullRequests(prs?: PrSummary[]): Pick<Navigatio
   };
 }
 
+function projectStackMemberships(thread: Pick<NavigationThreadSummary, "stacks" | "stackMemberships">): Pick<NavigationRow, "stackMemberships"> {
+  const stackMemberships = readCompactStackMemberships(thread).slice(0, 8).flatMap((entry) => {
+    if (typeof entry.key !== "string" || typeof entry.name !== "string" || !Number.isSafeInteger(entry.position)
+      || !Number.isSafeInteger(entry.count) || entry.position < 1 || entry.position > entry.count) return [];
+    return [{
+      key: entry.key.length <= 512 ? entry.key : createHash("sha256").update(entry.key).digest("hex"),
+      name: entry.name.slice(0, 160),
+      inferred: entry.inferred === true,
+      position: entry.position,
+      count: entry.count,
+      health: typeof entry.health === "string" && entry.health.length <= 16 ? entry.health : "unknown" as const,
+      ...(typeof entry.threadKey === "string" && entry.threadKey.length <= 512 ? { threadKey: entry.threadKey } : {}),
+      ...(typeof entry.parentThreadKey === "string" && entry.parentThreadKey.length <= 512 ? { parentThreadKey: entry.parentThreadKey } : {}),
+      ...(entry.parentMerged === true ? { parentMerged: true } : {}),
+      ...(typeof entry.detailRevision === "string" && entry.detailRevision.length <= 64 ? { detailRevision: entry.detailRevision } : {}),
+    }];
+  });
+  return stackMemberships.length ? { stackMemberships } : {};
+}
+
 function projectNavigationRow(params: {
   childCount: number;
   viewerChildCount?: number;
@@ -609,7 +632,7 @@ function projectNavigationRow(params: {
     ...(thread.checkoutHibernated ? { checkoutHibernated: true } : {}),
     ...(thread.keepCheckoutAwake ? { keepCheckoutAwake: true } : {}),
     ...(!params.omitPullRequests ? projectNavigationPullRequests(thread.prs) : {}),
-    ...(thread.stacks?.length ? { stacks: thread.stacks } : {}),
+    ...projectStackMemberships(thread),
     ...(messagingBindings.items
       ? { messagingBindings: messagingBindings.items }
       : {}),

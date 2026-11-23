@@ -77,6 +77,7 @@ import { getRuntimeMessagingLeaseCoordinator } from "./runtime-messaging-lease";
 import { getDesktopConfigStore, getDesktopSettingsService } from "./settings/desktop-settings-singleton";
 import { issueProviderDiscoveryPermit, type ProviderDiscoveryPermit } from "./settings/provider-discovery-permit";
 import { type ForgeReadArgs, type ForgeReadOperation } from "./pr-status/forge-tool-contract";
+import { installGithubMergeStackTransport } from "./pr-status/github-pr-fetcher";
 import type { AgentToolCallContext } from "./agent-tools/agent-tool-definition";
 import { createOwnerRoutedForgeReadHandler } from "./federation/federated-forge-read-service";
 import { navigationDiagnosticCause, navigationDiagnosticTrigger } from "../shared/navigation-diagnostic-cause";
@@ -437,6 +438,9 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
     useMachineClaudeDiscovery: !host.runtimePolicy || host.runtimePolicy.enabledBackends.includes("claude"),
   }));
   const service = initializeDesktopAppServerService();
+  ownerSubscriptions.add(installGithubMergeStackTransport({
+    requestGithub: (...args) => service.getForgeCiClient().requestGithub(...args),
+  }));
   const scheduledActions = initializeScheduledThreadActionService(registry);
   const automations = initializeDesktopAutomationService(registry);
   if (bootMode === "active-profile") {

@@ -39,8 +39,8 @@ import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
 import { StackReader, stackMemberships } from "../stacks/stack-reader";
 import { StackOperationsService } from "../stacks/stack-operations-service";
 import { StackOperationError } from "@pwragent/owner-core/stacks/stack-coordinator";
-import { githubStackRepository, isObservedStackParent } from "../stacks/stack-merge-guard";
-import { catalogMergeBlock, type StackSummary } from "@pwragent/shared/stacks/stack-status";
+import { assertGithubStackMergeAllowed, githubStackRepository, isObservedStackParent } from "../stacks/stack-merge-guard";
+import type { StackSummary } from "@pwragent/shared/stacks/stack-status";
 import { readLocalHeadPastPrHead } from "../pr-status/local-pr-head";
 import { PrChangeIdentityReader } from "../pr-status/pr-change-identity";
 import { PrReviewOfferCoordinator, type PrReviewOfferThread } from "../pr-status/pr-review-offer-coordinator";
@@ -3763,7 +3763,7 @@ class DesktopAppServerService {
   private githubPrToolClient?: GithubPrToolClient;
   private gitlabPrToolClient?: GitlabPrToolClient;
 
-  private getForgeCiClient(): ForgeCiClient {
+  getForgeCiClient(): ForgeCiClient {
     this.forgeCiClient ??= new ForgeCiClient({
       gitlab: this.getPrFetcher().gitlab,
       enabled: (provider) => getDesktopSettingsService().isForgeEnabled(provider),
@@ -3799,26 +3799,42 @@ class DesktopAppServerService {
     return [...this.prStatusRegistry.values()].map(({ pr }) => pr);
   }
 
-  private async stackMergeBlocked(thread: PrReviewOfferThread, pr: PrSummary): Promise<boolean> {
-    if (pr.lifecycleState === "closed" || pr.lifecycleState === "merged") return false;
-    const repository = `${pr.provider}:${pr.org}/${pr.repo}`.toLowerCase();
-    let matched = false;
-    for (const catalog of await this.stackReader.readCatalogs(this.prReviewOfferDirectories(thread, pr))) {
-      if (catalog.status !== "ok" || catalog.catalog.repository.toLowerCase() !== repository) continue;
-      for (const stack of catalog.catalog.stacks) {
-        const index = stack.branches.findIndex((branch) => branch.pullRequest?.number === pr.number
-          || (!branch.pullRequest && !pr.sourceRepository && branch.branch === pr.headRefName));
-        if (index < 0) continue;
-        matched = true;
-        const merged = new Set(stack.branches.slice(0, index).flatMap(({ pullRequest }) => {
-          if (!pullRequest) return [];
-          const saved = this.prStatusRegistry.get(getPrStatusKey({ provider: pr.provider, org: pr.org, repo: pr.repo, number: pullRequest.number }))?.pr.lifecycleState;
-          return (saved ? saved === "merged" : pullRequest.merged === true) ? [pullRequest.number] : [];
-        }));
-        if (catalogMergeBlock(stack, index, pr.baseRefName, merged)) return true;
-      }
+  private async readStackMergeEvidence(thread: PrReviewOfferThread, pr: PrSummary) {
+    const ref = parsePullRequestReferenceUrl(pr.url);
+    if (!ref) return { blocked: false, lowerKeys: [] };
+    if (ref.kind !== "github") {
+      const parents = this.knownStackPullRequests().filter((parent) => isObservedStackParent(parent, pr));
+      return { blocked: parents.length > 0, lowerKeys: parents.map(getPrStatusKey) };
     }
-    return !matched && this.knownStackPullRequests().some((parent) => isObservedStackParent(parent, pr));
+    const repository = { provider: "github" as const, host: ref.provider, owner: ref.org, repo: ref.repo };
+    const catalogs = (await this.stackReader.readCatalogs(this.prReviewOfferDirectories(thread, pr)))
+      .flatMap((read) => read.status === "ok" ? [read.catalog] : []);
+    const ci = this.getForgeCiClient();
+    const path = `repos/${encodeURIComponent(ref.org)}/${encodeURIComponent(ref.repo)}`;
+    const lowerKeys = new Set<string>();
+    const request = async (params: Parameters<ForgeCiClient["requestGithub"]>[1]) => {
+      // Offers share the poll budget but leave capacity for the next ordinary
+      // status batch and foreground forge reads.
+      if (this.prStatusTokenBucket.peek() <= 4) throw new ForgeReadError("rate_limited", "Review offer stack check is waiting for forge capacity.");
+      return await ci.requestGithub(repository, params);
+    };
+    try {
+      const base = await assertGithubStackMergeAllowed(repository, pr.number, catalogs,
+        (route) => request({ path: path + route }),
+        async (query, variables) => (await request({
+          path: "", graphql: true, body: { query, variables },
+        }) as { data?: unknown }).data,
+        (number) => lowerKeys.add(getPrStatusKey({ provider: pr.provider, org: pr.org, repo: pr.repo, number })),
+      );
+      const changedBase = pr.baseRefName !== undefined && base !== pr.baseRefName;
+      return { blocked: changedBase, lowerKeys: [...lowerKeys], retryOnObservation: changedBase };
+    } catch (error) {
+      if (!(error instanceof ForgeReadError) || error.code !== "stack_parent_open") {
+        appServerLog.debug("stack merge evidence unavailable", { pr: pr.url, error: String(error) });
+        return { blocked: true, lowerKeys: [...lowerKeys], retryOnObservation: true };
+      }
+      return { blocked: true, lowerKeys: [...lowerKeys] };
+    }
   }
 
   private async readScopedStacks(directories: readonly string[], scope: { backend: string; threadId: string; prs: PrSummary[] }) {
@@ -6856,6 +6872,11 @@ class DesktopAppServerService {
 
     const changed = this.rememberPrStatuses(merged, fetchedAt, "background-poll");
     const canonical = this.canonicalizePrs(merged);
+    const changedKeys = new Set(changed.map(getPrStatusKey));
+    this.prReviewOfferCoordinator?.handleObservations(canonical.filter((pr) =>
+      this.primaryPrThreadsByKey.has(getPrStatusKey(pr))
+      && !changedKeys.has(getPrStatusKey(pr))
+      && this.prStatusRegistry.get(getPrStatusKey(pr))?.fetchedAt === fetchedAt));
     this.recordPrCheck(canonical, "background poll");
     await this.handlePrAutoDispatchSnapshots(canonical, fetchedAt);
     // An unchanged accepted poll refreshes CI freshness without publishing a
@@ -8653,7 +8674,8 @@ class DesktopAppServerService {
           .map(getPrStatusKey);
       },
       getPr: (prKey) => this.prStatusRegistry.get(prKey)?.pr,
-      stackBlocksMerge: (thread, pr) => this.stackMergeBlocked(thread, pr),
+      stackMergeEvidence: (thread, pr) => this.readStackMergeEvidence(thread, pr),
+      isLowerPolled: (key) => this.prPollBackendByKey.has(key) || this.transcriptPrSubscriptions.hasTarget(key),
       directories: (thread, pr) => this.prReviewOfferDirectories(thread, pr),
       listReviews: (thread, pr) => {
         // The owner and every other thread showing the PR, such as a

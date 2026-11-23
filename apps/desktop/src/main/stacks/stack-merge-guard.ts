@@ -2,6 +2,7 @@ import type { GhStackCatalog } from "@pwragent/shared/stacks/catalog";
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { catalogMergeBlock } from "@pwragent/shared/stacks/stack-status";
 import { ForgeReadError, type ForgeRepository } from "../pr-status/forge-tool-contract";
+import { githubStackBlock, readGithubStackParents, type GithubStackGraphql, type GithubStackPull } from "./github-stack-evidence";
 
 export function githubStackRepository(repository: ForgeRepository): string {
   return `${repository.host}:${repository.owner}/${repository.repo}`.toLowerCase();
@@ -28,8 +29,10 @@ export async function assertStackMergeAllowed(input: {
   catalogs: readonly GhStackCatalog[];
   candidate: MergeCandidate;
   readMerged: (number: number) => Promise<boolean>;
-  findParent: (branch: string) => Promise<number | undefined>;
+  findParent?: (branch: string) => Promise<number | undefined>;
   findLayer?: (branch: string, bases: readonly string[]) => Promise<number | undefined>;
+  observeLower?: (number: number) => void;
+  checkInferred?: () => Promise<void>;
 }): Promise<void> {
   const { candidate } = input;
   let matched = false;
@@ -42,14 +45,19 @@ export async function assertStackMergeAllowed(input: {
       if (position < 0) continue;
       matched = true;
       const checked = [...stack.branches];
+      for (const branch of checked.slice(0, position)) {
+        if (branch.pullRequest) input.observeLower?.(branch.pullRequest.number);
+      }
       const merged = new Set<number>();
       if (candidate.base === stack.trunk.branch) {
         for (let index = 0; index < position; index++) {
           const branch = checked[index]!;
           const parent = checked[index - 1]?.branch ?? stack.trunk.branch;
           const number = branch.pullRequest?.number ?? await input.findLayer?.(branch.branch, [parent, stack.trunk.branch]);
-          if (!number || !(await input.readMerged(number))) break;
+          if (!number) break;
+          input.observeLower?.(number);
           checked[index] = { ...branch, pullRequest: { number } };
+          if (!(await input.readMerged(number))) break;
           merged.add(number);
         }
       }
@@ -58,58 +66,55 @@ export async function assertStackMergeAllowed(input: {
     }
   }
 
-  if (!matched && candidate.base && candidate.base !== candidate.defaultBranch) {
-    const parent = await input.findParent(candidate.base);
+  if (matched) return;
+  if (input.checkInferred) await input.checkInferred();
+  else if (candidate.base && candidate.base !== candidate.defaultBranch) {
+    const parent = await input.findParent?.(candidate.base);
     if (parent !== undefined && parent !== candidate.number) {
       throw new ForgeReadError("stack_parent_open", `This pull request targets ${candidate.base}, the head of layer #${parent}. Wait for lower layers to merge, then retarget this pull request to trunk.`);
     }
   }
 }
 
-type GithubMergeRead = {
-  state?: string;
-  number?: number;
-  merged?: boolean;
-  merged_at?: string;
-  created_at?: string;
-  head?: { ref?: string; repo?: { full_name?: string } };
-  base?: { ref?: string; repo?: { default_branch?: string } };
-};
-
 export async function assertGithubStackMergeAllowed(
   repository: ForgeRepository,
   number: number,
   catalogs: readonly GhStackCatalog[],
   get: (route: string) => Promise<unknown>,
+  graphql: GithubStackGraphql,
+  observeLower?: (number: number) => void,
 ): Promise<string> {
-  const current = await get(`/pulls/${number}`) as GithubMergeRead;
+  const current = await get(`/pulls/${number}`) as GithubStackPull;
   const base = current?.base?.ref;
   if (!base) throw new ForgeReadError("unavailable", `Could not confirm the base of pull request #${number}.`);
   const repo = `${repository.owner}/${repository.repo}`.toLowerCase();
   const fromBranch = async (branch: string) => {
     const params = new URLSearchParams({ state: "all", head: `${repository.owner}:${branch}`, per_page: "100" });
-    const parents = await get(`/pulls?${params}`) as GithubMergeRead[];
+    const parents = await get(`/pulls?${params}`) as GithubStackPull[];
     return parents.filter((pr) => pr.head?.ref === branch && pr.head.repo?.full_name?.toLowerCase() === repo);
   };
   await assertStackMergeAllowed({
     repository, catalogs,
-    candidate: { number, base, head: current.head?.ref, defaultBranch: current.base?.repo?.default_branch, fromRepository: current.head?.repo?.full_name?.toLowerCase() === repo },
+    observeLower,
+    candidate: { number, base, head: current.head?.ref, fromRepository: current.head?.repo?.full_name?.toLowerCase() === repo },
     readMerged: async (parent) => {
       try {
-        return (await get(`/pulls/${parent}`) as GithubMergeRead)?.merged === true;
+        return (await get(`/pulls/${parent}`) as GithubStackPull)?.merged === true;
       } catch (error) {
         if (error instanceof ForgeReadError && error.code === "not_found") return false;
         throw error;
       }
     },
-    findParent: async (branch) => {
-      return (await fromBranch(branch)).find((pr) => pr.state === "open"
-        || (pr.merged_at && current.created_at && pr.merged_at >= current.created_at))?.number;
-    },
     findLayer: async (branch, bases) => {
       const candidates = (await fromBranch(branch)).filter((pr) => pr.base?.ref && bases.includes(pr.base.ref)
         && (pr.state === "open" || pr.merged_at));
       return candidates.length === 1 ? candidates[0]?.number : undefined;
+    },
+    checkInferred: async () => {
+      const evidence = await readGithubStackParents({ repository, child: current, number, get, graphql });
+      for (const parent of evidence.parents) observeLower?.(parent.number);
+      const block = githubStackBlock(number, base, evidence);
+      if (block) throw block;
     },
   });
   return base;

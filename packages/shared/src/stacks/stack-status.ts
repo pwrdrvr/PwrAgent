@@ -53,6 +53,53 @@ export type ThreadStackMembership = {
   position: number;
 };
 
+export type CompactStackMembership = {
+  key: string;
+  name: string;
+  inferred: boolean;
+  position: number;
+  count: number;
+  health: StackLayerHealth;
+  detailRevision?: string;
+  threadKey?: string;
+  parentThreadKey?: string;
+  parentMerged?: boolean;
+};
+
+export type SelectedStackLayer = {
+  stackKey: string;
+  /** The first layer carries the stack header. */
+  stack?: Omit<StackSummary, "layers">;
+  position: number;
+  layer: StackLayer;
+};
+
+export function compactStackMembership(stack: StackSummary, position: number): CompactStackMembership | undefined {
+  const layer = stack.layers[position - 1];
+  if (!layer) return undefined;
+  const parent = stack.layers[position - 2];
+  return {
+    key: stack.key,
+    name: stack.name.slice(0, 160),
+    inferred: stack.inferred,
+    position,
+    count: stack.layers.length,
+    health: layer.health,
+    ...(layer.thread && layer.thread.key.length <= 512 ? { threadKey: layer.thread.key } : {}),
+    ...(parent?.thread && parent.thread.key.length <= 512 ? { parentThreadKey: parent.thread.key } : {}),
+    ...(parent?.pullRequest?.lifecycleState === "merged" ? { parentMerged: true } : {}),
+  };
+}
+
+/** Older peers still send full stack data in their rows. */
+export function readCompactStackMemberships(thread: {
+  stackMemberships?: CompactStackMembership[];
+  stacks?: ThreadStackMembership[];
+}): CompactStackMembership[] {
+  return thread.stackMemberships ?? thread.stacks?.flatMap(({ stack, position }) =>
+    compactStackMembership(stack, position) ?? []) ?? [];
+}
+
 export function stackLayerBinding(input: {
   branch: string;
   pullRequest?: number;
