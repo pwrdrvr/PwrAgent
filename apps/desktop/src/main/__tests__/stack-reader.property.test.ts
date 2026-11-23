@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { lstat, open, mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, lstat, open, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
@@ -103,6 +103,105 @@ describe("stack checkout demand", () => {
       expect(secondKey).toBeDefined();
       expect(secondKey).not.toBe(firstKey);
     } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("projects clones in the same order under reversed checkout completion", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-ordered-"));
+    try {
+      const first = path.join(sandbox, "first");
+      const second = path.join(sandbox, "second");
+      await Promise.all([mkdir(first), mkdir(second)]);
+      initialize(first);
+      initialize(second);
+      await Promise.all([writeCatalog(first, "first"), writeCatalog(second, "second")]);
+      const rows = [{
+        ...row(first, "linked"),
+        linkedDirectories: [...row(first, "first").linkedDirectories, ...row(second, "second").linkedDirectories],
+      }];
+      const reader = new StackReader();
+      await reader.read(rows, []);
+      const read = async (delayed: string) => {
+        const observation = new StackReadObservation();
+        const identity = observation.hints.checkoutIdentity.bind(observation.hints);
+        const firstComplete = Promise.withResolvers<void>();
+        const resume = Promise.withResolvers<void>();
+        vi.spyOn(observation.hints, "checkoutIdentity").mockImplementation(async (cwd) => {
+          const found = await identity(cwd);
+          if (cwd === delayed) await resume.promise;
+          else firstComplete.resolve();
+          return found;
+        });
+        const pending = reader.read(rows, [], undefined, undefined, observation);
+        await firstComplete.promise;
+        // Let the ready checkout reach the mapper's consumer before releasing
+        // the other observation. This advances scheduling without a time delay.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        resume.resolve();
+        return await pending;
+      };
+      const left = await read(first);
+      const right = await read(second);
+      expect(left).toEqual(right);
+      expect(left.stacks.map(({ repository }) => repository)).toEqual(["github.com:fixture/first", "github.com:fixture/second"]);
+    } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("follows a commondir retarget that differs by a trailing space", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-common-pointer-"));
+    try {
+      const primary = path.join(sandbox, "primary");
+      const worktree = path.join(sandbox, "worktree");
+      await mkdir(primary);
+      initialize(primary);
+      git(primary, "worktree", "add", "-b", "sibling", worktree);
+      await writeCatalog(primary, "first");
+      const common = path.join(primary, ".git");
+      const retargeted = common + " ";
+      const pointer = path.join(git(worktree, "rev-parse", "--absolute-git-dir"), "commondir");
+      await writeFile(pointer, common + "\n");
+      await cp(common, retargeted, { recursive: true });
+      const catalogPath = path.join(retargeted, "gh-stack");
+      const catalog = (await readFile(catalogPath, "utf8")).replace("fixture/first", "fixture/second");
+      await writeFile(catalogPath, catalog);
+      const gitCommonDirectory = () => execFileSync("git", ["-C", worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"], {
+        encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+      }).replace(/\n$/, "");
+      const reader = new StackReader();
+      const rows = [row(worktree, "worktree")];
+      expect(await realpath(gitCommonDirectory())).toBe(await realpath(common));
+      expect((await reader.read(rows, [])).stacks.map(({ repository }) => repository)).toEqual(["github.com:fixture/first"]);
+      expect((await reader.read(rows, [])).stacks.map(({ repository }) => repository)).toEqual(["github.com:fixture/first"]);
+      await writeFile(pointer, retargeted + "\n");
+      expect(await realpath(gitCommonDirectory())).toBe(await realpath(retargeted));
+      expect((await reader.read(rows, [])).stacks.map(({ repository }) => repository)).toEqual(["github.com:fixture/second"]);
+    } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("rechecks the scoped anchor without relaunching Git for unchanged sibling worktrees", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-scoped-warm-"));
+    const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    try {
+      const primary = path.join(sandbox, "primary");
+      const sibling = path.join(sandbox, "sibling");
+      await mkdir(primary);
+      initialize(primary);
+      git(primary, "worktree", "add", "-b", "sibling", sibling);
+      await writeCatalog(primary, "scoped");
+      const reader = new StackReader();
+      const rows = [row(primary, "primary"), row(sibling, "sibling")];
+      const first = await reader.read(rows, [], [primary]);
+      expect(first.stacks).toHaveLength(1);
+      start.mockClear();
+      expect(await reader.read(rows, [], [primary])).toEqual(first);
+      expect(start.mock.calls.filter(([, args]) => args[0] === "rev-parse").map(([cwd]) => cwd)).toEqual([primary]);
+    } finally {
+      start.mockRestore();
       await rm(sandbox, { recursive: true, force: true });
     }
   });

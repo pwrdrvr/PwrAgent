@@ -362,9 +362,12 @@ function possibleInferredLayers(threads: readonly StackThreadRow[], knownPrs: re
 export class StackReader {
   private readonly inventoryCheckouts = new Map<string, { version: string; checkout: Checkout }>();
 
-  private async readInventoryCheckout(cwd: string, observation: StackReadObservation): Promise<Checkout | undefined> {
+  private async readInventoryCheckout(
+    cwd: string, observation: StackReadObservation, candidates: readonly string[],
+  ): Promise<Checkout | undefined> {
     const { hints, inventoryDemand } = observation;
-    const before = await hints.checkoutIdentity(cwd);
+    const identity = await hints.checkoutIdentity(cwd);
+    const before = identity && candidates.includes(identity.commonDir) ? identity : undefined;
     const cached = this.inventoryCheckouts.get(cwd);
     if (before && cached?.version === before.version) return cached.checkout;
     this.inventoryCheckouts.delete(cwd);
@@ -437,11 +440,18 @@ export class StackReader {
       for (const cwd of paths) if (possible.get(cwd)?.length) admitted.add(cwd);
     }
     const verify = new IterableMapper(admitted, async (cwd) => ({
-      checkout: !directories && hinted.has(cwd) ? await this.readInventoryCheckout(cwd, observation)
+      // Explicit anchors already have a live result in this observation.
+      checkout: hinted.has(cwd) ? await this.readInventoryCheckout(cwd, observation, possible.get(cwd)!)
         : await observation.checkout(cwd, inventoryDemand),
     }), STACK_CHECKOUT_SCAN_LIMITS);
+    const verified = new Map<string, Checkout>();
+    for await (const { checkout } of verify) if (checkout) verified.set(checkout.cwd, checkout);
     const checkouts = new Map(anchors.flatMap((entry) => entry ? [[entry.cwd, entry] as const] : []));
-    for await (const { checkout } of verify) if (checkout) checkouts.set(checkout.cwd, checkout);
+    // Keep the existing path order regardless of which probes finish first.
+    for (const cwd of paths) {
+      const checkout = verified.get(cwd);
+      if (checkout) checkouts.set(cwd, checkout);
+    }
     const cloneCheckouts = directories ? scopedClones : new Map([...checkouts.values()]
       .filter((checkout) => wanted.has(checkout.commonDir)).map((checkout) => [checkout.commonDir, checkout]));
     const cloneThreads = new Map<string, CloneThread[]>();

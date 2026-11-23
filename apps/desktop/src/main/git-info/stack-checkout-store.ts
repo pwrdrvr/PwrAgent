@@ -2,7 +2,9 @@ import { constants } from "node:fs";
 import { access, lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
-import { createGitDirectoryObserver, readBoundedGitPointer } from "./private/directory-observation";
+import {
+  createGitDirectoryObserver, gitPointerTarget, parseGitDirPointer, parseGitPathPointer, readBoundedGitPointer,
+} from "./private/directory-observation";
 import { hasGitDiscoveryOverrides } from "./private/directory-probe";
 import { getSelectedManagedGit } from "../git-command";
 import { gitCommandPreference } from "../git-runtime";
@@ -19,11 +21,6 @@ async function status(file: string) {
     if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
     return null;
   }
-}
-
-function literalPath(parent: string, child: string): string {
-  // Do not collapse ".." before the filesystem resolves symbolic links.
-  return path.isAbsolute(child) ? child : parent + path.sep + child;
 }
 
 /**
@@ -66,9 +63,9 @@ export function createStackCheckoutHints(demand: PrMetadataDemand) {
     if (!dotGit.isDirectory()) {
       if (!dotGit.isFile()) return null;
       signal.throwIfAborted();
-      const gitdir = /^gitdir: ([^\r\n\0]+)\r?\n?$/.exec(await readBoundedGitPointer(marker))?.[1];
+      const gitdir = parseGitDirPointer(await readBoundedGitPointer(marker));
       if (!gitdir) return null;
-      admin = literalPath(directory, gitdir);
+      admin = gitPointerTarget(directory, gitdir);
     }
     signal.throwIfAborted();
     const resolvedAdmin = await realpath(admin);
@@ -76,10 +73,10 @@ export function createStackCheckoutHints(demand: PrMetadataDemand) {
     signal.throwIfAborted();
     if (!await status(commonFile)) return { commonDir: resolvedAdmin };
     signal.throwIfAborted();
-    const common = /^([^\r\n\0]+)\r?\n?$/.exec(await readBoundedGitPointer(commonFile))?.[1];
+    const common = parseGitPathPointer(await readBoundedGitPointer(commonFile));
     if (!common) return null;
     signal.throwIfAborted();
-    return { commonDir: await realpath(literalPath(admin, common)) };
+    return { commonDir: await realpath(gitPointerTarget(admin, common)) };
   }
 
   async function inspect(directory: string): Promise<readonly string[] | undefined> {
