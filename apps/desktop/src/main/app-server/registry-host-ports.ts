@@ -66,6 +66,10 @@ export type RegistryReadThreadRequest = AppServerReadThreadRequest & {
  * this contract must stay independent of the registry and its domain modules.
  */
 export interface RegistryHostPorts {
+  withGoalHibernation<T>(
+    identity: { backend: AppServerBackendKind; threadId: string },
+    work: () => Promise<T>,
+  ): Promise<T>;
   admitNewThreadModelSettings(
     backend: AppServerBackendKind,
     settings: ModelSettings & { acpRuntime?: BackendAcpSessionRuntimeState },

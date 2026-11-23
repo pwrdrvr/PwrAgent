@@ -923,6 +923,7 @@ import {
   APPEARANCE_CHANGED_EVENT_CHANNEL,
   AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_COMPACT_THREAD_CHANNEL,
+  AGENT_CONTROL_THREAD_GOAL_CHANNEL,
   AGENT_CONFIGURE_GROK_WORKFLOW_BUDGET_CHANNEL,
   AGENT_LIST_THREAD_MCP_SERVERS_CHANNEL,
   AGENT_RELOAD_CODEX_MCP_CONFIG_CHANNEL,
@@ -2790,6 +2791,18 @@ const desktopApi = Object.freeze({
     request: CompactThreadRequest
   ): Promise<CompactThreadResponse> =>
     await ipcRenderer.invoke(AGENT_COMPACT_THREAD_CHANNEL, request),
+  readThreadGoal: async (threadId: string) =>
+    await ipcRenderer.invoke(AGENT_CONTROL_THREAD_GOAL_CHANNEL, { threadId, action: "read" }),
+  setThreadGoal: async (threadId: string, objective: string, confirmedObjective?: string) =>
+    await ipcRenderer.invoke(AGENT_CONTROL_THREAD_GOAL_CHANNEL, { threadId, objective, confirmedObjective, action: "set" }),
+  pauseThreadGoal: async (threadId: string) =>
+    await ipcRenderer.invoke(AGENT_CONTROL_THREAD_GOAL_CHANNEL, { threadId, action: "pause" }),
+  resumeThreadGoal: async (threadId: string) =>
+    await ipcRenderer.invoke(AGENT_CONTROL_THREAD_GOAL_CHANNEL, { threadId, action: "resume" }),
+  clearThreadGoal: async (threadId: string, confirmedObjective?: string) =>
+    await ipcRenderer.invoke(AGENT_CONTROL_THREAD_GOAL_CHANNEL, { threadId, confirmedObjective, action: "clear" }),
+  cancelThreadGoalActivation: async (threadId: string) =>
+    await ipcRenderer.invoke(AGENT_CONTROL_THREAD_GOAL_CHANNEL, { threadId, action: "cancel" }),
   listThreadMcpServers: async (
     request: ListThreadMcpServersRequest,
   ): Promise<ListThreadMcpServersResponse> =>
