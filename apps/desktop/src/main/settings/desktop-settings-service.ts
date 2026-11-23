@@ -74,6 +74,7 @@ import type {
   DesktopUpdateTrain,
   DesktopWorktreeFolder,
   DesktopWorktreeStorageLocation,
+  ManagedCodexTrackTags,
 } from "@pwragent/shared/contracts/settings";
 import type {
   DesktopHelperModelSettings,
@@ -86,7 +87,7 @@ import type { ThreadTodoMergeMethod } from "@pwragent/shared/contracts/thread-to
 import { execFile } from "node:child_process";
 import { readFile, realpath } from "node:fs/promises";
 import { accessSync, constants, statSync } from "node:fs";
-import { retainManagedCodexCommand } from "../codex-managed-runtime";
+import { readManagedCodexTrackTags, retainManagedCodexCommand } from "../codex-managed-runtime";
 import { managedCodexTagForCommand } from "../codex-build-channel";
 import { buildCodexVersionAdvisory } from "./codex-version-advisory";
 import path from "node:path";
@@ -2342,6 +2343,10 @@ export class DesktopSettingsService {
       this.resolveTokenMiserEnabled(),
       this.configStore.read("models").codex?.managedBuilds ?? false,
     );
+  }
+
+  async readManagedCodexTrackTags(): Promise<ManagedCodexTrackTags> {
+    return this.resolveManagedCodexEnabled() ? await readManagedCodexTrackTags() : {};
   }
 
   /** Which pwrdrvr/codex track the managed runtime follows. */

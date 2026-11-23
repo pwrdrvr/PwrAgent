@@ -140,7 +140,6 @@ import {
 } from "../../../shared/ipc";
 import type { ManagedRuntimeProgress } from "../../../shared/managed-runtime-progress";
 import { readManagedRuntimeProgress } from "../../managed-runtime-progress";
-import { readManagedCodexTrackTags } from "../../codex-managed-runtime";
 import type { DesktopSettingsService } from "../../settings/desktop-settings-service";
 import { checkDecisionProvider } from "../../decision/decision-provider-check";
 import {
@@ -2064,9 +2063,7 @@ export function registerSettingsIpcHandlers(
   ipcMain.removeHandler(SETTINGS_READ_MANAGED_CODEX_TRACK_TAGS_CHANNEL);
   ipcMain.handle(
     SETTINGS_READ_MANAGED_CODEX_TRACK_TAGS_CHANNEL,
-    async () => getService(service).resolveManagedCodexEnabled()
-      ? await readManagedCodexTrackTags()
-      : {},
+    async () => await getService(service).readManagedCodexTrackTags(),
   );
 
   ipcMain.removeHandler(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL);
