@@ -112,7 +112,7 @@ export class ForgePrToolService {
       return r && repositoryKey(r) === repositoryKey(repository) && Number.isSafeInteger(pr.number) ? [{ number: pr.number, headRefName: pr.headRefName }] : [];
     });
     const stackCatalogs = operation === "merge_pull_request" && repository.provider === "github"
-      ? (await readStackClones(scope.directories, signal)).flatMap(({ catalog }) => catalog.status === "ok" ? [catalog.catalog] : [])
+      ? (await readStackClones(scope.directories, { signal })).flatMap(({ catalog }) => catalog.status === "ok" ? [catalog.catalog] : [])
       : undefined;
     return await this.options.clients[repository.provider].execute(operation, args, {
       repository, branch: scope.branch, directories: scope.directories, attached,

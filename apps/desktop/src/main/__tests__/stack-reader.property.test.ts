@@ -1,12 +1,17 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, open, mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { describe, expect, it, vi } from "vitest";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
-import { StackReader, readStackClones } from "../stacks/stack-reader";
+import { StackReader, StackReadObservation, readStackClones } from "../stacks/stack-reader";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const fs = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...fs, lstat: vi.fn(fs.lstat), open: vi.fn(fs.open) };
+});
 
 function row(cwd: string, id: string) {
   return {
@@ -164,12 +169,94 @@ describe("stack checkout demand", () => {
     }
   });
 
+  it("keeps checking a bare layout with a worktree even when an invalid .git directory exists", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-bare-layout-"));
+    try {
+      git(sandbox, "init", "--bare", "-b", "topic");
+      git(sandbox, "config", "core.bare", "false");
+      git(sandbox, "config", "core.worktree", sandbox);
+      await mkdir(path.join(sandbox, ".git"));
+      git(sandbox, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "topic");
+      expect(await realpath(git(sandbox, "rev-parse", "--path-format=absolute", "--git-common-dir"))).toBe(await realpath(sandbox));
+      await writeCatalog(sandbox, "bare-layout");
+      expect((await new StackReader().read([row(sandbox, "bare")], [])).stacks[0]?.repository).toBe("github.com:fixture/bare-layout");
+    } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("preserves literal carriage returns in Git checkout paths", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-line-ending-"));
+    try {
+      const cwd = path.join(sandbox, "checkout\r");
+      await mkdir(cwd);
+      initialize(cwd);
+      await writeCatalog(cwd, "line-ending");
+      const [checkout] = await readStackClones([cwd]);
+      expect(checkout?.root).toBe(await realpath(cwd));
+      expect(checkout?.catalog.status).toBe("ok");
+    } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to Git while an unrelated filesystem hint is still stalled", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-stalled-hint-"));
+    const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    const originalStat = vi.mocked(lstat).getMockImplementation()!;
+    let resume!: () => void;
+    const stalled = new Promise<void>((resolve) => { resume = resolve; });
+    try {
+      const selected = path.join(sandbox, "selected");
+      const unrelated = path.join(sandbox, "unrelated");
+      await mkdir(selected);
+      initialize(selected);
+      await writeCatalog(selected, "selected");
+      vi.mocked(lstat).mockImplementation((...args) => String(args[0]) === unrelated
+        ? stalled.then(() => originalStat(...args)) : originalStat(...args));
+      const { stacks } = await new StackReader().read([row(selected, "selected"), row(unrelated, "unrelated")], [], [selected]);
+      expect(stacks[0]?.layers[0]?.thread?.key).toBe("codex:selected");
+      expect(start.mock.calls.filter(([cwd]) => cwd === unrelated).map(([, args]) => args[0])).toEqual(["rev-parse"]);
+    } finally {
+      vi.mocked(lstat).mockImplementation(originalStat);
+      start.mockRestore();
+      resume();
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("uses one checkout and catalog observation for a PR preflight and its projection", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-preflight-"));
+    const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    try {
+      initialize(sandbox);
+      await writeCatalog(sandbox, "preflight");
+      const reader = new StackReader();
+      const rows = [row(sandbox, "preflight")];
+      const project = async () => {
+        const observation = new StackReadObservation();
+        expect((await observation.presentCatalogs([sandbox]))[0]?.status).toBe("ok");
+        expect((await reader.read(rows, [], [sandbox], undefined, observation)).stacks).toHaveLength(1);
+      };
+      vi.mocked(open).mockClear();
+      await project();
+      const checkoutStarts = () => start.mock.calls.filter(([, args]) => args[0] === "rev-parse");
+      expect(checkoutStarts()).toHaveLength(1);
+      expect(vi.mocked(open).mock.calls.filter(([file]) => path.basename(String(file)) === "gh-stack")).toHaveLength(1);
+      await project();
+      expect(checkoutStarts()).toHaveLength(2);
+    } finally {
+      start.mockRestore();
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
   it("cancels a queued scoped read before it can launch Git", async () => {
     const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
     try {
       const controller = new AbortController();
       const reason = new Error("Selection changed");
-      const result = new StackReader().read([], [], [os.tmpdir()], undefined, { signal: controller.signal });
+      const result = new StackReader().read([], [], [os.tmpdir()], undefined, new StackReadObservation({ signal: controller.signal }));
       controller.abort(reason);
       await expect(result).rejects.toBe(reason);
       expect(start).not.toHaveBeenCalled();
