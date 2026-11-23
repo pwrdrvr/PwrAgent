@@ -7,7 +7,7 @@ import * as gitExecutable from "../app-server/git-executable";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 import { filterStoredDiscoveredPullRequests } from "../pr-status/pr-detection";
 import { clearGitHubRemoteCache } from "../pr-status/git-remote";
-import { readProvenRemoteHeads } from "../pr-status/pr-remote-heads";
+import { readGitRemoteHead, readProvenRemoteHeads } from "../pr-status/pr-remote-heads";
 import { PR_METADATA_PRIORITY, runPrMetadataGit, runPrMetadataProcess } from "../pr-status/pr-metadata-process";
 import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
 
@@ -154,6 +154,71 @@ it("uses Git for malformed loose symrefs", async () => {
   const cwd = files.checkouts[0]!.cwd;
   expect(await readProvenRemoteHeads(cwd, (await observeGit(cwd)).names)).toBeUndefined();
   await expectDiscoveryMatchesGit(attachments(files.checkouts));
+}, 15_000);
+
+it("re-reads Git if a remote HEAD changes after an earlier probe starts", async () => {
+  const { repository } = await fixture();
+  const observed = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let starts = 0;
+  const runner = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (cwd, args, options) => {
+    const first = args[0] === "symbolic-ref" && ++starts === 1;
+    const answer = await run(cwd, args, options);
+    if (first) {
+      observed.resolve();
+      await release.promise;
+    }
+    return answer;
+  });
+  const earlier = readGitRemoteHead(repository, "origin");
+  try {
+    await Promise.race([observed.promise, earlier]);
+    await setRemoteHead(repository, "origin", "refs/remotes/origin/second");
+    expect(await readGitRemoteHead(repository, "origin")).toBe("origin/second");
+    release.resolve();
+    expect(await earlier).toBe("origin/first");
+    expect(starts).toBe(2);
+  } finally {
+    release.resolve();
+    await earlier;
+    runner.mockRestore();
+  }
+}, 15_000);
+
+it("keeps queued remote HEAD probes scoped to their environment and live readers", async () => {
+  const { repository } = await fixture();
+  const redirectedGitDir = path.join(path.dirname(repository), "redirect.git");
+  await git(repository, "init", "--bare", redirectedGitDir);
+  await setRemoteHead(redirectedGitDir, "origin", "refs/remotes/origin/redirected");
+
+  const ready = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let active = 0;
+  const blockers = Array.from({ length: 8 }, () => runPrMetadataProcess(async () => {
+    if (++active === 8) ready.resolve();
+    await release.promise;
+  }));
+  await ready.promise;
+  const cancelled = new AbortController();
+  const launches = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+  const initial = readGitRemoteHead(repository, "origin", { signal: cancelled.signal });
+  const retained = readGitRemoteHead(repository, "origin");
+  const abandoned = readGitRemoteHead(repository, "abandoned", { signal: cancelled.signal });
+  process.env.GIT_DIR = redirectedGitDir;
+  const redirected = readGitRemoteHead(repository, "origin");
+  try {
+    cancelled.abort();
+    await expect(initial).rejects.toMatchObject({ name: "AbortError" });
+    await expect(abandoned).rejects.toMatchObject({ name: "AbortError" });
+    release.resolve();
+    expect(await Promise.all([retained, redirected])).toEqual(["origin/first", "origin/redirected"]);
+    expect(launches.mock.calls.map(([, args]) => args[3])).toEqual(Array(2).fill("refs/remotes/origin/HEAD"));
+  } finally {
+    cancelled.abort();
+    release.resolve();
+    await Promise.allSettled([...blockers, initial, retained, abandoned, redirected]);
+    launches.mockRestore();
+  }
 }, 15_000);
 
 it.skipIf(process.platform === "win32")("falls back to Git when a ref changes during checkout verification", async () => {

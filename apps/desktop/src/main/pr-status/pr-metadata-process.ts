@@ -143,15 +143,19 @@ export async function runPrMetadataFileProbe<T>(
 }
 
 export function runPrMetadataGit(
-  cwd: string, args: string[], options: Parameters<typeof runGitCommand>[2], demand?: PrMetadataDemand,
+  cwd: string, args: string[], options: Parameters<typeof runGitCommand>[2],
+  demand?: PrMetadataDemand, onAdmitted?: () => void,
 ): ReturnType<typeof runGitCommand> {
-  return runPrMetadataProcess(() => runGitCommand(cwd, args, demand?.signal ? {
-    ...options,
-    beforeSpawn: () => {
-      demand.signal?.throwIfAborted();
-      options?.beforeSpawn?.();
-    },
-  } : options), demand);
+  return runPrMetadataProcess(() => {
+    onAdmitted?.();
+    return runGitCommand(cwd, args, demand?.signal ? {
+      ...options,
+      beforeSpawn: () => {
+        demand.signal?.throwIfAborted();
+        options?.beforeSpawn?.();
+      },
+    } : options);
+  }, demand);
 }
 
 /** A queued or running observation stays owned until its last reader leaves. */
