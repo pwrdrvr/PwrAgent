@@ -1,3 +1,7 @@
+import { execFileSync } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
 import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
@@ -6,7 +10,9 @@ import {
   type NavigationQueryRequest,
   type NavigationSnapshot,
   type NavigationThreadSummary,
+  type PrSummary,
 } from "@pwragent/shared/contracts/navigation";
+import type { AppServerListThreadsResponse } from "@pwragent/shared/contracts/normalized-app-server";
 import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import { type ProjectForgeAutomation } from "@pwragent/shared/project-forge-automation";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
@@ -35,7 +41,7 @@ vi.mock("../messaging/messaging-bindings-snapshot", () => ({ buildNavigationInde
 vi.mock("../federation/federation-runtime", () => ({ getDesktopFederationRuntime: () => ({
   remoteThreadSummaries: () => current.cache, health: async () => ({ instanceId: "viewer" }),
 }) }));
-import { initializeDesktopAppServerService } from "../app-server/desktop-app-server-service";
+import { initializeDesktopAppServerService, resetAppServerServiceForTests } from "../app-server/desktop-app-server-service";
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
@@ -602,4 +608,50 @@ it.each([4, 8])("persists one changed owner pin once across a full refresh with 
     const saved = await f.store.readRemoteThreadPinNavigationRows();
     expect(saved.find((row) => row.id === "remote-0")).toMatchObject({ title: "Changed owner", threadStatus: "active" });
   } finally { f.close(); }
+});
+
+
+it("gates a PR with a catalog that changes during the thread listing", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-hold-recheck-"));
+  const db = openInMemoryStateDb();
+  const entered = Promise.withResolvers<void>();
+  const listing = Promise.withResolvers<AppServerListThreadsResponse>();
+  const finish = () => listing.resolve({ backend: "all", fetchedAt: 0, threads: [] });
+  const git = (...args: string[]) => execFileSync("git", ["-C", cwd, ...args], {
+    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+  try {
+    git("init", "-b", "upper");
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "upper");
+    const head = git("rev-parse", "HEAD");
+    git("branch", "lower");
+    const catalog = path.join(cwd, ".git", "gh-stack");
+    const layer = (branch: string, number: number) => ({ branch, head, base: head, pullRequest: { number } });
+    const write = (...branches: ReturnType<typeof layer>[]) => writeFile(catalog, JSON.stringify({
+      schemaVersion: 1, repository: "github.com:fixture/stack",
+      stacks: [{ trunk: { branch: "main", head }, branches }],
+    }));
+    await write(layer("upper", 2));
+    current.store = new SqliteOverlayStore(db);
+    resetAppServerServiceForTests();
+    const service = initializeDesktopAppServerService();
+    vi.spyOn(service as unknown as { prStackDirectories: () => string[] }, "prStackDirectories").mockReturnValue([cwd]);
+    vi.spyOn(service, "listThreads").mockImplementation(async () => {
+      entered.resolve();
+      return await listing.promise;
+    });
+    const pr: PrSummary = {
+      number: 2, provider: "github.com", org: "fixture", repo: "stack", state: "passing",
+      lifecycleState: "open", url: "https://github.com/fixture/stack/pull/2", headRefName: "upper",
+    };
+    const gate = service["readPrStacks"](pr);
+    await entered.promise;
+    await write(layer("lower", 1), layer("upper", 2));
+    finish();
+    expect((await gate)[0]?.layers[1]).toMatchObject({ branch: "upper", heldBy: { branch: "lower", number: 1 } });
+  } finally {
+    finish();
+    db.close();
+    await rm(cwd, { recursive: true, force: true });
+  }
 });
