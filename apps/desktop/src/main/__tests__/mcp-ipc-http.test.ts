@@ -5,7 +5,9 @@ import type { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { execFileSync, spawnSync } from "node:child_process";
+import { ChildProcess, execFileSync, spawn, spawnSync } from "node:child_process";
+import { PassThrough } from "node:stream";
+import fc from "fast-check";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ErrorCode, ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -13,6 +15,11 @@ import { createMcpIpcHttp, createMcpIpcTransport, MCP_IPC_NO_RECONNECT, validate
 import { McpInitializationTransport } from "../mcp-connections/mcp-initialization-transport";
 import { parseMcpIpcUrl } from "@pwragent/shared/mcp-ipc-url";
 import { probeMcpConnectionUrl } from "../mcp-connections/mcp-connection-probe";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, spawn: vi.fn(actual.spawn) };
+});
 
 const { relay: executable, identity: identityExecutable } = inject("nativeHelperFixtures").mcpIpc!;
 const cleanups: (() => Promise<unknown> | void)[] = [];
@@ -299,6 +306,36 @@ describe("verified HTTP MCP over local IPC", () => {
     // Terminal lifecycle propagation must retain native verification errors
     // instead of replacing the failed initialize with generic SDK closure.
     await expect(client.connect(transport)).rejects.toThrow("MCP IPC:");
+  });
+
+  it("preserves the full relay diagnostic when stderr drains after process exit", async () => {
+    const diagnostic = "MCP IPC: fixture endpoint is unavailable";
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 0, max: diagnostic.length }), async (split) => {
+      const child = Object.assign(new ChildProcess(), {
+        stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
+      });
+      vi.spyOn(child, "kill").mockReturnValue(true);
+      const spawned = Promise.withResolvers<void>();
+      const spawnRelay = vi.mocked(spawn).mockClear().mockImplementationOnce(() => {
+        spawned.resolve();
+        return child;
+      });
+      const url = process.platform === "win32" ? "pipe:///pipe/fixture-missing#/mcp" : "unix:///tmp/fixture-missing.sock#/mcp";
+      const ipc = createMcpIpcHttp(url, { executable });
+      try {
+        const rejected = expect(ipc.fetch(ipc.url)).rejects.toThrow(diagnostic);
+        await spawned.promise;
+        child.stderr.write(diagnostic.slice(0, split));
+        child.emit("exit", 1, null);
+        child.stderr.end(`${diagnostic.slice(split)}\n`);
+        child.emit("close", 1, null);
+        await rejected;
+        expect(spawnRelay).toHaveBeenCalledOnce();
+      } finally {
+        ipc.close();
+        spawnRelay.mockReset();
+      }
+    }), { examples: [[0], [diagnostic.length]], numRuns: 20 });
   });
 
   it.skipIf(process.platform === "win32")("rejects unsafe paths, symlinks, broad permissions and regular-file squatters before HTTP", async () => {
