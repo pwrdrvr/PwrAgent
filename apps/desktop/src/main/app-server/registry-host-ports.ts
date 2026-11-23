@@ -230,6 +230,7 @@ export interface RegistryHostPorts {
     /** Base for a new worktree when `branchName` is unset. */
     worktreeBase?: WorktreeBaseSource;
     requiredWorkMode?: NavigationLaunchpadDraft["workMode"];
+    prepareNewWorktree?: (cwd: string) => Promise<void>;
     parentThreadId?: string;
     parentThreadBackend?: AppServerBackendKind;
     parentThreadInstanceId?: string;

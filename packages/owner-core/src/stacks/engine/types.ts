@@ -12,11 +12,12 @@ export interface CatalogStore {
   writeIfUnchanged(commonDir: string, next: GhStackCatalog, sha256: string): Promise<void>;
 }
 
-export type StackOperation =
+export type StackOperation = (
   | { kind: "restack"; root: string; from?: string; stopBefore?: string }
   | { kind: "adopt"; stack: GhStack; repository: string }
   | { kind: "add_branch"; root: string; branch: string }
-  | { kind: "remove"; root: string; branch: string; mode: "detach" | "forget" };
+  | { kind: "remove"; root: string; branch: string; mode: "detach" | "forget" }
+) & { conflictResolution?: { branch: string; base: string; previousTip: string } };
 
 export type RefMove = { branch: string; old: string | null; next: string | null };
 export type WorktreeFollow = { branch: string; path: string; old: string; next: string };

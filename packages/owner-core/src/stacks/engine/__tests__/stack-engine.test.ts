@@ -2,7 +2,80 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { StackEngine, type GitRunner } from "../index";
+import { StackCoordinator } from "../../stack-coordinator";
 import { commit, git, memoryStore, repository, runner, withRepo, withStack } from "./fixture.test-support";
+
+test("a routed conflict records the verified rewritten parent and replays only descendant commits", () => withRepo(async (cwd, base) => {
+  await git(cwd, "switch", "-qc", "parent");
+  const oldParent = await commit(cwd, "base.txt", "old parent\n");
+  await git(cwd, "switch", "-qc", "layer");
+  const oldLayer = await commit(cwd, "base.txt", "layer edit\n");
+  await git(cwd, "switch", "-qc", "leaf");
+  const oldLeaf = await commit(cwd, "leaf.txt", "leaf edit\n");
+  await git(cwd, "switch", "-qc", "replacement", base);
+  const rewritten = await commit(cwd, "base.txt", "rewritten parent\n");
+  await git(cwd, "update-ref", "refs/heads/parent", rewritten, oldParent);
+  const commonDir = join(cwd, ".git");
+  const store = memoryStore({ schemaVersion: 1, repository, stacks: [{
+    trunk: { branch: "main", head: base },
+    branches: [{ branch: "parent", head: oldParent, base }, { branch: "layer", head: oldLayer, base: oldParent },
+      { branch: "leaf", head: oldLeaf, base: oldLayer }],
+  }] });
+  const engine = new StackEngine(runner, store, cwd, commonDir);
+  const actor = { backend: "codex" as const, threadId: "lead" };
+  const owner = { backend: "codex" as const, threadId: "owner", title: "Layer owner", branch: "layer",
+    active: false, locked: false, remote: false };
+  let routed = 0;
+  let finishApply!: (result: { error?: unknown }) => void;
+  const applied = new Promise<{ error?: unknown }>((resolve) => { finishApply = resolve; });
+  const coordinator = new StackCoordinator({
+    newId: () => "resolved-conflict", now: () => 1, plan: (operation) => engine.plan(operation),
+    participants: async (moves) => moves.some(({ branch }) => branch === owner.branch) ? [owner] : [],
+    hold: () => () => undefined, subscribe: () => () => undefined, exclusive: (work) => work(),
+    requestWork: async (_sender, _owner, prompt) => {
+      expect(prompt).toContain(rewritten);
+      routed++;
+    },
+    apply: async (plan, id, when, hooks) => {
+      try {
+        const receipt = await engine.apply(plan, id, when, hooks);
+        finishApply({});
+        return receipt;
+      } catch (error) {
+        finishApply({ error });
+        throw error;
+      }
+    },
+    undo: () => { throw new Error("Unexpected undo"); }, receipt: () => { throw new Error("Unexpected receipt"); },
+  });
+  const operation = { kind: "restack" as const, root: "parent" };
+  const { planId } = await coordinator.plan(actor, operation);
+  coordinator.apply(actor, planId);
+  await expect.poll(() => coordinator.status(actor, planId).issue?.code).toBe("forecast_conflict");
+  await git(cwd, "update-ref", "refs/heads/parent", base, rewritten);
+  await expect(coordinator.routeConflict(actor, planId)).rejects.toMatchObject({ code: "stale_plan" });
+  expect(routed).toBe(0);
+  await git(cwd, "update-ref", "refs/heads/parent", rewritten, base);
+  await coordinator.routeConflict(actor, planId);
+  expect(routed).toBe(1);
+  await git(cwd, "switch", "-q", "layer");
+  const conflict = await runner.run(cwd, ["rebase", "--onto", rewritten, oldParent]);
+  expect(conflict.exitCode).toBe(1);
+  await writeFile(join(cwd, "base.txt"), "resolved layer edit\n");
+  await git(cwd, "add", "base.txt");
+  await git(cwd, "-c", "core.editor=true", "rebase", "--continue");
+  const resolved = await git(cwd, "rev-parse", "layer");
+  expect((await runner.run(cwd, ["merge-base", "--is-ancestor", oldParent, resolved])).exitCode).toBe(1);
+  await expect(engine.plan(operation)).rejects.toThrow("recorded base");
+  await coordinator.continue(owner, planId);
+  // Windows Git can outlast the polling budget. Wait for the real engine,
+  // then check that the coordinator publishes its terminal state.
+  expect(await applied).toEqual({});
+  await expect.poll(() => coordinator.status(actor, planId).status).toBe("done");
+  expect((await store.read(commonDir)).catalog.stacks[0]?.branches[1]).toMatchObject({ base: rewritten, head: resolved });
+  expect(await git(cwd, "merge-base", "layer", "leaf")).toBe(resolved);
+  expect(await git(cwd, "log", "--format=%s", "layer..leaf")).toBe("leaf.txt");
+}));
 
 describe("stack ref transaction", () => {
   test("EOF after prepare releases every lock without publishing any ref", () => withStack(async ({ cwd, commonDir, store, bottom, top }) => {

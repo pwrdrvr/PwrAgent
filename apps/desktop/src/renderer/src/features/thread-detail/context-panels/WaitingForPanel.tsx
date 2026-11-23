@@ -88,6 +88,7 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
   const now = props.now ?? Date.now();
   const capabilities = props.thread.federation?.capabilities ?? [];
   const peer = state.status === "ready" && state.peer;
+  const stackHeld = props.thread.stackMemberships?.some(({ health }) => health === "held");
   const [unlocking, setUnlocking] = useState(false);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const onFocusHeading = props.onFocusHeading;
@@ -173,6 +174,20 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
         {liveCount > 0 ? <span className="waiting-for-panel__count">{liveCount}</span> : null}
       </header>
       <div className="waiting-for-panel__body">
+        {stackHeld ? (
+          <div className="waiting-for-panel__hold" role="note">
+            <span className="waiting-for-panel__hold-icon" aria-hidden="true"><PauseIcon size={12} /></span>
+            <span className="waiting-for-panel__hold-text">
+              <span className="waiting-for-panel__hold-title">Held for a stack operation</span>
+              <span className="pr-watch-list__sub">Queued messages wait until the operation releases this thread.</span>
+            </span>
+            {props.onShowTab ? (
+              <button type="button" className="pr-watch-list__action" onClick={() => props.onShowTab?.("prs")}>
+                View stack
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         {notice ? (
           <div className="waiting-for-panel__hold" role="note">
             <span className="waiting-for-panel__hold-icon" aria-hidden="true">
@@ -273,7 +288,7 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
             ) : null}
           </div>
         ) : null}
-        {liveCount === 0 && !state.monitorWakesSuspended ? (
+        {liveCount === 0 && !state.monitorWakesSuspended && !stackHeld ? (
           <div className="waiting-for-panel__empty">
             <p className="waiting-for-panel__empty-title">{state.incomplete ? "Could not confirm everything this thread is waiting for." : "Nothing will wake this thread."}</p>
             <p className="pr-watch-list__sub">

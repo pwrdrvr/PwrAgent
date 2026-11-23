@@ -97,6 +97,10 @@ describe("DesktopBackendRegistry", () => {
       })).not.toThrow();
       expect(() => registry.assertProjectAcceptsThreadMessage(target)).not.toThrow();
       expect(registry.projectPausedThreadMessageRefusal({ backend: "codex", threadId: "elsewhere" })).toBeUndefined();
+      for (const signal of [undefined, new AbortController().signal]) {
+        await expect(registry.requestStackLayerWork({ backend: "codex", threadId: "orchestrator" },
+          target, "Resolve local edits", "fixture-stack", signal)).rejects.toThrow(/openclaw, where forge activity is paused/);
+      }
 
       await expect(registry.controlActiveTurn({
         ...target,
@@ -112,6 +116,25 @@ describe("DesktopBackendRegistry", () => {
       const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
       onTestFinished(() => registry.close());
       expect(registry.projectPausedThreadMessageRefusal({ backend: "codex", threadId: "parked" })).toBeUndefined();
+    });
+
+    it("withdraws only stack settlement input when its operation is cancelled", async () => {
+      const owner = { backend: "codex" as const, threadId: "layer" };
+      const actor = { backend: "codex" as const, threadId: "lead" };
+      const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [{
+        id: owner.threadId, title: "Layer", source: "codex", titleSource: "explicit", linkedDirectories: [],
+      }] }), overlayStore: createOverlayStoreMock() });
+      const release = registry.holdStackThread(owner, "fixture-hold");
+      onTestFinished(async () => { await registry.close(); release(); });
+      const unrelated = await registry.submitTurn({ ...owner, delivery: "new_turn", input: [{ type: "text", text: "Independent work" }] });
+      expect(unrelated.status).toBe("queued");
+      const abort = new AbortController();
+      const pending = registry.requestStackLayerWork(actor, owner, "Settle overlapping edits", "fixture-stack", abort.signal);
+      const observed = pending.catch((error: unknown) => error);
+      await vi.waitFor(() => expect(registry.getQueuedTurnsForThread(owner)).toHaveLength(2));
+      abort.abort(new Error("Fixture operation cancelled"));
+      expect(await observed).toMatchObject({ message: "Fixture operation cancelled" });
+      expect(registry.getQueuedTurnsForThread(owner).map(({ queueEntryId }) => queueEntryId)).toEqual([unrelated.entry.id]);
     });
 
     it("holds a wake-up without blocking the operator, lists it, and sends it on request", async () => {

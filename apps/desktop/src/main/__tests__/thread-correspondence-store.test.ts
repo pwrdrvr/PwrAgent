@@ -7,7 +7,7 @@ import type {
   AppServerThreadReplay,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import { parseThreadCorrespondenceMessage } from "@pwragent/shared/contracts/thread-system-messages";
-import { ThreadCorrespondenceStore, type CorrespondenceRecord } from "../app-server/thread-correspondence-store";
+import { stackFileReadsFromItem, ThreadCorrespondenceStore, type CorrespondenceRecord } from "../app-server/thread-correspondence-store";
 import { extractThreadReplayFromReadResult } from "../codex-app-server/desktop-client";
 
 const emptyReplay: AppServerThreadReplay = {
@@ -30,6 +30,62 @@ function record(): CorrespondenceRecord {
 }
 
 describe("PwrAgent correspondence persistence", () => {
+  it("records successful provider-reported file reads and ignores searches and failed reads", () => {
+    const item = { type: "commandExecution", commandActions: [
+      { type: "read", path: "src/example.ts" }, { type: "search", path: "src" },
+    ] };
+    expect(stackFileReadsFromItem({ ...item, exitCode: 0 })).toEqual(["src/example.ts"]);
+    expect(stackFileReadsFromItem({ ...item, exitCode: 1 })).toEqual([]);
+    expect(stackFileReadsFromItem({ toolName: "read_file", arguments: { file_path: "README.md" } })).toEqual(["README.md"]);
+    expect(stackFileReadsFromItem({ toolName: "write_file", data: { path: "README.md" } })).toEqual([]);
+  });
+  it("replays file-read provenance and deduplicates stack notices across a restart", () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "pwragent-stack-notice-"));
+    onTestFinished(() => rmSync(directory, { recursive: true, force: true }));
+    const message = record();
+    const store = new ThreadCorrespondenceStore(directory);
+    store.rememberStackReads(message.source, ["old.ts", "old.ts"]);
+    store.flushStackReads(message.source);
+    const reopened = new ThreadCorrespondenceStore(directory);
+    expect(reopened.readStackPaths(message.source)).toEqual(["old.ts"]);
+    const notice: CorrespondenceRecord = { ...message, id: "stack:op:layer", input: [], state: "started", stackNotice: {
+      opId: "op", kind: "restack", branch: "layer", stack: "stack", by: { threadId: "lead", actor: "agent" },
+      from: "old", to: "new", changedFiles: ["old.ts"], staleReads: ["old.ts"], undo: "refs/pwragent/undo/op",
+    } };
+    expect(reopened.record(notice)).toBe(true);
+    reopened.rememberStackReads(message.source, ["new.ts"]);
+    reopened.flushStackReads(message.source);
+    const names = readdirSync(directory);
+    expect(names.filter((name) => name.endsWith(".stack-reads.json"))).toHaveLength(1);
+    for (const name of names.filter((name) => name.endsWith(".jsonl"))) {
+      const entries = readFileSync(path.join(directory, name), "utf8").trim().split("\n");
+      expect(entries.every((entry) => ["message", "status"].includes(JSON.parse(entry).type))).toBe(true);
+    }
+    const final = new ThreadCorrespondenceStore(directory);
+    expect(final.record(notice)).toBe(false);
+    expect(final.readStackPaths(message.source)).toEqual(["new.ts"]);
+    expect(final.pendingStackNotices(message.source)).toEqual([
+      { id: notice.id, text: expect.stringContaining('Reread "old.ts"') },
+    ]);
+  });
+  it("replays a completion after the terminal turn as a standalone system item", () => {
+    const turn = { id: "closed", startedAt: 10, completedAt: 30 };
+    const entry: AppServerThreadMessageEntry = { type: "message", id: "response", role: "assistant", text: "Done", turn };
+    const replay = { ...emptyReplay, messages: [entry], entries: [entry],
+      pagination: { supportsPagination: true, hasPreviousPage: false } };
+    for (const backend of ["codex", "claude", "acp:grok"] as const) {
+      const source = { backend, threadId: "fixture" };
+      const store = new ThreadCorrespondenceStore();
+      store.record({ ...record(), id: "stack:op:", source, destination: source, createdAt: 50,
+        input: [], state: "started", stackNotice: { opId: "op", kind: "add_branch", branch: "", stack: "",
+          by: { threadId: source.threadId, actor: "agent" }, from: null, to: null, changedFiles: [],
+          undo: "refs/pwragent/undo/op", completion: {} } });
+      const merged = store.appendToReplay(source, replay);
+      expect(merged.entries.map(({ id }) => id)).toEqual(["response", "stack:op:"]);
+      expect(merged.entries[1]?.turn).toBeUndefined();
+      expect(store.appendToReplay(source, replay, undefined, [], { before: "older" })).toEqual(replay);
+    }
+  });
   it("bounds legacy receipts on older pages without pricing for newer turns", () => {
     const store = new ThreadCorrespondenceStore();
     const message = record();

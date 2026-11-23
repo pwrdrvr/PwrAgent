@@ -36,7 +36,7 @@ export function readNavigationDirectoryScope(value: unknown): readonly string[] 
 const ROW_CHANGE_METHODS = new Set([
   "navigation/invalidated", "federation/eventStream/changed",
   "thread/started", "thread/archived", "thread/deleted", "thread/unarchived", "thread/status/changed",
-  "navigation/thread/seen", "thread/name/updated", "thread/rewound",
+  "navigation/thread/seen", "thread/name/updated", "thread/rewound", "thread/stackHold/updated",
   "thread/pullRequests/updated", "pullRequest/status/updated", "thread/reactions/updated", "thread/lock/updated",
   "thread/checkoutHibernation/updated",
   "thread/pin/added", "thread/pin/removed", "thread/pin/reordered",

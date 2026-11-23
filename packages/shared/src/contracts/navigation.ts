@@ -3689,6 +3689,8 @@ export type ThreadWorktreeRegistration = {
 };
 
 export type ThreadOverlayState = {
+  /** Clone-qualified stack roots for which this thread is the lead. */
+  stackLead?: string[];
   codexSkillProfile?: CodexThreadSkillProfile;
   /** Absent follows the profile default. */
   monitorJobSuggestionsEnabled?: boolean;

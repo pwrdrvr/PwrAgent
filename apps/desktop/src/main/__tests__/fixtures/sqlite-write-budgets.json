@@ -1,6 +1,10 @@
 {
   "telegram-connection-removal": {"commits": 2, "note": "Delete the named encrypted credential and release its ID reservation.", "observedWalBytes": 16480, "rowsChanged": 2, "statements": 2},
   "telegram-connection-migration-staging": {"commits": 4, "note": "Reserve two connection IDs and stage both encrypted credentials before config publication.", "observedWalBytes": 32960, "rowsChanged": 4, "statements": 4},
+  "stack-lead-root-migration": {"commits": 1, "note": "A surviving stack keeps its lead in one SQLite commit. At 30 removals/day and 12,360 WAL bytes each, about 0.37 MB/day.", "observedWalBytes": 12360, "rowsChanged": 2, "statements": 2},
+  "stack-owner-metadata-replay": {"commits": 0, "note": "Restart replay of a lead transfer and an unread notice makes no additional commits.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "stack-notice-unread": {"commits": 1, "note": "One commit moves the watermark for a previously read thread. Already unread threads need no write.", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "stack-lead-transfer": {"commits": 1, "note": "A stack lead transfer edits both owner overlays in one commit.", "observedWalBytes": 12360, "rowsChanged": 2, "statements": 2},
   "pr-review-stack-stale-offer-unavailable": {"commits": 1, "note": "One commit withdraws an old-head offer during a failed verification. At 100 withdrawals/day and ~12 KB WAL each, ~1.2 MB/day.", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
   "pr-review-stack-uncovered-offer": {"commits": 1, "note": "One newly eligible child writes one offer commit on a recheck. At 100 offers/day and ~29 KB WAL each, ~2.9 MB/day.", "observedWalBytes": 28872, "rowsChanged": 1, "statements": 1},
   "pr-review-stack-uncovered-still-blocked": {"commits": 0, "note": "An unchanged child recheck while its unpolled lower remains open writes nothing.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},

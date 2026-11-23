@@ -286,7 +286,7 @@ async function createNamedStashIfDirty(
  * captures tracked files and staging. Its optional third parent holds the
  * untracked files. Neither operation cleans the source or updates refs/stash. */
 async function snapshotWorktreeEdits(
-  context: HandoffContext,
+  context: Pick<HandoffContext, "headSha" | "sourcePath" | "worktrees">,
   message: string,
   gitEnv: NodeJS.ProcessEnv | undefined,
 ): Promise<ThreadWorkspaceHandoffStashSummary> {
@@ -347,6 +347,23 @@ async function applyWorktreeEdits(
   if (!stash?.ref) return stash;
   await runGit(target, ["stash", "apply", "--index", stash.ref], gitEnv);
   return { ...stash, path: target, applied: true };
+}
+
+/** Capture a copy of staged, unstaged and untracked edits without modifying
+ * the source checkout, its index, refs/stash or ignored files. */
+export async function captureStackLayerEdits(sourcePath: string, expectedHead: string, worktrees: WorktreeInfo[]) {
+  const head = trim((await runGit(sourcePath, ["rev-parse", "--verify", "HEAD"])).stdout);
+  if (head !== expectedHead) throw new Error("To carry edits, the source worktree must be at the new layer's parent tip.");
+  if (!await getDirtyStatus(sourcePath)) return undefined;
+  return await snapshotWorktreeEdits({ sourcePath, headSha: head, worktrees }, "PwrAgent stack layer carry", undefined);
+}
+
+export async function applyStackLayerEdits(
+  target: string, stash: ThreadWorkspaceHandoffStashSummary, expectedHead: string,
+): Promise<void> {
+  const head = trim((await runGit(target, ["rev-parse", "--verify", "HEAD"])).stdout);
+  if (head !== expectedHead || await getDirtyStatus(target)) throw new Error("The new layer worktree changed before local edits could be carried.");
+  await applyWorktreeEdits(target, stash, undefined);
 }
 
 async function getDirtyStatus(

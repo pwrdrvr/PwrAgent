@@ -358,7 +358,8 @@ async function projectNavigationStacks(
     prs: attachments[index]?.length ? await registry.canonicalizeNavigationPullRequests(attachments[index]!, demand) : [],
   })));
   signal.throwIfAborted();
-  const { stacks } = await stackReader.read(rows, []);
+  const { stacks } = await stackReader.read(rows, [], undefined,
+    (row) => registry.stackThreadHeld?.({ backend: row.source, threadId: row.id }) ?? false);
   signal.throwIfAborted();
   return projectBoundNavigationStacks(threads, stacks);
 }

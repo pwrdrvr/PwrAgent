@@ -448,6 +448,7 @@ export class ForgeToolBridge {
     const identity = await this.resolveForgeAgentIdentity(context);
     const resolution = resolveForgeAgentToolAccess(this.resolveForgeToolPolicy(), group, repository, identity);
     const access = resolution.level;
+    const stackInterrupt = operation === "manage_stack_operation" && args.action === "interrupt";
     const rule = resolution.source === "project_rule" ? resolution.rule : undefined;
     // What the agent reads names the repository; what the operator reads
     // names the project, as the sidebar and Settings do.
@@ -463,7 +464,7 @@ export class ForgeToolBridge {
       this.assertForgeToolAllowed(group, operation);
       throw new ForgeReadError("tools_disabled", `${FORGE_AGENT_TOOL_GROUP_LABELS[group]} is Off in Settings → Git → Agent forge tools, so ${operation} is unavailable.`);
     }
-    if (access === "allow") {
+    if (access === "allow" && !stackInterrupt) {
       if (!rule) return {};
       const description = forgeAgentToolRuleDescription(rule, wording);
       backendRegistryLog.info("running forge write allowed by a project rule", {
@@ -503,13 +504,14 @@ export class ForgeToolBridge {
         requestId,
         serverName: forge,
         mode: "form",
-        message: forgeToolApprovalMessage(operation, args, repository?.provider ?? "github", mergeQueue),
+        message: stackInterrupt ? "Interrupt the running layer turns waiting on this stack operation?"
+          : forgeToolApprovalMessage(operation, args, repository?.provider ?? "github", mergeQueue),
         requestedSchema: { type: "object", properties: {} },
         _meta: meta,
       },
     };
     const automation = this.host().findHeadlessAutomationTurnForRequest(context.backend, notification);
-    if (access === "auto" && await this.forgeAutoRunsWithoutApproval(group, context, automation)) {
+    if (!stackInterrupt && access === "auto" && await this.forgeAutoRunsWithoutApproval(group, context, automation)) {
       signal.throwIfAborted();
       backendRegistryLog.info("running Auto forge write without an approval card", {
         backend: context.backend,
@@ -549,7 +551,7 @@ export class ForgeToolBridge {
     // "Always allow" choices for this card. Only offered options can be
     // chosen, and only for this request.
     const ruleRepository = repository ? normalizeForgeRuleRepository(repository) : undefined;
-    const rememberOptions = ruleRepository
+    const rememberOptions = ruleRepository && !stackInterrupt
       ? buildForgeApprovalRememberOptions({
         group,
         repository: ruleRepository,
