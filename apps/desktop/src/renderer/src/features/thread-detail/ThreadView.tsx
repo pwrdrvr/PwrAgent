@@ -3552,6 +3552,7 @@ export function ThreadView(props: ThreadViewProps) {
           >
             <TranscriptList
               entries={visibleTranscriptEntries}
+              prContextThread={selectedThread}
               rewind={
                 rewindableMessageIds && threadRewindSupport
                   ? {

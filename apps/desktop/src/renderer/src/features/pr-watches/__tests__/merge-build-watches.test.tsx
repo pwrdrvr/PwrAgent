@@ -9,6 +9,8 @@ import type {
 } from "@pwragent/shared/contracts/thread-dependencies";
 import { THREAD_DEPENDENCY_MERGE_BUILD_WAITING_REASON } from "@pwragent/shared/contracts/thread-dependencies";
 import { PrStatusCard } from "../../pr-status/PrStatusCard";
+import { PullRequestLinkChip } from "../../pr-status/PullRequestLinkChip";
+import { TranscriptPrContextProvider } from "../../pr-status/transcript-pr-context";
 import {
   summarizeThreadDependencies,
   ThreadDependencyIndicatorsContext,
@@ -76,9 +78,56 @@ describe("merge build watch rows", () => {
     expect(mergeBuildWaitForPr([wait({}, { prUrl: undefined })], pr({ url: "https://github.com/example/widgets/pull/7" }))).toBeUndefined();
     expect(mergeBuildWaitForPr([wait({ status: "delivered" })], pr())).toBeUndefined();
   });
+
+  it("matches the same PR through authored links to files and discussions", () => {
+    const watch = wait();
+    expect(mergeBuildWaitForPr([watch], pr({ url: `${PR_URL}/files` }))).toBe(watch);
+    fc.assert(fc.property(
+      fc.constantFrom("/files", "#discussion_r123", "?tab=checks"),
+      fc.constantFrom(7, 41, 42),
+      (suffix, number) => {
+        const authored = pr({ number, url: `https://github.com/EXAMPLE/widgets/pull/${number}${suffix}` });
+        expect(mergeBuildWaitForPr([watch], authored)).toBe(number === 41 ? watch : undefined);
+      },
+    ));
+  });
 });
 
 describe("merge build watches on PR chips", () => {
+  it.each([
+    ["a fresh check", wait({}, { mergeBuild: build({ checks: {
+      total: 6, passed: 5, failed: 0, cancelled: 0, running: 1, queued: 0, skipped: 0,
+    } }) }), "5 passed, 1 running"],
+    ["ready", wait({ status: "ready" }), "Waking the thread"],
+    ["dispatching", wait({ status: "dispatching" }), "Waking the thread"],
+    ["cancelled", wait({ status: "cancelled" }), undefined],
+  ] as const)(
+    "updates an open transcript card after %s",
+    (_change, next, expected) => {
+      const indicators: ThreadPrWatchIndicatorsValue = { byThreadKey: new Map(), stop: vi.fn() };
+      const scene = (waits: ThreadDependency[]) => (
+        <ThreadDependencyIndicatorsContext.Provider value={{ byThreadKey: summarizeThreadDependencies(waits) }}>
+          <ThreadPrWatchIndicatorsContext.Provider value={indicators}>
+            <TranscriptPrContextProvider thread={thread}>
+              <PullRequestLinkChip pr={merged} />
+            </TranscriptPrContextProvider>
+          </ThreadPrWatchIndicatorsContext.Provider>
+        </ThreadDependencyIndicatorsContext.Provider>
+      );
+      const view = render(scene([wait()]));
+      fireEvent.focus(screen.getByRole("button"));
+      const card = screen.getByRole("tooltip");
+      expect(card).toHaveTextContent("4 passed, 2 running");
+      view.rerender(scene([next]));
+      expect(screen.getByRole("tooltip")).toBe(card);
+      if (expected === undefined) {
+        expect(card).not.toHaveTextContent("Merge build");
+      } else {
+        expect(card).toHaveTextContent(expected);
+      }
+    },
+  );
+
   it("keeps one chip watch per unchanged thread entry and wait, so memoized chips bail out", () => {
     fc.assert(fc.property(fc.boolean(), fc.integer({ min: 0, max: 3 }), (open, running) => {
       const waits = [wait({}, { mergeBuild: build({ checks: { total: 6, passed: 6 - running, failed: 0, cancelled: 0, running, queued: 0, skipped: 0 } }) })];

@@ -7,8 +7,8 @@ import { resolveLifecycleState } from "./pr-chip-state";
  * counts appear, and Compact and Minimal density hide that chip.
  */
 export type PrBranchDrift = {
-  /** The PR whose card shows the counts. */
-  url: string;
+  /** Canonical PR identity, including when a transcript links to a subpage. */
+  prKey: string;
   baseBranch: string;
   /** Commits on the base after the merge base. */
   behind?: number;
