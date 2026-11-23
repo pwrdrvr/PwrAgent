@@ -85,7 +85,7 @@ function fixture(
     notifyBindingChanged: () => { trace.push("binding-changed"); },
     flagDeliveryCheck: async () => {},
   });
-  return { owner, options, trace, now };
+  return { owner, options, trace, now, advanceTime: (ms: number) => { time += ms; } };
 }
 
 const telegramBinding: MessagingBindingRecord = {
@@ -99,6 +99,7 @@ function telegramFixture(api: Partial<TelegramBotApi>) {
     api: api as TelegramBotApi,
     config: { channel: "telegram", botToken: "12345:fixture-token", authorizedActorIds: [] },
     now: f.now,
+    waitForReplyDelay: async (ms) => { f.advanceTime(ms); },
     pollOnStart: false,
   });
   return { ...f, adapter };
@@ -149,7 +150,7 @@ it("does not replay a Telegram timeout or a multipart reply with a delivered chu
     const sent = { chat: { id: -100777, type: "supergroup" as const }, message_id: 123 };
     const sendMessage = vi.fn<TelegramBotApi["sendMessage"]>();
     if (partial) sendMessage.mockResolvedValueOnce(sent);
-    sendMessage.mockRejectedValueOnce(partial
+    sendMessage.mockRejectedValue(partial
       ? Object.assign(new Error("Too Many Requests"), { error_code: 429, parameters: { retry_after: 11 } })
       : new Error("socket timeout"));
     const f = telegramFixture({ sendMessage });
@@ -158,7 +159,12 @@ it("does not replay a Telegram timeout or a multipart reply with a delivered chu
       parts: [{ type: "text", text: partial ? "x".repeat(5_000) : "Fixture reply" }],
     };
     await expect(f.owner.deliver(reply, telegramBinding)).resolves.toMatchObject({ outcome: "failed" });
-    expect(sendMessage).toHaveBeenCalledTimes(partial ? 2 : 1);
+    expect(sendMessage).toHaveBeenCalledTimes(partial ? 3 : 1);
+    if (partial) {
+      const [accepted, rejected, retry] = sendMessage.mock.calls.map(([request]) => request.text);
+      expect(rejected).not.toBe(accepted);
+      expect(retry).toBe(rejected);
+    }
     expect(f.trace).not.toContain("wait");
   }));
 });

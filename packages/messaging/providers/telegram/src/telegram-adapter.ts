@@ -2884,7 +2884,6 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     if (retryAfterMs === undefined) {
       return undefined;
     }
-    this.blockStreamRateLimitTarget(target, retryAfterMs);
     const info: MessagingRateLimitInfo = {
       scope: this.rateLimitScopeForTarget(target),
       retryAfterMs,
