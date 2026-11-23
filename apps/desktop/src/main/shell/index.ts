@@ -111,6 +111,7 @@ import {
   disposeMessagingStatusIpcHandlers,
   registerMessagingStatusIpcHandlers,
 } from "./ipc/messaging-status";
+import { disposeAppUpdateNoticeIpcHandlers, registerAppUpdateNoticeIpcHandlers } from "./ipc/app-update-notices";
 import { registerMessagingRbacIpcHandlers } from "./ipc/messaging-rbac";
 import {
   disposeMcpConnectionIpcHandlers,
@@ -488,6 +489,7 @@ function disposeMainProcessResourcesSync(options?: {
   disposeAppMetadataIpcHandlers();
   disposeClipboardIpcHandlers();
   disposeAppUpdateIpcHandlers();
+  disposeAppUpdateNoticeIpcHandlers();
   disposeComposerDraftIpcHandlers();
   disposeDiagnosticsIpcHandlers();
   disposeRendererErrorIpcHandlers();
@@ -1430,6 +1432,7 @@ export function bootstrapApp(): void {
       requestQuit: async (performQuit, beforeQuit) =>
         await requestQuit({ performQuit, beforeQuit, source: "update-install" }),
     });
+    registerAppUpdateNoticeIpcHandlers();
     registerComposerDraftIpcHandlers();
     registerDiagnosticsIpcHandlers();
     registerFederationIpcHandlers();

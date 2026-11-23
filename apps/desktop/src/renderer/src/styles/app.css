@@ -16531,6 +16531,37 @@ button.stack-position-chip:hover {
   width: auto;
 }
 
+.settings-update-notices {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: -3px;
+  padding: 3px;
+  border: 0;
+}
+
+.settings-update-notices__row {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.settings-update-notices__text {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+  .settings-field:has(> .settings-field__control > .settings-update-notices) {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+}
+
 .settings-update-channel {
   display: flex;
   flex-direction: column;

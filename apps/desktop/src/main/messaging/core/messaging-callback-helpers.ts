@@ -188,6 +188,7 @@ export type PendingNewThreadPromptWindow = {
 export type PendingNewThreadPromptBundle = {
   events: MessagingTurnInputEvent[];
   session: MessagingBrowseSessionRecord;
+  confirmationExpiresAt?: number;
 };
 
 export function readCommandAction(event: MessagingInboundCallbackEvent): string | undefined {

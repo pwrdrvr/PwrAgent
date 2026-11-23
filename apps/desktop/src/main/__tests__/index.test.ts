@@ -405,6 +405,7 @@ vi.mock("../shell/quit-manager", () => ({
     isQuitAllowed: isQuitAllowedMock,
   },
   requestQuit: requestQuitMock,
+  getCurrentQuitBlockers: () => ({ count: 0 }),
 }));
 
 vi.mock("../shell/ipc/app-server", () => ({
@@ -507,6 +508,12 @@ vi.mock("../shell/auto-updater", () => ({
   registerAppUpdateIpcHandlers: registerAppUpdateIpcHandlersMock,
   disposeAppUpdateIpcHandlers: disposeAppUpdateIpcHandlersMock,
   initAutoUpdater: initAutoUpdaterMock,
+  subscribeAppUpdateNotices: () => () => {},
+  readMessagingInstallTarget: () => undefined,
+}));
+vi.mock("../shell/ipc/app-update-notices", () => ({
+  registerAppUpdateNoticeIpcHandlers: vi.fn(),
+  disposeAppUpdateNoticeIpcHandlers: vi.fn(),
 }));
 
 const isUpdateInstallInProgressMock = vi.fn(() => false);
@@ -643,6 +650,7 @@ vi.mock("../messaging/messaging-runtime", () => { const mocked = {
     requestBindingRevokeAllForThread: requestBindingRevokeAllForThreadMock,
     onPlatformStatus: vi.fn(() => () => {}),
     getPlatformStatuses: vi.fn(() => []),
+    setAppUpdateControls: vi.fn(),
   })),
   disposeDesktopMessagingRuntime: disposeDesktopMessagingRuntimeMock,
 }; return { ...mocked, initializeDesktopMessagingRuntime: mocked.getDesktopMessagingRuntime }; });
@@ -682,7 +690,7 @@ vi.mock("../runtime-federation-lease", () => { const mocked = {
 vi.mock("../state/app-state", () => ({
   initializeAppState: initializeAppStateMock,
   hadExistingAppStateDatabase: vi.fn(() => true),
-  getAppStateDb: vi.fn(() => ({ raw: {} })),
+  getAppStateDb: vi.fn(() => ({ raw: { prepare: () => ({ all: () => [] }) }, getMeta: () => undefined })),
   disposeAppState: disposeAppStateMock,
   stopProfileRuntimeHeartbeatRefresh: stopProfileRuntimeHeartbeatRefreshMock,
   isAppStateInitialized: isAppStateInitializedMock,

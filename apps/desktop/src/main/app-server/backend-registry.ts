@@ -26,6 +26,7 @@ import type { RegistryDependencies } from "./backend-registry-construction";
 import { assertOutpostCodexProvider, assertOwnerCodexModelSelection, assertOwnerExecutionPolicy, ownerSandboxForMode, type OwnerExecutionRequest } from "../owner-runtime-policy";
 import { countAgentTools, filterAdvertisedAgentTools, isAgentToolCallAllowed } from "../headless/outpost-agent-tools";
 import { isAgentToolAdvertisedLocally, localAgentToolAllowlist, localAgentToolRefusal, localMemberRole } from "../member-containment";
+import { beginUpdateBlockingWork, holdUpdateBlockingWork } from "../app-update-admission";
 import { buildPwrAgentMessagingPdfToolRouter } from "../agent-tools/pwragent-messaging-agent-tools";
 import { requestShowThread, ownerNotifications as getDesktopNotificationService, getOwnerHostServices } from "../owner-host";
 import { ThreadCreationLifecycle, type PreparedThreadCreation, type ThreadCreationPreparation } from "@pwragent/owner-core/thread-creation-lifecycle";
@@ -8306,29 +8307,34 @@ export class DesktopBackendRegistry {
     descriptor: PendingThreadStartDescriptor | undefined,
     run: (pending?: PendingThreadStartReporter) => Promise<T>,
   ): Promise<T> {
-    if (!descriptor) return await run();
-    // A start this owner refuses outright draws no row.
-    this.assertThreadOwnership();
-    this.assertNotBootstrap("startThread");
-    const cwd = source.cwd?.trim();
-    const checkoutKey = descriptor.directoryKey ?? (cwd ? `directory:${cwd}` : undefined);
-    let directoryKey: string | undefined;
-    if (process.platform === "win32" && checkoutKey?.startsWith("directory:")) {
-      try {
-        directoryKey = await resolvePendingWindowsDirectoryKey(
-          checkoutKey, this.navigationDirectoriesByKey, this.overlayStore.readProjectCheckoutGroups?.(),
-        );
-      } catch (error) {
-        backendRegistryLog.warn("pending thread directory lookup failed", { startId: descriptor.startId, error: String(error) });
-      }
-    }
-    const pending = this.beginPendingThreadStart(source, directoryKey ? { ...descriptor, directoryKey } : descriptor);
+    const endUpdateBlockingWork = beginUpdateBlockingWork();
     try {
-      await pending.report("starting");
-      return await run(pending);
+      if (!descriptor) return await run();
+      // A start this owner refuses outright draws no row.
+      this.assertThreadOwnership();
+      this.assertNotBootstrap("startThread");
+      const cwd = source.cwd?.trim();
+      const checkoutKey = descriptor.directoryKey ?? (cwd ? `directory:${cwd}` : undefined);
+      let directoryKey: string | undefined;
+      if (process.platform === "win32" && checkoutKey?.startsWith("directory:")) {
+        try {
+          directoryKey = await resolvePendingWindowsDirectoryKey(
+            checkoutKey, this.navigationDirectoriesByKey, this.overlayStore.readProjectCheckoutGroups?.(),
+          );
+        } catch (error) {
+          backendRegistryLog.warn("pending thread directory lookup failed", { startId: descriptor.startId, error: String(error) });
+        }
+      }
+      const pending = this.beginPendingThreadStart(source, directoryKey ? { ...descriptor, directoryKey } : descriptor);
+      try {
+        await pending.report("starting");
+        return await run(pending);
+      } finally {
+        // Last, after any workspace rollback.
+        await pending.report("ended");
+      }
     } finally {
-      // Last, after any workspace rollback.
-      await pending.report("ended");
+      endUpdateBlockingWork();
     }
   }
 
@@ -9905,6 +9911,27 @@ export class DesktopBackendRegistry {
     return this.listQuietRestartTargets();
   }
 
+  holdAdmissionForIdleUpdate(): (() => void) | undefined {
+    if (this.hasDispatchBlockingIdleUpdate()) return undefined;
+    const release = holdUpdateBlockingWork();
+    if (!release) return undefined;
+    try {
+      this.beginQuietRestart();
+    } catch (error) {
+      release();
+      this.cancelQuietRestart();
+      throw error;
+    }
+    return () => {
+      release();
+      this.cancelQuietRestart();
+    };
+  }
+
+  hasDispatchBlockingIdleUpdate(): boolean {
+    return this.isRestartGateClosed() || this.threadTurnQueue.hasDispatchInProgress();
+  }
+
   /** Restore admission, and recover checkpointed work if preparation had already quieted it. */
   cancelQuietRestart(resumeCheckpoint = false): void {
     if (resumeCheckpoint) {
@@ -11268,13 +11295,18 @@ export class DesktopBackendRegistry {
     agentMessages?: ThreadTurnQueueEntry["agentMessages"];
     invalidIdRecoveryAttempted?: boolean;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
-    assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
-    await this.assertThreadCodexInferenceAvailable(params);
-    if (params.id && scheduledActionIdFromTurnQueueEntry(params.id)
-      && this.durableRestartContinuations.has(params.id)) {
-      await this.assertThreadNotLocked(params.backend, params.threadId);
+    const endUpdateBlockingWork = beginUpdateBlockingWork();
+    try {
+      assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
+      await this.assertThreadCodexInferenceAvailable(params);
+      if (params.id && scheduledActionIdFromTurnQueueEntry(params.id)
+        && this.durableRestartContinuations.has(params.id)) {
+        await this.assertThreadNotLocked(params.backend, params.threadId);
+      }
+      return await listingDiagnostics.trace("workflow", { query: "submit-acceptance" }, () => this.prepareAndStartTurn(params));
+    } finally {
+      endUpdateBlockingWork();
     }
-    return await listingDiagnostics.trace("workflow", { query: "submit-acceptance" }, () => this.prepareAndStartTurn(params));
   }
 
   private async prepareAndStartTurn(params: Parameters<DesktopBackendRegistry["startTurnNow"]>[0]): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {

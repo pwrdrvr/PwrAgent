@@ -161,6 +161,15 @@ name; a custom role needs explicit grants. The local provider transport supplies
 thread/turn identity. Discovery and execution re-resolve the persisted Agent
 designation and retained actor, including after response acknowledgement.
 
+An app update card requires the same two permissions. It resolves the actor
+from the provider callback, so neither tap starts an Agent turn. The owner
+checks the current provider account, conversation membership, local binding,
+and opt-in on every tap and again before installation. The confirmation
+belongs to the actor who opened it. An authorized actor in another conversation
+showing the same pending update can cancel the wait. The native installer runs
+once the owner is idle, including the initiating Agent's queue. Open terminals
+also block a chat-requested restart.
+
 `get_messaging_working_updates_default` and
 `set_messaging_working_updates_default` use the current messaging request on
 the owner serving the profile. An explicitly granted actor can use an active

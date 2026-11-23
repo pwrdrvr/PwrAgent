@@ -156,6 +156,12 @@ long-lived sqlite records:
   `intent.audit?.bindingId ?? intent.bindingId`; a single intent/action may be
   delivered to multiple bindings with the same platform handle.
 
+- A confirmation may explicitly set `callbackAudience: "conversation"`.
+  Slack and Telegram resolve these handles after provider actor admission and
+  the usual expiry and exact-conversation checks. The workflow separately
+  authorizes the clicking account before it changes anything. All other
+  callback handles remain scoped to their recorded actor IDs.
+
 ## Rendering Policy
 
 Adapters own platform limits and degradation:

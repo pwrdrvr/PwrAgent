@@ -1,4 +1,5 @@
 import type { MessagingActivityStorage } from "@pwragent/owner-core/messaging-activity-storage";
+import { AppUpdateNoticeStore } from "@pwragent/sqlite-storage/app-update-notice-store";
 import type { MessagingPairingStorage } from "@pwragent/owner-core/messaging-pairing-storage";
 import type { DesktopMessagingStorage, MessagingRequestStore } from "../messaging/core/messaging-storage";
 import { getAppMessagingStore, getAppStateDb } from "../state/app-state";
@@ -9,6 +10,10 @@ import { MessagingPairingStore } from "./messaging-pairing-store";
 // Accessors bind at the caller's existing lifecycle boundary, with no cached database handle.
 export function getMessagingStorage(): DesktopMessagingStorage {
   return getAppMessagingStore();
+}
+
+export function createAppUpdateNoticeStore(): AppUpdateNoticeStore {
+  return new AppUpdateNoticeStore(getAppStateDb());
 }
 
 export function createMessagingActivityStorage(): MessagingActivityStorage {

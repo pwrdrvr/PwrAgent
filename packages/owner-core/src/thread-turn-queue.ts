@@ -964,6 +964,10 @@ export class ThreadTurnQueue {
     return [...this.queuedEntries.values()].flatMap((queue) => [...queue]);
   }
 
+  hasDispatchInProgress(): boolean {
+    return this.admissions.size > 0 || this.steerPreflights.size > 0 || this.runningEntries.size > 0;
+  }
+
   cancelEntry(entryId: string, reason?: string, options?: { retainQueueHold?: boolean }): ThreadTurnQueueEntry | undefined {
     for (const [key, queue] of this.queuedEntries.entries()) {
       const index = queue.findIndex((entry) => entry.id === entryId);

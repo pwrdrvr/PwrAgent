@@ -1394,6 +1394,11 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     return chatAllowed || tenantAllowed;
   }
 
+  isAuthorizedNoticeDestination(channel: MessagingChannelRef): boolean {
+    return channel.channel === this.channel && (channel.conversation.kind === "dm"
+      || channel.conversation.isDirectMessage === true || this.isAuthorizedGroupConversation(channel));
+  }
+
   private async emitInboundRejected(event: MessagingRejectedInboundEvent): Promise<void> {
     // Log only the event kind and reason, never the actor or conversation ids.
     await notifyEachListenerAsync(this.inboundRejectedListeners, event, (error) => {
