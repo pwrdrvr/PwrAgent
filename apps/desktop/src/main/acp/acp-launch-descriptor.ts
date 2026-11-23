@@ -10,6 +10,8 @@ export type AcpLaunchDescriptor = {
   env: Record<string, string>;
   cwd?: string;
   installPath?: string;
+  /** Automatic managed selection may use the active release if this path was pruned. */
+  managedAntigravityFallback?: true;
 };
 
 export function acpAgentLaunchIdentity(agent: {
@@ -29,6 +31,7 @@ export function acpAgentLaunchIdentity(agent: {
           env: Object.fromEntries(Object.entries(descriptor.env).sort()),
           cwd: descriptor.cwd,
           installPath: descriptor.installPath,
+          managedAntigravityFallback: descriptor.managedAntigravityFallback,
         }
       : undefined,
   });

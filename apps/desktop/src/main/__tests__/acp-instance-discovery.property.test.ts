@@ -69,6 +69,24 @@ it("uses a working PATH candidate after rejecting the exact managed path", async
   });
 });
 
+it("allows fallback after pruning only for an automatically selected managed executable", async () => {
+  await withManagedBinary(async (_root, command) => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("automatic", "override", "selected"), async (selection) => {
+      const [record] = await discoverLocalAcpAgentRecords({
+        ...discovery(command, []),
+        preferences: {
+          antigravity: {
+            ...(selection === "override" ? { overridePath: command } : {}),
+            ...(selection === "selected" ? { selectedPath: command } : {}),
+          },
+        },
+      });
+      expect(record?.launchDescriptor?.command).toBe(command);
+      expect(record?.launchDescriptor?.managedAntigravityFallback).toBe(selection === "automatic" ? true : undefined);
+    }), { numRuns: 15 });
+  });
+});
+
 describe.skipIf(process.platform === "win32")("managed Antigravity symlinks", () => {
   it("keeps a rejected relative PATH alias out of the active selection", async () => {
     await withManagedBinary(async (root, command) => {

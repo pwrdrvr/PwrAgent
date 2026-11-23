@@ -249,6 +249,13 @@ export async function discoverLocalAcpAgentRecords(
       registryId: group.strategyId,
       distributionKind: "local",
       command: active.command,
+      ...(group.strategyId === "antigravity"
+        && active.command === managedAntigravity?.command
+        && active.source !== "override"
+        && preferences.antigravity?.overridePath?.trim() !== active.command
+        && preferences.antigravity?.selectedPath?.trim() !== active.command
+        ? { managedAntigravityFallback: true as const }
+        : {}),
       args: group.args,
       env: {
         ...group.env,

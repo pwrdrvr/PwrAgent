@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +12,8 @@ import {
   readManagedAntigravityStatus,
   type ManagedAntigravityRuntime,
 } from "../acp/antigravity-managed-runtime";
+import { pruneAntigravityRuntime, withAntigravityRuntimeLock } from "../acp/antigravity-runtime-retention";
+import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 
 const appleSilicon = { platform: "darwin", arch: "arm64" } as const;
 const manifestUrl = "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/darwin_arm64.json";
@@ -66,6 +69,170 @@ it("keeps unsupported platforms off the release feed", async () => {
 });
 
 describe.skipIf(process.platform === "win32")("managed Antigravity activation", () => {
+  it("collects abandoned staging and bounds unused releases while preserving every profile selection", async () => {
+    await withRuntimeRoot(async (directory) => {
+      const archive = await makeArchive(directory);
+      await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("direct", "alias", "clear", "keep"), {
+        minLength: 4, maxLength: 8,
+      }), async (choices) => {
+        const home = await mkdtemp(path.join(directory, "retention-"));
+        vi.stubEnv("PWRAGENT_HOME", home);
+        try {
+          const root = path.join(home, "agents", "antigravity");
+          const abandoned = ".install-2147483647-abcdEF";
+          const busy = `.install-${process.pid}-abcdEF`;
+          const ownerless = ".install-abcdEF";
+          for (const name of [abandoned, busy, ownerless]) {
+            await mkdir(path.join(root, name), { recursive: true });
+          }
+          const profiles = ["default", "inactive"].map((profile) => path.join(home, "profiles", profile));
+          await Promise.all(profiles.map((profile) => mkdir(profile, { recursive: true })));
+          const selections: Array<string | undefined> = [];
+          const install = (index: number) => installManagedAntigravityRuntime({
+            ...appleSilicon, fetch: releaseFetch(archive, `1.5.${index}`), verify: async () => {},
+          });
+          let active = await install(0);
+          for (const [index, choice] of choices.entries()) {
+            const profile = index % profiles.length;
+            if (choice !== "keep") {
+              selections[profile] = choice === "clear" ? undefined : active.command;
+              let chosen = selections[profile];
+              if (choice === "alias") {
+                chosen = path.join(home, `alias-${index}`);
+                await symlink(active.command, chosen);
+              }
+              await writeFile(path.join(profiles[profile], "config.toml"),
+                `[acp_agents.antigravity]\ncli_path = ${JSON.stringify(chosen ?? "")}\n`);
+            }
+            const previous = active;
+            active = await install(index + 1);
+            const retained = new Set([active.command, previous.command, ...selections.filter((command) => command !== undefined)]);
+            const releases = await readdir(path.join(root, "versions"));
+            expect(new Set(releases.map((name) => path.join(root, "versions", name, "agy")))).toEqual(retained);
+            expect((await readdir(root)).filter((name) => name.startsWith(".install-")).sort()).toEqual([busy, ownerless].sort());
+          }
+        } finally {
+          vi.unstubAllEnvs();
+          await rm(home, { recursive: true, force: true });
+        }
+      }), { numRuns: 20 });
+    });
+  });
+
+  it("keeps aliased releases until every ACP child releases its hold", async () => {
+    await withRuntimeRoot(async (directory) => {
+      const archive = await makeArchive(directory);
+      vi.stubEnv("PWRAGENT_HOME", directory);
+      try {
+        const install = (index: number) => installManagedAntigravityRuntime({
+          ...appleSilicon, fetch: releaseFetch(archive, `1.5.${index}`), verify: async () => {},
+        });
+        const held = await install(0);
+        const alias = path.join(directory, "agy-alias");
+        await symlink(held.command, alias);
+        const heldPath = await realpath(held.command);
+        const started = vi.fn((command: string) => {
+          expect(command).toBe(heldPath);
+          return spawn(process.execPath, ["-e", "process.stdin.resume()"], { detached: true });
+        });
+        const transports = [0, 1].map(() => new AcpStdioJsonRpcTransport({
+          launchDescriptor: {
+            backendId: "acp:antigravity", registryId: "antigravity", distributionKind: "local",
+            command: alias, args: [], env: {},
+          },
+          spawn: started,
+        }));
+        try {
+          await Promise.all([...transports.map((transport) => transport.connect()), transports[0].connect()]);
+          expect(started).toHaveBeenCalledTimes(2);
+          const owner = started.mock.results[0].value?.pid;
+          expect(owner).toBeTypeOf("number");
+          const root = path.join(directory, "agents", "antigravity");
+          const busy = path.join(root, `.install-${owner}-abcdef`);
+          await mkdir(busy);
+          const current = await install(1);
+          await rm(alias);
+          await symlink(current.command, alias);
+          await install(2);
+          expect(await readFile(held.command, "utf8")).toBe(fixtureBinary);
+          expect(await readdir(busy)).toEqual([]);
+          await transports[0].close();
+          await install(3);
+          expect(await readFile(held.command, "utf8")).toBe(fixtureBinary);
+          await expect(readdir(busy)).rejects.toMatchObject({ code: "ENOENT" });
+          await transports[1].close();
+          await install(4);
+          await expect(readFile(held.command)).rejects.toMatchObject({ code: "ENOENT" });
+
+          // A cached automatic selection can recover, while a saved exact
+          // path must never silently change to a different binary.
+          for (const automatic of [false, true]) {
+            const start = vi.fn(() => spawn(process.execPath, ["-e", "process.stdin.resume()"], { detached: true }));
+            const transport = new AcpStdioJsonRpcTransport({
+              launchDescriptor: {
+                backendId: "acp:antigravity", registryId: "antigravity", distributionKind: "local",
+                command: held.command, args: [], env: {},
+                ...(automatic ? { managedAntigravityFallback: true } : {}),
+              },
+              spawn: (command) => {
+                expect(command).toContain(automatic ? "1.5.4-" : "1.5.0-");
+                return start();
+              },
+            });
+            try {
+              await transport.connect();
+              expect(start).toHaveBeenCalledOnce();
+            } finally {
+              await transport.close();
+            }
+          }
+        } finally {
+          await Promise.allSettled(transports.map((transport) => transport.close()));
+        }
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+  });
+
+  it("rejects a managed selection whose publication lost the race with pruning", async () => {
+    await withRuntimeRoot(async (directory) => {
+      const archive = await makeArchive(directory);
+      vi.stubEnv("PWRAGENT_HOME", directory);
+      try {
+        const store = new DesktopConfigStore({
+          configPath: path.join(directory, "profiles", "default", "config.toml"),
+        });
+        const root = path.join(directory, "agents", "antigravity");
+        const install = (index: number) => installManagedAntigravityRuntime({
+          ...appleSilicon, fetch: releaseFetch(archive, `1.5.${index}`), verify: async () => {},
+        });
+        const { command } = await install(0);
+        const alias = path.join(directory, "older-agy");
+        await symlink(command, alias);
+        const select = (cliPath: string) => store.write({ acpAgents: { antigravity: { cliPath } } }, ["providers"]);
+        await select(alias);
+        const previous = await install(1);
+        const active = await install(2);
+        expect(await readFile(command, "utf8")).toBe(fixtureBinary);
+        await select("");
+        const attemptedSelection = Promise.withResolvers<unknown>();
+        await withAntigravityRuntimeLock(root, async (assertLocked) => {
+          attemptedSelection.resolve(select(alias).catch((error: unknown) => error));
+          await pruneAntigravityRuntime(root, active.command, previous.command, assertLocked);
+        });
+        expect(await attemptedSelection.promise).toMatchObject({
+          message: "The selected managed Antigravity release is no longer installed.",
+        });
+        for (const cliPath of [command, alias]) {
+          await expect(select(cliPath)).rejects.toThrow("no longer installed");
+        }
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+  });
+
   it("activates a release that enforces the ACP v1 initialize client schema", async () => {
     await withRuntimeRoot(async (directory) => {
       const archive = await makeArchive(directory);
@@ -185,9 +352,10 @@ describe.skipIf(process.platform === "win32")("managed Antigravity activation", 
           ...appleSilicon,
           rootDir: path.join(index === 0 ? rootDir : alias, "managed"),
           fetch: releaseFetch(archive, version),
-          verify: async () => {
+          verify: async (command) => {
             entered[index].resolve();
             await finish[index].promise;
+            expect(await readFile(command)).not.toHaveLength(0);
           },
         }),
       );

@@ -21,6 +21,10 @@ import {
   terminateOwnedProcessTree,
   type OwnedChildProcess,
 } from "../process-tree.js";
+import {
+  MANAGED_ANTIGRAVITY_ENV,
+  spawnWithAntigravityRuntimeHold,
+} from "./antigravity-runtime-retention.js";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10 * 60_000;
 const PROCESS_CLOSE_TIMEOUT_MS = 5_000;
@@ -188,6 +192,8 @@ class AcpLineStdioTransport implements JsonRpcTransport {
   private closeHandler: (error?: Error) => void = () => undefined;
   private closed = false;
   private closePromise?: Promise<void>;
+  private connectPromise?: Promise<void>;
+  private launchError?: Error;
   private lifecycleGeneration = 0;
   private stderrPreview = "";
 
@@ -213,11 +219,20 @@ class AcpLineStdioTransport implements JsonRpcTransport {
     if (this.closed) {
       throw new Error("ACP stdio transport is closed");
     }
-    if (this.childProcess) {
-      return;
+    if (this.connectPromise) return await this.connectPromise;
+    if (this.childProcess) return;
+    this.connectPromise = this.connectChild();
+    try {
+      await this.connectPromise;
+    } finally {
+      this.connectPromise = undefined;
     }
+  }
+
+  private async connectChild(): Promise<void> {
     const generation = ++this.lifecycleGeneration;
     this.stderrPreview = "";
+    this.launchError = undefined;
 
     const descriptor = normalizeAcpLaunchDescriptor(this.options.launchDescriptor);
     const baseEnv = this.options.baseEnv ?? process.env;
@@ -235,8 +250,41 @@ class AcpLineStdioTransport implements JsonRpcTransport {
         ...(this.options.platform ? { platform: this.options.platform } : {}),
       },
     );
+    const start = (command: string, managed: boolean) => this.startChild(
+      descriptor, command, managed ? { ...env, ...MANAGED_ANTIGRAVITY_ENV } : env, generation,
+    );
+    const child = descriptor.backendId === "acp:antigravity" && process.platform !== "win32"
+      ? await spawnWithAntigravityRuntimeHold(descriptor.command, { env, cwd: descriptor.cwd },
+        start, () => {
+          if (this.closed || generation !== this.lifecycleGeneration) {
+            throw new Error("ACP stdio transport is closed");
+          }
+        }, descriptor.managedAntigravityFallback)
+      : start(descriptor.command, false);
+
+    if (this.closed || generation !== this.lifecycleGeneration) {
+      await this.close();
+      throw new Error("ACP stdio transport is closed");
+    }
+    if (this.childProcess !== child) {
+      throw this.launchError ?? unexpectedAcpExitError({
+        code: child.exitCode,
+        descriptor,
+        signal: child.signalCode,
+        stderr: this.stderrPreview,
+      });
+    }
+    if (!child.stdin || !child.stdout || !child.stderr) {
+      await this.close();
+      throw new Error("ACP stdio pipes unavailable");
+    }
+  }
+
+  private startChild(
+    descriptor: AcpLaunchDescriptor, command: string, env: NodeJS.ProcessEnv, generation: number,
+  ): AcpStdioChildProcess {
     const invocation = createCommandInvocation({
-      command: descriptor.command,
+      command,
       args: descriptor.args,
       env,
       platform: this.options.platform,
@@ -244,11 +292,10 @@ class AcpLineStdioTransport implements JsonRpcTransport {
     const spawnProcess = this.options.spawn ?? spawn;
     acpTransportLog.info("launch ACP agent", {
       backendId: descriptor.backendId,
-      command: descriptor.command,
+      command,
       distributionKind: descriptor.distributionKind,
       registryId: descriptor.registryId,
     });
-
     const child = spawnProcess(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
       env,
@@ -256,37 +303,15 @@ class AcpLineStdioTransport implements JsonRpcTransport {
       detached: process.platform !== "win32",
       windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     });
-
-    if (this.closed || generation !== this.lifecycleGeneration) {
-      await terminateOwnedProcessTree(child, {
-        gracefulTimeoutMs: PROCESS_CLOSE_TIMEOUT_MS,
-        forceTimeoutMs: PROCESS_FORCE_CLOSE_TIMEOUT_MS,
-      });
-      throw new Error("ACP stdio transport is closed");
-    }
-
     this.childProcess = child;
 
-    if (!child.stdin || !child.stdout || !child.stderr) {
-      await terminateOwnedProcessTree(child, {
-        gracefulTimeoutMs: PROCESS_CLOSE_TIMEOUT_MS,
-        forceTimeoutMs: PROCESS_FORCE_CLOSE_TIMEOUT_MS,
-      });
-      if (this.childProcess === child) {
-        this.childProcess = null;
-      }
-      throw new Error("ACP stdio pipes unavailable");
-    }
-
-    readJsonRpcLines(child.stdout, (line) => {
-      this.messageHandler(line);
-    });
-
-    child.stderr.on("data", (chunk: Buffer | string) => {
+    if (child.stdout) readJsonRpcLines(child.stdout, (line) => this.messageHandler(line));
+    child.stderr?.on("data", (chunk: Buffer | string) => {
       this.stderrPreview = appendStderrPreview(this.stderrPreview, String(chunk));
     });
     child.on("error", (error: Error) => {
       if (this.childProcess === child && child.pid === undefined) {
+        this.launchError = error;
         this.childProcess = null;
       }
       this.closeHandler(error);
@@ -308,6 +333,7 @@ class AcpLineStdioTransport implements JsonRpcTransport {
         }),
       );
     });
+    return child;
   }
 
   async close(): Promise<void> {
