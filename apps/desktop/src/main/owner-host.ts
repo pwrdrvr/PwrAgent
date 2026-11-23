@@ -55,6 +55,7 @@ export interface ThreadPresenter {
 type NotificationText = { enabled: boolean; title: string; body: string; onShow?: () => void };
 export type TerminalNotification = NotificationText & {
   key?: string;
+  turnId?: string;
   status: "completed" | "failed" | "cancelled";
 };
 

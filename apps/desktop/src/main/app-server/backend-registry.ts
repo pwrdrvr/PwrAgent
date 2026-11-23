@@ -21245,8 +21245,7 @@ export class DesktopBackendRegistry {
         : event.notification.method === "turn/failed"
           ? "failed"
           : "cancelled";
-    const threadId = (event.notification.params as { threadId?: unknown })
-      .threadId;
+    const { threadId, turnId } = event.notification.params;
     const contextLabel =
       typeof threadId === "string"
         ? await this.notificationThreadContextLabelForTerminal(event.backend, threadId)
@@ -21258,6 +21257,7 @@ export class DesktopBackendRegistry {
       getDesktopNotificationService().notifyTerminal({
         enabled: this.notificationsEnabled(),
         status,
+        turnId: typeof turnId === "string" ? turnId : undefined,
         key:
           typeof threadId === "string"
             ? buildTerminalNotificationKey({

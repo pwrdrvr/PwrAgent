@@ -17659,6 +17659,7 @@ command = "pnpm dev"
       expect(call).toMatchObject({
         key: "codex:thread-2:turn-terminal",
         status: "completed",
+        turnId: "turn-1",
         title: "PwrAgent turn completed",
       });
       expect(call.body).toContain("PwrAgent > My Investigation");

@@ -194,7 +194,7 @@ describe("DesktopNotificationService", () => {
     ]);
   });
 
-  it("spends the shared 15-minute cooldown only on eligible routine terminal notifications", () => {
+  it("spends the shared 15-minute cooldown only on eligible, fresh routine terminal notifications", () => {
     const cooldownMs = 15 * 60_000;
     const event = fc.record({
       kind: fc.constantFrom("completed", "cancelled", "failed", "input"),
@@ -202,6 +202,7 @@ describe("DesktopNotificationService", () => {
       focused: fc.boolean(),
       supported: fc.boolean(),
       elapsed: fc.oneof(fc.nat(cooldownMs), fc.constantFrom(0, cooldownMs - 1, cooldownMs)),
+      redeliver: fc.boolean(),
     });
 
     fc.assert(fc.property(fc.array(event, { maxLength: 30, size: "max" }), (events) => {
@@ -227,7 +228,7 @@ describe("DesktopNotificationService", () => {
         if (event.kind === "input") {
           service.notifyAttention(notice);
         } else {
-          service.notifyTerminal({ ...notice, status: event.kind });
+          service.notifyTerminal({ ...notice, turnId: "turn-1", status: event.kind });
         }
 
         if (event.enabled && !event.focused && event.supported) {
@@ -236,12 +237,89 @@ describe("DesktopNotificationService", () => {
           } else if (lastRoutine === undefined || now - lastRoutine >= cooldownMs) {
             expected.push(notice.body);
             lastRoutine = now;
+          } else if (event.redeliver) {
+            now = lastRoutine + cooldownMs;
+            service.notifyTerminal({ ...notice, turnId: "turn-1", status: event.kind });
           }
         }
       }
 
       expect(shownNotifications.map(({ body }) => body)).toEqual(expected);
     }));
+  });
+
+  it("drops a repeated ACP cancellation after cooldown without swallowing fresh turns or failures", () => {
+    const cooldownMs = 15 * 60_000;
+    let now = 0;
+    const service = new DesktopNotificationService(() => now);
+    const cancellation = {
+      enabled: true,
+      key: "acp:grok:thread-1:turn-terminal",
+      turnId: "turn-1",
+      status: "cancelled" as const,
+      title: "Turn cancelled",
+      body: "Cancelled",
+    };
+    const otherThread = { ...cancellation, key: "acp:grok:thread-2:turn-terminal" };
+    service.notifyTerminal({
+      enabled: true,
+      status: "completed",
+      title: "Turn completed",
+      body: "First completion",
+    });
+
+    now = cooldownMs - 1;
+    service.notifyTerminal(cancellation);
+    service.notifyTerminal(otherThread);
+    service.notifyTerminal({ ...otherThread, status: "failed", title: "Turn failed", body: "Failure" });
+
+    now = cooldownMs;
+    service.clearAttentionKey(cancellation.key);
+    service.notifyTerminal(cancellation);
+    service.notifyTerminal({
+      ...cancellation,
+      turnId: "turn-2",
+      status: "completed",
+      title: "Turn completed",
+      body: "Fresh completion",
+    });
+
+    expect(shownNotifications.map(({ body }) => body)).toEqual([
+      "First completion",
+      "Failure",
+      "Fresh completion",
+    ]);
+  });
+
+  it.each([-3_600_000, 3_600_000])("expires at 15 elapsed minutes when the wall clock shifts by %i ms", (shiftMs) => {
+    const cooldownMs = 15 * 60_000;
+    let elapsedMs = 0;
+    let wallAdjustmentMs = 0;
+    const wallClock = vi.spyOn(Date, "now")
+      .mockImplementation(() => 1_700_000_000_000 + elapsedMs + wallAdjustmentMs);
+    const elapsedClock = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+    try {
+      const service = new DesktopNotificationService();
+      const notify = (body: string) => service.notifyTerminal({
+        enabled: true,
+        status: "completed",
+        title: "Turn completed",
+        body,
+      });
+      notify("First completion");
+
+      elapsedMs = cooldownMs - 1;
+      wallAdjustmentMs = shiftMs;
+      notify("Early completion");
+
+      elapsedMs = cooldownMs;
+      notify("On-time completion");
+
+      expect(shownNotifications.map(({ body }) => body)).toEqual(["First completion", "On-time completion"]);
+    } finally {
+      elapsedClock.mockRestore();
+      wallClock.mockRestore();
+    }
   });
 
   it("emits attention notifications only once per key", () => {

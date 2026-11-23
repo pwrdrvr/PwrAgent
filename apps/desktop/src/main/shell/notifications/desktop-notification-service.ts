@@ -4,11 +4,13 @@ import {
   type MessagingApprovalDecision,
   type MessagingApprovalIntent,
 } from "@pwragent/messaging-interface";
+import { rememberBoundedMap } from "../../bounded-map";
 import { getMainLogger } from "../../log";
 import type { TerminalNotification } from "../../owner-host";
 
 const notificationLog = getMainLogger("pwragent:notifications");
 const NATIVE_NOTIFICATION_BODY_MAX_LENGTH = 220;
+const MAX_RECENT_ROUTINE_TURNS = 2048;
 const ROUTINE_TERMINAL_NOTIFICATION_BUDGET = {
   id: "desktop-routine-terminal",
   intervalMs: 15 * 60_000,
@@ -36,9 +38,10 @@ export class DesktopNotificationService {
   private readonly attentionKeys = new Set<string>();
   private readonly attentionNotifications = new Map<string, Set<Notification>>();
   private readonly liveNotifications = new Set<Notification>();
+  private readonly recentRoutineTurns = new Map<string, true>();
   private readonly terminalNotificationGate: MessagingRateLimitGate;
 
-  constructor(now: () => number = Date.now) {
+  constructor(now: () => number = () => performance.now()) {
     this.terminalNotificationGate = new MessagingRateLimitGate(now);
   }
 
@@ -127,10 +130,7 @@ export class DesktopNotificationService {
     if (!Notification.isSupported()) {
       return;
     }
-    // Drop routine outcomes during the shared cooldown. The next eligible
-    // outcome after it expires should describe current activity.
-    if (params.status !== "failed"
-      && !this.terminalNotificationGate.admit(ROUTINE_TERMINAL_NOTIFICATION_BUDGET).admitted) {
+    if (params.status !== "failed" && !this.admitRoutineTerminal(params.key, params.turnId)) {
       return;
     }
     if (params.key) {
@@ -142,6 +142,18 @@ export class DesktopNotificationService {
       body: params.body,
       onClick: params.onShow,
     });
+  }
+
+  private admitRoutineTerminal(threadKey?: string, turnId?: string): boolean {
+    if (threadKey && turnId) {
+      const turnKey = JSON.stringify([threadKey, turnId]);
+      if (this.recentRoutineTurns.has(turnKey)) {
+        return false;
+      }
+      // Remember outcomes even during cooldown so a replay cannot spend the next slot.
+      rememberBoundedMap(this.recentRoutineTurns, turnKey, true, MAX_RECENT_ROUTINE_TURNS);
+    }
+    return this.terminalNotificationGate.admit(ROUTINE_TERMINAL_NOTIFICATION_BUDGET).admitted;
   }
 
   private supportsActionButtons(): boolean {
