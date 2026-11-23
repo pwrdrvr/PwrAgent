@@ -589,7 +589,7 @@ import type {
   SetDesktopPwrAgentProfileMenuVisibilityRequest,
   SetDesktopPwrAgentProfileMenuVisibilityResponse,
   ReadDesktopSettingsRequest,
-  ManagedCodexTrackTags,
+  ManagedCodexTrackLookup,
   ReadDesktopSettingsResponse,
   DesktopTokenMiserUsage,
   DesktopSettingsRuntimeChangedEvent,
@@ -1657,7 +1657,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   clearSettingsSecret?: (
     request: ClearDesktopSettingsSecretRequest
   ) => Promise<DesktopSettingsSecretWriteResponse>;
-  readManagedCodexTrackTags?: () => Promise<ManagedCodexTrackTags>;
+  readManagedCodexTrackTags?: () => Promise<ManagedCodexTrackLookup | undefined>;
   refreshCodexDiscovery?: (
     request: RefreshDesktopCodexDiscoveryRequest
   ) => Promise<ReadDesktopSettingsResponse>;

@@ -1427,6 +1427,11 @@ export type ManagedCodexTrackTags = {
   prereleaseTag?: string;
 };
 
+export type ManagedCodexTrackLookup = ManagedCodexTrackTags & {
+  /** When GitHub last returned or revalidated the release list. */
+  observedAt: number;
+};
+
 export type DesktopSettingsSnapshot = {
   fetchedAt: number;
   configPath: string;

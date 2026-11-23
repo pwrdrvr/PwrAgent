@@ -74,7 +74,7 @@ import type {
   DesktopUpdateTrain,
   DesktopWorktreeFolder,
   DesktopWorktreeStorageLocation,
-  ManagedCodexTrackTags,
+  ManagedCodexTrackLookup,
 } from "@pwragent/shared/contracts/settings";
 import type {
   DesktopHelperModelSettings,
@@ -2345,8 +2345,8 @@ export class DesktopSettingsService {
     );
   }
 
-  async readManagedCodexTrackTags(): Promise<ManagedCodexTrackTags> {
-    return this.resolveManagedCodexEnabled() ? await readManagedCodexTrackTags() : {};
+  async readManagedCodexTrackTags(): Promise<ManagedCodexTrackLookup | undefined> {
+    return this.resolveManagedCodexEnabled() ? await readManagedCodexTrackTags() : undefined;
   }
 
   /** Which pwrdrvr/codex track the managed runtime follows. */

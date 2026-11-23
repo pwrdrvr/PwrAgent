@@ -80,12 +80,20 @@ describe("managed Codex release selection", () => {
     const platform = { platform: "linux", arch: "x64" } as const;
     const tags = await readManagedCodexTrackTags(platform);
     expect(tags).toEqual({
+      observedAt: Date.now(),
       latestTag: "pwragent-v0.171.0-pwragent.1",
       prereleaseTag: "pwragent-v0.171.0-pwragent.2",
     });
+    vi.setSystemTime(Date.now() + 60_000);
     await expect(readManagedCodexTrackTags(platform)).resolves.toEqual(tags);
-    // Both reads use one metadata revalidation. No request goes to an asset.
+    network.mockResolvedValueOnce(new Response(null, { status: 429 }));
+    expect((await fetchGitHubReleaseMetadata(MANAGED_CODEX_RELEASES_URL, {}, { manual: true })).status)
+      .toBe(429);
+    // A rate-limited lookup retains the success time of the cached list.
+    await expect(readManagedCodexTrackTags(platform)).resolves.toEqual(tags);
+    // All requests go to the release list, even when REST is rate-limited.
     expect(network.mock.calls.map(([url]) => url)).toEqual([
+      MANAGED_CODEX_RELEASES_URL,
       MANAGED_CODEX_RELEASES_URL,
       MANAGED_CODEX_RELEASES_URL,
     ]);

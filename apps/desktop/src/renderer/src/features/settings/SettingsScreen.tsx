@@ -1800,7 +1800,7 @@ function SettingsSectionBody(props: {
         });
       }}
       onManagedCodexBuildChannelChange={async (managedBuildChannel) => {
-        return await props.settings.writeConfig({
+        return await props.settings.writeConfigWithSnapshot({
           models: {
             codex: { managedBuildChannel },
           },

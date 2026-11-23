@@ -487,7 +487,7 @@ import type {
   SetDesktopPwrAgentProfileMenuVisibilityRequest,
   SetDesktopPwrAgentProfileMenuVisibilityResponse,
   ReadDesktopSettingsRequest,
-  ManagedCodexTrackTags,
+  ManagedCodexTrackLookup,
   ReadDesktopSettingsResponse,
   DesktopTokenMiserUsage,
   DesktopSettingsRuntimeChangedEvent,
@@ -2319,7 +2319,7 @@ const desktopApi = Object.freeze({
     request: ClearDesktopSettingsSecretRequest,
   ): Promise<DesktopSettingsSecretWriteResponse> =>
     await ipcRenderer.invoke(SETTINGS_CLEAR_SECRET_CHANNEL, request),
-  readManagedCodexTrackTags: async (): Promise<ManagedCodexTrackTags> =>
+  readManagedCodexTrackTags: async (): Promise<ManagedCodexTrackLookup | undefined> =>
     await ipcRenderer.invoke(SETTINGS_READ_MANAGED_CODEX_TRACK_TAGS_CHANNEL),
   refreshCodexDiscovery: async (
     request: RefreshDesktopCodexDiscoveryRequest,
