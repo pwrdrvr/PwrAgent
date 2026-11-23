@@ -94,7 +94,7 @@ export class StackReadObservation {
   hints: ReturnType<typeof createStackCheckoutHints>;
   readonly inventoryDemand: PrMetadataDemand;
   private readonly checkouts = new Map<string, Promise<Checkout | undefined>>();
-  private readonly checkoutVersions = new Map<string, string>();
+  private readonly preflightCheckoutVersions = new Map<string, string | undefined>();
   private readonly catalogs = new Map<string, Promise<CatalogObservation>>();
 
   constructor(readonly demand: PrMetadataDemand = {}) {
@@ -131,9 +131,10 @@ export class StackReadObservation {
     const before = await this.hints.checkoutIdentity(cwd);
     const checkout = await (lookup ? lookup(cwd) : this.checkout(cwd));
     this.checkouts.set(cwd, Promise.resolve(checkout));
-    if (before && checkout?.root === before.root && checkout.commonDir === before.commonDir
-      && (await this.hints.checkoutIdentity(cwd))?.version === before.version) {
-      this.checkoutVersions.set(cwd, before.version);
+    if (checkout) {
+      const unchanged = before && checkout.root === before.root && checkout.commonDir === before.commonDir
+        && (await this.hints.checkoutIdentity(cwd))?.version === before.version;
+      this.preflightCheckoutVersions.set(cwd, unchanged ? before.version : undefined);
     }
     return checkout;
   }
@@ -168,8 +169,14 @@ export class StackReadObservation {
     // checkout relationship and the exact catalog file still match.
     this.hints = createStackCheckoutHints(this.inventoryDemand);
     const checkouts = [...this.checkouts.keys()].map(async (cwd) => {
-      const version = this.checkoutVersions.get(cwd);
-      if (!version || (await this.hints.checkoutIdentity(cwd))?.version !== version) this.checkouts.delete(cwd);
+      const version = this.preflightCheckoutVersions.get(cwd);
+      if (version && (await this.hints.checkoutIdentity(cwd))?.version === version) return;
+      this.checkouts.delete(cwd);
+      if (this.preflightCheckoutVersions.has(cwd) && !await this.checkout(cwd)) {
+        // We previously confirmed a checkout for this gate. A failed lookup
+        // cannot establish that its stack settled while listing threads.
+        throw new Error("Stack checkout evidence is unavailable.");
+      }
     });
     const catalogs = [...this.catalogs].map(async ([commonDir, read]) => {
       const previous = (await read).version;
@@ -525,9 +532,11 @@ export class StackReader {
       }), STACK_CHECKOUT_SCAN_LIMITS);
       for await (const { commonDir, present } of catalogs) if (present) wanted.add(commonDir);
     }
+    const inferredPaths = new Set<string>();
     for (const row of local) {
       if (!row.prs?.some((pr) => eligible.has(prIdentity(pr)))) continue;
       for (const cwd of threadDirectories(row)) {
+        inferredPaths.add(cwd);
         for (const commonDir of possible.get(cwd) ?? []) {
           if (!directories || scopedClones.has(commonDir)) wanted.add(commonDir);
         }
@@ -543,12 +552,20 @@ export class StackReader {
       if (!paths.some(participates)) continue;
       for (const cwd of paths) if (possible.get(cwd)?.length) admitted.add(cwd);
     }
-    const verify = new IterableMapper(admitted, async (cwd) => ({
+    let retargetedHints: typeof hints | undefined;
+    const verify = new IterableMapper(admitted, async (cwd) => {
       // Explicit anchors already have a live result in this observation.
-      checkout: hinted.has(cwd) ? await this.readInventoryCheckout(cwd, observation, possible.get(cwd)!) : located.get(cwd),
-    }), STACK_CHECKOUT_SCAN_LIMITS);
+      const candidates = possible.get(cwd)!;
+      const checkout = hinted.has(cwd) ? await this.readInventoryCheckout(cwd, observation, candidates) : located.get(cwd);
+      if (checkout && !directories && !candidates.includes(checkout.commonDir)
+        && (inferredPaths.has(cwd)
+          || await (retargetedHints ??= createStackCheckoutHints(inventoryDemand)).hasMarker(checkout.commonDir))) {
+        wanted.add(checkout.commonDir);
+      }
+      return checkout;
+    }, STACK_CHECKOUT_SCAN_LIMITS);
     const verified = new Map<string, Checkout>();
-    for await (const { checkout } of verify) if (checkout) verified.set(checkout.cwd, checkout);
+    for await (const checkout of verify) if (checkout) verified.set(checkout.cwd, checkout);
     const checkouts = new Map(anchors.flatMap((entry) => entry ? [[entry.cwd, entry] as const] : []));
     // Keep the existing path order regardless of which probes finish first.
     for (const cwd of paths) {

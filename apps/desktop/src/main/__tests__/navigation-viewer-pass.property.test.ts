@@ -15,7 +15,7 @@ import {
 import type { AppServerListThreadsResponse } from "@pwragent/shared/contracts/normalized-app-server";
 import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import { type ProjectForgeAutomation } from "@pwragent/shared/project-forge-automation";
-import { resolveGitExecutable } from "../app-server/git-executable";
+import * as gitExecutable from "../app-server/git-executable";
 import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
@@ -613,9 +613,10 @@ it.each([4, 8])("persists one changed owner pin once across a full refresh with 
 });
 
 
-it("gates a PR with a catalog that changes during the thread listing", async () => {
+it.each(["changed catalog", "failed checkout lookup"] as const)("keeps a PR gated after thread listing with a %s", async (change) => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-hold-recheck-"));
   const db = openInMemoryStateDb();
+  const restoreGitEnvironment = isolateProcessGitEnvironment();
   const entered = Promise.withResolvers<void>();
   const listing = Promise.withResolvers<AppServerListThreadsResponse>();
   const finish = () => listing.resolve({ backend: "all", fetchedAt: 0, threads: [] });
@@ -627,13 +628,14 @@ it("gates a PR with a catalog that changes during the thread listing", async () 
     git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "upper");
     const head = git("rev-parse", "HEAD");
     git("branch", "lower");
+    if (change === "failed checkout lookup") git("config", "include.path", "fixture-git-include");
     const catalog = path.join(cwd, ".git", "gh-stack");
     const layer = (branch: string, number: number) => ({ branch, head, base: head, pullRequest: { number } });
     const write = (...branches: ReturnType<typeof layer>[]) => writeFile(catalog, JSON.stringify({
       schemaVersion: 1, repository: "github.com:fixture/stack",
       stacks: [{ trunk: { branch: "main", head }, branches }],
     }));
-    await write(layer("upper", 2));
+    await write(...(change === "changed catalog" ? [layer("upper", 2)] : [layer("lower", 1), layer("upper", 2)]));
     current.store = new SqliteOverlayStore(db);
     resetAppServerServiceForTests();
     const service = initializeDesktopAppServerService();
@@ -646,13 +648,24 @@ it("gates a PR with a catalog that changes during the thread listing", async () 
       number: 2, provider: "github.com", org: "fixture", repo: "stack", state: "passing",
       lifecycleState: "open", url: "https://github.com/fixture/stack/pull/2", headRefName: "upper",
     };
-    const gate = service["readPrStacks"](pr);
+    const gate = change === "changed catalog"
+      ? service["readPrStacks"](pr).then((stacks) => stacks[0]?.layers[1])
+      : service["prStackHoldEvidence"](pr);
     await entered.promise;
-    await write(layer("lower", 1), layer("upper", 2));
+    if (change === "changed catalog") await write(layer("lower", 1), layer("upper", 2));
+    else {
+      const runGitCommand = gitExecutable.runGitCommand;
+      vi.spyOn(gitExecutable, "runGitCommand").mockImplementation((directory, args, options) =>
+        directory === cwd && args[0] === "rev-parse"
+          ? Promise.reject(Object.assign(new Error("fixture checkout timeout"), { killed: true }))
+          : runGitCommand(directory, args, options));
+    }
     finish();
-    expect((await gate)[0]?.layers[1]).toMatchObject({ branch: "upper", heldBy: { branch: "lower", number: 1 } });
+    if (change === "changed catalog") expect(await gate).toMatchObject({ branch: "upper", heldBy: { branch: "lower", number: 1 } });
+    else expect(await gate).toEqual({ reason: "Held while stack settlement is unavailable" });
   } finally {
     finish();
+    restoreGitEnvironment();
     db.close();
     await rm(cwd, { recursive: true, force: true });
   }
@@ -676,7 +689,7 @@ it.each(["absent", "unrelated"])("skips listing threads for a standalone PR with
           branches: [{ branch: "separate-layer", head, base: head, pullRequest: { number: 1 } }] }],
       }));
     }
-    process.env.PWRAGENT_GIT_PATH = await resolveGitExecutable();
+    process.env.PWRAGENT_GIT_PATH = await gitExecutable.resolveGitExecutable();
     resetAppServerServiceForTests();
     const service = initializeDesktopAppServerService();
     vi.spyOn(service as unknown as { prStackDirectories: () => string[] }, "prStackDirectories").mockReturnValue([cwd]);
