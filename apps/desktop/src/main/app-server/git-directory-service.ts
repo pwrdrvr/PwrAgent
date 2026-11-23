@@ -28,8 +28,8 @@ import { readStatusWithoutNestedWorktrees } from "@pwragent/shared/nested-worktr
 import { WORKTREE_FOLDER_CODEX_SUBFOLDER } from "@pwragent/shared/worktree-paths";
 import { userHomeWorktreesRoot } from "../settings/desktop-config";
 import { checkWorktreeFolder, markWorktreeFolder } from "../settings/worktree-folder-check";
-import { addManagedWorktree, removeManagedWorktree } from "./managed-worktree";
-import { lockWorktreeOnSeparateVolume, readWorktreeLockHolder } from "./worktree-volume-lock";
+import { addManagedWorktree, lockExternallyAddedWorktree, removeManagedWorktree } from "./managed-worktree";
+import { readWorktreeLockHolder } from "./worktree-volume-lock";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import { GitReadCache, type GitReadRequest } from "../git-info/read-cache";
 import { runGitCommand } from "./git-executable";
@@ -1503,7 +1503,7 @@ export class GitDirectoryService {
     if (!await matchesStackWorktreeOwner(ownerFile, options.ownerThreadId)) throw refused();
     // A crash can leave Git's checkout in place before the managed add locks
     // it against pruning on removal of an external drive.
-    if (options.create && !added) await lockWorktreeOnSeparateVolume({ repoRoot, worktreePath: checkout, git: (args) => git(repoRoot, args) });
+    if (options.create && !added) await lockExternallyAddedWorktree({ repoRoot, worktreePath: checkout, git: (args) => git(repoRoot, args) });
     return { cwd: toForwardSlashes(checkout), repositoryPath: toForwardSlashes(repoRoot), workMode: "worktree" };
   }
 
