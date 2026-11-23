@@ -5,17 +5,56 @@ import { promisify } from "node:util";
 import {
   bundledGitDirectory,
   bundledGitEnvironment,
+  isInsideDirectory,
   isPwrAgentGitPath,
   operatorSystemConfig,
   validateBundledGit,
 } from "./bundled-git";
 import { getConfiguredGitCommand, getSelectedManagedGit } from "./git-command";
+import { managedGitRoot } from "./managed-git-paths";
 import { resolveManagedGitRuntime } from "./managed-git-runtime";
 
 export const GIT_COMMAND_ENV = "PWRAGENT_GIT_PATH";
 
 export function gitCommandPreference(env: NodeJS.ProcessEnv): string | undefined {
   return env[GIT_COMMAND_ENV]?.trim() || getConfiguredGitCommand();
+}
+
+let lastCustomGitPath: {
+  inheritedPath: string;
+  commandDirectory: string | undefined;
+  bundledRoot: string;
+  managedRoot: string;
+  value: string;
+} | undefined;
+
+function customGitPath(inheritedPath: string, command: string, bundledRoot: string): string {
+  const commandDirectory = path.isAbsolute(command) ? path.dirname(command) : undefined;
+  const managedRoot = path.resolve(managedGitRoot());
+  const previous = lastCustomGitPath;
+  if (previous?.inheritedPath === inheritedPath
+    && previous.commandDirectory === commandDirectory
+    && previous.bundledRoot === bundledRoot
+    && previous.managedRoot === managedRoot) {
+    return previous.value;
+  }
+
+  const entries = new Set<string>();
+  if (commandDirectory) entries.add(commandDirectory);
+  let cacheable = true;
+  for (const entry of inheritedPath.split(path.delimiter)) {
+    if (!entry) continue;
+    // Relative paths need the current cwd. On Windows even a rooted path
+    // without a drive can depend on it, so only reuse drive-absolute entries.
+    cacheable &&= process.platform === "win32" ? /^[a-z]:[\\/]/i.test(entry) : path.isAbsolute(entry);
+    const resolved = path.resolve(entry);
+    if (!isInsideDirectory(bundledRoot, resolved) && !isInsideDirectory(managedRoot, resolved)) {
+      entries.add(entry);
+    }
+  }
+  const value = [...entries].join(path.delimiter);
+  if (cacheable) lastCustomGitPath = { inheritedPath, commandDirectory, bundledRoot, managedRoot, value };
+  return value;
 }
 
 /** Remove our bundled distribution before running an explicitly selected Git. */
@@ -41,10 +80,7 @@ export function customGitEnvironment(source: NodeJS.ProcessEnv, command: string)
       else delete env[key];
     }
   }
-  env.PATH = [...new Set([
-    ...(path.isAbsolute(command) ? [path.dirname(command)] : []),
-    ...inheritedPath.split(path.delimiter).filter((entry) => entry && !inBundle(entry)),
-  ])].join(path.delimiter);
+  env.PATH = customGitPath(inheritedPath, command, root);
   return env;
 }
 
