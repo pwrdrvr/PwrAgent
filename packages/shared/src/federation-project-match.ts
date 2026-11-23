@@ -72,11 +72,17 @@ export function findPeerCounterpartDirectory<T extends PeerDirectory>(
   const localNames = directoryIdentityNames(local);
   const choose = (matches: readonly T[]): T | undefined => {
     if (matches.length <= 1) return matches[0];
+    // An owner index can list a primary checkout and its tool-managed
+    // worktrees as separate projects. Prefer regular checkouts within this
+    // identity tier while keeping ties between independent clones ambiguous.
+    const checkouts = matches.filter((directory) => !isToolManagedWorktreePath(directory.path));
+    const preferred = checkouts.length ? checkouts : matches;
+    if (preferred.length === 1) return preferred[0];
     for (const name of localNames) {
-      const named = matches.filter((directory) => directory.label.trim().toLowerCase() === name);
+      const named = preferred.filter((directory) => directory.label.trim().toLowerCase() === name);
       if (named.length === 1) return named[0];
     }
-    const grouped = matches.filter((directory) => directory.checkoutPaths?.length);
+    const grouped = preferred.filter((directory) => directory.checkoutPaths?.length);
     return grouped.length === 1 ? grouped[0] : undefined;
   };
   const localRepository = local.repositoryKey?.toLowerCase();
