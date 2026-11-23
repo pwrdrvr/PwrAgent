@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { TRACE_CATEGORIES } from "./chromium-trace-filter";
 import { onChromiumTraceReleased, tryAcquireChromiumTrace } from "./chromium-trace-lease";
@@ -115,25 +116,22 @@ export class ChromiumTrace {
         return { status: "skipped", reason: "trigger-predates-recording" };
       }
       const recordingStoppedAtMs = this.options.wallNow?.() ?? Date.now();
-      const pendingPath = `${filePath}.tmp`;
-      let ownsPendingFile = false;
+      const pendingPath = `${filePath}.${randomUUID()}.tmp`;
+      let staged = false;
       let phase: TraceExportPhase = "stop";
       const reportPhase: ReportTracePhase = (next) => { phase = next; };
       try {
-        const filtered = await withDeadline(
-          (signal) => this.processTrace(recording.session.read(signal, reportPhase), signal, reportPhase),
-          this.options.stopTimeoutMs ?? STOP_TIMEOUT_MS,
-        );
-        reportPhase("publish");
-        // The worker never writes a file, even when it completes after a timeout.
-        const file = await fs.open(pendingPath, "wx", 0o600);
-        ownsPendingFile = true;
-        try {
-          await file.writeFile(filtered);
-        } finally {
-          await file.close();
-        }
+        await withDeadline(async (signal) => {
+          const filtered = await this.processTrace(recording.session.read(signal, reportPhase), signal, reportPhase);
+          signal.throwIfAborted();
+          reportPhase("publish");
+          await this.stageTrace(pendingPath, filtered, signal);
+        }, this.options.stopTimeoutMs ?? STOP_TIMEOUT_MS);
+        staged = true;
+        // Only the on-time caller can publish. Late writes clean up their own
+        // staging file, and cannot rename it or touch a later attempt.
         await fs.rename(pendingPath, filePath);
+        staged = false;
         return { status: "written", recordingStartedAtMs: recording.wallMs, recordingStoppedAtMs };
       } catch (error) {
         // Protocol and parse errors can contain private input.
@@ -146,12 +144,35 @@ export class ChromiumTrace {
         };
       } finally {
         this.discard();
-        if (ownsPendingFile) {
-          await fs.rm(pendingPath, { force: true }).catch(() => {
-            this.warn("Could not remove pending Chromium trace");
-          });
+        // This owner is still collecting its V8 tail. Other renderers can
+        // trigger on a fresh recording as soon as Chromium is available.
+        if ([...this.renderers].some((owner) => owner !== renderer)) {
+          void this.enqueue(() => this.reconcile());
         }
+        if (staged) void this.removePendingTrace(pendingPath);
       }
+    });
+  }
+
+  private async stageTrace(path: string, filtered: Uint8Array, signal: AbortSignal): Promise<void> {
+    const file = await fs.open(path, "wx", 0o600);
+    try {
+      try {
+        signal.throwIfAborted();
+        await file.writeFile(filtered, { signal });
+      } finally {
+        await file.close();
+      }
+      signal.throwIfAborted();
+    } catch (error) {
+      await this.removePendingTrace(path);
+      throw error;
+    }
+  }
+
+  private async removePendingTrace(path: string): Promise<void> {
+    await fs.rm(path, { force: true }).catch(() => {
+      this.warn("Could not remove pending Chromium trace");
     });
   }
 

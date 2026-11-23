@@ -131,6 +131,33 @@ it("reconciles with a manual trace owner and discards only when the last rendere
   }
 });
 
+it("rearms for a second renderer while the first renderer is still profiling", async () => {
+  const root = await createTemporaryTestDirectory();
+  let mono = 0;
+  const start = vi.fn(async () => {});
+  const trace = new ChromiumTrace(() => ({
+    start,
+    async *read() { yield { data: rawTrace }; },
+    dispose: () => {},
+  }), processTrace, vi.fn(), { monotonicNow: () => ++mono });
+  const first = {};
+  const second = {};
+  try {
+    await trace.arm(first);
+    await trace.arm(second);
+    expect(await trace.capture(first, path.join(root.path, "first.trace.json"), ++mono))
+      .toMatchObject({ status: "written" });
+    // The V8 tail has not finished, so neither owner has called arm again.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(await trace.capture(second, path.join(root.path, "second.trace.json"), ++mono))
+      .toMatchObject({ status: "written" });
+  } finally {
+    await Promise.all([trace.release(first), trace.release(second)]);
+    await root.cleanup();
+  }
+});
+
 it.each(["reject", "timeout"] as const)(
   "disposes an unacknowledged session without ending or exporting it on %s",
   async (failure) => {
@@ -191,6 +218,44 @@ it("closes a timed-out export before rearming, even if the old chunk arrives lat
     expect(await fs.readdir(root.path)).toEqual([]);
   } finally {
     deliverLateChunk();
+    await trace.release(owner);
+    await root.cleanup();
+  }
+});
+
+it("releases a stalled staging write and removes late output without publishing it", async () => {
+  const root = await createTemporaryTestDirectory();
+  const finalPath = path.join(root.path, "trace.json");
+  const open = fs.open;
+  const rm = fs.rm;
+  let resolveCleanup!: () => void;
+  const cleanup = new Promise<void>((resolve) => { resolveCleanup = resolve; });
+  const remove = vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
+    await rm(...args);
+    if (String(args[0]).startsWith(`${finalPath}.`)) resolveCleanup();
+  });
+  const delayedOpen = vi.spyOn(fs, "open").mockImplementationOnce(async (...args) => {
+    await new Promise<void>((resolve) => setTimeout(resolve, 120));
+    return open(...args);
+  });
+  const dispose = vi.fn();
+  const trace = new ChromiumTrace(() => ({
+    start: async () => {},
+    async *read() { yield { data: rawTrace }; },
+    dispose,
+  }), processTrace, vi.fn(), { stopTimeoutMs: 20 });
+  const owner = {};
+  try {
+    await trace.arm(owner);
+    expect(await trace.capture(owner, finalPath, performance.now() + 1)).toEqual({
+      status: "failed", phase: "publish", category: "timeout",
+    });
+    expect(dispose).toHaveBeenCalledOnce();
+    await cleanup;
+    expect(await fs.readdir(root.path)).toEqual([]);
+  } finally {
+    delayedOpen.mockRestore();
+    remove.mockRestore();
     await trace.release(owner);
     await root.cleanup();
   }
