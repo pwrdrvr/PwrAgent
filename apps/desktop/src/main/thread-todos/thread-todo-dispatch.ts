@@ -10,7 +10,7 @@ import type {
   ThreadTodoProject,
 } from "@pwragent/shared/contracts/thread-todos";
 import { CODEX_SPEED_LABELS, codexSpeedSettings, selectedCodexSpeed } from "@pwragent/shared/codex-speed";
-import { threadTodoActionProject } from "@pwragent/shared/contracts/thread-todos";
+import { threadTodoActionProject, threadTodoStartActionForRun } from "@pwragent/shared/contracts/thread-todos";
 import { THREAD_ENVIRONMENT_NONE } from "@pwragent/shared/contracts/agent";
 import {
   listCodexEnvironmentOptions,
@@ -182,8 +182,8 @@ export async function listThreadTodoDispatchEnvironments(
   };
   if (typeof request.id === "string") {
     const todo = deps.getTodo(request.id);
-    if (todo.action?.type !== "start_thread") {
-      throw new ThreadTodoError("invalid_arguments", "Only a start-thread card has environments to choose.");
+    if (!threadTodoStartActionForRun(todo.action, { startNewThread: true })) {
+      throw new ThreadTodoError("invalid_arguments", "Only a handoff card has environments to choose.");
     }
     const project = threadTodoActionProject(todo);
     if (request.repositoryOnly === true) {

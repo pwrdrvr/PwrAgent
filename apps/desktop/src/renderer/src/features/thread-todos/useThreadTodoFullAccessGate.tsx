@@ -1,5 +1,5 @@
 import { useCallback, useRef, type ReactNode } from "react";
-import { threadTodoSeenExecutionMode, type ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
+import { threadTodoSeenExecutionMode, threadTodoStartActionForRun, type ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useExecutionModeSelection } from "../../lib/useExecutionModeSelection";
 import type { ThreadTodoRunOptions } from "./thread-todos-view";
@@ -16,9 +16,7 @@ export function threadTodoRunRaisesToFullAccess(
   todo: ThreadTodo,
   options?: ThreadTodoRunOptions,
 ): boolean {
-  return todo.action?.type === "start_thread"
-    && options?.messageTarget === undefined
-    && todo.action.executionMode === "full-access";
+  return threadTodoStartActionForRun(todo.action, options)?.executionMode === "full-access";
 }
 
 /**
@@ -30,8 +28,9 @@ export function withSeenExecutionMode(
   todo: ThreadTodo,
   options?: ThreadTodoRunOptions,
 ): ThreadTodoRunOptions | undefined {
-  if (todo.action?.type !== "start_thread" || options?.messageTarget !== undefined) return options;
-  return { ...options, seenExecutionMode: threadTodoSeenExecutionMode(todo.action) };
+  const action = threadTodoStartActionForRun(todo.action, options);
+  if (!action) return options;
+  return { ...options, seenExecutionMode: threadTodoSeenExecutionMode(action) };
 }
 
 export type ThreadTodoFullAccessGate = {
