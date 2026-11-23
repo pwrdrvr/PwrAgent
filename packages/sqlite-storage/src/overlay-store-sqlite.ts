@@ -5892,6 +5892,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       fingerprint: string;
       archived: Array<{ ref: FederatedThreadRef; mountToken: string }>;
       refreshed: RemoteThreadPinSnapshotUpdate[];
+      acknowledgeArchiveDeletion?: (mount: { ref: FederatedThreadRef; mountToken: string }) => void;
     };
     insertAfter?: { threadId: string; sourceThreadId: string };
     move?: NavigationRelativeChildMove;
@@ -6020,13 +6021,18 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       if (pins.fingerprint !== this.readSubthreadPeerPinFingerprint()) {
         throw new Error("The mounted peer threads changed while discovering children. Try the move again.");
       }
-      for (const { ref, mountToken } of pins.archived) this.deleteRemoteThreadPin(ref, mountToken);
+      const deleted = pins.archived.filter(({ ref, mountToken }) => this.deleteRemoteThreadPin(ref, mountToken));
       this.writeRemoteThreadPinSnapshots(pins.refreshed);
       // Pin refresh remains useful when live peer data rules out the move.
       // Only the rank write rolls back on that rejection.
-      try { return { threadIds: apply() }; }
-      catch (error) { return { error }; }
+      try { return { threadIds: apply(), deleted }; }
+      catch (error) { return { error, deleted }; }
     }).immediate();
+    // A nested transaction only released a savepoint. Keep its proofs until
+    // the enclosing commit makes the removals visible to the viewer.
+    if (!this.stateDb.raw.inTransaction) {
+      for (const mount of result.deleted) pins.acknowledgeArchiveDeletion?.(mount);
+    }
     if ("error" in result) throw result.error;
     return result.threadIds;
   }

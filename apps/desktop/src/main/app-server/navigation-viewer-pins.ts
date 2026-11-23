@@ -22,7 +22,9 @@ export async function loadViewerNavigationPins(
 ): Promise<NavigationThreadSummary[]> {
   const pins = await store.readMountedRemoteThreadPinNavigationRows();
   const resolved = await cache.resolvePinnedThreads(pins);
-  for (const mount of archivedRemoteThreadPinMounts(pins, resolved.archived)) await store.removeRemoteThreadPin(mount);
+  for (const mount of archivedRemoteThreadPinMounts(pins, resolved.archived)) {
+    if (await store.removeRemoteThreadPin(mount)) resolved.acknowledgeArchiveDeletion?.(mount);
+  }
   await store.updateRemoteThreadPinSnapshots(resolved.refreshed);
   const ranks = new Map(pins.map((pin) => [federatedThreadIdentityKey(pin.ref), pin.localPinnedRank]));
   return resolved.threads.map(({ pinnedRank: _ownerRank, ...thread }) => {

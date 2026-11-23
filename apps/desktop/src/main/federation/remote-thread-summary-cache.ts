@@ -90,6 +90,8 @@ export type ResolvedRemotePins = {
   /** Pins proven to be archived on a reachable owner. The viewer can safely
    *  remove these instead of preserving a permanently stale fallback row. */
   archived: RemoteThreadPin["ref"][];
+  /** Acknowledge only after the token-guarded removal commits. */
+  acknowledgeArchiveDeletion?: (mount: { ref: RemoteThreadPin["ref"]; mountToken: string }) => void;
 };
 
 /**
@@ -697,6 +699,9 @@ export class RemoteThreadSummaryCache {
         ? changedMounts.has(owner) || previous !== this.mountedSelectionKey(owner)
         : this.cache.get(owner)?.descendants || this.inFlight.get(owner)?.descendants))
       .map(([owner]) => owner);
+    for (const owner of this.provenArchived.keys()) {
+      if (!pinsByInstanceId.has(owner)) this.provenArchived.delete(owner);
+    }
     for (const owner of this.missingPinSignatures.keys()) {
       if (!pinsByInstanceId.has(owner)) this.missingPinSignatures.delete(owner);
     }
@@ -732,6 +737,7 @@ export class RemoteThreadSummaryCache {
           thread,
         ]),
       );
+      const proofs = this.provenArchived.get(instanceId);
       for (const pin of group) {
         const pinKey = federatedThreadIdentityKey(pin.ref);
         const threadKey = buildThreadIdentityKey(
@@ -756,7 +762,7 @@ export class RemoteThreadSummaryCache {
           }
           continue;
         }
-        if (this.consumeArchivedProof(instanceId, threadKey, pin.mountToken)) {
+        if (proofs?.has(threadKey) && proofs.get(threadKey) === pin.mountToken) {
           archived.push(pin.ref);
           continue;
         }
@@ -821,7 +827,10 @@ export class RemoteThreadSummaryCache {
         );
       }
     }
-    return { threads, refreshed, archived };
+    return {
+      threads, refreshed, archived,
+      ...(archived.length ? { acknowledgeArchiveDeletion: (mount) => this.acknowledgeArchiveDeletion(mount) } : {}),
+    };
   }
 
   /**
@@ -1020,14 +1029,14 @@ export class RemoteThreadSummaryCache {
     this.scheduleWatchedExpiry();
   }
 
-  /** Report a proof once, and only for the mount observed by the owner probe. */
-  private consumeArchivedProof(instanceId: string, threadKey: string, mountToken: string | undefined): boolean {
+  private acknowledgeArchiveDeletion({ ref, mountToken }: { ref: RemoteThreadPin["ref"]; mountToken: string }): void {
+    if (ref.target.scope !== "remote") return;
+    const { instanceId } = ref.target;
     const proofs = this.provenArchived.get(instanceId);
-    if (!proofs?.has(threadKey)) return false;
-    const matchesMount = proofs.get(threadKey) === mountToken;
-    proofs.delete(threadKey);
+    const key = buildThreadIdentityKey(ref.backend, ref.threadId);
+    if (!proofs || proofs.get(key) !== mountToken) return;
+    proofs.delete(key);
     if (!proofs.size) this.provenArchived.delete(instanceId);
-    return matchesMount;
   }
 
   /**

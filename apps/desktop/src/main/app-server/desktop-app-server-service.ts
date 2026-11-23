@@ -2565,8 +2565,9 @@ class DesktopAppServerService {
         };
         if (resolution.archived.length > 0) {
           await Promise.all(
-            archivedRemoteThreadPinMounts(pins, resolution.archived).map((mount) =>
-              this.getOverlayStore().removeRemoteThreadPin(mount)),
+            archivedRemoteThreadPinMounts(pins, resolution.archived).map(async (mount) => {
+              if (await overlayStore.removeRemoteThreadPin(mount)) resolution.acknowledgeArchiveDeletion?.(mount);
+            }),
           );
         }
         if (resolution.refreshed.length > 0) {

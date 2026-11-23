@@ -155,8 +155,16 @@ async function updateRelativeOrder(
       }
     }
     const listings = await Promise.all([...group.scopes].map(async ([scope, ids]) => {
-      const threads = await registry.readSubthreadOrderProviderRows(scope, ids, orderedProviders.has(scope));
-      return threads.filter((thread) => thread.source === scope && ids.has(thread.id)
+      // A confirmed archive leaves its parent link in the overlay. A broken
+      // Claude sidecar can only make discovery incomplete for a live candidate.
+      // Keep all IDs in the event and storage fences so a racing restore retries.
+      const candidates = scope === "claude" ? new Set([...ids].filter((id) => {
+        const row = group.overlays.get(buildThreadIdentityKey(scope, id));
+        return !row || (row.archived === null && row.tombstoned === null);
+      })) : ids;
+      if (!candidates.size) return [];
+      const threads = await registry.readSubthreadOrderProviderRows(scope, candidates, orderedProviders.has(scope));
+      return threads.filter((thread) => thread.source === scope && candidates.has(thread.id)
         && !group.managed.has(buildThreadIdentityKey(scope, thread.id)));
     }));
     const children = resolveLocalSubthreadOrderChildren(target, group, listings);
@@ -169,7 +177,7 @@ async function updateRelativeOrder(
       // Resolve and commit without yielding to a newer live cache publication.
       const resolved = peers.summaries.readPinnedThreads(saved.pins);
       peerPins = { fingerprint: saved.fingerprint, archived: archivedRemoteThreadPinMounts(saved.pins, resolved.archived),
-        refreshed: resolved.refreshed };
+        refreshed: resolved.refreshed, acknowledgeArchiveDeletion: resolved.acknowledgeArchiveDeletion };
       for (const thread of resolved.threads) {
         const ref = thread.federation?.ref;
         if (!ref || !isRemoteFederationTarget(ref.target) || thread.federation?.derivedFromMountedParent

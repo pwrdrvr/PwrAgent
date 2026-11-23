@@ -34,6 +34,7 @@ vi.mock("../app-server/backend-registry", () => ({
 }));
 import { type PeerChildSource, peerSubthreadChildren, updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
 import { peerSubthreadKey } from "../app-server/thread-archive-sweeper";
+import { loadViewerNavigationPins } from "../app-server/navigation-viewer-pins";
 import { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
 
 let db: ReturnType<typeof openInMemoryStateDb>;
@@ -661,4 +662,96 @@ it("keeps a replacement mounted before the reorder when the real cache has archi
     reader.close();
     removeTempStateDbDir(tempDir);
   }
+});
+
+
+async function checkRejectedMoveKeepsArchiveProof(rejection: "owner-event" | "pin-change") {
+  const { dbPath, tempDir } = createTempStateDb("pwragent-subthread-retained-proof-");
+  const reader = StateDb.open(dbPath);
+  const writer = StateDb.open(dbPath);
+  const published = Promise.withResolvers<void>();
+  const cache = new RemoteThreadSummaryCache({
+    peers: () => [{ target: { scope: "remote", instanceId: PEER }, label: "Peer", capabilities: ["thread_navigation"] }],
+    fetchSnapshot: async () => ({ backend: "all", fetchedAt: 0, unchanged: false, threads: [], inboxThreadKeys: [], directories: [],
+      launchpadDefaults: { backend: "codex", executionMode: "default" } }),
+    fetchArchivedThreads: vi.fn().mockResolvedValueOnce([summary("codex", "archived-peer")]).mockResolvedValue([]),
+    peerStatus: () => ({ status: "connected" }),
+    onPinnedSummariesRefreshed: () => published.resolve(),
+    hasNavigationSubscription: () => true,
+  });
+  try {
+    const store = mocks.store = new SqliteOverlayStore(reader);
+    const target = { backend: "codex", parentThreadId: "root" } as const;
+    for (const threadId of ["anchor", "child"]) await store.setThreadParent({ ...target, threadId });
+    await pinPeerChild("archived-peer");
+    await pinPeerChild("other-pin", { parentThreadId: "elsewhere" });
+    mocks.readProvider.mockResolvedValue({ threads: ["root", "anchor", "child"].map((id) => summary("codex", id)) });
+    cache.readPinnedThreads(store.readSubthreadOrderPeerPins().pins);
+    await published.promise;
+
+    const discover = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<string>();
+    const moving = updateLocalSubthreadOrder({ ...target, move: { threadId: "child", anchorThreadId: "anchor", placement: "before" } },
+      { peers: {
+        localInstanceId: () => { discover.resolve(); return resume.promise; },
+        summaries: { readPinnedThreads: (pins) => {
+          const result = cache.readPinnedThreads(pins);
+          if (rejection === "pin-change") {
+            writer.raw.prepare(`UPDATE remote_thread_pins SET payload = json_set(payload, '$.summary.parentThreadId', ?)
+              WHERE thread_id = ?`).run("another-parent", "other-pin");
+          }
+          return result;
+        } },
+      } });
+    const assertion = expect(moving).rejects.toThrow("changed while discovering");
+    await discover.promise;
+    if (rejection === "owner-event") {
+      for (const listener of mocks.listeners) listener({ backend: "codex",
+        notification: { method: "thread/archived", params: { threadId: "anchor" } } });
+    }
+    resume.resolve(LOCAL);
+    await assertion;
+    expect((await store.listRemoteThreadPins()).map(({ ref }) => ref.threadId)).toContain("archived-peer");
+
+    // A rejected command never removed the pin. The next sidebar read must
+    // still see the owner proof and be able to commit the guarded deletion.
+    const remaining = await loadViewerNavigationPins(store, cache);
+    expect(remaining.map(({ id }) => id)).toEqual(["other-pin"]);
+    expect((await store.listRemoteThreadPins()).map(({ ref }) => ref.threadId)).toEqual(["other-pin"]);
+  } finally {
+    cache.dispose();
+    writer.close();
+    reader.close();
+    removeTempStateDbDir(tempDir);
+  }
+}
+
+it("preserves archive evidence when a local owner event rejects the reorder", async () => {
+  await checkRejectedMoveKeepsArchiveProof("owner-event");
+});
+
+it("models a rejected reorder followed by a sidebar cleanup of the same mount", async () => {
+  await fc.assert(fc.asyncProperty(fc.constantFrom("owner-event", "pin-change"), checkRejectedMoveKeepsArchiveProof), { numRuns: 6 });
+});
+
+it("skips unreadable archived Claude children and requires metadata after restore", async () => {
+  const store = mocks.store!;
+  const target = { backend: "codex", parentThreadId: "root" } as const;
+  for (const threadId of ["anchor", "child"]) await store.setThreadParent({ ...target, threadId });
+  const unreadable = { backend: "claude", threadId: "unreadable" } as const;
+  await store.setThreadParent({ ...unreadable, parentThreadId: "root", parentThreadBackend: "codex" });
+  mocks.readProvider.mockImplementation(async ({ backend, ids }: { backend: string; ids: ReadonlySet<string> }) => {
+    if (backend === "claude") {
+      if (ids.has(unreadable.threadId)) throw new Error("Unreadable Claude metadata");
+      return { threads: [] };
+    }
+    return { threads: ["root", "anchor", "child"].map((id) => summary("codex", id)) };
+  });
+  const request = { ...target, move: { threadId: "child", anchorThreadId: "anchor", placement: "before" } } as const;
+  await store.observeArchivedThreads([unreadable], 20);
+  await expect(updateLocalSubthreadOrder(request)).resolves.toMatchObject(target);
+  expect((await store.getThreadOverlayState({ backend: "codex", threadId: "root" }))?.subthreadOrder).toEqual(["child", "anchor"]);
+
+  await store.setThreadArchiveTombstone({ ...unreadable, restoredAt: 21 });
+  await expect(updateLocalSubthreadOrder(request)).rejects.toThrow("Unreadable Claude metadata");
 });
