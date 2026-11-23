@@ -1957,7 +1957,7 @@ export class AcpAgentClient {
       ? toolCall.name
       : undefined;
     const prompt = acpMcpToolName
-      ? `${this.approvalRequesterName} wants to use an MCP tool.`
+      ? mcpPermissionPrompt(this.approvalRequesterName, acpMcpToolName, toolCall)
       : permissionPrompt(this.approvalRequesterName, title, toolCall);
     const command = acpMcpToolName ? undefined : permissionCommand(title, toolCall);
 
@@ -2925,6 +2925,22 @@ function permissionPrompt(
 
 function isApprovalPromptText(text: string): boolean {
   return /^Requesting approval to Running:\s*/imu.test(text);
+}
+
+function mcpPermissionPrompt(
+  requesterName: string,
+  toolName: string,
+  toolCall: Record<string, unknown>,
+): string {
+  const title = readToolCallText(toolCall.title);
+  const content = readToolCallText(toolCall.content);
+  const details = [title, content].filter((text) =>
+    text && text !== toolName && text !== `Run ${toolName}`,
+  );
+  return [
+    `${requesterName} wants to use an MCP tool.`,
+    ...new Set(details),
+  ].join("\n\n");
 }
 
 function readToolCallText(value: unknown): string | undefined {

@@ -1231,10 +1231,16 @@ describe("AcpAgentClient", () => {
     await client.initialize();
     const session = await client.startSession({ cwd: "/repo", executionMode: "default" });
 
-    async function checkRequest(name: string, kind: string, mcp: boolean) {
+    async function checkRequest(
+      name: string,
+      kind: string,
+      mcp: boolean,
+      title = `Run ${name}`,
+      content?: unknown,
+    ) {
       const outcome = await transport.emitRequest("session/request_permission", {
         sessionId: session.sessionId,
-        toolCall: { toolCallId: "tool", kind, name, title: `Run ${name}`, status: "pending" },
+        toolCall: { toolCallId: "tool", kind, name, title, content, status: "pending" },
         options: [
           { optionId: "allow", name: "Allow", kind: "allow_once" },
           { optionId: "deny", name: "Deny", kind: "reject_once" },
@@ -1242,15 +1248,23 @@ describe("AcpAgentClient", () => {
       }, 1);
       const request = onRequest.mock.lastCall![0];
       expect(request.params.acpMcpToolName).toBe(mcp ? name : undefined);
-      expect(request.params.command).toBe(mcp ? undefined : `Run ${name}`);
+      expect(request.params.command).toBe(mcp ? undefined : title);
       expect(outcome).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+      return request.params.prompt;
     }
 
-    await checkRequest("mcp_pwragent_get_pull_request", "other", true);
+    const tool = "mcp_pwragent_get_pull_request";
+    expect(await checkRequest(tool, "other", true)).toBe("Antigravity wants to use an MCP tool.");
+    expect(await checkRequest(tool, "other", true, "Read PR #42", [
+      { type: "content", content: { type: "text", text: "Check the release notes." } },
+    ])).toBe("Antigravity wants to use an MCP tool.\n\nRead PR #42\n\nCheck the release notes.");
     await fc.assert(fc.asyncProperty(
       fc.stringMatching(/^[a-z][a-z0-9_-]{2,40}$/),
-      async (name) => {
-        await checkRequest(`mcp_${name}`, "other", true);
+      fc.integer({ min: 1, max: 1000 }),
+      async (name, number) => {
+        const title = `Read PR #${number}`;
+        const prompt = await checkRequest(`mcp_${name}`, "other", true, title, title);
+        expect(prompt?.split(title)).toHaveLength(2);
         await checkRequest(name, "other", false);
         await checkRequest(`mcp_${name}`, "execute", false);
       },

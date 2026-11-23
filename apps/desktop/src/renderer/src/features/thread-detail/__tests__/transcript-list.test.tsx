@@ -5625,7 +5625,7 @@ Implementation notes remain in a readable bubble.`;
           params: {
             threadId: "thread-1",
             requestId: "approval-1",
-            prompt: "Antigravity wants to use an MCP tool.",
+            prompt: "Antigravity wants to use an MCP tool.\n\nRead pull request #42.",
             acpMcpToolName: "mcp_pwragent_get_pull_request",
             acpPermissionOptions: [
               { optionId: "allow", name: "Allow", kind: "allow_once" },
@@ -5640,6 +5640,7 @@ Implementation notes remain in a readable bubble.`;
 
     expect(screen.getByText("MCP tool approval")).toBeInTheDocument();
     expect(screen.getByText("mcp_pwragent_get_pull_request")).toBeInTheDocument();
+    expect(screen.getByText("Read pull request #42.")).toBeInTheDocument();
     expect(screen.queryByText("Command:")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument();
   });
