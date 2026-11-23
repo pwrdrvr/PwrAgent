@@ -99,6 +99,7 @@ type ProjectionIndex = {
   parentCandidates: Map<string, NavigationThreadSummary[]>;
   repositories: ReturnType<typeof repositoryIdentitiesByPath>;
   checkoutProjects: ReadonlyMap<string, NavigationDirectorySummary>;
+  workspaceProjects: ReadonlyMap<string, NavigationDirectorySummary>;
   childCountByParent: Map<string, number>;
   viewerChildCountByParent: Map<string, number>;
 };
@@ -849,7 +850,7 @@ function withRepositoryIdentities(
 /** Project geometry counts primary membership once, independent of loaded cards. */
 function buildProjectGeometry(
   index: NavigationQueryIndex,
-  checkoutProjects: ProjectionIndex["checkoutProjects"],
+  projectMembership: Pick<ProjectionIndex, "checkoutProjects" | "workspaceProjects">,
 ): NavigationDirectoryRow[] {
   const projects = new Map<string, NavigationDirectoryRow>();
   const launchpads = new Set(index.directories.filter((directory) => directory.launchpad).map((directory) => directory.key));
@@ -859,8 +860,8 @@ function buildProjectGeometry(
     if (!isStarMapOwnerThread(thread) || seen.has(threadKey(thread))) continue;
     seen.add(threadKey(thread));
     const primary = thread.linkedDirectories[0];
-    const checkoutProject = checkoutProjectForThread(thread, checkoutProjects);
-    const descriptor = checkoutProject ?? (primary ? classifyDirectory(primary) : undefined);
+    const home = starMapProjectForThread(thread, projectMembership);
+    const descriptor = home ?? (primary ? classifyDirectory(primary) : undefined);
     const key = descriptor?.key ?? "__no-project__";
     let project = projects.get(key);
     if (!project) {
@@ -870,13 +871,13 @@ function buildProjectGeometry(
       // only one of them may have a cached status.
       const repositoryKey =
         (descriptor?.path ? repositories.get(descriptor.path)?.repositoryKey : undefined)
-        ?? (checkoutProject ? undefined : primary?.path ? repositories.get(primary.path)?.repositoryKey : undefined);
+        ?? (home ? undefined : primary?.path ? repositories.get(primary.path)?.repositoryKey : undefined);
       project = {
         key,
         kind: descriptor?.kind ?? "unlinked",
-        label: checkoutProject?.label ?? (descriptor ? (descriptor.label !== primary?.label ? descriptor.label : segments?.at(-1) ?? descriptor.label) : "No project"),
+        label: home?.label ?? (descriptor ? (descriptor.label !== primary?.label ? descriptor.label : segments?.at(-1) ?? descriptor.label) : "No project"),
         path: descriptor?.path,
-        ...(checkoutProject?.checkoutPaths ? { checkoutPaths: checkoutProject.checkoutPaths } : {}),
+        ...(home?.checkoutPaths ? { checkoutPaths: home.checkoutPaths } : {}),
         ...(repositoryKey ? { repositoryKey } : {}),
         counts: { total: 0, active: 0, unread: 0, review: 0 },
         pinnedRootCount: 0,
@@ -1009,12 +1010,20 @@ function checkoutProjectForThread(
   return thread.federation ? undefined : checkoutProjects.get(buildThreadIdentityKey(thread.source, thread.id));
 }
 
+function starMapProjectForThread(
+  thread: NavigationThreadSummary,
+  { workspaceProjects, checkoutProjects }: Pick<ProjectionIndex, "checkoutProjects" | "workspaceProjects">,
+): NavigationDirectorySummary | undefined {
+  return workspaceProjects.get(buildThreadIdentityKey(thread.source, thread.id))
+    ?? checkoutProjectForThread(thread, checkoutProjects);
+}
+
 function starMapProjectKey(
   thread: NavigationThreadSummary,
-  checkoutProjects: ProjectionIndex["checkoutProjects"],
+  projectMembership: Pick<ProjectionIndex, "checkoutProjects" | "workspaceProjects">,
 ): string {
-  const checkoutProject = checkoutProjectForThread(thread, checkoutProjects);
-  if (checkoutProject) return checkoutProject.key;
+  const home = starMapProjectForThread(thread, projectMembership);
+  if (home) return home.key;
   const primary = thread.linkedDirectories[0];
   return primary ? classifyDirectory(primary).key : "__no-project__";
 }
@@ -1042,6 +1051,7 @@ function selectQueryThreads(params: {
   threadsByLegacyKey: Map<string, NavigationThreadSummary>;
   parentCandidates: ReadonlyMap<string, readonly NavigationThreadSummary[]>;
   checkoutProjects: ProjectionIndex["checkoutProjects"];
+  workspaceProjects: ProjectionIndex["workspaceProjects"];
   /** A split lens's root resolver, shared with the page's collection size. */
   lensRootOf?: (thread: NavigationThreadSummary) => NavigationThreadSummary;
 }): NavigationThreadSummary[] {
@@ -1074,7 +1084,7 @@ function selectQueryThreads(params: {
   if (query.kind === "star-map") {
     const projectKey = query.projectKey ? findDirectory(params.index, query.projectKey)?.key ?? query.projectKey : undefined;
     return ordinaryThreads.filter(isStarMapOwnerThread)
-      .filter((thread) => projectKey === undefined || starMapProjectKey(thread, params.checkoutProjects) === projectKey)
+      .filter((thread) => projectKey === undefined || starMapProjectKey(thread, params) === projectKey)
       .filter((thread) => (thread.pinnedRank !== undefined && query.filters.pinned !== "exclude")
         || passesNavigationStarMapFilters(starMapSignals(thread, params.index), query.filters))
       .sort((left, right) => {
@@ -1294,11 +1304,16 @@ function buildChildCounts(
 function buildProjectionIndex(index: NavigationQueryIndex, onWork?: NavigationProjectionWork, includeChildCounts = true): ProjectionIndex {
   onWork?.("index", index.threads.length);
   const checkoutProjects = new Map<string, NavigationDirectorySummary>();
+  const workspaceProjects = new Map<string, NavigationDirectorySummary>();
   const foldedProjects = new Map<string, NavigationDirectorySummary>();
   const caseProjects = new Map<string, NavigationDirectorySummary>();
   for (const directory of index.directories) {
     if (directory.checkoutPaths) {
       for (const key of directory.threadKeys) checkoutProjects.set(key, directory);
+    }
+    // The owner has already collapsed allowed scratch roots in Directories.
+    if (directory.kind === "workspace") {
+      for (const key of directory.threadKeys) workspaceProjects.set(key, directory);
     }
     for (const key of index.worktreeProjectAliases?.[directory.key] ?? []) foldedProjects.set(key, directory);
     const caseAliases = index.directoryCaseAliases?.[directory.key];
@@ -1322,6 +1337,7 @@ function buildProjectionIndex(index: NavigationQueryIndex, onWork?: NavigationPr
     parentCandidates: buildParentCandidates(index),
     repositories: repositoryIdentitiesByPath(index),
     checkoutProjects,
+    workspaceProjects,
   };
   return { ...maps, ...(includeChildCounts ? buildChildCounts(index.threads, maps, onWork)
     : { childCountByParent: new Map<string, number>(), viewerChildCountByParent: new Map<string, number>() }) };
@@ -1496,7 +1512,7 @@ export function projectNavigationQuery(params: {
   const snapshot = snapshots.get(params.index);
   const onWork = params.onIndexWork ?? snapshot?.onWork;
   const prepared = snapshot?.projection ?? buildProjectionIndex(params.index, onWork, false);
-  const { threadsByIdentity, threadsByLegacyKey, parentCandidates, repositories, checkoutProjects } = prepared;
+  const { threadsByIdentity, threadsByLegacyKey, parentCandidates, repositories, checkoutProjects, workspaceProjects } = prepared;
   const scopedDirectory = queryDirectory({ query, index: params.index, threadsByLegacyKey });
   const scopedMembers = scopedDirectory ? new Set(directoryMemberThreads(scopedDirectory, threadsByLegacyKey)) : undefined;
   const { childCountByParent, viewerChildCountByParent } = scopedMembers
@@ -1511,6 +1527,7 @@ export function projectNavigationQuery(params: {
     threadsByLegacyKey,
     parentCandidates,
     checkoutProjects,
+    workspaceProjects,
     lensRootOf,
   });
   if (((query.kind === "lens" && query.lens === "attention")
@@ -1609,7 +1626,9 @@ export function projectNavigationQuery(params: {
         thread: parent?.ownerInstanceId && !thread.parentThreadInstanceId
           ? { ...thread, parentThreadInstanceId: parent.ownerInstanceId } : thread,
         homeProject: homeProjects?.get(thread),
-        checkoutProject: checkoutProjectForThread(thread, checkoutProjects),
+        checkoutProject: query.kind === "star-map"
+          ? starMapProjectForThread(thread, prepared)
+          : checkoutProjectForThread(thread, checkoutProjects),
         omitPullRequests: membershipOnly || defer,
       }),
       orderKey: rowOrderKey(index),
@@ -1681,7 +1700,7 @@ export function projectNavigationQuery(params: {
     } : {}),
     ...(includeDirectories ? { collectionKind: "directories" as const } : {}),
     ...(query.kind === "directory-index" && query.match === "mention" ? { directoryMatch: "mention" as const } : {}),
-    directories: query.kind === "star-map-geometry" ? buildProjectGeometry(params.index, checkoutProjects)
+    directories: query.kind === "star-map-geometry" ? buildProjectGeometry(params.index, prepared)
       : indexedDirectories ? buildDirectoryRows({
         snapshot: { ...params.index, directories: indexedDirectories },
         threadsByLegacyKey,

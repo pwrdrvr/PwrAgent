@@ -6,7 +6,7 @@ import type {
   NavigationThreadSummary,
   ThreadOverlayState,
 } from "@pwragent/shared/contracts/navigation";
-import { materializeNavigationThreads } from "@pwragent/shared/navigation-state";
+import { buildNavigationSnapshot, materializeNavigationThreads } from "@pwragent/shared/navigation-state";
 import { projectNavigationQuery } from "../navigation-query-projection";
 
 function thread(
@@ -142,6 +142,23 @@ describe("navigation query projection", () => {
       request: request({ kind: "star-map", projectKey: "directory:/repo", filters: {} }),
     });
     expect(project.counts.backends).toBeUndefined();
+  });
+
+  it("uses the owner's custom Workspaces group for Star Map geometry and cards", () => {
+    const root = "/state/profiles/default/projects";
+    const key = `workspace:${root}`;
+    const threads = ["a1b2c3", "d4e5f6"].map((suffix) => {
+      const path = `${root}/2026-11-22-${suffix}`;
+      return thread(suffix, { linkedDirectories: [{ id: path, kind: "local", label: suffix, path }] });
+    });
+    const index = buildNavigationSnapshot({
+      backend: "all", fetchedAt: 1, firstSnapshot: true, unchanged: false,
+      threads, workspaceRoots: [root], overlayByThreadKey: {}, previousKnownThreadKeys: [],
+    });
+    const geometry = projectNavigationQuery({ index, request: request({ kind: "star-map-geometry" }) });
+    expect(geometry.directories).toMatchObject([{ key, kind: "workspace", label: "Workspaces", counts: { total: 2 } }]);
+    const cards = projectNavigationQuery({ index, request: request({ kind: "star-map", projectKey: key, filters: {} }) });
+    expect(cards.entries.map(({ row }) => row.id).sort()).toEqual(["a1b2c3", "d4e5f6"]);
   });
 
   it.each([

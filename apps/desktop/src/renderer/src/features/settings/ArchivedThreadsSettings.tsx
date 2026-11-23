@@ -13,6 +13,7 @@ import {
 } from "@pwragent/shared/contracts/settings";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { isToolManagedWorktreePath } from "@pwragent/shared/worktree-paths";
+import { findConfiguredScratchProjectsRoot } from "@pwragent/shared/directory-navigation";
 import {
   type AppServerBackendKind,
   type AppServerThreadSummary,
@@ -1023,7 +1024,7 @@ function resolveWorkspaceProject(
   thread: AppServerThreadSummary,
   workspaceRoots: string[],
 ): ArchivedProjectIdentity | null | undefined {
-  const workspaceRoot = threadWorkspaceRoot(thread);
+  const workspaceRoot = threadWorkspaceRoot(thread, workspaceRoots);
   if (!workspaceRoot) {
     return undefined;
   }
@@ -1043,6 +1044,7 @@ function resolveWorkspaceProject(
 
 function threadWorkspaceRoot(
   thread: AppServerThreadSummary,
+  workspaceRoots: string[],
 ): string | undefined {
   return [
     thread.projectKey,
@@ -1051,7 +1053,8 @@ function threadWorkspaceRoot(
       directory.worktreePath,
     ]),
   ]
-    .map(matchScratchProjectsRoot)
+    .map((pathname) => findConfiguredScratchProjectsRoot(pathname, workspaceRoots, { includeDescendants: true })
+      ?? matchScratchProjectsRoot(pathname))
     .find((root): root is string => Boolean(root));
 }
 

@@ -1,0 +1,14 @@
+# Local CPU checkout
+
+Use `resource_checkout_discover` on the host running the work. Workloads absent from this list need no reservation. On a counted resource, cap the budget below at the discovered `sharing.capacity` and reduce the command’s parallelism to match. On an exclusive resource, request a checkout only above 33% of the host’s available logical CPUs. If checkout is unavailable, continue with parallelism limits that fit the host.
+
+- Unit tests — Start with 4 CPUs for a focused run that skips `desktop-main`, such as `pnpm test --project shared --maxWorkers=4`. Set `--maxWorkers` to the CPU budget. Use the uncapped budget for the full suite or any run that includes `desktop-main`, whose Outpost bootstrap runs outside Vitest’s worker limit.
+- Desktop E2E — Budget 4 CPUs for `pnpm --filter @pwragent/desktop test:e2e:prebuilt --workers=1`. `pnpm test:desktop-e2e` also builds the app, so use the uncapped budget below.
+- Lint — Budget 4 CPUs for `OXLINT_THREADS=4 pnpm lint:oxlint` or `OXLINT_THREADS=2 GOMAXPROCS=2 pnpm lint:oxlint:typed`. On smaller pools, split the typed budget between the two settings, with a minimum of one per tool on a single-CPU host. For plain `pnpm lint`, use the uncapped budget.
+- Typecheck — Budget 4 CPUs for `GOMAXPROCS=4 pnpm -r --workspace-concurrency=1 --if-present typecheck`. This runs one native TypeScript compiler at a time.
+- Uncapped heavy work — For `pnpm build` and other listed workloads that may saturate the host, budget all but two CPUs, with a minimum of one slot. For example, request 16 of 18 or 12 of 14.
+
+1. Send `resource_checkout_action` with `kind: "request"`, the discovered `resourceId`, a short `purpose`, an `expectedDurationMs` that covers the run, and an `idempotencyKey`. Set `units` to the CPU count for a counted resource and omit it for an exclusive resource.
+2. Start only after the request is granted. If it queues, use `resource_checkout_status` with the original request key to check for promotion. Cancel an unneeded queued request with `kind: "cancel_request"` and its `queueEntryId`. Apply the parallelism cap in the command itself. A shell checkout coordinates with other PwrAgent checkouts, and shell CPU use is outside broker enforcement.
+3. Monitor the grant’s `deadlineAt` via `resource_checkout_status` and leave time to stop the command and its child processes. If the run needs more time, send `kind: "extend"` with the resource ID, allocation ID, generation, and a new idempotency key while the grant is active. Confirm the new deadline before relying on it. If you cannot extend, stop the workload before the current deadline.
+4. After the workload exits, even on failure, send `kind: "release"` with the resource ID, granted `allocationId` and `generation`, and a separate idempotency key for the release. Check that the request status is `ended`. If a tool call has an unknown result, check its receipt or retry with the same key.
