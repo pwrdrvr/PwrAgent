@@ -1386,7 +1386,10 @@ export class ClaudeBackend {
             this.options.mcpStartupTimeoutMs ?? CLAUDE_MCP_STARTUP_TIMEOUT_MS);
         }
         if (config.jobMonitorCreationEnabled !== undefined) {
-          current.config.jobMonitorCreationEnabled = await readClaudeJobMonitorCatalog(current.query).catch(() => undefined);
+          // A startup status without a tool list gives no evidence of drift.
+          // Keep the launch setting so an unchanged preference can reuse the session.
+          const listed = await readClaudeJobMonitorCatalog(current.query).catch(() => undefined);
+          current.config.jobMonitorCreationEnabled = listed ?? config.jobMonitorCreationEnabled;
         }
         // A fork's totals start from its source's, so it reads them too.
         if ((session.sdkSessionId ?? session.forkFromSdkSessionId) && !session.modelUsage) {
