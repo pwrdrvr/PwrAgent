@@ -333,6 +333,7 @@ export function materializeNavigationThreads(params: {
       codexSkillProfile: overlay?.codexSkillProfile,
       monitorJobSuggestionsEnabled: overlay?.monitorJobSuggestionsEnabled,
       jobMonitorCreationEnabled: thread.source === "codex" || thread.source === "claude" || thread.jobMonitorCreationControl
+        || (isAcpBackendId(thread.source) && overlay?.jobMonitorCreationEnabled === false)
         ? overlay?.jobMonitorCreationEnabled : undefined,
       prAutoDispatchEnabled: overlay?.prAutoDispatchEnabled ?? false,
       prAutoDispatchPending: overlay?.prAutoDispatchPending,

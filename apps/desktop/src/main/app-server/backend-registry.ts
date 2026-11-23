@@ -6124,7 +6124,7 @@ export class DesktopBackendRegistry {
     });
 
     try {
-      const result = client.startPrompt({
+      const result = await client.startPrompt({
         sessionId: params.threadId,
         prompt: promptPayload.prompt,
         promptContent: promptPayload.promptContent,
@@ -16006,15 +16006,17 @@ export class DesktopBackendRegistry {
       || typeof threadId !== "string" || !threadId.trim() || typeof enabled !== "boolean") {
       throw new Error("Changing Job Monitor creation requires a thread and an enabled state.");
     }
-    if (isAcpBackendId(backend)) {
-      this.assertThreadOwnership();
-      if (!this.acpBackend.supportsJobMonitorControl(backend, threadId)) {
+    const identity = { backend, threadId };
+    const acpBackend = isAcpBackendId(backend) ? backend : undefined;
+    if (acpBackend) this.assertThreadOwnership();
+    const clearingOptOut = enabled && !(await this.isJobMonitorCreationEnabled(identity));
+    if (acpBackend && !this.acpBackend.supportsJobMonitorControl(acpBackend, threadId)) {
+      const session = clearingOptOut ? this.acpBackend.getSession(acpBackend, threadId) : undefined;
+      if (!session || session.hidden || session.archivedAt !== undefined) {
         throw new Error("This ACP session doesn't support changing Job Monitors.");
       }
     }
-    const identity = { backend, threadId };
-    const deferredTurnId = enabled && !(await this.isJobMonitorCreationEnabled(identity))
-      ? this.jobMonitorCreationTurnId(identity) : undefined;
+    const deferredTurnId = clearingOptOut ? this.jobMonitorCreationTurnId(identity) : undefined;
     this.overlayStore.setThreadJobMonitorCreation({ ...identity, enabled });
     if (deferredTurnId) {
       // Retain this turn's availability while saving On for the next turn.

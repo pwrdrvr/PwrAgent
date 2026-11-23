@@ -18,7 +18,9 @@ export function threadJobMonitorControl(
   const target = federation?.ref.target ?? windowTarget;
   if (target?.scope !== "remote") {
     const backend = thread.source;
-    if (backend !== "codex" && backend !== "claude" && !(isAcpBackendId(backend) && thread.jobMonitorCreationControl)) return undefined;
+    if (backend !== "codex" && backend !== "claude"
+      && !(isAcpBackendId(backend) && thread.archivedAt === undefined
+        && (thread.jobMonitorCreationControl || thread.jobMonitorCreationEnabled === false))) return undefined;
     return (enabled) => setJobMonitorCreation({
       threadId: thread.id, enabled, ...(backend !== "codex" ? { backend } : {}),
     });

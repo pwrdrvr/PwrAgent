@@ -107,7 +107,13 @@ it("uses the ACP owner's saved catalog and denies cached monitor calls through t
     turnState.unregisterTurn(turn);
     await toggle(false);
     expect((await overlayStore.getThreadOverlayState({ backend, threadId }))?.jobMonitorCreationEnabled).toBe(false);
-    client.startPrompt({ sessionId: threadId, prompt: "next prompt" });
+    const send = (text: string) => registry.startTurn({ backend, threadId, input: [{ type: "text", text }] });
+    transport.failClose = true;
+    await expect(send("unsent prompt")).rejects.toThrow("couldn't refresh its Job Monitor tools");
+    expect(transport.promptTools).toHaveLength(0);
+    expect(client.readReplay(threadId).messages).not.toContainEqual(expect.objectContaining({ text: "unsent prompt" }));
+    transport.failClose = false;
+    await send("next prompt");
     await vi.waitFor(() => expect(transport.promptTools).toHaveLength(1));
     expect(transport.promptTools[0]).not.toContain("create_monitor_delegation");
     expect(adapter.sessionToThreadSummary(adapter.getSession(backend, threadId)!)).toMatchObject({
@@ -121,6 +127,35 @@ it("uses the ACP owner's saved catalog and denies cached monitor calls through t
   }
 });
 
+it("lets an ACP owner clear an old opt-out without closing an unverified session", async () => {
+  const backend = "acp:grok";
+  const threadId = "after-upgrade";
+  const identity = { backend, threadId } as const;
+  const sessions = new AcpSessionStore(stateDb);
+  const overlay = new SqliteOverlayStore(stateDb);
+  sessions.upsertSession({ backendId: backend, sessionId: threadId, title: "Fixture",
+    cwd: "/repo", createdAt: 1, updatedAt: 1, executionMode: "default", status: "idle" });
+  overlay.setThreadJobMonitorCreation({ ...identity, enabled: false });
+  const createAcpTransport = vi.fn(() => new FakeAcpAgentTransport());
+  const registry = createDesktopBackendRegistry({
+    codexClient: new MockBackendClient({}), acpSessionStore: sessions, createAcpTransport,
+    overlayStore: {
+      ...createOverlayStoreMock(),
+      getThreadOverlayState: request => overlay.getThreadOverlayState(request),
+      setThreadJobMonitorCreation: request => overlay.setThreadJobMonitorCreation(request),
+    },
+  });
+  try {
+    await expect(registry.setThreadJobMonitorCreation({ ...identity, enabled: true }))
+      .resolves.toEqual({ threadId, enabled: true });
+    expect((await overlay.getThreadOverlayState(identity))?.jobMonitorCreationEnabled).toBeUndefined();
+    await expect(registry.setThreadJobMonitorCreation({ ...identity, enabled: false })).rejects.toThrow("doesn't support");
+    expect(createAcpTransport).not.toHaveBeenCalled();
+  } finally {
+    await registry.close();
+  }
+});
+
 type AgentSideSession = { client: Client; tools: string[] };
 
 /**
@@ -129,6 +164,7 @@ type AgentSideSession = { client: Client; tools: string[] };
  * that list until session/close, as Grok does.
  */
 class ListingAgentTransport extends FakeAcpAgentTransport {
+  failClose = false;
   readonly sessions = new Map<string, AgentSideSession>();
   /** The tools each prompt's session had listed, in order. */
   readonly promptTools: string[][] = [];
@@ -145,6 +181,7 @@ class ListingAgentTransport extends FakeAcpAgentTransport {
       this.sessions.set(String(params?.sessionId), await this.listTools(params));
     }
     if (method === "session/close") {
+      if (this.failClose) throw new Error("Fixture refused session close");
       const session = this.sessions.get(String(params?.sessionId));
       this.sessions.delete(String(params?.sessionId));
       await session?.client.close();

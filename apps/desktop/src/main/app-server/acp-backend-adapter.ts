@@ -169,9 +169,12 @@ export type AcpRuntimeClient = Pick<
   | "loadSession"
   | "readReplay"
   | "refreshSession"
-  | "startPrompt"
   | "startSession"
-> &
+> & {
+  startPrompt(
+    params: Parameters<AcpAgentClient["startPrompt"]>[0],
+  ): ReturnType<AcpAgentClient["startPrompt"]> | Awaited<ReturnType<AcpAgentClient["startPrompt"]>>;
+} &
   Partial<
     Pick<
       AcpAgentClient,

@@ -89,6 +89,11 @@ The driver restored creation through a second close/load and observed a
 second creation-tool call. The held MCP call stayed on a separate session
 throughout, as PwrAgent Job Monitors do.
 
+Repeat probes for all three builds used a fresh HTTP URL scope and signed
+MCP session for every reload. The scoped `tools/list` returned the expected
+catalog in both directions before the next prompt. The sibling MCP call still
+completed after both reloads.
+
 Separate probes started a 12-second background command on the parent itself.
 Closing that session before the command finished interrupted it on all three
 builds. Grok reported a running `background_tasks` snapshot and Antigravity

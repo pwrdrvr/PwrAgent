@@ -3350,9 +3350,11 @@ describe("AcpAgentClient", () => {
       const session = await client.startSession({ cwd: "/repo", executionMode: "default" });
       const memory = Promise.withResolvers<string>();
       const readAgentMemory = vi.fn(() => memory.promise);
-      client.startPrompt({ sessionId: session.sessionId, prompt: "stop this", readAgentMemory });
+      const cancelled = expect(client.startPrompt({ sessionId: session.sessionId, prompt: "stop this", readAgentMemory }))
+        .rejects.toThrow("cancelled before it was sent");
       await vi.waitFor(() => expect(readAgentMemory).toHaveBeenCalledOnce());
       await client.cancelSession(session.sessionId);
+      await cancelled;
       await vi.waitFor(() => expect(client.hasActiveTurns()).toBe(false));
       memory.resolve("private context");
       await memory.promise;
@@ -3385,7 +3387,7 @@ describe("AcpAgentClient", () => {
     const persistedSession = store.getSession("acp:codex-acp", session.sessionId);
     await client.cancelSession(session.sessionId);
 
-    expect(prompt).toEqual({
+    await expect(prompt).resolves.toEqual({
       sessionId: "session-1",
       turnId: "pending:session-1:1000",
     });
@@ -4590,7 +4592,7 @@ describe("AcpAgentClient", () => {
       turnId: "pending:session-1",
     });
 
-    expect(prompt).toEqual({
+    await expect(prompt).resolves.toEqual({
       sessionId: "session-1",
       turnId: "pending:session-1",
     });

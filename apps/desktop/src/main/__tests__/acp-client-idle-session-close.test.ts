@@ -99,7 +99,7 @@ async function createClient(options: {
 }
 
 async function finishPrompt(client: AcpAgentClient, sessionId: string, prompt: string) {
-  client.startPrompt({ sessionId, prompt });
+  await client.startPrompt({ sessionId, prompt });
   await vi.waitFor(() => {
     expect(client.hasActiveTurns()).toBe(false);
   });
@@ -195,8 +195,8 @@ it.each([
   transport.emitSessionUpdate("verified", running);
   await expect(client.closeIdleSessions({ idleMs: 0 })).resolves.toEqual([]);
   toggleOff();
-  await finishPrompt(client, "verified", "wait for work");
-  expect(onPromptError.mock.calls[0]?.[0].error).toHaveProperty("message", expect.stringContaining("background work"));
+  await expect(client.startPrompt({ sessionId: "verified", prompt: "wait for work" })).rejects.toThrow("background work");
+  expect(onPromptError).not.toHaveBeenCalled();
   expect(transport.methods()).toEqual(["initialize", "session/new"]);
   transport.emitSessionUpdate("verified", ended);
   await finishPrompt(client, "verified", "retry after work");
@@ -218,8 +218,8 @@ it.each(["close", "load", "list"] as const)("withholds the prompt when catalog %
   const requestCount = transport.requests.length;
   toggleOff();
   fail = true;
-  await finishPrompt(client, "verified", "blocked turn");
-  expect(onPromptError).toHaveBeenCalledOnce();
+  await expect(client.startPrompt({ sessionId: "verified", prompt: "blocked turn" })).rejects.toThrow();
+  expect(onPromptError).not.toHaveBeenCalled();
   expect(transport.methods().slice(requestCount)).not.toContain("session/prompt");
   fail = false;
   await finishPrompt(client, "verified", "retry");
@@ -255,9 +255,11 @@ it("cancels a send waiting for catalog refresh without cancelling the provider s
   await client.initialize();
   await client.startSession({ cwd: "/repo", executionMode: "default" });
   toggleOff();
-  client.startPrompt({ sessionId: "verified", prompt: "cancel this send" });
+  const cancelled = expect(client.startPrompt({ sessionId: "verified", prompt: "cancel this send" }))
+    .rejects.toThrow("cancelled before it was sent");
   await vi.waitFor(() => expect(transport.methods()).toContain("session/close"));
   await client.cancelSession("verified");
+  await cancelled;
   await vi.waitFor(() => expect(client.hasActiveTurns()).toBe(false));
   finishClose();
   await vi.waitFor(() => expect(transport.methods()).toContain("session/load"));

@@ -6,6 +6,20 @@ import { scopeDesktopApiToFederationTarget } from "../federation-desktop-api";
 import { threadJobMonitorControl } from "../job-monitor-control";
 
 describe("scopeDesktopApiToFederationTarget", () => {
+  it("can clear a saved ACP opt-out after the runtime loses refresh support", async () => {
+    const thread: NavigationThreadSummary = { source: "acp:grok", id: "grok-thread", title: "Fixture",
+      titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: true }, jobMonitorCreationEnabled: false };
+    const setThreadJobMonitorCreation = vi.fn(async () => ({ threadId: thread.id, enabled: true }));
+    const api = { setThreadJobMonitorCreation };
+    const restore = threadJobMonitorControl(api, thread, undefined);
+    expect(restore).toBeDefined();
+    await restore?.(true);
+    expect(setThreadJobMonitorCreation).toHaveBeenCalledExactlyOnceWith({
+      backend: "acp:grok", threadId: thread.id, enabled: true,
+    });
+    expect(threadJobMonitorControl(api, { ...thread, jobMonitorCreationEnabled: undefined }, undefined)).toBeUndefined();
+  });
+
   it("exposes the Job Monitor toggle for a verified ACP session on its local owner", async () => {
     const thread: NavigationThreadSummary = { source: "acp:grok", id: "grok-thread",
       title: "Fixture", titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: true } };

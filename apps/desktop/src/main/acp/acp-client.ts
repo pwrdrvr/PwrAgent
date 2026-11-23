@@ -1166,6 +1166,7 @@ export class AcpAgentClient {
     await this.loadSessionFromAgent(metadata, options);
   }
 
+  /** Acknowledge dispatch after preflight. Completion still arrives through turn events. */
   startPrompt(params: {
     sessionId: string;
     prompt: string;
@@ -1179,26 +1180,11 @@ export class AcpAgentClient {
      */
     agentInstructions?: string;
     readAgentMemory?: () => Promise<string | undefined>;
-  }): { sessionId: string; turnId: string } {
+  }): Promise<{ sessionId: string; turnId: string }> {
     const turnId = params.turnId ?? `pending:${params.sessionId}:${this.now()}`;
-    const receivedAt = this.now();
     this.startTrackedTurn(params.sessionId, turnId);
-    this.normalizerFor(params.sessionId).recordUserPrompt({
-      sessionId: params.sessionId,
-      prompt: params.prompt,
-      parts: params.parts,
-      turnId,
-      receivedAt,
-      waitingForAgent: true,
-    });
-    this.appendHistoryUpdate(params.sessionId, receivedAt, {
-      kind: "pwragent_user_prompt",
-      prompt: params.prompt,
-      ...(params.parts?.length ? { parts: params.parts } : {}),
-      turnId,
-      waitingForAgent: true,
-    });
-    this.markSessionHasConversationHistory(params.sessionId, receivedAt);
+    const acceptance = Promise.withResolvers<{ sessionId: string; turnId: string }>();
+    let dispatched = false;
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
     const promptRequest = this.requestPromptWithTerminalGuard({
       protocolSessionId,
@@ -1207,9 +1193,33 @@ export class AcpAgentClient {
       turnId,
       agentInstructions: params.agentInstructions?.trim(),
       readAgentMemory: params.readAgentMemory,
+      onDispatch: () => {
+        const receivedAt = this.now();
+        this.normalizerFor(params.sessionId).recordUserPrompt({
+          sessionId: params.sessionId,
+          prompt: params.prompt,
+          parts: params.parts,
+          turnId,
+          receivedAt,
+          waitingForAgent: true,
+        });
+        this.appendHistoryUpdate(params.sessionId, receivedAt, {
+          kind: "pwragent_user_prompt",
+          prompt: params.prompt,
+          ...(params.parts?.length ? { parts: params.parts } : {}),
+          turnId,
+          waitingForAgent: true,
+        });
+        this.markSessionHasConversationHistory(params.sessionId, receivedAt);
+        dispatched = true;
+        acceptance.resolve({ sessionId: params.sessionId, turnId });
+      },
     });
     void promptRequest
       .then((result) => {
+        if (!dispatched) {
+          throw new Error("The ACP prompt was cancelled before it was sent.");
+        }
         this.assertPromptProducedResponse(params.sessionId, result);
         const receivedAt = this.now();
         // A prompt that session/cancel stopped settles normally, with
@@ -1239,6 +1249,13 @@ export class AcpAgentClient {
         });
       })
       .catch(async (error) => {
+        if (!dispatched) {
+          this.activeTurns.delete(params.sessionId);
+          this.touchSession(params.sessionId);
+          this.updateSessionStatus(params.sessionId, "idle");
+          acceptance.reject(error);
+          return;
+        }
         if (promptMayStillBeRunning(error)) {
           // The agent never answered this prompt, so it may still be working
           // and asking for approvals. Cancel it while the turn is still
@@ -1258,10 +1275,7 @@ export class AcpAgentClient {
           }),
         ).catch(() => undefined);
       });
-    return {
-      sessionId: params.sessionId,
-      turnId,
-    };
+    return acceptance.promise;
   }
 
   async cancelSession(sessionId: string): Promise<void> {
@@ -2354,6 +2368,7 @@ export class AcpAgentClient {
     turnId: string;
     agentInstructions?: string;
     readAgentMemory?: () => Promise<string | undefined>;
+    onDispatch?: () => void;
   }): Promise<unknown> {
     const activeTurn = this.activeTurns.get(params.sessionId);
     const terminalResponseGuard = new Promise<never>((_resolve, reject) => {
@@ -2405,6 +2420,7 @@ export class AcpAgentClient {
         await this.refreshAgentToolCatalog(params.sessionId);
       }
       if (cancelledBeforePrompt) return cancelled;
+      params.onDispatch?.();
       if (activeTurn) {
         activeTurn.cancelBeforePrompt = undefined;
         activeTurn.sentAgentMemory = Boolean(memory);
