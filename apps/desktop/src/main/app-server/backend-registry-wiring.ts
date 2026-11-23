@@ -1068,6 +1068,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       ...(pullRequests ? { namedPullRequests: pullRequests } : {}),
     }),
     suggestMonitorJob: async (request) => await ports.suggestClaudeMonitorJob(request),
+    readJobMonitorCreationPreference: (threadId) => ports.isJobMonitorCreationEnabled({ backend: "claude", threadId }),
     holdSelfStartedTurn: async ({ threadId, prompt, source }) => await ports.holdBackendSelfStartedTurn({
       backend: "claude", threadId, prompt, source,
     }),

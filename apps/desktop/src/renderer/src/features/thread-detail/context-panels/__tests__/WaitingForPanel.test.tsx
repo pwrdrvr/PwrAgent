@@ -277,6 +277,21 @@ describe("WaitingForPanel", () => {
     expect(screen.queryByText(/or start a monitor/)).not.toBeInTheDocument();
   });
 
+  it.each([false, true])("uses the owner-routed Turn on action when supplied to a peer panel (%s)", async (supported) => {
+    const onTurnOnJobMonitors = vi.fn(async () => undefined);
+    render(<WaitingForPanel thread={{ ...thread, source: "codex", jobMonitorCreationEnabled: false }}
+      controller={controller(ready([], [], true))} ownerLabel="Mac Mini" now={NOW}
+      onTurnOnJobMonitors={supported ? onTurnOnJobMonitors : undefined} />);
+    const action = screen.queryByRole("button", { name: "Turn on Job Monitors" });
+    if (supported) {
+      expect(action).toBeInTheDocument();
+      await act(async () => { fireEvent.click(action!); });
+      expect(onTurnOnJobMonitors).toHaveBeenCalledOnce();
+    } else {
+      expect(action).not.toBeInTheDocument();
+    }
+  });
+
   it("shows a suppressed monitor after rearm with Cancel and zero pending wakes", () => {
     const monitor = WAKES.find((wake) => wake.kind === "monitor")!;
     render(<WaitingForPanel thread={thread} controller={controller(ready([{ ...monitor, wakeSuppressed: true }], []))} now={NOW} />);

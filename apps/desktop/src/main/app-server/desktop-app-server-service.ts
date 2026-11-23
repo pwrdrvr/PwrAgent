@@ -7169,7 +7169,17 @@ class DesktopAppServerService {
   async setThreadJobMonitorCreation(
     request: SetThreadJobMonitorCreationRequest,
   ): Promise<SetThreadJobMonitorCreationResponse> {
-    return await getDesktopBackendRegistry().setThreadJobMonitorCreation(request);
+    const { federationTarget, ...ownerRequest } = request;
+    if (federationTarget && isRemoteFederationTarget(federationTarget)) {
+      if (ownerRequest.backend === "claude") throw new Error("Federated Job Monitor controls require a Codex thread.");
+      const runtime = getDesktopFederationRuntime();
+      if (!runtime.remoteTargetSupportsCapability(federationTarget, "thread_job_monitor_control")
+        || !runtime.remoteTargetSupportsCapability(federationTarget, "turn_control")) {
+        throw new Error("The owning instance does not offer Job Monitor controls over Federation.");
+      }
+      return await runtime.remoteBackend(federationTarget).setThreadJobMonitorCreation(ownerRequest);
+    }
+    return await getDesktopBackendRegistry().setThreadJobMonitorCreation(ownerRequest);
   }
 
   async reorderThreadPins(

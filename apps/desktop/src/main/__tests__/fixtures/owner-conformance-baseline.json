@@ -120,6 +120,7 @@
     "backend.setThreadAgent",
     "backend.setThreadCheckoutHibernation",
     "backend.setThreadExecutionMode",
+    "backend.setThreadJobMonitorCreation",
     "backend.setThreadLock",
     "backend.setThreadMcpConnections",
     "backend.setThreadModelSettings",

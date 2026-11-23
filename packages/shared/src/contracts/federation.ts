@@ -62,6 +62,8 @@ export const FEDERATION_CAPABILITIES = [
   "turn_queue_reorder",
   /** Owner-side gateway inventory and per-thread MCP selection. */
   "thread_mcp_connections",
+  /** The owning instance accepts per-thread Job Monitor creation settings. */
+  "thread_job_monitor_control",
   /** Owner-local To-do and tracked review reads, mutations, and invalidations. */
   "thread_todos",
   /**

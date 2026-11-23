@@ -211,6 +211,8 @@ import type {
   SetThreadAgentResponse,
   SetThreadTokenMiserRequest,
   SetThreadTokenMiserResponse,
+  SetThreadJobMonitorCreationRequest,
+  SetThreadJobMonitorCreationResponse,
 } from "@pwragent/shared/contracts/navigation";
 import type {
   AppServerListSkillsResponse,
@@ -781,6 +783,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "turn_assistant_reply",
   "project_forge_automation",
   "thread_mcp_connections",
+  "thread_job_monitor_control",
   "thread_todos",
   "thread_todo_feed",
   "thread_todo_dispatch_target",
@@ -7883,6 +7886,9 @@ function localBackendOperations(): FederationBackendOperations {
       const thread = await getDesktopBackendRegistry().resolveThread(request);
       return thread ? { thread } : {};
     },
+    async isCodexThreadActive(threadId) {
+      return await getDesktopBackendRegistry().isThreadActiveForService({ backend: "codex", threadId });
+    },
     async resolveThreadAdmissionState(request) {
       return await new DesktopMessagingBackendBridge()
         .getThreadAdmissionState(request);
@@ -8588,6 +8594,9 @@ function localBackendOperations(): FederationBackendOperations {
     },
     async setThreadTokenMiser(request: SetThreadTokenMiserRequest): Promise<SetThreadTokenMiserResponse> {
       return await getDesktopBackendRegistry().setThreadTokenMiser(request);
+    },
+    async setThreadJobMonitorCreation(request: SetThreadJobMonitorCreationRequest): Promise<SetThreadJobMonitorCreationResponse> {
+      return await getDesktopBackendRegistry().setThreadJobMonitorCreation(request);
     },
     async setThreadModelSettings(
       request: SetThreadModelSettingsRequest,

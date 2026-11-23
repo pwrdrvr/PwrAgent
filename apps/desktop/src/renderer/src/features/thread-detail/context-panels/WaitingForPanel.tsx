@@ -235,7 +235,7 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
                 The agent can still delegate work and use Continue After.
               </span>
             </span>
-            {!peer && props.onTurnOnJobMonitors ? (
+            {props.onTurnOnJobMonitors ? (
               <button
                 aria-label="Turn on Job Monitors"
                 type="button"
