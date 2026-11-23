@@ -606,8 +606,11 @@ an independent wait and is kept.
 The coordinator serializes local events and uses a SQLite compare-and-swap
 to claim delivery across instances sharing a profile. Busy consumers retain
 readiness; their terminal turn event retries admission after rechecking the
-prerequisites. Dependencies schedule a continuation; they do not interrupt
-an active turn or hold unrelated manual messages.
+prerequisites. CI continuations wait outside the send queue until the owner
+can start them with current evidence. Stack holds follow the PR that supplied
+the evidence, including when another thread owns that PR. A held CI success
+also leaves failure-only waits active. Dependencies leave unrelated manual
+messages alone.
 The specific Codex resume refusal about changing Token Miser activation during
 an active turn is a confirmed busy result, before `turn/start`. It retains the
 wait for an idle event. Transport errors and errors after sending `turn/start`

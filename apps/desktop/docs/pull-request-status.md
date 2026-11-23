@@ -211,6 +211,9 @@ reason. A stale layer waits for its own new published head before dispatchers
 use its CI. Held snapshots spend no repair attempts. Inferred GitHub chains can
 hold automation, and adopting the chain gives the operation engine a catalog
 and an exact replay boundary.
+CI watches and Continue After retain evidence-dependent wakes until immediate
+admission is possible. A saved merge-queue removal is reconsidered on a fresh
+poll once its stack settles.
 
 The owner advances at most one eligible layer per stack. A push can start CI,
 so the next layer waits for the new head's result. A chain of *n* layers
@@ -218,17 +221,23 @@ therefore needs at most *n*−1 upper replays and pushes after a bottom fix that
 settles without further repair. The stack publisher uses the normal Git
 agent-tool policy under **Stack publishing**, which defaults to Ask and
 supports repository and agent rules. Project Forge Automation can pause the
-background publisher. A local sync forecast reads the remote trunk tip and
+background publisher. Approval is bound to the current PR head. Unchanged
+transport or local-operation failures can retry on a later observation after
+a short cooldown. A local sync forecast reads the remote trunk tip and
 requires that commit to be available locally. The publisher fetches it.
 
 Sync proves trunk contains the parent's merge commit and excludes the parent's
 branch commits from the replay. If the child was already replayed on an earlier
-integrated trunk, Git ancestry verifies that boundary. GitHub retargets bases
+integrated trunk, Git ancestry verifies that boundary. When the child still
+descends from an earlier tip of the merged parent, Git verifies its recorded
+base against both the child and the merged head. GitHub retargets bases
 owned by its Stack API. For an unlinked stack, PwrAgent confirms the child PR's
 trunk base before pushing. It leaves base branches in place. Each pushed ref
 has an exact lease. A rewrite uses the journalled pre-replay local tip to prove
-the observed remote history was already present. Any new remote work or a
-changed lease stops publication.
+the observed remote history was already present. The proof and undo receipt
+commit with the branch ref, so a failed replay keeps the prior proof and a
+later replay can publish directly from the original remote boundary. Any new
+remote work or a changed lease stops publication.
 
 A held observation costs zero SQLite commits. Publishing reuses the
 stack-notice unread watermark, which commits at most once for the moved

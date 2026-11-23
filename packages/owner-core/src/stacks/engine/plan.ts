@@ -79,6 +79,8 @@ async function sync(git: StackGit, plan: StackPlan, stack: GhStack, operation: E
       && (!anchor || await git.ancestor(anchor, candidate))) anchor = candidate;
   }
   if (!anchor && await git.ancestor(merged.head, oldTip)) anchor = merged.head;
+  if (!anchor && child.base && isOid(child.base) && await git.ancestor(child.base, oldTip)
+    && await git.ancestor(child.base, merged.head)) anchor = child.base;
   const resolved = operation.conflictResolution;
   if (resolved?.branch === child.branch && resolved.base === onto && oldTip !== resolved.previousTip
     && await git.ancestor(onto, oldTip)) anchor = onto;

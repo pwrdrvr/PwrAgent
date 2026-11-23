@@ -39,12 +39,13 @@ export class StackEngine {
       const receipt: StackReceipt = {
         id, when, moves: plan.moves, before: plan.before, after: (conflict && plan.cleanPrefix) || plan.after,
       };
+      const receiptRefs = await hooks.prepareReceipt?.(receipt);
       const manifest = (await this.git.output(["hash-object", "-w", "--stdin"], JSON.stringify(receipt))).trim();
       if (!isOid(manifest)) throw new Error("Invalid undo receipt object");
-      const creates = [`create ${prefix}/receipt ${manifest}`];
+      const refCommands = [`create ${prefix}/receipt ${manifest}`, ...(receiptRefs?.(manifest) ?? [])];
       for (const move of receipt.moves) {
         await this.git.tip(move.branch);
-        if (move.old) creates.push(`create ${prefix}/heads/${move.branch} ${move.old}`);
+        if (move.old) refCommands.push(`create ${prefix}/heads/${move.branch} ${move.old}`);
       }
       const worktrees = await this.git.worktrees(receipt.moves);
       await this.checkWorktrees(worktrees);
@@ -56,7 +57,7 @@ export class StackEngine {
       try {
         await this.git.requireMembership(receipt.moves, worktrees);
         // Undo refs and branch refs become visible in the same transaction.
-        await this.git.transaction(receipt.moves, plan.expectedTips, creates);
+        await this.git.transaction(receipt.moves, plan.expectedTips, refCommands);
       } catch (error) {
         const absent = await this.git.run(["show-ref", "--exists", `${prefix}/receipt`]).then(
           result => result.exitCode === 2, () => false,

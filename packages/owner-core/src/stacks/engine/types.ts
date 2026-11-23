@@ -54,6 +54,8 @@ export interface StackReceipt {
   before: GhStackCatalog;
   after: GhStackCatalog;
   when: number;
+  /** Original pre-replay tips carried across unpublished rewrites. */
+  publishBoundaries?: Record<string, string>;
 }
 
 export type StackJournal = {
@@ -66,6 +68,7 @@ export type StackJournal = {
  * these hooks under the catalog's operation lock and never opens a file. */
 export interface ApplyHooks {
   beforeTransaction?: () => Promise<void>;
+  prepareReceipt?: (receipt: StackReceipt) => Promise<(manifest: string) => string[]>;
   begin?: (entry: StackJournal) => Promise<void>;
   finish?: (outcome: "committed" | "aborted", receipt: StackReceipt) => Promise<void>;
 }

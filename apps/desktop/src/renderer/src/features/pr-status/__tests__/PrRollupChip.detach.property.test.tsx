@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import fc from "fast-check";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -67,6 +67,22 @@ const actionArbitrary = fc.record({
  * place.
  */
 describe("PrRollupChip detach properties", () => {
+  it.each(["rollup", "overflow"] as const)("shows and detaches every attachment in the %s even when a failure is held", (variant) => {
+    const held = { ...pr(41), state: "failing", checkState: "failing" } satisfies PrSummary;
+    const prs = [held, pr(42), pr(43)];
+    const onDetachAll = vi.fn();
+    const view = render(<PrRollupChip variant={variant} prs={prs} heldPrUrls={held.url}
+      repoPrefixedUrls="" threadTitle="Orbit refactor" onOpen={() => undefined} onDetachAll={onDetachAll} />);
+    const chip = view.container.querySelector("[data-pr-rollup]")!;
+    expect(chip.getAttribute("aria-label")).not.toContain("failing");
+    fireEvent.click(chip);
+    expect(rowLabels()).toEqual(resolvePrRollup(prs)!.ordered.map(({ number }) => "#" + number));
+    expect(screen.getByText("Held by a lower stack layer")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Detach all" }));
+    expect(onDetachAll).toHaveBeenCalledWith(expect.arrayContaining(prs));
+    expect(onDetachAll.mock.calls[0]?.[0]).toHaveLength(prs.length);
+  });
+
   it("detaches exactly the targeted PR and keeps the rest listed", () => {
     fc.assert(
       fc.property(

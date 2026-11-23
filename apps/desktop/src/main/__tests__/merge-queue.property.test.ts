@@ -758,21 +758,29 @@ describe("a merge queue removal wakes merge watches", () => {
     } finally { db.close(); }
   });
 
-  it("stays within its write budget across repeated polls of a removed PR", async () => {
+  it.each([false, true])("stays within its write budget across repeated polls of a removed PR (held: %s)", async (initiallyHeld) => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const temp = createTempStateDb("merge-queue-removal-budget-");
     const db = StateDb.open(temp.dbPath);
     const store = new SqliteOverlayStore(db);
+    let held = initiallyHeld;
+    const submitTurnIfIdle = vi.fn(async () => ({ status: "started" as const, turnId: "wake" }));
     const coordinator = new PrStatusWatchCoordinator({
-      store, registry: { submitTurnIfIdle: async () => ({ status: "started" as const, turnId: "wake" }) }, now: () => 1_000,
+      store, registry: { submitTurnIfIdle }, now: () => 1_000,
+      stackHold: async () => held ? "Held by #41: CI running" : undefined,
     });
     try {
       await registerMergeWatch(store, "budget", 1);
       const { writes } = await measureSqliteWrites(async () => {
         for (let index = 0; index < 10; index += 1) {
           await coordinator.handleStatusSnapshot(removedAt(100), 900 + index);
+          if (initiallyHeld && index === 4) {
+            expect(submitTurnIfIdle).not.toHaveBeenCalled();
+            held = false;
+          }
         }
       });
+      expect(submitTurnIfIdle).toHaveBeenCalledTimes(1);
       expectSqliteWriteBudget({ scenario: "pr-merge-queue-removal-wake", writes,
         note: "one merge watch woken by a queue removal, then nine more polls of the removed PR: observe, claim and finish once, 0 commits per later poll; ~0.3 MB/day at 10 removals/day" });
     } finally { db.close(); removeTempStateDbDir(temp.tempDir); vi.unstubAllEnvs(); }

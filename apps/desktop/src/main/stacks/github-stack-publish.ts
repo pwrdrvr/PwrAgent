@@ -8,6 +8,18 @@ import type { GithubStackPull } from "./github-stack-evidence";
 type Pull = GithubStackPull;
 type ReadGithub = ForgeCiClient["requestGithub"];
 
+export async function readStackPublishHead(
+  repository: ForgeRepository, number: number, request: ReadGithub, signal?: AbortSignal,
+): Promise<string> {
+  const path = "repos/" + encodeURIComponent(repository.owner) + "/" + encodeURIComponent(repository.repo);
+  const pr = await request(repository, { path: path + "/pulls/" + number }, signal) as Pull | undefined;
+  const head = pr?.head?.sha;
+  if (pr?.state !== "open" || !head || !isOid(head)) {
+    throw new ForgeReadError("stale_plan", "The current open PR head could not be verified for approval.");
+  }
+  return head;
+}
+
 export async function stackPublishRemote(git: StackGit, repository: ForgeRepository): Promise<string> {
   const matches = (url: string) => {
     if (/[\r\n]/.test(url)) return false;
@@ -25,7 +37,8 @@ export async function stackPublishRemote(git: StackGit, repository: ForgeReposit
 }
 
 export async function readStackPublishTarget(
-  repository: ForgeRepository, stack: GhStack, index: number, number: number, request: ReadGithub, signal?: AbortSignal, observedParent?: number,
+  repository: ForgeRepository, stack: GhStack, index: number, number: number, request: ReadGithub, signal?: AbortSignal,
+  observedParent?: number, expectedHead?: string,
 ) {
   const branch = stack.branches[index]!;
   const parent = stack.branches[index - 1];
@@ -38,6 +51,9 @@ export async function readStackPublishTarget(
     throw new Error(`#${number} no longer has an open pull request on ${branch.branch} in this repository`);
   }
   const remoteHead = child.head.sha;
+  if (expectedHead && remoteHead !== expectedHead) {
+    throw new ForgeReadError("stale_plan", "The pull request head changed before approval was used.");
+  }
   const parentNumber = parent?.pullRequest?.number ?? observedParent;
   const parentPr = parentNumber === undefined ? undefined : await get(parentNumber);
   const merged = parentPr?.merged

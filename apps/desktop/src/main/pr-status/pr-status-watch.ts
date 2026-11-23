@@ -27,16 +27,17 @@ export const PR_STATUS_WATCH_MAX_DISPATCH_ATTEMPTS = 3;
 export const PR_STATUS_WATCH_LEASE_MS = 60_000;
 const PR_STATUS_WATCH_HEARTBEAT_MS = 20_000;
 
+type PrWatchSubmission = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  input: AppServerTurnInputItem[];
+  origin: "automation";
+  messageOrigin: AppServerThreadMessageOrigin;
+  canAdmit?: () => Promise<boolean>;
+};
 type PrStatusWatchRegistry = {
-  submitTurnIfIdle(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-    input: AppServerTurnInputItem[];
-    origin: "automation";
-    messageOrigin: AppServerThreadMessageOrigin;
-    joinRunningTurn: true;
-    canAdmit?: () => Promise<boolean>;
-  }): Promise<{ status: "started" | "queued" | "busy"; turnId?: string }>;
+  submitTurnIfIdle(params: PrWatchSubmission & { joinRunningTurn?: false }): Promise<{ status: "started" | "queued" | "busy"; turnId?: string }>;
+  submitTurnIfIdle(params: PrWatchSubmission & { joinRunningTurn: true }): Promise<{ status: "started" | "queued" | "busy"; turnId?: string }>;
 };
 
 export type PrStatusWatchOutcome = "success" | "failure";
@@ -72,6 +73,7 @@ const TERMINAL_DETAILS_CACHE_LIMIT = 32;
 export class PrStatusWatchCoordinator {
   private readonly ownerId = createPrWatchOwnerId();
   private readonly terminalDetailsCache = new Map<string, PullRequestTerminalDetails>();
+  private readonly heldQueueRemovals = new Map<string, number>();
 
   constructor(
     private readonly options: {
@@ -85,6 +87,7 @@ export class PrStatusWatchCoordinator {
        */
       stackHold?: (pr: PrSummary) => Promise<string | undefined>;
       currentPr?: (key: string) => PrSummary | undefined;
+      canStartChecksWake?: (thread: PrStatusWatchThreadRef) => boolean;
       allowsWatchDispatch?: (watch: ThreadPullRequestWatchSummary) => boolean;
       /** Reads merge details from the forge; a throw falls back to cached status. */
       fetchTerminalDetails?: (pr: PrSummary) => Promise<PullRequestTerminalDetails | undefined>;
@@ -155,6 +158,7 @@ export class PrStatusWatchCoordinator {
       leaseExpiresAt: now + PR_STATUS_WATCH_LEASE_MS,
       maxAttempts: PR_STATUS_WATCH_MAX_DISPATCH_ATTEMPTS,
       skipThreadsWithTerminalWatch: terminal,
+      canClaim: this.options.canStartChecksWake,
       ...(failedCheckUrl ? { failedCheckUrl } : {}),
       ...(skipThreadKeys?.size ? { skipThreadKeys } : {}),
     });
@@ -195,12 +199,17 @@ export class PrStatusWatchCoordinator {
         })
         : await this.options.store.observeThreadPrTerminalWatches({ pr, observedAt, outcome, now });
     await this.notifyWatchesChanged(retired);
-    // A removed PR stays open and is polled on every round. Claim only when
-    // this round armed a wake; a wake a busy thread put back is retried when
-    // that thread goes idle, from its saved observation.
-    if (outcome === "dequeued" && !options.pendingOnly && retired.length === 0) return 0;
+    const prKey = buildPullRequestStatusKey(pr);
+    if (outcome === "dequeued") {
+      const removedAt = pr.mergeQueue!.removedAt!;
+      if (!options.pendingOnly && !retired.length && this.heldQueueRemovals.get(prKey) !== removedAt) return 0;
+      if (await this.queueRemovalHeld(prKey, pr)) return 0;
+      this.heldQueueRemovals.delete(prKey);
+    } else {
+      this.heldQueueRemovals.delete(prKey);
+    }
     const claimed = await this.options.store.claimThreadPrTerminalWatches({
-      prKey: buildPullRequestStatusKey(pr),
+      prKey,
       now,
       ownerId: this.ownerId,
       leaseExpiresAt: now + PR_STATUS_WATCH_LEASE_MS,
@@ -236,7 +245,10 @@ export class PrStatusWatchCoordinator {
         // The PR is still open: there are no merge details to read, and
         // nothing this thread made for the PR is done with yet.
         if (terminalWakeOutcomeOf(observation.pr) === "dequeued") {
-          return { observation, details: undefined, extraLines: [] };
+          const fresh = this.options.currentPr?.(prKey) ?? pr;
+          const latest = terminalWakeOutcomeOf(fresh) === "dequeued"
+            && fresh.mergeQueue?.removedAt === observation.pr.mergeQueue?.removedAt;
+          return { observation: latest ? { ...observation, pr: fresh } : observation, details: undefined, extraLines: [] };
         }
         const key = JSON.stringify(observation);
         let read = detailReads.get(key);
@@ -261,6 +273,15 @@ export class PrStatusWatchCoordinator {
       for (const stop of stopHeartbeats) stop();
     }
     return claims.length;
+  }
+
+  private async queueRemovalHeld(prKey: string, pr: PrSummary): Promise<boolean> {
+    const fresh = this.options.currentPr?.(prKey) ?? pr;
+    if (fresh.mergeQueue?.removedAt !== pr.mergeQueue?.removedAt || terminalWakeOutcomeOf(fresh) !== "dequeued") return true;
+    if (fresh.headSha === pr.headSha && !await this.options.stackHold?.(fresh)) return false;
+    this.heldQueueRemovals.set(prKey, pr.mergeQueue!.removedAt!);
+    if (this.heldQueueRemovals.size > 1024) this.heldQueueRemovals.delete(this.heldQueueRemovals.keys().next().value!);
+    return true;
   }
 
   /** Forge details when available, else what cached status can say. */
@@ -338,13 +359,13 @@ export class PrStatusWatchCoordinator {
       || !outcome
       || this.options.isBackgroundPollingEnabled?.() === false
       || this.options.allowsWatchDispatch?.(claim.watch) === false
-      || (outcome === "dequeued" && Boolean(await this.options.stackHold?.(pr)))
+      || (outcome === "dequeued" && await this.queueRemovalHeld(claim.watch.prKey, pr))
     ) {
       await release(false);
       return;
     }
     try {
-      const submission = await this.options.registry.submitTurnIfIdle({
+      const request: PrWatchSubmission = {
         backend: claim.watch.backend,
         threadId: claim.watch.threadId,
         input: [{
@@ -354,8 +375,6 @@ export class PrStatusWatchCoordinator {
             : buildPrTerminalWatchPrompt({ details, observedAt, extraLines }),
         }],
         origin: "automation",
-        // The wake joins the thread's running turn instead of waiting for it.
-        joinRunningTurn: true,
         messageOrigin: {
           kind: "pwragent",
           prAutomation: {
@@ -370,7 +389,10 @@ export class PrStatusWatchCoordinator {
           },
           ...watchCausalContext(claim.watch),
         },
-      });
+      };
+      const submission = outcome === "dequeued"
+        ? await this.options.registry.submitTurnIfIdle({ ...request, canAdmit: async () => !await this.queueRemovalHeld(claim.watch.prKey, pr) })
+        : await this.options.registry.submitTurnIfIdle({ ...request, joinRunningTurn: true });
       if (submission.status === "busy") {
         await release(false);
         return;
@@ -437,13 +459,11 @@ export class PrStatusWatchCoordinator {
           }),
         }],
         origin: "automation",
-        // The wake joins the thread's running turn instead of waiting for it.
         canAdmit: async () => {
           const fresh = this.options.currentPr?.(claim.watch.prKey) ?? pr;
           return fresh.headSha === pr.headSha && getPrStatusWatchOutcome(fresh) === outcome
             && !await this.options.stackHold?.(fresh);
         },
-        joinRunningTurn: true,
         messageOrigin: {
           kind: "pwragent",
           prAutomation: {

@@ -8669,35 +8669,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       .run(now, identity.backend, identity.threadId).changes;
   }
 
-  async claimThreadPrStatusWatches(params: {
-    prKey: string;
-    headSha: string;
-    outcome: "success" | "failure";
-    now: number;
-    ownerId: string;
-    leaseExpiresAt: number;
-    maxAttempts: number;
-    /**
-     * Set when the PR is merged or closed: a thread that also holds a
-     * terminal watch gets one terminal wake instead of a CI wake as well.
-     */
-    skipThreadsWithTerminalWatch?: boolean;
-    /**
-     * The failing check's link. A watch whose baseline failure has another
-     * link is past it: a re-run creates new job ids, so attempt 2's failure
-     * fires even when no poll saw the checks running in between.
-     */
-    failedCheckUrl?: string;
-    /**
-     * `backend:threadId` keys whose failure something else handles, such as
-     * Auto-fix. Their watches are never claimed. One that also waits for
-     * success takes the failure as its baseline and keeps waiting for success
-     * or another failure. A failure-only watch ends as `covered_by_auto_fix`.
-     * Neither ends another thread's watch: the oldest uncovered watch is
-     * claimed in the same pass.
-     */
-    skipThreadKeys?: ReadonlySet<string>;
-  }): Promise<PrStatusWatchClaimResult> {
+  async claimThreadPrStatusWatches(params: Parameters<PrStatusWatchStorage["claimThreadPrStatusWatches"]>[0]): Promise<PrStatusWatchClaimResult> {
     const claim = this.stateDb.raw.transaction((): PrStatusWatchClaimResult => {
       const activeDispatch = this.stateDb.raw
         .prepare(
@@ -8821,6 +8793,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         .slice(0, 1);
       const claimed: PrStatusWatchClaim[] = [];
       for (const row of rows) {
+        const watch = parsePrStatusWatchSummary(row.payload);
+        if (!watch || params.canClaim?.(watch) === false) continue;
         const updated = this.stateDb.raw
           .prepare(
             `UPDATE pr_status_watches
@@ -8843,8 +8817,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
             row.watch_id,
             params.now,
           );
-        const watch = parsePrStatusWatchSummary(row.payload);
-        if (updated.changes > 0 && watch) {
+        if (updated.changes > 0) {
           claimed.push({
             attemptCount: row.attempt_count + 1,
             watch,

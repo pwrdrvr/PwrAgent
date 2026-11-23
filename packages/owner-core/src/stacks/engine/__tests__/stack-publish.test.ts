@@ -5,33 +5,34 @@ import { StackGit } from "../git";
 import { pushStackLayers } from "../publish";
 import { commit, git, memoryStore, repository, runner, withRepo, withStack } from "./fixture.test-support";
 
-test.each([false, true])("sync excludes the merged parent with a stale catalog (already retargeted: %s)", async (retargeted) =>
+test.each(["last parent tip", "already retargeted", "earlier parent tip"])("sync excludes the merged parent using %s", async (scenario) =>
   withRepo(async (cwd, old) => {
     await git(cwd, "switch", "-qc", "parent");
-    await commit(cwd, "parent.txt", "one\n");
+    const earlier = await commit(cwd, "parent.txt", "one\n");
     const parent = await commit(cwd, "parent.txt", "two\n");
-    await git(cwd, "switch", "-qc", "child");
+    const fork = scenario === "earlier parent tip" ? earlier : parent;
+    await git(cwd, "switch", "-qc", "child", fork);
     await commit(cwd, "child.txt", "child\n");
     await git(cwd, "switch", "-q", "main");
     await git(cwd, "merge", "--squash", "parent");
     await git(cwd, "commit", "-qm", "squash parent");
     const squash = await git(cwd, "rev-parse", "main");
     const integrated = await commit(cwd, "integration.txt", "integrated\n");
-    if (retargeted) await git(cwd, "rebase", "--onto", "main", parent, "child");
+    if (scenario === "already retargeted") await git(cwd, "rebase", "--onto", "main", parent, "child");
     const child = await git(cwd, "rev-parse", "child");
     await git(cwd, "branch", "upper", child);
     await git(cwd, "switch", "-q", "main");
     const trunk = await commit(cwd, "parent.txt", "three\n");
     // Build the oracle with real rebase using the proper Git boundary.
     await git(cwd, "branch", "oracle", child);
-    const anchor = retargeted ? integrated : parent;
+    const anchor = scenario === "already retargeted" ? integrated : fork;
     await git(cwd, "rebase", "--onto", trunk, anchor, "oracle");
     const common = join(cwd, ".git");
     const store = memoryStore({ schemaVersion: 1, repository, stacks: [{
       trunk: { branch: "main", head: integrated },
       branches: [
         { branch: "parent", head: parent, base: old, pullRequest: { number: 41 } },
-        { branch: "child", head: child, base: old, pullRequest: { number: 42 } },
+        { branch: "child", head: child, base: fork === earlier ? earlier : old, pullRequest: { number: 42 } },
         { branch: "upper", head: child, base: child, pullRequest: { number: 43 } },
       ],
     }] });

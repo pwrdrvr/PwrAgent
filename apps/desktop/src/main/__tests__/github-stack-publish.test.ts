@@ -1,6 +1,6 @@
 import { expect, test, vi } from "vitest";
 import type { GhStack } from "@pwragent/shared/stacks/catalog";
-import { completeStackPublication, readStackPublishTarget } from "../stacks/github-stack-publish";
+import { completeStackPublication, readStackPublishHead, readStackPublishTarget } from "../stacks/github-stack-publish";
 import type { GithubRequest } from "../pr-status/forge-ci-client";
 import { ForgeReadError } from "../pr-status/forge-tool-contract";
 
@@ -84,5 +84,17 @@ test("a stale catalog link prevents retarget if the Stack API cannot confirm it"
 test("a child head change after membership lookup prevents retarget and push", async () => {
   const forge = fakeForge({ race: true });
   await expect(forge.publishThenDeleteOldBase()).rejects.toThrow("changed before retargeting");
+  expect(forge.log).toEqual([]);
+});
+
+test("a head observed before approval cannot authorize a subsequent head", async () => {
+  const forge = fakeForge({ race: true });
+  const approvedHead = await readStackPublishHead(repository, 42, forge.request);
+  expect(approvedHead).toBe(head);
+  await expect(readStackPublishTarget(repository, stack, 1, 42, forge.request, undefined, undefined, approvedHead))
+    .rejects.toMatchObject({ code: "stale_plan" });
+  expect(forge.request.mock.calls.map(([, params]) => params.path)).toEqual([
+    "repos/fixture/observatory/pulls/42", "repos/fixture/observatory/pulls/42",
+  ]);
   expect(forge.log).toEqual([]);
 });

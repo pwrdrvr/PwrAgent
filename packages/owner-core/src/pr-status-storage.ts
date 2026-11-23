@@ -217,6 +217,8 @@ export interface PrStatusWatchStorage {
      * claimed in the same pass.
      */
     skipThreadKeys?: ReadonlySet<string>;
+    /** Admission readiness for the oldest uncovered watch; false leaves it unclaimed. */
+    canClaim?: (thread: PrStatusWatchThreadRef) => boolean;
   }): Promise<PrStatusWatchClaimResult>;
   finishThreadPrStatusWatch(params: {
     watchId: string;

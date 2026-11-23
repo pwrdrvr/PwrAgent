@@ -184,7 +184,7 @@ function createHarness(
     },
     threadPrKeys: () => [PR_KEY],
     getPr: () => world.pr(),
-    stackHold: async () => world.heldBy,
+    stackHold: async () => world.heldBy ? { reason: world.heldBy, lowerKey: prKeyFor(1) } : undefined,
     stackMergeEvidence: async () => ({
       blocked: world.stackUnavailable || world.base !== "main" || [...world.lowers.values()].includes("open"),
       lowerKeys: [...world.lowers.keys()].map(prKeyFor),
@@ -736,6 +736,30 @@ describe("PR review and merge offers", () => {
         expect(openOfferCards(harness.todos)).toHaveLength(polled ? 0 : 1);
       } finally { harness.close(); }
     }), { examples: [[false, 1]] });
+  });
+
+  it.each(["status transition", "local settlement"] as const)("offers a review on %s without a child PR change", async (trigger) => {
+    const harness = createHarness();
+    try {
+      const { world, coordinator, todos } = harness;
+      world.ci = "passing";
+      world.heldBy = "Held by #1: CI running";
+      world.lowerPolled = true;
+      await transition(harness, { checkState: { from: "pending", to: "passing" } });
+      expect(openOfferCards(todos)).toEqual([]);
+      world.heldBy = undefined;
+      if (trigger === "status transition") {
+        const lower = { ...world.pr(), number: 1, url: "https://github.com/example/project/pull/1" };
+        coordinator.handleTransition(computePrStatusTransition(
+          { ...lower, checkState: "failing", state: "failing" }, lower,
+        )!);
+      } else {
+        world.clock += 6 * 60_000;
+        coordinator.handleObservations([world.pr()]);
+      }
+      await coordinator.idle();
+      expect(openOfferCards(todos).map((card) => card.action?.type)).toEqual(["start_review"]);
+    } finally { harness.close(); }
   });
 
   it("budgets card writes from stack transitions and duplicate deliveries", async () => {

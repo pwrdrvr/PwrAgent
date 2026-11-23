@@ -127,18 +127,37 @@ async function projectCatalogLayers(input: {
 }): Promise<StackLayer[]> {
   const { stack, clone, refs, prs, worktrees, threads } = input;
   const local = (branch: GhStackBranch) => refs.get(`refs/heads/${branch.branch}`);
-  const pullRequest = (branch: GhStackBranch) => branch.pullRequest
-    ? prs.find((pr) => pr.number === branch.pullRequest?.number)
-    : prs.find((pr) => pr.headRefName === branch.branch && sameRepositoryHead(pr) && pr.lifecycleState === "open");
+  const byBranch = new Map<string, PrSummary[]>();
+  for (const pr of prs) {
+    if (!pr.headRefName || !sameRepositoryHead(pr)) continue;
+    const matches = byBranch.get(pr.headRefName) ?? [];
+    matches.push(pr);
+    byBranch.set(pr.headRefName, matches);
+  }
+  const byNumber = new Map(prs.map((pr) => [pr.number, pr]));
+  const pullRequest = (branch: GhStackBranch, below: GhStackBranch, lowerMerged: boolean) => {
+    if (branch.pullRequest) return byNumber.get(branch.pullRequest.number);
+    const candidates = byBranch.get(branch.branch) ?? [];
+    const open = candidates.filter((pr) => pr.lifecycleState === "open");
+    if (open.length) return open.length === 1 ? open[0] : undefined;
+    // A recycled branch name is insufficient to associate a historical merge.
+    const merged = candidates.filter((pr) => pr.lifecycleState === "merged"
+      && (pr.baseRefName === below.branch || (lowerMerged && pr.baseRefName === stack.trunk.branch))
+      && pr.headSha && (pr.headSha === local(branch)?.head || pr.headSha === branch.head));
+    return merged.length === 1 ? merged[0] : undefined;
+  };
+  const allBelowMerged = [true];
+  const associated = stack.branches.map((branch, index) => {
+    const belowMerged = allBelowMerged[index]!;
+    const pr = pullRequest(branch, stack.branches[index - 1] ?? stack.trunk, belowMerged);
+    allBelowMerged.push(belowMerged && (pr ? pr.lifecycleState === "merged" : branch.pullRequest?.merged === true));
+    return pr;
+  });
   return await Promise.all(stack.branches.map(async (branch, index) => {
     const parent = stack.branches[index - 1] ?? stack.trunk;
-    const pr = pullRequest(branch);
-    const parentPr = pullRequest(parent);
-    const retargeted = index > 0 && pr?.baseRefName === stack.trunk.branch
-      && stack.branches.slice(0, index).every((lower) => {
-        const observed = pullRequest(lower)?.lifecycleState;
-        return observed ? observed === "merged" : lower.pullRequest?.merged === true;
-      });
+    const pr = associated[index];
+    const parentPr = associated[index - 1];
+    const retargeted = index > 0 && pr?.baseRefName === stack.trunk.branch && allBelowMerged[index];
     const number = branch.pullRequest?.number ?? pr?.number;
     const binding = stackLayerBinding({ branch: branch.branch, pullRequest: number, worktrees, threads });
     const current = local(branch);

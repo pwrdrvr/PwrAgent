@@ -917,32 +917,33 @@ export class ThreadDependencyCoordinator {
         && previous?.state === "satisfied" && previous.prUrl === entry.prUrl && previous.headSha === entry.headSha
         ? previous : entry;
     });
-    // Only a failure wakes a `wakeOn: "failure"` wait; success ends it here.
+    const hasCi = conditions.some(({ when }) => when === "ci_passed" || when === "ci_run" || when === "merge_build");
+    // A held success cannot silently end a failure-only wait.
     const quiet = success && item.wakeOn === "failure";
+    const outcome = success ? "success" : failure ? "failure" : staleOnly && item.status === "ready" ? item.outcome : undefined;
+    const evaluated = { ...item, conditions, evidence, outcome };
+    const held = hasCi && (success || failure) && Boolean(await this.options.stackHold?.(evaluated));
     const next: ThreadDependency = {
       ...item, conditions, evidence: persistedEvidence,
-      status: quiet ? "delivered" : success || failure || (staleOnly && item.status === "ready") ? "ready" : "waiting",
-      outcome: success ? "success" : failure ? "failure" : staleOnly && item.status === "ready" ? item.outcome : undefined,
+      status: quiet && !held ? "delivered" : success || failure || (staleOnly && item.status === "ready") ? "ready" : "waiting",
+      outcome,
       error: undefined,
     };
     const current = await this.save(item, next);
-    if (quiet || (!success && !failure)) return;
+    if (held || quiet || (!success && !failure)) return;
     if (!current || current.status !== "ready" || this.options.canDispatch?.(current) === false) return;
     // onFailure=wait tolerates repairable CI failures; closure/cancellation
     // still surfaces as terminal rather than silently waiting forever.
     if (current.outcome === "failure" && isRepairableDependencyFailure(current)) return;
     // A card needs no idle consumer: it starts no turn.
     if (threadDependencyDeliveryTarget(current) === "operator") return this.remind(current);
-    // A running turn does not hold the wake back: the queue steers it in, or
-    // starts one turn, sharing that delivery with whatever else waits. Only a
-    // provider's busy refusal of an earlier wake holds this consumer.
+    // CI wakes stay in this coordinator while busy so it can refresh evidence.
     if (this.busyConsumers.has(identity(current))) return;
     // A sibling claim may already have started this consumer. Do not admit
     // another saved plan until that uncertain delivery has been reviewed.
     if (this.options.store.active().some((other) => identity(other) === identity(current)
       && other.status === "dispatching" && other.error)) return;
     if ((current.conditions[0]?.localFile || current.conditions[0]?.resourceCheckout) && this.options.canClaimLocalFileWake?.() === false) return;
-    if (await this.options.stackHold?.(current)) return;
     const claim = { ...current, status: "dispatching" as const, dispatchOwnerPid: process.pid, updatedAt: this.now() };
     if (!this.options.store.replace(current, claim)) return;
     await this.options.changed(claim);
@@ -950,16 +951,20 @@ export class ThreadDependencyCoordinator {
     // must not turn that revoked subscription into a new continuation.
     if (JSON.stringify(this.options.store.get(claim.backend, claim.threadId, claim.id)) !== JSON.stringify(claim)) return;
     try {
+      let evidenceChanged = false;
       const result = await this.options.submit({
         backend: claim.backend, threadId: claim.threadId,
-        ...(this.options.stackHold ? { canAdmit: async () => !await this.options.stackHold?.(claim) } : {}),
+        ...(hasCi && this.options.stackHold ? { canAdmit: async () => {
+          evidenceChanged = Boolean(await this.options.stackHold?.(claim));
+          return !evidenceChanged;
+        } } : {}),
         input: [{ type: "text", text: buildDependencyPrompt(claim) }],
         origin: "automation", messageOrigin: { kind: "pwragent", dependencyId: claim.id,
           causalMessagingSource: claim.causalMessagingSource, causalMessagingAmbiguous: claim.causalMessagingAmbiguous },
       });
       // A refusal holds the consumer until its terminal or idle event, or
       // the owner confirming idle, admits the next ready wait.
-      if (result.status === "busy") this.busyConsumers.add(identity(claim));
+      if (result.status === "busy" && !evidenceChanged) this.busyConsumers.add(identity(claim));
       if (result.status === "queued") {
         this.queuedDeliveries.add(deliveryIdentity(claim));
         return;

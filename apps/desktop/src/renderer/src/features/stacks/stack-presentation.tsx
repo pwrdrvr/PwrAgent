@@ -4,6 +4,8 @@ import { describeStackAutomationBlock } from "@pwragent/shared/stacks/stack-auto
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { StartingTrayEntry } from "../navigation/StartingThreadRow";
 import { isStaleStackLayer, readCompactStackMemberships } from "@pwragent/shared/stacks/stack-status";
+import { resolveThreadParentKey } from "@pwragent/shared/subthreads";
+import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 
 export const StackRailContext = createContext<((thread: NavigationThreadSummary) => void) | undefined>(undefined);
 
@@ -39,13 +41,34 @@ function positionIn(stackKey: string, thread: NavigationThreadSummary) {
   return readCompactStackMemberships(thread).find(({ key }) => key === stackKey)?.position ?? 0;
 }
 
-/** Keep unrelated thread and pending-draft slots where the operator put them. */
+/** Order stack siblings within each tray while carrying each sibling's subtree. */
 export function orderStackTray(tray: StartingTrayEntry[], stackKey: string | undefined): StartingTrayEntry[] {
   if (!stackKey) return tray;
+  const threads = new Map(tray.flatMap((entry) => entry.kind === "thread"
+    ? [[threadSummaryIdentityKey(entry.thread), entry.thread] as const] : []));
+  const children = new Map<string | undefined, StartingTrayEntry[]>();
+  for (const entry of tray) {
+    const parent = entry.kind === "thread"
+      ? resolveThreadParentKey(entry.thread, threads) : entry.creation.parentThreadKey;
+    const key = parent && threads.has(parent) ? parent : undefined;
+    const siblings = children.get(key) ?? [];
+    siblings.push(entry);
+    children.set(key, siblings);
+  }
   const position = (entry: StartingTrayEntry) => entry.kind === "thread" ? positionIn(stackKey, entry.thread) : 0;
-  const layers = tray.filter((entry) => position(entry)).sort((a, b) => position(b) - position(a));
-  let index = 0;
-  return tray.map((entry) => position(entry) ? layers[index++]! : entry);
+  const ordered: StartingTrayEntry[] = [];
+  const append = (parent: string | undefined) => {
+    const siblings = children.get(parent) ?? [];
+    const layers = siblings.filter((entry) => position(entry)).sort((a, b) => position(b) - position(a));
+    let index = 0;
+    for (const sibling of siblings) {
+      const entry = position(sibling) ? layers[index++]! : sibling;
+      ordered.push(entry);
+      if (entry.kind === "thread") append(threadSummaryIdentityKey(entry.thread));
+    }
+  };
+  append(undefined);
+  return ordered.length === tray.length ? ordered : tray;
 }
 
 export function stackTrayPrecedesLead(parent: NavigationThreadSummary, children: readonly NavigationThreadSummary[]): boolean {

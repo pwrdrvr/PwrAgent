@@ -29,7 +29,7 @@ type StackPublishRequest = {
   actor: StackThreadRef;
   repository: ForgeRepository;
   directories: readonly string[];
-  expectedHead?: string;
+  expectedHead: string;
   automated: boolean;
   signal?: AbortSignal;
   readGate: () => Promise<{ layer: StackLayer; stack: StackSummary }>;
@@ -75,6 +75,35 @@ function stackLeadKey(commonDir: string, root: string): string {
 function stackPublishProofRef(repository: string, branch: string): string {
   const hash = createHash("sha256").update(JSON.stringify([repository.toLowerCase(), branch])).digest("hex");
   return `refs/pwragent/stack-publish/${hash}`;
+}
+
+async function readPublishProof(git: StackGit, ref: string, branch: string, tip: string | null) {
+  const result = await git.run(["show-ref", "--verify", "--hash", ref]);
+  if (result.exitCode !== 0) return undefined;
+  const oid = result.stdout.trim();
+  if (!isOid(oid)) throw new Error("Invalid publish receipt");
+  const receipt = JSON.parse(await git.output(["cat-file", "blob", oid])) as StackReceipt;
+  const move = receipt.moves.find((move) => move.branch === branch && move.next === tip);
+  const durable = move && await git.run(["rev-parse", "--verify", `refs/pwragent/undo/${receipt.id}/receipt`]);
+  const boundaries = durable && durable.exitCode === 0 && durable.stdout.trim() === oid
+    ? [move?.old, Object.hasOwn(receipt.publishBoundaries ?? {}, branch) ? receipt.publishBoundaries?.[branch] : undefined]
+      .filter((value): value is string => typeof value === "string" && isOid(value)) : [];
+  return { oid, boundaries };
+}
+
+export async function prepareStackPublishReceipt(git: StackGit, receipt: StackReceipt, carried?: { branch: string; tip: string }) {
+  const refs = await Promise.all(receipt.moves.map(async ({ branch, old }) => {
+    const ref = stackPublishProofRef(receipt.before.repository, branch);
+    const previous = await readPublishProof(git, ref, branch, old);
+    return { branch, ref, previous };
+  }));
+  receipt.publishBoundaries = Object.fromEntries(refs.flatMap(({ branch, previous }) => {
+    const tip = carried?.branch === branch ? carried.tip : previous?.boundaries.at(-1);
+    return tip ? [[branch, tip]] : [];
+  }));
+  return (manifest: string) => refs.map(({ ref, previous }) => previous
+    ? `update ${ref} ${manifest} ${previous.oid}`
+    : `create ${ref} ${manifest}`);
 }
 const ownerEpoch = randomUUID();
 
@@ -214,10 +243,9 @@ export class StackOperationsService {
       try {
         const remote = await stackPublishRemote(git, repository);
         const observedParent = current.stack.layers[index - 1]?.pullRequest?.number;
-        const target = await readStackPublishTarget(repository, stack, index, number, github, signal, observedParent);
+        const target = await readStackPublishTarget(repository, stack, index, number, github, signal, observedParent, request.expectedHead);
         const { remoteHead, merged } = target;
         if (layer.health === "parent_merged" && !merged) throw new Error("The parent merge could not be verified");
-        if (request.expectedHead && remoteHead !== request.expectedHead) throw new Error("The pull request head changed before approval was used");
         const parent = stack.branches[index - 1];
         if (!merged && parent && target.parentHead !== await git.tip(parent.branch)) {
           throw new Error("The parent PR no longer matches its local branch");
@@ -227,12 +255,13 @@ export class StackOperationsService {
         // remote update that was never contained in the pre-replay tip fails
         // here even if the live PR currently names it.
         const proofRef = stackPublishProofRef(repoKey, branch.branch);
-        const existingProof = await git.run(["show-ref", "--verify", "--hash", proofRef]);
-        const saved = existingProof.exitCode === 0
-          ? JSON.parse(await git.output(["cat-file", "blob", existingProof.stdout.trim()])) as StackReceipt : undefined;
-        const rewrite = saved?.moves.find((move) => move.branch === branch.branch && move.next === tip);
-        let previous = await git.ancestor(remoteHead, tip) ? tip : rewrite?.old;
-        if (!previous || !await git.ancestor(remoteHead, previous)) throw new Error("Remote head contains work outside the local replay");
+        const proof = await readPublishProof(git, proofRef, branch.branch, tip);
+        let verifiedBoundary: string | undefined;
+        for (const boundary of [tip, ...(proof?.boundaries ?? [])]) {
+          if (await git.ancestor(remoteHead, boundary)) { verifiedBoundary = boundary; break; }
+        }
+        if (!verifiedBoundary) throw new Error("Remote head contains work outside the local replay");
+        const previous = verifiedBoundary;
 
         let operation: StackOperation | undefined;
         const root = stackRoot(stack)!;
@@ -245,7 +274,6 @@ export class StackOperationsService {
         // Finish stale replays before sending any check-triggering update.
         let head = tip;
         if (operation) {
-          if (previous !== tip) throw new Error("Publish the outstanding replay before planning another");
           const plan = await engine.plan(operation);
           const conflict = plan.steps.find((step) => step.conflict);
           if (conflict) throw new StackOperationError("forecast_conflict", `Replay of ${conflict.branch} conflicts in ${conflict.conflict!.files.join(", ")}.`);
@@ -253,27 +281,25 @@ export class StackOperationsService {
           await request.readGate();
           const notification: StackNotification = { opId, actor, kind: operation.kind, operation,
             participants: owners, steps: plan.steps, moves: plan.moves };
+          const carried = { branch: branch.branch, tip: previous };
           const receipt = await this.runJournalled(clone, registry, store, engine, git, {
             beforeTransaction: async () => { await request.readGate(); signal?.throwIfAborted(); },
+            prepareReceipt: (receipt) => prepareStackPublishReceipt(git, receipt, carried),
           }, notification, (journal) => engine.apply(plan, opId, Date.now(), journal));
           await this.completeUnderWorktreeLock(clone, registry, store, git, notification);
-          previous = tip;
           head = receipt.moves.find((move) => move.branch === branch.branch)?.next ?? tip;
         }
 
         await store.withOperationLock(commonDir, async () => {
-          if (existingProof.exitCode === 0 && saved && rewrite?.old === previous && previous !== head && !operation) {
-            const durable = await git.output(["rev-parse", "--verify", `refs/pwragent/undo/${saved.id}/receipt`]);
-            if (durable.trim() !== existingProof.stdout.trim()) throw new Error("The replay was not committed");
-          }
           const freshRemote = await stackPublishRemote(git, repository);
           if (freshRemote !== remote) throw new Error("The stack's remote changed");
           await request.readGate();
           signal?.throwIfAborted();
+          const move = { branch: branch.branch, expected: remoteHead, previous, next: head };
           await completeStackPublication(() => target.retarget(), async () => {
             await request.readGate();
             signal?.throwIfAborted();
-            await pushStackLayers(git, remote, [{ branch: branch.branch, expected: remoteHead, previous, next: head }]);
+            await pushStackLayers(git, remote, [move]);
           });
         });
         return { head, pushed: head !== remoteHead };
@@ -680,6 +706,9 @@ export class StackOperationsService {
     let currentEntry: StackJournal | undefined;
     const applyHooks: ApplyHooks = {
       ...journal, ...hooks,
+      ...((notification.kind === "restack" || notification.kind === "sync") && {
+        prepareReceipt: hooks.prepareReceipt ?? ((receipt) => prepareStackPublishReceipt(git, receipt)),
+      }),
       finish: async (outcome, receipt) => {
         if (outcome === "committed") {
           if (currentEntry) await store.markJournalCommitted(clone.commonDir, currentEntry, notification);
@@ -695,15 +724,6 @@ export class StackOperationsService {
     let operationStarted = false;
     try {
       return await operate({ ...applyHooks, begin: async (entry) => {
-        // A proof pointer is harmless if the ref transaction never commits:
-        // publishing also requires the atomically created undo receipt.
-        if ((notification.kind === "restack" || notification.kind === "sync") && entry.receipt.moves.length) {
-          const blob = (await git.output(["hash-object", "-w", "--stdin"], JSON.stringify(entry.receipt))).trim();
-          if (!isOid(blob)) throw new Error("Invalid publish receipt");
-          for (const move of entry.receipt.moves) {
-            await git.output(["update-ref", stackPublishProofRef(entry.receipt.before.repository, move.branch), blob]);
-          }
-        }
         await applyHooks.begin?.(entry);
         currentEntry = entry;
         operationStarted = true;

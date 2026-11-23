@@ -1,4 +1,6 @@
 {
+  "stack-held-failure-only-continue-after": {"commits": 1, "note": "One commit records held CI evidence from the prerequisite; repeat polls write nothing. About 0.8 MB/day at 100 waits/day and 8 KB/commit.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
+  "busy-ci-watch-polls": {"commits": 0, "note": "A known busy thread's CI watch stays unclaimed across repeated polls. 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "stack-held-continue-after-ci": {"commits": 0, "note": "A ready CI prerequisite waits through repeated lower-stack observations without further commits. 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "stack-held-withdraw-review-offer": {"commits": 1, "note": "Withdraw an existing offer once when a lower layer becomes unsettled. At 100 withdrawals/day and 12,360 bytes each, about 1.24 MB/day.", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
   "stack-held-pr-incidents": {"commits": 0, "note": "Repeated held PR failures commit no claims or attempt reservations. 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
