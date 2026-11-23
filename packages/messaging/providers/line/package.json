@@ -16,6 +16,6 @@
     "vitest": "^5.0.1"
   },
   "scripts": {
-    "typecheck": "node ../../../../node_modules/typescript-native/bin/tsc --build tsconfig.json --stopBuildOnErrors"
+    "typecheck": "node ../../../../scripts/typecheck.mjs --package"
   }
 }

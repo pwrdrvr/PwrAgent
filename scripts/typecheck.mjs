@@ -1,37 +1,56 @@
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { invalidateTypecheckCaches } from "./typecheck-cache.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const compiler = fileURLToPath(new URL("../node_modules/typescript-native/bin/tsc", import.meta.url));
 const options = process.argv.slice(2);
-const desktopOnly = options[0] === "--desktop";
-if (desktopOnly) options.shift();
+const scope = ["--desktop", "--package"].includes(options[0]) ? options.shift() : undefined;
+
+function enabledOption(...names) {
+  const index = options.findLastIndex((option) => names.includes(option.toLowerCase()));
+  return index >= 0 && options[index + 1]?.toLowerCase() !== "false";
+}
+
+const watch = enabledOption("--watch", "-w");
+if (watch && !scope) {
+  process.stderr.write("Workspace typecheck does not support watch mode. Use pnpm --filter @pwragent/desktop typecheck --watch for desktop.\n");
+  process.exit(1);
+}
+const desktopWatch = scope === "--desktop" && watch;
+if (!desktopWatch && !enabledOption("--clean") && !enabledOption("--dry", "-d")
+  && !enabledOption("--help", "-h") && !enabledOption("--version")) {
+  invalidateTypecheckCaches(repositoryRoot);
+}
 
 const compilerEnv = { ...process.env, GOMAXPROCS: process.env.GOMAXPROCS ?? "4" };
-const projects = [
-  {
-    config: desktopOnly ? "apps/desktop/tsconfig.production.json" : "tsconfig.typecheck.json",
-    checkers: "4",
-    env: compilerEnv,
-  },
-  {
-    config: "apps/desktop/tsconfig.tests.json",
-    checkers: "2",
-    env: { ...compilerEnv, GOMEMLIMIT: compilerEnv.GOMEMLIMIT ?? "4608MiB" },
-  },
-  {
-    config: "apps/desktop/tsconfig.renderer.json",
-    checkers: "4",
-    env: compilerEnv,
-  },
-];
+const desktopTestEnv = { ...compilerEnv, GOMEMLIMIT: compilerEnv.GOMEMLIMIT ?? "4608MiB" };
+let projects;
+if (scope === "--package") {
+  projects = [{ config: "tsconfig.json", checkers: "4", env: compilerEnv }];
+} else if (desktopWatch) {
+  projects = [{ config: "apps/desktop/tsconfig.json", checkers: "2", env: desktopTestEnv }];
+} else {
+  projects = [
+    {
+      config: scope === "--desktop" ? "apps/desktop/tsconfig.production.json" : "tsconfig.typecheck.json",
+      checkers: "4",
+      env: compilerEnv,
+    },
+    { config: "apps/desktop/tsconfig.tests.json", checkers: "2", env: desktopTestEnv },
+    { config: "apps/desktop/tsconfig.renderer.json", checkers: "4", env: compilerEnv },
+  ];
+}
+
+const cwd = scope === "--package" ? process.cwd() : repositoryRoot;
 
 // Each compiler process releases its heap before the next desktop slice.
 for (const { config, checkers, env } of projects) {
+  const projectArgs = desktopWatch ? ["--project", config] : ["--build", config, "--stopBuildOnErrors"];
   const result = spawnSync(process.execPath, [
-    compiler, "--build", config, "--stopBuildOnErrors", "--checkers", checkers, ...options,
+    compiler, ...projectArgs, "--checkers", checkers, ...options,
   ], {
-    cwd: repositoryRoot,
+    cwd,
     env,
     stdio: "inherit",
   });

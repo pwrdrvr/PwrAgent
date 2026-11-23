@@ -139,6 +139,13 @@ defaults.
 
 Use `pnpm typecheck --clean` to clear the generated typecheck outputs and
 `pnpm typecheck --verbose` to see which projects are rebuilt.
+The build runner checks the installed pnpm graph, workspace manifests, and
+direct dependency targets at startup and invalidates cached checks when they
+change.
+
+`pnpm --filter @pwragent/desktop typecheck --watch` uses the full desktop
+config in one compiler process so that production, tests, E2E, and renderer
+files are all watched. The root workspace command requires a finite check.
 
 ### Main function bytecode budget
 

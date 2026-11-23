@@ -19,6 +19,6 @@
     "@types/ws": "8.18.2"
   },
   "scripts": {
-    "typecheck": "node ../../node_modules/typescript-native/bin/tsc --build tsconfig.json --stopBuildOnErrors"
+    "typecheck": "node ../../scripts/typecheck.mjs --package"
   }
 }
