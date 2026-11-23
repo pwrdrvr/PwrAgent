@@ -75,7 +75,7 @@ const registry = {
       registryListener = undefined;
     };
   }),
-  startThread: vi.fn(async (request: StartThreadRequest) => ({
+  startThreadWithoutLaunchpad: vi.fn(async (request: StartThreadRequest) => ({
     backend: request.backend,
     threadId: "thread-1",
   })),
@@ -519,7 +519,7 @@ describe("agent ipc", () => {
     });
     registry.listBackends.mockClear();
     registry.onEvent.mockClear();
-    registry.startThread.mockClear();
+    registry.startThreadWithoutLaunchpad.mockClear();
     registry.startTurn.mockClear();
     registry.submitTurn.mockClear();
     registry.submitHeldTurn.mockClear();
@@ -1268,6 +1268,7 @@ describe("agent ipc", () => {
       backend: "acp:grok",
       threadId: "thread-1",
     });
+    expect(registry.startThreadWithoutLaunchpad).toHaveBeenCalledExactlyOnceWith({ backend: "acp:grok" });
     vi.mocked(registry.submitTurn).mockResolvedValueOnce({
       status: "queued",
       entry: {

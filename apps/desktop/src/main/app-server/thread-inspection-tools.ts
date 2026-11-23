@@ -146,7 +146,7 @@ export interface ThreadInspectionToolsDependencies {
  * imports the registry.
  */
 export interface ThreadInspectionToolsHost extends Pick<RegistryHostPorts,
-  "dynamicToolPermissionDenied" | "listThreads" | "readCausalMessagingContext"
+  "dynamicToolPermissionDenied" | "listThreads" | "ownerRelativeInstanceId" | "readCausalMessagingContext"
   | "readThread" | "renameThread" | "resolveAgentCallerExecutionMode"
   | "threadHasActiveTurn"
   | "archiveThread"
@@ -163,8 +163,6 @@ export interface ThreadInspectionToolsHost extends Pick<RegistryHostPorts,
   readonly threadTurnQueue: ThreadTurnQueue;
   readonly gitWorkingStateService: GitWorkingStateService;
   readonly messagingStore: MessagingArchiveCleanupStore | null | undefined;
-  /** Nothing when an instance id names this instance itself, whose threads are local. */
-  ownerRelativeInstanceId(instanceId: string | undefined): string | undefined;
   restoreThread(request: RestoreThreadRequest): Promise<RestoreThreadResponse>;
   handoffThreadWorkspace(request: HandoffThreadWorkspaceRequest): Promise<HandoffThreadWorkspaceResponse>;
   setThreadExecutionMode(params: SetThreadExecutionModeRequest): Promise<SetThreadExecutionModeResponse>;

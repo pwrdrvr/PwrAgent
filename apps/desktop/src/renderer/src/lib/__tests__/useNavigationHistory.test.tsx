@@ -85,6 +85,42 @@ describe("useNavigationHistory", () => {
     expect(hook.result.current.canGoForward).toBe(false);
   });
 
+  it("drops a refused owner start from Forward without creating a composer visit", () => {
+    const source = thread("codex:source");
+    const h = renderHistory(source);
+    const ownerStart = { view: "starting", creationId: "owner-start", directoryKey: "project", ownerReported: true } as const;
+    h.update({ current: ownerStart, startingThreads: new Map([["owner-start", undefined]]) });
+    act(() => h.hook.result.current.goBack());
+    expect(h.restore).toHaveBeenLastCalledWith(source);
+    h.settle();
+
+    h.update({ startingThreads: new Map() });
+    expect(h.hook.result.current.canGoForward).toBe(false);
+  });
+
+  it("keeps the source selection as the current visit when its owner start is refused", () => {
+    const source = thread("codex:source");
+    const h = renderHistory(thread("codex:earlier"));
+    h.navigate(source);
+    const ownerStart = { view: "starting", creationId: "owner-start", directoryKey: "project", ownerReported: true } as const;
+    h.update({ current: ownerStart, startingThreads: new Map([["owner-start", undefined]]) });
+    h.update({ current: source, startingThreads: new Map() });
+
+    act(() => h.hook.result.current.goBack());
+    expect(h.restore).toHaveBeenLastCalledWith(thread("codex:earlier"));
+  });
+
+  it("keeps the project composer in Back when an owner start first appears", () => {
+    const composer = launchpad("project");
+    const h = renderHistory(composer);
+    h.update({ startingThreads: new Map() });
+    const ownerStart = { view: "starting", creationId: "owner-start", directoryKey: "project", ownerReported: true } as const;
+    h.update({ current: ownerStart, startingThreads: new Map([["owner-start", undefined]]) });
+
+    act(() => h.hook.result.current.goBack());
+    expect(h.restore).toHaveBeenLastCalledWith(composer);
+  });
+
   it("records thread-to-thread navigation and walks back/forward", () => {
     const { hook, navigate, restore, settle } = renderHistory(thread("codex:a"));
     navigate(thread("codex:b"));

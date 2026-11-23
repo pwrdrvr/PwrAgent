@@ -2096,6 +2096,31 @@ describe("DesktopFederationRuntime", () => {
     });
   });
 
+  it("keeps pending starts local even with an all-threads transcript subscription", () => {
+    const forwarded: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({ localInstanceId: "owner_one" });
+    router.registerConnection(createConnection({
+      peerId: "viewer_one", capabilities: ["thread_navigation", "thread_detail", "event_subscriptions"],
+      sendEnvelope: (envelope) => forwarded.push(envelope),
+    }));
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "owner_one";
+    runtime.router = router;
+    applyEventSubscription({ runtime, sourceInstanceId: "owner_one", subscriberInstanceId: "viewer_one",
+      eventClasses: ["navigation", "transcript"], threadSelection: { kind: "all" } });
+
+    runtime.forwardLocalBackendEvent({ backend: "codex", notification: { method: "thread/start/pending", params: {
+      phase: "starting", start: { startId: "local-start", backend: "codex", title: "Local start", submittedAt: 1000 },
+    } } });
+    runtime.forwardLocalBackendEvent({ backend: "codex", notification: { method: "thread/started", params: {
+      threadId: "created-thread",
+    } } });
+    expect(forwarded.length).toBeGreaterThan(0);
+    expect(forwarded).not.toContainEqual(expect.objectContaining({
+      params: expect.objectContaining({ notification: expect.objectContaining({ method: "thread/start/pending" }) }),
+    }));
+  });
+
   it("tells a navigation viewer to re-read a project when its Forge Automation changes", () => {
     const forwarded: FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({ localInstanceId: "owner_one" });

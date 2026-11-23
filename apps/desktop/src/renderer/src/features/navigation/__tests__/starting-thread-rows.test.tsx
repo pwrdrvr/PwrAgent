@@ -453,6 +453,30 @@ describe("a to-do card's thread while its worktree and setup run", () => {
     expect(onSelectPendingLaunchpad).toHaveBeenCalledWith(rows[0]);
   });
 
+  it("displays a direct start with no openable target as a status row until it lands", () => {
+    const onSelectPendingLaunchpad = vi.fn();
+    const direct = report({ progressThread: undefined, title: "Prepare fixtures" });
+    const renderDirect = (createdThreadId?: string) => renderSidebar({
+      browseMode: "inbox",
+      threads: [thread("Parent")],
+      creations: [],
+      pendingThreadStarts: rowsFor(direct, createdThreadId),
+      onSelectPendingLaunchpad,
+    });
+
+    const before = renderDirect();
+    const title = screen.getByText("Prepare fixtures");
+    expect(title).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Prepare fixtures, starting in PwrSnap" })).toBeNull();
+    fireEvent.click(title);
+    expect(onSelectPendingLaunchpad).not.toHaveBeenCalled();
+    before.unmount();
+
+    renderDirect("new-thread");
+    fireEvent.click(screen.getByRole("button", { name: "Prepare fixtures, starting in PwrSnap" }));
+    expect(onSelectPendingLaunchpad).toHaveBeenCalledOnce();
+  });
+
   it("starts in the project that groups the raising thread's worktree", () => {
     const worktree = "/Users/fixture-user/.pwragent/worktrees/abc123/PwrSnap";
     const [row] = rowsFor(report({ cwd: worktree, directoryKey: undefined, directoryLabel: undefined }));

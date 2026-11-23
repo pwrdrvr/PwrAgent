@@ -396,6 +396,7 @@ import type {
   AppServerListSkillsResponse,
   AppServerListThreadsRequest,
   AppServerListThreadsResponse,
+  AppServerPendingThreadStartReport,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   GetThreadFileDiffRequest,
@@ -961,6 +962,7 @@ import {
   AGENT_CANCEL_THREAD_PR_AUTO_DISPATCH_CHANNEL,
   AGENT_SEND_THREAD_PR_AUTO_DISPATCH_NOW_CHANNEL,
   AGENT_TURN_OFF_CODEX_FAST_EVERYWHERE_CHANNEL,
+  AGENT_LIST_PENDING_THREAD_STARTS_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
   AGENT_START_REVIEW_CHANNEL,
   AGENT_START_TURN_CHANNEL,
@@ -2783,6 +2785,8 @@ const desktopApi = Object.freeze({
     request: RenameThreadRequest,
   ): Promise<RenameThreadResponse> =>
     await ipcRenderer.invoke(APP_SERVER_RENAME_THREAD_CHANNEL, request),
+  listPendingThreadStarts: async (): Promise<AppServerPendingThreadStartReport[]> =>
+    await ipcRenderer.invoke(AGENT_LIST_PENDING_THREAD_STARTS_CHANNEL),
   startThread: async (
     request: StartThreadRequest
   ): Promise<StartThreadResponse> =>

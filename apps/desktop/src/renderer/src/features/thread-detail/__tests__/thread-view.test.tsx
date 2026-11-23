@@ -8542,6 +8542,7 @@ describe("ThreadView", () => {
         loading={false}
         loadingMore={false}
         messageCount={0}
+        pendingThreadStartFailure={{ message: "Setup exited 1", phase: "setup", worktreeCleanupAvailable: true }}
         selectedThread={{
           id: "thread-env-failure",
           title: "Untitled thread",

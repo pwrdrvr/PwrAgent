@@ -7484,6 +7484,10 @@ a.button {
   cursor: pointer;
 }
 
+.thread-row-shell--starting .thread-row:not(:has(.thread-row__open)) {
+  cursor: default;
+}
+
 .thread-row--compact {
   flex-direction: row;
   align-items: baseline;

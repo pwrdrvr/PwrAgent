@@ -397,6 +397,7 @@ import type {
   AppServerListSkillsResponse,
   AppServerListThreadsRequest,
   AppServerListThreadsResponse,
+  AppServerPendingThreadStartReport,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   GetThreadFileDiffRequest,
@@ -1383,6 +1384,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   renameThread?: (
     request: RenameThreadRequest
   ) => Promise<RenameThreadResponse>;
+  listPendingThreadStarts?: () => Promise<AppServerPendingThreadStartReport[]>;
   startThread?: (request: StartThreadRequest) => Promise<StartThreadResponse>;
   forkThread?: (request: ForkThreadRequest) => Promise<ForkThreadResponse>;
   startReview?: (request: StartReviewRequest) => Promise<StartReviewResponse>;
