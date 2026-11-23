@@ -91,7 +91,7 @@ type Resource = {
     batch?: number;
     cause?: NavigationDiagnosticCause;
     trigger?: string;
-    seen?: Map<string, number>;
+    seen?: { batches: Map<string, number>; count: number };
   };
   /** A correlated viewer pin publication is waiting for this resource. */
   pinPublicationPending?: boolean;
@@ -605,6 +605,13 @@ export class NavigationWindowQueries {
   }
 
   private fenceBaseline(resource: Resource): void {
+    const read = resource.membershipRead;
+    if (read?.seen) {
+      // The replacement consumes these notices even when a different event
+      // fences the read before its proof arrives.
+      resource.diagnosticInvalidations = (resource.diagnosticInvalidations ?? 0) + read.seen.count;
+      read.seen = undefined;
+    }
     resource.invalidated = true;
     // Some canonical events patch settled rows without scheduling a read.
     // Replace any pending page they discard so its counts cannot be stranded.
@@ -632,30 +639,31 @@ export class NavigationWindowQueries {
     // An old baseline can only nominate an apparently offscreen notice for
     // verification. The replacement may add this child or count it through
     // the enclosing directory, even if the returned rows do not show it.
-    const seen = read.seen ??= new Map();
-    if (seen.has(key)) return true;
-    if (seen.size >= MAX_SEEN_THREADS_PER_READ) return false;
-    seen.set(key, batch);
+    const seen = read.seen ??= { batches: new Map(), count: 0 };
+    if (!seen.batches.has(key)) {
+      if (seen.batches.size >= MAX_SEEN_THREADS_PER_READ) return false;
+      seen.batches.set(key, batch);
+    }
+    seen.count += 1;
     return true;
   }
 
   private needsSeenReplacement(resource: Resource, candidate?: RetainableState): boolean {
     const read = resource.membershipRead;
     if (!read?.seen || resource.invalidated) return false;
-    const { seen } = read;
+    const { batches } = read.seen;
     const page = candidate?.state.page;
     const dependencies = page?.coverage.state === "complete"
       ? candidate?.ownerProof?.dependencies ?? this.metadataDependencies(page) : undefined;
-    const match = dependencies?.threadKeys.find((key) => seen.has(key));
+    const match = dependencies?.threadKeys.find((key) => batches.has(key));
     if (dependencies && match === undefined) {
       // The proof covers off-page counts for this entire cursor generation.
       read.seen = undefined;
       return false;
     }
-    resource.diagnosticBatch = match === undefined ? seen.values().next().value : seen.get(match);
+    resource.diagnosticBatch = match === undefined ? batches.values().next().value : batches.get(match);
     resource.diagnosticCause = "metadata";
     resource.diagnosticTrigger = "navigation/thread/seen";
-    resource.diagnosticInvalidations = (resource.diagnosticInvalidations ?? 0) + seen.size;
     this.fenceBaseline(resource);
     return true;
   }

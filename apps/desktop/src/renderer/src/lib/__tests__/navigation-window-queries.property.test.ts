@@ -150,7 +150,7 @@ type SeenRaceCause = "navigation/threadDirectories/updated" | "navigation/remote
 
 async function checkSeenDuringMembershipRefresh(
   size: number, scope: "local" | "mounted" | "remote", race: SeenRace, timing: "queued" | "dispatched" | "no-seen",
-  cause: SeenRaceCause,
+  cause: SeenRaceCause, overtaken = false,
 ) {
   const peer = { scope: "remote", instanceId: "peer" } as const;
   const target = scope === "remote" ? peer : undefined;
@@ -163,7 +163,7 @@ async function checkSeenDuringMembershipRefresh(
     query: i === 0 && race === "exact-descriptor" ? { kind: "exact", identities: [parent] } : { kind: "children", parent,
       ...(i === 0 && race === "tray-descriptor" ? { directoryKey: "directory:/selected" } : {}) },
   } satisfies NavigationQueryRequest]));
-  const dispatches: { id: string; trigger?: string }[] = [];
+  const dispatches: { id: string; trigger?: string; invalidations?: number }[] = [];
   const firstWave = deferred<void>();
   const release = deferred<void>();
   let measuring = false;
@@ -203,7 +203,7 @@ async function checkSeenDuringMembershipRefresh(
       } } : {}),
     };
     if (measuring) {
-      dispatches.push({ id, trigger: request.diagnostic?.trigger });
+      dispatches.push({ id, trigger: request.diagnostic?.trigger, invalidations: request.diagnostic?.invalidations });
       if (dispatches.length === 4) firstWave.resolve();
       await release.promise;
     }
@@ -234,21 +234,31 @@ async function checkSeenDuringMembershipRefresh(
         : { method: "navigation/invalidated", params: { sourceMethod: "navigation/thread/seen", threadId } },
     });
     const beforeSeen = queries.getSnapshot();
-    if (race === "off-page" && timing === "dispatched") queries.invalidate(undefined, undefined, seenEvent("unrelated"));
+    const duplicateSeen = race === "off-page" && timing === "dispatched";
+    if (duplicateSeen) queries.invalidate(undefined, undefined, seenEvent("unrelated"));
     if (seen) queries.invalidate(undefined, undefined, seenEvent(seenRef.threadId));
+    if (duplicateSeen) queries.invalidate(undefined, undefined, seenEvent(seenRef.threadId));
+    if (overtaken) queries.invalidate(parents[0]!.threadId, undefined, { backend: "codex", notification: {
+      method: "thread/parent/set", params: { threadId: seenRef.threadId, parentThreadId: parents[0]!.threadId },
+    } });
     const fencedAtNotice = queries.getSnapshot() !== beforeSeen;
     const seenRefresh = queries.refresh(undefined, undefined, true);
     release.resolve();
     await Promise.all([refreshed, seenRefresh]);
     const repeats = timing === "dispatched" && race !== "absent" ? 1 : 0;
+    const retryTrigger = overtaken ? "thread/parent/set" : "navigation/thread/seen";
     const causes = new Map<string | undefined, number>();
     for (const { trigger } of dispatches) causes.set(trigger, (causes.get(trigger) ?? 0) + 1);
     expect(Object.fromEntries(causes)).toEqual({
       ...(membershipChanged ? { [cause]: size } : {}),
-      ...(repeats ? { "navigation/thread/seen": repeats } : {}),
+      ...(repeats ? { [retryTrigger]: repeats } : {}),
     });
     if (race === "absent") expect(fencedAtNotice).toBe(false);
-    if (repeats) expect(dispatches.find(({ trigger }) => trigger === "navigation/thread/seen")?.id).toBe(parents[0]!.threadId);
+    if (repeats) {
+      expect(dispatches.find(({ trigger }) => trigger === retryTrigger)).toMatchObject({
+        id: parents[0]!.threadId, invalidations: (duplicateSeen ? 3 : 1) + Number(overtaken),
+      });
+    }
     for (const [i, parent] of parents.entries()) {
       const page = queries.getSnapshot().resources.get(parent.threadId)?.state.page;
       const exact = i === 0 && race === "exact-descriptor";
@@ -287,12 +297,16 @@ it("attributes an off-page member's retry to the seen notice found in the return
     await checkSeenDuringMembershipRefresh(12, "local", "off-page", "dispatched", "navigation/threadDirectories/updated");
     const events = navigationListingDiagnostics.snapshot().events.filter(({ trigger }) => trigger === "navigation/thread/seen");
     const notices = events.filter(({ phase }) => phase === "invalidate");
-    expect(notices).toHaveLength(2);
+    expect(notices).toHaveLength(3);
     const retries = events.filter(({ phase }) => phase === "dispatch");
     expect(retries.map(({ batch }) => batch)).toEqual([notices[1]?.batch]);
   } finally {
     navigationListingDiagnostics.setEnabled(false);
   }
+});
+
+it("counts deferred seen notices when a later event fences the membership read", async () => {
+  await checkSeenDuringMembershipRefresh(12, "local", "off-page", "dispatched", "navigation/threadDirectories/updated", true);
 });
 
 it("retries dispatched trays only when the next owner baseline can depend on the seen thread", async () => {
