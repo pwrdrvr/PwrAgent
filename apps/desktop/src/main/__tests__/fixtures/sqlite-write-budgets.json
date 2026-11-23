@@ -1,6 +1,7 @@
 {
   "line-rich-menu-recover-absent-create": {"commits": 1, "note": "Recover an interrupted LINE rich-menu create that never reached LINE", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
   "line-rich-menu-lifecycle": {"commits": 7, "note": "One LINE rich-menu install, update, and removal", "observedWalBytes": 57712, "rowsChanged": 7, "statements": 7},
+  "messaging-adapter-validation-rejection-burst": {"commits": 1, "note": "100 failures in one cooldown. At 48 commits/day per platform and reason, 20,600 bytes/commit projects to about 10.9 MB/day across all 11 wired combinations under sustained failures. No idle writes.", "observedWalBytes": 20600, "rowsChanged": 1, "statements": 1},
   "cold-collapsed-project-thread-creation": {"commits": 4, "note": "One new thread, including its automatic pin with no navigation snapshot. At 100 starts/day, about 5.4 MB/day. No idle writes.", "observedWalBytes": 53560, "rowsChanged": 4, "statements": 4},
   "navigation-remove-project-retain-case-alias-drafts": {"commits": 1, "note": "Removing a project hides the case aliases and retains their drafts in one commit. At 100 removals/day and 12,360 bytes/commit, about 1.24 MB/day; zero idle writes.", "observedWalBytes": 12360, "rowsChanged": 3, "statements": 3},
   "thread-todo-ci-approval-settled": {"commits": 1, "note": "The owner saw an approval card's gate cleared (approved anywhere) or its run end: the card is marked done.", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
@@ -866,20 +867,9 @@
     "rowsChanged": 0,
     "statements": 0
   },
-  "navigation-relative-child-insertion": {
-    "commits": 1,
-    "note": "One owner-validated relative insertion among 101 children: one commit per explicit creation; at 100 creations/day and ~4 KiB/commit, ~0.4 MB/day; no idle writes",
-    "observedWalBytes": 0,
-    "rowsChanged": 1,
-    "statements": 1
-  },
-  "navigation-relative-child-move": {
-    "commits": 1,
-    "note": "One owner-validated move among 100 children: one commit per explicit drag; at 100 moves/day and ~4 KiB/commit, ~0.4 MB/day; no idle writes",
-    "observedWalBytes": 0,
-    "rowsChanged": 1,
-    "statements": 1
-  },
+  "navigation-relative-child-insertion": {"commits": 1, "note": "One owner-validated relative insertion among 101 children: one commit per explicit creation; at 100 creations/day and ~12 KiB/commit, ~1.2 MB/day; no idle writes", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "navigation-relative-child-move": {"commits": 1, "note": "One owner-validated move among 100 children: one commit per explicit drag; at 100 moves/day and ~12 KiB/commit, ~1.2 MB/day; no idle writes", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "navigation-relative-child-move-peer-refresh": {"commits": 1, "note": "One commit for a move and a changed peer snapshot, ~16.5 KB or 1.65 MB/day at 100 such moves/day. No periodic writes.", "observedWalBytes": 16480, "rowsChanged": 2, "statements": 2},
   "navigation-relative-thread-pin": {
     "commits": 1,
     "note": "One owner-revalidated move across 102 pins changes one rank in one commit; at 100 moves/day and ~4 KiB/commit, ~0.4 MB/day; no idle writes",
@@ -943,6 +933,7 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "navigation-viewer-pin-mount-token": {"commits": 2, "note": "The token shares the pin INSERT commit and target observation still commits separately. ~24.8 KB or 2.48 MB/day at 100 new mounts/day. No periodic writes.", "observedWalBytes": 24752, "rowsChanged": 2, "statements": 2},
   "navigation-viewer-pin-unchanged-reads": {
     "commits": 0,
     "note": "Twenty Attention and directory query pairs retain the same owner lifecycle: zero commits, 0 MB/day added WAL.",

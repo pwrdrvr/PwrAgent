@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AutomationStore } from "../storage/automation-store";
-import { StateDb } from "../state/state-db";
+import { CURRENT_STATE_DB_USER_VERSION, StateDb } from "../state/state-db";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
 let stateDb: StateDb;
@@ -43,7 +43,7 @@ describe("AutomationStore", () => {
     expect(store.getAutomation("automation-1")?.lifetimeCost).toEqual({ since: 0, totalMicros: 100 });
   });
 
-  it("starts coverage at migration and preserves it across reopen", () => {
+  it.each([86, 87])("starts coverage when upgrading v%i and preserves it across reopen", (version) => {
     const { dbPath, tempDir } = createTempStateDb("pwragent-automation-cost-");
     let db = StateDb.open(dbPath);
     try {
@@ -61,12 +61,13 @@ describe("AutomationStore", () => {
         ALTER TABLE automation_runs DROP COLUMN accounted_cost_micros;
         ALTER TABLE automations DROP COLUMN total_cost_micros;
         ALTER TABLE automations DROP COLUMN cost_since;
-        PRAGMA user_version = 86;
       `);
+      db.raw.pragma("user_version = " + version);
       db.close();
       const migrationStarted = Date.now();
       db = StateDb.open(dbPath);
       const migrationEnded = Date.now();
+      expect(db.raw.pragma("user_version", { simple: true })).toBe(CURRENT_STATE_DB_USER_VERSION);
       migrated = new AutomationStore(db, { runHistoryLimit: 1 });
       expect(migrated.getRun(oldRun.id)?.usage?.totalCostMicros).toBe(900);
       migrated.setRunUsage({ runId: oldRun.id, usage: { totalCostMicros: 850 }, now: migrationEnded });

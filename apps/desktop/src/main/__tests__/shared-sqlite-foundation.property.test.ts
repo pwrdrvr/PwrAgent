@@ -19,7 +19,8 @@ function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersio
   // recovery and automatic wake guards, research, request-pricing, sub-agent dismissal,
   // operator-request scope, pricing summary, gate pricing, usage completion,
   // automation turn, and PR watch indexes, plus pricing summary deltas and scheduled
-  // action projections, targeted managed membership, and lifetime automation cost.
+  // action projections, targeted managed membership, subthread lookup indexes,
+  // pin mount tokens, and lifetime automation cost.
   // Restore the v80 SQL for the indexes replaced by v83 and v84.
   const compared = rows.filter(row =>
     row.tbl_name !== "owner_jobs"
@@ -60,8 +61,14 @@ function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersio
     && row.name !== "thread_sub_agents_padded_child"
     && row.name !== "idx_scheduled_thread_actions_projection_order"
     && row.name !== "idx_scheduled_thread_actions_terminal_updated"
+    && row.name !== "idx_threads_subthread_noncanonical_id"
+    && row.name !== "idx_threads_subthread_parent"
+    && row.name !== "remote_thread_pin_mount_insert"
+    && row.name !== "remote_thread_pin_mount_update"
   ).map(row => {
     switch (row.name) {
+      case "remote_thread_pins":
+        return { ...row, sql: row.sql?.replace(", mount_token BLOB NOT NULL DEFAULT X''", "") };
       case "thread_usage_lines":
         return { ...row, sql: row.sql?.replace(/^ {2}request_pricing +TEXT,\n/m, "") };
       case "thread_pricing_summaries":

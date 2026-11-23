@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { checkDecisionProvider } from "../decision/decision-provider-check";
+import { checkDecisionProvider, listDecisionModels } from "../decision/decision-provider-check";
 
 const reply = (status: number, body: unknown = {}) =>
   ({ ok: status >= 200 && status < 300, status, json: async () => body, body: { cancel: async () => {} } }) as unknown as Response;
@@ -55,5 +55,42 @@ describe("decision provider check", () => {
     expect(refused.detail).toBe("TypeSafe rejected the request: unknown model. Check the model id (jev-latest).");
     await expect(status(529)).resolves.toContain("overloaded");
     await expect(status(500)).resolves.toBe("TypeSafe returned HTTP 500.");
+  });
+});
+
+describe("decision model listing", () => {
+  it("lists what each provider offers, with the saved key, and runs no decision", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => reply(200, {
+      models: [{ name: "jev-latest", description: " Newest ", release_date: "2026-10-14" }, { name: 7 }, { name: "  " }, { name: "jev-preview" }],
+    }));
+    await expect(listDecisionModels("jev", { settings: {}, apiKey: "sample-key", fetch })).resolves.toEqual({
+      ok: true,
+      models: [{ id: "jev-latest", description: "Newest" }, { id: "jev-preview" }],
+    });
+    expect(fetch).toHaveBeenCalledWith("https://api.typesafe.ai/v1/models", expect.objectContaining({
+      headers: { Authorization: "Bearer sample-key" }, redirect: "error",
+    }));
+    const local = vi.fn<typeof globalThis.fetch>(async () => reply(200, [{ name: "clef-flash" }]));
+    await expect(listDecisionModels("local", { settings: { local: { endpoint: "http://localhost:9911" } }, fetch: local }))
+      .resolves.toEqual({ ok: true, models: [{ id: "clef-flash" }] });
+    expect(local.mock.calls[0]![0]).toBe("http://localhost:9911/v1/models");
+  });
+
+  it("keeps up to 100 valid models, however many invalid entries come first", async () => {
+    const entries = [...Array.from({ length: 120 }, () => ({ name: " " })), ...Array.from({ length: 150 }, (_, index) => ({ name: `model-${index}` }))];
+    const listing = await listDecisionModels("local", { settings: {}, fetch: vi.fn(async () => reply(200, { models: entries })) });
+    expect(listing.ok && listing.models.map((model) => model.id)).toEqual(Array.from({ length: 100 }, (_, index) => `model-${index}`));
+  });
+
+  it("needs a Jev key before asking, and names a refused key, an error and silence", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    await expect(listDecisionModels("jev", { settings: {}, fetch })).resolves.toMatchObject({ ok: false, detail: expect.stringContaining("Add a TypeSafe API key") });
+    expect(fetch).not.toHaveBeenCalled();
+    await expect(listDecisionModels("jev", { settings: {}, apiKey: "sample-key", fetch: vi.fn(async () => reply(401)) }))
+      .resolves.toEqual({ ok: false, detail: "TypeSafe rejected the API key." });
+    await expect(listDecisionModels("local", { settings: {}, fetch: vi.fn(async () => reply(500)) }))
+      .resolves.toEqual({ ok: false, detail: "http://127.0.0.1:8787 returned HTTP 500 for its model list." });
+    await expect(listDecisionModels("local", { settings: {}, fetch: vi.fn(async () => { throw new TypeError("fetch failed"); }) }))
+      .resolves.toEqual({ ok: false, detail: "Nothing answered at http://127.0.0.1:8787." });
   });
 });
