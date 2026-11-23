@@ -1586,7 +1586,6 @@ export type DesktopSettingsSnapshot = {
       botToken: DesktopSettingsSecretState;
       authorizedUserIds: DesktopSettingsValue<DesktopAuthorizedContact[]>;
       authorizedSupergroups: DesktopSettingsValue<DesktopAuthorizedContact[]>;
-      pairingGrants?: DesktopTelegramPairingGrants;
     };
     discord: {
       enabled: DesktopSettingsValue<boolean>;

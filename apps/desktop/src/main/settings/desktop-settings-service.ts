@@ -1491,7 +1491,6 @@ export class DesktopSettingsService {
             config.messaging?.telegram?.authorizedSupergroups,
             TELEGRAM_AUTHORIZED_SUPERGROUPS_ENV,
           ),
-          pairingGrants: this.readTelegramPairingGrants(this.resolveTelegramBotTokenSync()),
         },
         discord: {
           enabled: this.resolveBoolean(
@@ -2009,11 +2008,7 @@ export class DesktopSettingsService {
       fetchedAt: this.now(),
       messaging: {
         ...messaging,
-        telegram: {
-          ...messaging.telegram,
-          botToken: telegramBotToken,
-          pairingGrants: this.readTelegramPairingGrants(this.resolveTelegramBotTokenSync()),
-        },
+        telegram: { ...messaging.telegram, botToken: telegramBotToken },
         discord: { ...messaging.discord, botToken: discordBotToken },
         mattermost: {
           ...messaging.mattermost,

@@ -81,6 +81,7 @@ import {
   MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL,
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
   MESSAGING_REJECT_PAIRING_CHANNEL,
+  MESSAGING_READ_TELEGRAM_PAIRING_GRANTS_CHANNEL,
   MESSAGING_REVOKE_TELEGRAM_PAIRING_GRANT_CHANNEL,
   MESSAGING_RESET_TOOL_UPDATE_BINDINGS_CHANNEL,
   MESSAGING_SET_ENABLED_CHANNEL,
@@ -823,6 +824,12 @@ export function registerMessagingStatusIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(MESSAGING_READ_TELEGRAM_PAIRING_GRANTS_CHANNEL);
+  ipcMain.handle(MESSAGING_READ_TELEGRAM_PAIRING_GRANTS_CHANNEL, () => {
+    const service = getDesktopSettingsService();
+    return service.readTelegramPairingGrants(service.resolveTelegramBotTokenSync());
+  });
+
   ipcMain.removeHandler(MESSAGING_REVOKE_TELEGRAM_PAIRING_GRANT_CHANNEL);
   ipcMain.handle(
     MESSAGING_REVOKE_TELEGRAM_PAIRING_GRANT_CHANNEL,
@@ -1046,6 +1053,7 @@ export async function disposeMessagingStatusIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(MESSAGING_LIST_PAIRING_REQUESTS_CHANNEL);
   ipcMain.removeHandler(MESSAGING_APPROVE_PAIRING_CHANNEL);
   ipcMain.removeHandler(MESSAGING_REJECT_PAIRING_CHANNEL);
+  ipcMain.removeHandler(MESSAGING_READ_TELEGRAM_PAIRING_GRANTS_CHANNEL);
   ipcMain.removeHandler(MESSAGING_REVOKE_TELEGRAM_PAIRING_GRANT_CHANNEL);
   ipcMain.removeHandler(MESSAGING_UNBIND_THREAD_CHANNEL);
   ipcMain.removeHandler(MESSAGING_RESET_TOOL_UPDATE_BINDINGS_CHANNEL);

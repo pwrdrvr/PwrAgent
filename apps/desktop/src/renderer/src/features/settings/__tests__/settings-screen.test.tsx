@@ -7166,6 +7166,32 @@ describe("SettingsScreen", () => {
     }
   });
 
+  it("shows and revokes only the current bot's grants when an earlier lookup finishes late", async () => {
+    const original = { accountId: "123456", users: [{ id: "42", displayName: "Original bot contact" }], supergroups: [] };
+    const replacement = { accountId: "654321", users: [{ id: "42", displayName: "Replacement bot contact" }], supergroups: [] };
+    let finishOriginal!: (grants: typeof original) => void;
+    const originalLookup = new Promise<typeof original>((resolve) => { finishOriginal = resolve; });
+    const readTelegramPairingGrants = vi.fn().mockReturnValueOnce(originalLookup).mockResolvedValue(replacement);
+    const revokeTelegramPairingGrant = vi.fn(async () => undefined);
+    const desktopApi: DesktopApi = { readTelegramPairingGrants, revokeTelegramPairingGrant };
+    const pane = (snapshot: DesktopSettingsSnapshot) => (
+      <SettingsScreen desktopApi={desktopApi} settings={createSettingsState(snapshot)}
+        initialSection="messaging" initialSubsection="telegram" onClose={() => undefined} />
+    );
+    const { rerender } = render(pane(createSnapshot()));
+    expect(readTelegramPairingGrants).toHaveBeenCalledTimes(1);
+    rerender(pane(createSnapshot()));
+
+    const revoke = await screen.findByRole("button", { name: "Revoke pairing for Replacement bot contact" });
+    await act(async () => { finishOriginal(original); });
+    expect(screen.queryByRole("button", { name: "Revoke pairing for Original bot contact" })).not.toBeInTheDocument();
+    fireEvent.click(revoke);
+    await waitFor(() => expect(revokeTelegramPairingGrant).toHaveBeenCalledWith({
+      accountId: replacement.accountId, kind: "users", contactId: replacement.users[0]!.id,
+    }));
+    await waitFor(() => expect(revoke).not.toBeInTheDocument());
+  });
+
   it("offers Telegram desktop and phone pairing and clears both when the token is observed", async () => {
     const snapshot = createSnapshot();
     const settings = createSettingsState({

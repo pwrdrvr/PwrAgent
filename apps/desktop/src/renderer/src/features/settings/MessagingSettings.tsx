@@ -953,13 +953,12 @@ export function MessagingSettings(props: {
               });
             }}
           />
-          {telegram.pairingGrants && (telegram.pairingGrants.users.length > 0 || telegram.pairingGrants.supergroups.length > 0) ? (
-            <TelegramPairingGrantField
-              grants={telegram.pairingGrants}
-              revoke={props.desktopApi?.revokeTelegramPairingGrant}
-              onChanged={props.onPairingSettingsChanged}
-            />
-          ) : null}
+          <TelegramPairingGrantField
+            settings={telegram}
+            load={props.desktopApi?.readTelegramPairingGrants}
+            revoke={props.desktopApi?.revokeTelegramPairingGrant}
+            onChanged={props.onPairingSettingsChanged}
+          />
         </div>
       </SettingsSection>
       ) : null}
@@ -3366,18 +3365,45 @@ function PairingTokenField(props: {
 }
 
 function TelegramPairingGrantField(props: {
-  grants: DesktopTelegramPairingGrants;
+  settings: DesktopSettingsSnapshot["messaging"]["telegram"];
+  load?: () => Promise<DesktopTelegramPairingGrants | undefined>;
   revoke?: (request: RevokeTelegramPairingGrantRequest) => Promise<void>;
   onChanged?: () => void | Promise<void>;
 }) {
+  const { load, settings } = props;
+  const [result, setResult] = useState<{
+    settings: typeof settings;
+    grants?: DesktopTelegramPairingGrants;
+    error?: string;
+  }>();
   const [revoking, setRevoking] = useState(false);
   const [error, setError] = useState<string>();
+  useEffect(() => {
+    if (!load) return;
+    let disposed = false;
+    void load().then(
+      (grants) => { if (!disposed) setResult({ settings, grants }); },
+      (caught) => {
+        if (!disposed) setResult({ settings, error: caught instanceof Error ? caught.message : String(caught) });
+      },
+    );
+    return () => { disposed = true; };
+  }, [load, settings]);
+
+  const current = result?.settings === settings ? result : undefined;
+  const grants = current?.grants;
+  if (!current?.error && (!grants || (grants.users.length === 0 && grants.supergroups.length === 0))) return null;
+
   const revoke = async (kind: RevokeTelegramPairingGrantRequest["kind"], contactId: string) => {
-    if (!props.revoke || revoking) return;
+    if (!grants || !props.revoke || revoking) return;
     setRevoking(true);
     setError(undefined);
     try {
-      await props.revoke({ accountId: props.grants.accountId, kind, contactId });
+      await props.revoke({ accountId: grants.accountId, kind, contactId });
+      setResult((previous) => previous?.grants === grants ? {
+        ...previous,
+        grants: { ...grants, [kind]: grants[kind].filter((contact) => contact.id !== contactId) },
+      } : previous);
       await props.onChanged?.();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -3390,10 +3416,10 @@ function TelegramPairingGrantField(props: {
     <SettingsField
       label="Paired access"
       sub="Users and groups approved through pairing for this Telegram bot."
-      error={error}
+      error={error ?? current?.error}
       control={(
         <div className="settings-pairing">
-          {(["users", "supergroups"] as const).flatMap((kind) => props.grants[kind].map((contact) => (
+          {(["users", "supergroups"] as const).flatMap((kind) => grants?.[kind].map((contact) => (
             <div className="settings-pairing__controls" key={`${kind}:${contact.id}`}>
               <span>{contact.displayName || (kind === "users" ? "Telegram user" : "Telegram group")} <code>{contact.id}</code></span>
               <button
@@ -3406,7 +3432,7 @@ function TelegramPairingGrantField(props: {
                 Revoke
               </button>
             </div>
-          )))}
+          )) ?? [])}
         </div>
       )}
     />

@@ -48,7 +48,7 @@ import type {
   DecisionsRailThreadRequest,
 } from "@pwragent/shared/decisions-rail";
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared/contracts/agent";
-import type { DesktopWorktreeFolderCheck } from "@pwragent/shared/contracts/settings";
+import type { DesktopTelegramPairingGrants, DesktopWorktreeFolderCheck } from "@pwragent/shared/contracts/settings";
 import type { NativeVoiceApi } from "../../../shared/native-voice";
 import type { DictationApi } from "../../../shared/audio-transcription";
 import type { HtmlPreviewNavigationEvent } from "../../../shared/html-preview";
@@ -2254,6 +2254,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   rejectMessagingPairing?: (
     request: RejectMessagingPairingRequest,
   ) => Promise<RejectMessagingPairingResponse>;
+  readTelegramPairingGrants?: () => Promise<DesktopTelegramPairingGrants | undefined>;
   revokeTelegramPairingGrant?: (request: RevokeTelegramPairingGrantRequest) => Promise<void>;
   onMessagingPairingChanged?: (
     callback: (event: { at: number; entry: MessagingPairingEntry }) => void,

@@ -4964,6 +4964,7 @@ describe("DesktopSettingsService", () => {
   });
 
   it("rereads secret metadata without decrypting stored values", async () => {
+    const readTelegramGrants = vi.fn();
     const getSecret = vi.fn(async () => {
       throw new Error("secret values should not be decrypted for settings snapshots");
     });
@@ -4987,6 +4988,7 @@ describe("DesktopSettingsService", () => {
       configPath: path.join(createTempRoot(), "config.toml"),
       env: {},
       secretStore,
+      telegramPairingStorage: { readTelegramGrants, dismissTelegramGrantWarning: vi.fn() },
     });
 
     const snapshot = await service.readSettingsProjection();
@@ -5003,8 +5005,11 @@ describe("DesktopSettingsService", () => {
     );
     expect(hasSecret).toHaveBeenCalledWith("telegramBotToken");
     expect(hasSecret).toHaveBeenCalledTimes(secretMetadataReads * 2);
+    const messaging = await service.readMessagingProjection();
+    expect(messaging.messaging.telegram.botToken).toEqual(snapshot.messaging.telegram.botToken);
     expect(getSecret).not.toHaveBeenCalled();
     expect(getSecretSync).not.toHaveBeenCalled();
+    expect(readTelegramGrants).not.toHaveBeenCalled();
   });
 
   it("surfaces secret access errors on settings snapshots", async () => {

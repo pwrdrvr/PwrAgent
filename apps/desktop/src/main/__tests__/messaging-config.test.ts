@@ -426,7 +426,6 @@ describe("desktop messaging config", () => {
     const original = await loadDesktopMessagingConfigFromSettings(service, {});
     expect(original.telegram?.authorizedActorIds).toEqual([{ id: "55", displayName: "" }, pairedUser]);
     expect(original.telegram?.authorizedSupergroupIds).toEqual([pairedGroup]);
-    expect((await service.readMessagingProjection()).messaging.telegram.pairingGrants?.users).toEqual([pairedUser]);
     expect(service.readMessagingSettings().telegram.authorizedUserIds.value).toEqual([{ id: "55", displayName: "" }]);
 
     await secretStore.setSecret("telegramBotToken", "654321:replacement-fixture");

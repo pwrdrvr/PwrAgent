@@ -16,6 +16,7 @@ const runtimeMock = vi.hoisted(() => ({
 }));
 const settingsServiceMock = vi.hoisted(() => ({
   readMessagingSettings: vi.fn(),
+  readTelegramPairingGrants: vi.fn(),
   resolveSlackBotTokenSync: vi.fn(),
   resolveTelegramBotTokenSync: vi.fn(() => "654321:replacement-bot"),
   writeConfigPatchTargeted: vi.fn(async () => ({ configPath: "/tmp/pwragent-config.toml" })),
@@ -396,6 +397,16 @@ describe("messaging status ipc", () => {
       .rejects.toThrow("This pairing request belongs to a different bot.");
     expect(settingsServiceMock.writeConfigPatchTargeted).not.toHaveBeenCalled();
     expect(pairingStoreMock.markStatus).not.toHaveBeenCalled();
+  });
+
+  it("reads only the grants for the saved Telegram credential on the dedicated request", async () => {
+    const { MESSAGING_READ_TELEGRAM_PAIRING_GRANTS_CHANNEL } = await import("../../shared/ipc");
+    const grants = { accountId: "654321", users: [{ id: "42", displayName: "Fixture contact" }], supergroups: [] };
+    settingsServiceMock.readTelegramPairingGrants.mockReturnValueOnce(grants);
+    registerMessagingStatusIpcHandlers();
+
+    expect(await handlers.get(MESSAGING_READ_TELEGRAM_PAIRING_GRANTS_CHANNEL)?.({})).toEqual(grants);
+    expect(settingsServiceMock.readTelegramPairingGrants).toHaveBeenCalledWith("654321:replacement-bot");
   });
 
   it("approves LINE user pairing into authorized users", async () => {
