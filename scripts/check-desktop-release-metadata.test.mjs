@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 
 const repoRoot = fileURLToPath(new URL("../", import.meta.url));
 const directories = [];
@@ -39,6 +39,23 @@ function fixture() {
   return root;
 }
 
+function releaseFixture(desktopVersion, outpostVersion, npmChannel) {
+  const root = fixture();
+  const desktopPath = join(root, "apps/desktop/package.json");
+  const desktop = JSON.parse(readFileSync(desktopPath, "utf8"));
+  desktop.version = desktopVersion;
+  writeFileSync(desktopPath, JSON.stringify(desktop));
+
+  const outpostPath = join(root, "packages/pwragent/package.json");
+  const outpost = JSON.parse(readFileSync(outpostPath, "utf8"));
+  outpost.version = outpostVersion;
+  outpost.publishConfig.tag = npmChannel;
+  writeFileSync(outpostPath, JSON.stringify(outpost));
+
+  writeFileSync(join(root, "CHANGELOG.md"), `# Changelog\n\n## v${desktopVersion}\n`);
+  return root;
+}
+
 function replace(root, path, before, after) {
   const file = join(root, path);
   const source = readFileSync(file, "utf8");
@@ -62,15 +79,28 @@ test("accepts the current packaging contract with Linux naming delegated to its 
   expect(result.status, result.stderr).toBe(0);
 });
 
-test("rejects Outpost version or npm channel drift from the desktop authority", () => {
-  for (const change of [{ version: "0.1.0-alpha.1" }, { publishConfig: { access: "public", registry: "https://registry.npmjs.org", tag: "next" } }]) {
-    const root = fixture();
-    const file = join(root, "packages/pwragent/package.json");
-    writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), ...change }));
-    const result = check(root);
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Outpost release metadata");
-  }
+// Outpost must match the desktop version exactly and use the npm channel for
+// that version form. Each rejection changes one field of a valid release.
+describe.each([
+  { version: "1.5.0", otherVersion: "1.5.1", channel: "latest", otherChannel: "next" },
+  { version: "1.5.0-prerelease.1", otherVersion: "1.5.0-prerelease.2", channel: "next", otherChannel: "latest" },
+])("Outpost metadata for desktop v$version", ({ version, otherVersion, channel, otherChannel }) => {
+  test(`accepts the matching desktop version on ${channel}`, () => {
+    const result = check(releaseFixture(version, version, channel));
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  test(`rejects version ${otherVersion} on the correct npm channel`, () => {
+    const result = check(releaseFixture(version, otherVersion, channel));
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("Outpost release metadata: Desktop tag must match package version");
+  });
+
+  test(`rejects npm channel ${otherChannel} with the matching desktop version`, () => {
+    const result = check(releaseFixture(version, version, otherChannel));
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("Outpost release metadata: publishConfig.tag must match the version channel");
+  });
 });
 
 test.each(
