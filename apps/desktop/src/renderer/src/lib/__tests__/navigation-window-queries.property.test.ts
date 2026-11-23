@@ -8,6 +8,7 @@ import type {
 } from "@pwragent/shared/contracts/navigation";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { expandNavigationRemoteOwner } from "@pwragent/shared/navigation-remote-owner";
+import { navigationListingDiagnostics } from "../navigation-listing-diagnostics";
 import { navigationIdentityKey } from "../navigation-query-state";
 import { NavigationWindowQueries, navigationResumeQueryKey } from "../navigation-window-queries";
 
@@ -141,6 +142,180 @@ it.each([[4, false], [12, false], [12, true]] as const)("keeps dispatched unaffe
 it("repeats a directory-move read only when the new page can contain a changed working state", async () => {
   await fc.assert(fc.asyncProperty(fc.integer({ min: 4, max: 16 }), fc.boolean(), fc.constantFrom("complete", "partial", "truncated"),
     checkDirectoryMoveWithWorkingState), { numRuns: 24 });
+});
+
+type SeenRace = "absent" | "off-page" | "tray-descriptor" | "exact-descriptor" | "legacy" | "partial";
+type SeenRaceCause = "navigation/threadDirectories/updated" | "navigation/remoteThreadPins/changed"
+  | "federation/eventStream/changed" | "scoped-pins" | "none";
+
+async function checkSeenDuringMembershipRefresh(
+  size: number, scope: "local" | "mounted" | "remote", race: SeenRace, timing: "queued" | "dispatched" | "no-seen",
+  cause: SeenRaceCause, overtaken = false,
+) {
+  const peer = { scope: "remote", instanceId: "peer" } as const;
+  const target = scope === "remote" ? peer : undefined;
+  const ownerInstanceId = scope === "mounted" ? peer.instanceId : undefined;
+  const ref = (threadId: string) => ({ backend: "codex" as const, threadId });
+  const seenRef = { ...ref("seen-thread"), ownerInstanceId };
+  const parents = Array.from({ length: size }, (_, i) => ({ ...ref(`parent-${i}`), ownerInstanceId: target?.instanceId }));
+  const demand = new Map(parents.map((parent, i) => [parent.threadId, {
+    protocol: 2, consumer: "main-sidebar", federationTarget: target, inventory: target ? "owner" : "viewer",
+    query: i === 0 && race === "exact-descriptor" ? { kind: "exact", identities: [parent] } : { kind: "children", parent,
+      ...(i === 0 && race === "tray-descriptor" ? { directoryKey: "directory:/selected" } : {}) },
+  } satisfies NavigationQueryRequest]));
+  const dispatches: { id: string; trigger?: string; invalidations?: number }[] = [];
+  const firstWave = deferred<void>();
+  const release = deferred<void>();
+  let measuring = false;
+  let membershipChanged = false;
+  let seen = false;
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: async (request) => {
+    const query = request.query;
+    if (query.kind !== "children" && query.kind !== "exact") throw new Error("Unexpected query");
+    const parent = query.kind === "children" ? query.parent : query.identities[0]!;
+    const id = parent.threadId;
+    const first = id === parents[0]!.threadId;
+    const offPage = membershipChanged && first && race === "off-page";
+    const descriptor = membershipChanged && first && (race === "exact-descriptor" || race === "tray-descriptor");
+    const hasProof = !membershipChanged || !first || (race !== "legacy" && race !== "partial");
+    // A local row sharing a mounted thread's ID does not depend on that peer.
+    const child = first && scope === "mounted" ? seenRef.threadId : `${id}-child`;
+    const member = ref(query.kind === "exact" ? id : child);
+    // The owner captures a page and its collection-wide proof together. The
+    // new child is beyond this window's displayed range and affects counts.
+    const counts = { total: offPage ? 2 : 1, active: 0, unread: Number(offPage && !seen), review: 0 };
+    const row: NavigationRow = { ref: { ...member, ownerInstanceId: target?.instanceId }, id: member.threadId,
+      source: member.backend, rowRevision: id, title: id,
+      titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: false }, ordinaryChildCount: 0,
+      nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" };
+    const page: NavigationQueryPage = {
+      protocol: 2, queryKey: id, generation: id, ownerEpoch: "fixture", countsRevision: `${membershipChanged}:${seen}`,
+      counts, coverage: membershipChanged && first && race === "partial" ? { state: "checking" } : { state: "complete" },
+      complete: !offPage, ...(offPage ? { nextCursor: "next" } : {}),
+      entries: [{ row, orderKey: id, placement: query.kind === "children" ? { kind: "child", parent } : { kind: "root" } }],
+      ...(descriptor ? { selectionDirectory: { key: "directory:/selected", kind: "directory", label: "Selected",
+        pinnedRootCount: 0, unpinnedRootCount: 1, launchpadPresent: false,
+        counts: { total: 2, active: 0, unread: Number(!seen), review: 0 } } } : {}),
+      ...(!target ? { viewerRowOwners: ownerInstanceId && membershipChanged ? [ownerInstanceId] : [] } : {}),
+      ...(hasProof ? { metadataDependencies: {
+        version: 1, prKeys: [], threadKeys: [member, ...(offPage || descriptor ? [seenRef] : [])].map(navigationIdentityKey).sort(),
+        ...(target ? { workingStatePaths: [] } : {}),
+      } } : {}),
+    };
+    if (measuring) {
+      dispatches.push({ id, trigger: request.diagnostic?.trigger, invalidations: request.diagnostic?.invalidations });
+      if (dispatches.length === 4) firstWave.resolve();
+      await release.promise;
+    }
+    return page;
+  } });
+  try {
+    queries.setDemand(demand);
+    await queries.refresh();
+    measuring = true;
+    membershipChanged = cause !== "none" && cause !== "scoped-pins";
+    if (cause !== "none") {
+      const event: AgentEvent = { backend: "codex", federationTarget: target, notification:
+        cause === "federation/eventStream/changed"
+          ? { method: cause, params: { instanceId: peer.instanceId, epoch: "recovered" } }
+          : cause === "navigation/remoteThreadPins/changed" || cause === "scoped-pins"
+            ? { method: "navigation/remoteThreadPins/changed", params: { instanceId: peer.instanceId,
+                ...(cause === "scoped-pins" ? { rowChanges: [{ ...ref("unrelated"), ownerInstanceId: peer.instanceId }] } : {}) } }
+            : target ? { method: "navigation/invalidated", params: { sourceMethod: cause } }
+              : { method: cause, params: { reason: "selected-thread", threadIds: ["moved"] } } };
+      queries.invalidate(undefined, undefined, event);
+    }
+    const refreshed = queries.refresh(undefined, undefined, true);
+    if (timing === "dispatched") await firstWave.promise;
+    seen = timing !== "no-seen";
+    const seenEvent = (threadId: string): AgentEvent => ({
+      backend: "codex", federationTarget: scope === "local" ? undefined : peer, notification: scope === "local"
+        ? { method: "navigation/thread/seen", params: { threadId, seenUpdatedAt: 2 } }
+        : { method: "navigation/invalidated", params: { sourceMethod: "navigation/thread/seen", threadId } },
+    });
+    const beforeSeen = queries.getSnapshot();
+    const duplicateSeen = race === "off-page" && timing === "dispatched";
+    if (duplicateSeen) queries.invalidate(undefined, undefined, seenEvent("unrelated"));
+    if (seen) queries.invalidate(undefined, undefined, seenEvent(seenRef.threadId));
+    if (duplicateSeen) queries.invalidate(undefined, undefined, seenEvent(seenRef.threadId));
+    if (overtaken) queries.invalidate(parents[0]!.threadId, undefined, { backend: "codex", notification: {
+      method: "thread/parent/set", params: { threadId: seenRef.threadId, parentThreadId: parents[0]!.threadId },
+    } });
+    const fencedAtNotice = queries.getSnapshot() !== beforeSeen;
+    const seenRefresh = queries.refresh(undefined, undefined, true);
+    release.resolve();
+    await Promise.all([refreshed, seenRefresh]);
+    const repeats = timing === "dispatched" && race !== "absent" ? 1 : 0;
+    const retryTrigger = overtaken ? "thread/parent/set" : "navigation/thread/seen";
+    const causes = new Map<string | undefined, number>();
+    for (const { trigger } of dispatches) causes.set(trigger, (causes.get(trigger) ?? 0) + 1);
+    expect(Object.fromEntries(causes)).toEqual({
+      ...(membershipChanged ? { [cause]: size } : {}),
+      ...(repeats ? { [retryTrigger]: repeats } : {}),
+    });
+    if (race === "absent") expect(fencedAtNotice).toBe(false);
+    if (repeats) {
+      expect(dispatches.find(({ trigger }) => trigger === retryTrigger)).toMatchObject({
+        id: parents[0]!.threadId, invalidations: (duplicateSeen ? 3 : 1) + Number(overtaken),
+      });
+    }
+    for (const [i, parent] of parents.entries()) {
+      const page = queries.getSnapshot().resources.get(parent.threadId)?.state.page;
+      const exact = i === 0 && race === "exact-descriptor";
+      expect(page?.entries[0]?.placement).toEqual(exact ? { kind: "root" } : { kind: "child", parent });
+      expect(page?.counts).toMatchObject({ total: i === 0 && race === "off-page" ? 2 : 1, unread: 0 });
+      if (i === 0 && (race === "tray-descriptor" || exact)) {
+        expect(page?.selectionDirectory?.counts).toMatchObject({ total: 2, unread: 0 });
+      }
+    }
+  } finally {
+    release.resolve();
+    queries.dispose();
+  }
+}
+
+it.each([
+  ["none", "queued"],
+  ["scoped-pins", "queued"],
+  ["navigation/threadDirectories/updated", "no-seen"],
+  ["navigation/threadDirectories/updated", "queued"],
+  ["navigation/threadDirectories/updated", "dispatched"],
+  ["navigation/remoteThreadPins/changed", "dispatched"],
+] as const)("attributes 12 viewer trays to %s with seen %s", async (cause, timing) => {
+  await checkSeenDuringMembershipRefresh(12, "local", "absent", timing, cause);
+});
+
+it.each(["tray-descriptor", "exact-descriptor", "legacy", "partial"] as const)(
+  "repeats just the dispatched tray or selection with %s evidence", async (race) => {
+    await checkSeenDuringMembershipRefresh(12, "local", race, "dispatched", "navigation/threadDirectories/updated");
+  },
+);
+
+it("attributes an off-page member's retry to the seen notice found in the returned proof", async () => {
+  navigationListingDiagnostics.setEnabled(true);
+  try {
+    await checkSeenDuringMembershipRefresh(12, "local", "off-page", "dispatched", "navigation/threadDirectories/updated");
+    const events = navigationListingDiagnostics.snapshot().events.filter(({ trigger }) => trigger === "navigation/thread/seen");
+    const notices = events.filter(({ phase }) => phase === "invalidate");
+    expect(notices).toHaveLength(3);
+    const retries = events.filter(({ phase }) => phase === "dispatch");
+    expect(retries.map(({ batch }) => batch)).toEqual([notices[1]?.batch]);
+  } finally {
+    navigationListingDiagnostics.setEnabled(false);
+  }
+});
+
+it("counts deferred seen notices when a later event fences the membership read", async () => {
+  await checkSeenDuringMembershipRefresh(12, "local", "off-page", "dispatched", "navigation/threadDirectories/updated", true);
+});
+
+it("retries dispatched trays only when the next owner baseline can depend on the seen thread", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 4, max: 16 }), fc.constantFrom("local", "mounted", "remote"),
+    fc.constantFrom("absent", "off-page", "tray-descriptor", "exact-descriptor", "legacy", "partial"),
+    fc.constantFrom("queued", "dispatched"), async (size, scope, race, timing) => {
+      await checkSeenDuringMembershipRefresh(size, scope, race, timing,
+        scope === "remote" ? "federation/eventStream/changed" : "navigation/threadDirectories/updated");
+    }), { numRuns: 36 });
 });
 
 it("publishes one loading snapshot when a pin refresh queues the admitted directory sections", async () => {

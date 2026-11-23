@@ -76,12 +76,13 @@ starts from two origins: 45 from one window and 15 from the profiled window.
 These were page reads, not 60 human navigation actions.
 
 Renderer `invalidate` records include the allowlisted `trigger`, source,
-numeric `batch`, and affected resource `count`, even when an earlier event
-already invalidated the resources. `refresh` has its own batch, selected count
-and `invalidatedOnly` flag. Each `queued` read receives a numeric `read` and
-`resource`. Its `dispatch` and `settled` records include query kind, target
-scope, inventory, cause, trigger, last consumed invalidation batch (`batch`)
-and refresh batch (`refreshBatch`). The aggregate `invalidations` count says
+numeric `batch`, and candidate resource `count`, including resources that
+already owe a read or whose returned proof will resolve the notice. `refresh`
+has its own batch, selected count and `invalidatedOnly` flag. Each `queued`
+read receives a numeric `read` and `resource`. Its `dispatch` and `settled`
+records include query kind, target scope, inventory, cause, trigger, the
+invalidation batch that fenced the baseline (`batch`) and refresh batch
+(`refreshBatch`). The aggregate `invalidations` count says
 how many events collapsed before dispatch; preceding invalidation records
 retain their sequence. Queue wait and API duration are separate milliseconds.
 Attempts correlate with main through `(origin, view, effect, logical, attempt)`;
@@ -104,9 +105,10 @@ consumer/query/read-reason attribution at IPC; absent lifecycle/trigger fields
 mean unknown, not an inferred StrictMode duplicate.
 
 Invalidation metadata contains a fixed cause category and an allowlisted
-protocol method (for example `turn/completed`). The controller records the
-latest relevant method and the number of invalidations collapsed into the
-next read. Main invalidation events retain the individual method sequence.
+protocol method (for example `turn/completed`). Later coalesced notices retain
+their own invalidation records. If a seen notice during a child membership
+read requires another page, that replacement carries the seen trigger.
+Main invalidation events retain the individual method sequence.
 Refresh reads also carry `diagnostic.caller` through IPC into main's `caller`
 field, independently of the event in `trigger`. For example, a read can have
 `caller: scheduled/thread-lifecycle` and `trigger: turn/completed`. The first
