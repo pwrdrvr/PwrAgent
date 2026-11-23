@@ -8675,6 +8675,7 @@ class DesktopAppServerService {
       },
       getPr: (prKey) => this.prStatusRegistry.get(prKey)?.pr,
       stackMergeEvidence: (thread, pr) => this.readStackMergeEvidence(thread, pr),
+      isLowerPolled: (key) => this.prPollBackendByKey.has(key) || this.transcriptPrSubscriptions.hasTarget(key),
       directories: (thread, pr) => this.prReviewOfferDirectories(thread, pr),
       listReviews: (thread, pr) => {
         // The owner and every other thread showing the PR, such as a

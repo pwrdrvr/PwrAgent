@@ -34,6 +34,38 @@ function threadWithPrs(prs: PrSummary[]): NavigationThreadSummary {
 }
 
 describe("PullRequestsPanel", () => {
+  it("reports a failed continuation and retries the stack from the first page", async () => {
+    let timedOut = false;
+    const read = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async ({ ref, collection }) => {
+      if (collection?.cursor && !timedOut) {
+        timedOut = true;
+        throw new Error("fixture cursor expired");
+      }
+      return {
+        protocol: 2, ref, revision: "stack-revision", readiness: "ready", identity: "present",
+        collectionPage: {
+          name: "stackLayers", revision: "stack-revision", complete: Boolean(collection?.cursor),
+          ...(!collection?.cursor ? { nextCursor: "next" } : {}),
+          values: { stackLayers: [{
+            stackKey: "fixture", position: collection?.cursor ? 2 : 1,
+            ...(!collection?.cursor ? { stack: { key: "fixture", name: "Fixture stack", trunk: "main",
+              repository: "github.com:fixture/project", inferred: false } } : {}),
+            layer: { branch: collection?.cursor ? "top-layer" : "bottom-layer", parent: "main", health: "in_sync", role: "layer" },
+          }] },
+        },
+      };
+    });
+    render(<PullRequestsPanel desktopApi={{ getNavigationSelectedDetail: read }} thread={{
+      ...baseThread, linkedDirectories: [{ id: "work", kind: "local", label: "Fixture", path: "/fixture" }],
+    }} />);
+    expect(await screen.findByRole("status")).toHaveTextContent("Could not load stack details.");
+    expect(screen.queryByText("bottom-layer")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry stack details" }));
+    expect(await screen.findByText("top-layer")).toBeVisible();
+    expect(screen.getByText("bottom-layer")).toBeVisible();
+    expect(read.mock.calls.map(([request]) => request.collection?.cursor)).toEqual([undefined, "next", undefined, "next"]);
+  });
+
   it("loads the selected stack layers from the thread's owning peer", async () => {
     const target = { scope: "remote" as const, instanceId: "peer-123" };
     const read = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async ({ ref, collection }) => ({

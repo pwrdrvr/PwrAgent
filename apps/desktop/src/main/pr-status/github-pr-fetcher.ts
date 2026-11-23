@@ -1,6 +1,7 @@
 import { parsePullRequestReferenceUrl, type PullRequestReferenceIdentity } from "./forge-reference";
 import { readStackClones } from "../stacks/stack-reader";
 import type { ForgeCiClient } from "./forge-ci-client";
+import { ForgeReadError } from "./forge-tool-contract";
 import { assertGithubStackMergeAllowed, assertStackMergeBaseUnchanged } from "../stacks/stack-merge-guard";
 import { describeMergeQueueState } from "@pwragent/shared/pr-merge-queue";
 import {
@@ -264,7 +265,23 @@ export class GithubPrFetcher {
       if (!reference) throw new Error("Could not identify the pull request before merging.");
     }
     params.assertCanMerge?.(reference.url);
-    const checkedBase = params.checkStackOrder ? await this.checkStackOrder(reference, params.cwd, run) : undefined;
+    let checkedBase: string | undefined;
+    let mergeTarget = params.pullRequest;
+    if (params.checkStackOrder) {
+      try {
+        checkedBase = await this.checkStackOrder(reference, params.cwd, run);
+      } catch (error) {
+        if (!(error instanceof ForgeReadError) || error.code !== "pull_request_redirected") throw error;
+        const result = await run(["pr", "view", reference.url, "--json", "url", "--jq", ".url"]);
+        const canonical = parsePullRequestReferenceUrl(result.stdout.trim());
+        if (!canonical || canonical.kind !== "github" || canonical.provider !== reference.provider
+          || canonical.number !== reference.number || (canonical.org === reference.org && canonical.repo === reference.repo)) throw error;
+        params.assertCanMerge?.(canonical.url);
+        reference = canonical;
+        mergeTarget = canonical.url;
+        checkedBase = await this.checkStackOrder(reference, params.cwd, run);
+      }
+    }
     const label = `#${reference.number}`;
     // A repository never seen with a queue merges exactly as before.
     const queueRepository = isMergeQueueRepository(reference.provider, reference.org, reference.repo);
@@ -274,7 +291,7 @@ export class GithubPrFetcher {
     }
     let output: { stdout: string; stderr?: string };
     try {
-      output = await run(["pr", "merge", params.pullRequest, `--${params.method}`], 60_000);
+      output = await run(["pr", "merge", mergeTarget, `--${params.method}`], 60_000);
     } catch (error) {
       const err = error as { stderr?: string; message?: string };
       const detail = err.stderr?.trim() || err.message || String(error);

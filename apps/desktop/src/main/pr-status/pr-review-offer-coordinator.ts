@@ -54,6 +54,8 @@ export type PrReviewOfferPorts = {
   /** The status registry's current PR. No forge request is made. */
   getPr(prKey: string): PrSummary | undefined;
   stackMergeEvidence?(thread: PrReviewOfferThread, pr: PrSummary): Promise<{ blocked: boolean; lowerKeys: string[]; retryOnObservation?: boolean }>;
+  isLowerPolled?(prKey: string): boolean;
+  now?: () => number;
   /** Checkouts where Git can read this PR's commits; the first one is used. */
   directories(thread: PrReviewOfferThread, pr: PrSummary): string[];
   /**
@@ -72,6 +74,7 @@ export type PrReviewOfferPorts = {
 const MAX_REVIEWS_CONSIDERED = 8;
 const MAX_TRACKED_CHILDREN = 128;
 const MAX_TRACKED_LOWERS = 32;
+const UNCOVERED_STACK_RECHECK_MS = 5 * 60_000;
 
 /** The fields that can move a PR's readiness. Title and others cannot. */
 const READINESS_FIELDS = [
@@ -124,7 +127,7 @@ export class PrReviewOfferCoordinator {
   private readonly childKeysByLower = new Map<string, Set<string>>();
   private readonly lowerChanges = new Map<string, number>();
   private lowerChangeSequence = 0;
-  private readonly evaluated = new Set<string>();
+  private readonly evaluated = new Map<string, { checkedAt: number; blocked: boolean }>();
   private observationReconciliationPending = false;
   private lastObservedCandidate: string | undefined;
   private closed = false;
@@ -157,7 +160,14 @@ export class PrReviewOfferCoordinator {
     if (this.closed || this.observationReconciliationPending) return;
     const keys = prs.filter((pr) => !prGateReadiness(pr)).map(buildPullRequestStatusKey);
     const offset = keys.indexOf(this.lastObservedCandidate ?? "") + 1;
-    const candidate = [...keys.slice(offset), ...keys.slice(0, offset)].find((key) => !this.evaluated.has(key));
+    const now = this.ports.now?.() ?? Date.now();
+    const candidate = [...keys.slice(offset), ...keys.slice(0, offset)].find((key) => {
+      const previous = this.evaluated.get(key);
+      if (!previous) return true;
+      if (!previous.blocked || now - previous.checkedAt < UNCOVERED_STACK_RECHECK_MS) return false;
+      const lowers = this.lowerKeysByChild.get(key);
+      return !lowers?.length || lowers.some((lower) => !this.ports.isLowerPolled?.(lower));
+    });
     if (!candidate) return;
     this.lastObservedCandidate = candidate;
     this.observationReconciliationPending = true;
@@ -311,8 +321,8 @@ export class PrReviewOfferCoordinator {
       || prGateReadiness(latest) !== prGateReadiness(pr)) return undefined;
     if (!assessment.retryOnObservation) {
       this.evaluated.delete(prKey);
-      this.evaluated.add(prKey);
-      if (this.evaluated.size > MAX_TRACKED_CHILDREN) this.evaluated.delete(this.evaluated.values().next().value!);
+      this.evaluated.set(prKey, { checkedAt: this.ports.now?.() ?? Date.now(), blocked: assessment.readiness === "stack_parent_open" });
+      if (this.evaluated.size > MAX_TRACKED_CHILDREN) this.evaluated.delete(this.evaluated.keys().next().value!);
     } else {
       this.evaluated.delete(prKey);
     }
@@ -330,7 +340,7 @@ export class PrReviewOfferCoordinator {
     if (recoveryOnly && assessment.standing !== "ready_to_merge") return undefined;
     // A transient transport failure defers a new offer. A previously
     // verified card stays put; executing it always rechecks live evidence.
-    if (assessment.retryOnObservation && open?.kind === "merge") return undefined;
+    if (assessment.retryOnObservation && open?.kind === "merge" && open.headSha === pr.headSha) return undefined;
     const { readiness, reviewId, headContentId, headCovered, standing } = assessment;
     const desired = desiredPrOffer({
       prKey,

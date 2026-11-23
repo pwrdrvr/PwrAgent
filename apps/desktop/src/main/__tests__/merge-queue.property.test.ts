@@ -440,6 +440,41 @@ describe("merge_pull_request and merge queues", () => {
     }
   });
 
+  it("rechecks an authenticated rename before a PR-card merge or a queue write", async () => {
+    const oldUrl = "https://github.com/fixture/old/pull/7";
+    const currentUrl = "https://github.com/fixture/project/pull/7";
+    const requests: string[] = [];
+    const ci = new ForgeCiClient({
+      githubToken: async () => "fixture-token", gitlab: { readApi: vi.fn() }, enabled: () => true, takeToken: () => true,
+      fetch: (async (input: string | URL | Request) => {
+        const url = new URL(String(input));
+        requests.push(url.pathname);
+        if (url.pathname.endsWith("/old/pulls/7")) return new Response(null, { status: 301 });
+        if (url.pathname.endsWith("/project/pulls/7")) return json(trunkTarget);
+        if (url.pathname === "/graphql") return json({ data: stackHistoryData });
+        throw new Error("Unexpected request");
+      }) as typeof fetch,
+    });
+    const uninstall = installGithubMergeStackTransport(ci);
+    const ran: string[][] = [];
+    const gh = new GithubPrFetcher({
+      graphqlClient: { fetchPullRequests: vi.fn(), fetchPullRequestsForBranches: vi.fn() },
+      discoverGhCommands: async () => ({ selectedCommand: "/fixture/gh" }) as never,
+      runGhCommand: async (_command, args) => {
+        ran.push(args);
+        return { stdout: args[1] === "view" ? currentUrl : "" };
+      },
+    });
+    try {
+      const assertCanMerge = vi.fn();
+      await expect(gh.mergePullRequest({ pullRequest: oldUrl, assertCanMerge, method: "squash", checkStackOrder: true }))
+        .resolves.toBeDefined();
+      expect(assertCanMerge.mock.calls.flat()).toEqual([oldUrl, currentUrl]);
+      expect(requests).toEqual(["/repos/fixture/old/pulls/7", "/repos/fixture/project/pulls/7", "/graphql"]);
+      expect(ran).toEqual([["pr", "view", oldUrl, "--json", "url", "--jq", ".url"], ["pr", "merge", currentUrl, "--squash"]]);
+    } finally { uninstall(); }
+  });
+
   it("never merges past a queue, and only reads stack history on a repository never seen with one", async () => {
     await fc.assert(fc.asyncProperty(gateArb, fc.boolean(), async (gate, seen) => {
       seenRepository(seen);

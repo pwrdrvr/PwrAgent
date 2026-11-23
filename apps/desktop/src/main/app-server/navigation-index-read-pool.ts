@@ -19,7 +19,15 @@ function rowBytes(rows: readonly unknown[], start = 0, remaining = RETAINED_BYTE
 }
 
 function retainedIndexBytes(index: NavigationQueryIndex, sharedRows: number, budget: number): number {
-  let bytes = Buffer.byteLength(JSON.stringify({ ...index, threads: [], directories: [], inputRequestThreadKeys: [] }));
+  let bytes = Buffer.byteLength(JSON.stringify({ ...index, threads: [], directories: [], inputRequestThreadKeys: [],
+    ...(index.stacks ? { stacks: [] } : {}),
+  }));
+  for (const [offset, stack] of (index.stacks ?? []).entries()) {
+    if (bytes > budget) break;
+    const { layers, ...header } = stack;
+    bytes += Buffer.byteLength(JSON.stringify({ ...header, layers: [] })) + (offset ? 1 : 0);
+    if (bytes <= budget) bytes += rowBytes(layers, 0, budget - bytes);
+  }
   if (bytes <= budget) bytes += rowBytes(index.threads, sharedRows, budget - bytes);
   if (bytes <= budget) bytes += rowBytes(index.directories, 0, budget - bytes);
   if (bytes <= budget && index.inputRequestThreadKeys) bytes += rowBytes([...index.inputRequestThreadKeys], 0, budget - bytes);

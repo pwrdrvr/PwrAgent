@@ -5,6 +5,7 @@ export type GithubStackPull = {
   number?: number;
   merged?: boolean;
   merged_at?: string | null;
+  merge_commit_sha?: string | null;
   closed_at?: string | null;
   created_at?: string;
   head?: { ref?: string; sha?: string; repo?: { full_name?: string } | null };
@@ -103,48 +104,86 @@ export async function readGithubStackParents(input: {
   const parents = new Map<number, StackParent>();
   let unresolved = false;
   const repo = `${repository.owner}/${repository.repo}`.toLowerCase();
-  for (const branch of sources) {
-    const query = new URLSearchParams({ state: "all", head: `${repository.owner}:${branch}`, per_page: String(BRANCH_PR_LIMIT) });
-    const rows = await get(`/pulls?${query}`) as GithubStackPull[];
-    if (!Array.isArray(rows) || rows.length >= BRANCH_PR_LIMIT) {
-      unresolved = true;
-      continue;
+  const byBranch = new Map<string, GithubStackPull[]>();
+  const candidatesFor = async (branch: string, ranges: readonly BaseWindow[]) => {
+    let rows = byBranch.get(branch);
+    if (!rows) {
+      if (byBranch.size >= BASE_LIMIT) throw incomplete(number);
+      const query = new URLSearchParams({ state: "all", head: `${repository.owner}:${branch}`, per_page: String(BRANCH_PR_LIMIT) });
+      rows = await get(`/pulls?${query}`) as GithubStackPull[];
+      if (!Array.isArray(rows) || rows.length >= BRANCH_PR_LIMIT) throw incomplete(number);
+      byBranch.set(branch, rows);
     }
-    const candidates = rows.filter((pr) => {
+    return rows.filter((pr) => {
       if (!pr?.number || !Number.isSafeInteger(pr.number) || pr.number < 1 || pr.number === number
         || pr.head?.ref !== branch || pr.head.repo?.full_name?.toLowerCase() !== repo) return false;
       const opened = time(pr.created_at);
       const ended = time(pr.merged_at ?? (pr.state === "closed" ? pr.closed_at : undefined));
-      return windows.some((window) => window.branch === branch
+      return ranges.some((window) => window.branch === branch
         && !(opened > window.until || ended < window.since));
     });
+  };
+  let comparisons = 0;
+  const includesCommit = async (ancestor: string, descendant: string): Promise<boolean> => {
+    if (ancestor === descendant) return true;
+    if (++comparisons > 2 * BASE_LIMIT) throw incomplete(number);
+    try {
+      const comparison = await get(`/compare/${ancestor}...${encodeURIComponent(descendant)}?per_page=1`) as { merge_base_commit?: { sha?: string } };
+      return comparison?.merge_base_commit?.sha === ancestor;
+    } catch (error) {
+      if (!(error instanceof ForgeReadError) || error.code !== "not_found") throw error;
+      return false;
+    }
+  };
+  const followMerge = async (intermediate: GithubStackPull, seen: Set<number>): Promise<void> => {
+    const target = intermediate.base?.ref;
+    if (target === trunk) return;
+    const mergedAt = time(intermediate.merged_at);
+    const commit = intermediate.merge_commit_sha ?? undefined;
+    if (!target || !Number.isFinite(mergedAt) || !isSha(commit) || seen.size >= BASE_LIMIT) {
+      unresolved = true;
+      return;
+    }
+    const candidates = await candidatesFor(target, [{ branch: target, since: mergedAt, until: mergedAt }]);
+    const lower = candidates.length === 1 ? candidates[0] : undefined;
+    if (!lower) {
+      if (!(await includesCommit(commit, trunk))) unresolved = true;
+      return;
+    }
+    const tip = lower.head?.sha;
+    if (seen.has(lower.number!) || !Number.isFinite(time(lower.created_at)) || !isSha(tip) || !(await includesCommit(commit, tip))) {
+      unresolved = true;
+      return;
+    }
+    parents.set(lower.number!, { number: lower.number!, branch: target, merged: Boolean(lower.merged_at) });
+    if (lower.merged_at) {
+      seen.add(lower.number!);
+      await followMerge(lower, seen);
+    }
+  };
+  for (const branch of sources) {
+    const candidates = await candidatesFor(branch, windows);
     if (candidates.length > 1) {
       // Two overlapping PRs can use the same branch, even at the same SHA.
-      if (branch === base || candidates.some((candidate) => !candidate.merged_at)) unresolved = true;
+      if (branch === base || candidates.some((candidate) => !candidate.merged_at || candidate.base?.ref !== trunk)) unresolved = true;
       continue;
     }
     const parent = candidates[0];
     if (!parent) continue;
     const merged = Boolean(parent.merged_at);
-    if (merged && branch !== base) continue;
+    if (merged && branch !== base) {
+      await followMerge(parent, new Set([parent.number!]));
+      continue;
+    }
     const ancestor = parent.head?.sha;
     const descendant = branch === base ? child.base?.sha : child.head?.sha;
     if (!isSha(ancestor) || !isSha(descendant) || !Number.isFinite(time(parent.created_at))) {
       unresolved = true;
       continue;
     }
-    if (ancestor !== descendant) {
-      try {
-        const comparison = await get(`/compare/${ancestor}...${descendant}?per_page=1`) as { merge_base_commit?: { sha?: string } };
-        if (comparison?.merge_base_commit?.sha !== ancestor) {
-          unresolved = true;
-          continue;
-        }
-      } catch (error) {
-        if (!(error instanceof ForgeReadError) || error.code !== "not_found") throw error;
-        unresolved = true;
-        continue;
-      }
+    if (!(await includesCommit(ancestor, descendant))) {
+      unresolved = true;
+      continue;
     }
     parents.set(parent.number!, { number: parent.number!, branch, merged });
   }

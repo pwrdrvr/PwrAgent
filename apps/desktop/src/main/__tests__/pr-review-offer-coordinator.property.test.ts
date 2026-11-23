@@ -69,6 +69,8 @@ class World {
   ci: Ci = "pending";
   lifecycle: "open" | "merged" = "open";
   base = "main";
+  stackUnavailable = false;
+  lowerPolled = true;
   readonly lowers = new Map<number, "open" | "merged">();
   readonly evaluatedOwners: string[] = [];
   readonly reviews: ModelReview[] = [];
@@ -182,9 +184,12 @@ function createHarness(
     threadPrKeys: () => [PR_KEY],
     getPr: () => world.pr(),
     stackMergeEvidence: async () => ({
-      blocked: world.base !== "main" || [...world.lowers.values()].includes("open"),
+      blocked: world.stackUnavailable || world.base !== "main" || [...world.lowers.values()].includes("open"),
       lowerKeys: [...world.lowers.keys()].map(prKeyFor),
+      retryOnObservation: world.stackUnavailable,
     }),
+    isLowerPolled: () => world.lowerPolled,
+    now: () => world.clock,
     directories: () => ["/work/project"],
     listReviews: () => world.reviews.map((entry) => entry.review),
     recordFixedThrough: (reviewId, commit, settledAt) => {
@@ -664,6 +669,46 @@ describe("PR review and merge offers", () => {
     }), { numRuns: 25, examples: [[true, false, 2], [false, true, 2]] });
   });
 
+  it("preserves a merge card during a failed stack read only for the card's exact head", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), async (headMoved) => {
+      const harness = createHarness();
+      try {
+        const { world } = harness;
+        world.ci = "passing";
+        await reviewChanged(harness, recordReview(world, 0));
+        expect(openOfferCards(harness.todos)).toHaveLength(1);
+        const previous = world.head;
+        world.stackUnavailable = true;
+        if (headMoved) world.head = world.commit(world.changeOf.get(previous)!);
+        await transition(harness, { headSha: { from: previous, to: world.head } });
+        expect(openOfferCards(harness.todos)).toHaveLength(headMoved ? 0 : 1);
+      } finally { harness.close(); }
+    }), { examples: [[true]] });
+  });
+
+  it("rechecks an uncovered hold on unchanged child polls within a bounded cadence", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), fc.integer({ min: 1, max: 6 }), async (polled, duplicatePolls) => {
+      const harness = createHarness();
+      try {
+        const { world } = harness;
+        world.ci = "passing";
+        world.lowerPolled = polled;
+        world.lowers.set(1, "open");
+        await reviewChanged(harness, recordReview(world, 0));
+        world.lowers.set(1, "merged");
+        for (let i = 0; i < duplicatePolls; i++) {
+          harness.coordinator.handleObservations([world.pr()]);
+          await harness.coordinator.idle();
+          expect(openOfferCards(harness.todos)).toHaveLength(0);
+        }
+        world.clock += 10 * 60_000;
+        harness.coordinator.handleObservations([world.pr()]);
+        await harness.coordinator.idle();
+        expect(openOfferCards(harness.todos)).toHaveLength(polled ? 0 : 1);
+      } finally { harness.close(); }
+    }), { examples: [[false, 1]] });
+  });
+
   it("budgets card writes from stack transitions and duplicate deliveries", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     for (const trigger of ["base", "lower"] as const) {
@@ -696,6 +741,45 @@ describe("PR review and merge offers", () => {
         harness.close();
         removeTempStateDbDir(temp.tempDir);
       }
+    }
+  });
+
+  it("budgets writes for uncovered holds and stale offers during transport failure", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("pwragent-stack-review-recheck-");
+    const harness = createHarness(StateDb.open(temp.dbPath));
+    try {
+      const { world } = harness;
+      world.ci = "passing";
+      world.lowerPolled = false;
+      world.lowers.set(1, "open");
+      await reviewChanged(harness, recordReview(world, 0));
+      const observe = async () => {
+        harness.coordinator.handleObservations([world.pr()]);
+        await harness.coordinator.idle();
+      };
+      world.clock += 10 * 60_000;
+      const unchanged = await measureSqliteWrites(observe);
+      expectSqliteWriteBudget({ scenario: "pr-review-stack-uncovered-still-blocked", writes: unchanged.writes,
+        note: "An unchanged child recheck while its unpolled lower remains open writes nothing." });
+      world.lowers.set(1, "merged");
+      world.clock += 10 * 60_000;
+      const offered = await measureSqliteWrites(observe);
+      expect(openOfferCards(harness.todos)).toHaveLength(1);
+      expectSqliteWriteBudget({ scenario: "pr-review-stack-uncovered-offer", writes: offered.writes,
+        note: "One newly eligible child writes one offer commit on a recheck. At 100 offers/day and ~29 KB WAL each, ~2.9 MB/day." });
+      const before = world.head;
+      world.head = world.commit(world.changeOf.get(before)!);
+      world.stackUnavailable = true;
+      const retired = await measureSqliteWrites(async () => {
+        await transition(harness, { headSha: { from: before, to: world.head } });
+      });
+      expect(openOfferCards(harness.todos)).toHaveLength(0);
+      expectSqliteWriteBudget({ scenario: "pr-review-stack-stale-offer-unavailable", writes: retired.writes,
+        note: "One commit withdraws an old-head offer during a failed verification. At 100 withdrawals/day and ~12 KB WAL each, ~1.2 MB/day." });
+    } finally {
+      harness.close();
+      removeTempStateDbDir(temp.tempDir);
     }
   });
 

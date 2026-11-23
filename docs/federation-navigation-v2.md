@@ -280,9 +280,10 @@ disable Send. No collection is silently truncated.
 Rows carry up to eight compact stack memberships. Each includes a position,
 count, health and the adjacent thread identity for Star Map edges. The owner
 inventory retains each full stack once. Opening the PR rail requests the
-selected thread's stack layers through the owner-routed `stackLayers`
+selected thread's complete membership through the owner-routed `stackLayers`
 collection, with the same 100-record and 252 KiB page limits and an 8 MiB
-viewer limit. A newer viewer can still display full stack records from an
-older owner. Older viewers can read rows from newer owners and need an update
+viewer limit. A failed collection shows a stack-specific retry from page one.
+The owner retains only stacks bound to an inventory thread. A newer viewer
+can still display full stack records from an older owner. Older viewers can read rows from newer owners and need an update
 to display their compact stack memberships. Directory-set and archive
 membership reads leave the stack projection idle.

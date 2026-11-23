@@ -360,18 +360,30 @@ async function projectNavigationStacks(
   signal.throwIfAborted();
   const { stacks } = await stackReader.read(rows, []);
   signal.throwIfAborted();
+  return projectBoundNavigationStacks(threads, stacks);
+}
+
+export function projectBoundNavigationStacks(
+  threads: NavigationQueryIndex["threads"], stacks: readonly StackSummary[],
+): Pick<NavigationQueryIndex, "threads" | "stacks"> | undefined {
+  const localKeys = new Set(threads.filter((thread) => !thread.federation)
+    .map((thread) => buildThreadIdentityKey(thread.source, thread.id)));
   const memberships = new Map<string, CompactStackMembership[]>();
+  const boundStacks: StackSummary[] = [];
   for (const stack of stacks) {
+    if (!stack.layers.some((layer) => layer.thread && localKeys.has(layer.thread.key))) continue;
+    boundStacks.push(stack);
     const detailRevision = stackRevision(stack);
     for (const [offset, layer] of stack.layers.entries()) {
-      if (!layer.thread) continue;
+      if (!layer.thread || !localKeys.has(layer.thread.key)) continue;
       const entries = memberships.get(layer.thread.key) ?? [];
       if (entries.length >= 8) continue;
       entries.push({ ...compactStackMembership(stack, offset + 1)!, detailRevision });
       memberships.set(layer.thread.key, entries);
     }
   }
-  return memberships.size ? { stacks, threads: threads.map((thread) => {
+  return memberships.size ? { stacks: boundStacks, threads: threads.map((thread) => {
+    if (thread.federation) return thread;
     const stackMemberships = memberships.get(buildThreadIdentityKey(thread.source, thread.id));
     return stackMemberships ? { ...thread, stackMemberships } : thread;
   }) } : undefined;
@@ -389,9 +401,12 @@ function stackRevision(stack: StackSummary): string {
 
 export async function readNavigationStackLayers(ref: NavigationIdentity, signal?: AbortSignal) {
   const index = await loadLocalNavigationQueryIndex({ callerReason: "selected-stack-detail", includeStacks: true, signal });
-  const thread = index.threads.find((row) => !row.federation && row.source === ref.backend && row.id === ref.threadId);
-  const membership = new Set(thread?.stackMemberships?.map(({ key }) => key));
-  const stacks = (index.stacks ?? []).filter(({ key }) => membership.has(key));
+  return projectSelectedStackLayers(index, ref);
+}
+
+export function projectSelectedStackLayers(index: NavigationQueryIndex, ref: NavigationIdentity) {
+  const key = buildThreadIdentityKey(ref.backend, ref.threadId);
+  const stacks = (index.stacks ?? []).filter((stack) => stack.layers.some((layer) => layer.thread?.key === key));
   const revisions = stacks.map(stackRevision);
   return {
     count: stacks.reduce((total, stack) => total + stack.layers.length, 0),

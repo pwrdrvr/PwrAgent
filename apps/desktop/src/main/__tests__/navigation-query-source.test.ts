@@ -2,6 +2,8 @@ import { mkdir, mkdtemp, realpath, rename, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
+import type { StackSummary } from "@pwragent/shared/stacks/stack-status";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { AppServerBackendScope } from "@pwragent/shared/contracts/normalized-app-server";
 import type { NavigationLaunchpadDraft, NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
@@ -40,7 +42,7 @@ vi.mock("../storage/desktop-overlay-store", () => ({ getDesktopOverlayStore: () 
 vi.mock("../messaging/desktop-messaging-store", () => ({ getDesktopMessagingStore: () => mocks.messaging }));
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: vi.fn() }));
 vi.mock("../app-server/scratch-projects", () => ({ resolveScratchProjectsRoots: () => [] }));
-import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
+import { loadLocalNavigationQueryIndex, projectBoundNavigationStacks, projectSelectedStackLayers } from "../app-server/navigation-query-source";
 import { runGitCommand } from "../app-server/git-executable";
 import { resolveWorktreeRepositoryDirectory } from "../git-info/worktree-store";
 import { NavigationQueryPool } from "../app-server/navigation-query-pool";
@@ -82,6 +84,29 @@ function createSource(coverage: "complete" | "checking" | "degraded" = "complete
     },
   };
 }
+
+it("stores only serviceable stacks and pages past the compact membership preview", () => {
+  fc.assert(fc.property(fc.integer({ min: 9, max: 36 }), fc.integer({ min: 1, max: 24 }), (selected, unrelated) => {
+    const thread: NavigationThreadSummary = {
+      id: "selected", source: "codex", title: "Selected", titleSource: "derived",
+      linkedDirectories: [], inbox: { inInbox: false },
+    };
+    const inventory = Array.from({ length: selected + unrelated }, (_, i): StackSummary => ({
+      key: `stack-${i}`, name: `Stack ${i}`, repository: "github.com:fixture/project", inferred: false,
+      trunk: "main", layers: [{ branch: `branch-${i}`, parent: "main", health: "in_sync", role: "layer",
+        ...(i < selected ? { thread: { key: "codex:selected", title: "Selected" } }
+          : { thread: { key: "codex:outside-inventory", title: "Unrelated" } }),
+      }],
+    }));
+    const projection = projectBoundNavigationStacks([thread], inventory)!;
+    expect(projection.stacks?.map(({ key }) => key)).toEqual(inventory.slice(0, selected).map(({ key }) => key));
+    expect(projection.threads[0]?.stackMemberships).toHaveLength(8);
+    const detail = projectSelectedStackLayers({ directories: [], ...projection }, { backend: "codex", threadId: "selected" });
+    expect(detail.count).toBe(selected);
+    expect([...detail.page(0, 8), ...detail.page(8, selected)].map(({ stackKey }) => stackKey))
+      .toEqual(inventory.slice(0, selected).map(({ key }) => key));
+  }));
+});
 
 it("publishes the repository once when a same-named worktree has a saved project registration", async () => {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-project-index-")));
