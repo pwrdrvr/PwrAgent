@@ -19,6 +19,7 @@ import { buildPwrAgentChildProcessEnv } from "../child-process-env.js";
 import { prependBundledToolsToPath } from "../bundled-tools.js";
 import { getMainLogger } from "../log.js";
 import {
+  isOwnedProcessTreeAlive,
   terminateOwnedProcessTree,
   type OwnedChildProcess,
 } from "../process-tree.js";
@@ -99,8 +100,17 @@ export class AcpStdioJsonRpcTransport implements AcpJsonRpcTransport {
       ) => Promise<unknown> | unknown)
     | undefined;
   private closed = false;
+  private reconnect = true;
 
   constructor(private readonly options: AcpStdioJsonRpcTransportOptions) {}
+
+  get disconnected(): boolean {
+    return this.current?.line.stopped ?? false;
+  }
+
+  disableReconnect(): void {
+    this.reconnect = false;
+  }
 
   private startConnection(): AcpStdioConnection {
     const { options } = this;
@@ -111,7 +121,7 @@ export class AcpStdioJsonRpcTransport implements AcpJsonRpcTransport {
     const rpc = new JsonRpcConnection(
       line,
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      observer && { onMessage: (event) => line.observe(observer, event) },
+      observer && { onMessage: (event) => line.observe(event) },
       {
         logContext: { backend: options.launchDescriptor.backendId },
         logger: getMainLogger("pwragent:json-rpc"),
@@ -138,6 +148,7 @@ export class AcpStdioJsonRpcTransport implements AcpJsonRpcTransport {
     this.assertOpen();
     while (this.current?.line.stopped) {
       const previous = this.current;
+      if (!this.reconnect) previous.line.assertOpen();
       await previous.line.close();
       this.assertOpen();
       if (this.current === previous) this.current = undefined;
@@ -168,10 +179,9 @@ export class AcpStdioJsonRpcTransport implements AcpJsonRpcTransport {
   }
 
   async notify(method: string, params?: Record<string, unknown>): Promise<void> {
-    const { line, rpc } = await this.connectToChild();
+    const { line } = await this.connectToChild();
     line.assertOpen();
-    await rpc.notify(method, params);
-    line.assertOpen();
+    await line.notify(method, params);
   }
 
   onNotification(
@@ -213,6 +223,7 @@ class AcpLineStdioTransport implements JsonRpcTransport {
   private closePromise?: Promise<void>;
   private stopReading?: () => void;
   private readonly outboundObservers = new Set<() => void>();
+  private readonly notificationWrites = new Set<(error?: Error | null) => void>();
 
   constructor(private readonly options: AcpStdioJsonRpcTransportOptions) {}
 
@@ -325,22 +336,58 @@ class AcpLineStdioTransport implements JsonRpcTransport {
 
   async close(): Promise<void> {
     this.disconnect(new Error("json-rpc transport closed"), true);
-    await this.closePromise;
+    try {
+      await this.closePromise;
+    } catch (error) {
+      // Retain a timed-out child until the same process-tree liveness check
+      // used by termination confirms it has gone.
+      if (this.childProcess && isOwnedProcessTreeAlive(this.childProcess)) throw error;
+      this.childProcess = null;
+      this.closePromise = undefined;
+    }
   }
 
-  async observe(observer: JsonRpcObserver, event: JsonRpcObserverEvent): Promise<void> {
-    if (this.stopped) return;
-    if (event.direction === "inbound") {
-      await observer.onMessage(event);
-      return;
-    }
-    const { promise, resolve } = Promise.withResolvers<void>();
-    this.outboundObservers.add(resolve);
+  async observe(event: JsonRpcObserverEvent): Promise<void> {
+    const observer = this.options.observer;
+    if (!observer || this.stopped) return;
     try {
-      await Promise.race([observer.onMessage(event), promise]);
-    } finally {
-      this.outboundObservers.delete(resolve);
+      if (event.direction === "inbound") {
+        await observer.onMessage(event);
+        return;
+      }
+      const { promise, resolve } = Promise.withResolvers<void>();
+      this.outboundObservers.add(resolve);
+      try {
+        await Promise.race([observer.onMessage(event), promise]);
+      } finally {
+        this.outboundObservers.delete(resolve);
+      }
+    } catch (error) {
+      getMainLogger("pwragent:json-rpc").error("json-rpc observer failed", {
+        backend: this.options.launchDescriptor.backendId,
+        direction: event.direction,
+        message: event.envelope.method ?? event.envelope.id ?? "message",
+        error: asError(error).message,
+      });
     }
+  }
+
+  async notify(method: string, params?: Record<string, unknown>): Promise<void> {
+    const envelope = { jsonrpc: "2.0", method, params: params ?? {} };
+    const raw = JSON.stringify(envelope);
+    await this.observe({ direction: "outbound", envelope, raw });
+    this.assertOpen();
+    // The kit's send method is synchronous. Notifications have no reply,
+    // so their caller needs the write callback to know if delivery failed.
+    const { promise, resolve, reject } = Promise.withResolvers<void>();
+    const complete = (error?: Error | null): void => {
+      if (!this.notificationWrites.delete(complete)) return;
+      if (error) reject(error);
+      else resolve();
+    };
+    this.notificationWrites.add(complete);
+    this.send(raw, complete);
+    await promise;
   }
 
   private disconnect(error: Error, reap: boolean): void {
@@ -349,6 +396,7 @@ class AcpLineStdioTransport implements JsonRpcTransport {
     this.stopReading?.();
     this.stopReading = undefined;
     for (const release of this.outboundObservers) release();
+    for (const complete of this.notificationWrites) complete(error);
     // JsonRpcConnection awaits send before attaching to its reply promise.
     // Release paused sends and let them reach that await before rejecting them.
     const flush = new Promise<void>((resolve) => setImmediate(() => {
@@ -357,13 +405,13 @@ class AcpLineStdioTransport implements JsonRpcTransport {
     }));
     const cleanup = Promise.resolve().then(async () => {
       const child = this.childProcess;
-      this.childProcess = null;
       if (reap && child) {
         await terminateOwnedProcessTree(child, {
           gracefulTimeoutMs: PROCESS_CLOSE_TIMEOUT_MS,
           forceTimeoutMs: PROCESS_FORCE_CLOSE_TIMEOUT_MS,
         });
       }
+      this.childProcess = null;
     });
     this.closePromise = Promise.all([flush, cleanup]).then(() => undefined);
     void this.closePromise.catch((error: unknown) => {
@@ -374,19 +422,21 @@ class AcpLineStdioTransport implements JsonRpcTransport {
     });
   }
 
-  send(message: string): void {
+  send(message: string, onWrite?: (error?: Error | null) => void): void {
     if (this.stopped) return;
+    const complete = (error?: Error | null): void => {
+      if (error) this.disconnect(error, true);
+      onWrite?.(error);
+    };
     const stdin = this.childProcess?.stdin;
     if (!stdin?.writable) {
-      this.disconnect(new Error("ACP stdio stdin is not writable"), true);
+      complete(new Error("ACP stdio stdin is not writable"));
       return;
     }
     try {
-      stdin.write(`${message}\n`, (error) => {
-        if (error) this.disconnect(error, true);
-      });
+      stdin.write(`${message}\n`, complete);
     } catch (error) {
-      this.disconnect(asError(error), true);
+      complete(asError(error));
     }
   }
 }

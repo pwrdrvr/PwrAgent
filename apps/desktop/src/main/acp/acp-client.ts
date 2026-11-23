@@ -62,6 +62,8 @@ import { getMainLogger } from "../log.js";
 const acpClientLog = getMainLogger("pwragent:acp-client");
 
 export type AcpJsonRpcTransport = {
+  readonly disconnected?: boolean;
+  disableReconnect?(): void;
   request(
     method: string,
     params?: Record<string, unknown>,
@@ -333,10 +335,17 @@ export class AcpAgentClient {
   private activeOperations = 0;
 
   constructor(private readonly options: AcpAgentClientOptions) {
+    // Initialization and loaded sessions belong to one child. The client
+    // owner must create a fresh client if that child disconnects.
+    options.transport.disableReconnect?.();
     this.now = options.now ?? Date.now;
     this.runtimeCapabilities = options.initialRuntimeCapabilities;
     this.approvalRequesterName = approvalRequesterNameForOptions(options);
     this.normalizerOptions = acpSessionReplayNormalizerOptions(options.backendId);
+  }
+
+  get disconnected(): boolean {
+    return this.options.transport.disconnected === true;
   }
 
   async initialize(): Promise<void> {

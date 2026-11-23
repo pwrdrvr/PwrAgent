@@ -541,4 +541,32 @@ describe("AcpStdioJsonRpcTransport", () => {
       vi.useRealTimers();
     }
   });
+
+  it("keeps a timed-out ACP child fenced until it eventually exits", async () => {
+    vi.useFakeTimers();
+    const child = new MockAcpChildProcess();
+    child.kill = vi.fn(() => false);
+    const spawn = vi.fn().mockReturnValueOnce(child).mockReturnValueOnce(new MockAcpChildProcess());
+    const transport = new AcpStdioJsonRpcTransport({ launchDescriptor: createDescriptor(), spawn });
+    try {
+      await transport.connect();
+      child.stdin.emit("error", new Error("fixture EPIPE"));
+      const first = transport.connect().catch((error: Error) => error.message);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(first).resolves.toContain("SIGKILL");
+      await expect(transport.connect()).rejects.toThrow("SIGKILL");
+      expect(spawn).toHaveBeenCalledTimes(1);
+
+      child.exitCode = 0;
+      child.emit("close");
+      await transport.connect();
+      expect(spawn).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(child.kill).mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+    } finally {
+      const close = transport.close().catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(0);
+      await close;
+      vi.useRealTimers();
+    }
+  });
 });

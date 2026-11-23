@@ -12,13 +12,15 @@ class FixtureChild extends EventEmitter {
   readonly stdin = new Writable({
     write: (chunk, _encoding, callback) => {
       this.requests.push(JSON.parse(String(chunk)).id);
-      callback();
+      if (this.onWrite) this.onWrite(callback);
+      else callback();
     },
   });
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
   exitCode: number | null = null;
   signalCode: NodeJS.Signals | null = null;
+  onWrite?: (callback: (error?: Error | null) => void) => void;
   readonly kill = vi.fn((signal: NodeJS.Signals = "SIGTERM") => {
     this.signalCode = signal;
     this.emit("close");
@@ -45,7 +47,46 @@ type Step = "request" | "reply" | "exit" | "close" | "late error" | Pipe;
 type Outcome = "pending" | "resolved" | "rejected";
 type ModelRequest = { child: number; write: number; outcome: Outcome };
 
+async function checkNotificationWrite(writeFails: boolean): Promise<void> {
+  const child = new FixtureChild();
+  const write = Promise.withResolvers<(error?: Error) => void>();
+  child.onWrite = write.resolve;
+  const transport = new AcpStdioJsonRpcTransport({
+    launchDescriptor: {
+      backendId: "acp:fixture", registryId: "fixture", distributionKind: "local",
+      command: "fixture", args: [], env: {},
+    },
+    spawn: () => child,
+  });
+  const outcomes: string[] = [];
+  const notification = transport.notify("session/cancel").then(
+    () => { outcomes.push("written"); },
+    (error: Error) => { outcomes.push(error.message); },
+  );
+  const complete = await write.promise;
+  let completed = false;
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(outcomes).toEqual([]);
+    completed = true;
+    complete(writeFails ? new Error("fixture EPIPE") : undefined);
+    await notification;
+    expect(outcomes).toEqual([writeFails ? "fixture EPIPE" : "written"]);
+  } finally {
+    if (!completed) complete();
+    await transport.close();
+  }
+}
+
 describe("ACP stdio lifecycle", () => {
+  it("keeps a notification pending until its write callback completes", async () => {
+    await checkNotificationWrite(false);
+  });
+
+  it("settles notifications from their own write callbacks", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), checkNotificationWrite), { numRuns: 16 });
+  });
+
   it("settles each generation's requests and reaps a broken child once", async () => {
     await fc.assert(fc.asyncProperty(
       fc.constantFrom(...pipes),

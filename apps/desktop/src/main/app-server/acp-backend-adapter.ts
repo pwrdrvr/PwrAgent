@@ -178,6 +178,7 @@ export type AcpRuntimeClient = Pick<
       | "closeIdleSessions"
       | "closeSessionForArchive"
       | "didSessionLoadReplayHistory"
+      | "disconnected"
       | "configureWorkflowBudget"
       | "hasActiveOperations"
       | "hasActiveTurns"
@@ -2072,17 +2073,18 @@ export class AcpBackendAdapter {
     };
     const launchIdentity = acpAgentLaunchIdentity(configuredAgent);
     const environmentUnchanged = previous?.environmentKey === environmentKey;
-    if (environmentUnchanged && previous.entry.launchIdentity === launchIdentity) {
+    const disconnected = previous?.entry.client.disconnected === true;
+    if (environmentUnchanged && previous.entry.launchIdentity === launchIdentity && !disconnected) {
       return;
     }
     const owner = previous
       ? await previous.entry.promise
       : await this.getClientForSession(backend, sessionId);
-    if (
+    if (!disconnected && (
       session.status === "active"
       || owner.hasActiveTurns?.() === true
       || owner.hasActiveOperations?.() === true
-    ) {
+    )) {
       // Settings changes take effect once the owning process is idle. Keep
       // cancellation and other live-session RPCs on that process meanwhile.
       if (environmentUnchanged) {
@@ -2093,6 +2095,7 @@ export class AcpBackendAdapter {
     if (!(owner.supportsSessionLoad?.() ?? acpRuntimeSupportsSessionLoad(agent.runtimeCapabilities))) {
       throw new Error("This ACP provider cannot reload an existing session with a new environment. Clear the environment selection to continue.");
     }
+    if (disconnected) await this.disposeAcpClient(previous.entry);
     const client = this.createAcpClient(configuredAgent);
     const entry: AcpClientEntry = {
       client,
@@ -2123,7 +2126,7 @@ export class AcpBackendAdapter {
       shellEnvironment: shellEnvironment ? { ...shellEnvironment } : undefined,
       entry,
     });
-    if (previous) {
+    if (previous && !disconnected) {
       await this.disposeAcpClient(previous.entry);
     }
   }
@@ -2146,7 +2149,7 @@ export class AcpBackendAdapter {
     }
     for (const [entry, backend] of owners) {
       if (this.closed) return;
-      if (entry.disposePromise || !entry.client.closeIdleSessions) continue;
+      if (entry.client.disconnected || entry.disposePromise || !entry.client.closeIdleSessions) continue;
       try {
         await entry.client.closeIdleSessions({
           idleMs: params.idleMs,
@@ -2175,7 +2178,7 @@ export class AcpBackendAdapter {
     }
     const owner =
       this.findSessionOwner(backend, sessionId) ?? this.acpClients.get(backend);
-    if (!owner) {
+    if (!owner || owner.client.disconnected) {
       return false;
     }
     await owner.client.cancelSession(sessionId);
@@ -2198,7 +2201,7 @@ export class AcpBackendAdapter {
         } catch (error) {
           // As with shared clients, a broken replacement must not strand the
           // original session. Turn preparation still reports the launch error.
-          if (this.closed) {
+          if (this.closed || previous.entry.client.disconnected) {
             throw error;
           }
           return await previous.entry.promise;
@@ -2213,7 +2216,7 @@ export class AcpBackendAdapter {
       // A broken replacement path must not strand a session whose original
       // process is still alive. New sessions still observe the launch failure.
       const owner = this.findSessionOwner(backend, sessionId);
-      if (owner) {
+      if (owner && !owner.client.disconnected) {
         return await owner.promise;
       }
       throw error;
@@ -2222,7 +2225,7 @@ export class AcpBackendAdapter {
       return current;
     }
     const owner = this.findSessionOwner(backend, sessionId);
-    return owner ? await owner.promise : current;
+    return owner && !owner.client.disconnected ? await owner.promise : current;
   }
 
   private async resolveClient(backend: AcpBackendId): Promise<AcpRuntimeClient> {
@@ -2231,7 +2234,14 @@ export class AcpBackendAdapter {
       throw new Error("ACP backend adapter is closed");
     }
     const launchIdentity = acpAgentLaunchIdentity(agent);
-    const cached = this.acpClients.get(backend);
+    let cached = this.acpClients.get(backend);
+    if (cached?.client.disconnected) {
+      // Keep the dead owner fenced until its process tree has been reaped.
+      await this.disposeAcpClient(cached);
+      if (this.closed) throw new Error("ACP backend adapter is closed");
+      this.acpClients.delete(backend);
+      cached = undefined;
+    }
     if (cached?.launchIdentity === launchIdentity) {
       return await cached.promise;
     }
@@ -2283,7 +2293,7 @@ export class AcpBackendAdapter {
     this.ownedAcpClients.set(entry, backend);
     this.acpClients.set(backend, entry);
     entry.promise.catch(() => {
-      if (this.acpClients.get(backend) === entry) {
+      if (this.acpClients.get(backend) === entry && !entry.client.disconnected) {
         this.acpClients.delete(backend);
       }
     });
@@ -2981,6 +2991,9 @@ export class AcpBackendAdapter {
     entry.disposePromise ??= Promise.resolve().then(async () => {
       await entry.client.dispose();
       this.ownedAcpClients.delete(entry);
+    }).catch((error: unknown) => {
+      entry.disposePromise = undefined;
+      throw error;
     });
     return entry.disposePromise;
   }
