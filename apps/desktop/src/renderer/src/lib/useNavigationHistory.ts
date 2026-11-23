@@ -20,9 +20,10 @@ export type NavigationHistoryLocation = (
    * creation, not the directory: the directory's launchpad is an empty draft
    * again by now. When the thread lands, every entry for the creation becomes
    * that thread's entry. A creation that ends with no thread becomes its
-   * launchpad's entry, where the draft was put back.
+   * launchpad's entry, where the draft was put back. Refused owner starts
+   * have no draft and drop out of history.
    */
-  | { view: "starting"; creationId: string; directoryKey: string; instanceId?: string }
+  | { view: "starting"; creationId: string; directoryKey: string; instanceId?: string; ownerReported?: true }
   | { view: "thread"; threadKey: string }
 ) & {
   /**
@@ -43,7 +44,7 @@ function sameLocation(
     return b.view === "search";
   }
   if (a.view === "starting") {
-    return b.view === "starting" && a.creationId === b.creationId;
+    return b.view === "starting" && a.creationId === b.creationId && a.ownerReported === b.ownerReported;
   }
   if (a.view === "launchpad") {
     // Peer directory keys are the peer's paths, which can coincide with this
@@ -85,15 +86,14 @@ function appendLocation(
 function pruneStack(
   stack: NavigationHistoryLocation[],
   isLive: (location: NavigationHistoryLocation) => boolean,
-  resolve: (location: NavigationHistoryLocation) => NavigationHistoryLocation,
+  resolve: (location: NavigationHistoryLocation) => NavigationHistoryLocation | undefined,
 ): NavigationHistoryLocation[] {
   let rewritten = false;
-  const resolved = stack.map((location) => {
+  const filtered = stack.flatMap((location) => {
     const next = resolve(location);
     rewritten ||= next !== location;
-    return next;
+    return next !== undefined && isLive(next) ? [next] : [];
   });
-  const filtered = resolved.filter(isLive);
   if (!rewritten && filtered.length === stack.length) {
     return stack;
   }
@@ -193,7 +193,8 @@ export function useNavigationHistory(args: {
    * each with its thread's identity key once the owner has answered. A
    * `starting` entry follows its creation: it becomes the thread's entry when
    * the key arrives, and the launchpad's entry when the creation ends
-   * without one. Pass undefined to leave `starting` entries alone.
+   * without one. A refused owner start is removed. Pass undefined to leave
+   * `starting` entries alone.
    */
   startingThreads?: ReadonlyMap<string, string | undefined>;
 }): {
@@ -263,6 +264,7 @@ export function useNavigationHistory(args: {
     }
     if (
       current.view === "starting"
+      && !current.ownerReported
       && !knownCreationIdsRef.current.has(current.creationId)
       && prev.cursor?.view === "launchpad"
       && prev.cursor.directoryKey === current.directoryKey
@@ -331,7 +333,7 @@ export function useNavigationHistory(args: {
         startedThreadKeys.set(creationId, threadKey);
       }
     }
-    const resolve = (location: NavigationHistoryLocation): NavigationHistoryLocation => {
+    const resolve = (location: NavigationHistoryLocation): NavigationHistoryLocation | undefined => {
       if (location.view !== "starting" || startingThreads === undefined) {
         return location;
       }
@@ -344,7 +346,8 @@ export function useNavigationHistory(args: {
       if (startingThreads.has(location.creationId)) {
         return location;
       }
-      // Ended with no thread. Main put the draft back in the launchpad.
+      if (location.ownerReported) return undefined;
+      // Main put the submitted draft back in the launchpad.
       return {
         view: "launchpad",
         directoryKey: location.directoryKey,

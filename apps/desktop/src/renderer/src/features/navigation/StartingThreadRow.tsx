@@ -69,6 +69,7 @@ export function StartingThreadRow(props: {
   onSelect?: (creation: PendingLaunchpadCreation) => void;
 }) {
   const { creation } = props;
+  const selectable = creation.selectable !== false;
   const title = pendingThreadTitleLine(creation.title) || "New thread";
   const worktree = creation.launchpad.workMode === "worktree";
   const showProvider = useProviderChipNeeded(creation.launchpad.backend, creation.launchpad.model);
@@ -102,18 +103,20 @@ export function StartingThreadRow(props: {
         className={`thread-row${props.compact ? " thread-row--compact" : ""}${
           props.selected ? " is-selected" : ""
         }`}
-        onClick={(event) => {
+        onClick={selectable ? (event) => {
           if ((event.target as HTMLElement).closest("button")) return;
           props.onSelect?.(creation);
-        }}
+        } : undefined}
       >
-        <button
-          aria-label={`${title}, starting in ${creation.directoryLabel}`}
-          aria-pressed={props.selected}
-          className="thread-row__open"
-          type="button"
-          onClick={() => props.onSelect?.(creation)}
-        />
+        {selectable ? (
+          <button
+            aria-label={`${title}, starting in ${creation.directoryLabel}`}
+            aria-pressed={props.selected}
+            className="thread-row__open"
+            type="button"
+            onClick={() => props.onSelect?.(creation)}
+          />
+        ) : null}
         <span className="thread-row__header">
           <span className="thread-row__heading">
             <span

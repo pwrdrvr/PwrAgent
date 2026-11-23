@@ -2116,6 +2116,7 @@ function DesktopAppShell(props: {
     (creation) => creation.selectionKey === navigation.selectedItemKey,
   );
   const selectedStartingCreationId = selectedStartingCreation?.operationId;
+  const ownerReportedStart = selectedPendingThreadStart !== undefined;
   const selectedStartingDirectoryKey = selectedStartingCreation?.directoryKey;
   const selectedStartingLabel = selectedStartingCreation
     ? pendingThreadTitleLine(selectedStartingCreation.title) || "New thread"
@@ -2137,6 +2138,7 @@ function DesktopAppShell(props: {
           view: "starting",
           creationId: selectedStartingCreationId,
           directoryKey: selectedStartingDirectoryKey,
+          ...(ownerReportedStart ? { ownerReported: true } : {}),
           ...(peerTarget ? { instanceId: peerTarget.instanceId } : {}),
           ...(selectedStartingLabel ? { label: selectedStartingLabel } : {}),
         };
@@ -2178,6 +2180,7 @@ function DesktopAppShell(props: {
     navigation.selectedThread,
     navigation.selectedThreadKey,
     newThreadFederationTargets,
+    ownerReportedStart,
     selectedStartingCreationId,
     selectedStartingDirectoryKey,
     selectedStartingLabel,
@@ -2336,12 +2339,13 @@ function DesktopAppShell(props: {
       }
       setMainView("thread", () => {
         if (location.view === "starting") {
-          const creation = [...navigation.pendingLaunchpadCreations, ...navigation.pendingThreadStartRows].find((candidate) =>
-            candidate.operationId === location.creationId);
+          const creations = location.ownerReported ? navigation.pendingThreadStartRows : navigation.pendingLaunchpadCreations;
+          const creation = creations.find((candidate) => candidate.operationId === location.creationId);
           if (creation) {
             navigation.selectPendingLaunchpad(creation.selectionKey);
             return;
           }
+          if (location.ownerReported) return;
         }
         if (location.view === "launchpad" || location.view === "starting") {
           if (location.instanceId) {

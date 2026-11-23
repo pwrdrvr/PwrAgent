@@ -107,8 +107,8 @@ The follow-up fork capture seeded a source with one contrived user item via
 preceded its `thread/started`. The navigation-shaped `thread/list` sent on
 notification included every new fork ID. Since the owner can still be pairing
 the provisional row with that ID when the notification arrives, it holds
-provider `thread/started` delivery for the duration of a reported fork's
-provider request and releases it after `landed`. The raw fork capture is
+provider `thread/started` delivery and delays publishing freshly read active
+Codex lists until the reported fork publishes `landed`. The raw fork capture is
 `apps/desktop/.local/protocol-captures/thread-start-order/wire-fork.jsonl`.
 Frames 10–15 show the first fork request, response, notification, and the
 list request and response that contains its new ID.

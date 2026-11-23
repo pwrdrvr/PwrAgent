@@ -145,6 +145,7 @@ export function pendingThreadStartRows(
       ...(createdThreadId
         ? { threadKey: buildThreadIdentityKey(start.backend, createdThreadId) }
         : {}),
+      selectable: Boolean(createdThreadId || start.progressThread || start.prompt !== undefined),
       title: start.title,
       input: start.prompt === undefined ? [] : [{ type: "text", text: start.prompt }],
     };

@@ -2962,6 +2962,8 @@ export type PendingLaunchpadCreation = {
    * creation's slot as soon as it renders there.
    */
   threadKey?: string;
+  /** Status-only until an owner start has a view or an openable thread. */
+  selectable?: boolean;
   title: string;
   input: AppServerTurnInputItem[];
 };
@@ -4504,7 +4506,7 @@ export function useThreadNavigation(
         const retired = retiredPendingThreadStartIdsRef.current;
         if (retired.has(startId)) return;
         if (report.phase === "ended") {
-          if (report.createdThreadId && report.setupFailure && report.start.prompt !== undefined) {
+          if (report.createdThreadId && report.setupFailure) {
             const threadKey = buildThreadIdentityKey(report.start.backend, report.createdThreadId);
             const setupFailure = report.setupFailure;
             setPendingThreadStartFailures((current) => new Map(current).set(threadKey, setupFailure));

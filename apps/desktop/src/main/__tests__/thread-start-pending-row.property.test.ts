@@ -487,3 +487,66 @@ it("relays a provider fork announcement after its pending row knows the thread i
 it("pairs a provider fork announcement received during the reply with its pending row", async () => {
   await expectProviderForkAnnouncementAfterLanding(fc.schedulerFor([1]), 1, false);
 });
+
+
+it("does not publish an independently listed Codex fork before the owner can pair its row", async () => {
+  const codexClient = new MockBackendClient({ threads: [] });
+  const providerReady = Promise.withResolvers<void>();
+  const providerReply = Promise.withResolvers<{ threadId: string }>();
+  vi.spyOn(codexClient, "forkThread").mockImplementation(async () => {
+    providerReady.resolve();
+    return await providerReply.promise;
+  });
+  const providerRead = Promise.withResolvers<void>();
+  const threadId = "new-fork";
+  vi.spyOn(codexClient, "listThreads").mockImplementation(async () => {
+    providerRead.resolve();
+    return [{ id: threadId, source: "codex", title: "Fork", titleSource: "explicit", linkedDirectories: [] }];
+  });
+  const overlayStore = createOverlayStoreMock();
+  const registry = createDesktopBackendRegistry({
+    codexClient, overlayStore,
+    gitDirectoryService: {
+      prepareLaunchpadWorkspace: async () => ({
+        cwd: "/worktrees/catalog", repositoryPath: "/repo/catalog", workMode: "worktree",
+      }),
+      recordCodexWorktreeOwnerThread: async () => undefined,
+    } as never,
+  });
+  const observedPairs: boolean[] = [];
+  let landed = false;
+  registry.onEvent(({ notification }) => {
+    if (notification.method === "thread/start/pending" && (notification.params as PendingReport).phase === "landed") landed = true;
+  });
+  const readOverlays = overlayStore.getThreadOverlayStates.bind(overlayStore);
+  vi.spyOn(overlayStore, "getThreadOverlayStates").mockImplementation(async (request) => {
+    if (request.threadIds.includes(threadId)) {
+      observedPairs.push(landed);
+    }
+    return await readOverlays(request);
+  });
+  const fork = registry.forkThread({
+    backend: "codex", sourceThreadId: "source", directoryPath: "/repo/catalog", workMode: "worktree",
+    pendingStart: { startId: "started-fork", title: "Fork catalog" },
+  });
+  try {
+    await providerReady.promise;
+    // The two reads a newly opened window issues during the name-write gap.
+    expect(registry.listPendingThreadStarts()).toMatchObject([{ phase: "starting" }]);
+    const listing = registry.listThreads({ backend: "codex", forceRefresh: true })
+      .then((threads) => ({ threads, landedBeforeListing: landed }));
+    await providerRead.promise;
+    // Drain the read's already-resolved provider continuations before releasing the reply.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    providerReply.resolve({ threadId });
+    const [, { threads, landedBeforeListing }] = await Promise.all([fork, listing]);
+    expect(landedBeforeListing).toBe(true);
+    expect(threads.some((thread) => thread.id === threadId)).toBe(true);
+    expect(observedPairs.length).toBeGreaterThan(0);
+    expect(observedPairs[0]).toBe(true);
+  } finally {
+    providerReply.resolve({ threadId });
+    await fork;
+    await registry.close();
+  }
+});

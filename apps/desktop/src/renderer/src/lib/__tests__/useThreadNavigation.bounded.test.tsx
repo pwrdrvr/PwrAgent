@@ -57,14 +57,14 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it("opens a start read on mount and follows it to the created thread", async () => {
+it.each([true, false])("retains startup failures with or without a preview (preview=%s)", async (hasPreview) => {
   const f = fixture();
   const listeners = new Set<(event: AgentEvent) => void>();
   const report: AppServerPendingThreadStartReport = {
     phase: "starting",
     start: {
       startId: "card-start", backend: "codex", submittedAt: 1000, title: "Card title",
-      prompt: "Check the recorder.", progressThread: { backend: "codex", threadId: "thread-0" },
+      ...(hasPreview ? { prompt: "Check the recorder." } : {}), progressThread: { backend: "codex", threadId: "thread-0" },
     },
   };
   const api: DesktopApi = { ...f.api,
@@ -74,16 +74,19 @@ it("opens a start read on mount and follows it to the created thread", async () 
   const { result } = renderHook(() => useThreadNavigation(api));
   await waitFor(() => expect(result.current.pendingThreadStartRows).toHaveLength(1));
   const [starting] = result.current.pendingThreadStartRows;
-  expect(starting?.input).toEqual([{ type: "text", text: "Check the recorder." }]);
-  act(() => result.current.selectPendingLaunchpad(starting!.selectionKey));
-  expect(result.current.selectedItemKey).toBe(starting!.selectionKey);
-  expect(result.current.selectedThreadKey).toBeUndefined();
+  expect(starting?.input).toEqual(hasPreview ? [{ type: "text", text: "Check the recorder." }] : []);
+  if (hasPreview) {
+    act(() => result.current.selectPendingLaunchpad(starting!.selectionKey));
+    expect(result.current.selectedItemKey).toBe(starting!.selectionKey);
+    expect(result.current.selectedThreadKey).toBeUndefined();
+  }
   await act(async () => {
     for (const listener of listeners) listener({ backend: "codex", notification: {
       method: "thread/start/pending", params: { ...report, phase: "ended", createdThreadId: "thread-1",
         setupFailure: { message: "Setup exited 1", phase: "setup", worktreeCleanupAvailable: true } },
     } });
   });
+  if (!hasPreview) await act(async () => { await result.current.showThread({ backend: "codex", threadId: "thread-1" }); });
   expect(result.current.selectedThreadKey).toBe("codex:thread-1");
   expect(result.current.selectedPendingThreadStartFailure).toMatchObject({ message: "Setup exited 1" });
   act(() => result.current.dismissPendingThreadStartFailure());

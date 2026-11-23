@@ -5384,19 +5384,6 @@ function useThreadEnvironmentSetup({
         ...setupRowFieldsFromProgress(progress),
       };
     }
-    if (props.pendingThreadStartFailure && selectedThreadKey) {
-      return {
-        key: `pending-start-failure:${selectedThreadKey}`,
-        phase: props.pendingThreadStartFailure.phase,
-        status: "failed",
-        environmentName: selectedThreadRuntime?.environmentName,
-        command: selectedThreadRuntime?.setupCommand,
-        cwd: selectedThreadRuntime?.cwd,
-        output: selectedThreadRuntime?.setupOutput,
-        error: props.pendingThreadStartFailure.message,
-        onDismiss: props.onDismissPendingThreadStartFailure,
-      };
-    }
     if (showSetupFailureChoice && selectedThreadKey) {
       const phase = selectedThreadEnvironmentFailurePhase;
       return {
@@ -5432,6 +5419,19 @@ function useThreadEnvironmentSetup({
           onCleanup: cleanupAfterSetupFailure,
           onContinue: continueAfterSetupFailureEvent,
         },
+      };
+    }
+    if (props.pendingThreadStartFailure && selectedThreadKey) {
+      return {
+        key: `pending-start-failure:${selectedThreadKey}`,
+        phase: props.pendingThreadStartFailure.phase,
+        status: "failed",
+        environmentName: selectedThreadRuntime?.environmentName,
+        command: selectedThreadRuntime?.setupCommand,
+        cwd: selectedThreadRuntime?.cwd,
+        output: selectedThreadRuntime?.setupOutput,
+        error: props.pendingThreadStartFailure.message,
+        onDismiss: props.onDismissPendingThreadStartFailure,
       };
     }
     if (progress && selectedThreadSetupProgressStatus === "failed") {

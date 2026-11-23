@@ -16716,6 +16716,13 @@ export class DesktopBackendRegistry {
             })
           : Promise.resolve([]),
       ]);
+    if (!params.archived && this.reportedCodexForks.size > 0) {
+      // A provider page can already contain a fork while its RPC is still
+      // finishing. Pair the start before publishing any of those rows to an
+      // independently refreshed list. A fork begun after these reads cannot
+      // be in their results.
+      await Promise.all([...this.reportedCodexForks.values()].flatMap((forks) => [...forks]));
+    }
     const providerFilteredThreadIds = new Set(
       providerFilteredThreads.map((thread) => thread.id),
     );
