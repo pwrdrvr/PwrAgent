@@ -1,12 +1,21 @@
 import { BrowserWindow, Notification } from "electron";
-import type {
-  MessagingApprovalDecision,
-  MessagingApprovalIntent,
+import {
+  MessagingRateLimitGate,
+  type MessagingApprovalDecision,
+  type MessagingApprovalIntent,
 } from "@pwragent/messaging-interface";
+import { rememberBoundedMap } from "../../bounded-map";
 import { getMainLogger } from "../../log";
+import type { TerminalNotification } from "../../owner-host";
 
 const notificationLog = getMainLogger("pwragent:notifications");
 const NATIVE_NOTIFICATION_BODY_MAX_LENGTH = 220;
+const MAX_RECENT_ROUTINE_TURNS = 2048;
+const ROUTINE_TERMINAL_NOTIFICATION_BUDGET = {
+  id: "desktop-routine-terminal",
+  intervalMs: 15 * 60_000,
+  limit: 1,
+};
 
 type NativeNotificationAction = {
   text: string;
@@ -29,6 +38,12 @@ export class DesktopNotificationService {
   private readonly attentionKeys = new Set<string>();
   private readonly attentionNotifications = new Map<string, Set<Notification>>();
   private readonly liveNotifications = new Set<Notification>();
+  private readonly recentRoutineTurns = new Map<string, true>();
+  private readonly terminalNotificationGate: MessagingRateLimitGate;
+
+  constructor(now: () => number = () => performance.now()) {
+    this.terminalNotificationGate = new MessagingRateLimitGate(now);
+  }
 
   clearAttentionKey(key: string): void {
     this.attentionKeys.delete(key);
@@ -105,13 +120,7 @@ export class DesktopNotificationService {
     });
   }
 
-  notifyTerminal(params: {
-    key?: string;
-    enabled: boolean;
-    title: string;
-    body: string;
-    onShow?: () => void;
-  }): void {
+  notifyTerminal(params: TerminalNotification): void {
     if (!params.enabled || (params.key && this.attentionKeys.has(params.key))) {
       return;
     }
@@ -119,6 +128,9 @@ export class DesktopNotificationService {
       return;
     }
     if (!Notification.isSupported()) {
+      return;
+    }
+    if (params.status !== "failed" && !this.admitRoutineTerminal(params.key, params.turnId)) {
       return;
     }
     if (params.key) {
@@ -130,6 +142,18 @@ export class DesktopNotificationService {
       body: params.body,
       onClick: params.onShow,
     });
+  }
+
+  private admitRoutineTerminal(threadKey?: string, turnId?: string): boolean {
+    if (threadKey && turnId) {
+      const turnKey = JSON.stringify([threadKey, turnId]);
+      if (this.recentRoutineTurns.has(turnKey)) {
+        return false;
+      }
+      // Remember outcomes even during cooldown so a replay cannot spend the next slot.
+      rememberBoundedMap(this.recentRoutineTurns, turnKey, true, MAX_RECENT_ROUTINE_TURNS);
+    }
+    return this.terminalNotificationGate.admit(ROUTINE_TERMINAL_NOTIFICATION_BUDGET).admitted;
   }
 
   private supportsActionButtons(): boolean {

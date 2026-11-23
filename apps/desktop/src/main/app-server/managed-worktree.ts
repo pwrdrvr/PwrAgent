@@ -88,8 +88,8 @@ export async function removeManagedWorktree<T>(params: {
 }
 
 /**
- * For a worktree another package adds (the federation handoff import, which
- * cannot import desktop code): the drive lock `addManagedWorktree` applies.
+ * Applies the drive lock to an existing checkout, such as a federation
+ * import or a checkout Git finished before stack recovery resumed.
  */
 export async function lockExternallyAddedWorktree(params: {
   repoRoot: string;

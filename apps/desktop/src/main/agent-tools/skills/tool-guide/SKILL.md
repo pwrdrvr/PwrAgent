@@ -76,7 +76,8 @@ Plan with `askToSettle: true` to ask a layer's thread to settle overlapping
 edits before applying. Use `action: "interrupt"` to request operator approval
 to stop turns that are holding up the operation. A paused conflict can be
 sent to its owner with `action: "route_conflict"`. The owner can resolve the
-conflict in its worktree and call `action: "continue"`. After a provisioning
-failure, the caller can continue the operation without repeating its ref moves.
-Use `action: "abort"` to abandon failed child provisioning. The Git changes
-and their undo receipt remain available.
+conflict in its worktree and call `action: "continue"`. Child provisioning can
+resume from its reserved checkout without repeating the ref moves. When the
+provider's acceptance is uncertain, PwrAgent pauses for the operator and
+keeps the checkout and any saved edit snapshot. Use `action: "abort"` to
+abandon child provisioning while keeping the Git changes and undo receipt.

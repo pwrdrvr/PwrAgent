@@ -162,7 +162,7 @@ import { mergeCausalMessagingContext } from "./causal-messaging-context";
 import { rememberBoundedMap } from "../bounded-map";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -605,6 +605,7 @@ import {
 } from "./git-directory-service";
 import type {
   DirectoryGitStatusEntry,
+  StackWorktreeStart,
   WorktreeBaseSource,
 } from "./git-directory-service";
 import { GitWorkingStateService } from "./git-working-state-service";
@@ -3634,6 +3635,53 @@ export class DesktopBackendRegistry {
   withStackWorktreeMutation<T>(commonDir: string, operation: () => Promise<T>): Promise<T> {
     this.assertThreadOwnership();
     return this.gitDirectoryService.withStackWorktreeMutation(commonDir, operation);
+  }
+
+  reserveStackWorktree(...args: Parameters<GitDirectoryService["reserveStackWorktree"]>) {
+    return this.gitDirectoryService.reserveStackWorktree(...args);
+  }
+
+  prepareStackWorktree(...args: Parameters<GitDirectoryService["prepareStackWorktree"]>) {
+    return this.gitDirectoryService.prepareStackWorktree(...args);
+  }
+
+  async inspectCodexStackThread(child: StackThreadRef, worktreePath: string, priorHome?: string): Promise<"present" | "missing" | "unverified"> {
+    return await this.withCodexThreadClient(child.threadId, async (client) => {
+      let thread: AppServerThreadSummary | undefined;
+      try {
+        thread = await client.readThreadSummary?.(child.threadId);
+      } catch (error) {
+        // Codex thread/read with includeTurns:false reads loaded and persisted
+        // sessions. This is its explicit absence response, not a list miss.
+        if (!(error instanceof Error) || error.message !== `json-rpc error (-32600): thread not loaded: ${child.threadId}`
+          || !priorHome || !client.readCodexHome) return "unverified";
+        const currentHome = await client.readCodexHome();
+        const [prior, current] = await Promise.all([realpath(priorHome), realpath(currentHome)]);
+        return path.relative(prior, current) === "" ? "missing" : "unverified";
+      }
+      if (thread?.id !== child.threadId || !thread.projectKey) return "unverified";
+      return path.relative(worktreePath, await realpath(thread.projectKey)) === "" ? "present" : "unverified";
+    }, undefined, false).catch(() => "unverified" as const);
+  }
+
+  async registerStackLayerThread(child: StackThreadRef, lead: StackThreadRef, worktreePath: string): Promise<void> {
+    const current = await this.overlayStore.getThreadOverlayState(child);
+    if (current?.parentThreadId && (current.parentThreadId !== lead.threadId
+      || (current.parentThreadBackend ?? child.backend) !== lead.backend || current.parentThreadInstanceId)) {
+      throw new Error("The accepted stack layer thread belongs to a different parent.");
+    }
+    if (!current?.parentThreadId) {
+      const parent = { parentThreadId: lead.threadId, parentThreadBackend: lead.backend };
+      const saved = await this.overlayStore.setThreadParent?.({ ...child, ...parent, expectedParent: null });
+      if (saved?.parentThreadId !== lead.threadId) throw new Error("Could not register the accepted stack layer thread.");
+      await this.emit({ backend: child.backend, notification: {
+        method: "thread/parent/set", params: { threadId: child.threadId, ...parent },
+      } });
+    }
+    if (child.backend === "codex") {
+      await this.gitDirectoryService.recordCodexWorktreeOwnerThread({ ...child, worktreePath, preserveExisting: true });
+    }
+    this.invalidateThreadListCache(child.backend, true, child.threadId, [worktreePath]);
   }
 
   private updateCorrespondenceStatus(
@@ -8383,7 +8431,7 @@ export class DesktopBackendRegistry {
     /** Base for a new worktree when `branchName` is unset. */
     worktreeBase?: WorktreeBaseSource;
     requiredWorkMode?: NavigationLaunchpadDraft["workMode"];
-    prepareNewWorktree?: (cwd: string) => Promise<void>;
+    stackWorktree?: StackWorktreeStart;
     parentThreadId?: string;
     parentThreadBackend?: AppServerBackendKind;
     parentThreadInstanceId?: string;
@@ -8554,6 +8602,7 @@ export class DesktopBackendRegistry {
       worktreeBranchMode,
       worktreeBase,
       requiredWorkMode,
+      stackWorktree,
       parentThreadId,
       parentThreadBackend,
       parentThreadInstanceId,
@@ -8592,7 +8641,7 @@ export class DesktopBackendRegistry {
     let effectiveWorkMode = workMode;
     if (workMode === "worktree" && request.cwd?.trim()) {
       const preparedWorkspace =
-        await this.gitDirectoryService.prepareLaunchpadWorkspace({
+        await (stackWorktree?.prepare() ?? this.gitDirectoryService.prepareLaunchpadWorkspace({
           backend,
           branchName,
           directoryKind: "directory",
@@ -8601,7 +8650,7 @@ export class DesktopBackendRegistry {
           workMode: "worktree",
           ...(worktreeBranchMode ? { worktreeBranchMode, rejectOccupiedBranch: true } : {}),
           ...(worktreeBase ? { worktreeBase } : {}),
-        });
+        }));
       resources.setWorkspaceRollback(preparedWorkspace.rollback);
       cwd = preparedWorkspace.cwd;
       effectiveWorkMode = preparedWorkspace.workMode;
@@ -8621,9 +8670,6 @@ export class DesktopBackendRegistry {
         rollback: undefined,
         backend,
       });
-    }
-    if (request.prepareNewWorktree && effectiveWorkMode === "worktree" && cwd) {
-      await request.prepareNewWorktree(cwd);
     }
     let codexEnvironmentRuntime = request.codexEnvironmentRuntime;
     let codexEnvironmentStartupFailure: CodexEnvironmentStartupFailure | undefined;
@@ -8842,6 +8888,7 @@ export class DesktopBackendRegistry {
             ...request,
             ...modelSettings,
             cwd,
+            ...(stackWorktree ? { includeStartScope: true } : {}),
             approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
             approvalsReviewer: modeSettings.approvalsReviewer,
             sandbox: ownerSandboxForMode(getOwnerHostServices().runtimePolicy, effectiveExecutionMode, request.sandbox, modeSettings.sandbox),
@@ -8863,7 +8910,8 @@ export class DesktopBackendRegistry {
           }),
       },
       withWorkspaceWrite: async (submit) => await this.withArchiveWorkspaceWrite(
-        [cwd ?? "", ...(resolvedLinkedDirectories ?? []).map((directory) => linkedDirectoryWorktreePath(directory) ?? directory.path)], submit,
+        [cwd ?? "", ...(resolvedLinkedDirectories ?? []).map((directory) => linkedDirectoryWorktreePath(directory) ?? directory.path)],
+        () => stackWorktree ? stackWorktree.admit(submit) : submit(),
       ),
       rejection: (error) => userActionableMcpConnectionConfigError(error, mcpConnectionRegistrations),
       bindPdf: ({ threadId }) => { pdfMcpRegistration?.bindThread(threadId); },
@@ -8903,7 +8951,11 @@ export class DesktopBackendRegistry {
       },
       markPlaceholder: (identity) => { this.threadNaming.markSystemPlaceholder(identity); },
       recordWorktreeOwner: async (identity) => {
-        await this.recordCodexWorktreeOwnerThread({ ...identity, worktreePath: cwd });
+        if (stackWorktree && identity.backend === "codex" && cwd) {
+          await this.gitDirectoryService.recordCodexWorktreeOwnerThread({ ...identity, worktreePath: cwd, preserveExisting: true });
+        } else {
+          await this.recordCodexWorktreeOwnerThread({ ...identity, worktreePath: cwd });
+        }
       },
       invalidate: ({ threadId }) => { this.invalidateThreadListCache(backend, true, threadId, cwd ? [cwd] : []); },
       persistExecutionMode: async (identity) => {
@@ -21335,8 +21387,7 @@ export class DesktopBackendRegistry {
         : event.notification.method === "turn/failed"
           ? "failed"
           : "cancelled";
-    const threadId = (event.notification.params as { threadId?: unknown })
-      .threadId;
+    const { threadId, turnId } = event.notification.params;
     const contextLabel =
       typeof threadId === "string"
         ? await this.notificationThreadContextLabelForTerminal(event.backend, threadId)
@@ -21347,6 +21398,8 @@ export class DesktopBackendRegistry {
     try {
       getDesktopNotificationService().notifyTerminal({
         enabled: this.notificationsEnabled(),
+        status,
+        turnId: typeof turnId === "string" ? turnId : undefined,
         key:
           typeof threadId === "string"
             ? buildTerminalNotificationKey({

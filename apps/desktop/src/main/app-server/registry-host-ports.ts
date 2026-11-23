@@ -48,7 +48,7 @@ import type {
 import type { AcpMcpServerRegistration } from "../acp/acp-client";
 import type { BackendModelCatalogCallerReason } from "./backend-model-catalog";
 import type { ThreadRenameOptions } from "@pwragent/owner-core/thread-naming-lifecycle";
-import type { WorktreeBaseSource } from "./git-directory-service";
+import type { StackWorktreeStart, WorktreeBaseSource } from "./git-directory-service";
 
 /**
  * A registry read. Renderer and federation reads rebuild the request field
@@ -230,7 +230,7 @@ export interface RegistryHostPorts {
     /** Base for a new worktree when `branchName` is unset. */
     worktreeBase?: WorktreeBaseSource;
     requiredWorkMode?: NavigationLaunchpadDraft["workMode"];
-    prepareNewWorktree?: (cwd: string) => Promise<void>;
+    stackWorktree?: StackWorktreeStart;
     parentThreadId?: string;
     parentThreadBackend?: AppServerBackendKind;
     parentThreadInstanceId?: string;
