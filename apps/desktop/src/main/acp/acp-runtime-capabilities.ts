@@ -104,6 +104,7 @@ export function acpSessionRuntimeStateFromCapabilities(
 export function acpSessionRuntimeStateFromResponse(
   value: unknown,
   now: number,
+  preferModelConfig = false,
 ): BackendAcpSessionRuntimeState | undefined {
   const responseCapabilities = normalizeAcpRuntimeCapabilities({
     value,
@@ -111,6 +112,17 @@ export function acpSessionRuntimeStateFromResponse(
     source: "session-load",
   });
   const state = acpSessionRuntimeStateFromCapabilities(responseCapabilities, now);
+  const model = preferModelConfig
+    ? responseCapabilities?.configOptions?.find((option) => option.category === "model")?.currentValue
+    : undefined;
+  if (model) {
+    return {
+      ...state,
+      currentModelId: model,
+      reasoningEffort: responseCapabilities?.configOptions?.find((option) => option.category === "thought_level")?.currentValue,
+      updatedAt: now,
+    };
+  }
   const reasoningEffort = readCurrentReasoningEffort(value);
   if (!state?.currentModelId && !reasoningEffort) {
     return state;

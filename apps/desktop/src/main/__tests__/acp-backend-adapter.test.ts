@@ -344,7 +344,7 @@ describe("describeInstalledAcpBackend", () => {
           expect(settings.installed).toBe(true);
           expect(settings.unavailableReason).toBe(summary.unavailableReason);
           if (deprecated) {
-            expect(settings.lastDiscoveryError).toContain("Antigravity CLI");
+            expect(settings.lastDiscoveryError).toContain("Antigravity");
             expect(settings.lastDiscoveryError).toContain("Re-probe");
           } else {
             expect(settings.lastDiscoveryError).toBe(lastDiscoveryError);

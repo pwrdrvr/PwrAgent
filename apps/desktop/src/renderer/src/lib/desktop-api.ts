@@ -1647,6 +1647,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   listAcpAgents?: (
     request?: ListAcpAgentSettingsRequest
   ) => Promise<ListAcpAgentSettingsResponse>;
+  antigravitySetup?: (
+    request: import("../../../shared/antigravity-setup").AntigravitySetupRequest,
+  ) => Promise<import("../../../shared/antigravity-setup").AntigravitySetupResult>;
   /** Start the Settings all-provider catalog refresh, or join the one running. */
   startProviderCatalogRefresh?: () => Promise<ProviderCatalogRefreshState>;
   cancelProviderCatalogRefresh?: (

@@ -19,6 +19,7 @@ import {
   useManagedRuntimeProgress,
 } from "./ManagedRuntimeProgress";
 import { SettingsCopyValue } from "./SettingsCopyValue";
+import { AntigravitySetup } from "./AntigravitySetup";
 import { SettingsPathRow, type SettingsPathRowChip } from "./SettingsPathRow";
 import {
   acpRelativeTime,
@@ -221,6 +222,10 @@ export function AcpAgentsSettings(props: {
               props.onManagedGrokBuildChannelChange
             }
             onRefresh={() => refresh(true, true)}
+            onSetupChanged={() => {
+              void refresh(false);
+              window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+            }}
           />
         </Fragment>
       ))}
@@ -328,6 +333,10 @@ function LegacyKimiCompatibilityCard(props: {
   );
 }
 
+function UnmanagedAcpSetup({ children }: { children: ReactNode }) {
+  return children;
+}
+
 function AcpAgentSection(props: {
   entry: AcpAgentSettingsEntry;
   cliPathSnapshot: DesktopSettingsValue<string> | undefined;
@@ -348,8 +357,11 @@ function AcpAgentSection(props: {
     channel: DesktopUpdateChannel,
   ) => Promise<boolean>;
   onRefresh: () => Promise<boolean>;
+  onSetupChanged: () => void;
 }) {
   const { entry, enabled } = props;
+  const hasAntigravitySetup = entry.registryId === "antigravity" && Boolean(props.desktopApi?.antigravitySetup);
+  const Setup = hasAntigravitySetup ? AntigravitySetup : UnmanagedAcpSetup;
   const managedBuild = entry.managedBuild;
   const instances = entry.instances ?? [];
   const rejectedInstances = entry.rejectedInstances ?? [];
@@ -594,7 +606,8 @@ function AcpAgentSection(props: {
           />
         ) : null}
 
-        <SettingsField
+        <Setup desktopApi={props.desktopApi} entry={entry} onChanged={props.onSetupChanged}>
+          <SettingsField
           label="Detected paths"
           sub={
             enabled
@@ -604,7 +617,7 @@ function AcpAgentSection(props: {
               : "Previously detected binaries. Enable this provider and Refresh before launching new threads."
           }
           source={`${instances.length + rejectedInstances.length} found`}
-          error={signInRequired ? undefined : detail}
+          error={signInRequired || (hasAntigravitySetup && (!entry.installed || entry.unavailableReason)) ? undefined : detail}
           control={
             <div className="settings-paths" aria-label={`${entry.name} installs`}>
               {instances.length === 0 && rejectedInstances.length === 0 ? (
@@ -706,7 +719,8 @@ function AcpAgentSection(props: {
               )}
             </div>
           }
-        />
+          />
+        </Setup>
 
         {props.onCliPathChange ? (
           <SettingsField

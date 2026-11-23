@@ -75,6 +75,7 @@ export async function discoverAcpRuntimeCapabilities(
     });
     runtimeCapabilities = await discoverModelReasoningCapabilities({
       client,
+      backendId: agent.backendId,
       onStage: options.onStage,
       readRuntimeCapabilities: () => runtimeCapabilities,
       sessionId: session.sessionId,
@@ -94,6 +95,7 @@ export async function discoverAcpRuntimeCapabilities(
 
 type DiscoverySession = {
   client: AcpAgentClient;
+  backendId: AcpBackendId;
   onStage?: (stage: string) => void;
   readRuntimeCapabilities: () => BackendAcpRuntimeCapabilities | undefined;
   sessionId: string;
@@ -105,12 +107,15 @@ async function discoverModelReasoningCapabilities(
   const initial = params.readRuntimeCapabilities();
   const modelOption = findConfigOption(initial, "model");
   const thoughtLevelOption = findConfigOption(initial, "thought_level");
-  if (!modelOption || !thoughtLevelOption || modelOption.values.length === 0) {
+  // Antigravity can start on Orchestrator, which has no effort menu. The
+  // individual models still report their effort options when selected.
+  if (!modelOption || modelOption.values.length === 0
+    || (!thoughtLevelOption && params.backendId !== "acp:antigravity")) {
     return initial;
   }
 
   const originalModel = modelOption.currentValue;
-  const originalThoughtLevel = thoughtLevelOption.currentValue;
+  const originalThoughtLevel = thoughtLevelOption?.currentValue;
   let selectedModel = originalModel;
   const models: BackendAcpRuntimeModel[] = [];
   // Rebuilding the list from config values must keep what only the agent's
@@ -144,10 +149,10 @@ async function discoverModelReasoningCapabilities(
           });
           continue;
         }
-        thoughtLevels = await settleCarriedThoughtLevel(
-          params,
-          thoughtLevelOption.id,
-        );
+        const switchedOption = findConfigOption(params.readRuntimeCapabilities(), "thought_level");
+        thoughtLevels = switchedOption
+          ? await settleCarriedThoughtLevel(params, switchedOption.id)
+          : { values: [] };
       } else {
         thoughtLevels = readThoughtLevels(params.readRuntimeCapabilities());
       }
@@ -183,7 +188,7 @@ async function discoverModelReasoningCapabilities(
     // walk visited, and the returned capabilities report its menu.
     const restoredThoughtLevel =
       readThoughtLevels(params.readRuntimeCapabilities()).currentValue;
-    if (originalThoughtLevel && restoredThoughtLevel !== originalThoughtLevel) {
+    if (thoughtLevelOption && originalThoughtLevel && restoredThoughtLevel !== originalThoughtLevel) {
       await params.client.setRuntimeOption({
         sessionId: params.sessionId,
         source: "configOption",

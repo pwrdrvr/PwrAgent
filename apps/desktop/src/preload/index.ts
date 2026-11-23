@@ -972,6 +972,7 @@ import {
   AGENT_TRUST_CODEX_PROJECT_CHANNEL,
   AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL,
   ACP_AGENTS_LIST_CHANNEL,
+  ANTIGRAVITY_SETUP_CHANNEL,
   ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL,
   PROVIDER_CATALOG_REFRESH_CANCEL_CHANNEL,
   PROVIDER_CATALOG_REFRESH_EVENT_CHANNEL,
@@ -2259,6 +2260,9 @@ const desktopApi = Object.freeze({
     request?: ListAcpAgentSettingsRequest,
   ): Promise<ListAcpAgentSettingsResponse> =>
     await ipcRenderer.invoke(ACP_AGENTS_LIST_CHANNEL, request),
+  antigravitySetup: (request: import("../shared/antigravity-setup").AntigravitySetupRequest):
+    Promise<import("../shared/antigravity-setup").AntigravitySetupResult> =>
+    ipcRenderer.invoke(ANTIGRAVITY_SETUP_CHANNEL, request),
   startProviderCatalogRefresh: async (): Promise<ProviderCatalogRefreshState> =>
     await ipcRenderer.invoke(PROVIDER_CATALOG_REFRESH_START_CHANNEL),
   cancelProviderCatalogRefresh: async (

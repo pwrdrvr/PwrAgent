@@ -119,6 +119,7 @@ import {
 import {
   recordWithSessionRuntimeCapabilities,
   shouldProbeAcpCapabilitiesAtStartup,
+  withAntigravityModelCatalog,
 } from "../acp/acp-capability-freshness";
 import {
   ensureAcpRuntimeDiscoveryWorkspace,
@@ -568,6 +569,9 @@ async function withAcpSessionEnvironment(
 }
 
 function formatAcpAgentDisplayName(agent: AcpInstalledAgentRecord): string {
+  if (agent.registryId === "antigravity") {
+    return "Antigravity";
+  }
   if (agent.registryId === "gemini") {
     return "Gemini";
   }
@@ -708,6 +712,9 @@ export function buildAcpLaunchpadOptions(
   runtimeCapabilities: BackendAcpRuntimeCapabilities | undefined,
   registryId?: string,
 ): BackendLaunchpadOptions | undefined {
+  if (registryId === "antigravity") {
+    runtimeCapabilities = withAntigravityModelCatalog(runtimeCapabilities);
+  }
   const modelOptions =
     runtimeCapabilities?.models?.availableModels.map(
       (model): BackendModelOption => {
@@ -3467,9 +3474,15 @@ export class AcpBackendAdapter {
       }) => {
         const now = Date.now();
         const current = this.getInstalledAgent(agent.backendId) ?? agent;
-        this.acpAgentStore?.upsertInstalledAgent(
-          recordWithSessionRuntimeCapabilities(current, runtimeCapabilities, now),
-        );
+        // A turn still running on an old managed binary must not publish its
+        // catalog over the newly selected installation. Its session state is
+        // still authoritative for that thread.
+        if (agent.registryId !== "antigravity"
+          || current.launchDescriptor?.command === agent.launchDescriptor?.command) {
+          this.acpAgentStore?.upsertInstalledAgent(
+            recordWithSessionRuntimeCapabilities(current, runtimeCapabilities, now),
+          );
+        }
         await this.emit({
           backend: agent.backendId,
           notification: {

@@ -8,7 +8,7 @@ import {
 export const ANTIGRAVITY_ACP_STRATEGY: AcpAgentStrategy = {
   id: "antigravity",
   backendId: "acp:antigravity",
-  displayName: "Antigravity CLI",
+  displayName: "Antigravity",
   authors: ["Google LLC"],
   repositoryUrl: "https://github.com/google-antigravity/antigravity-cli",
   discoveryProbe: {
