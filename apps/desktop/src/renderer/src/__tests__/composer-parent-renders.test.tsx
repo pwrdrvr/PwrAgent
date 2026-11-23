@@ -160,11 +160,13 @@ it("uses the newly selected thread in retained callbacks and respects abort", as
   const beforeStart = probe.props!.onBeforeStartTurn!;
   const beforeSend = probe.props!.onBeforeSendTurn!;
   const setExecutionMode = probe.props!.onSetExecutionMode!;
+  const showRunningMonitors = probe.props!.onShowRunningMonitors!;
   fireEvent.click(screen.getByRole("button", { name: "Second fixture" }));
   await waitFor(() => expect(probe.props?.thread?.id).toBe("thread-b"));
   expect(probe.props!.onBeforeStartTurn).toBe(beforeStart);
   expect(probe.props!.onBeforeSendTurn).toBe(beforeSend);
   expect(probe.props!.onSetExecutionMode).toBe(setExecutionMode);
+  expect(probe.props!.onShowRunningMonitors).toBe(showRunningMonitors);
   checkThreadBranchDrift.mockClear();
   await act(async () => { expect(await beforeStart()).toBe(true); });
   expect(checkThreadBranchDrift).toHaveBeenCalledWith(expect.objectContaining({
@@ -177,4 +179,6 @@ it("uses the newly selected thread in retained callbacks and respects abort", as
   expect(setThreadExecutionMode).toHaveBeenCalledWith(expect.objectContaining({
     threadId: "thread-b", executionMode: "default",
   }));
+  await act(async () => { showRunningMonitors(); });
+  expect(await screen.findByRole("heading", { name: "Waiting for" })).toHaveFocus();
 });

@@ -202,6 +202,7 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   tokenMiserEnabled?: boolean;
   /** Absent follows the profile default. */
   monitorJobSuggestionsEnabled?: boolean;
+  jobMonitorCreationEnabled?: boolean;
   /** User-curated position in the pinned section. Lower ranks sort first. */
   pinnedRank?: string;
   /**
@@ -1411,6 +1412,10 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
    * default for each new draft.
    */
   agent?: NavigationLaunchpadAgent;
+  /** The saved preset copied into this draft, if any. Never part of an Agent thread. */
+  agentPresetId?: string;
+  /** This MCP selection belongs to the unsent Agent setup, including Custom. */
+  agentDraftMcpSelection?: true;
   /** MCP connections selected for the thread created from this launchpad. */
   mcpConnectionIds?: string[];
   /**
@@ -2740,6 +2745,8 @@ export type NavigationLaunchpadConfiguration = Pick<NavigationLaunchpadDraft,
   | "directoryLabel"
   | "directoryPath"
   | "agent"
+  | "agentPresetId"
+  | "agentDraftMcpSelection"
   | "mcpConnectionIds"
   | "registeredAt"
   | "settingsTouchedAt"
@@ -2762,6 +2769,27 @@ export type NavigationLaunchpadConfiguration = Pick<NavigationLaunchpadDraft,
 >;
 
 /** Independent defaults and one explicitly selected launchpad; never a collection. */
+/** An applied Agent setup owns its connection choices for one launch. */
+export function hasAgentDraftMcpSelection(draft: Pick<NavigationLaunchpadDraft, "agentDraftMcpSelection" | "agentPresetId">): boolean {
+  return draft.agentDraftMcpSelection === true || draft.agentPresetId !== undefined;
+}
+
+export function redactLaunchpadAgentDraft<T extends Pick<NavigationLaunchpadDraft,
+  "agent" | "agentPresetId" | "agentDraftMcpSelection" | "mcpConnectionIds" | "mcpConnectionIdsFromDefaults">>(draft: T): T {
+  const { agent: _agent, agentPresetId: _presetId, agentDraftMcpSelection: _draftSelection, ...shared } = draft;
+  if (hasAgentDraftMcpSelection(draft) || (draft.agent && draft.mcpConnectionIdsFromDefaults !== true)) {
+    delete shared.mcpConnectionIds;
+    delete shared.mcpConnectionIdsFromDefaults;
+  }
+  return shared as T;
+}
+
+/** Only the viewer that composed an unsent draft may recover its input. */
+export function projectFederatedLaunchpad(draft: NavigationLaunchpadDraft): NavigationLaunchpadDraft {
+  const { editorDocument: _editor, imageAttachments: _images, fileAttachments: _files, ...configuration } = redactLaunchpadAgentDraft(draft);
+  return { ...configuration, prompt: "" };
+}
+
 export type NavigationLaunchpadConfigRequest = {
   protocol: typeof NAVIGATION_QUERY_PROTOCOL_VERSION;
   federationTarget?: FederationTarget;
@@ -3159,6 +3187,16 @@ export type SetThreadMonitorJobSuggestionsResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   monitorJobSuggestionsEnabled?: boolean;
+};
+
+export type SetThreadJobMonitorCreationRequest = {
+  threadId: ThreadIdentifier;
+  enabled: boolean;
+};
+
+export type SetThreadJobMonitorCreationResponse = {
+  threadId: ThreadIdentifier;
+  enabled: boolean;
 };
 
 /**
@@ -3634,6 +3672,7 @@ export type ThreadWorktreeRegistration = {
 export type ThreadOverlayState = {
   /** Absent follows the profile default. */
   monitorJobSuggestionsEnabled?: boolean;
+  jobMonitorCreationEnabled?: boolean;
   /** Durable once-per-turn reminder claim, including failed delivery attempts. */
   monitorJobSuggestionTurnId?: string;
   backend: AppServerBackendKind;

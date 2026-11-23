@@ -1,4 +1,5 @@
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
+import type { AgentPreset, ManageAgentPresetsRequest } from "@pwragent/shared/contracts/agent-presets";
 import type { DecisionModelListing, DecisionProviderId } from "@pwragent/shared/decision-models";
 import type {
   ReadWorktreeReflinkCapabilitiesRequest,
@@ -396,6 +397,7 @@ import type {
   AppServerListSkillsResponse,
   AppServerListThreadsRequest,
   AppServerListThreadsResponse,
+  AppServerPendingThreadStartReport,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   GetThreadFileDiffRequest,
@@ -527,6 +529,8 @@ import type {
   SetThreadMonitorJobSuggestionsRequest,
   SetThreadTokenMiserResponse,
   SetThreadMonitorJobSuggestionsResponse,
+  SetThreadJobMonitorCreationRequest,
+  SetThreadJobMonitorCreationResponse,
   SetThreadAgentResponse,
   SetNavigationBrowseModeRequest,
   SetNavigationBrowseModeResponse,
@@ -1384,6 +1388,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   renameThread?: (
     request: RenameThreadRequest
   ) => Promise<RenameThreadResponse>;
+  listPendingThreadStarts?: () => Promise<AppServerPendingThreadStartReport[]>;
   startThread?: (request: StartThreadRequest) => Promise<StartThreadResponse>;
   forkThread?: (request: ForkThreadRequest) => Promise<ForkThreadResponse>;
   startReview?: (request: StartReviewRequest) => Promise<StartReviewResponse>;
@@ -1924,6 +1929,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   setThreadMonitorJobSuggestions?: (
     request: SetThreadMonitorJobSuggestionsRequest
   ) => Promise<SetThreadMonitorJobSuggestionsResponse>;
+  setThreadJobMonitorCreation?: (
+    request: SetThreadJobMonitorCreationRequest
+  ) => Promise<SetThreadJobMonitorCreationResponse>;
   reorderThreadPins?: (
     request: ReorderThreadPinsRequest
   ) => Promise<ReorderThreadPinsResponse>;
@@ -2114,6 +2122,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   listModelSettingsRecents?: (
     request: ListModelSettingsRecentsRequest,
   ) => Promise<ListModelSettingsRecentsResponse>;
+  manageAgentPresets?: (request: ManageAgentPresetsRequest) => Promise<AgentPreset[]>;
   /** Fire-and-forget record of a combination the operator just ran. */
   recordModelSettingsRecent?: (
     request: RecordModelSettingsRecentRequest,

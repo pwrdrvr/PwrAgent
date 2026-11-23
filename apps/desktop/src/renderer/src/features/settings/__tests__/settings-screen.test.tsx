@@ -2082,7 +2082,7 @@ describe("SettingsScreen", () => {
     ]);
     expect(categories).toEqual([
       ["App", ["General", "Keyboard", "Updates", "Applications", "Profiles"]],
-      ["Agents", ["AI Providers", "Plugins", "Usage & Pricing"]],
+      ["Agents", ["AI Providers", "Plugins", "Agent Presets", "Usage & Pricing"]],
       ["Projects", ["Git", "Worktrees", "Environments"]],
       ["Threads", ["Thread Management", "Archived Threads"]],
       ["Remote Access", ["Messaging", "Access Control", "Federation"]],
@@ -10127,6 +10127,7 @@ describe("SettingsScreen", () => {
       "Profiles",
       "AI Providers",
       "Plugins",
+      "Agent Presets",
       "Usage & Pricing",
       "Git",
       "Worktrees",

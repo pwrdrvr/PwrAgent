@@ -581,8 +581,9 @@ describe("NavigationDetailService", () => {
   it("rejects oversized configuration without truncating action metadata", async () => {
     const service = new NavigationDetailService({} as DesktopBackendRegistry);
     mocks.getDirectoryLaunchpad.mockResolvedValue({ directoryKey: "chosen", agent: { name: "owner", instructions: "x".repeat(252 * 1024) } });
-    await expect(service.readLaunchpadConfig({ protocol: 2, directoryKey: "chosen" }))
+    await expect(service.readLaunchpadConfig({ protocol: 2, directoryKey: "chosen" }, { includeLocalAgentDraft: true }))
       .rejects.toMatchObject({ code: "navigation_item_too_large" });
+    expect((await service.readLaunchpadConfig({ protocol: 2, directoryKey: "chosen" })).launchpad?.agent).toBeUndefined();
   });
 
   it("loads authoritative selected detail independently of a row page", async () => {

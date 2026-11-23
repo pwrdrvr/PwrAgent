@@ -331,6 +331,7 @@ export function materializeNavigationThreads(params: {
       fastMode: overlay?.fastMode ?? thread.fastMode,
       tokenMiserEnabled: overlay?.tokenMiserEnabled,
       monitorJobSuggestionsEnabled: overlay?.monitorJobSuggestionsEnabled,
+      jobMonitorCreationEnabled: overlay?.jobMonitorCreationEnabled,
       prAutoDispatchEnabled: overlay?.prAutoDispatchEnabled ?? false,
       prAutoDispatchPending: overlay?.prAutoDispatchPending,
       codexEnvironmentRuntime:
@@ -583,6 +584,7 @@ export function serializeNavigationSnapshotForHash(params: {
       fastMode: thread.fastMode ?? null,
       tokenMiserEnabled: thread.tokenMiserEnabled ?? null,
       monitorJobSuggestionsEnabled: thread.monitorJobSuggestionsEnabled ?? null,
+      jobMonitorCreationEnabled: thread.jobMonitorCreationEnabled ?? null,
       scheduledStart: thread.scheduledStart
         ? {
             actionId: thread.scheduledStart.actionId,

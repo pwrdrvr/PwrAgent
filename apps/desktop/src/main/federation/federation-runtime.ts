@@ -7312,7 +7312,9 @@ export class DesktopFederationRuntime {
   }
 
   private forwardLocalBackendEvent(event: AgentEvent): void {
-    if (!this.router || event.notification.method.startsWith("thread/goal/")) return;
+    if (!this.router
+      || event.notification.method === "thread/start/pending"
+      || event.notification.method.startsWith("thread/goal/")) return;
     const invalidation = navigationInvalidationForLocalEvent(event);
     if (invalidation) this.forwardLocalBackendEvent(invalidation);
     const ownerInstanceId = this.ensureLocalInstanceId();
@@ -8322,7 +8324,7 @@ function localBackendOperations(): FederationBackendOperations {
       return await getDesktopBackendRegistry().restoreThread(request);
     },
     async startThread(request: StartThreadRequest): Promise<StartThreadResponse> {
-      return await getDesktopBackendRegistry().startThread(request);
+      return await getDesktopBackendRegistry().startThreadWithoutLaunchpad(request);
     },
     async forkThread(
       request: ForkThreadRequest,

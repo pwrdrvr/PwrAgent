@@ -2,7 +2,8 @@ import type {
   ResourceCheckoutActionRequest, ResourceCheckoutActionResult, ResourceCheckoutsSnapshot, ResourceCheckoutsChangedEvent, ResourceThreadRef,
 } from "@pwragent/shared/contracts/resource-checkouts";
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
-import { AGENT_MEMORY_CHANNEL } from "../shared/ipc";
+import { AGENT_MEMORY_CHANNEL, AGENT_PRESETS_CHANNEL } from "../shared/ipc";
+import type { AgentPreset, ManageAgentPresetsRequest } from "@pwragent/shared/contracts/agent-presets";
 import type {
   ResearchThread,
   ResearchUpdateRequest,
@@ -395,6 +396,7 @@ import type {
   AppServerListSkillsResponse,
   AppServerListThreadsRequest,
   AppServerListThreadsResponse,
+  AppServerPendingThreadStartReport,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   GetThreadFileDiffRequest,
@@ -585,6 +587,8 @@ import type {
   SetThreadMonitorJobSuggestionsRequest,
   SetThreadTokenMiserResponse,
   SetThreadMonitorJobSuggestionsResponse,
+  SetThreadJobMonitorCreationRequest,
+  SetThreadJobMonitorCreationResponse,
   SetThreadAgentResponse,
   NavigationQueryPage,
   NavigationQueryRequest,
@@ -958,6 +962,7 @@ import {
   AGENT_CANCEL_THREAD_PR_AUTO_DISPATCH_CHANNEL,
   AGENT_SEND_THREAD_PR_AUTO_DISPATCH_NOW_CHANNEL,
   AGENT_TURN_OFF_CODEX_FAST_EVERYWHERE_CHANNEL,
+  AGENT_LIST_PENDING_THREAD_STARTS_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
   AGENT_START_REVIEW_CHANNEL,
   AGENT_START_TURN_CHANNEL,
@@ -1279,6 +1284,7 @@ import {
   NAVIGATION_SET_THREAD_AGENT_CHANNEL,
   NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL,
   NAVIGATION_SET_THREAD_MONITOR_JOB_SUGGESTIONS_CHANNEL,
+  NAVIGATION_SET_THREAD_JOB_MONITOR_CREATION_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_SET_THREAD_LOCK_CHANNEL,
@@ -2787,6 +2793,8 @@ const desktopApi = Object.freeze({
     request: RenameThreadRequest,
   ): Promise<RenameThreadResponse> =>
     await ipcRenderer.invoke(APP_SERVER_RENAME_THREAD_CHANNEL, request),
+  listPendingThreadStarts: async (): Promise<AppServerPendingThreadStartReport[]> =>
+    await ipcRenderer.invoke(AGENT_LIST_PENDING_THREAD_STARTS_CHANNEL),
   startThread: async (
     request: StartThreadRequest
   ): Promise<StartThreadResponse> =>
@@ -3287,6 +3295,10 @@ const desktopApi = Object.freeze({
     request: SetThreadMonitorJobSuggestionsRequest,
   ): Promise<SetThreadMonitorJobSuggestionsResponse> =>
     await ipcRenderer.invoke(NAVIGATION_SET_THREAD_MONITOR_JOB_SUGGESTIONS_CHANNEL, request),
+  setThreadJobMonitorCreation: async (
+    request: SetThreadJobMonitorCreationRequest,
+  ): Promise<SetThreadJobMonitorCreationResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_SET_THREAD_JOB_MONITOR_CREATION_CHANNEL, request),
   reorderThreadPins: async (
     request: ReorderThreadPinsRequest,
   ): Promise<ReorderThreadPinsResponse> =>
@@ -3584,6 +3596,8 @@ const desktopApi = Object.freeze({
       NAVIGATION_LIST_MODEL_SETTINGS_RECENTS_CHANNEL,
       request,
     ),
+  manageAgentPresets: (request: ManageAgentPresetsRequest): Promise<AgentPreset[]> =>
+    ipcRenderer.invoke(AGENT_PRESETS_CHANNEL, request),
   recordModelSettingsRecent: async (
     request: RecordModelSettingsRecentRequest,
   ): Promise<void> =>

@@ -5,7 +5,6 @@ import type {
   AppServerBackendKind,
   AppServerPendingRequestNotification,
   AppServerReadThreadRequest,
-  AppServerPendingThreadStart,
   AppServerReadThreadResponse,
   AppServerThreadMessageOrigin,
   AppServerThreadSummary,
@@ -35,6 +34,9 @@ import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition"
 import type {
   BackendClient,
   BackendRegistryForkThreadRequest,
+  PendingThreadStartDescriptor,
+  PendingThreadStartReporter,
+  PendingThreadStartSource,
   ModelSettings,
   TaskMonitorDelegationRecord,
   ThreadListCallerReason,
@@ -131,6 +133,7 @@ export interface RegistryHostPorts {
     backend?: AppServerBackendKind;
     callerReason?: ThreadListCallerReason;
     enrichDirectories?: boolean;
+    skipPendingDirectoryEnrichment?: boolean;
     filter?: string;
     forceRefresh?: boolean;
     limit?: number;
@@ -203,6 +206,8 @@ export interface RegistryHostPorts {
     model?: string;
     reasoningEffort?: string;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }>;
+  /** A missing or local instance id resolves to the local owner. */
+  ownerRelativeInstanceId(instanceId: string | undefined): string | undefined;
   startThread(params: {
     backend: AppServerBackendKind;
     executionMode?: ThreadExecutionMode;
@@ -241,8 +246,13 @@ export interface RegistryHostPorts {
      * starting row (`thread/start/pending`). For callers with no row of
      * their own: a launchpad draws its own.
      */
-    pendingStart?: Pick<AppServerPendingThreadStart, "startId" | "title" | "directoryKey" | "directoryLabel" | "progressThread">;
-  }): Promise<StartThreadResponse>;
+    pendingStart?: PendingThreadStartDescriptor;
+  }, preparedStart?: PendingThreadStartReporter): Promise<StartThreadResponse>;
+  withPendingThreadStart<T>(
+    source: PendingThreadStartSource,
+    descriptor: PendingThreadStartDescriptor | undefined,
+    run: (pending?: PendingThreadStartReporter) => Promise<T>,
+  ): Promise<T>;
   startTurn(params: {
     backend: AppServerBackendKind;
     threadId: string;

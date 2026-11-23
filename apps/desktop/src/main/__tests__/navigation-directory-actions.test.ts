@@ -188,6 +188,21 @@ it("marks all owner directory members read in one transaction with no renderer a
   expect(repeated.writes.commits).toBe(0);
 });
 
+it("keeps unread state when verified membership includes a thread displayed under another project", async () => {
+  const threads = ["parent", "nested"].map((id) => ({ id, source: "codex", updatedAt: 1, inbox: { inInbox: true } }));
+  mocks.loadIndex.mockResolvedValueOnce({
+    threads, directories: [{ ...directory, threadKeys: ["codex:parent", "codex:nested"] }],
+  }).mockResolvedValueOnce({
+    threads, directories: [{ ...directory, threadKeys: ["codex:parent"] },
+      { ...directory, key: `${key}/nested`, threadKeys: ["codex:nested"] }],
+  });
+  const { writes } = await measureSqliteWrites(async () => {
+    await expect(markLocalNavigationDirectorySeen({ directoryKey: key })).rejects.toThrow("Refresh navigation");
+  });
+  expect(writes.commits).toBe(0);
+  expect(mocks.publish).not.toHaveBeenCalled();
+});
+
 it("does not mark unread state when owner directory membership is incomplete", async () => {
   const { markLocalNavigationDirectorySeen } = await import("../app-server/navigation-directory-actions");
   mocks.loadIndex.mockResolvedValue({ threads: [], directories: [{ ...directory, threadKeys: ["codex:unloaded"] }] });
@@ -330,12 +345,13 @@ it.each(["checking", "degraded"] as const)("rejects directory actions while prov
 
 
 it("archives unloaded members before rechecking and removing the registration", async () => {
-  mocks.loadIndex.mockResolvedValueOnce({ threads: [{ id: "unloaded", source: "codex" }],
-    directories: [{ ...directory, threadKeys: ["codex:unloaded"] }] });
+  const index = { threads: [{ id: "unloaded", source: "codex" }],
+    directories: [{ ...directory, threadKeys: ["codex:unloaded"] }] };
+  mocks.loadIndex.mockResolvedValueOnce(index).mockResolvedValueOnce(index);
   const archive = vi.fn(async () => undefined);
   const { writes } = await measureSqliteWrites(() => removeLocalNavigationDirectory({ directoryKey: key, archiveThreads: true }, archive));
   expect(archive).toHaveBeenCalledExactlyOnceWith({ backend: "codex", threadId: "unloaded" });
-  expect(mocks.loadIndex).toHaveBeenCalledTimes(2);
+  expect(mocks.loadIndex).toHaveBeenCalledTimes(3);
   expect(await mocks.store!.getDirectoryLaunchpad({ directoryKey: key })).toBeUndefined();
   expectSqliteWriteBudget({ scenario: "navigation-archive-project-registration", writes,
     note: "Archive orchestration with provider mocked: one existing registration removal commit (~8 KiB); 100 projects/day is ~0.8 MB/day plus unchanged provider archive costs; no idle writes" });
@@ -352,8 +368,9 @@ it("retains the project when a member fails to archive", async () => {
 });
 
 it("retains a project if new threads arrive while archiving", async () => {
-  mocks.loadIndex.mockResolvedValueOnce({ threads: [{ id: "old", source: "codex" }],
-    directories: [{ ...directory, threadKeys: ["codex:old"] }] })
+  const index = { threads: [{ id: "old", source: "codex" }],
+    directories: [{ ...directory, threadKeys: ["codex:old"] }] };
+  mocks.loadIndex.mockResolvedValueOnce(index).mockResolvedValueOnce(index)
     .mockResolvedValueOnce({ threads: [{ id: "new", source: "codex" }],
       directories: [{ ...directory, threadKeys: ["codex:new"] }] });
   await expect(removeLocalNavigationDirectory({ directoryKey: key, archiveThreads: true }, async () => undefined))
@@ -367,6 +384,29 @@ it("refuses incomplete archive membership before archiving any thread", async ()
   await expect(removeLocalNavigationDirectory({ directoryKey: key, archiveThreads: true }, archive))
     .rejects.toThrow("resolved completely");
   expect(archive).not.toHaveBeenCalled();
+});
+
+it("rejects a displayed directory key absent from the verified archive inventory", async () => {
+  const archive = vi.fn();
+  await expect(removeLocalNavigationDirectory({ directoryKey: `${key}/nested`, archiveThreads: true }, archive))
+    .rejects.toThrow("Refresh navigation");
+  expect(archive).not.toHaveBeenCalled();
+  expect(mocks.publish).not.toHaveBeenCalled();
+});
+
+it("refuses to archive verified members that navigation groups in another project", async () => {
+  const threads = [{ id: "parent", source: "codex" }, { id: "child", source: "codex" }];
+  mocks.loadIndex.mockResolvedValueOnce({
+    threads, directories: [{ ...directory, threadKeys: ["codex:parent", "codex:child"] }],
+  }).mockResolvedValueOnce({
+    threads, directories: [{ ...directory, threadKeys: ["codex:parent"] },
+      { ...directory, key: `${key}/nested`, threadKeys: ["codex:child"] }],
+  });
+  const archive = vi.fn();
+  await expect(removeLocalNavigationDirectory({ directoryKey: key, archiveThreads: true }, archive))
+    .rejects.toThrow("Refresh navigation");
+  expect(archive).not.toHaveBeenCalled();
+  expect(mocks.publish).not.toHaveBeenCalled();
 });
 
 

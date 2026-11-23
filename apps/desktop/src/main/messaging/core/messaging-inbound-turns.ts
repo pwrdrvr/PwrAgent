@@ -19,6 +19,7 @@ import { defaultAgentBackendSupport } from "./messaging-default-agent.js";
 import type { MessagingBackendBridge, MessagingThreadAdmissionState } from "./messaging-adapter.js";
 import { buildConfirmationIntent, buildErrorIntent } from "./messaging-renderer.js";
 import { isNewAgentThreadLaunchAction, isNewThreadLaunchAction } from "./messaging-resume-browser.js";
+import { resolveMessagingAgentPreset } from "./messaging-agent-presets";
 import { resolveMessagingResponseMode } from "./messaging-status-card.js";
 import { formatSkillInputPrefix, isSkillSelectionNoticeIntent, isSkillsSearchIntent } from "./messaging-skills-browser.js";
 import { type MessagingNavigationContext, type MessagingThreadContext } from "./messaging-thread-state.js";
@@ -1821,7 +1822,20 @@ export class MessagingInboundTurns {
       return;
     }
 
+    if (!await this.context.host().requirePermission(event, "thread.new", "messaging-project-create")) return;
     if (!await this.context.host().requireRemoteScope(event, bundle.session.selectedProject?.federationTarget, "messaging-project-create")) return;
+    const preset = await resolveMessagingAgentPreset(this.context.backend, bundle.session);
+    if (bundle.session.agentPresetId && !preset) {
+      await this.context.host().deliver(buildErrorIntent({
+        id: this.context.host().newIntentId("agent-preset-unavailable"),
+        createdAt: this.context.now(),
+        title: "Agent preset unavailable",
+        body: "Choose another Agent preset or Messaging Agent, then resend your first instruction.",
+        recoverable: true,
+      }), undefined, event);
+      return;
+    }
+    const agent = preset?.agent ?? agentForNewThreadSession(bundle.session);
     const prepared = await this.prepareTurnInput(bundle.events, undefined, event);
     if (!prepared) {
       return;
@@ -1988,7 +2002,7 @@ export class MessagingInboundTurns {
         fastMode: options.supportsFast ? options.fastMode : undefined,
         acpRuntime: options.acpRuntime,
         codexEnvironmentRuntime: started.codexEnvironmentRuntime,
-        agent: agentForNewThreadSession(session),
+        agent,
         preferences,
         project,
         threadId: started.threadId,
@@ -2001,7 +2015,7 @@ export class MessagingInboundTurns {
       };
       return boundThread;
     };
-    const launchpad = launchpadForMessagingProject({
+    const baseLaunchpad = launchpadForMessagingProject({
       backend: selectedBackend.kind,
       directory,
       navigation,
@@ -2013,6 +2027,7 @@ export class MessagingInboundTurns {
       options,
       acpRuntime: options.acpRuntime,
     });
+    const launchpad = preset ? { ...baseLaunchpad, mcpConnectionIds: preset.connectionIds } : baseLaunchpad;
     const startFirstTurnAfterEnvironmentSetup = Boolean(
       launchpad.codexEnvironmentId,
     );
@@ -2030,7 +2045,7 @@ export class MessagingInboundTurns {
             {
               directoryKey: messagingLaunchpadMaterializationKey(session),
               ...(project.federationTarget ? { federationTarget: project.federationTarget } : {}),
-              agent: agentForNewThreadSession(session),
+              agent,
               launchpad,
               ...(startInline ? { input: prepared.input } : {}),
             },
@@ -2069,7 +2084,8 @@ export class MessagingInboundTurns {
       reasoningEffort: options.supportsReasoning ? options.reasoningEffort : undefined,
       serviceTier: options.serviceTier,
       acpRuntime: options.acpRuntime,
-      agent: agentForNewThreadSession(session),
+      agent,
+      mcpConnectionIds: preset?.connectionIds,
       ...(options.workMode === "worktree"
         ? {
             workMode: "worktree" as const,

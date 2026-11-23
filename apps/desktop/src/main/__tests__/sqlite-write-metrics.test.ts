@@ -48,8 +48,10 @@ import {
   SQLITE_WRITE_METRICS_ENV,
 } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
+import { messagingNewThreadHarness } from "./fixtures/messaging-new-thread-harness";
 import { ComposerDraftRecoveryStore } from "../state/composer-draft-recovery-store";
 import { StateDb } from "../state/state-db";
+import { deleteAgentPreset, listAgentPresets, saveAgentPreset } from "@pwragent/sqlite-storage/agent-preset-store";
 import { createTempStateDb } from "./sqlite-test-utils";
 import { partitionFederationCollection } from "../federation/federation-collection-reads";
 import {
@@ -128,6 +130,39 @@ afterEach(() => {
 });
 
 describe("sqlite write metrics", () => {
+  it("budgets opening and paging the messaging Agent preset picker", async () => {
+    const real = await messagingNewThreadHarness({ dbPath: path.join(tempDir, "preset-messaging.db"), maxActions: 8 });
+    try {
+      real.backend.listAgentPresets = () => Array.from({ length: 16 }, (_, index) => ({
+        id: `preset-${index}`, name: `Fixture preset ${index}`, mcpConnectionIds: [], availableInMessaging: true,
+      }));
+      await real.command("agent", ["--new"]);
+      await real.click("browse:select-project", { directoryKey: real.directory.key, path: real.directory.path!, label: real.directory.label });
+      const opened = await measureSqliteWrites(() => real.click("browse:new:preset"));
+      expect(real.latest()).toMatchObject({ title: "Start from an Agent preset" });
+      expectSqliteWriteBudget({ scenario: "messaging-agent-preset-picker-open", note: "One picker open, 57,680 WAL bytes or 0.58 MB/day at 10 opens/day.", writes: opened.writes });
+      const paged = await measureSqliteWrites(() => real.choose("browse:new:preset", "presetPage", "1"));
+      expect(real.latest()).toMatchObject({ title: "Start from an Agent preset", body: expect.stringContaining("Fixture preset 4") });
+      expectSqliteWriteBudget({ scenario: "messaging-agent-preset-picker-page", note: "One page change, 41,200 WAL bytes or 0.41 MB/day at 10 pages/day.", writes: paged.writes });
+    } finally { await real.close(); }
+  });
+
+  it("budgets explicit Agent preset changes and read-only listing", async () => {
+    const { result: preset, writes: save } = await measureSqliteWrites(() => saveAgentPreset(stateDb, {
+      name: "Release reviewer",
+      instructions: "Check the change log.",
+      mcpConnectionIds: ["docs"],
+    }));
+    expectSqliteWriteBudget({ scenario: "agent-preset-save", note: "One explicit preset save.", writes: save });
+
+    const { writes: remove } = await measureSqliteWrites(() => {
+      listAgentPresets(stateDb);
+      deleteAgentPreset(stateDb, preset.id);
+      deleteAgentPreset(stateDb, preset.id);
+    });
+    expectSqliteWriteBudget({ scenario: "agent-preset-delete", note: "One explicit delete. Listing and retrying the delete commit nothing.", writes: remove });
+  });
+
   it("budgets Claude branch adoption and unchanged Git monitoring", async () => {
     const cwd = path.join(tempDir, "repo");
     mkdirSync(cwd);

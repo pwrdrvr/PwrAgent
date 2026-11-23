@@ -263,6 +263,8 @@ import {
   type SetThreadTokenMiserRequest,
   type SetThreadMonitorJobSuggestionsRequest,
   type SetThreadMonitorJobSuggestionsResponse,
+  type SetThreadJobMonitorCreationRequest,
+  type SetThreadJobMonitorCreationResponse,
   type SetThreadTokenMiserResponse,
   type SetThreadAgentResponse,
   type SetThreadPinRequest,
@@ -2133,7 +2135,7 @@ class DesktopAppServerService {
           if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
             return getDesktopFederationRuntime().remoteNavigationLaunchpadConfig(request.federationTarget, request, options);
           }
-          return getDesktopNavigationDetailService().readLaunchpadConfig(request);
+          return getDesktopNavigationDetailService().readLaunchpadConfig(request, { includeLocalAgentDraft: true });
         },
       });
     } finally { if (!consumerId) navigationQueryPool.release(token); }
@@ -6663,6 +6665,7 @@ class DesktopAppServerService {
     const index = await loadLocalNavigationQueryIndex({
       backend: "all",
       callerReason: "settings-bulk-pr-auto-dispatch",
+      requireVerifiedDirectories: true,
     });
     if (index.coverage && index.coverage.state !== "complete") {
       throw new Error("Thread discovery is incomplete. Wait for providers to finish loading before changing Auto-fix for all eligible threads.");
@@ -7161,6 +7164,12 @@ class DesktopAppServerService {
         ? { monitorJobSuggestionsEnabled: overlay.monitorJobSuggestionsEnabled }
         : {}),
     };
+  }
+
+  async setThreadJobMonitorCreation(
+    request: SetThreadJobMonitorCreationRequest,
+  ): Promise<SetThreadJobMonitorCreationResponse> {
+    return await getDesktopBackendRegistry().setThreadJobMonitorCreation(request);
   }
 
   async reorderThreadPins(

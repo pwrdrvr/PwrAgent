@@ -181,7 +181,7 @@ import {
   materializeNavigationThreads,
   serializeNavigationSnapshotForHash,
 } from "@pwragent/shared/navigation-state";
-import { buildDirectorySummaries, hasPersistableLaunchpadState } from "@pwragent/shared/directory-navigation";
+import { buildDirectorySummaries, hasPersistableLaunchpadState, navigationPathIdentity } from "@pwragent/shared/directory-navigation";
 import {
   estimateTokenUsageCost,
   resolveTokenUsagePriceUnavailableReason,
@@ -1080,6 +1080,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     backend: AppServerBackendScope;
     threads: AppServerThreadSummary[];
     workspaceRoots?: string[];
+    /** Physical checkout identity to verified primary for separate Git dirs. */
+    worktreeRepositoryAliases?: ReadonlyMap<string, { adminPath: string; path: string; label: string }>;
   }): { threads: NavigationThreadSummary[]; directories: NavigationDirectorySummary[]; directoryOverlays: Record<string, DirectoryOverlayState> } {
     const backendState = this.getBackend(params.backend);
     const baseline = this.readNavigationUnreadBaseline();
@@ -1115,9 +1117,19 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       const source = value.handoffGroupSource as { sourceBackend: AppServerBackendKind; sourceThreadId: string } | null;
       if (source?.sourceBackend && source.sourceThreadId) handoffSources.set(key, source);
       delete value.handoffGroupSource;
-      overlays[key] = normalizeThreadOverlayState(
+      const overlay = normalizeThreadOverlayState(
         Object.fromEntries(Object.entries(value).filter(([, field]) => field !== null)) as ThreadOverlayState,
       );
+      if (params.worktreeRepositoryAliases?.size && overlay.extraLinkedDirectories.length) {
+        const identity = (value: string) => navigationPathIdentity(value, process.platform === "win32");
+        overlay.extraLinkedDirectories = overlay.extraLinkedDirectories.map((directory) => {
+          if (!directory.worktreePath || isHandoffDirectory(directory)) return directory;
+          const alias = params.worktreeRepositoryAliases?.get(identity(directory.worktreePath));
+          return alias && identity(directory.path) === identity(alias.adminPath)
+            ? { ...directory, path: alias.path, label: alias.label } : directory;
+        });
+      }
+      overlays[key] = overlay;
     }
     // Read-only compatibility for handoffs that dropped the remote root owner.
     // Carry only provenance IDs through this bounded index, never the task or
@@ -5624,6 +5636,26 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       : { ...current, monitorJobSuggestionsEnabled: params.enabled };
     this.putThread(threadKey, nextState);
     return nextState;
+  }
+
+  setThreadJobMonitorCreation(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    enabled: boolean;
+  }): void {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    this.stateDb.raw.transaction(() => {
+      const current: ThreadOverlayState = this.getThread(threadKey) ?? {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+      };
+      if ((current.jobMonitorCreationEnabled !== false) !== params.enabled) {
+        const { jobMonitorCreationEnabled: _cleared, ...rest } = current;
+        this.putThread(threadKey, params.enabled ? rest : { ...rest, jobMonitorCreationEnabled: false });
+      }
+    }).immediate();
   }
 
   async setThreadHandoffOrigin(params: {
@@ -13028,6 +13060,7 @@ export type OverlayStoreLike = Pick<
   | "setThreadTokenMiser"
   | "setThreadKeepCheckoutAwake"
   | "setThreadMonitorJobSuggestions"
+  | "setThreadJobMonitorCreation"
   | "claimMonitorJobSuggestion"
   | "setThreadHandoffOrigin"
   | "setThreadForkOrigin"

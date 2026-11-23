@@ -1131,6 +1131,31 @@ describe("DesktopBackendRegistry", () => {
     } finally { await registry.close(); }
   });
 
+  it("admits stock Live Voice with the creation-time catalog while Job Monitors are off", async () => {
+    const codexClient = voiceClient({ initializeResult: { userAgent: "codex/0.160.0" }, serverCapabilities: {} });
+    const prepare = vi.fn(async (params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]) =>
+      JSON.stringify(params.dynamicTools) === JSON.stringify(codexClient.lastStartThreadParams?.dynamicTools));
+    const registry = createDesktopBackendRegistry({
+      codexClient: Object.assign(codexClient, { prepareFreshNativeVoiceThread: prepare }),
+      overlayStore: {
+        ...createOverlayStoreMock(),
+        getThreadOverlayState: async ({ backend, threadId }) => ({
+          backend, threadId, executionMode: "default", extraLinkedDirectories: [], jobMonitorCreationEnabled: false,
+        }),
+      },
+      resolveCodexToolDiscovery: () => false,
+      threadTitleGenerationService: null,
+    });
+    try {
+      const { threadId } = await registry.startThread({ backend: "codex", tokenMiserEnabled: false });
+      expect(JSON.stringify(codexClient.lastStartThreadParams?.dynamicTools)).toContain("create_monitor_delegation");
+      const voice = await registry.acquireNativeVoiceBackend(threadId);
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(codexClient.refreshThreadTools).not.toHaveBeenCalled();
+      voice.release();
+    } finally { await registry.close(); }
+  });
+
   it("requires refresh for catalog drift and reports accurate recovery for unknown stock ownership", async () => {
     const client = Object.assign(voiceClient({ initializeResult: { userAgent: "codex/0.160.0" }, serverCapabilities: {} }), {
       prepareFreshNativeVoiceThread: vi.fn(async () => false),
@@ -11437,6 +11462,41 @@ command = "pnpm dev"
     expect(codexClient.listThreadsCallCount).toBe(1);
 
     await registry.close();
+  });
+
+  it("serves cheap listings while a directory-enriched inventory is pending", async () => {
+    const started = createDeferred<void>();
+    const finish = createDeferred<void>();
+    const thread: AppServerThreadSummary = {
+      id: "history", source: "codex", title: "History", titleSource: "derived", linkedDirectories: [],
+    };
+    const codexClient = new MockBackendClient({ threads: [thread] });
+    const list = codexClient.listThreads.bind(codexClient);
+    const calls = vi.spyOn(codexClient, "listThreads").mockImplementation(async (params, diagnostics) => {
+      if (params?.enrichDirectories) {
+        started.resolve();
+        await finish.promise;
+      }
+      return list(params, diagnostics);
+    });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const enriched = registry.listThreads({ backend: "codex", enrichDirectories: true });
+    let visible: Promise<AppServerThreadSummary[]> | undefined;
+    try {
+      await started.promise;
+      visible = registry.listThreads({
+        backend: "codex", callerReason: "renderer-navigation-query", enrichDirectories: false, skipPendingDirectoryEnrichment: true,
+      });
+      await vi.waitFor(() => expect(calls).toHaveBeenCalledWith(
+        expect.objectContaining({ enrichDirectories: false }), expect.objectContaining({ callerReason: "renderer-navigation-query" }),
+        expect.any(Function),
+      ));
+      expect(await visible).toMatchObject([{ id: thread.id }]);
+    } finally {
+      finish.resolve();
+      await Promise.allSettled([enriched, visible]);
+      await registry.close();
+    }
   });
 
   it("never downgrades a known quit title for fallback or missing list rows", async () => {

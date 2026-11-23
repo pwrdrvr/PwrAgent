@@ -68,7 +68,7 @@ import type {
   NavigationLaunchpadDraft,
   NavigationThreadSummary,
 } from "@pwragent/shared/contracts/navigation";
-import type { AppServerCollaborationModeRequest, ThreadRewindMode } from "@pwragent/shared/contracts/agent";
+import type { AppServerCollaborationModeRequest, CodexEnvironmentStartupFailure, ThreadRewindMode } from "@pwragent/shared/contracts/agent";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type {
   DesktopApplicationsSnapshot,
@@ -317,6 +317,43 @@ function setupRowFieldsFromProgress(progress: LaunchpadEnvironmentSetupProgress)
     durationMs: progress.durationMs,
     startedAt: progress.startedAt,
   } satisfies Partial<EnvironmentSetupRowModel>;
+}
+
+function PendingThreadStartContent(props: {
+  creation: PendingLaunchpadCreation;
+  desktopApi?: DesktopApi;
+  message: AppServerThreadMessageEntry;
+  skills: AppServerSkillSummary[];
+}) {
+  const { creation, desktopApi, message, skills } = props;
+  const progress = creation.setupProgress;
+  return (
+    <div className="thread-view__launchpad-composer is-materializing">
+      <div className="thread-view__launchpad-transcript">
+        <article className="launchpad-submitted-message" aria-label="Submitted message">
+          <div className="transcript-list__content">
+            <TranscriptMessage desktopApi={desktopApi} message={message} parentThreadId="" skills={skills} />
+          </div>
+        </article>
+        <div className="transcript-panel transcript-panel--pending" role="status">
+          <div className="launchpad-pending">
+            <p><StartupTiming submittedAt={creation.submittedAt} startedAt={creation.submittedAt} compact /></p>
+          </div>
+        </div>
+        {progress ? (
+          <LaunchpadEnvironmentSetupPending
+            command={progress.command}
+            confirmedCwd={progress.cwd}
+            cwd={progress.cwd}
+            desktopApi={desktopApi}
+            directoryLabel={creation.directoryLabel}
+            environmentName={progress.environmentName}
+            progress={progress}
+          />
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 function LaunchpadEnvironmentSetupPending(props: {
@@ -922,6 +959,9 @@ export type ThreadViewProps = {
   onReloadThread?: () => Promise<void>;
   onLiveTranscriptEntry?: (entry: AppServerThreadEntry) => void;
   pendingLaunchpadCreation?: PendingLaunchpadCreation;
+  pendingThreadStart?: PendingLaunchpadCreation;
+  pendingThreadStartFailure?: CodexEnvironmentStartupFailure;
+  onDismissPendingThreadStartFailure?: () => void;
   onMaterializeLaunchpad?: (
     directoryKey: string,
     input?: AppServerTurnInputItem[],
@@ -1236,8 +1276,9 @@ export function ThreadView(props: ThreadViewProps) {
   const [localLaunchpadMaterializing, setLaunchpadMaterializing] = useState(false);
   const launchpadMaterializing = Boolean(props.pendingLaunchpadCreation) || localLaunchpadMaterializing;
   const [launchpadSubmittedInput, setLaunchpadSubmittedInput] = useState<AppServerTurnInputItem[]>([]);
+  const submittedCreation = props.pendingThreadStart ?? props.pendingLaunchpadCreation;
   const launchpadSubmittedMessage = useMemo<AppServerThreadMessageEntry>(() => {
-    const parts = (props.pendingLaunchpadCreation?.input ?? launchpadSubmittedInput)
+    const parts = (submittedCreation?.input ?? launchpadSubmittedInput)
       .flatMap<AppServerThreadMessagePart>((item) =>
         item.type === "text" || item.type === "image" ? [item] : [],
       );
@@ -1245,11 +1286,11 @@ export function ThreadView(props: ThreadViewProps) {
       id: "launchpad-submitted-message",
       type: "message",
       role: "user",
-      createdAt: props.pendingLaunchpadCreation?.submittedAt,
+      createdAt: submittedCreation?.submittedAt,
       text: parts.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n\n"),
       parts,
     };
-  }, [launchpadSubmittedInput, props.pendingLaunchpadCreation?.input, props.pendingLaunchpadCreation?.submittedAt]);
+  }, [launchpadSubmittedInput, submittedCreation?.input, submittedCreation?.submittedAt]);
   // Terminal state is owned by `useIntegratedTerminals` up in App, mirroring
   // the main process's registry. It cannot live here: ThreadView unmounts on
   // search and on any refresh that flips `threadDetailPending`, which used to
@@ -1422,18 +1463,19 @@ export function ThreadView(props: ThreadViewProps) {
   );
   const selectedLaunchpad = props.selectedLaunchpad;
   const pendingForkEnvironmentSetup = props.pendingForkEnvironmentSetup;
+  const pendingThreadStart = props.pendingThreadStart;
   // Which view renders: a fork still in setup, the empty state, a launchpad
   // (`composerLaunchpad` is set), or a thread. Only a launchpad and a thread
   // have a composer. A launchpad whose directory row has not loaded has no
   // view of its own and, without a thread, shows the empty state: the thread
   // view needs a thread.
   const composerLaunchpad =
-    !pendingForkEnvironmentSetup && props.selectedDirectory
+    !pendingThreadStart && !pendingForkEnvironmentSetup && props.selectedDirectory
       ? selectedLaunchpad
       : undefined;
   const emptyView =
-    !pendingForkEnvironmentSetup && !composerLaunchpad && !selectedThread;
-  const composerView = !pendingForkEnvironmentSetup && !emptyView;
+    !pendingThreadStart && !pendingForkEnvironmentSetup && !composerLaunchpad && !selectedThread;
+  const composerView = !pendingThreadStart && !pendingForkEnvironmentSetup && !emptyView;
   const threadView = composerView && !composerLaunchpad;
   const threadLock = threadView ? selectedThread?.lock : undefined;
   // Keyed to the thread, so switching threads never carries the editor over.
@@ -1741,6 +1783,12 @@ export function ThreadView(props: ThreadViewProps) {
     }
   }, [launchpadConnectionsDock]);
   const [threadMcpAccessOpen, setThreadMcpAccessOpen] = useState(false);
+  const [waitingHeadingThreadId, setWaitingHeadingThreadId] = useState<string>();
+  const showRunningMonitors = useEventCallback(() => {
+    setWaitingHeadingThreadId(selectedThread?.id);
+    onActiveContextTabChange("waiting");
+    onContextRailPinnedChange(true);
+  });
   // Closing the panel is the cheap, reliable signal that the selection may
   // have changed; re-reading then keeps the composer badge honest without
   // subscribing to every write.
@@ -3155,6 +3203,7 @@ export function ThreadView(props: ThreadViewProps) {
           onCreateSubthread: props.onCreateSubthread,
           readThreadWorktreeAvailability: props.readThreadWorktreeAvailability,
           onShowMcpInventory: showMcpInventory,
+          onShowRunningMonitors: showRunningMonitors,
           onLockThread: lockThreadFromComposer,
           mcpConnectionCount: threadMcpConnectionCount,
           replySubmission: asyncQuestionReply,
@@ -3372,7 +3421,14 @@ export function ThreadView(props: ThreadViewProps) {
 
   function renderThreadPrimaryContent() {
     return (
-      emptyView ? null : pendingForkEnvironmentSetup ? (
+      pendingThreadStart ? (
+        <PendingThreadStartContent
+          creation={pendingThreadStart}
+          desktopApi={props.desktopApi}
+          message={launchpadSubmittedMessage}
+          skills={props.skills}
+        />
+      ) : emptyView ? null : pendingForkEnvironmentSetup ? (
         <div className="thread-view__launchpad-composer">
           <LaunchpadEnvironmentSetupPending
             command={
@@ -3661,6 +3717,9 @@ export function ThreadView(props: ThreadViewProps) {
           onDismissEnvActionRun: dismissEnvActionRun,
           onStopEnvActionRun: stopEnvActionRun,
           onRefreshNavigation: props.onRefreshNavigation,
+          onFocusWaitingHeading: waitingHeadingThreadId && waitingHeadingThreadId === selectedThread?.id
+            ? () => setWaitingHeadingThreadId(undefined)
+            : undefined,
           onSetThreadPrAutoDispatch: props.onSetThreadPrAutoDispatch,
           onUnlockThread: props.onSetThreadLock
             ? async () => await props.onSetThreadLock?.(false)
@@ -4239,7 +4298,14 @@ function renderThreadViewHeader({
     ? composerLaunchpad.model
       ?? getDefaultModelOption(props.backends?.find((backend) => backend.kind === composerLaunchpad.backend))?.id
     : undefined;
-  return pendingForkEnvironmentSetup ? (
+  return props.pendingThreadStart ? (
+    <ThreadPlaceholderHeader
+      {...headerChrome}
+      backend={props.pendingThreadStart.launchpad.backend}
+      projectLabel={props.pendingThreadStart.directoryLabel}
+      title={props.pendingThreadStart.title}
+    />
+  ) : pendingForkEnvironmentSetup ? (
     <ThreadPlaceholderHeader
       {...headerChrome}
       backend={pendingForkEnvironmentSetup.backend}
@@ -5365,6 +5431,19 @@ function useThreadEnvironmentSetup({
         },
       };
     }
+    if (props.pendingThreadStartFailure && selectedThreadKey) {
+      return {
+        key: `pending-start-failure:${selectedThreadKey}`,
+        phase: props.pendingThreadStartFailure.phase,
+        status: "failed",
+        environmentName: selectedThreadRuntime?.environmentName,
+        command: selectedThreadRuntime?.setupCommand,
+        cwd: selectedThreadRuntime?.cwd,
+        output: selectedThreadRuntime?.setupOutput,
+        error: props.pendingThreadStartFailure.message,
+        onDismiss: props.onDismissPendingThreadStartFailure,
+      };
+    }
     if (progress && selectedThreadSetupProgressStatus === "failed") {
       return {
         key: `progress:${progress.directoryKey}:${progress.startedAt ?? 0}`,
@@ -5380,6 +5459,8 @@ function useThreadEnvironmentSetup({
     continueAfterSetupFailureEvent,
     dismissSelectedThreadSetupProgress,
     props.composerDisabled,
+    props.pendingThreadStartFailure,
+    props.onDismissPendingThreadStartFailure,
     selectedThreadEnvironmentFailurePhase,
     selectedThreadKey,
     selectedThreadLatestFailedActionRun,
