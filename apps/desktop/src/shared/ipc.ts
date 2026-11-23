@@ -650,6 +650,13 @@ export const SETTINGS_LINE_RICH_MENU_CHANNEL = "settings:line-rich-menu";
  */
 export const SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL =
   "settings:last-credential-test";
+/**
+ * Lists the models a decision provider offers (`GET /v1/models`), with the
+ * saved key, for Settings' Model picker. Request: `{ provider }`. Response:
+ * `DecisionModelListing`. Runs no decision; the key stays in main.
+ */
+export const SETTINGS_LIST_DECISION_MODELS_CHANNEL =
+  "settings:list-decision-models";
 export const SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL =
   "settings:resolve-messaging-contact";
 /**
@@ -1081,3 +1088,7 @@ export const INTEGRATED_TERMINAL_RENAME_CHANNEL = "integrated-terminal:rename";
 
 export const NAVIGATION_CONTINUE_THREAD_ENVIRONMENT_STARTUP_CHANNEL =
   "navigation:continue-thread-environment-startup";
+/** The merge method a thread's PR card starts on. */
+export const THREAD_PULL_REQUEST_READ_MERGE_CHANNEL = "thread-pull-request:read-merge";
+/** Merges one of a local thread's attached PRs from its PR card. */
+export const THREAD_PULL_REQUEST_MERGE_CHANNEL = "thread-pull-request:merge";

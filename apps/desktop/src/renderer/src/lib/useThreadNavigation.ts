@@ -1197,6 +1197,7 @@ function applyDirectoryGitStatusUpdate(
 function applyThreadGitWorkingStateUpdate(
   snapshot: NavigationLoadedRows | undefined,
   params: NavigationThreadGitWorkingStateUpdatedNotification["params"],
+  target: FederationTarget | undefined,
 ): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
@@ -1204,7 +1205,9 @@ function applyThreadGitWorkingStateUpdate(
 
   let changed = false;
   const threads = loadedThreadRows(snapshot).map((thread) => {
-    if (resolveThreadWorkingStatePath(thread) !== params.worktreePath) {
+    if (!federationTargetsEqual(thread.federation?.ref.target, target)
+      || (thread.gitWorkingStateFetchedAt ?? 0) > params.fetchedAt
+      || resolveThreadWorkingStatePath(thread) !== params.worktreePath) {
       return thread;
     }
     if (
@@ -4650,13 +4653,12 @@ export function useThreadNavigation(
           .params as NavigationThreadGitWorkingStateUpdatedNotification["params"];
         setState((current) => ({
           ...current,
-          rows: applyThreadGitWorkingStateUpdate(current.rows, params),
+          rows: applyThreadGitWorkingStateUpdate(current.rows, params, event.federationTarget),
         }));
         return;
       }
 
       if (method === "navigation/threadDirectories/updated") {
-        scheduleEventRefresh();
         return;
       }
 

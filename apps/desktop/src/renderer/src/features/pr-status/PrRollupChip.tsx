@@ -6,6 +6,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type ComponentProps,
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
@@ -82,6 +83,8 @@ type PrRollupChipProps = {
    * the lead leaves out, and opens the same list of every PR.
    */
   variant?: "rollup" | "overflow";
+  /** A single PR's card merges it, as the lead chip's does. */
+  merge?: ComponentProps<typeof PrChip>["merge"];
 };
 
 /** Hover opens a peek; a click or the keyboard keeps it open. */
@@ -120,6 +123,7 @@ export const PrRollupChip = memo(function PrRollupChip(props: PrRollupChipProps)
           onDetach={props.onDetach}
           hideDetachButton
           cardActions
+          merge={props.merge}
         />
       </span>
     );

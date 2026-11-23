@@ -1,10 +1,13 @@
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
+import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared/contracts/navigation";
 import type {
   NavigationQueryPage,
   NavigationQueryRequest,
   NavigationRow,
 } from "@pwragent/shared/contracts/navigation";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import { expandNavigationRemoteOwner } from "@pwragent/shared/navigation-remote-owner";
 import { navigationIdentityKey } from "../navigation-query-state";
 import { NavigationWindowQueries, navigationResumeQueryKey } from "../navigation-window-queries";
 
@@ -13,6 +16,132 @@ function deferred<T>() {
   const promise = new Promise<T>((done) => { resolve = done; });
   return { promise, resolve };
 }
+
+async function checkDirectoryMoveWithWorkingState(children: number, remote: boolean, proof: "complete" | "partial" | "truncated") {
+  const target = remote ? { scope: "remote" as const, instanceId: "peer" } : undefined;
+  const owners = [target ?? { scope: "local" as const }];
+  const request = (query: NavigationQueryRequest["query"]): NavigationQueryRequest => ({
+    protocol: 2, consumer: "main-sidebar", inventory: remote ? "owner" : "viewer", federationTarget: target, query,
+  });
+  const ref = (threadId: string) => ({ backend: "codex" as const, threadId, ownerInstanceId: target?.instanceId });
+  const oldDirectory = "directory:/old";
+  const newDirectory = "directory:/new";
+  const demand = new Map<string, NavigationQueryRequest>([
+    ["directory-index", request({ kind: "directory-index" })],
+    ["old", request({ kind: "directory", directoryKey: oldDirectory })],
+    ["new", request({ kind: "directory", directoryKey: newDirectory })],
+    ["selection", request({ kind: "exact", identities: [ref("moved")] })],
+  ]);
+  for (let i = 0; i < children; i++) {
+    demand.set(`tray-${i}`, request({ kind: "children", parent: ref(`parent-${i}`), directoryKey: `directory:/group-${i}` }));
+    demand.set(`group-${i}`, request({ kind: "directory", directoryKey: `directory:/group-${i}` }));
+  }
+  let moved = false;
+  let fetchedAt = 1;
+  let holdReads = false;
+  const calls = new Map<string, number>();
+  const dispatches: { first: boolean; trigger?: string }[] = [];
+  const pending: { release: () => void; first: boolean }[] = [];
+  const read = async (sent: NavigationQueryRequest): Promise<NavigationQueryPage> => {
+    const { query } = sent;
+    const id = [...demand].find(([, candidate]) => JSON.stringify(candidate.query) === JSON.stringify(query))![0];
+    const moveDirectory = moved ? newDirectory : oldDirectory;
+    const carriesMove = id === "selection" || id === (moved ? "new" : "old");
+    const entries = carriesMove || id.startsWith("tray-") ? (() => {
+      const thread = ref(carriesMove ? "moved" : `child-${id}`);
+      const path = carriesMove ? (moved ? "/new" : "/old") : `/unrelated/${id}`;
+      const row: NavigationRow = { id: thread.threadId, source: thread.backend, ref: thread,
+        rowRevision: `${path}:${fetchedAt}`, title: thread.threadId, titleSource: "explicit",
+        linkedDirectories: [{ id: thread.threadId, kind: "local", path, label: thread.threadId,
+          ...(carriesMove ? { worktreePath: `/checkouts${path}` } : {}) }],
+        ...(carriesMove ? { gitWorkingStateFetchedAt: fetchedAt } : {}),
+        ...(proof === "truncated" && id === "tray-0" ? { linkedDirectoriesTruncated: true } : {}),
+        inbox: { inInbox: false }, ordinaryChildCount: 0, nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" };
+      return [{ row, orderKey: id, placement: query.kind === "children" ? { kind: "child" as const, parent: query.parent } : { kind: "root" as const } }];
+    })() : [];
+    const directory = (key: string) => ({ key, kind: "directory" as const, label: key,
+      pinnedRootCount: 0, unpinnedRootCount: Number(key === moveDirectory), launchpadPresent: false,
+      counts: { total: Number(key === moveDirectory), active: 0, unread: 0, review: 0 } });
+    const page: NavigationQueryPage = { protocol: 2, queryKey: id, generation: id, ownerEpoch: "fixture", countsRevision: `${moved}:${fetchedAt}`,
+      counts: { total: entries.length, active: 0, unread: 0, review: 0 },
+      coverage: proof === "partial" && id === "tray-0" ? { state: "checking" } : { state: "complete" }, complete: true, entries,
+      ...(id === "directory-index" ? { directories: [directory(oldDirectory), directory(newDirectory)] } : {}),
+      ...(id === "selection" ? { selectionDirectory: directory(moveDirectory) } : {}) };
+    if (holdReads) {
+      const count = (calls.get(id) ?? 0) + 1;
+      calls.set(id, count);
+      dispatches.push({ first: count === 1, trigger: sent.diagnostic?.trigger });
+      const gate = deferred<void>();
+      pending.push({ release: () => gate.resolve(), first: count === 1 });
+      await gate.promise;
+    }
+    return page;
+  };
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  try {
+    queries.setDemand(demand);
+    await queries.refresh();
+    holdReads = true;
+    moved = true;
+    const event = (kind: "directories" | "working", path = "/checkouts/new"): AgentEvent => ({
+      backend: "codex", federationTarget: target,
+      notification: kind === "directories" ? remote
+        ? { method: "navigation/invalidated", params: { sourceMethod: "navigation/threadDirectories/updated" } }
+        : { method: "navigation/threadDirectories/updated", params: { reason: "selected-thread", threadIds: ["moved"] } }
+        : remote ? { method: "navigation/invalidated", params: { sourceMethod: "navigation/threadGitWorkingState/updated", ...{ worktreePath: path } } }
+        : { method: "navigation/threadGitWorkingState/updated", params: { worktreePath: path, fetchedAt, gitWorkingState: null } },
+    });
+    queries.invalidate(undefined, owners, event("directories"));
+    const refreshed = queries.refresh(undefined, owners, true);
+    // The first four resources have captured responses. Later waves contain
+    // child trays and directories that have no rows on either notified path.
+    for (let wave = 0; wave < demand.size; wave++) {
+      for (let tick = 0; tick < 20; tick++) await Promise.resolve();
+      if (pending.length === 0) break;
+      if (wave === 0) {
+        fetchedAt = 2;
+        queries.invalidate(undefined, owners, event("working"));
+      } else if (pending.some(({ first }) => first)) {
+        queries.invalidate(undefined, owners, event("working", "/absent"));
+      }
+      for (const { release } of pending.splice(0)) release();
+    }
+    await refreshed;
+    const pages = queries.getSnapshot().resources;
+    expect(pages.get("old")?.state.page?.counts.total).toBe(0);
+    expect(pages.get("new")?.state.page?.counts.total).toBe(1);
+    expect(pages.get("directory-index")?.state.page?.directories?.map((directory) => directory.counts.total)).toEqual([0, 1]);
+    expect(pages.get("selection")?.state.page?.selectionDirectory?.key).toBe(newDirectory);
+    for (const id of ["new", "selection"]) {
+      expect(pages.get(id)?.state.page?.entries[0]?.row).toMatchObject({ gitWorkingStateFetchedAt: 2,
+        linkedDirectories: [{ path: "/new", worktreePath: "/checkouts/new" }] });
+    }
+    for (let i = 0; i < children; i++) {
+      expect(pages.get(`tray-${i}`)?.state.page?.entries[0]?.placement).toEqual({ kind: "child", parent: ref(`parent-${i}`) });
+    }
+    const actualReads = [...calls.values()].reduce((sum, count) => sum + count, 0);
+    const expectedReads = demand.size + 2 + Number(proof !== "complete");
+    expect(actualReads, `${children} trays and ${children + 2} directories, ${remote ? "remote" : "local"}`).toBe(expectedReads);
+    expect(Object.fromEntries(calls)).toEqual(Object.fromEntries([...demand.keys()].map((id) => [id,
+      id === "new" || id === "selection" || (id === "tray-0" && proof !== "complete") ? 2 : 1])));
+    for (const { first, trigger } of dispatches) {
+      expect(trigger).toBe(first ? "navigation/threadDirectories/updated" : "navigation/threadGitWorkingState/updated");
+    }
+  } finally {
+    for (const { release } of pending) release();
+    queries.dispose();
+  }
+}
+
+it.each([[4, false], [12, false], [12, true]] as const)("keeps dispatched unaffected pages during a directory move with %i trays (remote: %s)",
+  async (size, remote) => {
+    await checkDirectoryMoveWithWorkingState(size, remote, "complete");
+});
+
+it("repeats a directory-move read only when the new page can contain a changed working state", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 4, max: 16 }), fc.boolean(), fc.constantFrom("complete", "partial", "truncated"),
+    checkDirectoryMoveWithWorkingState), { numRuns: 24 });
+});
 
 it("publishes one loading snapshot when a pin refresh queues the admitted directory sections", async () => {
   await fc.assert(fc.asyncProperty(fc.constantFrom(6, 12), async (size) => {
@@ -237,6 +366,182 @@ it("restores saved rows after metadata fences the opening read", async () => {
 
 it("keeps a second row when the one-row opening page is invalidated before delivery", async () => {
   await interruptedResume(1, 1, 0);
+});
+
+const checkoutDirectoryRequest: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", inventory: "viewer",
+  query: { kind: "directory", directoryKey: "project" } };
+
+function checkoutPage(generation: string, start: number, count: number, total: number): NavigationQueryPage {
+  const end = Math.min(total, start + count);
+  const entries = Array.from({ length: end - start }, (_, offset) => {
+    const index = start + offset;
+    const id = `thread-${index}`;
+    const row: NavigationRow = { id, source: "codex", ref: { backend: "codex", threadId: id },
+      title: id, titleSource: "explicit", rowRevision: generation, projectKey: `/checkout/${index}`, linkedDirectories: [],
+      inbox: { inInbox: false }, ordinaryChildCount: 0, nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" };
+    return { row, placement: { kind: "root" as const }, orderKey: id };
+  });
+  return { protocol: 2, queryKey: "project", generation, ownerEpoch: "owner", countsRevision: generation,
+    counts: { total, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, entries,
+    rangeStart: start, complete: end === total, nextCursor: end < total ? String(end) : undefined };
+}
+
+const directoryChange: AgentEvent = { backend: "codex", notification: { method: "navigation/threadDirectories/updated",
+  params: { reason: "selected-thread", threadIds: ["thread-0"] } } };
+const workingStateChange = (index: number): AgentEvent => ({ backend: "codex", notification: {
+  method: "navigation/threadGitWorkingState/updated",
+  params: { worktreePath: `/checkout/${index}`, fetchedAt: 1, gitWorkingState: null },
+} });
+
+async function checkExpiredFencedRefresh(visibleRows: number, firstPageRows: number) {
+  const cursorDispatched = deferred<void>();
+  const expireCursor = deferred<void>();
+  let generation = "initial";
+  const read = vi.fn(async (sent: NavigationQueryRequest) => {
+    if (generation === "overtaken" && sent.cursor) {
+      cursorDispatched.resolve();
+      await expireCursor.promise;
+      generation = "recovered";
+      throw new Error("[navigation_cursor_expired] Navigation cursor expired");
+    }
+    return checkoutPage(generation, 0, generation === "overtaken" ? firstPageRows : visibleRows, visibleRows);
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  try {
+    queries.setDemand(new Map([["project", checkoutDirectoryRequest]]));
+    await queries.refresh();
+    read.mockClear();
+    generation = "overtaken";
+    queries.invalidate(undefined, undefined, directoryChange);
+    const refreshed = queries.refresh(undefined, undefined, true);
+    await cursorDispatched.promise;
+    // A path beyond the first page cannot be excluded when the cursor fails.
+    queries.invalidate(undefined, undefined, workingStateChange(visibleRows - 1));
+    expireCursor.resolve();
+    await refreshed;
+    expect(queries.getSnapshot().resources.get("project")?.state).toMatchObject({
+      stale: false, error: undefined, rebaselineRequired: false, page: { generation: "recovered", complete: true },
+    });
+    expect(read.mock.calls.map(([sent]) => sent.cursor)).toEqual([undefined, String(firstPageRows), undefined]);
+  } finally { expireCursor.resolve(); queries.dispose(); }
+}
+
+it("replaces a fenced two-row refresh when its cursor expires before the second row", async () => {
+  await checkExpiredFencedRefresh(2, 1);
+});
+
+it("recovers the displayed range when a working-state notice overtakes an expired refresh cursor", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 20 }), fc.nat(100), async (visible, split) => {
+    await checkExpiredFencedRefresh(visible, 1 + split % (visible - 1));
+  }), { numRuns: 20 });
+});
+
+async function checkFencedSavedDepth(savedRows: number, matchingRow: number, noticePage: number, oversized = false) {
+  const dispatched = deferred<void>();
+  const delivery = deferred<void>();
+  let opening = 0;
+  const read = vi.fn(async (sent: NavigationQueryRequest) => {
+    if (!sent.cursor) opening++;
+    const start = Number(sent.cursor ?? 0);
+    const page = checkoutPage(opening === 1 ? "overtaken" : "recovered", start, 1, savedRows);
+    if (opening === 1 && start === noticePage) {
+      dispatched.resolve();
+      await delivery.promise;
+      if (oversized) {
+        oversized = false;
+        page.entries[0]!.row.title = "x".repeat(NAVIGATION_QUERY_MAX_RESULT_BYTES);
+      }
+    }
+    return page;
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined,
+    { loadedRowsByQuery: { [navigationResumeQueryKey(checkoutDirectoryRequest)]: savedRows } });
+  try {
+    queries.setDemand(new Map([["project", checkoutDirectoryRequest]]));
+    queries.invalidate(undefined, undefined, directoryChange);
+    const refreshed = queries.refresh(undefined, undefined, true);
+    await dispatched.promise;
+    queries.invalidate(undefined, undefined, workingStateChange(matchingRow));
+    delivery.resolve();
+    await refreshed;
+    const page = queries.getSnapshot().resources.get("project")?.state.page;
+    // An overtaken generation owes no more paid continuations after the notice.
+    // Reads already issued keep their place in the same eight-read budget.
+    const expected = Math.min(savedRows, 9 - noticePage);
+    const cursors = read.mock.calls.map(([sent]) => sent.cursor);
+    expect(page?.generation).toBe("recovered");
+    expect(page?.entries.map(({ row }) => row.id)).toEqual(Array.from({ length: expected }, (_, i) => `thread-${i}`));
+    expect(cursors.slice(1, cursors.lastIndexOf(undefined))).toEqual(Array.from({ length: noticePage }, (_, i) => String(i + 1)));
+    expect(cursors.filter(Boolean)).toHaveLength(noticePage + expected - 1);
+  } finally { delivery.resolve(); queries.dispose(); }
+}
+
+it("leaves all eight saved-depth continuations for the replacement after a first-page match", async () => {
+  await checkFencedSavedDepth(9, 0, 0);
+});
+
+it("restores nine saved rows when the opening notice refers to a checkout on page two", async () => {
+  await checkFencedSavedDepth(9, 1, 0);
+});
+
+it("reserves the next paid attempt when a fenced continuation exceeds the page limit", async () => {
+  await checkFencedSavedDepth(9, 2, 1, true);
+});
+
+it("preserves the remaining saved-depth budget for any matching row and notice timing", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 9 }), fc.nat(8), fc.nat(8), async (saved, match, notice) => {
+    await checkFencedSavedDepth(saved, match % saved, notice % saved);
+  }), { numRuns: 30, examples: [[9, 1, 0], [8, 5, 2], [9, 0, 1]] });
+});
+
+async function checkOwnerProofFirstPaint(firstRows: number, extraRows: number) {
+  const savedRows = firstRows + extraRows;
+  const target = { scope: "remote", instanceId: "peer" } as const;
+  const request: NavigationQueryRequest = { ...checkoutDirectoryRequest, inventory: "owner", federationTarget: target };
+  const dispatched = deferred<void>();
+  const delivery = deferred<void>();
+  const continuationDispatched = deferred<void>();
+  const continuationDelivery = deferred<void>();
+  const workingStatePaths = Array.from({ length: savedRows }, (_, i) => `/checkout/${i}`);
+  const read = vi.fn(async (sent: NavigationQueryRequest) => {
+    if (!sent.cursor) {
+      dispatched.resolve();
+      await delivery.promise;
+    } else if (Number(sent.cursor) === firstRows) {
+      continuationDispatched.resolve();
+      await continuationDelivery.promise;
+    }
+    return expandNavigationRemoteOwner({ ...checkoutPage("current", Number(sent.cursor ?? 0), sent.cursor ? 1 : firstRows, savedRows),
+      remoteOwner: { instanceId: target.instanceId, instanceLabel: "Peer" },
+      metadataDependencies: { version: 1, threadKeys: [], prKeys: [], workingStatePaths } });
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined,
+    { loadedRowsByQuery: { [navigationResumeQueryKey(request)]: savedRows } });
+  try {
+    queries.setDemand(new Map([["project", request]]));
+    queries.invalidate(undefined, [target], { ...directoryChange, federationTarget: target });
+    const refreshed = queries.refresh(undefined, [target], true);
+    await dispatched.promise;
+    queries.invalidate(undefined, [target], { ...workingStateChange(savedRows), federationTarget: target });
+    delivery.resolve();
+    await continuationDispatched.promise;
+    // An owner-certified opening page is displayable before optional depth arrives.
+    const visible = queries.getSnapshot().resources.get("project");
+    expect(visible?.state.page?.entries.map(({ row }) => row.id)).toEqual(Array.from({ length: firstRows }, (_, i) => `thread-${i}`));
+    expect(visible).toMatchObject({ loading: true, state: { stale: false } });
+    continuationDelivery.resolve();
+    await refreshed;
+    expect(read.mock.calls.map(([sent]) => sent.cursor)).toEqual([undefined, ...Array.from({ length: extraRows }, (_, i) => String(firstRows + i))]);
+    expect(queries.getSnapshot().resources.get("project")?.state.page?.entries).toHaveLength(savedRows);
+  } finally { delivery.resolve(); continuationDelivery.resolve(); queries.dispose(); }
+}
+
+it("publishes an owner-certified first row before the saved-depth continuation responds", async () => {
+  await checkOwnerProofFirstPaint(1, 1);
+});
+
+it("does not hold first paint for optional continuation after a disjoint owner proof", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 6 }), fc.integer({ min: 1, max: 8 }), checkOwnerProofFirstPaint), { numRuns: 20 });
 });
 
 it("shares one continuation budget across metadata replacements", async () => {

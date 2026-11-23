@@ -123,13 +123,16 @@ describe("LineAdapter", () => {
 
   it("rejects unsigned webhook bodies before JSON parsing", async () => {
     const listener = vi.fn();
+    const rejected = vi.fn();
     const adapter = new LineAdapter({
       listenPort: 0,
       api: createApi(),
       callbackHandleStore: createCallbackStore(),
       config: createConfig(),
+      now: () => 1_000,
     });
     adapters.push(adapter);
+    adapter.onInboundRejected(rejected);
     await adapter.start(listener);
 
     const response = await fetch(webhookUrl(adapter), {
@@ -140,6 +143,11 @@ describe("LineAdapter", () => {
 
     expect(response.status).toBe(401);
     expect(listener).not.toHaveBeenCalled();
+    expect(rejected.mock.calls).toEqual([[{
+      kind: "validation",
+      reason: "webhook-authentication",
+      receivedAt: 1_000,
+    }]]);
   });
 
   it("starts the webhook listener with only a channel secret", async () => {

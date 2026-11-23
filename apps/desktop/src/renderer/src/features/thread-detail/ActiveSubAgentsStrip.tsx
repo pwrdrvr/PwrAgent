@@ -1,9 +1,10 @@
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import {
   hasStoppableSubAgentRun,
   isCodexNativeSubAgent,
   isDecisionBatchSubAgent,
 } from "@pwragent/shared/subagent-kind";
+import { taskMonitorDisplayTitle } from "@pwragent/shared/task-monitor-display-title";
 import {
   type NavigationThreadSummary,
   type ThreadSubAgentSummary,
@@ -73,6 +74,7 @@ export function ActiveSubAgentsStrip(props: {
   const [dismissal, setDismissal] = useState<{ threadKey: string; phase: "saving" | "failed" }>();
   const dismissalPhase = dismissal?.threadKey === threadKey ? dismissal?.phase : undefined;
   const [stoppingIds, setStoppingIds] = useState<Set<string>>(() => new Set());
+  const descriptionPrefix = useId();
 
   // The owner's projection already drops cards an earlier build wrote for
   // decision batches (they have their own strip); the raw history does not.
@@ -251,16 +253,20 @@ export function ActiveSubAgentsStrip(props: {
       ) : null}
       {expanded ? (
         <ul className="live-strip__list">
-          {visible.map((subAgent) => {
+          {visible.map((subAgent, index) => {
             const failedRow = isFailedSubAgent(subAgent);
             const blockedRow = isBlockedSubAgent(subAgent);
             const stopping = stoppingIds.has(subAgent.monitorId);
             // A Codex worker goes by the name the rail and sidebar show; its
             // task is a placeholder unless Codex titled the thread, and the
             // placeholder carries the id the name falls back to.
+            const monitorTitle = taskMonitorDisplayTitle(subAgent);
             const label = (isCodexNativeSubAgent(subAgent)
               ? subAgent.agentName ?? subAgent.task
-              : subAgent.task) || subAgent.monitorId;
+              : monitorTitle ?? subAgent.task) || subAgent.monitorId;
+            const taskPreview = monitorTitle ? subAgent.task.trim() : "";
+            const taskContext = taskPreview && taskPreview !== label ? taskPreview : undefined;
+            const descriptionId = taskContext ? `${descriptionPrefix}-${index}` : undefined;
             const canStop =
               (subAgent.status === "pending"
                 || subAgent.status === "running"
@@ -285,7 +291,7 @@ export function ActiveSubAgentsStrip(props: {
                   }
                   ref={failedRow || blockedRow ? undefined : statusPulseRef}
                 />
-                <span className="live-strip__item-text" title={label}>
+                <span className="live-strip__item-text tooltip-target" data-tooltip={taskContext ?? label}>
                   {label}
                 </span>
                 {/* Never color alone: the row states its state in words, and a
@@ -311,10 +317,13 @@ export function ActiveSubAgentsStrip(props: {
                     state text slid right to the edge while every neighbour's
                     stopped short — the right rail stopped being a column. */}
                 <span className="live-strip__item-slot">
+                  {descriptionId ? <span id={descriptionId} hidden>{taskContext}</span> : null}
                   {failedRow && canOfferDismiss ? (
                     <button
                       aria-label={`Dismiss failed sub-agent: ${label}`}
-                      className="live-strip__item-action"
+                      aria-describedby={descriptionId}
+                      className="live-strip__item-action tooltip-target"
+                      data-tooltip={taskContext}
                       disabled={!dismiss || dismissalPhase === "saving"}
                       type="button"
                       onClick={() => void dismissFailures([subAgent])}
@@ -324,7 +333,9 @@ export function ActiveSubAgentsStrip(props: {
                   ) : canStop ? (
                     <button
                       aria-label={`Stop sub-agent: ${label}`}
-                      className="live-strip__item-action live-strip__item-action--danger"
+                      aria-describedby={descriptionId}
+                      className="live-strip__item-action live-strip__item-action--danger tooltip-target"
+                      data-tooltip={taskContext}
                       disabled={stopping}
                       type="button"
                       onClick={() => void stopSubAgent(subAgent)}

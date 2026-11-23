@@ -97,18 +97,19 @@ test("Troubleshooting persists the Chromium trace opt-in independently of Start 
     await expect(slowburn).toBeChecked();
     // Exercise the shared interval fallback alongside the live main-process
     // sampler, debugger, trace publication and capture notice.
+    // Every other process reads idle: the main process samples the same
+    // metrics, and on a busy runner its real CPU crosses Slow burn's 15%,
+    // captures first, and its notice covers the renderer's.
     await app.electronApp.evaluate(({ app: electronApp, BrowserWindow }) => {
       const rendererPid = BrowserWindow.getAllWindows()[0].webContents.getOSProcessId();
       const readMetrics = electronApp.getAppMetrics.bind(electronApp);
-      electronApp.getAppMetrics = () => readMetrics().map((metric) => metric.pid === rendererPid
-        ? {
-          ...metric,
-          cpu: {
-            percentCPUUsage: 95,
-            idleWakeupsPerSecond: 0,
-          },
-        }
-        : metric);
+      electronApp.getAppMetrics = () => readMetrics().map((metric) => ({
+        ...metric,
+        cpu: {
+          percentCPUUsage: metric.pid === rendererPid ? 95 : 0,
+          idleWakeupsPerSecond: 0,
+        },
+      }));
     });
     await pane.getByRole("button", { name: "Start Capture (Immediate)", exact: true }).click();
     const rendererNotice = page.getByText("Renderer CPU profile captured", { exact: true });
