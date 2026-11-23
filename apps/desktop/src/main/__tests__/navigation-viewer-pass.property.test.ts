@@ -15,6 +15,8 @@ import {
 import type { AppServerListThreadsResponse } from "@pwragent/shared/contracts/normalized-app-server";
 import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import { type ProjectForgeAutomation } from "@pwragent/shared/project-forge-automation";
+import { resolveGitExecutable } from "../app-server/git-executable";
+import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
@@ -655,6 +657,41 @@ it("gates a PR with a catalog that changes during the thread listing", async () 
   } finally {
     finish();
     db.close();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+
+it.each(["absent", "unrelated"])("skips listing threads for a standalone PR with an %s catalog under installed Git", async (catalog) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-no-hold-"));
+  const restore = isolateProcessGitEnvironment();
+  const git = (...args: string[]) => execFileSync("git", ["-C", cwd, ...args], {
+    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+  try {
+    git("init", "-b", "standalone");
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "standalone");
+    if (catalog === "unrelated") {
+      const head = git("rev-parse", "HEAD");
+      await writeFile(path.join(cwd, ".git", "gh-stack"), JSON.stringify({
+        schemaVersion: 1, repository: "github.com:fixture/stack",
+        stacks: [{ trunk: { branch: "main", head },
+          branches: [{ branch: "separate-layer", head, base: head, pullRequest: { number: 1 } }] }],
+      }));
+    }
+    process.env.PWRAGENT_GIT_PATH = await resolveGitExecutable();
+    resetAppServerServiceForTests();
+    const service = initializeDesktopAppServerService();
+    vi.spyOn(service as unknown as { prStackDirectories: () => string[] }, "prStackDirectories").mockReturnValue([cwd]);
+    const list = vi.spyOn(service, "listThreads").mockRejectedValue(new Error("Thread listing is unavailable"));
+    const pr: PrSummary = {
+      number: 2, provider: "github.com", org: "fixture", repo: "stack", state: "passing",
+      lifecycleState: "open", url: "https://github.com/fixture/stack/pull/2", headRefName: "standalone",
+    };
+    expect(await service["prStackHoldEvidence"](pr)).toBeUndefined();
+    expect(list).not.toHaveBeenCalled();
+  } finally {
+    restore();
     await rm(cwd, { recursive: true, force: true });
   }
 });

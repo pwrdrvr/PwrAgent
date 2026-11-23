@@ -1,4 +1,4 @@
-import { constants } from "node:fs";
+import { constants, type BigIntStats } from "node:fs";
 import { createHash } from "node:crypto";
 import { lstat, open, realpath } from "node:fs/promises";
 import path from "node:path";
@@ -11,7 +11,7 @@ import {
 } from "@pwragent/shared/stacks/stack-status";
 import { resolveCheckState } from "@pwragent/shared/pull-request-rollup";
 import { stackAutomationGates } from "@pwragent/shared/stacks/stack-automation";
-import { PR_METADATA_PRIORITY, runPrMetadataGit, type PrMetadataDemand } from "../pr-status/pr-metadata-process";
+import { PR_METADATA_PRIORITY, runPrMetadataFileProbe, runPrMetadataGit, type PrMetadataDemand } from "../pr-status/pr-metadata-process";
 import { createStackCheckoutHints, STACK_CHECKOUT_SCAN_LIMITS } from "../git-info/stack-checkout-store";
 
 type CatalogRead = GhStackCatalogRead | { status: "missing" | "unavailable" };
@@ -19,27 +19,41 @@ type CatalogRead = GhStackCatalogRead | { status: "missing" | "unavailable" };
 const CATALOG_BYTES = 1024 * 1024;
 const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
-export async function readGhStackCatalog(commonDir: string): Promise<CatalogRead> {
+type CatalogObservation = { catalog: CatalogRead; version?: string };
+
+function catalogVersion(info: BigIntStats): string {
+  return [info.dev, info.ino, info.mode, info.size, info.mtimeNs, info.ctimeNs].join(":");
+}
+
+async function observeCatalog(commonDir: string): Promise<CatalogObservation> {
   try {
     const file = await open(path.join(commonDir, "gh-stack"), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
-      const stat = await file.stat();
-      if (!stat.isFile() || stat.size > CATALOG_BYTES) return { status: "catalog_invalid" };
-      const bytes = Buffer.alloc(stat.size + 1);
+      const stat = await file.stat({ bigint: true });
+      if (!stat.isFile() || stat.size > CATALOG_BYTES) return { catalog: { status: "catalog_invalid" } };
+      const bytes = Buffer.alloc(Number(stat.size) + 1);
       const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
-      if (bytesRead !== stat.size) return { status: "catalog_invalid" };
-      return parseGhStackCatalog(bytes.toString("utf8", 0, bytesRead));
+      const version = catalogVersion(stat);
+      if (bytesRead !== Number(stat.size) || version !== catalogVersion(await file.stat({ bigint: true }))) {
+        return { catalog: { status: "catalog_invalid" } };
+      }
+      return { catalog: parseGhStackCatalog(bytes.toString("utf8", 0, bytesRead)), version };
     } finally {
       await file.close();
     }
   } catch (error) {
-    return { status: (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "unavailable" };
+    return { catalog: { status: (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "unavailable" } };
   }
+}
+
+export async function readGhStackCatalog(commonDir: string): Promise<CatalogRead> {
+  return (await observeCatalog(commonDir)).catalog;
 }
 
 async function git(cwd: string, args: string[], demand?: PrMetadataDemand, checkout = false): Promise<string> {
   return (await runPrMetadataGit(cwd, args, {
     timeout: 3_000, signal: demand?.signal, purpose: checkout ? "stack-checkout" : "stack-status",
+    ownProcessTree: process.platform === "win32" && demand?.signal !== undefined,
   }, demand)).stdout;
 }
 
@@ -70,10 +84,11 @@ async function locateCheckout(cwd: string, demand?: PrMetadataDemand): Promise<C
 
 /** Directory hints and live reads shared within one stack request. */
 export class StackReadObservation {
-  readonly hints: ReturnType<typeof createStackCheckoutHints>;
+  hints: ReturnType<typeof createStackCheckoutHints>;
   readonly inventoryDemand: PrMetadataDemand;
   private readonly checkouts = new Map<string, Promise<Checkout | undefined>>();
-  private readonly catalogs = new Map<string, Promise<CatalogRead>>();
+  private readonly checkoutVersions = new Map<string, string>();
+  private readonly catalogs = new Map<string, Promise<CatalogObservation>>();
 
   constructor(readonly demand: PrMetadataDemand = {}) {
     // A selected request can promote the explicit checkout without putting
@@ -95,25 +110,36 @@ export class StackReadObservation {
     return read;
   }
 
-  catalog(commonDir: string): Promise<CatalogRead> {
+  async catalog(commonDir: string): Promise<CatalogRead> {
     this.demand.signal?.throwIfAborted();
     let read = this.catalogs.get(commonDir);
     if (!read) {
-      read = readGhStackCatalog(commonDir);
+      read = observeCatalog(commonDir);
       this.catalogs.set(commonDir, read);
     }
-    return read;
+    return (await read).catalog;
   }
 
-  async checkoutsByClone(directories: readonly string[]): Promise<Checkout[]> {
-    const checkouts = await Promise.all([...new Set(directories)].map((cwd) => this.checkout(cwd)));
+  private async recordCheckout(cwd: string): Promise<Checkout | undefined> {
+    const before = await this.hints.checkoutIdentity(cwd);
+    const checkout = await this.checkout(cwd);
+    if (before && checkout?.root === before.root && checkout.commonDir === before.commonDir
+      && (await this.hints.checkoutIdentity(cwd))?.version === before.version) {
+      this.checkoutVersions.set(cwd, before.version);
+    }
+    return checkout;
+  }
+
+  async checkoutsByClone(directories: readonly string[], recordIdentity = false): Promise<Checkout[]> {
+    const checkouts = await Promise.all([...new Set(directories)]
+      .map((cwd) => recordIdentity ? this.recordCheckout(cwd) : this.checkout(cwd)));
     this.demand.signal?.throwIfAborted();
     const clones = new Map(checkouts.flatMap((entry) => entry ? [[entry.commonDir, entry] as const] : []));
     return [...clones.values()];
   }
 
-  async clones(directories: readonly string[]): Promise<Clone[]> {
-    const clones = await this.checkoutsByClone(directories);
+  async clones(directories: readonly string[], recordIdentity = false): Promise<Clone[]> {
+    const clones = await this.checkoutsByClone(directories, recordIdentity);
     const catalogs = await Promise.all(clones.map(async (clone) => ({
       ...clone, catalog: await this.catalog(clone.commonDir),
     })));
@@ -121,8 +147,26 @@ export class StackReadObservation {
     return catalogs;
   }
 
-  async presentCatalogs(directories: readonly string[]): Promise<CatalogRead[]> {
-    return (await this.clones(await this.hints.markerCandidates(directories))).map(({ catalog }) => catalog);
+  async presentCatalogs(directories: readonly string[], recordIdentity = false): Promise<CatalogRead[]> {
+    return (await this.clones(await this.hints.markerCandidates(directories), recordIdentity)).map(({ catalog }) => catalog);
+  }
+
+  async revalidateAfterListing(): Promise<void> {
+    // A provider listing can block. Reuse the preflight only when both its
+    // checkout relationship and the exact catalog file still match.
+    this.hints = createStackCheckoutHints(this.inventoryDemand);
+    const checkouts = [...this.checkouts.keys()].map(async (cwd) => {
+      const version = this.checkoutVersions.get(cwd);
+      if (!version || (await this.hints.checkoutIdentity(cwd))?.version !== version) this.checkouts.delete(cwd);
+    });
+    const catalogs = [...this.catalogs].map(async ([commonDir, read]) => {
+      const previous = (await read).version;
+      const current = previous && await runPrMetadataFileProbe(async () =>
+        catalogVersion(await lstat(path.join(commonDir, "gh-stack"), { bigint: true })), this.inventoryDemand);
+      if (!previous || previous !== current) this.catalogs.delete(commonDir);
+    });
+    await Promise.all([...checkouts, ...catalogs]);
+    this.demand.signal?.throwIfAborted();
   }
 }
 
