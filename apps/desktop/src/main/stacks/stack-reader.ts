@@ -11,8 +11,7 @@ import {
 } from "@pwragent/shared/stacks/stack-status";
 import { resolveCheckState } from "@pwragent/shared/pull-request-rollup";
 import { stackAutomationGates } from "@pwragent/shared/stacks/stack-automation";
-import { runGitCommand } from "../app-server/git-executable";
-import { PR_METADATA_PRIORITY, runPrMetadataProcess, type PrMetadataDemand } from "../pr-status/pr-metadata-process";
+import { PR_METADATA_PRIORITY, runPrMetadataGit, type PrMetadataDemand } from "../pr-status/pr-metadata-process";
 import { createStackCheckoutHints, STACK_CHECKOUT_SCAN_LIMITS } from "../git-info/stack-checkout-store";
 
 type CatalogRead = GhStackCatalogRead | { status: "missing" | "unavailable" };
@@ -39,11 +38,9 @@ export async function readGhStackCatalog(commonDir: string): Promise<CatalogRead
 }
 
 async function git(cwd: string, args: string[], demand?: PrMetadataDemand, checkout = false): Promise<string> {
-  return await runPrMetadataProcess(async () => {
-    const deadline = AbortSignal.timeout(3_000);
-    const signal = demand?.signal ? AbortSignal.any([demand.signal, deadline]) : deadline;
-    return (await runGitCommand(cwd, args, { signal, purpose: checkout ? "stack-checkout" : "stack-status" })).stdout;
-  }, demand);
+  return (await runPrMetadataGit(cwd, args, {
+    timeout: 3_000, signal: demand?.signal, purpose: checkout ? "stack-checkout" : "stack-status",
+  }, demand)).stdout;
 }
 
 type Checkout = { cwd: string; root: string; commonDir: string };
@@ -363,6 +360,24 @@ function possibleInferredLayers(threads: readonly StackThreadRow[], knownPrs: re
 }
 
 export class StackReader {
+  private readonly inventoryCheckouts = new Map<string, { version: string; checkout: Checkout }>();
+
+  private async readInventoryCheckout(cwd: string, observation: StackReadObservation): Promise<Checkout | undefined> {
+    const { hints, inventoryDemand } = observation;
+    const before = await hints.checkoutIdentity(cwd);
+    const cached = this.inventoryCheckouts.get(cwd);
+    if (before && cached?.version === before.version) return cached.checkout;
+    this.inventoryCheckouts.delete(cwd);
+
+    const checkout = await observation.checkout(cwd, inventoryDemand);
+    if (before && checkout?.root === before.root && checkout.commonDir === before.commonDir
+      && (await hints.checkoutIdentity(cwd))?.version === before.version) {
+      this.inventoryCheckouts.set(cwd, { version: before.version, checkout });
+      if (this.inventoryCheckouts.size > 2_048) this.inventoryCheckouts.delete(this.inventoryCheckouts.keys().next().value!);
+    }
+    return checkout;
+  }
+
   async read(threads: readonly StackThreadRow[], knownPrs: readonly PrSummary[], directories?: readonly string[],
     activity?: (threadKey: string) => Promise<{ held?: boolean; repair?: boolean }>,
     observation = new StackReadObservation(),
@@ -384,9 +399,13 @@ export class StackReader {
     }));
     const paths = !directories || wanted.size || eligible.size
       ? [...new Set(local.flatMap(threadDirectories))].sort() : [];
+    const hinted = new Set<string>();
     const scan = new IterableMapper(paths, async (cwd) => {
       const found = anchorPaths.has(cwd) ? undefined : await hints.possibleCommonDirs(cwd);
-      if (found) return [cwd, found] as const;
+      if (found) {
+        if (found.length) hinted.add(cwd);
+        return [cwd, found] as const;
+      }
       const checkout = await observation.checkout(cwd, inventoryDemand);
       return [cwd, checkout ? [checkout.commonDir] : []] as const;
     }, STACK_CHECKOUT_SCAN_LIMITS);
@@ -417,8 +436,12 @@ export class StackReader {
       if (!paths.some(participates)) continue;
       for (const cwd of paths) if (possible.get(cwd)?.length) admitted.add(cwd);
     }
-    const located = await Promise.all([...admitted].map((cwd) => observation.checkout(cwd, inventoryDemand)));
-    const checkouts = new Map([...anchors, ...located].flatMap((entry) => entry ? [[entry.cwd, entry] as const] : []));
+    const verify = new IterableMapper(admitted, async (cwd) => ({
+      checkout: !directories && hinted.has(cwd) ? await this.readInventoryCheckout(cwd, observation)
+        : await observation.checkout(cwd, inventoryDemand),
+    }), STACK_CHECKOUT_SCAN_LIMITS);
+    const checkouts = new Map(anchors.flatMap((entry) => entry ? [[entry.cwd, entry] as const] : []));
+    for await (const { checkout } of verify) if (checkout) checkouts.set(checkout.cwd, checkout);
     const cloneCheckouts = directories ? scopedClones : new Map([...checkouts.values()]
       .filter((checkout) => wanted.has(checkout.commonDir)).map((checkout) => [checkout.commonDir, checkout]));
     const cloneThreads = new Map<string, CloneThread[]>();

@@ -1,12 +1,14 @@
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
-import { readBoundedGitPointer } from "./private/directory-observation";
+import { createGitDirectoryObserver, readBoundedGitPointer } from "./private/directory-observation";
 import { hasGitDiscoveryOverrides } from "./private/directory-probe";
+import { getSelectedManagedGit } from "../git-command";
 import { gitCommandPreference } from "../git-runtime";
 import { runPrMetadataFileProbe, type PrMetadataDemand } from "../pr-status/pr-metadata-process";
 
 export const STACK_CHECKOUT_SCAN_LIMITS = { concurrency: 8, maxUnread: 8 };
+const observeInventoryCheckout = createGitDirectoryObserver({ navigation: true });
 
 async function status(file: string) {
   try {
@@ -131,6 +133,26 @@ export function createStackCheckoutHints(demand: PrMetadataDemand) {
   }
 
   return {
+    async checkoutIdentity(cwd: string) {
+      // Nonstandard discovery or runtime settings belong to Git. Do not
+      // transfer a confirmed inventory checkout across these environments.
+      const env = process.env;
+      if (useGit || gitCommandPreference(env) || hasGitDiscoveryOverrides() || Object.keys(env).some((key) =>
+        /^GIT_(?:CONFIG(?:_|$)|TEST_|NAMESPACE$|OBJECT_DIRECTORY$)/i.test(key))) return undefined;
+      const runtime = getSelectedManagedGit();
+      return await runPrMetadataFileProbe(async (signal) => {
+        const observed = await observeInventoryCheckout(cwd, undefined, signal);
+        if (!observed?.repository || !observed.checkoutRoot || !observed.commonDirectory) return undefined;
+        signal.throwIfAborted();
+        const commonDir = await realpath(observed.commonDirectory);
+        return {
+          root: observed.checkoutRoot,
+          commonDir,
+          version: JSON.stringify([observed.relationship, observed.head, commonDir, runtime,
+            env.HOME, env.USERPROFILE, env.XDG_CONFIG_HOME, env.SUDO_UID]),
+        };
+      }, demand);
+    },
     possibleCommonDirs,
     hasMarker,
     async markerCandidates(directories: readonly string[], marker = "gh-stack"): Promise<string[]> {

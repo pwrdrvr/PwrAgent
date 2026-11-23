@@ -5,6 +5,7 @@ import path from "node:path";
 import fc from "fast-check";
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { describe, expect, it, vi } from "vitest";
+import * as gitExecutable from "../app-server/git-executable";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 import { StackOperationsService } from "../stacks/stack-operations-service";
@@ -102,6 +103,54 @@ describe("stack checkout demand", () => {
       expect(secondKey).toBeDefined();
       expect(secondKey).not.toBe(firstKey);
     } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses verified inventory checkouts until their physical relationship changes", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-warm-inventory-"));
+    const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    try {
+      const primary = path.join(sandbox, "primary");
+      const sibling = path.join(sandbox, "sibling");
+      const other = path.join(sandbox, "other");
+      const alias = path.join(sandbox, "alias");
+      await Promise.all([mkdir(primary), mkdir(other)]);
+      initialize(primary);
+      initialize(other);
+      git(primary, "worktree", "add", "-b", "sibling", sibling);
+      await Promise.all([writeCatalog(primary, "primary"), writeCatalog(other, "other")]);
+      await symlink(sibling, alias, "junction");
+      const reader = new StackReader();
+      const checkoutStarts = () => start.mock.calls.filter(([, args]) => args[0] === "rev-parse").map(([cwd]) => cwd);
+      const rows = [row(primary, "primary"), row(alias, "alias")];
+      await fc.assert(fc.asyncProperty(fc.uniqueArray(fc.nat({ max: 15 }), { minLength: 2, maxLength: 8 }), async (inventory) => {
+        const subdirectories = await Promise.all(inventory.map(async (index) => {
+          const cwd = path.join(sibling, "fixture-" + index);
+          await mkdir(cwd, { recursive: true });
+          return row(cwd, "fixture-" + index);
+        }));
+        const coldReader = new StackReader();
+        const cold = await coldReader.read([...rows, ...subdirectories], []);
+        start.mockClear();
+        expect(await coldReader.read([...rows, ...subdirectories], [])).toEqual(cold);
+        expect(checkoutStarts()).toEqual([]);
+      }), { numRuns: 6 });
+      const scoped = await reader.read([row(alias, "alias")], [], [alias]);
+      expect(scoped.stacks[0]?.repository).toBe("github.com:fixture/primary");
+      await reader.read(rows, []);
+      await rm(alias);
+      await symlink(other, alias, "junction");
+      start.mockClear();
+      const rebound = await reader.read(rows, []);
+      expect(checkoutStarts()).toEqual([alias]);
+      expect(rebound.stacks.find((stack) => stack.repository === "github.com:fixture/other")?.layers[0]?.thread?.key)
+        .toBe("codex:alias");
+      start.mockClear();
+      expect((await reader.read([row(alias, "alias")], [], [alias])).stacks[0]?.repository).toBe("github.com:fixture/other");
+      expect(checkoutStarts()).toEqual([alias]);
+    } finally {
+      start.mockRestore();
       await rm(sandbox, { recursive: true, force: true });
     }
   });
@@ -266,6 +315,21 @@ describe("stack checkout demand", () => {
       expect(start).not.toHaveBeenCalled();
     } finally {
       start.mockRestore();
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the subprocess timeout separate from the request signal", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-subprocess-timeout-"));
+    const run = vi.spyOn(gitExecutable, "runGitCommand");
+    try {
+      initialize(sandbox);
+      const { signal } = new AbortController();
+      await expect(readStackClones([sandbox], { signal })).resolves.toHaveLength(1);
+      expect(run.mock.calls[0]?.[2]).toMatchObject({ timeout: 3_000, purpose: "stack-checkout" });
+      expect(run.mock.calls[0]?.[2]?.signal).toBe(signal);
+    } finally {
+      run.mockRestore();
       await rm(sandbox, { recursive: true, force: true });
     }
   });
