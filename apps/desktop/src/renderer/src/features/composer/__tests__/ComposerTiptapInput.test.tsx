@@ -1711,7 +1711,12 @@ describe("ComposerTiptapInput", () => {
   // Formatting and transcript-copy tests cover the native clipboard path.
   it.each([
     { name: "prose", htmlCode: "", textCode: "", codeBlocks: 0 },
-    { name: "prose and an HTML code block", htmlCode: "<pre><code>return 1;</code></pre>", textCode: "\n```\nreturn 1;\n```", codeBlocks: 1 },
+    {
+      name: "prose and an HTML code block",
+      htmlCode: '<pre><code class="language-ts">return 1;</code></pre>',
+      textCode: "\n```ts\nreturn 1;\n```",
+      codeBlocks: 1,
+    },
     { name: "prose and a plain-text-only fence", htmlCode: "", textCode: "\n\n```ts\nreturn 1;\n```", codeBlocks: 1 },
   ])("preserves paragraph separators when pasting $name", async ({
     htmlCode, textCode, codeBlocks,
