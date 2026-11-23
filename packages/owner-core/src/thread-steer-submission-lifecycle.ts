@@ -27,7 +27,8 @@ export type PreparedCodexSteerPorts = Pick<PreparedCodexSteer, "submit">
 export interface ThreadSteerSubmissionHost {
   assertUnlocked(request: SteerTurnRequest): Promise<void>;
   isRestartGateClosed(): boolean;
-  queue(request: SteerTurnRequest, origin: AppServerThreadMessageOrigin, queueOrigin: "messaging" | "manual"):
+  isReviewAutoFixActive?(request: SteerTurnRequest): boolean;
+  queue(request: SteerTurnRequest, origin: AppServerThreadMessageOrigin | undefined, queueOrigin: "messaging" | "manual"):
     Promise<{ id: string; createdAt: number }>;
   reviewMode(request: SteerTurnRequest): "native" | "managed" | undefined;
   prepareInput(request: SteerTurnRequest): Promise<AppServerTurnInputItem[]>;
@@ -55,11 +56,11 @@ export class ThreadSteerSubmissionLifecycle {
       throw new Error("This backend cannot interrupt a running response. Steer or queue the message instead.");
     }
     await this.host.assertUnlocked(request);
-    // Automatic messages wait behind a quiet restart. Its own steer and the
-    // operator's steer pass through the gate.
-    if (this.host.isRestartGateClosed?.() && origin && origin.systemReason !== "app-restart") {
-      if (!this.host.queue) throw new Error("This host cannot queue steering behind a restart");
-      const entry = await this.host.queue(request, origin, origin.kind === "messaging" ? "messaging" : "manual");
+    // The restart notice itself must still be able to reach the running turn.
+    const restarting = this.host.isRestartGateClosed?.() && origin;
+    if (origin?.systemReason !== "app-restart" && (restarting || this.host.isReviewAutoFixActive?.(request))) {
+      if (!this.host.queue) throw new Error("This host cannot defer steering");
+      const entry = await this.host.queue(request, origin, origin?.kind === "messaging" ? "messaging" : "manual");
       return { response: { backend: request.backend, threadId: request.threadId, turnId: request.expectedTurnId,
         disposition: "queued", queueEntryId: entry.id, queueEntryCreatedAt: entry.createdAt } };
     }
