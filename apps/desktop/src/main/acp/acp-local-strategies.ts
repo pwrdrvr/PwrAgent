@@ -5,7 +5,7 @@ import {
   type AcpAgentStrategy,
 } from "@pwrdrvr/agent-acp/strategies";
 
-const antigravity: AcpAgentStrategy = {
+export const ANTIGRAVITY_ACP_STRATEGY: AcpAgentStrategy = {
   id: "antigravity",
   backendId: "acp:antigravity",
   displayName: "Antigravity CLI",
@@ -35,5 +35,5 @@ const antigravity: AcpAgentStrategy = {
 
 export const ACP_LOCAL_AGENT_STRATEGIES: readonly AcpAgentStrategy[] = [
   ...BUILT_IN_ACP_STRATEGIES,
-  antigravity,
+  ANTIGRAVITY_ACP_STRATEGY,
 ];

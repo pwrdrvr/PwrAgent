@@ -28,7 +28,14 @@ import type { AcpBackendId } from "@pwragent/shared/contracts/normalized-app-ser
 import type { DesktopUpdateChannel } from "@pwragent/shared/contracts/settings";
 import { resolveActiveAcpInstance } from "./acp-instance-resolver.js";
 import { acpAgentCapabilitiesForRegistryId } from "./acp-agent-capabilities.js";
-import { ACP_LOCAL_AGENT_STRATEGIES } from "./acp-local-strategies.js";
+import { ACP_LOCAL_AGENT_STRATEGIES, ANTIGRAVITY_ACP_STRATEGY } from "./acp-local-strategies.js";
+import {
+  isManagedAntigravityCommand,
+  MANAGED_ANTIGRAVITY_ENV,
+  readManagedAntigravityStatus,
+  resolveAntigravityCommandPath,
+  type ManagedAntigravityRuntime,
+} from "./antigravity-managed-runtime.js";
 import { resolveBundledGrokCommand } from "./acp-bundled-agent.js";
 import {
   ensureManagedGrokRuntime,
@@ -68,7 +75,7 @@ function strategyById(id: string): AcpAgentStrategy | undefined {
 }
 
 export type AcpInstanceDiscovery = {
-  /** Every installed instance, in candidate order (override → PATH → fallback). */
+  /** Every installed instance, in candidate order (override → managed → PATH → fallback). */
   instances: AcpAgentInstance[];
   /** Detected command collisions that are intentionally excluded. */
   incompatibleInstances?: AcpAgentInstance[];
@@ -114,6 +121,10 @@ export type DiscoverAcpAgentInstancesOptions = {
     enabled: boolean;
     requirePlatformSignature?: boolean;
   };
+  /** Include the locally installed Antigravity runtime without checking for updates. */
+  useManagedAntigravity?: boolean;
+  /** Injectable local status reader (tests). */
+  readManagedAntigravity?: typeof readManagedAntigravityStatus;
   /** Injectable managed-runtime resolver (tests). */
   resolveManagedGrokCommand?: (
     checkMode: ManagedGrokCheckMode,
@@ -148,26 +159,7 @@ export async function discoverAcpAgentInstances(
   options?: DiscoverAcpAgentInstancesOptions,
 ): Promise<Map<string, AcpInstanceDiscovery>> {
   const preferences = options?.preferences ?? {};
-  const strategies = strategiesForEnabledRegistryIds(
-    options?.enabledRegistryIds,
-    options?.fallbackRootDir,
-  );
-
-  const discover = options?.discover ?? discoverLocalAcpAgentInstances;
-  const [discoveredGroups, managedGrokCommand] = await Promise.all([
-    discover(kitDiscoveryOptions(options, strategies)),
-    resolveManagedGrokCommand(options, strategies),
-  ]);
-  const groups = await withPwrAgentGrok(
-    discoveredGroups,
-    strategies,
-    managedGrokCommand,
-    options?.bundledGrokCommand === undefined
-      ? resolveBundledGrokCommand()
-      : options.bundledGrokCommand,
-    options?.now?.() ?? Date.now(),
-    options,
-  );
+  const { groups } = await discoverAcpGroups(options);
 
   const byRegistryId = new Map<string, AcpInstanceDiscovery>();
   for (const group of groups) {
@@ -208,29 +200,8 @@ export async function discoverLocalAcpAgentRecords(
   options?: DiscoverAcpAgentInstancesOptions,
 ): Promise<AcpInstalledAgentRecord[]> {
   const preferences = options?.preferences ?? {};
-  const strategies = strategiesForEnabledRegistryIds(
-    options?.enabledRegistryIds,
-    options?.fallbackRootDir,
-  );
-
-  const discover = options?.discover ?? discoverLocalAcpAgentInstances;
-  const [discoveredGroups, managedGrokCommand] = await Promise.all([
-    discover(kitDiscoveryOptions(options, strategies)),
-    resolveManagedGrokCommand(options, strategies),
-  ]);
-  const now = options?.now?.() ?? Date.now();
-  const bundledGrokCommand =
-    options?.bundledGrokCommand === undefined
-      ? resolveBundledGrokCommand()
-      : options.bundledGrokCommand;
-  const groups = await withPwrAgentGrok(
-    discoveredGroups,
-    strategies,
-    managedGrokCommand,
-    bundledGrokCommand,
-    now,
-    options,
-  );
+  const { groups, managedGrokCommand, bundledGrokCommand, managedAntigravity, now } =
+    await discoverAcpGroups(options);
 
   const records: AcpInstalledAgentRecord[] = [];
   for (const group of groups) {
@@ -294,6 +265,11 @@ export async function discoverLocalAcpAgentRecords(
           )
           ? { GROK_INSTALLER: "pwragent" }
           : {}),
+        ...(group.strategyId === "antigravity"
+          && (active.command === managedAntigravity?.command
+            || await isManagedAntigravityCommand(active.command, { env: options?.env }))
+          ? MANAGED_ANTIGRAVITY_ENV
+          : {}),
       },
     });
     const registryAgent: AcpRegistryAgent = {
@@ -336,6 +312,81 @@ export async function discoverLocalAcpAgentRecords(
     });
   }
   return records;
+}
+
+async function discoverAcpGroups(options: DiscoverAcpAgentInstancesOptions | undefined) {
+  const strategies = strategiesForEnabledRegistryIds(options?.enabledRegistryIds, options?.fallbackRootDir);
+  const discover = options?.discover ?? discoverLocalAcpAgentInstances;
+  const [discoveredGroups, managedGrokCommand, managedAntigravity] = await Promise.all([
+    discover(kitDiscoveryOptions(options, strategies)),
+    resolveManagedGrokCommand(options, strategies),
+    resolveManagedAntigravity(options, strategies),
+  ]);
+  const now = options?.now?.() ?? Date.now();
+  const bundledGrokCommand = options?.bundledGrokCommand === undefined
+    ? resolveBundledGrokCommand()
+    : options.bundledGrokCommand;
+  const groups = await withPwrAgentGrok(discoveredGroups, strategies, managedGrokCommand, bundledGrokCommand, now, options);
+  if (managedAntigravity) await addManagedAntigravity(groups, managedAntigravity, now, options);
+  return { groups, managedGrokCommand, bundledGrokCommand, managedAntigravity, now };
+}
+
+async function resolveManagedAntigravity(
+  options: DiscoverAcpAgentInstancesOptions | undefined,
+  strategies: readonly AcpAgentStrategy[],
+): Promise<ManagedAntigravityRuntime | undefined> {
+  if (!options?.useManagedAntigravity || !strategies.some((strategy) => strategy.id === "antigravity")) {
+    return undefined;
+  }
+  // A missing or unreadable managed install must leave manual and PATH
+  // candidates available. The explicit status call can surface I/O errors.
+  const readStatus = options.readManagedAntigravity ?? readManagedAntigravityStatus;
+  const status = await readStatus().catch(() => undefined);
+  return status?.status === "installed" ? status.runtime : undefined;
+}
+
+async function addManagedAntigravity(
+  groups: DiscoveredAcpAgentGroup[],
+  runtime: ManagedAntigravityRuntime,
+  now: number,
+  options: DiscoverAcpAgentInstancesOptions | undefined,
+): Promise<void> {
+  const instance: AcpAgentInstance = { ...runtime, source: "fallback" };
+  const group = groups.find(({ strategyId }) => strategyId === "antigravity");
+  if (group) {
+    const environment = { env: options?.env };
+    const target = await resolveAntigravityCommandPath(runtime.command, environment);
+    const matchesRuntime = async ({ command }: { command: string }) =>
+      command === runtime.command
+      || (target !== undefined && await resolveAntigravityCommandPath(command, environment) === target);
+    // The kit reports the probe verdict under the path it tested. Reconcile
+    // aliases by actual executable identity before adding a managed entry.
+    const rejectedMatches = await Promise.all((group.rejectedInstances ?? []).map(matchesRuntime));
+    if (rejectedMatches.some(Boolean)) return;
+
+    const matches = await Promise.all(group.instances.map(matchesRuntime));
+    const aliases = group.instances.filter((_candidate, index) => matches[index]);
+    const pickedPath = options?.preferences?.antigravity?.selectedPath?.trim();
+    const managed = aliases.find(({ source }) => source === "override")
+      ?? aliases.find(({ command }) => command === pickedPath)
+      ?? aliases[0]
+      ?? instance;
+    const others = group.instances.filter((_candidate, index) => !matches[index]);
+    const firstNonOverride = others.findIndex(({ source }) => source !== "override");
+    others.splice(firstNonOverride === -1 ? others.length : firstNonOverride, 0, managed);
+    group.instances = others;
+    return;
+  }
+  const strategy = ANTIGRAVITY_ACP_STRATEGY;
+  groups.push({
+    strategyId: strategy.id,
+    backendId: strategy.backendId,
+    name: strategy.displayName,
+    args: [...strategy.spawn.args],
+    env: { ...strategy.spawn.env },
+    instances: [instance],
+    discoveredAt: now,
+  });
 }
 
 function mapRejectedInstances(
