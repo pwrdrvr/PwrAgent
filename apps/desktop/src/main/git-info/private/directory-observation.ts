@@ -23,6 +23,20 @@ export async function readBoundedGitPointer(target: string): Promise<string> {
   }
 }
 
+export function parseGitPathPointer(contents: string): string | undefined {
+  const value = contents.replace(/[\r\n]+$/, "");
+  return value && !/[\r\n\0]/.test(value) ? value : undefined;
+}
+
+export function parseGitDirPointer(contents: string): string | undefined {
+  return contents.startsWith("gitdir: ") ? parseGitPathPointer(contents.slice(8)) : undefined;
+}
+
+export function gitPointerTarget(parent: string, target: string): string {
+  // Let the filesystem resolve symlinks before interpreting "..".
+  return path.isAbsolute(target) ? target : parent + path.sep + target;
+}
+
 export type GitDirectoryObservation = {
   repository: boolean;
   relationship: string;
@@ -141,15 +155,19 @@ export function createGitDirectoryObserver(options: { navigation?: boolean } = {
     }
     onCheckoutBoundary?.(parent);
     const link = dotGit.directory ? "" : await pointer(dotGitPath, dotGit, signal);
-    const gitdirMatch = link.match(/^gitdir:\s*(.+?)\s*$/m);
-    if (!dotGit.directory && !gitdirMatch) return undefined;
-    const gitdir = gitdirMatch ? path.resolve(parent, gitdirMatch[1]) : dotGitPath;
-    const admin = await observeFile(gitdir);
+    const gitdirPointer = parseGitDirPointer(link);
+    if (!dotGit.directory && !gitdirPointer) return undefined;
+    const adminTarget = gitdirPointer ? gitPointerTarget(parent, gitdirPointer) : dotGitPath;
+    const admin = await observeFile(adminTarget);
     if (!admin?.directory) return undefined;
+    signal?.throwIfAborted();
+    const gitdir = gitdirPointer ? await realpath(adminTarget) : dotGitPath;
     const commonPath = path.join(gitdir, "commondir");
     const commonState = await observeFile(commonPath);
-    const common = (await pointer(commonPath, commonState, signal)).trim();
-    const commonDir = common ? path.resolve(gitdir, common) : gitdir;
+    const common = parseGitPathPointer(await pointer(commonPath, commonState, signal));
+    if (commonState && !common) return undefined;
+    signal?.throwIfAborted();
+    const commonDir = common ? await realpath(gitPointerTarget(adminTarget, common)) : gitdir;
     const commonInfo = await observeFile(commonDir);
     if (!commonInfo?.directory) return undefined;
     const configPath = path.join(commonDir, "config");
@@ -191,7 +209,7 @@ export function createGitDirectoryObserver(options: { navigation?: boolean } = {
       commonVersion: JSON.stringify([commonDir, commonInfo.signature, config?.signature]),
       relationship: JSON.stringify([
         resolved, directory.signature, dotGitPath, dotGit.signature, link,
-        gitdir, admin.signature, common, commonInfo.signature,
+        gitdir, admin.signature, common, commonState?.signature, commonInfo.signature,
         config?.signature, worktreeConfig?.signature, backlink?.signature,
       ]),
       head: JSON.stringify([head.signature, refs?.signature, commonRefs?.signature]),
