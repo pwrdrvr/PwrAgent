@@ -22,7 +22,7 @@ function box(top: number, height: number): DOMRect {
   return new DOMRect(0, top, 300, height);
 }
 
-function mountDock(directoryCount: number, selectedDirectory = 0) {
+function mountDock(directoryCount: number, selectedDirectory = 0, zoom = 1) {
   const fixture = buildLargeDirectoryFixture({
     directoryCount, unpinnedThreadsPerDirectory: 2, directoryThreadsCollapsed: false,
   });
@@ -40,25 +40,28 @@ function mountDock(directoryCount: number, selectedDirectory = 0) {
   };
   let offset = 0;
   const work = { row: 0, sticky: 0, selectors: 0, reserveLifts: 0 };
+  const viewportBox = (top: number, height: number) => box(top * zoom, height * zoom);
   const originalRect = Element.prototype.getBoundingClientRect;
   const geometry = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
-    if (this.matches(".sidebar__scroll-region, .directory-list")) return box(VIEW_TOP, VIEW_HEIGHT);
+    if (this.matches(".sidebar__scroll-region, .directory-list")) return viewportBox(VIEW_TOP, VIEW_HEIGHT);
     const directory = this.closest<HTMLElement>(".directory-row");
     const index = directoryOrder.get(directory?.dataset.directoryKey ?? "");
     if (index === undefined) return originalRect.call(this);
     const top = VIEW_TOP + index * PITCH - offset;
     const reserve = this.closest(".sidebar__scroll-region")?.classList.contains(RESERVE) ? 58 : 0;
+    if (this === directory) return viewportBox(top + 2, PITCH - 2);
     if (this.matches(".directory-row__header")) {
       work.sticky++;
-      return box(Math.min(Math.max(top + 2, VIEW_TOP + reserve), top + PITCH - 28), 28);
+      return viewportBox(Math.min(Math.max(top + 2, VIEW_TOP + reserve), top + PITCH - 28), 28);
     }
     if (this.matches(".directory-row__thread-divider")) {
       work.sticky++;
-      return box(Math.min(Math.max(top + 90, VIEW_TOP + 28 + reserve), top + PITCH - 26), 24);
+      return viewportBox(Math.min(Math.max(top + 90, VIEW_TOP + 28 + reserve), top + PITCH - 26), 24);
     }
+    if (this.matches(".directory-row__thread-divider-origin")) return viewportBox(top + 90, 0);
     if (this.matches(".thread-row") && this.parentElement?.getAttribute("data-thread-key") === selectedKey) {
       work.row++;
-      return box(top + ROW_TOP, ROW_HEIGHT);
+      return viewportBox(top + ROW_TOP, ROW_HEIGHT);
     }
     return originalRect.call(this);
   });
@@ -124,6 +127,10 @@ function mountDock(directoryCount: number, selectedDirectory = 0) {
   const region = view.container.querySelector<HTMLElement>(".sidebar__scroll-region")!;
   const lane = queryOne.call(region, ".directory-list") as HTMLElement;
   lane.style.overflowY = "auto";
+  Object.defineProperty(lane, "currentCSSZoom", { value: zoom });
+  const dividerStyle = document.createElement("style");
+  dividerStyle.textContent = ".directory-row__thread-divider { --directory-row-header-height: 28px; }";
+  document.head.append(dividerStyle);
   view.rerender(<Fixture metadata={0} />);
   expect(lane.querySelectorAll(".directory-row__thread-divider")).toHaveLength(directoryCount);
   function flush() {
@@ -162,6 +169,7 @@ function mountDock(directoryCount: number, selectedDirectory = 0) {
       selectors.mockRestore();
       singleSelectors.mockRestore();
       reserve.mockRestore();
+      dividerStyle.remove();
       expect(pendingAfterUnmount).toBe(0);
     },
   };
@@ -224,6 +232,44 @@ it.each([12, 24])("matches the sticky band through scroll frames and metadata co
       expect(fixture.work.selectors).toBe(0);
       expect(fixture.work.sticky).toBeLessThanOrEqual(2 * Math.ceil(Math.log2(count + 1)));
     }
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+it("keeps the top reserve in place while the same dock covers the selected row", () => {
+  const fixture = mountDock(12, 1);
+  const checkScroll = (offsets: number[]) => {
+    fixture.move(570);
+    expect(fixture.edge()).toBe("top");
+    fixture.reset();
+    for (const offset of offsets) {
+      fixture.move(offset);
+      expect(fixture.edge()).toBe("top");
+    }
+    expect(fixture.work.reserveLifts).toBe(0);
+  };
+  try {
+    checkScroll([571]); // A one-pixel scroll used to lift and reapply the reserve.
+    fc.assert(fc.property(
+      fc.array(fc.integer({ min: 570, max: 610 }), { minLength: 1, maxLength: 8 }),
+      checkScroll,
+    ), { numRuns: 25 });
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+it.each([0.85, 1.1])("keeps the sticky threshold in viewport coordinates at CSS zoom %s", (zoom) => {
+  const fixture = mountDock(12, 1, zoom);
+  try {
+    // The divider ends at y=152 in CSS pixels. The selected row ends at
+    // y=760 before scrolling. The row must show at least 39 viewport pixels.
+    const firstDockedOffset = Math.floor(608 - 39 / zoom) + 1;
+    fixture.move(firstDockedOffset);
+    expect(fixture.edge()).toBe("top");
+    fixture.move(firstDockedOffset - 1);
+    expect(fixture.edge()).toBeUndefined();
   } finally {
     fixture.cleanup();
   }

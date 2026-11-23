@@ -588,9 +588,13 @@ describe("Tangerine Terminal theme contract", () => {
     // header's measured height, opaque and as wide as the header so rows
     // never show beside it, and under the header so it slides beneath it
     // when its list scrolls out.
+    const directory = extractRuleBody(css, ".directory-row");
     const divider = extractRuleBody(css, ".directory-row__thread-divider");
+    // The divider and the dock both read the project's inset before the
+    // header's first measurement replaces this default.
+    expect(directory).toMatch(/--directory-row-header-height:\s*24px;/);
     expect(divider).toContain("position: sticky;");
-    expect(divider).toMatch(/\btop:\s*var\(--directory-row-header-height, 24px\);/);
+    expect(divider).toMatch(/\btop:\s*var\(--directory-row-header-height\);/);
     expect(divider).toContain("background: var(--bg-sidebar);");
     expect(divider).toMatch(/\bmargin-inline:\s*-8px;/);
     expect(extractRuleBody(css, ".directory-row__threads")).toMatch(/\bpadding-left:\s*8px;/);
@@ -615,6 +619,11 @@ describe("Tangerine Terminal theme contract", () => {
       "sidebar-rail-inset",
       "sidebar-lane-inset",
       "sidebar-masthead-pull",
+      // Directory divider geometry. Its sticky inset comes from the project
+      // row. The thread list shares its gap and margin with the flow marker.
+      "directory-row-header-height",
+      "directory-thread-row-gap",
+      "directory-thread-divider-margin",
       // Pane resize seams — defined on the two resize handles, not `:root`.
       // How far the 11px hit band reaches over the scrolling neighbour's
       // edge; both seams read it so their geometry cannot drift apart.
