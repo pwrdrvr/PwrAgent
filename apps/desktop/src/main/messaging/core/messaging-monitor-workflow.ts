@@ -168,7 +168,7 @@ export class MessagingMonitorWorkflow {
       ...event,
       id: `${event.id}:topic:${topic.id}`,
       kind: "command",
-      channel: topicChannelRef(topic),
+      channel: topicChannelRef(topic, event.channel.connectionId),
       command: "monitor",
       args,
       rawText: `/monitor ${args.join(" ")}`,
@@ -430,7 +430,7 @@ export class MessagingMonitorWorkflow {
         action: "topics.seed",
         actor: event.actor,
         backend: thread.source,
-        channel: topicChannelRef(topic),
+        channel: topicChannelRef(topic, event.channel.connectionId),
         now: this.context.now(),
         threadId: thread.id,
       }),
@@ -455,7 +455,7 @@ export class MessagingMonitorWorkflow {
     topic: MessagingManagedTopicRecord,
     thread: NavigationThreadSummary,
   ): Promise<"bound" | "existing" | "conflict"> {
-    const channel = topicChannelRef(topic);
+    const channel = topicChannelRef(topic, event.channel.connectionId);
     const existing = await this.context.store.findActiveBindingForChannel(channel);
     if (existing) {
       if (existing.backend === thread.source && existing.threadId === thread.id) {

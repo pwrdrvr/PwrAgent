@@ -55,6 +55,7 @@ import {
   isFederationPeerUnavailableError,
 } from "../../federation/federation-peer-unavailable-error";
 import { loadDesktopMessagingConfigFromSettings } from "../../messaging/messaging-config";
+import type { SaveTelegramConnectionRequest, TelegramConnectionStatus } from "@pwragent/shared/contracts/settings";
 import { getDesktopMessagingActivityLog } from "../../messaging/desktop-messaging-activity-log";
 import { getDesktopMessagingPairingStore } from "../../messaging/desktop-messaging-pairing-store";
 import { getMainLogger } from "../../log";
@@ -70,6 +71,8 @@ import {
   MESSAGING_APPROVE_PAIRING_CHANNEL,
   MESSAGING_CLEAR_DEFAULT_AGENT_CHANNEL,
   MESSAGING_GENERATE_PAIRING_TOKEN_CHANNEL,
+  MESSAGING_LIST_TELEGRAM_CONNECTIONS_CHANNEL,
+  MESSAGING_SAVE_TELEGRAM_CONNECTION_CHANNEL,
   MESSAGING_GET_ACTIVITY_SUMMARY_CHANNEL,
   MESSAGING_GET_PLATFORM_STATUSES_CHANNEL,
   MESSAGING_INBOUND_PREVIEW_EVENT_CHANNEL,
@@ -594,6 +597,7 @@ export function registerMessagingStatusIpcHandlers(): void {
       startInboundPreview(request.subscriptionId, {
         conversationId: request.conversationId,
         provider: request.provider,
+        ...(request.connectionId ? { connectionId: request.connectionId } : {}),
         recipientUserId: request.recipientUserId,
         conversationKind: request.conversationKind,
         ...(request.parentId ? { parentId: request.parentId } : {}),
@@ -678,6 +682,41 @@ export function registerMessagingStatusIpcHandlers(): void {
     },
   );
 
+  const telegramConnections = (): TelegramConnectionStatus[] =>
+    (getDesktopSettingsService().readConfiguredTelegramConnections() ?? []).map((connection) => {
+      const health = connection.legacy
+        ? runtime.getPlatformStatuses().find((status) => status.platform === "telegram")
+        : runtime.getTelegramConnectionHealth(connection.id);
+      return {
+        id: connection.id,
+        displayName: connection.displayName,
+        enabled: connection.enabled,
+        legacy: connection.legacy,
+        verified: health?.health === "enabled" || health?.health === "degraded",
+        ...(health?.health === "errored" ? { startupError: "Could not connect to this Telegram bot." } : {}),
+      };
+    });
+  ipcMain.removeHandler(MESSAGING_LIST_TELEGRAM_CONNECTIONS_CHANNEL);
+  ipcMain.handle(MESSAGING_LIST_TELEGRAM_CONNECTIONS_CHANNEL, telegramConnections);
+  ipcMain.removeHandler(MESSAGING_SAVE_TELEGRAM_CONNECTION_CHANNEL);
+  ipcMain.handle(MESSAGING_SAVE_TELEGRAM_CONNECTION_CHANNEL, async (
+    _event,
+    request: SaveTelegramConnectionRequest,
+  ): Promise<TelegramConnectionStatus[]> => {
+    const service = getDesktopSettingsService();
+    const coordinator = getRuntimeMessagingLeaseCoordinator();
+    const lease = coordinator.snapshot();
+    if (!lease.leaseHeld && lease.leaseHolder) {
+      throw new Error("Change Telegram connections in the PwrAgent instance running Messaging for this profile.");
+    }
+    await service.saveTelegramConnection(request);
+    await coordinator.applyLatestConfig(
+      runtime, (options) => loadDesktopMessagingConfigFromSettings(service, process.env, options),
+      { logStartupEligibility: true, allowStart: !resolveRuntimeMessagingOverride().disabled || runtime.isEnabled() },
+    );
+    return telegramConnections();
+  });
+
   ipcMain.removeHandler(MESSAGING_GENERATE_PAIRING_TOKEN_CHANNEL);
   ipcMain.handle(
     MESSAGING_GENERATE_PAIRING_TOKEN_CHANNEL,
@@ -685,7 +724,7 @@ export function registerMessagingStatusIpcHandlers(): void {
       _event,
       request: GenerateMessagingPairingTokenRequest,
     ): Promise<GenerateMessagingPairingTokenResponse> => {
-      const accountId = request.platform === "telegram"
+      const accountId = request.platform === "telegram" && request.connectionId === undefined
         ? telegramBotAccountId(getDesktopSettingsService().resolveTelegramBotTokenSync())
         : undefined;
       return runtime.generatePairingToken(request, accountId);
@@ -711,7 +750,7 @@ export function registerMessagingStatusIpcHandlers(): void {
       request: ApproveMessagingPairingRequest,
     ): Promise<ApproveMessagingPairingResponse> => {
       const service = getDesktopSettingsService();
-      const pairing = runtime.listPairingRequests({ includeResolved: true }).entries
+      const pairing = runtime.listPairingRequests({ includeResolved: true, connectionId: request.connectionId }).entries
         .find((entry) => entry.id === request.entryId);
       if (!pairing) throw new Error("Pairing request not found.");
       const accountStatus = runtime.getPairingAccountStatus(pairing);
@@ -726,11 +765,17 @@ export function registerMessagingStatusIpcHandlers(): void {
         throw new Error("This pairing request belongs to a different bot. Generate a code for the connected bot.");
       }
       if (pairing.platform === "telegram") {
-        const approval = getDesktopMessagingPairingStore().approveTelegramPairing({
+        const approval = runtime.getConnectionPairingStore(request.connectionId).approveTelegramPairing({
           entryId: pairing.id,
           contact: contactForPairing(pairing),
           now: Date.now(),
-          resolveCurrentAccountId: () => telegramBotAccountId(service.resolveTelegramBotTokenSync()),
+          resolveCurrentAccountId: () => {
+            if (request.connectionId === undefined) return telegramBotAccountId(service.resolveTelegramBotTokenSync());
+            const config = service.readConfiguredTelegramConnections()?.find((connection) =>
+              connection.id === request.connectionId && connection.enabled && !connection.legacy);
+            const savedAccount = telegramBotAccountId(service.resolveTelegramConnectionTokenSync(request.connectionId));
+            return config?.botAccountId === savedAccount ? savedAccount : undefined;
+          },
         });
         if (approval === "different-bot") {
           throw new Error("This pairing request belongs to a different bot. Generate a code for the connected bot.");
@@ -743,11 +788,13 @@ export function registerMessagingStatusIpcHandlers(): void {
           (options) => loadDesktopMessagingConfigFromSettings(service, process.env, options),
           { logStartupEligibility: true },
         );
-        recordPairingActivity(approval.entry, "Approved pairing request");
-        await runtime.deliverPairingOutcome(approval.entry, "approved");
-        broadcastPairingChanged({ at: Date.now(), entry: approval.entry });
+        const entry = request.connectionId === undefined ? approval.entry
+          : { ...approval.entry, connectionId: request.connectionId };
+        recordPairingActivity(entry, "Approved pairing request");
+        await runtime.deliverPairingOutcome(entry, "approved");
+        broadcastPairingChanged({ at: Date.now(), entry });
         log.info("messaging pairing approved", { pairingId: pairing.id, platform: pairing.platform, added: approval.added });
-        return approval;
+        return { ...approval, entry };
       }
       // For a Slack team approval, resolve the workspace name best-effort so the
       // saved row carries a label (blank on failure/timeout), mirroring how the
@@ -825,8 +872,12 @@ export function registerMessagingStatusIpcHandlers(): void {
   );
 
   ipcMain.removeHandler(MESSAGING_READ_TELEGRAM_PAIRING_GRANTS_CHANNEL);
-  ipcMain.handle(MESSAGING_READ_TELEGRAM_PAIRING_GRANTS_CHANNEL, () => {
+  ipcMain.handle(MESSAGING_READ_TELEGRAM_PAIRING_GRANTS_CHANNEL, (_event, connectionId?: string) => {
     const service = getDesktopSettingsService();
+    if (connectionId !== undefined) {
+      const connection = service.readConfiguredTelegramConnections()?.find((row) => row.id === connectionId && !row.legacy);
+      return connection && runtime.getConnectionPairingStore(connectionId).readTelegramGrants(connection.botAccountId);
+    }
     return service.readTelegramPairingGrants(service.resolveTelegramBotTokenSync());
   });
 
@@ -843,7 +894,12 @@ export function registerMessagingStatusIpcHandlers(): void {
       if (!lease.leaseHeld && lease.leaseHolder) {
         throw new Error("Revoke this pairing in the PwrAgent instance running Messaging for this profile.");
       }
-      getDesktopMessagingPairingStore().revokeTelegramGrant(request);
+      if (request.connectionId !== undefined) {
+        const connection = getDesktopSettingsService().readConfiguredTelegramConnections()
+          ?.find((row) => row.id === request.connectionId && !row.legacy);
+        if (connection?.botAccountId !== request.accountId) throw new Error("This Telegram connection is unavailable.");
+      }
+      runtime.getConnectionPairingStore(request.connectionId).revokeTelegramGrant(request);
       await coordinator.applyLatestConfig(
         runtime,
         (options) => loadDesktopMessagingConfigFromSettings(getDesktopSettingsService(), process.env, options),
@@ -859,13 +915,17 @@ export function registerMessagingStatusIpcHandlers(): void {
       _event,
       request: RejectMessagingPairingRequest,
     ): Promise<RejectMessagingPairingResponse> => {
-      const pairing = runtime.listPairingRequests({ includeResolved: true }).entries
+      const pairing = runtime.listPairingRequests({ includeResolved: true, connectionId: request.connectionId }).entries
         .find((entry) => entry.id === request.entryId);
+      if (request.connectionId !== undefined && !pairing) throw new Error("Pairing request not found.");
       const dismissAfterApproval =
         (pairing?.approvedTargets?.length ?? 0) > 0;
-      const entry = dismissAfterApproval
+      const updated = request.connectionId !== undefined
+        ? runtime.getConnectionPairingStore(request.connectionId).markStatus({ entryId: request.entryId, status: "rejected" })
+        : dismissAfterApproval
         ? markPairingConsumed(request.entryId)
         : markPairingRejected(request.entryId);
+      const entry = updated && (request.connectionId === undefined ? updated : { ...updated, connectionId: request.connectionId });
       if (!entry) throw new Error("Pairing request not found.");
       recordPairingActivity(
         entry,
@@ -896,6 +956,7 @@ export function registerMessagingStatusIpcHandlers(): void {
       // Slack / Mattermost requires zero changes here.
       const result = await runtime.requestBindingRevoke({
         bindingId: request.bindingId,
+        ...(request.connectionId === undefined ? {} : { connectionId: request.connectionId }),
         origin: "ui",
       });
       log.info("messaging binding unbound", {
@@ -1037,6 +1098,8 @@ export function registerMessagingStatusIpcHandlers(): void {
 }
 
 export async function disposeMessagingStatusIpcHandlers(): Promise<void> {
+  ipcMain.removeHandler(MESSAGING_LIST_TELEGRAM_CONNECTIONS_CHANNEL);
+  ipcMain.removeHandler(MESSAGING_SAVE_TELEGRAM_CONNECTION_CHANNEL);
   unsubscribePlatformStatus?.();
   unsubscribePlatformStatus = undefined;
   unsubscribeBindingsChanged?.();

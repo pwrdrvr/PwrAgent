@@ -1,7 +1,8 @@
-import type {
-  MessagingBindingRecord,
-  MessagingInboundMediaEvent,
-  MessagingInboundTextEvent,
+import {
+  scopeMessagingRoutingKey,
+  type MessagingBindingRecord,
+  type MessagingInboundMediaEvent,
+  type MessagingInboundTextEvent,
 } from "@pwragent/messaging-interface";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { federatedThreadIdentityKey, isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
@@ -45,10 +46,10 @@ export class MessagingTurnAdmission {
     event: MessagingTurnInputEvent;
   }): Promise<void> {
     const threadKey = threadKeyForBinding(params.binding);
-    const pendingKey = pendingKeyForActor(
+    const pendingKey = scopeMessagingRoutingKey(params.event.channel.connectionId, pendingKeyForActor(
       threadKey,
       params.event.actor.platformUserId,
-    );
+    ));
     const existing = this.pendingByThreadActorKey.get(pendingKey);
     if (existing) {
       existing.events.push(params.event);

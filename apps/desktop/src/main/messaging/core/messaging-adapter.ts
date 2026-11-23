@@ -89,6 +89,7 @@ import type {
   MessagingImagePart,
   MessagingAdapterAuthorizationUpdate,
   MessagingAdapterRenderingPreferencesUpdate,
+  MessagingChannelRef,
   MessagingConversationTitleSupportRequest,
   MessagingConversationTitleUpdateRequest,
   MessagingConversationTitleUpdateResult,
@@ -133,6 +134,7 @@ export type MessagingAdapter = {
   retainedSourceConnectionId?(): string | undefined;
   /** Reapply provider admission to a retained source without dispatching a new inbound event. */
   authorizeRetainedSource?(event: MessagingInboundEvent, verifyAccess?: boolean): boolean | undefined | Promise<boolean | undefined>;
+  isAuthorizedNoticeDestination?(channel: MessagingChannelRef): boolean;
   capabilityProfile: MessagingCapabilityProfile;
   clientRateLimitStrategy?: MessagingClientRateLimitStrategy;
   resolveDirectConversation?(userId: string): Promise<MessagingPrivateConversationResolveResult>;

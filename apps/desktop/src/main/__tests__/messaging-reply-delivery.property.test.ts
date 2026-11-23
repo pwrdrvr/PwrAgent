@@ -6,12 +6,66 @@ import type { MessagingBindingRecord, MessagingDeliveryResult, MessagingSurfaceI
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import type { MessagingBackendBridge } from "../messaging/core/messaging-adapter";
 import { MessagingController } from "../messaging/core/messaging-controller";
+import { MessagingOutboundDelivery } from "../messaging/core/messaging-outbound-delivery";
 import * as receipts from "../messaging/core/messaging-reply-receipts";
 import { StateDb } from "../state/state-db";
 import { SqliteMessagingStore } from "../state/messaging-store-sqlite";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
+
+it("hands a waiting reply to the selected replacement unless the source reply was cancelled", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), fc.boolean(), async (cancel, replacementAvailable) => {
+    const db = StateDb.open(":memory:");
+    try {
+      const store = new SqliteMessagingStore(db);
+      const binding = await bind(store);
+      const old = {
+        capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
+        deliver: vi.fn<() => Promise<MessagingDeliveryResult>>(),
+      };
+      const replacement = {
+        capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
+        deliver: vi.fn(async (): Promise<MessagingDeliveryResult> => ({ channel: "telegram", deliveredAt: 2, outcome: "presented" })),
+      };
+      let cancelled = false;
+      const scope = vi.fn().mockReturnValueOnce(replacement).mockReturnValue(undefined);
+      const delivery = new MessagingOutboundDelivery({
+        adapter: old, channel: "telegram", store,
+        isDeliveryAdapterAvailable: (selected) => selected === replacement,
+        replacementAdapter: {
+          now: scope,
+          settled: async () => {
+            cancelled = cancel;
+            return replacementAvailable ? replacement : undefined;
+          },
+        },
+      }, {
+        disposed: true, capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE, logger: {},
+        clock: () => 1, now: () => 1,
+        flushToolUpdatesForBinding: async () => {}, markWorkingCardWaiting: async () => {},
+        desktopActivityLog: () => undefined, recordBindingTransition: async () => {},
+        notifyBindingChanged: () => {}, flagDeliveryCheck: async () => {},
+      });
+      await delivery.deliver({
+        id: "replacement-reply", kind: "message", createdAt: 1, role: "assistant",
+        parts: [{ type: "text", text: "Fixture reply" }],
+      }, binding, undefined, { isCancelled: () => cancelled }, {
+        identity: {
+          kind: "assistant-final", bindingId: binding.id, backend: "codex",
+          threadId: THREAD_ID, turnId: "turn", itemId: "final",
+        },
+      });
+
+      expect(old.deliver).not.toHaveBeenCalled();
+      expect(replacement.deliver).toHaveBeenCalledTimes(!cancel && replacementAvailable ? 1 : 0);
+      expect(Object.values((await store.readSnapshot()).deliveries).map((row) => row.receipt?.state))
+        .toEqual([cancel ? "withdrawn" : replacementAvailable ? "sent" : "owed"]);
+    } finally {
+      db.close();
+    }
+  }), { numRuns: 12 });
+});
 
 /**
  * Model of the final-reply send state machine (PWR-223). Each final reply

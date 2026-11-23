@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
 import { isPermanentMessagingTargetFailure, managedTopicRecordFromConversation, resolveMonitorStateOptions } from "../messaging/core/messaging-monitor-helpers";
+import { topicChannelRef } from "../messaging/core/messaging-callback-helpers";
 
 describe("monitor workflow helpers", () => {
   it("cycles independently specified intervals and row limits without losing other preferences", () => {
@@ -21,6 +22,17 @@ describe("monitor workflow helpers", () => {
         routingState: { opaque: { fixture: opaque } }, source: "linked" });
       expect(record).toMatchObject({ id: `topic:${channel}:fixture-parent:fixture-topic`, supergroupId: "fixture-parent", topicId: "fixture-topic",
         title, routingState: { opaque: { fixture: opaque } }, source: "linked", lifecycle: "open" });
+    }));
+  });
+
+  it("keeps managed topic routes in the originating connection across identical provider topic IDs", () => {
+    fc.assert(fc.property(fc.uniqueArray(fc.uuid(), { minLength: 2, maxLength: 2 }), (connections) => {
+      const topic = managedTopicRecordFromConversation({
+        actorIds: [], channel: "telegram", now: 1, source: "owned",
+        conversation: { id: "101", kind: "topic", parentId: "-100777" },
+      });
+      expect(topicChannelRef(topic)).not.toHaveProperty("connectionId");
+      expect(connections.map((id) => topicChannelRef(topic, id).connectionId)).toEqual(connections);
     }));
   });
 

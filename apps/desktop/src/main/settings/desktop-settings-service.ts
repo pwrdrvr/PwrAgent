@@ -1,5 +1,7 @@
 import { assertHotCpuCaptureRules, primaryHotCpuRule } from "@pwragent/shared/hot-cpu-rules";
 import { telegramBotAccountId } from "@pwragent/shared/messaging-id-validation";
+import { createTelegramConnectionId, telegramConnectionSecretName } from "./telegram-connections-config";
+import { publishTelegramConnection } from "./telegram-connection-migration";
 import type { MessagingPairingStorage } from "@pwragent/owner-core/messaging-pairing-storage";
 import { resolveHotCpuRules } from "../diagnostics/hot-cpu-profile-config";
 import { CommandDiscoveryLifetime } from "./command-discovery-lifetime";
@@ -43,6 +45,8 @@ import type {
   DesktopChatReplyComposer,
   DesktopAuthorizedContact,
   DesktopTelegramPairingGrants,
+  DesktopTelegramConnection,
+  SaveTelegramConnectionRequest,
   DesktopCodexAuthProfileDiscoverySnapshot,
   DesktopCodexCandidateSource,
   DesktopCodexDiscoverySnapshot,
@@ -361,6 +365,9 @@ function normalizeCodexProfilesSnapshot(
 
 type DesktopSettingsServiceOptions = {
   telegramPairingStorage?: Pick<MessagingPairingStorage, "readTelegramGrants" | "dismissTelegramGrantWarning">;
+  reserveTelegramConnectionId?: (attempt: string, proposedId: string) => string;
+  releaseTelegramConnectionId?: (attempt: string, id: string) => void;
+  verifyTelegramConnectionToken?: (token: string) => Promise<string | undefined>;
   tokenMiserStore?: TokenMiserStore;
   codexHome?: string;
   codexDiscoveryCoordinator?: Pick<
@@ -2746,8 +2753,21 @@ export class DesktopSettingsService {
     secret: DesktopSettingsSecretName,
     value: string,
   ): Promise<DesktopSettingsSecretState> {
+    if (secret.startsWith("telegramBotToken:")) throw new Error("Use Telegram connection setup to save this credential.");
     if (isMessagingRuntimeSecret(secret)) {
       this.configStore.requireSavedMessagingSafetyAcknowledgment();
+    }
+    if (secret === "telegramBotToken") {
+      const existing = this.readConfiguredTelegramConnections();
+      const legacy = existing?.find((connection) => connection.legacy);
+      if (existing !== undefined) {
+        if (!legacy) throw new Error("Select a saved Telegram connection to change its credential.");
+        return await this.serializeTelegramSettings(async () => {
+          await this.saveVerifiedTelegramConnectionToken(legacy, value.trim());
+          await this.options.secretStore.setSecret(secret, value.trim());
+          return await this.readAndPublishSecretState(secret);
+        });
+      }
     }
     await this.options.secretStore.setSecret(secret, value);
     return await this.readAndPublishSecretState(secret);
@@ -2756,6 +2776,10 @@ export class DesktopSettingsService {
   async clearSecret(
     secret: DesktopSettingsSecretName,
   ): Promise<DesktopSettingsSecretState> {
+    if (secret.startsWith("telegramBotToken:")) throw new Error("Use Telegram connection settings to remove this credential.");
+    if (secret === "telegramBotToken" && this.readConfiguredTelegramConnections() !== undefined) {
+      throw new Error("Disable the Telegram connection to stop using it.");
+    }
     await this.options.secretStore.deleteSecret(secret);
     return await this.readAndPublishSecretState(secret);
   }
@@ -2921,9 +2945,153 @@ export class DesktopSettingsService {
   }
 
   resolveTelegramBotTokenSync(): string | undefined {
+    const migrated = this.readConfiguredTelegramConnections();
+    if (migrated !== undefined) {
+      const legacy = migrated.find((connection) => connection.legacy);
+      return legacy && this.resolveTelegramConnectionTokenSync(legacy.id);
+    }
     return readEnvString(this.env, TELEGRAM_BOT_TOKEN_ENV)
       ?? readEnvString(this.env, "TELEGRAM_BOT_TOKEN")
       ?? this.options.secretStore.getSecretSync?.("telegramBotToken");
+  }
+
+  readConfiguredTelegramConnections(): DesktopTelegramConnection[] | undefined {
+    return this.readMessagingConfig().telegram?.connections;
+  }
+
+  resolveTelegramConnectionTokenSync(id: string): string | undefined {
+    return this.options.secretStore.getSecretSync?.(telegramConnectionSecretName(id));
+  }
+
+  private telegramConnectionSave: Promise<unknown> = Promise.resolve();
+
+  saveTelegramConnection(input: SaveTelegramConnectionRequest): Promise<void> {
+    return this.serializeTelegramSettings(async () => {
+      this.configStore.reloadFromDisk("watch");
+      if (this.readMessagingConfig().telegram?.invalidConnections) {
+        throw new Error("Correct the malformed Telegram connections in config.toml before saving.");
+      }
+      if (input.kind === "add") await this.addTelegramConnection(input);
+      else await this.updateTelegramConnection(input);
+    });
+  }
+
+  private serializeTelegramSettings<T>(operation: () => Promise<T>): Promise<T> {
+    const save = this.telegramConnectionSave.then(operation);
+    this.telegramConnectionSave = save.catch(() => undefined);
+    return save;
+  }
+
+  private async saveVerifiedTelegramConnectionToken(connection: DesktopTelegramConnection, token: string): Promise<void> {
+    if (telegramBotAccountId(token) !== connection.botAccountId
+      || await this.options.verifyTelegramConnectionToken?.(token) !== connection.botAccountId) {
+      throw new Error("Telegram could not verify this token for the existing bot account.");
+    }
+    const name = telegramConnectionSecretName(connection.id);
+    await this.options.secretStore.setSecret(name, token);
+    if (this.options.secretStore.getSecretSync?.(name) !== token) {
+      throw new Error("The Telegram credential could not be saved in encrypted storage.");
+    }
+  }
+
+  private async updateTelegramConnection(input: Exclude<SaveTelegramConnectionRequest, { kind: "add" }>): Promise<void> {
+    const current = this.readConfiguredTelegramConnections() ?? [];
+    const connection = current.find((row) => row.id === input.id && !row.legacy);
+    if (!connection) throw new Error("This Telegram connection is unavailable.");
+    if (input.kind === "remove") {
+      // Delete before publishing so an interrupted removal can be retried
+      // with the saved row and the named token already unavailable.
+      await this.options.secretStore.deleteSecret(telegramConnectionSecretName(connection.id));
+      this.options.releaseTelegramConnectionId?.(`new:${connection.botAccountId}`, connection.id);
+      await this.writeConfigPatchTargeted({ messaging: { telegram: {
+        connections: current.filter((row) => row.id !== connection.id),
+      } } });
+      return;
+    }
+    const displayName = input.displayName.trim();
+    if (!displayName || displayName.length > 100) throw new Error("Enter a connection name.");
+    if (current.some((row) => row.id !== connection.id && row.displayName.toLowerCase() === displayName.toLowerCase())) {
+      throw new Error("Choose a different name for this Telegram connection.");
+    }
+    if (input.enabled || input.token !== undefined) {
+      this.configStore.requireSavedMessagingSafetyAcknowledgment();
+      const token = input.token?.trim() ?? this.resolveTelegramConnectionTokenSync(connection.id);
+      if (!token) throw new Error("Save a bot token before enabling this connection.");
+      if (input.token !== undefined) await this.saveVerifiedTelegramConnectionToken(connection, token);
+      else if (input.enabled && !connection.enabled
+        && await this.options.verifyTelegramConnectionToken?.(token) !== connection.botAccountId) {
+        throw new Error("Telegram could not verify this bot. Check the token and try again.");
+      }
+    }
+    this.configStore.reloadFromDisk("watch");
+    if (this.readMessagingConfig().telegram?.invalidConnections
+      || JSON.stringify(this.readConfiguredTelegramConnections()) !== JSON.stringify(current)) {
+      throw new Error("Telegram settings changed during setup. Try saving again.");
+    }
+    await this.writeConfigPatchTargeted({ messaging: { telegram: {
+      connections: current.map((row) => row.id === connection.id ? { ...row, displayName, enabled: input.enabled } : row),
+    } } });
+  }
+
+  private async addTelegramConnection(input: { displayName: string; token: string }): Promise<DesktopTelegramConnection> {
+    this.configStore.requireSavedMessagingSafetyAcknowledgment();
+    const verify = this.options.verifyTelegramConnectionToken;
+    const reserve = this.options.reserveTelegramConnectionId;
+    if (!verify || !reserve) throw new Error("Telegram connection setup is unavailable.");
+    const displayName = input.displayName.trim();
+    if (!displayName || displayName.length > 100 || !input.token.trim()) throw new Error("Enter a connection name and bot token.");
+    const previous = this.readConfiguredTelegramConnections();
+    const existing = previous ?? [];
+    if (existing.length >= 2) throw new Error("This profile already has two Telegram connections.");
+    if (existing.some((connection) => connection.displayName.toLowerCase() === displayName.toLowerCase())) {
+      throw new Error("Choose a different name for this Telegram connection.");
+    }
+    const legacyToken = previous === undefined ? this.resolveTelegramBotTokenSync() : undefined;
+    const legacy = this.readMessagingSettings().telegram;
+    if (previous === undefined && (readEnvString(this.env, TELEGRAM_BOT_TOKEN_ENV)
+      || readEnvString(this.env, "TELEGRAM_BOT_TOKEN") || legacy.authorizedUserIds.source === "env"
+      || legacy.authorizedSupergroups.source === "env")) {
+      throw new Error("Move the existing Telegram credential and access settings from the environment into the profile before adding a connection.");
+    }
+    if (previous === undefined && !legacyToken && await this.options.secretStore.hasSecret("telegramBotToken")) {
+      throw new Error("Unlock the existing Telegram credential before adding a connection.");
+    }
+    const candidateToken = input.token.trim();
+    const candidateAccount = telegramBotAccountId(candidateToken);
+    if (!candidateAccount) throw new Error("Enter a valid Telegram bot token.");
+    if (previous === undefined && legacyToken && displayName.toLowerCase() === "telegram") {
+      throw new Error("Choose a different name for this Telegram connection.");
+    }
+    return await publishTelegramConnection(existing, {
+      id: reserve(`new:${candidateAccount}`, createTelegramConnectionId()),
+      displayName, token: candidateToken, enabled: true, legacy: false,
+      authorizedUserIds: [], authorizedSupergroupIds: [],
+    }, legacyToken ? {
+      id: reserve("legacy", createTelegramConnectionId()),
+      displayName: "Telegram", token: legacyToken, enabled: legacy.enabled.value, legacy: true,
+      authorizedUserIds: legacy.authorizedUserIds.value.map((contact) => contact.id),
+      authorizedSupergroupIds: legacy.authorizedSupergroups.value.map((contact) => contact.id),
+    } : undefined, {
+      verify: async (token) => {
+        const accountId = await verify(token);
+        return accountId === telegramBotAccountId(token) ? accountId : undefined;
+      },
+      writeSecret: async (name, token) => {
+        await this.options.secretStore.setSecret(name, token);
+        if (this.options.secretStore.getSecretSync?.(name) !== token) {
+          throw new Error("The Telegram credential could not be saved in encrypted storage.");
+        }
+      },
+      publish: async (connections) => {
+        this.configStore.reloadFromDisk("watch");
+        if (this.readMessagingConfig().telegram?.invalidConnections
+          || JSON.stringify(this.readConfiguredTelegramConnections()) !== JSON.stringify(previous)
+          || (previous === undefined && this.resolveTelegramBotTokenSync() !== legacyToken)) {
+          throw new Error("Telegram settings changed during setup. Try saving again.");
+        }
+        await this.writeConfigPatchTargeted({ messaging: { telegram: { connections } } });
+      },
+    });
   }
 
   readTelegramPairingGrants(botToken: string | undefined): DesktopTelegramPairingGrants | undefined {

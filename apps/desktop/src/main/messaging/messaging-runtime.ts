@@ -1,11 +1,11 @@
 import { CONTAINED_OUTPOST_MESSAGING_OPERATIONS } from "@pwragent/federation/federation-backend-methods";
 import { validateMessagingFileMetadata } from "@pwragent/agent-tools/messaging-outbound-file";
 import { matchesAutomationConversation } from "@pwragent/shared/contracts/automations";
-import { permissionForDynamicTool } from "@pwragent/shared/contracts/rbac";
+import { BUILT_IN_ROLES, permissionForDynamicTool, RBAC_BUILT_IN_ROLE_IDS, resolveEffectivePermissions } from "@pwragent/shared/contracts/rbac";
 import { randomBytes, randomUUID } from "node:crypto";
 import { renderSVG } from "uqr";
 import type { MessagingDmPairingAddress } from "@pwragent/messaging-interface";
-import { createMessagingRequestStorage } from "../storage/desktop-messaging-storage";
+import { createMessagingRequestStorage, openMessagingConnectionStorage, withExistingMessagingConnectionBindings } from "../storage/desktop-messaging-storage";
 import { setFederationMessagingDestinationHandler } from "../federation/federation-messaging-tools";
 import type {
   MessagingController,
@@ -16,6 +16,7 @@ import { isMessagingInteractivePendingRequest } from "./core/messaging-pending-r
 import { getRbacPolicyService } from "./rbac-policy-service";
 import { getDesktopAutomationService } from "../automations/desktop-automation-service";
 import type { MessagingStoreLike } from "./core/messaging-storage";
+import { setNamedMessagingBindingReader } from "./named-messaging-bindings";
 import type {
   MessagingAdapter,
   MessagingBackendBridge,
@@ -134,9 +135,10 @@ import type {
 export type DesktopMessagingAdapter = {
   readDmPairingAddress?(): MessagingDmPairingAddress | undefined;
   readDmPairingAccountId?(): string | undefined;
+  readVerifiedBotAccountId?(): string | undefined;
   retainedSourceConnectionId?: MessagingAdapter["retainedSourceConnectionId"];
   authorizeRetainedSource?: MessagingAdapter["authorizeRetainedSource"];
-  isAuthorizedNoticeDestination?(channel: MessagingChannelRef): boolean;
+  isAuthorizedNoticeDestination?: MessagingAdapter["isAuthorizedNoticeDestination"];
   authorizedActorIds: readonly string[];
   capabilityProfile: MessagingCapabilityProfile;
   channel: MessagingChannelKind;
@@ -425,6 +427,7 @@ export type BindingRevokeOrigin =
 
 export type BindingRevokeRequest = {
   bindingId: string;
+  connectionId?: string;
   origin: BindingRevokeOrigin;
 };
 
@@ -479,13 +482,15 @@ export type CredentialValidationRequest =
   | { channel: "line"; credential: { channelAccessToken: string } };
 
 export class DesktopMessagingRuntime implements MessagingAgentToolService {
-  private readonly originalAttachmentStore = new MessagingOriginalAttachmentStore(
-    resolveActiveProfilePath("state/messaging-original-attachments"),
-  );
+  private readonly originalAttachmentStore: MessagingOriginalAttachmentStore;
   private adapters: DesktopMessagingAdapter[] = [];
   private automationsChangedUnsubscribe?: () => void;
   private previewScopesChangedUnsubscribe?: () => void;
   private controllers: MessagingController[] = [];
+  private readonly namedConnections = new Map<string, DesktopMessagingRuntime>();
+  private readonly desiredConnections = new Map<string, string>();
+  private connectionConfigRevision = 0;
+  private currentConnectionConfig?: DesktopMessagingConfig;
   private appUpdateControls?: MessagingAppUpdateControls;
   private readonly runningAdapters = new Map<
     MessagingChannelKind,
@@ -601,8 +606,20 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       /** Raises a reminder card when a final reply's delivery is in doubt. */
       raiseDeliveryCheck?: MessagingControllerOptions["raiseDeliveryCheck"];
       adapterStartTimeoutMs?: number;
+      readSavedTelegramConnectionIds?: () => Promise<readonly string[]>;
+      connection?: {
+        id: string;
+        accountId: string;
+        isRegistered: () => boolean;
+        storage: ReturnType<typeof openMessagingConnectionStorage>;
+        syncFederationEventSubscriptions: () => Promise<void>;
+      };
     },
   ) {
+    this.originalAttachmentStore = new MessagingOriginalAttachmentStore(resolveActiveProfilePath(options.connection
+      ? `state/messaging-connections/${options.connection.id}-attachments`
+      : "state/messaging-original-attachments"));
+    if (options.connection) return;
     setFederationMessagingDestinationHandler(async (operation, callerInstanceId, contained, consumeOriginal) => {
       const tool = operation?.kind === "authorize" ? operation.check?.tool : operation?.kind === "request" ? operation.request?.operation : undefined;
       if (contained && !(CONTAINED_OUTPOST_MESSAGING_OPERATIONS as readonly string[]).includes(tool ?? "")) {
@@ -642,12 +659,14 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   }
 
   async start(): Promise<void> {
+    const revision = ++this.connectionConfigRevision;
     this.pendingAdapterStopReason = undefined;
     this.pendingAdapterStartCancellationReasons.clear();
     await this.enqueueLifecycle(async () => {
       const config = await this.loadConfigForLifecycle({
         logStartupEligibility: true,
       });
+      if (revision === this.connectionConfigRevision) this.updateDesiredConnections(config);
       await this.applyConfigWithFailureStatus(config);
     });
   }
@@ -658,6 +677,9 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     const reason = "Messaging was stopped while adapter startup was still pending.";
     this.pendingAdapterStopReason = reason;
     this.cancelPendingAdapterStarts(reason);
+    this.connectionConfigRevision++;
+    this.desiredConnections.clear();
+    for (const runtime of this.namedConnections.values()) runtime.cancelPendingAdapterStarts(reason);
     await this.enqueueLifecycle(async () => {
       await this.stopNow(options);
     });
@@ -683,7 +705,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       }
     }
     let firstNotFound: PwrAgentMessagingResponse | undefined;
-    for (const controller of this.controllers) {
+    for (const controller of this.controllersForTurn(request.context)) {
       const response = await controller.handlePwrAgentMessagingRequest(request, receivedFile, consumeOriginal);
       if (response.ok) {
         return response;
@@ -722,7 +744,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         return { allowed: false, permission: "federation.remote_control" };
       }
     }
-    for (const controller of this.controllers) {
+    for (const controller of this.controllersForTurn(context)) {
       const result = await controller.authorizeRetainedTool(context, check);
       if (result.owns) return result;
     }
@@ -734,7 +756,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   checkDynamicToolPermission(
     check: DynamicToolPermissionCheck,
   ): DynamicToolPermissionResult {
-    for (const controller of this.controllers) {
+    for (const controller of this.allControllers()) {
       const result = controller.checkDynamicToolPermission(check);
       if (result.owns) {
         return result.permission !== undefined
@@ -753,6 +775,13 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   private async stopNow(
     options: { preserveStartupFailures?: boolean } = {},
   ): Promise<void> {
+    if (this.namedConnections.size > 0) {
+      await Promise.all([...this.namedConnections.values()].map((runtime) => runtime.stop()));
+      this.namedConnections.clear();
+      this.broadcastBindingsChanged();
+      // Old asynchronous controller work keeps its own references until it
+      // settles. Release the registry's handles without closing under it.
+    }
     this.automationsChangedUnsubscribe?.();
     this.automationsChangedUnsubscribe = undefined;
     this.previewScopesChangedUnsubscribe?.();
@@ -767,7 +796,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
 
     this.unsubscribeBackendEvents?.();
     this.unsubscribeBackendEvents = undefined;
-    this.options.backendBridge.setRemoteEventSubscriptions?.([]);
+    if (!this.options.connection) this.options.backendBridge.setRemoteEventSubscriptions?.([]);
     const stoppedChannels = [...this.runningAdapters.keys()];
     await Promise.all(
       [...this.runningAdapters.values()].map(async (running) =>
@@ -799,6 +828,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     config: DesktopMessagingConfig,
     options: { allowStart?: boolean } = {},
   ): Promise<void> {
+    this.connectionConfigRevision++;
+    this.updateDesiredConnections(config);
     this.updatePendingAdapterStartIntent(config);
     await this.enqueueLifecycle(async () => {
       await this.applyConfigWithFailureStatus(config, options);
@@ -809,10 +840,12 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     config: DesktopMessagingConfig,
     options: { allowStart?: boolean } = {},
   ): Promise<void> {
+    if (this.options.connection) this.currentConnectionConfig = config;
     this.applyFullAccessPolicySnapshot(config);
     this.applyMessagingAdmissionPolicySnapshot(config);
     try {
       await this.applyConfigNow(config, options);
+      await this.applyNamedConnections(config, options);
       this.clearStartupFailuresForDisabledPlatforms(config);
     } catch (error) {
       // Config application can reject after adapters have already reported
@@ -866,7 +899,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       this.subscribeBackendEvents();
     }
 
-    const store = getDesktopMessagingStore();
+    const store = this.bindingStore();
     const configuredAdapters = await this.options.adapterFactory({
       config,
       store,
@@ -980,7 +1013,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         stopped: stoppedChannels.length > 0 ? stoppedChannels : undefined,
         failed: failedChannels.length > 0 ? failedChannels : undefined,
       });
-    } else if (this.runningAdapters.size === 0) {
+    } else if (this.runningAdapters.size === 0 && !config.telegramConnections?.length) {
       messagingLog.info(
         "messaging runtime started with no adapters — no platforms configured",
       );
@@ -988,14 +1021,107 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     await this.syncFederationEventSubscriptions();
   }
 
+  private bindingStore(): MessagingStoreLike {
+    return this.options.connection?.storage.bindings ?? getDesktopMessagingStore();
+  }
+
+  private pairingStore() {
+    return this.options.connection?.storage.pairing ?? getDesktopMessagingPairingStore();
+  }
+
+  private allControllers(): MessagingController[] {
+    return [
+      ...this.controllers,
+      ...[...this.namedConnections.values()].flatMap((runtime) =>
+        runtime.options.connection?.isRegistered() ? runtime.controllers : []),
+    ];
+  }
+
+  private controllersForTurn(context: PwrAgentMessagingContext): MessagingController[] {
+    const source = context.causalMessagingSource;
+    if (source?.connectionId === undefined) return this.controllers;
+    const id = source.connectionId;
+    const runtime = this.namedConnections.get(id);
+    return runtime?.options.connection?.isRegistered() && runtime.options.connection.storage.requests.get(source)
+      ? runtime.controllers : [];
+  }
+
+  private updateDesiredConnections(config: DesktopMessagingConfig): void {
+    this.desiredConnections.clear();
+    if (config.enabled === false) return;
+    for (const connection of config.telegramConnections ?? []) {
+      this.desiredConnections.set(connection.configuredConnectionId, connection.expectedBotAccountId);
+    }
+  }
+
+  private async applyNamedConnections(
+    config: DesktopMessagingConfig,
+    options: { allowStart?: boolean },
+  ): Promise<void> {
+    if (this.namedConnections.size === 0 && !config.telegramConnections?.length) return;
+    let bindingsChanged = false;
+    for (const [id, runtime] of this.namedConnections) {
+      if (runtime.options.connection?.isRegistered()) continue;
+      this.namedConnections.delete(id);
+      await runtime.stop();
+      bindingsChanged = true;
+    }
+    if (!this.started || config.enabled === false) return;
+    const {
+      telegramConnections, telegram: _telegram, discord: _discord, slack: _slack,
+      mattermost: _mattermost, feishu: _feishu, line: _line, ...common
+    } = config;
+    for (const telegram of telegramConnections ?? []) {
+      const { configuredConnectionId: id, expectedBotAccountId: accountId } = telegram;
+      const isRegistered = () => this.desiredConnections.get(id) === accountId;
+      if (!isRegistered()) continue;
+      let runtime = this.namedConnections.get(id);
+      if (options.allowStart === false && !runtime) continue;
+      const storage = runtime?.options.connection?.storage ?? openMessagingConnectionStorage(id);
+      const grants = storage.pairing.readTelegramGrants(accountId);
+      const scopedConfig = {
+        ...common,
+        telegram: {
+          ...telegram,
+          authorizedActorIds: [...(telegram.authorizedActorIds ?? []), ...grants.users],
+          authorizedSupergroupIds: [...(telegram.authorizedSupergroupIds ?? []), ...grants.supergroups],
+        },
+        fullAccessControls: undefined,
+      };
+      if (!runtime) {
+        runtime = new DesktopMessagingRuntime({
+          ...this.options,
+          config: () => runtime?.currentConnectionConfig ?? scopedConfig,
+          connection: { id, accountId, isRegistered, storage, syncFederationEventSubscriptions: () => this.syncFederationEventSubscriptions() },
+        });
+        runtime.onBindingsChanged(() => this.broadcastBindingsChanged());
+        runtime.onPlatformStatus((event) => {
+          if (event.kind === "health-changed") {
+            this.broadcastPlatformStatus({
+              kind: "connection-health-changed", platform: "telegram", connectionId: id, at: event.at,
+            });
+          }
+        });
+        runtime.onPairingChanged((event) => {
+          for (const listener of this.pairingChangedListeners) listener(event);
+        });
+        this.namedConnections.set(id, runtime);
+        bindingsChanged = true;
+      }
+      await runtime.applyConfig(scopedConfig, options);
+    }
+    if (bindingsChanged) this.broadcastBindingsChanged();
+    await this.syncFederationEventSubscriptions();
+  }
+
   async applyLatestConfig(
     options: { allowStart?: boolean } = {},
   ): Promise<void> {
+    const revision = ++this.connectionConfigRevision;
     await this.enqueueLifecycle(async () => {
-      await this.applyConfigWithFailureStatus(
-        await this.loadConfigForLifecycle(),
-        options,
-      );
+      const config = await this.loadConfigForLifecycle();
+      if (revision === this.connectionConfigRevision) this.updateDesiredConnections(config);
+      await this.applyConfigWithFailureStatus(config, options);
     });
   }
 
@@ -1055,10 +1181,10 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
    */
   supportsPreviewHistory(
     provider: MessagingChannelKind,
-    scope?: { parentId?: string; recipientUserId?: string },
+    scope?: { connectionId?: string; parentId?: string; recipientUserId?: string },
   ): boolean {
     // History currently reads top-level conversation IDs, not contact IDs or thread roots.
-    if (scope?.recipientUserId || scope?.parentId) return false;
+    if (scope?.connectionId !== undefined || scope?.recipientUserId || scope?.parentId) return false;
     const adapter = this.adapters.find((entry) => entry.channel === provider);
     return Boolean(adapter?.fetchRecentMessages);
   }
@@ -1126,7 +1252,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       for (const automation of getDesktopAutomationService().list({}).automations) {
         if (automation.status !== "enabled") continue;
         for (const trigger of automation.triggers) {
-          if (trigger.kind !== "inbound_message") continue;
+          if (trigger.kind !== "inbound_message"
+            || trigger.conversation.connectionId !== this.options.connection?.id) continue;
           const platform = trigger.conversation.channel;
           const ids = byPlatform.get(platform) ?? new Set<string>();
           byPlatform.set(platform, ids);
@@ -1164,7 +1291,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         adapter.updateObservedConversations?.([
           ...new Set([
             ...(automationObserved.get(adapter.channel) ?? []),
-            ...activeInboundPreviewConversationIds(adapter.channel),
+            ...activeInboundPreviewConversationIds(adapter.channel, this.options.connection?.id),
           ]),
         ]);
       } catch (error) {
@@ -1236,6 +1363,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   }
 
   selectAppUpdateNoticeDelivery(binding: MessagingBindingRecord) {
+    if (binding.channel.connectionId !== this.options.connection?.id) return undefined;
     const channel = binding.channel.channel;
     const running = this.runningAdapters.get(channel);
     if (!this.started || this.pendingAdapterStopReason || !running) return undefined;
@@ -1255,11 +1383,12 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   }
 
   isAppUpdateConnectionCurrent(binding: MessagingBindingRecord, connectionId: string): boolean {
-    return this.runningAdapters.get(binding.channel.channel)?.adapter.retainedSourceConnectionId?.() === connectionId;
+    return binding.channel.connectionId === this.options.connection?.id
+      && this.runningAdapters.get(binding.channel.channel)?.adapter.retainedSourceConnectionId?.() === connectionId;
   }
 
   countUnsubmittedUpdateBlockingWork(): number {
-    return this.controllers.filter((controller) => controller.hasUnsubmittedUpdateBlockingWork()).length;
+    return this.allControllers().filter((controller) => controller.hasUnsubmittedUpdateBlockingWork()).length;
   }
 
   onPairingChanged(
@@ -1275,12 +1404,21 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     request: GenerateMessagingPairingTokenRequest,
     configuredTelegramAccountId?: string,
   ): GenerateMessagingPairingTokenResponse {
+    if (request.connectionId !== undefined && !this.options.connection) {
+      return this.requireNamedConnection(request.connectionId).generatePairingToken(request);
+    }
+    const connection = this.options.connection;
+    if (connection && (request.platform !== "telegram" || request.instanceId !== undefined
+      || !connection.isRegistered() || this.runningAdapters.get("telegram")?.adapter
+        .readVerifiedBotAccountId?.() !== connection.accountId)) {
+      throw new Error("Connect this Telegram bot before generating a pairing code.");
+    }
     const now = Date.now();
     const ttlMs = clampPairingTtlMs(request.ttlMs);
     const defaultInstance = request.instanceId === undefined || request.instanceId === PAIRING_INSTANCE_ID;
     const adapter = this.runningAdapters.get(request.platform)?.adapter;
     const accountId = request.platform === "telegram" && defaultInstance
-      ? configuredTelegramAccountId ?? adapter?.readDmPairingAccountId?.()
+      ? connection?.accountId ?? configuredTelegramAccountId ?? adapter?.readDmPairingAccountId?.()
       : undefined;
     const address = request.scope === "user_dm" && accountId
       ? adapter?.readDmPairingAddress?.()
@@ -1288,7 +1426,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     const instanceId = accountId
       ? `${PAIRING_ACCOUNT_PREFIX}${accountId}`
       : request.instanceId ?? PAIRING_INSTANCE_ID;
-    const store = getDesktopMessagingPairingStore();
+    const store = this.pairingStore();
     const outstanding = store.countOutstanding({
       platform: request.platform,
       instanceId,
@@ -1316,7 +1454,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     this.recordPairingActivity(entry, "Generated pairing token");
     this.broadcastPairingChanged(entry);
     return {
-      entry,
+      entry: this.scopePairingEntry(entry),
       token,
       expiresAt: entry.expiresAt,
       message: `${MESSAGING_PAIRING_COMMAND} ${token}`,
@@ -1327,13 +1465,37 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   listPairingRequests(
     request: ListMessagingPairingRequestsRequest = {},
   ): ListMessagingPairingRequestsResponse {
+    if (request.connectionId !== undefined && !this.options.connection) {
+      return this.requireNamedConnection(request.connectionId).listPairingRequests(request);
+    }
     return {
-      entries: getDesktopMessagingPairingStore().list({
+      entries: this.pairingStore().list({
         includeResolved: request.includeResolved,
         platform: request.platform,
         now: Date.now(),
-      }),
+      }).map((entry) => this.scopePairingEntry(entry)),
     };
+  }
+
+  private scopePairingEntry(entry: MessagingPairingEntry): MessagingPairingEntry {
+    return this.options.connection ? { ...entry, connectionId: this.options.connection.id } : entry;
+  }
+
+  private requireNamedConnection(id: string): DesktopMessagingRuntime {
+    const runtime = this.namedConnections.get(id);
+    if (!runtime?.options.connection?.isRegistered()) throw new Error("This Telegram connection is unavailable.");
+    return runtime;
+  }
+
+  getConnectionPairingStore(connectionId: string | undefined) {
+    return connectionId === undefined
+      ? this.pairingStore()
+      : this.requireNamedConnection(connectionId).pairingStore();
+  }
+
+  getTelegramConnectionHealth(id: string): MessagingPlatformStatus | undefined {
+    const runtime = this.namedConnections.get(id);
+    return runtime?.options.connection?.isRegistered() ? runtime.platformStatuses.get("telegram") : undefined;
   }
 
   async deliverPairingOutcome(
@@ -1341,6 +1503,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     outcome: "approved" | "rejected" | "expired",
     options?: { text?: string },
   ): Promise<void> {
+    if (entry.connectionId !== undefined && !this.options.connection) {
+      const runtime = this.namedConnections.get(entry.connectionId);
+      if (runtime?.options.connection?.isRegistered()) await runtime.deliverPairingOutcome(entry, outcome, options);
+      return;
+    }
     const running = this.runningAdapters.get(entry.platform);
     if (!running || !entry.observedActor || !entry.observedChat || this.getPairingAccountStatus(entry) !== "current") return;
     const text = options?.text
@@ -1364,6 +1531,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         action: `pairing.${outcome}`,
         channel: {
           channel: entry.platform,
+          ...(this.options.connection ? { connectionId: this.options.connection.id } : {}),
           conversation: {
             id: entry.observedChat.id,
             kind: entry.observedChat.kind,
@@ -1378,8 +1546,15 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   }
 
   getPairingAccountStatus(entry: MessagingPairingEntry): "current" | "different" | "unavailable" {
+    if (entry.connectionId !== undefined && !this.options.connection) {
+      const runtime = this.namedConnections.get(entry.connectionId);
+      return runtime?.options.connection?.isRegistered() ? runtime.getPairingAccountStatus(entry) : "unavailable";
+    }
+    if (this.options.connection && (entry.connectionId !== this.options.connection.id
+      || entry.platform !== "telegram" || !entry.instanceId.startsWith(PAIRING_ACCOUNT_PREFIX))) return "different";
     if (!entry.instanceId.startsWith(PAIRING_ACCOUNT_PREFIX)) return "current";
-    const accountId = this.runningAdapters.get(entry.platform)?.adapter.readDmPairingAccountId?.();
+    const adapter = this.runningAdapters.get(entry.platform)?.adapter;
+    const accountId = this.options.connection ? adapter?.readVerifiedBotAccountId?.() : adapter?.readDmPairingAccountId?.();
     if (accountId === undefined) return "unavailable";
     return entry.instanceId === `${PAIRING_ACCOUNT_PREFIX}${accountId}` ? "current" : "different";
   }
@@ -1415,13 +1590,31 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   async requestBindingRevoke(
     request: BindingRevokeRequest,
   ): Promise<BindingRevokeResult> {
-    const store = getDesktopMessagingStore();
-    const binding = await store.getBinding(request.bindingId);
-    if (!binding || binding.revokedAt) {
-      return { revoked: false, notifiedPlatform: false };
+    const runtime = request.connectionId === undefined ? this : this.namedConnections.get(request.connectionId);
+    const revoke = async (store: MessagingStoreLike, owner?: DesktopMessagingRuntime) => {
+      const binding = await store.getBinding(request.bindingId);
+      if (!binding || binding.revokedAt || binding.channel.connectionId !== request.connectionId) {
+        return { revoked: false, notifiedPlatform: false };
+      }
+      return await (owner ?? this).revokeBinding(binding, request.origin, store, owner !== undefined);
+    };
+    if (runtime && (!runtime.options.connection || runtime.options.connection.isRegistered())) {
+      return await revoke(runtime.bindingStore(), runtime);
     }
+    if (request.connectionId && (await this.options.readSavedTelegramConnectionIds?.())?.includes(request.connectionId)) {
+      const result = await withExistingMessagingConnectionBindings(request.connectionId, revoke);
+      if (result) return result;
+    }
+    return { revoked: false, notifiedPlatform: false };
+  }
 
-    const notifiedPlatform = await this.dispatchRevokeToControllers(binding);
+  private async revokeBinding(
+    binding: MessagingBindingRecord,
+    origin: BindingRevokeRequest["origin"],
+    store = this.bindingStore(),
+    notify = true,
+  ): Promise<BindingRevokeResult> {
+    const notifiedPlatform = notify && await this.dispatchRevokeToControllers(binding);
     if (!notifiedPlatform) {
       await store.revokeBinding({ bindingId: binding.id });
       await this.recordBindingUnbound(binding);
@@ -1430,7 +1623,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
 
     messagingLog.info("messaging binding revoke handled", {
       bindingId: binding.id,
-      origin: request.origin,
+      origin,
       backend: binding.backend,
       platform: binding.channel.channel,
       threadId: binding.threadId,
@@ -1450,43 +1643,57 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   async requestBindingRevokeAllForThread(
     request: BindingRevokeAllForThreadRequest,
   ): Promise<BindingRevokeAllForThreadResult> {
-    const store = getDesktopMessagingStore();
-    const bindings = await store.findActiveBindingsForThread({
-      backend: request.backend,
-      threadId: request.threadId,
-    });
-    if (bindings.length === 0) {
-      return { revokedCount: 0, notifiedCount: 0 };
-    }
-
+    let revokedCount = 0;
     let notifiedCount = 0;
-    const fallbackBindings: MessagingBindingRecord[] = [];
-    for (const binding of bindings) {
-      const notified = await this.dispatchRevokeToControllers(binding);
-      if (notified) {
-        notifiedCount++;
-      } else {
-        fallbackBindings.push(binding);
+    const handledConnections = new Set<string>();
+    for (const runtime of [this, ...this.namedConnections.values()]) {
+      if (runtime.options.connection && !runtime.options.connection.isRegistered()) continue;
+      if (runtime.options.connection) handledConnections.add(runtime.options.connection.id);
+      const bindings = await runtime.bindingStore().findActiveBindingsForThread({
+        backend: request.backend,
+        threadId: request.threadId,
+      });
+      for (const binding of bindings) {
+        if (binding.channel.connectionId !== runtime.options.connection?.id) continue;
+        const result = await runtime.revokeBinding(binding, request.origin);
+        if (result.revoked) revokedCount++;
+        if (result.notifiedPlatform) notifiedCount++;
       }
     }
-
-    for (const binding of fallbackBindings) {
-      await store.revokeBinding({ bindingId: binding.id });
-      await this.recordBindingUnbound(binding);
+    for (const id of await this.options.readSavedTelegramConnectionIds?.() ?? []) {
+      if (handledConnections.has(id)) continue;
+      revokedCount += await withExistingMessagingConnectionBindings(id, async (store) => {
+        const bindings = await store.findActiveBindingsForThread({ backend: request.backend, threadId: request.threadId });
+        let count = 0;
+        for (const binding of bindings) {
+          if (binding.channel.connectionId !== id) continue;
+          await this.revokeBinding(binding, request.origin, store, false);
+          count++;
+        }
+        return count;
+      }) ?? 0;
     }
-    if (fallbackBindings.length > 0) {
-      this.broadcastBindingsChanged();
+    return { revokedCount, notifiedCount };
+  }
+
+  async listNamedBindings(thread?: { backend: AppServerBackendKind; threadId: string }, includeOffline = false): Promise<MessagingBindingRecord[]> {
+    const bindings: MessagingBindingRecord[] = [];
+    const read = async (id: string, store: MessagingStoreLike) => {
+      const rows = thread ? await store.findActiveBindingsForThread(thread) : await store.findActiveBindings();
+      bindings.push(...rows.filter((binding) => binding.channel.connectionId === id));
+    };
+    const handled = new Set<string>();
+    for (const [id, child] of this.namedConnections) {
+      if (!child.options.connection?.isRegistered()) continue;
+      handled.add(id);
+      await read(id, child.bindingStore());
     }
-
-    messagingLog.info("messaging binding revoke-all handled", {
-      backend: request.backend,
-      threadId: request.threadId,
-      origin: request.origin,
-      revokedCount: bindings.length,
-      notifiedCount,
-    });
-
-    return { revokedCount: bindings.length, notifiedCount };
+    if (includeOffline) {
+      for (const id of await this.options.readSavedTelegramConnectionIds?.() ?? []) {
+        if (!handled.has(id)) await withExistingMessagingConnectionBindings(id, (store) => read(id, store));
+      }
+    }
+    return bindings;
   }
 
   /**
@@ -1673,6 +1880,17 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     store: MessagingStoreLike;
   }): Promise<AdapterStartOutcome> {
     const { adapter, config, store } = params;
+    const connection = this.options.connection;
+    const isConnectionAvailable = () => !connection || (
+      connection.isRegistered()
+      && adapter.channel === "telegram"
+      && this.liveAdapters.get("telegram") === adapter
+      && adapter.readVerifiedBotAccountId?.() === connection.accountId
+    );
+    const admitsChannel = (channel: MessagingChannelRef) =>
+      channel.channel === adapter.channel
+      && channel.connectionId === connection?.id
+      && isConnectionAvailable();
     if (!(await this.previousAdapterIsDown(adapter.channel))) {
       return "failed";
     }
@@ -1696,15 +1914,34 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       adapter,
       appUpdateControls: () => this.started && !this.pendingAdapterStopReason
         && this.runningAdapters.get(adapter.channel)?.adapter === adapter ? this.appUpdateControls : undefined,
-      requestStore: createMessagingRequestStorage(),
+      requestStore: connection?.storage.requests ?? createMessagingRequestStorage(),
       sourceInstanceId: getDesktopFederationRuntime().messagingSourceInstanceId(),
       attachmentPolicy: config.attachmentPolicy,
       authorizedActorIds,
-      rbacPolicy: getRbacPolicyService().providerFor(adapter.channel),
+      rbacPolicy: connection ? {
+        isEnforcing: () => true,
+        resolve: (input) => resolveEffectivePermissions({
+          ...input,
+          platform: adapter.channel,
+          roles: BUILT_IN_ROLES,
+          attachments: isConnectionAvailable() && authorization.actorIdSet.has(input.actorId) ? [{
+            subject: { kind: "actor", platform: adapter.channel, actorId: input.actorId },
+            roleIds: [RBAC_BUILT_IN_ROLE_IDS.powerUser],
+          }] : [],
+        }),
+      } : getRbacPolicyService().providerFor(adapter.channel),
       automationInboundHandler: this.options.automationInboundHandler,
       onInboundPreview: (event) => publishInboundPreview(event),
       backend: this.options.backendBridge,
       channel: adapter.channel,
+      connectionId: connection?.id,
+      isConnectionAvailable: connection && isConnectionAvailable,
+      isConnectionRegistered: connection?.isRegistered,
+      isDeliveryAdapterAvailable: connection && ((selected) => {
+        const live = this.liveAdapters.get("telegram");
+        return connection.isRegistered() && live !== undefined && live === selected
+          && live.readVerifiedBotAccountId?.() === connection.accountId;
+      }),
       deliveryBudget,
       deliveryLane: this.deliveryLaneFor(adapter.channel),
       replacementAdapter: {
@@ -1784,10 +2021,12 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         });
       });
       unsubscribeInboundRejected = adapter.onInboundRejected?.(async (event) => {
-        if ("channel" in event && event.channel?.connectionId !== undefined) return;
+        const channel = "channel" in event ? event.channel : undefined;
+        if (connection ? !channel || !admitsChannel(channel) : channel?.connectionId !== undefined) return;
         await this.handleRejectedInbound(adapter.channel, event, store);
       });
       unsubscribeInboundChannelMetadata = adapter.onInboundChannelMetadata?.(async (update) => {
+        if (!admitsChannel(update.channel)) return;
         await controller.handleInboundChannelMetadata(update);
       });
       this.setPlatformHealth(adapter.channel, "unknown");
@@ -1881,9 +2120,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         }
       };
       await this.startAdapterWithDeadline(adapter, async (event) => {
-        // Only singleton routes are registered. Reject out-of-scope events
-        // before the update gate or any downstream handler sees them.
-        if (event.channel.connectionId !== undefined || event.channel.channel !== adapter.channel) return;
+        if (!admitsChannel(event.channel)) return;
         if (event.kind === "callback" && isAppUpdateCallback(event)) return await handleInbound(event);
         if (updateBlockingWorkIsHeld()) {
           await controller.reportUpdateRestarting(event);
@@ -1893,6 +2130,9 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         try { await handleInbound(event); }
         finally { endUpdateBlockingWork(); }
       });
+      if (connection && (!connection.isRegistered() || adapter.readVerifiedBotAccountId?.() !== connection.accountId)) {
+        throw new Error("Telegram did not verify the configured bot identity.");
+      }
     } catch (error) {
       try {
         unsubscribeDiagnostic?.();
@@ -2430,8 +2670,12 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   }
 
   private async syncFederationEventSubscriptions(): Promise<void> {
+    if (this.options.connection) {
+      await this.options.connection.syncFederationEventSubscriptions();
+      return;
+    }
     if (!this.options.backendBridge.setRemoteEventSubscriptions) return;
-    if (!this.started || this.runningAdapters.size === 0) {
+    if (!this.started) {
       this.options.backendBridge.setRemoteEventSubscriptions([]);
       return;
     }
@@ -2439,24 +2683,29 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       string,
       Map<string, { backend: AppServerBackendKind; threadId: string }>
     >();
-    for (const binding of await getDesktopMessagingStore().findActiveBindings()) {
-      if (
-        this.runningAdapters.has(binding.channel.channel)
-        && binding.federatedThread?.target.scope === "remote"
-      ) {
-        const instanceId = binding.federatedThread.target.instanceId;
-        const threads = threadsByInstanceId.get(instanceId) ?? new Map();
-        threads.set(
-          buildThreadIdentityKey(
-            binding.federatedThread.backend,
-            binding.federatedThread.threadId,
-          ),
-          {
-            backend: binding.federatedThread.backend,
-            threadId: binding.federatedThread.threadId,
-          },
-        );
-        threadsByInstanceId.set(instanceId, threads);
+    for (const runtime of [this, ...this.namedConnections.values()]) {
+      if (runtime.runningAdapters.size === 0
+        || (runtime.options.connection && !runtime.options.connection.isRegistered())) continue;
+      for (const binding of await runtime.bindingStore().findActiveBindings()) {
+        if (
+          runtime.runningAdapters.has(binding.channel.channel)
+          && runtime.options.connection?.id === binding.channel.connectionId
+          && binding.federatedThread?.target.scope === "remote"
+        ) {
+          const instanceId = binding.federatedThread.target.instanceId;
+          const threads = threadsByInstanceId.get(instanceId) ?? new Map();
+          threads.set(
+            buildThreadIdentityKey(
+              binding.federatedThread.backend,
+              binding.federatedThread.threadId,
+            ),
+            {
+              backend: binding.federatedThread.backend,
+              threadId: binding.federatedThread.threadId,
+            },
+          );
+          threadsByInstanceId.set(instanceId, threads);
+        }
       }
     }
     this.options.backendBridge.setRemoteEventSubscriptions(
@@ -2630,7 +2879,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   }
 
   private broadcastPairingChanged(entry: MessagingPairingEntry): void {
-    const event = { at: Date.now(), entry };
+    const event = { at: Date.now(), entry: this.scopePairingEntry(entry) };
     for (const listener of this.pairingChangedListeners) {
       try {
         listener(event);
@@ -3066,14 +3315,16 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     if (!token) return false;
 
     const now = Date.now();
-    const store = getDesktopMessagingPairingStore();
-    const accountId = adapter.readDmPairingAccountId?.();
+    const store = this.pairingStore();
+    const connection = this.options.connection;
+    const accountId = connection ? adapter.readVerifiedBotAccountId?.() : adapter.readDmPairingAccountId?.();
     const lookup = { token, platform: adapter.channel, now };
     const accountEntry = accountId === undefined ? undefined : store.findMatchingPending({
       ...lookup,
       instanceId: `${PAIRING_ACCOUNT_PREFIX}${accountId}`,
     });
-    const entry = accountEntry ?? store.findMatchingPending({ ...lookup, instanceId: PAIRING_INSTANCE_ID });
+    const entry = accountEntry ?? (connection ? undefined
+      : store.findMatchingPending({ ...lookup, instanceId: PAIRING_INSTANCE_ID }));
     if (!entry) {
       await this.deliverPairingReply(
         adapter,
@@ -3682,6 +3933,11 @@ export function initializeDesktopMessagingRuntime(
       ),
       config: config ?? (() => loadDesktopMessagingConfig()),
       readDevelopmentWorkingUpdatesDefault,
+      readSavedTelegramConnectionIds: async () => {
+        const { readDesktopSettingsConfig, resolveDesktopConfigPath } = await import("../settings/desktop-config");
+        return (readDesktopSettingsConfig(resolveDesktopConfigPath()).messaging?.telegram?.connections ?? [])
+          .filter((connection) => !connection.legacy).map((connection) => connection.id);
+      },
       automationInboundHandler: (event) =>
         getDesktopAutomationService().handleMessagingInboundEvent(event),
       automationInboundMatches: (event) =>
@@ -3699,6 +3955,7 @@ export function initializeDesktopMessagingRuntime(
         });
       },
     });
+    setNamedMessagingBindingReader((thread, includeOffline) => runtime?.listNamedBindings(thread, includeOffline) ?? Promise.resolve([]));
   }
 
   return runtime;
@@ -3711,11 +3968,13 @@ export async function disposeDesktopMessagingRuntime(): Promise<void> {
 
   const current = runtime;
   runtime = null;
+  setNamedMessagingBindingReader(undefined);
   await current.stop();
 }
 
 export function resetDesktopMessagingRuntimeForTests(): void {
   runtime = null;
+  setNamedMessagingBindingReader(undefined);
 }
 
 function createConfiguredAdapters(params: {

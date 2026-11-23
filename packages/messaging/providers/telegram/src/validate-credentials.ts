@@ -47,6 +47,9 @@ export async function validateCredentials(
       durationMs: Date.now() - startedAt,
       testedAt: Date.now(),
       account: formatAccount(me),
+      ...(me.is_bot === true && Number.isSafeInteger(me.id) && me.id > 0
+        ? { providerAccountId: String(me.id) }
+        : {}),
       detail: "api.telegram.org",
     };
   } catch (error) {

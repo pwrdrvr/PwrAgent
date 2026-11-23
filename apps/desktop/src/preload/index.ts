@@ -46,6 +46,7 @@ import type {
 } from "@pwragent/shared/research-harness";
 import type { ResearchProfileRunsPage, ResearchProfileRunsQuery } from "@pwragent/shared/research";
 import type { DesktopTelegramPairingGrants, DesktopWorktreeFolderCheck } from "@pwragent/shared/contracts/settings";
+import type { SaveTelegramConnectionRequest, TelegramConnectionStatus } from "@pwragent/shared/contracts/settings";
 import { RESEARCH_PROFILE_RUNS_CHANNEL, RESEARCH_OPEN_WINDOW_CHANNEL, RESEARCH_WINDOW_SELECT_EVENT_CHANNEL } from "../shared/ipc";
 import { RESEARCH_HARNESS_STATUS_CHANNEL, RESEARCH_HARNESS_START_CHANNEL, RESEARCH_HARNESS_CHECK_CHANNEL, RESEARCH_HARNESS_RECONCILE_CHANNEL, RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL } from "../shared/ipc";
 import { RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_CHANGED_EVENT_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL, RESEARCH_WITHDRAW_CHANNEL, RESEARCH_EVENTS_CHANNEL, RESEARCH_CHANGES_CHANNEL } from "../shared/ipc";
@@ -1210,6 +1211,8 @@ import {
   MESSAGING_APPROVE_PAIRING_CHANNEL,
   MESSAGING_CLEAR_DEFAULT_AGENT_CHANNEL,
   MESSAGING_GENERATE_PAIRING_TOKEN_CHANNEL,
+  MESSAGING_LIST_TELEGRAM_CONNECTIONS_CHANNEL,
+  MESSAGING_SAVE_TELEGRAM_CONNECTION_CHANNEL,
   MESSAGING_GET_ACTIVITY_SUMMARY_CHANNEL,
   MESSAGING_GET_PLATFORM_STATUSES_CHANNEL,
   MESSAGING_INBOUND_PREVIEW_EVENT_CHANNEL,
@@ -4047,6 +4050,10 @@ const desktopApi = Object.freeze({
   getMessagingActivitySummary:
     async (): Promise<GetMessagingActivitySummaryResponse> =>
       await ipcRenderer.invoke(MESSAGING_GET_ACTIVITY_SUMMARY_CHANNEL),
+  listTelegramConnections: async (): Promise<TelegramConnectionStatus[]> =>
+    await ipcRenderer.invoke(MESSAGING_LIST_TELEGRAM_CONNECTIONS_CHANNEL),
+  saveTelegramConnection: async (request: SaveTelegramConnectionRequest): Promise<TelegramConnectionStatus[]> =>
+    await ipcRenderer.invoke(MESSAGING_SAVE_TELEGRAM_CONNECTION_CHANNEL, request),
   generateMessagingPairingToken: async (
     request: GenerateMessagingPairingTokenRequest,
   ): Promise<GenerateMessagingPairingTokenResponse> =>
@@ -4063,8 +4070,8 @@ const desktopApi = Object.freeze({
     request: RejectMessagingPairingRequest,
   ): Promise<RejectMessagingPairingResponse> =>
     await ipcRenderer.invoke(MESSAGING_REJECT_PAIRING_CHANNEL, request),
-  readTelegramPairingGrants: async (): Promise<DesktopTelegramPairingGrants | undefined> =>
-    await ipcRenderer.invoke(MESSAGING_READ_TELEGRAM_PAIRING_GRANTS_CHANNEL),
+  readTelegramPairingGrants: async (connectionId?: string): Promise<DesktopTelegramPairingGrants | undefined> =>
+    await ipcRenderer.invoke(MESSAGING_READ_TELEGRAM_PAIRING_GRANTS_CHANNEL, connectionId),
   revokeTelegramPairingGrant: async (request: RevokeTelegramPairingGrantRequest): Promise<void> =>
     await ipcRenderer.invoke(MESSAGING_REVOKE_TELEGRAM_PAIRING_GRANT_CHANNEL, request),
   openMessagingActivityWindow: async (): Promise<void> => {

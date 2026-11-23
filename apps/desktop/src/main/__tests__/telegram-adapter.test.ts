@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import { MessagingController } from "../messaging/core/messaging-controller";
 import { MessagingStore } from "../messaging/core/messaging-store";
 import { boundedMessagingNavigation } from "./fixtures/bounded-messaging-navigation";
@@ -37,6 +38,44 @@ afterEach(async () => {
 });
 
 describe("TelegramAdapter", () => {
+  it("checks the current group grant for every named Telegram send, including a stored topic target", async () => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 500 }), fc.boolean(), async (number, storedTarget) => {
+      const id = `-100${number}`;
+      const api = createApi();
+      const adapter = new TelegramAdapter({
+        api: api as unknown as TelegramBotApi, pollOnStart: false,
+        config: {
+          channel: "telegram", botToken: "100:fixture", configuredConnectionId: "ops",
+          expectedBotAccountId: "100", authorizedActorIds: [],
+          authorizedSupergroupIds: [{ id, displayName: "" }],
+        },
+      });
+      await adapter.start(async () => {});
+      try {
+        const intent: MessagingSurfaceIntent = {
+          id: "bound-reply", kind: "message", bindingId: "binding", createdAt: 1,
+          audit: {
+            action: "thread.reply", actor: { platformUserId: "42" }, occurredAt: 1,
+            channel: { channel: "telegram", connectionId: "ops", conversation: { kind: "topic", id: "101", parentId: id } },
+          },
+          parts: [{ type: "text", text: "Fixture reply" }],
+          ...(storedTarget ? {
+            delivery: { mode: "update" as const },
+            targetSurface: { channel: "telegram" as const, id: "3", state: { opaque: { chatId: Number(id), messageId: 3 } } },
+          } : {}),
+        };
+        const send = storedTarget ? api.editMessageText : api.sendMessage;
+        await adapter.deliver(intent);
+        expect(send).toHaveBeenCalledTimes(1);
+        await adapter.updateAuthorization({ authorizedActorIds: [], authorizedConversationIds: [] });
+        await expect(adapter.deliver(intent)).resolves.toMatchObject({ outcome: "discarded" });
+        expect(send).toHaveBeenCalledTimes(1);
+      } finally {
+        await adapter.stop();
+      }
+    }), { numRuns: 8 });
+  });
+
   it("rechecks the allowlist for unsolicited notices to the parent of a forum topic", async () => {
     const adapter = new TelegramAdapter({
       api: createApi() as unknown as TelegramBotApi, pollOnStart: false,

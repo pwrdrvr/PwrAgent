@@ -916,6 +916,8 @@ export type MessagingCausalSourceRef = {
   /** Opaque profile-database identity, distinct even for profiles sharing a harness. */
   ownerId: string;
   requestId: string;
+  /** Configured connection on the authenticated messaging owner. */
+  connectionId?: string;
   /** Stable actor/agent/surface scope, used only to detect conflicting grouped inputs. */
   surfaceSelector?: string;
   /** Messaging owner, which can differ from the thread owner. */

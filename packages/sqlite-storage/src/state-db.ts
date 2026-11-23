@@ -2675,6 +2675,10 @@ export class StateDb {
     return this.getMeta(key)!;
   }
 
+  deleteMetaIfValue(key: string, value: string): void {
+    this.db.prepare("DELETE FROM meta WHERE key = ? AND value = ?").run(key, value);
+  }
+
   getSecret(key: string): Buffer | undefined {
     const row = this.db
       .prepare("SELECT ciphertext FROM secrets WHERE key = ?")

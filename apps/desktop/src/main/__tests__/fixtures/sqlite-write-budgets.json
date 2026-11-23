@@ -14,6 +14,8 @@
   "telegram-pairing-grant-revoke": {"commits": 1, "note": "Remove one bot-scoped Telegram pairing grant.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
   "telegram-pairing-grant-dismiss-warning": {"commits": 1, "note": "Update the warning setting for one paired Telegram user.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
   "telegram-pairing-grant-approve": {"commits": 1, "note": "Upsert the bot-scoped grant and consume the observed request in one transaction.", "observedWalBytes": 16480, "rowsChanged": 2, "statements": 2},
+  "telegram-connection-removal": {"commits": 2, "note": "Delete the named encrypted credential and release its ID reservation.", "observedWalBytes": 16480, "rowsChanged": 2, "statements": 2},
+  "telegram-connection-migration-staging": {"commits": 4, "note": "Reserve two connection IDs and stage both encrypted credentials before config publication.", "observedWalBytes": 32960, "rowsChanged": 4, "statements": 4},
   "acp-account-restriction-publication": {"commits": 1, "note": "One commit for the newly observed account restriction, including concurrent attempts with the same rejection", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1},
   "line-rich-menu-recover-absent-create": {"commits": 1, "note": "Recover an interrupted LINE rich-menu create that never reached LINE", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
   "line-rich-menu-lifecycle": {"commits": 7, "note": "One LINE rich-menu install, update, and removal", "observedWalBytes": 57712, "rowsChanged": 7, "statements": 7},

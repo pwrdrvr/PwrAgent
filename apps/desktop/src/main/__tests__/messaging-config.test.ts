@@ -85,6 +85,7 @@ describe("desktop messaging config", () => {
       "showStreamingOption",
       "slack",
       "telegram",
+      "telegramConnections",
       "toolUpdateDefaultMode",
     ]);
     expect(Object.keys(DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS.telegram).sort()).toEqual([
@@ -92,7 +93,9 @@ describe("desktop messaging config", () => {
       "authorizedSupergroupIds",
       "botToken",
       "channel",
+      "configuredConnectionId",
       "enabled",
+      "expectedBotAccountId",
       "responseMode",
       "streamingResponses",
     ]);

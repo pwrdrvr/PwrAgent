@@ -7,6 +7,14 @@ import { DurableConfigSnapshotStore } from "./durable-config-snapshot-store";
 
 export { getAppStateMode };
 
+export function reserveTelegramConnectionId(attempt: string, proposedId: string): string {
+  return getAppStateDb().getOrInsertMeta(`telegram_connection_migration_v1:${attempt}`, proposedId);
+}
+
+export function releaseTelegramConnectionId(attempt: string, id: string): void {
+  getAppStateDb().deleteMetaIfValue(`telegram_connection_migration_v1:${attempt}`, id);
+}
+
 export function createDesktopConfigSnapshotStorage(): DesktopConfigSnapshotStorage {
   return new DurableConfigSnapshotStore(getAppStateDb());
 }
