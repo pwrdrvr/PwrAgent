@@ -9,7 +9,7 @@ import { OUTPOST_VIEWER_CAPABILITIES, startOutpostDaemon } from "./helpers/outpo
 
 describe.skipIf(process.platform === "win32")("desktop client against the standalone outpost", () => {
   it.each(["direct", "symlink"] as const)("uses the current navigation, composer, transcript and project contracts (%s workspace)", async (workspaceKind) => {
-    const outpost = await startOutpostDaemon({ workspaceKind });
+    const outpost = await startOutpostDaemon({ workspaceKind, waitForCodexCommand: true });
     const { client, rpc, workspace, viewerId } = outpost;
     try {
       await expect(rpc.request({ method: FEDERATION_THREAD_TODO_METHODS.snapshotFeed, params: {} }))
