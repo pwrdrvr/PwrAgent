@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
@@ -25,9 +25,13 @@ async function withRuntimeRoot(run: (directory: string) => Promise<void>): Promi
   }
 }
 
-async function makeArchive(directory: string, entries = ["antigravity"]): Promise<Buffer<ArrayBuffer>> {
+async function makeArchive(
+  directory: string,
+  entries = ["antigravity"],
+  contents = fixtureBinary,
+): Promise<Buffer<ArrayBuffer>> {
   const archive = path.join(directory, "fixture.tar.gz");
-  await writeFile(path.join(directory, "antigravity"), fixtureBinary);
+  await writeFile(path.join(directory, "antigravity"), contents);
   await create({ cwd: directory, gzip: true, file: archive }, entries);
   return await readFile(archive);
 }
@@ -132,6 +136,97 @@ describe.skipIf(process.platform === "win32")("managed Antigravity activation", 
         await second;
       }
       expect((await readManagedAntigravityStatus(location))).toEqual({ status: "installed", runtime: await second });
+    });
+  });
+
+  async function raceReleases(
+    directory: string,
+    first: { archive: Buffer<ArrayBuffer>; version: string },
+    second: { archive: Buffer<ArrayBuffer>; version: string },
+    firstFinishesLast: boolean,
+  ): Promise<void> {
+    const rootDir = await mkdtemp(path.join(directory, "installs-"));
+    // Two lexical paths bypass the process-local guard while sharing the same
+    // activation files, as independently running owners do.
+    const alias = path.join(directory, "alias");
+    await symlink(rootDir, alias);
+    try {
+      const releases = [first, second];
+      const entered = releases.map(() => Promise.withResolvers<void>());
+      const finish = releases.map(() => Promise.withResolvers<void>());
+      const installs = releases.map(({ archive, version }, index) =>
+        installManagedAntigravityRuntime({
+          ...appleSilicon,
+          rootDir: path.join(index === 0 ? rootDir : alias, "managed"),
+          fetch: releaseFetch(archive, version),
+          verify: async () => {
+            entered[index].resolve();
+            await finish[index].promise;
+          },
+        }),
+      );
+      try {
+        await Promise.race([Promise.all(entered.map(({ promise }) => promise)), ...installs]);
+        const earlier = firstFinishesLast ? 1 : 0;
+        finish[earlier].resolve();
+        const earlierRuntime = await installs[earlier];
+        finish[1 - earlier].resolve();
+        const laterRuntime = await installs[1 - earlier];
+        const active = await readManagedAntigravityStatus({ ...appleSilicon, rootDir: path.join(rootDir, "managed") });
+        const expectedRuntime = first.version === second.version || firstFinishesLast ? earlierRuntime : laterRuntime;
+        expect(active).toMatchObject({ status: "installed", runtime: { version: second.version } });
+        if (active.status !== "installed") throw new Error("Expected an active runtime");
+        expect(await realpath(active.runtime.command)).toBe(await realpath(expectedRuntime.command));
+        expect(await realpath(laterRuntime.command)).toBe(await realpath(active.runtime.command));
+      } finally {
+        for (const gate of finish) gate.resolve();
+        await Promise.allSettled(installs);
+      }
+    } finally {
+      await rm(alias, { force: true });
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  }
+
+  it("keeps 1.5.15 active when a slower installer finishes verifying 1.5.14", async () => {
+    await withRuntimeRoot(async (directory) => {
+      const archive = await makeArchive(directory);
+      await raceReleases(directory, { archive, version: "1.5.14" }, { archive, version: "1.5.15" }, true);
+    });
+  });
+
+  it("keeps a concurrent activation of the same version when the staged digest differs", async () => {
+    await withRuntimeRoot(async (directory) => {
+      const original = await makeArchive(directory);
+      const rebuilt = await makeArchive(directory, ["antigravity"], "rebuilt executable");
+      await raceReleases(directory, { archive: original, version: "1.5.14" }, { archive: rebuilt, version: "1.5.14" }, true);
+    });
+  });
+
+  it("allows a later explicit reinstall of a rebuilt release with the same version", async () => {
+    await withRuntimeRoot(async (directory) => {
+      const options = { ...appleSilicon, rootDir: path.join(directory, "managed"), verify: async () => {} };
+      const original = await makeArchive(directory);
+      const previous = await installManagedAntigravityRuntime({ ...options, fetch: releaseFetch(original, "1.5.14") });
+      const rebuilt = await makeArchive(directory, ["antigravity"], "rebuilt executable");
+      const active = await installManagedAntigravityRuntime({ ...options, fetch: releaseFetch(rebuilt, "1.5.14") });
+      expect(await readFile(active.command, "utf8")).toBe("rebuilt executable");
+      expect(await readFile(previous.command, "utf8")).toBe(fixtureBinary);
+      expect(await readManagedAntigravityStatus(options)).toEqual({ status: "installed", runtime: active });
+    });
+  });
+
+  it("preserves the newest verified version regardless of verification order", async () => {
+    await withRuntimeRoot(async (directory) => {
+      const archive = await makeArchive(directory);
+      await fc.assert(fc.asyncProperty(
+        fc.integer({ min: 0, max: 100 }),
+        fc.integer({ min: 1, max: 100 }),
+        fc.boolean(),
+        async (patch, gap, firstFinishesLast) => {
+          await raceReleases(directory, { archive, version: `1.5.${patch}` }, { archive, version: `1.5.${patch + gap}` }, firstFinishesLast);
+        },
+      ), { numRuns: 25 });
     });
   });
 

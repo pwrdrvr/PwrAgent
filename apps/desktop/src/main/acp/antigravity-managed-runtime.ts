@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { chmod, lstat, mkdir, mkdtemp, readlink, rename, rm, symlink } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readlink, realpath, rename, rm, symlink } from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
+import { lock } from "proper-lockfile";
 import { extract } from "tar";
 import { getMainLogger } from "../log.js";
 import { resolvePwragentRoot } from "../profile.js";
@@ -67,8 +68,14 @@ function isVersion(value: string): boolean {
   return value.length <= 32 && value === value.trim() && VERSION_PATTERN.test(value);
 }
 
-export function isManagedAntigravityCommand(command: string, options?: RuntimeLocation): boolean {
-  const relative = path.relative(managedRoot(options), command);
+export async function isManagedAntigravityCommand(command: string): Promise<boolean> {
+  if (!path.isAbsolute(command)) return false;
+  const [root, target] = await Promise.all([
+    realpath(managedRoot()).catch(() => undefined),
+    realpath(command).catch(() => undefined),
+  ]);
+  if (!root || !target) return false;
+  const relative = path.relative(root, target);
   return relative === relative.trim() && ACTIVE_TARGET_PATTERN.test(relative);
 }
 
@@ -77,12 +84,16 @@ export async function readManagedAntigravityStatus(
   options?: RuntimeLocation,
 ): Promise<ManagedAntigravityStatus> {
   if (!supportsManagedInstall(options)) return { status: "unsupported" };
-  const root = managedRoot(options);
+  const runtime = await readActiveRuntime(managedRoot(options));
+  return runtime ? { status: "installed", runtime } : { status: "not-installed" };
+}
+
+async function readActiveRuntime(root: string): Promise<ManagedAntigravityRuntime | undefined> {
   try {
     const target = await readlink(path.join(root, ACTIVE_LINK));
     const version = ACTIVE_TARGET_PATTERN.exec(target)?.[1];
     if (target !== target.trim() || !version || !isVersion(version)) {
-      return { status: "not-installed" };
+      return undefined;
     }
     const command = path.join(root, target);
     const [rootInfo, versionsInfo, releaseInfo, binaryInfo] = await Promise.all([
@@ -93,14 +104,14 @@ export async function readManagedAntigravityStatus(
     ]);
     if (rootInfo.isDirectory() && versionsInfo.isDirectory() && releaseInfo.isDirectory()
       && binaryInfo.isFile() && (binaryInfo.mode & 0o100) !== 0) {
-      return { status: "installed", runtime: { command, version } };
+      return { command, version };
     }
   } catch (error) {
     if (!["ENOENT", "EINVAL", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) {
       throw error;
     }
   }
-  return { status: "not-installed" };
+  return undefined;
 }
 
 /** Explicitly install or reinstall Google's current release. The active link
@@ -123,6 +134,7 @@ export async function installManagedAntigravityRuntime(
 }
 
 async function installRelease(root: string, options: InstallOptions): Promise<ManagedAntigravityRuntime> {
+  const previous = await readActiveRuntime(root);
   const fetchRelease = options.fetch ?? globalThis.fetch;
   const downloadTimeout = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
   const downloadSignal = options.signal
@@ -144,7 +156,7 @@ async function installRelease(root: string, options: InstallOptions): Promise<Ma
     options.signal?.throwIfAborted();
     await verify(command, release.version, staging, options.signal);
     options.signal?.throwIfAborted();
-    return await activateRelease(root, staging, command, release, options.signal);
+    return await activateRelease(root, staging, command, release, previous?.command, options.signal);
   } finally {
     await rm(staging, { recursive: true, force: true }).catch(() => {
       log.warn("Could not clean up an Antigravity installation staging directory");
@@ -287,7 +299,54 @@ async function activateRelease(
   staging: string,
   command: string,
   release: Release,
+  previousCommand: string | undefined,
   signal?: AbortSignal,
+): Promise<ManagedAntigravityRuntime> {
+  // Only publication needs a cross-process lock. A different profile can
+  // finish downloading and validating while this installer is still staging.
+  let compromise: Error | undefined;
+  const unlock = await lock(path.join(root, "activate"), {
+    realpath: false,
+    stale: 60_000,
+    retries: { retries: 20, minTimeout: 25, maxTimeout: 25 },
+    onCompromised: (error) => { compromise = error; },
+  });
+  const assertCanPublish = () => {
+    signal?.throwIfAborted();
+    if (compromise) throw compromise;
+  };
+  try {
+    const active = await readActiveRuntime(root);
+    assertCanPublish();
+    if (active && keepActiveRuntime(active, release.version, previousCommand)) return active;
+    return await publishRelease(root, staging, command, release, assertCanPublish);
+  } finally {
+    await unlock().catch(() => log.warn("Could not release the Antigravity activation lock"));
+  }
+}
+
+function keepActiveRuntime(
+  active: ManagedAntigravityRuntime,
+  version: string,
+  previousCommand: string | undefined,
+): boolean {
+  const activeParts = active.version.split(".");
+  for (const [index, part] of version.split(".").entries()) {
+    const difference = BigInt(activeParts[index]) - BigInt(part);
+    if (difference !== 0n) return difference > 0n;
+  }
+  // Google can rebuild a version with a different digest. A concurrent
+  // activation wins that tie. An explicit reinstall can still replace it
+  // after reading the current active build on the next attempt.
+  return active.command !== previousCommand;
+}
+
+async function publishRelease(
+  root: string,
+  staging: string,
+  command: string,
+  release: Release,
+  assertCanPublish: () => void,
 ): Promise<ManagedAntigravityRuntime> {
   const relative = path.join("versions", `${release.version}-${release.sha512}`, "agy");
   const installedCommand = path.join(root, relative);
@@ -299,11 +358,11 @@ async function activateRelease(
   }
   const stagedLink = path.join(staging, ACTIVE_LINK);
   await symlink(relative, stagedLink);
-  signal?.throwIfAborted();
+  assertCanPublish();
   // A reinstall of the same digest atomically replaces the same verified
   // executable. Other releases keep their paths for existing selections.
   await rename(command, installedCommand);
-  signal?.throwIfAborted();
+  assertCanPublish();
   await rename(stagedLink, path.join(root, ACTIVE_LINK));
   return { command: installedCommand, version: release.version };
 }

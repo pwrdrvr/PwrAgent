@@ -16,6 +16,7 @@ import {
 } from "@pwrdrvr/agent-acp/discovery";
 import type { AcpAgentStrategy } from "@pwrdrvr/agent-acp/strategies";
 import { execFile as execFileCallback } from "node:child_process";
+import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -265,7 +266,7 @@ export async function discoverLocalAcpAgentRecords(
           ? { GROK_INSTALLER: "pwragent" }
           : {}),
         ...(group.strategyId === "antigravity"
-          && (active.command === managedAntigravity?.command || isManagedAntigravityCommand(active.command))
+          && (active.command === managedAntigravity?.command || await isManagedAntigravityCommand(active.command))
           ? MANAGED_ANTIGRAVITY_ENV
           : {}),
       },
@@ -325,7 +326,7 @@ async function discoverAcpGroups(options: DiscoverAcpAgentInstancesOptions | und
     ? resolveBundledGrokCommand()
     : options.bundledGrokCommand;
   const groups = await withPwrAgentGrok(discoveredGroups, strategies, managedGrokCommand, bundledGrokCommand, now, options);
-  if (managedAntigravity) addManagedAntigravity(groups, managedAntigravity, now);
+  if (managedAntigravity) await addManagedAntigravity(groups, managedAntigravity, now);
   return { groups, managedGrokCommand, bundledGrokCommand, managedAntigravity, now };
 }
 
@@ -343,14 +344,15 @@ async function resolveManagedAntigravity(
   return status?.status === "installed" ? status.runtime : undefined;
 }
 
-function addManagedAntigravity(
+async function addManagedAntigravity(
   groups: DiscoveredAcpAgentGroup[],
   runtime: ManagedAntigravityRuntime,
   now: number,
-): void {
+): Promise<void> {
   const instance: AcpAgentInstance = { ...runtime, source: "fallback" };
   const group = groups.find(({ strategyId }) => strategyId === "antigravity");
   if (group) {
+    if (await rejectedManagedAntigravity(group, runtime.command)) return;
     if (group.instances.some(({ command, source }) =>
       command === runtime.command && source === "override"
     )) return;
@@ -370,6 +372,20 @@ function addManagedAntigravity(
     instances: [instance],
     discoveredAt: now,
   });
+}
+
+async function rejectedManagedAntigravity(group: DiscoveredAcpAgentGroup, command: string): Promise<boolean> {
+  const rejected = group.rejectedInstances ?? [];
+  if (!rejected.length) return false;
+  if (rejected.some((candidate) => candidate.command === command)) return true;
+  // The discovery kit deduplicates paths by real path and reports its probe
+  // under the winning alias. Honor that verdict for the managed path as well.
+  const target = await realpath(command).catch(() => undefined);
+  if (!target) return false;
+  const resolved = await Promise.all(rejected
+    .filter((candidate) => path.isAbsolute(candidate.command))
+    .map((candidate) => realpath(candidate.command).catch(() => undefined)));
+  return resolved.includes(target);
 }
 
 function mapRejectedInstances(
