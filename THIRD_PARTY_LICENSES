@@ -1169,9 +1169,9 @@ MIT
 - @peculiar/utils@2.0.3 | https://github.com/PeculiarVentures/pvtsutils
 - @peculiar/x509@2.2.0 | https://github.com/PeculiarVentures/x509
 - @pwrdrvr/agent-acp@0.17.0 | https://github.com/pwrdrvr/agent-kit
-- @pwrdrvr/agent-client@0.8.2 | https://github.com/pwrdrvr/agent-kit
+- @pwrdrvr/agent-client@0.8.3 | https://github.com/pwrdrvr/agent-kit
 - @pwrdrvr/agent-core@0.2.0 | https://github.com/pwrdrvr/agent-kit
-- @pwrdrvr/agent-transport@0.1.8 | https://github.com/pwrdrvr/agent-kit
+- @pwrdrvr/agent-transport@0.1.9 | https://github.com/pwrdrvr/agent-kit
 - @pwrdrvr/codex-app-server-protocol@0.144.0 | https://github.com/pwrdrvr/codex-app-server-protocol
 - @pwrdrvr/codex-app-server-protocol@0.164.0 | https://github.com/pwrdrvr/codex-app-server-protocol
 - @pwrdrvr/codex-discovery@0.4.0 | https://github.com/pwrdrvr/agent-kit
@@ -4874,9 +4874,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 Applies to:
 - @pwrdrvr/agent-acp@0.17.0 (MIT)
-- @pwrdrvr/agent-client@0.8.2 (MIT)
+- @pwrdrvr/agent-client@0.8.3 (MIT)
 - @pwrdrvr/agent-core@0.2.0 (MIT)
-- @pwrdrvr/agent-transport@0.1.8 (MIT)
+- @pwrdrvr/agent-transport@0.1.9 (MIT)
 - @pwrdrvr/codex-app-server-protocol@0.144.0 (MIT)
 - @pwrdrvr/codex-app-server-protocol@0.164.0 (MIT)
 - @pwrdrvr/codex-discovery@0.4.0 (MIT)

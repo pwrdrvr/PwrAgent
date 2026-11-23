@@ -5203,7 +5203,7 @@ describe("CodexAppServerClient", () => {
       },
     );
 
-    it("external close during restart waits for initialization and prevents resume", async () => {
+    it("external close during restart cancels a blocked initialize before it reaches stdio", async () => {
       const restarting = deferred();
       const finishRestart = deferred();
       let initializeCount = 0;
@@ -5222,11 +5222,15 @@ describe("CodexAppServerClient", () => {
         .catch((error: unknown) => error);
       await restarting.promise;
       const close = client.close();
-      finishRestart.resolve();
-      expect(await recovery).toBeInstanceOf(Error);
-      await close;
+      try {
+        await close;
+        expect(await recovery).toBeInstanceOf(Error);
+      } finally {
+        finishRestart.resolve();
+      }
+      await new Promise<void>((resolve) => setImmediate(resolve));
       expect(methods()).not.toContain("thread/resume");
-      expect(methods().filter((method) => method === "initialize")).toHaveLength(2);
+      expect(methods().filter((method) => method === "initialize")).toHaveLength(1);
     });
 
     it("external close during shutdown cancels repair before it starts", async () => {

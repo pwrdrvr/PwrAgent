@@ -444,15 +444,20 @@ it.each([1_024, 65_536, 131_072])("parses each of 16 replies once at %i payload 
   expect(outcome.parsedCodeUnits).toBe(frames.reduce((sum, line) => sum + line.length, 0));
 });
 
-it("latches auth and cancels pending RPCs before observers and dispatch can accept a response", async () => {
+it("latches auth before observing the triggering frame and rejects the pending RPC", async () => {
   const frames = operation("response-error", 0, "");
   const fixture = {
     frames, requests: [{ method: "account/read" }], chunkSizes: [8], closeOnRejection: true,
   };
   const baseline = await runTraffic({ ...fixture, canonical: false });
   const actual = await runTraffic({ ...fixture, canonical: true });
-  expect(actual.events).toEqual(baseline.events);
-  expect(actual.events[0]).toEqual(["auth"]);
+  const isObservation = (event: unknown) => Array.isArray(event) && event[0] === "observe";
+  // The raw-line path closes before it reaches JSON-RPC. The canonical path
+  // closes inside the observer wrapper, so diagnostics see the triggering frame.
+  expect(actual.events.filter((event) => !isObservation(event))).toEqual(baseline.events);
+  const observation = ["observe", JSON.parse(frames[0]!), frames[0], true];
+  expect(actual.events.slice(0, 2)).toEqual([["auth"], observation]);
+  expect(actual.events.filter(isObservation)).toEqual([observation]);
   expect(actual.events.filter((event) => Array.isArray(event) && event[0] === "auth")).toHaveLength(1);
   expect(actual.events).toContainEqual(["rejected", "account/read", "json-rpc transport closed"]);
 });
