@@ -405,6 +405,8 @@ async function runAxeScan(
     rules?: string[];
     /** Record the result matrix for the shared-launch comparison. */
     comparisonKey?: string;
+    /** Continue to audit later appearances after reporting a violation. */
+    softViolations?: boolean;
   },
 ): Promise<void> {
   // setLegacyMode is required under Electron: the default analyze()
@@ -474,9 +476,12 @@ async function runAxeScan(
         }),
       )
     ).join("\n");
-    throw new Error(
-      `axe-core found ${results.violations.length} WCAG2 AA violation(s) on ${surface}:\n${summary}`,
-    );
+    const message = `axe-core found ${results.violations.length} WCAG2 AA violation(s) on ${surface}:\n${summary}`;
+    if (options?.softViolations) {
+      expect.soft(results.violations.length, message).toBe(0);
+    } else {
+      throw new Error(message);
+    }
   }
 }
 
@@ -504,6 +509,7 @@ async function scanCopyChips(page: Page, appearance: AuditAppearance): Promise<v
     await runAxeScan(page, `sidebar rows carrying copy chips (${label})`, {
       rules: appearance.colorTheme ? COLOR_RULES : undefined,
       comparisonKey: label,
+      softViolations: true,
     });
   });
 }
