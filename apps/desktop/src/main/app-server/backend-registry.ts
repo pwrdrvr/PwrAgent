@@ -1012,6 +1012,7 @@ type JoinedSubmissionResult =
 
 export class DesktopBackendRegistry {
   readonly context: RegistryContext;
+  private readonly jobMonitorCreationDeferredTurns = new Set<string>();
   /** The PR and forge domain: forge tools, PR bindings and PR attachment. Importers use the facade below. */
   private readonly forgeToolBridge: ForgeToolBridge;
   /** The thread inspection, mutation and maintenance Agent tools. Importers use the facade below. */
@@ -1824,6 +1825,7 @@ export class DesktopBackendRegistry {
     connect: (ports: ReturnType<DesktopBackendRegistry["constructionPorts"]>) => void,
   ) {
     this.context = dependencies.context;
+    this.context.turnState.onTurnUnregistered((key) => { this.jobMonitorCreationDeferredTurns.delete(key); });
     this.turnEventObservers = dependencies.turnEventObservers;
     this.ownerAdmission = dependencies.ownerAdmission;
     this.configStore = dependencies.configStore;
@@ -2095,7 +2097,8 @@ export class DesktopBackendRegistry {
       get gitWorkingStateService() { return current().gitWorkingStateService; },
       handleAgentMcpConnectionRequest: (...args: Parameters<ThreadMcpConnections["handleAgentMcpConnectionRequest"]>) => this.threadMcpConnections.handleAgentMcpConnectionRequest(...args),
       handleAgentTaskMonitorRequest: (request: TaskMonitorRequest) => this.handleAgentTaskMonitorRequest(request),
-      isJobMonitorCreationEnabled: (context: { backend: AppServerBackendKind; threadId: string }) => this.isJobMonitorCreationEnabled(context),
+      isJobMonitorCreationEnabled: (context: { backend: AppServerBackendKind; threadId: string }) =>
+        this.isJobMonitorCreationEnabled({ ...context, turnId: this.jobMonitorCreationTurnId(context) }),
       handleCodexAppServerUnexpectedExit: (...args: Parameters<typeof this.codexRuntimeSupervisor.handleCodexAppServerUnexpectedExit>) => this.codexRuntimeSupervisor.handleCodexAppServerUnexpectedExit(...args),
       handleServerRequest: (...args: Parameters<typeof this.handleServerRequest>) => this.handleServerRequest(...args),
       handoffThreadWorkspace: (...args: Parameters<ThreadWorkspaceService["handoffThreadWorkspace"]>) => this.threadWorkspaceService.handoffThreadWorkspace(...args),
@@ -11344,6 +11347,7 @@ export class DesktopBackendRegistry {
               client,
               threadId: params.threadId,
               tokenMiserEnabled: tokenMiserEnabledForThread,
+              turnId: syntheticStartedTurnId,
             });
           const pwrdrvrTokenMiser =
             await this.buildSupportedPwrdrvrTokenMiserActivation({
@@ -11425,6 +11429,7 @@ export class DesktopBackendRegistry {
     const result = submitted.turn;
     const retryTerminalObserved = () => retryableCodexTurnStart
       ? this.context.turnState.retryReceipt(retryableCodexTurnStart).terminalObserved ?? false : false;
+    if (!retryTerminalObserved()) this.bindDeferredJobMonitorCreation(result.threadId, result.turnId);
     return await this.threadStarts.finalizeCodex({
       identity: params, turn: result, settings: turnParams, executionMode: params.executionMode,
       bindOrigin: () => this.bindStartingTurnOrigin(startingOrigin, result, retryTerminalObserved()),
@@ -15606,31 +15611,62 @@ export class DesktopBackendRegistry {
     if (typeof threadId !== "string" || !threadId.trim() || typeof enabled !== "boolean") {
       throw new Error("Changing Job Monitor creation requires a thread and an enabled state.");
     }
-    const backend = "codex";
-    this.overlayStore.setThreadJobMonitorCreation({ backend, threadId, enabled });
+    const identity = { backend: "codex", threadId } as const;
+    const deferredTurnId = enabled && !(await this.isJobMonitorCreationEnabled(identity))
+      ? this.jobMonitorCreationTurnId(identity) : undefined;
+    this.overlayStore.setThreadJobMonitorCreation({ ...identity, enabled });
+    if (deferredTurnId) {
+      // Retain this turn's availability while saving On for the next turn.
+      this.jobMonitorCreationDeferredTurns.add(buildActiveTurnKey(identity.backend, threadId, deferredTurnId));
+    }
     await this.publishLocalEvent({
-      backend,
+      backend: identity.backend,
       notification: { method: "thread/agent/updated", params: { threadId } },
     });
     return { threadId, enabled };
   }
 
-  private async isJobMonitorCreationEnabled(context: { backend: AppServerBackendKind; threadId: string }): Promise<boolean> {
-    return (await this.overlayStore.getThreadOverlayState(context))?.jobMonitorCreationEnabled !== false;
+  private jobMonitorCreationTurnId(identity: { backend: AppServerBackendKind; threadId: string }): string | undefined {
+    if (identity.backend !== "codex") return undefined;
+    const pendingId = buildPendingTurnId(identity.threadId);
+    return this.context.turnState.pendingStartedTurnId(identity.threadId)
+      ?? this.getActiveTurnForThread(identity)?.turnId
+      ?? (this.context.turnState.hasRegisteredTurn({ ...identity, turnId: pendingId }) ? pendingId : undefined);
+  }
+
+  private bindDeferredJobMonitorCreation(threadId: string, turnId: string): void {
+    const pendingId = buildPendingTurnId(threadId);
+    if (turnId !== pendingId && this.jobMonitorCreationDeferredTurns.delete(buildActiveTurnKey("codex", threadId, pendingId))) {
+      this.jobMonitorCreationDeferredTurns.add(buildActiveTurnKey("codex", threadId, turnId));
+    }
+  }
+
+  private async isJobMonitorCreationEnabled(context: { backend: AppServerBackendKind; threadId: string; turnId?: string }): Promise<boolean> {
+    return await this.jobMonitorCreationAvailability(context) === "enabled";
+  }
+
+  private async jobMonitorCreationAvailability({ backend, threadId, turnId }: {
+    backend: AppServerBackendKind; threadId: string; turnId?: string;
+  }): Promise<"enabled" | "off" | "next-turn"> {
+    if ((await this.overlayStore.getThreadOverlayState({ backend, threadId }))?.jobMonitorCreationEnabled === false) return "off";
+    return turnId && this.jobMonitorCreationDeferredTurns.has(buildActiveTurnKey(backend, threadId, turnId))
+      ? "next-turn" : "enabled";
   }
 
   private handleAgentTaskMonitorRequest(request: TaskMonitorRequest): Promise<TaskMonitorResponse> {
     if (request.operation !== "create_monitor_delegation") {
       return this.subAgentMonitorService.handleAgentTaskMonitorRequest(request);
     }
-    return this.isJobMonitorCreationEnabled(request.context).then<TaskMonitorResponse>((enabled) => {
-      if (enabled) return this.subAgentMonitorService.handleAgentTaskMonitorRequest(request);
+    return this.jobMonitorCreationAvailability(request.context).then<TaskMonitorResponse>((availability) => {
+      if (availability === "enabled") return this.subAgentMonitorService.handleAgentTaskMonitorRequest(request);
       return {
         ok: false,
         operation: request.operation,
         error: {
           code: "forbidden",
-          message: "Job Monitors are off for this thread. The operator turned them off. Use Continue After or ask for a sub-agent instead. Existing monitors still report back.",
+          message: availability === "next-turn"
+            ? "Job Monitors will be available from the next turn. Use Continue After or ask for a sub-agent instead. Existing monitors still report back."
+            : "Job Monitors are off for this thread. The operator turned them off. Use Continue After or ask for a sub-agent instead. Existing monitors still report back.",
         },
       };
     });
@@ -15647,7 +15683,7 @@ export class DesktopBackendRegistry {
   ): Promise<CodexDynamicToolSpec[]> {
     const { caller, discoveryEnabled = this.resolveCodexToolDiscoveryFn(), eagerTools } = options;
     const jobMonitorCreationEnabled = options.jobMonitorCreationEnabled ?? (caller?.threadId
-      ? await this.isJobMonitorCreationEnabled({ backend: "codex", threadId: caller.threadId })
+      ? await this.isJobMonitorCreationEnabled({ backend: "codex", threadId: caller.threadId, turnId: caller.turnId })
       : true);
     const tools = withPwrAgentToolDiscovery(buildCodexParentDynamicToolSpecs(
       resolveAgentToolCatalogs({
@@ -15685,6 +15721,7 @@ export class DesktopBackendRegistry {
     client: BackendClient;
     threadId: string;
     tokenMiserEnabled: boolean;
+    turnId?: string;
   }): Promise<CodexDynamicToolSpec[] | undefined> {
     if (!(await this.supportsTokenMiserDynamicToolsResume(params.client))) {
       return undefined;
@@ -15696,6 +15733,7 @@ export class DesktopBackendRegistry {
         ? await this.resolveEagerPwrAgentTools(params.threadId)
         : undefined,
       caller: { backend: "codex", threadId: params.threadId },
+      jobMonitorCreationEnabled: await this.isJobMonitorCreationEnabled({ backend: "codex", threadId: params.threadId, turnId: params.turnId }),
     });
   }
 
@@ -17482,11 +17520,12 @@ export class DesktopBackendRegistry {
               sandbox: modeSettings.sandbox,
               defaultModeRequestUserInput: this.resolveCodexDefaultModeRequestUserInputFn(),
             };
-            // A newly created director has the ordinary discovery catalog.
-            // Eager director tools are a latency optimization, not authority.
+            // Stock Codex keeps the creation-time catalog. The dispatch gate
+            // still enforces the thread setting when its registered tool is called.
             const initialTools = await this.buildCodexParentDynamicTools(
               this.resolveTokenMiserEnabledForOverride(overlay?.tokenMiserEnabled),
-              { jobMonitorCreationEnabled: overlay?.jobMonitorCreationEnabled !== false },
+              { jobMonitorCreationEnabled: overlay?.jobMonitorCreationEnabled !== false
+                || !(await this.supportsTokenMiserDynamicToolsResume(client)) },
             );
             const fresh = await client.prepareFreshNativeVoiceThread?.({ ...admission, dynamicTools: initialTools });
             if (!fresh) {
@@ -21235,6 +21274,7 @@ export class DesktopBackendRegistry {
         const pendingModeKey = buildActiveTurnModeKey(threadId, pendingTurnId);
         const canTransferPending = this.context.turnState.transferPendingCodexTurnInputSource(threadId, turnId,
           this.codexMessageContextTurnObservations.get(threadId)?.get(turnId));
+        if (canTransferPending) this.bindDeferredJobMonitorCreation(threadId, turnId);
         const collaborationMode = canTransferPending ? this.context.turnState.collaborationMode(pendingActiveKey) : undefined;
         const pendingMode = collaborationMode ? this.context.turnState.executionMode(pendingModeKey) : undefined;
         if (collaborationMode) {

@@ -501,9 +501,14 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
         await runAxe(app.window, "Job Monitors on", { include });
         await monitors.click();
         await expect(monitors).toHaveAttribute("aria-checked", "false");
+        await expect(monitors).not.toHaveAttribute("aria-busy", "true");
+        await expect(monitors).toContainText("The agent can't start new ones.");
+        const suggestions = menu.getByRole("menuitemcheckbox", { name: "Monitor job suggestions", exact: true });
+        await expect(suggestions).toHaveAttribute("aria-disabled", "true");
+        await expect(suggestions).toContainText("needs Job Monitors");
         await runAxe(app.window, "Job Monitors off", { include });
         await monitors.press("ArrowDown");
-        await expect(menu.getByRole("menuitemcheckbox", { name: "Monitor job suggestions", exact: true })).toBeFocused();
+        await expect(suggestions).toBeFocused();
         await app.window.keyboard.press("Escape");
         await expect(trigger).toBeFocused();
       } finally {

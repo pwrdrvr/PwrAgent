@@ -2316,12 +2316,13 @@ function ComposerThreadOptionsMenu(props: {
   const switchesDisabled = props.disabled || props.settingsSaving || jobMonitorSaving;
   const monitorSuggestionsDisabled = monitorCreationOff || switchesDisabled;
   const runningMonitors = props.runningMonitorCount ?? 0;
+  const showRunningCount = !monitorCreationOff && runningMonitors > 0 && !props.runningMonitorCountIncomplete;
   let monitorDescription: string | undefined;
   if (failedJobMonitorCreation !== undefined && failedJobMonitorCreation === monitorCreationOff) {
     monitorDescription = failedJobMonitorCreation ? "Couldn't turn on. Still off." : "Couldn't turn off. Still on.";
   } else if (monitorCreationOff) {
     monitorDescription = "The agent can't start new ones.";
-    if (props.runningMonitorCountIncomplete || runningMonitors > 0) {
+    if (runningMonitors > 0) {
       monitorDescription += props.runningMonitorCountIncomplete
         ? " Running monitors still report back."
         : runningMonitors === 1 ? " 1 running still reports back." : ` ${runningMonitors} running still report back.`;
@@ -2330,6 +2331,11 @@ function ComposerThreadOptionsMenu(props: {
     monitorDescription = "Available from the agent's next turn.";
   }
   const jobMonitorTooltip = "Let the agent start Job Monitors: helper threads that poll until something changes, then wake this thread. Off stops new ones; running monitors still report back.";
+  const jobMonitorDescriptionIds = [
+    `${menuId}-monitor-help`,
+    ...(showRunningCount ? [`${menuId}-monitor-count`] : []),
+    ...(monitorDescription ? [`${menuId}-monitor-description`] : []),
+  ].join(" ");
   const changeJobMonitorCreation = async () => {
     if (switchesDisabled || !props.onJobMonitorCreationChange) return;
     setRequestedJobMonitorCreation(monitorCreationOff);
@@ -2444,7 +2450,7 @@ function ComposerThreadOptionsMenu(props: {
                 aria-checked={requestedJobMonitorCreation ?? !monitorCreationOff}
                 aria-busy={jobMonitorSaving || undefined}
                 aria-disabled={switchesDisabled || undefined}
-                aria-describedby={monitorDescription ? `${menuId}-monitor-description` : undefined}
+                aria-describedby={jobMonitorDescriptionIds}
                 className="composer-dropdown__option composer-thread-options__option"
                 role="menuitemcheckbox"
                 type="button"
@@ -2456,8 +2462,8 @@ function ComposerThreadOptionsMenu(props: {
               >
                 <span className="composer-thread-options__label">
                   Job Monitors
-                  {!monitorCreationOff && runningMonitors > 0 && !props.runningMonitorCountIncomplete ? (
-                    <span className="composer-dropdown__option-description composer-thread-options__note"> · {runningMonitors} running</span>
+                  {showRunningCount ? (
+                    <span className="composer-dropdown__option-description composer-thread-options__note"> <span aria-hidden="true">· </span><span id={`${menuId}-monitor-count`}>{runningMonitors} running</span></span>
                   ) : null}
                   {monitorDescription ? (
                     <span className="composer-dropdown__option-description composer-thread-options__note composer-thread-options__detail" id={`${menuId}-monitor-description`}>
@@ -2469,7 +2475,8 @@ function ComposerThreadOptionsMenu(props: {
                   <span className="composer-thread-options__toggle-thumb" />
                 </span>
               </button>
-              {monitorCreationOff && props.onShowRunningMonitors && (runningMonitors > 0 || props.runningMonitorCountIncomplete) ? (
+              <span hidden id={`${menuId}-monitor-help`}>{jobMonitorTooltip}</span>
+              {monitorCreationOff && props.onShowRunningMonitors && runningMonitors > 0 ? (
                 <button
                   className="composer-dropdown__option"
                   role="menuitem"
@@ -16222,7 +16229,9 @@ function useComposerController(props: ComposerProps) {
               ? {
                   jobMonitorCreation: props.thread.jobMonitorCreationEnabled ?? true,
                   activeTurnId: props.activeTurnId,
-                  runningMonitorCount: props.thread.activeSubAgents?.filter(({ monitorId }) => monitorId.startsWith("monitor-")).length,
+                  runningMonitorCount: props.thread.activeSubAgents?.filter(({ monitorId, status }) =>
+                    monitorId.startsWith("monitor-")
+                    && (status === "pending" || status === "running" || status === "blocked" || status === "cancelling")).length,
                   runningMonitorCountIncomplete: props.thread.activeSubAgentsIncomplete,
                   onShowRunningMonitors: props.onShowRunningMonitors,
                   onJobMonitorCreationChange: changeJobMonitorCreation,

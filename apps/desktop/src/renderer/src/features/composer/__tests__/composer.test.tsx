@@ -2009,6 +2009,7 @@ describe("Composer", () => {
     const switchRow = screen.getByRole("menuitemcheckbox", { name: "Job Monitors" });
     expect(switchRow).toHaveAttribute("aria-checked", "true");
     expect(switchRow).toHaveTextContent("1 running");
+    expect(switchRow).toHaveAccessibleDescription(/Let the agent start Job Monitors:.*1 running/);
     act(() => { switchRow.focus(); });
     fireEvent.click(switchRow);
     expect(setThreadJobMonitorCreation).toHaveBeenCalledWith({ threadId: thread.id, enabled: false });
@@ -2022,7 +2023,7 @@ describe("Composer", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Couldn't change Job Monitors");
     expect(screen.getByRole("alert")).toHaveTextContent("fixture save error");
     expect(switchRow).toHaveAttribute("aria-checked", "true");
-    expect(switchRow).toHaveAccessibleDescription("Couldn't turn off. Still on.");
+    expect(switchRow).toHaveAccessibleDescription(/Couldn't turn off\. Still on\./);
 
     rerender(<Composer {...props} thread={{ ...thread, jobMonitorCreationEnabled: false }} />);
     expect(switchRow).toHaveAttribute("aria-checked", "false");
@@ -2035,6 +2036,33 @@ describe("Composer", () => {
     expect(onShowRunningMonitors).toHaveBeenCalledOnce();
   });
 
+  it("counts only live Job Monitors in the thread options menu", () => {
+    const thread = { id: "thread-1", title: "CI", titleSource: "explicit" as const,
+      source: "codex" as const, linkedDirectories: [], inbox: { inInbox: false } };
+    const props = { desktopApi: { setThreadJobMonitorCreation: vi.fn() },
+      disabled: false, skills: [], onShowRunningMonitors: vi.fn() };
+    const card = { task: "Watch the build", createdAt: 1, updatedAt: 1 };
+    const failed = (["failed", "failure", "cancelled", "success"] as const).map((status) => ({
+      ...card, monitorId: `monitor-${status}`, status,
+    }));
+    const { rerender } = render(<Composer {...props} thread={{
+      ...thread, jobMonitorCreationEnabled: false, activeSubAgents: failed, activeSubAgentsIncomplete: true,
+    }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    const row = screen.getByRole("menuitemcheckbox", { name: "Job Monitors" });
+    expect(row).toHaveTextContent("The agent can't start new ones.");
+    expect(row).not.toHaveTextContent("still report back");
+    expect(screen.queryByRole("menuitem", { name: "Show running monitors…" })).toBeNull();
+
+    rerender(<Composer {...props} thread={{ ...thread, activeSubAgents: [
+      ...failed,
+      { ...card, monitorId: "monitor-running", status: "running" },
+      { ...card, monitorId: "delegation-running", status: "running" },
+    ] }} />);
+    expect(row).toHaveTextContent("1 running");
+    expect(row).not.toHaveTextContent("5 running");
+  });
+
   it("shows the next-turn note when Job Monitors is turned back on during a turn", async () => {
     const thread = { id: "thread-1", title: "CI", titleSource: "explicit" as const,
       source: "codex" as const, linkedDirectories: [], inbox: { inInbox: false } };
@@ -2043,13 +2071,13 @@ describe("Composer", () => {
     const { rerender } = render(<Composer {...props} activeTurnId="turn-1" thread={{ ...thread, jobMonitorCreationEnabled: false }} />);
     fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
     const row = screen.getByRole("menuitemcheckbox", { name: "Job Monitors" });
-    expect(row).toHaveAccessibleDescription("The agent can't start new ones.");
+    expect(row).toHaveAccessibleDescription(/Let the agent start Job Monitors:.*The agent can't start new ones\./);
     await act(async () => { fireEvent.click(row); });
     expect(setThreadJobMonitorCreation).toHaveBeenCalledWith({ threadId: thread.id, enabled: true });
     rerender(<Composer {...props} activeTurnId="turn-1" thread={thread} />);
-    expect(row).toHaveAccessibleDescription("Available from the agent's next turn.");
+    expect(row).toHaveAccessibleDescription(/Available from the agent's next turn\./);
     rerender(<Composer {...props} activeTurnId="turn-2" thread={thread} />);
-    expect(row).not.toHaveAccessibleDescription();
+    expect(row).toHaveAccessibleDescription(/^Let the agent start Job Monitors:.*still report back\.$/);
   });
 
   it("shows the profile default and lets a thread clear its monitor suggestion override", async () => {
