@@ -219,6 +219,7 @@ import {
 import { ArchiveGroupConfirmation, useArchiveGroupConfirmation } from "./features/navigation/ArchiveGroupConfirmation";
 import { detachedRestoreNotice, detachedRestoreNotices } from "./features/workspace-recovery/detached-restore-notice";
 import { usePwrAgentProfiles } from "./lib/usePwrAgentProfiles";
+import { PullRequestMergeProvider } from "./features/pr-status/pull-request-merge-context";
 import { usePullRequestRefresh } from "./features/pr-status/usePullRequestRefresh";
 import { useThreadGitWorkingStateRefresh } from "./features/navigation/useThreadGitWorkingStateRefresh";
 import { useThreadSessionState } from "./lib/useThreadSessionState";
@@ -4553,6 +4554,12 @@ function DesktopAppShell(props: {
       <OperatorWaitsContext.Provider value={operatorWaitsContext}>
       <ThreadDependencyIndicatorsContext.Provider value={threadDependencyContext}>
       <ThreadPrWatchIndicatorsContext.Provider value={threadPrWatchContext}>
+      {/* A peer's thread merges on its owner, which holds the thread's
+          attachments and merge holds; see threadPullRequestMergeTarget. */}
+      <PullRequestMergeProvider
+        desktopApi={desktopApi}
+        showNotice={showAppNotice}
+      >
       <ThreadProvidersContext.Provider value={threadProviders}>
       <ThreadProviderCatalogsContext.Provider value={threadProviderCatalogs}>
       <ThreadHandoffBandContext.Provider value={threadHandoffBand}>
@@ -5299,6 +5306,7 @@ function DesktopAppShell(props: {
       </ThreadHandoffBandContext.Provider>
       </ThreadProviderCatalogsContext.Provider>
       </ThreadProvidersContext.Provider>
+      </PullRequestMergeProvider>
       </ThreadPrWatchIndicatorsContext.Provider>
       </ThreadDependencyIndicatorsContext.Provider>
       </OperatorWaitsContext.Provider>

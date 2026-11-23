@@ -1158,7 +1158,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           extraLinkedDirectories: [], ...overlays[key], lastSeenUpdatedAt: seenUpdatedAt };
       }
     }
-    const threads = materializeNavigationThreads({ threads: providerRows, overlayByThreadKey: overlays,
+    const threads = materializeNavigationThreads({ threads: providerRows, overlayByThreadKey: overlays, workspaceRoots: params.workspaceRoots,
       firstSnapshot: !baseline && !backendState?.lastSnapshotHash,
       previousKnownThreadKeys: baseline?.knownThreadKeys ?? backendState?.knownThreadKeys ?? [] }).map((thread) => {
         const key = buildThreadIdentityKey(thread.source, thread.id);
@@ -1564,6 +1564,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     thread: AppServerThreadSummary;
     messagingBindingsByThreadKey?: Record<string, MessagingThreadBindingSummary[] | undefined>;
     queuedExecutionMode?: { mode: ThreadExecutionMode; queuedAt: number };
+    workspaceRoots?: string[];
   }): Promise<NavigationThreadSummary> {
     const thread = params.thread;
     const threadKey = buildThreadIdentityKey(thread.source, thread.id);
@@ -1580,6 +1581,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         ...overlay, queuedExecutionMode: queue.mode, queuedExecutionModeAt: queue.queuedAt,
       } : overlay },
       threads: [thread],
+      workspaceRoots: params.workspaceRoots,
     })[0]!;
   }
 

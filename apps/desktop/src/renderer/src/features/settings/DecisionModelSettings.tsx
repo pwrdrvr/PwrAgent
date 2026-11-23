@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   DECISION_JEV_DEFAULT_MODEL,
   DECISION_JEV_ENDPOINT,
@@ -9,9 +9,12 @@ import {
   decisionImageCapabilities,
   decisionImageCapabilityLabel,
   decisionLocalEndpointProblem,
+  decisionModelOptions,
   normalizeDecisionLocalEndpoint,
   resolveDecisionModelSettings,
   type DecisionModelChoice,
+  type DecisionModelListing,
+  type DecisionModelOption,
   type DecisionProviderId,
   type DesktopDecisionModelSettings,
 } from "@pwragent/shared/decision-models";
@@ -189,6 +192,8 @@ export function DraftTextField(props: {
   disabled?: boolean;
   validate?: (value: string) => string | undefined;
   onSave: (value: string | undefined) => Promise<unknown>;
+  /** Escape leaves the field without saving; the field takes focus when given. */
+  onCancel?: () => void;
 }) {
   const [draft, setDraft] = useState<string | undefined>(undefined);
   const [problem, setProblem] = useState<string | undefined>(undefined);
@@ -212,6 +217,7 @@ export function DraftTextField(props: {
           aria-label={props.label}
           aria-invalid={problem ? true : undefined}
           className="settings-input"
+          autoFocus={props.onCancel !== undefined}
           disabled={props.disabled}
           placeholder={props.placeholder}
           spellCheck={false}
@@ -225,6 +231,9 @@ export function DraftTextField(props: {
             if (event.key === "Enter") {
               event.preventDefault();
               void commit();
+            } else if (event.key === "Escape" && props.onCancel) {
+              event.preventDefault();
+              props.onCancel();
             } else if (event.key === "Escape" && draft !== undefined) {
               event.preventDefault();
               setDraft(undefined);
@@ -234,6 +243,141 @@ export function DraftTextField(props: {
         />
       }
     />
+  );
+}
+
+/** The picker's last choice, which opens a box for any other id. Ids are trimmed, so none starts with a space. */
+const OTHER_MODEL = " other";
+
+const LISTED_GROUP: Record<DecisionProviderId, string> = {
+  local: "Offered by this server",
+  jev: "Your TypeSafe account",
+};
+
+function modelGroup(provider: DecisionProviderId, option: DecisionModelOption): string {
+  return option.source === "listed" ? LISTED_GROUP[provider]
+    : option.source === "known" ? "Known models"
+      : "Saved";
+}
+
+/**
+ * What a provider's model list says, read when the screen opens and again
+ * when the endpoint or key changes. Undefined while it is being read, or
+ * when this build cannot ask.
+ */
+function useDecisionModelListing(
+  provider: DecisionProviderId,
+  desktopApi: DesktopApi | undefined,
+  refreshKey: string,
+): { listing: DecisionModelListing | undefined; loading: boolean } {
+  const [state, setState] = useState<{ key: string; listing: DecisionModelListing } | undefined>();
+  const list = desktopApi?.listDecisionModels;
+  const key = `${provider}:${refreshKey}`;
+  useEffect(() => {
+    if (!list) return;
+    let current = true;
+    void list({ provider })
+      .catch((): DecisionModelListing => ({ ok: false, detail: "PwrAgent could not ask for the model list." }))
+      .then((listing) => {
+        if (current) setState({ key, listing });
+      });
+    return () => { current = false; };
+  }, [list, provider, key]);
+  const listing = state?.key === key ? state.listing : undefined;
+  return { listing, loading: Boolean(list) && !listing };
+}
+
+/**
+ * A decision provider's Model: a choice among the models the provider lists
+ * for this key or server, the ones PwrAgent knows, and any other id typed in.
+ */
+function DecisionModelField(props: {
+  provider: DecisionProviderId;
+  saved: string | undefined;
+  resolvedModel: string;
+  defaultModel: string;
+  sub: ReactNode;
+  desktopApi?: DesktopApi;
+  /** Changes when the endpoint or key does, so the list is read again. */
+  refreshKey: string;
+  saving: boolean;
+  onSave: (model: string | undefined) => Promise<unknown>;
+}) {
+  const [typing, setTyping] = useState(false);
+  const { listing, loading } = useDecisionModelListing(props.provider, props.desktopApi, props.refreshKey);
+  const options = decisionModelOptions({
+    provider: props.provider,
+    saved: props.saved,
+    listed: listing?.ok ? listing.models : undefined,
+  });
+  const listedIds = listing?.ok ? listing.models.map((model) => model.id) : undefined;
+  const source = props.provider === "local" ? "The server" : "TypeSafe";
+  const status = !listing ? undefined
+      : !listing.ok ? `${listing.detail} Showing the models PwrAgent knows.`
+        : listing.models.length === 0 ? `${source} listed no models. Showing the models PwrAgent knows.`
+          : props.provider === "local"
+            ? `The server offers ${listing.models.length === 1 ? "1 model" : `${listing.models.length} models`}.`
+            : "Lists the models your key can use. Pinned versions work whether or not they are listed.";
+  // A local server answers only for what it serves; Jev accepts pinned ids it does not list.
+  const missing = props.provider === "local" && listedIds && listedIds.length > 0 && !listedIds.includes(props.resolvedModel)
+    ? `The server does not offer ${props.resolvedModel}. Choose one it offers.`
+    : undefined;
+  const choose = async (id: string) => {
+    if (id === OTHER_MODEL) {
+      setTyping(true);
+      return;
+    }
+    setTyping(false);
+    if (id !== props.resolvedModel) await props.onSave(id === props.defaultModel ? undefined : id);
+  };
+  return (
+    <>
+      <SettingsField
+        label="Model"
+        sub={props.sub}
+        help={status}
+        error={missing}
+        pending={loading}
+        pendingLabel="Reading models…"
+        control={
+          <Select
+            aria-label="Model"
+            className={PICKER_CLASS}
+            disabled={props.saving}
+            value={typing ? OTHER_MODEL : props.resolvedModel}
+            options={[
+              ...options.map((option) => ({
+                value: option.id,
+                label: option.id === props.defaultModel ? `${option.id} (default)` : option.id,
+                ...(option.description ? { description: option.description } : {}),
+                group: modelGroup(props.provider, option),
+              })),
+              { value: OTHER_MODEL, label: "Other model id…", group: "Other" },
+            ]}
+            onChange={(id) => { void choose(id); }}
+          />
+        }
+      />
+      {typing ? (
+        <DraftTextField
+          label="Model id"
+          sub="Any id the provider accepts. Enter saves it; Escape keeps the current model."
+          value=""
+          placeholder={props.resolvedModel}
+          disabled={props.saving}
+          validate={modelIdProblem}
+          onCancel={() => setTyping(false)}
+          onSave={async (model) => {
+            if (!model) {
+              setTyping(false);
+              return;
+            }
+            await props.onSave(model === props.defaultModel ? undefined : model);
+            setTyping(false);
+          }}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -259,6 +403,18 @@ export function DecisionProviderScreen(props: {
     props.onSave({ ...settings, local: providerSection({ ...settings.local, ...local }) });
   const saveJev = (jev: NonNullable<DesktopDecisionModelSettings["jev"]>) =>
     props.onSave({ ...settings, jev: providerSection({ ...settings.jev, ...jev }) });
+  // A replaced key keeps its `configured` and `source`, so count saves to read the model list again.
+  const [keySaves, setKeySaves] = useState(0);
+  const replaceSecret = async (secret: DesktopSettingsSecretName, value: string) => {
+    const saved = await props.onReplaceSecret(secret, value);
+    if (saved) setKeySaves((count) => count + 1);
+    return saved;
+  };
+  const clearSecret = async (secret: DesktopSettingsSecretName) => {
+    const cleared = await props.onClearSecret(secret);
+    if (cleared) setKeySaves((count) => count + 1);
+    return cleared;
+  };
 
   if (props.provider === "local") {
     return (
@@ -301,13 +457,15 @@ export function DecisionProviderScreen(props: {
                 endpoint: endpoint ? normalizeDecisionLocalEndpoint(endpoint) : undefined,
               })}
             />
-            <DraftTextField
-              label="Model"
-              sub={`PwrSuiteLab's Clef runtime uses clef-flash. ${decisionImageCapabilityLabel(decisionImageCapabilities("local", resolved.localModel))}.`}
-              value={settings.local?.model ?? ""}
-              placeholder={DECISION_LOCAL_DEFAULT_MODEL}
-              disabled={props.saving}
-              validate={modelIdProblem}
+            <DecisionModelField
+              provider="local"
+              saved={settings.local?.model}
+              resolvedModel={resolved.localModel}
+              defaultModel={DECISION_LOCAL_DEFAULT_MODEL}
+              sub={`${decisionImageCapabilityLabel(decisionImageCapabilities("local", resolved.localModel))}.`}
+              desktopApi={props.desktopApi}
+              refreshKey={`${resolved.localEndpoint}:${secrets.localApiKey.configured}:${keySaves}`}
+              saving={props.saving}
               onSave={async (model) => await saveLocal({ model })}
             />
             <SecretField
@@ -316,8 +474,8 @@ export function DecisionProviderScreen(props: {
               secret="decisionLocalApiKey"
               state={secrets.localApiKey}
               disabled={props.saving}
-              onClearSecret={props.onClearSecret}
-              onReplaceSecret={props.onReplaceSecret}
+              onClearSecret={clearSecret}
+              onReplaceSecret={replaceSecret}
             />
             <SettingsField
               label="Connection test"
@@ -372,16 +530,18 @@ export function DecisionProviderScreen(props: {
             secret="typesafeJevApiKey"
             state={secrets.jevApiKey}
             disabled={props.saving}
-            onClearSecret={props.onClearSecret}
-            onReplaceSecret={props.onReplaceSecret}
+            onClearSecret={clearSecret}
+            onReplaceSecret={replaceSecret}
           />
-          <DraftTextField
-            label="Model"
-            sub={decisionImageCapabilityLabel(decisionImageCapabilities("jev", resolved.jevModel))}
-            value={settings.jev?.model ?? ""}
-            placeholder={DECISION_JEV_DEFAULT_MODEL}
-            disabled={props.saving}
-            validate={modelIdProblem}
+          <DecisionModelField
+            provider="jev"
+            saved={settings.jev?.model}
+            resolvedModel={resolved.jevModel}
+            defaultModel={DECISION_JEV_DEFAULT_MODEL}
+            sub={`${decisionImageCapabilityLabel(decisionImageCapabilities("jev", resolved.jevModel))}.`}
+            desktopApi={props.desktopApi}
+            refreshKey={`${secrets.jevApiKey.configured}:${secrets.jevApiKey.source}:${keySaves}`}
+            saving={props.saving}
             onSave={async (model) => await saveJev({ model })}
           />
           <SettingsField

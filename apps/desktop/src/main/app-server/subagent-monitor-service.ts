@@ -31,6 +31,7 @@ import {
   isClaudeNativeSubAgent,
 } from "@pwragent/shared/subagent-kind";
 import { codexNativeSubAgentName } from "@pwragent/shared/subagent-activity";
+import { deriveTaskMonitorDisplayTitle } from "@pwragent/shared/task-monitor-display-title";
 import {
   isCodexNativeSubAgentVisibleInNavigation,
   CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS,
@@ -2779,6 +2780,7 @@ export class SubAgentMonitorService {
       ...record.causalContext,
       monitorId: record.monitorId,
       task: record.task,
+      displayTitle: existing?.displayTitle ?? deriveTaskMonitorDisplayTitle(record.task),
       status:
         patch.status ??
         existing?.status ??

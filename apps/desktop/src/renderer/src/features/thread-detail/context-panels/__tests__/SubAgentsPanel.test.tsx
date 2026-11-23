@@ -86,14 +86,14 @@ describe("SubAgentsPanel", () => {
       .toHaveAttribute("aria-selected", "true");
     expect(screen.getByText("Inspect native worker")).toBeInTheDocument();
     expect(screen.queryByText("Gate noisy output")).not.toBeInTheDocument();
-    expect(screen.queryByText("Watch the deployment")).not.toBeInTheDocument();
+    expect(screen.queryByText("the deployment", { exact: true })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: "Token Miser 1" }));
     expect(screen.getByText("Gate noisy output")).toBeInTheDocument();
     expect(screen.queryByText("Inspect native worker")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: "PwrAgent 2" }));
-    expect(screen.getByText("Watch the deployment")).toBeInTheDocument();
+    expect(screen.getByText("the deployment", { exact: true })).toBeInTheDocument();
     expect(screen.getByText("Finished work")).toBeInTheDocument();
     expect(screen.queryByText("Gate noisy output")).not.toBeInTheDocument();
   });
@@ -187,7 +187,7 @@ describe("SubAgentsPanel", () => {
 
     expect(screen.getByRole("tab", { name: "PwrAgent 2" }))
       .toHaveAttribute("aria-selected", "true");
-    expect(screen.getByText("Watch the deployment")).toBeInTheDocument();
+    expect(screen.getByText("the deployment", { exact: true })).toBeInTheDocument();
     expect(screen.queryByText("Gate noisy output")).not.toBeInTheDocument();
   });
 

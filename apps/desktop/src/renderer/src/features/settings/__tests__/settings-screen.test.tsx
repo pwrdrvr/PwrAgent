@@ -3841,8 +3841,8 @@ describe("SettingsScreen", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("groups active-profile scratch projects as Workspaces and hides inactive profile roots", async () => {
-    const activeWorkspaceRoot = "/Users/fixture-user/.pwragent/profiles/dev/projects";
+  it.each(["/Users/fixture-user/.pwragent", "/state"])("groups active-profile scratch projects under %s as Workspaces", async (profileHome) => {
+    const activeWorkspaceRoot = `${profileHome}/profiles/dev/projects`;
     const listThreads = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: 3_000,
@@ -3871,6 +3871,14 @@ describe("SettingsScreen", () => {
           createdAt: 1_000,
           updatedAt: 4_000,
           projectKey: `${activeWorkspaceRoot}/2026-05-10-883761`,
+          linkedDirectories: [],
+          source: "codex" as const,
+        },
+        {
+          id: "thread-inactive-workspace",
+          title: "Archived on another profile",
+          titleSource: "explicit" as const,
+          projectKey: `${profileHome}/profiles/other/projects/2026-05-10-991047`,
           linkedDirectories: [],
           source: "codex" as const,
         },
@@ -3916,6 +3924,7 @@ describe("SettingsScreen", () => {
       screen.queryByRole("heading", { name: "2026-05-10-883761" }),
     ).not.toBeInTheDocument();
     expect(screen.queryByText("Key Lime Pie yum")).not.toBeInTheDocument();
+    expect(screen.queryByText("Archived on another profile")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: "projects" }),
     ).not.toBeInTheDocument();

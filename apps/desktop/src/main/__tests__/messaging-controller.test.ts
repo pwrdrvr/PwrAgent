@@ -28709,6 +28709,89 @@ describe("MessagingController", () => {
     });
   });
 
+  it.each([
+    { kind: "thread", canRename: false },
+    { kind: "channel", canRename: true },
+    { kind: "dm", canRename: true },
+  ] as const)(
+    "honors conversation rename support for a Mattermost $kind",
+    async ({ kind, canRename }) => {
+      const setConversationTitle = vi.fn<NonNullable<MessagingAdapter["setConversationTitle"]>>(
+        async ({ channel, title }) => ({
+          channel: "mattermost",
+          conversation: channel.conversation,
+          outcome: "updated",
+          title,
+          updatedAt: 1000,
+        }),
+      );
+      const harness = await createHarness({
+        channel: "mattermost",
+        setConversationTitle,
+        supportsConversationTitle: () => canRename,
+      });
+      const channel: MessagingChannelRef = {
+        channel: "mattermost",
+        conversation: {
+          id: "channel-id",
+          kind,
+          title: kind === "thread" ? "How much wood?" : "Workshop",
+          ...(kind === "thread" ? { parentId: "root-post-id" } : {}),
+          ...(kind === "dm" ? { isDirectMessage: true } : {}),
+        },
+      };
+      await harness.store.upsertBinding({
+        id: "binding-mattermost",
+        authorizedActorIds: ["user-1"],
+        backend: "codex",
+        channel,
+        createdAt: 1000,
+        threadId: "thread-1",
+        updatedAt: 1000,
+      });
+      await harness.controller.handleInboundEvent(buildCallbackEvent({
+        actionId: "status:refresh",
+        channel,
+      }));
+
+      const status = harness.delivered.at(-1);
+      expect(status?.kind).toBe("status");
+      expect(status?.kind === "status" && (status.actions ?? []).some(({ id }) => id === "status:sync-name"))
+        .toBe(canRename);
+
+      // An already-published card can still send the callback after the upgrade.
+      await harness.controller.handleInboundEvent(buildCallbackEvent({
+        actionId: "status:sync-name",
+        channel,
+      }));
+      expect(harness.delivered).toContainEqual(expect.objectContaining(canRename
+        ? { kind: "confirmation", title: "Name synced" }
+        : { kind: "error", title: "Name sync unavailable" }));
+      expect(setConversationTitle).toHaveBeenCalledTimes(canRename ? 1 : 0);
+      setConversationTitle.mockClear();
+
+      await harness.controller.handleInboundEvent(buildTextEvent("Rename this conversation", { channel }));
+      const context = { backend: "codex", threadId: "thread-1", turnId: "turn-1" } as const;
+      await expect(harness.controller.handlePwrAgentMessagingRequest({
+        operation: "get_current_messaging_surface",
+        context,
+        args: {},
+      })).resolves.toMatchObject({
+        ok: true,
+        data: { location: { conversationCapabilities: { rename: { supported: canRename } } } },
+      });
+      await expect(harness.controller.handlePwrAgentMessagingRequest({
+        operation: "rename_current_messaging_conversation",
+        context,
+        args: { title: "Wood chuck joke" },
+      })).resolves.toMatchObject(canRename
+        ? { ok: true, data: { title: "Wood chuck joke" } }
+        : { ok: false, error: { code: "unsupported_operation" } });
+      expect(setConversationTitle).toHaveBeenCalledTimes(canRename ? 1 : 0);
+      harness.controller.dispose();
+    },
+  );
+
   it("syncs the platform conversation name from the bound thread title", async () => {
     const setConversationTitle = vi.fn(
       async (

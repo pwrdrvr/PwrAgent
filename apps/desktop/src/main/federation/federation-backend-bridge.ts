@@ -19,6 +19,13 @@ export { authenticateMessageOrigin } from "@pwragent/federation/federation-messa
 import { ForgeReadError, type ForgeReadRequest } from "../pr-status/forge-tool-contract";
 import { THREAD_PR_WATCHES_UNSUPPORTED_MESSAGE } from "../pr-status/thread-pr-watches-federation";
 import {
+  THREAD_PULL_REQUEST_MERGE_FORBIDDEN_MESSAGE,
+  THREAD_PULL_REQUEST_MERGE_UNSUPPORTED_MESSAGE,
+} from "../pr-status/thread-pull-request-merge-federation";
+
+/** A peer's PR card merge: `gh pr merge` (60s) plus merge-queue reads. */
+const MERGE_THREAD_PULL_REQUEST_TIMEOUT_MS = 180_000;
+import {
   HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
@@ -53,6 +60,12 @@ import type {
 import { projectFederationThreadRead, materializeFederationThreadRead, type FederationThreadReadResponse } from "./federation-thread-read";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared/contracts/navigation";
 import { projectFederatedLaunchpad } from "@pwragent/shared/contracts/navigation";
+import type {
+  FederationMergeThreadPullRequestRequestV1,
+  FederationMergeThreadPullRequestResultV1,
+  FederationReadThreadPullRequestMergeRequestV1,
+  ReadThreadPullRequestMergeResponse,
+} from "@pwragent/shared/contracts/navigation";
 import type {
   MarkNavigationDirectorySeenRequest,
   MarkNavigationDirectorySeenResponse,
@@ -848,6 +861,17 @@ export type FederationBackendOperations = NavigationBackendOperations & {
     request: FederationThreadPrWatchesRequestV1,
   ): Promise<ThreadPrWatchesResponse>;
   /**
+   * Optional on owner adapters so a viewer of an older owner receives
+   * method_not_found and offers no merge. The owner parses each request
+   * against its own allowlist.
+   */
+  readThreadPullRequestMergeV1?(
+    request: unknown,
+  ): Promise<ReadThreadPullRequestMergeResponse>;
+  mergeThreadPullRequestV1?(
+    request: unknown,
+  ): Promise<FederationMergeThreadPullRequestResultV1>;
+  /**
    * Optional on owner adapters, like `moveQueuedTurn`: an owner without
    * `project_forge_automation` answers method_not_found.
    */
@@ -1558,6 +1582,18 @@ export function registerFederationBackendHandlers(params: {
         await params.backend.manageThreadPrWatchesV1!(
           envelope.params as FederationThreadPrWatchesRequestV1,
         ),
+    );
+  }
+  if (params.backend.readThreadPullRequestMergeV1) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.readThreadPullRequestMergeV1,
+      async (envelope) => await params.backend.readThreadPullRequestMergeV1!(envelope.params),
+    );
+  }
+  if (params.backend.mergeThreadPullRequestV1) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.mergeThreadPullRequestV1,
+      async (envelope) => await params.backend.mergeThreadPullRequestV1!(envelope.params),
     );
   }
   if (params.backend.setProjectForgeAutomation) {
@@ -2910,6 +2946,46 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
             message: "The owning instance does not let this one control its threads.",
           },
         };
+      }
+      throw error;
+    }
+  }
+
+  async readThreadPullRequestMergeV1(
+    request: FederationReadThreadPullRequestMergeRequestV1,
+  ): Promise<ReadThreadPullRequestMergeResponse> {
+    return await this.requestThreadPullRequestMerge<ReadThreadPullRequestMergeResponse>(
+      FEDERATION_BACKEND_METHODS.readThreadPullRequestMergeV1,
+      request,
+    );
+  }
+
+  async mergeThreadPullRequestV1(
+    request: FederationMergeThreadPullRequestRequestV1,
+  ): Promise<FederationMergeThreadPullRequestResultV1> {
+    return await this.requestThreadPullRequestMerge<FederationMergeThreadPullRequestResultV1>(
+      FEDERATION_BACKEND_METHODS.mergeThreadPullRequestV1,
+      request,
+      // The owner's `gh pr merge` alone may take 60s, and a queue adds reads:
+      // the default 30s would report a merge that is still landing as failed.
+      MERGE_THREAD_PULL_REQUEST_TIMEOUT_MS,
+    );
+  }
+
+  /** An older owner, or one that withholds turn control, explains itself. */
+  private async requestThreadPullRequestMerge<T>(
+    method: FederationBackendMethod,
+    params: unknown,
+    timeoutMs?: number,
+  ): Promise<T> {
+    try {
+      return await this.rpc.request<T>({ method, params, ...(timeoutMs ? { timeoutMs } : {}) });
+    } catch (error) {
+      if (hasFederationErrorCode(error, "method_not_found")) {
+        throw new Error(THREAD_PULL_REQUEST_MERGE_UNSUPPORTED_MESSAGE, { cause: error });
+      }
+      if (hasFederationErrorCode(error, "capability_denied")) {
+        throw new Error(THREAD_PULL_REQUEST_MERGE_FORBIDDEN_MESSAGE, { cause: error });
       }
       throw error;
     }
