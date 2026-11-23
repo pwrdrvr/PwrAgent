@@ -39,6 +39,7 @@ import {
   threadTodoKindForAction,
   threadTodoBlockingItems,
   threadTodoItemNoun,
+  threadTodoStartActionForRun,
   threadTodoStartAccessChanged,
   threadTodoSteps,
 } from "@pwragent/shared/contracts/thread-todos";
@@ -260,7 +261,7 @@ export class ThreadTodoService {
   async withDispatchDefaults(todos: ThreadTodo[]): Promise<ThreadTodo[]> {
     const defaults = new Map<string, Promise<NonNullable<ThreadTodo["dispatchDefaults"]>>>();
     return Promise.all(todos.map(async (todo) => {
-      if (todo.action?.type !== "start_thread" || !this.readDispatchSettings) return todo;
+      if (!threadTodoStartActionForRun(todo.action, { startNewThread: true }) || !this.readDispatchSettings) return todo;
       const key = JSON.stringify([todo.backend, todo.threadId]);
       let pending = defaults.get(key);
       if (!pending) {
@@ -892,6 +893,7 @@ export class ThreadTodoService {
       mergeMethod?: ThreadTodoMergeMethod;
       rememberMergeMethod?: boolean;
       startOnInstanceId?: string;
+      startNewThread?: boolean;
       messageTarget?: ThreadTodoMessageTarget;
       modelSettings?: ThreadTodoModelSettings;
       /** A run that succeeds marks the card done, so it asks the same. */
@@ -906,7 +908,11 @@ export class ThreadTodoService {
     if (todo.status !== "open") {
       throw new ThreadTodoError("conflict", "This to-do is already resolved.");
     }
-    const action = todo.action;
+    const startAction = threadTodoStartActionForRun(todo.action, options);
+    if (options.startNewThread && !startAction) {
+      throw new ThreadTodoError("invalid_arguments", "Choose a handoff and a single destination to start a new thread.");
+    }
+    const action = startAction ?? todo.action;
     if (!action || action.type === "start_review") {
       throw new ThreadTodoError(
         "invalid_arguments",
@@ -917,9 +923,7 @@ export class ThreadTodoService {
     // agent can change a card's access at any time, so the start runs only
     // if the stored card still matches it.
     if (
-      action.type === "start_thread"
-      && !options.messageTarget
-      && threadTodoStartAccessChanged(action, options.seenExecutionMode)
+      startAction && threadTodoStartAccessChanged(startAction, options.seenExecutionMode)
     ) {
       throw new ThreadTodoError(
         "conflict",
@@ -947,10 +951,10 @@ export class ThreadTodoService {
     // raising thread's workspace.
     const cwd = todo.targetProject ? todo.targetProject.path : todo.cwd;
     const crossProject = todo.targetProject !== undefined;
-    const placement = action.type === "start_thread" && !options.messageTarget
+    const placement = startAction
       ? resolveThreadTodoPlacement({
           ...(options.placement ? { requested: options.placement } : {}),
-          ...(action.placement ? { proposed: action.placement } : {}),
+          ...(startAction.placement ? { proposed: startAction.placement } : {}),
           crossProject,
           otherMachine: startOnInstance !== undefined,
         })

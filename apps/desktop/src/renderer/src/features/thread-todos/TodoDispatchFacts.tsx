@@ -95,6 +95,7 @@ export type TodoDispatchTarget = {
  */
 export function useTodoDispatchTarget(params: {
   todo: ThreadTodo;
+  startNewThread?: boolean;
   instances?: readonly ThreadTodoInstance[];
   localMachine?: ThreadTodoLocalMachine;
   /** The owner's settings: pick, memory, suggestion or the thread's. */
@@ -103,8 +104,8 @@ export function useTodoDispatchTarget(params: {
 }): TodoDispatchTarget {
   const { todo, ownerSelection } = params;
   const context = useTodoDispatchContext();
-  const isHandoff = todo.action?.type === "start_thread";
   const action = todo.action?.type === "start_thread" ? todo.action : undefined;
+  const canConfigureStart = action !== undefined || params.startNewThread === true;
   const choices = context.choices.get(todoDispatchPickKey(todo)) ?? {};
   const { owner, machines } = todoDispatchMachines({
     ...(todo.federationTarget ? { ownerInstanceId: todo.federationTarget.instanceId } : {}),
@@ -115,7 +116,7 @@ export function useTodoDispatchTarget(params: {
   const chosen = machines.find((entry) => entry.key === choices.machine && entry.available);
   const machine = chosen && (chosen.key === owner.key || project) ? chosen : owner;
   const onOwner = machine.key === owner.key;
-  const machineBackends = useTodoMachineBackends(isHandoff ? machine.key : owner.key);
+  const machineBackends = useTodoMachineBackends(canConfigureStart ? machine.key : owner.key);
 
   let model: ModelSelection | undefined;
   let fit: TodoDispatchFit | undefined;
@@ -153,7 +154,7 @@ export function useTodoDispatchTarget(params: {
   });
 
   const legacy = !owner.dispatchTarget;
-  const environmentState = useDispatchEnvironments({ todo, machine, onOwner, enabled: isHandoff && !legacy });
+  const environmentState = useDispatchEnvironments({ todo, machine, onOwner, enabled: canConfigureStart && !legacy });
   const environmentDefault = environmentState.status === "ready"
     ? environmentState.response.defaultEnvironmentId ?? THREAD_ENVIRONMENT_NONE
     : undefined;

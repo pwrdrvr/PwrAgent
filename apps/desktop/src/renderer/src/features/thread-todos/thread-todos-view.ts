@@ -26,6 +26,7 @@ export type ThreadTodoInstance = {
    */
   dispatchTarget?: boolean;
   messageTarget?: boolean;
+  startFromMessage?: boolean;
   /** The peer advertises `thread_todo_placement`: as a card's owner it honors a placement pick. */
   placement?: boolean;
   /** The peer advertises `thread_todo_placement_sibling`: it makes sibling threads, by default. */

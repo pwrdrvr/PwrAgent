@@ -680,6 +680,14 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
     dispatch.choose(todo, (current) => ({ ...current, ...update }));
     setLocalMessageChoices((current) => ({ ...current, ...update }));
   };
+  const action = todo.action;
+  const canStartFromMessage = !todo.federationTarget
+    || props.instances?.some((instance) => instance.instanceId === todo.federationTarget?.instanceId && instance.startFromMessage);
+  const startNewThread = action?.type === "send_message" && canStartFromMessage === true
+    && messageChoices.dispatchMode === "new_thread";
+  const sendingMessage = action?.type === "send_message" && !startNewThread
+    || action?.type === "start_thread" && messageChoices.dispatchMode === "message";
+  const startsThread = !sendingMessage && (action?.type === "start_thread" || startNewThread);
   const [localPick, setLocalPick] = useState<ThreadTodoModelSettings>();
   const selection = resolveThreadTodoModelSettings({
     thread: todo.dispatchDefaults?.thread ?? { backend: todo.backend },
@@ -693,6 +701,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
   };
   const target = useTodoDispatchTarget({
     todo,
+    startNewThread,
     ...(props.instances ? { instances: props.instances } : {}),
     ...(props.localMachine ? { localMachine: props.localMachine } : {}),
     ownerSelection: selection,
@@ -717,11 +726,8 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
   const [copied, setCopied] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(copiedTimerRef.current), []);
-  const action = todo.action;
-  const sendingMessage = action?.type === "send_message" || messageChoices.dispatchMode === "message";
   const messageTarget = messageChoices.messageTarget ?? (action?.type === "send_message" ? action.target : undefined);
-  // An agent can address a request to the thread that raised it. That card's
-  // only useful action is Do it here, so it leads instead of a refused Send.
+  // A request for the thread that raised the card can be sent as a reply.
   const targetsOwnThread = sendingMessage && messageTarget !== undefined
     && messageTarget.backend === todo.backend && messageTarget.threadId === todo.threadId
     && (!messageTarget.instanceId || messageTarget.instanceId === todo.federationTarget?.instanceId);
@@ -817,9 +823,10 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
         if (sendingMessage && (!messageTarget || !canSendMessage)) return;
         // Freeze the attempted settings too: a failed start's Retry uses them
         // even if another card changes the thread's memory in the meantime.
-        if (!sendingMessage && target.onOwner) pickModel(selection.settings);
+        if (startsThread && target.onOwner) pickModel(selection.settings);
         props.onRun(todo, {
-          ...(sendingMessage ? { messageTarget } : action?.type === "start_thread" ? target.runOptions() : {}),
+          ...(sendingMessage ? { messageTarget } : startsThread ? target.runOptions() : {}),
+          ...(startNewThread ? { startNewThread: true } : {}),
           ...options,
           ...(allowOpenItems ? { allowOpenItems } : {}),
         });
@@ -1055,7 +1062,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
             onSelect: () => chooseMessage({ dispatchMode: "message" }),
           });
         }
-        if (action.type === "start_thread" && sendingMessage) {
+        if (sendingMessage && (action.type === "start_thread" || canStartFromMessage)) {
           entries.push({
             kind: "item", id: "new-thread", label: "Start a new thread", checked: false,
             onSelect: () => chooseMessage({ dispatchMode: "new_thread" }),
@@ -1216,11 +1223,12 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
           {sendingMessage ? (
             <TodoMessageDestination todo={todo} target={messageTarget} localMachine={props.localMachine}
               disabled={props.running} onSelect={(next) => chooseMessage({ messageTarget: next })} />
-          ) : action?.type === "start_thread" ? (
+          ) : startsThread ? (
             <TodoDispatchFacts
               todo={todo}
               target={target}
-              {...(action.executionMode ? { access: formatExecutionModeLabel(action.executionMode) } : {})}
+              {...(action?.type === "start_thread" && action.executionMode
+                ? { access: formatExecutionModeLabel(action.executionMode) } : {})}
               disabled={props.running}
             />
           ) : action?.type === "merge_pull_request" ? (

@@ -201,6 +201,31 @@ describe("to-do dispatch target", () => {
     expect((screen.getByRole("button", { name: "Send request" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("switches a Do it here handoff to a new thread without running it on selection", async () => {
+    const target = { backend: "claude" as const, threadId: "thread-a" };
+    const todo: ThreadTodo = { ...card, action: { type: "send_message", prompt: "Follow up", target } };
+    const onDoHere = vi.fn();
+    const { onRun } = setup({ todo, onDoHere });
+    const chooseHandoff = async (name: string) => {
+      fireEvent.click(screen.getByRole("button", { name: "Handoff options" }));
+      const menu = screen.getByRole("menu", { name: "Handoff options" });
+      const item = within(menu).queryByRole("menuitemradio", { name });
+      expect(item, `${name} should be available`).not.toBeNull();
+      await act(async () => { fireEvent.click(item!); });
+    };
+    expect(screen.getByRole("button", { name: "Do it here" })).toBeTruthy();
+    await chooseHandoff("Start a new thread");
+    await chooseHandoff("Send to thread…");
+    expect(screen.getByRole("button", { name: "Do it here" })).toBeTruthy();
+    await chooseHandoff("Start a new thread");
+    expect(chip("Model for the new thread")).toBeTruthy();
+    expect(onDoHere).not.toHaveBeenCalled();
+    expect(onRun).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    expect(onRun).toHaveBeenCalledWith(todo, expect.objectContaining({ startNewThread: true, modelSettings: thread }));
+    expect(onRun.mock.calls[0]?.[1]).not.toHaveProperty("messageTarget");
+  });
+
   it("shows the agent's proposed destination before sending", async () => {
     const target = { backend: "codex" as const, threadId: "owner", title: "Existing PR owner" };
     const { onRun } = setup({ todo: { ...card, action: { type: "send_message", prompt: "Refresh the PR", target } } });
