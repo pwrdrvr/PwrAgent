@@ -270,7 +270,7 @@ describe("HotCpuProfiler", () => {
     }
   });
 
-  it.each(["settings-changed", "exhausted", "window-closed", "native-timeout", "cpu-stop-failed"] as const)(
+  it.each(["settings-changed", "exhausted", "window-closed", "native-timeout", "cpu-stop-failed", "trace-register-failed"] as const)(
     "settles renderer trace ownership when %s",
     async (transition) => {
       const workspace = await createTemporaryTestDirectory();
@@ -285,6 +285,18 @@ describe("HotCpuProfiler", () => {
         config, versions: { appVersion: "test", electronVersion: "test", chromeVersion: "test", nodeVersion: process.version },
       });
       if (!created.ok) throw new Error(created.message);
+      if (transition === "trace-register-failed") {
+        const writeFile = fs.writeFile;
+        let failed = false;
+        const manifestWrite = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+          if (!failed && String(args[0]).includes("session.json") && String(args[1]).includes(".trace.json")) {
+            failed = true;
+            throw new Error("Contrived trace registration failure");
+          }
+          return writeFile(...args);
+        });
+        onTestFinished(() => { manifestWrite.mockRestore(); });
+      }
       let recording = false;
       const released = deferred<void>();
       const start = vi.fn(async () => { recording = true; });
@@ -325,7 +337,7 @@ describe("HotCpuProfiler", () => {
           },
           vi.fn(), { stopTimeoutMs: transition === "native-timeout" ? 200 : undefined },
         ),
-        target,
+        target: transition === "trace-register-failed" ? { ...target, readDiagnostics: () => ({}) } : target,
         session: created.session,
         logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
         getAppMetrics: () => [createMetric(0, transition === "window-closed" ? 0 : (cpu += 0.005))],
@@ -360,8 +372,15 @@ describe("HotCpuProfiler", () => {
         expect((await fs.readdir(directoryPath)).filter((file) => file.endsWith(".trace.json"))).toEqual([]);
       } else {
         const traceFilename = "renderer-hot-0001.trace.json";
-        const hasTrace = transition !== "native-timeout";
-        expect(artifacts).toEqual(["renderer-hot-0001.cpuprofile", ...(hasTrace ? [traceFilename] : [])]);
+        const hasTrace = transition !== "native-timeout" && transition !== "trace-register-failed";
+        expect(artifacts).toEqual([
+          "renderer-hot-0001.cpuprofile",
+          ...(hasTrace ? [traceFilename] : []),
+          ...(transition === "trace-register-failed" ? ["renderer-hot-0001.diagnostics.json"] : []),
+        ]);
+        if (transition === "trace-register-failed") {
+          expect((await fs.readdir(directoryPath)).includes(traceFilename)).toBe(false);
+        }
         expect(onProfileWritten).toHaveBeenCalledOnce();
         expect(onProfileWritten.mock.calls[0][0].chromiumTracePath).toBe(
           hasTrace ? created.session.createProfilePath(1).replace(/\.cpuprofile$/, ".trace.json") : undefined,
@@ -374,6 +393,113 @@ describe("HotCpuProfiler", () => {
             detail: expect.objectContaining({ status: "failed", phase: "stop", category: "timeout" }),
           }));
         }
+      }
+    },
+  );
+
+  // Exhaust the two completion orders after shutdown claims a triggered
+  // profile, plus the case where startup fails with no shutdown owner.
+  it.each(["failure-before-registration", "failure-after-delivery", "no-shutdown"] as const)(
+    "keeps trace ownership consistent on a failed startup event with %s",
+    async (order) => {
+      const workspace = await createTemporaryTestDirectory();
+      cleanups.push(workspace.cleanup);
+      const config = createEnabledConfig(workspace.path, {
+        PWRAGENT_HOT_CPU_PROFILING_TRIGGER_MODE: "spike",
+        PWRAGENT_HOT_CPU_PROFILING_DURATION_MS: "60000",
+      });
+      const created = await createHotCpuProfileSession({
+        config, versions: { appVersion: "test", electronVersion: "test", chromeVersion: "test", nodeVersion: process.version },
+      });
+      if (!created.ok) throw new Error(created.message);
+      const session = created.session;
+      const startWrite = deferred();
+      const firstStarted = deferred();
+      const secondStarted = deferred();
+      const registration = deferred();
+      const stopReachedRegistration = deferred();
+      const written = deferred<string | undefined>();
+      const delivery = deferred();
+      let cpu = 0;
+      let sampleTimeMs = 0;
+      const startTrace = vi.fn(async () => {});
+      const profiler = createProfiler({
+        config,
+        chromiumTrace: new ChromiumTrace(() => ({
+          start: startTrace,
+          async *read() { yield { data: '{"traceEvents":[]}' }; },
+          dispose() {},
+        }), async (chunks) => {
+          for await (const chunk of chunks) return Buffer.from(chunk.data);
+          throw new Error("Contrived trace stream was empty");
+        }, vi.fn(), { monotonicNow: () => sampleTimeMs }),
+        target: createTarget().target,
+        session: {
+          ...session,
+          async appendEvent(event) {
+            if (event.type === "profile-started") {
+              if (event.detail?.index === 1) {
+                firstStarted.resolve();
+                await startWrite.promise;
+              } else {
+                secondStarted.resolve();
+              }
+            }
+            await session.appendEvent(event);
+          },
+          async registerArtifact(filename) {
+            if (filename === "renderer-hot-0001.cpuprofile") {
+              stopReachedRegistration.resolve();
+              await registration.promise;
+            }
+            await session.registerArtifact(filename);
+          },
+        },
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        sampleNow: () => (sampleTimeMs += config.intervalMs),
+        getAppMetrics: () => [createMetric(0, (cpu += 0.005))],
+        onProfileWritten: async (event) => {
+          written.resolve(event.chromiumTracePath);
+          if (order === "failure-after-delivery") await delivery.promise;
+        },
+      });
+      const failStart = () => startWrite.reject(new Error("Contrived startup event write failed"));
+      try {
+        await profiler.start();
+        await firstStarted.promise;
+        if (order === "no-shutdown") {
+          failStart();
+          await samplesOf(profiler).waitForCount(2);
+          expect(startTrace).toHaveBeenCalledTimes(2);
+          await secondStarted.promise;
+          await profiler.stop("settings-changed");
+        } else {
+          const stopped = profiler.stop("settings-changed");
+          await stopReachedRegistration.promise;
+          if (order === "failure-before-registration") {
+            failStart();
+            await samplesOf(profiler).waitForCount(2);
+            registration.resolve();
+          } else {
+            registration.resolve();
+            await written.promise;
+            failStart();
+            await samplesOf(profiler).waitForCount(2);
+            delivery.resolve();
+          }
+          await stopped;
+        }
+        const index = order === "no-shutdown" ? "0002" : "0001";
+        const traceFilename = `renderer-hot-${index}.trace.json`;
+        const { artifacts } = JSON.parse(await fs.readFile(`${session.directoryPath}/session.json`, "utf8"));
+        expect(artifacts).toEqual([`renderer-hot-${index}.cpuprofile`, traceFilename]);
+        const tracePath = await written.promise;
+        expect(tracePath).toBe(session.createProfilePath(Number(index)).replace(/\.cpuprofile$/, ".trace.json"));
+        expect(await fs.readFile(tracePath!, "utf8")).toBe('{"traceEvents":[]}');
+      } finally {
+        startWrite.resolve();
+        registration.resolve();
+        delivery.resolve();
       }
     },
   );

@@ -700,20 +700,29 @@ export class HotCpuProfiler {
         this.config.profileDurationMs,
       );
     } catch (error) {
-      await this.discardChromiumTrace(this.activeChromiumTrace);
-      this.activeChromiumTrace = undefined;
-      this.activeProfileTrigger = null;
-      this.activeProfileTime = undefined;
-      this.profiling = false;
-      await this.session.appendEvent({
-        capturedAt: this.now().toISOString(),
-        type: "profile-start-failed",
-        detail: { error: serializeError(error) },
-      });
-      this.logger.error("[pwragent:hot-cpu] CPU profile failed to start", error);
-      await this.discardRecording();
-      this.detachDebugger();
-      if (this.profileCount >= this.config.maxProfiles) await this.chromiumTrace?.release(this);
+      // Shutdown can claim the profile while the startup event write is
+      // pending. Only the path that claims it can discard its recording.
+      const ownsProfile = this.profiling;
+      if (ownsProfile) {
+        this.profiling = false;
+        this.activeProfileTrigger = null;
+        this.activeProfileTime = undefined;
+        await this.discardChromiumTrace(this.takeChromiumTrace());
+      }
+      try {
+        this.logger.error("[pwragent:hot-cpu] CPU profile failed to start", error);
+        await this.session.appendEvent({
+          capturedAt: this.now().toISOString(),
+          type: "profile-start-failed",
+          detail: { error: serializeError(error) },
+        });
+      } finally {
+        if (ownsProfile) {
+          await this.discardRecording();
+          this.detachDebugger();
+          await this.reconcileChromiumTrace();
+        }
+      }
     }
   }
 
@@ -760,6 +769,20 @@ export class HotCpuProfiler {
     return { path: tracePath, triggeredAt: trigger.capturedAt, result };
   }
 
+  private takeChromiumTrace(): ActiveChromiumTrace | undefined {
+    const trace = this.activeChromiumTrace;
+    this.activeChromiumTrace = undefined;
+    return trace;
+  }
+
+  private async reconcileChromiumTrace(): Promise<void> {
+    if (!this.stopped && this.profileCount < this.config.maxProfiles) {
+      await this.chromiumTrace?.arm(this);
+    } else {
+      await this.chromiumTrace?.release(this);
+    }
+  }
+
   private async discardChromiumTrace(trace: ActiveChromiumTrace | undefined): Promise<void> {
     if (trace && (await trace.result).status === "written") {
       await fs.rm(trace.path, { force: true }).catch(() => {
@@ -796,7 +819,7 @@ export class HotCpuProfiler {
     this.clearProfileDurationTimer();
     this.clearHeapSnapshotMidTimer();
     const index = this.profileCount;
-    const trace = this.activeChromiumTrace;
+    const trace = this.takeChromiumTrace();
     let profileRegistered = false;
     const profilePath = this.session.createProfilePath(index);
     const profileFilename = artifactFilename(profilePath);
@@ -876,17 +899,12 @@ export class HotCpuProfiler {
       if (!profileRegistered) await this.discardChromiumTrace(trace);
       this.activeProfileTrigger = null;
       this.activeProfileTime = undefined;
-      this.activeChromiumTrace = undefined;
       this.activeProfileHeapSnapshots = [];
       this.activeProfileHeapSnapshotCaptures.clear();
       this.previousRecording = null;
       this.recording = false;
       this.detachDebugger();
-      if (!this.stopped && this.profileCount < this.config.maxProfiles) {
-        await this.chromiumTrace?.arm(this);
-      } else {
-        await this.chromiumTrace?.release(this);
-      }
+      await this.reconcileChromiumTrace();
       await this.ensureRecording(this.now().getTime());
       this.resumeSamplingAfterProfile();
     }
