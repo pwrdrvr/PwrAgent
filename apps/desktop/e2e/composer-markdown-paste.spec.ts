@@ -14,15 +14,8 @@ const TABLE_MARKDOWN = [
   "| Beta | `beta` | API key |",
 ].join("\n");
 
-// Regression coverage for composer markdown paste. The bug these guard against:
-// a code fence used to flip paste off Tiptap's HTML-aware default path onto a
-// plain-text-only markdown reparse. When a clipboard's text/plain flattens
-// paragraph breaks to single newlines (structure living only in text/html),
-// that flip collapsed prose paragraphs into one block — but ONLY when a code
-// block was present. The visible symptom was "the blank line above Fix: /
-// Root cause: disappears once you include the Swift code block." A pure jsdom
-// test cannot catch this: fireEvent.paste never runs the real-browser
-// text/html-vs-text/plain clipboard arbitration. These run in real Electron.
+// Exercise native clipboard, browser paste and replay-backed submission here.
+// The synthetic paragraph/fence cases run in ComposerTiptapInput.test.tsx.
 
 async function createPasteFixture(): Promise<{
   cleanup: () => Promise<void>;
@@ -163,30 +156,6 @@ async function pasteIntoReply(
   }, params);
 }
 
-// Prose paragraphs whose only paragraph-break signal lives in text/html. The
-// text/plain flavor flattens them to single newlines (as many rich sources do).
-const PROSE_LINES = [
-  "We reproduced and fixed the cereal-pouring bug.",
-  "Root cause:",
-  "After selecting multiple cereal boxes, the click silently fell through.",
-  "Fix:",
-  "Handle cereal pouring by command/title as well as object identity:",
-];
-const PROSE_PLAIN_SINGLE_NL = PROSE_LINES.join("\n");
-const PROSE_HTML = PROSE_LINES.map((line) => `<p>${line}</p>`).join("");
-
-const CODE_LINES = [
-  "} else if button === pourButton {",
-  "    pourCerealIntoBowl()",
-  "}",
-];
-const CODE_PLAIN = ["```swift", ...CODE_LINES, "```"].join("\n");
-const CODE_HTML = `<pre><code class="language-swift">${CODE_LINES.join("\n")}</code></pre>`;
-
-// The prose serialized with real paragraph breaks (what the HTML structure means).
-const EXPECTED_PROSE_VALUE = PROSE_LINES.join("\n\n");
-const EXPECTED_CODE_VALUE = ["```swift", ...CODE_LINES, "```"].join("\n");
-
 test("Paste Without Formatting uses the menu and accelerator, and Shift+Enter exits pasted marks", async ({ playwright: _playwright }, testInfo) => {
   const fixture = await createPasteFixture();
   const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
@@ -229,97 +198,6 @@ test("Paste Without Formatting uses the menu and accelerator, and Shift+Enter ex
     await app.window.keyboard.press(process.platform === "darwin" ? "Meta+Shift+V" : "Control+Shift+V");
     await expect(tiptapInput).toHaveAttribute("data-value", literal);
     await expect(textbox.locator("h1, strong")).toHaveCount(0);
-  } finally {
-    await app.close();
-    await fixture.cleanup();
-  }
-});
-
-test("pasting prose without a code block preserves paragraph separators", async () => {
-  const fixture = await createPasteFixture();
-  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
-
-  try {
-    await openExistingThread(app);
-    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
-    await app.window.getByRole("textbox", { name: "Reply" }).focus();
-
-    await pasteIntoReply(app.window, {
-      html: PROSE_HTML,
-      text: PROSE_PLAIN_SINGLE_NL,
-    });
-
-    await expect(tiptapInput).toHaveAttribute("data-value", EXPECTED_PROSE_VALUE);
-    await expect(
-      tiptapInput.locator(".composer-tiptap-input__editor > p"),
-    ).toHaveCount(PROSE_LINES.length);
-  } finally {
-    await app.close();
-    await fixture.cleanup();
-  }
-});
-
-test("a trailing code block does not collapse the paragraph separators above it", async () => {
-  const fixture = await createPasteFixture();
-  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
-
-  try {
-    await openExistingThread(app);
-    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
-    await app.window.getByRole("textbox", { name: "Reply" }).focus();
-
-    await pasteIntoReply(app.window, {
-      html: `${PROSE_HTML}${CODE_HTML}`,
-      text: `${PROSE_PLAIN_SINGLE_NL}\n${CODE_PLAIN}`,
-    });
-
-    // The prose paragraphs keep the SAME blank-line separators as the no-code
-    // paste above, and the fenced code block is appended after one blank line.
-    await expect(tiptapInput).toHaveAttribute(
-      "data-value",
-      `${EXPECTED_PROSE_VALUE}\n\n${EXPECTED_CODE_VALUE}`,
-    );
-    // Prose stays as distinct paragraphs (the bug collapsed them into one). The
-    // doc ends in a code block, so ProseMirror appends a trailing empty
-    // paragraph — assert "not collapsed" rather than an exact count.
-    expect(
-      await tiptapInput.locator(".composer-tiptap-input__editor > p").count(),
-    ).toBeGreaterThanOrEqual(PROSE_LINES.length);
-    await expect(
-      tiptapInput.locator(".composer-tiptap-input__editor > pre"),
-    ).toHaveCount(1);
-  } finally {
-    await app.close();
-    await fixture.cleanup();
-  }
-});
-
-test("a code fence is upgraded from text/plain even when HTML is present but has no code block", async () => {
-  const fixture = await createPasteFixture();
-  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
-
-  try {
-    await openExistingThread(app);
-    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
-    await app.window.getByRole("textbox", { name: "Reply" }).focus();
-
-    // HTML is present but carries NO <pre>, so it does not represent the code
-    // block the text/plain fence implies. text/plain stays authoritative: the
-    // custom fence parse must still run and form the code block. (If the guard
-    // deferred on any HTML rather than on a <pre> specifically, the default
-    // paste would render the prose <p>s and drop the fence to literal text.)
-    await pasteIntoReply(app.window, {
-      html: "<p>Intro paragraph.</p><p>Body paragraph.</p>",
-      text: ["Intro paragraph.", "", "Body paragraph.", "", CODE_PLAIN].join("\n"),
-    });
-
-    await expect(tiptapInput).toHaveAttribute(
-      "data-value",
-      `Intro paragraph.\n\nBody paragraph.\n\n${EXPECTED_CODE_VALUE}`,
-    );
-    await expect(
-      tiptapInput.locator(".composer-tiptap-input__editor > pre"),
-    ).toHaveCount(1);
   } finally {
     await app.close();
     await fixture.cleanup();
