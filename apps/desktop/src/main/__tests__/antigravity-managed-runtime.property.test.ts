@@ -5,6 +5,7 @@ import path from "node:path";
 import fc from "fast-check";
 import { create } from "tar";
 import { describe, expect, it, vi } from "vitest";
+import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
 import {
   installManagedAntigravityRuntime,
   readManagedAntigravityStatus,
@@ -65,6 +66,31 @@ it("keeps unsupported platforms off the release feed", async () => {
 });
 
 describe.skipIf(process.platform === "win32")("managed Antigravity activation", () => {
+  it("activates a release that enforces the ACP v1 initialize client schema", async () => {
+    await withRuntimeRoot(async (directory) => {
+      const archive = await makeArchive(directory);
+      const version = "1.5.14";
+      const request = vi.spyOn(AcpStdioJsonRpcTransport.prototype, "request").mockImplementation(async (method, params) => {
+        expect(method).toBe("initialize");
+        expect(params?.protocolVersion).toBe(1);
+        const info = params?.clientInfo as { name?: string; version?: string } | undefined;
+        if (info && (typeof info.name !== "string" || typeof info.version !== "string")) {
+          throw new Error("ACP error -32602: invalid client implementation information");
+        }
+        return { protocolVersion: 1, agentInfo: { name: "Antigravity ACP Server", version } };
+      });
+      try {
+        const { version: installed } = await installManagedAntigravityRuntime({
+          ...appleSilicon, rootDir: path.join(directory, "managed"), fetch: releaseFetch(archive, version),
+        });
+        expect(installed).toBe(version);
+        expect(request).toHaveBeenCalledOnce();
+      } finally {
+        request.mockRestore();
+      }
+    });
+  });
+
   it("only publishes successfully verified releases across upgrades, failures and cancellations", async () => {
     await withRuntimeRoot(async (directory) => {
       const archive = await makeArchive(directory);

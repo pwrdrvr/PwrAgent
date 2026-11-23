@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { createWriteStream } from "node:fs";
-import { chmod, lstat, mkdir, mkdtemp, readlink, realpath, rename, rm, symlink } from "node:fs/promises";
+import { constants, createWriteStream } from "node:fs";
+import { access, chmod, lstat, mkdir, mkdtemp, readlink, realpath, rename, rm, stat, symlink } from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -68,11 +68,36 @@ function isVersion(value: string): boolean {
   return value.length <= 32 && value === value.trim() && VERSION_PATTERN.test(value);
 }
 
-export async function isManagedAntigravityCommand(command: string): Promise<boolean> {
-  if (!path.isAbsolute(command)) return false;
+type CommandEnvironment = { env?: NodeJS.ProcessEnv; cwd?: string };
+
+/** Resolve the executable as a POSIX probe or launch would. A relative PATH
+ * entry can surface as a bare command, for example when the entry is ".". */
+export async function resolveAntigravityCommandPath(
+  command: string,
+  { env = process.env, cwd = process.cwd() }: CommandEnvironment = {},
+): Promise<string | undefined> {
+  // Keep ".." for the filesystem to resolve after following any symlinks.
+  const fromCwd = (entry: string) => path.isAbsolute(entry) ? entry : `${cwd}${path.sep}${entry}`;
+  if (path.basename(command) !== command) {
+    return await realpath(fromCwd(command)).catch(() => undefined);
+  }
+  for (const directory of (env.PATH ?? "/usr/bin:/bin").split(path.delimiter)) {
+    const candidate = fromCwd(directory ? `${directory}${path.sep}${command}` : command);
+    try {
+      if (!(await stat(candidate)).isFile()) continue;
+      await access(candidate, constants.X_OK);
+      return await realpath(candidate);
+    } catch {
+      // Continue to the next PATH entry, as execFile does.
+    }
+  }
+  return undefined;
+}
+
+export async function isManagedAntigravityCommand(command: string, environment?: CommandEnvironment): Promise<boolean> {
   const [root, target] = await Promise.all([
     realpath(managedRoot()).catch(() => undefined),
-    realpath(command).catch(() => undefined),
+    resolveAntigravityCommandPath(command, environment),
   ]);
   if (!root || !target) return false;
   const relative = path.relative(root, target);
@@ -278,7 +303,6 @@ async function verifyRuntime(
     const result = await transport.request("initialize", {
       protocolVersion: 1,
       clientCapabilities: {},
-      clientInfo: { name: "pwragent" },
     }) as { protocolVersion?: unknown; agentInfo?: { name?: unknown; version?: unknown } } | null;
     if (result?.protocolVersion !== 1
       || result.agentInfo?.name !== "Antigravity ACP Server"

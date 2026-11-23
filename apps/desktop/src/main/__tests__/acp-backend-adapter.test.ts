@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -5315,6 +5315,86 @@ describe("AcpBackendAdapter", () => {
     }
     expect(original.dispose).toHaveBeenCalledOnce();
     expect(cleared.dispose).toHaveBeenCalledOnce();
+  });
+
+  async function expectAntigravitySessionUpdaterGuard(managed: boolean, shellValue: string | undefined) {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agy-session-env-test-"));
+    vi.stubEnv("PWRAGENT_HOME", root);
+    try {
+      const binary = managed
+        ? path.join(root, "agents", "antigravity", "versions", `1.5.14-${"a".repeat(128)}`, "agy")
+        : path.join(root, "standalone");
+      await mkdir(path.dirname(binary), { recursive: true });
+      await writeFile(binary, "fixture binary", { mode: 0o700 });
+      const command = path.join(root, "agy");
+      await symlink(binary, command);
+      const backendId = "acp:antigravity";
+      const agent: AcpInstalledAgentRecord = {
+        ...buildInstalledAgent(),
+        backendId,
+        registryId: "antigravity",
+        launchDescriptor: {
+          backendId, registryId: "antigravity", distributionKind: "local",
+          command, args: ["acp"],
+          env: managed ? { AGY_CLI_DISABLE_AUTO_UPDATE: "true" } : {},
+        },
+      };
+      const session: AcpSessionMetadata = {
+        backendId, sessionId: "session-1", status: "idle", cwd: root,
+        title: "Fixture session", createdAt: 1000, updatedAt: 1000, executionMode: "default",
+      };
+      const createAcpClient = vi.fn((_agent: AcpInstalledAgentRecord) => ({
+        initialize: vi.fn(async () => undefined),
+        ensureSession: vi.fn(async () => undefined),
+        dispose: vi.fn(async () => undefined),
+        ownsSession: () => true,
+        supportsSessionLoad: () => true,
+        supportsArchivedSessionRestore: () => true,
+      }));
+      const adapter = createTestAcpBackendAdapter({
+        acpAgentStore: null,
+        acpSessionStore: { listSessions: () => [session], getSession: () => session },
+        captureStores: [],
+        createAcpClient: createAcpClient as never,
+        discoverLocalAcpAgents: async () => [agent],
+        emit: async () => {},
+        handleServerRequest: async () => ({ decision: "accept" }),
+      });
+      try {
+        await adapter.discoverAvailableAgents(issueProviderDiscoveryPermit("startup"));
+        const shellEnvironment = {
+          PROFILE: "fixture",
+          ...(shellValue !== undefined ? { AGY_CLI_DISABLE_AUTO_UPDATE: shellValue } : {}),
+        };
+        await adapter.prepareSessionEnvironment(backendId, session.sessionId, shellEnvironment);
+        const prepared = createAcpClient.mock.lastCall?.[0].launchDescriptor;
+        session.archivedAt = 1000;
+        await adapter.restoreWorktreeSession(backendId, session.sessionId);
+        const restored = createAcpClient.mock.lastCall?.[0].launchDescriptor;
+        for (const descriptor of [prepared, restored]) {
+          expect(descriptor?.command).toBe(command);
+          expect(descriptor?.env.PROFILE).toBe("fixture");
+          expect(descriptor?.env.AGY_CLI_DISABLE_AUTO_UPDATE).toBe(managed ? "true" : shellValue);
+        }
+      } finally {
+        await adapter.close();
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+
+  it.skipIf(process.platform === "win32")("keeps the updater disabled when a managed thread setup exports false", async () => {
+    await expectAntigravitySessionUpdaterGuard(true, "false");
+  });
+
+  it.skipIf(process.platform === "win32")("preserves updater ownership across prepared and restored session environments", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.boolean(),
+      fc.option(fc.string({ maxLength: 12 }), { nil: undefined }),
+      expectAntigravitySessionUpdaterGuard,
+    ), { numRuns: 20 });
   });
 
   it.each([false, true])("reconciles provider changes for idle environment clients (selection cleared: %s)", async (cleared) => {

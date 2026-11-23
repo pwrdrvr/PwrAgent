@@ -38,7 +38,7 @@ async function withManagedBinary(
   vi.stubEnv("PWRAGENT_HOME", root);
   try {
     await mkdir(path.dirname(command), { recursive: true });
-    await writeFile(command, "fixture binary");
+    await writeFile(command, "fixture binary", { mode: 0o700 });
     await run(root, command);
   } finally {
     vi.unstubAllEnvs();
@@ -46,8 +46,10 @@ async function withManagedBinary(
   }
 }
 
-async function expectRejectedRuntime(command: string, rejected: AcpRejectedAgentInstance, fallback: boolean) {
-  const options = discovery(command, fallback ? [external] : [], [rejected]);
+async function expectRejectedRuntime(
+  command: string, rejected: AcpRejectedAgentInstance, fallback: boolean, env?: NodeJS.ProcessEnv,
+) {
+  const options = { ...discovery(command, fallback ? [external] : [], [rejected]), env };
   const [settings, [record]] = await Promise.all([
     discoverAcpAgentInstances(options),
     discoverLocalAcpAgentRecords(options),
@@ -68,17 +70,69 @@ it("uses a working PATH candidate after rejecting the exact managed path", async
 });
 
 describe.skipIf(process.platform === "win32")("managed Antigravity symlinks", () => {
+  it("keeps a rejected relative PATH alias out of the active selection", async () => {
+    await withManagedBinary(async (root, command) => {
+      const alias = path.join(root, "agy");
+      await symlink(command, alias);
+      const relative = path.relative(process.cwd(), alias);
+      await expectRejectedRuntime(command, { command: relative, source: "path", reason: "acp-probe-failed" }, true);
+    });
+  });
+
   it("keeps rejections authoritative for direct and symlinked paths", async () => {
     await withManagedBinary(async (root, command) => {
-      const alias = path.join(root, "alternate-agy");
+      const alias = path.join(root, "agy");
       await symlink(command, alias);
       await fc.assert(fc.asyncProperty(
-        fc.constantFrom(command, alias),
+        fc.constantFrom(command, alias, path.relative(process.cwd(), command), path.relative(process.cwd(), alias), "agy"),
         fc.constantFrom("override", "path"),
         fc.constantFrom("acp-probe-failed", "version-probe-failed", "acp-help-mismatch", "probe-timed-out"),
         fc.boolean(),
         async (rejectedCommand, source, reason, fallback) => {
-          await expectRejectedRuntime(command, { command: rejectedCommand, source, reason }, fallback);
+          await expectRejectedRuntime(command, { command: rejectedCommand, source, reason }, fallback, {
+            PATH: path.relative(process.cwd(), root),
+          });
+        },
+      ), { numRuns: 25 });
+    });
+  });
+
+  it("keeps an accepted override alias as the only entry for that executable", async () => {
+    await withManagedBinary(async (root, command) => {
+      const alias = path.join(root, "agy");
+      await symlink(command, alias);
+      const override: AcpAgentInstance = { command: alias, source: "override", version: "1.5.14" };
+      const [record] = await discoverLocalAcpAgentRecords(discovery(command, [override, external]));
+      expect(record?.instances).toEqual([override, external]);
+      expect(record?.activeCommand).toBe(alias);
+    });
+  });
+
+  it("keeps one entry per accepted managed executable and preserves the selected alias", async () => {
+    await withManagedBinary(async (root, command) => {
+      const alias = path.join(root, "agy");
+      await symlink(command, alias);
+      await fc.assert(fc.asyncProperty(
+        fc.constantFrom(alias, path.relative(process.cwd(), alias), "agy"),
+        fc.constantFrom("path", "override"),
+        fc.boolean(),
+        fc.boolean(),
+        async (candidate, source, externalFirst, duplicate) => {
+          const managed: AcpAgentInstance = { command: candidate, source, version: "1.5.14" };
+          const candidates = externalFirst ? [external, managed] : [managed, external];
+          if (duplicate) candidates.unshift({ command, source: "path", version: "1.5.14" });
+          const options = {
+            ...discovery(command, candidates),
+            env: { PATH: path.relative(process.cwd(), root) },
+            preferences: { antigravity: { selectedPath: candidate } },
+          };
+          const [settings, [record]] = await Promise.all([
+            discoverAcpAgentInstances(options), discoverLocalAcpAgentRecords(options),
+          ]);
+          expect(settings.get("antigravity")?.instances).toEqual([managed, external]);
+          expect(record?.instances).toEqual([managed, external]);
+          expect(record?.activeCommand).toBe(candidate);
+          expect(record?.launchDescriptor?.env.AGY_CLI_DISABLE_AUTO_UPDATE).toBe("true");
         },
       ), { numRuns: 25 });
     });

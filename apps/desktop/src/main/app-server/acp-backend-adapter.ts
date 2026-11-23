@@ -63,6 +63,8 @@ import type {
   AgentToolMcpServerLike,
 } from "../agent-tools/agent-tool-mcp-server.js";
 import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
+import type { AcpLaunchDescriptor } from "../acp/acp-launch-descriptor";
+import { isManagedAntigravityCommand, MANAGED_ANTIGRAVITY_ENV } from "../acp/antigravity-managed-runtime";
 import type { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import {
   assertProviderDiscoveryPermit,
@@ -546,6 +548,23 @@ export function describeInstalledAcpBackend(
     ),
     unavailableReason,
   };
+}
+
+async function withAcpSessionEnvironment(
+  descriptor: AcpLaunchDescriptor,
+  shellEnvironment?: Record<string, string>,
+): Promise<AcpLaunchDescriptor> {
+  const env = { ...descriptor.env, ...shellEnvironment };
+  // The shell can configure a standalone CLI. PwrAgent owns updates to its
+  // verified binaries even when a session supplies a different environment.
+  if (descriptor.backendId === "acp:antigravity"
+    && await isManagedAntigravityCommand(descriptor.command, {
+      cwd: descriptor.cwd,
+      env: { ...process.env, ...env },
+    })) {
+    Object.assign(env, MANAGED_ANTIGRAVITY_ENV);
+  }
+  return { ...descriptor, env };
 }
 
 function formatAcpAgentDisplayName(agent: AcpInstalledAgentRecord): string {
@@ -1646,8 +1665,10 @@ export class AcpBackendAdapter {
     const previous = this.environmentClients.get(key);
     const agent = await this.resolveInstalledAgent(backend);
     if (!agent.launchDescriptor) throw new Error(`ACP backend ${backend} has no launch descriptor`);
-    const configuredAgent = { ...agent, launchDescriptor: { ...agent.launchDescriptor,
-      env: { ...agent.launchDescriptor.env, ...previous?.shellEnvironment } } };
+    const configuredAgent = {
+      ...agent,
+      launchDescriptor: await withAcpSessionEnvironment(agent.launchDescriptor, previous?.shellEnvironment),
+    };
     const client = this.createAcpClient(configuredAgent);
     const entry: AcpClientEntry = { client, launchIdentity: acpAgentLaunchIdentity(configuredAgent),
       promise: Promise.resolve(client), supportsSessionLoad: true };
@@ -2040,10 +2061,7 @@ export class AcpBackendAdapter {
     }
     const configuredAgent = {
       ...agent,
-      launchDescriptor: {
-        ...agent.launchDescriptor,
-        env: { ...agent.launchDescriptor.env, ...shellEnvironment },
-      },
+      launchDescriptor: await withAcpSessionEnvironment(agent.launchDescriptor, shellEnvironment),
     };
     const launchIdentity = acpAgentLaunchIdentity(configuredAgent);
     const environmentUnchanged = previous?.environmentKey === environmentKey;
