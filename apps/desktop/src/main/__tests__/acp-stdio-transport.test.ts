@@ -1,4 +1,5 @@
-import { EventEmitter } from "node:events";
+import { spawn as spawnProcess } from "node:child_process";
+import { EventEmitter, once } from "node:events";
 import {
   chmodSync,
   mkdtempSync,
@@ -402,6 +403,117 @@ describe("AcpStdioJsonRpcTransport", () => {
     await expect(request).rejects.toThrow(
       "Kimi ACP agent exited unexpectedly (code 1): Selected model is no longer available.",
     );
+  });
+
+  it("rejects and reaps a live ACP child that closes stdin after initialize", async () => {
+    const pipeErrors: string[] = [];
+    let exited: Promise<unknown[]> | undefined;
+    const spawn: AcpStdioSpawn = (_command, _args, options) => {
+      const child = spawnProcess(process.execPath, ["-e", String.raw`
+        const { closeSync, readSync } = require("node:fs");
+        let line = "";
+        const byte = Buffer.alloc(1);
+        while (readSync(0, byte, 0, 1) && byte[0] !== 10) line += byte.toString();
+        const { id } = JSON.parse(line);
+        closeSync(0);
+        setInterval(() => {}, 1000);
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result: { protocolVersion: 1 } }) + "\n");
+      `], options);
+      // Record the kernel error and keep the worker alive on the pre-fix code.
+      child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+        if (error.code) pipeErrors.push(error.code);
+      });
+      exited = once(child, "exit");
+      return child;
+    };
+    const transport = new AcpStdioJsonRpcTransport({
+      launchDescriptor: createDescriptor({ cwd: os.tmpdir() }),
+      requestTimeoutMs: 1_000,
+      spawn,
+    });
+
+    try {
+      await expect(transport.request("initialize")).resolves.toEqual({ protocolVersion: 1 });
+      await expect(transport.request("session/new")).rejects.toThrow(/broken pipe|EPIPE/u);
+      expect(pipeErrors).toEqual(["EPIPE"]);
+      await exited;
+    } finally {
+      await transport.close();
+    }
+  });
+
+  it("rejects a request whose outbound observer is still waiting when stdin fails", async () => {
+    const child = new MockAcpChildProcess();
+    const observing = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const transport = new AcpStdioJsonRpcTransport({
+      launchDescriptor: createDescriptor(),
+      spawn: () => child,
+      observer: {
+        onMessage: () => {
+          observing.resolve();
+          return release.promise;
+        },
+      },
+    });
+    try {
+      const pending = expect(transport.request("session/new")).rejects.toThrow("fixture EPIPE");
+      await observing.promise;
+      child.stdin.destroy(new Error("fixture EPIPE"));
+      await pending;
+      expect(child.writes).toEqual([]);
+      expect(child.killCalled).toBe(true);
+    } finally {
+      release.resolve();
+      await transport.close();
+    }
+  });
+
+  it("waits for the failed child to exit before restarting and drops its late reply", async () => {
+    const child = new MockAcpChildProcess();
+    const replacement = new MockAcpChildProcess();
+    const signalled = Promise.withResolvers<void>();
+    child.kill = vi.fn(() => {
+      signalled.resolve();
+      return true;
+    });
+    const spawn = vi.fn().mockReturnValueOnce(child).mockReturnValueOnce(replacement);
+    const transport = new AcpStdioJsonRpcTransport({
+      launchDescriptor: createDescriptor(),
+      spawn,
+    });
+    const handling = Promise.withResolvers<void>();
+    const handlerResult = Promise.withResolvers<unknown>();
+    transport.onRequest(() => {
+      handling.resolve();
+      return handlerResult.promise;
+    });
+    const exit = () => {
+      child.signalCode = "SIGTERM";
+      child.emit("close");
+    };
+    try {
+      await transport.connect();
+      child.stdout.write('{"jsonrpc":"2.0","id":1,"method":"session/request_permission"}\n');
+      await handling.promise;
+      child.stdin.destroy(new Error("fixture EPIPE"));
+      await signalled.promise;
+      const restarting = transport.connect();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(spawn).toHaveBeenCalledTimes(1);
+      child.stderr.destroy(new Error("late fixture EPIPE"));
+      exit();
+      await restarting;
+      expect(spawn).toHaveBeenCalledTimes(2);
+      handlerResult.resolve({ outcome: "cancelled" });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(replacement.writes).toEqual([]);
+      expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+    } finally {
+      handlerResult.resolve(undefined);
+      exit();
+      await transport.close();
+    }
   });
 
   it("waits for ACP exit and escalates when SIGTERM is resisted", async () => {
