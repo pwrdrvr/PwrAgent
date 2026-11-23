@@ -3150,6 +3150,7 @@ async function createControllerHarness(): Promise<{
     threadId: request.threadId,
     turnId: "turn-1",
   }));
+  let adapterNow = 1000;
   const adapter = new TelegramAdapter({
     api: api as unknown as TelegramBotApi,
     config: {
@@ -3158,7 +3159,8 @@ async function createControllerHarness(): Promise<{
       authorizedActorIds: [{ id: "42", displayName: "" }],
       authorizedSupergroupIds: [{ id: "-100777", displayName: "PwrAgent" }],
     },
-    now: () => 1000,
+    now: () => adapterNow,
+    waitForReplyDelay: async (ms) => { adapterNow += ms; },
     pollOnStart: false,
     store,
   });

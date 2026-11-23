@@ -21031,6 +21031,7 @@ describe("MessagingController", () => {
       api: api as unknown as TelegramBotApi,
       config: { botToken: "test-token", channel: "telegram", authorizedActorIds: [], streamingResponses: true },
       now: () => now,
+      waitForReplyDelay: async (ms) => { now += ms; },
     });
     const delivered: MessagingSurfaceIntent[] = [];
     let finalDelivery: MessagingDeliveryResult | undefined;
