@@ -1948,7 +1948,18 @@ export class AcpAgentClient {
           : undefined;
     const requestId = id == null ? toolCallId ?? `acp:${this.now()}` : String(id);
     const activeTurn = this.activeTurns.get(sessionId);
-    const command = permissionCommand(title, toolCall);
+    // Antigravity reports MCP invocations as kind "other" with a flattened
+    // tool name. Preserve the name as reported for display only.
+    const acpMcpToolName = this.options.backendId === "acp:antigravity"
+      && toolCall.kind === "other"
+      && typeof toolCall.name === "string"
+      && /^mcp_[A-Za-z0-9_-]+$/u.test(toolCall.name)
+      ? toolCall.name
+      : undefined;
+    const prompt = acpMcpToolName
+      ? `${this.approvalRequesterName} wants to use an MCP tool.`
+      : permissionPrompt(this.approvalRequesterName, title, toolCall);
+    const command = acpMcpToolName ? undefined : permissionCommand(title, toolCall);
 
     return {
       method: "item/commandExecution/requestApproval",
@@ -1956,10 +1967,9 @@ export class AcpAgentClient {
         threadId: sessionId,
         ...(activeTurn?.turnId ? { turnId: activeTurn.turnId } : {}),
         requestId,
-        prompt: permissionPrompt(this.approvalRequesterName, title, toolCall),
-        reason: permissionPrompt(this.approvalRequesterName, title, toolCall),
-        command,
-        displayCommand: command,
+        prompt,
+        reason: prompt,
+        ...(acpMcpToolName ? { acpMcpToolName } : { command, displayCommand: command }),
         acpMethod: "session/request_permission",
         acpToolCallId: toolCallId,
         acpToolKind: typeof toolCall.kind === "string" ? toolCall.kind : undefined,
