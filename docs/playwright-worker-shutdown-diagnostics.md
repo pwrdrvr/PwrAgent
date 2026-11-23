@@ -461,11 +461,12 @@ The result flags a launch inventory that overlaps the exit callback and marks
 known diagnostic processes so their handles cannot be mistaken for an
 uninstrumented holder.
 
-For a detached onboarding handoff, `[windows-profile-sweep]` in the job log
-records the process table read, selected PIDs, kill failures, and whether the
-follow-up poll found no remaining matches. Join the worker and sweep timestamps
-to the native journal for each selected PID's creation FILETIME and the pipe
-inventory.
+For a detached onboarding handoff, the native controller emits
+`[windows-pipe-evidence]` records with `kind: "windows-profile-sweep"`, including
+runs with Playwright's `--quiet` flag. Each record gives the process table read,
+selected PIDs, kill failures, and whether the follow-up poll found no remaining
+matches. Join the worker and sweep timestamps to the native journal for each
+selected PID's creation FILETIME and the pipe inventory.
 
 Names come from the official [Sysinternals Handle utility](https://learn.microsoft.com/en-us/sysinternals/downloads/handle),
 downloaded and checked for a valid Microsoft signature by the Windows job.

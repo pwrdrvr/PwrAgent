@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 export function normalizePipeName(name) {
@@ -59,6 +59,24 @@ export function ancestry(rows, pid, created) {
   }
 }
 
+export function writeWindowsPipeRequest(directory, name, event) {
+  const filename = path.join(directory, name);
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(filename + ".tmp", JSON.stringify(event));
+  renameSync(filename + ".tmp", filename + ".json");
+}
+
+export function scanWindowsPipeRequests(directory, processed, { log, handleRequest }) {
+  for (const filename of readdirSync(directory).sort()) {
+    if (!filename.endsWith(".json") || processed.has(filename)) continue;
+    processed.add(filename);
+    if (processed.size > 2048) { log("request-limit", { omitted: processed.size - 2048 }); continue; }
+    const event = JSON.parse(readFileSync(path.join(directory, filename), "utf8"));
+    if (event.kind === "windows-profile-sweep") log(event.kind, event);
+    else handleRequest(event);
+  }
+}
+
 export function observeWindowsLauncher(child, { directory, logEvidence, now = Date.now, report = () => process.report.getReport() } = {}) {
   if (!directory || path.basename(child.spawnfile).toLowerCase() !== "electron.exe") return;
   const launchId = randomUUID();
@@ -66,11 +84,10 @@ export function observeWindowsLauncher(child, { directory, logEvidence, now = Da
     fd, destroyed: stream.destroyed, readableEnded: stream.readableEnded, writableFinished: stream.writableFinished,
   }] : []);
   const request = (kind, data) => {
-    const filename = path.join(directory, launchId + "-" + kind);
     try {
-      mkdirSync(directory, { recursive: true });
-      writeFileSync(filename + ".tmp", JSON.stringify({ kind, launchId, workerPid: process.pid, pid: child.pid, ...data }));
-      renameSync(filename + ".tmp", filename + ".json");
+      writeWindowsPipeRequest(directory, launchId + "-" + kind, {
+        kind, launchId, workerPid: process.pid, pid: child.pid, ...data,
+      });
     } catch (error) {
       logEvidence?.("windows-pipe-request-error", { launchId, workerPid: process.pid, kind, error: error.message });
     }

@@ -1,10 +1,10 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, watch, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, watch, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { ancestry, bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS, launcherParentMatches, packageManagerCommand, parseHandleOutput } from "./windows-pipe-observation.mjs";
+import { ancestry, bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS, launcherParentMatches, packageManagerCommand, parseHandleOutput, scanWindowsPipeRequests } from "./windows-pipe-observation.mjs";
 import { nativeProbeFailure, nativeStackArguments, parseNativeStacks, verifiedNativeStack } from "./windows-native-stack.mjs";
 import { childProcessLocations } from "./windows-child-process-locations.mjs";
 
@@ -262,25 +262,23 @@ function enqueue(task) {
   void operation.finally(() => pending.delete(operation));
 }
 function scanRequests() {
-  for (const filename of readdirSync(requests).sort()) {
-    if (!filename.endsWith(".json") || processed.has(filename)) continue;
-    processed.add(filename);
-    if (processed.size > 2048) { log("request-limit", { omitted: processed.size - 2048 }); continue; }
-    const event = JSON.parse(readFileSync(path.join(requests, filename), "utf8"));
-    if (event.kind === "stalled") {
-      event.launchId = [...launchEvents.values()].findLast((launch) => launch.pid === event.pid && launch.workerPid === event.workerPid)?.launchId;
-    }
-    if (!/^[a-f0-9-]{36}$/.test(event.launchId)) continue;
-    if (!liveArtifacts) { cpSync(evidence, artifact, { recursive: true }); liveArtifacts = true; }
-    if (event.kind === "launch") {
-      launchEvents.set(event.launchId, event);
-      const operation = inventory(event);
-      launches.set(event.launchId, operation);
-      enqueue(operation);
-    }
-    if (event.kind === "trigger") enqueue(capture(event));
-    if (event.kind === "stalled") { enqueue(capture(event)); enqueue(captureNativeStack(event)); }
+  scanWindowsPipeRequests(requests, processed, { log, handleRequest });
+}
+
+function handleRequest(event) {
+  if (event.kind === "stalled") {
+    event.launchId = [...launchEvents.values()].findLast((launch) => launch.pid === event.pid && launch.workerPid === event.workerPid)?.launchId;
   }
+  if (!/^[a-f0-9-]{36}$/.test(event.launchId)) return;
+  if (!liveArtifacts) { cpSync(evidence, artifact, { recursive: true }); liveArtifacts = true; }
+  if (event.kind === "launch") {
+    launchEvents.set(event.launchId, event);
+    const operation = inventory(event);
+    launches.set(event.launchId, operation);
+    enqueue(operation);
+  }
+  if (event.kind === "trigger") enqueue(capture(event));
+  if (event.kind === "stalled") { enqueue(capture(event)); enqueue(captureNativeStack(event)); }
 }
 async function startObserver() {
   mkdirSync(requests, { recursive: true });

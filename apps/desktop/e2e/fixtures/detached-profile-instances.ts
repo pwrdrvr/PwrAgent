@@ -1,5 +1,7 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { writeWindowsPipeRequest } from "../../scripts/windows-pipe-observation.mjs";
 import { ELECTRON_E2E_ENTRY } from "./electron-app";
 
 export function graduatedProfileOwnerArg(homeRoot: string): string {
@@ -56,14 +58,18 @@ export async function killGraduatedProfileInstances(
   const pollConfirmedNoMatches = pids.length > 0
     ? await waitForProfileInstancesToExit(profile, homeRoot, deadline)
     : undefined;
-  if (process.platform === "win32" && process.env.PWRAGENT_WINDOWS_PIPE_REQUESTS) {
-    console.error("[windows-profile-sweep] " + JSON.stringify({
-      workerPid: process.pid, startedAt, readAt, killsFinishedAt, finishedAt: Date.now(),
-      processTableRead: rows !== undefined,
-      matchedCount: pids.length, matchedPids: pids.slice(0, 8),
-      failedKillCount: failedKills.length, failedKillPids: failedKills.slice(0, 8),
-      pollConfirmedNoMatches,
-    }));
+  const requests = process.env.PWRAGENT_WINDOWS_PIPE_REQUESTS;
+  if (process.platform === "win32" && requests) {
+    try {
+      writeWindowsPipeRequest(requests, randomUUID(), {
+        kind: "windows-profile-sweep",
+        workerPid: process.pid, startedAt, readAt, killsFinishedAt, finishedAt: Date.now(),
+        processTableRead: rows !== undefined,
+        matchedCount: pids.length, matchedPids: pids.slice(0, 8),
+        failedKillCount: failedKills.length, failedKillPids: failedKills.slice(0, 8),
+        pollConfirmedNoMatches,
+      });
+    } catch { /* Recording evidence must not change fixture teardown. */ }
   }
 }
 
