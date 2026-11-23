@@ -378,7 +378,7 @@ GitHub run, so one rule decides every wait (`evaluateCiRunCondition`).
 
 | `ciRun.on` | GitLab |
 | --- | --- |
-| `approval_gate` | A deployment to a protected environment that is `blocked` on approval, named by its environment, with its approval rules as reviewers. Also a manual job that can be played now, named by the job. |
+| `approval_gate` | A deployment with API status `blocked`, named by its environment, with its approval rules as reviewers when available. Also a manual job, named by the job. |
 | `job_failed` | A job with status `failed`, unless it has `allow_failure`. Retried jobs are left out. |
 | `finished` | The pipeline's final status: `success` or `skipped` passes, `failed` or `canceled` fails. |
 
@@ -389,12 +389,22 @@ GitHub run, so one rule decides every wait (`evaluateCiRunCondition`).
   for `approval_gate` reports the gate.
 - An `allow_failure` job that fails is counted among failed jobs and wakes
   nothing, because its pipeline still passes.
-- Each check reads the pipeline, its jobs, and the project's 100 newest
-  blocked deployments. A manual trigger job is read only when the pipeline is
-  `manual` and nothing else explains it. A project whose token cannot list
-  deployments reports manual jobs only.
-- Deployment approvals need GitLab Premium or Ultimate. Without them only
-  manual jobs are gates.
+- Each check reads the pipeline and its jobs. Unless the pipeline is `failed`
+  or `canceled`, the check also reads the project's 100 newest blocked
+  deployments and keeps those for this pipeline. It reads manual trigger jobs
+  when the pipeline is `manual` and neither a blocked deployment nor a manual
+  job explains the pause. A project whose token cannot list deployments
+  reports manual jobs only.
+- An approval-blocked job reports `manual` in the jobs API. A deployment can
+  remain `blocked` after approval and while the job is `pending` because
+  GitLab's deployment status synchronization ignores `pending`. Checking for
+  a `manual` job before reading deployments would miss that gate.
+  [GitLab approval guard](https://gitlab.com/gitlab-org/gitlab/-/blob/177bd587a0e0be373af9d84b3428ac50d12a5b0b/ee/app/models/concerns/ee/ci/deployable.rb#L9-18),
+  [GitLab jobs API serializer](https://gitlab.com/gitlab-org/gitlab/-/blob/177bd587a0e0be373af9d84b3428ac50d12a5b0b/lib/api/entities/ci/job_basic.rb#L5-9),
+  [GitLab deployment status synchronization](https://gitlab.com/gitlab-org/gitlab/-/blob/177bd587a0e0be373af9d84b3428ac50d12a5b0b/app/models/deployment.rb#L413-420),
+  [GitLab blocked deployment behavior](https://gitlab.com/gitlab-org/gitlab/-/merge_requests/125659).
+- Deployment approvals need GitLab Premium or Ultimate. GitLab can also
+  mark a deployment as `blocked` when it requires manual execution.
 
 ### Approving a GitHub gate from its card
 
