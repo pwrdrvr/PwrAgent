@@ -181,7 +181,13 @@ export default defineConfig({
       {
         test: {
           name: "owner-core",
-          env: SANDBOX_ENV,
+          env: {
+            ...SANDBOX_ENV,
+            // Stack replay requires the Git version pinned by the desktop
+            // workspace. The system Git on CI images can lack --ref-action.
+            PWRAGENT_STACK_TEST_GIT: path.join(REPOSITORY_ROOT, "apps/desktop/node_modules/dugite/git",
+              process.platform === "win32" ? "cmd/git.exe" : "bin/git"),
+          },
           pool: "threads",
           globals: true,
           testTimeout: TEST_TIMEOUT_MS,

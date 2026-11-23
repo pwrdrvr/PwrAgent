@@ -13,15 +13,19 @@ export const gitEnvironment = {
   GIT_CONFIG_COUNT: undefined,
   GIT_CONFIG_PARAMETERS: undefined,
   GIT_DIR: undefined,
+  GIT_EXEC_PATH: undefined,
   GIT_WORK_TREE: undefined,
   GIT_INDEX_FILE: undefined,
+  GIT_TEMPLATE_DIR: undefined,
 };
 
 const execute = promisify(execFile);
 
 export const runner: GitRunner = {
   async run(cwd, args, opts) {
-    const call = execute("git", args, { cwd, env: gitEnvironment, encoding: "utf8", windowsHide: true });
+    const git = process.env.PWRAGENT_STACK_TEST_GIT;
+    if (!git) throw new Error("Stack engine tests require the pinned Git from vitest.workspace.mts.");
+    const call = execute(git, args, { cwd, env: gitEnvironment, encoding: "utf8", windowsHide: true });
     call.child?.stdin?.on("error", () => undefined);
     call.child?.stdin?.end(opts?.stdin);
     try {

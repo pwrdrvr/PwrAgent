@@ -1,4 +1,4 @@
-import { readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { StackEngine, type GitRunner } from "../index";
@@ -7,6 +7,7 @@ import { commit, git, memoryStore, repository, runner, withRepo, withStack } fro
 test("an ignored file in a replay's path survives byte for byte", () => withStack(async ({ cwd, engine, top }) => {
   await commit(cwd, "trunk.txt", "advance\n");
   await git(cwd, "switch", "top");
+  await mkdir(join(cwd, ".git", "info"), { recursive: true });
   await writeFile(join(cwd, ".git", "info", "exclude"), "trunk.txt\n");
   const local = Buffer.from([9, 0, 255, 10]);
   await writeFile(join(cwd, "trunk.txt"), local);
