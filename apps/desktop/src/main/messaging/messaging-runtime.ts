@@ -1711,7 +1711,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         });
       });
       unsubscribeInboundRejected = adapter.onInboundRejected?.(async (event) => {
-        if (event.channel?.connectionId !== undefined) return;
+        if ("channel" in event && event.channel?.connectionId !== undefined) return;
         await this.handleRejectedInbound(adapter.channel, event, store);
       });
       unsubscribeInboundChannelMetadata = adapter.onInboundChannelMetadata?.(async (update) => {
