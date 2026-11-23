@@ -40,6 +40,7 @@ import {
   type DesktopMessagingContactLookupResponse,
   type DesktopSettingsSecretName,
   type DesktopSettingsSnapshot,
+  type DesktopTelegramPairingGrants,
   type DesktopMessagingFullAccessWarningGlobalPolicy,
   type DesktopMessagingFullAccessWarningUserPolicy,
   type InspectDiscordThreadPermissionsResponse,
@@ -54,6 +55,7 @@ import {
   type MessagingPairingEntry,
   type MessagingPairingScope,
   type MessagingToolUpdateMode,
+  type RevokeTelegramPairingGrantRequest,
 } from "@pwragent/shared/contracts/messaging";
 import {
   CheckIcon,
@@ -951,6 +953,13 @@ export function MessagingSettings(props: {
               });
             }}
           />
+          {telegram.pairingGrants && (telegram.pairingGrants.users.length > 0 || telegram.pairingGrants.supergroups.length > 0) ? (
+            <TelegramPairingGrantField
+              grants={telegram.pairingGrants}
+              revoke={props.desktopApi?.revokeTelegramPairingGrant}
+              onChanged={props.onPairingSettingsChanged}
+            />
+          ) : null}
         </div>
       </SettingsSection>
       ) : null}
@@ -3352,6 +3361,54 @@ function PairingTokenField(props: {
           ) : null}
         </div>
       }
+    />
+  );
+}
+
+function TelegramPairingGrantField(props: {
+  grants: DesktopTelegramPairingGrants;
+  revoke?: (request: RevokeTelegramPairingGrantRequest) => Promise<void>;
+  onChanged?: () => void | Promise<void>;
+}) {
+  const [revoking, setRevoking] = useState(false);
+  const [error, setError] = useState<string>();
+  const revoke = async (kind: RevokeTelegramPairingGrantRequest["kind"], contactId: string) => {
+    if (!props.revoke || revoking) return;
+    setRevoking(true);
+    setError(undefined);
+    try {
+      await props.revoke({ accountId: props.grants.accountId, kind, contactId });
+      await props.onChanged?.();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setRevoking(false);
+    }
+  };
+
+  return (
+    <SettingsField
+      label="Paired access"
+      sub="Users and groups approved through pairing for this Telegram bot."
+      error={error}
+      control={(
+        <div className="settings-pairing">
+          {(["users", "supergroups"] as const).flatMap((kind) => props.grants[kind].map((contact) => (
+            <div className="settings-pairing__controls" key={`${kind}:${contact.id}`}>
+              <span>{contact.displayName || (kind === "users" ? "Telegram user" : "Telegram group")} <code>{contact.id}</code></span>
+              <button
+                type="button"
+                className="button button--ghost"
+                aria-label={`Revoke pairing for ${contact.displayName || contact.id}`}
+                disabled={revoking || !props.revoke}
+                onClick={() => void revoke(kind, contact.id)}
+              >
+                Revoke
+              </button>
+            </div>
+          )))}
+        </div>
+      )}
     />
   );
 }

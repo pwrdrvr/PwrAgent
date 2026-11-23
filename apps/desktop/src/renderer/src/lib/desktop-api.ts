@@ -719,6 +719,7 @@ import type {
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
   RejectMessagingPairingRequest,
+  RevokeTelegramPairingGrantRequest,
   RejectMessagingPairingResponse,
   ResetMessagingToolUpdateBindingsRequest,
   ResetMessagingToolUpdateBindingsResponse,
@@ -2253,6 +2254,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   rejectMessagingPairing?: (
     request: RejectMessagingPairingRequest,
   ) => Promise<RejectMessagingPairingResponse>;
+  revokeTelegramPairingGrant?: (request: RevokeTelegramPairingGrantRequest) => Promise<void>;
   onMessagingPairingChanged?: (
     callback: (event: { at: number; entry: MessagingPairingEntry }) => void,
   ) => () => void;

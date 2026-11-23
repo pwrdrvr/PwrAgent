@@ -21,6 +21,7 @@ import type {
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
   RejectMessagingPairingRequest,
+  RevokeTelegramPairingGrantRequest,
   RejectMessagingPairingResponse,
   ResetMessagingToolUpdateBindingsRequest,
   ResetMessagingToolUpdateBindingsResponse,
@@ -44,6 +45,7 @@ import {
   validateSlackChannelId,
   validateSlackTeamId,
   validateSlackUserId,
+  telegramBotAccountId,
 } from "@pwragent/shared/messaging-id-validation";
 import { getDesktopMessagingRuntime } from "../../messaging/messaging-runtime";
 import {
@@ -79,6 +81,7 @@ import {
   MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL,
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
   MESSAGING_REJECT_PAIRING_CHANNEL,
+  MESSAGING_REVOKE_TELEGRAM_PAIRING_GRANT_CHANNEL,
   MESSAGING_RESET_TOOL_UPDATE_BINDINGS_CHANNEL,
   MESSAGING_SET_ENABLED_CHANNEL,
   MESSAGING_SET_DEFAULT_AGENT_CHANNEL,
@@ -179,20 +182,6 @@ function buildPairingApprovalPatch(
   };
 
   switch (entry.platform) {
-    case "telegram": {
-      if (entry.scope === "bucket") {
-        const merged = merge(snapshot.messaging.telegram.authorizedSupergroups.value);
-        return {
-          added: merged.added,
-          patch: { messaging: { telegram: { authorizedSupergroups: merged.contacts } } },
-        };
-      }
-      const merged = merge(snapshot.messaging.telegram.authorizedUserIds.value);
-      return {
-        added: merged.added,
-        patch: { messaging: { telegram: { authorizedUserIds: merged.contacts } } },
-      };
-    }
     case "discord": {
       if (entry.scope === "bucket") {
         const merged = merge(snapshot.messaging.discord.authorizedGuilds.value);
@@ -695,7 +684,10 @@ export function registerMessagingStatusIpcHandlers(): void {
       _event,
       request: GenerateMessagingPairingTokenRequest,
     ): Promise<GenerateMessagingPairingTokenResponse> => {
-      return runtime.generatePairingToken(request);
+      const accountId = request.platform === "telegram"
+        ? telegramBotAccountId(getDesktopSettingsService().resolveTelegramBotTokenSync())
+        : undefined;
+      return runtime.generatePairingToken(request, accountId);
     },
   );
 
@@ -731,6 +723,30 @@ export function registerMessagingStatusIpcHandlers(): void {
       }
       if (accountStatus === "different") {
         throw new Error("This pairing request belongs to a different bot. Generate a code for the connected bot.");
+      }
+      if (pairing.platform === "telegram") {
+        const approval = getDesktopMessagingPairingStore().approveTelegramPairing({
+          entryId: pairing.id,
+          contact: contactForPairing(pairing),
+          now: Date.now(),
+          resolveCurrentAccountId: () => telegramBotAccountId(service.resolveTelegramBotTokenSync()),
+        });
+        if (approval === "different-bot") {
+          throw new Error("This pairing request belongs to a different bot. Generate a code for the connected bot.");
+        }
+        if (approval === "unavailable") {
+          throw new Error("Save a Telegram bot token, then try approving again.");
+        }
+        await getRuntimeMessagingLeaseCoordinator().applyLatestConfig(
+          runtime,
+          (options) => loadDesktopMessagingConfigFromSettings(service, process.env, options),
+          { logStartupEligibility: true },
+        );
+        recordPairingActivity(approval.entry, "Approved pairing request");
+        await runtime.deliverPairingOutcome(approval.entry, "approved");
+        broadcastPairingChanged({ at: Date.now(), entry: approval.entry });
+        log.info("messaging pairing approved", { pairingId: pairing.id, platform: pairing.platform, added: approval.added });
+        return approval;
       }
       // For a Slack team approval, resolve the workspace name best-effort so the
       // saved row carries a label (blank on failure/timeout), mirroring how the
@@ -804,6 +820,28 @@ export function registerMessagingStatusIpcHandlers(): void {
           : {}),
       });
       return { entry: consumed ?? pairing, added: approval.added };
+    },
+  );
+
+  ipcMain.removeHandler(MESSAGING_REVOKE_TELEGRAM_PAIRING_GRANT_CHANNEL);
+  ipcMain.handle(
+    MESSAGING_REVOKE_TELEGRAM_PAIRING_GRANT_CHANNEL,
+    async (_event, request: RevokeTelegramPairingGrantRequest): Promise<void> => {
+      if (!/^[1-9]\d*$/.test(request.accountId)
+        || (request.kind !== "users" && request.kind !== "supergroups")) {
+        throw new Error("Invalid Telegram pairing grant.");
+      }
+      const coordinator = getRuntimeMessagingLeaseCoordinator();
+      const lease = coordinator.snapshot();
+      if (!lease.leaseHeld && lease.leaseHolder) {
+        throw new Error("Revoke this pairing in the PwrAgent instance running Messaging for this profile.");
+      }
+      getDesktopMessagingPairingStore().revokeTelegramGrant(request);
+      await coordinator.applyLatestConfig(
+        runtime,
+        (options) => loadDesktopMessagingConfigFromSettings(getDesktopSettingsService(), process.env, options),
+        { logStartupEligibility: true, allowStart: false },
+      );
     },
   );
 
@@ -1008,6 +1046,7 @@ export async function disposeMessagingStatusIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(MESSAGING_LIST_PAIRING_REQUESTS_CHANNEL);
   ipcMain.removeHandler(MESSAGING_APPROVE_PAIRING_CHANNEL);
   ipcMain.removeHandler(MESSAGING_REJECT_PAIRING_CHANNEL);
+  ipcMain.removeHandler(MESSAGING_REVOKE_TELEGRAM_PAIRING_GRANT_CHANNEL);
   ipcMain.removeHandler(MESSAGING_UNBIND_THREAD_CHANNEL);
   ipcMain.removeHandler(MESSAGING_RESET_TOOL_UPDATE_BINDINGS_CHANNEL);
   ipcMain.removeHandler(MESSAGING_LIST_ROUTES_CHANNEL);

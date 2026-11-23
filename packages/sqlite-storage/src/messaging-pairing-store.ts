@@ -13,10 +13,13 @@ import type {
   MessagingPairingObservedChat,
   MessagingPairingScope,
   MessagingPairingStatus,
+  RevokeTelegramPairingGrantRequest,
 } from "@pwragent/shared/contracts/messaging";
+import type { DesktopTelegramPairingGrants } from "@pwragent/shared/contracts/settings";
 import type { StateDb } from "./state-db";
 
 const PAIRING_SECRET_META_KEY = "messaging_pairing_secret_v1";
+const TELEGRAM_GRANTS_META_PREFIX = "messaging_telegram_grants_v1:";
 
 type PairingRow = {
   entry_id: string;
@@ -40,6 +43,66 @@ type PairingPayload = {
 
 export class MessagingPairingStore implements MessagingPairingStorage {
   constructor(private readonly stateDb: StateDb) {}
+
+  readTelegramGrants(accountId: string): DesktopTelegramPairingGrants {
+    const raw = this.stateDb.getMeta(`${TELEGRAM_GRANTS_META_PREFIX}${accountId}`);
+    if (raw) {
+      const { users, supergroups } = JSON.parse(raw) as Omit<DesktopTelegramPairingGrants, "accountId">;
+      return { accountId, users, supergroups };
+    }
+    return { accountId, users: [], supergroups: [] };
+  }
+
+  approveTelegramPairing(params: Parameters<MessagingPairingStorage["approveTelegramPairing"]>[0]):
+  ReturnType<MessagingPairingStorage["approveTelegramPairing"]> {
+    // Secret writes from the active profile and bootstrap use this same SQLite
+    // database. Resolve the effective credential while holding its write lock.
+    return this.stateDb.raw.transaction(() => {
+      const entry = this.get(params.entryId);
+      if (entry?.platform !== "telegram" || entry.status !== "observed"
+        || entry.expiresAt <= params.now || !entry.observedActor || !entry.observedChat) {
+        throw new Error("Pairing request has not been observed or has expired.");
+      }
+      const accountId = params.resolveCurrentAccountId();
+      if (!accountId) return "unavailable" as const;
+      if (entry.instanceId !== `account:${accountId}`) return "different-bot" as const;
+
+      const grants = this.readTelegramGrants(accountId);
+      const contacts = entry.scope === "bucket" ? grants.supergroups : grants.users;
+      const existing = contacts.find((contact) => contact.id === params.contact.id);
+      if (!existing) {
+        contacts.push(params.contact);
+        this.saveTelegramGrants(grants);
+      }
+      const consumed = this.markStatus({ entryId: entry.id, status: "consumed" });
+      if (!consumed) throw new Error("Pairing request not found.");
+      return { entry: consumed, added: !existing };
+    }).immediate();
+  }
+
+  revokeTelegramGrant({ accountId, kind, contactId }: RevokeTelegramPairingGrantRequest): void {
+    this.stateDb.raw.transaction(() => {
+      const grants = this.readTelegramGrants(accountId);
+      const remaining = grants[kind].filter((contact) => contact.id !== contactId);
+      if (remaining.length === grants[kind].length) return;
+      grants[kind] = remaining;
+      this.saveTelegramGrants(grants);
+    }).immediate();
+  }
+
+  dismissTelegramGrantWarning(accountId: string, contactId: string): void {
+    this.stateDb.raw.transaction(() => {
+      const grants = this.readTelegramGrants(accountId);
+      const contact = grants.users.find((candidate) => candidate.id === contactId);
+      if (!contact || contact.fullAccessWarningDismissed) return;
+      contact.fullAccessWarningDismissed = true;
+      this.saveTelegramGrants(grants);
+    }).immediate();
+  }
+
+  private saveTelegramGrants({ accountId, users, supergroups }: DesktopTelegramPairingGrants): void {
+    this.stateDb.setMeta(`${TELEGRAM_GRANTS_META_PREFIX}${accountId}`, JSON.stringify({ users, supergroups }));
+  }
 
   create(params: {
     token: string;

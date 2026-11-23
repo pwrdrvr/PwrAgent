@@ -548,6 +548,14 @@ export type ApproveMessagingPairingResponse = {
   added: boolean;
 };
 
+export type TelegramPairingGrantKind = "users" | "supergroups";
+
+export type RevokeTelegramPairingGrantRequest = {
+  accountId: string;
+  kind: TelegramPairingGrantKind;
+  contactId: string;
+};
+
 export type RejectMessagingPairingRequest = {
   entryId: string;
 };

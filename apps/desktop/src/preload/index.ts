@@ -554,6 +554,7 @@ import type {
   MessagingPlatformStatusEvent,
   MessagingPairingEntry,
   RejectMessagingPairingRequest,
+  RevokeTelegramPairingGrantRequest,
   RejectMessagingPairingResponse,
   ResetMessagingToolUpdateBindingsRequest,
   ResetMessagingToolUpdateBindingsResponse,
@@ -1210,6 +1211,7 @@ import {
   MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL,
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
   MESSAGING_REJECT_PAIRING_CHANNEL,
+  MESSAGING_REVOKE_TELEGRAM_PAIRING_GRANT_CHANNEL,
   MESSAGING_RESET_TOOL_UPDATE_BINDINGS_CHANNEL,
   MESSAGING_SET_ENABLED_CHANNEL,
   MESSAGING_SET_DEFAULT_AGENT_CHANNEL,
@@ -3999,6 +4001,8 @@ const desktopApi = Object.freeze({
     request: RejectMessagingPairingRequest,
   ): Promise<RejectMessagingPairingResponse> =>
     await ipcRenderer.invoke(MESSAGING_REJECT_PAIRING_CHANNEL, request),
+  revokeTelegramPairingGrant: async (request: RevokeTelegramPairingGrantRequest): Promise<void> =>
+    await ipcRenderer.invoke(MESSAGING_REVOKE_TELEGRAM_PAIRING_GRANT_CHANNEL, request),
   openMessagingActivityWindow: async (): Promise<void> => {
     await ipcRenderer.invoke(MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL);
   },

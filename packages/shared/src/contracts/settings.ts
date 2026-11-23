@@ -677,6 +677,12 @@ export type DesktopAuthorizedContact = {
   responseMode?: DesktopMessagingResponseMode;
 };
 
+export type DesktopTelegramPairingGrants = {
+  accountId: string;
+  users: DesktopAuthorizedContact[];
+  supergroups: DesktopAuthorizedContact[];
+};
+
 export type DesktopMessagingResponseMode = "every_message" | "mention_only";
 export type DesktopMessagingAuthorizationMode = "approved_only" | "allow_all";
 export type DesktopMessagingSlackDmAccessMode =
@@ -1580,6 +1586,7 @@ export type DesktopSettingsSnapshot = {
       botToken: DesktopSettingsSecretState;
       authorizedUserIds: DesktopSettingsValue<DesktopAuthorizedContact[]>;
       authorizedSupergroups: DesktopSettingsValue<DesktopAuthorizedContact[]>;
+      pairingGrants?: DesktopTelegramPairingGrants;
     };
     discord: {
       enabled: DesktopSettingsValue<boolean>;

@@ -1231,15 +1231,20 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
 
   generatePairingToken(
     request: GenerateMessagingPairingTokenRequest,
+    configuredTelegramAccountId?: string,
   ): GenerateMessagingPairingTokenResponse {
     const now = Date.now();
     const ttlMs = clampPairingTtlMs(request.ttlMs);
     const defaultInstance = request.instanceId === undefined || request.instanceId === PAIRING_INSTANCE_ID;
-    const address = request.scope === "user_dm" && defaultInstance
-      ? this.runningAdapters.get(request.platform)?.adapter.readDmPairingAddress?.()
+    const adapter = this.runningAdapters.get(request.platform)?.adapter;
+    const accountId = request.platform === "telegram" && defaultInstance
+      ? configuredTelegramAccountId ?? adapter?.readDmPairingAccountId?.()
       : undefined;
-    const instanceId = address
-      ? `${PAIRING_ACCOUNT_PREFIX}${address.accountId}`
+    const address = request.scope === "user_dm" && accountId
+      ? adapter?.readDmPairingAddress?.()
+      : undefined;
+    const instanceId = accountId
+      ? `${PAIRING_ACCOUNT_PREFIX}${accountId}`
       : request.instanceId ?? PAIRING_INSTANCE_ID;
     const store = getDesktopMessagingPairingStore();
     const outstanding = store.countOutstanding({
@@ -1253,7 +1258,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       );
     }
     const token = generatePairingToken();
-    const url = address?.linkForToken(token);
+    const url = address && address.accountId === accountId ? address.linkForToken(token) : undefined;
     const dmLink = url ? {
       url,
       qrImage: `data:image/svg+xml,${encodeURIComponent(renderSVG(url, { border: 4 }))}`,

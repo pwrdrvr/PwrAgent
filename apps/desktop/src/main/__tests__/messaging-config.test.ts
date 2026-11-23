@@ -402,6 +402,46 @@ describe("desktop messaging config", () => {
     });
   });
 
+  it("projects paired Telegram contacts only onto their bot while preserving manual entries and env overrides", async () => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    fs.writeFileSync(configPath, '[messaging.telegram]\nenabled = true\nauthorized_user_ids = ["55"]\n');
+    const secretStore = new MemoryDesktopSecretStore();
+    const pairedUser = { id: "42", displayName: "Fixture Contact" };
+    const pairedGroup = { id: "-1001234567890", displayName: "Fixture Group" };
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore,
+      telegramPairingStorage: {
+        readTelegramGrants: (accountId) => ({
+          accountId,
+          users: accountId === "123456" ? [pairedUser] : [],
+          supergroups: accountId === "123456" ? [pairedGroup] : [],
+        }),
+        dismissTelegramGrantWarning: vi.fn(),
+      },
+    });
+
+    await secretStore.setSecret("telegramBotToken", "123456:rotated-fixture");
+    const original = await loadDesktopMessagingConfigFromSettings(service, {});
+    expect(original.telegram?.authorizedActorIds).toEqual([{ id: "55", displayName: "" }, pairedUser]);
+    expect(original.telegram?.authorizedSupergroupIds).toEqual([pairedGroup]);
+    expect((await service.readMessagingProjection()).messaging.telegram.pairingGrants?.users).toEqual([pairedUser]);
+    expect(service.readMessagingSettings().telegram.authorizedUserIds.value).toEqual([{ id: "55", displayName: "" }]);
+
+    await secretStore.setSecret("telegramBotToken", "654321:replacement-fixture");
+    const replacement = await loadDesktopMessagingConfigFromSettings(service, {});
+    expect(replacement.telegram?.authorizedActorIds).toEqual([{ id: "55", displayName: "" }]);
+    expect(replacement.telegram?.authorizedSupergroupIds).toEqual([]);
+
+    const envOverride = await loadDesktopMessagingConfigFromSettings(service, {
+      [TELEGRAM_BOT_TOKEN_ENV]: "123456:configured-in-env",
+      [TELEGRAM_AUTHORIZED_USER_IDS_ENV]: "77",
+    });
+    expect(envOverride.telegram?.authorizedActorIds).toEqual([{ id: "77", displayName: "" }]);
+    expect(envOverride.telegram?.authorizedSupergroupIds).toEqual([pairedGroup]);
+  });
+
   it("preserves env Slack workspace allowlists in the settings-backed loader", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

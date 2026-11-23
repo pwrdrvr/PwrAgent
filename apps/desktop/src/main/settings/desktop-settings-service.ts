@@ -1,4 +1,6 @@
 import { assertHotCpuCaptureRules, primaryHotCpuRule } from "@pwragent/shared/hot-cpu-rules";
+import { telegramBotAccountId } from "@pwragent/shared/messaging-id-validation";
+import type { MessagingPairingStorage } from "@pwragent/owner-core/messaging-pairing-storage";
 import { resolveHotCpuRules } from "../diagnostics/hot-cpu-profile-config";
 import { CommandDiscoveryLifetime } from "./command-discovery-lifetime";
 import {
@@ -40,6 +42,7 @@ import type {
   DesktopApplicationsSnapshot,
   DesktopChatReplyComposer,
   DesktopAuthorizedContact,
+  DesktopTelegramPairingGrants,
   DesktopCodexAuthProfileDiscoverySnapshot,
   DesktopCodexCandidateSource,
   DesktopCodexDiscoverySnapshot,
@@ -355,6 +358,7 @@ function normalizeCodexProfilesSnapshot(
 }
 
 type DesktopSettingsServiceOptions = {
+  telegramPairingStorage?: Pick<MessagingPairingStorage, "readTelegramGrants" | "dismissTelegramGrantWarning">;
   tokenMiserStore?: TokenMiserStore;
   codexHome?: string;
   codexDiscoveryCoordinator?: Pick<
@@ -1487,6 +1491,7 @@ export class DesktopSettingsService {
             config.messaging?.telegram?.authorizedSupergroups,
             TELEGRAM_AUTHORIZED_SUPERGROUPS_ENV,
           ),
+          pairingGrants: this.readTelegramPairingGrants(this.resolveTelegramBotTokenSync()),
         },
         discord: {
           enabled: this.resolveBoolean(
@@ -2004,7 +2009,11 @@ export class DesktopSettingsService {
       fetchedAt: this.now(),
       messaging: {
         ...messaging,
-        telegram: { ...messaging.telegram, botToken: telegramBotToken },
+        telegram: {
+          ...messaging.telegram,
+          botToken: telegramBotToken,
+          pairingGrants: this.readTelegramPairingGrants(this.resolveTelegramBotTokenSync()),
+        },
         discord: { ...messaging.discord, botToken: discordBotToken },
         mattermost: {
           ...messaging.mattermost,
@@ -2903,7 +2912,18 @@ export class DesktopSettingsService {
   }
 
   resolveTelegramBotTokenSync(): string | undefined {
-    return this.resolveSecretSync("telegramBotToken", TELEGRAM_BOT_TOKEN_ENV);
+    return readEnvString(this.env, TELEGRAM_BOT_TOKEN_ENV)
+      ?? readEnvString(this.env, "TELEGRAM_BOT_TOKEN")
+      ?? this.options.secretStore.getSecretSync?.("telegramBotToken");
+  }
+
+  readTelegramPairingGrants(botToken: string | undefined): DesktopTelegramPairingGrants | undefined {
+    const accountId = telegramBotAccountId(botToken);
+    return accountId ? this.options.telegramPairingStorage?.readTelegramGrants(accountId) : undefined;
+  }
+
+  dismissTelegramPairingGrantWarning(accountId: string, actorId: string): void {
+    this.options.telegramPairingStorage?.dismissTelegramGrantWarning(accountId, actorId);
   }
 
   resolveDiscordBotTokenSync(): string | undefined {
