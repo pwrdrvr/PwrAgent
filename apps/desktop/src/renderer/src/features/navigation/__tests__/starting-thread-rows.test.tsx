@@ -488,6 +488,27 @@ describe("a to-do card's thread while its worktree and setup run", () => {
     expect(startingThreadHomeDirectoryKey(row!, directories)).toBeUndefined();
   });
 
+  it("renders a Windows start inside the project identified by its owner", () => {
+    const path = "C:/Projects/Catalog";
+    renderSidebar({
+      browseMode: "directories",
+      threads: [],
+      creations: [],
+      directories: [{
+        key: `directory:${path}`, kind: "directory", path, label: "Catalog",
+        checkoutPaths: [path, "C:/Projects/a"], threadKeys: [], needsAttentionCount: 0,
+      }],
+      pendingThreadStarts: rowsFor(report({
+        cwd: "c:\\projects\\a", directoryKey: `directory:${path}`, directoryLabel: undefined,
+        progressThread: undefined, title: "Prepare catalog fixtures",
+      })),
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /^Catalog$/ }));
+    const project = screen.getByRole("list", { name: "Threads in Catalog" });
+    expect(within(project).getByText("Prepare catalog fixtures")).toBeVisible();
+  });
+
   it("steps aside once its landed thread renders in the slot", () => {
     renderSidebar({
       browseMode: "directories",

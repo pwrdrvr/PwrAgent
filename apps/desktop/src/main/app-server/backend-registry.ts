@@ -18,6 +18,7 @@ import type { ThreadArchiveCoordinator } from "./thread-archive-coordinator";
 import type { RegistryReadThreadRequest } from "./registry-host-ports";
 import type { ThreadWorkspaceService } from "./thread-workspace-service";
 import type { ThreadDirectoryService } from "./thread-directory-service";
+import { resolvePendingWindowsDirectoryKey } from "./navigation-windows-directory-aliases";
 import { refuseResolvedWorkMode } from "./required-work-mode";
 import { logUnpricedThreadUsageLine } from "./unpriced-usage-line-log";
 import { logDebug } from "./registry-debug-log";
@@ -8309,7 +8310,19 @@ export class DesktopBackendRegistry {
     // A start this owner refuses outright draws no row.
     this.assertThreadOwnership();
     this.assertNotBootstrap("startThread");
-    const pending = this.beginPendingThreadStart(source, descriptor);
+    const cwd = source.cwd?.trim();
+    const checkoutKey = descriptor.directoryKey ?? (cwd ? `directory:${cwd}` : undefined);
+    let directoryKey: string | undefined;
+    if (process.platform === "win32" && checkoutKey?.startsWith("directory:")) {
+      try {
+        directoryKey = await resolvePendingWindowsDirectoryKey(
+          checkoutKey, this.navigationDirectoriesByKey, this.overlayStore.readProjectCheckoutGroups?.(),
+        );
+      } catch (error) {
+        backendRegistryLog.warn("pending thread directory lookup failed", { startId: descriptor.startId, error: String(error) });
+      }
+    }
+    const pending = this.beginPendingThreadStart(source, directoryKey ? { ...descriptor, directoryKey } : descriptor);
     try {
       await pending.report("starting");
       return await run(pending);
