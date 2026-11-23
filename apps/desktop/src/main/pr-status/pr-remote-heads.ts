@@ -12,12 +12,13 @@ const PACKED_REFS_BYTES = 256 * 1024;
 const MAX_REMOTES = 16;
 const MAX_SYMREF_DEPTH = 4;
 
-const queuedRemoteHeads = new Map<string, {
+type QueuedRemoteHead = {
   env: NodeJS.ProcessEnv;
   preference: string | undefined;
   managedGit: string | undefined;
   pending: SharedPrMetadataRead<string | undefined>;
-}>();
+};
+const queuedRemoteHeads = new Map<string, Set<QueuedRemoteHead>>();
 
 /** Share a fallback probe only until admission, before it can observe Git state. */
 export async function readGitRemoteHead(cwd: string, remote: string, demand?: PrMetadataDemand): Promise<string | undefined> {
@@ -42,13 +43,15 @@ export async function readGitRemoteHead(cwd: string, remote: string, demand?: Pr
   const key = JSON.stringify([cwd, remote]);
   const preference = gitCommandPreference(env);
   const managedGit = preference ? undefined : getSelectedManagedGit();
-  const existing = queuedRemoteHeads.get(key);
-  if (existing && !existing.pending.signal.aborted && existing.preference === preference
-    && existing.managedGit === managedGit && isDeepStrictEqual(existing.env, env)) {
-    return await existing.pending.read(demand);
+  const queued = queuedRemoteHeads.get(key) ?? new Set<QueuedRemoteHead>();
+  for (const existing of queued) {
+    if (!existing.pending.signal.aborted && existing.preference === preference
+      && existing.managedGit === managedGit && isDeepStrictEqual(existing.env, env)) {
+      return await existing.pending.read(demand);
+    }
   }
   const remove = () => {
-    if (queuedRemoteHeads.get(key)?.pending === pending) queuedRemoteHeads.delete(key);
+    if (queued.delete(entry) && queued.size === 0) queuedRemoteHeads.delete(key);
   };
   const pending = new SharedPrMetadataRead(async (sharedDemand) => {
     try {
@@ -57,7 +60,9 @@ export async function readGitRemoteHead(cwd: string, remote: string, demand?: Pr
       remove();
     }
   });
-  queuedRemoteHeads.set(key, { env, preference, managedGit, pending });
+  const entry = { env, preference, managedGit, pending };
+  queued.add(entry);
+  queuedRemoteHeads.set(key, queued);
   return await pending.read(demand);
 }
 
