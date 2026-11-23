@@ -1708,25 +1708,33 @@ function resolveStandardOnlyPricingServiceTier(
     : undefined;
 }
 
+// Initialize each default-locale formatter only when its display mode is used.
+let usdThreeDigitFormatter: Intl.NumberFormat | undefined;
+let usdTwoDigitFormatter: Intl.NumberFormat | undefined;
+let usdPerMillionFormatter: Intl.NumberFormat | undefined;
+let multiplierFormatter: Intl.NumberFormat | undefined;
+
 export function formatTokenUsageUsd(value: number): string {
   if (value > 0 && value < 0.001) {
     return "<$0.001";
   }
   if (value < 0.1) {
-    return new Intl.NumberFormat(undefined, {
+    usdThreeDigitFormatter ??= new Intl.NumberFormat(undefined, {
       currency: "USD",
       maximumFractionDigits: 3,
       minimumFractionDigits: 3,
       style: "currency",
-    }).format(roundUpCurrency(value, 3));
+    });
+    return usdThreeDigitFormatter.format(roundUpCurrency(value, 3));
   }
 
-  return new Intl.NumberFormat(undefined, {
+  usdTwoDigitFormatter ??= new Intl.NumberFormat(undefined, {
     currency: "USD",
     maximumFractionDigits: 2,
     minimumFractionDigits: 2,
     style: "currency",
-  }).format(roundUpCurrency(value, 2));
+  });
+  return usdTwoDigitFormatter.format(roundUpCurrency(value, 2));
 }
 
 export function formatTokenUsageMicrosAsUsd(value: number): string {
@@ -1734,12 +1742,13 @@ export function formatTokenUsageMicrosAsUsd(value: number): string {
 }
 
 export function formatTokenUsageUsdPerMillion(value: number): string {
-  return new Intl.NumberFormat(undefined, {
+  usdPerMillionFormatter ??= new Intl.NumberFormat(undefined, {
     currency: "USD",
     maximumFractionDigits: 3,
     minimumFractionDigits: 2,
     style: "currency",
-  }).format(value);
+  });
+  return usdPerMillionFormatter.format(value);
 }
 
 export function formatTokenUsagePriceFactor(
@@ -1749,11 +1758,7 @@ export function formatTokenUsagePriceFactor(
   if (standardRate <= 0) {
     return "unknown factor";
   }
-  const factor = discountedRate / standardRate;
-  return `${new Intl.NumberFormat(undefined, {
-    maximumFractionDigits: 3,
-    minimumFractionDigits: 1,
-  }).format(factor)}x`;
+  return formatTokenUsageMultiplier(discountedRate / standardRate);
 }
 
 export function formatTokenUsageStandardRateSuffix(
@@ -1910,10 +1915,11 @@ function microsToCurrencyUnits(value: number): number {
 }
 
 function formatTokenUsageMultiplier(multiplier: number): string {
-  return `${new Intl.NumberFormat(undefined, {
+  multiplierFormatter ??= new Intl.NumberFormat(undefined, {
     maximumFractionDigits: 3,
     minimumFractionDigits: 1,
-  }).format(multiplier)}x`;
+  });
+  return `${multiplierFormatter.format(multiplier)}x`;
 }
 
 function roundUpCurrency(value: number, fractionDigits: number): number {
