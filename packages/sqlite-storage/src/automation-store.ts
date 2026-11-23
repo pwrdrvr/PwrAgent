@@ -50,7 +50,7 @@ import {
 } from "@pwragent/shared/contracts/navigation";
 import type { StateDb } from "./state-db.js";
 import { mergeTranscriptEvents } from "@pwragent/owner-core/automation-transcript-merge";
-import type { AutomationRunAdmission, AutomationStorage, AutomationRecord, CreateAutomationInput, UpdateAutomationInput, CreateAutomationRunInput, StartupReconciliationInput, StartupReconciliationResult, UpsertAutomationRunArtifactInput } from "@pwragent/owner-core/automation-storage";
+import type { AutomationRunAdmission, AutomationRunPricingTarget, AutomationStorage, AutomationRecord, CreateAutomationInput, UpdateAutomationInput, CreateAutomationRunInput, PrunedAutomationRunCost, StartupReconciliationInput, StartupReconciliationResult, UpsertAutomationRunArtifactInput } from "@pwragent/owner-core/automation-storage";
 export type { AutomationRunAdmission, AutomationRecord, CreateAutomationInput, UpdateAutomationInput, CreateAutomationRunInput, StartupReconciliationInput, StartupReconciliationResult, UpsertAutomationRunArtifactInput } from "@pwragent/owner-core/automation-storage";
 
 const DEFAULT_RUN_HISTORY_LIMIT = 200;
@@ -105,6 +105,8 @@ type AutomationRow = {
   created_at: number;
   updated_at: number;
   deleted_at: number | null;
+  cost_since: number | null;
+  total_cost_micros: number | null;
   payload: string;
 };
 
@@ -123,7 +125,16 @@ type AutomationRunRow = {
   queue_entry_id: string | null;
   created_at: number;
   updated_at: number;
+  accounted_cost_micros: number | null;
   payload: string;
+};
+
+type PrunedRunCostRow = {
+  run_id: string;
+  automation_id: string;
+  backend_turn_id: string;
+  execution_thread_id: string | null;
+  total_cost_micros: number | null;
 };
 
 type AutomationRunArtifactRow = {
@@ -895,8 +906,8 @@ export class AutomationStore implements AutomationStorage {
   findRunsByBackendTurnIds(params: {
     backend: AppServerBackendKind;
     backendTurnIds: readonly string[];
-  }): Map<string, AutomationRunSummary> {
-    const runs = new Map<string, AutomationRunSummary>();
+  }): Map<string, AutomationRunPricingTarget> {
+    const runs = new Map<string, AutomationRunPricingTarget>();
     if (params.backendTurnIds.length === 0) return runs;
     const rows = this.stateDb.raw
       .prepare(
@@ -917,7 +928,34 @@ export class AutomationStore implements AutomationStorage {
     }
     for (const [turnId, row] of chosen) {
       const run = this.runFromRow(row);
-      if (run) runs.set(turnId, run);
+      if (run) runs.set(turnId, {
+        ...run,
+        headlessThreadId: run.backendThreadId === row.thread_id ? undefined : run.backendThreadId,
+      });
+    }
+    return runs;
+  }
+
+  findPrunedRunCostsByBackendTurnIds(params: {
+    backend: AppServerBackendKind;
+    backendTurnIds: readonly string[];
+  }): Map<string, PrunedAutomationRunCost> {
+    const runs = new Map<string, PrunedAutomationRunCost>();
+    if (params.backendTurnIds.length === 0) return runs;
+    const rows = this.stateDb.raw.prepare(`
+      SELECT run_id, automation_id, backend_turn_id, execution_thread_id, total_cost_micros
+        FROM automation_pruned_run_costs
+       WHERE backend = ?
+         AND backend_turn_id IN (SELECT value FROM json_each(?))
+       ORDER BY rowid
+    `).all(params.backend, JSON.stringify(params.backendTurnIds)) as PrunedRunCostRow[];
+    for (const row of rows) {
+      runs.set(row.backend_turn_id, {
+        runId: row.run_id,
+        automationId: row.automation_id,
+        headlessThreadId: row.execution_thread_id ?? undefined,
+        totalCostMicros: row.total_cost_micros ?? undefined,
+      });
     }
     return runs;
   }
@@ -1318,8 +1356,9 @@ export class AutomationStore implements AutomationStorage {
           created_at,
           updated_at,
           deleted_at,
+          cost_since,
           payload
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(automation_id) DO UPDATE SET
           backend = excluded.backend,
           thread_id = excluded.thread_id,
@@ -1344,6 +1383,7 @@ export class AutomationStore implements AutomationStorage {
         record.createdAt,
         record.updatedAt,
         record.deletedAt ?? null,
+        record.createdAt,
         JSON.stringify(payload),
       );
   }
@@ -1353,21 +1393,58 @@ export class AutomationStore implements AutomationStorage {
     usage: AutomationRunUsage;
     now?: number;
   }): AutomationRunSummary | undefined {
-    const row = this.stateDb.raw
-      .prepare("SELECT * FROM automation_runs WHERE run_id = ?")
-      .get(params.runId) as AutomationRunRow | undefined;
-    if (!row) return undefined;
-    const run = this.runFromRow(row);
-    if (!run) return undefined;
-    const payload = parseJson<AutomationRunPayload>(row.payload);
-    if (!payload) return undefined;
-    const updated: AutomationRunPayload = { ...payload, usage: params.usage };
-    this.stateDb.raw
-      .prepare(
-        "UPDATE automation_runs SET payload = ?, updated_at = ? WHERE run_id = ?",
-      )
-      .run(JSON.stringify(updated), params.now ?? Date.now(), params.runId);
-    return { ...run, usage: params.usage };
+    const total = usdRunCostMicros(params.usage);
+    return this.stateDb.raw.transaction(() => {
+      const row = this.getRunRow(params.runId);
+      if (!row) {
+        if (total !== undefined) this.setPrunedRunCost(params.runId, total);
+        return undefined;
+      }
+      const run = this.runFromRow(row);
+      const payload = parseJson<AutomationRunPayload>(row.payload);
+      if (!run || !payload) return undefined;
+
+      let accounted = row.accounted_cost_micros;
+      if (total !== undefined && total !== accounted) {
+        // The coverage predicate excludes old runs even if a fresh pricing
+        // publication replays their entire ledger after the migration.
+        const updated = this.stateDb.raw.prepare(`
+          UPDATE automations
+             SET total_cost_micros = COALESCE(total_cost_micros, 0) + ?
+           WHERE automation_id = ? AND cost_since <= ?
+        `).run(total - (accounted ?? 0), row.automation_id, row.created_at);
+        if (updated.changes > 0) accounted = total;
+      }
+      if (accounted !== row.accounted_cost_micros
+        || JSON.stringify(payload.usage) !== JSON.stringify(params.usage)) {
+        this.stateDb.raw.prepare(`
+          UPDATE automation_runs
+             SET payload = ?, updated_at = MAX(updated_at, ?), accounted_cost_micros = ?
+           WHERE run_id = ?
+        `).run(
+          JSON.stringify({ ...payload, usage: params.usage }),
+          params.now ?? Date.now(),
+          accounted,
+          params.runId,
+        );
+      }
+      return { ...run, usage: params.usage };
+    }).immediate();
+  }
+
+  private setPrunedRunCost(runId: string, total: number): void {
+    const prior = this.stateDb.raw.prepare(`
+      SELECT automation_id, total_cost_micros FROM automation_pruned_run_costs WHERE run_id = ?
+    `).get(runId) as Pick<PrunedRunCostRow, "automation_id" | "total_cost_micros"> | undefined;
+    if (!prior || prior.total_cost_micros === total) return;
+    this.stateDb.raw.prepare(`
+      UPDATE automation_pruned_run_costs SET total_cost_micros = ? WHERE run_id = ?
+    `).run(total, runId);
+    this.stateDb.raw.prepare(`
+      UPDATE automations
+         SET total_cost_micros = COALESCE(total_cost_micros, 0) + ?
+       WHERE automation_id = ?
+    `).run(total - (prior.total_cost_micros ?? 0), prior.automation_id);
   }
 
   private upsertRun(
@@ -1549,6 +1626,9 @@ export class AutomationStore implements AutomationStorage {
       nextRunAt: row.next_run_at ?? undefined,
       lastRunAt: row.last_run_at ?? undefined,
       lastRunStatus: payload.lastRunStatus,
+      ...(row.cost_since !== null && row.total_cost_micros !== null
+        ? { lifetimeCost: { since: row.cost_since, totalMicros: row.total_cost_micros } }
+        : {}),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       deletedAt: row.deleted_at ?? undefined,
@@ -1661,7 +1741,8 @@ export class AutomationStore implements AutomationStorage {
     if (count.count <= this.runHistoryLimit) return;
     this.stateDb.raw.transaction(() => {
       const expired = this.stateDb.raw.prepare(`
-        SELECT r.backend, r.thread_id AS owner_thread_id,
+        SELECT r.run_id, r.backend, r.thread_id AS owner_thread_id,
+               r.backend_turn_id IS NOT NULL AND r.created_at >= a.cost_since AS keep_cost,
                CASE WHEN json_valid(r.payload)
                  THEN json_extract(r.payload, '$.backendThreadId') END AS execution_thread_id,
                a.name AS automation_name
@@ -1676,12 +1757,28 @@ export class AutomationStore implements AutomationStorage {
               LIMIT -1 OFFSET ?
            )
       `).all(automationId, automationId, countedSince, this.runHistoryLimit) as Array<{
+        run_id: string;
+        keep_cost: 0 | 1 | null;
         backend: AppServerBackendKind;
         owner_thread_id: string;
         execution_thread_id: string | null;
         automation_name: string;
       }>;
       if (expired.length === 0) return;
+      const runIds = JSON.stringify(expired.map((run) => run.run_id));
+      const costRunIds = expired.filter((run) => run.keep_cost).map((run) => run.run_id);
+      if (costRunIds.length > 0) {
+        this.stateDb.raw.prepare(`
+          INSERT INTO automation_pruned_run_costs (
+            run_id, automation_id, backend, backend_turn_id, execution_thread_id, total_cost_micros
+          )
+          SELECT run_id, automation_id, backend, backend_turn_id,
+                 CASE WHEN json_valid(payload)
+                   THEN NULLIF(json_extract(payload, '$.backendThreadId'), thread_id) END,
+                 accounted_cost_micros
+            FROM automation_runs WHERE run_id IN (SELECT value FROM json_each(?))
+        `).run(JSON.stringify(costRunIds));
+      }
       const currentTitle = this.stateDb.raw.prepare(
         "SELECT title FROM thread_search_documents WHERE identity_key = ?",
       );
@@ -1717,20 +1814,20 @@ export class AutomationStore implements AutomationStorage {
       this.stateDb.raw.prepare(`
         DELETE FROM automation_runs
          WHERE automation_id = ?
-           AND run_id IN (
-             SELECT run_id FROM automation_runs
-              WHERE automation_id = ?
-              ORDER BY (status != 'skipped' AND created_at >= ?) DESC,
-                       updated_at DESC, rowid DESC
-              LIMIT -1 OFFSET ?
-           )
-      `).run(automationId, automationId, countedSince, this.runHistoryLimit);
-    })();
+           AND run_id IN (SELECT value FROM json_each(?))
+      `).run(automationId, runIds);
+    }).immediate();
   }
 
   private get runHistoryLimit(): number {
     return this.options.runHistoryLimit ?? DEFAULT_RUN_HISTORY_LIMIT;
   }
+}
+
+function usdRunCostMicros(usage: AutomationRunUsage): number | undefined {
+  const total = usage.totalCostMicros;
+  return typeof total === "number" && Number.isSafeInteger(total) && total >= 0
+    && (usage.currency === undefined || usage.currency === "USD") ? total : undefined;
 }
 
 /** Stored JSON is untrusted: an owner that is not well formed is no owner. */

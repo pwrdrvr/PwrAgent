@@ -3,6 +3,11 @@ declare module "*.md?raw" {
   export default value;
 }
 
+declare module "*.png?asset" {
+  const path: string;
+  export default path;
+}
+
 // Supporting files of bundled skills, served as text.
 declare module "*.sh?raw" {
   const value: string;

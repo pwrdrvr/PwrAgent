@@ -1232,6 +1232,9 @@ vi.mock("../storage/desktop-overlay-store", () => ({
     writeThreadGitWorkingStateCacheEntry,
     listRemoteThreadPins,
     readRemoteThreadPinNavigationRows,
+    readMountedRemoteThreadPinNavigationRows: async () => (await readRemoteThreadPinNavigationRows()).flatMap((summary) =>
+      summary.federation ? [{ ref: summary.federation.ref, instanceLabel: summary.federation.instanceLabel,
+        summary, localPinnedRank: summary.pinnedRank, addedAt: 1_000, mountToken: "A1" }] : []),
     updateRemoteThreadPinSnapshots,
     removeRemoteThreadPin: removeRemoteThreadPinStore,
     addRemoteThreadPin: addRemoteThreadPinStore,
@@ -2530,6 +2533,12 @@ describe("app server ipc", () => {
     await read({ kind: "directory-index" });
     const group = await read({ kind: "group-members", roots: [{ backend: "codex", threadId: "page-0" }], membershipOnly: true });
     expect(group.entries.map(({ row }) => row.id)).toEqual(["page-0"]);
+    const viewer = await handler({ sender: { id: 90490, once: vi.fn() } }, {
+      protocol: 2, consumer: "main-sidebar", inventory: "viewer", pageSize: 1,
+      query: { kind: "group-members", roots: [{ backend: "codex", threadId: "page-1" }], membershipOnly: true },
+    }) as NavigationQueryPage;
+    expect(viewer.entries.map(({ row }) => row.id)).toEqual(["page-1"]);
+    expect(listThreads).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ enrichDirectories: false }));
     expect(runner).not.toHaveBeenCalled();
     expect(readNavigationPullRequests).not.toHaveBeenCalled();
     const exact = (index: number) => ({ kind: "exact" as const, identities: [{ backend: "codex" as const, threadId: `page-${index}` }] });
@@ -6626,7 +6635,7 @@ describe("app server ipc", () => {
       instanceId: "peer-laptop",
       threadId: "remote-archived",
     });
-    const pin = { ref, addedAt: 1_000, instanceLabel: "Laptop" };
+    const pin = { ref, addedAt: 1_000, instanceLabel: "Laptop", mountToken: "A1" };
     removeRemoteThreadPinStore.mockClear();
     listRemoteThreadPins.mockResolvedValueOnce([pin]);
     federationMock.remoteThreadSummaries.resolvePinnedThreads.mockResolvedValueOnce({
@@ -6642,7 +6651,7 @@ describe("app server ipc", () => {
       {} satisfies GetNavigationSnapshotRequest,
     )) as { threads: Array<{ id: string }> };
 
-    expect(removeRemoteThreadPinStore).toHaveBeenCalledWith({ ref });
+    expect(removeRemoteThreadPinStore).toHaveBeenCalledWith({ ref, mountToken: pin.mountToken });
     expect(response.threads).not.toContainEqual(
       expect.objectContaining({ id: "remote-archived" }),
     );

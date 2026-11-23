@@ -1,4 +1,6 @@
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
+import type { AgentPreset, ManageAgentPresetsRequest } from "@pwragent/shared/contracts/agent-presets";
+import type { DecisionModelListing, DecisionProviderId } from "@pwragent/shared/decision-models";
 import type {
   ReadWorktreeReflinkCapabilitiesRequest,
   ReadWorktreeReflinkCapabilitiesResponse,
@@ -494,6 +496,10 @@ import type {
   GlabStatus,
   GhStatus,
   DetachThreadPullRequestRequest,
+  MergeThreadPullRequestRequest,
+  MergeThreadPullRequestResponse,
+  ReadThreadPullRequestMergeResponse,
+  ThreadPullRequestMergeTarget,
   DetachThreadPullRequestResponse,
   RefreshThreadPullRequestsRequest,
   RefreshThreadGitWorkingStateRequest,
@@ -591,6 +597,7 @@ import type {
   SetDesktopPwrAgentProfileMenuVisibilityRequest,
   SetDesktopPwrAgentProfileMenuVisibilityResponse,
   ReadDesktopSettingsRequest,
+  ManagedCodexTrackLookup,
   ReadDesktopSettingsResponse,
   DesktopTokenMiserUsage,
   DesktopSettingsRuntimeChangedEvent,
@@ -610,6 +617,8 @@ import type {
   ReplaceDesktopSettingsSecretRequest,
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
+  LineRichMenuSetupRequest,
+  LineRichMenuSetupResponse,
   SettingsCredentialTestResult,
   InspectDiscordThreadPermissionsRequest,
   InspectDiscordThreadPermissionsResponse,
@@ -822,6 +831,12 @@ import type {
 } from "../../../shared/app-metadata";
 
 export type DesktopApi = Partial<NativeVoiceApi> & {
+  readThreadGoal?: (threadId: string) => Promise<import("@pwragent/shared/contracts/thread-goal").ThreadGoalState>;
+  setThreadGoal?: (threadId: string, objective: string, confirmedObjective?: string) => Promise<import("@pwragent/shared/contracts/thread-goal").ThreadGoalState>;
+  pauseThreadGoal?: (threadId: string) => Promise<import("@pwragent/shared/contracts/thread-goal").ThreadGoalState>;
+  resumeThreadGoal?: (threadId: string) => Promise<import("@pwragent/shared/contracts/thread-goal").ThreadGoalState>;
+  clearThreadGoal?: (threadId: string, confirmedObjective?: string) => Promise<import("@pwragent/shared/contracts/thread-goal").ThreadGoalState>;
+  cancelThreadGoalActivation?: (threadId: string) => Promise<import("@pwragent/shared/contracts/thread-goal").ThreadGoalState>;
   replayFixtureActive?: boolean;
   copyText?: (text: string) => Promise<void>;
   copyRichText?: (payload: { text: string; html: string }) => Promise<void>;
@@ -1658,6 +1673,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   clearSettingsSecret?: (
     request: ClearDesktopSettingsSecretRequest
   ) => Promise<DesktopSettingsSecretWriteResponse>;
+  readManagedCodexTrackTags?: () => Promise<ManagedCodexTrackLookup | undefined>;
   refreshCodexDiscovery?: (
     request: RefreshDesktopCodexDiscoveryRequest
   ) => Promise<ReadDesktopSettingsResponse>;
@@ -1723,6 +1739,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   testSettingsCredentials?: (
     request: SettingsCredentialTestRequest,
   ) => Promise<SettingsCredentialTestResult>;
+  lineRichMenuSetup?: (request: LineRichMenuSetupRequest) => Promise<LineRichMenuSetupResponse>;
+  /** The models a decision provider offers, read with the saved key. Runs no decision. */
+  listDecisionModels?: (request: { provider: DecisionProviderId }) => Promise<DecisionModelListing>;
   /** Open Slack's create-from-manifest page or existing-app management. */
   openSlackCreateApp?: (
     request?: SlackCreateAppRequest,
@@ -1992,6 +2011,14 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   detachThreadPullRequest?: (
     request: DetachThreadPullRequestRequest
   ) => Promise<DetachThreadPullRequestResponse>;
+  /** The merge method a local thread's PR card starts on. */
+  readThreadPullRequestMerge?: (
+    request: ThreadPullRequestMergeTarget,
+  ) => Promise<ReadThreadPullRequestMergeResponse>;
+  /** Merges one of a local thread's attached PRs, as its to-do merge card would. */
+  mergeThreadPullRequest?: (
+    request: MergeThreadPullRequestRequest,
+  ) => Promise<MergeThreadPullRequestResponse>;
   refreshDirectoryGitStatuses?: (
     request: RefreshDirectoryGitStatusesRequest
   ) => Promise<RefreshDirectoryGitStatusesResponse>;
@@ -2089,6 +2116,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   listModelSettingsRecents?: (
     request: ListModelSettingsRecentsRequest,
   ) => Promise<ListModelSettingsRecentsResponse>;
+  manageAgentPresets?: (request: ManageAgentPresetsRequest) => Promise<AgentPreset[]>;
   /** Fire-and-forget record of a combination the operator just ran. */
   recordModelSettingsRecent?: (
     request: RecordModelSettingsRecentRequest,

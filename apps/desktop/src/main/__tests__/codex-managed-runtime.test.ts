@@ -12,6 +12,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ensureManagedCodexRuntime,
+  readManagedCodexTrackTags,
   retainManagedCodexCommand,
   isManagedCodexTagEligible,
   managedCodexAssetPlatform,
@@ -51,6 +52,92 @@ afterEach(async () => {
 });
 
 describe("managed Codex release selection", () => {
+  it("refreshes the advertised tracks through the shared metadata cache without downloading", async () => {
+    const rootDir = await temporaryRoot();
+    vi.stubEnv("PWRAGENT_HOME", rootDir);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-30T12:00:00Z"));
+    const published = (version: string, prerelease = false) => release(
+      `pwragent-v${version}`,
+      [
+        asset("SHA256SUMS"),
+        asset(`pwragent-codex-${version}-linux-x86_64.tar.gz`),
+        ...publicationAssets(),
+      ],
+      { prerelease },
+    );
+    const network = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json([published("0.160.0-pwragent.1")]))
+      .mockResolvedValueOnce(Response.json([
+        published("0.171.0-pwragent.2", true),
+        published("0.171.0-pwragent.1"),
+        release("pwragent-v0.172.0-pwragent.1", [], { prerelease: true }),
+      ]));
+    vi.stubGlobal("fetch", network);
+    await fetchGitHubReleaseMetadata(MANAGED_CODEX_RELEASES_URL, {}, { manual: true });
+    vi.setSystemTime(new Date("2026-10-21T12:00:00Z"));
+
+    const platform = { platform: "linux", arch: "x64" } as const;
+    const tags = await readManagedCodexTrackTags(platform);
+    expect(tags).toEqual({
+      observedAt: Date.now(),
+      latestTag: "pwragent-v0.171.0-pwragent.1",
+      prereleaseTag: "pwragent-v0.171.0-pwragent.2",
+    });
+    vi.setSystemTime(Date.now() + 60_000);
+    await expect(readManagedCodexTrackTags(platform)).resolves.toEqual(tags);
+    network.mockResolvedValueOnce(new Response(null, { status: 429 }));
+    expect((await fetchGitHubReleaseMetadata(MANAGED_CODEX_RELEASES_URL, {}, { manual: true })).status)
+      .toBe(429);
+    // A rate-limited lookup retains the success time of the cached list.
+    await expect(readManagedCodexTrackTags(platform)).resolves.toEqual(tags);
+    // All requests go to the release list, even when REST is rate-limited.
+    expect(network.mock.calls.map(([url]) => url)).toEqual([
+      MANAGED_CODEX_RELEASES_URL,
+      MANAGED_CODEX_RELEASES_URL,
+      MANAGED_CODEX_RELEASES_URL,
+    ]);
+    expect(verifySigstoreMock).not.toHaveBeenCalled();
+  });
+
+  it("lets a manual runtime check revalidate during a Settings metadata lookup", async () => {
+    const rootDir = await temporaryRoot();
+    vi.stubEnv("PWRAGENT_HOME", rootDir);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-30T12:00:00Z"));
+    const pendingMetadata = Promise.withResolvers<Response>();
+    const network = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json([]))
+      .mockReturnValueOnce(pendingMetadata.promise)
+      .mockResolvedValueOnce(Response.json([]));
+    vi.stubGlobal("fetch", network);
+    await fetchGitHubReleaseMetadata(MANAGED_CODEX_RELEASES_URL, {}, { manual: true });
+    vi.setSystemTime(new Date("2026-10-21T12:00:00Z"));
+
+    const platform = { platform: "linux", arch: "x64" } as const;
+    const checking = Promise.withResolvers<void>();
+    const stop = subscribeManagedRuntimeProgress((progress) => {
+      if (progress.runtime === "codex" && progress.phase === "checking") checking.resolve();
+    });
+    try {
+      const lookup = readManagedCodexTrackTags(platform);
+      const check = ensureManagedCodexRuntime({ ...platform, rootDir, checkMode: "force" });
+      const checkedReleaseList = expect(check).rejects.toThrow(
+        "No compatible complete PwrAgent Codex release",
+      );
+      // The manual check must start while the automatic lookup still holds
+      // the cache reservation, and reach the release list after it clears.
+      await checking.promise;
+      expect(network).toHaveBeenCalledTimes(2);
+      pendingMetadata.resolve(Response.json([]));
+      await Promise.all([lookup, checkedReleaseList]);
+      expect(network).toHaveBeenCalledTimes(3);
+    } finally {
+      pendingMetadata.resolve(Response.json([]));
+      stop();
+    }
+  });
+
   it("selects the newest complete eligible release for the platform", () => {
     const selected = selectManagedCodexRelease([
       release("pwragent-v0.200.0-pwragent.2", []),

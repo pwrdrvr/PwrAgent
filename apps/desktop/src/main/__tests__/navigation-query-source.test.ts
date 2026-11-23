@@ -268,6 +268,19 @@ describe("owner index source event admission", () => {
     }
   });
 
+  it("keeps action-only indexes out of sidebar visibility and event scope", async () => {
+    const source = createSource();
+    source.finish();
+    try {
+      const visible = await source.read();
+      await loadLocalNavigationQueryIndex({ registry: source.registry, callerReason: "remove-navigation-directory", requireVerifiedDirectories: true });
+      expect(source.rememberNavigationVisibilityIndex).toHaveBeenCalledExactlyOnceWith(visible);
+      expect(source.rememberDirectoryScope).toHaveBeenCalledExactlyOnceWith(visible, 0);
+    } finally {
+      source.emit("thread/name/updated");
+    }
+  });
+
   it("cannot grant directory scope from a scan overtaken at ingress before listeners hear the membership event", async () => {
     const source = createSource();
     const row: NavigationThreadSummary = { id: "hidden", source: "codex", title: "Hidden", titleSource: "explicit",

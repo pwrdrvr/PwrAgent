@@ -422,22 +422,27 @@ export class MessagingAgentTools {
     if (!origin.ok) {
       return origin;
     }
-    if (!this.context.adapter.setConversationTitle) {
+    const { event, binding } = origin.origin;
+    const target = {
+      actor: event.actor,
+      channel: event.channel,
+      routingState: event.routingState ?? binding?.routingState,
+    };
+    if (
+      !this.context.adapter.setConversationTitle
+      || this.context.adapter.supportsConversationTitle?.(target) === false
+    ) {
       return {
         ok: false,
         error: {
           code: "unsupported_operation",
-          message:
-            "This messaging provider does not support renaming the current conversation.",
+          message: "The current messaging conversation does not support renaming.",
         },
       };
     }
 
     const result = await this.context.adapter.setConversationTitle({
-      actor: origin.origin.event.actor,
-      channel: origin.origin.event.channel,
-      routingState:
-        origin.origin.event.routingState ?? origin.origin.binding?.routingState,
+      ...target,
       title,
     });
     if (result.outcome !== "updated") {

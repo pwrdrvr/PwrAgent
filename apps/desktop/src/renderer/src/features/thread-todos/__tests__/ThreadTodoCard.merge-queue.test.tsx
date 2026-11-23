@@ -120,3 +120,15 @@ describe("PR chip and card in the queue", () => {
     expect(section).toHaveTextContent("Joined4m ago");
   });
 });
+
+describe("merge card on a repository that allows some methods", () => {
+  it("runs and lists only the methods the repository allows", async () => {
+    renderCard(pr(undefined, { allowedMergeMethods: ["merge", "rebase"] }));
+    // Squash is the Settings default, but the repository refuses it.
+    expect(await screen.findByRole("button", { name: "Rebase merge" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Merge options" }));
+    expect(screen.getByRole("menuitemradio", { name: "Rebase and merge" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitemradio", { name: "Create a merge commit" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitemradio", { name: "Squash and merge" })).toBeNull();
+  });
+});

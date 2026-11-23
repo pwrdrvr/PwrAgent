@@ -1375,6 +1375,61 @@ describe("DesktopBackendRegistry", () => {
     expect(withTokenMiserBridgeDescriptorEnv(source, undefined)).toBe(source);
   });
 
+  it("reads candidate ACP sessions for reorder without discovering or enriching other sessions", async () => {
+    const backendId = "acp:kimi";
+    const records: AcpSessionMetadata[] = [
+      { backendId, sessionId: "first", title: "First", cwd: "/fixture", createdAt: 2, updatedAt: 4, executionMode: "default", status: "idle" },
+      { backendId, sessionId: "second", title: "Second", cwd: "/fixture", createdAt: 1, updatedAt: 3, executionMode: "default", status: "idle" },
+      { backendId, sessionId: "hidden", title: "Hidden", cwd: "/fixture", createdAt: 1, updatedAt: 3, executionMode: "default", status: "idle", hidden: true },
+      { backendId, sessionId: "archived", title: "Archived", cwd: "/fixture", createdAt: 1, updatedAt: 3, executionMode: "default", status: "idle", archivedAt: 3 },
+    ];
+    const sessions = createAcpSessionStoreMock(records);
+    const getSession = vi.spyOn(sessions, "getSession");
+    const list = vi.spyOn(sessions, "listSessions");
+    const launch = vi.fn(() => { throw new Error("unexpected ACP launch"); });
+    const registry = createDesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }), overlayStore: createOverlayStoreMock(),
+      acpSessionStore: sessions, createAcpClient: launch,
+    });
+    try {
+      const ids = new Set(["second", "first", "hidden", "archived", "missing"]);
+      const rows = await registry.readSubthreadOrderProviderRows(backendId, ids);
+      expect(rows.map((row) => row.id)).toEqual(["first", "second"]);
+      expect(getSession.mock.calls).toEqual([...ids].map((id) => [backendId, id]));
+      expect(list).not.toHaveBeenCalled();
+      expect(launch).not.toHaveBeenCalled();
+
+      // The old list's update-time tie can decide legacy ownership repair
+      // even when the creation times are distinct.
+      records[1]!.updatedAt = records[0]!.updatedAt;
+      const tied = await registry.readSubthreadOrderProviderRows(backendId, ids, true);
+      expect(tied.map((row) => row.id)).toEqual(["first", "second"]);
+      expect(list).toHaveBeenCalledOnce();
+    } finally {
+      await registry.close();
+    }
+  });
+
+
+  it("rejects a reorder inventory when Codex reports an incomplete walk", async () => {
+    const client = new MockBackendClient({ threads: [] });
+    const listing = vi.fn(async (_params?: Parameters<MockBackendClient["listThreads"]>[0],
+      _diagnostics?: Parameters<MockBackendClient["listThreads"]>[1], incomplete?: () => void) => {
+      incomplete?.();
+      return [];
+    });
+    client.listThreads = listing;
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
+    try {
+      await expect(registry.readSubthreadOrderProviderRows("codex", new Set(["parent"])))
+        .rejects.toThrow("complete owner discovery");
+      expect(listing).toHaveBeenCalledWith(expect.objectContaining({ enrichDirectories: false }),
+        expect.objectContaining({ callerReason: "relative-child-move" }), expect.any(Function));
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("does not regress completed provider coverage during late durable hydration", async () => {
     const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(), discoverLocalAcpAgents: async () => [],
@@ -8948,7 +9003,11 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("forks into a fresh scratch workspace with an explicit cwd and parent", async () => {
+  it.each([
+    ["workspace", undefined],
+    ["directory", undefined],
+    ["directory", " "],
+  ] as const)("forks a %s request with path %j into a fresh scratch workspace", async (directoryKind, directoryPath) => {
     const overlayStore = createOverlayStoreMock();
     await overlayStore.setThreadCodexEnvironmentRuntime?.({
       backend: "codex",
@@ -8969,7 +9028,8 @@ describe("DesktopBackendRegistry", () => {
       backend: "codex",
       sourceThreadId: "thread-parent",
       parentThreadId: "thread-parent",
-      directoryKind: "workspace",
+      directoryKind,
+      directoryPath,
       directoryLabel: "New Workspace",
       workMode: "local",
     });
@@ -11402,6 +11462,41 @@ command = "pnpm dev"
     expect(codexClient.listThreadsCallCount).toBe(1);
 
     await registry.close();
+  });
+
+  it("serves cheap listings while a directory-enriched inventory is pending", async () => {
+    const started = createDeferred<void>();
+    const finish = createDeferred<void>();
+    const thread: AppServerThreadSummary = {
+      id: "history", source: "codex", title: "History", titleSource: "derived", linkedDirectories: [],
+    };
+    const codexClient = new MockBackendClient({ threads: [thread] });
+    const list = codexClient.listThreads.bind(codexClient);
+    const calls = vi.spyOn(codexClient, "listThreads").mockImplementation(async (params, diagnostics) => {
+      if (params?.enrichDirectories) {
+        started.resolve();
+        await finish.promise;
+      }
+      return list(params, diagnostics);
+    });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const enriched = registry.listThreads({ backend: "codex", enrichDirectories: true });
+    let visible: Promise<AppServerThreadSummary[]> | undefined;
+    try {
+      await started.promise;
+      visible = registry.listThreads({
+        backend: "codex", callerReason: "renderer-navigation-query", enrichDirectories: false, skipPendingDirectoryEnrichment: true,
+      });
+      await vi.waitFor(() => expect(calls).toHaveBeenCalledWith(
+        expect.objectContaining({ enrichDirectories: false }), expect.objectContaining({ callerReason: "renderer-navigation-query" }),
+        expect.any(Function),
+      ));
+      expect(await visible).toMatchObject([{ id: thread.id }]);
+    } finally {
+      finish.resolve();
+      await Promise.allSettled([enriched, visible]);
+      await registry.close();
+    }
   });
 
   it("never downgrades a known quit title for fallback or missing list rows", async () => {
@@ -14926,10 +15021,8 @@ command = "pnpm dev"
       startThreadResult: { threadId: "monitor-thread" },
     });
     Object.assign(codexClient, { readTurnRoot: vi.fn(async () => rootTurnId) });
-    const registry = createDesktopBackendRegistry({
-      codexClient,
-      overlayStore: createOverlayStoreMock(),
-    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
     await registry.publishLocalEvent({
       backend: "codex",
       notification: {
@@ -14979,6 +15072,9 @@ command = "pnpm dev"
       monitorTurnId: "turn-1",
     });
     expect(String(payload.monitorId)).toMatch(/^monitor-/);
+    expect(await overlayStore.getThreadSubAgent({
+      backend: "codex", threadId: "thread-1", monitorId: String(payload.monitorId),
+    })).toMatchObject({ task: "Watch PR #123 checks until they finish.", displayTitle: "PR 123 CI" });
     expect(String(payload.parentAgentGuidance)).toContain("do not call generic spawnAgent");
     expect(String(payload.parentAgentGuidance)).toContain("model=gpt-5.6-luna");
     expect(String(payload.parentAgentGuidance)).toContain("exact monitoring procedure");

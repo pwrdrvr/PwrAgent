@@ -1,5 +1,8 @@
 export const PWRAGENT_TOOL_NAMESPACE = "pwragent";
 
+/** The full JSON-RPC body on the local HTTP MCP transport. */
+export const PWRAGENT_MCP_HTTP_MAX_REQUEST_BYTES = 1024 * 1024;
+
 export const AGENT_TOOL_CATALOG_IDS = [
   "automation_inspection",
   "app_management",

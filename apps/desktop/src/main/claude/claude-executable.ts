@@ -30,6 +30,10 @@ export type ClaudeInstallation = {
   message?: string;
 };
 
+export function isClaudeInstallationAvailable(installation: ClaudeInstallation): boolean {
+  return Boolean(installation.executable) && installation.authStatus !== "sign-in-required";
+}
+
 /** The CLI owns authentication. Never supply an application credential fallback. */
 export function claudeEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const result = buildPwrAgentChildProcessEnv(env);

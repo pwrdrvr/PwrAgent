@@ -533,6 +533,7 @@ describe("ThreadContextPanel", () => {
           {
             monitorId: "monitor-2",
             task: "Watch CI until it completes.",
+            displayTitle: "Required CI",
             status: "running",
             createdAt: 2000,
             updatedAt: 2500,
@@ -571,10 +572,11 @@ describe("ThreadContextPanel", () => {
       },
     });
 
-    expect(screen.getByText("Watch CI until it completes.")).toBeInTheDocument();
     expect(screen.getByText("Poincare")).toBeInTheDocument();
     expect(screen.getByText("Running")).toBeInTheDocument();
     const firstCard = within(screen.getAllByRole("listitem")[0]!);
+    expect(firstCard.getByText("Required CI")).toBeInTheDocument();
+    expect(firstCard.queryByText("Watch CI until it completes.")).not.toBeInTheDocument();
     expect(firstCard.getByText("OpenAI")).toBeInTheDocument();
     expect(firstCard.getByText("gpt-5.4-mini")).toBeInTheDocument();
     expect(screen.getByText("Lint is still running.")).toBeInTheDocument();
@@ -583,9 +585,6 @@ describe("ThreadContextPanel", () => {
         "Monitor usage: 800 uncached in · 200 cached · 50 out (10 reasoning) · <$0.001 list price",
       ),
     ).toBeInTheDocument();
-    expect(screen.getAllByRole("listitem")[0]).toHaveTextContent(
-      "Watch CI until it completes.",
-    );
     // Every card shows a second-resolution start plus a duration. The exact
     // completed timestamp lives on the settled duration's tooltip instead of
     // occupying the narrow rail with a second timestamp.

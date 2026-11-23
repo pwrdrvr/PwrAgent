@@ -1132,6 +1132,7 @@ export type UpdateDirectoryLaunchpadRequest = {
       | "imageAttachments"
       | "fileAttachments"
       | "mcpConnectionIds"
+      | "mcpConnectionIdsFromDefaults"
       | "mcpProviderServersEnabled"
       | "prompt"
       | "editorDocument"
@@ -1159,6 +1160,8 @@ export type UpdateDirectoryLaunchpadRequest = {
       | "directoryLabel"
       | "directoryPath"
       | "agent"
+      | "agentPresetId"
+      | "agentDraftMcpSelection"
     >
   >;
   stickySettingsChanged?: boolean;

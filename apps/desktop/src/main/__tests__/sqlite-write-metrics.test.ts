@@ -48,8 +48,10 @@ import {
   SQLITE_WRITE_METRICS_ENV,
 } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
+import { messagingNewThreadHarness } from "./fixtures/messaging-new-thread-harness";
 import { ComposerDraftRecoveryStore } from "../state/composer-draft-recovery-store";
 import { StateDb } from "../state/state-db";
+import { deleteAgentPreset, listAgentPresets, saveAgentPreset } from "@pwragent/sqlite-storage/agent-preset-store";
 import { createTempStateDb } from "./sqlite-test-utils";
 import { partitionFederationCollection } from "../federation/federation-collection-reads";
 import {
@@ -128,6 +130,39 @@ afterEach(() => {
 });
 
 describe("sqlite write metrics", () => {
+  it("budgets opening and paging the messaging Agent preset picker", async () => {
+    const real = await messagingNewThreadHarness({ dbPath: path.join(tempDir, "preset-messaging.db"), maxActions: 8 });
+    try {
+      real.backend.listAgentPresets = () => Array.from({ length: 16 }, (_, index) => ({
+        id: `preset-${index}`, name: `Fixture preset ${index}`, mcpConnectionIds: [], availableInMessaging: true,
+      }));
+      await real.command("agent", ["--new"]);
+      await real.click("browse:select-project", { directoryKey: real.directory.key, path: real.directory.path!, label: real.directory.label });
+      const opened = await measureSqliteWrites(() => real.click("browse:new:preset"));
+      expect(real.latest()).toMatchObject({ title: "Start from an Agent preset" });
+      expectSqliteWriteBudget({ scenario: "messaging-agent-preset-picker-open", note: "One picker open, 57,680 WAL bytes or 0.58 MB/day at 10 opens/day.", writes: opened.writes });
+      const paged = await measureSqliteWrites(() => real.choose("browse:new:preset", "presetPage", "1"));
+      expect(real.latest()).toMatchObject({ title: "Start from an Agent preset", body: expect.stringContaining("Fixture preset 4") });
+      expectSqliteWriteBudget({ scenario: "messaging-agent-preset-picker-page", note: "One page change, 41,200 WAL bytes or 0.41 MB/day at 10 pages/day.", writes: paged.writes });
+    } finally { await real.close(); }
+  });
+
+  it("budgets explicit Agent preset changes and read-only listing", async () => {
+    const { result: preset, writes: save } = await measureSqliteWrites(() => saveAgentPreset(stateDb, {
+      name: "Release reviewer",
+      instructions: "Check the change log.",
+      mcpConnectionIds: ["docs"],
+    }));
+    expectSqliteWriteBudget({ scenario: "agent-preset-save", note: "One explicit preset save.", writes: save });
+
+    const { writes: remove } = await measureSqliteWrites(() => {
+      listAgentPresets(stateDb);
+      deleteAgentPreset(stateDb, preset.id);
+      deleteAgentPreset(stateDb, preset.id);
+    });
+    expectSqliteWriteBudget({ scenario: "agent-preset-delete", note: "One explicit delete. Listing and retrying the delete commit nothing.", writes: remove });
+  });
+
   it("budgets Claude branch adoption and unchanged Git monitoring", async () => {
     const cwd = path.join(tempDir, "repo");
     mkdirSync(cwd);
@@ -3429,7 +3464,7 @@ describe("sqlite write metrics", () => {
 
   it("holds a burst of automation pricing snapshots to one run-usage write", async () => {
     vi.useFakeTimers();
-    const automationStore = new AutomationStore(stateDb);
+    const automationStore = new AutomationStore(stateDb, { runHistoryLimit: 1 });
     const registryListeners: Array<(event: AgentEvent) => void | Promise<void>> = [];
     const registry = {
       canStartThreadTurnImmediately: () => true,
@@ -3472,49 +3507,71 @@ describe("sqlite write metrics", () => {
         taskPrompt: "Check.",
         schedule: { kind: "interval", every: 5, unit: "minutes" },
       });
-      await service.runNow({ automationId: created.automation.id });
+      const { run } = await service.runNow({ automationId: created.automation.id });
+      const emitPricing = async (observation: number, cumulativeOnly = false) => {
+        await Promise.all(registryListeners.map((listener) => listener({
+          backend: "codex",
+          notification: {
+            method: "thread/pricing/updated",
+            params: {
+              threadId: "headless-1",
+              pricing: {
+                summaries: [],
+                lines: [{
+                  backend: "codex",
+                  threadId: "headless-1",
+                  scope: "turn",
+                  turnId: "turn-1",
+                  turnUsageAttributed: !cumulativeOnly,
+                  model: "gpt-5",
+                  uncachedInputTokens: observation * 100,
+                  outputTokens: observation * 10,
+                  totalCostMicros: observation * 1_000,
+                  currency: "USD",
+                }],
+              },
+            },
+          },
+          // Partial ThreadUsageLineRecord: only what the capture reads.
+        } as unknown as AgentEvent)));
+      };
 
       const { writes } = await measureSqliteWrites(async () => {
         // Fifty cumulative pricing snapshots for one streaming turn. Each
         // setRunUsage rewrites the whole run payload row, so the debounce is
         // what keeps this at one commit instead of fifty.
         for (let observation = 1; observation <= 50; observation += 1) {
-          await Promise.all(
-            registryListeners.map((listener) =>
-              listener({
-                backend: "codex",
-                notification: {
-                  method: "thread/pricing/updated",
-                  params: {
-                    threadId: "thread-1",
-                    pricing: {
-                      summaries: [],
-                      lines: [
-                        {
-                          scope: "turn",
-                          turnId: "turn-1",
-                          model: "gpt-5",
-                          uncachedInputTokens: observation * 100,
-                          outputTokens: observation * 10,
-                          totalCostMicros: observation * 1_000,
-                          currency: "USD",
-                        },
-                      ],
-                    },
-                  },
-                },
-                // Partial ThreadUsageLineRecord: only what the capture reads.
-              } as unknown as AgentEvent),
-            ),
-          );
+          await emitPricing(observation);
         }
+        await vi.advanceTimersByTimeAsync(1_000);
+        await emitPricing(50);
         await vi.advanceTimersByTimeAsync(1_000);
       });
 
+      expect(automationStore.getAutomation(created.automation.id)?.lifetimeCost?.totalMicros)
+        .toBe(50_000);
       expectSqliteWriteBudget({
-        note: "50 cumulative pricing snapshots for one run, one debounced payload write",
+        note: "50 cumulative pricing snapshots and one replay: one debounced commit for usage and lifetime cost",
         scenario: "automation-run-usage",
         writes,
+      });
+
+      automationStore.markRunTerminal({ runId: run.id, status: "completed" });
+      await vi.advanceTimersByTimeAsync(1);
+      automationStore.createRun({ automationId: created.automation.id, trigger: "manual" });
+      expect(automationStore.getRun(run.id)).toBeUndefined();
+      const late = await measureSqliteWrites(async () => {
+        await emitPricing(40, true);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await emitPricing(40, true);
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(automationStore.getAutomation(created.automation.id)?.lifetimeCost?.totalMicros)
+        .toBe(40_000);
+      expectSqliteWriteBudget({
+        note: "One downward pricing correction after pruning and one replay: one debounced commit",
+        scenario: "automation-pruned-run-cost-correction",
+        writes: late.writes,
       });
     } finally {
       service.dispose();

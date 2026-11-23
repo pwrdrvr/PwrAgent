@@ -149,6 +149,42 @@ function matchScratchProjectsRoot(value: string): string | undefined {
   return scratchWorkspaceMatch?.[1];
 }
 
+/** Match scratch paths against the owning instance's configured roots. Sibling
+ * profiles under the same instance root can then be excluded by its allowlist. */
+export function findConfiguredScratchProjectsRoot(
+  pathname: string | undefined,
+  workspaceRoots: readonly string[],
+  { includeDescendants = false } = {},
+): string | undefined {
+  const path = normalizeComparablePath(pathname);
+  if (!path) return undefined;
+
+  for (const candidate of workspaceRoots) {
+    const root = normalizeComparablePath(candidate);
+    if (!root) continue;
+    const ignoreCase = /^(?:[a-z]:\/|\/\/)/i.test(root);
+    const rootKey = navigationPathIdentity(root, ignoreCase);
+    const pathKey = navigationPathIdentity(path, ignoreCase);
+    if (isScratchProjectsPath(pathKey, rootKey, includeDescendants)) return root;
+
+    const profilesPrefix = rootKey.match(/^(.*\/profiles\/)[^/]+\/projects$/)?.[1];
+    if (!profilesPrefix || !pathKey.startsWith(profilesPrefix)) continue;
+    const sibling = pathKey.slice(profilesPrefix.length).match(/^([^/]+\/projects)(?:\/|$)/)?.[1];
+    if (!sibling) continue;
+    const siblingKey = profilesPrefix + sibling;
+    if (isScratchProjectsPath(pathKey, siblingKey, includeDescendants)) return path.slice(0, siblingKey.length);
+  }
+  return undefined;
+}
+
+function isScratchProjectsPath(path: string, root: string, includeDescendants: boolean): boolean {
+  if (path === root) return true;
+  if (!path.startsWith(`${root}/`)) return false;
+  const parts = path.slice(root.length + 1).split("/");
+  return (includeDescendants || parts.length === 1)
+    && parts.every((part) => part && part !== "." && part !== "..");
+}
+
 function matchCodexChatsRoot(value: string): string | undefined {
   const codexChatsRootMatch = value.match(
     /^(.*[\\/]Documents[\\/]Codex)(?:[\\/]\d{4}-\d{2}-\d{2}(?:[\\/].*)?)?$/,
@@ -178,9 +214,9 @@ export function classifyDirectory(
   // codex/git paths to) collapses to ONE directory row instead of duplicating.
   const path = canonicalizeNavigationPath(directory.path);
 
-  // Match both current ".pwragent" and legacy ".pwragnt" home directory names
-  // so pre-rebrand thread data classifies correctly.
-  const scratchProjectsRoot = matchScratchProjectsRoot(path);
+  // Older owners and callers can omit the configured root. Recognize both
+  // current and pre-rebrand home directory names in that case.
+  const scratchProjectsRoot = directory.scratchWorkspaceRoot ?? matchScratchProjectsRoot(path);
   if (scratchProjectsRoot) {
     return {
       key: `workspace:${scratchProjectsRoot}`,
@@ -244,14 +280,26 @@ export function classifyDirectory(
   };
 }
 
+function classifyDirectoryInProfile(
+  directory: LinkedDirectorySummary,
+  workspaceRoots: readonly string[] | undefined,
+): DirectoryDescriptor {
+  // Unstamped sibling profiles still need classification for the owner
+  // allowlist. Only active roots are sent as workspace links to viewers.
+  const root = directory.kind === "local" && !directory.scratchWorkspaceRoot && workspaceRoots?.length
+    ? findConfiguredScratchProjectsRoot(directory.path, workspaceRoots) : undefined;
+  return classifyDirectory(root ? { ...directory, scratchWorkspaceRoot: root } : directory);
+}
+
 function collectStablePathByLabel(
   threads: NavigationThreadSummary[],
+  workspaceRoots: readonly string[] | undefined,
 ): Map<string, string | undefined> {
   const pathsByLabel = new Map<string, Set<string>>();
 
   for (const thread of threads) {
     for (const directory of thread.linkedDirectories) {
-      const descriptor = classifyDirectory(directory);
+      const descriptor = classifyDirectoryInProfile(directory, workspaceRoots);
       if (!descriptor.path || descriptor.kind !== "directory") {
         continue;
       }
@@ -580,7 +628,7 @@ export function buildDirectorySummaries(params: {
   checkoutGroups?: readonly ProjectCheckoutGroup[];
 }): NavigationDirectorySummary[] {
   const summaries = new Map<string, NavigationDirectorySummary>();
-  const stablePathByLabel = collectStablePathByLabel(params.threads);
+  const stablePathByLabel = collectStablePathByLabel(params.threads, params.workspaceRoots);
   const managedWorktreeDescriptorByOrigin =
     collectManagedWorktreeDescriptorByOrigin(params.threads);
   const allowedWorkspaceRoots = workspaceRootSet(params.workspaceRoots);
@@ -612,7 +660,7 @@ export function buildDirectorySummaries(params: {
     // to one entry here.
     const descriptorsByKey = new Map<string, DirectoryDescriptor>();
     for (const directory of thread.linkedDirectories) {
-      const descriptor = classifyDirectory(directory);
+      const descriptor = classifyDirectoryInProfile(directory, params.workspaceRoots);
       const stablePath = stablePathByLabel.get(descriptor.label);
       const origin = normalizeGitOriginUrl(thread.gitOriginUrl);
       const managedWorktreeOriginDescriptor =

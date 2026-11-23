@@ -615,12 +615,22 @@ export class MessagingCallbackHandlers {
       return;
     }
 
+    if (actionId === "browse:new:preset" || actionId === "browse:new:preset:set") {
+      await this.context.host().handleAgentPresetPicker(session, event, actionId);
+      return;
+    }
     const navigation = await readMessagingLaunchpadContext({ backend: this.context.backend,
       ...(actionId.startsWith("browse:new:") ? { project: session.selectedProject } : {}) });
     const nextSession = {
       ...session,
       updatedAt: this.context.now(),
     };
+    if (actionId === "browse:new:options") {
+      if (await this.context.host().requirePermission(event, "thread.new", actionId)) {
+        await this.context.host().presentNewThreadPromptGate(nextSession, event, navigation);
+      }
+      return;
+    }
 
     if (actionId === "browse:page:next") {
       await this.context.host().renderResumeBrowser(

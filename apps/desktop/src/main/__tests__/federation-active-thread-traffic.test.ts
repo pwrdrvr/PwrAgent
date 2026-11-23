@@ -4,6 +4,7 @@ import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { FederationProtocolEnvelope } from "@pwragent/shared/contracts/federation";
 import type { NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import { expandNavigationRemoteOwner } from "@pwragent/shared/navigation-remote-owner";
 import { DesktopFederationRuntime } from "../federation/federation-runtime";
 import { FederationRouter } from "../federation/federation-router";
 import { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
@@ -60,7 +61,11 @@ it.each(["separate", "shared"])("budgets pin and renderer reads with four viewer
         return page;
       };
       const baselines = new RemoteNavigationPageBaselines();
-      const window = new NavigationWindowQueries({ getNavigationQueryPage: (request) => baselines.read(request, (next) => read("renderer", next)) });
+      const window = new NavigationWindowQueries({ getNavigationQueryPage: async (request) => {
+        const page = await baselines.read(request, (next) => read("renderer", next));
+        // Budget the owner's wire page above, then expand it as the renderer's API does.
+        return expandNavigationRemoteOwner({ ...page, remoteOwner: { instanceId: target.instanceId, instanceLabel: "Owner" } });
+      } });
       windows.push(window);
       const runtime = new DesktopFederationRuntime();
       const state = runtime as unknown as { localInstanceId: string; router: FederationRouter };
@@ -82,7 +87,8 @@ it.each(["separate", "shared"])("budgets pin and renderer reads with four viewer
         traffic.notifications++;
         const event = envelope.params as AgentEvent;
         cache.invalidate("owner", event);
-        window.invalidate(undefined, [target], event);
+        // The receiving federation runtime stamps the authenticated source before fan-out.
+        window.invalidate(undefined, [target], { ...event, federationTarget: target });
       } });
       await cache.resolvePinnedThreads((layout === "shared" ? [0, 1] : [i]).map((root) => ({
         ref: buildFederatedThreadRef({ backend: "codex", instanceId: "owner", threadId: `${root}-0` }), addedAt: 1, instanceLabel: "Owner",

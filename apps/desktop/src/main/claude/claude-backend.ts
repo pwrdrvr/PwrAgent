@@ -52,7 +52,7 @@ import { resolveActiveProfilePath } from "../profile";
 import { toTranscriptImageProtocolUrl } from "../transcript-images";
 import { ClaudeSessionReaderError, type ClaudeSessionReader, type ClaudeSessionReads } from "./claude-session-reader";
 import { buildClaudeSessionPrimer } from "./claude-session-primer";
-import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, signInWithClaudeCode, supportsClaudeMcpInitialize, type ClaudeInstallation } from "./claude-executable";
+import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, isClaudeInstallationAvailable, signInWithClaudeCode, supportsClaudeMcpInitialize, type ClaudeInstallation } from "./claude-executable";
 import {
   CLAUDE_EXIT_PLAN_TOOL, claudeAllowedTools, createClaudePermissionHandler, claudePermissionMode,
   threadExecutionModeForClaudePermission,
@@ -933,6 +933,26 @@ export class ClaudeBackend {
     return (await this.store.list({ requireComplete: params.requireComplete })).map((session) => this.threadSummary(session))
       .filter((thread) => Boolean(thread.archivedAt) === Boolean(params.archived)
         && (!filter || thread.title.toLowerCase().includes(filter) || thread.id.includes(filter)));
+  }
+
+  async readSubthreadOrderSummaries(ids: ReadonlySet<string>, preserveListingOrder = false): Promise<AppServerThreadSummary[]> {
+    const sessions = await Promise.all([...ids].map((id) => this.store.readListedSession(id)));
+    const summaries = sessions.flatMap((session) =>
+      session && !session.thread.archivedAt ? [this.threadSummary(session)] : []);
+    // Stable tray sort and ordered legacy handoff repair can both depend on
+    // the metadata listing order. Only those cases need the full listing.
+    if (preserveListingOrder || new Set(summaries.map((thread) => thread.createdAt ?? 0)).size < summaries.length) {
+      const byId = new Map(summaries.map((thread) => [thread.id, thread]));
+      const ordered = (await this.listThreads()).flatMap(({ id }) => {
+        const thread = byId.get(id);
+        return thread ? [thread] : [];
+      });
+      if (ordered.length !== summaries.length) {
+        throw new Error("The owning group changed while discovering its children. Try the move again.");
+      }
+      return ordered;
+    }
+    return summaries;
   }
 
   /** One stored thread, as listThreads reports it, or undefined when its
@@ -2573,7 +2593,7 @@ export class ClaudeBackend {
   }
 
   private available(): boolean {
-    return Boolean(this.installation.executable) && this.installation.authStatus !== "sign-in-required";
+    return isClaudeInstallationAvailable(this.installation);
   }
 
   /** Remembered limits describe a usable install; hide them while Claude is unavailable. */

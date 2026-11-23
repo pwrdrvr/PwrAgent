@@ -34,7 +34,7 @@ export type ThreadDirectoryEnrichment = {
   observedGitBranch?: string;
 };
 export type DirectoryEnrichmentCaller =
-  | "thread-list" | "selected-thread" | "missing-worktree-backfill" | "explicit-enrichment" | "direct";
+  | "thread-list" | "verified-directory-list" | "selected-thread" | "missing-worktree-backfill" | "explicit-enrichment" | "direct";
 
 type ListingFields = {
   caller?: string;

@@ -300,7 +300,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     expectSqliteWriteBudget({
       scenario: "automation-run-prune-retain-usage-title",
       writes,
-      note: "Creating a run and pruning an older run retains its usage title in the existing prune transaction",
+      note: "Creating a run and pruning an older run retains the usage title and cost basis in the existing prune transaction",
     });
 
     expect(automations.getRun("run-1")).toBeUndefined();
@@ -334,7 +334,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
         expectSqliteWriteBudget({
           scenario: "automation-run-prune-without-usage",
           writes,
-          note: "Creating a run and pruning an older execution with no visible usage writes no retained title",
+          note: "Creating a run and pruning an unpriced execution retains its turn for late pricing",
         });
       }
       automations.markRunStarted({

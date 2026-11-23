@@ -1,0 +1,156 @@
+import { federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import type {
+  AppServerBackendKind,
+  AppServerNotification,
+  AppServerPendingThreadStart,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import type { PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
+
+/**
+ * Starts the owner reports with `thread/start/pending`: a to-do card's thread
+ * while its worktree and environment setup run. The list draws each one as a
+ * starting row in the slot its thread will take, and the thread's own row
+ * takes over the slot once it renders (`selectUnlandedStartingThreads`).
+ *
+ * Only this machine's starts arrive here. A launchpad draws its own starting
+ * row and does not report one.
+ */
+export type PendingThreadStart = {
+  start: AppServerPendingThreadStart;
+  /** The thread, once the owner reports it landed. */
+  createdThreadId?: string;
+  /** The owner finished the start. A landed start stays until its row is read. */
+  ended?: boolean;
+};
+
+export type PendingThreadStartReport = Extract<AppServerNotification, { method: "thread/start/pending" }>["params"];
+
+const SELECTION_PREFIX = "pending-thread-start:";
+
+export function isPendingThreadStartSelectionKey(selectionKey: string | undefined): boolean {
+  return selectionKey?.startsWith(SELECTION_PREFIX) === true;
+}
+
+/**
+ * The starts after one report. `retired` holds the starts already gone, so a
+ * report that arrives after its start ended never draws the row again.
+ */
+export function applyPendingThreadStartReport(
+  starts: readonly PendingThreadStart[],
+  report: PendingThreadStartReport,
+  retired: { has: (startId: string) => boolean },
+): readonly PendingThreadStart[] {
+  const { start, phase, createdThreadId } = report;
+  if (retired.has(start.startId)) return starts;
+  const index = starts.findIndex((entry) => entry.start.startId === start.startId);
+  const current = index >= 0 ? starts[index] : undefined;
+  if (current?.ended) return starts;
+  const landedThreadId = current?.createdThreadId ?? createdThreadId;
+  if (phase === "ended" && !landedThreadId) {
+    // Nothing was created: the row goes at once.
+    return index >= 0 ? starts.filter((_, at) => at !== index) : starts;
+  }
+  const next: PendingThreadStart = {
+    start: current?.start ?? start,
+    ...(landedThreadId ? { createdThreadId: landedThreadId } : {}),
+    ...(phase === "ended" ? { ended: true } : {}),
+  };
+  if (index < 0) return [...starts, next];
+  return starts.map((entry, at) => (at === index ? next : entry));
+}
+
+/** Removes a start whose thread row has been read since it ended. */
+export function retirePendingThreadStart(
+  starts: readonly PendingThreadStart[],
+  startId: string,
+): readonly PendingThreadStart[] {
+  return starts.some((entry) => entry.start.startId === startId)
+    ? starts.filter((entry) => entry.start.startId !== startId)
+    : starts;
+}
+
+/** A thread's row key, as `threadSummaryIdentityKey` spells it in this machine's list. */
+function threadKeyOnThisMachine(
+  backend: AppServerBackendKind,
+  threadId: string,
+  instanceId: string | undefined,
+  localInstanceId: string | undefined,
+): string {
+  return instanceId && instanceId !== localInstanceId
+    ? federatedThreadIdentityKey({ backend, target: { scope: "remote", instanceId }, threadId })
+    : buildThreadIdentityKey(backend, threadId);
+}
+
+function pathLabel(path: string | undefined): string {
+  return path?.split(/[\\/]/).filter(Boolean).at(-1) ?? "";
+}
+
+/**
+ * The starting rows for this machine's list. Each carries the keys a list
+ * files a starting row by: its project, the parent whose tray it lands in,
+ * and its thread once landed.
+ */
+export function pendingThreadStartRows(
+  starts: readonly PendingThreadStart[],
+  localInstanceId: string | undefined,
+): PendingLaunchpadCreation[] {
+  return starts.map(({ start, createdThreadId }) => {
+    const directoryPath = start.cwd?.trim() || undefined;
+    const directoryKey = start.directoryKey ?? (directoryPath ? `directory:${directoryPath}` : "");
+    const directoryLabel = start.directoryLabel || pathLabel(directoryPath) || "No project";
+    const selectionKey = `${SELECTION_PREFIX}${start.startId}`;
+    return {
+      operationId: start.startId,
+      submittedAt: start.submittedAt,
+      selectionKey,
+      directoryKey,
+      directoryLabel,
+      setupProgressKey: selectionKey,
+      launchpad: {
+        backend: start.backend,
+        // Not shown on a starting row; the thread's own row shows its access.
+        executionMode: "default",
+        directoryKey,
+        directoryKind: "directory",
+        directoryLabel,
+        ...(directoryPath ? { directoryPath } : {}),
+        ...(start.model ? { model: start.model } : {}),
+        prompt: "",
+        workMode: start.workMode ?? "local",
+        createdAt: start.submittedAt,
+        updatedAt: start.submittedAt,
+      },
+      ...(start.parentThreadId
+        ? {
+            parentThreadKey: threadKeyOnThisMachine(
+              start.parentThreadBackend ?? start.backend,
+              start.parentThreadId,
+              start.parentThreadInstanceId,
+              localInstanceId,
+            ),
+          }
+        : {}),
+      ...(createdThreadId
+        ? { threadKey: buildThreadIdentityKey(start.backend, createdThreadId) }
+        : {}),
+      title: start.title,
+      input: [],
+    };
+  });
+}
+
+/**
+ * The thread a starting row opens: its own thread once landed, else the
+ * thread whose view reports the start (a to-do card's tray). Undefined when
+ * there is neither, and the row stays where it is.
+ */
+export function pendingThreadStartOpenTarget(
+  starts: readonly PendingThreadStart[],
+  selectionKey: string,
+): { backend: AppServerBackendKind; threadId: string } | undefined {
+  const entry = starts.find(({ start }) => `${SELECTION_PREFIX}${start.startId}` === selectionKey);
+  if (!entry) return undefined;
+  if (entry.createdThreadId) return { backend: entry.start.backend, threadId: entry.createdThreadId };
+  return entry.start.progressThread;
+}

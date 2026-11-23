@@ -86,6 +86,8 @@ import {
 } from "react";
 import { BrandLockup } from "../chrome/BrandLockup";
 
+import { AgentPresetsSettings } from "./AgentPresetsSettings";
+
 export type SettingsSection =
   | "general"
   | "keyboard"
@@ -100,6 +102,7 @@ export type SettingsSection =
   | "pricing"
   | "applications"
   | "plugins"
+  | "agent-presets"
   | "worktrees"
   | "environments"
   | "thread-management"
@@ -113,6 +116,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "updates", label: "Updates" },
   { id: "applications", label: "Applications" },
   { id: "plugins", label: "Plugins" },
+  { id: "agent-presets", label: "Agent Presets" },
   { id: "profiles", label: "Profiles" },
   { id: "models", label: "AI Providers" },
   { id: "pricing", label: "Usage & Pricing" },
@@ -150,7 +154,7 @@ const SETTINGS_NAV_CATEGORIES = [
     label: "App",
     sections: ["general", "keyboard", "updates", "applications", "profiles"],
   },
-  { id: "agents", label: "Agents", sections: ["models", "plugins", "pricing"] },
+  { id: "agents", label: "Agents", sections: ["models", "plugins", "agent-presets", "pricing"] },
   {
     id: "projects",
     label: "Projects",
@@ -1219,6 +1223,10 @@ function SettingsSectionBody(props: {
     );
   }
 
+  if (props.section === "agent-presets") {
+    return <AgentPresetsSettings desktopApi={props.desktopApi} />;
+  }
+
   if (props.section === "pricing") {
     return (
       <PricingSettings
@@ -1800,7 +1808,7 @@ function SettingsSectionBody(props: {
         });
       }}
       onManagedCodexBuildChannelChange={async (managedBuildChannel) => {
-        return await props.settings.writeConfig({
+        return await props.settings.writeConfigWithSnapshot({
           models: {
             codex: { managedBuildChannel },
           },

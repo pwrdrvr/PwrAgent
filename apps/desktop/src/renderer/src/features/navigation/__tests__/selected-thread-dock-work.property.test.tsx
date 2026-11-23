@@ -171,13 +171,14 @@ function expectStableTop(
   fixture: ReturnType<typeof mountDock>,
   offset: number,
   metadata: number,
+  expectedRowReads = 1,
 ) {
   fixture.move(offset);
   expect(fixture.edge()).toBe("top");
   fixture.reset();
   fixture.update(metadata);
   expect(fixture.edge()).toBe("top");
-  expect(fixture.work).toEqual({ row: 1, sticky: 0, selectors: 0, reserveLifts: 0 });
+  expect(fixture.work).toEqual({ row: expectedRowReads, sticky: 0, selectors: 0, reserveLifts: 0 });
 }
 
 it.each([12, 24])("keeps work constant as unrelated metadata commits over %i directories", (count) => {
@@ -193,8 +194,12 @@ it("keeps the same work budget for generated offscreen positions and metadata", 
   const fixture = mountDock(4);
   try {
     fc.assert(fc.property(fc.integer({ min: 180, max: 5000 }), fc.integer(), (offset, metadata) => {
-      expectStableTop(fixture, offset, metadata);
-    }), { numRuns: 25 });
+      // Start each sample from known metadata. A changed DOM needs one row
+      // read, while repeating the same commit leaves the DOM untouched.
+      fixture.update(0);
+      expectStableTop(fixture, offset, metadata, metadata === 0 ? 0 : 1);
+      expectStableTop(fixture, offset, metadata, 0);
+    }), { numRuns: 25, examples: [[180, 0], [180, 6]] });
   } finally {
     fixture.cleanup();
   }
