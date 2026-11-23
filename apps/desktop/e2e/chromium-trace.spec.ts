@@ -10,6 +10,7 @@ import type { chromiumTraceProcessor } from "../src/main/diagnostics/chromium-tr
 import type { createChromiumTraceSession } from "../src/main/shell/diagnostics/chromium-trace-session";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { expect, test } from "./fixtures/electron-test";
+import { tolerateTransientRpcFailure } from "./fixtures/transient-rpc-poll";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -250,8 +251,9 @@ test("automatic hot CPU capture preserves renderer layout while the V8 profile k
         hotCpuProfilingCaptureChromiumTrace: true,
       } } });
     });
-    await expect.poll(() => app.electronApp.evaluate(({ BrowserWindow }) =>
-      BrowserWindow.getAllWindows()[0].webContents.debugger.isAttached())).toBe(true);
+    const debuggerAttached = tolerateTransientRpcFailure(() => app.electronApp.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].webContents.debugger.isAttached()));
+    await expect.poll(debuggerAttached.read).toBe(true).catch(debuggerAttached.rethrowWithLastFailure);
     const pid = await app.electronApp.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0].webContents.getOSProcessId());
     await app.window.evaluate((privateMark) => {
