@@ -91,6 +91,10 @@ export type MessagingDeliveryScopeBudget = {
   limit: number;
   intervalMs: number;
   reserved?: number;
+  /** Minimum spacing between capacity-consuming intents in this scope. */
+  minSpacingMs?: number;
+  /** Count stream previews against ordinary capacity. A discarded preview made no provider request. */
+  countStreamPartials?: boolean;
 };
 
 export type MessagingDeliveryScope = {

@@ -1,6 +1,6 @@
 import { setImmediate } from "node:timers/promises";
 import fc from "fast-check";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type {
   MessagingBindingRecord,
   MessagingDeliveryResult,
@@ -8,6 +8,7 @@ import type {
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
+import { TelegramAdapter, type TelegramBotApi } from "@pwragent/messaging-provider-telegram";
 import { MessagingDeliveryBudget } from "../messaging/core/messaging-delivery-budget";
 import { MessagingDeliveryLane } from "../messaging/core/messaging-delivery-lane";
 import { MessagingOutboundDelivery } from "../messaging/core/messaging-outbound-delivery";
@@ -39,7 +40,10 @@ const intent: MessagingSurfaceIntent = {
 
 type DeliveryOptions = ConstructorParameters<typeof MessagingOutboundDelivery>[0];
 
-function fixture(deliver: DeliveryOptions["adapter"]["deliver"]) {
+function fixture(
+  deliver: DeliveryOptions["adapter"]["deliver"],
+  resolveDeliveryScope: DeliveryOptions["adapter"]["resolveDeliveryScope"] = () => scope,
+) {
   let time = 1_000;
   const now = () => time;
   const trace: string[] = [];
@@ -56,7 +60,7 @@ function fixture(deliver: DeliveryOptions["adapter"]["deliver"]) {
   const options = {
     adapter: {
       capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
-      resolveDeliveryScope: () => scope,
+      resolveDeliveryScope,
       deliver,
     },
     store: writes,
@@ -83,6 +87,165 @@ function fixture(deliver: DeliveryOptions["adapter"]["deliver"]) {
   });
   return { owner, options, trace, now };
 }
+
+const telegramBinding: MessagingBindingRecord = {
+  ...binding,
+  channel: { channel: "telegram", conversation: { id: "101", kind: "topic", parentId: "-100777" } },
+};
+
+function telegramFixture(api: Partial<TelegramBotApi>) {
+  const f = fixture((routed) => adapter.deliver(routed), (routed) => adapter.resolveDeliveryScope(routed));
+  const adapter = new TelegramAdapter({
+    api: api as TelegramBotApi,
+    config: { channel: "telegram", botToken: "12345:fixture-token", authorizedActorIds: [] },
+    now: f.now,
+    pollOnStart: false,
+  });
+  return { ...f, adapter };
+}
+
+it("queues the Release Stats reply after an explicit rich-send 429", async () => {
+  await fc.assert(fc.asyncProperty(fc.option(fc.integer({ min: 1, max: 60 })), async (seconds) => {
+    const attempts: number[] = [];
+    const f = telegramFixture({
+      sendRichMessage: async () => {
+        attempts.push(f.now());
+        if (attempts.length === 1) {
+          throw Object.assign(new Error("Too Many Requests"), {
+            error_code: 429, ...(seconds === null ? {} : { parameters: { retry_after: seconds } }),
+          });
+        }
+        return { chat: { id: -100777, type: "supergroup" }, message_id: 123 };
+      },
+    });
+    const richReply: MessagingSurfaceIntent = {
+      ...intent,
+      parts: [{ type: "text", markdown: "markdown", text: "| Asset | Downloads |\n| --- | --- |\n| ZIP | 123 |" }],
+    };
+    const deadline = 1_000 + (seconds ?? 1) * 1_000 + 2_000;
+    const sleepUntil = f.options.sleepUntil;
+    f.options.sleepUntil = async (retryAt, clock) => {
+      expect(retryAt).toBe(deadline);
+      const scope = f.adapter.resolveDeliveryScope({
+        ...intent,
+        audit: {
+          actor: { platformUserId: "42" },
+          channel: { channel: "telegram", conversation: { id: "102", kind: "topic", parentId: "-100777" } },
+          occurredAt: clock(),
+        },
+      });
+      expect(f.options.deliveryBudget.admit({ priority: "routine_status", scope }))
+        .toMatchObject({ outcome: "dropped", reason: "cool-off" });
+      await sleepUntil(retryAt, clock);
+    };
+    await expect(f.owner.deliver(richReply, telegramBinding)).resolves.toMatchObject({ outcome: "presented" });
+    expect(attempts).toEqual([1_000, deadline]);
+    expect(f.trace.filter((entry) => entry.startsWith("persist:"))).toEqual(["persist:presented"]);
+  }), { examples: [[11], [null]] });
+});
+
+it("does not replay a Telegram timeout or a multipart reply with a delivered chunk", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), async (partial) => {
+    const sent = { chat: { id: -100777, type: "supergroup" as const }, message_id: 123 };
+    const sendMessage = vi.fn<TelegramBotApi["sendMessage"]>();
+    if (partial) sendMessage.mockResolvedValueOnce(sent);
+    sendMessage.mockRejectedValueOnce(partial
+      ? Object.assign(new Error("Too Many Requests"), { error_code: 429, parameters: { retry_after: 11 } })
+      : new Error("socket timeout"));
+    const f = telegramFixture({ sendMessage });
+    const reply: MessagingSurfaceIntent = {
+      ...intent,
+      parts: [{ type: "text", text: partial ? "x".repeat(5_000) : "Fixture reply" }],
+    };
+    await expect(f.owner.deliver(reply, telegramBinding)).resolves.toMatchObject({ outcome: "failed" });
+    expect(sendMessage).toHaveBeenCalledTimes(partial ? 2 : 1);
+    expect(f.trace).not.toContain("wait");
+  }));
+});
+
+it("paces replies across Telegram topics and federated owners in the same group", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), fc.integer({ min: 102, max: 1_000 }), async (remoteFirst, topicId) => {
+    const attempts: number[] = [];
+    const f = telegramFixture({
+      sendMessage: async () => {
+        attempts.push(f.now());
+        return { chat: { id: -100777, type: "supergroup" }, message_id: attempts.length };
+      },
+    });
+    const remote: MessagingBindingRecord = {
+      ...telegramBinding,
+      channel: { channel: "telegram", conversation: { id: String(topicId), kind: "topic", parentId: "-100777" } },
+      federatedThread: { backend: "codex", threadId: "fixture-peer-thread", target: { scope: "remote", instanceId: "fixture-peer" } },
+    };
+    const bindings = remoteFirst ? [remote, telegramBinding] : [telegramBinding, remote];
+    for (const target of bindings) {
+      await expect(f.owner.deliver(intent, target)).resolves.toMatchObject({ outcome: "presented" });
+    }
+    expect(attempts[1]! - attempts[0]!).toBeGreaterThanOrEqual(1_000);
+  }));
+});
+
+it("counts a Telegram stream preview and a final reply in the same budget", async () => {
+  const attempts: number[] = [];
+  const f = telegramFixture({
+    sendMessage: async () => {
+      attempts.push(f.now());
+      return { chat: { id: -100777, type: "supergroup" }, message_id: attempts.length };
+    },
+  });
+  const preview: MessagingSurfaceIntent = {
+    id: "fixture-preview", createdAt: 1_000, kind: "stream_update", role: "assistant",
+    policy: "enabled", text: "Working", stream: { key: "fixture-stream", sequence: 1, isFinal: false },
+  };
+  await expect(f.owner.deliver(preview, telegramBinding)).resolves.toMatchObject({ outcome: "presented" });
+  await expect(f.owner.deliver(intent, telegramBinding)).resolves.toMatchObject({ outcome: "presented" });
+  expect(attempts).toEqual([1_000, 2_100]);
+});
+
+it("queues retirement and unpin even when the old status just used the pacing slot", async () => {
+  const calls: string[] = [];
+  const sent = { chat: { id: -100777, type: "supergroup" as const }, message_id: 8 };
+  const f = telegramFixture({
+    sendMessage: async () => { calls.push("present"); return sent; },
+    editMessageText: async () => { calls.push("retire"); return sent; },
+    unpinChatMessage: async () => { calls.push("unpin"); return true; },
+  });
+  const targetSurface = { channel: "telegram" as const, id: "8", state: { opaque: { chatId: -100777, messageId: 8 } } };
+  await f.owner.deliver(intent, telegramBinding);
+  await f.owner.deliver({
+    id: "status-retire:fixture", kind: "status", createdAt: 1_000,
+    text: "Retired", status: "idle", actions: [], targetSurface, delivery: { mode: "update" },
+  }, telegramBinding);
+  await f.owner.deliver({
+    id: "status-unpin:fixture", kind: "dismiss", createdAt: 1_000, targetSurface, delivery: { mode: "dismiss", unpin: true },
+  }, telegramBinding);
+  expect(calls).toEqual(["present", "retire", "unpin"]);
+});
+
+it("releases the chat slot when Telegram throttles a preview before it reaches the API", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 1_100, max: 1_999 }), async (spacing) => {
+    const calls: number[] = [];
+    const f = telegramFixture({
+      sendMessage: async () => {
+        calls.push(f.now());
+        return { chat: { id: -100777, type: "supergroup" }, message_id: calls.length };
+      },
+    });
+    const preview: MessagingSurfaceIntent = {
+      id: "preview", createdAt: 1_000, kind: "stream_update", role: "assistant", policy: "enabled",
+      text: "Working", stream: { key: "preview", sequence: 1, isFinal: false },
+    };
+    for (let index = 0; index < 3; index++) {
+      await f.owner.deliver({ ...preview, stream: { ...preview.stream, key: String(index) } }, telegramBinding);
+      await f.options.sleepUntil(f.now() + spacing, f.now);
+    }
+    const finalAt = f.now();
+    await expect(f.owner.deliver(preview, telegramBinding)).resolves.toMatchObject({ outcome: "discarded" });
+    await f.owner.deliver(intent, telegramBinding);
+    expect(calls).toHaveLength(4);
+    expect(calls.at(-1)).toBe(finalAt);
+  }));
+});
 
 it("honors the provider deadline and records only the settled attempt", async () => {
   await fc.assert(fc.asyncProperty(

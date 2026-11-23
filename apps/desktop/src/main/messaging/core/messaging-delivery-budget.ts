@@ -2,6 +2,7 @@ import type {
   MessagingDeliveryScope,
   MessagingRateLimitInfo,
 } from "@pwragent/messaging-interface";
+import { MESSAGING_RATE_LIMIT_SAFETY_BUFFER_MS } from "@pwragent/messaging-interface";
 
 export type MessagingDeliveryPriority =
   | "critical_interactive"
@@ -15,10 +16,11 @@ export type MessagingDeliveryAdmission =
   | {
       outcome: "admitted";
       slowMode: boolean;
+      releaseCapacity?: () => void;
     }
   | {
       outcome: "deferred";
-      reason: "cool-off" | "budget-exhausted";
+      reason: "cool-off" | "budget-exhausted" | "pacing";
       retryAt: number;
       slowMode: boolean;
     }
@@ -28,6 +30,7 @@ export type MessagingDeliveryAdmission =
         | "cool-off"
         | "slow-mode"
         | "budget-exhausted"
+        | "pacing"
         | "missing-scope";
       slowMode: boolean;
     };
@@ -35,7 +38,7 @@ export type MessagingDeliveryAdmission =
 type ScopeState = {
   coolOffUntil?: number;
   slowModeUntil?: number;
-  timestamps: number[];
+  timestamps: { at: number }[];
 };
 
 // A provider limit shared by several scopes, such as one bot account. It has
@@ -48,7 +51,6 @@ type BucketState = {
 const DEFAULT_INTERVAL_MS = 60_000;
 const DEFAULT_LIMIT = 60;
 const DEFAULT_RESERVED = 1;
-const RATE_LIMIT_SAFETY_BUFFER_MS = 2_000;
 const SLOW_MODE_RECOVERY_MS = 5 * 60_000;
 const SLOW_MODE_MINIMUM_MS = 5_000;
 
@@ -82,6 +84,7 @@ export class MessagingDeliveryBudget {
 
   admit(request: {
     consumeCapacity?: boolean;
+    releasable?: boolean;
     priority: MessagingDeliveryPriority;
     scope?: MessagingDeliveryScope;
   }): MessagingDeliveryAdmission {
@@ -136,14 +139,31 @@ export class MessagingDeliveryBudget {
       return { outcome: "dropped", reason: "budget-exhausted", slowMode };
     }
 
-    state.timestamps.push(now);
-    return { outcome: "admitted", slowMode };
+    const last = state.timestamps.at(-1)?.at;
+    const spacingMs = request.scope.budget?.minSpacingMs ?? 0;
+    if (last !== undefined && last + spacingMs > now) {
+      return DEFERABLE_PRIORITIES.has(request.priority)
+        ? { outcome: "deferred", reason: "pacing", retryAt: last + spacingMs, slowMode }
+        : { outcome: "dropped", reason: "pacing", slowMode };
+    }
+
+    const reservation = { at: now };
+    state.timestamps.push(reservation);
+    if (!request.releasable) return { outcome: "admitted", slowMode };
+    return {
+      outcome: "admitted",
+      slowMode,
+      releaseCapacity: () => {
+        const index = state.timestamps.indexOf(reservation);
+        if (index !== -1) state.timestamps.splice(index, 1);
+      },
+    };
   }
 
   recordRateLimit(info: MessagingRateLimitInfo): void {
     const now = info.observedAt ?? this.now();
     const retryAfterMs = Math.max(0, Math.floor(info.retryAfterMs ?? 0));
-    const coolOffUntil = now + retryAfterMs + RATE_LIMIT_SAFETY_BUFFER_MS;
+    const coolOffUntil = now + retryAfterMs + MESSAGING_RATE_LIMIT_SAFETY_BUFFER_MS;
     const targets: Array<ScopeState | BucketState> = [this.stateFor(info.scope)];
     const key = info.appliesTo === "bucket" ? bucketKey(info.scope) : undefined;
     if (key !== undefined) {
@@ -213,7 +233,7 @@ export class MessagingDeliveryBudget {
   ): void {
     const intervalMs = budgetIntervalMs(scope);
     const cutoff = now - intervalMs;
-    state.timestamps = state.timestamps.filter((timestamp) => timestamp > cutoff);
+    state.timestamps = state.timestamps.filter(({ at }) => at > cutoff);
     if (state.coolOffUntil !== undefined && state.coolOffUntil <= now) {
       state.coolOffUntil = undefined;
     }
@@ -256,7 +276,7 @@ function nextWindowAt(
   state: ScopeState,
   now: number,
 ): number {
-  const oldest = state.timestamps[0];
+  const oldest = state.timestamps[0]?.at;
   return oldest === undefined ? now : oldest + budgetIntervalMs(scope);
 }
 

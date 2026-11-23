@@ -660,6 +660,15 @@ Use `bucket` only when the platform says the limit is shared:
 | Slack | The channel. A 429 does not say whether a per-channel or workspace method limit was hit. |
 | Feishu | The chat. The adapter reads only `retryAfter`, which does not say which limit was hit. |
 
+Telegram's Bot API reports `parameters.retry_after` in seconds. Rich messages,
+plain messages, media and stream edits use the same bot/chat delivery scope.
+All topics within a chat draw from its one window, including topics bound to
+federated threads. The budget spaces intents by 1.1 seconds and charges stream
+previews against the group window. One intent can still make more than one
+request, for example when plain text is split or files are sent separately.
+Retry a rejected intent only if it made no visible change, or if the adapter
+can resume from the changes that it already made, as with stream anchors.
+
 Read the wait with `retryAfterMsFromHttpHeaders` from
 `@pwragent/messaging-interface`. It accepts `Retry-After` as delta-seconds or
 an HTTP-date, then any provider-documented reset header, then the adapter's

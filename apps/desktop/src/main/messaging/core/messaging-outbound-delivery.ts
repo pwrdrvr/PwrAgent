@@ -55,7 +55,7 @@ export type MessagingControllerDeliveryBudgetEvent = {
   intentKind: MessagingSurfaceIntent["kind"];
   outcome: "deferred" | "dropped";
   priority: MessagingDeliveryPriority;
-  reason?: "cool-off" | "slow-mode" | "budget-exhausted" | "missing-scope";
+  reason?: "cool-off" | "slow-mode" | "budget-exhausted" | "pacing" | "missing-scope";
   retryAt?: number;
   scope?: MessagingDeliveryScope;
   slowMode: boolean;
@@ -440,7 +440,6 @@ export class MessagingOutboundDelivery {
       };
     }
     const routedIntent = this.withRoutingAudit(displayIntent, binding, event);
-    const consumeDeliveryBudget = shouldConsumeDeliveryBudget(routedIntent);
     // A disposed controller budgets against the adapter that will send, not
     // the stopped-adapter stub, which has no scope and would skip cool-off.
     const scopeAdapter = this.context.disposed
@@ -458,6 +457,7 @@ export class MessagingOutboundDelivery {
       };
     }
     const scope = scopeAdapter.resolveDeliveryScope?.(routedIntent);
+    const consumeDeliveryBudget = shouldConsumeDeliveryBudget(routedIntent, scope);
     const priority = messagingDeliveryPriority(routedIntent, {
       userInitiated: isUserInitiatedDeliveryEvent(event),
     });
@@ -537,16 +537,20 @@ export class MessagingOutboundDelivery {
       if (guard?.isCancelled()) {
         return cancelledResult();
       }
+      let releaseCapacity: (() => void) | undefined;
       if (this.deliveryBudget) {
         const budgetChannel = channel ?? scope?.platform ?? "telegram";
         if (scope && lane.lane?.isOccupied(scope.id) && !(await waitForTurn())) {
           return cancelledResult();
         }
-        let admission = this.deliveryBudget.admit({
+        const budget = this.deliveryBudget;
+        const admit = () => budget.admit({
           consumeCapacity: consumeDeliveryBudget,
           priority,
+          releasable: priority === "stream_partial" && scope?.budget?.countStreamPartials === true,
           scope,
         });
+        let admission = admit();
         while (admission.outcome === "deferred") {
           const budgetEvent: MessagingControllerDeliveryBudgetEvent = {
             at: this.context.now(),
@@ -581,11 +585,7 @@ export class MessagingOutboundDelivery {
             if (!(await waitForTurn())) {
               return cancelledResult();
             }
-            admission = this.deliveryBudget.admit({
-              consumeCapacity: consumeDeliveryBudget,
-              priority,
-              scope,
-            });
+            admission = admit();
             continue;
           }
           const delay = (this.options.sleepUntil ?? sleepUntil)(
@@ -600,11 +600,7 @@ export class MessagingOutboundDelivery {
           if (guard?.isCancelled()) {
             return cancelledResult();
           }
-          admission = this.deliveryBudget.admit({
-            consumeCapacity: consumeDeliveryBudget,
-            priority,
-            scope,
-          });
+          admission = admit();
         }
         if (admission.outcome !== "admitted") {
           const budgetEvent: MessagingControllerDeliveryBudgetEvent = {
@@ -641,15 +637,19 @@ export class MessagingOutboundDelivery {
             outcome: "discarded",
           };
         }
+        releaseCapacity = admission.releaseCapacity;
       }
       if (guard?.isCancelled()) {
+        releaseCapacity?.();
         return cancelledResult();
       }
       const adapter = await this.adapterForSend();
       if (guard?.isCancelled()) {
+        releaseCapacity?.();
         return cancelledResult();
       }
       if (!adapter) {
+        releaseCapacity?.();
         this.context.logger.info?.("messaging delivery discarded: adapter stopped and nothing replaced it", {
           bindingId: binding?.id ?? intent.bindingId,
           intentId: routedIntent.id,
@@ -659,6 +659,7 @@ export class MessagingOutboundDelivery {
         return cancelledResult();
       }
       if (this.options.isDeliveryAdapterAvailable?.(adapter) === false) {
+        releaseCapacity?.();
         if (receipt) receipt.notSent = "adapter-stopped";
         return cancelledResult();
       }
@@ -667,6 +668,7 @@ export class MessagingOutboundDelivery {
         receipt.notSent = undefined;
       }
       const result = await adapter.deliver(routedIntent);
+      if (result.outcome === "discarded") releaseCapacity?.();
       if (guard?.isCancelled()) {
         await guard.onCancelledDelivery?.(result);
         if (receipt) {
@@ -804,6 +806,9 @@ export class MessagingOutboundDelivery {
       intentId: intent.id,
       intentKind: intent.kind,
       outcome: result.outcome,
+      retryAfterMs: result.rateLimit?.retryAfterMs,
+      retryable: result.rateLimit?.retryable,
+      scopeId: result.rateLimit?.scope.id,
       surfaceId: result.surface?.id,
       threadId: binding?.threadId,
     };
@@ -943,9 +948,12 @@ function stripCodexGitActionDirectivesFromMessagingIntent(
   return intent;
 }
 
-export function shouldConsumeDeliveryBudget(intent: MessagingSurfaceIntent): boolean {
+export function shouldConsumeDeliveryBudget(
+  intent: MessagingSurfaceIntent,
+  scope?: MessagingDeliveryScope,
+): boolean {
   if (intent.kind === "stream_update" && !intent.stream.isFinal) {
-    return false;
+    return scope?.budget?.countStreamPartials === true && intent.policy !== "disabled";
   }
   return intent.kind !== "activity";
 }
@@ -982,16 +990,17 @@ export function messagingDeliveryPriority(
       }
       return "user_command";
     case "status":
-      if (context?.userInitiated) {
+      if (context?.userInitiated || intent.id.startsWith("status-retire:")) {
         return "user_command";
       }
       if (intent.delivery?.mode === "present" && intent.delivery.pin === true) {
         return "user_command";
       }
       return "routine_status";
+    case "dismiss":
+      return intent.delivery?.unpin ? "user_command" : "routine_status";
     case "activity":
     case "progress":
-    case "dismiss":
       return "routine_status";
     case "thread_picker":
     case "project_picker":
@@ -1034,6 +1043,7 @@ function shouldRetryArtifactInline(
 ): boolean {
   return (
     intent.artifactDelivery.mode === "attachment_summary" &&
+    !result.rateLimit &&
     (result.outcome === "failed" || result.outcome === "unsupported")
   );
 }

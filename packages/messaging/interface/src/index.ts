@@ -43,6 +43,7 @@ export {
 } from "./rate-limit-gate";
 export { notifyEachListener, notifyEachListenerAsync } from "./listeners";
 export {
+  MESSAGING_RATE_LIMIT_SAFETY_BUFFER_MS,
   MESSAGING_RETRY_AFTER_MAX_MS,
   parseRetryAfterMs,
   retryAfterMsFromHttpHeaders,

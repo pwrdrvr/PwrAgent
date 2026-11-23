@@ -49,6 +49,8 @@ import {
   MESSAGING_COMMAND_CATALOG,
   MESSAGING_PAIRING_COMMAND,
   MESSAGING_PAIRING_TOKEN_PATTERN,
+  MESSAGING_RATE_LIMIT_SAFETY_BUFFER_MS,
+  MESSAGING_RETRY_AFTER_MAX_MS,
   messagingInlineImageBytes,
   notifyEachListener,
   notifyEachListenerAsync,
@@ -92,6 +94,8 @@ const TELEGRAM_STREAM_GROUP_FAST_INTERVAL_MS = 1_000;
 const TELEGRAM_STREAM_GROUP_MEDIUM_INTERVAL_MS = 2_000;
 const TELEGRAM_STREAM_GROUP_SLOW_INTERVAL_MS = 3_100;
 const TELEGRAM_STREAM_RETRY_AFTER_BUFFER_MS = 100;
+const TELEGRAM_MESSAGE_MIN_SPACING_MS = 1_100;
+const TELEGRAM_RETRY_AFTER_FALLBACK_MS = 1_000;
 const TELEGRAM_GENERAL_TOPIC_THREAD_ID = 1;
 
 const TELEGRAM_COMMAND_DESCRIPTIONS: Record<MessagingCommandVerb, string> = {
@@ -615,6 +619,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   private observedConversationIds = new Set<string>();
   private listener?: (event: MessagingInboundEvent) => Promise<void>;
   private streamRateLimits = new Map<string, TelegramStreamRateLimitState>();
+  private readonly preparedReplyMarkup = new WeakMap<MessagingSurfaceIntent, {
+    markup: TelegramInlineKeyboardMarkup;
+    expiresAt: number;
+  }>();
   // Per-stream sent messages, keyed by `intent.stream.key`. A response longer
   // than Telegram's 4096-byte limit rolls onto additional messages (element 1,
   // 2, …); `text` lets us skip re-editing an unchanged chunk. Cleared when the
@@ -1067,13 +1075,17 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     )) {
       return { channel: this.channel, deliveredAt: this.now(), outcome: "discarded" };
     }
+    const sentMessages: TelegramSentMessage[] = [];
     try {
-      return await this.deliverSurface(intent);
+      const result = await this.deliverSurface(intent, sentMessages);
+      this.preparedReplyMarkup.delete(intent);
+      return result;
     } catch (error) {
       const target = this.resolveTarget(intent);
       const rateLimit = target
-        ? this.emitRateLimitFromError(error, target, { retryable: false })
+        ? this.emitRateLimitFromError(error, target, { retryable: sentMessages.length === 0 })
         : undefined;
+      if (!rateLimit?.retryable) this.preparedReplyMarkup.delete(intent);
       const failure = telegramDeliveryFailure(error);
       this.options.logger?.warn?.(
         `telegram deliver failed kind=${intent.kind} target=${target ? this.compactTypingTarget(target) : "missing"} error=${failure.errorMessage}`,
@@ -1091,6 +1103,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
   private async deliverSurface(
     intent: MessagingSurfaceIntent,
+    sentMessages: TelegramSentMessage[],
   ): Promise<MessagingDeliveryResult> {
     const target = this.resolveTarget(intent);
     if (!target) {
@@ -1147,7 +1160,6 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     const text = files.length > 0 ? textForTelegramIntentWithoutFiles(intent) : textForTelegramIntent(intent);
     const mediaParts = richMediaParts(intent);
     const images = mediaParts.filter((part) => part.media.type === "photo");
-    const sentMessages: TelegramSentMessage[] = [];
     let outcome: MessagingDeliveryResult["outcome"] = "presented";
     this.options.logger?.debug(
       `telegram deliver begin kind=${intent.kind} mode=${intent.delivery?.mode ?? "new"} target=${this.compactTypingTarget(target)} chars=${text.length} actions=${actions.length} images=${images.length} files=${files.length} preview="${compactPreview(text)}"`,
@@ -1183,20 +1195,29 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         );
         outcome = "updated";
       } catch (error) {
-        if (intent.delivery.fallback !== "present_new") {
+        const code = telegramErrorCode(error);
+        if (isTelegramMessageNotModifiedError(error)) {
+          sentMessages.push({ chat: { id: Number(target.chatId), type: "private" }, message_id: target.messageId });
+          outcome = "updated";
+        } else if (
+          intent.delivery.fallback !== "present_new"
+          || telegramRetryAfterMs(error) !== undefined
+          || (code !== 400 && code !== 403 && code !== 404)
+        ) {
           throw error;
+        } else {
+          sentMessages.push(
+            await this.bot.api.sendMessage({
+              chat_id: target.chatId,
+              disable_web_page_preview: true,
+              message_thread_id: target.messageThreadId,
+              parse_mode: "HTML",
+              reply_markup: replyMarkup,
+              text: text || " ",
+            }),
+          );
+          outcome = "presented_new";
         }
-        sentMessages.push(
-          await this.bot.api.sendMessage({
-            chat_id: target.chatId,
-            disable_web_page_preview: true,
-            message_thread_id: target.messageThreadId,
-            parse_mode: "HTML",
-            reply_markup: replyMarkup,
-            text: text || " ",
-          }),
-        );
-        outcome = "presented_new";
       }
     } else if (mediaParts.length > 0) {
       const caption = text && Buffer.byteLength(text, "utf8") <= 1024 ? text : undefined;
@@ -1250,8 +1271,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           message_id: lastMessage.message_id,
         });
         outcome = "pinned";
-      } catch {
+      } catch (error) {
         // Keep the visible status message even if the chat cannot pin it.
+        this.emitRateLimitFromError(error, target);
       }
     }
 
@@ -1459,20 +1481,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         },
       };
     } catch (error) {
-      const retryAfterMs = telegramRetryAfterMs(error);
-      let rateLimitInfo: MessagingRateLimitInfo | undefined;
-      if (retryAfterMs !== undefined) {
-        this.blockStreamRateLimitTarget(target, retryAfterMs);
-        rateLimitInfo = {
-          scope: this.rateLimitScopeForTarget(target),
-          retryAfterMs,
-          message: errorMessage(error),
-          observedAt: this.now(),
-          retryable: true,
-        };
-        this.emitRateLimit(rateLimitInfo);
+      const rateLimit = this.emitRateLimitFromError(error, target, { retryable: true });
+      if (rateLimit) {
         this.options.logger?.warn?.(
-          `telegram stream update rate limited retryAfterMs=${retryAfterMs} target=${this.compactTypingTarget(target)} stream=${intent.stream.key}`,
+          `telegram stream update rate limited retryAfterMs=${rateLimit.retryAfterMs} target=${this.compactTypingTarget(target)} stream=${intent.stream.key}`,
         );
       }
       return {
@@ -1480,7 +1492,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         deliveredAt: this.now(),
         ...telegramDeliveryFailure(error),
         outcome: "failed",
-        ...(rateLimitInfo ? { rateLimit: rateLimitInfo } : {}),
+        ...(rateLimit ? { rateLimit } : {}),
       };
     }
   }
@@ -1536,10 +1548,12 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           cleanup.failures += 1;
           const backoffMs = Math.min(60_000, 1000 * 2 ** Math.min(cleanup.failures - 1, 6));
           cleanup.retryAt = this.now() + backoffMs;
-          const rateLimit = this.emitRateLimitFromError(error, target, { retryable: false });
+          const rateLimit = this.emitRateLimitFromError(error, target);
           if (rateLimit?.retryAfterMs !== undefined) {
-            this.blockStreamRateLimitTarget(target, rateLimit.retryAfterMs);
-            cleanup.retryAt = Math.max(cleanup.retryAt, this.now() + rateLimit.retryAfterMs);
+            cleanup.retryAt = Math.max(
+              cleanup.retryAt,
+              this.now() + rateLimit.retryAfterMs + MESSAGING_RATE_LIMIT_SAFETY_BUFFER_MS,
+            );
           }
           this.options.logger?.warn?.(`telegram stream cleanup deferred target=${this.compactTypingTarget(target)} error=${errorMessage(error)}`);
         }
@@ -1589,14 +1603,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       if (target.messageId !== undefined && isTelegramMessageNotModifiedError(error)) {
         return { chat: { id: Number(target.chatId), type: "private" }, message_id: target.messageId };
       }
-      const retryAfterMs = telegramRetryAfterMs(error);
-      if (retryAfterMs !== undefined) {
-        this.blockStreamRateLimitTarget(target, retryAfterMs);
-        throw error;
-      }
       // Only a definite API rejection permits regular fallback. A timeout may
       // have delivered remotely, and flooding errors require backpressure.
-      if (!isTelegramRichMessageRejected(error)) throw error;
+      if (telegramRetryAfterMs(error) !== undefined || !isTelegramRichMessageRejected(error)) throw error;
       this.options.logger?.warn?.(`telegram rich message rejected; using regular fallback error=${errorMessage(error)}`);
       return undefined;
     }
@@ -2493,6 +2502,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     intent: MessagingSurfaceIntent,
     actions: MessagingSurfaceAction[],
   ): Promise<TelegramInlineKeyboardMarkup | undefined> {
+    const now = this.now();
+    const prepared = this.preparedReplyMarkup.get(intent);
+    if (prepared && prepared.expiresAt > now) return prepared.markup;
     // Defensive caps from the adapter's own profile. Producers should
     // already have applied these via applyActionCapabilityLimits.
     const maxActions = this.capabilityProfile.actions?.maxActions ?? 100;
@@ -2517,12 +2529,15 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       return undefined;
     }
 
-    return {
+    const markup = {
       inline_keyboard: layoutMessagingActionRows(items, {
         defaultColumns: intent.actionLayout?.columns ?? 1,
         maxColumns,
       }),
     };
+    // The delivery queue replays the same routed intent after a safe 429.
+    this.preparedReplyMarkup.set(intent, { markup, expiresAt: now + MESSAGING_CALLBACK_HANDLE_TTL_MS });
+    return markup;
   }
 
   private async createCallbackData(
@@ -2788,14 +2803,21 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     signalId: number,
     source: "interval" | "start",
   ): Promise<void> {
+    const blockedUntil = this.streamRateLimits.get(this.streamRateLimitKey(target))?.blockedUntil;
+    if (blockedUntil !== undefined && blockedUntil > this.now()) return;
     this.options.logger?.debug(
       `telegram sendChatAction typing request signal=${signalId} source=${source} target=${this.compactTypingTarget(target)}`,
     );
-    await this.bot.api.sendChatAction({
-      action: "typing",
-      chat_id: target.chatId,
-      message_thread_id: target.messageThreadId,
-    });
+    try {
+      await this.bot.api.sendChatAction({
+        action: "typing",
+        chat_id: target.chatId,
+        message_thread_id: target.messageThreadId,
+      });
+    } catch (error) {
+      this.emitRateLimitFromError(error, target);
+      throw error;
+    }
     this.options.logger?.debug(
       `telegram sendChatAction typing ok signal=${signalId} source=${source} target=${this.compactTypingTarget(target)}`,
     );
@@ -2880,7 +2902,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     const state = this.streamRateLimitState(key, now);
     state.blockedUntil = Math.max(
       state.blockedUntil ?? 0,
-      now + retryAfterMs + TELEGRAM_STREAM_RETRY_AFTER_BUFFER_MS,
+      now + retryAfterMs + MESSAGING_RATE_LIMIT_SAFETY_BUFFER_MS,
     );
   }
 
@@ -2908,9 +2930,6 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   private streamRateLimitPolicy(
     target: TelegramDeliveryTarget,
   ): TelegramStreamRateLimitDecision["policy"] {
-    if (target.messageThreadId !== undefined) {
-      return "group";
-    }
     const chatId =
       typeof target.chatId === "number" ? target.chatId : Number(target.chatId);
     return Number.isFinite(chatId) && chatId < 0 ? "group" : "dm";
@@ -2921,18 +2940,22 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   ): MessagingDeliveryScope {
     const policy = this.streamRateLimitPolicy(target);
     const chatId = String(target.chatId);
+    const accountId = this.options.config.expectedBotAccountId ?? this.configuredBotId();
     return {
       platform: this.channel,
-      id: policy === "group" ? `telegram:group:${chatId}` : `telegram:dm:${chatId}`,
-      kind: policy === "group" ? "group" : "dm",
+      id: accountId ? `telegram:bot:${accountId}:${policy}:${chatId}` : `telegram:${policy}:${chatId}`,
+      kind: policy,
       label:
         policy === "group"
           ? `Telegram group ${compactIdentifier(chatId)}`
           : "Telegram DM",
-      budget:
-        policy === "group"
-          ? { limit: 20, intervalMs: 60_000, reserved: 5 }
-          : { limit: 60, intervalMs: 60_000, reserved: 0 },
+      budget: {
+        limit: policy === "group" ? TELEGRAM_STREAM_GROUP_MAX_PER_WINDOW : 60,
+        intervalMs: TELEGRAM_STREAM_GROUP_WINDOW_MS,
+        reserved: policy === "group" ? 5 : 0,
+        minSpacingMs: TELEGRAM_MESSAGE_MIN_SPACING_MS,
+        countStreamPartials: true,
+      },
     };
   }
 
@@ -2945,6 +2968,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     if (retryAfterMs === undefined) {
       return undefined;
     }
+    this.blockStreamRateLimitTarget(target, retryAfterMs);
     const info: MessagingRateLimitInfo = {
       scope: this.rateLimitScopeForTarget(target),
       retryAfterMs,
@@ -3656,9 +3680,13 @@ function isTelegramMessageNotModifiedError(error: unknown): boolean {
 }
 
 function isTelegramRichMessageRejected(error: unknown): boolean {
-  const code = readNumberProperty(error, "error_code")
-    ?? readNumberProperty(readErrorProperty(error), "error_code");
+  const code = telegramErrorCode(error);
   return code === 400 || code === 404 || code === 501;
+}
+
+function telegramErrorCode(error: unknown): number | undefined {
+  return readNumberProperty(error, "error_code")
+    ?? readNumberProperty(readErrorProperty(error), "error_code");
 }
 
 function telegramErrorIncludes(error: unknown, description: string): boolean {
@@ -3678,9 +3706,10 @@ function telegramRetryAfterMs(error: unknown): number | undefined {
   const seconds =
     telegramRetryAfterSeconds(error) ??
     telegramRetryAfterSeconds(readErrorProperty(error));
-  return seconds !== undefined && seconds > 0
-    ? Math.ceil(seconds * 1000)
-    : undefined;
+  if (seconds !== undefined && Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(Math.ceil(seconds * 1_000), MESSAGING_RETRY_AFTER_MAX_MS);
+  }
+  return telegramErrorCode(error) === 429 ? TELEGRAM_RETRY_AFTER_FALLBACK_MS : undefined;
 }
 
 function telegramRetryAfterSeconds(value: unknown): number | undefined {
