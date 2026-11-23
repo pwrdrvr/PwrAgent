@@ -184,6 +184,7 @@ import { recordStartupProfileEvent } from "../diagnostics/startup-profile-events
 
 
 import { getDesktopConfigStore } from "../settings/desktop-settings-singleton";
+import { E2E_ACP_DISCOVERY_ROOT_ENV } from "../settings/desktop-settings-env";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
 import { disposeAppState, recordBootDecision } from "../storage/desktop-state-lifecycle";
 import type { AutoVacuumConversion } from "../storage/desktop-state-lifecycle";
@@ -1142,6 +1143,7 @@ function installWindowMenuRefreshHandlers(): void {
 function rejectDevOnlyEnvVarsInProduction(): void {
   if (!app.isPackaged) return;
   const devOnlyVars = [
+    E2E_ACP_DISCOVERY_ROOT_ENV,
     PWRAGENT_PROFILE_AUTO_CREATE_ENV,
     SECRET_STORAGE_DISABLED_ENV,
     SQLITE_WRITE_METRICS_ENV,

@@ -883,6 +883,7 @@ async function listInstalledAndLocalAcpAgents(
       const fixtureRoot = app?.isPackaged === false && process.env.PWRAGENT_E2E === "1"
         ? process.env[E2E_ACP_DISCOVERY_ROOT_ENV]
         : undefined;
+      const fixtureBin = fixtureRoot ? join(fixtureRoot, ".local", "bin") : undefined;
       discovered = (await discoverLocalAcpAgentRecords({
         enabledRegistryIds: discoveryRegistryIds,
         useManagedAntigravity: true,
@@ -905,13 +906,10 @@ async function listInstalledAndLocalAcpAgents(
           requirePlatformSignature: app?.isPackaged === true,
         },
         ...(Object.keys(preferences).length > 0 ? { preferences } : {}),
-        ...(fixtureRoot
+        ...(fixtureBin
           ? {
-              // The kit adds system prefixes to PATH enumeration and probes
-              // absolute strategy fallbacks independently. Confine both to the
-              // fixture, including the bare-name probe when the lister is empty.
-              env: { ...process.env, PATH: join(fixtureRoot, ".local", "bin") },
-              listExecutables: () => [],
+              env: { ...process.env, PATH: fixtureBin },
+              pathProbeRootDir: fixtureBin,
               fallbackRootDir: fixtureRoot,
               bundledGrokCommand: null,
             }
