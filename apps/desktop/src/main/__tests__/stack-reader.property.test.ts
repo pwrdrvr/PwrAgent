@@ -4,17 +4,20 @@ import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as gitExecutable from "../app-server/git-executable";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 import { StackOperationsService } from "../stacks/stack-operations-service";
 import { StackReader, StackReadObservation, readStackClones } from "../stacks/stack-reader";
+import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const fs = await importOriginal<typeof import("node:fs/promises")>();
   return { ...fs, lstat: vi.fn(fs.lstat), open: vi.fn(fs.open) };
 });
+
+beforeEach(() => onTestFinished(isolateProcessGitEnvironment()));
 
 function row(cwd: string, id: string) {
   return {
@@ -88,18 +91,21 @@ describe("stack checkout demand", () => {
       await Promise.all([writeCatalog(first, "same-repository"), writeCatalog(second, "same-repository")]);
       const reader = new StackReader();
       const rows = [row(alias, "alias")];
-      const read = async (root: string) => {
+      const read = async (root: string, observation?: StackReadObservation) => {
         const [physical] = await readStackClones([alias]);
         expect(physical?.root).toBe(await realpath(root));
-        const { stacks } = await reader.read(rows, [], [alias]);
+        const { stacks } = await reader.read(rows, [], [alias], undefined, observation);
         expect(stacks[0]?.layers[0]?.thread?.key).toBe("codex:alias");
         return stacks[0]?.key;
       };
       await symlink(first, alias, "junction");
       const firstKey = await read(first);
+      const observation = new StackReadObservation();
+      expect((await observation.presentCatalogs([alias], true))[0]?.status).toBe("ok");
       await rm(alias);
       await symlink(second, alias, "junction");
-      const secondKey = await read(second);
+      await observation.revalidateAfterListing();
+      const secondKey = await read(second, observation);
       expect(secondKey).toBeDefined();
       expect(secondKey).not.toBe(firstKey);
     } finally {
@@ -402,7 +408,7 @@ describe("stack checkout demand", () => {
     }
   });
 
-  it("uses one live checkout and catalog read after PR admission", async () => {
+  it("reuses a verified preflight only while checkout and catalog evidence still agree", async () => {
     const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-preflight-"));
     const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
     try {
@@ -412,7 +418,8 @@ describe("stack checkout demand", () => {
       const rows = [row(sandbox, "preflight")];
       const project = async () => {
         const observation = new StackReadObservation();
-        expect(await observation.hints.markerCandidates([sandbox])).toEqual([sandbox]);
+        expect((await observation.presentCatalogs([sandbox], true))[0]?.status).toBe("ok");
+        await observation.revalidateAfterListing();
         expect((await reader.read(rows, [], [sandbox], undefined, observation)).stacks).toHaveLength(1);
       };
       vi.mocked(open).mockClear();
@@ -439,7 +446,7 @@ describe("stack checkout demand", () => {
       initialize(tracked);
       initialize(ordinary);
       await writeCatalog(tracked, "tracked");
-      vi.stubEnv("PWRAGENT_GIT_PATH", await gitExecutable.resolveGitExecutable());
+      process.env.PWRAGENT_GIT_PATH = await gitExecutable.resolveGitExecutable();
       let now = 0;
       const reader = new StackReader(() => now);
       const rows = [row(tracked, "tracked"), row(ordinary, "ordinary"), row(missing, "missing")];
@@ -464,7 +471,6 @@ describe("stack checkout demand", () => {
       expect((await reader.read(rows, [])).stacks).toHaveLength(2);
       expect(count()).toBe(3);
     } finally {
-      vi.unstubAllEnvs();
       start.mockRestore();
       await rm(sandbox, { recursive: true, force: true });
     }
@@ -512,7 +518,9 @@ describe("stack checkout demand", () => {
       initialize(sandbox);
       const { signal } = new AbortController();
       await expect(readStackClones([sandbox], { signal })).resolves.toHaveLength(1);
-      expect(run.mock.calls[0]?.[2]).toMatchObject({ timeout: 3_000, purpose: "stack-checkout" });
+      expect(run.mock.calls[0]?.[2]).toMatchObject({
+        timeout: 3_000, purpose: "stack-checkout", ownProcessTree: process.platform === "win32",
+      });
       expect(run.mock.calls[0]?.[2]?.signal).toBe(signal);
     } finally {
       run.mockRestore();

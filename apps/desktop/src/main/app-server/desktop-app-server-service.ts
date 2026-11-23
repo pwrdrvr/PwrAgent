@@ -3832,10 +3832,11 @@ class DesktopAppServerService {
       && stack.layers.some((layer) => layer.pullRequest?.number === pr.number);
     const directories = this.prStackDirectories(pr);
     if (!directories.length) return this.publishedStacks.filter(matches);
-    // Presence is enough to admit the inventory read. Resolve the anchors
-    // and read catalog contents after the thread listing has settled.
-    const hasCatalogCandidate = (await observation.hints.markerCandidates(directories)).length > 0;
-    if (!hasCatalogCandidate && !this.knownStackPullRequests().some((lower) => isObservedStackParent(lower, pr))) return [];
+    const catalogs = await observation.presentCatalogs(directories, true);
+    const tracked = catalogs.some((read) => read.status === "ok" && read.catalog.repository.toLowerCase() === repository
+      && read.catalog.stacks.some((stack) => stack.branches.some((layer) =>
+        layer.pullRequest?.number === pr.number || layer.branch === pr.headRefName)));
+    if (!tracked && !this.knownStackPullRequests().some((lower) => isObservedStackParent(lower, pr))) return [];
     return (await this.readScopedStacks(directories, undefined, observation)).stacks.filter(matches);
   }
 
@@ -4008,7 +4009,7 @@ class DesktopAppServerService {
     observation.demand.signal?.throwIfAborted();
     if (!directories.length) return { stacks: [], catalogs: [] };
     const { threads } = await this.listThreads({});
-    observation.demand.signal?.throwIfAborted();
+    await observation.revalidateAfterListing();
     const attached = getDesktopOverlayStore().readNavigationPullRequests(threads.map((thread) => ({
       backend: thread.source, threadId: thread.id,
     })));
