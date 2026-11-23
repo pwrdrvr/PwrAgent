@@ -10,7 +10,7 @@ const runtimeMock = vi.hoisted(() => ({
   notifyBindingsChanged: vi.fn(),
   onBindingsChanged: vi.fn(() => vi.fn()),
   onPairingChanged: vi.fn(() => vi.fn()),
-  isPairingAccountCurrent: vi.fn(() => true),
+  getPairingAccountStatus: vi.fn<() => "current" | "different" | "unavailable">(() => "current"),
   onPlatformStatus: vi.fn(() => vi.fn()),
   stop: vi.fn(async () => undefined),
 }));
@@ -34,6 +34,7 @@ const messagingConfigMocks = vi.hoisted(() => ({
   })),
 }));
 const leaseCoordinatorMock = vi.hoisted(() => ({
+  snapshot: vi.fn(() => ({ leaseHeld: false, leaseHolder: { instanceId: "messaging-owner" } })),
   applyLatestConfig: vi.fn(
     async (
       runtime: typeof runtimeMock,
@@ -166,6 +167,7 @@ describe("messaging status ipc", () => {
     runtimeMock.getPlatformStatuses.mockClear();
     runtimeMock.isEnabled.mockClear();
     runtimeMock.isEnabled.mockReturnValue(true);
+    runtimeMock.getPairingAccountStatus.mockReturnValue("current");
     runtimeMock.listPairingRequests.mockClear();
     runtimeMock.listPairingRequests.mockReturnValue({ entries: [] });
     runtimeMock.notifyBindingsChanged.mockClear();
@@ -355,6 +357,20 @@ describe("messaging status ipc", () => {
       expect.objectContaining({ enabled: true }),
       { allowStart: true },
     );
+  });
+
+  it("directs pairing approval to the instance that holds the messaging lease", async () => {
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    runtimeMock.listPairingRequests.mockReturnValue({ entries: [{
+      id: "fixture-pairing", platform: "telegram", instanceId: "account:123456", status: "observed",
+    }] });
+    runtimeMock.getPairingAccountStatus.mockReturnValueOnce("unavailable");
+    registerMessagingStatusIpcHandlers();
+
+    await expect(handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.({}, { entryId: "fixture-pairing" }))
+      .rejects.toThrow("Approve this pairing in the PwrAgent instance running Messaging for this profile.");
+    expect(settingsServiceMock.writeConfigPatchTargeted).not.toHaveBeenCalled();
+    expect(pairingStoreMock.markStatus).not.toHaveBeenCalled();
   });
 
   it("approves LINE user pairing into authorized users", async () => {

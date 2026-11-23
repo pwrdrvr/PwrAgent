@@ -129,6 +129,7 @@ import type {
 
 export type DesktopMessagingAdapter = {
   readDmPairingAddress?(): MessagingDmPairingAddress | undefined;
+  readDmPairingAccountId?(): string | undefined;
   retainedSourceConnectionId?: MessagingAdapter["retainedSourceConnectionId"];
   authorizeRetainedSource?: MessagingAdapter["authorizeRetainedSource"];
   authorizedActorIds: readonly string[];
@@ -1294,7 +1295,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     options?: { text?: string },
   ): Promise<void> {
     const running = this.runningAdapters.get(entry.platform);
-    if (!running || !entry.observedActor || !entry.observedChat || !this.isPairingAccountCurrent(entry)) return;
+    if (!running || !entry.observedActor || !entry.observedChat || this.getPairingAccountStatus(entry) !== "current") return;
     const text = options?.text
       ?? (outcome === "approved"
         ? "PwrAgent pairing approved."
@@ -1329,10 +1330,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     });
   }
 
-  isPairingAccountCurrent(entry: MessagingPairingEntry): boolean {
-    if (!entry.instanceId.startsWith(PAIRING_ACCOUNT_PREFIX)) return true;
-    const address = this.runningAdapters.get(entry.platform)?.adapter.readDmPairingAddress?.();
-    return address !== undefined && entry.instanceId === `${PAIRING_ACCOUNT_PREFIX}${address.accountId}`;
+  getPairingAccountStatus(entry: MessagingPairingEntry): "current" | "different" | "unavailable" {
+    if (!entry.instanceId.startsWith(PAIRING_ACCOUNT_PREFIX)) return "current";
+    const accountId = this.runningAdapters.get(entry.platform)?.adapter.readDmPairingAccountId?.();
+    if (accountId === undefined) return "unavailable";
+    return entry.instanceId === `${PAIRING_ACCOUNT_PREFIX}${accountId}` ? "current" : "different";
   }
 
   /**
@@ -3002,11 +3004,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
 
     const now = Date.now();
     const store = getDesktopMessagingPairingStore();
-    const address = adapter.readDmPairingAddress?.();
+    const accountId = adapter.readDmPairingAccountId?.();
     const lookup = { token, platform: adapter.channel, now };
-    const accountEntry = address && store.findMatchingPending({
+    const accountEntry = accountId === undefined ? undefined : store.findMatchingPending({
       ...lookup,
-      instanceId: `${PAIRING_ACCOUNT_PREFIX}${address.accountId}`,
+      instanceId: `${PAIRING_ACCOUNT_PREFIX}${accountId}`,
     });
     const entry = accountEntry ?? store.findMatchingPending({ ...lookup, instanceId: PAIRING_INSTANCE_ID });
     if (!entry) {

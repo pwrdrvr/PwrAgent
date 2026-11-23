@@ -3250,7 +3250,9 @@ function PairingTokenField(props: {
             <MessagingDmPairingLink
               link={generated.dmLink}
               expiresAt={generated.expiresAt}
-              onExpire={() => setGeneratedMessage(undefined)}
+              onExpire={() => {
+                if (messageEntryIdRef.current === generated.entry.id) setGeneratedMessage(undefined);
+              }}
             />
           ) : null}
           {message ? (

@@ -494,6 +494,7 @@ export type TelegramProviderAdapter = {
   channel: "telegram";
   clientRateLimitStrategy: MessagingClientRateLimitStrategy;
   readDmPairingAddress(): MessagingDmPairingAddress | undefined;
+  readDmPairingAccountId(): string | undefined;
   resolveDirectConversation?(userId: string): Promise<MessagingPrivateConversationResolveResult>;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
@@ -717,6 +718,13 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     };
   }
 
+  readDmPairingAccountId(): string | undefined {
+    // Telegram bot tokens carry the stable account ID. Polling authenticates
+    // with that token even when the optional username lookup times out.
+    return this.authenticatedBotId === undefined
+      ? this.configuredBotId() : String(this.authenticatedBotId);
+  }
+
   async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
     if (update.responseMode !== undefined) {
       this.options.config.responseMode = update.responseMode;
@@ -837,7 +845,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     try {
       const me = await this.readStartupIdentity(api, signal, tokenDiagnostics);
       if (signal.aborted) return;
-      this.authenticatedBotId = me?.is_bot && me.username && Number.isSafeInteger(me.id) && me.id > 0
+      this.authenticatedBotId = me?.is_bot && Number.isSafeInteger(me.id) && me.id > 0
         ? me.id : undefined;
       if (me?.username) {
         this.botUsername = me.username.toLowerCase();

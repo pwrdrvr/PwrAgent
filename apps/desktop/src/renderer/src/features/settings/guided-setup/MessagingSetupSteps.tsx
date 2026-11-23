@@ -1206,9 +1206,8 @@ function PairingBlock(props: {
   const [scope, setScope] = useState<MessagingPairingScope>(
     props.options[0]?.scope ?? "user_dm",
   );
-  const [generated, setGenerated] = useState<GenerateMessagingPairingTokenResponse>();
+  const [generated, setGeneratedState] = useState<GenerateMessagingPairingTokenResponse>();
   const message = generated?.message;
-  const [entryId, setEntryId] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
   const [copied, setCopied] = useState(false);
@@ -1254,7 +1253,10 @@ function PairingBlock(props: {
   // mode unless the operator re-clicks "Pair another".
   const [pairingAnother, setPairingAnother] = useState(false);
   const entryIdRef = useRef<string | undefined>(undefined);
-  entryIdRef.current = entryId;
+  const setGenerated = (result: GenerateMessagingPairingTokenResponse | undefined): void => {
+    entryIdRef.current = result?.entry.id;
+    setGeneratedState(result);
+  };
 
   const activeOption = props.options.find((o) => o.scope === scope) ?? props.options[0];
 
@@ -1293,7 +1295,6 @@ function PairingBlock(props: {
       },
     ]);
     setGenerated(undefined);
-    setEntryId(undefined);
     setObservedActorLabel(undefined);
     setObservedChatLabel(undefined);
     setObservedChatKind(undefined);
@@ -1381,7 +1382,6 @@ function PairingBlock(props: {
     // Keeps the `paired` list intact above the surface so the
     // previously-approved entities stay visible.
     setGenerated(undefined);
-    setEntryId(undefined);
     setResolution(undefined);
     setObservedActorLabel(undefined);
     setObservedChatLabel(undefined);
@@ -1403,7 +1403,6 @@ function PairingBlock(props: {
         scope,
       });
       setGenerated(result);
-      setEntryId(result.entry.id);
       // Auto-copy the freshly generated code so the operator can paste it
       // straight into chat; best-effort.
       await copy(result.message);
@@ -1434,7 +1433,6 @@ function PairingBlock(props: {
     // token was scoped to the old kind. Clear it; the operator can
     // generate a new one for the freshly-selected scope.
     setGenerated(undefined);
-    setEntryId(undefined);
     setResolution(undefined);
     setError(undefined);
     setObservedActorLabel(undefined);
@@ -1473,7 +1471,7 @@ function PairingBlock(props: {
             <span className="guided-setup__field-pill is-ok">✓ paired</span>
           ) : resolution === "observed" ? (
             <span className="guided-setup__field-pill is-ok">✓ message seen</span>
-          ) : entryId ? (
+          ) : generated ? (
             <span className="guided-setup__field-pill is-warn">
               waiting for message…
             </span>
@@ -1530,8 +1528,8 @@ function PairingBlock(props: {
               link={generated.dmLink}
               expiresAt={generated.expiresAt}
               onExpire={() => {
+                if (entryIdRef.current !== generated.entry.id) return;
                 setGenerated(undefined);
-                setEntryId(undefined);
               }}
             />
           ) : null}
@@ -1641,6 +1639,19 @@ function PairingBlock(props: {
                   {approving ? "Approving…" : "Approve"}
                 </button>
               )}
+              {generated?.dmLink ? (
+                <button
+                  type="button"
+                  className="guided-setup__btn guided-setup__btn--ghost"
+                  disabled={approving || busy || !props.desktopApi?.generateMessagingPairingToken}
+                  onClick={() => {
+                    pairAnother();
+                    void generate();
+                  }}
+                >
+                  Generate new code
+                </button>
+              ) : null}
             </div>
           ) : null}
         </>

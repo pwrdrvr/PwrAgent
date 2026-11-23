@@ -721,7 +721,15 @@ export function registerMessagingStatusIpcHandlers(): void {
       const pairing = runtime.listPairingRequests({ includeResolved: true }).entries
         .find((entry) => entry.id === request.entryId);
       if (!pairing) throw new Error("Pairing request not found.");
-      if (!runtime.isPairingAccountCurrent(pairing)) {
+      const accountStatus = runtime.getPairingAccountStatus(pairing);
+      if (accountStatus === "unavailable") {
+        const lease = getRuntimeMessagingLeaseCoordinator().snapshot();
+        if (!lease.leaseHeld && lease.leaseHolder) {
+          throw new Error("Approve this pairing in the PwrAgent instance running Messaging for this profile.");
+        }
+        throw new Error("Start Telegram messaging in this PwrAgent instance, then try approving again.");
+      }
+      if (accountStatus === "different") {
         throw new Error("This pairing request belongs to a different bot. Generate a code for the connected bot.");
       }
       // For a Slack team approval, resolve the workspace name best-effort so the

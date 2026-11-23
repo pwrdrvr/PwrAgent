@@ -46,6 +46,7 @@ import type {
 import { buildProviderPickerEntries } from "@pwragent/shared/provider-picker";
 import { GIT_LFS_UNAVAILABLE_REASON } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { ProviderSetupStep } from "../guided-setup/MessagingSetupSteps";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import {
   CURRENT_CODEX_MODEL_LABELS,
@@ -7093,6 +7094,76 @@ describe("SettingsScreen", () => {
     expect(
       await screen.findByRole("button", { name: "Copied" }),
     ).toBeInTheDocument();
+  });
+
+  function pairingFixture(id: string, ttlMs = 60_000) {
+    const expiresAt = Date.now() + ttlMs;
+    const token = "123456789ABCDEFGHJKLMNPQRSTUVWXY";
+    const entry: MessagingPairingEntry = {
+      id, platform: "telegram", instanceId: "account:123456", scope: "user_dm",
+      status: "pending", generatedAt: Date.now(), expiresAt,
+    };
+    return { entry, expiresAt, token, message: `pair ${id}`, dmLink: {
+      url: `https://t.me/example_fixture_bot?start=pair_${token}`,
+      qrImage: "data:image/svg+xml,%3Csvg/%3E",
+    } };
+  }
+
+  it("regenerates a Telegram pairing in guided setup after approval rejects the old bot", async () => {
+    const first = pairingFixture("old-bot-pairing");
+    const replacement = pairingFixture("new-bot-pairing");
+    const listeners = new Set<(event: { at: number; entry: MessagingPairingEntry }) => void>();
+    const generate = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(replacement);
+    const desktopApi: DesktopApi = {
+      generateMessagingPairingToken: generate,
+      approveMessagingPairing: vi.fn().mockRejectedValue(new Error("This pairing request belongs to a different bot.")),
+      onMessagingPairingChanged: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    };
+    render(<ProviderSetupStep provider="telegram" settings={createSettingsState(createSnapshot())} desktopApi={desktopApi} />);
+    fireEvent.click(screen.getByRole("button", { name: "Generate pairing code" }));
+    expect(await screen.findByText(first.message)).toBeInTheDocument();
+    act(() => {
+      for (const listener of listeners) listener({ at: Date.now(), entry: {
+        ...first.entry, status: "observed", observedActor: { id: "5551234", displayName: "Fixture Contact" },
+      } });
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    expect(await screen.findByText("This pairing request belongs to a different bot.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Generate new code" }));
+    expect(await screen.findByText(replacement.message)).toBeInTheDocument();
+    expect(generate).toHaveBeenLastCalledWith({ platform: "telegram", scope: "user_dm" });
+  });
+
+  it("keeps a replacement Telegram pairing if the previous expiry callback already queued", async () => {
+    const snapshot = createSnapshot();
+    snapshot.messaging.telegram.enabled = { value: true, source: "config" };
+    const first = pairingFixture("first-code");
+    const replacement = pairingFixture("replacement-code", 120_000);
+    const nativeSetTimeout = globalThis.setTimeout;
+    let priorExpiry: (() => void) | undefined;
+    const timers = vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
+      if (delay !== undefined && delay > 30_000 && delay <= 60_000) priorExpiry = () => callback(...args);
+      return nativeSetTimeout(callback, delay, ...args);
+    });
+    try {
+      const desktopApi: DesktopApi = {
+        generateMessagingPairingToken: vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(replacement),
+        listMessagingPairingRequests: vi.fn(async () => ({ entries: [] })),
+      };
+      render(<SettingsScreen desktopApi={desktopApi} settings={createSettingsState(snapshot)}
+        initialSection="messaging" initialSubsection="telegram" onClose={() => undefined} />);
+      const generate = screen.getAllByRole("button", { name: "Generate" })[0]!;
+      fireEvent.click(generate);
+      expect(await screen.findByText(first.message)).toBeInTheDocument();
+      const expiry = priorExpiry;
+      expect(expiry).toBeDefined();
+      fireEvent.click(generate);
+      expect(await screen.findByText(replacement.message)).toBeInTheDocument();
+      act(() => expiry!());
+      expect(screen.getByText(replacement.message)).toBeInTheDocument();
+    } finally {
+      timers.mockRestore();
+    }
   });
 
   it("offers Telegram desktop and phone pairing and clears both when the token is observed", async () => {

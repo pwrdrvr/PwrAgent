@@ -3848,13 +3848,16 @@ describe("DesktopMessagingRuntime", () => {
     expect(rows[0]?.summary).not.toContain("critical_interactive");
   });
 
-  it("pairs a Telegram link only with the account that generated it", async () => {
+  it.each([true, false])("pairs a Telegram link only with its original account (identity lookup available: %s)", async (canAdvertise) => {
     let accountId = "1001";
+    let advertise = true;
+    const pairingIdentity = { readDmPairingAccountId: () => accountId };
     const adapter = createAdapter("telegram", {
-      readDmPairingAddress: () => ({
+      ...pairingIdentity,
+      readDmPairingAddress: () => advertise ? {
         accountId,
         linkForToken: (token) => `https://t.me/example_fixture_bot?start=pair_${token}`,
-      }),
+      } : undefined,
     });
     const { runtime } = await createRuntimeHarness({ adapter });
     await runtime.start();
@@ -3877,14 +3880,15 @@ describe("DesktopMessagingRuntime", () => {
       .find((candidate) => candidate.id === result.entry.id)!;
 
     accountId = "1002";
+    advertise = canAdvertise;
     await receive();
     expect(entry().status).toBe("pending");
-    expect(runtime.isPairingAccountCurrent(entry())).toBe(false);
+    expect(runtime.getPairingAccountStatus(entry())).toBe("different");
 
     accountId = "1001";
     await receive();
     expect(entry().status).toBe("observed");
-    expect(runtime.isPairingAccountCurrent(entry())).toBe(true);
+    expect(runtime.getPairingAccountStatus(entry())).toBe("current");
   });
 
   it("logs Telegram topic pairing activity with supergroup parent metadata", async () => {
