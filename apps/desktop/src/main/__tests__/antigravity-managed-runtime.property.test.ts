@@ -202,21 +202,23 @@ describe.skipIf(process.platform === "win32")("managed Antigravity activation", 
         const alias = path.join(directory, "agy-alias");
         await symlink(held.command, alias);
         const heldPath = await realpath(held.command);
-        const started = vi.fn((command: string) => {
+        const startChild = (command: string) => {
           expect(command).toBe(heldPath);
           return spawn(process.execPath, ["-e", "process.stdin.resume()"], { detached: true });
-        });
-        const transports = [0, 1].map(() => new AcpStdioJsonRpcTransport({
+        };
+        const starts = [vi.fn(startChild), vi.fn(startChild)];
+        const transports = starts.map((spawnChild) => new AcpStdioJsonRpcTransport({
           launchDescriptor: {
             backendId: "acp:antigravity", registryId: "antigravity", distributionKind: "local",
             command: alias, args: [], env: {},
           },
-          spawn: started,
+          spawn: spawnChild,
         }));
         try {
           await Promise.all([...transports.map((transport) => transport.connect()), transports[0].connect()]);
-          expect(started).toHaveBeenCalledTimes(2);
-          const firstChild = started.mock.results[0].value;
+          expect(starts[0]).toHaveBeenCalledOnce();
+          expect(starts[1]).toHaveBeenCalledOnce();
+          const firstChild = starts[0].mock.results[0].value;
           const owner = firstChild.pid;
           expect(owner).toBeTypeOf("number");
           const root = path.join(directory, "agents", "antigravity");
@@ -234,6 +236,7 @@ describe.skipIf(process.platform === "win32")("managed Antigravity activation", 
           firstChild.stdout.emit("error", Object.assign(new Error("fixture broken pipe"), { code: "EPIPE" }));
           await exited;
           expect(transports[0].disconnected).toBe(true);
+          expect(transports[1].disconnected).toBe(false);
           await transports[0].close();
           await install(3);
           expect(await readFile(held.command, "utf8")).toBe(fixtureBinary);
