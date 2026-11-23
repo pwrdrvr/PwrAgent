@@ -1,7 +1,7 @@
 import { buildThreadIdentityKey, type NavigationThreadSummary, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import { describeStackAutomationBlock } from "@pwragent/shared/stacks/stack-automation";
 import { compactStackMembership, readCompactStackMemberships, type CompactStackMembership, type StackLayerHealth, type StackSummary } from "@pwragent/shared/stacks/stack-status";
-import { resolveLifecycleState } from "../pr-status/pr-chip-state";
+import { prPhaseLabel, resolveLifecycleState } from "../pr-status/pr-chip-state";
 
 export const stackRepository = (pr: PrSummary) => `${pr.provider}:${pr.org}/${pr.repo}`.toLowerCase();
 
@@ -53,6 +53,11 @@ export function staleStackSpine(health: StackLayerHealth) {
 
 export function knownPrStatus(label: string) {
   return label.split(" · ").filter((part) => part !== "status unknown").join(" · ");
+}
+
+export function stackLayerReadiness(pr: PrSummary | undefined, status: string | undefined, health: string | undefined) {
+  if (!health) return status;
+  return pr && prPhaseLabel(pr) === "draft" ? "draft" : undefined;
 }
 
 export type StackRollupGroup = {

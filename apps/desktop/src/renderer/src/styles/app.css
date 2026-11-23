@@ -7192,14 +7192,21 @@ a.button {
 }
 
 .stack-display__text {
-  display: flex;
+  display: grid;
   min-width: 0;
-  flex-direction: column;
-  align-items: flex-start;
+  grid-column: 2 / -1;
+  grid-row: 1;
+  grid-template-columns: subgrid;
+  justify-items: start;
+}
+
+/* The position sits beside the title. Metadata can use the full width below it. */
+.stack-display__text > :not(.stack-display__title) {
+  grid-column: 1 / -1;
 }
 
 .stack-display__title,
-.stack-display__readiness,
+.stack-display__status,
 .stack-display__thread,
 .stack-display__trunk > span:last-child {
   overflow: hidden;
@@ -7252,10 +7259,8 @@ button.stack-display__thread,
 }
 
 .stack-display__status {
-  display: flex;
-  max-width: 100%;
-  flex-wrap: wrap;
-  column-gap: 4px;
+  width: max-content;
+  max-width: calc(100% + 4px);
 }
 
 .stack-display__warning {
@@ -7264,6 +7269,7 @@ button.stack-display__thread,
 
 .stack-display__thread {
   position: relative;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -7274,10 +7280,22 @@ button.stack-display__thread,
 
 .stack-display__thread span {
   overflow: hidden;
+  text-decoration: underline var(--border-strong);
+  text-underline-offset: 2px;
   text-overflow: ellipsis;
 }
 
-button.stack-display__thread:hover,
+.stack-display__thread:hover,
+.stack-display__thread:focus-visible {
+  color: var(--text-primary);
+}
+
+.stack-display__thread:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
 .stack-popover__rail:hover {
   color: var(--text-primary);
   text-decoration: underline;
@@ -7291,6 +7309,8 @@ button.stack-display__thread:hover,
 
 .stack-display__position {
   display: flex;
+  grid-column: 3;
+  grid-row: 1;
   align-items: baseline;
   gap: 6px;
 }
@@ -9195,6 +9215,7 @@ button.stack-display__thread:hover,
 }
 
 .pr-status-card__stack-base .stack-display__node {
+  align-self: center;
   margin-top: 0;
 }
 

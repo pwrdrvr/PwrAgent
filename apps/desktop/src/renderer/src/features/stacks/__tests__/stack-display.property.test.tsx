@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
-import { compactStackMembership, type StackSummary } from "@pwragent/shared/stacks/stack-status";
+import { compactStackMembership, type StackLayer, type StackSummary } from "@pwragent/shared/stacks/stack-status";
 import { ThreadRow } from "../../navigation/ThreadRow";
 import { PrChip } from "../../pr-status/PrChip";
 import { PrRollupChip } from "../../pr-status/PrRollupChip";
@@ -10,22 +10,32 @@ import { PullRequestsPanel } from "../../thread-detail/context-panels/PullReques
 
 afterEach(cleanup);
 
-function fixture(height: number, newestFirst: boolean) {
+const amberStates = [
+  { layer: { health: "parent_merged" }, text: "parent merged · needs sync" },
+  { layer: { health: "needs_push" }, text: "needs push" },
+  { layer: { health: "held", heldBy: { number: 10, branch: "ledger-1", reason: "needs sync" } },
+    text: "merge held · #10 needs sync" },
+] as const satisfies readonly { layer: Pick<StackLayer, "health" | "heldBy">; text: string }[];
+
+function fixture(height: number, newestFirst: boolean, amber?: (typeof amberStates)[number], draft = false) {
   const now = Date.now();
   const prs: PrSummary[] = Array.from({ length: height }, (_, index) => ({
     provider: "github.com", org: "example", repo: "ledger", number: 10 + index,
     url: `https://github.com/example/ledger/pull/${10 + index}`,
-    title: `Ledger change ${index + 1}`, state: "passing", lifecycleState: "open",
+    title: `Ledger change ${index + 1}`, state: "passing",
+    lifecycleState: amber?.layer.health === "parent_merged" && index === height - 2 ? "merged" : "open",
+    reviewState: draft && index === height - 1 ? "draft" : "ready_for_review",
     baseRefName: index ? `ledger-${index}` : "main",
     headRefName: `ledger-${index + 1}`,
     createdAt: now - (newestFirst ? index : height - index) * 1_000,
   }));
   const stack: StackSummary = {
     key: "ledger-stack", name: "ledger-1", repository: "github.com:example/ledger", trunk: "main", inferred: true,
-    layers: prs.map((pr) => ({
+    layers: prs.map((pr, index) => ({
       branch: pr.headRefName!, parent: pr.baseRefName!, health: "in_sync", role: "holder",
-      pullRequest: { number: pr.number, lifecycleState: "open" },
+      pullRequest: { number: pr.number, lifecycleState: pr.lifecycleState },
       thread: { key: "codex:ledger", title: "Ledger stack" },
+      ...(index === height - 1 ? amber?.layer : undefined),
     })),
   };
   const stacks = prs.map((_, index) => ({ stack, position: index + 1 }));
@@ -37,9 +47,11 @@ function fixture(height: number, newestFirst: boolean) {
   return { prs, thread };
 }
 
-it("draws every position top first, with position one directly above trunk, on all three surfaces", () => {
-  fc.assert(fc.property(fc.integer({ min: 2, max: 24 }), fc.boolean(), (height, newestFirst) => {
-    const { prs, thread } = fixture(height, newestFirst);
+it("draws the stack top first and keeps actionable status in the metadata on all three surfaces", () => {
+  const heights = fc.integer({ min: 2, max: 24 });
+  const amber = fc.constantFrom(...amberStates);
+  fc.assert(fc.property(heights, fc.boolean(), amber, fc.boolean(), (height, newestFirst, warning, draft) => {
+    const { prs, thread } = fixture(height, newestFirst, warning, draft);
     const top = prs.at(-1)!;
     const open = vi.fn();
     const detachAll = vi.fn();
@@ -62,6 +74,14 @@ it("draws every position top first, with position one directly above trunk, on a
       for (const surface of [popover, rollup, rail]) {
         const list = surface.querySelector(".stack-display__list")!;
         expect(Array.from(list.children, (row) => row.getAttribute("data-position") ?? row.textContent)).toEqual(expected);
+        const meta = [...list.querySelectorAll(".stack-display__status, .pr-rollup-popover__status")];
+        expect(meta).toHaveLength(height);
+        for (const line of meta) expect(line.textContent?.trim()).not.toMatch(/^·/);
+        const prefix = surface === rollup ? `${height}/${height}` : `#${top.number}`;
+        expect(meta[0]!.textContent).toBe(`${prefix}${draft ? " · draft" : ""} · ${warning.text}`);
+        expect(meta[0]!.querySelector(".stack-display__warning")?.textContent).toBe(warning.text);
+        expect(meta[1]!.textContent).toContain(warning.layer.health === "parent_merged"
+          ? "merged" : "ready for review · checks passing");
       }
       fireEvent.click(within(rollup).getByRole("button", { name: "Detach all" }));
       expect(detachAll).toHaveBeenCalledWith(prs.toReversed());

@@ -27,8 +27,8 @@ import { MAX_COMPACT_STACK_MEMBERSHIPS, type CompactStackMembership } from "@pwr
 import { sidebarPrCardBridge } from "../../lib/hover-card-bridge";
 import { getDesktopApi } from "../../lib/desktop-api";
 import { useSelectedStackDetails } from "../stacks/useSelectedStackDetails";
-import { StackHeading, StackNode, StackTrunk } from "../stacks/StackBody";
-import { groupStackRollup, knownPrStatus, stackHealthLabel, stackMembershipForPr, staleStackSpine } from "../stacks/stack-pr-data";
+import { StackHeading, StackLayerMeta, StackNode, StackTrunk } from "../stacks/StackBody";
+import { groupStackRollup, knownPrStatus, stackHealthLabel, stackLayerReadiness, stackMembershipForPr, staleStackSpine } from "../stacks/stack-pr-data";
 import { PrChip } from "./PrChip";
 import { PrCardActions } from "./PrCardActions";
 import { PrStatusCard } from "./PrStatusCard";
@@ -540,7 +540,9 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
         ? stackTime
         : `${stackTime} · ${status}`;
     const health = member && stackHealthLabel(member);
-    const displayStatus = member ? knownPrStatus(statusLine) : statusLine;
+    const accessibleStatus = member
+      ? [stackLayerReadiness(pr, knownPrStatus(status), health), health].filter(Boolean).join(" · ")
+      : status;
     const rowPresentation = isHeld ? undefined : resolvePrChipPresentation(pr);
     const rowWaitingForCi = !isHeld && Boolean(watchFor(pr)?.ci);
     const openRow = (): void => {
@@ -565,7 +567,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
           className="pr-rollup-popover__row"
           aria-label={`Open ${pr.org}/${pr.repo}#${pr.number}${
             pr.title ? `, ${pr.title}` : ""
-          } (${member ? [knownPrStatus(status), health].filter(Boolean).join(" · ") : status}) in browser${rowWaitingForCi ? ", waiting for CI" : ""}`}
+          } (${accessibleStatus}) in browser${rowWaitingForCi ? ", waiting for CI" : ""}`}
           aria-describedby={
             cardUrl === pr.url && cardVisible ? cardId : undefined
           }
@@ -585,12 +587,10 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
           <span className="pr-rollup-popover__title">
             {pr.title ?? `${pr.org}/${pr.repo}`}
           </span>
-          <span className="pr-rollup-popover__status">
-            {member ? `${member.position}/${member.count}` : null}
-            {member && displayStatus ? " · " : null}
-            {displayStatus}
-            {health ? <span className="stack-display__warning"> · {health}</span> : null}
-          </span>
+          {member ? (
+            <StackLayerMeta className="pr-rollup-popover__status" prefix={`${member.position}/${member.count}`}
+              pr={pr} status={knownPrStatus(statusLine)} health={health} />
+          ) : <span className="pr-rollup-popover__status">{statusLine}</span>}
         </button>
         {/* The chip as Mission Control draws it, ✕ included. It is
             a pointer shortcut beside the row's button, not a second

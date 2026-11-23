@@ -4,7 +4,7 @@ import type { StackLayer, StackSummary } from "@pwragent/shared/stacks/stack-sta
 import { ThreadIcon } from "../../icons";
 import { prStackTimeLabel } from "../pr-status/pr-rollup";
 import { isPrStatusUnknown, prStatusLabel, resolveLifecycleState, resolvePrChipPresentation } from "../pr-status/pr-chip-state";
-import { knownPrStatus, stackHealthLabel, stackRepository, stackThreadKey, staleStackSpine } from "./stack-pr-data";
+import { knownPrStatus, stackHealthLabel, stackLayerReadiness, stackRepository, stackThreadKey, staleStackSpine } from "./stack-pr-data";
 
 export const StackNavigationContext = createContext<{
   findThread: (owner: NavigationThreadSummary, key: string) => NavigationThreadSummary | undefined;
@@ -41,6 +41,23 @@ export function StackNode({ pr, kind }: { pr?: PrSummary; kind?: "trunk" | "bran
   const presentation = pr && resolvePrChipPresentation(pr);
   const tone = kind ?? (presentation?.isConflicting ? "conflicting" : presentation?.chipState ?? "unknown");
   return <span className="stack-display__node" data-tone={tone} aria-hidden="true" />;
+}
+
+export function StackLayerMeta({ prefix, pr, status, health, className = "stack-display__status" }: {
+  prefix: string;
+  pr?: PrSummary;
+  status?: string;
+  health?: string;
+  className?: string;
+}) {
+  const readiness = stackLayerReadiness(pr, status, health);
+  const lead = readiness ? `${prefix} · ${readiness}` : prefix;
+  return (
+    <span className={className}>
+      {lead}
+      {health ? <> · <span className="stack-display__warning">{health}</span></> : null}
+    </span>
+  );
 }
 
 export function StackTrunk({ trunk }: { trunk: string }) {
@@ -98,9 +115,7 @@ export function StackBody({ stack, thread, position, onOpen, onThreadOpen }: {
             : layerPosition === position;
           const pr = readLayerPr(stack, layer, [...(owner?.prs ?? []), ...(thread.prs ?? [])]);
           const title = pr?.title?.trim() || layer.pullRequest?.title?.trim() || layer.branch;
-          const status = layer.pullRequest
-            ? [`#${layer.pullRequest.number}`, layerStatus(pr)].filter(Boolean).join(" · ")
-            : "no PR yet";
+          const prefix = layer.pullRequest ? `#${layer.pullRequest.number}` : "no PR yet";
           const health = stackHealthLabel(layer);
           const url = pr?.url;
           return (
@@ -114,20 +129,15 @@ export function StackBody({ stack, thread, position, onOpen, onThreadOpen }: {
                     {title}
                   </button>
                 ) : <span className="stack-display__title" title={title}>{title}</span>}
-                <span className="stack-display__status">
-                  <span className="stack-display__readiness">{status}</span>
-                  {health ? <span className="stack-display__warning">· {health}</span> : null}
-                </span>
-                {other ? (
-                  navigation ? (
-                    <button type="button" className="stack-display__thread" title={owner?.title ?? other.title}
-                      onClick={() => {
-                        onThreadOpen?.();
-                        navigation.openThread(thread, other.key);
-                      }}>
-                      <ThreadIcon size={11} /> <span>{owner?.title ?? other.title}</span>
-                    </button>
-                  ) : <span className="stack-display__thread">{other.title}</span>
+                <StackLayerMeta prefix={prefix} pr={pr} status={layerStatus(pr)} health={health} />
+                {other && navigation ? (
+                  <button type="button" className="stack-display__thread" title={owner?.title ?? other.title}
+                    onClick={() => {
+                      onThreadOpen?.();
+                      navigation.openThread(thread, other.key);
+                    }}>
+                    <ThreadIcon size={11} /> <span>{owner?.title ?? other.title}</span>
+                  </button>
                 ) : null}
               </div>
               <div className="stack-display__position">
