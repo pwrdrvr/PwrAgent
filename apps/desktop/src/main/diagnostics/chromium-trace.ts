@@ -118,8 +118,8 @@ export class ChromiumTrace {
       const recordingStoppedAtMs = this.options.wallNow?.() ?? Date.now();
       const pendingPath = `${filePath}.${randomUUID()}.tmp`;
       let staged = false;
-      let phase: TraceExportPhase = "stop";
-      const reportPhase: ReportTracePhase = (next) => { phase = next; };
+      const progress: { phase: TraceExportPhase } = { phase: "stop" };
+      const reportPhase: ReportTracePhase = (phase) => { progress.phase = phase; };
       try {
         await withDeadline(async (signal) => {
           const filtered = await this.processTrace(recording.session.read(signal, reportPhase), signal, reportPhase);
@@ -136,10 +136,11 @@ export class ChromiumTrace {
       } catch (error) {
         // Protocol and parse errors can contain private input.
         const failure = error instanceof ChromiumTraceExportError ? error : undefined;
+        const phase = failure?.phase ?? progress.phase;
         this.warn("Could not save Chromium trace");
         return {
           status: "failed",
-          phase: failure?.phase ?? phase,
+          phase,
           category: failure?.category ?? (phase === "publish" ? "io" : "protocol"),
         };
       } finally {
