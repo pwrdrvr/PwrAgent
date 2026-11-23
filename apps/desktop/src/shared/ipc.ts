@@ -1079,3 +1079,7 @@ export const INTEGRATED_TERMINAL_RENAME_CHANNEL = "integrated-terminal:rename";
 
 export const NAVIGATION_CONTINUE_THREAD_ENVIRONMENT_STARTUP_CHANNEL =
   "navigation:continue-thread-environment-startup";
+/** The merge method a thread's PR card starts on. */
+export const THREAD_PULL_REQUEST_READ_MERGE_CHANNEL = "thread-pull-request:read-merge";
+/** Merges one of a local thread's attached PRs from its PR card. */
+export const THREAD_PULL_REQUEST_MERGE_CHANNEL = "thread-pull-request:merge";

@@ -644,6 +644,10 @@ import type {
   GlabStatus,
   GhStatus,
   DetachThreadPullRequestRequest,
+  MergeThreadPullRequestRequest,
+  MergeThreadPullRequestResponse,
+  ReadThreadPullRequestMergeResponse,
+  ThreadPullRequestMergeTarget,
   DetachThreadPullRequestResponse,
   RefreshThreadPullRequestsRequest,
   RefreshThreadGitWorkingStateRequest,
@@ -894,6 +898,8 @@ import {
   THREAD_TODOS_LIST_PROJECTS_CHANNEL,
   THREAD_TODOS_RESOLVE_CHANNEL,
   THREAD_TODOS_RUN_ACTION_CHANNEL,
+  THREAD_PULL_REQUEST_MERGE_CHANNEL,
+  THREAD_PULL_REQUEST_READ_MERGE_CHANNEL,
   THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL,
   THREAD_TODOS_REVIEW_CI_DEPLOYMENT_CHANNEL,
   THREAD_TODOS_SET_PROJECT_CHANNEL,
@@ -3396,6 +3402,14 @@ const desktopApi = Object.freeze({
     request: DetachThreadPullRequestRequest,
   ): Promise<DetachThreadPullRequestResponse> =>
     await ipcRenderer.invoke(NAVIGATION_DETACH_THREAD_PR_CHANNEL, request),
+  readThreadPullRequestMerge: async (
+    request: ThreadPullRequestMergeTarget,
+  ): Promise<ReadThreadPullRequestMergeResponse> =>
+    await ipcRenderer.invoke(THREAD_PULL_REQUEST_READ_MERGE_CHANNEL, request),
+  mergeThreadPullRequest: async (
+    request: MergeThreadPullRequestRequest,
+  ): Promise<MergeThreadPullRequestResponse> =>
+    await ipcRenderer.invoke(THREAD_PULL_REQUEST_MERGE_CHANNEL, request),
   refreshDirectoryGitStatuses: async (
     request: RefreshDirectoryGitStatusesRequest,
   ): Promise<RefreshDirectoryGitStatusesResponse> =>

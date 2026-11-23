@@ -727,6 +727,8 @@ export function serializeNavigationSnapshotForHash(params: {
         lifecycleState: pr.lifecycleState ?? null,
         reviewState: pr.reviewState ?? null,
         mergeState: pr.mergeState ?? null,
+        mergeQueue: pr.mergeQueue ?? null,
+        allowedMergeMethods: pr.allowedMergeMethods ?? null,
         url: pr.url,
       })),
       // Include the breadcrumb fields (parentTitle / ancestorTitle) in
