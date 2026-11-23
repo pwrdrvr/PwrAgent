@@ -3973,8 +3973,9 @@ class DesktopAppServerService {
       return { blocked: parents.length > 0, lowerKeys: parents.map(getPrStatusKey) };
     }
     const repository = { provider: "github" as const, host: ref.provider, owner: ref.org, repo: ref.repo };
-    const observation = new StackReadObservation();
-    const catalogs = (await observation.presentCatalogs(this.prReviewOfferDirectories(thread, pr)))
+    const catalogs = (await this.stackReader.preflightCatalogs(
+      this.prReviewOfferDirectories(thread, pr), new StackReadObservation(),
+    ))
       .flatMap((catalog) => catalog.status === "ok" ? [catalog.catalog] : []);
     const ci = this.getForgeCiClient();
     const path = `repos/${encodeURIComponent(ref.org)}/${encodeURIComponent(ref.repo)}`;

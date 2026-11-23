@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { open, readFile, realpath, stat } from "node:fs/promises";
+import { lstat, open, readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
 const MAX_POINTER_BYTES = 1024 * 1024;
@@ -51,10 +51,10 @@ export type GitDirectoryObservation = {
 
 type FileState = Awaited<ReturnType<typeof fileState>>;
 
-async function fileState(target: string, signal?: AbortSignal) {
+async function fileState(target: string, signal?: AbortSignal, followSymlinks = true) {
   signal?.throwIfAborted();
   try {
-    const info = await stat(target, { bigint: true });
+    const info = await (followSymlinks ? stat : lstat)(target, { bigint: true });
     // Directory mtimes change for ordinary edits, commits and sibling worktree
     // creation. Only replacement of the directory invalidates its identity.
     return {
@@ -174,7 +174,9 @@ export function createGitDirectoryObserver(options: { navigation?: boolean } = {
     const config = await observeFile(configPath);
     const worktreeConfig = await observeFile(path.join(gitdir, "config.worktree"));
     const backlink = await observeFile(path.join(gitdir, "gitdir"));
-    const head = await observeFile(path.join(gitdir, "HEAD"));
+    // Git interprets a HEAD symlink's literal target. Filesystem resolution
+    // can normalize it to the same file even after Git rejects the checkout.
+    const head = await fileState(path.join(gitdir, "HEAD"), signal, !options.navigation);
     if (!head?.file) return undefined;
     if (options.navigation) {
       const owner = process.getuid?.();

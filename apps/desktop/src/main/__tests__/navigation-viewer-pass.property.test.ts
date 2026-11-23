@@ -16,6 +16,7 @@ import type { AppServerListThreadsResponse } from "@pwragent/shared/contracts/no
 import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import { type ProjectForgeAutomation } from "@pwragent/shared/project-forge-automation";
 import * as gitExecutable from "../app-server/git-executable";
+import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
@@ -26,6 +27,7 @@ import { NavigationWindowQueries } from "../../renderer/src/lib/navigation-windo
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import { NavigationIndexReadPool } from "../app-server/navigation-index-read-pool";
+import type { ForgeCiClient } from "../pr-status/forge-ci-client";
 import * as projection from "@pwragent/owner-core/navigation-query-projection";
 
 const current = vi.hoisted(() => ({
@@ -701,6 +703,62 @@ it.each(["absent", "unrelated"])("skips listing threads for a standalone PR with
     expect(await service["prStackHoldEvidence"](pr)).toBeUndefined();
     expect(list).not.toHaveBeenCalled();
   } finally {
+    restore();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+it("reuses installed Git for repeated merge offers while reading the live guard and new catalogs", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-merge-offer-reuse-"));
+  const restore = isolateProcessGitEnvironment();
+  const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+  const git = (...args: string[]) => execFileSync("git", ["-C", cwd, ...args], {
+    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+  try {
+    git("init", "-b", "upper");
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "upper");
+    const head = git("rev-parse", "HEAD");
+    process.env.PWRAGENT_GIT_PATH = await gitExecutable.resolveGitExecutable();
+    resetAppServerServiceForTests();
+    const service = initializeDesktopAppServerService();
+    vi.spyOn(service as unknown as { prReviewOfferDirectories: () => string[] }, "prReviewOfferDirectories").mockReturnValue([cwd]);
+    const requestGithub = vi.fn<ForgeCiClient["requestGithub"]>(async (_repo, request) => {
+      if (request.graphql) return { data: { repository: { pullRequest: {
+        baseRefName: "main", headRefOid: head, timelineItems: { pageInfo: { hasPreviousPage: false }, nodes: [] },
+      } } } };
+      if (request.path.endsWith("/pulls/2")) return {
+        created_at: "2026-01-01T00:00:00Z",
+        base: { ref: "main", repo: { default_branch: "main" } },
+        head: { ref: "upper", sha: head, repo: { full_name: "fixture/stack" } },
+      };
+      if (request.path.endsWith("/pulls/1")) return { merged: false };
+      throw new Error("Unexpected forge request");
+    });
+    vi.spyOn(service as unknown as { getForgeCiClient: () => Pick<ForgeCiClient, "requestGithub"> }, "getForgeCiClient")
+      .mockReturnValue({ requestGithub });
+    const pr: PrSummary = {
+      number: 2, provider: "github.com", org: "fixture", repo: "stack", state: "passing",
+      lifecycleState: "open", url: "https://github.com/fixture/stack/pull/2", headRefName: "upper", baseRefName: "main",
+    };
+    const offer = () => service["readStackMergeEvidence"]({ backend: "codex", threadId: "fixture" }, pr);
+    const checkoutStarts = () => start.mock.calls.filter(([directory, args]) => directory === cwd && args[0] === "rev-parse");
+    expect(await offer()).toMatchObject({ blocked: false });
+    expect(await offer()).toMatchObject({ blocked: false });
+    expect(requestGithub.mock.calls.filter(([, request]) => request.graphql)).toHaveLength(2);
+    expect(checkoutStarts()).toHaveLength(1);
+    await writeFile(path.join(cwd, ".git", "gh-stack"), JSON.stringify({
+      schemaVersion: 1, repository: "github.com:fixture/stack",
+      stacks: [{ trunk: { branch: "main", head }, branches: [
+        { branch: "lower", head, base: head, pullRequest: { number: 1 } },
+        { branch: "upper", head, base: head, pullRequest: { number: 2 } },
+      ] }],
+    }));
+    expect(await offer()).toMatchObject({ blocked: true, lowerKeys: ["github.com/fixture/stack#1"] });
+    expect(requestGithub.mock.calls.filter(([, request]) => request.path.endsWith("/pulls/2"))).toHaveLength(3);
+    expect(checkoutStarts()).toHaveLength(1);
+  } finally {
+    start.mockRestore();
     restore();
     await rm(cwd, { recursive: true, force: true });
   }
