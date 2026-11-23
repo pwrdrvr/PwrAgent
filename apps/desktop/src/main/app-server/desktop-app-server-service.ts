@@ -34,13 +34,15 @@ import { ForgePrToolService, type ForgePrToolScope } from "../pr-status/forge-pr
 import type { ForgePrToolPreflightResult } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import { GitlabPrToolClient } from "../pr-status/gitlab-pr-tool-client";
 import type { ForgePrToolArgs, ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
-import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation } from "../pr-status/forge-tool-contract";
+import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation, type ForgeRepository } from "../pr-status/forge-tool-contract";
 import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
 import { StackReader, stackMemberships } from "../stacks/stack-reader";
 import { StackOperationsService } from "../stacks/stack-operations-service";
 import { StackOperationError } from "@pwragent/owner-core/stacks/stack-coordinator";
 import { assertGithubStackMergeAllowed, githubStackRepository, isObservedStackParent } from "../stacks/stack-merge-guard";
-import type { StackSummary } from "@pwragent/shared/stacks/stack-status";
+import { readStackPublishHead } from "../stacks/github-stack-publish";
+import type { StackLayer, StackSummary } from "@pwragent/shared/stacks/stack-status";
+import { describeStackAutomationBlock, nextStackAdvance, stackDispatchBlock } from "@pwragent/shared/stacks/stack-automation";
 import { readLocalHeadPastPrHead } from "../pr-status/local-pr-head";
 import { PrChangeIdentityReader } from "../pr-status/pr-change-identity";
 import { PrReviewOfferCoordinator, type PrReviewOfferThread } from "../pr-status/pr-review-offer-coordinator";
@@ -61,6 +63,7 @@ import {
   threadDependencyDeliveryKey,
   type ManageThreadDependenciesRequest,
   type ManageThreadDependenciesResponse,
+  type ThreadDependency,
   type ThreadDependencyCondition,
   type ThreadDependencyMergeBuildObservation,
 } from "@pwragent/shared/contracts/thread-dependencies";
@@ -84,7 +87,7 @@ import {
   type ThreadPendingWakeReaders,
 } from "../app-server/thread-pending-wakes";
 import { getScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
-import { ThreadDependencyCoordinator, validateDependencyCreate, type DependencyThreadSnapshot } from "../app-server/thread-dependency-coordinator";
+import { evaluateCondition, ThreadDependencyCoordinator, validateDependencyCreate, type DependencyThreadSnapshot } from "../app-server/thread-dependency-coordinator";
 import { authorizeLocalFile, LocalFilePoller, readLocalFile } from "./thread-dependency-local-files";
 import { CI_RUN_URL_FORMS, ciApprovalSettled, parseCiRunUrl, readCiRun, readGithubRunGates, ThreadDependencyCiRunPoller, type CiRunUrlOptions } from "../app-server/thread-dependency-ci-runs";
 import { approveGithubCiDeployment, CiDeploymentReviewRefusal } from "../thread-todos/ci-deployment-review";
@@ -1231,7 +1234,10 @@ class DesktopAppServerService {
   >();
   private readonly prStatusRegistry = new Map<string, PrStatusRegistryEntry>();
   private readonly stackReader = new StackReader();
-  private readonly stackOperations = new StackOperationsService();
+  private readonly stackPublishAttempts = new Map<string, { signature: string; retryAfter?: number }>();
+  private readonly stackPublishActive = new Map<string, AbortController>();
+  private readonly stackPublishAwaitingObservation = new Map<string, string>();
+  private readonly stackOperations = new StackOperationsService(undefined, async (cwd) => (await this.readScopedStacks([cwd])).stacks);
 
   async resumeInterruptedStackOperations(): Promise<void> {
     const registry = getDesktopBackendRegistry();
@@ -2452,7 +2458,7 @@ class DesktopAppServerService {
       });
 
     const { stacks } = await this.stackReader.read(threadsWithWorkingState, this.knownStackPullRequests(), undefined,
-      (row) => getDesktopBackendRegistry().stackThreadHeld?.({ backend: row.source, threadId: row.id }) ?? false);
+      (key) => this.stackThreadActivity(key));
     if (replaceThreadPrAttachments) this.publishedStacks = stacks;
     const memberships = stackMemberships(stacks);
     const threadsWithStacks = threadsWithWorkingState.map((thread) => {
@@ -3800,6 +3806,158 @@ class DesktopAppServerService {
     return [...this.prStatusRegistry.values()].map(({ pr }) => pr);
   }
 
+  private async stackThreadActivity(key: string) {
+    const identity = parseThreadIdentityKey(key);
+    if (!identity) return {};
+    const registry = getDesktopBackendRegistry();
+    const held = registry.stackThreadHeld?.(identity) ?? false;
+    const repair = !held && (Boolean(await this.getOverlayStore().getThreadPrAutoDispatchPending(identity))
+      || await registry.stackRepairActive?.(identity) === true);
+    return { held, repair };
+  }
+
+  private prStackDirectories(pr: PrSummary): string[] {
+    const key = getPrStatusKey(pr);
+    return [...new Set([...this.primaryPrThreadsByKey.get(key) ?? []].flatMap((threadKey) => {
+      const target = parseThreadIdentityKey(threadKey);
+      return target ? this.prReviewOfferDirectories(target, pr) : [];
+    }))];
+  }
+
+  private async readPrStacks(pr: PrSummary): Promise<readonly StackSummary[]> {
+    const repository = `${pr.provider}:${pr.org}/${pr.repo}`.toLowerCase();
+    const matches = (stack: StackSummary) => stack.repository === repository
+      && stack.layers.some((layer) => layer.pullRequest?.number === pr.number);
+    const directories = this.prStackDirectories(pr);
+    if (!directories.length) return this.publishedStacks.filter(matches);
+    const catalogs = await this.stackReader.readCatalogs(directories);
+    const tracked = catalogs.some((read) => read.status === "ok" && read.catalog.repository.toLowerCase() === repository
+      && read.catalog.stacks.some((stack) => stack.branches.some((layer) =>
+        layer.pullRequest?.number === pr.number || layer.branch === pr.headRefName)));
+    if (!tracked && !this.knownStackPullRequests().some((lower) => isObservedStackParent(lower, pr))) return [];
+    return (await this.readScopedStacks(directories)).stacks.filter(matches);
+  }
+
+  private async prStackHoldEvidence(pr: PrSummary): Promise<{ reason: string; lowerKey?: string } | undefined> {
+    try {
+      for (const stack of await this.readPrStacks(pr)) {
+        const layer = stack.layers.find((entry) => entry.pullRequest?.number === pr.number);
+        const block = layer && stackDispatchBlock(layer);
+        if (block) return {
+          reason: describeStackAutomationBlock(block),
+          ...(layer?.heldBy?.number !== undefined && { lowerKey: getPrStatusKey({ ...pr, number: layer.heldBy.number }) }),
+        };
+      }
+    } catch (error) {
+      appServerLog.debug("could not read stack automation gate", { pr: pr.url, error: String(error) });
+      return { reason: "Held while stack settlement is unavailable" };
+    }
+  }
+
+  private async prStackHold(pr: PrSummary): Promise<string | undefined> {
+    return (await this.prStackHoldEvidence(pr))?.reason;
+  }
+
+  async automationStackHold(thread: PrReviewOfferThread): Promise<string | undefined> {
+    const attachment = this.attachedPrsByThreadKey.get(buildThreadIdentityKey(thread.backend, thread.threadId));
+    for (const pr of this.canonicalizePrs(attachment?.prs ?? [])) {
+      if (isTerminalPullRequest(pr) || !this.matchesPrimaryRepository(pr, attachment?.primaryRepoKey)) continue;
+      const hold = await this.prStackHold(pr);
+      if (hold) return hold;
+    }
+  }
+
+  private async advanceStackFromObservation(pr: PrSummary, stack: StackSummary, next: StackLayer): Promise<void> {
+    if (!this.ownerNavigationActive || !this.backgroundPrPollingEnabled || isTerminalPullRequest(pr) || !pr.headSha) return;
+    const key = getPrStatusKey(pr);
+    if (this.stackPublishActive.has(key)) return;
+    // GraphQL can briefly return the old head after a successful leased
+    // push. A local needs-push projection alone must not request it again.
+    if (this.stackPublishAwaitingObservation.get(key) === pr.headSha) return;
+    this.stackPublishAwaitingObservation.delete(key);
+    if (next.role === "layer" && next.thread) {
+      const actor = parseThreadIdentityKey(next.thread.key);
+      if (!actor || !projectAllowsPrWatches(this.threadForgeAutomation(actor))) return;
+      const registry = getDesktopBackendRegistry();
+      if (registry.isRestartGateClosed?.() || registry.stackThreadActive(actor) || await registry.isThreadLocked(actor)) return;
+      const parent = stack.layers[stack.layers.indexOf(next) - 1]?.pullRequest;
+      const parentHead = parent && this.prStatusRegistry.get(getPrStatusKey({ ...pr, number: parent.number }))?.pr.headSha;
+      const signature = JSON.stringify([stack.key, next.unsettled, pr.headSha, pr.baseRefName, parent?.lifecycleState, parentHead]);
+      const attempt = this.stackPublishAttempts.get(key);
+      if ((attempt?.signature === signature && (attempt.retryAfter ?? Infinity) > Date.now()) || this.stackPublishActive.has(key)) return;
+      const ref = parsePullRequestReferenceUrl(pr.url);
+      if (ref?.kind !== "github") return;
+      const controller = new AbortController();
+      this.stackPublishActive.set(key, controller);
+      this.stackPublishAttempts.set(key, { signature });
+      if (this.stackPublishAttempts.size > 1024) this.stackPublishAttempts.delete(this.stackPublishAttempts.keys().next().value!);
+      try {
+        const result = await registry.publishStackLayer({
+          number: pr.number, expectedHeadSha: pr.headSha,
+          repository: { provider: "github", host: ref.provider, owner: ref.org, repo: ref.repo },
+        }, { ...actor, transport: "mcp", signal: AbortSignal.any([controller.signal, AbortSignal.timeout(180_000)]) });
+        if (result && typeof result === "object" && "pushed" in result && result.pushed === true) {
+          this.stackPublishAwaitingObservation.set(key, pr.headSha);
+          if (this.stackPublishAwaitingObservation.size > 1024) {
+            this.stackPublishAwaitingObservation.delete(this.stackPublishAwaitingObservation.keys().next().value!);
+          }
+        }
+      } catch (error) {
+        if (!(error instanceof ForgeReadError && error.code === "declined")) {
+          this.stackPublishAttempts.set(key, { signature, retryAfter: Date.now() + 30_000 });
+        }
+        this.prActivity.record({
+          category: "repair", source: "Stack publishing", tone: "warning", prKeys: [key], threadKeys: [next.thread.key],
+          message: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        this.stackPublishActive.delete(key);
+      }
+      return;
+    }
+  }
+
+  private observeStackMerge(prUrls?: ReadonlySet<string>): void {
+    if (!prUrls?.size) return;
+    const parents = [...prUrls].flatMap((url) => {
+      const ref = parsePullRequestReferenceUrl(url);
+      const pr = ref && this.prStatusRegistry.get(getPrStatusKey({ provider: ref.provider, org: ref.org, repo: ref.repo, number: ref.number }))?.pr;
+      return pr?.lifecycleState === "merged" ? [pr] : [];
+    });
+    if (!parents.length) return;
+    const affected: PrSummary[] = [];
+    for (const { pr } of this.prStatusRegistry.values()) {
+      if (!this.primaryPrThreadsByKey.has(getPrStatusKey(pr))) continue;
+      const parent = parents.find((entry) => isObservedStackParent(entry, pr)
+        || this.publishedStacks.some((stack) => stack.repository === `${pr.provider}:${pr.org}/${pr.repo}`.toLowerCase()
+          && entry.provider === pr.provider && entry.org.toLowerCase() === pr.org.toLowerCase() && entry.repo.toLowerCase() === pr.repo.toLowerCase()
+          && stack.layers.some((layer, index) => layer.pullRequest?.number === pr.number
+            && stack.layers[index - 1]?.pullRequest?.number === entry.number)));
+      if (parent) affected.push(pr);
+    }
+    this.queueStackAdvance(affected);
+  }
+
+  private queueStackAdvance(prs: readonly PrSummary[]): void {
+    if (!this.ownerNavigationActive || !this.backgroundPrPollingEnabled || !prs.length) return;
+    void this.advanceObservedStacks(prs).catch((error) => {
+      appServerLog.debug("stack publishing evaluation failed", { error: String(error) });
+    });
+  }
+
+  private async advanceObservedStacks(prs: readonly PrSummary[]): Promise<void> {
+    const open = prs.filter((pr) => !isTerminalPullRequest(pr) && pr.headSha);
+    const byLayer = new Map(open.map((pr) => [`${pr.provider}:${pr.org}/${pr.repo}#${pr.number}`.toLowerCase(), pr]));
+    const directories = [...new Set(open.flatMap((pr) => this.prStackDirectories(pr)))];
+    if (!directories.length) return;
+    const { stacks } = await this.readScopedStacks(directories);
+    await Promise.all(stacks.flatMap((stack) => {
+      const next = !stack.inferred && nextStackAdvance(stack.layers);
+      const pr = next && next.pullRequest && byLayer.get(`${stack.repository}#${next.pullRequest.number}`);
+      return pr && next ? [this.advanceStackFromObservation(pr, stack, next)] : [];
+    }));
+  }
+
   private async readStackMergeEvidence(thread: PrReviewOfferThread, pr: PrSummary) {
     const ref = parsePullRequestReferenceUrl(pr.url);
     if (!ref) return { blocked: false, lowerKeys: [] };
@@ -3838,7 +3996,7 @@ class DesktopAppServerService {
     }
   }
 
-  private async readScopedStacks(directories: readonly string[], scope: { backend: string; threadId: string; prs: PrSummary[] }) {
+  private async readScopedStacks(directories: readonly string[], scope?: { backend: string; threadId: string; prs: PrSummary[] }) {
     if (!directories.length) return { stacks: [], catalogs: [] };
     const { threads } = await this.listThreads({});
     const attached = getDesktopOverlayStore().readNavigationPullRequests(threads.map((thread) => ({
@@ -3846,14 +4004,14 @@ class DesktopAppServerService {
     })));
     const rows = threads.map((thread, index) => {
       const attachment = this.attachedPrsByThreadKey.get(buildThreadIdentityKey(thread.source, thread.id));
-      const isScope = thread.source === scope.backend && thread.id === scope.threadId;
+      const isScope = scope && thread.source === scope.backend && thread.id === scope.threadId;
       return {
         ...thread, linkedDirectories: attachment?.workspace?.linkedDirectories ?? thread.linkedDirectories,
-        prs: isScope ? scope.prs : this.canonicalizePrs(attachment?.prs ?? attached[index] ?? []),
+        prs: this.canonicalizePrs(isScope ? scope.prs : attachment?.prs ?? attached[index] ?? []),
       };
     });
     return await this.stackReader.read(rows, this.knownStackPullRequests(), directories,
-      (row) => getDesktopBackendRegistry().stackThreadHeld({ backend: row.source, threadId: row.id }));
+      (key) => this.stackThreadActivity(key));
   }
 
   private forgePrToolService(context?: AgentToolCallContext): ForgePrToolService {
@@ -3881,6 +4039,16 @@ class DesktopAppServerService {
   /** The repository and settled arguments of a call, so an approval prompt names them and a bad call fails first. */
   async prepareForgePrToolForAgent(operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext): Promise<ForgePrToolPreflightResult> {
     const scope = await this.forgePrToolScope(context);
+    if (operation === "publish_stack_layer") {
+      const prepared = await this.forgePrToolService().prepare(operation, args, scope, context.signal);
+      const { repository } = prepared;
+      if (repository.provider !== "github") throw new ForgeReadError("unsupported_provider", "Stack publishing requires GitHub.");
+      const pr = this.stackPublishAttachment(args, scope, repository);
+      if (args.expectedHeadSha) return prepared;
+      const head = await readStackPublishHead(repository, pr.number,
+        (...params) => this.getForgeCiClient().requestGithub(...params), context.signal);
+      return { ...prepared, args: { ...prepared.args, expectedHeadSha: head } };
+    }
     if (operation !== "merge_pull_request") {
       return await this.forgePrToolService().prepare(operation, args, scope, context.signal);
     }
@@ -3894,9 +4062,50 @@ class DesktopAppServerService {
     return { ...prepared, mergeMethods: { ...prepared.mergeMethods, remember: preference.remember } };
   }
 
+  private stackPublishAttachment(args: ForgePrToolArgs, scope: Awaited<ReturnType<DesktopAppServerService["forgePrToolScope"]>>, repository: ForgeRepository) {
+    const pr = this.canonicalizePrs(scope.attached).find((entry) =>
+      entry.number === args.number && !isTerminalPullRequest(entry)
+      && `${entry.provider}:${entry.org}/${entry.repo}`.toLowerCase() === githubStackRepository(repository));
+    if (!pr) throw new ForgeReadError("not_found", "Select a live PR attached to this layer thread.");
+    return pr;
+  }
+
+  private async publishStackLayer(args: ForgePrToolArgs, context: AgentToolCallContext,
+    scope: Awaited<ReturnType<DesktopAppServerService["forgePrToolScope"]>>) {
+    const repository = this.forgePrToolService().resolveRepository(args, scope);
+    if (repository.provider !== "github") throw new ForgeReadError("unsupported_provider", "Stack publishing requires GitHub.");
+    const pr = this.stackPublishAttachment(args, scope, repository);
+    if (!args.expectedHeadSha) throw new ForgeReadError("invalid_arguments", "Stack publishing requires a verified PR head.");
+    const readGate = async () => {
+      const live = this.prStatusRegistry.get(getPrStatusKey(pr))?.pr ?? pr;
+      if (isTerminalPullRequest(live)) throw new ForgeReadError("stale_plan", "The PR closed before publishing.");
+      if (!context.turnId && (!this.ownerNavigationActive || !projectAllowsPrWatches(this.threadForgeAutomation(context)))) {
+        throw new ForgeReadError("tools_disabled", "Project automation is paused.");
+      }
+      const stacks = (await this.readPrStacks(live)).filter((stack) => !stack.inferred);
+      const stack = stacks.length === 1 ? stacks[0] : undefined;
+      const layer = stack?.layers.find((entry) => entry.pullRequest?.number === pr.number);
+      if (!stack || !layer || layer.role !== "layer" || layer.thread?.key !== buildThreadIdentityKey(context.backend, context.threadId)) {
+        throw new ForgeReadError("ambiguous_layer", "The PR needs one tracked stack and one local layer owner.");
+      }
+      if (layer.heldBy) throw new ForgeReadError("stack_parent_open", describeStackAutomationBlock(layer.heldBy));
+      if (layer.health === "drift" || layer.health === "remote_ahead") {
+        throw new ForgeReadError("stale_plan", "The PR base or remote branch changed.");
+      }
+      return { stack, layer };
+    };
+    const ci = this.getForgeCiClient();
+    return await this.stackOperations.publish({
+      actor: { backend: context.backend, threadId: context.threadId }, number: pr.number, repository, directories: scope.directories,
+      expectedHead: args.expectedHeadSha, signal: context.signal, automated: !context.turnId,
+      readGate, github: (...parameters) => ci.requestGithub(...parameters),
+    }, getDesktopBackendRegistry());
+  }
+
   /** Pull request and issue tools act only in the calling thread's own repositories. */
   async runForgePrToolForAgent(operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext): Promise<unknown> {
     const scope = await this.forgePrToolScope(context);
+    if (operation === "publish_stack_layer") return await this.publishStackLayer(args, context, scope);
     if (operation === "plan_stack_operation" || operation === "apply_stack_operation" || operation === "manage_stack_operation") {
       if (!isAppServerBackendKind(context.backend)) throw new ForgeReadError("invalid_arguments", "Unknown PwrAgent backend.");
       const repository = this.forgePrToolService().resolveRepository(args, scope);
@@ -3905,6 +4114,9 @@ class DesktopAppServerService {
       try {
         return await this.stackOperations.call(operation, args, actor, {
           directories: scope.directories, repository: githubStackRepository(repository), branch: scope.branch,
+          ...(args.operation === "sync" ? {
+            sync: { repository, github: (...parameters) => this.getForgeCiClient().requestGithub(...parameters), signal: context.signal },
+          } : {}),
           infer: async () => (await this.readScopedStacks(scope.directories, { ...actor, prs: this.canonicalizePrs(scope.attached) })).stacks,
         }, getDesktopBackendRegistry());
       } catch (error) {
@@ -4944,8 +5156,10 @@ class DesktopAppServerService {
       : autoFixActive && forgeProject && (projectSkipsMergeConflicts || projectSkipsCiFailures)
         ? `${baseGuidance} ${forgeProject.label} skips ${projectSkippedKind} in Forge Automation, so PwrAgent will not start a repair turn for ${projectSkippedKind}.`
         : baseGuidance;
-    const stackGuidance = await this.threadStackGuidance(params, primaryPrs, attachment?.workspace);
-    const guidance = [...stackGuidance, automationGuidance, ...readinessGuidance].join(" ");
+    const stackGuidance = await this.threadStackGuidance(primaryPrs);
+    const stackLines = stackGuidance.map(({ text }) => text);
+    const guidance = (stackGuidance.some(({ held }) => held)
+      ? stackLines : [...stackLines, automationGuidance, ...readinessGuidance]).join(" ");
     return {
       backgroundPollingEnabled: this.backgroundPrPollingEnabled,
       autoFixAllowed: this.prAutoDispatchAllowed,
@@ -4961,23 +5175,27 @@ class DesktopAppServerService {
   }
 
   private async threadStackGuidance(
-    thread: PrReviewOfferThread,
     prs: PrSummary[],
-    workspace: ThreadPrAttachment["workspace"],
-  ): Promise<string[]> {
+  ): Promise<Array<{ text: string; held?: boolean }>> {
     if (!prs.length) return [];
-    const directories = workspace ? resolveThreadPullRequestDirectoryPaths(workspace) : [];
-    const { stacks } = directories.length
-      ? await this.readScopedStacks(directories, { ...thread, prs })
-      : { stacks: this.publishedStacks };
-    return prs.flatMap((pr) => {
-      const repository = `${pr.provider}:${pr.org}/${pr.repo}`.toLowerCase();
-      const stack = stacks.find((entry) => entry.repository === repository && entry.layers.some((layer) => layer.pullRequest?.number === pr.number));
+    const scoped = await Promise.all(prs.map((pr) => this.readPrStacks(pr)));
+    return prs.flatMap((pr, offset) => {
+      const candidates = scoped[offset]!;
+      const stack = candidates.find((entry) => entry.layers.some((layer) => layer.pullRequest?.number === pr.number
+        && stackDispatchBlock(layer))) ?? candidates[0];
       if (!stack) return [];
       const index = stack.layers.findIndex((layer) => layer.pullRequest?.number === pr.number);
       const layer = stack.layers[index]!;
+      const hold = stackDispatchBlock(layer);
+      if (hold) {
+        const lower = hold.number === undefined ? hold.branch : `#${hold.number}`;
+        const next = layer.heldBy
+          ? `PwrAgent advances this layer after ${lower} settles and publishing is authorized.`
+          : "PwrAgent checks the replacement head before acting on CI.";
+        return [{ text: `#${pr.number} is held. ${describeStackAutomationBlock(hold)}. Don't rebase, fix CI, or push this layer now. ${next}`, held: true }];
+      }
       const parent = layer.activeBase ? undefined : stack.layers[index - 1]?.pullRequest?.number;
-      return [`#${pr.number} is layer ${index + 1} of ${stack.layers.length} in ${stack.inferred ? "inferred " : ""}stack ${stack.name}, with expected base ${layer.activeBase ?? layer.parent}${parent === undefined ? "" : ` (#${parent})`} and health ${layer.health.replaceAll("_", " ")}. Merge or enable auto-merge only after all lower layers have merged and the PR targets ${stack.trunk}.`];
+      return [{ text: `#${pr.number} is layer ${index + 1} of ${stack.layers.length} in ${stack.inferred ? "inferred " : ""}stack ${stack.name}, with expected base ${layer.activeBase ?? layer.parent}${parent === undefined ? "" : ` (#${parent})`} and health ${layer.health.replaceAll("_", " ")}. Merge or enable auto-merge only after all lower layers have merged and the PR targets ${stack.trunk}.` }];
     });
   }
 
@@ -6452,7 +6670,7 @@ class DesktopAppServerService {
         const reason = outcome.status === "gate-off"
           ? budgetBlocked ? "Repair blocked: budget paused"
             : !this.backgroundPrPollingEnabled ? "Background polling is off" : "Auto-fix is disabled globally"
-          : describePrRepairDecision(outcome.status);
+          : outcome.stackHold ?? describePrRepairDecision(outcome.status);
         this.prActivity.record({
           category: budgetBlocked ? "budget" : "repair",
           source: "Auto-fix",
@@ -6883,9 +7101,9 @@ class DesktopAppServerService {
     await this.handlePrAutoDispatchSnapshots(canonical, fetchedAt);
     // An unchanged accepted poll refreshes CI freshness without publishing a
     // field-change event. Dependencies still need that observation for admission.
-    const freshPrUrls = canonical
-      .filter((pr) => this.prStatusRegistry.get(getPrStatusKey(pr))?.fetchedAt === fetchedAt)
-      .map((pr) => pr.url);
+    const fresh = canonical.filter((pr) => this.prStatusRegistry.get(getPrStatusKey(pr))?.fetchedAt === fetchedAt);
+    this.queueStackAdvance(fresh);
+    const freshPrUrls = fresh.map((pr) => pr.url);
     // Evaluation can start a continuation turn; the poll must not wait on it.
     if (freshPrUrls.length > 0) {
       void this.threadDependencyCoordinator?.handlePrEvent(freshPrUrls)
@@ -8519,6 +8737,9 @@ class DesktopAppServerService {
     this.unsubscribeRestartGate = undefined;
     this.pendingWakesCache.clear();
     this.ownerNavigationActive = false;
+    for (const pending of this.stackPublishActive.values()) pending.abort();
+    this.stackPublishAttempts.clear();
+    this.stackPublishAwaitingObservation.clear();
     this.ownerNavigationMetadataVersion += 1;
     this.ownerNavigationMetadataAbort?.abort();
     this.prFetcher = undefined;
@@ -8622,6 +8843,7 @@ class DesktopAppServerService {
         isBackgroundPollingEnabled: () => this.isPrAutoDispatchAvailable(),
         getBudgetConfig: () => this.prAutoDispatchBudgetConfig,
         onActivity: (event) => this.prActivity.record(event),
+        stackHold: (pr) => this.prStackHold(pr),
         getCurrentPr: (prKey) => this.prStatusRegistry.get(prKey)?.pr,
         allowsEventKind: (identity, kind) =>
           projectAllowsAutoFixKind(this.threadForgeAutomation(identity), kind),
@@ -8676,6 +8898,7 @@ class DesktopAppServerService {
           .map(getPrStatusKey);
       },
       getPr: (prKey) => this.prStatusRegistry.get(prKey)?.pr,
+      stackHold: (pr) => this.prStackHoldEvidence(pr),
       stackMergeEvidence: (thread, pr) => this.readStackMergeEvidence(thread, pr),
       isLowerPolled: (key) => this.prPollBackendByKey.has(key) || this.transcriptPrSubscriptions.hasTarget(key),
       directories: (thread, pr) => this.prReviewOfferDirectories(thread, pr),
@@ -8739,6 +8962,8 @@ class DesktopAppServerService {
     const coordinator = this.prReviewOfferCoordinator;
     const pr = this.findPrimaryAttachedPr(thread, pullRequest);
     if (!coordinator || !pr) return undefined;
+    const hold = await this.prStackHold(pr);
+    if (hold) return hold;
     const prKey = getPrStatusKey(pr);
     const owner = await this.prReviewOfferOwner(prKey);
     if (owner?.backend !== thread.backend || owner.threadId !== thread.threadId) return undefined;
@@ -8822,6 +9047,16 @@ class DesktopAppServerService {
         store: this.getOverlayStore(),
         registry: getDesktopBackendRegistry(),
         isBackgroundPollingEnabled: () => this.backgroundPrPollingEnabled,
+        currentPr: (key) => this.prStatusRegistry.get(key)?.pr,
+        canStartChecksWake: (thread) => getDesktopBackendRegistry().canStartThreadTurnImmediately(thread),
+        stackHold: async (pr) => {
+          const hold = await this.prStackHold(pr);
+          if (hold) this.prActivity.record({
+            category: "repair", source: "PR watch", tone: "warning", message: hold,
+            prKeys: [getPrStatusKey(pr)], threadKeys: [...this.primaryPrThreadsByKey.get(getPrStatusKey(pr)) ?? []],
+          });
+          return hold;
+        },
         allowsWatchDispatch: (watch) =>
           getDesktopBackendRegistry().getThreadInfo(watch)?.archived !== true
           && projectAllowsPrWatches(this.threadForgeAutomation(watch)),
@@ -8889,6 +9124,12 @@ class DesktopAppServerService {
         canonicalizePrUrl: (url) => this.prRepositoryAliases.canonicalizeUrl(url),
         resolvePrUrl: async (url) => await this.resolveCurrentPullRequestUrl(url),
         submit: async (request) => await this.submitDependencyWakeup(request),
+        onPrObservation: (urls) => this.observeStackMerge(urls),
+        stackHold: async (dependency) => {
+          const hold = await this.dependencyCiHold(dependency);
+          if (hold) appServerLog.debug("Continue After CI held", { threadId: dependency.threadId, reason: hold });
+          return hold;
+        },
         recoverCompaction: async (dependency, prompt, canSubmit, admit) => {
           const registry = getDesktopBackendRegistry();
           return await registry.steerCompactionRecovery({
@@ -9136,6 +9377,42 @@ class DesktopAppServerService {
     return { githubEnterpriseHosts: getDesktopSettingsService().resolveGithubEnterpriseHosts() };
   }
 
+  private async dependencyCiHold(dependency: ThreadDependency): Promise<string | undefined> {
+    const state = dependency.outcome === "success" ? "satisfied" : "failed";
+    for (const entry of dependency.evidence) {
+      if (entry.state !== state) continue;
+      const { condition } = entry;
+      if (condition.when === "ci_run" && condition.ciRun && entry.ciRun?.headSha) {
+        const ref = parseCiRunUrl(condition.ciRun.url, this.ciRunUrlOptions());
+        if (!ref) continue;
+        const repo = githubStackRepository(ref.repository);
+        for (const { pr } of this.prStatusRegistry.values()) {
+          if (pr.headSha !== entry.ciRun.headSha || isTerminalPullRequest(pr)
+            || (entry.ciRun.branch !== undefined && pr.headRefName !== entry.ciRun.branch)
+            || `${pr.provider}:${pr.org}/${pr.repo}`.toLowerCase() !== repo) continue;
+          const hold = await this.prStackHold(pr);
+          if (hold) return hold;
+        }
+      } else if ((condition.when === "ci_passed" || condition.when === "merge_build") && entry.prUrl) {
+        const ref = parsePullRequestReferenceUrl(this.prRepositoryAliases.canonicalizeUrl(entry.prUrl));
+        const fresh = ref && this.prStatusRegistry.get(getPrStatusKey({ provider: ref.provider, org: ref.org, repo: ref.repo, number: ref.number }));
+        if (!fresh) return "Waiting for fresh CI status for the prerequisite PR";
+        if (entry.headSha !== fresh.pr.headSha) return "Waiting for CI evidence for the prerequisite PR's current head";
+        if (condition.when === "ci_passed") {
+          const current = evaluateCondition(condition, { turns: [], prs: [fresh] }, Date.now(),
+            undefined, (url) => this.prRepositoryAliases.canonicalizeUrl(url));
+          if (current.state !== entry.state || current.reason !== entry.reason) {
+            return "Waiting for fresh CI status for the prerequisite PR";
+          }
+        }
+        if (!isTerminalPullRequest(fresh.pr)) {
+          const hold = await this.prStackHold(fresh.pr);
+          if (hold) return hold;
+        }
+      }
+    }
+  }
+
   /**
    * A dependency's wake. When the consumer's project is paused, its wake-up
    * policy holds it as a project-held message or discards it with a note;
@@ -9147,14 +9424,18 @@ class DesktopAppServerService {
     input: { type: "text"; text: string }[];
     origin: "automation";
     messageOrigin: import("@pwragent/shared/contracts/normalized-app-server").AppServerThreadMessageOrigin;
+    canAdmit?: () => Promise<boolean>;
   }): Promise<{ status: "started" | "queued" | "busy" | "held" | "discarded"; turnId?: string }> {
     const registry = getDesktopBackendRegistry();
     const project = this.resolveThreadForgeProject(request);
+    if (request.canAdmit) {
+      if (!this.backgroundPrPollingEnabled || !projectAllowsPrWatches(this.threadForgeAutomation(request))) return { status: "busy" };
+      const submitted = await registry.submitTurnIfIdle(request);
+      return submitted.status === "started" ? { status: "started", turnId: submitted.turnId } : { status: submitted.status };
+    }
     // A lock already holds every source, so it wins: the dependency waits
     // for unlock exactly as it does in an active project.
     if (!project?.automation.paused || await registry.isThreadLocked(request)) {
-      // The wake joins a running turn, or starts one, and shares that
-      // delivery with the agent and system messages waiting beside it.
       const submitted = await registry.submitTurnIfIdle({ ...request, joinRunningTurn: true });
       return submitted.status === "started" ? { status: "started", turnId: submitted.turnId } : { status: submitted.status };
     }

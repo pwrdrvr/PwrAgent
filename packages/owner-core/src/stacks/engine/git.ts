@@ -40,7 +40,7 @@ export class StackGit {
     return result.exitCode === 0;
   }
 
-  async transaction(moves: RefMove[], expected: Record<string, string | null>, creates: string[] = []) {
+  async transaction(moves: RefMove[], expected: Record<string, string | null>, extraCommands: string[] = []) {
     for (const branch of new Set([...Object.keys(expected), ...moves.map(move => move.branch)])) {
       await this.output(["check-ref-format", branchRef(branch)]);
     }
@@ -50,7 +50,7 @@ export class StackGit {
     }
     const updates = new Set(moves.map(move => move.branch));
     const commands = [
-      ...creates,
+      ...extraCommands,
       ...Object.entries(expected).flatMap(([branch, oid]) => updates.has(branch) ? [] : [`verify ${branchRef(branch)} ${oid ?? ""}`.trimEnd()]),
       ...moves.map(({ branch, old, next }) => {
         const ref = branchRef(branch);

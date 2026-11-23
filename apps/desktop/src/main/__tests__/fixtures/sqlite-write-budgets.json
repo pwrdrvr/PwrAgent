@@ -1,4 +1,9 @@
 {
+  "stack-held-failure-only-continue-after": {"commits": 1, "note": "One commit records held CI evidence from the prerequisite; repeat polls write nothing. About 0.8 MB/day at 100 waits/day and 8 KB/commit.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
+  "busy-ci-watch-polls": {"commits": 0, "note": "A known busy thread's CI watch stays unclaimed across repeated polls. 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "stack-held-continue-after-ci": {"commits": 0, "note": "A ready CI prerequisite waits through repeated lower-stack observations without further commits. 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "stack-held-withdraw-review-offer": {"commits": 1, "note": "Withdraw an existing offer once when a lower layer becomes unsettled. At 100 withdrawals/day and 12,360 bytes each, about 1.24 MB/day.", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "stack-held-pr-incidents": {"commits": 0, "note": "Repeated held PR failures commit no claims or attempt reservations. 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "stack-child-registration-recovery": {"commits": 1, "note": "One parent registration through the normal storage path; replay with the same parent makes no commits.", "observedWalBytes": 20632, "rowsChanged": 2, "statements": 2},
   "stack-lead-root-migration": {"commits": 1, "note": "A surviving stack keeps its lead in one SQLite commit. At 30 removals/day and 12,360 WAL bytes each, about 0.37 MB/day.", "observedWalBytes": 12360, "rowsChanged": 2, "statements": 2},
   "stack-owner-metadata-replay": {"commits": 0, "note": "Restart replay of a lead transfer and an unread notice makes no additional commits.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
@@ -1008,20 +1013,8 @@
   "owner-content-search-cold-usage": {"commits": 1, "note": "Real registry and SQLite: one metadata batch for three cold candidates with 60 usage lines, including two nonmatches; no usage/pricing/directory hydration. Transcript persistence adds 0 MB/day.", "observedWalBytes": 45352, "rowsChanged": 9, "statements": 9},
   "owner-content-search-cold-usage-repeated": {"commits": 0, "note": "20 real owner searches of unchanged metadata and unhydrated usage-bearing transcripts: 0 commits and 0 MB/day at 20 queries/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "owner-content-search-unchanged": {"commits": 0, "note": "20 repeated owner searches with unchanged metadata: zero commits and 0 MB/day at 20 searches/day; transcript reads add no search persistence.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
-  "owner-pr-candidate-bootstrap": {
-    "commits": 1,
-    "note": "120 owner PR candidates reconciled at startup/provider completion: one commit when membership changes, never per-thread commits; no idle timer writes",
-    "observedWalBytes": 57680,
-    "rowsChanged": 120,
-    "statements": 120
-  },
-  "owner-pr-candidate-unchanged-bootstrap": {
-    "commits": 0,
-    "note": "120 unchanged owner PR memberships at a later startup/provider completion: zero commits, statements or timestamp rewrites; 0 MB/day idle WAL",
-    "observedWalBytes": 0,
-    "rowsChanged": 0,
-    "statements": 0
-  },
+  "owner-pr-candidate-bootstrap": {"commits": 1, "note": "120 owner PR candidates reconciled at startup/provider completion: one commit when membership changes, never per-thread commits; no idle timer writes", "observedWalBytes": 57680, "rowsChanged": 120, "statements": 120},
+  "owner-pr-candidate-unchanged-bootstrap": {"commits": 0, "note": "120 unchanged owner PR memberships at a later startup/provider completion: zero commits, statements or timestamp rewrites; 0 MB/day idle WAL", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "owner-thread-metadata-command": {"commits": 1, "note": "One owner metadata command merges all changed fields in one transaction; no lifecycle callers yet.", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
   "owner-thread-metadata-unchanged": {"commits": 0, "note": "100 unchanged metadata commands and reads make no commits.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "pending-spend-alert-page": {
@@ -1061,69 +1054,21 @@
     "rowsChanged": 0,
     "statements": 0
   },
-  "pr-terminal-watch-deliver": {"commits": 3, "note": "observe, claim and finish one merge/close wake: 3 commits/~29 KB WAL per merged PR; ~1.5 MB/day at 50 merges/day, zero idle writes", "observedWalBytes": 28840, "rowsChanged": 3, "statements": 4},
-  "pr-terminal-watch-open-polls": {
-    "commits": 0,
-    "note": "ten polls of an open PR that has a merge/close watch: 0 commits, 0 rows and 0 WAL; the per-poll head/baseline advance only reads when nothing moved, so the watch adds 0 MB/day",
-    "observedWalBytes": 0,
-    "rowsChanged": 0,
-    "statements": 0
-  },
-  "pr-terminal-watch-register": {
-    "commits": 1,
-    "note": "one merge/close watch requested by an agent tool call: 1 commit/~16.5 KB WAL; ~0.8 MB/day at 50 requests/day, zero idle writes",
-    "observedWalBytes": 16480,
-    "rowsChanged": 1,
-    "statements": 1
-  },
+  "pr-terminal-watch-deliver": {"commits": 3, "note": "observe, claim and finish one merge/close wake: 3 commits/~29 KB WAL per merged PR; ~1.5 MB/day at 50 merges/day, zero idle writes", "observedWalBytes": 45320, "rowsChanged": 3, "statements": 4},
+  "pr-terminal-watch-open-polls": {"commits": 0, "note": "ten polls of an open PR that has a merge/close watch: 0 commits, 0 rows and 0 WAL; the per-poll head/baseline advance only reads when nothing moved, so the watch adds 0 MB/day", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "pr-terminal-watch-register": {"commits": 1, "note": "one merge/close watch requested by an agent tool call: 1 commit/~16.5 KB WAL; ~0.8 MB/day at 50 requests/day, zero idle writes", "observedWalBytes": 20632, "rowsChanged": 1, "statements": 1},
   "pr-terminal-watch-rename": {"commits": 1, "note": "one pending event renamed and nine unchanged syncs: 1 commit/~8.2 KB WAL per rename, 0 idle writes; ~0.4 MB/day at 50 renames/day", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
   "pr-terminal-watch-retire": {"commits": 1, "note": "one retirement plus nine duplicate observations: 1 commit/~12.4 KB WAL; ~0.6 MB/day at 50 terminal events/day, zero idle writes", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 2},
   "pr-watch-recovery-legacy-exit": {"commits": 3, "note": "Observe, claim and finish one abandoned legacy wake: 3 commits/28.8 KB WAL; 50 recoveries/day x 28.8 KB = ~1.44 MB/day, zero idle writes", "observedWalBytes": 28840, "rowsChanged": 3, "statements": 4},
   "pr-watch-recovery-legacy-live": {"commits": 0, "note": "Ten startup replays while a sibling owns delivery, including after lease expiry: zero commits and 0 MB/day recurring writes", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "pr-watch-recovery-pending-exit": {"commits": 2, "note": "Claim and finish one abandoned pending wake: 2 commits/16.5 KB WAL; 50 recoveries/day x 16.5 KB = ~0.82 MB/day, zero idle writes", "observedWalBytes": 16480, "rowsChanged": 2, "statements": 2},
   "pr-watch-recovery-pending-live": {"commits": 0, "note": "Ten startup replays while a sibling owns delivery, including after lease expiry: zero commits and 0 MB/day recurring writes", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
-  "pr-watch-agent-cancel": {
-    "commits": 1,
-    "note": "an agent stops one PR watch through watch_thread_pull_request: 1 commit per call, 0 idle writes",
-    "observedWalBytes": 12360,
-    "rowsChanged": 1,
-    "statements": 1
-  },
-  "pr-watch-autofix-hold": {
-    "commits": 1,
-    "note": "ten polls of one CI failure that Auto-fix covers, one success and failure watch: 1 commit holds the failure as its baseline, the other 9 polls only read; at most 1 commit per failure",
-    "observedWalBytes": 4120,
-    "rowsChanged": 1,
-    "statements": 1
-  },
-  "pr-watch-baseline-clear": {
-    "commits": 1,
-    "note": "ten polls while re-run checks run, one baselined watch: 1 commit clears the baseline once, the other 9 polls only read; at most 1 commit per watch lifetime",
-    "observedWalBytes": 4120,
-    "rowsChanged": 1,
-    "statements": 1
-  },
-  "pr-watch-follow-head": {
-    "commits": 1,
-    "note": "one poll that sees a pushed head: the CI watch's copy and the old row's end share 1 commit; only on pushes, well under 1 MB/day",
-    "observedWalBytes": 16480,
-    "rowsChanged": 2,
-    "statements": 2
-  },
-  "pr-watch-operator-cancel": {
-    "commits": 1,
-    "note": "the operator stops one PR watch: 1 commit per click, 0 idle writes",
-    "observedWalBytes": 12360,
-    "rowsChanged": 1,
-    "statements": 1
-  },
-  "pr-watch-operator-register": {
-    "commits": 1,
-    "note": "the operator arms one CI watch with Watch CI: 1 commit per click, 0 idle writes",
-    "observedWalBytes": 16512,
-    "rowsChanged": 1,
-    "statements": 1
-  },
+  "pr-watch-agent-cancel": {"commits": 1, "note": "an agent stops one PR watch through watch_thread_pull_request: 1 commit per call, 0 idle writes", "observedWalBytes": 20600, "rowsChanged": 1, "statements": 1},
+  "pr-watch-autofix-hold": {"commits": 1, "note": "ten polls of one CI failure that Auto-fix covers, one success and failure watch: 1 commit holds the failure as its baseline, the other 9 polls only read; at most 1 commit per failure", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
+  "pr-watch-baseline-clear": {"commits": 1, "note": "ten polls while re-run checks run, one baselined watch: 1 commit clears the baseline once, the other 9 polls only read; at most 1 commit per watch lifetime", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
+  "pr-watch-follow-head": {"commits": 1, "note": "one poll that sees a pushed head: the CI watch's copy and the old row's end share 1 commit; only on pushes, well under 1 MB/day", "observedWalBytes": 24720, "rowsChanged": 2, "statements": 2},
+  "pr-watch-operator-cancel": {"commits": 1, "note": "the operator stops one PR watch: 1 commit per click, 0 idle writes", "observedWalBytes": 20600, "rowsChanged": 1, "statements": 1},
+  "pr-watch-operator-register": {"commits": 1, "note": "the operator arms one CI watch with Watch CI: 1 commit per click, 0 idle writes", "observedWalBytes": 20632, "rowsChanged": 1, "statements": 1},
   "profile-model-default-launchpads": {
     "commits": 1,
     "note": "One profile model change updates 100 directory launchpads and learned defaults in one transaction.",

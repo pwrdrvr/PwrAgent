@@ -47,6 +47,30 @@ describe("stack catalog reads", () => {
       expect(await readFile(catalogPath, "utf8")).toBe(bytes);
       if (repository) {
         git(root, "branch", "feature/upper", nextTrunk);
+        const childPr = {
+          number: 2, provider: "github.com", org: "fixture", repo: "project", state: "passing", lifecycleState: "open",
+          headRefName: "feature/upper", headSha: nextTrunk, baseRefName: "feature/model", url: "https://github.com/fixture/project/pull/2",
+        } as const;
+        const unnumberedCatalog = {
+          schemaVersion: 1, repository, stacks: [{
+            trunk: { branch: "main", head: base },
+            branches: [{ branch: "feature/model", head, base }, { branch: "feature/upper", head: nextTrunk, base: head }],
+          }],
+        };
+        await writeFile(catalogPath, JSON.stringify(unnumberedCatalog));
+        const parentPr = {
+          ...childPr, number: 1, baseRefName: "main", headRefName: "feature/model", headSha: head,
+          url: "https://github.com/fixture/project/pull/1",
+        };
+        const reusedName = { ...parentPr, number: 3, lifecycleState: "merged" as const, headSha: base };
+        for (const lifecycleState of ["open", "merged"] as const) {
+          const observed = await reader.read(threads, [reusedName, { ...parentPr, lifecycleState }, childPr]);
+          expect(observed.stacks[0]?.layers[0]?.pullRequest).toEqual({ number: 1, lifecycleState });
+          if (lifecycleState === "merged") {
+            expect(observed.stacks[0]?.layers[1]).toMatchObject({ health: "parent_merged", unsettled: "needs sync" });
+            expect(observed.stacks[0]?.layers[1]?.heldBy).toBeUndefined();
+          }
+        }
         await writeFile(catalogPath, JSON.stringify({
           schemaVersion: 1, repository, stacks: [{
             trunk: { branch: "main", head: base },
@@ -60,7 +84,7 @@ describe("stack catalog reads", () => {
           number: 2, provider: "github.com", org: "fixture", repo: "project", state: "passing", lifecycleState: "open",
           headRefName: "feature/upper", headSha: nextTrunk, baseRefName: "main", url: "https://github.com/fixture/project/pull/2",
         }]);
-        expect(retargeted.stacks[0]?.layers[1]).toMatchObject({ parent: "feature/model", activeBase: "main", health: "in_sync" });
+        expect(retargeted.stacks[0]?.layers[1]).toMatchObject({ parent: "feature/model", activeBase: "main", health: "parent_merged" });
       }
     } finally {
       await rm(sandbox, { recursive: true, force: true });

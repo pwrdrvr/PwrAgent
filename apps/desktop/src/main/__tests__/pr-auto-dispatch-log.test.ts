@@ -9,6 +9,7 @@ describe("PR auto-dispatch logging", () => {
     "gate-off": "debug",
     "not-actionable": "debug",
     deferred: "debug",
+    "stack-held": "debug",
     "missing-head": "debug",
     disabled: "debug",
     "project-off": "debug",

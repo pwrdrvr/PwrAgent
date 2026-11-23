@@ -28,6 +28,7 @@ import type {
   PrSummary,
 } from "@pwragent/shared/contracts/navigation";
 import type { NavigationStarMapSignals } from "@pwragent/shared/navigation-star-map-filters";
+import { STACK_UNSETTLED_REASONS } from "@pwragent/shared/stacks/stack-automation";
 import { readCompactStackMemberships, type StackSummary } from "@pwragent/shared/stacks/stack-status";
 import {
   buildThreadIdentityKey,
@@ -517,12 +518,21 @@ function projectStackMemberships(thread: Pick<NavigationThreadSummary, "stacks" 
   const stackMemberships = readCompactStackMemberships(thread).slice(0, 8).flatMap((entry) => {
     if (typeof entry.key !== "string" || typeof entry.name !== "string" || !Number.isSafeInteger(entry.position)
       || !Number.isSafeInteger(entry.count) || entry.position < 1 || entry.position > entry.count) return [];
+    const heldBy = entry.heldBy;
+    const positiveNumber = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
     return [{
       key: entry.key.length <= 512 ? entry.key : createHash("sha256").update(entry.key).digest("hex"),
       name: entry.name.slice(0, 160),
       inferred: entry.inferred === true,
       position: entry.position,
       count: entry.count,
+      ...(typeof entry.repository === "string" && entry.repository.length <= 512 ? { repository: entry.repository } : {}),
+      ...(positiveNumber(entry.number) ? { number: entry.number } : {}),
+      ...(STACK_UNSETTLED_REASONS.includes(entry.unsettled!) ? { unsettled: entry.unsettled } : {}),
+      ...(heldBy && typeof heldBy.branch === "string" && STACK_UNSETTLED_REASONS.includes(heldBy.reason) ? {
+        heldBy: { branch: heldBy.branch.slice(0, 160), reason: heldBy.reason,
+          ...(positiveNumber(heldBy.number) ? { number: heldBy.number } : {}) },
+      } : {}),
       health: typeof entry.health === "string" && entry.health.length <= 16 ? entry.health : "unknown" as const,
       ...(typeof entry.threadKey === "string" && entry.threadKey.length <= 512 ? { threadKey: entry.threadKey } : {}),
       ...(typeof entry.parentThreadKey === "string" && entry.parentThreadKey.length <= 512 ? { parentThreadKey: entry.parentThreadKey } : {}),

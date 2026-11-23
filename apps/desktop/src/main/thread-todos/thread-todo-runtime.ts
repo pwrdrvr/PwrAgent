@@ -245,6 +245,7 @@ export function installThreadTodoRuntime(params: {
   /** The local Directories lens rows, for naming and filing projects. */
   listProjects: () => Promise<ThreadTodoProjectCandidate[]>;
   /** `[git] default_merge_method`. */
+  readReviewStackHold?: (thread: Pick<ThreadReview, "backend" | "threadId">) => Promise<string | undefined>;
   readDefaultMergeMethod: () => ThreadTodoMergeMethod;
   /** The federation agent tools, which start threads on peers. */
   federation?: PwrAgentFederationHandler;
@@ -305,21 +306,64 @@ export function installThreadTodoRuntime(params: {
   // Someone settling a finding has taken the review on, so a failed send no
   // longer needs saying.
   reviews.setOnUpdated((review) => reviewAutoFixRuns.record(review, review.id, { kind: "reviewUpdated", at: Date.now() }));
-  const sendReviewAutoFix = (review: ThreadReview): void => {
-    const message = reviewAutoFixMessage(review);
-    if (!message) return;
-    void registry.submitTurn({
-      backend: review.backend,
-      threadId: review.threadId,
-      input: [{ type: "text", text: message.text }],
-      origin: "automation",
-      messageOrigin: message.messageOrigin,
-    }).catch((error: unknown) => {
+  const heldReviews = new Map<string, string>();
+  const checkingReviews = new Set<string>();
+  const sendReviewAutoFix = async (id: string): Promise<void> => {
+    if (checkingReviews.has(id)) return;
+    checkingReviews.add(id);
+    try {
+      const review = reviews.get(id);
+      const message = review && reviewAutoFixMessage(review);
+      if (!review || !message || registry.getThreadInfo(review)?.archived) {
+        heldReviews.delete(id);
+        if (review) reviewAutoFixRuns.record(review, id, { kind: "queue", status: "cancelled", at: Date.now() });
+        return;
+      }
+      if (params.readReviewStackHold) reviewAutoFixRuns.record(review, id, { kind: "queue", status: "held", at: Date.now() });
+      const hold = await params.readReviewStackHold?.(review);
+      if (hold) {
+        if (heldReviews.get(id) !== hold) {
+          threadTodoLog.debug("review Auto-fix held", { threadId: review.threadId, reason: hold });
+        }
+        heldReviews.set(id, hold);
+        return;
+      }
+      const current = reviews.get(id);
+      const latest = current && reviewAutoFixMessage(current);
+      if (!latest) {
+        heldReviews.delete(id);
+        reviewAutoFixRuns.record(review, id, { kind: "queue", status: "cancelled", at: Date.now() });
+        return;
+      }
+      const request = {
+        backend: review.backend, threadId: review.threadId,
+        input: [{ type: "text" as const, text: latest.text }],
+        origin: "automation" as const, messageOrigin: latest.messageOrigin,
+      };
+      if (params.readReviewStackHold) {
+        // Keep ownership until admission. A queued start could otherwise
+        // outlive the observation that cleared the gate.
+        const result = await registry.submitTurnIfIdle({
+          ...request, canAdmit: async () => !await params.readReviewStackHold?.(review),
+        });
+        if (result.status === "busy") {
+          heldReviews.set(id, "Waiting for turn admission");
+          return;
+        }
+      } else {
+        await registry.submitTurn(request);
+      }
+      heldReviews.delete(id);
+    } catch (error) {
+      heldReviews.delete(id);
       const reason = error instanceof Error ? error.message : String(error);
+      const review = reviews.get(id);
+      if (!review) return;
       threadTodoLog.warn("could not send a review's auto-fix", { error: reason, threadId: review.threadId });
-      // The arm is spent, so the card says so and offers Auto-fix by hand.
-      reviewAutoFixRuns.record(review, review.id, { kind: "sendFailed", reason, at: Date.now() });
-    });
+      reviewAutoFixRuns.record(review, id, { kind: "sendFailed", reason, at: Date.now() });
+    } finally {
+      checkingReviews.delete(id);
+    }
   };
   readDefaultMergeMethod = params.readDefaultMergeMethod;
   todos.setOnChanged(changed);
@@ -357,10 +401,16 @@ export function installThreadTodoRuntime(params: {
       params.broadcast({ at: Date.now() });
       return;
     }
+    const status = event.notification.method === "thread/status/changed" ? event.notification.params.status : undefined;
+    if (event.notification.method === "pullRequest/status/updated"
+      || event.notification.method === "thread/stackHold/updated" || event.notification.method === "turn/completed"
+      || (status && typeof status === "object" && "type" in status && status.type === "idle")) {
+      for (const id of heldReviews.keys()) void sendReviewAutoFix(id);
+    }
     const completed = completedThreadReview(event);
     if (completed) {
       const review = importReview(completed.identity, completed.entry, "live");
-      if (reviewAutoFix.takeOnCompletion(completed.identity, completed.turnId) && review) sendReviewAutoFix(review);
+      if (reviewAutoFix.takeOnCompletion(completed.identity, completed.turnId) && review) void sendReviewAutoFix(review.id);
     }
     if (event.notification.method === "turn/completed"
       || event.notification.method === "turn/failed"

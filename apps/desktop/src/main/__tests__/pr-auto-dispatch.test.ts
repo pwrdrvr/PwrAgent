@@ -1,3 +1,5 @@
+import { measureSqliteWrites } from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildPullRequestStatusKey,
@@ -105,6 +107,7 @@ function createHarness(options: {
   currentPr?: PrSummary;
   pauseGateWhenBudgetPaused?: boolean;
   onPendingChanged?: (pending: ThreadPrAutoDispatchPending | null) => void;
+  stackHold?: () => string | undefined;
   allowsEventKind?: (kind: ThreadPrAutoDispatchEventKind) => boolean;
 } = {}) {
   let busy = options.busy ?? false;
@@ -127,6 +130,7 @@ function createHarness(options: {
   const coordinator = new PrAutoDispatchCoordinator({
     store: options.targetStore ?? store,
     onActivity,
+    ...(options.stackHold ? { stackHold: options.stackHold } : {}),
     registry: { submitTurnIfIdle },
     getCurrentPr: () => currentPr,
     refreshPendingPrs: async (pending) => {
@@ -172,6 +176,40 @@ function createHarness(options: {
     submitTurnIfIdle,
   };
 }
+
+it("keeps an upper-layer failure from spending an attempt when its parent becomes unsettled", async () => {
+  let held = false;
+  const harness = createHarness({ stackHold: () => held ? "Held by #1104: CI running" : undefined });
+  await observe(harness.coordinator, pr());
+  held = true;
+  await runCountdown();
+  expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
+  held = false;
+  await observe(harness.coordinator, pr());
+  await runCountdown();
+  expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+  expect(harness.submitTurnIfIdle.mock.calls[0]?.[0].input[0]).toMatchObject({
+    text: expect.stringContaining("Automatic attempt: 1/2"),
+  });
+});
+
+it("records duplicate held incidents without SQLite writes, then reads the current head", async () => {
+  let held = true;
+  const harness = createHarness({ stackHold: () => held ? "Held by #1104: needs restack" : undefined });
+  const { writes } = await measureSqliteWrites(async () => {
+    for (let poll = 0; poll < 10; poll++) {
+      expect(await observe(harness.coordinator)).toMatchObject([{ status: "stack-held", stackHold: "Held by #1104: needs restack" }]);
+    }
+  });
+  expectSqliteWriteBudget({ scenario: "stack-held-pr-incidents", writes,
+    note: "Repeated held PR failures commit no claims or attempt reservations. 0 MB/day." });
+  held = false;
+  const passing = pr({ checkState: "passing", state: "passing", headSha: "b".repeat(40) });
+  harness.setCurrentPr(passing);
+  await observe(harness.coordinator, passing);
+  await runCountdown();
+  expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
+});
 
 async function observe(
   coordinator: PrAutoDispatchCoordinator,

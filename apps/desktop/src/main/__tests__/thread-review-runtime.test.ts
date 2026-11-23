@@ -44,14 +44,18 @@ describe("review tracking runtime eligibility", () => {
   });
 
   const submitTurn = vi.fn(async () => ({ status: "queued" }));
-  function install() {
+  const submitTurnIfIdle = vi.fn(async ({ canAdmit }: { canAdmit: () => Promise<boolean> }) =>
+    await canAdmit() ? { status: "started", turnId: "fix-turn" } : { status: "busy" });
+  function install(readReviewStackHold?: () => Promise<string | undefined>) {
     submitTurn.mockClear();
+    submitTurnIfIdle.mockClear();
     const registry = {
       onEvent: (listener: typeof onEvent) => { onEvent = listener; return () => {}; },
       setPwrAgentThreadTodoHandler: (value: PwrAgentThreadTodoHandler) => { handler = value; },
-      submitTurn,
+      getThreadInfo: () => undefined,
+      submitTurn, submitTurnIfIdle,
     } as unknown as DesktopBackendRegistry;
-    installThreadTodoRuntime({ registry, broadcast, listProjects: async () => [], readDefaultMergeMethod: () => "squash",
+    installThreadTodoRuntime({ registry, broadcast, listProjects: async () => [], readDefaultMergeMethod: () => "squash", readReviewStackHold,
       feed: { loadOwners: async () => [], managedThreadKeys: () => new Set(), onDelta: () => {} } });
   }
 
@@ -225,6 +229,37 @@ describe("review tracking runtime eligibility", () => {
       onEvent(findingsOutput("review-turn", "armed-review"));
       await Promise.resolve();
       expect(submitTurn).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps a held review pending and rechecks the stack at turn admission", async () => {
+      let hold: string | undefined = "Held by #6: CI running";
+      const readHold = vi.fn(async () => hold);
+      install(readHold);
+      getReviewAutoFixArming().starting(THREAD, "auto-fix").accepted("review-turn");
+      onEvent(findingsOutput("review-turn", "held-review"));
+      const [review] = getThreadReviewService().list();
+      expect(readReviewAutoFixStatus(THREAD).runs[review!.id]?.phase).toBe("queued");
+      await vi.waitFor(() => expect(readHold).toHaveBeenCalledTimes(1));
+      expect(submitTurnIfIdle).not.toHaveBeenCalled();
+
+      const observe = () => onEvent({ backend: THREAD.backend, notification: {
+        method: "pullRequest/status/updated", params: { pr: PR },
+      } } as AgentEvent);
+      hold = undefined;
+      submitTurnIfIdle.mockImplementationOnce(async ({ canAdmit }) => {
+        hold = "Held by #6: needs restack";
+        expect(await canAdmit()).toBe(false);
+        return { status: "busy" };
+      });
+      observe();
+      await vi.waitFor(() => expect(readHold).toHaveBeenCalledTimes(3));
+      expect(readReviewAutoFixStatus(THREAD).runs[review!.id]?.phase).toBe("queued");
+      hold = undefined;
+      observe();
+      await vi.waitFor(() => expect(readHold).toHaveBeenCalledTimes(5));
+      observe();
+      expect(submitTurnIfIdle).toHaveBeenCalledTimes(2);
+      expect(submitTurn).not.toHaveBeenCalled();
     });
 
     it("sends nothing for a review started to wait, or one PwrAgent did not start", async () => {

@@ -3,15 +3,74 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, inject, it, onTestFinished, vi } from "vitest";
 import { StackGit } from "@pwragent/owner-core/stacks/engine/git";
+import { StackEngine } from "@pwragent/owner-core/stacks/engine/index";
+import { pushStackLayers } from "@pwragent/owner-core/stacks/engine/publish";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { acquireNativeFileLock } from "../app-server/maintenance-native-lock";
 import { GhStackCatalogStore, stackGitRunner } from "../stacks/stack-engine-ports";
-import { StackOperationsService } from "../stacks/stack-operations-service";
+import { prepareStackPublishReceipt, StackOperationsService } from "../stacks/stack-operations-service";
 import { resetDesktopOverlayStoreForTests, setDesktopOverlayStoreForTests } from "../storage/desktop-overlay-store";
 import { SqliteOverlayStore } from "../storage/overlay-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 vi.mock("../native-relay-path", () => ({ nativeRelayPath: () => inject("nativeHelperFixtures").stackEngine!.relay }));
+
+it("keeps the previous proof across a failed replay and leases directly from the original remote head", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "pwragent-stack-proof-")));
+  onTestFinished(async () => await rm(root, { recursive: true, force: true }));
+  const cwd = join(root, "local");
+  await new StackGit(stackGitRunner, root).output(["init", "-b", "main", cwd]);
+  const git = new StackGit(stackGitRunner, cwd);
+  await git.output(["config", "user.email", "fixture@example.invalid"]);
+  await git.output(["config", "user.name", "Fixture"]);
+  await git.output(["config", "commit.gpgSign", "false"]);
+  const commitFile = async (file: string) => {
+    await writeFile(join(cwd, file), file);
+    await git.output(["add", file]);
+    await git.output(["commit", "-m", file]);
+  };
+  await commitFile("base");
+  const base = (await git.tip("main"))!;
+  await git.output(["switch", "-c", "child"]);
+  await commitFile("child-file");
+  const original = (await git.tip("child"))!;
+  const remote = join(root, "remote");
+  await git.output(["init", "--bare", remote]);
+  await git.output(["push", remote, "child"]);
+  await git.output(["switch", "main"]);
+  await commitFile("first-trunk-fix");
+  const common = join(cwd, ".git");
+  await writeFile(join(common, "gh-stack"), JSON.stringify({
+    schemaVersion: 1, repository: "github.com:fixture/stack",
+    stacks: [{ trunk: { branch: "main", head: base }, branches: [{ branch: "child", head: original, base }] }],
+  }));
+  const store = new GhStackCatalogStore(inject("nativeHelperFixtures").stackEngine!.relay);
+  const engine = new StackEngine(stackGitRunner, store, cwd, common);
+  const operation = { kind: "restack" as const, root: "child" };
+  const prepareReceipt = (receipt: Parameters<typeof prepareStackPublishReceipt>[1]) => prepareStackPublishReceipt(git, receipt);
+  await engine.apply(await engine.plan(operation), "first", 1, { prepareReceipt });
+  const first = (await git.tip("child"))!;
+  const proof = () => git.output(["for-each-ref", "--format=%(objectname)", "refs/pwragent/stack-publish/"]);
+  const firstProof = await proof();
+  expect(firstProof.trim()).toBe((await git.output(["rev-parse", "refs/pwragent/undo/first/receipt"])).trim());
+
+  await commitFile("second-trunk-fix");
+  const plan = await engine.plan(operation);
+  await expect(engine.apply(plan, "aborted", 2, {
+    prepareReceipt,
+    begin: async () => { await git.output(["update-ref", "refs/heads/child", original, first]); },
+  })).rejects.toThrow();
+  expect(await proof()).toBe(firstProof);
+  await git.output(["update-ref", "refs/heads/child", first, original]);
+  const final = await engine.apply(plan, "final", 3, { prepareReceipt });
+  expect(final.publishBoundaries?.child).toBe(original);
+  const tip = (await git.tip("child"))!;
+  expect(await git.ancestor(original, tip)).toBe(false);
+  expect(await git.ancestor(first, tip)).toBe(false);
+  await pushStackLayers(git, remote, [{ branch: "child", expected: original, previous: final.publishBoundaries!.child!, next: tip }]);
+  expect(await git.output(["ls-remote", remote, "refs/heads/child"])).toContain(tip);
+  expect((await git.output(["log", "--format=%s", "main..child"])).trim()).toBe("child-file");
+});
 
 it("keeps gh stack lock inodes, rejects foreign journals and compares catalog bytes before replacing them", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pwragent-stack-ports-"));

@@ -106,6 +106,7 @@ const FORGE_TOOL_GROUP_SUBS: Record<ForgeAgentToolGroup, string> = {
   issues: "Open, edit, close and label issues.",
   ci: "Rerun failed GitHub Actions jobs and their dependents, or failed and canceled GitLab pipeline jobs.",
   stacks: "Apply and undo local branch and catalog changes for stacked pull requests.",
+  stack_publish: "Push a stack layer or retarget its pull request after the parent merges.",
   approve_merge: "Approving or requesting changes in a review, and merging a pull or merge request.",
 };
 

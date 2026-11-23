@@ -37,6 +37,7 @@ import { ThreadRowPrChip, ThreadRowPrRollupChip } from "./ThreadRowPrChips";
 import { ThreadRowDensityContext } from "./thread-row-density";
 import { ReactionPicker } from "./ReactionPicker";
 import { ThreadMetaChips } from "./ThreadMetaChips";
+import { stackHoldForPr } from "../stacks/stack-presentation";
 import { isStaleStackLayer, readCompactStackMemberships } from "@pwragent/shared/stacks/stack-status";
 import {
   getThreadRowStatus,
@@ -274,7 +275,12 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
     && props.thread.federation?.ref.target.scope !== "remote";
   // Compact rows serve the chips immediately. The disclosure reads the
   // owner's full collection when the row only carries a preview.
-  const prs = props.thread.prs ?? [];
+  const attachedPrs = props.thread.prs ?? [];
+  // The stack chip is the primary signal while a lower layer holds this PR.
+  const heldPrUrls = readCompactStackMemberships(props.thread).some(({ heldBy }) => heldBy)
+    ? attachedPrs.filter((pr) => stackHoldForPr(props.thread, pr)).map((pr) => pr.url) : [];
+  const prs = heldPrUrls.length ? attachedPrs.filter((pr) => !heldPrUrls.includes(pr.url)) : attachedPrs;
+  const heldPrUrlList = heldPrUrls.length ? heldPrUrls.join("\n") : undefined;
   const attachmentThread = props.thread.prsTruncated ? props.thread : undefined;
   // The chips line's one PR chip; the rest sit behind a `+N PRs` chip.
   const leadPr = prs.length > 1 ? resolvePrOverflow(prs)!.lead : prs[0];
@@ -312,9 +318,9 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
   // A string, not a callback or a Set: the memoized rollup chip compares it
   // by value, and it is read during that chip's render. Minimal mounts the
   // chip for any PR; the other densities, for the `+N PRs` chip.
-  const repoPrefixedPrUrls = density === "minimal" || prs.length > 1
-    ? prs
-      .filter((pr) => needsRepoPrefix(props.thread, pr, prs))
+  const repoPrefixedPrUrls = density === "minimal" || attachedPrs.length > 1
+    ? attachedPrs
+      .filter((pr) => needsRepoPrefix(props.thread, pr, attachedPrs))
       .map((pr) => pr.url)
       .join("\n")
     : "";
@@ -461,8 +467,8 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
       <div
         ref={rowRef}
         data-stack-tray-layer={props.stackTrayKey && readCompactStackMemberships(props.thread).find(({ key }) => key === props.stackTrayKey)?.key}
-        data-stack-tray-stale={props.stackTrayKey && readCompactStackMemberships(props.thread).some(({ key, health }) =>
-          key === props.stackTrayKey && isStaleStackLayer(health)) || undefined}
+        data-stack-tray-stale={props.stackTrayKey && readCompactStackMemberships(props.thread).some(({ key, health, heldBy }) =>
+          key === props.stackTrayKey && !heldBy && isStaleStackLayer(health)) || undefined}
         className={`thread-row${props.compact ? " thread-row--compact" : ""}${
           selected ? " is-selected" : ""
         }${
@@ -710,10 +716,11 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
             {/* Minimal density's one PR chip. CSS hides it while X-ray is
                 held, so a peek re-renders no row. It sits right of the pin
                 so the hover-only pin button never shifts it. */}
-            {density === "minimal" && prs.length > 0 ? (
+            {density === "minimal" && (prs.length > 0 || attachedPrs.length > 1) ? (
               <ThreadRowPrRollupChip
                 thread={props.thread}
-                prs={prs}
+                prs={attachedPrs}
+                heldPrUrls={heldPrUrlList}
                 threadTitle={props.thread.title}
                 repoPrefixedUrls={repoPrefixedPrUrls}
                 attachmentThread={attachmentThread}
@@ -804,13 +811,13 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
             linkedDirectoryMode={props.linkedDirectoryMode}
             // One chip for the lead PR, then one `+N PRs` chip whose list
             // holds every PR and Detach all.
-            prChips={leadPr ? (
+            prChips={leadPr || attachedPrs.length > 1 ? (
               <>
-                <ThreadRowPrChip
+                {leadPr ? <ThreadRowPrChip
                   key={leadPr.url}
                   thread={props.thread}
                   pr={leadPr}
-                  showRepoPrefix={needsRepoPrefix(props.thread, leadPr, prs)}
+                  showRepoPrefix={needsRepoPrefix(props.thread, leadPr, attachedPrs)}
                   branchDrift={branchDrift?.prKey === buildPullRequestStatusKey(leadPr) ? branchDrift : undefined}
                   onOpen={openPrStable}
                   onOpenContextMenu={
@@ -819,12 +826,13 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
                       : undefined
                   }
                   onDetach={props.onDetachPullRequests ? detachPr : undefined}
-                />
-                {prs.length > 1 ? (
+                /> : null}
+                {attachedPrs.length > 1 ? (
                   <ThreadRowPrRollupChip
-                    variant="overflow"
+                    variant={leadPr ? "overflow" : "rollup"}
                     thread={props.thread}
-                    prs={prs}
+                    prs={attachedPrs}
+                    heldPrUrls={heldPrUrlList}
                     threadTitle={props.thread.title}
                     repoPrefixedUrls={repoPrefixedPrUrls}
                     attachmentThread={attachmentThread}

@@ -14,6 +14,7 @@ export interface CatalogStore {
 
 export type StackOperation = (
   | { kind: "restack"; root: string; from?: string; stopBefore?: string }
+  | { kind: "sync"; root: string; branch: string; onto: string; merged: { number: number; head: string; commit: string } }
   | { kind: "adopt"; stack: GhStack; repository: string }
   | { kind: "add_branch"; root: string; branch: string }
   | { kind: "remove"; root: string; branch: string; mode: "detach" | "forget" }
@@ -53,6 +54,8 @@ export interface StackReceipt {
   before: GhStackCatalog;
   after: GhStackCatalog;
   when: number;
+  /** Original pre-replay tips carried across unpublished rewrites. */
+  publishBoundaries?: Record<string, string>;
 }
 
 export type StackJournal = {
@@ -65,6 +68,7 @@ export type StackJournal = {
  * these hooks under the catalog's operation lock and never opens a file. */
 export interface ApplyHooks {
   beforeTransaction?: () => Promise<void>;
+  prepareReceipt?: (receipt: StackReceipt) => Promise<(manifest: string) => string[]>;
   begin?: (entry: StackJournal) => Promise<void>;
   finish?: (outcome: "committed" | "aborted", receipt: StackReceipt) => Promise<void>;
 }

@@ -79,8 +79,9 @@ const LABEL_MAX = 50;
 
 const FIELDS: Record<ForgePrToolOperation, string[]> = {
   list_stacks: [],
-  plan_stack_operation: ["operation", "stack", "branch", "from", "mode", "branches", "name", "newThread", "carryChanges", "askToSettle"],
-  apply_stack_operation: ["planId", "operation", "stack", "branch", "from", "mode", "branches", "name", "newThread", "carryChanges", "askToSettle"],
+  plan_stack_operation: ["operation", "stack", "branch", "from", "stopBefore", "mode", "branches", "name", "newThread", "carryChanges", "askToSettle"],
+  apply_stack_operation: ["planId", "operation", "stack", "branch", "from", "stopBefore", "mode", "branches", "name", "newThread", "carryChanges", "askToSettle"],
+  publish_stack_layer: ["number", "expectedHeadSha"],
   manage_stack_operation: ["opId", "action", "threadId", "stack"],
   get_pull_request: ["number", "url", "branch"],
   list_pull_requests: ["state", "head", "base", "page", "perPage"],
@@ -104,6 +105,7 @@ const FIELDS: Record<ForgePrToolOperation, string[]> = {
 };
 const REQUIRED: Partial<Record<ForgePrToolOperation, string[]>> = {
   plan_stack_operation: ["operation"],
+  publish_stack_layer: ["number"],
   manage_stack_operation: ["action"],
   list_pull_request_files: ["number"],
   get_pull_request_diff: ["number"],
@@ -177,10 +179,10 @@ export function validateForgePrToolArgs(operation: string, value: unknown): asse
   if (unknown) fail(`Unknown argument for ${operation}: ${unknown}.`);
   for (const key of forgePrToolRequiredFields(operation)) if (args[key] === undefined) fail(`${operation} requires ${key}.`);
   if (operation.endsWith("_stack_operation")) {
-    oneOf(args, "operation", ["restack", "adopt", "add_branch", "remove"]);
+    oneOf(args, "operation", ["restack", "adopt", "add_branch", "remove", "sync"]);
     oneOf(args, "action", ["status", "abort", "undo", "continue", "release_thread", "interrupt", "route_conflict", "set_lead"]);
     oneOf(args, "mode", ["detach", "forget"]);
-    for (const key of ["stack", "from", "name"]) text(args, key, 255);
+    for (const key of ["stack", "from", "stopBefore", "name"]) text(args, key, 255);
     if (typeof args.name === "string" && !isSafeRefName(args.name)) fail("Use a valid branch name.");
     text(args, "threadId", 500);
     if (args.action === "release_thread" && !args.threadId) fail("release_thread requires threadId.");

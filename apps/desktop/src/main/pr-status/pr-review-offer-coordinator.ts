@@ -53,6 +53,7 @@ export type PrReviewOfferPorts = {
   threadPrKeys(thread: PrReviewOfferThread): string[];
   /** The status registry's current PR. No forge request is made. */
   getPr(prKey: string): PrSummary | undefined;
+  stackHold?(pr: PrSummary): Promise<{ reason: string; lowerKey?: string } | undefined>;
   stackMergeEvidence?(thread: PrReviewOfferThread, pr: PrSummary): Promise<{ blocked: boolean; lowerKeys: string[]; retryOnObservation?: boolean }>;
   isLowerPolled?(prKey: string): boolean;
   now?: () => number;
@@ -127,7 +128,7 @@ export class PrReviewOfferCoordinator {
   private readonly childKeysByLower = new Map<string, Set<string>>();
   private readonly lowerChanges = new Map<string, number>();
   private lowerChangeSequence = 0;
-  private readonly evaluated = new Map<string, { checkedAt: number; blocked: boolean }>();
+  private readonly evaluated = new Map<string, { checkedAt: number; blocked: boolean; waitingForSettlement?: boolean }>();
   private observationReconciliationPending = false;
   private lastObservedCandidate: string | undefined;
   private closed = false;
@@ -139,8 +140,7 @@ export class PrReviewOfferCoordinator {
     if (this.closed) return;
     if (!READINESS_FIELDS.some((field) => transition.changed[field] !== undefined)) return;
     const keys = new Set([transition.prKey]);
-    const lifecycle = transition.changed.lifecycleState;
-    if (lifecycle && lifecycle.from !== lifecycle.to) {
+    if (READINESS_FIELDS.some((field) => field !== "reviewState" && transition.changed[field] !== undefined)) {
       this.lowerChanges.delete(transition.prKey);
       this.lowerChanges.set(transition.prKey, ++this.lowerChangeSequence);
       if (this.lowerChanges.size > MAX_TRACKED_CHILDREN) {
@@ -166,12 +166,12 @@ export class PrReviewOfferCoordinator {
       if (!previous) return true;
       if (!previous.blocked || now - previous.checkedAt < UNCOVERED_STACK_RECHECK_MS) return false;
       const lowers = this.lowerKeysByChild.get(key);
-      return !lowers?.length || lowers.some((lower) => !this.ports.isLowerPolled?.(lower));
+      return previous.waitingForSettlement || !lowers?.length || lowers.some((lower) => !this.ports.isLowerPolled?.(lower));
     });
     if (!candidate) return;
     this.lastObservedCandidate = candidate;
     this.observationReconciliationPending = true;
-    this.track(this.reconcile([candidate], true).finally(() => {
+    this.track(this.reconcile([candidate], !this.evaluated.get(candidate)?.waitingForSettlement).finally(() => {
       this.observationReconciliationPending = false;
     }));
   }
@@ -319,9 +319,10 @@ export class PrReviewOfferCoordinator {
     const latest = this.ports.getPr(prKey);
     if (this.closed || !latest || latest.headSha !== pr.headSha || latest.baseRefName !== pr.baseRefName
       || prGateReadiness(latest) !== prGateReadiness(pr)) return undefined;
-    if (!assessment.retryOnObservation) {
+    if (!assessment.retryOnObservation || assessment.stackHold) {
       this.evaluated.delete(prKey);
-      this.evaluated.set(prKey, { checkedAt: this.ports.now?.() ?? Date.now(), blocked: assessment.readiness === "stack_parent_open" });
+      this.evaluated.set(prKey, { checkedAt: this.ports.now?.() ?? Date.now(),
+        blocked: assessment.readiness === "stack_parent_open", waitingForSettlement: !!assessment.stackHold });
       if (this.evaluated.size > MAX_TRACKED_CHILDREN) this.evaluated.delete(this.evaluated.keys().next().value!);
     } else {
       this.evaluated.delete(prKey);
@@ -340,7 +341,7 @@ export class PrReviewOfferCoordinator {
     if (recoveryOnly && assessment.standing !== "ready_to_merge") return undefined;
     // A transient transport failure defers a new offer. A previously
     // verified card stays put; executing it always rechecks live evidence.
-    if (assessment.retryOnObservation && open?.kind === "merge" && open.headSha === pr.headSha) return undefined;
+    if (assessment.retryOnObservation && !assessment.stackHold && open?.kind === "merge" && open.headSha === pr.headSha) return undefined;
     const { readiness, reviewId, headContentId, headCovered, standing } = assessment;
     const desired = desiredPrOffer({
       prKey,
@@ -348,7 +349,8 @@ export class PrReviewOfferCoordinator {
       ...(pr.headSha ? { headSha: pr.headSha } : {}),
       ...(headContentId ? { headContentId } : {}),
     });
-    const plan = planPrOffer({
+    const plan = assessment.stackHold && open
+      ? { retire: { cardId: open.cardId, reason: "stale" as const }, raise: undefined } : planPrOffer({
       open,
       desired,
       readiness,
@@ -407,6 +409,8 @@ export class PrReviewOfferCoordinator {
   async mergeOfferRefusal(thread: PrReviewOfferThread, prKey: string): Promise<string | undefined> {
     const pr = this.ports.getPr(prKey);
     if (!pr) return undefined;
+    const hold = await this.ports.stackHold?.(pr);
+    if (hold) return hold.reason;
     const assessment = await this.assessPr(thread, pr, true, false);
     if (assessment.readiness === "stack_parent_open") return `#${pr.number} is waiting for its lower stack layers to merge and its base to be trunk.`;
     if (!assessment.headSha || assessment.readiness === "closed") return undefined;
@@ -435,9 +439,15 @@ export class PrReviewOfferCoordinator {
     pr: PrSummary,
     coverageWhileWaiting: boolean,
     forOffer: boolean,
-  ): Promise<PrReviewAssessment & { lowerKeys?: string[]; retryOnObservation?: boolean }> {
+  ): Promise<PrReviewAssessment & { lowerKeys?: string[]; retryOnObservation?: boolean; stackHold?: string }> {
     const gate = prGateReadiness(pr);
     const head = pr.headSha;
+    const hold = gate !== "closed" && await this.ports.stackHold?.(pr);
+    if (hold) {
+      this.ports.log?.(hold.reason, { prKey: buildPullRequestStatusKey(pr), threadId: thread.threadId });
+      return { readiness: "stack_parent_open", headSha: head, headCovered: false, retryOnObservation: true,
+        stackHold: hold.reason, lowerKeys: hold.lowerKey ? [hold.lowerKey] : [] };
+    }
     if (gate && (!coverageWhileWaiting || !head || gate === "closed" || gate === "no_head")) {
       return { readiness: gate, ...(head ? { headSha: head } : {}), headCovered: false };
     }

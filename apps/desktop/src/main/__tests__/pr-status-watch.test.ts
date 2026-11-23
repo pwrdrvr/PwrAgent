@@ -137,6 +137,64 @@ function createHarness(
   };
 }
 
+it("preserves a held failure watch until a fresh eligible check result", async () => {
+  const watch = await registerWatch(store, ["failure"]);
+  const observe = vi.fn<() => Promise<string | undefined>>().mockResolvedValue("Held by #1104: CI running");
+  const submitTurnIfIdle = vi.fn(async () => ({ status: "started" as const, turnId: "fresh-watch" }));
+  const coordinator = new PrStatusWatchCoordinator({
+    store, registry: { submitTurnIfIdle }, stackHold: observe, now: () => now,
+  });
+  await expect(coordinator.handleStatusSnapshot(pr(), now)).resolves.toBe(0);
+  expect(submitTurnIfIdle).not.toHaveBeenCalled();
+  expect(await store.listActiveThreadPrStatusWatches(watch)).toMatchObject([{ watchId: watch.watchId }]);
+  observe.mockResolvedValue(undefined);
+  await coordinator.handleStatusSnapshot(pr({ state: "passing", checkState: "passing" }), now + 1);
+  expect(submitTurnIfIdle).not.toHaveBeenCalled();
+});
+
+it("keeps a busy CI wake outside the turn queue and checks the latest head on the next admission", async () => {
+  const watch = await registerWatch(store, ["failure"]);
+  let fresh = pr({ state: "failing", checkState: "failing" });
+  const submitTurnIfIdle = vi.fn(async (_request: { joinRunningTurn?: boolean; canAdmit?: () => Promise<boolean> }) => {
+    // The watch is ready, but the backend was occupied at admission.
+    return { status: "busy" as const };
+  });
+  const coordinator = new PrStatusWatchCoordinator({
+    store, registry: { submitTurnIfIdle }, currentPr: () => fresh, now: () => now,
+  });
+  await coordinator.handleStatusSnapshot(fresh, now);
+  expect(submitTurnIfIdle).toHaveBeenCalledTimes(1);
+  const request = submitTurnIfIdle.mock.calls[0]![0];
+  expect(request.joinRunningTurn).not.toBe(true);
+  expect(await request.canAdmit?.()).toBe(true);
+  fresh = pr({ headSha: "b".repeat(40), state: "passing", checkState: "passing" });
+  expect(await request.canAdmit?.()).toBe(false);
+  await coordinator.handleStatusSnapshot(fresh, now + 1);
+  expect(submitTurnIfIdle).toHaveBeenCalledTimes(1);
+  expect(await store.listActiveThreadPrStatusWatches(watch)).toMatchObject([{ headSha: fresh.headSha, notifyOn: ["failure"] }]);
+});
+
+it("does not claim or release CI watches on each poll of a known busy consumer", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  useFileStateDb();
+  await registerWatch();
+  let busy = true;
+  const submitTurnIfIdle = vi.fn(async () => ({ status: "started" as const, turnId: "wake" }));
+  const coordinator = new PrStatusWatchCoordinator({
+    store, registry: { submitTurnIfIdle }, canStartChecksWake: () => !busy, now: () => now,
+  });
+  const failing = pr({ state: "failing", checkState: "failing" });
+  const { writes } = await measureSqliteWrites(async () => {
+    for (let index = 0; index < 10; index++) await coordinator.handleStatusSnapshot(failing, now + index);
+  });
+  expectSqliteWriteBudget({ scenario: "busy-ci-watch-polls", writes,
+    note: "A known busy thread's CI watch stays unclaimed across repeated polls. 0 MB/day." });
+  expect(submitTurnIfIdle).not.toHaveBeenCalled();
+  busy = false;
+  await coordinator.handleStatusSnapshot(failing, now + 10);
+  expect(submitTurnIfIdle).toHaveBeenCalledTimes(1);
+});
+
 describe("PrStatusWatchCoordinator", () => {
   it("migrates a legacy fork-keyed watch and completes it only for its destination", async () => {
     const dbPath = useFileStateDb();

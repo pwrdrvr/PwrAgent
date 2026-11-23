@@ -11351,7 +11351,9 @@ describe("app server ipc", () => {
     };
     const registry = backendRegistryLifecycle.get() as Record<string, unknown>;
     const submitTurnIfIdle = vi.fn(async (): Promise<{ status: "started" | "busy"; turnId?: string }> => ({ status: "started", turnId: "wake" }));
+    const canStartThreadTurnImmediately = vi.fn(() => true);
     registry.submitTurnIfIdle = submitTurnIfIdle;
+    registry.canStartThreadTurnImmediately = canStartThreadTurnImmediately;
     registry.getActiveTurnForThread = () => undefined;
     // Dependency registration reads each thread's turns through the provider.
     const originalReadThread = readThread.getMockImplementation();
@@ -11369,13 +11371,14 @@ describe("app server ipc", () => {
     const restore = () => {
       if (originalReadThread) readThread.mockImplementation(originalReadThread);
       delete registry.submitTurnIfIdle;
+      delete registry.canStartThreadTurnImmediately;
       delete registry.getActiveTurnForThread;
       service.backgroundPrPollingEnabled = previous.polling;
       service.ownerNavigationActive = previous.navigation;
       service.threadDependencyCoordinator = undefined;
       service.prStatusWatchCoordinator = undefined;
     };
-    return { appServerService, service, submitTurnIfIdle, restore };
+    return { appServerService, service, submitTurnIfIdle, canStartThreadTurnImmediately, restore };
   }
 
   it.each(["status-cache", "legacy-attachment"])("retires a locked terminal watch from %s and delivers its saved event on unlock without a forge read", async (source) => {
@@ -11644,7 +11647,7 @@ describe("app server ipc", () => {
     const { measureSqliteWrites } = await import("../state/sqlite-write-metrics");
     const { expectSqliteWriteBudget } = await import("./fixtures/sqlite-write-budget");
     await withRenamedRepositoryStore("renamed-repo-watch-", async ({ store }) => {
-      const { service, submitTurnIfIdle, restore } = await renamedRepositoryService();
+      const { service, submitTurnIfIdle, canStartThreadTurnImmediately, restore } = await renamedRepositoryService();
       const threadId = "renamed-repo-watch";
       const headSha = "a".repeat(40);
       const storedPr = githubPr({
@@ -11690,8 +11693,17 @@ describe("app server ipc", () => {
           note: "Two undelivered watches saved under a renamed repository's old name move to the new name in one commit, once per learned rename; a second sync with no new rename reads only. 0 MB/day after the move.",
         });
 
-        await expect(service.getPrStatusWatchCoordinator().handleStatusSnapshot(passingPr, Date.now()))
-          .resolves.toBe(1);
+        const coordinator = service.getPrStatusWatchCoordinator();
+        canStartThreadTurnImmediately.mockReturnValueOnce(false);
+        await expect(coordinator.handleStatusSnapshot(passingPr, Date.now())).resolves.toBe(0);
+        expect(submitTurnIfIdle).not.toHaveBeenCalled();
+        expect(await store.listActiveThreadPrStatusWatches({ backend: "codex", threadId })).toEqual([
+          expect.objectContaining({ watchId: "ci", prKey: "github.com/pwrdrvr/pwragent#3179" }),
+          expect.objectContaining({ watchId: "merge" }),
+        ]);
+
+        await expect(coordinator.handleStatusSnapshot(passingPr, Date.now())).resolves.toBe(1);
+        expect(submitTurnIfIdle).toHaveBeenCalledTimes(1);
         expect(submitTurnIfIdle).toHaveBeenCalledWith(expect.objectContaining({
           threadId,
           messageOrigin: expect.objectContaining({

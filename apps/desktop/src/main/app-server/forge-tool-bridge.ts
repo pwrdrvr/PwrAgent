@@ -492,7 +492,7 @@ export class ForgeToolBridge {
       pwragent_approval_kind: "mcp_tool_call",
       ...(sessionGrant ? { persist: ["session"] } : {}),
       ...(repository ? { connector_name: `${repository.owner}/${repository.repo}` } : {}),
-      ...(group === "approve_merge" ? { riskLevel: "high" } : {}),
+      ...(group === "approve_merge" || group === "stack_publish" ? { riskLevel: "high" } : {}),
       // `subtitle` is set below, once the call is known to need a card.
       tool_params_display: forgeToolParamsDisplay(args),
     };
@@ -529,7 +529,7 @@ export class ForgeToolBridge {
           ? `${forgeAgentToolUnreadableRuleSentence(resolution.repository, group, wording)} An automation cannot answer an approval.`
           : `${label} is set to ${levelName} in Settings → Git → Agent forge tools, and an automation cannot answer an approval. The operator can set it to Allow.`);
     }
-    if (!context.turnId) {
+    if (!context.turnId && operation !== "publish_stack_layer") {
       throw new ForgeReadError("approval_required", `${label} needs the operator's approval, which requires an active turn.`);
     }
     const sessionKey = JSON.stringify([context.backend, context.threadId]);

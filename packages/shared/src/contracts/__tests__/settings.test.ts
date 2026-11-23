@@ -463,6 +463,7 @@ describe("desktop settings contracts", () => {
             ci: { value: "auto", source: "default" },
             stacks: { value: "auto", source: "default" },
             approve_merge: { value: "ask", source: "default" },
+            stack_publish: { value: "ask", source: "default" },
           },
         },
       },

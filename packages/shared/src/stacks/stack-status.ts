@@ -1,3 +1,4 @@
+import type { StackAutomationBlock, StackLayerHealth, StackUnsettledReason } from "./stack-automation";
 import type { GhStack, GhStackBranch } from "./catalog";
 import { pullRequestStackOrder } from "../pull-request-review";
 
@@ -9,9 +10,7 @@ export type StackPullRequest = {
   lifecycleState?: "open" | "merged" | "closed";
 };
 
-export type StackLayerHealth =
-  | "in_sync" | "needs_restack" | "parent_merged" | "needs_push"
-  | "drift" | "remote_ahead" | "held" | "ambiguous" | "unknown";
+export type { StackLayerHealth } from "./stack-automation";
 
 export type StackThread = {
   key: string;
@@ -33,6 +32,8 @@ export type StackLayer = {
   /** When a merged historical parent has been replaced by the stack trunk. */
   activeBase?: string;
   health: StackLayerHealth;
+  heldBy?: StackAutomationBlock;
+  unsettled?: StackUnsettledReason;
   pullRequest?: { number: number; lifecycleState?: StackPullRequest["lifecycleState"] };
   thread?: Pick<StackThread, "key" | "title">;
   role: StackLayerBinding["role"];
@@ -59,7 +60,11 @@ export type CompactStackMembership = {
   inferred: boolean;
   position: number;
   count: number;
+  repository?: string;
+  number?: number;
   health: StackLayerHealth;
+  heldBy?: StackAutomationBlock;
+  unsettled?: StackUnsettledReason;
   detailRevision?: string;
   threadKey?: string;
   parentThreadKey?: string;
@@ -84,7 +89,11 @@ export function compactStackMembership(stack: StackSummary, position: number): C
     inferred: stack.inferred,
     position,
     count: stack.layers.length,
+    repository: stack.repository,
+    ...(layer.pullRequest ? { number: layer.pullRequest.number } : {}),
     health: layer.health,
+    ...(layer.heldBy ? { heldBy: layer.heldBy } : {}),
+    ...(layer.unsettled ? { unsettled: layer.unsettled } : {}),
     ...(layer.thread && layer.thread.key.length <= 512 ? { threadKey: layer.thread.key } : {}),
     ...(parent?.thread && parent.thread.key.length <= 512 ? { parentThreadKey: parent.thread.key } : {}),
     ...(parent?.pullRequest?.lifecycleState === "merged" ? { parentMerged: true } : {}),

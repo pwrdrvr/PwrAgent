@@ -6062,7 +6062,6 @@ export function StarMapScreen(props: StarMapScreenProps) {
             transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
           }}
         >
-        {!overview ? <StarMapStackEdges threads={localThreads} rects={flightRects} instanceId={localInstanceId} /> : null}
         {projectsMode ? null : (
         <svg
           className="star-map__links"
@@ -6275,6 +6274,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
             ))}
           </svg>
         ) : null}
+        {!overview ? <StarMapStackEdges threads={localThreads} rects={flightRects} instanceId={localInstanceId} /> : null}
         {projectsMode
           ? projectLayout.projects.map((placement) => {
               const project = projects.find(

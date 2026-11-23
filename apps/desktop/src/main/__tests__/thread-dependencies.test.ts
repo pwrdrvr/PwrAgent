@@ -76,7 +76,7 @@ function operatorTodos(stateDb = db, prepare: OperatorTodoDelivery["prepare"] = 
 
 const cards = () => new ThreadTodoStore(db).list({ status: "all" });
 
-function create(agent: ThreadDependencyCoordinator, conditions = [condition("foundation")], extra: Partial<Pick<ManageThreadDependenciesRequest, "mode" | "onFailure" | "threadId" | "continuation" | "deliver" | "handoff" | "steps" | "holdMerge">> = {}) {
+function create(agent: ThreadDependencyCoordinator, conditions = [condition("foundation")], extra: Partial<Pick<ManageThreadDependenciesRequest, "mode" | "onFailure" | "threadId" | "continuation" | "deliver" | "handoff" | "steps" | "holdMerge" | "wakeOn">> = {}) {
   return agent.manage({ action: "create", backend: "codex", threadId: "dependencies", conditions, ...extra });
 }
 
@@ -98,6 +98,32 @@ beforeEach(() => {
 afterEach(() => { db.close(); removeTempStateDbDir(tempDir); vi.unstubAllEnvs(); });
 
 describe("durable thread dependencies", () => {
+  it("keeps a failure-only wait live through held green CI from another thread", async () => {
+    let held = true;
+    const agent = coordinator(store, undefined, {
+      stackHold: async (item) => {
+        expect(item.evidence[0]?.prUrl).toBe(pr().url);
+        expect(item.evidence[0]?.condition.threadId).toBe("foundation");
+        return held ? "Held by #41: needs restack" : undefined;
+      },
+    });
+    snapshots.get("foundation")!.prs = [{ pr: pr(), fetchedAt: now }];
+    await create(agent, [condition("foundation")], { wakeOn: "failure" });
+    snapshots.get("foundation")!.prs = [{ pr: pr({ checkState: "passing", state: "passing" }), fetchedAt: now }];
+    const { writes } = await measureSqliteWrites(async () => {
+      for (let index = 0; index < 10; index++) await agent.handlePrEvent(pr().url);
+    });
+    expectSqliteWriteBudget({ scenario: "stack-held-failure-only-continue-after", writes,
+      note: "One commit records held CI evidence from the prerequisite; repeat polls write nothing. About 0.8 MB/day at 100 waits/day and 8 KB/commit." });
+    expect(store.active()).toMatchObject([{ status: "ready" }]);
+    expect(submit).not.toHaveBeenCalled();
+    held = false;
+    snapshots.get("foundation")!.prs = [{ pr: pr({ headSha: "restacked", checkState: "failing", state: "failing" }), fetchedAt: now }];
+    await agent.handlePrEvent(pr().url);
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(store.active()).toEqual([]);
+  });
+
   it("waits before a PR exists and follows fresh current-head CI to one continuation", async () => {
     const agent = coordinator();
     await create(agent);

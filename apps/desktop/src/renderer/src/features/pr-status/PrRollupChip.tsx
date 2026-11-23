@@ -45,6 +45,8 @@ import {
 
 type PrRollupChipProps = {
   prs: PrSummary[];
+  /** Newline-joined URLs whose readiness the stack chip represents. */
+  heldPrUrls?: string;
   /** Names the popover for assistive tech: "Pull requests for <title>". */
   threadTitle: string;
   /** Newline-joined URLs of the PRs that need their org/repo prefix. */
@@ -146,19 +148,20 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
   const rollup = resolvePrRollup(props.prs)!;
   const listRollup = listPrs === props.prs ? rollup : resolvePrRollup(listPrs);
   const ordered = listRollup?.ordered ?? [];
-  const overflow = props.variant === "overflow" ? resolvePrOverflow(props.prs) : undefined;
+  const held = props.heldPrUrls && new Set(props.heldPrUrls.split("\n"));
+  const visiblePreview = held ? props.prs.filter((pr) => !held.has(pr.url)) : props.prs;
+  const signalPrs = held ? listPrs.filter((pr) => !held.has(pr.url)) : listPrs;
+  const overflow = props.variant === "overflow";
   const overflowLabel = countUnknown ? "More PRs" : prOverflowLabel(moreCount);
   // The PRs the chip itself speaks for: all of them, or the ones the lead
   // chip beside it leaves out. The list always holds every PR.
-  const chipRollup = overflow
-    ? (attachments.prs && resolvePrRollup(ordered.filter((pr) => pr.url !== overflow.lead.url)))
-      || overflow.restRollup
-    : listRollup ?? rollup;
+  const overflowLead = overflow ? resolvePrOverflow(visiblePreview)?.lead ?? visiblePreview[0] : undefined;
+  const chipRollup = resolvePrRollup(overflowLead ? signalPrs.filter((pr) => pr.url !== overflowLead.url) : signalPrs);
   const repoPrefixed = new Set(props.repoPrefixedUrls.split("\n"));
   const summaryText = incomplete ? (attachments.failed ? "Couldn’t load all PRs" : "Loading PRs…")
-    : listRollup?.summary;
-  const presentation = resolvePrChipPresentation(chipRollup.representative);
-  const lead = listRollup?.lead;
+    : held ? resolvePrRollup(signalPrs)?.summary ?? "Held by lower stack layers" : listRollup?.summary;
+  const presentation = chipRollup && resolvePrChipPresentation(chipRollup.representative);
+  const lead = chipRollup?.lead;
   const leadLabel = lead && !overflow
     ? prNumberLabel(lead, repoPrefixed.has(lead.url) || props.needsRepoPrefix?.(lead, listPrs) === true)
     : undefined;
@@ -211,7 +214,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
   const watchFor = (pr: PrSummary) =>
     resolvePrChipWatch(props.prWatches, pr, props.autoFixRepository);
   const watchStopHint = Boolean(props.onOpenContextMenu);
-  const waitingForCi = chipRollup.ordered.some((pr) => watchFor(pr)?.ci);
+  const waitingForCi = chipRollup?.ordered.some((pr) => watchFor(pr)?.ci);
   // Read from the live list, so a status update reaches an open card.
   const cardPr = ordered.find((pr) => pr.url === cardUrl);
   const latestCardRef = useRef<ReactNode>(null);
@@ -488,9 +491,9 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
     "pr-chip",
     "pr-chip--rollup",
     ...(overflow ? ["pr-chip--overflow"] : []),
-    ...prChipModifierClasses(presentation),
+    ...(presentation ? prChipModifierClasses(presentation) : []),
   ].join(" ");
-  const dotRef = presentation.hasFailingChecksStillRunning ? statusPulseRef : undefined;
+  const dotRef = presentation?.hasFailingChecksStillRunning ? statusPulseRef : undefined;
 
   return (
     <span
@@ -508,10 +511,10 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
         aria-label={overflow
           ? `${overflowLabel}: ${moreCount}${countUnknown ? "+" : ""} more ${
             moreCount === 1 ? "pull request" : "pull requests"
-          }${props.attachmentThread ? "" : `, ${chipRollup.summary}`}${waitingForCi ? ", waiting for CI" : ""}`
+          }${props.attachmentThread || !chipRollup ? "" : `, ${chipRollup.summary}`}${waitingForCi ? ", waiting for CI" : ""}`
           : `${countLabel} pull requests${
             leadLabel ? `, ${leadLabel} open` : ""
-          }${props.attachmentThread ? "" : `, ${rollup.summary}`}${waitingForCi ? ", waiting for CI" : ""}`}
+          }${props.attachmentThread || !chipRollup ? "" : `, ${chipRollup.summary}`}${waitingForCi ? ", waiting for CI" : ""}`}
         className={className}
         data-pr-rollup=""
         draggable={false}
@@ -543,7 +546,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
             <span className="pr-chip__lead">
               <span className="pr-chip__dot" aria-hidden="true" ref={dotRef} />
               <span className="pr-chip__label">{leadLabel}</span>
-              {presentation.isDraft
+              {presentation?.isDraft
                 ? <span className="pr-chip__draft-bar" aria-hidden="true" />
                 : null}
             </span>
@@ -556,16 +559,16 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
           </>
         ) : (
           <>
-            <span className="pr-chip__dot" aria-hidden="true" ref={dotRef} />
+            {presentation ? <span className="pr-chip__dot" aria-hidden="true" ref={dotRef} /> : null}
             <span className="pr-chip__label">
-              {overflow ? overflowLabel : incomplete ? `${countLabel} PRs` : prRollupLabel(listPrs)}
+              {overflow ? overflowLabel : incomplete || held ? `${countLabel} PRs` : prRollupLabel(listPrs)}
             </span>
             {waitingForCi ? (
               <span className="pr-chip__watch" aria-hidden="true">
                 <EyeIcon size={12} />
               </span>
             ) : null}
-            {presentation.isDraft
+            {presentation?.isDraft
               ? <span className="pr-chip__draft-bar" aria-hidden="true" />
               : null}
           </>
@@ -625,7 +628,8 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                 const behind = props.branchDrift?.prKey === buildPullRequestStatusKey(pr)
                   ? prBranchBehindLabel(props.branchDrift)
                   : undefined;
-                const status = behind
+                const isHeld = held && held.has(pr.url);
+                const status = isHeld ? "Held by a lower stack layer" : behind
                   ? `${prStatusLabel(pr)} · ${behind}`
                   : prStatusLabel(pr);
                 // The time each stack sorts by, so the order reads as one.
@@ -641,8 +645,8 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                     || (lifecycle === "merged" && pr.mergeQueue?.state !== "merged_by_queue")
                     ? stackTime
                     : `${stackTime} · ${status}`;
-                const rowPresentation = resolvePrChipPresentation(pr);
-                const rowWaitingForCi = Boolean(watchFor(pr)?.ci);
+                const rowPresentation = isHeld ? undefined : resolvePrChipPresentation(pr);
+                const rowWaitingForCi = !isHeld && Boolean(watchFor(pr)?.ci);
                 const openRow = (): void => {
                   dismissImmediately();
                   props.onOpen(pr.url);
@@ -693,13 +697,13 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                       className={[
                         "pr-chip",
                         "pr-rollup-popover__chip",
-                        ...prChipModifierClasses(rowPresentation),
+                        ...(rowPresentation ? prChipModifierClasses(rowPresentation) : []),
                       ].join(" ")}
                       onClick={openRow}
                     >
                       <span
                         className="pr-chip__dot"
-                        ref={rowPresentation.hasFailingChecksStillRunning ? statusPulseRef : undefined}
+                        ref={rowPresentation?.hasFailingChecksStillRunning ? statusPulseRef : undefined}
                       />
                       <span className="pr-chip__label">{label}</span>
                       {rowWaitingForCi ? (

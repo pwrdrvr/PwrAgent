@@ -1,6 +1,6 @@
 import { constants } from "node:fs";
 import { createHash } from "node:crypto";
-import { open, realpath } from "node:fs/promises";
+import { lstat, open, realpath } from "node:fs/promises";
 import path from "node:path";
 import { buildThreadIdentityKey, type NavigationThreadSummary, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import { parseGhStackCatalog, type GhStack, type GhStackBranch, type GhStackCatalogRead } from "@pwragent/shared/stacks/catalog";
@@ -8,6 +8,8 @@ import {
   inferPullRequestStacks, stackLayerBinding, stackLayerHealth,
   type StackLayer, type StackSummary, type StackThread, type StackWorktree, type ThreadStackMembership,
 } from "@pwragent/shared/stacks/stack-status";
+import { resolveCheckState } from "@pwragent/shared/pull-request-rollup";
+import { stackAutomationGates } from "@pwragent/shared/stacks/stack-automation";
 import { runGitCommand } from "../app-server/git-executable";
 import { PR_METADATA_PRIORITY, runPrMetadataProcess, type PrMetadataDemand } from "../pr-status/pr-metadata-process";
 
@@ -40,6 +42,13 @@ async function git(cwd: string, args: string[], demand?: PrMetadataDemand): Prom
 
 type Checkout = { cwd: string; root: string; commonDir: string };
 type Clone = Checkout & { catalog: CatalogRead };
+
+async function stackJournalInFlight(commonDir: string): Promise<boolean> {
+  const journals = ["gh-stack-rebase-state", "gh-stack-modify-state", "gh-stack-migration", "pwrgit-stack-op.json", "pwragent-stack-op.json"];
+  const observed = await Promise.all(journals.map((name) => lstat(path.join(commonDir, name))
+    .then(() => true, (error: unknown) => (error as NodeJS.ErrnoException).code !== "ENOENT")));
+  return observed.some(Boolean);
+}
 
 async function locateCheckout(cwd: string, demand?: PrMetadataDemand): Promise<Checkout | undefined> {
   try {
@@ -118,26 +127,45 @@ async function projectCatalogLayers(input: {
 }): Promise<StackLayer[]> {
   const { stack, clone, refs, prs, worktrees, threads } = input;
   const local = (branch: GhStackBranch) => refs.get(`refs/heads/${branch.branch}`);
-  const pullRequest = (branch: GhStackBranch) => branch.pullRequest
-    ? prs.find((pr) => pr.number === branch.pullRequest?.number)
-    : prs.find((pr) => pr.headRefName === branch.branch && sameRepositoryHead(pr) && pr.lifecycleState === "open");
+  const byBranch = new Map<string, PrSummary[]>();
+  for (const pr of prs) {
+    if (!pr.headRefName || !sameRepositoryHead(pr)) continue;
+    const matches = byBranch.get(pr.headRefName) ?? [];
+    matches.push(pr);
+    byBranch.set(pr.headRefName, matches);
+  }
+  const byNumber = new Map(prs.map((pr) => [pr.number, pr]));
+  const pullRequest = (branch: GhStackBranch, below: GhStackBranch, lowerMerged: boolean) => {
+    if (branch.pullRequest) return byNumber.get(branch.pullRequest.number);
+    const candidates = byBranch.get(branch.branch) ?? [];
+    const open = candidates.filter((pr) => pr.lifecycleState === "open");
+    if (open.length) return open.length === 1 ? open[0] : undefined;
+    // A recycled branch name is insufficient to associate a historical merge.
+    const merged = candidates.filter((pr) => pr.lifecycleState === "merged"
+      && (pr.baseRefName === below.branch || (lowerMerged && pr.baseRefName === stack.trunk.branch))
+      && pr.headSha && (pr.headSha === local(branch)?.head || pr.headSha === branch.head));
+    return merged.length === 1 ? merged[0] : undefined;
+  };
+  const allBelowMerged = [true];
+  const associated = stack.branches.map((branch, index) => {
+    const belowMerged = allBelowMerged[index]!;
+    const pr = pullRequest(branch, stack.branches[index - 1] ?? stack.trunk, belowMerged);
+    allBelowMerged.push(belowMerged && (pr ? pr.lifecycleState === "merged" : branch.pullRequest?.merged === true));
+    return pr;
+  });
   return await Promise.all(stack.branches.map(async (branch, index) => {
     const parent = stack.branches[index - 1] ?? stack.trunk;
-    const pr = pullRequest(branch);
-    const parentPr = pullRequest(parent);
-    const retargeted = index > 0 && pr?.baseRefName === stack.trunk.branch
-      && stack.branches.slice(0, index).every((lower) => {
-        const observed = pullRequest(lower)?.lifecycleState;
-        return observed ? observed === "merged" : lower.pullRequest?.merged === true;
-      });
+    const pr = associated[index];
+    const parentPr = associated[index - 1];
+    const retargeted = index > 0 && pr?.baseRefName === stack.trunk.branch && allBelowMerged[index];
     const number = branch.pullRequest?.number ?? pr?.number;
     const binding = stackLayerBinding({ branch: branch.branch, pullRequest: number, worktrees, threads });
     const current = local(branch);
     const localHead = current?.head;
     const activeParent = retargeted ? stack.trunk : parent;
-    const parentTip = local(activeParent)?.head;
+    const parentTip = retargeted ? stack.trunk.head : local(activeParent)?.head;
     const remoteHead = current?.upstream ? refs.get(current.upstream)?.head : undefined;
-    const compareBase = retargeted || branch.base === parentTip ? parentTip : undefined;
+    const compareBase = branch.base === parentTip ? parentTip : undefined;
     const compareRemote = remoteHead !== branch.head && remoteHead !== pr?.headSha ? remoteHead : undefined;
     const trunkTip = local(stack.trunk)?.head;
     const parentIntegrated = !retargeted && !parentPr && !parent.pullRequest && index > 0
@@ -151,8 +179,8 @@ async function projectCatalogLayers(input: {
     return {
       branch: branch.branch, parent: parent.branch, role: binding.role,
       ...(retargeted ? { activeBase: activeParent.branch } : {}),
-      health: stackLayerHealth({
-        branch: retargeted && parentTip ? { ...branch, base: parentTip } : branch,
+      health: retargeted && branch.base !== parentTip && !branch.pullRequest?.merged ? "parent_merged" : stackLayerHealth({
+        branch,
         parent: activeParent, pr, parentPr: retargeted ? undefined : parentPr, localHead, parentTip, remoteHead,
         baseIsAncestor, remoteIsAncestor, parentIntegrated, ambiguous: binding.role === "ambiguous",
       }),
@@ -194,13 +222,12 @@ async function projectClone(clone: Clone, threads: readonly CloneThread[], known
   if (!plans.length) return stacks;
   const [worktreeOutput, refOutput] = await Promise.all([
     git(clone.cwd, ["worktree", "list", "--porcelain", "-z"]).catch(() => ""),
-    catalog?.stacks.length
-      ? git(clone.cwd, ["for-each-ref", "--format=%(refname)%00%(objectname)%00%(upstream)", "refs/heads/", "refs/remotes/"]).catch(() => "")
-      : "",
+    git(clone.cwd, ["for-each-ref", "--format=%(refname)%00%(objectname)%00%(upstream)", "refs/heads/", "refs/remotes/"]).catch(() => ""),
   ]);
   const worktrees = checkedOutWorktrees(worktreeOutput);
   const refs = parseRefs(refOutput);
   const cloneKey = createHash("sha256").update(clone.commonDir).digest("hex").slice(0, 24);
+  const busy = Boolean(catalog?.stacks.length) && await stackJournalInFlight(clone.commonDir);
   for (const { repository, catalogStacks, prs, bindings, inferred } of plans) {
     const prefix = `${cloneKey}:${repository}`;
     for (const stack of catalogStacks) {
@@ -211,21 +238,25 @@ async function projectClone(clone: Clone, threads: readonly CloneThread[], known
       const key = `${prefix}:catalog:${identity}`;
       stacks.push({
         key: key.length <= 512 ? key : createHash("sha256").update(key).digest("hex"),
-        name, repository, inferred: false, trunk: stack.trunk.branch, layers,
+        name, repository, inferred: false, trunk: stack.trunk.branch,
+        layers: busy ? layers.map((layer) => ({ ...layer, health: "held" })) : layers,
       });
     }
     for (const chain of inferred) {
       const name = chain[0]!.headRefName!;
-      const layers = chain.map((pr): StackLayer => {
+      const layers = await Promise.all(chain.map(async (pr): Promise<StackLayer> => {
         const branch = pr.headRefName!;
         const binding = stackLayerBinding({ branch, pullRequest: pr.number, worktrees, threads: bindings });
         return {
           branch, parent: pr.baseRefName!, role: binding.role,
-          health: binding.role === "ambiguous" ? "ambiguous" : "unknown",
+          health: binding.role === "ambiguous" ? "ambiguous"
+            : pr.headSha && pr.baseSha && refs.get(`refs/heads/${branch}`)?.head === pr.headSha
+              && (chain.find((parent) => parent.headRefName === pr.baseRefName)?.headSha ?? pr.baseSha) === pr.baseSha
+              && await isAncestor(clone.cwd, pr.baseSha, pr.headSha) ? "in_sync" : "unknown",
           pullRequest: { number: pr.number, lifecycleState: pr.lifecycleState },
           ...("thread" in binding ? { thread: { key: binding.thread.key, title: binding.thread.title } } : {}),
         };
-      });
+      }));
       stacks.push({ key: `${prefix}:inferred:${chain[0]!.number}`, name, repository, inferred: true, trunk: chain[0]!.baseRefName!, layers });
     }
   }
@@ -252,7 +283,7 @@ export class StackReader {
   }
 
   async read(threads: readonly StackThreadRow[], knownPrs: readonly PrSummary[], directories?: readonly string[],
-    held?: (row: StackThreadRow) => boolean) {
+    activity?: (threadKey: string) => Promise<{ held?: boolean; repair?: boolean }>) {
     const paths = new Set([...threads.filter((row) => !row.federation).flatMap(threadDirectories), ...directories ?? []]);
     const located = await Promise.all([...paths].sort().map((cwd) => this.checkout(cwd)));
     const checkouts = new Map(located.flatMap((entry) => entry ? [[entry.cwd, entry] as const] : []));
@@ -283,12 +314,31 @@ export class StackReader {
         stacks: await projectClone({ ...checkout, catalog }, cloneThreads.get(checkout.commonDir) ?? [], knownPrs),
       };
     }));
-    const heldKeys = new Set(held ? threads.filter(held).map((row) => buildThreadIdentityKey(row.source, row.id)) : []);
-    return { stacks: results.flatMap(({ stacks }) => stacks).map((stack) => ({
-      ...stack,
-      layers: stack.layers.map((layer) => layer.thread && heldKeys.has(layer.thread.key)
-        ? { ...layer, health: "held" as const } : layer),
-    })), catalogs: results.map(({ catalog }) => catalog) };
+    const observed = new Map([...threads.flatMap((row) => row.prs ?? []), ...knownPrs].map((pr) => [`${prRepository(pr)}#${pr.number}`, pr]));
+    const stacks = results.flatMap((result) => result.stacks);
+    const threadKeys = new Set(stacks.flatMap((stack) => stack.layers.flatMap((layer) => layer.thread ? [layer.thread.key] : [])));
+    const activityByThread = new Map(await Promise.all([...threadKeys].map(async (key) => [key, await activity?.(key)] as const)));
+    return { stacks: stacks.map((stack) => {
+      const layers = stack.layers.map((layer) => {
+        const state = layer.thread && activityByThread.get(layer.thread.key);
+        return state && state.held ? { ...layer, health: "held" as const } : layer;
+      });
+      const gates = stackAutomationGates(layers.map((layer) => {
+        const pr = layer.pullRequest && observed.get(`${stack.repository}#${layer.pullRequest.number}`);
+        const state = layer.thread && activityByThread.get(layer.thread.key);
+        return {
+          branch: layer.branch, health: layer.health, number: layer.pullRequest?.number,
+          merged: layer.pullRequest?.lifecycleState === "merged",
+          closed: layer.pullRequest?.lifecycleState === "closed",
+          merging: pr?.mergeQueue?.state === "merging" || pr?.mergeQueue?.state === "queued",
+          conflict: pr?.mergeState === "mergeable" ? false : pr?.mergeState === "conflicting" ? true : undefined,
+          repair: Boolean(state && state.repair),
+          checks: pr?.headSha ? resolveCheckState(pr) : undefined,
+          checksRunning: pr?.checksStillRunning,
+        };
+      }));
+      return { ...stack, layers: layers.map((layer, index) => ({ ...layer, ...gates[index] })) };
+    }), catalogs: results.map(({ catalog }) => catalog) };
   }
 }
 

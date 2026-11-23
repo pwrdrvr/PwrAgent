@@ -106,6 +106,7 @@ type Options = {
     input: { type: "text"; text: string }[];
     origin: "automation";
     messageOrigin: AppServerThreadMessageOrigin;
+    canAdmit?: () => Promise<boolean>;
   }): Promise<{
     /**
      * `held` and `discarded`: the consumer's project is paused, and its
@@ -119,6 +120,8 @@ type Options = {
     turnId?: string;
   }>;
   changed(dependency: ThreadDependency): Promise<void>;
+  onPrObservation?: (urls?: ReadonlySet<string>) => void;
+  stackHold?: (dependency: ThreadDependency) => Promise<string | undefined>;
   canDispatch?: (dependency: ThreadDependency) => boolean;
   /**
    * The consumer's owner confirms it is idle: no turn this instance started
@@ -741,6 +744,7 @@ export class ThreadDependencyCoordinator {
     if (urls?.size === 0) return Promise.resolve();
     return this.serialize(async () => {
       const observed = urls && new Set([...urls].map((url) => this.canonicalizePrUrl(url)));
+      this.options.onPrObservation?.(observed);
       // A URL saved under a renamed repository's old name, before the forge
       // has named it this session, still takes the event: evaluation asks.
       const named = (url: string | undefined) => {
@@ -751,7 +755,9 @@ export class ThreadDependencyCoordinator {
             && [...observed!].some((entry) => isSameNumberInAnotherRepository(entry, current)));
       };
       for (const item of this.options.store.active()) {
-        if (item.conditions.some((condition) => ["pr_attached", "ci_passed", "pr_merged", "merge_build"].includes(condition.when))
+        if (item.status === "ready" && item.conditions.some((condition) => condition.ciRun)) {
+          await this.evaluate(item);
+        } else if (item.conditions.some((condition) => ["pr_attached", "ci_passed", "pr_merged", "merge_build"].includes(condition.when))
           && (!observed || item.conditions.some((condition) => named(condition.prUrl))
             || item.evidence.some((entry) => named(entry.prUrl)))) await this.evaluate(item);
       }
@@ -911,25 +917,27 @@ export class ThreadDependencyCoordinator {
         && previous?.state === "satisfied" && previous.prUrl === entry.prUrl && previous.headSha === entry.headSha
         ? previous : entry;
     });
-    // Only a failure wakes a `wakeOn: "failure"` wait; success ends it here.
+    const hasCi = conditions.some(({ when }) => when === "ci_passed" || when === "ci_run" || when === "merge_build");
+    // A held success cannot silently end a failure-only wait.
     const quiet = success && item.wakeOn === "failure";
+    const outcome = success ? "success" : failure ? "failure" : staleOnly && item.status === "ready" ? item.outcome : undefined;
+    const evaluated = { ...item, conditions, evidence, outcome };
+    const held = hasCi && (success || failure) && Boolean(await this.options.stackHold?.(evaluated));
     const next: ThreadDependency = {
       ...item, conditions, evidence: persistedEvidence,
-      status: quiet ? "delivered" : success || failure || (staleOnly && item.status === "ready") ? "ready" : "waiting",
-      outcome: success ? "success" : failure ? "failure" : staleOnly && item.status === "ready" ? item.outcome : undefined,
+      status: quiet && !held ? "delivered" : success || failure || (staleOnly && item.status === "ready") ? "ready" : "waiting",
+      outcome,
       error: undefined,
     };
     const current = await this.save(item, next);
-    if (quiet || (!success && !failure)) return;
+    if (held || quiet || (!success && !failure)) return;
     if (!current || current.status !== "ready" || this.options.canDispatch?.(current) === false) return;
     // onFailure=wait tolerates repairable CI failures; closure/cancellation
     // still surfaces as terminal rather than silently waiting forever.
     if (current.outcome === "failure" && isRepairableDependencyFailure(current)) return;
     // A card needs no idle consumer: it starts no turn.
     if (threadDependencyDeliveryTarget(current) === "operator") return this.remind(current);
-    // A running turn does not hold the wake back: the queue steers it in, or
-    // starts one turn, sharing that delivery with whatever else waits. Only a
-    // provider's busy refusal of an earlier wake holds this consumer.
+    // CI wakes stay in this coordinator while busy so it can refresh evidence.
     if (this.busyConsumers.has(identity(current))) return;
     // A sibling claim may already have started this consumer. Do not admit
     // another saved plan until that uncertain delivery has been reviewed.
@@ -943,15 +951,20 @@ export class ThreadDependencyCoordinator {
     // must not turn that revoked subscription into a new continuation.
     if (JSON.stringify(this.options.store.get(claim.backend, claim.threadId, claim.id)) !== JSON.stringify(claim)) return;
     try {
+      let evidenceChanged = false;
       const result = await this.options.submit({
         backend: claim.backend, threadId: claim.threadId,
+        ...(hasCi && this.options.stackHold ? { canAdmit: async () => {
+          evidenceChanged = Boolean(await this.options.stackHold?.(claim));
+          return !evidenceChanged;
+        } } : {}),
         input: [{ type: "text", text: buildDependencyPrompt(claim) }],
         origin: "automation", messageOrigin: { kind: "pwragent", dependencyId: claim.id,
           causalMessagingSource: claim.causalMessagingSource, causalMessagingAmbiguous: claim.causalMessagingAmbiguous },
       });
       // A refusal holds the consumer until its terminal or idle event, or
       // the owner confirming idle, admits the next ready wait.
-      if (result.status === "busy") this.busyConsumers.add(identity(claim));
+      if (result.status === "busy" && !evidenceChanged) this.busyConsumers.add(identity(claim));
       if (result.status === "queued") {
         this.queuedDeliveries.add(deliveryIdentity(claim));
         return;

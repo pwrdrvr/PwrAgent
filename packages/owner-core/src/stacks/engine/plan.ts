@@ -59,6 +59,46 @@ async function restack(git: StackGit, plan: StackPlan, stack: GhStack, first: nu
   }
 }
 
+async function sync(git: StackGit, plan: StackPlan, stack: GhStack, operation: Extract<StackOperation, { kind: "sync" }>) {
+  const index = stack.branches.findIndex(({ branch }) => branch === operation.branch);
+  const parent = stack.branches[index - 1];
+  const child = stack.branches[index];
+  const { onto, merged } = operation;
+  if (!child || !parent || (parent.pullRequest && parent.pullRequest.number !== merged.number)
+    || ![onto, merged.head, merged.commit].every(isOid) || !await git.ancestor(merged.commit, onto)) {
+    throw new Error("The merged parent and its integration into trunk could not be verified");
+  }
+  const oldTip = requireTip(plan.expectedTips, child.branch);
+  let anchor: string | undefined;
+  // The child may already have been moved to an earlier trunk. In that case
+  // the stale catalog base can include the parent's whole patch series (#586).
+  const common = (await git.run(["merge-base", onto, oldTip])).stdout.trim();
+  for (const candidate of [child.base, stack.trunk.head, common]) {
+    if (candidate && isOid(candidate) && await git.ancestor(merged.commit, candidate)
+      && await git.ancestor(candidate, onto) && await git.ancestor(candidate, oldTip)
+      && (!anchor || await git.ancestor(anchor, candidate))) anchor = candidate;
+  }
+  if (!anchor && await git.ancestor(merged.head, oldTip)) anchor = merged.head;
+  if (!anchor && child.base && isOid(child.base) && await git.ancestor(child.base, oldTip)
+    && await git.ancestor(child.base, merged.head)) anchor = child.base;
+  const resolved = operation.conflictResolution;
+  if (resolved?.branch === child.branch && resolved.base === onto && oldTip !== resolved.previousTip
+    && await git.ancestor(onto, oldTip)) anchor = onto;
+  if (!anchor) throw new Error(`Cannot verify the old parent boundary for ${child.branch}`);
+
+  const step = await replayStep(git, {
+    branch: child.branch, parent: stack.trunk.branch, oldBase: anchor, newBase: onto, oldTip,
+  });
+  plan.steps.push(step);
+  if (step.conflict) return;
+  if (!step.newTip) throw new Error(`Missing replay output for ${child.branch}`);
+  if (step.newTip !== oldTip) plan.moves.push({ branch: child.branch, old: oldTip, next: step.newTip });
+  parent.pullRequest = { ...parent.pullRequest, number: merged.number, merged: true, mergedHead: merged.head };
+  stack.trunk.head = onto;
+  child.base = onto;
+  child.head = step.newTip;
+}
+
 function assertAdoptable(catalog: GhStackCatalog, stack: GhStack, repository: string) {
   if (!repository || (catalog.repository && catalog.repository.toLowerCase() !== repository.toLowerCase())) {
     throw new Error("The inferred stack belongs to a different repository");
@@ -124,6 +164,8 @@ export async function planStack(git: StackGit, store: CatalogStore, commonDir: s
       if (removed.base) child.base = removed.base;
       else delete child.base;
     }
+  } else if (operation.kind === "sync") {
+    await sync(git, plan, stack, operation);
   } else {
     const from = operation.kind === "restack" ? operation.from : undefined;
     const first = from === undefined ? 0 : stack.branches.findIndex(layer => layer.branch === from);

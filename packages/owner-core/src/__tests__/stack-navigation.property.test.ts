@@ -20,6 +20,8 @@ it("keeps stack-membership rows bounded and their total wire size linear at the 
       repository: catalog.repository, trunk: "main",
       layers: branches.map(({ branch }, index) => ({
         branch, parent: branches[index - 1]?.branch ?? "main", health: "in_sync", role: "layer",
+        pullRequest: { number: 41 + index, lifecycleState: "open" },
+        ...(index > 0 ? { heldBy: { branch: branches[0]!.branch, number: 41, reason: "CI running" as const } } : {}),
         thread: { key: `codex:thread-${index}`, title: `Thread ${index}` },
       })) };
     const threads: NavigationThreadSummary[] = stack.layers.map((layer, index) => ({
@@ -42,7 +44,10 @@ it("keeps stack-membership rows bounded and their total wire size linear at the 
       expect(projection.entries).toHaveLength(Math.min(10, threads.length - offset));
       expect(pageBytes).toBeLessThan(NAVIGATION_QUERY_MAX_RESULT_BYTES);
       expect(projection.entries[0]?.row).toMatchObject({
-        stackMemberships: [{ position: offset + 1, count, key: "fixture-stack" }],
+        stackMemberships: [{
+          position: offset + 1, count, key: "fixture-stack", repository: catalog.repository, number: 41 + offset,
+          ...(offset ? { heldBy: { number: 41, reason: "CI running", branch: branches[0]!.branch.slice(0, 160) } } : {}),
+        }],
       });
       expect(projection.entries[0]?.row.stacks).toBeUndefined();
       bytes += pageBytes;

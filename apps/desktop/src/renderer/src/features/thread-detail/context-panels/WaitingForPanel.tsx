@@ -1,3 +1,5 @@
+import { describeStackAutomationBlock } from "@pwragent/shared/stacks/stack-automation";
+import { readCompactStackMemberships } from "@pwragent/shared/stacks/stack-status";
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { AGENT_FOLLOW_UP_MAX_FIRED_PER_WINDOW } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import { THREAD_PR_WATCH_CONTROL_CAPABILITY } from "@pwragent/shared/contracts/thread-pr-watches";
@@ -88,7 +90,9 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
   const now = props.now ?? Date.now();
   const capabilities = props.thread.federation?.capabilities ?? [];
   const peer = state.status === "ready" && state.peer;
-  const stackHeld = props.thread.stackMemberships?.some(({ health }) => health === "held");
+  const stackMemberships = readCompactStackMemberships(props.thread);
+  const blocker = stackMemberships.find(({ heldBy }) => heldBy)?.heldBy;
+  const stackHeld = Boolean(blocker) || stackMemberships.some(({ health }) => health === "held");
   const [unlocking, setUnlocking] = useState(false);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const onFocusHeading = props.onFocusHeading;
@@ -178,8 +182,8 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
           <div className="waiting-for-panel__hold" role="note">
             <span className="waiting-for-panel__hold-icon" aria-hidden="true"><PauseIcon size={12} /></span>
             <span className="waiting-for-panel__hold-text">
-              <span className="waiting-for-panel__hold-title">Held for a stack operation</span>
-              <span className="pr-watch-list__sub">Queued messages wait until the operation releases this thread.</span>
+              <span className="waiting-for-panel__hold-title">{blocker ? describeStackAutomationBlock(blocker, " · ") : "Held for a stack operation"}</span>
+              <span className="pr-watch-list__sub">{blocker ? "PR automation waits for the lower layer to settle." : "Queued messages wait until the operation releases this thread."}</span>
             </span>
             {props.onShowTab ? (
               <button type="button" className="pr-watch-list__action" onClick={() => props.onShowTab?.("prs")}>

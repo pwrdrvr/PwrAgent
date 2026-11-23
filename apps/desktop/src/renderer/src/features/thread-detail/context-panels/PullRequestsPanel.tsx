@@ -1,3 +1,5 @@
+import { describeStackAutomationBlock } from "@pwragent/shared/stacks/stack-automation";
+import { stackHoldForPr } from "../../stacks/stack-presentation";
 import { memo, useEffect, useState } from "react";
 import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { ThreadPrWatchHistoryEntry } from "@pwragent/shared/contracts/thread-pr-watches";
@@ -135,22 +137,28 @@ function useSelectedStackDetails({ thread, desktopApi }: PullRequestsPanelProps)
 }
 
 function StackRailCard({ stack }: { stack: StackSummary }) {
+  const next = stack.layers.find((layer) => layer.pullRequest?.lifecycleState !== "merged");
   return (
     <li className={`rail-card stack-rail-card${stack.inferred ? " stack-rail-card--inferred" : ""}`}>
       <p className="rail-card__title">{stack.inferred ? "Inferred stack" : "Stack"} · {stack.name}</p>
-      <p className="rail-card__meta">Trunk · {stack.trunk}</p>
       <ol className="stack-rail-card__layers" reversed>
-        {[...stack.layers].reverse().map((layer) => (
-          <li key={layer.branch} data-stale={isStaleStackLayer(layer.health) || undefined}>
-            <span className="stack-rail-card__branch">{layer.pullRequest ? `#${layer.pullRequest.number} ` : ""}{layer.branch}</span>
-            <span className="rail-card__meta">{[
-              layer.thread?.title,
-              layer.pullRequest?.lifecycleState === "merged" ? "Merged"
-                : layer.health === "unknown" ? undefined : layer.health.replaceAll("_", " "),
-            ].filter(Boolean).join(" · ")}</span>
-          </li>
-        ))}
+        {[...stack.layers].reverse().map((layer) => {
+          const merged = layer.pullRequest?.lifecycleState === "merged";
+          const nextLabel = next?.pullRequest ? `#${next.pullRequest.number}` : next?.branch;
+          const detail = merged ? "Merged"
+            : layer.heldBy ? describeStackAutomationBlock(layer.heldBy, " · ")
+            : layer === next ? [layer.pullRequest?.lifecycleState === "open" ? "Next to merge" : "First in merge order", layer.unsettled].filter(Boolean).join(" · ")
+            : `Waiting for ${nextLabel} to merge`;
+          return (
+            <li key={layer.branch} data-stale={!layer.heldBy && isStaleStackLayer(layer.health) || undefined}
+              data-held={Boolean(layer.heldBy) || undefined}>
+              <span className="stack-rail-card__branch">{layer.pullRequest ? `#${layer.pullRequest.number} ` : ""}{layer.branch}</span>
+              <span className="rail-card__meta">{detail}</span>
+            </li>
+          );
+        })}
       </ol>
+      <p className="rail-card__meta stack-rail-card__trunk">Trunk · {stack.trunk}</p>
     </li>
   );
 }
@@ -315,6 +323,7 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
             const checkState = resolveCheckState(pr);
             const statusKey = buildPullRequestStatusKey(pr);
             const prWatches = watches?.filter((watch) => watch.prKey === statusKey) ?? NO_WATCHES;
+            const held = stackHoldForPr(props.thread, pr);
             const chipWatch = resolvePrChipWatch(chipWatches, pr, autoFixRepository);
             return (
               <li key={prKey(pr)} className="rail-card">
@@ -324,6 +333,7 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
                     showRepoPrefix={false}
                     onOpen={openExternalUrl}
                     withStatusPills
+                    statusOverride={held ? describeStackAutomationBlock(held, " · ") : undefined}
                     watch={chipWatch}
                     onDetach={requestDetachPr}
                   />
@@ -336,12 +346,13 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
                   {isOpen && pr.reviewState === "draft" ? (
                     <RailStatusChip tone="neutral">Draft</RailStatusChip>
                   ) : null}
-                  {isOpen && pr.mergeState === "conflicting" ? (
+                  {isOpen && !held && pr.mergeState === "conflicting" ? (
                     <RailStatusChip tone="error" alert>
                       Merge conflict
                     </RailStatusChip>
                   ) : null}
-                  {isOpen ? (
+                  {held ? <RailStatusChip tone="warning">{describeStackAutomationBlock(held, " · ")}</RailStatusChip> : null}
+                  {isOpen && !held ? (
                     <RailStatusChip
                       tone={checkTone(checkState)}
                       alert={checkState === "failing"}
