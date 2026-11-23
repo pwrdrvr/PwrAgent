@@ -169,6 +169,7 @@ type ThreadContextPanelProps = {
   decisionSettings?: DecisionSetupSettings;
   onOpenDecisionSettings?: (focus?: string) => void;
   onRefreshNavigation?: () => Promise<void>;
+  onFocusWaitingHeading?: () => void;
   /** Backs Turn Off on the Pull requests tab's Auto-fix row. */
   onSetThreadPrAutoDispatch?: (enabled: boolean) => Promise<void>;
   /** Unlocks the selected thread, as its lock card does. */
@@ -1057,13 +1058,21 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         const resolveHeld = props.desktopApi?.resolveProjectHeldWakeups;
         const turnOffAutoFix = props.onSetThreadPrAutoDispatch;
         const openContinueAfter = dependencyContext?.open;
+        const setJobMonitorCreation = !federationTarget || federationTarget.scope === "local"
+          ? props.desktopApi?.setThreadJobMonitorCreation
+          : undefined;
         return (
           <WaitingForPanel
             key={JSON.stringify([thread.source, thread.id, federationTarget])}
             thread={thread}
             controller={pendingWakes}
+            onFocusHeading={props.onFocusWaitingHeading}
             ownerLabel={ownerLabel}
             onTurnOffAutoFix={turnOffAutoFix ? async () => await turnOffAutoFix(false) : undefined}
+            onTurnOnJobMonitors={thread.source === "codex" && setJobMonitorCreation ? async () => {
+              await setJobMonitorCreation({ threadId: thread.id, enabled: true });
+              await props.onRefreshNavigation?.().catch(() => undefined);
+            } : undefined}
             onSendScheduledNow={sendNow ? async (id) => {
               await sendNow({ id, ...(federationTarget ? { federationTarget } : {}) });
             } : undefined}

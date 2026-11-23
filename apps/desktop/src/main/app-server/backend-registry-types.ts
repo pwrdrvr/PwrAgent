@@ -46,6 +46,7 @@ import {
   type ArchiveThreadResponse,
   type AppServerListSkillsResponse,
   type AppServerNotification,
+  type AppServerPendingThreadStart,
   type AppServerPendingRequestNotification,
   type AppServerReadThreadResponse,
   type AppServerThreadActivityEntry,
@@ -85,6 +86,7 @@ import {
 import {
   type AppServerCollaborationModeRequest,
   type CodexEnvironmentSetupProgressEvent,
+  type CodexEnvironmentStartupFailure,
   type ControlActiveTurnResponse,
   type ForkThreadRequest,
   type ListThreadMcpServersResponse,
@@ -198,6 +200,9 @@ export type BackendClient = {
   close(): Promise<void>;
   getInitializeResult(): Promise<InitializeResult>;
   readServerCapabilities?(): Promise<CodexServerCapabilities>;
+  readThreadGoal?: CodexAppServerClient["readThreadGoal"];
+  setThreadGoal?: CodexAppServerClient["setThreadGoal"];
+  clearThreadGoal?: CodexAppServerClient["clearThreadGoal"];
   isTokenMiserActivationNegotiated?(): boolean;
   readCodexHome?(): Promise<string>;
   readConfiguredMcpServerNames?(params?: {
@@ -208,6 +213,7 @@ export type BackendClient = {
     params?: {
       archived?: boolean;
       enrichDirectories?: boolean;
+      revalidateDirectories?: boolean;
       filter?: string;
       limit?: number;
       maxPages?: number;
@@ -491,7 +497,21 @@ export type BackendClient = {
   }): Promise<{ projectPath: string; configPath?: string }>;
 };
 
+export type PendingThreadStartDescriptor = Pick<AppServerPendingThreadStart,
+  "startId" | "title" | "directoryKey" | "directoryLabel" | "progressThread" | "prompt"
+>;
+
+export type PendingThreadStartSource = Pick<AppServerPendingThreadStart,
+  "backend" | "cwd" | "model" | "workMode" | "parentThreadId" | "parentThreadBackend" | "parentThreadInstanceId"
+>;
+
+export type PendingThreadStartReporter = {
+  setupProgress: (event: Omit<CodexEnvironmentSetupProgressEvent, "directoryKey">) => void;
+  land(threadId: string, failure?: CodexEnvironmentStartupFailure): Promise<void>;
+};
+
 export type BackendRegistryForkThreadRequest = ForkThreadRequest & {
+  pendingStart?: PendingThreadStartDescriptor;
   importedWorktree?: { repositoryPath: string; worktreePath: string };
   rejectOccupiedBranch?: boolean;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;

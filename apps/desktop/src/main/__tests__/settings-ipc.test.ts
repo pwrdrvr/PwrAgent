@@ -361,6 +361,34 @@ describe("settings ipc", () => {
     } finally { disposeSettingsIpcHandlers(); }
   });
 
+  it("lists decision models through the Settings IPC handler with the saved key, and refuses an unknown provider", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    tempRoots.push(tempRoot);
+    const stateDb = openInMemoryStateDb(); stateDbs.push(stateDb);
+    const service = new DesktopSettingsService({ configPath: path.join(tempRoot, "config.toml"), env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      tokenMiserStore: new TokenMiserStore(path.join(tempRoot, "token-miser"), { storage: new SqliteTokenMiserStorage(stateDb) }) });
+    vi.spyOn(service, "resolveDecisionModelSettings").mockReturnValue({ local: { endpoint: "http://127.0.0.1:9911" } });
+    const resolveKey = vi.spyOn(service, "resolveDecisionApiKey").mockImplementation(async (provider) => provider === "jev" ? "fixture-jev-key" : undefined);
+    const fetch = vi.fn(async (url: string, _init?: RequestInit) => new Response(JSON.stringify({ models: [{ name: url.includes("typesafe") ? "jev-latest" : "clef-flash" }] })));
+    vi.stubGlobal("fetch", fetch);
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import("../shell/ipc/settings");
+    const { SETTINGS_LIST_DECISION_MODELS_CHANNEL } = await import("../../shared/ipc");
+    registerSettingsIpcHandlers(service);
+    try {
+      const list = (provider: unknown) => handlers.get(SETTINGS_LIST_DECISION_MODELS_CHANNEL)?.({}, { provider });
+      await expect(list("jev")).resolves.toEqual({ ok: true, models: [{ id: "jev-latest" }] });
+      expect(fetch).toHaveBeenLastCalledWith("https://api.typesafe.ai/v1/models", expect.objectContaining({
+        headers: { Authorization: "Bearer fixture-jev-key" },
+      }));
+      await expect(list("local")).resolves.toEqual({ ok: true, models: [{ id: "clef-flash" }] });
+      expect(fetch).toHaveBeenLastCalledWith("http://127.0.0.1:9911/v1/models", expect.objectContaining({ headers: {} }));
+      expect(resolveKey.mock.calls.map(([provider]) => provider)).toEqual(["jev", "local"]);
+      await expect(list("openai")).resolves.toEqual({ ok: false, detail: "Unknown decision provider." });
+      expect(fetch).toHaveBeenCalledTimes(2);
+    } finally { disposeSettingsIpcHandlers(); }
+  });
+
   it("refreshes provider catalogs through the owner's reader, and says so when Codex is not running", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
     tempRoots.push(tempRoot);
@@ -1893,6 +1921,69 @@ describe("settings ipc", () => {
       disposeAppState();
     }
   });
+
+  it.each(["signed-in", "sign-in-required"] as const)(
+    "uses the Claude profile environment during bootstrap when auth status is %s",
+    async (authStatus) => {
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+      tempRoots.push(tempRoot);
+      vi.stubEnv("PWRAGENT_HOME", tempRoot);
+      const { initializeAppState, disposeAppState } = await import("../state/app-state");
+      const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import("../shell/ipc/settings");
+      const { SETTINGS_DISCOVER_RECENT_PROJECTS_CHANNEL } = await import("../../shared/ipc");
+      const claudeExecutable = await import("../claude/claude-executable");
+      const claudeSessionReader = await import("../claude/claude-session-reader");
+      const service = new DesktopSettingsService({
+        configPath: path.join(tempRoot, "config.toml"),
+        env: {},
+        secretStore: new MemoryDesktopSecretStore(),
+      });
+      const project = fs.realpathSync(tempRoot);
+      const env = { CLAUDE_CONFIG_DIR: path.join(tempRoot, "claude-fixture") };
+      const resolveEnv = vi.spyOn(service, "resolveTerminalSpawnEnvAsync").mockResolvedValue(env);
+      const inspect = vi.spyOn(claudeExecutable, "inspectClaudeInstallation")
+        .mockResolvedValue({ authStatus, executable: "/fake/claude" });
+      const listRecentDirectories = vi.fn(async () => ({
+        complete: true,
+        directories: [{ cwd: project, updatedAt: 50 }],
+      }));
+      const close = vi.fn();
+      const open = vi.spyOn(claudeSessionReader, "openClaudeSessionReader").mockReturnValue({
+        listRecentDirectories, close,
+        getSessionInfo: vi.fn(), getSessionMessages: vi.fn(), getSubagentMessages: vi.fn(),
+      });
+
+      initializeAppState("bootstrap");
+      try {
+        registerSettingsIpcHandlers(service);
+        const sender = Object.assign(new EventEmitter(), { id: 1 });
+        const result = await handlers.get(SETTINGS_DISCOVER_RECENT_PROJECTS_CHANNEL)!({ sender }, { includeCodex: false });
+        const available = authStatus === "signed-in";
+        expect(getDesktopBackendRegistryMock).not.toHaveBeenCalled();
+        expect(inspect).toHaveBeenCalledWith(expect.objectContaining({ env: expect.objectContaining(env) }));
+        if (available) {
+          expect(open).toHaveBeenCalledWith(expect.objectContaining(env), expect.anything());
+          expect(listRecentDirectories).toHaveBeenCalledOnce();
+          expect(close).toHaveBeenCalledOnce();
+        } else {
+          expect(open).not.toHaveBeenCalled();
+        }
+        expect(result).toEqual({
+          sources: [
+            expect.objectContaining({ agent: "codex", status: "skipped" }),
+            { agent: "claude", label: "Claude Code", status: available ? "complete" : "skipped" },
+          ],
+          observations: available ? [{ path: project.replaceAll("\\", "/"), agent: "claude", lastActiveAt: 50 }] : [],
+        });
+      } finally {
+        open.mockRestore();
+        inspect.mockRestore();
+        resolveEnv.mockRestore();
+        disposeSettingsIpcHandlers();
+        disposeAppState();
+      }
+    },
+  );
 
   it("excludes a previously installed Claude ACP adapter from the settings catalog", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));

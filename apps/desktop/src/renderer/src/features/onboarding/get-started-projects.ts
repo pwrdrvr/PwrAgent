@@ -16,6 +16,10 @@ import { canonicalizeNavigationPath } from "@pwragent/shared/directory-navigatio
  * - The first `PRECHECKED_PROJECT_COUNT` rows start checked and show; the
  *   rest start unchecked behind Review all. A row the operator toggles keeps
  *   that choice, whatever its rank.
+ * - The list fills in as each part of the search answers. A row already
+ *   listed keeps the state it showed when another answer adds rows, so an
+ *   answer never checks or unchecks a row the operator has seen. Added rows
+ *   start by the rule above.
  */
 export const PRECHECKED_PROJECT_COUNT = 12;
 
@@ -44,7 +48,8 @@ function agentOrder(agent: RecentProjectAgent): number {
   return agent === "codex" ? 0 : agent === "claude" ? 1 : 2;
 }
 
-function compareAgents(left: RecentProjectAgent, right: RecentProjectAgent): number {
+/** Codex, then Claude Code, then other agents by name. */
+export function compareAgents(left: RecentProjectAgent, right: RecentProjectAgent): number {
   return agentOrder(left) - agentOrder(right) || left.localeCompare(right);
 }
 
@@ -97,6 +102,21 @@ export type ProjectChoices = ReadonlyMap<string, boolean>;
 
 export function isProjectChecked(candidate: ProjectCandidate, choices: ProjectChoices): boolean {
   return choices.get(candidate.key) ?? candidate.rank < PRECHECKED_PROJECT_COUNT;
+}
+
+/**
+ * `choices` plus the state each listed row shows now, for rows the operator
+ * has not toggled. Apply it when another answer is about to re-rank the list.
+ */
+export function keepListedChoices(
+  listed: readonly ProjectCandidate[],
+  choices: ProjectChoices,
+): ProjectChoices {
+  const next = new Map(choices);
+  for (const candidate of listed) {
+    if (!next.has(candidate.key)) next.set(candidate.key, isProjectChecked(candidate, choices));
+  }
+  return next;
 }
 
 export function checkedProjectPaths(

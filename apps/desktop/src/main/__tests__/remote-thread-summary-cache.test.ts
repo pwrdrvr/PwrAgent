@@ -1516,13 +1516,17 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
       ttlMs: 100,
       now: () => now,
     });
-    const firstPin = pin({ instanceId: "peer-a", threadId: "restored" });
+    const firstPin = { ...pin({ instanceId: "peer-a", threadId: "restored" }), mountToken: "A1" };
 
     await cache.resolvePinnedThreads([firstPin]);
     await settle();
-    expect((await cache.resolvePinnedThreads([firstPin])).archived).toEqual([
-      firstPin.ref,
-    ]);
+    const archived = await cache.resolvePinnedThreads([firstPin]);
+    expect(archived.archived).toEqual([firstPin.ref]);
+    expect(cache.readPinnedThreads([firstPin]).archived).toEqual([firstPin.ref]);
+    archived.acknowledgeArchiveDeletion?.({ ref: firstPin.ref, mountToken: "B2" });
+    expect(cache.readPinnedThreads([firstPin]).archived).toEqual([firstPin.ref]);
+    archived.acknowledgeArchiveDeletion?.(firstPin);
+    expect(cache.readPinnedThreads([firstPin]).archived).toEqual([]);
 
     // The owner restored the thread and the viewer re-pinned it. The spent
     // proof must never prune it a second time — only fresh evidence can,
@@ -1536,6 +1540,7 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
         summary: cachedSummary,
       }),
       addedAt: 2_000,
+      mountToken: "B2",
     };
     now = 500;
     await cache.resolvePinnedThreads([readdedPin]);

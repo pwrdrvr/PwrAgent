@@ -3,6 +3,7 @@ import type { ProjectForgeAutomation } from "../project-forge-automation";
 import type { ToolAccountingTotals } from "../thread-tool-display";
 import type { ThreadIncidentSummary } from "../thread-incident-summary";
 import type { ThreadPricingDisplay } from "../thread-pricing-display";
+import type { ThreadGoalState, ThreadGoalView } from "./thread-goal";
 import type {
   AutomationRunFailureReason,
   AutomationRunOutputDecision,
@@ -30,6 +31,7 @@ import type {
   ThreadLock,
   ThreadPrAutoDispatchPending,
   ThreadSubAgentSummary,
+  LaunchpadWorkMode,
 } from "./navigation";
 import type {
   ThreadPricingSummary,
@@ -391,6 +393,8 @@ export type LinkedDirectorySummary = {
    * Absent on legacy entries, which retain their existing cleanup behavior.
    */
   worktreeOwnership?: "external";
+  /** Scratch root identified by the thread's owning profile during navigation projection. */
+  scratchWorkspaceRoot?: string;
   /** Best-effort branch observed for this linked directory/worktree. */
   gitBranch?: string;
   kind: "local" | "worktree";
@@ -2243,6 +2247,48 @@ export type AppServerMcpElicitationRequestNotification = {
   };
 };
 
+export type AppServerPendingThreadStartPhase = "starting" | "setup" | "landed" | "ended";
+
+/**
+ * What a list needs to draw a start in the slot its thread will take. The
+ * owner fills it from the start request; nothing here comes from the thread,
+ * which does not exist yet.
+ */
+export type AppServerPendingThreadStart = {
+  /** A unique id for this attempt, shared by every phase. */
+  startId: string;
+  title: string;
+  submittedAt: number;
+  /** The submitted message shown while the thread is starting. */
+  prompt?: string;
+  backend: AppServerBackendKind;
+  model?: string;
+  workMode?: LaunchpadWorkMode;
+  /** The checkout the start begins from. A top-level start lands in its project. */
+  cwd?: string;
+  /** The project row the start files under, when the caller knows it. */
+  directoryKey?: string;
+  directoryLabel?: string;
+  parentThreadId?: string;
+  parentThreadBackend?: AppServerBackendKind;
+  parentThreadInstanceId?: string;
+  /**
+   * The thread on this machine whose view reports the start's progress, such
+   * as the thread holding the to-do card. Selecting the row opens it until
+   * the new thread lands.
+   */
+  progressThread?: { backend: AppServerBackendKind; threadId: string };
+};
+
+export type AppServerPendingThreadStartReport = {
+  start: AppServerPendingThreadStart;
+  phase: AppServerPendingThreadStartPhase;
+  createdThreadId?: string;
+  /** Latest setup state, with bounded cumulative output. */
+  setupProgress?: import("./agent").CodexEnvironmentSetupProgressEvent;
+  setupFailure?: import("./agent").CodexEnvironmentStartupFailure;
+};
+
 export type AppServerNotification =
   | { method: "thread/operatorQuestions/changed"; params: { backend: AppServerBackendKind; threadId: string } }
   | { method: "thread/operatorRequests/changed" | "thread/operatorRequestDetails/changed"; params: import("./operator-requests").OperatorRequestsChangedEvent }
@@ -2789,6 +2835,17 @@ export type AppServerNotification =
       };
     }
   | {
+      /**
+       * A start that prepares a workspace before its thread exists, such as
+       * a to-do card's new worktree and its environment setup. Each start
+       * reports `starting` before any workspace work, `landed` once the
+       * provider names the thread and before the owner announces it, and
+       * `ended` exactly once, last, after any rollback.
+       */
+      method: "thread/start/pending";
+      params: AppServerPendingThreadStartReport;
+    }
+  | {
       method: "warning";
       params: {
         threadId?: string;
@@ -2807,6 +2864,9 @@ export type AppServerNotification =
         configPath?: string;
       };
     }
+  | { method: "thread/goal/updated"; params: { threadId: string; goal: ThreadGoalView } }
+  | { method: "thread/goal/cleared"; params: { threadId: string } }
+  | { method: "thread/goal/controlChanged"; params: { threadId: string; state: ThreadGoalState } }
   | {
       method: "thread/name/updated";
       params: {

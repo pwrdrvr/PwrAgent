@@ -1000,6 +1000,7 @@ export class MessagingController {
 
   private newThreadHost(): MessagingNewThreadHost {
     return this.newThreadHostPorts ??= {
+      requirePermission: (...args) => this.accessControl.requirePermission(...args),
       resolveToolUpdateDefaultMode: (...args) => this.bindingService.resolveToolUpdateDefaultMode(...args),
       resolveShowStreamingOption: (...args) => this.bindingService.resolveShowStreamingOption(...args),
       requireRemoteScope: (...args) => this.accessControl.requireRemoteScope(...args),
@@ -1124,6 +1125,7 @@ export class MessagingController {
       startNewThreadFromProject: (...args) => this.newThreadWorkflow.startNewThreadFromProject(...args),
       updateNewThreadStickySettings: (...args) => this.newThreadWorkflow.updateNewThreadStickySettings(...args),
       presentNewThreadPromptGate: (...args) => this.newThreadWorkflow.presentNewThreadPromptGate(...args),
+      handleAgentPresetPicker: (...args) => this.newThreadWorkflow.handleAgentPresetPicker(...args),
       presentNewThreadBranchPicker: (...args) => this.newThreadWorkflow.presentNewThreadBranchPicker(...args),
       getBackendSummary: (...args) => this.getBackendSummary(...args),
       get streamingResponsesDefault() { return readController().streamingResponsesDefault; },

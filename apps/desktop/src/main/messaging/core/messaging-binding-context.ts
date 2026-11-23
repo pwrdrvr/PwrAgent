@@ -14,7 +14,7 @@ import type { MessagingToolUpdateDefaultModeResolver } from "./messaging-binding
 export interface MessagingBindingContext {
   readonly store: Pick<MessagingStoreLike, "findActiveBindingForChannel" | "findManagedTopicByConversation" | "mergeBindingChannelMetadata" | "findActiveBindingsForThread" | "findActivePendingIntentForChannel" | "deletePendingIntent" | "upsertBinding" | "upsertPendingIntent" | "findActiveMonitorSubscriptionForChannel" | "revokeBinding" | "getBinding" | "deletePendingIntentsForChannel">;
   readonly backend: Pick<MessagingBackendBridge, "getThreadAdmissionState" | "handoffThreadWorkspace" | "recordMessagingBindingTransition">;
-  readonly adapter: Pick<MessagingAdapter, "setConversationTitle">;
+  readonly adapter: Pick<MessagingAdapter, "setConversationTitle" | "supportsConversationTitle">;
   readonly capabilityProfile: MessagingCapabilityProfile;
   readonly now: () => number;
   readonly logger: MessagingControllerLogger;

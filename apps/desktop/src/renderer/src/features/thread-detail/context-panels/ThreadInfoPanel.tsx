@@ -3,6 +3,7 @@ import type { AgentMemoryArgs } from "@pwragent/shared/contracts/agent-memory";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { AgentMemoryPanel } from "./AgentMemoryPanel";
+import { SaveAgentPresetButton } from "./SaveAgentPresetButton";
 import { PopoutIcon } from "../../../icons";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../../lib/federation-window";
@@ -140,6 +141,9 @@ export const ThreadInfoPanel = memo(function ThreadInfoPanel(props: ThreadInfoPa
           <AgentMemoryPanel key={JSON.stringify([instanceId, source, id])}
             access={accessMemory}
             canEdit={!federation || federation.capabilities?.includes("turn_control") === true} />
+        ) : null}
+        {props.thread.agent && props.desktopApi && !instanceId && !readRendererFederationTarget() ? (
+          <SaveAgentPresetButton key={JSON.stringify([source, id])} thread={props.thread} desktopApi={props.desktopApi} />
         ) : null}
         {props.thread.agentChange?.error ? (
           <p className="context-empty context-empty--error" role="alert">

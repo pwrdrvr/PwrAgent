@@ -16,6 +16,9 @@ import {
   type PendingSidebarRow,
 } from "../StartingThreadRow";
 import { buildSubthreadLaunchpadKey } from "../../../lib/subthread-launchpads";
+import type { AppServerPendingThreadStart } from "@pwragent/shared/contracts/normalized-app-server";
+import { applyPendingThreadStartReport, pendingThreadStartRows } from "../pending-thread-starts";
+import { startingThreadHomeDirectoryKey } from "../starting-thread-home";
 
 afterEach(cleanup);
 
@@ -99,6 +102,8 @@ function renderSidebar(props: {
   browseMode: "attention" | "drafts" | "inbox" | "recents" | "directories";
   threads: NavigationThreadSummary[];
   creations: PendingLaunchpadCreation[];
+  pendingThreadStarts?: PendingLaunchpadCreation[];
+  directories?: NavigationDirectorySummary[];
   drafts?: SubthreadLaunchpadDraft[];
   selectedItemKey?: string;
   onSelectPendingLaunchpad?: (entry: PendingSidebarRow) => void;
@@ -110,11 +115,12 @@ function renderSidebar(props: {
     <Sidebar
       backends={[]}
       browseMode={props.browseMode}
-      directories={directories}
+      directories={props.directories ?? directories}
       inboxThreads={[]}
       loaded
       loading={false}
       pendingLaunchpadCreations={props.creations}
+      pendingThreadStartRows={props.pendingThreadStarts}
       subthreadLaunchpadDrafts={props.drafts}
       selectedItemKey={props.selectedItemKey}
       threads={props.threads}
@@ -408,6 +414,91 @@ describe("a thread that is still starting", () => {
 
     expect(rowNames(screen.getByRole("list", { name: "Threads in PwrSnap" })))
       .toEqual(["Add a crop tool", "Older thread"]);
+  });
+});
+
+describe("a to-do card's thread while its worktree and setup run", () => {
+  const report = (patch: Partial<AppServerPendingThreadStart> = {}): AppServerPendingThreadStart => ({
+    startId: "thread-todo:card-1",
+    title: "Fix the flaky export test",
+    submittedAt: 1_000,
+    backend: "codex",
+    workMode: "worktree",
+    cwd: PROJECT_PATH,
+    directoryKey: PROJECT_KEY,
+    directoryLabel: "PwrSnap",
+    progressThread: { backend: "codex", threadId: "Parent" },
+    ...patch,
+  });
+  const rowsFor = (start: AppServerPendingThreadStart, createdThreadId?: string) => pendingThreadStartRows(
+    applyPendingThreadStartReport([], { start, phase: createdThreadId ? "landed" : "starting",
+      ...(createdThreadId ? { createdThreadId } : {}) }, new Set()),
+    undefined,
+  );
+
+  it("starts in the tray of the thread that raised the card", () => {
+    const onSelectPendingLaunchpad = vi.fn();
+    const rows = rowsFor(report({ parentThreadId: "Parent", parentThreadBackend: "codex" }));
+    renderSidebar({
+      browseMode: "inbox",
+      threads: [thread("Parent")],
+      creations: [],
+      pendingThreadStarts: rows,
+      onSelectPendingLaunchpad,
+    });
+
+    expect(rowNames(screen.getByRole("list", { name: "Sub-threads of Parent" })))
+      .toEqual(["Fix the flaky export test, starting in PwrSnap"]);
+    fireEvent.click(screen.getByRole("button", { name: "Fix the flaky export test, starting in PwrSnap" }));
+    expect(onSelectPendingLaunchpad).toHaveBeenCalledWith(rows[0]);
+  });
+
+  it("displays a direct start with no openable target as a status row until it lands", () => {
+    const onSelectPendingLaunchpad = vi.fn();
+    const direct = report({ progressThread: undefined, title: "Prepare fixtures" });
+    const renderDirect = (createdThreadId?: string) => renderSidebar({
+      browseMode: "inbox",
+      threads: [thread("Parent")],
+      creations: [],
+      pendingThreadStarts: rowsFor(direct, createdThreadId),
+      onSelectPendingLaunchpad,
+    });
+
+    const before = renderDirect();
+    const title = screen.getByText("Prepare fixtures");
+    expect(title).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Prepare fixtures, starting in PwrSnap" })).toBeNull();
+    fireEvent.click(title);
+    expect(onSelectPendingLaunchpad).not.toHaveBeenCalled();
+    before.unmount();
+
+    renderDirect("new-thread");
+    fireEvent.click(screen.getByRole("button", { name: "Prepare fixtures, starting in PwrSnap" }));
+    expect(onSelectPendingLaunchpad).toHaveBeenCalledOnce();
+  });
+
+  it("starts in the project that groups the raising thread's worktree", () => {
+    const worktree = "/Users/fixture-user/.pwragent/worktrees/abc123/PwrSnap";
+    const [row] = rowsFor(report({ cwd: worktree, directoryKey: undefined, directoryLabel: undefined }));
+    expect(startingThreadHomeDirectoryKey(row!, [
+      { key: "directory:/Users/fixture-user/pwrdrvr/Other", kind: "directory", label: "Other" },
+      { ...directories[0]!, checkoutPaths: [PROJECT_PATH, worktree] },
+    ])).toBe(PROJECT_KEY);
+    // A checkout no project groups has no row to start in.
+    expect(startingThreadHomeDirectoryKey(row!, directories)).toBeUndefined();
+  });
+
+  it("steps aside once its landed thread renders in the slot", () => {
+    renderSidebar({
+      browseMode: "directories",
+      threads: [thread("Fix the flaky export test", { createdAt: 5 }), thread("Older thread")],
+      creations: [],
+      pendingThreadStarts: rowsFor(report({ title: "Card title" }), "Fix the flaky export test"),
+      selectedItemKey: "codex:Older thread",
+    });
+
+    expect(rowNames(screen.getByRole("list", { name: "Threads in PwrSnap" })))
+      .toEqual(["Fix the flaky export test", "Older thread"]);
   });
 });
 

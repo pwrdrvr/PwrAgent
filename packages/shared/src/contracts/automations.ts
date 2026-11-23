@@ -1148,6 +1148,8 @@ export type AutomationDetail = AutomationListItemSummary & {
    * migration) and is deliberately not attempted here.
    */
   costTodayMicros?: number;
+  /** List-price USD for priced runs created since accounting began. */
+  lifetimeCost?: { since: number; totalMicros: number };
   outputActions: AutomationOutputActionDefinition[];
   /**
    * Inbound coalescing window in milliseconds. 0 disables coalescing (one run

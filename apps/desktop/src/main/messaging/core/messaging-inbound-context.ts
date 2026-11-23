@@ -91,7 +91,7 @@ export interface MessagingInboundConfiguration {
 
 export interface MessagingInboundContext {
   readonly store: Pick<MessagingStoreLike, "findActivePendingIntentForChannel" | "getBinding" | "deletePendingIntent" | "findActiveBindingForChannel" | "findActiveDefaultAgentAssignmentsForChannel" | "revokeDefaultAgentAssignment" | "revokeDefaultAgentAssignmentsForTarget" | "findActiveBrowseSessionForChannel" | "revokeBinding" | "findActiveBindings" | "deleteBrowseSession" | "upsertBinding">;
-  readonly backend: Pick<MessagingBackendBridge, "getThreadAdmissionState" | "supportsMessagingPdfTools" | "startTurn" | "materializeDirectoryLaunchpad" | "startThread" | "getNavigationQueryPage" | "getNavigationLaunchpadConfig" | "ensureDirectoryLaunchpad" | "listBackends">;
+  readonly backend: Pick<MessagingBackendBridge, "getThreadAdmissionState" | "supportsMessagingPdfTools" | "startTurn" | "materializeDirectoryLaunchpad" | "startThread" | "getNavigationQueryPage" | "getNavigationLaunchpadConfig" | "ensureDirectoryLaunchpad" | "listBackends" | "listAgentPresets" | "listAgentPresetConnections">;
   readonly adapter: Pick<MessagingAdapter, "capabilityProfile" | "deliver" | "downloadAttachment">;
   readonly capabilityProfile: MessagingCapabilityProfile;
   readonly now: () => number;

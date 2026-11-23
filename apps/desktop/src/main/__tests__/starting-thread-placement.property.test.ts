@@ -2,6 +2,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { buildFederatedThreadRef, federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
 import { type LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
+import { materializeNavigationThreads } from "@pwragent/shared/navigation-state";
 import {
   type NavigationDirectorySummary,
   type NavigationThreadSummary,
@@ -50,6 +51,7 @@ const PEER_PARENTS = [
 ] as const;
 const LOCAL_WORKSPACE_ROOT = "/Users/me/.pwragent/profiles/default/projects";
 const PEER_WORKSPACE_ROOT = "/Users/peer/.pwragent/profiles/default/projects";
+const CUSTOM_PEER_WORKSPACE_ROOT = "/state/profiles/default/projects";
 
 /** A folder the composer `@`-references, as the operator picked it. */
 type Reference = {
@@ -137,11 +139,12 @@ const peerProject: fc.Arbitrary<PeerProject> = fc.oneof(
     })
     .map((project) => ({ kind: "directory" as const, ...project })),
   fc
-    .record({ backend, references })
+    .record({ backend, references, path: fc.constantFrom(
+      PEER_WORKSPACE_ROOT, CUSTOM_PEER_WORKSPACE_ROOT, "C:/Outpost/profiles/default/projects",
+    ) })
     .map((project) => ({
       kind: "workspace" as const,
       label: "Workspaces",
-      path: PEER_WORKSPACE_ROOT,
       workMode: "local" as const,
       ...project,
     })),
@@ -151,7 +154,7 @@ const peerProject: fc.Arbitrary<PeerProject> = fc.oneof(
 function landedThread(project: PeerProject, threadId: string): NavigationThreadSummary {
   const worktreePath = `/Users/peer/.pwragent/worktrees/${threadId}/${project.label}`;
   const launchpadDirectory: LinkedDirectorySummary = project.kind === "workspace"
-    ? { id: threadId, kind: "local", label: threadId, path: `${PEER_WORKSPACE_ROOT}/${threadId}` }
+    ? { id: threadId, kind: "local", label: threadId, path: `${project.path}/${threadId}` }
     : project.workMode === "worktree"
       ? { id: threadId, kind: "worktree", label: project.label, path: project.path, worktreePath }
       : { id: threadId, kind: "local", label: project.label, path: project.path };
@@ -163,16 +166,21 @@ function landedThread(project: PeerProject, threadId: string): NavigationThreadS
   const cwd = project.kind === "workspace"
     ? launchpadDirectory.path
     : project.workMode === "worktree" ? worktreePath : project.path;
+  const [ownerThread] = materializeNavigationThreads({
+    firstSnapshot: true,
+    overlayByThreadKey: {},
+    previousKnownThreadKeys: [],
+    workspaceRoots: project.kind === "workspace" ? [project.path] : undefined,
+    threads: [{ id: threadId, source: project.backend, title: threadId, titleSource: "explicit",
+      linkedDirectories, projectKey: cwd }],
+  });
   return {
-    id: threadId,
-    source: project.backend,
-    linkedDirectories,
-    projectKey: cwd,
+    ...ownerThread!,
     federation: {
       ref: buildFederatedThreadRef({ backend: project.backend, instanceId: PEER, threadId }),
       instanceLabel: "Peer",
     },
-  } as unknown as NavigationThreadSummary;
+  };
 }
 
 function shuffled<T>(items: readonly T[], order: readonly number[]): T[] {
@@ -183,6 +191,23 @@ function shuffled<T>(items: readonly T[], order: readonly number[]): T[] {
 }
 
 describe("starting row placement for a peer's thread", () => {
+  it("draws the owner's Workspaces placeholder for a custom peer root", () => {
+    const project: PeerProject = {
+      kind: "workspace", label: "Workspaces", path: CUSTOM_PEER_WORKSPACE_ROOT,
+      workMode: "local", backend: "codex", references: [],
+    };
+    const creation = {
+      directoryKey: `workspace:${project.path}`,
+      directoryLabel: project.label,
+      launchpad: { directoryPath: project.path },
+      target: { scope: "remote" as const, instanceId: PEER },
+    };
+    const rendered = withStartingPlaceholderDirectories([], [creation], undefined, (placeholder) => placeholder);
+    const landed = attachRemoteThreadsToLocalDirectories([], [landedThread(project, "started")]);
+    expect(landed[0]?.key).toBe("unconfigured-workspace");
+    expect(startingThreadHomeDirectoryKey(creation, rendered)).toBe(landed[0]?.key);
+  });
+
   it("renders in the group main files the landed thread under", () => {
     fc.assert(
       fc.property(

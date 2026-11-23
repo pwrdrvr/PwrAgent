@@ -30,6 +30,14 @@ function directoryCheckChangeDescription(event: AgentEvent): string {
   return `${event.backend}, ${event.notification.method}${thread}${instance}`;
 }
 
+async function matchesDisplayedMembership(directoryKey: string, keys: ReadonlySet<string>, callerReason: string): Promise<boolean> {
+  const visible = await loadLocalNavigationQueryIndex({ callerReason });
+  const displayed = visible.directories.find((directory) => directory.key === directoryKey);
+  return (!visible.coverage || visible.coverage.state === "complete")
+    && displayed?.threadKeys.length === keys.size
+    && displayed.threadKeys.every((key) => keys.has(key));
+}
+
 /** No renderer membership assertion authorizes removing a registration. */
 export async function removeLocalNavigationDirectory(
   request: RemoveNavigationDirectoryRequest,
@@ -45,7 +53,7 @@ export async function removeLocalNavigationDirectory(
   let members: ArchiveThreadRequest[] = [];
   let checkoutProject = false;
   try {
-    const index = await loadLocalNavigationQueryIndex({ callerReason: "remove-navigation-directory" });
+    const index = await loadLocalNavigationQueryIndex({ callerReason: "remove-navigation-directory", requireVerifiedDirectories: true });
     if (index.coverage && index.coverage.state !== "complete") throw new Error("Owner directory membership is still checking or unavailable. Try again after providers are ready.");
     if (changedDuringRead) throw new Error("Owner state changed during the directory check. Refresh navigation and try again.");
     if (Object.values(index.directoryCaseAliases ?? {}).some((aliases) => aliases.includes(request.directoryKey))) {
@@ -60,8 +68,15 @@ export async function removeLocalNavigationDirectory(
       throw new Error("Use Project Checkouts to ungroup this project.");
     }
     if (archiveWorkspace && directory?.kind !== "workspace") throw new Error("This workspace is no longer available on its owner.");
+    if (request.archiveThreads && !directory) {
+      throw new Error("Directory membership changed. Refresh navigation and try again.");
+    }
     if (request.archiveThreads && directory) {
       const keys = new Set(directory.threadKeys);
+      const matches = await matchesDisplayedMembership(request.directoryKey, keys, "remove-navigation-directory");
+      if (changedDuringRead || !matches) {
+        throw new Error("Directory membership changed. Refresh navigation and try again.");
+      }
       const threads = new Map(index.threads.map((thread) => [buildThreadIdentityKey(thread.source, thread.id), thread]));
       members = [...keys].map((key) => {
         const thread = threads.get(key);
@@ -122,7 +137,7 @@ export async function markLocalNavigationDirectorySeen(
   });
   let changedCount: number;
   try {
-    const index = await loadLocalNavigationQueryIndex({ callerReason: "mark-navigation-directory-seen" });
+    const index = await loadLocalNavigationQueryIndex({ callerReason: "mark-navigation-directory-seen", requireVerifiedDirectories: true });
     if (index.coverage && index.coverage.state !== "complete") throw new Error("Owner directory membership is still checking or unavailable. Try again after providers are ready.");
     if (changedDuringRead) {
       throw new Error(`Owner state changed during the directory check (${changedDuringRead}). Refresh navigation and try again.`);
@@ -130,6 +145,10 @@ export async function markLocalNavigationDirectorySeen(
     const directory = index.directories.find((candidate) => candidate.key === request.directoryKey);
     if (!directory) throw new Error("This directory is no longer available on its owner.");
     const keys = new Set(directory.threadKeys);
+    const matches = await matchesDisplayedMembership(request.directoryKey, keys, "mark-navigation-directory-seen");
+    if (changedDuringRead || !matches) {
+      throw new Error("Directory membership changed. Refresh navigation and try again.");
+    }
     const members = new Map(index.threads.filter((thread) => keys.has(buildThreadIdentityKey(thread.source, thread.id)))
       .map((thread) => [buildThreadIdentityKey(thread.source, thread.id), thread]));
     if ([...keys].some((key) => !members.has(key)) || [...members.values()].some((thread) => thread.federation?.ref.target.scope === "remote")) {

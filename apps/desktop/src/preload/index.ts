@@ -2,7 +2,8 @@ import type {
   ResourceCheckoutActionRequest, ResourceCheckoutActionResult, ResourceCheckoutsSnapshot, ResourceCheckoutsChangedEvent, ResourceThreadRef,
 } from "@pwragent/shared/contracts/resource-checkouts";
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
-import { AGENT_MEMORY_CHANNEL } from "../shared/ipc";
+import { AGENT_MEMORY_CHANNEL, AGENT_PRESETS_CHANNEL } from "../shared/ipc";
+import type { AgentPreset, ManageAgentPresetsRequest } from "@pwragent/shared/contracts/agent-presets";
 import type {
   ResearchThread,
   ResearchUpdateRequest,
@@ -36,6 +37,7 @@ import type {
   DecisionsRailSnapshot,
   DecisionsRailThreadRequest,
 } from "@pwragent/shared/decisions-rail";
+import type { DecisionModelListing, DecisionProviderId } from "@pwragent/shared/decision-models";
 import type {
   ResearchHarnessCheck,
   ResearchHarnessReconcileRequest,
@@ -394,6 +396,7 @@ import type {
   AppServerListSkillsResponse,
   AppServerListThreadsRequest,
   AppServerListThreadsResponse,
+  AppServerPendingThreadStartReport,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   GetThreadFileDiffRequest,
@@ -487,6 +490,7 @@ import type {
   SetDesktopPwrAgentProfileMenuVisibilityRequest,
   SetDesktopPwrAgentProfileMenuVisibilityResponse,
   ReadDesktopSettingsRequest,
+  ManagedCodexTrackLookup,
   ReadDesktopSettingsResponse,
   DesktopTokenMiserUsage,
   DesktopSettingsRuntimeChangedEvent,
@@ -500,6 +504,8 @@ import type {
   ReplaceDesktopSettingsSecretRequest,
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
+  LineRichMenuSetupRequest,
+  LineRichMenuSetupResponse,
   SettingsCredentialTestResult,
   InspectDiscordThreadPermissionsRequest,
   InspectDiscordThreadPermissionsResponse,
@@ -581,6 +587,8 @@ import type {
   SetThreadMonitorJobSuggestionsRequest,
   SetThreadTokenMiserResponse,
   SetThreadMonitorJobSuggestionsResponse,
+  SetThreadJobMonitorCreationRequest,
+  SetThreadJobMonitorCreationResponse,
   SetThreadAgentResponse,
   NavigationQueryPage,
   NavigationQueryRequest,
@@ -642,6 +650,10 @@ import type {
   GlabStatus,
   GhStatus,
   DetachThreadPullRequestRequest,
+  MergeThreadPullRequestRequest,
+  MergeThreadPullRequestResponse,
+  ReadThreadPullRequestMergeResponse,
+  ThreadPullRequestMergeTarget,
   DetachThreadPullRequestResponse,
   RefreshThreadPullRequestsRequest,
   RefreshThreadGitWorkingStateRequest,
@@ -892,6 +904,8 @@ import {
   THREAD_TODOS_LIST_PROJECTS_CHANNEL,
   THREAD_TODOS_RESOLVE_CHANNEL,
   THREAD_TODOS_RUN_ACTION_CHANNEL,
+  THREAD_PULL_REQUEST_MERGE_CHANNEL,
+  THREAD_PULL_REQUEST_READ_MERGE_CHANNEL,
   THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL,
   THREAD_TODOS_REVIEW_CI_DEPLOYMENT_CHANNEL,
   THREAD_TODOS_SET_PROJECT_CHANNEL,
@@ -914,6 +928,7 @@ import {
   APPEARANCE_CHANGED_EVENT_CHANNEL,
   AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_COMPACT_THREAD_CHANNEL,
+  AGENT_CONTROL_THREAD_GOAL_CHANNEL,
   AGENT_CONFIGURE_GROK_WORKFLOW_BUDGET_CHANNEL,
   AGENT_LIST_THREAD_MCP_SERVERS_CHANNEL,
   AGENT_RELOAD_CODEX_MCP_CONFIG_CHANNEL,
@@ -947,6 +962,7 @@ import {
   AGENT_CANCEL_THREAD_PR_AUTO_DISPATCH_CHANNEL,
   AGENT_SEND_THREAD_PR_AUTO_DISPATCH_NOW_CHANNEL,
   AGENT_TURN_OFF_CODEX_FAST_EVERYWHERE_CHANNEL,
+  AGENT_LIST_PENDING_THREAD_STARTS_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
   AGENT_START_REVIEW_CHANNEL,
   AGENT_START_TURN_CHANNEL,
@@ -1266,6 +1282,7 @@ import {
   NAVIGATION_SET_THREAD_AGENT_CHANNEL,
   NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL,
   NAVIGATION_SET_THREAD_MONITOR_JOB_SUGGESTIONS_CHANNEL,
+  NAVIGATION_SET_THREAD_JOB_MONITOR_CREATION_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_SET_THREAD_LOCK_CHANNEL,
@@ -1339,10 +1356,13 @@ import {
   SETTINGS_READ_MESSAGING_CHANNEL,
   SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL,
   SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
+  SETTINGS_READ_MANAGED_CODEX_TRACK_TAGS_CHANNEL,
   SETTINGS_REPLACE_SECRET_CHANNEL,
   SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL,
   SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL,
   SETTINGS_TEST_CREDENTIALS_CHANNEL,
+  SETTINGS_LINE_RICH_MENU_CHANNEL,
+  SETTINGS_LIST_DECISION_MODELS_CHANNEL,
   SETTINGS_WRITE_CONFIG_CHANNEL,
   THREAD_MIGRATION_LIST_SOURCES_CHANNEL,
   THREAD_MIGRATION_LIST_SOURCE_THREADS_CHANNEL,
@@ -2317,6 +2337,8 @@ const desktopApi = Object.freeze({
     request: ClearDesktopSettingsSecretRequest,
   ): Promise<DesktopSettingsSecretWriteResponse> =>
     await ipcRenderer.invoke(SETTINGS_CLEAR_SECRET_CHANNEL, request),
+  readManagedCodexTrackTags: async (): Promise<ManagedCodexTrackLookup | undefined> =>
+    await ipcRenderer.invoke(SETTINGS_READ_MANAGED_CODEX_TRACK_TAGS_CHANNEL),
   refreshCodexDiscovery: async (
     request: RefreshDesktopCodexDiscoveryRequest,
   ): Promise<ReadDesktopSettingsResponse> =>
@@ -2382,6 +2404,10 @@ const desktopApi = Object.freeze({
     request: SettingsCredentialTestRequest,
   ): Promise<SettingsCredentialTestResult> =>
     await ipcRenderer.invoke(SETTINGS_TEST_CREDENTIALS_CHANNEL, request),
+  lineRichMenuSetup: async (request: LineRichMenuSetupRequest): Promise<LineRichMenuSetupResponse> =>
+    await ipcRenderer.invoke(SETTINGS_LINE_RICH_MENU_CHANNEL, request),
+  listDecisionModels: async (request: { provider: DecisionProviderId }): Promise<DecisionModelListing> =>
+    await ipcRenderer.invoke(SETTINGS_LIST_DECISION_MODELS_CHANNEL, request),
   openSlackCreateApp: async (
     request?: SlackCreateAppRequest,
   ): Promise<SlackCreateAppResponse> =>
@@ -2759,6 +2785,8 @@ const desktopApi = Object.freeze({
     request: RenameThreadRequest,
   ): Promise<RenameThreadResponse> =>
     await ipcRenderer.invoke(APP_SERVER_RENAME_THREAD_CHANNEL, request),
+  listPendingThreadStarts: async (): Promise<AppServerPendingThreadStartReport[]> =>
+    await ipcRenderer.invoke(AGENT_LIST_PENDING_THREAD_STARTS_CHANNEL),
   startThread: async (
     request: StartThreadRequest
   ): Promise<StartThreadResponse> =>
@@ -2775,6 +2803,18 @@ const desktopApi = Object.freeze({
     request: CompactThreadRequest
   ): Promise<CompactThreadResponse> =>
     await ipcRenderer.invoke(AGENT_COMPACT_THREAD_CHANNEL, request),
+  readThreadGoal: async (threadId: string) =>
+    await ipcRenderer.invoke(AGENT_CONTROL_THREAD_GOAL_CHANNEL, { threadId, action: "read" }),
+  setThreadGoal: async (threadId: string, objective: string, confirmedObjective?: string) =>
+    await ipcRenderer.invoke(AGENT_CONTROL_THREAD_GOAL_CHANNEL, { threadId, objective, confirmedObjective, action: "set" }),
+  pauseThreadGoal: async (threadId: string) =>
+    await ipcRenderer.invoke(AGENT_CONTROL_THREAD_GOAL_CHANNEL, { threadId, action: "pause" }),
+  resumeThreadGoal: async (threadId: string) =>
+    await ipcRenderer.invoke(AGENT_CONTROL_THREAD_GOAL_CHANNEL, { threadId, action: "resume" }),
+  clearThreadGoal: async (threadId: string, confirmedObjective?: string) =>
+    await ipcRenderer.invoke(AGENT_CONTROL_THREAD_GOAL_CHANNEL, { threadId, confirmedObjective, action: "clear" }),
+  cancelThreadGoalActivation: async (threadId: string) =>
+    await ipcRenderer.invoke(AGENT_CONTROL_THREAD_GOAL_CHANNEL, { threadId, action: "cancel" }),
   listThreadMcpServers: async (
     request: ListThreadMcpServersRequest,
   ): Promise<ListThreadMcpServersResponse> =>
@@ -3247,6 +3287,10 @@ const desktopApi = Object.freeze({
     request: SetThreadMonitorJobSuggestionsRequest,
   ): Promise<SetThreadMonitorJobSuggestionsResponse> =>
     await ipcRenderer.invoke(NAVIGATION_SET_THREAD_MONITOR_JOB_SUGGESTIONS_CHANNEL, request),
+  setThreadJobMonitorCreation: async (
+    request: SetThreadJobMonitorCreationRequest,
+  ): Promise<SetThreadJobMonitorCreationResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_SET_THREAD_JOB_MONITOR_CREATION_CHANNEL, request),
   reorderThreadPins: async (
     request: ReorderThreadPinsRequest,
   ): Promise<ReorderThreadPinsResponse> =>
@@ -3391,6 +3435,14 @@ const desktopApi = Object.freeze({
     request: DetachThreadPullRequestRequest,
   ): Promise<DetachThreadPullRequestResponse> =>
     await ipcRenderer.invoke(NAVIGATION_DETACH_THREAD_PR_CHANNEL, request),
+  readThreadPullRequestMerge: async (
+    request: ThreadPullRequestMergeTarget,
+  ): Promise<ReadThreadPullRequestMergeResponse> =>
+    await ipcRenderer.invoke(THREAD_PULL_REQUEST_READ_MERGE_CHANNEL, request),
+  mergeThreadPullRequest: async (
+    request: MergeThreadPullRequestRequest,
+  ): Promise<MergeThreadPullRequestResponse> =>
+    await ipcRenderer.invoke(THREAD_PULL_REQUEST_MERGE_CHANNEL, request),
   refreshDirectoryGitStatuses: async (
     request: RefreshDirectoryGitStatusesRequest,
   ): Promise<RefreshDirectoryGitStatusesResponse> =>
@@ -3536,6 +3588,8 @@ const desktopApi = Object.freeze({
       NAVIGATION_LIST_MODEL_SETTINGS_RECENTS_CHANNEL,
       request,
     ),
+  manageAgentPresets: (request: ManageAgentPresetsRequest): Promise<AgentPreset[]> =>
+    ipcRenderer.invoke(AGENT_PRESETS_CHANNEL, request),
   recordModelSettingsRecent: async (
     request: RecordModelSettingsRecentRequest,
   ): Promise<void> =>

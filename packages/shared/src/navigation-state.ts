@@ -25,7 +25,7 @@ import {
 } from "./worktree-paths.js";
 import { deriveInboxState, rankInboxThreadKeys } from "./inbox";
 import { isThreadCheckoutHibernated } from "./checkout-hibernation-policy";
-import { buildDirectorySummaries, canonicalizeNavigationPath } from "./directory-navigation";
+import { buildDirectorySummaries, canonicalizeNavigationPath, findConfiguredScratchProjectsRoot } from "./directory-navigation";
 
 type AppServerThreadSummaryWithEnvironmentOptions = AppServerThreadSummary & {
   codexEnvironmentOptions?: CodexEnvironmentOption[];
@@ -276,8 +276,10 @@ export function materializeNavigationThreads(params: {
   automationsByThreadKey?: Record<string, AutomationThreadSummary | undefined>;
   previousKnownThreadKeys: string[];
   threads: AppServerThreadSummaryWithEnvironmentOptions[];
+  workspaceRoots?: string[];
 }): NavigationThreadSummary[] {
   const previousKnownThreadKeys = new Set(params.previousKnownThreadKeys);
+  const workspaceRoots = params.workspaceRoots?.map((root) => canonicalizeNavigationPath(root.trim()));
 
   return params.threads.map((thread) => {
     const threadKey = buildThreadIdentityKey(thread.source, thread.id);
@@ -285,7 +287,12 @@ export function materializeNavigationThreads(params: {
     const linkedDirectories = mergeThreadLinkedDirectories([
       ...thread.linkedDirectories,
       ...(overlay?.extraLinkedDirectories ?? []),
-    ]);
+    ]).map((directory) => {
+      if (directory.kind !== "local" || !workspaceRoots?.length) return directory;
+      const scratchWorkspaceRoot = findConfiguredScratchProjectsRoot(directory.path, workspaceRoots);
+      return scratchWorkspaceRoot && workspaceRoots.includes(scratchWorkspaceRoot)
+        ? { ...directory, scratchWorkspaceRoot } : directory;
+    });
     const gitBranch = resolveNavigationGitBranch({ overlay, thread });
     const observedGitBranch = resolveNavigationObservedBranch({ overlay, thread });
     const parentThread = resolveNavigationParentThread({
@@ -324,6 +331,7 @@ export function materializeNavigationThreads(params: {
       fastMode: overlay?.fastMode ?? thread.fastMode,
       tokenMiserEnabled: overlay?.tokenMiserEnabled,
       monitorJobSuggestionsEnabled: overlay?.monitorJobSuggestionsEnabled,
+      jobMonitorCreationEnabled: overlay?.jobMonitorCreationEnabled,
       prAutoDispatchEnabled: overlay?.prAutoDispatchEnabled ?? false,
       prAutoDispatchPending: overlay?.prAutoDispatchPending,
       codexEnvironmentRuntime:
@@ -390,6 +398,7 @@ export function buildNavigationSnapshot(params: {
     automationsByThreadKey: params.automationsByThreadKey,
     previousKnownThreadKeys: params.previousKnownThreadKeys,
     threads: params.threads,
+    workspaceRoots: params.workspaceRoots,
   });
 
   return {
@@ -575,6 +584,7 @@ export function serializeNavigationSnapshotForHash(params: {
       fastMode: thread.fastMode ?? null,
       tokenMiserEnabled: thread.tokenMiserEnabled ?? null,
       monitorJobSuggestionsEnabled: thread.monitorJobSuggestionsEnabled ?? null,
+      jobMonitorCreationEnabled: thread.jobMonitorCreationEnabled ?? null,
       scheduledStart: thread.scheduledStart
         ? {
             actionId: thread.scheduledStart.actionId,
@@ -668,6 +678,7 @@ export function serializeNavigationSnapshotForHash(params: {
         path: directory.path,
         worktreePath: directory.worktreePath ?? null,
         worktreeOwnership: directory.worktreeOwnership ?? null,
+        ...(directory.scratchWorkspaceRoot ? { scratchWorkspaceRoot: directory.scratchWorkspaceRoot } : {}),
       })),
       worktreeSnapshots: (thread.worktreeSnapshots ?? []).map((snapshot) => ({
         id: snapshot.id,
@@ -718,6 +729,8 @@ export function serializeNavigationSnapshotForHash(params: {
         lifecycleState: pr.lifecycleState ?? null,
         reviewState: pr.reviewState ?? null,
         mergeState: pr.mergeState ?? null,
+        mergeQueue: pr.mergeQueue ?? null,
+        allowedMergeMethods: pr.allowedMergeMethods ?? null,
         url: pr.url,
       })),
       // Include the breadcrumb fields (parentTitle / ancestorTitle) in

@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
-import { StateDb } from "../state/state-db";
+import { CURRENT_STATE_DB_USER_VERSION, StateDb } from "../state/state-db";
 import { FileScheduledThreadActionPayloadStore, MemoryScheduledThreadActionPayloadStore } from "../storage/scheduled-thread-action-payload-store";
 import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
@@ -170,8 +170,8 @@ it("admits owner history when the conservative JSON bound alone exceeds the limi
 it.each([
   { version: 85, missingTriggerOnly: false },
   { version: 86, missingTriggerOnly: false },
-  { version: 87, missingTriggerOnly: false },
-  { version: 87, missingTriggerOnly: true },
+  { version: CURRENT_STATE_DB_USER_VERSION + 1, missingTriggerOnly: false },
+  { version: CURRENT_STATE_DB_USER_VERSION + 1, missingTriggerOnly: true },
 ])("repairs scheduled projections at v$version (only update trigger absent: $missingTriggerOnly)", ({ version, missingTriggerOnly }) => {
   const { dbPath, tempDir } = createTempStateDb("scheduled-projection-migration-");
   let db = StateDb.open(dbPath);
@@ -197,7 +197,7 @@ it.each([
     db.close();
 
     db = StateDb.open(dbPath);
-    expect(db.raw.pragma("user_version", { simple: true })).toBe(Math.max(version, 86));
+    expect(db.raw.pragma("user_version", { simple: true })).toBe(Math.max(version, CURRENT_STATE_DB_USER_VERSION));
     const reopened = new ScheduledThreadActionStore(db);
     const expected = [{ ...retained, errorMessage }];
     expect(reopened.listProjectionPage({ ...history, terminalUpdatedAfter: 2 }).actions).toEqual(expected);

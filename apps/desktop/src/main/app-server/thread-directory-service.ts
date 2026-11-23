@@ -19,6 +19,7 @@ import {
   isRemoteLaunchpadStorageKey,
   launchpadStorageKey,
   parseRemoteLaunchpadStorageKey,
+  projectFederatedLaunchpad,
 } from "@pwragent/shared/contracts/navigation";
 import { providerPickerValue } from "@pwragent/shared/provider-picker";
 import { type FederationTarget } from "@pwragent/shared/contracts/federation";
@@ -108,6 +109,7 @@ import {
   ThreadInfoStore,
 } from "./thread-info-store";
 import { hasWorktreeRegistration, inspectRegisterableWorktree, sameRegisteredWorktree } from "./worktree-maintenance-registration";
+import { shortenDerivedThreadTitle } from "@pwragent/shared/thread-titles";
 import { getMainLogger } from "../log";
 import {
   type ProviderDiscoveryPermit,
@@ -129,6 +131,7 @@ import {
   type CodexEnvironmentCommandRunner,
   type CodexEnvironmentDetachedExit,
   type CodexEnvironmentDetachedOutput,
+  type CodexEnvironmentSelection,
 } from "./codex-environment-runtime";
 import { type CodexEnvironmentHydrationStoreLike } from "../storage/codex-environment-hydration-store";
 import {
@@ -141,6 +144,7 @@ import {
 import {
   type CodexDiscoveryObserver,
   type ModelSettings,
+  type PendingThreadStartReporter,
 } from "./backend-registry-types";
 import {
   threadOrchestrationFailure,
@@ -184,6 +188,11 @@ import type { RegistryHostPorts } from "./registry-host-ports";
 
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 
+type LaunchpadMaterializationOptions = MaterializeDirectoryLaunchpadOptions & {
+  sourceInstanceId?: FederationInstanceId;
+  turnInputSource?: TurnInputSource;
+};
+
 /** The collaborators and services the composition root supplies to this module. */
 export interface ThreadDirectoryServiceDependencies {
   readonly threadArchiveCoordinator: ThreadArchiveCoordinator;
@@ -204,9 +213,9 @@ export interface ThreadDirectoryServiceDependencies {
 export interface ThreadDirectoryServiceHost extends Pick<RegistryHostPorts,
   "admitNewThreadModelSettings" | "archiveThread" | "findThreadForWorkspaceHandoff"
   | "getBackendLaunchpadOptions" | "getCachedThreadSummary" | "invalidateThreadListCache"
-  | "isLiveDynamicToolCall" | "publishLocalEvent" | "readThread" | "recordCodexWorktreeOwnerThread"
+  | "isLiveDynamicToolCall" | "ownerRelativeInstanceId" | "publishLocalEvent" | "readThread" | "recordCodexWorktreeOwnerThread"
   | "resolveCodexThreadExecutionModeForActiveTurn" | "resolveModelSettings"
-  | "resolveThreadEnvironmentCwd" | "startThread" | "startTurn" | "threadHasActiveTurn"
+  | "resolveThreadEnvironmentCwd" | "startThread" | "startTurn" | "threadHasActiveTurn" | "withPendingThreadStart"
 > {
   readonly codexEnvironmentCommandEnv?: NodeJS.ProcessEnv;
   readonly createScheduledThreadActionFn?: (
@@ -699,6 +708,7 @@ export class ThreadDirectoryService {
       // only repeats the current ids is not an edit: the MCP access panel
       // sends them along with its agent-servers switch.
       ...("mcpConnectionIds" in request.patch
+        && !("mcpConnectionIdsFromDefaults" in request.patch)
         && !sameMcpConnectionIds(
           request.patch.mcpConnectionIds,
           current.mcpConnectionIds,
@@ -1457,15 +1467,13 @@ export class ThreadDirectoryService {
 
   async materializeDirectoryLaunchpad(
     request: MaterializeDirectoryLaunchpadRequest,
-    options?: MaterializeDirectoryLaunchpadOptions & {
-      sourceInstanceId?: FederationInstanceId;
-      turnInputSource?: TurnInputSource;
-    },
+    options?: LaunchpadMaterializationOptions,
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
     const policy = getOwnerHostServices().runtimePolicy;
     let proxyDraft: NavigationLaunchpadDraft | undefined;
     if (policy?.codexOpenAiProviderEnabled === false) {
-      const draft = request.launchpad ?? await this.context.stores.launchpads.getDirectoryLaunchpad({ directoryKey: request.directoryKey });
+      const stored = request.launchpad ?? await this.context.stores.launchpads.getDirectoryLaunchpad({ directoryKey: request.directoryKey });
+      const draft = stored && options?.sourceInstanceId && !request.launchpad ? projectFederatedLaunchpad(stored) : stored;
       if (draft?.backend === "codex") {
         assertOwnerCodexModelSelection(policy, { backend: draft.backend, model: request.launchpad?.model, collaborationMode: request.collaborationMode });
         const projected = projectNavigationLaunchpadProviderSettings(draft);
@@ -1519,14 +1527,14 @@ export class ThreadDirectoryService {
 
   private async runMaterializeDirectoryLaunchpad(
     request: MaterializeDirectoryLaunchpadRequest,
-    options?: MaterializeDirectoryLaunchpadOptions & { sourceInstanceId?: FederationInstanceId; turnInputSource?: TurnInputSource },
+    options?: LaunchpadMaterializationOptions,
     operation?: LaunchpadCreationOperation,
     proxyLaunchpad?: NavigationLaunchpadDraft,
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
     operation?.check();
     const materialize = (request: MaterializeDirectoryLaunchpadRequest) =>
       listingDiagnostics.trace("workflow", { query: "first-send" }, () => this.materializeLaunchpadDraftPrepared(request, options, operation, proxyLaunchpad));
-    if (!request.releaseLaunchpadOnSubmit) {
+    if (!request.releaseLaunchpadOnSubmit || options?.sourceInstanceId) {
       return await materialize(request);
     }
     const launchpad =
@@ -1537,6 +1545,7 @@ export class ThreadDirectoryService {
     if (!launchpad) {
       throw new Error(`No launchpad found for ${request.directoryKey}`);
     }
+    if (request.directoryKey !== launchpad.directoryKey) return await materialize(request);
     // Release the draft before the slow part (worktree, environment setup,
     // thread start) so the operator can compose the next thread in this
     // directory while this one starts.
@@ -1602,14 +1611,14 @@ export class ThreadDirectoryService {
     request: MaterializeDirectoryLaunchpadRequest,
     sourceInstanceId?: FederationInstanceId,
   ): Promise<NavigationLaunchpadDraft> {
-    const draft =
-      request.launchpad ??
-      (await this.context.stores.launchpads.getDirectoryLaunchpad({
+    const stored = request.launchpad ??
+      await this.context.stores.launchpads.getDirectoryLaunchpad({
         directoryKey: request.directoryKey,
-      }));
-    if (!draft) {
+      });
+    if (!stored) {
       throw new Error(`No launchpad found for ${request.directoryKey}`);
     }
+    const draft = sourceInstanceId && !request.launchpad ? projectFederatedLaunchpad(stored) : stored;
     const projectedDraft = await this.resolveLaunchpadProviderModel(projectNavigationLaunchpadProviderSettings(draft));
     await this.host().admitNewThreadModelSettings(projectedDraft.backend, projectedDraft);
     return sourceInstanceId ? await this.resolveRemoteLaunchpadModelSettings(draft) : projectedDraft;
@@ -1617,7 +1626,7 @@ export class ThreadDirectoryService {
 
   private async materializeLaunchpadDraftPrepared(
     request: MaterializeDirectoryLaunchpadRequest,
-    options?: MaterializeDirectoryLaunchpadOptions & { sourceInstanceId?: FederationInstanceId; turnInputSource?: TurnInputSource },
+    options?: LaunchpadMaterializationOptions,
     operation?: LaunchpadCreationOperation,
     proxyLaunchpad?: NavigationLaunchpadDraft,
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
@@ -1657,6 +1666,64 @@ export class ThreadDirectoryService {
       };
     }
 
+    const selection = resolveCodexEnvironmentSelection(launchpad, codexEnvironmentOptions);
+    const origin = options?.messageOrigin;
+    const sourceThread = origin?.sourceThread;
+    const localProgressThread = sourceThread
+      && !options?.sourceInstanceId
+      && !this.host().ownerRelativeInstanceId(sourceThread.instanceId)
+      ? { backend: sourceThread.backend, threadId: sourceThread.threadId }
+      : undefined;
+    // Renderer launchpads own their row. Their local IPC and older peer RPC
+    // send no message origin; modern renderer submissions own an operation.
+    const reportStart = !operation && origin
+      && (launchpad.workMode === "worktree" || (selection?.executionTarget === "local" && selection.runSetup));
+    const pendingStart = reportStart ? {
+      startId: randomUUID(),
+      title: shortenDerivedThreadTitle(
+        origin.threadTodo?.title || request.agent?.name || launchpad.agent?.name
+        || request.input?.find((item) => item.type === "text")?.text || launchpad.prompt
+        || origin.messaging?.surface.title,
+      ) ?? `New thread in ${launchpad.directoryLabel}`,
+      directoryKey: launchpad.directoryKey,
+      directoryLabel: launchpad.directoryLabel,
+      progressThread: localProgressThread,
+    } : undefined;
+    return await this.host().withPendingThreadStart({
+      backend: launchpad.backend,
+      cwd: launchpad.directoryPath,
+      model: launchpad.model,
+      workMode: launchpad.workMode,
+      parentThreadId: request.parentThreadId ?? launchpad.parentThreadId,
+      parentThreadBackend: request.parentThreadBackend ?? launchpad.parentThreadBackend,
+      parentThreadInstanceId: request.parentThreadInstanceId ?? launchpad.parentThreadInstanceId,
+    }, pendingStart, async (pending) => {
+      const uncommitted: { rollback?: () => Promise<void> } | undefined = pending ? {} : undefined;
+      try {
+        return await this.materializeLaunchpadWorkspace({ request, launchpad, options, operation, selection, pending, uncommitted });
+      } finally {
+        if (uncommitted?.rollback) {
+          try {
+            await uncommitted.rollback();
+          } catch (error) {
+            backendRegistryLog.warn("launchpad-workspace-rollback-failed", { error: String(error) });
+          }
+        }
+      }
+    });
+  }
+
+  private async materializeLaunchpadWorkspace({
+    request, launchpad, options, operation, selection, pending, uncommitted,
+  }: {
+    request: MaterializeDirectoryLaunchpadRequest;
+    launchpad: NavigationLaunchpadDraft;
+    options?: LaunchpadMaterializationOptions;
+    operation?: LaunchpadCreationOperation;
+    selection?: CodexEnvironmentSelection;
+    pending?: PendingThreadStartReporter;
+    uncommitted?: { rollback?: () => Promise<void> };
+  }): Promise<MaterializeDirectoryLaunchpadResponse> {
     operation?.check();
     const preparedWorkspace =
       await listingDiagnostics.trace("workflow", { query: "workspace-preparation" }, () => this.host().gitDirectoryService.prepareLaunchpadWorkspace(
@@ -1677,6 +1744,18 @@ export class ThreadDirectoryService {
         rollback: preparedWorkspace.rollback,
         backend: launchpad.backend,
       });
+    }
+    // Until the provider accepts the thread, this owner owns the prepared
+    // workspace and any detached setup action started in it.
+    const autoActionRunId = randomUUID();
+    if (uncommitted) {
+      uncommitted.rollback = async () => {
+        const stopped = stopCodexEnvironmentDetachedCommand(autoActionRunId, "terminate");
+        if (stopped.found && !stopped.alreadyClosed) {
+          await waitForCodexEnvironmentDetachedCommandGone({ runId: autoActionRunId });
+        }
+        await preparedWorkspace.rollback?.();
+      };
     }
     const workspace =
       launchpad.directoryKind === "workspace" && !preparedWorkspace.cwd
@@ -1699,10 +1778,6 @@ export class ThreadDirectoryService {
             worktreePath: workspace.cwd,
           })
         : undefined;
-    const codexEnvironmentSelection = resolveCodexEnvironmentSelection(
-      launchpad,
-      codexEnvironmentOptions,
-    );
     let codexEnvironmentRuntime: CodexThreadEnvironmentRuntime | undefined;
     let codexEnvironmentStartupFailure:
       | MaterializeDirectoryLaunchpadResponse["codexEnvironmentStartupFailure"]
@@ -1710,10 +1785,6 @@ export class ThreadDirectoryService {
     // The detached env-action child can exit asynchronously after we've
     // already returned to the caller. Queue any early exits until the
     // thread is started so we can attribute them to the right thread.
-    // Pre-generate the runId for the auto-action so the same id flows
-    // from the runtime helper into the renderer's actionRuns entry and
-    // into the post-startThread output/exit handlers.
-    const autoActionRunId = randomUUID();
     if (operation) {
       operation.actionRunId = autoActionRunId;
       operation.controller.signal.addEventListener("abort", () => {
@@ -1725,7 +1796,7 @@ export class ThreadDirectoryService {
     const queuedActionDetachedOutputs: CodexEnvironmentDetachedOutput[] = [];
     const codexActionBackend: AppServerBackendKind = launchpad.backend;
     const onActionDetachedExit = (event: CodexEnvironmentDetachedExit) => {
-      if (pendingActionThreadIdRef.current && codexEnvironmentSelection?.action?.id) {
+      if (pendingActionThreadIdRef.current && selection?.action?.id) {
         void this.handleCodexEnvironmentActionDetachedExit({
           backend: codexActionBackend,
           threadId: pendingActionThreadIdRef.current,
@@ -1737,7 +1808,7 @@ export class ThreadDirectoryService {
       queuedActionDetachedExits.push(event);
     };
     const onActionDetachedOutput = (event: CodexEnvironmentDetachedOutput) => {
-      if (pendingActionThreadIdRef.current && codexEnvironmentSelection?.action?.id) {
+      if (pendingActionThreadIdRef.current && selection?.action?.id) {
         void this.handleCodexEnvironmentActionDetachedOutput({
           backend: codexActionBackend,
           threadId: pendingActionThreadIdRef.current,
@@ -1760,6 +1831,7 @@ export class ThreadDirectoryService {
         cwd: workspace.cwd,
         env: this.host().codexEnvironmentCommandEnv,
         onSetupProgress: (event) => {
+          pending?.setupProgress(event);
           const progress = {
             directoryKey: request.codexEnvironmentSetupProgressKey ?? launchpad.directoryKey,
             ...event,
@@ -1788,7 +1860,7 @@ export class ThreadDirectoryService {
         // is what keeps an auto-started dev server visible to the quit dialog.
         owner: { backend: codexActionBackend },
         hydrationStore: this.codexEnvironmentHydrationStore,
-        selection: codexEnvironmentSelection,
+        selection,
       }));
     } catch (error) {
       operation?.check();
@@ -1833,7 +1905,11 @@ export class ThreadDirectoryService {
         request.parentThreadBackend ?? launchpad.parentThreadBackend,
       parentThreadInstanceId:
         request.parentThreadInstanceId ?? launchpad.parentThreadInstanceId,
-    });
+    }, pending ? {
+      setupProgress: pending.setupProgress,
+      land: (threadId) => pending.land(threadId, codexEnvironmentStartupFailure),
+    } : undefined);
+    if (uncommitted) uncommitted.rollback = undefined;
     operation?.update({ threadId: startThreadResponse.threadId });
     if (operation) operation.workspaceRollback = undefined;
     operation?.check();
@@ -1854,7 +1930,7 @@ export class ThreadDirectoryService {
     // give its detached-process record an owner now so the quit dialog can name
     // it and link back here.
     attachDetachedCommandThreadId(autoActionRunId, startThreadResponse.threadId);
-    if (codexEnvironmentSelection?.action?.id) {
+    if (selection?.action?.id) {
       for (const event of queuedActionDetachedOutputs) {
         void this.handleCodexEnvironmentActionDetachedOutput({
           backend: codexActionBackend,
@@ -1924,18 +2000,16 @@ export class ThreadDirectoryService {
       );
     }
 
-    if (!request.releaseLaunchpadOnSubmit) {
-      await this.resetLaunchpadDraft(launchpad);
-    } else if (launchpad.prompt.trim()) {
-      // Released at submit. A draft save the renderer sent just before
-      // submitting can still land after that release and bring the sent
-      // prompt back. Clear it again only if it is still that prompt, so a
-      // new draft the operator started meanwhile survives.
-      const current = await this.context.stores.launchpads.getDirectoryLaunchpad({
-        directoryKey: launchpad.directoryKey,
-      });
-      if (current?.prompt === launchpad.prompt) {
+    // A messaging launch uses a separate creation key even when it borrows
+    // the project's settings. A peer also owns its draft on its own viewer.
+    if (!options?.sourceInstanceId && request.directoryKey === launchpad.directoryKey) {
+      if (!request.releaseLaunchpadOnSubmit) {
         await this.resetLaunchpadDraft(launchpad);
+      } else if (launchpad.prompt.trim()) {
+        // A save sent before release can land late. Clear the sent prompt
+        // again only if the operator has not replaced it with a new one.
+        const current = await this.context.stores.launchpads.getDirectoryLaunchpad({ directoryKey: launchpad.directoryKey });
+        if (current?.prompt === launchpad.prompt) await this.resetLaunchpadDraft(launchpad);
       }
     }
 

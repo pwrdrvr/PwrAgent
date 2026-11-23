@@ -222,7 +222,11 @@ describe("SubAgentMonitorService", () => {
       const record = monitorRecord();
       const isMonitor = vi.spyOn(monitors, "isTaskMonitorThread").mockReturnValue(true);
       const forThread = vi.spyOn(monitors, "taskMonitorForThread").mockReturnValue(record);
-      const handled = Promise.resolve({ ok: true } as never);
+      const handled = Promise.resolve<TaskMonitorResponse<"cancel_monitor_delegation">>({
+        ok: false,
+        operation: "cancel_monitor_delegation",
+        error: { code: "not_found", message: "Fixture monitor was not found." },
+      });
       const handle = vi.spyOn(monitors, "handleAgentTaskMonitorRequest").mockReturnValue(handled);
       const recorded = Promise.resolve();
       const recordCards = vi.spyOn(monitors, "recordClaudeSubAgents").mockReturnValue(recorded);
@@ -231,7 +235,12 @@ describe("SubAgentMonitorService", () => {
       expect(isMonitor).toHaveBeenLastCalledWith(context);
       expect(ports.taskMonitorForThread(context)).toBe(record);
       expect(forThread).toHaveBeenLastCalledWith(context);
-      const taskRequest = { operation: "create_monitor_delegation" } as never;
+      await registry.setThreadJobMonitorCreation({ threadId: thread.threadId, enabled: false });
+      const taskRequest: TaskMonitorRequest<"cancel_monitor_delegation"> = {
+        operation: "cancel_monitor_delegation",
+        context: { ...thread, turnId: "parent-turn" },
+        args: { monitorId: record.monitorId },
+      };
       expect(ports.handleAgentTaskMonitorRequest(taskRequest)).toBe(handled);
       expect(handle).toHaveBeenLastCalledWith(taskRequest);
       const cards = { threadId: "claude-thread", subAgents: [] };

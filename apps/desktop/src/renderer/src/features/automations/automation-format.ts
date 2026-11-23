@@ -1,5 +1,6 @@
 import type {
   AutomationBacklogPolicy,
+  AutomationDetail,
   AutomationRunFailureReason,
   AutomationRunStatus,
   AutomationScheduleDefinition,
@@ -142,4 +143,15 @@ function formatTokenCount(count: number): string {
 export function formatCostTodayMicros(micros: number | undefined): string | undefined {
   if (micros === undefined) return undefined;
   return `${formatUsd(micros / 1_000_000)} today`;
+}
+
+export function formatAutomationCost(
+  automation: Pick<AutomationDetail, "costTodayMicros" | "lifetimeCost">,
+): string | undefined {
+  const today = formatCostTodayMicros(automation.costTodayMicros);
+  const lifetime = automation.lifetimeCost;
+  if (!lifetime) return today;
+  const date = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(lifetime.since);
+  const total = `${formatUsd(lifetime.totalMicros / 1_000_000)} total since ${date}`;
+  return today ? `${today} · ${total}` : total;
 }

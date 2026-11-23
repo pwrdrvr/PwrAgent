@@ -93,6 +93,7 @@ export function resolveAgentToolCatalogs(params: {
   checkoutHandler?: CheckoutToolHandler;
 }, options?: {
   taskMonitorRole?: "parent" | "monitor" | "all";
+  jobMonitorCreationEnabled?: boolean;
 }): ResolvedAgentToolCatalog[] {
   const automationRouter = buildAutomationInspectionToolRouter(
     params.automationInspectionHandler,
@@ -127,6 +128,7 @@ export function resolveAgentToolCatalogs(params: {
       ...buildPwrAgentTaskMonitorToolDefinitions(
         params.taskMonitorHandler,
         options?.taskMonitorRole,
+        options?.jobMonitorCreationEnabled,
       ),
     ],
   );

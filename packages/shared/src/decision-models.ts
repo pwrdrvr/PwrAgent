@@ -19,6 +19,129 @@ export const DECISION_LOCAL_DEFAULT_MODEL = "clef-flash";
 export const DECISION_JEV_ENDPOINT = "https://api.typesafe.ai";
 export const DECISION_JEV_DEFAULT_MODEL = "jev-latest";
 
+export type DecisionImageMimeType = "image/png" | "image/jpeg";
+
+export const DECISION_IMAGE_MAX_COUNT = 4;
+const DECISION_IMAGE_MIME_TYPES: readonly DecisionImageMimeType[] = ["image/png", "image/jpeg"];
+// 512 KiB encodes to ~683 KiB, leaving room in the 1 MiB HTTP MCP body for
+// the 256 KiB evidence value and the tool envelope on a registered call.
+const DECISION_IMAGE_MAX_DECODED_BYTES = 512 * 1024;
+const DECISION_IMAGE_LIMITS = {
+  mimeTypes: DECISION_IMAGE_MIME_TYPES,
+  maxImages: DECISION_IMAGE_MAX_COUNT,
+  maxBytesPerImage: DECISION_IMAGE_MAX_DECODED_BYTES,
+  maxTotalBytes: DECISION_IMAGE_MAX_DECODED_BYTES,
+  minSide: 1,
+  maxSide: 4096,
+} as const;
+
+/** PwrAgent's accepted subset of provider formats and request sizes. */
+export type DecisionImageCapabilities =
+  | { supported: false }
+  | (Omit<typeof DECISION_IMAGE_LIMITS, "minSide" | "maxSide"> & {
+      supported: true;
+      experimental: boolean;
+      minSide: number;
+      maxSide: number;
+    });
+
+/** Used by registration, invocation, and provider disclosure. */
+export function decisionImageCapabilities(
+  provider: "openai" | DecisionProviderId,
+  model?: string,
+): DecisionImageCapabilities {
+  switch (provider) {
+    // https://developers.openai.com/api/docs/guides/decisions#evaluate-an-image
+    case "openai":
+      return { ...DECISION_IMAGE_LIMITS, supported: true, experimental: false };
+    // https://huggingface.co/Cloudflare/clef-flash#jev--systemone-api
+    // PwrSuiteLab's System One transport also serves the live voice camera.
+    case "local":
+      return /^(?:cloudflare\/)?clef(?:-flash)?$/i.test(model ?? DECISION_LOCAL_DEFAULT_MODEL)
+        ? { ...DECISION_IMAGE_LIMITS, supported: true, experimental: false }
+        : { supported: false };
+    // https://docs.typesafe.ai/images documents Jev 1.13 and 1.14 with an
+    // experimental request header, PNG/JPEG, and 280–1568 px on each side.
+    // Its provider limits are 16 MiB per file and 32 MiB per request.
+    // https://docs.typesafe.ai/models#aliases lists latest and preview.
+    case "jev":
+      return /^jev-(?:latest|preview|1\.(?:13|14)(?:\.\d+)?)$/.test(model ?? DECISION_JEV_DEFAULT_MODEL)
+        ? { ...DECISION_IMAGE_LIMITS, supported: true, experimental: true, minSide: 280, maxSide: 1568 }
+        : { supported: false };
+  }
+}
+
+export function decisionImageCapabilityLabel(capability: DecisionImageCapabilities): string {
+  if (!capability.supported) return "Images unavailable for this model";
+  const limits = `up to ${capability.maxImages} PNG or JPEG images`;
+  return capability.experimental ? `Experimental image input · ${limits}` : `Image input · ${limits}`;
+}
+
+/** A model id a provider accepts, as Settings lists it. */
+export type DecisionModelInfo = {
+  id: string;
+  description?: string;
+};
+
+/**
+ * The models PwrAgent knows each provider accepts, so Settings can offer a
+ * choice before the provider has been asked. Default first.
+ * https://docs.typesafe.ai/models lists Jev's aliases and versioned ids;
+ * PwrSuiteLab's Clef runtime serves only clef-flash.
+ */
+export const DECISION_KNOWN_MODELS: Record<DecisionProviderId, readonly DecisionModelInfo[]> = {
+  local: [
+    { id: DECISION_LOCAL_DEFAULT_MODEL, description: "Cloudflare's Clef, as PwrSuiteLab serves it" },
+  ],
+  jev: [
+    { id: DECISION_JEV_DEFAULT_MODEL, description: "The newest stable Jev" },
+    { id: "jev-preview", description: "Jev's preview build, when there is one" },
+    { id: "jev-1.14.0", description: "Jev 1.14, pinned" },
+    { id: "jev-1.13.0", description: "Jev 1.13, pinned" },
+  ],
+};
+
+/** What a provider's `GET /v1/models` answered, for the Model picker. */
+export type DecisionModelListing =
+  | { ok: true; models: DecisionModelInfo[] }
+  | { ok: false; detail: string };
+
+export type DecisionModelOption = DecisionModelInfo & {
+  /** listed: the provider offers it now; known: PwrAgent's catalog; saved: only in Settings. */
+  source: "listed" | "known" | "saved";
+};
+
+/**
+ * The Model picker's choices: what the provider lists, then the known
+ * models it did not list, then a saved id neither mentions, so the saved
+ * model is always a choice and no id appears twice. The default model
+ * leads its group.
+ */
+export function decisionModelOptions(input: {
+  provider: DecisionProviderId;
+  saved?: string;
+  listed?: readonly DecisionModelInfo[];
+}): DecisionModelOption[] {
+  const fallback = input.provider === "local" ? DECISION_LOCAL_DEFAULT_MODEL : DECISION_JEV_DEFAULT_MODEL;
+  const known = DECISION_KNOWN_MODELS[input.provider];
+  const seen = new Set<string>();
+  const options: DecisionModelOption[] = [];
+  const add = (model: DecisionModelInfo, source: DecisionModelOption["source"]) => {
+    const id = model.id.trim();
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    const description = model.description?.trim()
+      || known.find((entry) => entry.id === id)?.description;
+    options.push({ id, ...(description ? { description } : {}), source });
+  };
+  const defaultFirst = (models: readonly DecisionModelInfo[]) =>
+    [...models].sort((a, b) => Number(b.id.trim() === fallback) - Number(a.id.trim() === fallback));
+  for (const model of defaultFirst(input.listed ?? [])) add(model, "listed");
+  for (const model of known) add(model, "known");
+  add({ id: input.saved ?? fallback }, "saved");
+  return options;
+}
+
 /** Where to try each provider, for the Settings rows that suggest them. */
 export const DECISION_PROVIDER_LINKS = {
   clefModel: "https://huggingface.co/Cloudflare/clef-flash",

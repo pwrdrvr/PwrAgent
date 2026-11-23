@@ -2827,6 +2827,33 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it.each([undefined, "review-preset"])("keeps a registered desktop draft when a messaging launch uses its project (%s)", async (agentPresetId) => {
+    const overlayStore = createOverlayStoreMock();
+    const project = {
+      directoryKey: "directory:/repo/app", directoryKind: "directory" as const, directoryLabel: "app",
+      directoryPath: "/repo/app", backend: "codex" as const, executionMode: "default" as const,
+      workMode: "worktree" as const, registeredAt: 1, createdAt: 1, updatedAt: 1,
+    };
+    const saved = { ...project, prompt: "Unsent desktop prompt", agent: { name: "Desktop Agent", instructions: "Keep this draft" },
+      agentPresetId, mcpConnectionIds: ["desktop-plugin"] };
+    await overlayStore.upsertDirectoryLaunchpad(saved);
+    const identity = { directoryKey: project.directoryKey };
+    const desktopDraft = await overlayStore.getDirectoryLaunchpad(identity);
+    expect(desktopDraft).toMatchObject({ agent: saved.agent, prompt: saved.prompt, mcpConnectionIds: saved.mcpConnectionIds });
+    const registry = createDesktopBackendRegistry({
+      codexClient: new MockBackendClient({ initializeResult: { methods: ["thread/start", "turn/start"] } }), overlayStore,
+      gitDirectoryService: { prepareLaunchpadWorkspace: vi.fn(async () => ({
+        cwd: "/repo/app/.worktrees/thread-1/app", repositoryPath: "/repo/app", workMode: "worktree" as const,
+      })), recordCodexWorktreeOwnerThread: vi.fn(async () => {}) } as never,
+    });
+    try {
+      await registry.materializeDirectoryLaunchpad({ directoryKey: "messaging:browse:fixture", launchpad: { ...project, prompt: "" },
+        input: [{ type: "text", text: "Messaging prompt" }] });
+      // An independently materialized thread has no claim on the saved draft.
+      expect(await overlayStore.getDirectoryLaunchpad(identity)).toEqual(desktopDraft);
+    } finally { await registry.close(); }
+  });
+
   it("uses submitted launchpad Fast mode instead of stale persisted launchpad settings", async () => {
     const overlayStore = createOverlayStoreMock();
     await overlayStore.upsertDirectoryLaunchpad({

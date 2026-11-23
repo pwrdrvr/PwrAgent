@@ -284,7 +284,9 @@ import {
   useFederatedThreadSearch,
 } from "../../lib/useFederatedThreadSearch";
 import { useExecutionModeSelection } from "../../lib/useExecutionModeSelection";
+import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import { useModalDialog } from "../../lib/useModalDialog";
+import { AgentPresetDialog } from "./AgentPresetDialog";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
   findSkillTrigger,
@@ -331,6 +333,13 @@ import {
 import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
 import { SkillPickerHeader } from "./SkillPickerHeader";
 import { ComposerErrorRail, type ComposerErrorEntry } from "./ComposerErrorRail";
+import {
+  ComposerGoalConfirmation,
+  ComposerGoalStrip,
+  GOAL_ARGUMENT_HINT,
+  parseGoalCommand,
+  useComposerGoal,
+} from "./ComposerGoal";
 import {
   ComposerTerminalToggle,
   type ComposerTerminalToggleProps,
@@ -646,6 +655,10 @@ export type ComposerProps = {
         | "imageAttachments"
         | "fileAttachments"
         | "agent"
+        | "agentPresetId"
+        | "agentDraftMcpSelection"
+        | "mcpConnectionIds"
+        | "mcpConnectionIdsFromDefaults"
       >
     >,
     options?: {
@@ -695,6 +708,7 @@ export type ComposerProps = {
   /** `/lock [note]`: locks this thread. Rejects with the error to show. */
   onLockThread?: (note: string) => Promise<void>;
   onShowMcpAccess?: () => void;
+  onShowRunningMonitors?: () => void;
   /** Managed connections this thread has selected, for the composer badge. */
   mcpConnectionCount?: number;
   pickDirectoryError?: string;
@@ -1140,9 +1154,9 @@ function providerCommandToSlashSuggestion(
   const commandName = command.name.startsWith("/")
     ? command.name.slice(1)
     : command.name;
-  const sourceLabel = command.backend
-    ? formatBackendLabel(command.backend, backends)
-    : "Provider";
+  const sourceLabel = command.backend === "codex" && commandName === "goal"
+    ? "Codex"
+    : command.backend ? formatBackendLabel(command.backend, backends) : "Provider";
   return {
     id: `provider:${command.backend ?? "unknown"}:${commandName}`,
     label: `/${commandName}`,
@@ -2215,6 +2229,7 @@ const CLAUDE_MCP_CONFIG_TOOLTIP =
 function ComposerThreadOptionsMenu(props: {
   agentThread: boolean;
   disabled?: boolean;
+  settingsSaving?: boolean;
   existingCodexThread?: boolean;
   /**
    * Managed connections this thread has selected. Undefined hides the badge;
@@ -2222,10 +2237,17 @@ function ComposerThreadOptionsMenu(props: {
    */
   mcpConnectionCount?: number;
   onAgentThreadChange?: (agentThread: boolean) => void;
+  onAgentPresets?: () => void;
   onShowMcpInventory?: () => void;
   /** Whose own MCP config the inventory row opens. */
   mcpInventoryAgent?: "codex" | "claude";
   onShowMcpAccess?: () => void;
+  jobMonitorCreation?: boolean;
+  onJobMonitorCreationChange?: (enabled: boolean) => Promise<void>;
+  activeTurnId?: string;
+  runningMonitorCount?: number;
+  runningMonitorCountIncomplete?: boolean;
+  onShowRunningMonitors?: () => void;
   /**
    * Effective Token Miser state for this thread. Undefined hides the item.
    */
@@ -2237,9 +2259,23 @@ function ComposerThreadOptionsMenu(props: {
   onTokenMiserChange?: (enabled: boolean | null) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [requestedJobMonitorCreation, setRequestedJobMonitorCreation] = useState<boolean>();
+  const [failedJobMonitorCreation, setFailedJobMonitorCreation] = useState<boolean>();
+  const [jobMonitorEnabledDuringTurn, setJobMonitorEnabledDuringTurn] = useState<string>();
   const menuId = useId();
   const menuRef = useRef<HTMLDivElement>(null);
-  const ref = useDismissableMenu<HTMLDivElement>(open, () => setOpen(false));
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const pointerOpenedMenu = useRef(false);
+  useMenuNavigation({ open, menuRef, triggerRef, onClose: () => setOpen(false), includeAriaDisabled: true });
+  useEffect(() => {
+    if (!open) return;
+    const dismissOutside = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!menuRef.current?.contains(target) && !triggerRef.current?.contains(target)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", dismissOutside);
+    return () => document.removeEventListener("pointerdown", dismissOutside);
+  }, [open]);
   const getTooltipHorizontalBounds = useCallback((target: HTMLElement) => {
     const composerSetup = target.closest<HTMLElement>(".composer__setup");
     if (!composerSetup) {
@@ -2270,7 +2306,7 @@ function ComposerThreadOptionsMenu(props: {
     getHorizontalBounds: getTooltipHorizontalBounds,
   });
   const agentThreadChangeDisabled =
-    props.disabled ||
+    props.disabled || props.settingsSaving ||
     !props.onAgentThreadChange;
   const agentThreadTooltip = props.existingCodexThread
     ? `${AGENT_THREAD_CAPABILITIES} ${CODEX_AGENT_THREAD_CHANGE_NOTE}`
@@ -2288,15 +2324,54 @@ function ComposerThreadOptionsMenu(props: {
   // underneath the thread sidebar. Keep it inside the settings row instead.
   const menuStyle = useComposerPopoverClamp(open, menuRef);
 
-  const threadOptionsTooltip = props.mcpConnectionCount
+  const monitorCreationOff = props.jobMonitorCreation === false;
+  const jobMonitorSaving = requestedJobMonitorCreation !== undefined;
+  const switchesDisabled = props.disabled || props.settingsSaving || jobMonitorSaving;
+  const monitorSuggestionsDisabled = monitorCreationOff || switchesDisabled;
+  const runningMonitors = props.runningMonitorCount ?? 0;
+  const showRunningCount = !monitorCreationOff && runningMonitors > 0 && !props.runningMonitorCountIncomplete;
+  let monitorDescription: string | undefined;
+  if (failedJobMonitorCreation !== undefined && failedJobMonitorCreation === monitorCreationOff) {
+    monitorDescription = failedJobMonitorCreation ? "Couldn't turn on. Still off." : "Couldn't turn off. Still on.";
+  } else if (monitorCreationOff) {
+    monitorDescription = "The agent can't start new ones.";
+    if (runningMonitors > 0) {
+      monitorDescription += props.runningMonitorCountIncomplete
+        ? " Running monitors still report back."
+        : runningMonitors === 1 ? " 1 running still reports back." : ` ${runningMonitors} running still report back.`;
+    }
+  } else if (props.activeTurnId && jobMonitorEnabledDuringTurn === props.activeTurnId) {
+    monitorDescription = "Available from the agent's next turn.";
+  }
+  const jobMonitorTooltip = "Let the agent start Job Monitors: helper threads that poll until something changes, then wake this thread. Off stops new ones; running monitors still report back.";
+  const jobMonitorDescriptionIds = [
+    `${menuId}-monitor-help`,
+    ...(showRunningCount ? [`${menuId}-monitor-count`] : []),
+    ...(monitorDescription ? [`${menuId}-monitor-description`] : []),
+  ].join(" ");
+  const changeJobMonitorCreation = async () => {
+    if (switchesDisabled || !props.onJobMonitorCreationChange) return;
+    setRequestedJobMonitorCreation(monitorCreationOff);
+    setFailedJobMonitorCreation(undefined);
+    try {
+      await props.onJobMonitorCreationChange(monitorCreationOff);
+      setJobMonitorEnabledDuringTurn(monitorCreationOff ? props.activeTurnId : undefined);
+    } catch {
+      setFailedJobMonitorCreation(monitorCreationOff);
+    } finally {
+      setRequestedJobMonitorCreation(undefined);
+    }
+  };
+  const threadOptionsTooltip = (props.mcpConnectionCount
     ? `Thread options — ${props.mcpConnectionCount} PwrAgent ${
         props.mcpConnectionCount === 1 ? "connection" : "connections"
       }`
-    : "Thread options";
+    : "Thread options") + (monitorCreationOff ? props.mcpConnectionCount ? " · Job Monitors off" : " — Job Monitors off" : "");
 
   return (
-    <div className="composer-thread-options" ref={ref}>
+    <div className="composer-thread-options">
       <button
+        ref={triggerRef}
         aria-controls={open ? menuId : undefined}
         aria-describedby={tooltipVisible ? tooltipId : undefined}
         aria-expanded={open}
@@ -2308,7 +2383,8 @@ function ComposerThreadOptionsMenu(props: {
         disabled={props.disabled}
         type="button"
         onBlur={hideTooltip}
-        onClick={() => {
+        onClick={(event) => {
+          pointerOpenedMenu.current = !open && event.detail > 0;
           hideTooltip();
           setOpen((current) => !current);
         }}
@@ -2334,16 +2410,23 @@ function ComposerThreadOptionsMenu(props: {
       {open ? (
         <div
           aria-label="Thread options"
-          className="composer-dropdown__menu composer-thread-options__menu"
+          className={`composer-dropdown__menu composer-thread-options__menu${
+            props.onJobMonitorCreationChange ? " composer-thread-options__menu--job-monitors" : ""
+          }`}
           id={menuId}
           ref={menuRef}
           role="menu"
+          tabIndex={-1}
           style={menuStyle}
         >
           <div
             className="composer-thread-options__item"
             onBlur={hideMenuTooltip}
             onFocus={(event) => {
+              if (pointerOpenedMenu.current) {
+                pointerOpenedMenu.current = false;
+                return;
+              }
               showMenuTooltip(event.currentTarget, agentThreadTooltip);
             }}
             onMouseEnter={(event) => {
@@ -2355,11 +2438,11 @@ function ComposerThreadOptionsMenu(props: {
               aria-checked={props.agentThread}
               aria-describedby={menuTooltipVisible ? menuTooltipId : undefined}
               className="composer-dropdown__option composer-thread-options__option"
-              disabled={agentThreadChangeDisabled}
+              aria-disabled={agentThreadChangeDisabled || undefined}
               role="menuitemcheckbox"
               type="button"
               onClick={() => {
-                props.onAgentThreadChange?.(!props.agentThread);
+                if (!agentThreadChangeDisabled) props.onAgentThreadChange?.(!props.agentThread);
               }}
             >
               <span className="composer-thread-options__label">Agent thread</span>
@@ -2373,31 +2456,89 @@ function ComposerThreadOptionsMenu(props: {
               </span>
             </button>
           </div>
+          {props.onAgentPresets ? (
+            <button className="composer-dropdown__option" disabled={props.disabled} role="menuitem" type="button"
+              onClick={() => { hideMenuTooltip(); setOpen(false); props.onAgentPresets?.(); }}>
+              Start from preset…
+            </button>
+          ) : null}
+          {props.onJobMonitorCreationChange ? (
+            <>
+              <button
+                aria-label="Job Monitors"
+                aria-checked={requestedJobMonitorCreation ?? !monitorCreationOff}
+                aria-busy={jobMonitorSaving || undefined}
+                aria-disabled={switchesDisabled || undefined}
+                aria-describedby={jobMonitorDescriptionIds}
+                className="composer-dropdown__option composer-thread-options__option"
+                role="menuitemcheckbox"
+                type="button"
+                onClick={() => { hideMenuTooltip(); void changeJobMonitorCreation(); }}
+                onFocus={(event) => showMenuTooltip(event.currentTarget, jobMonitorTooltip)}
+                onBlur={hideMenuTooltip}
+                onMouseEnter={(event) => showMenuTooltipAfterDelay(event.currentTarget, jobMonitorTooltip)}
+                onMouseLeave={hideMenuTooltip}
+              >
+                <span className="composer-thread-options__label">
+                  Job Monitors
+                  {showRunningCount ? (
+                    <span className="composer-dropdown__option-description composer-thread-options__note"> <span aria-hidden="true">· </span><span id={`${menuId}-monitor-count`}>{runningMonitors} running</span></span>
+                  ) : null}
+                  {monitorDescription ? (
+                    <span className="composer-dropdown__option-description composer-thread-options__note composer-thread-options__detail" id={`${menuId}-monitor-description`}>
+                      {monitorDescription}
+                    </span>
+                  ) : null}
+                </span>
+                <span aria-hidden="true" className={`composer-thread-options__toggle${(requestedJobMonitorCreation ?? !monitorCreationOff) ? " is-checked" : ""}${jobMonitorSaving ? " is-saving" : ""}`}>
+                  <span className="composer-thread-options__toggle-thumb" />
+                </span>
+              </button>
+              <span hidden id={`${menuId}-monitor-help`}>{jobMonitorTooltip}</span>
+              {monitorCreationOff && props.onShowRunningMonitors && runningMonitors > 0 ? (
+                <button
+                  className="composer-dropdown__option"
+                  role="menuitem"
+                  type="button"
+                  onClick={() => { setOpen(false); props.onShowRunningMonitors?.(); }}
+                >
+                  Show running monitors…
+                </button>
+              ) : null}
+            </>
+          ) : null}
           {props.onMonitorJobSuggestionsChange ? (
             <>
               <button
-                aria-checked={props.monitorJobSuggestions ?? true}
+                aria-label="Monitor job suggestions"
+                aria-checked={!monitorCreationOff && (props.monitorJobSuggestions ?? true)}
+                aria-disabled={monitorSuggestionsDisabled || undefined}
+                aria-describedby={monitorCreationOff ? `${menuId}-monitor-suggestions-description` : undefined}
                 className="composer-dropdown__option composer-thread-options__option"
-                disabled={props.disabled}
                 role="menuitemcheckbox"
                 type="button"
                 title="Suggest a monitor job once per turn when repeated polling is detected."
-                onClick={() => props.onMonitorJobSuggestionsChange?.(!(props.monitorJobSuggestions ?? true))}
+                onClick={() => {
+                  if (!monitorSuggestionsDisabled) props.onMonitorJobSuggestionsChange?.(!(props.monitorJobSuggestions ?? true));
+                }}
               >
-                <span className="composer-thread-options__label">Monitor job suggestions</span>
+                <span className="composer-thread-options__label">
+                  Monitor job suggestions
+                  {monitorCreationOff ? <span className="composer-thread-options__note composer-thread-options__note--dependency" id={`${menuId}-monitor-suggestions-description`}> · needs Job Monitors</span> : null}
+                </span>
                 <span aria-hidden="true" className={`composer-thread-options__toggle${
-                  (props.monitorJobSuggestions ?? true) ? " is-checked" : ""
+                  !monitorCreationOff && (props.monitorJobSuggestions ?? true) ? " is-checked" : ""
                 }`}>
                   <span className="composer-thread-options__toggle-thumb" />
                 </span>
               </button>
-              {props.monitorJobSuggestionsOverridden ? (
+              {props.monitorJobSuggestionsOverridden && !monitorCreationOff ? (
                 <button
                   className="composer-dropdown__option"
-                  disabled={props.disabled}
+                  aria-disabled={switchesDisabled || undefined}
                   role="menuitem"
                   type="button"
-                  onClick={() => props.onMonitorJobSuggestionsChange?.(null)}
+                  onClick={() => { if (!switchesDisabled) props.onMonitorJobSuggestionsChange?.(null); }}
                 >
                   Use default for monitor suggestions
                 </button>
@@ -2426,11 +2567,11 @@ function ComposerThreadOptionsMenu(props: {
                     menuTooltipVisible ? menuTooltipId : undefined
                   }
                   className="composer-dropdown__option composer-thread-options__option"
-                  disabled={props.disabled}
+                  aria-disabled={switchesDisabled || undefined}
                   role="menuitemcheckbox"
                   type="button"
                   onClick={() => {
-                    props.onTokenMiserChange?.(!props.tokenMiser);
+                    if (!switchesDisabled) props.onTokenMiserChange?.(!props.tokenMiser);
                   }}
                 >
                   <span className="composer-thread-options__label">
@@ -2452,11 +2593,11 @@ function ComposerThreadOptionsMenu(props: {
               {props.tokenMiserOverridden ? (
                 <button
                   className="composer-dropdown__option composer-thread-options__option"
-                  disabled={props.disabled}
+                  aria-disabled={switchesDisabled || undefined}
                   role="menuitem"
                   type="button"
                   onClick={() => {
-                    props.onTokenMiserChange?.(null);
+                    if (!switchesDisabled) props.onTokenMiserChange?.(null);
                   }}
                 >
                   <span className="composer-thread-options__label">
@@ -3297,6 +3438,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 });
 
 function useComposerController(props: ComposerProps) {
+  const [agentPresetScope, setAgentPresetScope] = useState<string>();
+  const [jobMonitorCreationError, setJobMonitorCreationError] = useState<{ scopeKey?: string; message: string }>();
   // These unconditional local hooks keep the original controller lifetime
   // and hook order. Their snapshots belong to this render; JSX runs after
   // the controller returns.
@@ -4285,6 +4428,15 @@ function useComposerController(props: ComposerProps) {
     () => serializeDraftWithSkillTokens(draft, skillTokens),
     [draft, skillTokens]
   );
+  const codexGoalCommands = (props.launchpad?.backend ?? props.thread?.source) === "codex";
+  const localGoalThreadId = codexGoalCommands && filesystemFederationTarget?.scope !== "remote"
+    ? props.thread?.id
+    : undefined;
+  const goalControls = useComposerGoal(props.desktopApi, localGoalThreadId);
+  const goalCommand = codexGoalCommands ? parseGoalCommand(canonicalDraft) : undefined;
+  const goalNotice = (message: string, title = "Codex goal") => {
+    showComposerNotice({ title, message });
+  };
   const canonicalReferenceTokens = useMemo(
     () =>
       hydrateComposerDraft(
@@ -6020,9 +6172,10 @@ function useComposerController(props: ComposerProps) {
   });
   const slashCommandSuggestions = useMemo(() => {
     const commands =
-      props.providerCommands?.map((command) =>
-        providerCommandToSlashSuggestion(command, props.backends)
-      ) ?? [];
+      props.providerCommands?.filter((command) =>
+        command.backend !== "codex" || command.name.replace(/^\//, "") !== "goal"
+        || (localGoalThreadId && goalControls.state?.supported !== false)
+      ).map((command) => providerCommandToSlashSuggestion(command, props.backends)) ?? [];
     const localCommands = supportsReview ? [...SLASH_COMMANDS] : [];
     if (supportsMcpInventory) {
       localCommands.push(...CODEX_MCP_SLASH_COMMANDS);
@@ -6035,6 +6188,8 @@ function useComposerController(props: ComposerProps) {
     }
     return [...localCommands, ...commands];
   }, [
+    goalControls.state?.supported,
+    localGoalThreadId,
     props.backends,
     props.providerCommands,
     supportsLockCommand,
@@ -9959,6 +10114,26 @@ function useComposerController(props: ComposerProps) {
     // A slash command is not a message: it runs as typed and leaves dictation
     // alone, so a transcript is never appended to the command.
     const submitsCommand = (inputRef.current?.value ?? draft).trimStart().startsWith("/");
+    if (goalCommand) {
+      if (filesystemFederationTarget?.scope === "remote") {
+        goalNotice("Goals are set on the machine that owns this thread.");
+      } else if (!localGoalThreadId) {
+        goalNotice("Start the thread first.");
+      } else if (imageAttachments.length || fileAttachments.length || remoteFileUploads.uploads.length) {
+        goalNotice("/goal does not accept attachments.");
+      } else {
+        const snapshot = latestDraftSnapshotRef.current.snapshot;
+        await goalControls.run(goalCommand, goalNotice, () => {
+          if (activeComposerScopeKeyRef.current === composerScopeKey
+            && latestDraftSnapshotRef.current.snapshot.draft === snapshot.draft
+            && latestDraftSnapshotRef.current.snapshot.imageAttachments.length === 0
+            && !latestDraftSnapshotRef.current.snapshot.fileAttachments?.length) {
+            resetComposerDraftAndState(composerScopeKey);
+          }
+        });
+      }
+      return;
+    }
     if (dictation.phase !== "idle" && !submitsCommand) {
       // Send finishes dictation first. Nothing has been heard while
       // connecting, so that session is dropped and the draft goes as it is.
@@ -11588,6 +11763,22 @@ function useComposerController(props: ComposerProps) {
     }
   };
 
+  const changeJobMonitorCreation = async (enabled: boolean): Promise<void> => {
+    const thread = props.thread;
+    if (!thread || !props.desktopApi?.setThreadJobMonitorCreation) return;
+    setAgentThreadSaving(true);
+    setJobMonitorCreationError(undefined);
+    try {
+      await props.desktopApi.setThreadJobMonitorCreation({ threadId: thread.id, enabled });
+      await props.onRefreshNavigation?.().catch(() => undefined);
+    } catch (error) {
+      setJobMonitorCreationError({ scopeKey: composerScopeKey, message: error instanceof Error ? error.message : String(error) });
+      throw error;
+    } finally {
+      setAgentThreadSaving(false);
+    }
+  };
+
   // Per-thread Token Miser override. A launchpad persists the choice before
   // materialization; an existing thread writes it to the thread overlay.
   const changeTokenMiser = async (enabled: boolean | null): Promise<void> => {
@@ -12375,6 +12566,7 @@ function useComposerController(props: ComposerProps) {
     // before they reach the draft.
     const sendButtonDisabled =
       sendBlocked ||
+      Boolean(goalCommand && goalControls.busy) ||
       (nothingToSend && dictation.phase !== "listening" && dictation.phase !== "finishing");
     // A scheduled send would leave without the transcript.
     const scheduleButtonDisabled =
@@ -12385,7 +12577,7 @@ function useComposerController(props: ComposerProps) {
       (!props.thread && !props.launchpad) ||
       Boolean(props.launchpad && !props.onMaterializeLaunchpad) ||
       isCompactCommand || Boolean(forkCommand) ||
-      lockCommandNote !== undefined;
+      lockCommandNote !== undefined || Boolean(goalCommand);
     // Only surface the schedule caret where scheduling actually applies. In the
     // compact command or a thread-less composer there is nothing to schedule,
     // so the split collapses to a plain Send pill instead of parking a
@@ -12396,7 +12588,7 @@ function useComposerController(props: ComposerProps) {
       Boolean(
         props.thread
         || (props.launchpad && props.onMaterializeLaunchpad)
-      ) && !isCompactCommand && !forkCommand && lockCommandNote === undefined;
+      ) && !isCompactCommand && !forkCommand && !goalCommand && lockCommandNote === undefined;
     // A pending draft schedule (e.g. after editing a scheduled item) surfaces as
     // a checkable toggle between the caret and Send rather than hijacking the
     // Send label into a countdown. Armed → Send keeps the schedule; unarmed →
@@ -12431,7 +12623,7 @@ function useComposerController(props: ComposerProps) {
       ? "Forking…"
       : forkCommand
         ? "Fork"
-        : turnSubmitButtonLabel;
+        : goalCommand ? goalControls.label(goalCommand) : turnSubmitButtonLabel;
     // The command menu owns the "/fork" row until it closes; after that the
     // input draws the parameters still available as muted text after the caret.
     const forkInlineHint =
@@ -12447,7 +12639,7 @@ function useComposerController(props: ComposerProps) {
     // draft that starts with one of their commands draws it as a chip and, until
     // an argument is typed, the arguments it takes.
     const commandBackend = props.launchpad?.backend ?? props.thread?.source;
-    const { chip: commandChip, hint: commandInlineHint } = describeLeadingCommand({
+    const { chip: commandChip, hint: providerCommandInlineHint } = describeLeadingCommand({
       commands: props.providerCommands?.filter((command) =>
         backendDrawsCommandChips(command.backend ?? commandBackend)
       ) ?? [],
@@ -12459,6 +12651,10 @@ function useComposerController(props: ComposerProps) {
         && !preparingSend,
       skillTokens,
     });
+    const commandInlineHint = goalCommand?.action === "read"
+      && autocompleteKind !== "slash" && goalControls.state?.supported
+      ? GOAL_ARGUMENT_HINT
+      : providerCommandInlineHint;
     // Queue is the primary mid-turn; the steer chord is its keyboard-only
     // sibling, so the button is where it gets named.
     const submitButtonSteerHint =
@@ -13421,6 +13617,7 @@ function useComposerController(props: ComposerProps) {
         : undefined;
 
     const composerErrorEntries: readonly ComposerErrorEntry[] = [
+      ...(goalControls.error ? [goalControls.error] : []),
       { id: "skills", label: "Couldn't load skills", message: props.skillError },
       { id: "launchpad", label: "Couldn't start thread", message: props.launchpadError },
       {
@@ -13457,6 +13654,10 @@ function useComposerController(props: ComposerProps) {
             : environmentError?.message,
       },
       { id: "agent-thread", label: "Couldn't change agent", message: agentThreadError },
+      {
+        id: "job-monitor-creation", label: "Couldn't change Job Monitors",
+        message: jobMonitorCreationError?.scopeKey === composerScopeKey ? jobMonitorCreationError?.message : undefined,
+      },
       {
         id: "agent-change",
         label: "Agent change failed",
@@ -13655,6 +13856,31 @@ function useComposerController(props: ComposerProps) {
         desktopApi={props.desktopApi}
         entries={composerErrorEntries}
       />
+
+      {goalControls.state?.goal && (
+        <ComposerGoalStrip
+          key={localGoalThreadId}
+          goal={goalControls.state.goal}
+          pausedForMessage={goalControls.state.pausedForMessage}
+          activationQueued={goalControls.state.activationQueued}
+          activationHoldReason={goalControls.state.activationHoldReason}
+          busy={goalControls.busy}
+          showCount={goalControls.showCount}
+          onCommand={(command) => { void goalControls.run(command, goalNotice); }}
+        />
+      )}
+      {goalControls.confirmation && (
+        <ComposerGoalConfirmation
+          confirmation={goalControls.confirmation}
+          onCancel={goalControls.dismissConfirmation}
+          onConfirm={() => {
+            const confirmation = goalControls.confirmation;
+            if (!confirmation) return;
+            goalControls.dismissConfirmation();
+            void goalControls.run(confirmation.command, goalNotice, confirmation.onAccepted, confirmation.objective);
+          }}
+        />
+      )}
 
       {pendingSteer ? (
         <div
@@ -15316,6 +15542,8 @@ function useComposerController(props: ComposerProps) {
   }
 
   function renderComposerToolbar(): ReactNode {
+    const localPresetLaunchpad = props.desktopApi?.manageAgentPresets && props.onUpdateLaunchpad
+      && filesystemFederationTarget?.scope !== "remote" ? props.launchpad : undefined;
     return (
       props.launchpad || props.thread ? (
         <div
@@ -16050,10 +16278,12 @@ function useComposerController(props: ComposerProps) {
 
           {dictationApi && (!preparingSend || dictation.phase === "idle") ? renderDictationButton() : null}
           <ComposerThreadOptionsMenu
+            key={composerScopeKey}
             agentThread={props.thread?.agentChange && !props.thread.agentChange.error
               ? props.thread.agentChange.enabled
               : Boolean(props.launchpad?.agent ?? props.thread?.agent)}
-            disabled={launchpadSubmitting || agentThreadSaving}
+            disabled={launchpadSubmitting}
+            settingsSaving={agentThreadSaving}
             existingCodexThread={
               props.thread !== undefined &&
               props.thread.source === "codex"
@@ -16072,12 +16302,27 @@ function useComposerController(props: ComposerProps) {
                     }
                   : undefined
             }
+            onAgentPresets={localPresetLaunchpad ? () => setAgentPresetScope(localPresetLaunchpad.directoryKey) : undefined}
             mcpInventoryAgent={mcpInventoryAgent}
             onShowMcpInventory={
               mcpInventoryAgent
                 ? () => props.onShowMcpInventory?.("toolsAndAuthOnly")
                 : undefined
             }
+            {...(props.thread?.source === "codex"
+              && (props.thread.federation?.ref.target ?? rendererFederationTarget)?.scope !== "remote"
+              && props.desktopApi?.setThreadJobMonitorCreation
+              ? {
+                  jobMonitorCreation: props.thread.jobMonitorCreationEnabled ?? true,
+                  activeTurnId: props.activeTurnId,
+                  runningMonitorCount: props.thread.activeSubAgents?.filter(({ monitorId, status }) =>
+                    monitorId.startsWith("monitor-")
+                    && (status === "pending" || status === "running" || status === "blocked" || status === "cancelling")).length,
+                  runningMonitorCountIncomplete: props.thread.activeSubAgentsIncomplete,
+                  onShowRunningMonitors: props.onShowRunningMonitors,
+                  onJobMonitorCreationChange: changeJobMonitorCreation,
+                }
+              : {})}
             {...(props.thread?.source === "codex"
               && props.thread.federation?.ref.target.scope !== "remote"
               && props.desktopApi?.setThreadMonitorJobSuggestions
@@ -16110,6 +16355,22 @@ function useComposerController(props: ComposerProps) {
             mcpConnectionCount={props.mcpConnectionCount}
             onShowMcpAccess={props.onShowMcpAccess}
           />
+          {localPresetLaunchpad?.agent ? (
+            <button className="button button--ghost composer-agent-preset-chip" disabled={launchpadSubmitting} type="button"
+              onClick={() => setAgentPresetScope(localPresetLaunchpad.directoryKey)}>Agent · {localPresetLaunchpad.agent.name}</button>
+          ) : null}
+          {localPresetLaunchpad && props.desktopApi && agentPresetScope === localPresetLaunchpad.directoryKey ? (
+            <AgentPresetDialog key={agentPresetScope} launchpad={localPresetLaunchpad} desktopApi={props.desktopApi}
+              onClose={() => setAgentPresetScope(undefined)} onApply={async (values, agentPresetId) => {
+                await props.onUpdateLaunchpad?.(localPresetLaunchpad.directoryKey, {
+                  agent: { name: values.name, instructions: values.instructions },
+                  agentPresetId,
+                  agentDraftMcpSelection: true,
+                  mcpConnectionIds: values.mcpConnectionIds,
+                  mcpConnectionIdsFromDefaults: false,
+                }, { owner: { scope: "local" } });
+              }} />
+          ) : null}
         </div>
       ) : null
     );

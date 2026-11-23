@@ -3618,9 +3618,18 @@ describe("DesktopBackendRegistry", () => {
       startThreadResult: { threadId: "monitor-thread" },
     });
     const overlayStore = createOverlayStoreMock();
+    let jobMonitorCreationEnabled = true;
     const registry = createDesktopBackendRegistry({
       codexClient,
-      overlayStore,
+      overlayStore: {
+        ...overlayStore,
+        getThreadOverlayState: async (identity) => {
+          const overlay = await overlayStore.getThreadOverlayState(identity);
+          return overlay && identity.threadId === "thread-1"
+            ? { ...overlay, jobMonitorCreationEnabled }
+            : overlay;
+        },
+      },
     });
     await registry.publishLocalEvent({
       backend: "codex",
@@ -3651,6 +3660,11 @@ describe("DesktopBackendRegistry", () => {
       (delegationResponse as { contentItems: Array<{ text: string }> })
         .contentItems[0]?.text ?? "{}",
     ).monitorId as string;
+    jobMonitorCreationEnabled = false;
+    expect(registryModules(registry).subAgentMonitorService.isTaskMonitorThread({
+      backend: "codex", threadId: "monitor-thread",
+    })).toBe(true);
+    expect(codexClient.interruptTurnCallCount).toBe(0);
     const legacyCancellationResponse = await codexClient.emitRequest({
       method: "item/tool/call",
       params: {

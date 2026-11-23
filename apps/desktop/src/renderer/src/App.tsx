@@ -80,6 +80,7 @@ import { type SubmitServerRequestRequest } from "@pwragent/shared/contracts/agen
 import { Sidebar } from "./features/navigation/Sidebar";
 import type { ProjectRevealRequest } from "./features/navigation/DirectoriesList";
 import { isSubthreadLaunchpadDraft, pendingThreadTitleLine } from "./features/navigation/StartingThreadRow";
+import { isPendingThreadStartSelectionKey } from "./features/navigation/pending-thread-starts";
 import { SidebarResizeHandle } from "./features/navigation/SidebarResizeHandle";
 import { useThreadJump } from "./features/navigation/useThreadJump";
 import { useLensHotkeys } from "./features/navigation/useLensHotkeys";
@@ -219,6 +220,7 @@ import {
 import { ArchiveGroupConfirmation, useArchiveGroupConfirmation } from "./features/navigation/ArchiveGroupConfirmation";
 import { detachedRestoreNotice, detachedRestoreNotices } from "./features/workspace-recovery/detached-restore-notice";
 import { usePwrAgentProfiles } from "./lib/usePwrAgentProfiles";
+import { PullRequestMergeProvider } from "./features/pr-status/pull-request-merge-context";
 import { usePullRequestRefresh } from "./features/pr-status/usePullRequestRefresh";
 import { useThreadGitWorkingStateRefresh } from "./features/navigation/useThreadGitWorkingStateRefresh";
 import { useThreadSessionState } from "./lib/useThreadSessionState";
@@ -2108,10 +2110,14 @@ function DesktopAppShell(props: {
   const threadSearchState = useThreadSearchPanelState();
   // Setup progress replaces a creation's object many times a second. Read
   // only the fields history uses, so those updates do not touch history.
-  const selectedStartingCreation = navigation.pendingLaunchpadCreations.find(
+  const selectedPendingThreadStart = navigation.pendingThreadStartRows.find(
+    (creation) => creation.selectionKey === navigation.selectedItemKey,
+  );
+  const selectedStartingCreation = selectedPendingThreadStart ?? navigation.pendingLaunchpadCreations.find(
     (creation) => creation.selectionKey === navigation.selectedItemKey,
   );
   const selectedStartingCreationId = selectedStartingCreation?.operationId;
+  const ownerReportedStart = selectedPendingThreadStart !== undefined;
   const selectedStartingDirectoryKey = selectedStartingCreation?.directoryKey;
   const selectedStartingLabel = selectedStartingCreation
     ? pendingThreadTitleLine(selectedStartingCreation.title) || "New thread"
@@ -2120,7 +2126,7 @@ function DesktopAppShell(props: {
     if (mainView === "search") {
       return { view: "search", label: "Search" };
     }
-    if (mainView === "thread" && navigation.selectedLaunchpad) {
+    if (mainView === "thread" && (navigation.selectedLaunchpad || selectedStartingCreationId !== undefined)) {
       // A peer's launchpad session is keyed by the peer's own directory key,
       // which only that peer can reopen, so its entry names the machine.
       // Sub-thread launchpads aimed at a peer live in this window's own
@@ -2133,10 +2139,12 @@ function DesktopAppShell(props: {
           view: "starting",
           creationId: selectedStartingCreationId,
           directoryKey: selectedStartingDirectoryKey,
+          ...(ownerReportedStart ? { ownerReported: true } : {}),
           ...(peerTarget ? { instanceId: peerTarget.instanceId } : {}),
           ...(selectedStartingLabel ? { label: selectedStartingLabel } : {}),
         };
       }
+      if (!navigation.selectedLaunchpad) return undefined;
       const peerLabel = peerTarget
         ? newThreadFederationTargets.find((target) =>
           target.instanceId === peerTarget.instanceId)?.label
@@ -2173,13 +2181,14 @@ function DesktopAppShell(props: {
     navigation.selectedThread,
     navigation.selectedThreadKey,
     newThreadFederationTargets,
+    ownerReportedStart,
     selectedStartingCreationId,
     selectedStartingDirectoryKey,
     selectedStartingLabel,
   ]);
   // Keyed by what history reads, for the same reason as above.
   const historyStartingThreadsSignature = JSON.stringify(
-    navigation.pendingLaunchpadCreations.map((creation) =>
+    [...navigation.pendingLaunchpadCreations, ...navigation.pendingThreadStartRows].map((creation) =>
       [creation.operationId, creation.threadKey ?? null]),
   );
   const historyStartingThreads = useMemo(
@@ -2331,12 +2340,13 @@ function DesktopAppShell(props: {
       }
       setMainView("thread", () => {
         if (location.view === "starting") {
-          const creation = navigation.pendingLaunchpadCreations.find((candidate) =>
-            candidate.operationId === location.creationId);
+          const creations = location.ownerReported ? navigation.pendingThreadStartRows : navigation.pendingLaunchpadCreations;
+          const creation = creations.find((candidate) => candidate.operationId === location.creationId);
           if (creation) {
             navigation.selectPendingLaunchpad(creation.selectionKey);
             return;
           }
+          if (location.ownerReported) return;
         }
         if (location.view === "launchpad" || location.view === "starting") {
           if (location.instanceId) {
@@ -4232,6 +4242,9 @@ function DesktopAppShell(props: {
         onForkThread: navigation.forkThread,
         onCreateSubthread: navigation.createSubthread,
         readThreadWorktreeAvailability: navigation.readThreadWorktreeAvailability,
+        pendingThreadStart: selectedPendingThreadStart,
+        pendingThreadStartFailure: navigation.selectedPendingThreadStartFailure,
+        onDismissPendingThreadStartFailure: navigation.dismissPendingThreadStartFailure,
         pendingLaunchpadCreation: navigation.pendingLaunchpadCreations.find(
           (creation) => creation.selectionKey === navigation.selectedItemKey,
         ),
@@ -4553,6 +4566,12 @@ function DesktopAppShell(props: {
       <OperatorWaitsContext.Provider value={operatorWaitsContext}>
       <ThreadDependencyIndicatorsContext.Provider value={threadDependencyContext}>
       <ThreadPrWatchIndicatorsContext.Provider value={threadPrWatchContext}>
+      {/* A peer's thread merges on its owner, which holds the thread's
+          attachments and merge holds; see threadPullRequestMergeTarget. */}
+      <PullRequestMergeProvider
+        desktopApi={desktopApi}
+        showNotice={showAppNotice}
+      >
       <ThreadProvidersContext.Provider value={threadProviders}>
       <ThreadProviderCatalogsContext.Provider value={threadProviderCatalogs}>
       <ThreadHandoffBandContext.Provider value={threadHandoffBand}>
@@ -4655,8 +4674,19 @@ function DesktopAppShell(props: {
             inert={layerView !== undefined}
             directoryDisclosure={navigation.directoryDisclosure}
             pendingLaunchpadCreations={navigation.pendingLaunchpadCreations}
+            pendingThreadStartRows={navigation.pendingThreadStartRows}
             subthreadLaunchpadDrafts={navigation.subthreadLaunchpadDrafts}
             onSelectPendingLaunchpad={(entry) => {
+              if (isPendingThreadStartSelectionKey(entry.selectionKey)) {
+                if (!isSubthreadLaunchpadDraft(entry) && entry.input.length && !entry.threadKey) {
+                  setMainView("thread");
+                  navigation.selectPendingLaunchpad(entry.selectionKey);
+                } else {
+                  const target = navigation.pendingThreadStartTarget(entry.selectionKey);
+                  if (target) showThreadFromLink(target);
+                }
+                return;
+              }
               setMainView("thread");
               if (isSubthreadLaunchpadDraft(entry)) {
                 navigation.selectDirectoryLaunchpad(entry.directoryKey);
@@ -5299,6 +5329,7 @@ function DesktopAppShell(props: {
       </ThreadHandoffBandContext.Provider>
       </ThreadProviderCatalogsContext.Provider>
       </ThreadProvidersContext.Provider>
+      </PullRequestMergeProvider>
       </ThreadPrWatchIndicatorsContext.Provider>
       </ThreadDependencyIndicatorsContext.Provider>
       </OperatorWaitsContext.Provider>

@@ -24,8 +24,9 @@ export function oxlintBin() {
 }
 
 export function runOxlint(config, paths) {
+  const threads = process.env.OXLINT_THREADS;
   const result = spawnSync(process.execPath, [
-    oxlintBin(), "--config", config, ...paths,
+    oxlintBin(), "--config", config, ...(threads ? ["--threads", threads] : []), ...paths,
   ], { cwd: repositoryRoot, stdio: "inherit" });
   if (result.error) throw result.error;
   return result.status ?? 1;

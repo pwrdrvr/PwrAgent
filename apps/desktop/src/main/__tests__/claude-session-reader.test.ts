@@ -1,9 +1,12 @@
 import { EventEmitter } from "node:events";
+import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   answerClaudeSessionRead, openClaudeSessionReader,
   type ClaudeSessionReadReply, type ClaudeSessionReadRequest,
 } from "../claude/claude-session-reader";
+import { forkOwnerWorker } from "../node-worker-process";
 
 /** A utility process that answers when the test says so. */
 function fakeChild() {
@@ -26,6 +29,63 @@ const WORKER = "/app/out/main/claude-session-reader-worker.js";
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("Claude session reader", () => {
+  it("lists only interactive project directories from the worker's own Claude config", async () => {
+    const scratch = path.resolve(".local");
+    await mkdir(scratch, { recursive: true });
+    const fixture = await mkdtemp(path.join(scratch, "claude-recent-projects-"));
+    const configDir = path.join(fixture, "account");
+    const checkout = path.join(fixture, "checkout");
+    const headlessCheckout = path.join(fixture, "headless");
+    const old = 1_700_000_000;
+    const recent = old + 100;
+    const workerPath = path.resolve("packages/pwragent/dist/claude-session-reader-worker.js");
+
+    // Minimal SDK-owned on-disk format for a user message. The test is the
+    // only writer, and the worker receives the fixture's config directory.
+    async function writeSession(cwd: string, index: number, entrypoint: string, modifiedAt: number) {
+      const sessionId = `11111111-1111-4111-8111-11111111111${index}`;
+      const projectDir = path.join(configDir, "projects", cwd.replace(/[^a-zA-Z0-9]/g, "-"));
+      await mkdir(cwd, { recursive: true });
+      await mkdir(projectDir, { recursive: true });
+      const transcript = path.join(projectDir, `${sessionId}.jsonl`);
+      await writeFile(transcript, JSON.stringify({
+        type: "user",
+        uuid: sessionId,
+        sessionId,
+        parentUuid: null,
+        cwd,
+        entrypoint,
+        isSidechain: false,
+        timestamp: "2023-11-14T00:00:00.000Z",
+        message: { role: "user", content: "Contrived user prompt" },
+      }) + "\n");
+      await utimes(transcript, modifiedAt, modifiedAt);
+    }
+
+    try {
+      await writeSession(checkout, 1, "cli", old);
+      await writeSession(checkout, 2, "cli", recent);
+      await writeSession(headlessCheckout, 3, "sdk-ts", recent + 100);
+      const reader = openClaudeSessionReader({ ...process.env, CLAUDE_CONFIG_DIR: configDir }, {
+        workerPath,
+        fork: async (env) => forkOwnerWorker(workerPath, env),
+      });
+      try {
+        await expect(reader.listRecentDirectories()).resolves.toEqual({
+          complete: true,
+          directories: [
+            { cwd: checkout, updatedAt: recent * 1_000 },
+            { cwd: checkout, updatedAt: old * 1_000 },
+          ],
+        });
+      } finally {
+        reader.close();
+      }
+    } finally {
+      await rm(fixture, { recursive: true, force: true });
+    }
+  });
+
   it("starts with the given environment and answers each read by its id", async () => {
     const child = fakeChild();
     const fork = vi.fn(async (_env: NodeJS.ProcessEnv) => child);
@@ -111,6 +171,7 @@ describe("Claude session reader", () => {
 
   it("answers a request with the matching SDK read", async () => {
     const reads = {
+      listSessions: vi.fn(async () => []),
       getSessionMessages: vi.fn(async () => [{ uuid: "prompt" }] as never),
       getSessionInfo: vi.fn(async () => { throw new Error("unreadable"); }),
       getSubagentMessages: vi.fn(async () => [{ uuid: "subagent-prompt" }] as never),

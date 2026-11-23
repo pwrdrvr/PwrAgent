@@ -43,6 +43,8 @@ Read the task-specific references below before doing the work they cover. They c
 
 ## Verification and Platform Constraints
 
+Follow [local CPU checkout](docs/local-cpu-checkout.md) to reserve CPU capacity before local test runs and builds.
+
 - Before source edits or lint/tooling changes, read [code formatting and linting](docs/development-checks.md#code-formatting--linting). Before test execution, read [verification](docs/development-checks.md#verification). Before desktop E2E, screenshot capture, or desktop CI work, read [desktop test operations](docs/development-checks.md#desktop-test-operations).
 - For macOS desktop Playwright, including inspect specs and screenshot capture, prefer the dedicated E2E VM when available and follow the [macOS VM E2E lab skill](.agents/skills/macos-vm-e2e-lab/SKILL.md) for on-demand startup through PwrSuiteLab Control MCP. Host runs are allowed when the VM is unavailable or the operator is away from the host desktop and using messaging or a remote Federation viewer, unless the operator asks to keep runs off the host.
 - Run unit tests, lint, and typecheck locally or in repository CI. After code edits, run `pnpm lint:oxlint`; production unbound-method checking uses `pnpm lint:oxlint:typed`. Fix all lint errors. `pnpm build` strips types and does not replace lint or `pnpm typecheck`. Run `pnpm lint:boundaries` before pushing.
