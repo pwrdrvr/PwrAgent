@@ -1,13 +1,13 @@
-PwrAgent redistributes the unmodified Git and Git LFS executables from
-Dugite 3.3.2 / dugite-native v2.56.0-2. These are separate command-line tools.
+PwrAgent for Windows redistributes the unmodified Git and Git LFS executables
+from Dugite 3.3.3 / dugite-native v2.56.1. These are separate command-line tools.
 PwrAgent's own code remains MIT licensed.
 
-Git 2.56.0: GPL-2.0-only; see COPYING.
-Source: https://github.com/git/git/tree/v2.56.0
-Windows Git 2.56.0.windows.4 source:
-https://github.com/git-for-windows/git/tree/v2.56.0.windows.4
+Git 2.56.1: GPL-2.0-only; see COPYING.
+Source: https://github.com/git/git/tree/v2.56.1
+Windows Git 2.56.1.windows.1 source:
+https://github.com/git-for-windows/git/tree/v2.56.1.windows.1
 Build scripts, patches, and distribution metadata:
-https://github.com/desktop/dugite-native/tree/v2.56.0-2
+https://github.com/desktop/dugite-native/tree/v2.56.1
 
 Git LFS 3.8.1: MIT; see LICENSE.git-lfs.
 https://github.com/git-lfs/git-lfs/tree/v3.8.1
