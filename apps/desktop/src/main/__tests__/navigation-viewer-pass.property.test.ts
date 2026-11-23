@@ -615,7 +615,8 @@ it.each([4, 8])("persists one changed owner pin once across a full refresh with 
 });
 
 
-it.each(["changed catalog", "failed checkout lookup"] as const)("keeps a PR gated after thread listing with a %s", async (change) => {
+it.each(["changed catalog", "failed checkout lookup", "failed preflight lookup"] as const)(
+  "keeps stack automation gated with a %s", async (change) => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-hold-recheck-"));
   const db = openInMemoryStateDb();
   const restoreGitEnvironment = isolateProcessGitEnvironment();
@@ -642,7 +643,7 @@ it.each(["changed catalog", "failed checkout lookup"] as const)("keeps a PR gate
     resetAppServerServiceForTests();
     const service = initializeDesktopAppServerService();
     vi.spyOn(service as unknown as { prStackDirectories: () => string[] }, "prStackDirectories").mockReturnValue([cwd]);
-    vi.spyOn(service, "listThreads").mockImplementation(async () => {
+    const list = vi.spyOn(service, "listThreads").mockImplementation(async () => {
       entered.resolve();
       return await listing.promise;
     });
@@ -650,18 +651,27 @@ it.each(["changed catalog", "failed checkout lookup"] as const)("keeps a PR gate
       number: 2, provider: "github.com", org: "fixture", repo: "stack", state: "passing",
       lifecycleState: "open", url: "https://github.com/fixture/stack/pull/2", headRefName: "upper",
     };
-    const gate = change === "changed catalog"
-      ? service["readPrStacks"](pr).then((stacks) => stacks[0]?.layers[1])
-      : service["prStackHoldEvidence"](pr);
-    await entered.promise;
-    if (change === "changed catalog") await write(layer("lower", 1), layer("upper", 2));
-    else {
+    const failCheckout = () => {
       const runGitCommand = gitExecutable.runGitCommand;
       vi.spyOn(gitExecutable, "runGitCommand").mockImplementation((directory, args, options) =>
         directory === cwd && args[0] === "rev-parse"
           ? Promise.reject(Object.assign(new Error("fixture checkout timeout"), { killed: true }))
           : runGitCommand(directory, args, options));
+    };
+    if (change === "failed preflight lookup") {
+      finish();
+      expect(await service["prStackHoldEvidence"](pr)).toMatchObject({ reason: expect.stringContaining("Held by #1") });
+      failCheckout();
+      expect(await service["prStackHoldEvidence"](pr)).toEqual({ reason: "Held while stack settlement is unavailable" });
+      expect(list).toHaveBeenCalledOnce();
+      return;
     }
+    const gate = change === "changed catalog"
+      ? service["readPrStacks"](pr).then((stacks) => stacks[0]?.layers[1])
+      : service["prStackHoldEvidence"](pr);
+    await entered.promise;
+    if (change === "changed catalog") await write(layer("lower", 1), layer("upper", 2));
+    else failCheckout();
     finish();
     if (change === "changed catalog") expect(await gate).toMatchObject({ branch: "upper", heldBy: { branch: "lower", number: 1 } });
     else expect(await gate).toEqual({ reason: "Held while stack settlement is unavailable" });

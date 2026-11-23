@@ -60,11 +60,13 @@ export async function readGhStackCatalog(commonDir: string): Promise<CatalogRead
 async function git(cwd: string, args: string[], demand?: PrMetadataDemand, checkout = false): Promise<string> {
   return (await runPrMetadataGit(cwd, args, {
     timeout: 3_000, signal: demand?.signal, purpose: checkout ? "stack-checkout" : "stack-status",
-    ownProcessTree: process.platform === "win32" && demand?.signal !== undefined,
+    ownProcessTree: demand?.signal !== undefined,
+    ...(checkout && { env: { ...process.env, LC_ALL: "C", LANGUAGE: "C" } }),
   }, demand)).stdout;
 }
 
 type Checkout = { cwd: string; root: string; commonDir: string };
+type CheckoutLookup = Checkout | "unavailable" | undefined;
 type Clone = Checkout & { catalog: CatalogRead };
 
 async function stackJournalInFlight(commonDir: string): Promise<boolean> {
@@ -74,18 +76,25 @@ async function stackJournalInFlight(commonDir: string): Promise<boolean> {
   return observed.some(Boolean);
 }
 
-async function locateCheckout(cwd: string, demand?: PrMetadataDemand): Promise<Checkout | undefined> {
+async function locateCheckout(cwd: string, demand?: PrMetadataDemand): Promise<CheckoutLookup> {
   try {
     const args = ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"];
     const stdout = await git(cwd, args, demand, true);
     const fields = (process.platform === "win32" ? stdout.replace(/\r\n/g, "\n") : stdout).replace(/\n$/, "").split("\n");
-    if (fields.length !== 2 || !fields[0] || !fields[1]) return undefined;
+    if (fields.length !== 2 || !fields[0] || !fields[1]) return "unavailable";
     const [root, commonDir] = await Promise.all([realpath(fields[0]), realpath(fields[1])]);
     demand?.signal?.throwIfAborted();
     return { cwd, root, commonDir };
-  } catch {
+  } catch (error) {
     demand?.signal?.throwIfAborted();
-    return undefined;
+    // Git uses exit 128 for both confirmed absence and errors such as unsafe
+    // ownership or a broken gitdir pointer. Only its negative discovery
+    // messages establish absence. Timeouts and malformed output stay unknown.
+    const failure = error as { code?: number; killed?: boolean; stderr?: string };
+    if (failure?.code === 128 && !failure.killed
+      && /^fatal: (?:not a git repository \(or any |this operation must be run in a work tree\r?$|cannot change to .*: (?:No such file or directory|Not a directory)\r?$)/m
+        .test(failure.stderr ?? "")) return undefined;
+    return "unavailable";
   }
 }
 
@@ -93,7 +102,7 @@ async function locateCheckout(cwd: string, demand?: PrMetadataDemand): Promise<C
 export class StackReadObservation {
   hints: ReturnType<typeof createStackCheckoutHints>;
   readonly inventoryDemand: PrMetadataDemand;
-  private readonly checkouts = new Map<string, Promise<Checkout | undefined>>();
+  private readonly checkouts = new Map<string, Promise<CheckoutLookup>>();
   private readonly preflightCheckoutVersions = new Map<string, string | undefined>();
   private readonly catalogs = new Map<string, Promise<CatalogObservation>>();
 
@@ -107,7 +116,7 @@ export class StackReadObservation {
     this.hints = createStackCheckoutHints(this.inventoryDemand);
   }
 
-  checkout(cwd: string, demand = this.demand): Promise<Checkout | undefined> {
+  checkoutLookup(cwd: string, demand = this.demand): Promise<CheckoutLookup> {
     this.demand.signal?.throwIfAborted();
     let read = this.checkouts.get(cwd);
     if (!read) {
@@ -115,6 +124,11 @@ export class StackReadObservation {
       this.checkouts.set(cwd, read);
     }
     return read;
+  }
+
+  async checkout(cwd: string, demand = this.demand): Promise<Checkout | undefined> {
+    const result = await this.checkoutLookup(cwd, demand);
+    return result === "unavailable" ? undefined : result;
   }
 
   async catalog(commonDir: string): Promise<CatalogRead> {
@@ -127,11 +141,11 @@ export class StackReadObservation {
     return (await read).catalog;
   }
 
-  private async recordCheckout(cwd: string, lookup?: (cwd: string) => Promise<Checkout | undefined>): Promise<Checkout | undefined> {
+  private async recordCheckout(cwd: string, lookup?: (cwd: string) => Promise<CheckoutLookup>): Promise<CheckoutLookup> {
     const before = await this.hints.checkoutIdentity(cwd);
-    const checkout = await (lookup ? lookup(cwd) : this.checkout(cwd));
+    const checkout = await (lookup ? lookup(cwd) : this.checkoutLookup(cwd));
     this.checkouts.set(cwd, Promise.resolve(checkout));
-    if (checkout) {
+    if (checkout && checkout !== "unavailable") {
       const unchanged = before && checkout.root === before.root && checkout.commonDir === before.commonDir
         && (await this.hints.checkoutIdentity(cwd))?.version === before.version;
       this.preflightCheckoutVersions.set(cwd, unchanged ? before.version : undefined);
@@ -155,9 +169,17 @@ export class StackReadObservation {
     return catalogs;
   }
 
-  async preflightCatalogs(directories: readonly string[], lookup?: (cwd: string) => Promise<Checkout | undefined>): Promise<CatalogRead[]> {
+  async preflightCatalogs(directories: readonly string[], lookup?: (cwd: string) => Promise<CheckoutLookup>): Promise<CatalogRead[]> {
     const candidates = await this.hints.markerCandidates(directories);
-    return (await this.clones(candidates, (cwd) => this.recordCheckout(cwd, lookup))).map(({ catalog }) => catalog);
+    let unavailable = false;
+    const clones = await this.clones(candidates, async (cwd) => {
+      const checkout = await this.recordCheckout(cwd, lookup);
+      if (checkout !== "unavailable") return checkout;
+      unavailable = true;
+    });
+    const catalogs = clones.map(({ catalog }) => catalog);
+    if (unavailable) catalogs.push({ status: "unavailable" });
+    return catalogs;
   }
 
   async revalidateAfterListing(): Promise<void> {
@@ -419,7 +441,7 @@ function possibleInferredLayers(threads: readonly StackThreadRow[], knownPrs: re
 }
 
 export class StackReader {
-  private readonly pendingPreflights = new Map<string, SharedPrMetadataRead<Checkout | undefined>>();
+  private readonly pendingPreflights = new Map<string, SharedPrMetadataRead<CheckoutLookup>>();
   private readonly inventoryCheckouts = new Map<string, {
     version: string; checkout: Checkout | undefined; expiresAt: number;
   }>();
@@ -433,13 +455,13 @@ export class StackReader {
     }
     return await observation.preflightCatalogs(directories, async (cwd) => {
       const candidates = await observation.hints.possibleCommonDirs(cwd);
-      return candidates ? await this.readInventoryCheckout(cwd, observation, candidates, true) : await observation.checkout(cwd);
+      return candidates ? await this.readInventoryCheckout(cwd, observation, candidates, true) : await observation.checkoutLookup(cwd);
     });
   }
 
   private async sharedPreflight(
-    cwd: string, version: string, demand: PrMetadataDemand, load: (demand: PrMetadataDemand) => Promise<Checkout | undefined>,
-  ): Promise<Checkout | undefined> {
+    cwd: string, version: string, demand: PrMetadataDemand, load: (demand: PrMetadataDemand) => Promise<CheckoutLookup>,
+  ): Promise<CheckoutLookup> {
     const key = JSON.stringify([cwd, version]);
     let pending = this.pendingPreflights.get(key);
     if (!pending || pending.signal.aborted) {
@@ -458,7 +480,7 @@ export class StackReader {
 
   private async readInventoryCheckout(
     cwd: string, observation: StackReadObservation, candidates: readonly string[], sharePreflight = false,
-  ): Promise<Checkout | undefined> {
+  ): Promise<CheckoutLookup> {
     const { hints, inventoryDemand } = observation;
     const identity = candidates.length ? await hints.checkoutIdentity(cwd) : undefined;
     const before = identity && candidates.includes(identity.commonDir) ? identity : undefined;
@@ -467,8 +489,9 @@ export class StackReader {
     if (version && cached?.version === version && cached.expiresAt > this.now()) return cached.checkout;
     this.inventoryCheckouts.delete(cwd);
 
-    const read = async (demand: PrMetadataDemand, locate: () => Promise<Checkout | undefined>, currentHints = hints) => {
+    const read = async (demand: PrMetadataDemand, locate: () => Promise<CheckoutLookup>, currentHints = hints) => {
       const checkout = await locate();
+      if (checkout === "unavailable") return checkout;
       const agreed = before ? checkout?.root === before.root && checkout.commonDir === before.commonDir
         && (await currentHints.checkoutIdentity(cwd))?.version === version : !checkout;
       demand.signal?.throwIfAborted();
@@ -482,7 +505,7 @@ export class StackReader {
     return sharePreflight && version
       ? await this.sharedPreflight(cwd, version, inventoryDemand,
         (demand) => read(demand, () => locateCheckout(cwd, demand), createStackCheckoutHints(demand)))
-      : await read(inventoryDemand, () => observation.checkout(cwd, inventoryDemand));
+      : await read(inventoryDemand, () => observation.checkoutLookup(cwd, inventoryDemand));
   }
 
   async read(threads: readonly StackThreadRow[], knownPrs: readonly PrSummary[], directories?: readonly string[],
@@ -516,8 +539,9 @@ export class StackReader {
       }
       const checkout = found && hints.installedGitVersion
         ? await this.readInventoryCheckout(cwd, observation, found) : await observation.checkout(cwd, inventoryDemand);
-      if (checkout) located.set(cwd, checkout);
-      return [cwd, checkout ? [checkout.commonDir] : []] as const;
+      if (!checkout || checkout === "unavailable") return [cwd, []] as const;
+      located.set(cwd, checkout);
+      return [cwd, [checkout.commonDir]] as const;
     }, STACK_CHECKOUT_SCAN_LIMITS);
     const possible = new Map<string, readonly string[]>();
     for await (const [cwd, commonDirs] of scan) possible.set(cwd, commonDirs);
@@ -553,6 +577,7 @@ export class StackReader {
       // Explicit anchors already have a live result in this observation.
       const candidates = possible.get(cwd)!;
       const checkout = hinted.has(cwd) ? await this.readInventoryCheckout(cwd, observation, candidates) : located.get(cwd);
+      if (checkout === "unavailable") return undefined;
       if (checkout && !directories && !candidates.includes(checkout.commonDir)
         && (inferredPaths.has(cwd)
           || await (retargetedHints ??= createStackCheckoutHints(inventoryDemand)).hasMarker(checkout.commonDir))) {
