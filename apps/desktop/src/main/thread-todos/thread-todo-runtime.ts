@@ -319,7 +319,7 @@ export function installThreadTodoRuntime(params: {
         if (review) reviewAutoFixRuns.record(review, id, { kind: "queue", status: "cancelled", at: Date.now() });
         return;
       }
-      reviewAutoFixRuns.record(review, id, { kind: "queue", status: "held", at: Date.now() });
+      if (params.readReviewStackHold) reviewAutoFixRuns.record(review, id, { kind: "queue", status: "held", at: Date.now() });
       const hold = await params.readReviewStackHold?.(review);
       if (hold) {
         if (heldReviews.get(id) !== hold) {
