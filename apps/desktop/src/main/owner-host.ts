@@ -53,9 +53,15 @@ export interface ThreadPresenter {
 }
 
 type NotificationText = { enabled: boolean; title: string; body: string; onShow?: () => void };
+export type TerminalNotification = NotificationText & {
+  key?: string;
+  turnId?: string;
+  status: "completed" | "failed" | "cancelled";
+};
+
 export interface OwnerNotifications {
   notifyAttention(params: NotificationText & { key: string }): void;
-  notifyTerminal(params: NotificationText & { key?: string }): void;
+  notifyTerminal(params: TerminalNotification): void;
   notifyApproval(params: { enabled: boolean; key: string; intent: MessagingApprovalIntent; onDecision?: (decision: MessagingApprovalDecision) => void; onShow?: () => void }): void;
   clearAttentionKey(key: string): void;
 }
