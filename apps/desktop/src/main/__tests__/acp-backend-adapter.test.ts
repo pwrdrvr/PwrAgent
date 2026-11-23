@@ -7,7 +7,7 @@ import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import fc from "fast-check";
-import type { AcpAgentUpdateStatus } from "@pwragent/shared/contracts/backend";
+import type { AcpAgentUpdateStatus, BackendRateLimitSummary } from "@pwragent/shared/contracts/backend";
 import type {
   AcpBackendId,
   AppServerPendingRequestNotification,
@@ -3832,6 +3832,62 @@ describe("AcpBackendAdapter", () => {
     ).toHaveLength(1);
 
     await adapter.close();
+  });
+
+  it("publishes the local Antigravity quota reading without blocking discovery", async () => {
+    const backendId = "acp:antigravity" as const;
+    const baseAgent = buildInstalledAgent();
+    const launchDescriptor = {
+      backendId,
+      registryId: "antigravity",
+      distributionKind: "local" as const,
+      command: "/fake/agy",
+      args: ["acp", "--process-per-session"],
+      env: {},
+    };
+    const agent: AcpInstalledAgentRecord = {
+      ...baseAgent,
+      backendId,
+      registryId: "antigravity",
+      name: "Antigravity",
+      launchDescriptor,
+    };
+    const reading = Promise.withResolvers<{ rateLimits: BackendRateLimitSummary[] }>();
+    const readAntigravityUsage = vi.fn(() => reading.promise);
+    const emit = vi.fn(async () => undefined);
+    const adapter = createTestAcpBackendAdapter({
+      captureStores: [],
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      createAcpClient: () => ({
+        initialize: vi.fn(async () => undefined),
+        dispose: vi.fn(async () => undefined),
+      }) as never,
+      readAntigravityUsage,
+      emit,
+      handleServerRequest: async () => ({}),
+    });
+    try {
+      await adapter.getClient(backendId);
+      expect((await adapter.describeInstalledBackends())[0]?.rateLimits).toBeUndefined();
+      await adapter.describeInstalledBackends();
+      expect(readAntigravityUsage).toHaveBeenCalledExactlyOnceWith(launchDescriptor);
+      const rateLimits = [
+        { name: "Weekly Gemini limit", limitId: "gemini-weekly", usedPercent: 20 },
+        { name: "Weekly Claude/GPT limit", limitId: "3p-weekly", usedPercent: 45 },
+      ];
+      reading.resolve({ rateLimits });
+      await vi.waitFor(() => expect(emit).toHaveBeenCalledWith({
+        backend: backendId,
+        notification: { method: "backend/providerStatus/updated", params: { backend: backendId } },
+      }));
+      expect((await adapter.describeInstalledBackends())[0]?.rateLimits).toEqual(rateLimits);
+    } finally {
+      await adapter.close();
+    }
   });
 
   it("does not block backend discovery while Grok billing is pending", async () => {

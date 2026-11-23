@@ -52,6 +52,7 @@ import {
   type AcpPromptContentBlock,
 } from "../acp/acp-client";
 import type { AcpProviderStatus } from "../acp/acp-provider-status";
+import { readAntigravityUsage } from "../acp/antigravity-usage.js";
 import { PlanLimitStore } from "./plan-limit-store";
 import {
   MAX_TURN_INPUT_ATTACHMENT_BYTES,
@@ -340,6 +341,7 @@ export type AcpBackendAdapterOptions = {
   createAcpClient?: AcpClientFactory;
   assertOwnerAdmission?: () => void;
   createAcpTransport?: AcpTransportFactory;
+  readAntigravityUsage?: typeof readAntigravityUsage;
   /**
    * Required so no caller can silently inherit machine-wide discovery.
    * Production passes `createLocalAcpAgentDiscovery(...)`; tests pass a stub.
@@ -1366,13 +1368,13 @@ export class AcpBackendAdapter {
       );
     return enabledAgents.map((agent) => {
       const summary = describeInstalledAcpBackend(agent);
-      if (agent.registryId !== "grok" || !summary.available) {
+      if ((agent.registryId !== "grok" && agent.registryId !== "antigravity") || !summary.available) {
         return summary;
       }
       // Backend discovery is also used by launchpad and messaging flows.
-      // Merge only cached decoration here; vendor billing must never delay it.
+      // Merge only cached decoration here; provider quota reads must never delay it.
       const providerStatus = this.providerStatuses.get(agent.backendId);
-      this.refreshProviderStatusInBackground(agent.backendId);
+      this.refreshProviderStatusInBackground(agent);
       return providerStatus
         ? {
             ...summary,
@@ -1465,11 +1467,12 @@ export class AcpBackendAdapter {
     this.grokUpdateRefreshes.set(agent.backendId, refresh);
   }
 
-  private refreshProviderStatusInBackground(backend: AcpBackendId): void {
-    const clientPromise = this.acpClients.get(backend)?.promise;
+  private refreshProviderStatusInBackground(agent: AcpInstalledAgentRecord): void {
+    const backend = agent.backendId;
+    const owner = this.acpClients.get(backend);
     if (
       this.closed
-      || !clientPromise
+      || !owner
       || this.providerStatusRefreshes.has(backend)
     ) {
       return;
@@ -1482,8 +1485,15 @@ export class AcpBackendAdapter {
     ) {
       return;
     }
+    const launch = agent.registryId === "antigravity"
+      ? recoverLegacyAntigravitySelection(agent).launchDescriptor
+      : undefined;
+    if (agent.registryId === "antigravity"
+      && (!launch || owner.launchIdentity !== acpAgentLaunchIdentity({ ...agent, launchDescriptor: launch }))) {
+      return;
+    }
     this.providerStatusRefreshAttempts.set(backend, now);
-    const refreshPromise = this.refreshProviderStatus(backend, clientPromise);
+    const refreshPromise = this.refreshProviderStatus(backend, owner, launch);
     this.providerStatusRefreshes.set(backend, refreshPromise);
     void refreshPromise.finally(() => {
       if (this.providerStatusRefreshes.get(backend) === refreshPromise) {
@@ -1494,14 +1504,18 @@ export class AcpBackendAdapter {
 
   private async refreshProviderStatus(
     backend: AcpBackendId,
-    clientPromise: Promise<AcpRuntimeClient>,
+    owner: AcpClientEntry,
+    antigravityLaunch?: AcpLaunchDescriptor,
   ): Promise<void> {
     try {
-      const client = await clientPromise;
+      const client = await owner.promise;
+      if (this.closed || this.acpClients.get(backend) !== owner) return;
       // Reads run one at a time, so each answer is newer than the last.
       let since = this.planLimits.mark(backend);
-      const providerStatus = await client.readProviderStatus?.();
-      if (!providerStatus || this.closed) {
+      const providerStatus = antigravityLaunch
+        ? await (this.options.readAntigravityUsage ?? readAntigravityUsage)(antigravityLaunch)
+        : await client.readProviderStatus?.();
+      if (!providerStatus || this.closed || this.acpClients.get(backend) !== owner) {
         return;
       }
       this.providerStatuses.set(backend, { account: providerStatus.account });
