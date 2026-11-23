@@ -9468,7 +9468,7 @@ class DesktopAppServerService {
 
   private async readDependencyThread(
     condition: Pick<ThreadDependencyCondition, "backend" | "threadId"> & Partial<ThreadDependencyCondition>,
-    automaticMergeBuild = false,
+    automaticMergeBuild?: "recover" | "verified",
   ): Promise<DependencyThreadSnapshot> {
     const registry = getDesktopBackendRegistry();
     const turns = new Map<string, AppServerThreadTurnMetadata>();
@@ -9494,10 +9494,10 @@ class DesktopAppServerService {
     }
     let prs: PrSummary[] = [];
     if (automaticMergeBuild && condition.when === "merge_build" && condition.prUrl) {
-      // The merge transition already verified primary ownership. The saved
-      // watch follows that attached PR even when the checkout is unavailable or moves.
+      // A watch already following a merged PR can outlive a checkout move.
+      // A legacy wait that never saw its merge still checks its stored attachment.
       const overlay = await this.getOverlayStore().getThreadOverlayState(condition);
-      prs = await this.canonicalizeStoredPullRequests(overlay?.prs ?? [], undefined, false);
+      prs = await this.canonicalizeStoredPullRequests(overlay?.prs ?? [], undefined, automaticMergeBuild === "recover");
     } else if (!condition.when || isPrDependencyCondition({ when: condition.when })) {
       prs = (await this.readPrimaryAttachedPrs(condition, false)).prs;
     }
@@ -9936,5 +9936,6 @@ export async function startAppServerOwnerNavigation(): Promise<void> {
 
 /** A prerequisite that waits on a PR, so it needs background PR polling. */
 function isPrDependencyCondition(condition: Pick<ThreadDependencyCondition, "when">): boolean {
-  return condition.when === "pr_attached" || condition.when === "ci_passed" || condition.when === "pr_merged";
+  return condition.when === "pr_attached" || condition.when === "ci_passed"
+    || condition.when === "pr_merged" || condition.when === "merge_build";
 }

@@ -11804,7 +11804,7 @@ describe("app server ipc", () => {
       const mode = vi.spyOn(appState, "getAppStateMode").mockReturnValue("active-profile");
       const thread = { backend: "codex" as const, threadId: "automatic-merge-build" };
       const merged = githubPr({ org: "fixture", repo: "project", number: 41, state: "passing", lifecycleState: "merged",
-        headSha: "a".repeat(40), url: "https://github.com/fixture/project/pull/41" });
+        explicitlyAttached: true, headSha: "a".repeat(40), url: "https://github.com/fixture/project/pull/41" });
       const other = githubPr({ org: "fixture", repo: "other", number: 41, state: "pending",
         url: "https://github.com/fixture/other/pull/41" });
       const key = buildPullRequestStatusKey(merged);
@@ -11819,16 +11819,8 @@ describe("app server ipc", () => {
         await store.setThreadPullRequests({ ...thread, prs, fetchedAt: now - 60_000, refreshKey: thread.threadId });
         internal.prStatusRegistryLoaded = true;
         internal.prStatusRegistry.set(key, { pr: merged, fetchedAt: now });
-        if (input.workspace === "missing") {
-          await store.addLinkedDirectory({ ...thread, directory: {
-            id: "/fixture/project-worktree", kind: "worktree", label: "Project",
-            path: "/fixture/project", worktreePath: "/fixture/project-worktree",
-          } });
-        } else {
-          getCachedThreadSummary.mockReturnValue({ id: thread.threadId, source: thread.backend,
-            title: "Fixture thread", titleSource: "explicit", gitOriginUrl: "https://github.com/fixture/other.git", linkedDirectories: [] });
-        }
-
+        const summary: AppServerThreadSummary = { id: thread.threadId, source: thread.backend,
+          title: "Fixture thread", titleSource: "explicit", gitOriginUrl: "https://github.com/fixture/project.git", linkedDirectories: [] };
         const coordinator = internal.getThreadDependencyCoordinator();
         if (input.restoreWait) {
           dependencies.register({
@@ -11837,14 +11829,24 @@ describe("app server ipc", () => {
             evidence: [{ condition, state: "waiting", reason: "Waiting for a primary-workspace PR", observedAt: now }],
             createdAt: now, updatedAt: now,
           });
-          await coordinator.reconcile();
         } else {
+          getCachedThreadSummary.mockReturnValue(summary);
           service.setThreadPrAttachment(`codex:${thread.threadId}`, {
             backend: thread.backend, primaryRepoKey: "github.com/fixture/project", prs,
           });
           expect(appServerService.isPullRequestLocallyMonitored(key)).toBe(true);
           expect(await coordinator.armMergeBuild(thread, merged)).toBe(true);
         }
+        if (input.workspace === "missing") {
+          getCachedThreadSummary.mockReturnValue(undefined);
+          await store.addLinkedDirectory({ ...thread, directory: {
+            id: "/fixture/project-worktree", kind: "worktree", label: "Project",
+            path: "/fixture/project", worktreePath: "/fixture/project-worktree",
+          } });
+        } else {
+          getCachedThreadSummary.mockReturnValue({ ...summary, gitOriginUrl: "https://github.com/fixture/other.git" });
+        }
+        await coordinator.reconcile();
         expect(latest()).toMatchObject({ status: "waiting", evidence: [{ reason: MERGE_BUILD_WAITING_REASON, prUrl: merged.url }] });
         expect(coordinator.mergeBuildUrls()).toEqual([merged.url]);
         expect(coordinator.mergeBuildPullRequest(merged.url)).toMatchObject({ url: merged.url, lifecycleState: "merged" });
@@ -11884,6 +11886,77 @@ describe("app server ipc", () => {
       otherPrFirst: fc.boolean(),
       restoreWait: fc.boolean(),
     }), checkAutomaticMergeBuildWatch), { numRuns: 24 });
+  });
+
+  it("validates the Git default branch before arming or recovering an unverified automatic merge build watch", async () => {
+    const appState = await import("../state/app-state");
+    const { runGitCommand } = await import("../app-server/git-executable");
+    const { ThreadDependencyStore } = await import("../state/thread-dependency-store");
+    const { resolveGitHubRepoForDirectory: readOrigin, clearGitHubRemoteCache } =
+      await vi.importActual<typeof import("../pr-status/git-remote")>("../pr-status/git-remote");
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-merge-build-attachment-oracle-"));
+    const restoreGit = isolateProcessGitEnvironment(root);
+    onTestFinished(async () => {
+      clearGitHubRemoteCache();
+      restoreGit();
+      await rm(root, { recursive: true, force: true });
+    });
+    await withRenamedRepositoryStore("merge-build-attachment-oracle-", async ({ store, db }) => {
+      const { appServerService, service, restore } = await renamedRepositoryService();
+      const internal = service as unknown as {
+        getThreadDependencyCoordinator: () => import("../app-server/thread-dependency-coordinator").ThreadDependencyCoordinator;
+      };
+      const stateDb = vi.spyOn(appState, "getAppStateDb").mockReturnValue(db);
+      const mode = vi.spyOn(appState, "getAppStateMode").mockReturnValue("active-profile");
+      const origin = "https://github.com/fixture/merge-build-validation.git";
+      const dependencies = new ThreadDependencyStore(db.raw);
+      const coordinator = internal.getThreadDependencyCoordinator();
+      resolveGitHubRepoForDirectory.mockImplementation((cwd, options) => readOrigin(cwd!, options));
+      try {
+        for (const [index, headBranch] of ["main", "topic"].entries()) {
+          const cwd = path.join(root, headBranch);
+          await mkdir(cwd);
+          await runGitCommand(cwd, ["init", "-b", "main"]);
+          await runGitCommand(cwd, ["remote", "add", "origin", origin]);
+          await runGitCommand(cwd, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+          const { stdout } = await runGitCommand(cwd, ["symbolic-ref", "refs/remotes/origin/HEAD"]);
+          const belongsToCheckout = stdout.trim() !== `refs/remotes/origin/${headBranch}`;
+          const thread = { backend: "codex" as const, threadId: `merge-build-attachment-${headBranch}` };
+          const pr = githubPr({ org: "fixture", repo: "merge-build-validation", number: index + 1,
+            state: "passing", lifecycleState: "merged", headRefName: headBranch, linkedDirectoryPaths: [cwd],
+            url: `https://github.com/fixture/merge-build-validation/pull/${index + 1}` });
+          const now = Date.now();
+          getCachedThreadSummary.mockReturnValue({ id: thread.threadId, source: thread.backend,
+            title: "Fixture thread", titleSource: "explicit", gitOriginUrl: origin,
+            linkedDirectories: [{ id: cwd, kind: "local", label: headBranch, path: cwd }] });
+          await store.setThreadPullRequests({ ...thread, prs: [pr], fetchedAt: now, refreshKey: thread.threadId });
+          service.setThreadPrAttachment(`codex:${thread.threadId}`, {
+            backend: thread.backend, primaryRepoKey: "github.com/fixture/merge-build-validation", prs: [pr],
+          });
+          try {
+            // Inventory marks both PRs as candidates. Only Git can validate ownership.
+            expect(appServerService.isPullRequestLocallyMonitored(buildPullRequestStatusKey(pr))).toBe(true);
+            expect(await coordinator.armMergeBuild(thread, pr)).toBe(belongsToCheckout);
+            if (!belongsToCheckout) {
+              expect(dependencies.list(thread.backend, thread.threadId)).toEqual([]);
+              dependencies.register({ ...thread, id: "legacy-watch", conditions: [{ ...thread, when: "merge_build", prUrl: pr.url }],
+                mode: "all", onFailure: "notify", deliver: "agent", wakeOn: "failure", automatic: true,
+                status: "waiting", evidence: [], createdAt: now, updatedAt: now });
+              await coordinator.reconcile();
+            }
+            expect(coordinator.mergeBuildUrls().includes(pr.url)).toBe(belongsToCheckout);
+          } finally {
+            service.setThreadPrAttachment(`codex:${thread.threadId}`, undefined);
+          }
+        }
+      } finally {
+        getCachedThreadSummary.mockReset();
+        resolveGitHubRepoForDirectory.mockReset();
+        stateDb.mockRestore();
+        mode.mockRestore();
+        restore();
+      }
+    });
   });
 
   it("saves a new dependency's PR URL under the repository's current name", async () => {
