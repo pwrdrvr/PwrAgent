@@ -1,8 +1,43 @@
 import { describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../desktop-api";
 import { scopeDesktopApiToFederationTarget } from "../federation-desktop-api";
+import { threadJobMonitorControl } from "../job-monitor-control";
 
 describe("scopeDesktopApiToFederationTarget", () => {
+  it("binds a Job Monitor toggle to a capable thread owner even after selection changes", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.string({ minLength: 1 }), fc.boolean(), fc.boolean(), fc.boolean(),
+      async (threadId, capable, connected, enabled) => {
+        const setThreadJobMonitorCreation = vi.fn(async () => ({ threadId, enabled }));
+        const desktopApi = { setThreadJobMonitorCreation };
+        const viewer = { scope: "remote", instanceId: "viewer-window" } as const;
+        const owner = { scope: "remote", instanceId: "owner" } as const;
+        const thread: NavigationThreadSummary = { source: "codex", id: threadId,
+          title: "Fixture", titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: false } };
+        expect(threadJobMonitorControl(desktopApi, thread, viewer)).toBeUndefined();
+        expect(threadJobMonitorControl(desktopApi, { ...thread, source: "acp:kimi" }, undefined)).toBeUndefined();
+        const peerThread: NavigationThreadSummary = { ...thread, federation: {
+          ref: { backend: "codex", threadId, target: owner }, instanceLabel: "Fixture owner",
+          peerStatus: connected ? "connected" : "disconnected",
+          capabilities: capable ? ["thread_job_monitor_control", "turn_control"] : ["turn_control"],
+        } };
+        const toggle = threadJobMonitorControl(scopeDesktopApiToFederationTarget(desktopApi, owner), peerThread, viewer);
+        if (capable && connected) {
+          const selectedLocal = threadJobMonitorControl(desktopApi, thread, undefined);
+          await selectedLocal?.(!enabled);
+          await toggle?.(enabled);
+          expect(setThreadJobMonitorCreation.mock.calls).toEqual([
+            [{ threadId, enabled: !enabled }], [{ threadId, enabled, federationTarget: owner }],
+          ]);
+        } else {
+          expect(toggle).toBeUndefined();
+          expect(setThreadJobMonitorCreation).not.toHaveBeenCalled();
+        }
+      },
+    ), { numRuns: 30 });
+  });
   it("scopes MCP inventory, selection, and verification to the thread owner", async () => {
     const listMcpConnections = vi.fn();
     const readThreadMcpConnections = vi.fn();

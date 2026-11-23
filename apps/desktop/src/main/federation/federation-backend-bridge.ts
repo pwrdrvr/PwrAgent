@@ -271,6 +271,8 @@ import type {
   SetThreadAgentResponse,
   SetThreadTokenMiserRequest,
   SetThreadTokenMiserResponse,
+  SetThreadJobMonitorCreationRequest,
+  SetThreadJobMonitorCreationResponse,
   SetThreadParentRequest,
   SetThreadParentResponse,
   SetSubthreadsCollapsedRequest,
@@ -718,6 +720,7 @@ export function additionalFederationBackendCapabilities(
     || envelope.method === FEDERATION_BACKEND_METHODS.getSteerRequest) required.push("durable_steer_requests_v1");
   if (envelope.method === FEDERATION_BACKEND_METHODS.steerTurn
     && (envelope.params as Partial<SteerTurnRequest> | undefined)?.fallback) required.push("scheduled_actions");
+  if (envelope.method === FEDERATION_BACKEND_METHODS.setThreadJobMonitorCreation) required.push("turn_control");
   return required;
 }
 
@@ -982,6 +985,9 @@ export type FederationBackendOperations = NavigationBackendOperations & {
   setThreadTokenMiser(
     request: SetThreadTokenMiserRequest,
   ): Promise<SetThreadTokenMiserResponse>;
+  setThreadJobMonitorCreation(
+    request: Omit<SetThreadJobMonitorCreationRequest, "federationTarget">,
+  ): Promise<SetThreadJobMonitorCreationResponse>;
   setThreadModelSettings(
     request: SetThreadModelSettingsRequest,
   ): Promise<SetThreadModelSettingsResponse>;
@@ -2040,6 +2046,23 @@ export function registerFederationBackendHandlers(params: {
         envelope.params as SetThreadTokenMiserRequest,
       ),
   );
+  params.router.registerHandler(FEDERATION_BACKEND_METHODS.setThreadJobMonitorCreation, async (envelope) => {
+    const request = envelope.params as SetThreadJobMonitorCreationRequest | undefined;
+    if (!request || typeof request.threadId !== "string" || !request.threadId.trim()
+      || typeof request.enabled !== "boolean" || request.federationTarget !== undefined
+      || (request.backend !== undefined && request.backend !== "codex")) {
+      throw new Error("Changing Job Monitors requires an owner-local Codex thread and an enabled state.");
+    }
+    const { threadId, enabled } = request;
+    const { thread } = await params.backend.resolveThread({ backend: "codex", threadId });
+    if (thread?.id !== threadId || thread.source !== "codex" || thread.archivedAt !== undefined) {
+      throw new Error("The Codex thread is no longer available on the owning instance.");
+    }
+    if (envelope.deadlineAt !== undefined && envelope.deadlineAt <= Date.now()) {
+      throw new Error("The Job Monitors request expired before it could be applied.");
+    }
+    return await params.backend.setThreadJobMonitorCreation({ threadId, enabled });
+  });
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.setThreadModelSettings,
     async (envelope) =>
@@ -3490,6 +3513,22 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       method: FEDERATION_BACKEND_METHODS.setThreadModelSettings,
       params: request,
     });
+  }
+
+  async setThreadJobMonitorCreation(
+    request: Omit<SetThreadJobMonitorCreationRequest, "federationTarget">,
+  ): Promise<SetThreadJobMonitorCreationResponse> {
+    try {
+      return await this.rpc.request<SetThreadJobMonitorCreationResponse>({
+        method: FEDERATION_BACKEND_METHODS.setThreadJobMonitorCreation,
+        params: request,
+      });
+    } catch (error) {
+      if (hasFederationErrorCode(error, "method_not_found")) {
+        throw new Error("Update PwrAgent on the owning instance to change Job Monitors over Federation.");
+      }
+      throw error;
+    }
   }
 
   async checkThreadBranchDrift(

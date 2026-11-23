@@ -3190,8 +3190,10 @@ export type SetThreadMonitorJobSuggestionsResponse = {
 };
 
 export type SetThreadJobMonitorCreationRequest = {
+  backend?: "codex" | "claude";
   threadId: ThreadIdentifier;
   enabled: boolean;
+  federationTarget?: FederationTarget;
 };
 
 export type SetThreadJobMonitorCreationResponse = {

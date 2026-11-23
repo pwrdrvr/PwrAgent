@@ -1,4 +1,5 @@
 import { projectClaudeSessionThread } from "@pwragent/owner-core/claude-profile-storage";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import { createHash, randomUUID } from "node:crypto";
 import { readFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -298,6 +299,13 @@ async function configureClaudeStartupMcp(
   }
 }
 
+async function readClaudeJobMonitorCatalog(query: Query): Promise<boolean | undefined> {
+  const server = (await query.mcpServerStatus()).find(({ name }) => name === PWRAGENT_TOOL_NAMESPACE);
+  return server?.status === "connected"
+    ? server.tools?.some(({ name }) => name === "create_monitor_delegation")
+    : undefined;
+}
+
 /**
  * The shortest gap between usage reports while a turn runs. Each report is a
  * usage probe and one write of the turn's usage row (about 57 KB of WAL), so
@@ -460,6 +468,7 @@ type ClaudeSessionConfig = {
   strictMcpConfig?: boolean;
   /** The agent tool catalog PwrAgent's MCP server listed when the process started. */
   agentToolCatalogKey?: string;
+  jobMonitorCreationEnabled?: boolean;
   /** Tools Claude runs without asking, fixed when the process starts. */
   allowedTools: string[];
   /** The thread's other linked directories, fixed when the process starts. */
@@ -558,6 +567,8 @@ type ClaudeTurnParams = {
    * and keeps the list, so a change relaunches the session.
    */
   agentToolCatalogKey?: string;
+  /** Expected creation-tool availability in the PwrAgent MCP catalog for this prompt. */
+  jobMonitorCreationEnabled?: boolean;
   /** Plan runs this turn in Claude's read-only plan mode. */
   collaborationMode?: AppServerCollaborationModeRequest;
   /** Directories attached to the thread after it was created. */
@@ -597,6 +608,7 @@ function claudeSessionConfig(params: ClaudeTurnParams, session: ClaudeSession): 
     mcpKey: JSON.stringify(params.mcpServers ?? {}),
     strictMcpConfig: params.strictMcpConfig,
     agentToolCatalogKey: params.agentToolCatalogKey,
+    jobMonitorCreationEnabled: params.jobMonitorCreationEnabled,
     allowedTools: claudeAllowedTools(params.mcpServers),
     additionalDirectories: claudeAdditionalDirectories(session, params.attachedDirectories),
     shellEnvironment: params.shellEnvironment,
@@ -1216,6 +1228,12 @@ export class ClaudeBackend {
     }
   }
 
+  jobMonitorCreationEnabledForTurn(threadId: string, turnId: string): boolean | undefined {
+    const live = this.sessions.get(threadId);
+    if (live?.turn?.turnId === turnId) return live.config.jobMonitorCreationEnabled;
+    return undefined;
+  }
+
   /** Launch a query for the thread, with this turn's message as its prompt. */
   private async startSession(params: ClaudeTurnParams): Promise<ClaudeTurnStart> {
     const { threadId } = params;
@@ -1366,6 +1384,9 @@ export class ClaudeBackend {
         if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
           await configureClaudeStartupMcp(current.query, config.mcpServers, initializeMcp, controller.signal,
             this.options.mcpStartupTimeoutMs ?? CLAUDE_MCP_STARTUP_TIMEOUT_MS);
+        }
+        if (config.jobMonitorCreationEnabled !== undefined) {
+          current.config.jobMonitorCreationEnabled = await readClaudeJobMonitorCatalog(current.query).catch(() => undefined);
         }
         // A fork's totals start from its source's, so it reads them too.
         if ((session.sdkSessionId ?? session.forkFromSdkSessionId) && !session.modelUsage) {
@@ -1525,6 +1546,17 @@ export class ClaudeBackend {
         await query.setMcpServers(config.mcpServers ?? {});
         live.config.mcpServers = config.mcpServers;
         live.config.mcpKey = config.mcpKey;
+      }
+      if (config.jobMonitorCreationEnabled !== undefined
+        && config.jobMonitorCreationEnabled !== live.config.jobMonitorCreationEnabled) {
+        // Updating the same server config retains Claude's cached tool list.
+        // Reconnect only PwrAgent's server and confirm the list before the prompt.
+        live.config.jobMonitorCreationEnabled = undefined;
+        await query.reconnectMcpServer(PWRAGENT_TOOL_NAMESPACE);
+        if (await readClaudeJobMonitorCatalog(query) !== config.jobMonitorCreationEnabled) {
+          throw new Error("Claude could not confirm the Job Monitors tool catalog. Try sending again.");
+        }
+        live.config.jobMonitorCreationEnabled = config.jobMonitorCreationEnabled;
       }
       return true;
     } catch (error) {

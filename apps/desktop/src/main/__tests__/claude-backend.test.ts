@@ -3043,6 +3043,58 @@ describe("Claude SDK backend", () => {
     await f.backend.close();
   });
 
+  it("reconnects the Job Monitor catalog before a later prompt and preserves live tasks", async () => {
+    let listed = true;
+    let requested = true;
+    let reloadWorks = true;
+    const snapshots: boolean[] = [];
+    const reconnectMcpServer = vi.fn(async () => { if (reloadWorks) listed = requested; });
+    const mcpServerStatus = vi.fn(async (): Promise<Awaited<ReturnType<Query["mcpServerStatus"]>>> => [{
+      name: "pwragent", status: "connected", tools: [
+        { name: "cancel_monitor_delegation" }, ...(listed ? [{ name: "create_monitor_delegation" }] : []),
+      ],
+    }]);
+    const f = await fixture(async function* (_options, prompt) {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "system", subtype: "task_started", task_id: "task-1", description: "Fixture job", task_type: "local_bash", is_backgrounded: true } as SDKMessage;
+      for await (const message of prompt) {
+        snapshots.push(listed);
+        yield { type: "result", subtype: "success", is_error: false, result: "OK",
+          user_message_uuids: [message.uuid] } as unknown as SDKMessage;
+      }
+    }, { reconnectMcpServer, mcpServerStatus, setMcpServers: vi.fn().mockResolvedValue({ added: [], removed: [], errors: {} }) });
+    try {
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      const mcpServers = { pwragent: { type: "http" as const, url: "http://127.0.0.1:9/mcp" } };
+      const turn = () => f.backend.startTurn({ threadId, input: [{ type: "text", text: "Continue" }],
+        mcpServers, jobMonitorCreationEnabled: requested });
+      await turn();
+      await f.waitForTurn();
+
+      requested = false;
+      reloadWorks = false;
+      await expect(turn()).rejects.toThrow("could not confirm the Job Monitors tool catalog");
+      expect(snapshots).toEqual([true]);
+      expect(f.close).not.toHaveBeenCalled();
+      expect(f.backend.listBackgroundTasks(threadId).terminals).toHaveLength(1);
+
+      reloadWorks = true;
+      await turn();
+      await f.waitForTurn();
+      await turn();
+      await f.waitForTurn();
+      requested = true;
+      await turn();
+      await f.waitForTurn();
+      expect(snapshots).toEqual([true, false, false, true]);
+      expect(reconnectMcpServer.mock.calls).toEqual([["pwragent"], ["pwragent"], ["pwragent"]]);
+      expect(f.run).toHaveBeenCalledOnce();
+      expect(f.close).not.toHaveBeenCalled();
+    } finally {
+      await f.backend.close();
+    }
+  });
+
   it("relaunches for new instructions once no task would stop with the process", async () => {
     const firstGrants = vi.fn();
     const secondGrants = vi.fn();

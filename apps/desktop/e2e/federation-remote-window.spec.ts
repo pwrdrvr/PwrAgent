@@ -308,6 +308,75 @@ async function seedFixtureGitRepo(params: {
 }
 
 test.describe("federation remote window", () => {
+  test("changes Job Monitors on the remote Codex owner", async () => {
+    test.setTimeout(120_000);
+    const threadId = "fixture-release-checks";
+    const title = "Verify the release checks";
+    const instanceLabel = "Fixture build Mac";
+    const ownerFixture = await createLocalControlFixture({ threadId, threadTitle: title });
+    const viewerFixture = await createLocalControlFixture({ threadId, threadTitle: "Local release notes" });
+    let owner: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
+    let viewer: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
+    try {
+      owner = await launchElectronApp({ fixturePath: ownerFixture.fixturePath, secretStorage: "memory",
+        preLaunchHook: async (homeRoot) => {
+          const profile = path.join(homeRoot, ".pwragent", "profiles", "default");
+          await mkdir(profile, { recursive: true });
+          await writeFile(path.join(profile, "config.toml"), ["[federation]", 'mode = "gateway"',
+            `instance_label = "${instanceLabel}"`, 'listen_host = "127.0.0.1"', "listen_port = 0", ""].join("\n"));
+        },
+      });
+      await restoreE2eFederationIdentity({ page: owner.window,
+        identityPrivateKeyPem: generateFederationIdentityKeyPair().privateKeyPem,
+        noiseStaticPrivateKeyBase64: generateFederationNoiseStaticKeyPair().privateKeyBase64, restartMode: "gateway" });
+      await expect.poll(async () => owner!.window.evaluate(async () =>
+        (await (window as unknown as { pwragent: DesktopApi }).pwragent.readFederationHealth!()).health),
+      { timeout: 30_000 }).toMatchObject({ status: "listening" });
+      const { instanceId, invite } = await owner.window.evaluate(async () => {
+        const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+        return { instanceId: (await api.readFederationHealth!()).health.instanceId!, invite: (await api.generateFederationInvite!()).invite };
+      });
+      viewer = await launchElectronApp({ fixturePath: viewerFixture.fixturePath, secretStorage: "memory" });
+      await restoreE2eFederationIdentity({ page: viewer.window,
+        identityPrivateKeyPem: generateFederationIdentityKeyPair().privateKeyPem,
+        noiseStaticPrivateKeyBase64: generateFederationNoiseStaticKeyPair().privateKeyBase64 });
+      await viewer.window.evaluate(async (encodedInvite) => {
+        await (window as unknown as { pwragent: DesktopApi }).pwragent.importFederationInvite!({ invite: encodedInvite });
+      }, invite);
+      await expect.poll(async () => viewer!.window.evaluate(async () =>
+        (await (window as unknown as { pwragent: DesktopApi }).pwragent.readFederationHealth!()).health),
+      { timeout: 30_000 }).toMatchObject({ status: "connected" });
+      await viewer.window.evaluate(async ({ instanceId, threadId, title, instanceLabel }) => {
+        const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+        const ref = { backend: "codex" as const, threadId, target: { scope: "remote" as const, instanceId } };
+        await api.addRemoteThreadPin!({ ref, instanceLabel, summary: {
+          id: threadId, source: "codex", title, titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: true },
+          federation: { ref, instanceLabel, peerStatus: "connected" },
+        } });
+      }, { instanceId, threadId, title, instanceLabel });
+      const openOptions = async (page: Page, threadTitle: string) => {
+        await page.getByRole("region", { name: "Thread browser" }).getByRole("button", { name: threadTitle, exact: true }).click();
+        await page.getByRole("button", { name: "Thread options", exact: true }).click();
+        return page.getByRole("menuitemcheckbox", { name: "Job Monitors", exact: true });
+      };
+      const remote = await openOptions(viewer.window, title);
+      await expect(remote).toHaveAttribute("aria-checked", "true");
+      await remote.click();
+      await expect(remote).toContainText("The agent can't start new ones.");
+      const ownerOptions = await openOptions(owner.window, title);
+      await expect(ownerOptions).toHaveAttribute("aria-checked", "false");
+      await ownerOptions.click();
+      await expect(remote).toHaveAttribute("aria-checked", "true");
+      await viewer.window.keyboard.press("Escape");
+      await expect(await openOptions(viewer.window, "Local release notes")).toHaveAttribute("aria-checked", "true");
+    } finally {
+      await viewer?.close();
+      await owner?.close();
+      await viewerFixture.cleanup();
+      await ownerFixture.cleanup();
+    }
+  });
+
   test("renders and refreshes owner sub-agents in the local main window through the real federation runtime", async ({ browserName: _browserName }, testInfo) => {
     test.setTimeout(180_000);
     const threadId = "colliding-subagent-parent";

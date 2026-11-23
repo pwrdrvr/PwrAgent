@@ -235,6 +235,7 @@ import {
   agentEventMatchesThread,
   threadSummaryIdentityKey,
 } from "../../lib/federated-thread-events";
+import { threadJobMonitorControl } from "../../lib/job-monitor-control";
 import {
   acpRuntimeModeRequiresFullAccess,
   formatExecutionModeLabel,
@@ -11763,13 +11764,13 @@ function useComposerController(props: ComposerProps) {
     }
   };
 
+  const setJobMonitorCreation = threadJobMonitorControl(props.desktopApi, props.thread, rendererFederationTarget);
   const changeJobMonitorCreation = async (enabled: boolean): Promise<void> => {
-    const thread = props.thread;
-    if (!thread || !props.desktopApi?.setThreadJobMonitorCreation) return;
+    if (!setJobMonitorCreation) return;
     setAgentThreadSaving(true);
     setJobMonitorCreationError(undefined);
     try {
-      await props.desktopApi.setThreadJobMonitorCreation({ threadId: thread.id, enabled });
+      await setJobMonitorCreation(enabled);
       await props.onRefreshNavigation?.().catch(() => undefined);
     } catch (error) {
       setJobMonitorCreationError({ scopeKey: composerScopeKey, message: error instanceof Error ? error.message : String(error) });
@@ -16309,9 +16310,7 @@ function useComposerController(props: ComposerProps) {
                 ? () => props.onShowMcpInventory?.("toolsAndAuthOnly")
                 : undefined
             }
-            {...(props.thread?.source === "codex"
-              && (props.thread.federation?.ref.target ?? rendererFederationTarget)?.scope !== "remote"
-              && props.desktopApi?.setThreadJobMonitorCreation
+            {...(props.thread && setJobMonitorCreation
               ? {
                   jobMonitorCreation: props.thread.jobMonitorCreationEnabled ?? true,
                   activeTurnId: props.activeTurnId,

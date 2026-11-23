@@ -627,6 +627,75 @@ describe("federation backend bridge", () => {
     }
   });
 
+  it("changes Job Monitors only on the authorized owner of a live Codex thread", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.array(fc.record({
+        owner: fc.integer({ min: 0, max: 1 }),
+        enabled: fc.boolean(),
+        request: fc.constantFrom("current", "missing", "archived", "other-provider", "no-grant", "redirect", "expired"),
+      }), { minLength: 1, maxLength: 16 }),
+      async (steps) => {
+        const threadId = "same-thread-id";
+        let now = 1_000;
+        const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+        try {
+          const model = [true, true];
+          const owners = model.map((initial, index) => {
+            let enabled = initial;
+            const instanceId = `owner-${index}`;
+            const router = new FederationRouter({ localInstanceId: instanceId,
+              methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+              additionalRequiredCapabilities: additionalFederationBackendCapabilities });
+            const routes = ["viewer", "older-viewer"].map((peerId) => {
+              const rpc = new FederationRpcEndpoint({ localInstanceId: peerId, remoteInstanceId: instanceId,
+                sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: peerId }); } });
+              router.registerConnection({ peerId,
+                capabilities: peerId === "viewer" ? ["thread_job_monitor_control", "turn_control"] : ["turn_control"],
+                sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+              return { rpc, client: new FederationRemoteBackendClient(rpc) };
+            });
+            const resolveThread = vi.fn(async ({ threadId: id }) => {
+              if (id === "missing") return {};
+              if (id === "expired") now += 60_000;
+              return { thread: { id, source: id === "other-provider" ? "claude" : "codex",
+                ...(id === "archived" ? { archivedAt: 1 } : {}), title: "Fixture", titleSource: "explicit", linkedDirectories: [] } };
+            });
+            const setThreadJobMonitorCreation = vi.fn(async (request) => { enabled = request.enabled; return request; });
+            registerFederationBackendHandlers({ router, backend: {
+              resolveThread, setThreadJobMonitorCreation,
+            } as unknown as FederationBackendOperations });
+            return { routes, value: () => enabled, setThreadJobMonitorCreation };
+          });
+          for (const step of steps) {
+            const owner = owners[step.owner];
+            const route = owner.routes[step.request === "no-grant" ? 1 : 0];
+            const request = { threadId: ["missing", "archived", "other-provider", "expired"].includes(step.request)
+              ? step.request : threadId, enabled: step.enabled };
+            if (step.request === "current") {
+              await expect(route.client.setThreadJobMonitorCreation(request)).resolves.toEqual(request);
+              model[step.owner] = step.enabled;
+            } else if (step.request === "redirect") {
+              await expect(route.rpc.request({ method: FEDERATION_BACKEND_METHODS.setThreadJobMonitorCreation,
+                params: { ...request, federationTarget: { scope: "remote", instanceId: `owner-${1 - step.owner}` } },
+              })).rejects.toThrow("owner-local Codex thread");
+            } else {
+              await expect(route.client.setThreadJobMonitorCreation(request)).rejects.toThrow();
+              expect(owner.setThreadJobMonitorCreation).not.toHaveBeenCalled();
+            }
+            expect(owners.map((candidate) => candidate.value())).toEqual(model);
+            for (const candidate of owners) candidate.setThreadJobMonitorCreation.mockClear();
+          }
+        } finally {
+          clock.mockRestore();
+        }
+      },
+    ), { numRuns: 30, examples: [[[
+      { owner: 0, enabled: false, request: "current" },
+      { owner: 1, enabled: false, request: "no-grant" },
+      { owner: 0, enabled: true, request: "expired" },
+    ]]] });
+  });
+
   it.each([true, false])("keeps Agent memory read and write grants separate (%s)", async (canWrite) => {
     const accessAgentMemory = vi.fn(async () => ({ content: "fixture", revision: "revision", exists: true }));
     const router = new FederationRouter({
@@ -4411,6 +4480,7 @@ describe("federation backend bridge", () => {
       setThreadAgent: vi.fn(),
       accessAgentMemory: vi.fn(),
       setThreadTokenMiser: vi.fn(),
+      setThreadJobMonitorCreation: vi.fn(),
       setThreadModelSettings: vi.fn(),
       checkThreadBranchDrift: vi.fn(),
       updateThreadExpectedBranch: vi.fn(),
@@ -4891,6 +4961,7 @@ describe("federation backend bridge", () => {
         setThreadAgent: vi.fn(),
         accessAgentMemory: vi.fn(),
       setThreadTokenMiser: vi.fn(),
+        setThreadJobMonitorCreation: vi.fn(),
       setThreadModelSettings: vi.fn(),
         checkThreadBranchDrift: vi.fn(),
         updateThreadExpectedBranch: vi.fn(),

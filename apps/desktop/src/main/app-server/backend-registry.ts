@@ -23,7 +23,7 @@ import { logDebug } from "./registry-debug-log";
 import type { RegistryDependencies } from "./backend-registry-construction";
 import { assertOutpostCodexProvider, assertOwnerCodexModelSelection, assertOwnerExecutionPolicy, ownerSandboxForMode, type OwnerExecutionRequest } from "../owner-runtime-policy";
 import { countAgentTools, filterAdvertisedAgentTools, isAgentToolCallAllowed } from "../headless/outpost-agent-tools";
-import { localAgentToolAllowlist, localAgentToolRefusal, localMemberRole } from "../member-containment";
+import { isAgentToolAdvertisedLocally, localAgentToolAllowlist, localAgentToolRefusal, localMemberRole } from "../member-containment";
 import { buildPwrAgentMessagingPdfToolRouter } from "../agent-tools/pwragent-messaging-agent-tools";
 import { requestShowThread, ownerNotifications as getDesktopNotificationService, getOwnerHostServices } from "../owner-host";
 import { ThreadCreationLifecycle, type PreparedThreadCreation, type ThreadCreationPreparation } from "@pwragent/owner-core/thread-creation-lifecycle";
@@ -11313,6 +11313,10 @@ export class DesktopBackendRegistry {
             ...(this.subAgentMonitorService.taskMonitorForThread(params) ? { strictMcpConfig: true } : {}),
             // PwrAgent's server lists tools by this member's containment.
             ...(owned ? { agentToolCatalogKey: localMemberRole() } : {}),
+            ...(owned && !this.subAgentMonitorService.isTaskMonitorThread(params)
+              && isAgentToolAdvertisedLocally("create_monitor_delegation") ? {
+              jobMonitorCreationEnabled: await this.isJobMonitorCreationEnabled(params),
+            } : {}),
             // Directories attached to the thread, so Claude can work in them too.
             attachedDirectories: overlay?.extraLinkedDirectories,
             shellEnvironment: setupVariablesForAgent(
@@ -15944,14 +15948,16 @@ export class DesktopBackendRegistry {
       : undefined;
   }
 
-  async setThreadJobMonitorCreation({ threadId, enabled }: {
+  async setThreadJobMonitorCreation({ backend = "codex", threadId, enabled }: {
+    backend?: "codex" | "claude";
     threadId: string;
     enabled: boolean;
   }): Promise<{ threadId: string; enabled: boolean }> {
-    if (typeof threadId !== "string" || !threadId.trim() || typeof enabled !== "boolean") {
+    if ((backend !== "codex" && backend !== "claude")
+      || typeof threadId !== "string" || !threadId.trim() || typeof enabled !== "boolean") {
       throw new Error("Changing Job Monitor creation requires a thread and an enabled state.");
     }
-    const identity = { backend: "codex", threadId } as const;
+    const identity = { backend, threadId };
     const deferredTurnId = enabled && !(await this.isJobMonitorCreationEnabled(identity))
       ? this.jobMonitorCreationTurnId(identity) : undefined;
     this.overlayStore.setThreadJobMonitorCreation({ ...identity, enabled });
@@ -15967,6 +15973,7 @@ export class DesktopBackendRegistry {
   }
 
   private jobMonitorCreationTurnId(identity: { backend: AppServerBackendKind; threadId: string }): string | undefined {
+    if (identity.backend === "claude") return this.getActiveTurnForThread(identity)?.turnId;
     if (identity.backend !== "codex") return undefined;
     const pendingId = buildPendingTurnId(identity.threadId);
     return this.context.turnState.pendingStartedTurnId(identity.threadId)
@@ -15989,7 +15996,8 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind; threadId: string; turnId?: string;
   }): Promise<"enabled" | "off" | "next-turn"> {
     if ((await this.overlayStore.getThreadOverlayState({ backend, threadId }))?.jobMonitorCreationEnabled === false) return "off";
-    return turnId && this.jobMonitorCreationDeferredTurns.has(buildActiveTurnKey(backend, threadId, turnId))
+    return turnId && (this.jobMonitorCreationDeferredTurns.has(buildActiveTurnKey(backend, threadId, turnId))
+      || (backend === "claude" && this.claudeBackend.jobMonitorCreationEnabledForTurn(threadId, turnId) === false))
       ? "next-turn" : "enabled";
   }
 
