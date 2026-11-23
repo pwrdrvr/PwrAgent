@@ -1,14 +1,65 @@
 import { constants, type BigIntStats } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import path from "node:path";
-import { getConfiguredGitCommand } from "../git-command";
+import { isDeepStrictEqual } from "node:util";
+import { getConfiguredGitCommand, getSelectedManagedGit } from "../git-command";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
-import { runPrMetadataFileProbe, runPrMetadataGit, type PrMetadataDemand } from "./pr-metadata-process";
+import { gitCommandPreference } from "../git-runtime";
+import { runPrMetadataFileProbe, runPrMetadataGit, SharedPrMetadataRead, type PrMetadataDemand } from "./pr-metadata-process";
 
 const REF_FILE_BYTES = 4096;
 const PACKED_REFS_BYTES = 256 * 1024;
 const MAX_REMOTES = 16;
 const MAX_SYMREF_DEPTH = 4;
+
+const queuedRemoteHeads = new Map<string, {
+  env: NodeJS.ProcessEnv;
+  preference: string | undefined;
+  managedGit: string | undefined;
+  pending: SharedPrMetadataRead<string | undefined>;
+}>();
+
+/** Share a fallback probe only until admission, before it can observe Git state. */
+export async function readGitRemoteHead(cwd: string, remote: string, demand?: PrMetadataDemand): Promise<string | undefined> {
+  demand?.signal?.throwIfAborted();
+  const env = buildPwrAgentChildProcessEnv(process.env);
+  const probe = async (currentDemand?: PrMetadataDemand, onAdmitted?: () => void) => {
+    try {
+      const { stdout } = await runPrMetadataGit(cwd, [
+        "symbolic-ref", "--quiet", "--short", `refs/remotes/${remote}/HEAD`,
+      ], { purpose: "pr-discovery", env, maxBuffer: 64 * 1024, timeout: 2_000 }, currentDemand, onAdmitted);
+      return stdout.trim();
+    } catch {
+      currentDemand?.signal?.throwIfAborted();
+      return undefined;
+    }
+  };
+  if (!path.isAbsolute(cwd)) return await probe(demand);
+
+  // Use the exact path passed to Git. Worktrees can share refs and still
+  // resolve the same short name differently. Both readers must also have
+  // requested the same Git environment.
+  const key = JSON.stringify([cwd, remote]);
+  const preference = gitCommandPreference(env);
+  const managedGit = preference ? undefined : getSelectedManagedGit();
+  const existing = queuedRemoteHeads.get(key);
+  if (existing && !existing.pending.signal.aborted && existing.preference === preference
+    && existing.managedGit === managedGit && isDeepStrictEqual(existing.env, env)) {
+    return await existing.pending.read(demand);
+  }
+  const remove = () => {
+    if (queuedRemoteHeads.get(key)?.pending === pending) queuedRemoteHeads.delete(key);
+  };
+  const pending = new SharedPrMetadataRead(async (sharedDemand) => {
+    try {
+      return await probe(sharedDemand, remove);
+    } finally {
+      remove();
+    }
+  });
+  queuedRemoteHeads.set(key, { env, preference, managedGit, pending });
+  return await pending.read(demand);
+}
 
 async function fileStatus(file: string): Promise<BigIntStats | undefined> {
   try {
