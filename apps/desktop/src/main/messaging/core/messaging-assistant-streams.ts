@@ -611,15 +611,15 @@ function finalReplyReceipt(
 
 /**
  * Whether a final stream edit leaves the reply to a new message. An edit
- * with no receipt behind it falls back whenever the message does not show
- * it. With one, only an edit proved not shown does: an ambiguous one was
- * flagged, and posting the reply again could show it twice.
+ * falls back only when the provider has not ruled out a replay. A kept
+ * receipt further requires evidence that the edit did not land.
  */
 function finalStreamNeedsMessage(
   result: MessagingDeliveryResult,
   receipt: MessagingReplyReceiptRequest | undefined,
 ): boolean {
   if (isVisibleAssistantStreamDelivery(result)) return false;
+  if (result.fallbackUnsafe) return false;
   if (!receipt?.kept) return true;
   return replyReceiptSettlement("stream_update", result).state === "owed";
 }

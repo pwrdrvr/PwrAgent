@@ -339,3 +339,47 @@ it("uses the store installed while delivery was in flight", async () => {
   await expect(send).resolves.toMatchObject({ outcome: "presented" });
   expect(f.trace).toEqual(["flush", "wrapped:presented"]);
 });
+
+it("paces local and federated topic replies against the same Telegram chat", async () => {
+  let now = 1000;
+  const calls: Array<{ at: number; chat: number | string; topic?: number }> = [];
+  const api = {
+    sendMessage: async (request) => {
+      calls.push({ at: now, chat: request.chat_id, topic: request.message_thread_id });
+      return {
+        chat: { id: Number(request.chat_id), type: "supergroup" },
+        message_id: calls.length,
+      };
+    },
+  } satisfies Partial<TelegramBotApi>;
+  const adapter = new TelegramAdapter({
+    api: api as TelegramBotApi,
+    config: { botToken: "123:test-token", channel: "telegram", authorizedActorIds: [] },
+    now: () => now,
+    waitForReplyDelay: async (ms) => { now += ms; },
+  });
+  const { owner, trace } = fixture(
+    (routed) => adapter.deliver(routed),
+    (routed) => adapter.resolveDeliveryScope(routed),
+  );
+  const local: MessagingBindingRecord = {
+    ...binding,
+    channel: { channel: "telegram", conversation: { kind: "topic", id: "10", parentId: "-100123" } },
+  };
+  const federated: MessagingBindingRecord = {
+    ...local,
+    id: "remote-binding",
+    channel: { channel: "telegram", conversation: { kind: "topic", id: "20", parentId: "-100123" } },
+    federatedThread: { backend: "codex", threadId: "fixture-thread", target: { scope: "remote", instanceId: "peer" } },
+  };
+  const reply = { ...intent, parts: [{ type: "text" as const, text: "x".repeat(4100) }] };
+  await owner.deliver(reply, local);
+  await owner.deliver({ ...reply, id: "remote-reply" }, federated);
+  expect(calls).toEqual([
+    { at: 1000, chat: -100123, topic: 10 },
+    { at: 2100, chat: -100123, topic: 10 },
+    { at: 3200, chat: -100123, topic: 20 },
+    { at: 4300, chat: -100123, topic: 20 },
+  ]);
+  expect(trace.filter((entry) => entry.startsWith("persist:"))).toEqual(["persist:presented", "persist:presented"]);
+});

@@ -1044,6 +1044,7 @@ function shouldRetryArtifactInline(
   return (
     intent.artifactDelivery.mode === "attachment_summary" &&
     !result.rateLimit &&
+    !result.fallbackUnsafe &&
     (result.outcome === "failed" || result.outcome === "unsupported")
   );
 }

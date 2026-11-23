@@ -235,7 +235,11 @@ describe("TelegramAdapter rich messages", () => {
     },
   };
 
-  function harness(now?: () => number) {
+  function harness(
+    now?: () => number,
+    advance?: (ms: number) => void | Promise<void>,
+  ) {
+    let clock = 1000;
     const api = fakeTelegramApi();
     const send = vi.spyOn(api, "sendMessage");
     const edit = vi.spyOn(api, "editMessageText");
@@ -247,7 +251,12 @@ describe("TelegramAdapter rich messages", () => {
     const adapter = new TelegramAdapter({
       api,
       config: { botToken: "test-token", channel: "telegram", authorizedActorIds: [], streamingResponses: true },
-      now,
+      now: now ?? (() => clock),
+      waitForReplyDelay: async (ms) => {
+        if (advance) await advance(ms);
+        else if (now) vi.setSystemTime(Date.now() + ms);
+        else clock += ms;
+      },
       store,
     });
     adapters.push(adapter);
@@ -549,7 +558,7 @@ describe("TelegramAdapter rich messages", () => {
   });
 
   it("uses one request for rich final content in the last group stream budget slot", async () => {
-    const { adapter, send, rich } = harness(() => 1000);
+    const { adapter, send, rich } = harness();
     for (let index = 0; index < 20; index += 1) {
       const result = await adapter.deliver({
         id: `stream-${index}`, kind: "stream_update", createdAt: 1,
@@ -579,7 +588,10 @@ describe("TelegramAdapter rich messages", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1000);
     try {
-      const { adapter, send, rich } = harness(() => Date.now());
+      const { adapter, send, rich } = harness(() => Date.now(), (ms) => {
+        if (ms <= 1100) vi.setSystemTime(Date.now() + ms);
+        else return new Promise<void>((resolve) => setTimeout(resolve, ms));
+      });
       rich.mockRejectedValue({ error_code: 400, description: "Unsupported rich message" });
       for (let index = 0; index < 19; index += 1) {
         await adapter.deliver({
@@ -662,7 +674,7 @@ describe("TelegramAdapter rich messages", () => {
 
   it.each([false, true])("deletes obsolete streamed messages when a link completes (final=%s)", async (isFinal) => {
     let now = 1000;
-    const { api, adapter, send, edit } = harness(() => now);
+    const { api, adapter, send, edit } = harness(() => now, (ms) => { now += ms; });
     let messageId = 200;
     send.mockImplementation(async (request) => ({
       chat: { id: Number(request.chat_id), type: "supergroup" },
@@ -728,7 +740,7 @@ describe("TelegramAdapter rich messages", () => {
   it("does not reuse a message owned by deferred cleanup when a partial response regrows", async () => {
     vi.useFakeTimers();
     let now = 1000;
-    const { api, adapter, send, edit } = harness(() => now);
+    const { api, adapter, send, edit } = harness(() => now, (ms) => { now += ms; });
     let messageId = 200;
     send.mockImplementation(async (request) => ({
       chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: messageId++,
@@ -916,7 +928,7 @@ describe("TelegramAdapter rich messages", () => {
 
   it("clears stale text through the edit seam when an injected API cannot delete messages", async () => {
     let now = 1000;
-    const { adapter, send, edit } = harness(() => now);
+    const { adapter, send, edit } = harness(() => now, (ms) => { now += ms; });
     let messageId = 200;
     send.mockImplementation(async (request) => ({
       chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: messageId++,
@@ -938,7 +950,7 @@ describe("TelegramAdapter rich messages", () => {
 
   it.each([false, true])("removes all previous stream messages when the response becomes blank (final=%s)", async (isFinal) => {
     let now = 1000;
-    const { api, adapter, send, edit } = harness(() => now);
+    const { api, adapter, send, edit } = harness(() => now, (ms) => { now += ms; });
     let messageId = 200;
     send.mockImplementation(async (request) => ({
       chat: { id: Number(request.chat_id), type: "supergroup" }, message_id: messageId++,
@@ -1064,6 +1076,7 @@ describe("TelegramAdapter callback persistence", () => {
   it("sends every assistant image", async () => {
     const api = fakeTelegramApi();
     const sendPhoto = vi.spyOn(api, "sendPhoto");
+    let now = 1_700_000_000_000;
     const adapter = new TelegramAdapter({
       api,
       config: {
@@ -1071,7 +1084,8 @@ describe("TelegramAdapter callback persistence", () => {
         botToken: "token",
         channel: "telegram",
       },
-      now: () => 1_700_000_000_000,
+      now: () => now,
+      waitForReplyDelay: async (ms) => { now += ms; },
       store: fakeCallbackStore(),
     });
 

@@ -10,14 +10,14 @@ import type {
 
 // Rules for the Telegram adapter's own non-final stream throttle:
 // - After Telegram answers 429 with `retry_after`, the adapter makes no send
-//   or edit to that chat until Retry-After (plus its 100 ms buffer) passes,
+//   or edit to that chat until Retry-After (plus the shared 2 s buffer) passes,
 //   whatever deliveries, reads and other chats' traffic run in between.
 // - Non-final edits to one chat are at least 1 s apart.
 // - A group chat makes at most 20 stream calls in any 60 s window.
 // - Reads are pure: `resolveDeliveryScope`, which the controller calls before
 //   every delivery, never changes when the adapter calls Telegram.
 
-const RETRY_AFTER_BUFFER_MS = 100;
+const RETRY_AFTER_BUFFER_MS = 2_000;
 const MIN_INTERVAL_MS = 1_000;
 const GROUP_WINDOW_MS = 60_000;
 const GROUP_MAX_PER_WINDOW = 20;
@@ -201,8 +201,7 @@ describe("TelegramAdapter stream throttle model", () => {
   it("counts a 429'd call toward the group's 20 calls per minute", async () => {
     // Telegram counts a rejected request against the chat's budget too, so
     // the adapter reserves the window slot before the call and keeps it when
-    // the answer is a 429. Short Retry-After values (1-2 s, under the 3.1 s
-    // spacing floor) keep the stream dense enough to fill the window.
+    // the answer is a 429. Short Retry-After values keep the stream dense enough to fill the window.
     await fc.assert(
       fc.asyncProperty(
         fc.array(fc.integer({ min: 50, max: 250 }), { minLength: 400, maxLength: 600 }),

@@ -566,8 +566,8 @@ provider-neutral: platform, stable scope id, kind, optional label, optional
 provider bucket id, and conservative write budget hints. Do not leak provider
 SDK error objects through these hooks.
 
-Outbound rate-limit retries are owned by the desktop delivery budget, not by
-provider SDKs. Adapters that use SDKs with built-in 429 queues must configure
+Whole-intent rate-limit retries are owned by the desktop delivery budget.
+Adapters that use SDKs with built-in 429 queues must configure
 those SDKs to reject/surface rate-limit responses before constructing the
 adapter. Set `clientRateLimitStrategy` to `externalized` when the SDK has been
 configured this way, `direct` when calls go straight to the platform without a
@@ -631,7 +631,7 @@ In Slow Mode, obsolete low-priority traffic such as non-final stream updates,
 routine status edits, and intermediate tool progress can be dropped; final turn
 results and interactive prompts are reserved and deferred when possible.
 
-If a send attempt is rejected with a rate-limit error, `deliver()` should return
+If a send attempt ends with a rate-limit error, `deliver()` should return
 a failed `MessagingDeliveryResult` with structured `rateLimit` metadata. Set
 `rateLimit.retryable: true` only when replaying the same intent cannot duplicate
 visible platform side effects from the failed attempt. The controller always
@@ -666,8 +666,14 @@ All topics within a chat draw from its one window, including topics bound to
 federated threads. The budget spaces intents by 1.1 seconds and charges stream
 previews against the group window. One intent can still make more than one
 request, for example when plain text is split or files are sent separately.
-Retry a rejected intent only if it made no visible change, or if the adapter
-can resume from the changes that it already made, as with stream anchors.
+
+Telegram also admits each reply write through `MessagingRateLimitGate`, keyed
+by sending bot and parent chat. Topic bindings, including federated bindings,
+share the sending bot's chat window with stream previews. A rejected rich write
+uses a slot before the regular fallback obtains its own. If a multipart reply
+has already written an accepted part, the adapter can retry the explicitly
+rejected operation once after Retry-After plus the shared safety buffer.
+An unconfirmed write stops delivery and marks any new-message fallback unsafe.
 
 Read the wait with `retryAfterMsFromHttpHeaders` from
 `@pwragent/messaging-interface`. It accepts `Retry-After` as delta-seconds or

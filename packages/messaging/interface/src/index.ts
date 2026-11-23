@@ -1471,6 +1471,8 @@ export type MessagingDeliveryResult = {
   errorMessage?: string;
   /** A failed delivery may identify a destination that no longer exists. */
   failureReason?: "target_not_found";
+  /** An accepted or unconfirmed write makes a new fallback message unsafe. */
+  fallbackUnsafe?: true;
   /**
    * Structured provider rate-limit feedback for this delivery attempt.
    * When present, the desktop controller should feed it back through

@@ -974,6 +974,7 @@ describe("TelegramAdapter", () => {
 
   it("creates and updates one Telegram message for enabled stream updates", async () => {
     const api = createApi();
+    let now = 1000;
     const adapter = new TelegramAdapter({
       api: api as unknown as TelegramBotApi,
       config: {
@@ -982,7 +983,8 @@ describe("TelegramAdapter", () => {
         authorizedActorIds: [{ id: "42", displayName: "" }],
         streamingResponses: true,
       },
-      now: () => 1000,
+      now: () => now,
+      waitForReplyDelay: async (ms) => { now += ms; },
     });
     const baseIntent = {
       audit: {
@@ -1061,6 +1063,7 @@ describe("TelegramAdapter", () => {
         throw new Error("Bad Request: message is not modified");
       }),
     });
+    let now = 1000;
     const adapter = new TelegramAdapter({
       api: api as unknown as TelegramBotApi,
       config: {
@@ -1069,7 +1072,8 @@ describe("TelegramAdapter", () => {
         authorizedActorIds: [{ id: "42", displayName: "" }],
         streamingResponses: true,
       },
-      now: () => 1000,
+      now: () => now,
+      waitForReplyDelay: async (ms) => { now += ms; },
     });
     const baseIntent = {
       audit: {
@@ -1412,7 +1416,7 @@ describe("TelegramAdapter", () => {
     expect(api.editMessageText).toHaveBeenCalledTimes(2);
   });
 
-  it("delivers final Telegram stream edits without waiting for soft cadence", async () => {
+  it("delivers final Telegram stream edits at the request floor without waiting for adaptive preview pacing", async () => {
     const api = createApi();
     let now = 1000;
     const adapter = new TelegramAdapter({
@@ -1424,6 +1428,7 @@ describe("TelegramAdapter", () => {
         streamingResponses: true,
       },
       now: () => now,
+      waitForReplyDelay: async (ms) => { now += ms; },
     });
     const baseIntent = {
       audit: {
@@ -1471,6 +1476,7 @@ describe("TelegramAdapter", () => {
       outcome: "updated",
     });
 
+    expect(now).toBe(2100);
     expect(api.sendMessage).toHaveBeenCalledTimes(1);
     expect(api.editMessageText).toHaveBeenCalledTimes(1);
   });
@@ -2061,6 +2067,7 @@ describe("TelegramAdapter", () => {
     api.editMessageText.mockRejectedValueOnce(
       Object.assign(new Error("message is not editable anymore"), { error_code: 400 }),
     );
+    let now = 1000;
     const adapter = new TelegramAdapter({
       api: api as unknown as TelegramBotApi,
       config: {
@@ -2068,7 +2075,8 @@ describe("TelegramAdapter", () => {
         botToken: "telegram-token",
         authorizedActorIds: [{ id: "42", displayName: "" }],
       },
-      now: () => 1000,
+      now: () => now,
+      waitForReplyDelay: async (ms) => { now += ms; },
       pollOnStart: false,
     });
 
