@@ -5,7 +5,11 @@ import type {
   AppServerThreadFileDiff,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import { acpDiffContentIsWholeFile } from "../acp/acp-file-edit";
-import { AcpSessionReplayNormalizer } from "../acp/acp-session-normalizer";
+import {
+  AcpSessionReplayNormalizer,
+  acpSessionReplayNormalizerOptions,
+} from "../acp/acp-session-normalizer";
+import { acpToolUpdateNotifications } from "../acp/acp-live-notifications";
 import { applyUnifiedDiff, fileLines, parseHunks } from "./helpers/unified-diff";
 
 // ACP `diff` content is `{path, oldText, newText}` with no position. Gemini
@@ -100,9 +104,7 @@ function snippetEditFrames(params: {
 }
 
 function replay(backendId: string, frames: Record<string, unknown>[]): AcpSessionReplayNormalizer {
-  const normalizer = new AcpSessionReplayNormalizer({
-    wholeFileDiffContent: acpDiffContentIsWholeFile(backendId),
-  });
+  const normalizer = new AcpSessionReplayNormalizer(acpSessionReplayNormalizerOptions(backendId));
   frames.forEach((update, index) => {
     normalizer.apply({ sessionId, receivedAt: 1_000 + index, update });
   });
@@ -111,6 +113,40 @@ function replay(backendId: string, frames: Record<string, unknown>[]): AcpSessio
 
 function fileDiffOf(normalizer: AcpSessionReplayNormalizer): AppServerThreadFileDiff | undefined {
   return activities(normalizer)[0]?.details[0]?.fileDiff;
+}
+
+/** Contrived values in the shapes recorded in an Antigravity rollout. */
+function antigravityEditFrames(params: {
+  oldText?: string;
+  newText: string;
+}): Record<string, unknown>[] {
+  const rawInput = params.oldText === undefined
+    ? { Path: filePath, Content: params.newText, Overwrite: true }
+    : { Path: filePath, Target: "old rule", Replacement: "new rule" };
+  const call = {
+    toolCallId: "antigravity-edit",
+    name: params.oldText === undefined ? "write_file" : "edit_file",
+    title: "Editing checkers.md",
+    kind: "edit",
+    rawInput,
+    args: rawInput,
+    locations: [{ path: filePath }],
+  };
+  return [
+    { ...call, sessionUpdate: "tool_call", status: "in_progress" },
+    {
+      ...call,
+      sessionUpdate: "tool_call_update",
+      status: "completed",
+      rawOutput: {},
+      content: [{
+        type: "diff",
+        path: filePath,
+        newText: params.newText,
+        ...(params.oldText === undefined ? {} : { oldText: params.oldText }),
+      }],
+    },
+  ];
 }
 
 /** The fewest lines a line diff can remove and add: the LCS distance. */
@@ -135,6 +171,68 @@ function numbered(count: number): string[] {
 }
 
 describe("whole-file ACP edit diffs", () => {
+  it("recovers the positioned patch for an Antigravity edit from saved tool frames", () => {
+    const [activity] = activities(replay("acp:antigravity", antigravityEditFrames({
+      oldText: "heading\nold rule\nlast rule\n",
+      newText: "heading\nnew rule\nlast rule\n",
+    })));
+    expect(activity?.summary).toBe("Edited checkers.md");
+    expect(activity?.details[0]?.fileDiff).toMatchObject({
+      kind: "update",
+      additions: 1,
+      removals: 1,
+      diff: expect.stringContaining("@@ -1,3 +1,3 @@\n heading\n-old rule\n+new rule\n last rule"),
+    });
+  });
+
+  it("renders an Antigravity creation whose diff omits oldText", () => {
+    const [activity] = activities(replay("acp:antigravity", antigravityEditFrames({
+      newText: "new file\n",
+    })));
+    expect(activity?.details[0]?.fileDiff).toMatchObject({
+      kind: "add",
+      additions: 1,
+      removals: 0,
+      diff: expect.stringContaining("--- /dev/null\n+++ b/work/notes/checkers.md\n@@ -0,0 +1,1 @@\n+new file"),
+    });
+  });
+
+  it("preserves Antigravity overwrite changes when the provider supplies both snapshots", () => {
+    const frames = antigravityEditFrames({ oldText: "before\n", newText: "after\n" });
+    for (const frame of frames) {
+      frame.name = "write_file";
+      frame.rawInput = { Path: filePath, Content: "after\n", Overwrite: true };
+    }
+    expect(fileDiffOf(replay("acp:antigravity", frames))).toMatchObject({
+      kind: "update", additions: 1, removals: 1,
+    });
+  });
+
+  it("property: live and replayed Antigravity patches reconstruct the provider's after image", () => {
+    const line = fc.constantFrom("alpha", "beta", "gamma", "");
+    fc.assert(fc.property(fc.array(line, { maxLength: 30 }), fc.nat(), (lines, offset) => {
+      const before = [...lines];
+      const after = [...before];
+      after.splice(offset % (after.length + 1), 0, "inserted line");
+      const frames = antigravityEditFrames({
+        oldText: before.length ? `${before.join("\n")}\n` : "",
+        newText: `${after.join("\n")}\n`,
+      });
+      const saved = fileDiffOf(replay("acp:antigravity", frames));
+      const [notification] = acpToolUpdateNotifications({
+        backendId: "acp:antigravity",
+        threadId: sessionId,
+        update: frames[1]!,
+      });
+      expect(notification).toMatchObject({
+        method: "item/completed",
+        params: { item: { type: "acpFileEdit", fileDiff: saved } },
+      });
+      expect(saved).toBeDefined();
+      expect(applyUnifiedDiff(before, saved!.diff)).toEqual(after);
+    }));
+  });
+
   it("shows two distant changes as two hunks", () => {
     const oldLines = numbered(40);
     const newLines = [...oldLines];
