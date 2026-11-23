@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ThreadTodo, ThreadTodoCiApproval, ThreadTodoResolution } from "@pwragent/shared/contracts/thread-todos";
 import { threadTodoItemProgress } from "@pwragent/shared/contracts/thread-todos";
 import { TodoIcon } from "../../icons";
@@ -30,6 +30,14 @@ type LaunchFlight = { id: string; title: string; from: DOMRect };
 function prefersReducedMotion(): boolean {
   return typeof window.matchMedia === "function"
     && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+function focusLaunchAction(row: HTMLElement | undefined): boolean {
+  if (!row || row.classList.contains("is-landing")) return false;
+  const button = row.querySelector<HTMLButtonElement>("button:not(:disabled)");
+  if (!button) return false;
+  button.focus();
+  return button.ownerDocument.activeElement === button;
 }
 
 /**
@@ -75,7 +83,7 @@ export type ThreadTodoStackProps = {
 export function ThreadTodoStack(props: ThreadTodoStackProps) {
   const { threadKey, view, onFocusTranscript } = props;
   const [selectedId, setSelectedId] = useState<string>();
-  const launches = useThreadTodoLaunches(threadKey);
+  const { launches, returnedIds } = useThreadTodoLaunches(threadKey);
   // A started card is in the tray, not the deck, until its row is closed.
   const todos = launches.length === 0
     ? props.todos
@@ -85,6 +93,7 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
   const sectionRef = useRef<HTMLElement>(null);
   const deckRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLElement>(null);
+  const detachedCardFocusRef = useRef<{ threadKey: string; id: string; card: HTMLElement }>(undefined);
   const chipRef = useRef<HTMLButtonElement>(null);
   const launchFocusRef = useRef<{ threadKey: string; closedRowIndex?: number }>(undefined);
   const ghostRef = useRef<HTMLDivElement>(null);
@@ -135,24 +144,38 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
     todos.findIndex((todo) => todo.id === shownId),
   );
   const todo = todos[selectedIndex];
+  const returnedId = todo && returnedIds.has(todo.id) ? todo.id : undefined;
+  const setCardRef = useCallback((card: HTMLElement | null) => {
+    const previous = cardRef.current;
+    // Ref detachment runs before Chromium clears focus from the removed card.
+    if (!card && returnedId && previous?.contains(previous.ownerDocument.activeElement)) {
+      detachedCardFocusRef.current = { threadKey, id: returnedId, card: previous };
+    }
+    cardRef.current = card;
+  }, [returnedId, threadKey]);
 
-  // A tray action can replace the focused control and mount a new card in
-  // the same commit. Wait for those DOM changes before handing off focus.
+  // Read both the explicit tray action and any focused pending card removed
+  // in this commit. The owner can remove a card from the open list before
+  // the run reply arrives, so use the deck fallback if its row is absent.
   useLayoutEffect(() => {
-    const focus = launchFocusRef.current;
+    const requested = launchFocusRef.current;
     launchFocusRef.current = undefined;
-    if (!focus || focus.threadKey !== threadKey) return;
-    if (focus.closedRowIndex !== undefined && sectionRef.current) {
-      const rows = Array.from(sectionRef.current.querySelectorAll("[data-launch-id]"));
+    const focus = requested?.threadKey === threadKey ? requested : undefined;
+    const detached = detachedCardFocusRef.current;
+    detachedCardFocusRef.current = undefined;
+    const removedId = detached?.threadKey === threadKey && !detached.card.isConnected
+      && detached.card.ownerDocument.activeElement === detached.card.ownerDocument.body
+      && !deckIds.includes(detached.id) ? detached.id : undefined;
+    if (!focus && !removedId) return;
+
+    const rows = Array.from(sectionRef.current?.querySelectorAll<HTMLElement>("[data-launch-id]") ?? []);
+    if (focus?.closedRowIndex !== undefined) {
       const next = rows.slice(focus.closedRowIndex);
       const previous = rows.slice(0, focus.closedRowIndex).reverse();
-      for (const row of [...next, ...previous]) {
-        const button = row.querySelector<HTMLButtonElement>("button:not(:disabled)");
-        if (button) {
-          button.focus();
-          return;
-        }
-      }
+      if ([...next, ...previous].some(focusLaunchAction)) return;
+    } else if (!focus && removedId) {
+      const row = rows.find((entry) => entry.dataset.launchId === removedId);
+      if (focusLaunchAction(row)) return;
     }
     const card = cardRef.current;
     const primary = card?.querySelector<HTMLButtonElement>(
@@ -161,7 +184,7 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
     const target = primary ?? card ?? chipRef.current;
     if (target) target.focus();
     else onFocusTranscript?.();
-  }, [launches, threadKey, onFocusTranscript]);
+  });
 
   // The ghost runs from the card's box to its new tray row's box.
   useLayoutEffect(() => {
@@ -283,7 +306,7 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
     if (launch.phase === "starting") showStartingThreadTodoCard(launch.id);
     else dismissThreadTodoLaunch(launch.id);
   };
-  const tray = (
+  const tray = launches.length > 0 ? (
     <ThreadTodoLaunchTray
       launches={launches}
       {...(flight ? { landingId: flight.id } : {})}
@@ -301,7 +324,7 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
         dismissThreadTodoLaunch(launch.id);
       }}
     />
-  );
+  ) : null;
 
   if (collapsed && todo) {
     const count = todos.length;
@@ -355,9 +378,9 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
             }}
           >
             <ThreadTodoCard
-              cardRef={cardRef}
+              cardRef={setCardRef}
               todo={todo}
-              running={view.runningIds.has(todo.id)}
+              running={returnedId !== undefined || view.runningIds.has(todo.id)}
               threadRunning={props.threadRunning}
               copyAllTodos={todos}
               pager={{

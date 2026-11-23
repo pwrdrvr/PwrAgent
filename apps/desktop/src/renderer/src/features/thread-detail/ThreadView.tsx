@@ -3519,7 +3519,8 @@ export function ThreadView(props: ThreadViewProps) {
               findOpen={props.findOpen}
               revealRequest={props.threadTodoRevealRequest}
               onFocusTranscript={() => {
-                transcriptPanelRef.current?.querySelector<HTMLElement>(".transcript-list__items")?.focus();
+                const panel = transcriptPanelRef.current;
+                (panel?.querySelector<HTMLElement>(".transcript-list__items") ?? panel)?.focus();
               }}
             />
           ) : null}
@@ -3541,6 +3542,7 @@ export function ThreadView(props: ThreadViewProps) {
             className="transcript-panel"
             aria-label="Transcript"
             ref={transcriptPanelRef}
+            tabIndex={-1}
           >
             <TranscriptList
               entries={visibleTranscriptEntries}

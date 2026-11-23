@@ -159,12 +159,22 @@ export function dismissThreadTodoLaunch(id: string): void {
   publish(launches.filter(({ launch }) => launch.id !== id));
 }
 
-/** The tray rows of one thread, oldest start first. */
-export function useThreadTodoLaunches(threadKey: string): readonly ThreadTodoLaunch[] {
+/** The tray rows (oldest first) and pending cards returned to the deck. */
+export function useThreadTodoLaunches(threadKey: string): {
+  launches: readonly ThreadTodoLaunch[];
+  returnedIds: ReadonlySet<string>;
+} {
   const all = useSyncExternalStore(subscribe, snapshot, snapshot);
-  return useMemo(() => all
-    .filter(({ launch, returnedToDeck }) => launch.threadKey === threadKey && !returnedToDeck)
-    .map(({ launch }) => launch), [all, threadKey]);
+  return useMemo(() => {
+    const launches: ThreadTodoLaunch[] = [];
+    const returnedIds = new Set<string>();
+    for (const { launch, returnedToDeck } of all) {
+      if (launch.threadKey !== threadKey) continue;
+      if (returnedToDeck) returnedIds.add(launch.id);
+      else launches.push(launch);
+    }
+    return { launches, returnedIds };
+  }, [all, threadKey]);
 }
 
 /** Test seam: forgets every start. */

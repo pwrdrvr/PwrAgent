@@ -162,6 +162,95 @@ describe("ThreadTodoStack launches", () => {
     expect(screen.getByRole("status").textContent).toBe("Starting…");
   });
 
+  it.each([false, true])("disables Dismiss on a returned card while the launch is pending (controller running: %s)", (running) => {
+    vi.useFakeTimers();
+    const todo = card("1");
+    const view = createView([todo], {
+      run: vi.fn(begun(() => new Promise<ThreadTodo>(() => {}))),
+    });
+    const { rerender } = render(
+      <ThreadTodoStack threadKey={THREAD_KEY} todos={[todo]} view={view} onStartReview={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    if (running) {
+      const runningView = { ...view, runningIds: new Set([todo.id]) };
+      rerender(<ThreadTodoStack threadKey={THREAD_KEY} todos={[todo]} view={runningView} onStartReview={vi.fn()} />);
+    }
+    act(() => { vi.advanceTimersByTime(60_000); });
+    fireEvent.click(within(tray()).getByRole("button", { name: "Show card: Card 1" }));
+
+    const dismiss = screen.getByRole("button", { name: "Dismiss to-do: Card 1" });
+    expect(dismiss).toHaveProperty("disabled", true);
+    fireEvent.click(dismiss);
+    expect(view.resolve).not.toHaveBeenCalled();
+  });
+
+  // Model the owner's result and snapshot arriving independently of where the
+  // operator moved focus after showing the pending card.
+  it.each([
+    { outcome: "started", focus: "card" },
+    { outcome: "started", focus: "outside" },
+    { outcome: "failed", focus: "card" },
+    { outcome: "failed", focus: "outside" },
+    { outcome: "snapshot-first", focus: "card" },
+    { outcome: "snapshot-first", focus: "outside" },
+  ] as const)("preserves focus on $focus when a returned launch is $outcome", async ({ outcome, focus }) => {
+    vi.useFakeTimers();
+    const cards = [card("1"), card("2")];
+    const pending = deferred<ThreadTodo>();
+    const view = createView(cards, { run: vi.fn(begun(() => pending.promise)) });
+    const stack = (todos: ThreadTodo[], runningIds: ReadonlySet<string>) => (
+      <>
+        <button type="button">Outside the stack</button>
+        <ThreadTodoStack threadKey={THREAD_KEY} todos={todos} view={{ ...view, runningIds }} onStartReview={vi.fn()} />
+      </>
+    );
+    const { rerender } = render(stack(cards, new Set()));
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    rerender(stack(cards, new Set(["1"])));
+    act(() => { vi.advanceTimersByTime(60_000); });
+    fireEvent.click(within(tray()).getByRole("button", { name: "Show card: Card 1" }));
+    const outside = screen.getByRole("button", { name: "Outside the stack" });
+    if (focus === "outside") act(() => { outside.focus(); });
+    else expect(document.activeElement).toBe(screen.getByRole("article", { name: "Card 1" }));
+
+    if (outcome === "snapshot-first") rerender(stack(cards.slice(1), new Set(["1"])));
+    const ended = outcome === "failed"
+      ? { ...cards[0]!, error: "The project moved." }
+      : { ...cards[0]!, status: "done" as const, startedThread: { backend: "codex" as const, threadId: "child-1" } };
+    await act(async () => { pending.resolve(ended); });
+    const rowAction = within(tray()).getByRole("button", {
+      name: outcome === "failed" ? "Review card: Card 1" : "Open thread: Card 1",
+    });
+    const expected = focus === "outside" ? outside
+      : outcome === "snapshot-first" ? screen.getByRole("button", { name: "Start thread" })
+      : rowAction;
+    expect(document.activeElement).toBe(expected);
+  });
+
+  it("starts a late success's countdown after the hovered tray was removed", async () => {
+    vi.useFakeTimers();
+    const cards = [card("1"), card("2")];
+    const pending = deferred<ThreadTodo>();
+    const view = createView(cards, { run: vi.fn(begun(() => pending.promise)) });
+    render(<>
+      <button type="button">Outside the stack</button>
+      <ThreadTodoStack threadKey={THREAD_KEY} todos={cards} view={view} onStartReview={vi.fn()} />
+    </>);
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    act(() => { vi.advanceTimersByTime(60_000); });
+    fireEvent.pointerEnter(tray());
+    fireEvent.click(within(tray()).getByRole("button", { name: "Show card: Card 1" }));
+    // Removing the hovered section does not dispatch pointerleave.
+    expect(screen.queryByRole("region", { name: "Started to-dos" })).toBeNull();
+    act(() => { screen.getByRole("button", { name: "Outside the stack" }).focus(); });
+    await act(async () => {
+      pending.resolve({ ...cards[0]!, status: "done", startedThread: { backend: "codex", threadId: "child-1" } });
+    });
+    act(() => { vi.advanceTimersByTime(THREAD_TODO_LAUNCH_DISMISS_MS); });
+    expect(screen.queryByRole("region", { name: "Started to-dos" })).toBeNull();
+  });
+
   // Returning a pending card preserves the owner's outcome across view lifetimes.
   it.each([
     { status: "done", label: "Started" },
@@ -391,8 +480,8 @@ describe("ThreadTodoStack launches", () => {
     expect(document.activeElement).toBe(open);
   });
 
-  it("focuses the deck after Close removes the last started row", async () => {
-    const cards = [card("1"), card("2")];
+  it.each([false, true])("focuses the deck after Close removes the last started row (tracked review: %s)", async (trackedReview) => {
+    const cards = [card("1"), card("2", trackedReview ? { kind: "review", action: undefined, reviewId: "review-2" } : {})];
     const view = createView(cards, {
       run: vi.fn(begun(async (entry) => ({ ...entry, status: "done" as const,
         startedThread: { backend: "codex" as const, threadId: "child-1" } }))),
@@ -408,7 +497,41 @@ describe("ThreadTodoStack launches", () => {
     const close = within(tray()).getByRole("button", { name: "Close: Card 1" });
     act(() => { close.focus(); });
     fireEvent.click(close);
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Start thread" }));
+    expect(document.activeElement).toBe(trackedReview
+      ? screen.getByRole("article", { name: "Card 2" })
+      : screen.getByRole("button", { name: "Start thread" }));
     expect(screen.queryByRole("region", { name: "Started to-dos" })).toBeNull();
+  });
+
+  it("focuses the deck when the neighboring tray action is still landing", async () => {
+    const previousAnimate = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "animate");
+    const animation = { cancel: vi.fn(), onfinish: () => {} };
+    Object.defineProperty(HTMLElement.prototype, "animate", { configurable: true, value: () => animation });
+    try {
+      const cards = [card("1"), card("2"), card("3")];
+      const view = createView(cards, {
+        run: vi.fn(begun(async (entry) => ({ ...entry, status: "done" as const,
+          startedThread: { backend: "codex" as const, threadId: `child-${entry.id}` } }))),
+      });
+      const stack = (todos: ThreadTodo[]) => (
+        <ThreadTodoStack threadKey={THREAD_KEY} todos={todos} view={view} onStartReview={vi.fn()} />
+      );
+      const { rerender } = render(stack(cards));
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start thread" })); });
+      act(() => { animation.onfinish(); });
+      rerender(stack(cards.slice(1)));
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start thread" })); });
+      rerender(stack(cards.slice(2)));
+      const landing = within(tray()).getByRole("button", { name: "Open thread: Card 2" }).closest("li");
+      expect(landing?.classList.contains("is-landing")).toBe(true);
+
+      const close = within(tray()).getByRole("button", { name: "Close: Card 1" });
+      act(() => { close.focus(); });
+      fireEvent.click(close);
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Start thread" }));
+    } finally {
+      if (previousAnimate) Object.defineProperty(HTMLElement.prototype, "animate", previousAnimate);
+      else Reflect.deleteProperty(HTMLElement.prototype, "animate");
+    }
   });
 });
