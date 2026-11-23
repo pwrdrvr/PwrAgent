@@ -10,7 +10,6 @@ import type { chromiumTraceProcessor } from "../src/main/diagnostics/chromium-tr
 import type { createChromiumTraceSession } from "../src/main/shell/diagnostics/chromium-trace-session";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { expect, test } from "./fixtures/electron-test";
-import { tolerateTransientRpcFailure } from "./fixtures/transient-rpc-poll";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -228,7 +227,7 @@ test("automatic hot CPU capture preserves renderer layout while the V8 profile k
   });
   const marker = "contrived-private-renderer-mark";
   try {
-    await app.window.evaluate(async () => {
+    const widths = await app.window.evaluate(async (privateMark) => {
       const page = window as unknown as {
         profile: Promise<HotCpuProfileCapturedEvent>;
         pwragent: {
@@ -246,35 +245,46 @@ test("automatic hot CPU capture preserves renderer layout while the V8 profile k
           resolve(event);
         });
       });
+
+      // Every burst starts with a forced flex layout. Have the fixture
+      // producing it before the first hot CPU interval can trigger a trace.
+      const container = document.createElement("div");
+      container.style.cssText = "position:fixed;top:0;left:0;display:flex;width:300px;";
+      const child = document.createElement("div");
+      child.style.flex = "1";
+      child.textContent = "Trace fixture";
+      container.append(child);
+      document.body.append(container);
+      const before = child.offsetWidth;
+      container.style.width = "513px";
+      const after = child.offsetWidth;
+      let width = after;
+      const workload = setInterval(() => {
+        const deadline = performance.now() + 8;
+        do {
+          for (let i = 0; i < 8; i += 1) {
+            container.style.width = width === 513 ? "300px" : "513px";
+            width = child.offsetWidth;
+          }
+          for (let i = 0; i < 128; i += 1) performance.mark(privateMark);
+          performance.clearMarks(privateMark);
+        } while (performance.now() < deadline);
+      }, 16);
+      setTimeout(() => { clearInterval(workload); container.remove(); }, 25_000);
+
       await page.pwragent.writeSettingsConfig({ patch: { general: {
         hotCpuProfilingEnabled: true,
         hotCpuProfilingCaptureChromiumTrace: true,
       } } });
-    });
-    const debuggerAttached = tolerateTransientRpcFailure(() => app.electronApp.evaluate(({ BrowserWindow }) =>
-      BrowserWindow.getAllWindows()[0].webContents.debugger.isAttached()));
-    await expect.poll(debuggerAttached.read).toBe(true).catch(debuggerAttached.rethrowWithLastFailure);
-    const pid = await app.electronApp.evaluate(({ BrowserWindow }) =>
-      BrowserWindow.getAllWindows()[0].webContents.getOSProcessId());
-    await app.window.evaluate((privateMark) => {
-      const element = document.createElement("div");
-      element.style.cssText = "position:fixed;top:0;width:1px;height:1px;";
-      document.body.append(element);
-      let cycle = 0;
-      const workload = setInterval(() => {
-        for (let i = 0; i < 2_000; i += 1) performance.mark(privateMark);
-        performance.clearMarks(privateMark);
-        for (let i = 0; i < 6; i += 1) {
-          element.style.width = `${1 + (cycle++ % 10)}px`;
-          void element.offsetWidth;
-        }
-      }, 2);
-      setTimeout(() => { clearInterval(workload); element.remove(); }, 25_000);
+      return [before, after];
     }, marker);
+    expect(widths).toEqual([300, 513]);
     const event = await app.window.evaluate(() =>
       (window as unknown as { profile: Promise<HotCpuProfileCapturedEvent> }).profile);
     const events = (await readFile(path.join(event.sessionDirectory, "events.ndjson"), "utf8"))
       .trim().split("\n").map((line) => JSON.parse(line));
+    const started = events.find((entry) => entry.type === "profile-started");
+    expect(started?.detail).toMatchObject({ pid: expect.any(Number) });
     const exported = events.find((entry) => entry.type === "chromium-trace-written");
     expect(exported?.detail).toMatchObject({
       triggeredAt: expect.any(String),
@@ -288,7 +298,9 @@ test("automatic hot CPU capture preserves renderer layout while the V8 profile k
     const trace = await readFile(event.chromiumTracePath!, "utf8");
     expect(trace.includes(marker)).toBe(false);
     const timing = JSON.parse(trace).traceEvents as { pid: number; name: string }[];
-    expect(timing.some((entry) => entry.pid === pid && entry.name === "Layout")).toBe(true);
+    const rendererEvents = timing.filter((entry) => entry.pid === started.detail.pid);
+    expect(rendererEvents.filter((entry) => entry.name === "Layout").length,
+      `profiled renderer recorded ${rendererEvents.length} of ${timing.length} trace events`).toBeGreaterThan(0);
   } finally {
     await app.close();
   }
