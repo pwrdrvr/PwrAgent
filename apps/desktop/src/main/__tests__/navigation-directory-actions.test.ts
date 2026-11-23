@@ -188,6 +188,21 @@ it("marks all owner directory members read in one transaction with no renderer a
   expect(repeated.writes.commits).toBe(0);
 });
 
+it("keeps unread state when verified membership includes a thread displayed under another project", async () => {
+  const threads = ["parent", "nested"].map((id) => ({ id, source: "codex", updatedAt: 1, inbox: { inInbox: true } }));
+  mocks.loadIndex.mockResolvedValueOnce({
+    threads, directories: [{ ...directory, threadKeys: ["codex:parent", "codex:nested"] }],
+  }).mockResolvedValueOnce({
+    threads, directories: [{ ...directory, threadKeys: ["codex:parent"] },
+      { ...directory, key: `${key}/nested`, threadKeys: ["codex:nested"] }],
+  });
+  const { writes } = await measureSqliteWrites(async () => {
+    await expect(markLocalNavigationDirectorySeen({ directoryKey: key })).rejects.toThrow("Refresh navigation");
+  });
+  expect(writes.commits).toBe(0);
+  expect(mocks.publish).not.toHaveBeenCalled();
+});
+
 it("does not mark unread state when owner directory membership is incomplete", async () => {
   const { markLocalNavigationDirectorySeen } = await import("../app-server/navigation-directory-actions");
   mocks.loadIndex.mockResolvedValue({ threads: [], directories: [{ ...directory, threadKeys: ["codex:unloaded"] }] });

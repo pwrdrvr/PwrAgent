@@ -4,7 +4,7 @@ import type { LinkedDirectorySummary } from "@pwragent/shared/contracts/normaliz
 import { createGitDirectoryObserver, type GitDirectoryObservation } from "./private/directory-observation";
 import {
   runGit, buildCheckoutLinkedDirectory, buildFallbackLinkedDirectory, hasGitDiscoveryOverrides,
-  pathExists, parseGitWorktrees, resolveWorktreeRepositoryDirectory,
+  pathExists, parseGitWorktrees, readLiveWorktreeCommonDirectory, resolveWorktreeRepositoryDirectory,
   loadThreadDirectoryEnrichment, type ThreadDirectoryEnrichment,
 } from "./private/directory-probe";
 import {
@@ -157,7 +157,12 @@ export function createThreadDirectoryEnricher(options: { now?: () => number } = 
 export const enrichThreadDirectory = createThreadDirectoryEnricher();
 
 const observeNavigationCheckout = createGitDirectoryObserver({ navigation: true });
-const navigationCheckouts = new GitReadCache<LinkedDirectorySummary[] | undefined>({ ttlMs: 1_000 });
+type NavigationCheckout = {
+  directories?: LinkedDirectorySummary[];
+  provisional?: { root: string; directory: LinkedDirectorySummary };
+  separateGit?: { commonDirectory: string; checkoutRoot: string; primary?: LinkedDirectorySummary };
+};
+const navigationCheckouts = new GitReadCache<NavigationCheckout | undefined>({ ttlMs: 1_000 });
 
 /**
  * Group raw provider folders for navigation using filesystem evidence alone.
@@ -165,32 +170,50 @@ const navigationCheckouts = new GitReadCache<LinkedDirectorySummary[] | undefine
  * supplied through their own reads. Ambiguous layouts retain the provider cwd
  * until a caller requests Git-verified enrichment.
  */
-export function readNavigationCheckoutDirectory(cwd: string): Promise<LinkedDirectorySummary[] | undefined> {
+export function readNavigationCheckout(cwd: string, fresh = false): Promise<NavigationCheckout | undefined> {
   if (hasGitDiscoveryOverrides()) return Promise.resolve(undefined);
   const key = path.resolve(cwd);
-  return navigationCheckouts.read(key, async () => {
+  const load = async (): Promise<NavigationCheckout | undefined> => {
     try {
       if (!(await stat(key)).isDirectory()) return undefined;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
-      return code === "ENOENT" || code === "ENOTDIR" ? [] : undefined;
+      return code === "ENOENT" || code === "ENOTDIR" ? { directories: [] } : undefined;
     }
     try {
-      const observed = await observeNavigationCheckout(key);
-      if (observed?.repository === false) return [buildFallbackLinkedDirectory(key)];
-      if (!observed?.checkoutRoot || !observed.gitDirectory) return undefined;
+      let boundary: string | undefined;
+      const observed = await observeNavigationCheckout(key, (root) => { boundary = root; });
+      const provisional = boundary ? { provisional: { root: boundary, directory: buildFallbackLinkedDirectory(key) } } : undefined;
+      if (observed?.repository === false) return { directories: [buildFallbackLinkedDirectory(key)] };
+      if (!observed?.checkoutRoot || !observed.gitDirectory) return provisional;
+      const checkout = buildCheckoutLinkedDirectory(observed.checkoutRoot);
+      const dotGit = path.join(observed.checkoutRoot, ".git");
       if (!observed.dotGitDirectory) {
-        if (observed.separateGitDirectory) return [buildCheckoutLinkedDirectory(observed.checkoutRoot)];
+        if (observed.separateGitDirectory) {
+          const commonDirectory = await realpath(observed.gitDirectory);
+          return { directories: [checkout], separateGit: { commonDirectory, checkoutRoot: checkout.path, primary: checkout } };
+        }
         const linked = await resolveWorktreeRepositoryDirectory(observed.checkoutRoot, true);
-        return linked && [linked];
+        if (linked) return { directories: [linked] };
+        // A standalone administrative directory has no backlink to its
+        // primary checkout. Return the linked side for an index-local join.
+        const adminParent = path.dirname(await realpath(observed.gitDirectory));
+        if (path.basename(adminParent) === "worktrees") {
+          const commonDirectory = await readLiveWorktreeCommonDirectory(dotGit, observed.gitDirectory);
+          if (commonDirectory && path.relative(commonDirectory, path.dirname(adminParent)) === "") {
+            return { ...provisional, separateGit: { commonDirectory, checkoutRoot: checkout.path } };
+          }
+        }
+        return provisional;
       }
-      const expected = path.join(observed.checkoutRoot, ".git");
-      if (observed.commonDirectory === expected && await realpath(expected) === expected) {
-        return [buildCheckoutLinkedDirectory(observed.checkoutRoot)];
+      if (observed.commonDirectory === dotGit && await realpath(dotGit) === dotGit) {
+        return { directories: [checkout] };
       }
+      return provisional;
     } catch {
       // Filesystem observations can race checkout moves or permission changes.
     }
     return undefined;
-  });
+  };
+  return fresh ? load() : navigationCheckouts.read(key, load);
 }

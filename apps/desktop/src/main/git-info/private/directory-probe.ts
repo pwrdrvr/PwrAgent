@@ -199,19 +199,30 @@ async function buildLinkedDirectoryFromGitMetadata(
   };
 }
 
-async function hasLiveWorktreeOwner(dotGit: string, admin: string, repository: string): Promise<boolean> {
+export async function readLiveWorktreeCommonDirectory(dotGit: string, admin: string): Promise<string | undefined> {
   try {
-    const [backlink, common, primaryGit, hasHead] = await Promise.all([
+    const [backlink, common] = await Promise.all([
       readBoundedGitPointer(path.join(admin, "gitdir")),
       readBoundedGitPointer(path.join(admin, "commondir")),
-      realpath(path.join(repository, ".git")),
-      pathExists(path.join(repository, ".git", "HEAD")),
     ]);
-    if (!hasHead || !backlink.trim() || !common.trim()) return false;
+    if (!backlink.trim() || !common.trim()) return undefined;
     const [linkedGit, namedGit, commonGit] = await Promise.all([
       realpath(dotGit), realpath(path.resolve(admin, backlink.trim())), realpath(path.resolve(admin, common.trim())),
     ]);
-    return linkedGit === namedGit && commonGit === primaryGit;
+    return linkedGit === namedGit ? commonGit : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function hasLiveWorktreeOwner(dotGit: string, admin: string, repository: string): Promise<boolean> {
+  try {
+    const [commonGit, primaryGit, hasHead] = await Promise.all([
+      readLiveWorktreeCommonDirectory(dotGit, admin),
+      realpath(path.join(repository, ".git")),
+      pathExists(path.join(repository, ".git", "HEAD")),
+    ]);
+    return hasHead && commonGit === primaryGit;
   } catch {
     return false;
   }

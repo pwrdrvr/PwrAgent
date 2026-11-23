@@ -331,8 +331,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
             await awaitStartupProviderCoverage({ query: request.query, deadlineAt: options.deadlineAt,
               registry: this.registry, signal: options.signal });
             return loadLocalNavigationQueryIndex({ backend: request.backend,
-              callerReason: "messaging-bounded-navigation", registry: this.registry, signal: options.signal,
-              requireVerifiedDirectories: request.query.kind === "group-members" && request.query.membershipOnly === true });
+              callerReason: "messaging-bounded-navigation", registry: this.registry, signal: options.signal });
           } });
       } }));
     } finally { pool.release(consumerId); }

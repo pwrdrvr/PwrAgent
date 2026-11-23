@@ -30,6 +30,14 @@ function directoryCheckChangeDescription(event: AgentEvent): string {
   return `${event.backend}, ${event.notification.method}${thread}${instance}`;
 }
 
+async function matchesDisplayedMembership(directoryKey: string, keys: ReadonlySet<string>, callerReason: string): Promise<boolean> {
+  const visible = await loadLocalNavigationQueryIndex({ callerReason });
+  const displayed = visible.directories.find((directory) => directory.key === directoryKey);
+  return (!visible.coverage || visible.coverage.state === "complete")
+    && displayed?.threadKeys.length === keys.size
+    && displayed.threadKeys.every((key) => keys.has(key));
+}
+
 /** No renderer membership assertion authorizes removing a registration. */
 export async function removeLocalNavigationDirectory(
   request: RemoveNavigationDirectoryRequest,
@@ -65,11 +73,8 @@ export async function removeLocalNavigationDirectory(
     }
     if (request.archiveThreads && directory) {
       const keys = new Set(directory.threadKeys);
-      const visible = await loadLocalNavigationQueryIndex({ callerReason: "remove-navigation-directory" });
-      const displayed = visible.directories.find((candidate) => candidate.key === request.directoryKey);
-      if (changedDuringRead || (visible.coverage && visible.coverage.state !== "complete")
-        || !displayed || displayed.threadKeys.length !== keys.size
-        || displayed.threadKeys.some((key) => !keys.has(key))) {
+      const matches = await matchesDisplayedMembership(request.directoryKey, keys, "remove-navigation-directory");
+      if (changedDuringRead || !matches) {
         throw new Error("Directory membership changed. Refresh navigation and try again.");
       }
       const threads = new Map(index.threads.map((thread) => [buildThreadIdentityKey(thread.source, thread.id), thread]));
@@ -140,6 +145,10 @@ export async function markLocalNavigationDirectorySeen(
     const directory = index.directories.find((candidate) => candidate.key === request.directoryKey);
     if (!directory) throw new Error("This directory is no longer available on its owner.");
     const keys = new Set(directory.threadKeys);
+    const matches = await matchesDisplayedMembership(request.directoryKey, keys, "mark-navigation-directory-seen");
+    if (changedDuringRead || !matches) {
+      throw new Error("Directory membership changed. Refresh navigation and try again.");
+    }
     const members = new Map(index.threads.filter((thread) => keys.has(buildThreadIdentityKey(thread.source, thread.id)))
       .map((thread) => [buildThreadIdentityKey(thread.source, thread.id), thread]));
     if ([...keys].some((key) => !members.has(key)) || [...members.values()].some((thread) => thread.federation?.ref.target.scope === "remote")) {

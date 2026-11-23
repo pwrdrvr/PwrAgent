@@ -1,7 +1,8 @@
 import path from "node:path";
-import type { AppServerBackendScope, AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
+import type { AppServerBackendScope, AppServerThreadSummary, LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type { NavigationDirectorySummary, NavigationQueryRequest, PrSummary } from "@pwragent/shared/contracts/navigation";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { navigationPathIdentity } from "@pwragent/shared/directory-navigation";
 import { isWorkspaceHandoffDirectory } from "@pwragent/shared/navigation-state";
 import {
   NAVIGATION_DIRECTORY_SET_CHANGED_METHOD,
@@ -26,7 +27,7 @@ import {
 import { getMainLogger } from "../log";
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
 import { PR_METADATA_PRIORITY } from "../pr-status/pr-metadata-process";
-import { readNavigationCheckoutDirectory } from "../git-info/directory-store";
+import { readNavigationCheckout } from "../git-info/directory-store";
 import { collectConcurrent } from "../../shared/concurrent-work";
 
 const indexReads = new NavigationIndexReadPool(1_000);
@@ -203,7 +204,10 @@ async function projectNavigationCheckoutDirectories(
   threads: AppServerThreadSummary[],
   signal: AbortSignal,
   checkpoint: NavigationIndexCheckpoint,
-): Promise<AppServerThreadSummary[]> {
+  options: { requireVerifiedDirectories?: boolean; refreshProviders?: boolean },
+) {
+  const verified = options.requireVerifiedDirectories === true;
+  const fresh = verified || options.refreshProviders === true;
   const candidates = new Map<string, AppServerThreadSummary[]>();
   for (const thread of threads) {
     // Recheck provider-derived relationships, including remembered Git roots.
@@ -217,15 +221,58 @@ async function projectNavigationCheckoutDirectories(
     rows.push(thread);
     candidates.set(cwd, rows);
   }
-  const projected = new Map<AppServerThreadSummary, AppServerThreadSummary>();
-  await collectConcurrent([...candidates], 16, async ([cwd, rows]) => {
+  const observed = await collectConcurrent([...candidates], 16, async ([cwd, rows]) => {
     signal.throwIfAborted();
     checkpoint();
-    const directories = await readNavigationCheckoutDirectory(cwd);
-    if (!directories) return;
-    const [current] = directories;
+    return { cwd, rows, checkout: await readNavigationCheckout(cwd, fresh) };
+  });
+  // Git does not record the primary checkout path in a separate git-dir.
+  // Join only to a primary established in this inventory, even when its row
+  // follows the linked checkout. Multiple primary paths are ambiguous.
+  const primaryByCommon = new Map<string, LinkedDirectorySummary | null>();
+  for (const { rows, checkout } of observed) {
+    const separate = checkout?.separateGit;
+    const primary = separate?.primary;
+    if (!primary || !separate) continue;
+    if (verified && !rows.some((row) => {
+      const [directory] = row.linkedDirectories;
+      return directory?.kind === "local" && path.relative(primary.path, directory.path) === "";
+    })) continue;
+    const previous = primaryByCommon.get(separate.commonDirectory);
+    if (previous === undefined) primaryByCommon.set(separate.commonDirectory, primary);
+    else if (previous && path.relative(previous.path, primary.path) !== "") primaryByCommon.set(separate.commonDirectory, null);
+  }
+
+  const projected = new Map<AppServerThreadSummary, AppServerThreadSummary>();
+  const worktreeRepositoryAliases = new Map<string, { adminPath: string; path: string; label: string }>();
+  for (const { cwd, rows, checkout } of observed) {
+    if (!checkout) continue;
+    const separate = checkout.separateGit;
+    const primary = separate && !separate.primary && primaryByCommon.get(separate.commonDirectory);
+    const linked = primary && separate
+      ? { ...primary, worktreePath: separate.checkoutRoot, kind: "worktree" as const }
+      : undefined;
     for (const row of rows) {
       const [previous] = row.linkedDirectories;
+      if (linked && separate && (!verified || (previous?.worktreePath
+        && path.relative(previous.worktreePath, linked.worktreePath) === ""
+        && path.relative(previous.path, separate.commonDirectory) === ""))) {
+        worktreeRepositoryAliases.set(navigationPathIdentity(linked.worktreePath, process.platform === "win32"),
+          { adminPath: separate.commonDirectory, path: linked.path, label: linked.label });
+        const sameWorktree = previous?.worktreePath && path.relative(previous.worktreePath, linked.worktreePath) === "";
+        projected.set(row, { ...row, linkedDirectories: [linked], observedGitBranch: sameWorktree ? row.observedGitBranch : undefined });
+        continue;
+      }
+      if (verified) continue;
+      let directories = checkout.directories;
+      if (!directories && previous && checkout.provisional) {
+        const relative = path.relative(previous.worktreePath ?? previous.path, checkout.provisional.root);
+        if (relative && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
+          directories = [checkout.provisional.directory];
+        }
+      }
+      if (!directories) continue;
+      const [current] = directories;
       // A missing cwd can retire a provisional folder. Keep the last known
       // repository and branch of an unavailable checkout for status polling.
       if (!current && (!previous || row.observedGitBranch || path.relative(cwd, previous.id) !== ""
@@ -236,8 +283,12 @@ async function projectNavigationCheckoutDirectories(
         && path.relative(current.worktreePath ?? current.path, previous.worktreePath ?? previous.path) === "") continue;
       projected.set(row, { ...row, linkedDirectories: directories, observedGitBranch: undefined });
     }
-  });
-  return hydrateMissingLinkedDirectoriesFromSiblingRepos(threads.map((thread) => projected.get(thread) ?? thread));
+  }
+  const rows = threads.map((thread) => projected.get(thread) ?? thread);
+  return {
+    threads: verified ? rows : hydrateMissingLinkedDirectoriesFromSiblingRepos(rows),
+    ...(worktreeRepositoryAliases.size ? { worktreeRepositoryAliases } : {}),
+  };
 }
 
 const directorySetLog = getMainLogger("pwragent:navigation-directory-set");
@@ -299,13 +350,13 @@ async function buildLocalNavigationQueryIndex(params: {
   // An overtaken scan whose follow-up already has readers hands them over
   // here instead of spending CPU on a projection nobody would keep.
   params.checkpoint();
-  const threadsWithDirectories = params.requireVerifiedDirectories
-    ? listedThreads
-    : await projectNavigationCheckoutDirectories(listedThreads, params.signal, params.checkpoint);
+  const checkoutProjection = await projectNavigationCheckoutDirectories(
+    listedThreads, params.signal, params.checkpoint, params,
+  );
   params.signal.throwIfAborted();
   const index = overlayStore.readNavigationQueryIndex({
     backend,
-    threads: threadsWithDirectories,
+    ...checkoutProjection,
     workspaceRoots: resolveScratchProjectsRoots(),
   });
   params.signal?.throwIfAborted();

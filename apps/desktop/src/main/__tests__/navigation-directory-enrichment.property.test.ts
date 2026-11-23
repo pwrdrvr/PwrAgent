@@ -10,7 +10,11 @@ import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
 import { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
-import { createThreadDirectoryEnricher, readNavigationCheckoutDirectory } from "../git-info/directory-store";
+import { createThreadDirectoryEnricher, readNavigationCheckout } from "../git-info/directory-store";
+import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
+
+const overlays = vi.hoisted(() => ({ current: undefined as SqliteOverlayStore | undefined }));
 
 vi.mock("../app-server/backend-registry", () => ({}));
 vi.mock("../app-server/scratch-projects", () => ({ resolveScratchProjectsRoots: () => [] }));
@@ -26,7 +30,7 @@ vi.mock("../storage/desktop-overlay-store", () => {
     readDirectoryGitStatusCache: async () => ({}),
     listAllActivePrStatusWatches: async () => [],
   };
-  return { getDesktopOverlayStore: () => store };
+  return { getDesktopOverlayStore: () => overlays.current ?? store };
 });
 
 const normalize = (cwd: string) => cwd.replace(/\\/g, "/");
@@ -131,7 +135,7 @@ it("keeps navigation inventory independent of historical checkout discovery and 
   }
 });
 
-it("refreshes a previously verified parent mapping when a nested checkout appears", async () => {
+it.each([false, true])("refreshes a remembered parent mapping for a new nested checkout (config include: %s)", async (includeConfig) => {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-navigation-nested-")));
   const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { stdio: "pipe", encoding: "utf8" });
   const cwd = path.join(root, "nested");
@@ -151,7 +155,11 @@ it("refreshes a previously verified parent mapping when a nested checkout appear
     const parent = `directory:${normalize(root)}`;
     expect((await verify()).directories.find((directory) => directory.key === parent)?.threadKeys).toHaveLength(2);
     git(cwd, "init", "--initial-branch=child");
-    const clock = vi.spyOn(performance, "now").mockReturnValue(performance.now() + 1_001);
+    if (includeConfig) {
+      const config = path.join(root, "extra.conf");
+      await writeFile(config, "[gc]\n  auto = 0\n");
+      git(cwd, "config", "include.path", config);
+    }
     const launches = vi.spyOn(gitSubprocessDiagnostics, "startGit");
     try {
       const [thread] = (await read(true)).threads;
@@ -165,7 +173,6 @@ it("refreshes a previously verified parent mapping when a nested checkout appear
       expect(members(verified)[parent]).toEqual(["codex:thread-1"]);
     } finally {
       launches.mockRestore();
-      clock.mockRestore();
     }
   } finally {
     await client.close();
@@ -191,11 +198,11 @@ it("observes ordinary and linked checkout roots, leaving Git overrides to live v
     const enrich = createThreadDirectoryEnricher();
     // An unborn branch has a real checkout root without an observed commit.
     const unbornPath = git(alias, "rev-parse", "--show-toplevel").trim();
-    expect(await readNavigationCheckoutDirectory(alias)).toMatchObject([{ path: unbornPath, kind: "local" }]);
+    expect((await readNavigationCheckout(alias))?.directories).toMatchObject([{ path: unbornPath, kind: "local" }]);
     expect(await enrich(alias)).toMatchObject({ linkedDirectories: [{ path: unbornPath, kind: "local" }] });
     vi.stubEnv("GIT_CEILING_DIRECTORIES", repo);
     expect(() => git(nested, "rev-parse", "--show-toplevel")).toThrow();
-    expect(await readNavigationCheckoutDirectory(nested)).toBeUndefined();
+    expect(await readNavigationCheckout(nested)).toBeUndefined();
     vi.stubEnv("GIT_CEILING_DIRECTORIES", undefined);
 
     git(repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
@@ -207,17 +214,17 @@ it("observes ordinary and linked checkout roots, leaving Git overrides to live v
     const linkedNested = path.join(linked, "nested");
     await mkdir(linkedNested);
     await writeFile(backlink, `${originalBacklink}${" ".repeat(1024 * 1024)}`);
-    expect(await readNavigationCheckoutDirectory(linkedNested)).toBeUndefined();
+    expect((await readNavigationCheckout(linkedNested))?.directories).toBeUndefined();
     await writeFile(backlink, originalBacklink);
     git(repo, "worktree", "move", linked, moved);
     const movedRoot = git(moved, "rev-parse", "--show-toplevel").trim();
-    expect(await readNavigationCheckoutDirectory(linked)).toEqual([]);
-    expect(await readNavigationCheckoutDirectory(moved)).toMatchObject([
+    expect((await readNavigationCheckout(linked))?.directories).toEqual([]);
+    expect((await readNavigationCheckout(moved))?.directories).toMatchObject([
       { path: normalize(repo), worktreePath: movedRoot, kind: "worktree" },
     ]);
     expect(await enrich(moved)).toMatchObject({ observedGitBranch: "HEAD", linkedDirectories: [{ worktreePath: movedRoot }] });
     git(repo, "worktree", "remove", moved);
-    expect(await readNavigationCheckoutDirectory(path.join(moved, "nested"))).toEqual([]);
+    expect((await readNavigationCheckout(path.join(moved, "nested")))?.directories).toEqual([]);
   } finally {
     vi.unstubAllEnvs();
     await rm(root, { recursive: true, force: true });
@@ -231,20 +238,42 @@ it("matches Git discovery for a nested bare boundary and a separate Git director
   const mirrorCwd = path.join(mirror, "objects");
   const checkout = path.join(root, "checkout");
   const checkoutCwd = path.join(checkout, "nested");
-  const { client, read, verify } = navigationFixture([mirrorCwd, checkoutCwd]);
+  const linked = path.join(root, "linked");
+  // Visit the linked checkout before its primary to exercise order-independent grouping.
+  const { client, read, verify } = navigationFixture([mirrorCwd, linked, checkoutCwd]);
+  const db = openInMemoryStateDb();
+  const store = new SqliteOverlayStore(db);
+  overlays.current = store;
   vi.stubEnv("PWRAGENT_GIT_PATH", "git");
   try {
     git(root, "init", "--initial-branch=outer");
     git(root, "init", "--bare", mirror);
     await mkdir(checkoutCwd, { recursive: true });
     git(checkout, "init", "--separate-git-dir", path.join(root, "admin"));
+    git(checkout, "config", "core.hooksPath", path.join(root, "empty-hooks"));
+    git(checkout, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+      "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "Fixture");
+    git(checkout, "worktree", "add", "--detach", linked);
+    const admin = git(checkout, "rev-parse", "--absolute-git-dir").trim();
+    await store.addLinkedDirectory({ backend: "codex", threadId: "thread-1", directory: {
+      id: normalize(linked), label: "Admin", path: admin, kind: "worktree", worktreePath: normalize(linked),
+    } });
     expect(() => git(mirrorCwd, "rev-parse", "--show-toplevel")).toThrow();
     const separateRoot = git(checkoutCwd, "rev-parse", "--show-toplevel").trim();
-    const projected = (await read()).threads.map((thread) => normalize(thread.linkedDirectories[0]!.path));
-    expect(projected).toEqual([normalize(mirrorCwd), separateRoot]);
-    expect((await verify()).threads.map((thread) => normalize(thread.linkedDirectories[0]!.path))).toEqual(projected);
+    for (const index of [await read(), await verify()]) {
+      expect(index.threads.map((thread) => normalize(thread.linkedDirectories[0]!.path)))
+        .toEqual([normalize(mirrorCwd), separateRoot, separateRoot]);
+      expect(index.threads[1]?.linkedDirectories[0]).toMatchObject({
+        kind: "worktree", worktreePath: git(linked, "rev-parse", "--show-toplevel").trim(),
+      });
+      expect(new Set(index.directories.find(({ path }) => path === separateRoot)?.threadKeys))
+        .toEqual(new Set(["codex:thread-1", "codex:thread-2"]));
+    }
+    expect((await store.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))?.extraLinkedDirectories[0]?.path).toBe(admin);
   } finally {
     await client.close();
+    overlays.current = undefined;
+    db.close();
     vi.unstubAllEnvs();
     await rm(root, { recursive: true, force: true });
   }

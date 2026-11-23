@@ -69,6 +69,7 @@ async function fileState(target: string) {
  */
 export function createGitDirectoryObserver(options: { navigation?: boolean } = {}): (
   cwd: string,
+  onCheckoutBoundary?: (root: string) => void,
 ) => Promise<GitDirectoryObservation | undefined> {
   const files = new Map<string, { signature: string; value: string }>();
   async function pointer(target: string, state: FileState): Promise<string> {
@@ -103,7 +104,7 @@ export function createGitDirectoryObserver(options: { navigation?: boolean } = {
     return /^(?:ref:\s*refs\/[^\s]+|[a-f0-9]{40}|[a-f0-9]{64})$/i.test((await pointer(headPath, head)).trim());
   }
 
-  return async (cwd) => {
+  return async (cwd, onCheckoutBoundary) => {
     const directory = await fileState(cwd);
     if (!directory?.directory) return undefined;
     const resolved = await realpath(cwd);
@@ -135,6 +136,7 @@ export function createGitDirectoryObserver(options: { navigation?: boolean } = {
     for (const directory of belowCheckout) {
       if (await isBareBoundary(directory)) return options.navigation ? unversioned() : undefined;
     }
+    onCheckoutBoundary?.(parent);
     const link = dotGit.directory ? "" : await pointer(dotGitPath, dotGit);
     const gitdirMatch = link.match(/^gitdir:\s*(.+?)\s*$/m);
     if (!dotGit.directory && !gitdirMatch) return undefined;

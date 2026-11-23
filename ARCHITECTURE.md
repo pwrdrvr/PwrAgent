@@ -404,6 +404,8 @@ selected-thread reads. Navigation can reuse completed Git-enriched lists.
 Directory actions that require verified checkout membership request Git
 enrichment in a separate index read. They take a new filesystem observation
 before reusing verified directory facts and leave sidebar membership untouched.
+Archive and Mark Read check that the displayed and verified memberships agree.
+Group archive planning uses the shared index for thread ancestry.
 
 ## Thread state and lifecycle
 

@@ -2060,7 +2060,6 @@ class DesktopAppServerService {
         const index = await loadLocalNavigationQueryIndex({
           backend: request.backend,
           callerReason: "renderer-navigation-query",
-          requireVerifiedDirectories: request.query.kind === "group-members" && request.query.membershipOnly === true,
           signal: rpcOptions?.signal,
           ...(summaries ? { viewer: { source: summaries, project: async (local: NavigationQueryIndex) => {
             const pins = await loadViewerNavigationPins(getDesktopOverlayStore(), summaries);
