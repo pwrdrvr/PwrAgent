@@ -9100,7 +9100,7 @@ class DesktopAppServerService {
           raise: (card, placement) => getThreadTodoService().raiseForDependency({ ...card, ...placement }).todo,
           publish: (todo) => getThreadTodoService().publish(todo),
         },
-        readThread: (condition) => this.readDependencyThread(condition),
+        readThread: (condition, automaticMergeBuild) => this.readDependencyThread(condition, automaticMergeBuild),
         authorizeLocalFile: async ({ backend, threadId }, file) => authorizeLocalFile(
           await getDesktopBackendRegistry().resolveThreadWorkspaceCwd(backend, threadId), file),
         readLocalFile,
@@ -9466,7 +9466,10 @@ class DesktopAppServerService {
     return !response.replay.entries.some((entry) => entry.turn?.status === "in_progress");
   }
 
-  private async readDependencyThread(condition: Pick<ThreadDependencyCondition, "backend" | "threadId"> & Partial<ThreadDependencyCondition>): Promise<DependencyThreadSnapshot> {
+  private async readDependencyThread(
+    condition: Pick<ThreadDependencyCondition, "backend" | "threadId"> & Partial<ThreadDependencyCondition>,
+    automaticMergeBuild = false,
+  ): Promise<DependencyThreadSnapshot> {
     const registry = getDesktopBackendRegistry();
     const turns = new Map<string, AppServerThreadTurnMetadata>();
     // Use the provider protocol for validation and turn catch-up. PR event
@@ -9489,8 +9492,15 @@ class DesktopAppServerService {
       // A turn's latest metadata wins; its first position keeps the order.
       for (const turn of pages.flat()) turns.set(turn.id, turn);
     }
-    const prs = !condition.when || isPrDependencyCondition({ when: condition.when })
-      ? (await this.readPrimaryAttachedPrs(condition, false)).prs : [];
+    let prs: PrSummary[] = [];
+    if (automaticMergeBuild && condition.when === "merge_build" && condition.prUrl) {
+      // The merge transition already verified primary ownership. The saved
+      // watch follows that attached PR even when the checkout is unavailable or moves.
+      const overlay = await this.getOverlayStore().getThreadOverlayState(condition);
+      prs = await this.canonicalizeStoredPullRequests(overlay?.prs ?? [], undefined, false);
+    } else if (!condition.when || isPrDependencyCondition({ when: condition.when })) {
+      prs = (await this.readPrimaryAttachedPrs(condition, false)).prs;
+    }
     return {
       activeTurnId: registry.getActiveTurnForThread(condition)?.turnId,
       turns: [...turns.values()],

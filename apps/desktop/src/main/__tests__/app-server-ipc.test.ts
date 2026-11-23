@@ -11784,6 +11784,108 @@ describe("app server ipc", () => {
     });
   });
 
+  async function checkAutomaticMergeBuildWatch(input: {
+    workspace: "missing" | "moved";
+    conclusion: "success" | "failure";
+    otherPrFirst: boolean;
+    restoreWait: boolean;
+  }) {
+    const appState = await import("../state/app-state");
+    const { ThreadDependencyStore } = await import("../state/thread-dependency-store");
+    const { MERGE_BUILD_WAITING_REASON } = await import("../app-server/thread-dependency-merge-builds");
+    await withRenamedRepositoryStore("automatic-merge-build-watch-", async ({ store, db }) => {
+      const { appServerService, service, submitTurnIfIdle, restore } = await renamedRepositoryService();
+      const internal = service as unknown as {
+        getThreadDependencyCoordinator: () => import("../app-server/thread-dependency-coordinator").ThreadDependencyCoordinator;
+        prStatusRegistryLoaded: boolean;
+        prStatusRegistry: Map<string, { pr: PrSummary; fetchedAt: number }>;
+      };
+      const stateDb = vi.spyOn(appState, "getAppStateDb").mockReturnValue(db);
+      const mode = vi.spyOn(appState, "getAppStateMode").mockReturnValue("active-profile");
+      const thread = { backend: "codex" as const, threadId: "automatic-merge-build" };
+      const merged = githubPr({ org: "fixture", repo: "project", number: 41, state: "passing", lifecycleState: "merged",
+        headSha: "a".repeat(40), url: "https://github.com/fixture/project/pull/41" });
+      const other = githubPr({ org: "fixture", repo: "other", number: 41, state: "pending",
+        url: "https://github.com/fixture/other/pull/41" });
+      const key = buildPullRequestStatusKey(merged);
+      const previous = { loaded: internal.prStatusRegistryLoaded, entry: internal.prStatusRegistry.get(key) };
+      const now = Date.now();
+      const condition = { ...thread, when: "merge_build" as const, prUrl: merged.url };
+      const dependencies = new ThreadDependencyStore(db.raw);
+      const latest = () => dependencies.list(thread.backend, thread.threadId)[0];
+      const open = { ...merged, lifecycleState: "open" as const };
+      try {
+        const prs = input.otherPrFirst ? [other, open] : [open, other];
+        await store.setThreadPullRequests({ ...thread, prs, fetchedAt: now - 60_000, refreshKey: thread.threadId });
+        internal.prStatusRegistryLoaded = true;
+        internal.prStatusRegistry.set(key, { pr: merged, fetchedAt: now });
+        if (input.workspace === "missing") {
+          await store.addLinkedDirectory({ ...thread, directory: {
+            id: "/fixture/project-worktree", kind: "worktree", label: "Project",
+            path: "/fixture/project", worktreePath: "/fixture/project-worktree",
+          } });
+        } else {
+          getCachedThreadSummary.mockReturnValue({ id: thread.threadId, source: thread.backend,
+            title: "Fixture thread", titleSource: "explicit", gitOriginUrl: "https://github.com/fixture/other.git", linkedDirectories: [] });
+        }
+
+        const coordinator = internal.getThreadDependencyCoordinator();
+        if (input.restoreWait) {
+          dependencies.register({
+            ...thread, id: "stuck-merge-build", conditions: [condition], mode: "all", onFailure: "notify",
+            deliver: "agent", wakeOn: "failure", automatic: true, status: "waiting",
+            evidence: [{ condition, state: "waiting", reason: "Waiting for a primary-workspace PR", observedAt: now }],
+            createdAt: now, updatedAt: now,
+          });
+          await coordinator.reconcile();
+        } else {
+          service.setThreadPrAttachment(`codex:${thread.threadId}`, {
+            backend: thread.backend, primaryRepoKey: "github.com/fixture/project", prs,
+          });
+          expect(appServerService.isPullRequestLocallyMonitored(key)).toBe(true);
+          expect(await coordinator.armMergeBuild(thread, merged)).toBe(true);
+        }
+        expect(latest()).toMatchObject({ status: "waiting", evidence: [{ reason: MERGE_BUILD_WAITING_REASON, prUrl: merged.url }] });
+        expect(coordinator.mergeBuildUrls()).toEqual([merged.url]);
+        expect(coordinator.mergeBuildPullRequest(merged.url)).toMatchObject({ url: merged.url, lifecycleState: "merged" });
+
+        const failed = input.conclusion === "failure";
+        const observation = {
+          status: "completed" as const, conclusion: input.conclusion, mergeCommitSha: "b".repeat(40),
+          mergedAt: now - 120_000, checkedAt: now,
+          checks: { total: 1, passed: failed ? 0 : 1, failed: failed ? 1 : 0, cancelled: 0, running: 0, queued: 0, skipped: 0 },
+        };
+        await coordinator.handleMergeBuildObservation(merged.url, observation);
+        await coordinator.handleMergeBuildObservation(merged.url, observation);
+        expect(latest()).toMatchObject({ status: "delivered", outcome: input.conclusion });
+        expect(coordinator.mergeBuildUrls()).toEqual([]);
+        expect(submitTurnIfIdle).toHaveBeenCalledTimes(failed ? 1 : 0);
+      } finally {
+        service.setThreadPrAttachment(`codex:${thread.threadId}`, undefined);
+        getCachedThreadSummary.mockReset();
+        internal.prStatusRegistryLoaded = previous.loaded;
+        if (previous.entry) internal.prStatusRegistry.set(key, previous.entry);
+        else internal.prStatusRegistry.delete(key);
+        stateDb.mockRestore();
+        mode.mockRestore();
+        restore();
+      }
+    });
+  }
+
+  it("clears a stranded automatic merge build watch when its merge build passed", async () => {
+    await checkAutomaticMergeBuildWatch({ workspace: "missing", conclusion: "success", otherPrFirst: false, restoreWait: true });
+  });
+
+  it("settles automatic merge builds from the named PR regardless of checkout metadata", async () => {
+    await fc.assert(fc.asyncProperty(fc.record({
+      workspace: fc.constantFrom("missing" as const, "moved" as const),
+      conclusion: fc.constantFrom("success" as const, "failure" as const),
+      otherPrFirst: fc.boolean(),
+      restoreWait: fc.boolean(),
+    }), checkAutomaticMergeBuildWatch), { numRuns: 24 });
+  });
+
   it("saves a new dependency's PR URL under the repository's current name", async () => {
     const appState = await import("../state/app-state");
     const { buildThreadIdentityKey } = await import("@pwragent/shared/contracts/navigation");

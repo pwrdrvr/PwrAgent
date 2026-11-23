@@ -99,7 +99,8 @@ type Options = {
   readLocalFile?: (file: ThreadDependencyLocalFile) => Promise<"result" | "exited" | undefined>;
   /** Without it, operator registrations are refused. */
   operatorTodos?: OperatorTodoDelivery;
-  readThread(condition: Pick<ThreadDependencyCondition, "backend" | "threadId"> & Partial<ThreadDependencyCondition>): Promise<DependencyThreadSnapshot>;
+  readThread(condition: Pick<ThreadDependencyCondition, "backend" | "threadId"> & Partial<ThreadDependencyCondition>,
+    automaticMergeBuild?: boolean): Promise<DependencyThreadSnapshot>;
   submit(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -307,7 +308,7 @@ export class ThreadDependencyCoordinator {
           conditions.push(condition);
           continue;
         }
-        const snapshot = await this.options.readThread(condition);
+        const snapshot = await this.options.readThread(condition, registration.automatic);
         turnOrder.set(identity(condition), snapshot.turns.map((turn) => turn.id));
         if (condition.when === "turn_completed" && !condition.turnId) {
           condition.turnId = snapshot.activeTurnId ?? snapshot.turns.at(-1)?.id;
@@ -861,7 +862,7 @@ export class ThreadDependencyCoordinator {
         const snapshotKey = JSON.stringify([identity(condition), condition.when === "turn_completed" ? condition.turnId : "pr"]);
         let snapshot = snapshots.get(snapshotKey);
         if (!snapshot) {
-          snapshot = await this.options.readThread(condition);
+          snapshot = await this.options.readThread(condition, item.automatic);
           snapshots.set(snapshotKey, snapshot);
         }
         // Only a forge resolve waits: an extra await here would delay every
