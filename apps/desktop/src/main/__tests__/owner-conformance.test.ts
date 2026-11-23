@@ -2963,7 +2963,16 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
           && notification.params.threadId === ref.threadId
           && (notification.params.turn as { id?: string } | undefined)?.id === turn.turnId, AbortSignal.timeout(5_000));
         expect(await rank(), "after native start").toBe(nextRank);
-        if (publication === "repeated read") await publishStartupInventory();
+        if (publication === "repeated read") {
+          const callsPath = path.join(owner.env.PWRAGENT_TEST_DATA!, "calls.jsonl");
+          const countListings = () => readFileSync(callsPath, "utf8").trim().split("\n")
+            .filter(line => JSON.parse(line).method === "thread/list").length;
+          // Startup's older inventory must leave the post-start listing reusable.
+          const listings = countListings();
+          await publishStartupInventory();
+          expect(await rank(), "after startup publication").toBe(nextRank);
+          expect(countListings(), "provider walks after startup publication").toBe(listings);
+        }
         for (let duplicate = 0; duplicate <= duplicates; duplicate++) {
           await owner.client.readThread(ref);
           expect(await rank(), "after the older startup inventory and a repeated read").toBe(nextRank);

@@ -5222,10 +5222,6 @@ export class DesktopBackendRegistry {
       if (!latest?.title || (latest.title === thread.title && (latest.titleSource ?? thread.titleSource) === thread.titleSource)) return thread;
       return { ...thread, title: latest.title, titleSource: latest.titleSource ?? thread.titleSource };
     });
-    // Discovery can finish after a thread or turn starts. Publish coverage,
-    // but let the next navigation read rebuild any invalidated inventory.
-    const inventoryInvalidated = this.threadListCacheRevision !== cacheRevision;
-    this.invalidateThreadListCache();
     this.rememberThreadListContexts(
       currentThreads.filter(thread => !isAcpBackendId(thread.source)),
       observationSequence,
@@ -5235,7 +5231,10 @@ export class DesktopBackendRegistry {
     // ACP was reread from its native session store above, independently of
     // the completed provider inventories, so it owns that read's sequence.
     this.rememberThreadListContexts(acpThreads, acpObservationSequence, false, false);
-    if (inventoryInvalidated) return;
+    // A thread or turn can start during discovery. Keep any newer listing
+    // already cached or in flight when discarding the earlier inventory.
+    if (this.threadListCacheRevision !== cacheRevision) return;
+    this.invalidateThreadListCache();
     const cacheKey = this.buildThreadListCacheKey({
       callerReason: "navigation-snapshot",
       enrichDirectories: false,
