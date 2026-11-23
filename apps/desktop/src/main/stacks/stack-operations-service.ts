@@ -13,6 +13,7 @@ import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { GhStackCatalogStore, stackGitRunner, type RuntimeJournal, type StackProvisioning } from "./stack-engine-ports";
+import { PR_METADATA_PRIORITY } from "../pr-status/pr-metadata-process";
 import { readStackClones } from "./stack-reader";
 import { applyStackLayerEdits, captureStackLayerEdits } from "../app-server/git-workspace-handoff-service";
 import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
@@ -209,7 +210,10 @@ export class StackOperationsService {
     const { actor, automated, directories, github, number, repository, signal } = request;
     const repoKey = `${repository.host}:${repository.owner}/${repository.repo}`.toLowerCase();
     const initial = await request.readGate();
-    const candidates = (await readStackClones(directories, signal)).filter(({ catalog }) => catalog.status === "ok"
+    const candidates = (await readStackClones(directories, {
+      signal,
+      priority: () => automated ? PR_METADATA_PRIORITY.background : PR_METADATA_PRIORITY.selected,
+    })).filter(({ catalog }) => catalog.status === "ok"
       && catalog.catalog.repository.toLowerCase() === repoKey
       && catalog.catalog.stacks.some(({ branches }) => branches.some((layer) => layer.branch === initial.layer.branch)));
     if (candidates.length !== 1) throw new Error("Publishing requires one tracked checkout for this layer");
