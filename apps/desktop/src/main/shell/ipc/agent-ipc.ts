@@ -577,7 +577,7 @@ export function registerAgentIpcHandlers(): void {
           .remoteBackend(request.federationTarget)
           .startThread(stripFederationTarget(request));
       }
-      return await registry.startThread(request);
+      return await registry.startThreadWithoutLaunchpad(request);
     },
   );
 

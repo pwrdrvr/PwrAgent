@@ -183,16 +183,17 @@ Read this before changing thread lenses, Attention membership/order, unread stat
 
 - A thread that is still starting has a starting row in the slot its thread will take.
 - The thread's own row takes that slot once it renders (`selectUnlandedStartingThreads`). No frame shows both rows or neither.
-- A launchpad draws its own starting row, in the window that sent it.
-- To-do card starts and clean handoffs with a new worktree or requested environment pass `pendingStart` to `startThread`. Their rows appear before worktree preparation and environment setup.
+- A renderer launchpad draws its own starting row in the window that sent it. The owner leaves that row to the renderer for local and peer submissions, including older peer requests without an operation ID or a message origin.
+- The owner draws starting rows for to-do cards, prepared direct starts, and clean or fork-seeded handoffs that prepare a worktree or run setup.
+- Agent tools, messaging, and Star Map intake also materialize launchpads on the owner. Their existing message origin identifies those launches. The owner starts reporting before workspace preparation and carries the same report through environment setup, thread creation, and any rollback.
 - The owner reports such a start with `thread/start/pending`:
   - `starting` before the worktree is prepared.
   - `setup` with the latest environment setup progress, keyed to the start.
-  - `landed` with the thread id once the provider creates it, before the owner announces the thread (its parent, pin, or `thread/started`). See [the Codex start-order capture](../apps/desktop/docs/protocol-captures.md#codex-thread-start-and-navigation).
+  - `landed` with the thread id once the provider creates it, before the owner announces the thread (its parent, pin, or `thread/started`). The owner also holds a provider `thread/started` received during a reported Codex fork request until the fork's row can identify its thread. See [the Codex start-order capture](../apps/desktop/docs/protocol-captures.md#codex-thread-start-and-navigation).
   - `ended` exactly once, last, after a refused start has rolled its worktree back.
 - A refused start's row goes at `ended`. A landed start's row stays until a read after `ended` brings in the thread's own row.
 - The owner keeps in-flight reports in memory. Local windows subscribe to live reports before reading that snapshot. A terminal report wins over a late snapshot and the newest setup sequence wins over older output. Federation viewers see the created thread through regular navigation.
-- Selecting a to-do start opens its submitted prompt, elapsed time, and live setup output. Completing the start opens the created thread. A refused start returns to the source thread. If setup failed and the thread was created, the thread keeps a dismissible setup error in windows that saw the start finish. A clean handoff's row opens its source while it is still starting.
+- Selecting a to-do start opens its submitted prompt, elapsed time, and live setup output. Completing the start opens the created thread. A refused start returns to the source thread. If setup failed and the thread was created, the thread keeps a dismissible setup error in windows that saw the start finish. A handoff's row opens its local source while it is still starting.
 - `thread-start-pending-row.property.test.ts` and `pending-thread-starts.test.ts` hold these rules.
 
 ### Group archive

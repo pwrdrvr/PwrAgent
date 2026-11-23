@@ -743,6 +743,9 @@ import {
   type ArchivedWorktreeRepairReport,
   type BackendClient,
   type BackendRegistryForkThreadRequest,
+  type PendingThreadStartDescriptor,
+  type PendingThreadStartReporter,
+  type PendingThreadStartSource,
   type BackendRegistryMcpConnectionService,
   type BackendRegistryOverlayStoreLike,
   type CodexDiscoveryObserver,
@@ -1000,13 +1003,6 @@ class CompactionRecoveryRevoked extends Error {
   constructor(readonly status: "busy" | "discarded" = "discarded") { super("Compaction recovery admission was revoked"); }
 }
 
-/** One start's `thread/start/pending` reports; see `beginPendingThreadStart`. */
-type PendingThreadStartReporter = {
-  report(phase: "starting" | "ended"): Promise<void>;
-  setupProgress: (event: Omit<CodexEnvironmentSetupProgressEvent, "directoryKey">) => void;
-  land(threadId: string, failure?: CodexEnvironmentStartupFailure): Promise<void>;
-};
-
 type IdleSubmission = {
   backend: AppServerBackendKind;
   threadId: string;
@@ -1154,6 +1150,7 @@ export class DesktopBackendRegistry {
   private readonly restartGateStatusListeners = new Set<(status: RestartGateStatus) => void>();
   private restartDispatchStarted = false;
   private readonly restartDispatchPlanOptions: Omit<RestartDispatchPlanOptions, "now">;
+  private readonly reportedCodexForks = new Map<BackendClient, Set<Promise<void>>>();
   private readonly inFlightThreadStarts = new Map<string, AppServerPendingThreadStartReport>();
   private readonly pendingStartedThreads = new Map<string, AppServerThreadSummary>();
   private readonly acceptedHandoffTaskRequests = new Map<
@@ -2244,6 +2241,7 @@ export class DesktopBackendRegistry {
       startAcpTurn: (...args: Parameters<typeof this.startAcpTurn>) => this.startAcpTurn(...args),
       startReview: (...args: Parameters<typeof this.startReview>) => this.startReview(...args),
       startThread: (...args: Parameters<typeof this.startThread>) => this.startThread(...args),
+      withPendingThreadStart: <T>(...args: Parameters<typeof this.withPendingThreadStart<T>>) => this.withPendingThreadStart(...args),
       startTurn: (...args: Parameters<typeof this.startTurn>) => this.startTurn(...args),
       startTurnNow: (...args: Parameters<typeof this.startTurnNow>) => this.startTurnNow(...args),
       prepareQueuedTurnInput: (entry: ThreadTurnQueueEntry) => this.prepareQueuedTurnInput(entry),
@@ -8170,16 +8168,39 @@ export class DesktopBackendRegistry {
      * starting row (`thread/start/pending`). For callers with no row of
      * their own: a launchpad draws its own.
      */
-    pendingStart?: Pick<AppServerPendingThreadStart, "startId" | "title" | "directoryKey" | "directoryLabel" | "progressThread" | "prompt">;
-  }): Promise<StartThreadResponse> {
+    pendingStart?: PendingThreadStartDescriptor;
+  }, preparedStart?: PendingThreadStartReporter): Promise<StartThreadResponse> {
     assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
-    const pending = params.pendingStart ? this.beginPendingThreadStart(params, params.pendingStart) : undefined;
+    return await this.withPendingThreadStart(params, preparedStart ? undefined : params.pendingStart, async (pending) =>
+      await listingDiagnostics.trace("workflow", { query: "thread-start" }, () => this.startThreadPrepared(params, preparedStart ?? pending)));
+  }
+
+  startThreadWithoutLaunchpad(request: StartThreadRequest): Promise<StartThreadResponse> {
+    return this.startThread({
+      ...request,
+      ...(request.workMode === "worktree" && request.cwd?.trim() ? {
+        pendingStart: {
+          startId: randomUUID(),
+          title: shortenDerivedThreadTitle(request.agent?.name) ?? "New thread",
+          directoryKey: request.directoryKey,
+        },
+      } : {}),
+    });
+  }
+
+  private async withPendingThreadStart<T>(
+    source: PendingThreadStartSource,
+    descriptor: PendingThreadStartDescriptor | undefined,
+    run: (pending?: PendingThreadStartReporter) => Promise<T>,
+  ): Promise<T> {
+    if (!descriptor) return await run();
+    const pending = this.beginPendingThreadStart(source, descriptor);
     try {
-      if (pending) await pending.report("starting");
-      return await listingDiagnostics.trace("workflow", { query: "thread-start" }, () => this.startThreadPrepared(params, pending));
+      await pending.report("starting");
+      return await run(pending);
     } finally {
-      // Last, after a refused start has rolled its worktree back.
-      if (pending) await pending.report("ended");
+      // Last, after any workspace rollback.
+      await pending.report("ended");
     }
   }
 
@@ -8192,9 +8213,9 @@ export class DesktopBackendRegistry {
    * `rememberPending`, before this owner announces the created thread.
    */
   private beginPendingThreadStart(
-    params: Parameters<DesktopBackendRegistry["startThread"]>[0],
-    descriptor: NonNullable<Parameters<DesktopBackendRegistry["startThread"]>[0]["pendingStart"]>,
-  ): PendingThreadStartReporter {
+    params: PendingThreadStartSource,
+    descriptor: PendingThreadStartDescriptor,
+  ): PendingThreadStartReporter & { report(phase: "starting" | "ended"): Promise<void> } {
     const start: AppServerPendingThreadStart = {
       startId: descriptor.startId,
       title: descriptor.title,
@@ -8783,6 +8804,18 @@ export class DesktopBackendRegistry {
       throw new Error("Thread forking is supported by the Codex and Claude backends.");
     }
 
+    return await this.withPendingThreadStart(
+      { ...request, backend, cwd: request.directoryPath },
+      request.pendingStart,
+      async (pending) => await this.forkThreadPrepared(request, backend, pending),
+    );
+  }
+
+  private async forkThreadPrepared(
+    request: BackendRegistryForkThreadRequest,
+    backend: "codex" | "claude",
+    pending?: PendingThreadStartReporter,
+  ): Promise<ForkThreadResponse> {
     const executionMode = request.executionMode ?? "default";
     const modeSettings = executionModeSettings(executionMode);
     const modelSettings = await this.admitNewThreadModelSettings(backend, request);
@@ -8857,38 +8890,36 @@ export class DesktopBackendRegistry {
         throw error;
       }
     } else {
-      const client = this.getClient(backend, executionMode);
-      if (!client.forkThread) {
-        await preparedWorkspace.rollback?.();
-        request.onPreparedWorkspaceRollback?.(undefined);
-        throw new Error("Selected backend does not support thread/fork.");
-      }
-      const sourceHasPdfMcpToolCatalog = this.hasPdfMcpToolCatalog(sourceOverlay);
-      pdfMcpRegistration =
-        sourceHasPdfMcpToolCatalog && this.resolvePdfAnalysisEnabledFn()
-          ? await this.registerPdfMcpClient({})
-          : undefined;
-      const pdfMcpConfig = sourceHasPdfMcpToolCatalog
-        ? pdfMcpRegistration
-          ? buildCodexPdfMcpConfig(pdfMcpRegistration)
-          : buildCodexPdfMcpDisabledConfig()
-        : undefined;
-      const tokenMiserEnabled = this.resolveTokenMiserEnabledForOverride(
-        sourceOverlay?.tokenMiserEnabled,
-      );
-      if (tokenMiserEnabled) {
-        await this.prepareTokenMiserRuntime();
-      }
-      const tokenMiserConfig = await this.buildSupportedCodexTokenMiserConfig({
-        client,
-        enabled: tokenMiserEnabled,
-      });
-      const codexThreadConfig = mergeCodexThreadConfigs(
-        pdfMcpConfig,
-        tokenMiserConfig,
-      );
-
       try {
+        const client = this.getClient(backend, executionMode);
+        if (!client.forkThread) {
+          throw new Error("Selected backend does not support thread/fork.");
+        }
+        const sourceHasPdfMcpToolCatalog = this.hasPdfMcpToolCatalog(sourceOverlay);
+        pdfMcpRegistration =
+          sourceHasPdfMcpToolCatalog && this.resolvePdfAnalysisEnabledFn()
+            ? await this.registerPdfMcpClient({})
+            : undefined;
+        const pdfMcpConfig = sourceHasPdfMcpToolCatalog
+          ? pdfMcpRegistration
+            ? buildCodexPdfMcpConfig(pdfMcpRegistration)
+            : buildCodexPdfMcpDisabledConfig()
+          : undefined;
+        const tokenMiserEnabled = this.resolveTokenMiserEnabledForOverride(
+          sourceOverlay?.tokenMiserEnabled,
+        );
+        if (tokenMiserEnabled) {
+          await this.prepareTokenMiserRuntime();
+        }
+        const tokenMiserConfig = await this.buildSupportedCodexTokenMiserConfig({
+          client,
+          enabled: tokenMiserEnabled,
+        });
+        const codexThreadConfig = mergeCodexThreadConfigs(
+          pdfMcpConfig,
+          tokenMiserConfig,
+        );
+
         try {
           const sourceRuntime = directoryKind === "workspace"
             ? undefined
@@ -8898,8 +8929,9 @@ export class DesktopBackendRegistry {
           forkedCodexEnvironmentRuntime = await this.threadDirectoryService.buildForkedCodexEnvironmentRuntime({
             cwd,
             forceSetup: request.rerunCodexEnvironmentSetup,
-            onSetupProgress: request.onCodexEnvironmentSetupProgress
+            onSetupProgress: pending || request.onCodexEnvironmentSetupProgress
               ? (event) => {
+                  pending?.setupProgress(event);
                   request.onCodexEnvironmentSetupProgress?.({
                     directoryKey:
                       request.codexEnvironmentSetupProgressKey ??
@@ -8922,7 +8954,7 @@ export class DesktopBackendRegistry {
             worktreeCleanupAvailable: preparedWorkspace.workMode === "worktree",
           };
         }
-        result = await this.withArchiveWorkspaceWrite([cwd ?? "", ...linkedDirectories.map((directory) => linkedDirectoryWorktreePath(directory) ?? directory.path)], async () => await client.forkThread!({
+        result = await this.withArchiveWorkspaceWrite([cwd ?? "", ...linkedDirectories.map((directory) => linkedDirectoryWorktreePath(directory) ?? directory.path)], async () => await this.forkCodexThreadWithPendingStart(client, {
           threadId: request.sourceThreadId,
           ...(request.sourceThreadPath?.trim()
             ? { path: request.sourceThreadPath.trim() }
@@ -8934,7 +8966,7 @@ export class DesktopBackendRegistry {
           sandbox: ownerSandboxForMode(getOwnerHostServices().runtimePolicy, executionMode, request.sandbox, modeSettings.sandbox),
           codexEnvironmentRuntime: forkedCodexEnvironmentRuntime,
           ...(codexThreadConfig ? { config: codexThreadConfig } : {}),
-        }));
+        }, pending, codexEnvironmentStartupFailure));
         pdfMcpRegistration?.bindThread(result.threadId);
       } catch (error) {
         await preparedWorkspace.rollback?.();
@@ -8942,6 +8974,7 @@ export class DesktopBackendRegistry {
         throw error;
       }
     }
+    if (backend === "claude") await pending?.land(result.threadId, codexEnvironmentStartupFailure);
     let gitBranch: string | undefined;
     try {
       const forkedAt = Date.now();
@@ -9112,6 +9145,32 @@ export class DesktopBackendRegistry {
       codexEnvironmentRuntime: forkedCodexEnvironmentRuntime,
       codexEnvironmentStartupFailure,
     };
+  }
+
+  private async forkCodexThreadWithPendingStart(
+    client: BackendClient,
+    request: Parameters<NonNullable<BackendClient["forkThread"]>>[0],
+    pending?: PendingThreadStartReporter,
+    failure?: CodexEnvironmentStartupFailure,
+  ): Promise<{ threadId: string }> {
+    if (!pending) return await client.forkThread!(request);
+
+    let activeForks = this.reportedCodexForks.get(client);
+    if (!activeForks) {
+      activeForks = new Set();
+      this.reportedCodexForks.set(client, activeForks);
+    }
+    const announced = Promise.withResolvers<void>();
+    activeForks.add(announced.promise);
+    try {
+      const result = await client.forkThread!(request);
+      await pending.land(result.threadId, failure);
+      return result;
+    } finally {
+      activeForks.delete(announced.promise);
+      if (activeForks.size === 0) this.reportedCodexForks.delete(client);
+      announced.resolve();
+    }
   }
 
   /** Reserve submission order until the queue claims a position, not until
@@ -16188,6 +16247,12 @@ export class DesktopBackendRegistry {
           this.context.turnState.observeTurnTerminal(notification.params.threadId, turnIdFromTerminalNotification(notification));
         }
         try {
+          if (backend === "codex" && notification.method === "thread/started") {
+            const activeForks = this.reportedCodexForks.get(client);
+            // A fork already has history, so a read triggered by this event
+            // can list it immediately. Wait for its RPC to pair the two rows.
+            if (activeForks) await Promise.all(activeForks);
+          }
           logBackendLifecycleNotification(backend, notification);
           // The registry announces its own revert once the rewind is recorded,
           // so the marker arrives with the event.

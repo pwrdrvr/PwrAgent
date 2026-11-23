@@ -1224,7 +1224,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     if (remote) {
       return await remote.startThread(stripFederationTarget(request));
     }
-    return await this.registry.startThread(request);
+    return await this.registry.startThreadWithoutLaunchpad(request);
   }
 
   async setThreadLock(request: SetThreadLockRequest): Promise<SetThreadLockResponse> {

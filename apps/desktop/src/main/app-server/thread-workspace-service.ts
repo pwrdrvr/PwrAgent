@@ -2616,6 +2616,17 @@ export class ThreadWorkspaceService {
     const groupedParentThreadId = groupedParentThread?.threadId;
     const groupedParentBackend = groupedParentThread?.backend;
 
+    const pendingStart = workspaceMode === "new_worktree" || environmentSource === "requested"
+      ? {
+          startId: randomUUID(),
+          title,
+          ...(childProjectBoundary ? {
+            directoryKey: `directory:${childProjectBoundary}`,
+            directoryLabel: path.basename(childProjectBoundary),
+          } : {}),
+          progressThread: { backend: sourceBackend, threadId: sourceThreadId },
+        }
+      : undefined;
     let threadId: string;
     let createdLinkedDirectory: LinkedDirectorySummary | undefined;
     let createdWorkspaceMode = workspaceMode;
@@ -2638,6 +2649,7 @@ export class ThreadWorkspaceService {
         const forked = await this.host().forkThread({
           backend,
           sourceThreadId,
+          pendingStart,
           ...(groupedParentThreadId
             ? {
                 parentThreadId: groupedParentThreadId,
@@ -2684,19 +2696,7 @@ export class ThreadWorkspaceService {
           branchName: request.args.branchName,
           ...(worktreeBranchMode ? { worktreeBranchMode } : {}),
           requiredWorkMode: workspaceMode === "new_worktree" ? "worktree" : undefined,
-          ...(workspaceMode === "new_worktree" || environmentSource === "requested"
-            ? {
-                pendingStart: {
-                  startId: randomUUID(),
-                  title,
-                  ...(childProjectBoundary ? {
-                    directoryKey: `directory:${childProjectBoundary}`,
-                    directoryLabel: path.basename(childProjectBoundary),
-                  } : {}),
-                  progressThread: { backend: sourceBackend, threadId: sourceThreadId },
-                },
-              }
-            : {}),
+          pendingStart,
           model: inheritedSettings.model,
           reasoningEffort: inheritedSettings.reasoningEffort,
           serviceTier: inheritedSettings.serviceTier,

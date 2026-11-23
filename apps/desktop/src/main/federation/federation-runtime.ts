@@ -8292,7 +8292,7 @@ function localBackendOperations(): FederationBackendOperations {
       return await getDesktopBackendRegistry().restoreThread(request);
     },
     async startThread(request: StartThreadRequest): Promise<StartThreadResponse> {
-      return await getDesktopBackendRegistry().startThread(request);
+      return await getDesktopBackendRegistry().startThreadWithoutLaunchpad(request);
     },
     async forkThread(
       request: ForkThreadRequest,

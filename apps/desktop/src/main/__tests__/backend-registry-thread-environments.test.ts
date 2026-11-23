@@ -3490,7 +3490,50 @@ command = "pnpm dev"
     shellEnvironment: { PATH: `${cwd}/node_modules/.bin:/usr/bin` },
   });
 
-  it("reports a clean handoff from before workspace preparation until the child exists", async () => {
+  it("reports setup for an owner launch in an existing checkout and preserves its first turn on failure", async () => {
+    const { root, repoPath } = await environmentProject("pwragent-materialized-setup-");
+    const client = new MockBackendClient({ threads: [] });
+    const registry = createDesktopBackendRegistry({
+      codexClient: client,
+      overlayStore: createOverlayStoreMock(),
+      codexEnvironmentCommandRunner: async ({ onProgress }) => {
+        onProgress?.({ phase: "stderr", chunk: "fixture installation failed", at: 1000 });
+        throw new CodexEnvironmentCommandError("Setup exited 1", {
+          output: "fixture installation failed", durationMs: 10, exitCode: 1,
+        });
+      },
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: async () => ({ cwd: repoPath, workMode: "local" }),
+      } as never,
+    });
+    try {
+      const reports: AppServerPendingThreadStartReport[] = [];
+      registry.onEvent(({ notification }) => {
+        if (notification.method === "thread/start/pending") reports.push(notification.params as AppServerPendingThreadStartReport);
+      });
+      const directoryKey = `directory:${expectedDir(repoPath)}`;
+      const result = await registry.materializeDirectoryLaunchpad({
+        directoryKey, codexEnvironmentSelector: "PwrAgent",
+        launchpad: { directoryKey, directoryKind: "directory", directoryLabel: "Catalog", directoryPath: repoPath,
+          backend: "codex", executionMode: "default", prompt: "", workMode: "local", createdAt: 1, updatedAt: 1 },
+        input: [{ type: "text", text: "Verify the catalog." }],
+      }, { messageOrigin: { kind: "pwragent" } });
+      expect(result.codexEnvironmentStartupFailure).toMatchObject({ phase: "setup" });
+      expect(client.lastStartTurnParams).toBeUndefined();
+      expect(reports[0]?.phase).toBe("starting");
+      expect(reports.some(({ phase, setupProgress, start }) =>
+        phase === "setup" && setupProgress?.directoryKey === start.startId
+        && setupProgress.output?.includes("fixture installation failed"))).toBe(true);
+      expect(reports.at(-1)).toMatchObject({ phase: "ended", createdThreadId: result.threadId,
+        setupFailure: result.codexEnvironmentStartupFailure });
+      expect(registry.listPendingThreadStarts()).toEqual([]);
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  it.each(["clean", "fork"])("reports a %s handoff from before workspace preparation until the child exists", async (seedMode) => {
     const fixture = await environmentHandoffFixture({ prefix: "pwragent-handoff-starting-" });
     try {
       const phases: string[] = [];
@@ -3502,7 +3545,7 @@ command = "pnpm dev"
         expect(start.progressThread).toEqual({ backend: "codex", threadId: "ordinary-thread" });
         if (phase === "starting") expect(fixture.prepareLaunchpadWorkspace).not.toHaveBeenCalled();
       });
-      const { response } = await fixture.handoff({ title: "Check the recorder" });
+      const { response } = await fixture.handoff({ title: "Check the recorder", seedMode });
       expect(response).toMatchObject({ success: true });
       expect(fixture.prepareLaunchpadWorkspace).toHaveBeenCalledOnce();
       expect(phases).toEqual(["starting", "landed", "ended"]);

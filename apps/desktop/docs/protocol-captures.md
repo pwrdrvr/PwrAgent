@@ -101,3 +101,14 @@ build and request path.
 Raw capture (ignored): `apps/desktop/.local/protocol-captures/thread-start-order/wire-state-db.jsonl`.
 The first trial's frames 4–13 show the start request, response, notification,
 and the two list reads followed by the loaded-thread read.
+
+The follow-up fork capture seeded a source with one contrived user item via
+`thread/inject_items` and sent 12 `thread/fork` requests. Each fork response
+preceded its `thread/started`. The navigation-shaped `thread/list` sent on
+notification included every new fork ID. Since the owner can still be pairing
+the provisional row with that ID when the notification arrives, it holds
+provider `thread/started` delivery for the duration of a reported fork's
+provider request and releases it after `landed`. The raw fork capture is
+`apps/desktop/.local/protocol-captures/thread-start-order/wire-fork.jsonl`.
+Frames 10–15 show the first fork request, response, notification, and the
+list request and response that contains its new ID.
