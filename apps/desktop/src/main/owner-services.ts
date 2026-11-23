@@ -864,7 +864,11 @@ function wireMessagingAppUpdates(options: {
   const selectDelivery = (binding: Parameters<DesktopMessagingRuntime["selectAppUpdateNoticeDelivery"]>[0]) =>
     messagingRuntime.selectAppUpdateNoticeDelivery(binding);
   const readMachine = () => options.readMachine();
-  const unsubscribe = subscribeAgentUpdateNotices({ subscribe: options.subscribe, selectDelivery, readMachine });
+  const onConnection = (listener: () => void) => messagingRuntime.onPlatformStatus((event) => {
+    if (event.kind === "health-changed" && event.health === "enabled") listener();
+  });
+  const unsubscribe = subscribeAgentUpdateNotices({ subscribe: options.subscribe, selectDelivery, readMachine, onConnection,
+    restoreReadyCards: Boolean(host.updates.messagingInstallTarget) });
   const { messagingInstallTarget, messagingInstallBlockerCount } = host.updates;
   if (!messagingInstallTarget || !messagingInstallBlockerCount) return unsubscribe;
   const runtimeId = registry.getAppManagementRuntimeId();
@@ -897,9 +901,7 @@ function wireMessagingAppUpdates(options: {
     runtimeId, currentVersion: () => host.application.getVersion(),
     selectDelivery, readMachine,
     isSameConnection: (binding, connectionId) => messagingRuntime.isAppUpdateConnectionCurrent(binding, connectionId),
-    onConnection: (listener) => messagingRuntime.onPlatformStatus((event) => {
-      if (event.kind === "health-changed" && event.health === "enabled") listener();
-    }),
+    onConnection,
   });
   return () => {
     unsubscribe();

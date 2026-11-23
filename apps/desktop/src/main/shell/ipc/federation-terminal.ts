@@ -418,7 +418,7 @@ export class FederationTerminalBridge {
    * looking it up, and a remote thread is not in THIS instance's thread list,
    * so a peer-blind lookup can only fall back to the raw thread id.
    */
-  quitSnapshotSessions(): Array<{
+  quitSnapshotSessions(options?: { includeIdle?: boolean }): Array<{
     sessionId: string;
     threadKey: string;
     target: FederationRemoteTarget;
@@ -430,7 +430,7 @@ export class FederationTerminalBridge {
     // this, every idle remote shell blocked the viewer's quit while the
     // identical local shell did not.
     return [...this.sessionsById.values()]
-      .filter((session) => session.foregroundCommand)
+      .filter((session) => options?.includeIdle || session.foregroundCommand)
       .map((session) => {
         const instanceLabel = identities.get(
           session.target.instanceId,

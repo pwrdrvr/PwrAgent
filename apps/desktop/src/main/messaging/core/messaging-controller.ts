@@ -73,7 +73,7 @@ import { buildMessagingConversationKey } from "./messaging-store.js";
 import { beginUpdateBlockingWork } from "../../app-update-admission";
 import { localAgentToolRefusal } from "../../member-containment";
 import { createAppUpdateNoticeStore } from "../../storage/desktop-messaging-storage";
-import { isAppUpdateCallback, type MessagingAppUpdateControls } from "../app-update-controls";
+import { isAppUpdateCallback, type AppUpdateNoticeDeliveryResult, type MessagingAppUpdateControls, type ReadyAppUpdateNotice } from "../app-update-controls";
 import { type MessagingOutboundFileAccess } from "./messaging-outbound-file.js";
 import { defaultAgentScopeForChannel, type MessagingDefaultAgentScopeKind } from "./messaging-default-agent.js";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
@@ -1297,16 +1297,19 @@ export class MessagingController {
     text: string,
     machine: string | undefined,
     guard: MessagingDeliveryGuard,
-    readyVersion?: string,
-  ): Promise<MessagingDeliveryResult> {
+    ready?: ReadyAppUpdateNotice,
+  ): Promise<AppUpdateNoticeDeliveryResult> {
     const liveGuard = { ...guard, isCancelled: () => this.disposed || guard.isCancelled() };
     const controls = this.options.appUpdateControls?.();
     const connectionId = this.adapter.retainedSourceConnectionId?.();
     const actions = this.adapter.capabilityProfile.actions;
-    if (readyVersion && controls && connectionId && this.adapter.authorizeRetainedSource && !binding.federatedThread
+    if (ready && controls && connectionId && this.adapter.authorizeRetainedSource && !binding.federatedThread
       && actions && actions.maxActions >= 2 && this.options.rbacPolicy?.isEnforcing()
-      && !localAgentToolRefusal("manage_pwragent")) {
-      const interactive = controls.present(binding, readyVersion, text, connectionId, async (presentation) => {
+      && !localAgentToolRefusal("manage_pwragent") && !controls.hasCard(binding, ready.version, connectionId)) {
+      const previous = ready.previousCard;
+      const surface = previous?.connectionId === connectionId && previous.surface.channel === binding.channel.channel
+        ? previous.surface : undefined;
+      const interactive = controls.present(binding, ready.version, text, connectionId, async (presentation) => {
         const current = await this.currentAppUpdateBinding(binding);
         if (!current || liveGuard.isCancelled()) return { outcome: "discarded", channel: binding.channel.channel, deliveredAt: this.now() };
         return await this.deliver({
@@ -1318,9 +1321,11 @@ export class MessagingController {
           attribution: { label: "PwrAgent updates", hint: machine },
           fallbackText: [presentation.title, presentation.body].join("\n"),
         }, current, undefined, liveGuard);
-      });
-      if (interactive) return interactive;
+      }, surface);
+      if (interactive) return interactive.then((result) => result.surface
+        ? { ...result, card: { connectionId, surface: result.surface } } : result);
     }
+    if (ready?.restore) return Promise.resolve({ outcome: "discarded", channel: binding.channel.channel, deliveredAt: this.now() });
     return this.deliver({
       id: this.newIntentId("app-update-notice"),
       kind: "message",
@@ -1334,7 +1339,7 @@ export class MessagingController {
 
   hasUnsubmittedUpdateBlockingWork(): boolean {
     return this.turnAdmission.hasPendingWork() || this.inboundTurns.pendingNewThreadPrompts.size > 0
-      || this.inboundTurns.pendingFullAccessNewThreadPrompts.size > 0;
+      || this.inboundTurns.hasLiveFullAccessPrompt();
   }
 
   async reportUpdateRestarting(event: MessagingInboundEvent): Promise<void> {
@@ -1363,8 +1368,11 @@ export class MessagingController {
         if (!isLive() || event.actor.isBot
           || localAgentToolRefusal("manage_pwragent") || !this.isChannelInScope(event.channel)) return false;
         const resolution = this.accessControl.resolveActorPermissions(event);
-        return !!resolution && !resolution.rejected && resolution.permissions.has("tools.instance_management")
-          && resolution.permissions.has("tools.instance_lifecycle");
+        const missing = (["tools.instance_management", "tools.instance_lifecycle"] as const)
+          .find((permission) => !resolution?.permissions.has(permission));
+        if (!missing) return !resolution?.rejected;
+        this.accessControl.recordCapabilityDenied(event, missing, resolution?.roleIds ?? [], event.actionId ?? "app-update");
+        return false;
       };
       if (!explicitlyAuthorized() || await this.adapter.authorizeRetainedSource?.(event, true) !== true) return false;
       const binding = await this.currentAppUpdateBinding(previousBinding);

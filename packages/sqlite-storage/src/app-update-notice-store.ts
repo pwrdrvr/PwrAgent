@@ -1,18 +1,14 @@
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import { buildThreadIdentityKey, encodeLegacyThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import type { StateDb } from "./state-db";
+import type { AppUpdateRestartReceipt } from "@pwragent/owner-core/app-update-notice-storage";
+import type BetterSqlite3 from "better-sqlite3";
 
 type AgentIdentity = { backend: AppServerBackendKind; threadId: string };
 type NoticeIdentity = { destination: string; version: string; phase: "available" | "ready" };
 
 const RESTART_RECEIPT_KEY = "messaging-app-update-restart";
-export type AppUpdateRestartReceipt = AgentIdentity & {
-  runtimeId: string;
-  version: string;
-  bindingId: string;
-  destination: string;
-  connectionId: string;
-};
+const RESTART_RECEIPT_KEY_PREFIX = `${RESTART_RECEIPT_KEY}:`;
 
 export const APP_UPDATE_NOTICE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS app_update_notice_agents (
@@ -24,6 +20,7 @@ CREATE TABLE IF NOT EXISTS app_update_notice_deliveries (
   phase TEXT NOT NULL,
   thread_key TEXT NOT NULL,
   binding_id TEXT NOT NULL,
+  ready_surface TEXT,
   PRIMARY KEY (destination, version, phase)
 ) WITHOUT ROWID;
 CREATE VIEW IF NOT EXISTS app_update_notice_eligible_agents AS
@@ -43,6 +40,16 @@ BEGIN
     AND NOT EXISTS (SELECT 1 FROM app_update_notice_eligible_agents WHERE thread_key = NEW.thread_id);
 END;
 `;
+
+export function ensureAppUpdateNoticeSchema(db: BetterSqlite3.Database): void {
+  db.transaction(() => {
+    db.exec(APP_UPDATE_NOTICE_SCHEMA);
+    const columns = db.prepare("PRAGMA table_info(app_update_notice_deliveries)").all() as Array<{ name: string }>;
+    if (!columns.some(({ name }) => name === "ready_surface")) {
+      db.exec("ALTER TABLE app_update_notice_deliveries ADD COLUMN ready_surface TEXT");
+    }
+  }).immediate();
+}
 
 type AgentRow = AgentIdentity & { name: string; enabled: number };
 
@@ -84,30 +91,50 @@ export class AppUpdateNoticeStore {
   }
 
   delivered(notice: NoticeIdentity): boolean {
-    return Boolean(this.stateDb.raw.prepare(
-      "SELECT 1 FROM app_update_notice_deliveries WHERE destination = ? AND version = ? AND phase = ?",
-    ).get(notice.destination, notice.version, notice.phase));
+    return this.readDelivery(notice) !== undefined;
   }
 
-  recordDelivery(notice: NoticeIdentity, identity: AgentIdentity, bindingId: string): void {
-    this.stateDb.raw.prepare(`INSERT OR IGNORE INTO app_update_notice_deliveries
-      (destination, version, phase, thread_key, binding_id) VALUES (?, ?, ?, ?, ?)`)
-      .run(notice.destination, notice.version, notice.phase, storageKey(identity), bindingId);
+  readDelivery(notice: NoticeIdentity): { bindingId: string; readySurface: string | null } | undefined {
+    return this.stateDb.raw.prepare(`SELECT binding_id AS bindingId, ready_surface AS readySurface
+      FROM app_update_notice_deliveries WHERE destination = ? AND version = ? AND phase = ?`)
+      .get(notice.destination, notice.version, notice.phase) as { bindingId: string; readySurface: string | null } | undefined;
   }
 
-  readRestartReceipt(): AppUpdateRestartReceipt | undefined {
-    const row = this.stateDb.getMeta(RESTART_RECEIPT_KEY);
-    return row ? JSON.parse(row) as AppUpdateRestartReceipt : undefined;
+  recordDelivery(notice: NoticeIdentity, identity: AgentIdentity, bindingId: string, readySurface?: string): void {
+    this.stateDb.raw.prepare(`INSERT INTO app_update_notice_deliveries
+      (destination, version, phase, thread_key, binding_id, ready_surface) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(destination, version, phase) DO UPDATE SET ready_surface = excluded.ready_surface
+      WHERE app_update_notice_deliveries.binding_id = excluded.binding_id AND excluded.ready_surface IS NOT NULL
+        AND app_update_notice_deliveries.ready_surface IS NOT excluded.ready_surface`)
+      .run(notice.destination, notice.version, notice.phase, storageKey(identity), bindingId, readySurface ?? null);
+  }
+
+  listRestartReceipts(): Array<{ key: string; receipt: AppUpdateRestartReceipt }> {
+    const rows = this.stateDb.raw.prepare("SELECT key, value FROM meta WHERE key = ? OR key GLOB ? ORDER BY key")
+      .all(RESTART_RECEIPT_KEY, `${RESTART_RECEIPT_KEY_PREFIX}*`) as Array<{ key: string; value: string }>;
+    return rows.map(({ key, value }) => ({ key, receipt: JSON.parse(value) as AppUpdateRestartReceipt }));
   }
 
   saveRestartReceipt(receipt: AppUpdateRestartReceipt): boolean {
-    if (this.stateDb.getMeta(RESTART_RECEIPT_KEY) !== undefined) return false;
+    const key = `${RESTART_RECEIPT_KEY_PREFIX}${receipt.runtimeId}:${receipt.version}`;
+    if (this.stateDb.getMeta(key) !== undefined) return false;
     return this.stateDb.raw.prepare("INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING")
-      .run(RESTART_RECEIPT_KEY, JSON.stringify(receipt)).changes === 1;
+      .run(key, JSON.stringify(receipt)).changes === 1;
   }
 
   clearRestartReceipt(receipt: AppUpdateRestartReceipt): void {
-    this.stateDb.raw.prepare("DELETE FROM meta WHERE key = ? AND value = ?")
-      .run(RESTART_RECEIPT_KEY, JSON.stringify(receipt));
+    this.removeRestartReceipt(`${RESTART_RECEIPT_KEY_PREFIX}${receipt.runtimeId}:${receipt.version}`, receipt);
+  }
+
+  observeRestartReceipt(key: string, receipt: AppUpdateRestartReceipt, version: string): AppUpdateRestartReceipt | undefined {
+    if (receipt.observedVersion !== undefined) return receipt;
+    const observed = { ...receipt, observedVersion: version };
+    const result = this.stateDb.raw.prepare("UPDATE meta SET value = ? WHERE key = ? AND value = ?")
+      .run(JSON.stringify(observed), key, JSON.stringify(receipt));
+    return result.changes === 1 ? observed : undefined;
+  }
+
+  removeRestartReceipt(key: string, receipt: AppUpdateRestartReceipt): void {
+    this.stateDb.raw.prepare("DELETE FROM meta WHERE key = ? AND value = ?").run(key, JSON.stringify(receipt));
   }
 }

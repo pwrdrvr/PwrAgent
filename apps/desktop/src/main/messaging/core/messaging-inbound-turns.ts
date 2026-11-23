@@ -47,6 +47,17 @@ export class MessagingInboundTurns {
     PendingNewThreadPromptBundle
   >();
 
+  hasLiveFullAccessPrompt(): boolean {
+    const now = this.context.now();
+    let live = false;
+    for (const [id, prompt] of this.pendingFullAccessNewThreadPrompts) {
+      if (prompt.confirmationExpiresAt === undefined) continue;
+      if (prompt.confirmationExpiresAt <= now) this.pendingFullAccessNewThreadPrompts.delete(id);
+      else live = true;
+    }
+    return live;
+  }
+
   async refreshInboundMetadata(event: MessagingInboundEvent): Promise<void> {
     const startedAt = this.context.now();
     let refreshBindingFromInboundMs = 0;
@@ -1927,15 +1938,22 @@ export class MessagingInboundTurns {
         return;
       }
       if (decision === "warning") {
-        this.pendingFullAccessNewThreadPrompts.set(session.id, {
+        const prompt: PendingNewThreadPromptBundle = {
           events: bundle.events,
           session,
-        });
-        await this.context.host().presentFullAccessRiskWarning(
-          { kind: "new-thread", session },
-          event,
-          { presentationMode: "message" },
-        );
+        };
+        this.pendingFullAccessNewThreadPrompts.set(session.id, prompt);
+        let expiresAt: number | undefined;
+        try {
+          expiresAt = (await this.context.host().presentFullAccessRiskWarning(
+            { kind: "new-thread", session }, event, { presentationMode: "message" },
+          ))?.expiresAt;
+        } finally {
+          if (this.pendingFullAccessNewThreadPrompts.get(session.id) === prompt) {
+            if (expiresAt === undefined) this.pendingFullAccessNewThreadPrompts.delete(session.id);
+            else prompt.confirmationExpiresAt = expiresAt;
+          }
+        }
         return;
       }
     }

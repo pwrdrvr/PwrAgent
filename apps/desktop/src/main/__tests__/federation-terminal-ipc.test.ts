@@ -816,6 +816,7 @@ describe("integrated terminal IPC federation branch", () => {
       sessionIds: [],
       threads: [],
     });
+    expect(getIntegratedTerminalQuitSnapshot({ includeIdle: true }).sessionIds).toEqual(["remote-session"]);
   });
 
   it("keeps a session blocking when the owner's state message is malformed", async () => {

@@ -5,7 +5,7 @@ import { MessagingAppUpdateControls } from "../messaging/app-update-controls";
 
 function setup() {
   const readiness = { version: "1.4.20", selection: "stable" };
-  const state = { target: { ...readiness }, blockers: 0, allowed: true, live: true, persisted: true };
+  const state = { target: { ...readiness }, blockers: 0, allowed: true, live: true, persisted: true, failRender: false };
   const saveReceipt = vi.fn(() => state.persisted);
   const handoff = vi.fn();
   const reply = vi.fn(async () => undefined);
@@ -26,7 +26,7 @@ function setup() {
     };
     const surface = { channel: "slack", id: `${id}-message` } as const;
     const render = vi.fn(async (_presentation: { body: string; actions: MessagingSurfaceAction[] }) => ({
-      outcome: "presented" as const, channel: "slack" as const, surface, deliveredAt: 1,
+      outcome: state.failRender ? "failed" as const : "presented" as const, channel: "slack" as const, surface, deliveredAt: 1,
     }));
     const text = "PwrAgent update ready · v1.4.20\nDownloaded on Test Workstation (running v1.4.19).";
     await controls.present(binding, readiness.version, text, "test-connection", render);
@@ -116,5 +116,42 @@ it.each(["superseded", "disconnected", "receipt rejected"])("refuses an accepted
   fixture.state.blockers = 0;
   await vi.advanceTimersByTimeAsync(5_000);
   expect(fixture.handoff).not.toHaveBeenCalled();
+  fixture.controls.dispose();
+});
+
+it("keeps the last visible Cancel action usable after a failed progress edit", async () => {
+  const fixture = setup();
+  const room = await fixture.room("release-watch");
+  fixture.state.blockers = 1;
+  await room.tap("Install and restart");
+  await room.tap("Install when idle");
+  const visibleCancel = room.eventFor("Cancel install");
+  fixture.state.blockers = 2;
+  fixture.state.failRender = true;
+  await vi.advanceTimersByTimeAsync(30_001);
+  expect(room.render.mock.lastCall?.[0].body).toContain("2 blockers");
+  fixture.state.failRender = false;
+  await room.send(visibleCancel);
+  fixture.state.blockers = 0;
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(fixture.handoff).not.toHaveBeenCalled();
+  expect(room.render.mock.lastCall?.[0].body).toContain("Install canceled");
+  fixture.controls.dispose();
+});
+
+it("bounds progress edits while a busy owner keeps changing", async () => {
+  const fixture = setup();
+  const room = await fixture.room("release-watch");
+  fixture.state.blockers = 1;
+  await room.tap("Install and restart");
+  await room.tap("Install when idle");
+  const before = room.render.mock.calls.length;
+  for (let blockers = 2; blockers <= 30; blockers += 1) {
+    fixture.state.blockers = blockers;
+    await vi.advanceTimersByTimeAsync(30_001);
+  }
+  expect(room.render.mock.calls.length - before).toBe(12);
+  await room.tap("Cancel install");
+  expect(room.render.mock.lastCall?.[0].body).toContain("Install canceled");
   fixture.controls.dispose();
 });

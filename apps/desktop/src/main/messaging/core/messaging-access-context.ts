@@ -28,7 +28,7 @@ export interface MessagingAccessConfiguration {
 }
 
 export interface MessagingAccessContext {
-  readonly store: Pick<MessagingStoreLike, "upsertBrowseSession" | "upsertPendingIntent" | "findActiveBindingForChannel" | "findActiveDefaultAgentAssignmentForChannel">;
+  readonly store: Pick<MessagingStoreLike, "upsertBrowseSession" | "upsertPendingIntent" | "deletePendingIntent" | "findActiveBindingForChannel" | "findActiveDefaultAgentAssignmentForChannel">;
   readonly adapter: Pick<MessagingAdapter, "retainedSourceConnectionId" | "authorizeRetainedSource">;
   readonly capabilityProfile: MessagingCapabilityProfile;
   readonly now: () => number;

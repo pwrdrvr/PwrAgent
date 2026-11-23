@@ -1299,6 +1299,21 @@ export class SlackAdapter implements SlackProviderAdapter {
       ? `${this.workspaceId}:${this.botId ?? this.botUserId}` : undefined;
   }
 
+  isAuthorizedNoticeDestination(channel: MessagingChannelRef): boolean {
+    if (channel.channel !== this.channel) return false;
+    const conversation = channel.conversation;
+    if (conversation.kind === "dm" || conversation.isDirectMessage) return slackDmAccessMode(this.config) !== "none";
+    const groupDm = this.conversationGroupDmCache.get(conversation.id);
+    if (groupDm === true) return slackGroupDmAccessMode(this.config) !== "none";
+    const listed = this.config.authorizedConversationIds?.some((contact) => contact.id === conversation.id) === true;
+    // An old G-prefixed conversation can be a private channel or a group DM.
+    if (groupDm === undefined && conversation.id.startsWith("G") && !listed) return false;
+    return slackChannelUserAccessMode(this.config) !== "none"
+      && (slackTeamAuthorizationMode(this.config) === "allow_all"
+        || this.config.authorizedTeamIds?.some((team) => team.id === conversation.workspaceId) === true)
+      && (slackChannelAuthorizationMode(this.config) === "allow_all" || listed);
+  }
+
   async createManagedConversation(
     request: MessagingManagedConversationCreateRequest,
   ): Promise<MessagingManagedConversationCreateResult> {

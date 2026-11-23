@@ -132,6 +132,7 @@ import type {
 export type DesktopMessagingAdapter = {
   retainedSourceConnectionId?: MessagingAdapter["retainedSourceConnectionId"];
   authorizeRetainedSource?: MessagingAdapter["authorizeRetainedSource"];
+  isAuthorizedNoticeDestination?(channel: MessagingChannelRef): boolean;
   authorizedActorIds: readonly string[];
   capabilityProfile: MessagingCapabilityProfile;
   channel: MessagingChannelKind;
@@ -1238,7 +1239,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       return running.controller.deliverAppUpdateNotice(current, text, machine, {
         ...guard,
         isCancelled: () => guard.isCancelled() || !this.started
-          || Boolean(this.pendingAdapterStopReason) || this.runningAdapters.get(channel) !== running,
+          || Boolean(this.pendingAdapterStopReason) || this.runningAdapters.get(channel) !== running
+          || running.adapter.isAuthorizedNoticeDestination?.(current.channel) !== true,
       }, readyVersion);
     };
   }

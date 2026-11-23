@@ -37,6 +37,18 @@ afterEach(async () => {
 });
 
 describe("TelegramAdapter", () => {
+  it("rechecks the allowlist for unsolicited notices to the parent of a forum topic", async () => {
+    const adapter = new TelegramAdapter({
+      api: createApi() as unknown as TelegramBotApi, pollOnStart: false,
+      config: { channel: "telegram", botToken: "12345:fake-token", authorizedActorIds: [],
+        authorizedSupergroupIds: [{ id: "-100777", displayName: "Fixture group" }] },
+    });
+    const destination = { channel: "telegram", conversation: { kind: "topic", id: "101", parentId: "-100777" } } as const;
+    expect(adapter.isAuthorizedNoticeDestination(destination)).toBe(true);
+    await adapter.updateAuthorization({ authorizedActorIds: [], authorizedConversationIds: [] });
+    expect(adapter.isAuthorizedNoticeDestination(destination)).toBe(false);
+  });
+
   it("uses a sliding minute delivery budget for direct messages", () => {
     const adapter = new TelegramAdapter({
       api: createApi() as unknown as TelegramBotApi,

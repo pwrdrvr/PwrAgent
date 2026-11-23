@@ -690,7 +690,7 @@ vi.mock("../runtime-federation-lease", () => { const mocked = {
 vi.mock("../state/app-state", () => ({
   initializeAppState: initializeAppStateMock,
   hadExistingAppStateDatabase: vi.fn(() => true),
-  getAppStateDb: vi.fn(() => ({ raw: {}, getMeta: () => undefined })),
+  getAppStateDb: vi.fn(() => ({ raw: { prepare: () => ({ all: () => [] }) }, getMeta: () => undefined })),
   disposeAppState: disposeAppStateMock,
   stopProfileRuntimeHeartbeatRefresh: stopProfileRuntimeHeartbeatRefreshMock,
   isAppStateInitialized: isAppStateInitializedMock,

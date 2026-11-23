@@ -3,7 +3,7 @@ import {
   SCHEDULED_ACTION_PROJECTION_SCHEMA,
 } from "./scheduled-thread-action-projection-schema";
 import { OWNER_JOB_SCHEMA } from "./owner-job-schema";
-import { APP_UPDATE_NOTICE_SCHEMA } from "./app-update-notice-store";
+import { ensureAppUpdateNoticeSchema } from "./app-update-notice-store";
 import { RESEARCH_SCHEMA, ensureResearchProjections } from "./research-store";
 import { removeUsageActivityIndex } from "./usage-activity-index";
 import { hasSubthreadGroupIndexes, SUBTHREAD_GROUP_INDEXES } from "./subthread-group-sqlite";
@@ -2381,7 +2381,7 @@ export class StateDb {
       // These additive objects depend on threads, which partial-schema repair
       // databases can omit.
       if (hasThreads) {
-        db.transaction(() => db.exec(APP_UPDATE_NOTICE_SCHEMA))();
+        ensureAppUpdateNoticeSchema(db);
         db.exec(`CREATE INDEX IF NOT EXISTS idx_threads_pending_spend_alert
           ON threads(thread_id)
           WHERE CASE WHEN json_valid(payload) THEN json_type(payload, '$.threadSpendAlertPending') END = 'object'`);

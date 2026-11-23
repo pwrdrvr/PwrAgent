@@ -3,7 +3,7 @@ import type {
   MessagingBindingRecord, MessagingDeliveryResult, MessagingInboundCallbackEvent,
   MessagingSurfaceAction, MessagingSurfaceRef,
 } from "@pwragent/messaging-interface";
-import type { AppUpdateRestartReceipt } from "@pwragent/sqlite-storage/app-update-notice-store";
+import type { AppUpdateRestartReceipt } from "@pwragent/owner-core/app-update-notice-storage";
 import { getMainLogger } from "../log";
 import { buildMessagingConversationKey } from "./core/messaging-store";
 import { isAcceptedDeliveryOutcome } from "./core/messaging-reply-receipts";
@@ -13,6 +13,7 @@ const ACTION_PREFIX = "app-update:";
 const MAX_CARDS = 256;
 const CHECK_IDLE_INTERVAL_MS = 2_000;
 const PROGRESS_UPDATE_INTERVAL_MS = 30_000;
+const MAX_PROGRESS_EDITS = 12;
 const CONFIRMATION_TTL_MS = 5 * 60_000;
 
 type Target = Readonly<{ version: string; selection: string }>;
@@ -35,6 +36,7 @@ type Card = {
   surface?: MessagingSurfaceRef;
   confirmation?: { actor: string; expiresAt: number };
   rendered?: string;
+  nextRender?: symbol;
   queue: Promise<unknown>;
 };
 type Operation = {
@@ -43,11 +45,17 @@ type Operation = {
   isLive(): boolean;
   authorize(): Promise<boolean>;
   nextProgressAt: number;
+  remainingProgressEdits: number;
+  reportedBlockers: number;
 };
 
 export function isAppUpdateCallback(event: MessagingInboundCallbackEvent): boolean {
   return event.actionId?.startsWith(ACTION_PREFIX) === true;
 }
+
+export type AppUpdateCardSurface = { connectionId: string; surface: MessagingSurfaceRef };
+export type AppUpdateNoticeDeliveryResult = MessagingDeliveryResult & { card?: AppUpdateCardSurface };
+export type ReadyAppUpdateNotice = { version: string; restore?: true; previousCard?: AppUpdateCardSurface };
 
 export class MessagingAppUpdateControls {
   private readonly cards = new Map<string, Card>();
@@ -69,13 +77,19 @@ export class MessagingAppUpdateControls {
     clearReceipt(receipt: AppUpdateRestartReceipt): void;
   }) {}
 
-  present(binding: MessagingBindingRecord, version: string, text: string, connectionId: string, render: Card["render"]): Promise<MessagingDeliveryResult> | undefined {
+  hasCard(binding: MessagingBindingRecord, version: string, connectionId: string): boolean {
+    const card = this.cards.get(buildMessagingConversationKey(binding.channel));
+    return card?.target.version === version && card.binding.id === binding.id
+      && card.connectionId === connectionId && card.surface !== undefined && card.rendered !== undefined;
+  }
+
+  present(binding: MessagingBindingRecord, version: string, text: string, connectionId: string, render: Card["render"], surface?: MessagingSurfaceRef): Promise<MessagingDeliveryResult> | undefined {
     const target = this.options.readTarget();
     if (this.disposed || !target || target.version !== version) return undefined;
     const key = buildMessagingConversationKey(binding.channel);
     this.forgetCard(this.cards.get(key));
     if (this.cards.size >= MAX_CARDS) this.forgetCard(this.cards.values().next().value);
-    const card: Card = { key, target: { ...target }, binding, connectionId, text, render, phase: "ready", queue: Promise.resolve() };
+    const card: Card = { key, target: { ...target }, binding, connectionId, text, render, surface, phase: "ready", queue: Promise.resolve() };
     this.cards.set(key, card);
     const pending = this.pending;
     return this.render(card, pending && sameTarget(target, pending.card.target) ? "waiting" : "ready");
@@ -116,8 +130,8 @@ export class MessagingAppUpdateControls {
           await reply("This PwrAgent instance already has a pending update request.");
           return;
         }
-        card.confirmation = { actor: event.actor.platformUserId, expiresAt: Date.now() + CONFIRMATION_TTL_MS };
-        await this.render(card, "confirm");
+        await this.render(card, "confirm", undefined,
+          { actor: event.actor.platformUserId, expiresAt: Date.now() + CONFIRMATION_TTL_MS });
         return;
       case `${ACTION_PREFIX}dismiss`:
         if (card.phase === "ready" || card.phase === "confirm") await this.render(card, "dismissed");
@@ -132,6 +146,7 @@ export class MessagingAppUpdateControls {
         const operation: Operation = {
           card, phase: "waiting", isLive: current, authorize: permitted,
           nextProgressAt: Date.now() + PROGRESS_UPDATE_INTERVAL_MS,
+          remainingProgressEdits: MAX_PROGRESS_EDITS, reportedBlockers: this.options.blockerCount(),
         };
         this.pending = operation;
         if (!await this.updateCards(operation, "waiting")) {
@@ -141,7 +156,7 @@ export class MessagingAppUpdateControls {
         this.schedule(0);
         return;
       case `${ACTION_PREFIX}cancel`:
-        if (card.phase === "waiting" && this.pending?.phase === "waiting"
+        if (card.phase === "waiting" && this.pending && this.pending.phase !== "committed"
           && sameTarget(card.target, this.pending.card.target)) {
           await this.finish(this.pending, "Install canceled. PwrAgent will keep running.");
         }
@@ -188,10 +203,16 @@ export class MessagingAppUpdateControls {
       await this.finish(operation, "The staged update changed. Use the latest update notice.", "closed");
       return;
     }
-    if (this.options.blockerCount() > 0) {
-      if (Date.now() >= operation.nextProgressAt) {
+    const blockers = this.options.blockerCount();
+    if (blockers > 0) {
+      if (operation.remainingProgressEdits > 0 && blockers !== operation.reportedBlockers
+        && Date.now() >= operation.nextProgressAt) {
         operation.nextProgressAt = Date.now() + PROGRESS_UPDATE_INTERVAL_MS;
-        await this.render(operation.card, "waiting");
+        operation.remainingProgressEdits -= 1;
+        operation.reportedBlockers = blockers;
+        await this.render(operation.card, "waiting", operation.remainingProgressEdits === 0
+          ? "PwrAgent is still waiting for work to finish and open terminals to close. You can keep working or cancel this install."
+          : undefined);
       }
       this.schedule();
       return;
@@ -247,7 +268,7 @@ export class MessagingAppUpdateControls {
     return updates.some((update) => update.status === "fulfilled" && update.value);
   }
 
-  private render(card: Card, phase: Phase, message?: string): Promise<MessagingDeliveryResult> {
+  private render(card: Card, phase: Phase, message?: string, confirmation?: Card["confirmation"]): Promise<MessagingDeliveryResult> {
     const [readyTitle, ...lines] = card.text.split("\n");
     const title = phase === "confirm" ? `Confirm PwrAgent update · v${card.target.version}`
       : phase === "waiting" ? `PwrAgent update waiting · v${card.target.version}`
@@ -262,13 +283,9 @@ export class MessagingAppUpdateControls {
         : phase === "starting" ? "Preparing to restart. PwrAgent will check for new work before installing." : "");
     const body = [...lines, detail].filter(Boolean).join("\n");
     const stamp = JSON.stringify([phase, body]);
-    if (stamp === card.rendered && phase === card.phase && card.surface) return Promise.resolve({
-      outcome: "updated", channel: card.surface.channel, surface: card.surface, deliveredAt: Date.now(),
-    });
-    if (card.nonce) this.tokens.delete(card.nonce);
+    const attempt = Symbol();
+    card.nextRender = attempt;
     const nonce = randomUUID();
-    card.nonce = nonce;
-    card.phase = phase;
     const action = (id: string, label: string, style: MessagingSurfaceAction["style"]): MessagingSurfaceAction => ({
       id: `${ACTION_PREFIX}${id}`, label, value: nonce, style,
     });
@@ -276,14 +293,24 @@ export class MessagingAppUpdateControls {
       : phase === "confirm" ? [action("confirm", blockers ? "Install when idle" : "Install now", "primary"), action("dismiss", "Not now", "secondary")]
       : phase === "waiting" ? [action("cancel", "Cancel install", "secondary")] : [];
     const delivery = card.queue.then(async () => {
-      if (this.disposed || this.cards.get(card.key) !== card || card.nonce !== nonce) {
+      if (this.disposed || this.cards.get(card.key) !== card || card.nextRender !== attempt) {
         return { outcome: "discarded", channel: card.binding.channel.channel, deliveredAt: Date.now() } satisfies MessagingDeliveryResult;
       }
+      if (stamp === card.rendered && phase === card.phase && card.surface && !confirmation) return {
+        outcome: "updated", channel: card.surface.channel, surface: card.surface, deliveredAt: Date.now(),
+      } satisfies MessagingDeliveryResult;
       const result = await card.render({ title: title ?? "PwrAgent update", body, actions, surface: card.surface });
-      if (isAcceptedDeliveryOutcome(result.outcome)) {
+      if (isAcceptedDeliveryOutcome(result.outcome) && !this.disposed && this.cards.get(card.key) === card) {
+        if (card.nonce) this.tokens.delete(card.nonce);
+        card.nonce = undefined;
         card.surface = result.surface ?? card.surface;
+        card.phase = phase;
+        card.confirmation = confirmation;
         card.rendered = stamp;
-        if (actions.length && card.surface && card.nonce === nonce && !this.disposed) this.tokens.set(nonce, card);
+        if (actions.length && card.surface) {
+          card.nonce = nonce;
+          this.tokens.set(nonce, card);
+        }
       }
       return result;
     });

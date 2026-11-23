@@ -74,7 +74,7 @@ export interface MessagingInboundHost {
   readonly resolveNewThreadToolUpdateMode: (session: MessagingBrowseSessionRecord, directory?: MessagingLaunchpadDirectory) => Promise<MessagingToolUpdateMode>;
   readonly streamingResponsesDefault: boolean;
   readonly resolveFullAccessRiskForSession: (session: MessagingBrowseSessionRecord, event: MessagingInboundEvent, options: NewThreadOptionsSummary) => Promise<"accepted" | "blocked" | "warning">;
-  readonly presentFullAccessRiskWarning: (context: FullAccessEscalationContext, event: MessagingInboundEvent, options?: { presentationMode?: FullAccessRiskPresentationMode; }) => Promise<void>;
+  readonly presentFullAccessRiskWarning: (context: FullAccessEscalationContext, event: MessagingInboundEvent, options?: { presentationMode?: FullAccessRiskPresentationMode; }) => Promise<{ expiresAt?: number } | undefined>;
 }
 
 export interface MessagingInboundConfiguration {

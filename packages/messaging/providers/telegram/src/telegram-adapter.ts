@@ -31,6 +31,7 @@ import type {
   MessagingManagedConversationRightsRequest,
   MessagingManagedConversationRightsResult,
   MessagingCommandVerb,
+  MessagingChannelRef,
   MessagingRateLimitInfo,
   MessagingAuthorizationRejection,
   MessagingRejectedInboundEvent,
@@ -1698,6 +1699,16 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     } catch {
       return undefined;
     }
+  }
+
+  isAuthorizedNoticeDestination(channel: MessagingChannelRef): boolean {
+    if (channel.channel !== this.channel) return false;
+    const target = this.telegramStateFromChannel(channel.conversation);
+    if (!target) return false;
+    const id = String(target.chatId);
+    return channel.conversation.kind === "dm" || channel.conversation.isDirectMessage
+      ? this.isAuthorizedActor(id)
+      : this.options.config.authorizedSupergroupIds?.some((contact) => contact.id === id) === true;
   }
 
   retainedSourceConnectionId(): string | undefined {

@@ -245,7 +245,7 @@ export function getIntegratedTerminalQuitSnapshot(options?: { includeIdle?: bool
   // a long command on another machine dies without the prompt its local
   // equivalent would get. They cannot be foreground-filtered like local
   // sessions: the process lives on the owner.
-  const remote = federationBridge?.quitSnapshotSessions() ?? [];
+  const remote = federationBridge?.quitSnapshotSessions(options) ?? [];
   if (remote.length === 0) {
     return local;
   }
