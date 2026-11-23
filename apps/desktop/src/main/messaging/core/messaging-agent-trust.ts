@@ -66,8 +66,8 @@ export class MessagingAgentTrust {
   async evaluate(policy: unknown, event: MessagingInboundEvent, roleIds?: readonly string[]): Promise<AgentTrustDecision> {
     const evidence: AgentTrustEvidence = {
       provider: event.channel.channel,
-      // The pre-#258 runtime only has the legacy namespace. A retained
-      // provider account identity is never substituted for a connection ID.
+      // Ingress admits a concrete stamp only from its verified connection.
+      connectionId: event.channel.connectionId,
       conversation: event.channel.conversation,
       actorId: event.actor.platformUserId,
       roleIds,

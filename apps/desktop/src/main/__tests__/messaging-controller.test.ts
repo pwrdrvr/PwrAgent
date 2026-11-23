@@ -17106,6 +17106,32 @@ describe("MessagingController", () => {
     expect(harness.delivered).not.toContainEqual(expect.objectContaining({ kind: "confirmation", title: "Message queued" }));
   });
 
+  it("uses only the exact admitted connection for Agent trust, including observed-only Automation admission", async () => {
+    const harness = await createHarness();
+    const connectionId = "mc_" + "1".repeat(32);
+    await fc.assert(fc.asyncProperty(fc.uuid(), async (otherId) => {
+      const event = buildTextEvent("Fixture request");
+      const otherConnectionId = `mc_${otherId.replaceAll("-", "")}`;
+      const actor = { kind: "actor-id", actorId: event.actor.platformUserId } as const;
+      for (const observedOnly of [false, true]) {
+        for (const stamp of [undefined, connectionId, otherConnectionId]) {
+          for (const selector of [undefined, connectionId]) {
+            const allowed = await harness.controller.admitAgentTrust({
+              ...event, observedOnly, channel: { ...event.channel, connectionId: stamp },
+            }, {
+              backend: "codex", threadId: "fixture-agent", policy: {
+                version: 1, denialResponse: "silent", rules: [{
+                  provider: "telegram", connectionId: selector, allOf: [actor],
+                }],
+              },
+            });
+            expect(allowed).toBe(stamp === selector);
+          }
+        }
+      }
+    }), { numRuns: 10 });
+  });
+
   it("rejects restricted Agent media before downloading the attachment or starting a turn", async () => {
     const downloadAttachment = vi.fn();
     const getThreadAgentTrustPolicy = vi.fn<NonNullable<MessagingBackendBridge["getThreadAgentTrustPolicy"]>>()

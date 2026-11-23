@@ -105,25 +105,28 @@ describe("MessagingTurnAdmission", () => {
     );
   });
 
-  it("keeps each debounce bundle on the conversation that supplied its input", async () => {
+  it("keeps each debounce bundle on the conversation and connection that supplied its input", async () => {
     vi.useFakeTimers();
     const onBundleReady = vi.fn();
     const admission = new MessagingTurnAdmission({ debounceMs: 500, onBundleReady });
-    await fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { maxLength: 6 }), async (interleaving) => {
+    const routes = [undefined, "mc_" + "1".repeat(32), "mc_" + "2".repeat(32)]
+      .flatMap((connectionId) => ["shared", "private"].map((id) => ({ connectionId, id })));
+    await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom(...routes), { maxLength: 6 }), async (interleaving) => {
       onBundleReady.mockClear();
-      for (const [index, shared] of [false, ...interleaving, true].entries()) {
+      for (const [index, { connectionId, id }] of [...interleaving, ...routes].entries()) {
         const base = buildBinding();
-        const channel = { ...base.channel, conversation: { ...base.channel.conversation, id: shared ? "shared" : "private" } };
+        const channel = { ...base.channel, connectionId, conversation: { ...base.channel.conversation, id } };
         await admission.append({
           binding: { ...base, channel, id: channel.conversation.id },
           event: { ...buildTextEvent(`fixture-${index}`), channel },
         });
       }
       await vi.advanceTimersByTimeAsync(500);
-      expect(onBundleReady).toHaveBeenCalledTimes(2);
+      expect(onBundleReady).toHaveBeenCalledTimes(routes.length);
       for (const [bundle] of onBundleReady.mock.calls) {
         expect(bundle.events.every((event: MessagingInboundTextEvent) =>
-          event.channel.conversation.id === bundle.binding.channel.conversation.id)).toBe(true);
+          event.channel.conversation.id === bundle.binding.channel.conversation.id
+          && event.channel.connectionId === bundle.binding.channel.connectionId)).toBe(true);
       }
     }));
     admission.dispose();

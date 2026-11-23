@@ -3,6 +3,7 @@ import type {
   MessagingInboundMediaEvent,
   MessagingInboundTextEvent,
 } from "@pwragent/messaging-interface";
+import { scopeMessagingRoutingKey } from "@pwragent/messaging-interface";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { federatedThreadIdentityKey, isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
 
@@ -44,8 +45,8 @@ export class MessagingTurnAdmission {
     onSettled?: (accepted: boolean) => void;
   }): Promise<void> {
     const threadKey = threadKeyForBinding(params.binding);
-    const { channel, conversation } = params.event.channel;
-    const pendingKey = JSON.stringify([
+    const { channel, connectionId, conversation } = params.event.channel;
+    const pendingKey = scopeMessagingRoutingKey(connectionId, JSON.stringify([
       threadKey,
       params.binding.id,
       channel,
@@ -55,7 +56,7 @@ export class MessagingTurnAdmission {
       conversation.workspaceId,
       params.event.actor.platformUserId,
       params.binding.privateReplyContinuation?.requestId,
-    ]);
+    ]));
     const flushNow = params.immediate || this.options.debounceMs <= 0;
     const existing = this.pendingByRoute.get(pendingKey);
     if (existing) {

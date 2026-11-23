@@ -1723,6 +1723,9 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       });
       this.setPlatformHealth(adapter.channel, "unknown");
       await this.startAdapterWithDeadline(adapter, async (event) => {
+        // Only singleton routes are registered. Reject out-of-scope events
+        // before pairing, observation, or workflow admission.
+        if (event.channel.connectionId !== undefined || event.channel.channel !== adapter.channel) return;
         assertMessagingInboundReceipt(event);
         // Activity ping fires on every inbound, before authorization checks.
         this.emitPlatformActivity(adapter.channel);

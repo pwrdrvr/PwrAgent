@@ -55,8 +55,9 @@ reply. Historical replay supplies no live actor evidence and is disabled for
 restricted Agents. Local operator runs and scheduled runs have no inbound
 messaging actor.
 
-Concrete connections have no evidence issuer in the legacy runtime. These
-rules fail closed. Federation messaging cannot supply policy evidence on the
+Named connections supply evidence through the exact stamp admitted from
+their verified running adapter. The legacy singleton runtime rejects stamped
+traffic at ingress. Federation messaging cannot supply policy evidence on the
 destination profile. Restricted Agents therefore refuse peer messaging turns
 and peer reviews, steering and request answers until those paths can preserve
 the source authority. Changes apply to new admissions. Work already accepted
