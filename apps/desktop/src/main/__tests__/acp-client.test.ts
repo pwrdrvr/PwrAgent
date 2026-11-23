@@ -1228,6 +1228,7 @@ describe("AcpAgentClient", () => {
       return buildPendingRequestResponse(request, allow);
     });
     const client = new AcpAgentClient({ backendId: "acp:antigravity", store, transport, onRequest });
+    await client.initialize();
     const session = await client.startSession({ cwd: "/repo", executionMode: "default" });
 
     async function checkRequest(name: string, kind: string, mcp: boolean) {
