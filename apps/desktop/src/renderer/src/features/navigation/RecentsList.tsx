@@ -35,6 +35,7 @@ import { KeepAtTopSlot } from "./KeepAtTopSlot";
 import { SidebarShowMore } from "./SidebarShowMore";
 import { renderSubthreadPages, subthreadPageResources } from "./SubthreadPagination";
 import { ThreadRow, type ThreadRowRef } from "./ThreadRow";
+import { visibleStackTray } from "../stacks/stack-presentation";
 import { isRenamingRow, type RenamingThreadRow } from "./thread-action-hotkeys";
 import { AttentionReviewReadout, AttentionTurnReadouts, describeAttentionCounts } from "./AttentionSignals";
 import { isThreadActive, isThreadAwaitingReview, isThreadRemoteWork } from "./ThreadRowStatus";
@@ -385,8 +386,9 @@ export function RecentsList(props: RecentsListProps) {
       return null;
     }
 
+    const stackTrayKey = visibleStackTray(parent, children);
     return (
-      <div className="subthread-list" role="list" aria-label={`Sub-threads of ${parent.title}`} data-subthread-tray={parentKey}>
+      <div className={`subthread-list${stackTrayKey ? " subthread-list--stack" : ""}`} role="list" aria-label={`Sub-threads of ${parent.title}`} data-subthread-tray={parentKey}>
         {/* The parent's own workers lead its tray. Trailing them after every
             child read as the last child's workers and buried them under a
             long child list. */}
@@ -438,6 +440,7 @@ export function RecentsList(props: RecentsListProps) {
               includeLinkedDirectories
               nested
               nestedDepth={trays.depth(childKey)}
+              stackTrayKey={stackTrayKey}
               revealSelectedThreadRequest={props.revealSelectedThreadRequest}
               selectedThreadKey={props.selectedThreadKey === childKey ? childKey : undefined}
               selected={props.selectedThreadKeys?.has(childKey)}

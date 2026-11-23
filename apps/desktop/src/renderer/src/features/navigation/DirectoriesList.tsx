@@ -84,6 +84,7 @@ import {
   NativeSubAgentsDisclosure,
 } from "./NativeSubAgentsDisclosure";
 import { ThreadRow, type ThreadRowRef } from "./ThreadRow";
+import { visibleStackTray } from "../stacks/stack-presentation";
 import {
   formatActiveThreadCount,
   formatLocalActiveThreadCount,
@@ -1395,6 +1396,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
       // direct children reorder with `useSubthreadReorderDrag`, the same
       // pointer drag RecentsList uses.
       const directChildKeySet = new Set(directChildKeys);
+      const stackTrayKey = visibleStackTray(parent, children);
       // Any row in the tray drags to nest it under another row, a sole
       // child or a grandchild too; only direct children also reorder.
       const groupable = threadSupportsFederationCapability(parent, "thread_grouping");
@@ -1409,7 +1411,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
         // `role="list"` there fails `aria-required-children` — list owns only
         // listitem. This is the `<li><ul>...</ul></li>` shape.
         <div className="directory-row__threads-slot" role="listitem">
-          <div className="subthread-list subthread-list--compact" role="list" aria-label={`Sub-threads of ${parent.title}`} data-subthread-tray={parentKey}>
+          <div className={`subthread-list subthread-list--compact${stackTrayKey ? " subthread-list--stack" : ""}`} role="list" aria-label={`Sub-threads of ${parent.title}`} data-subthread-tray={parentKey}>
             {/* The parent's own workers lead its tray. Trailing them after every
                 child read as the last child's workers and buried them under a
                 long child list. */}
@@ -1460,6 +1462,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                 linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(child)}
                 nested
                 nestedDepth={trays.depth(childKey)}
+                stackTrayKey={stackTrayKey}
                 revealSelectedThreadRequest={rowRevealSelectedThreadRequest}
                 selectedThreadKey={props.selectedItemKey === childKey ? childKey : undefined}
                 selected={props.selectedThreadKeys?.has(childKey)}

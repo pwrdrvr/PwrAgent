@@ -117,6 +117,7 @@ describe("overlay row write cost", () => {
     const db = stateDb.raw;
     db.pragma(`recursive_triggers = ${recursive ? "ON" : "OFF"}`);
     expect((db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'threads' ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name)).toEqual([
+      "app_update_notice_remove_ineligible_agent",
       "thread_navigation_relationships_delete", "thread_navigation_relationships_insert", "thread_navigation_relationships_update",
       "thread_sub_agents_capture_insert", "thread_sub_agents_capture_update",
       "thread_usage_activities_capture_insert", "thread_usage_activities_capture_update",

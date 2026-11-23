@@ -1200,6 +1200,31 @@ describe("DesktopMessagingRuntime", () => {
     expect(automationInboundHandler).toHaveBeenCalledOnce();
   });
 
+  it("admits only the singleton provider event to the restart reply path", async () => {
+    const { holdUpdateBlockingWork } = await import("../app-update-admission");
+    const { MessagingController } = await import("../messaging/core/messaging-controller");
+    const reportRestart = vi.spyOn(MessagingController.prototype, "reportUpdateRestarting");
+    const { adapter } = await startMentionOnlyRuntime({
+      automationInboundHandler: vi.fn(async () => false),
+      automationInboundMatches: vi.fn(() => false),
+    });
+    const release = holdUpdateBlockingWork();
+    try {
+      expect(release).toBeDefined();
+      for (const channel of [
+        { ...ambientEvent.channel, connectionId: "unknown-connection" },
+        { ...ambientEvent.channel, channel: "slack" as const },
+        ambientEvent.channel,
+      ]) {
+        await adapter.listener?.({ ...ambientEvent, channel });
+      }
+      expect(reportRestart).toHaveBeenCalledExactlyOnceWith(ambientEvent);
+    } finally {
+      release?.();
+      reportRestart.mockRestore();
+    }
+  });
+
   it("delivers @mention-only messages an automation filter matches", async () => {
     const automationInboundHandler = vi.fn(async () => false);
     // The automation's own filter matches this ambient (non-@mention) message,

@@ -979,6 +979,12 @@ export class LineAdapter implements LineProviderAdapter {
     return false;
   }
 
+  isAuthorizedNoticeDestination(channel: MessagingChannelRef): boolean {
+    return channel.channel === this.channel && (channel.conversation.kind === "dm"
+      ? this.authorizedActorIds.includes(channel.conversation.id)
+      : this.isAuthorizedConversation(channel));
+  }
+
   private eventMentionsBot(event: LineWebhookEvent): boolean {
     const mentionees = event.message?.mention?.mentionees ?? [];
     return mentionees.some((mention) => mention.isSelf === true || mention.userId === this.botUserId);

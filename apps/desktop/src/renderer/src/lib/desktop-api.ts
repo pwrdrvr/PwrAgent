@@ -828,6 +828,8 @@ import type {
   AppUpdateCancelResult,
   AppUpdateCheckResult,
   AppUpdateInstallResult,
+  AppUpdateNoticeAgent,
+  AppUpdateNoticeAgentIdentity,
   AppUpdateReleaseVersions,
   AppUpdateStatus,
 } from "../../../shared/app-metadata";
@@ -982,6 +984,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   openAppLogWindow?: () => Promise<void>;
   onAppLogEntry?: (callback: (entry: AppLogEntry) => void) => () => void;
   checkForAppUpdates?: () => Promise<AppUpdateCheckResult>;
+  listAppUpdateNoticeAgents?: () => Promise<AppUpdateNoticeAgent[]>;
+  setAppUpdateNoticeAgent?: (request: AppUpdateNoticeAgentIdentity & { enabled: boolean }) => Promise<boolean>;
   readAppUpdateStatus?: () => Promise<AppUpdateStatus>;
   readAppUpdateReleaseVersions?: () => Promise<AppUpdateReleaseVersions>;
   onAppUpdateStatus?: (callback: (status: AppUpdateStatus) => void) => () => void;

@@ -26580,7 +26580,7 @@ describe("MessagingController", () => {
     });
   });
 
-  it("reports specific copy when a first-prompt Full Access approval lost its prompt", async () => {
+  it("expires a first-prompt Full Access approval and clears its restart blocker", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.launchpadDefaults = {
       ...navigation.launchpadDefaults,
@@ -26611,7 +26611,11 @@ describe("MessagingController", () => {
     );
     await harness.controller.handleInboundEvent(buildTextEvent("fix bug"));
     const warning = harness.delivered.at(-1);
-    messagingModules(harness.controller).inbound.pendingFullAccessNewThreadPrompts.clear();
+    expect(harness.controller.hasUnsubmittedUpdateBlockingWork()).toBe(true);
+    const pending = messagingModules(harness.controller).inbound.pendingFullAccessNewThreadPrompts;
+    for (const prompt of pending.values()) prompt.confirmationExpiresAt = 0;
+    expect(harness.controller.hasUnsubmittedUpdateBlockingWork()).toBe(false);
+    expect(pending.size).toBe(0);
 
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({

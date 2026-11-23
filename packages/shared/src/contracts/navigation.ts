@@ -131,6 +131,8 @@ export type NavigationLaunchpadAgent = Pick<
 
 export type NavigationThreadSummary = AppServerThreadSummary & {
   codexSkillProfile?: CodexThreadSkillProfile;
+  /** Read-only stack membership projected by this checkout's owner. */
+  stacks?: import("../stacks/stack-status").ThreadStackMembership[];
   /** Owner-projected navigation group. Workspace paths still come from linkedDirectories. */
   checkoutProject?: NavigationCheckoutProject;
   /** Most recent completed probe for `gitWorkingState`, even when its value was unchanged. */
@@ -2363,6 +2365,7 @@ export type NavigationRowAgent = {
  * durable protocol identity; consumers must use it for owner-routed reads.
  */
 export type NavigationRow = {
+  stacks?: NavigationThreadSummary["stacks"];
   ref: NavigationIdentity;
   rowRevision: string;
   id: ThreadIdentifier;
@@ -3198,8 +3201,10 @@ export type SetThreadMonitorJobSuggestionsResponse = {
 };
 
 export type SetThreadJobMonitorCreationRequest = {
+  backend?: "codex" | "claude";
   threadId: ThreadIdentifier;
   enabled: boolean;
+  federationTarget?: FederationTarget;
 };
 
 export type SetThreadJobMonitorCreationResponse = {

@@ -113,7 +113,15 @@ test("Troubleshooting persists the Chromium trace opt-in independently of Start 
     }, rendererPid);
     expect(hasRendererMetric).toBe(true);
     await pane.getByRole("button", { name: "Start Capture (Immediate)", exact: true }).click();
-    await expect(page.getByText("Renderer CPU profile captured", { exact: true })).toBeVisible();
+    const rendererNotice = page.getByText("Renderer CPU profile captured", { exact: true });
+    const nextNotice = page.getByRole("navigation", { name: "Durable notices", exact: true })
+      .getByRole("button", { name: "Next notice", exact: true })
+      .and(page.locator(":enabled"));
+    // The main process can also match a rule and occupy the first notice.
+    // Wait for the renderer notice or the carousel that makes it reachable.
+    await expect(rendererNotice.or(nextNotice).first()).toBeVisible();
+    if (!await rendererNotice.isVisible()) await nextNotice.click();
+    await expect(rendererNotice).toBeVisible();
     const diagnostics = path.join(path.dirname(stateDbPathForHomeRoot(app.homeRoot)), "diagnostics");
     const sessions = await Promise.all((await readdir(diagnostics)).filter((name) => name.startsWith("hot-cpu-"))
       .map(async (name) => ({

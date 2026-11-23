@@ -47,6 +47,8 @@ import type {
   PwrAgentMessagingContext,
 } from "@pwragent/shared/contracts/messaging-tools";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { beginUpdateBlockingWork, updateBlockingWorkIsHeld } from "../app-update-admission";
+import { isAppUpdateCallback, type MessagingAppUpdateControls } from "./app-update-controls";
 import type {
   MessagingBindingRecord,
   MessagingAdapterAuthorizationUpdate,
@@ -134,6 +136,7 @@ export type DesktopMessagingAdapter = {
   readDmPairingAccountId?(): string | undefined;
   retainedSourceConnectionId?: MessagingAdapter["retainedSourceConnectionId"];
   authorizeRetainedSource?: MessagingAdapter["authorizeRetainedSource"];
+  isAuthorizedNoticeDestination?(channel: MessagingChannelRef): boolean;
   authorizedActorIds: readonly string[];
   capabilityProfile: MessagingCapabilityProfile;
   channel: MessagingChannelKind;
@@ -483,6 +486,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   private automationsChangedUnsubscribe?: () => void;
   private previewScopesChangedUnsubscribe?: () => void;
   private controllers: MessagingController[] = [];
+  private appUpdateControls?: MessagingAppUpdateControls;
   private readonly runningAdapters = new Map<
     MessagingChannelKind,
     RunningMessagingAdapter
@@ -1231,6 +1235,33 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     };
   }
 
+  selectAppUpdateNoticeDelivery(binding: MessagingBindingRecord) {
+    const channel = binding.channel.channel;
+    const running = this.runningAdapters.get(channel);
+    if (!this.started || this.pendingAdapterStopReason || !running) return undefined;
+    return (...args: Parameters<MessagingController["deliverAppUpdateNotice"]>) => {
+      const [current, text, machine, guard, readyVersion] = args;
+      return running.controller.deliverAppUpdateNotice(current, text, machine, {
+        ...guard,
+        isCancelled: () => guard.isCancelled() || !this.started
+          || Boolean(this.pendingAdapterStopReason) || this.runningAdapters.get(channel) !== running
+          || running.adapter.isAuthorizedNoticeDestination?.(current.channel) !== true,
+      }, readyVersion);
+    };
+  }
+
+  setAppUpdateControls(controls: MessagingAppUpdateControls | undefined): void {
+    this.appUpdateControls = controls;
+  }
+
+  isAppUpdateConnectionCurrent(binding: MessagingBindingRecord, connectionId: string): boolean {
+    return this.runningAdapters.get(binding.channel.channel)?.adapter.retainedSourceConnectionId?.() === connectionId;
+  }
+
+  countUnsubmittedUpdateBlockingWork(): number {
+    return this.controllers.filter((controller) => controller.hasUnsubmittedUpdateBlockingWork()).length;
+  }
+
   onPairingChanged(
     listener: (event: MessagingPairingChangedEvent) => void,
   ): () => void {
@@ -1663,6 +1694,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     }
     const controller = new MessagingController({
       adapter,
+      appUpdateControls: () => this.started && !this.pendingAdapterStopReason
+        && this.runningAdapters.get(adapter.channel)?.adapter === adapter ? this.appUpdateControls : undefined,
       requestStore: createMessagingRequestStorage(),
       sourceInstanceId: getDesktopFederationRuntime().messagingSourceInstanceId(),
       attachmentPolicy: config.attachmentPolicy,
@@ -1758,10 +1791,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         await controller.handleInboundChannelMetadata(update);
       });
       this.setPlatformHealth(adapter.channel, "unknown");
-      await this.startAdapterWithDeadline(adapter, async (event) => {
-        // Only singleton routes are registered. Reject scoped events before
-        // pairing, observation, or the automation-only path sees them.
-        if (event.channel.connectionId !== undefined || event.channel.channel !== adapter.channel) return;
+      const handleInbound = async (event: MessagingInboundEvent) => {
         assertMessagingInboundReceipt(event);
         // Activity ping fires on every inbound, before authorization checks.
         this.emitPlatformActivity(adapter.channel);
@@ -1849,6 +1879,19 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
             eventKind: event.kind,
           });
         }
+      };
+      await this.startAdapterWithDeadline(adapter, async (event) => {
+        // Only singleton routes are registered. Reject out-of-scope events
+        // before the update gate or any downstream handler sees them.
+        if (event.channel.connectionId !== undefined || event.channel.channel !== adapter.channel) return;
+        if (event.kind === "callback" && isAppUpdateCallback(event)) return await handleInbound(event);
+        if (updateBlockingWorkIsHeld()) {
+          await controller.reportUpdateRestarting(event);
+          return;
+        }
+        const endUpdateBlockingWork = beginUpdateBlockingWork();
+        try { await handleInbound(event); }
+        finally { endUpdateBlockingWork(); }
       });
     } catch (error) {
       try {

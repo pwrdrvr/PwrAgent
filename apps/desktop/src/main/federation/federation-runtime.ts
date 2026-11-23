@@ -211,6 +211,8 @@ import type {
   SetThreadAgentResponse,
   SetThreadTokenMiserRequest,
   SetThreadTokenMiserResponse,
+  SetThreadJobMonitorCreationRequest,
+  SetThreadJobMonitorCreationResponse,
 } from "@pwragent/shared/contracts/navigation";
 import type {
   AppServerListSkillsResponse,
@@ -471,6 +473,7 @@ import {
   getNavigationDirectorySetAnnouncer,
   loadLocalNavigationQueryIndex,
   navigationPullRequestProjection,
+  navigationQueryShowsStacks,
 } from "../app-server/navigation-query-source";
 import { resolveNavigationWorktreeProjects } from "../app-server/navigation-worktree-projects";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
@@ -781,6 +784,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "turn_assistant_reply",
   "project_forge_automation",
   "thread_mcp_connections",
+  "thread_job_monitor_control",
   "thread_todos",
   "thread_todo_feed",
   "thread_todo_dispatch_target",
@@ -7786,7 +7790,7 @@ function localBackendOperations(): FederationBackendOperations {
             loadIndex: async () => {
               await awaitStartupProviderCoverage({ query: request.query, deadlineAt, signal });
               return loadLocalNavigationQueryIndex({ backend: request.backend,
-                callerReason: "federation-navigation-query", signal });
+                callerReason: "federation-navigation-query", includeStacks: navigationQueryShowsStacks(request.query), signal });
             },
             request, scopeKey,
           }),
@@ -7882,6 +7886,9 @@ function localBackendOperations(): FederationBackendOperations {
     async resolveThread(request) {
       const thread = await getDesktopBackendRegistry().resolveThread(request);
       return thread ? { thread } : {};
+    },
+    async isCodexThreadActive(threadId) {
+      return await getDesktopBackendRegistry().isThreadActiveForService({ backend: "codex", threadId });
     },
     async resolveThreadAdmissionState(request) {
       return await new DesktopMessagingBackendBridge()
@@ -8588,6 +8595,9 @@ function localBackendOperations(): FederationBackendOperations {
     },
     async setThreadTokenMiser(request: SetThreadTokenMiserRequest): Promise<SetThreadTokenMiserResponse> {
       return await getDesktopBackendRegistry().setThreadTokenMiser(request);
+    },
+    async setThreadJobMonitorCreation(request: SetThreadJobMonitorCreationRequest): Promise<SetThreadJobMonitorCreationResponse> {
+      return await getDesktopBackendRegistry().setThreadJobMonitorCreation(request);
     },
     async setThreadModelSettings(
       request: SetThreadModelSettingsRequest,

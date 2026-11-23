@@ -281,6 +281,7 @@ function expectedAction(gate: Gate): "direct" | "none" | "auto_merge" | "enqueue
 const QUEUE_REFUSAL = "Repository rule violations found\n\nChanges must be made through the merge queue";
 /** What `gh pr merge` prints when it queues the PR itself instead of merging. */
 const GH_QUEUED = "! The merge strategy for main is set by the merge queue\n✓ Pull request fixture/project#3631 will be added to the merge queue for main when ready";
+const trunkTarget = { base: { ref: "main", repo: { default_branch: "main" } } };
 
 function seenRepository(seen: boolean, host = "github.com") {
   forgetMergeQueueRepositories();
@@ -289,6 +290,104 @@ function seenRepository(seen: boolean, host = "github.com") {
 
 describe("merge_pull_request and merge queues", () => {
   beforeEach(() => forgetMergeQueueRepositories());
+
+  it("merges or enables auto-merge for a catalog layer only after every lower layer has merged and its base is trunk", async () => {
+    const layer = fc.record({ merged: fc.boolean() });
+    await fc.assert(fc.asyncProperty(
+      fc.array(layer, { maxLength: 5 }), fc.boolean(), fc.boolean(),
+      async (below, onTrunk, queue) => {
+        seenRepository(queue);
+        const target = below.length + 1;
+        const base = onTrunk ? "main" : below.length ? `layer-${below.length}` : "release";
+        const stackCatalogs = [{
+          schemaVersion: 1 as const,
+          repository: "github.com:fixture/project",
+          stacks: [{
+            trunk: { branch: "main", head },
+            branches: Array.from({ length: target }, (_, i) => ({
+              branch: `layer-${i + 1}`, head, base: head,
+              pullRequest: { number: i + 1, id: `PR_${i + 1}`, url: `https://github.com/fixture/project/pull/${i + 1}` },
+            })),
+          }],
+        }];
+        const writes: string[] = [];
+        const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
+          const url = new URL(String(input));
+          const query = init?.body ? (JSON.parse(String(init.body)) as { query?: string }).query ?? "" : "";
+          if (query.includes("isMergeQueueEnabled")) {
+            const data = gateData({ required: true, entry: null, checks: "PENDING", lastRemoved: false });
+            return json({ data: { repository: { pullRequest: { ...data.repository.pullRequest, baseRefName: base } } } });
+          }
+          if (query.includes("enablePullRequestAutoMerge")) {
+            writes.push("auto-merge");
+            return json({ data: { enablePullRequestAutoMerge: { pullRequest: { autoMergeRequest: { enabledAt: "2026-11-22" } } } } });
+          }
+          if (init?.method === "PUT") {
+            writes.push("merge");
+            return json({ merged: true });
+          }
+          const number = Number(url.pathname.split("/").at(-1));
+          return json({
+            number,
+            merged: below[number - 1]?.merged ?? false,
+            state: below[number - 1]?.merged ? "closed" : "open",
+            head: { ref: `layer-${number}`, sha: head, repo: { full_name: "fixture/project" } },
+            base: { ref: number === target ? base : "main", repo: { default_branch: "main" } },
+          });
+        }) as unknown as typeof fetch;
+        const client = new GithubPrToolClient({ ci: new ForgeCiClient({
+          fetch: fetcher, githubToken: async () => "fixture-token", gitlab: { readApi: vi.fn() }, enabled: () => true, takeToken: () => true,
+        }) });
+        const result = client.execute("merge_pull_request", { number: target, expectedHeadSha: head }, { ...ctx(), ...{ stackCatalogs } });
+        if (onTrunk && below.every((layer) => layer.merged)) {
+          await expect(result).resolves.toMatchObject(queue ? { autoMergeEnabled: true } : { merged: true });
+          expect(writes).toEqual([queue ? "auto-merge" : "merge"]);
+        } else {
+          await expect(result).rejects.toMatchObject({ code: "stack_parent_open" });
+          expect(writes).toEqual([]);
+        }
+      },
+    ));
+  });
+
+  it("refuses an observed retarget before either merge path", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), async (required) => {
+      seenRepository(true);
+      const writes: string[] = [];
+      const fetcher = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+        if (init?.method === "GET") return json({ state: "open", base: { ref: "main", repo: { default_branch: "main" } } });
+        const query = init?.body ? JSON.parse(String(init.body)).query : undefined;
+        if (query?.includes("isMergeQueueEnabled")) {
+          const data = gateData({ required, entry: null, checks: "SUCCESS", lastRemoved: false });
+          return json({ data: { repository: { pullRequest: { ...data.repository.pullRequest, baseRefName: "parent" } } } });
+        }
+        writes.push(init?.method ?? "");
+        return json({ merged: true });
+      }) as unknown as typeof fetch;
+      const client = new GithubPrToolClient({ ci: new ForgeCiClient({
+        fetch: fetcher, githubToken: async () => "fixture-token", gitlab: { readApi: vi.fn() }, enabled: () => true, takeToken: () => true,
+      }) });
+      await expect(client.execute("merge_pull_request", { number: 7, expectedHeadSha: head }, ctx()))
+        .rejects.toMatchObject({ code: "stack_parent_open" });
+      const gh = new GithubPrFetcher({
+        graphqlClient: { fetchPullRequests: vi.fn(), fetchPullRequestsForBranches: vi.fn() },
+        discoverGhCommands: async () => ({ selectedCommand: "/fixture/gh" }) as never,
+        runGhCommand: async (_command, args) => {
+          if (args[0] === "api" && args[1] === "graphql") {
+            const data = gateData({ required, entry: null, checks: "SUCCESS", lastRemoved: false });
+            data.repository.pullRequest.baseRefName = "parent";
+            return { stdout: JSON.stringify({ data }) };
+          }
+          if (args[0] === "api") return { stdout: JSON.stringify(trunkTarget) };
+          writes.push(args.join(" "));
+          return { stdout: "" };
+        },
+      });
+      await expect(gh.mergePullRequest({ pullRequest: "https://github.com/fixture/project/pull/7", method: "squash", checkStackOrder: true }))
+        .rejects.toMatchObject({ code: "stack_parent_open" });
+      expect(writes).toEqual([]);
+    }), { examples: [[false], [true]] });
+  });
 
   it("never merges past a queue, and asks nothing more of a repository never seen with one", async () => {
     await fc.assert(fc.asyncProperty(gateArb, fc.boolean(), async (gate, seen) => {
@@ -304,6 +403,7 @@ describe("merge_pull_request and merge queues", () => {
         if (query.includes("enqueuePullRequest")) return respond({ data: { enqueuePullRequest: { mergeQueueEntry: { state: "QUEUED", position: 4, enqueuedAt: "2026-11-11T18:10:00Z" } } } });
         if (query.includes("enablePullRequestAutoMerge")) return respond({ data: { enablePullRequestAutoMerge: { pullRequest: { autoMergeRequest: { enabledAt: "2026-11-11T18:10:00Z" } } } } });
         if (query.includes("isMergeQueueEnabled")) return respond({ data: gateData(gate) });
+        if ((init?.method ?? "GET") === "GET") return respond(trunkTarget);
         if (init?.method === "PUT") {
           return gate.required
             ? respond({ message: QUEUE_REFUSAL }, 405)
@@ -365,6 +465,7 @@ describe("merge_pull_request and merge queues", () => {
       const calls: string[] = [];
       const fetcher = (async (_input: string | URL | Request, init?: RequestInit) => {
         calls.push(init?.method ?? "GET");
+        if ((init?.method ?? "GET") === "GET") return json(trunkTarget);
         if (init?.method === "PUT") return json({ merged: true, sha: "c".repeat(40) });
         return gateResponse();
       }) as unknown as typeof fetch;
@@ -374,7 +475,7 @@ describe("merge_pull_request and merge queues", () => {
       const context = { ...ctx(), repository: { ...repo, host } };
       await expect(client.execute("merge_pull_request", { number: 3631, expectedHeadSha: head, method: "squash" }, context))
         .resolves.toMatchObject({ merged: true, method: "squash" });
-      expect(calls).toEqual(["POST", "PUT"]);
+      expect(calls).toEqual(["GET", "POST", "PUT"]);
     }), { numRuns: 16 });
   });
 
@@ -400,6 +501,7 @@ describe("merge_pull_request and merge queues", () => {
     seenRepository(true);
     const pending: Gate = { required: true, entry: null, checks: "PENDING", lastRemoved: false };
     const fetcher = (async (_input: string | URL | Request, init?: RequestInit) => {
+      if ((init?.method ?? "GET") === "GET") return json(trunkTarget);
       const query = (init?.body ? JSON.parse(String(init.body)) as { query?: string } : {}).query ?? "";
       if (query.includes("enablePullRequestAutoMerge")) return json({ data: { enablePullRequestAutoMerge: { pullRequest: { autoMergeRequest: null } } } });
       return json({ data: gateData(pending) });

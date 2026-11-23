@@ -32,6 +32,7 @@ import type {
   MessagingManagedConversationRightsRequest,
   MessagingManagedConversationRightsResult,
   MessagingCommandVerb,
+  MessagingChannelRef,
   MessagingRateLimitInfo,
   MessagingAuthorizationRejection,
   MessagingRejectedInboundEvent,
@@ -1729,6 +1730,16 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     }
   }
 
+  isAuthorizedNoticeDestination(channel: MessagingChannelRef): boolean {
+    if (channel.channel !== this.channel) return false;
+    const target = this.telegramStateFromChannel(channel.conversation);
+    if (!target) return false;
+    const id = String(target.chatId);
+    return channel.conversation.kind === "dm" || channel.conversation.isDirectMessage
+      ? this.isAuthorizedActor(id)
+      : this.options.config.authorizedSupergroupIds?.some((contact) => contact.id === id) === true;
+  }
+
   retainedSourceConnectionId(): string | undefined {
     return this.configuredBotId();
   }
@@ -2503,6 +2514,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         id: telegramCallbackRecordId(handle, intent),
         actionId: action.id,
         allowedActorIds: callbackAllowedActorIds(intent),
+        ...(intent.kind === "confirmation" && intent.callbackAudience ? { audience: intent.callbackAudience } : {}),
         bindingId: callbackBindingId(intent),
         channel: intent.audit.channel,
         createdAt: now,

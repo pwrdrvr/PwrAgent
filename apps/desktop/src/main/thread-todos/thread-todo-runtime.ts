@@ -696,7 +696,7 @@ export function createThreadTodoRunners(params: {
         backend: request.sourceBackend, threadId: request.sourceThreadId, pullRequest,
       }, (thread) => overlay.readThreadPullRequestUrls(thread));
       assertNotHeld(request.pullRequest);
-      return await new GithubPrFetcher().mergePullRequest({ ...request, assertCanMerge: assertNotHeld });
+      return await new GithubPrFetcher().mergePullRequest({ ...request, assertCanMerge: assertNotHeld, checkStackOrder: true });
     },
     startThread: async ({
       sourceBackend, sourceThreadId, cwd: requestedCwd, project, crossProject, placement, action, todo, modelSettings, workMode: chosenWorkMode, environment, speed, plan,

@@ -25,7 +25,8 @@ import { logDebug } from "./registry-debug-log";
 import type { RegistryDependencies } from "./backend-registry-construction";
 import { assertOutpostCodexProvider, assertOwnerCodexModelSelection, assertOwnerExecutionPolicy, ownerSandboxForMode, type OwnerExecutionRequest } from "../owner-runtime-policy";
 import { countAgentTools, filterAdvertisedAgentTools, isAgentToolCallAllowed } from "../headless/outpost-agent-tools";
-import { localAgentToolAllowlist, localAgentToolRefusal, localMemberRole } from "../member-containment";
+import { isAgentToolAdvertisedLocally, localAgentToolAllowlist, localAgentToolRefusal, localMemberRole } from "../member-containment";
+import { beginUpdateBlockingWork, holdUpdateBlockingWork } from "../app-update-admission";
 import { buildPwrAgentMessagingPdfToolRouter } from "../agent-tools/pwragent-messaging-agent-tools";
 import { requestShowThread, ownerNotifications as getDesktopNotificationService, getOwnerHostServices } from "../owner-host";
 import { ThreadCreationLifecycle, type PreparedThreadCreation, type ThreadCreationPreparation } from "@pwragent/owner-core/thread-creation-lifecycle";
@@ -2159,7 +2160,7 @@ export class DesktopBackendRegistry {
       handleAgentMcpConnectionRequest: (...args: Parameters<ThreadMcpConnections["handleAgentMcpConnectionRequest"]>) => this.threadMcpConnections.handleAgentMcpConnectionRequest(...args),
       handleAgentTaskMonitorRequest: (request: TaskMonitorRequest) => this.handleAgentTaskMonitorRequest(request),
       isJobMonitorCreationEnabled: (context: { backend: AppServerBackendKind; threadId: string }) =>
-        this.isJobMonitorCreationEnabled({ ...context, turnId: this.jobMonitorCreationTurnId(context) }),
+        this.isJobMonitorCreationEnabled({ ...context, turnId: this.jobMonitorCreationTurnId(context) }, { forCatalog: true }),
       handleCodexAppServerUnexpectedExit: (...args: Parameters<typeof this.codexRuntimeSupervisor.handleCodexAppServerUnexpectedExit>) => this.codexRuntimeSupervisor.handleCodexAppServerUnexpectedExit(...args),
       handleServerRequest: (...args: Parameters<typeof this.handleServerRequest>) => this.handleServerRequest(...args),
       handoffThreadWorkspace: (...args: Parameters<ThreadWorkspaceService["handoffThreadWorkspace"]>) => this.threadWorkspaceService.handoffThreadWorkspace(...args),
@@ -8306,29 +8307,34 @@ export class DesktopBackendRegistry {
     descriptor: PendingThreadStartDescriptor | undefined,
     run: (pending?: PendingThreadStartReporter) => Promise<T>,
   ): Promise<T> {
-    if (!descriptor) return await run();
-    // A start this owner refuses outright draws no row.
-    this.assertThreadOwnership();
-    this.assertNotBootstrap("startThread");
-    const cwd = source.cwd?.trim();
-    const checkoutKey = descriptor.directoryKey ?? (cwd ? `directory:${cwd}` : undefined);
-    let directoryKey: string | undefined;
-    if (process.platform === "win32" && checkoutKey?.startsWith("directory:")) {
-      try {
-        directoryKey = await resolvePendingWindowsDirectoryKey(
-          checkoutKey, this.navigationDirectoriesByKey, this.overlayStore.readProjectCheckoutGroups?.(),
-        );
-      } catch (error) {
-        backendRegistryLog.warn("pending thread directory lookup failed", { startId: descriptor.startId, error: String(error) });
-      }
-    }
-    const pending = this.beginPendingThreadStart(source, directoryKey ? { ...descriptor, directoryKey } : descriptor);
+    const endUpdateBlockingWork = beginUpdateBlockingWork();
     try {
-      await pending.report("starting");
-      return await run(pending);
+      if (!descriptor) return await run();
+      // A start this owner refuses outright draws no row.
+      this.assertThreadOwnership();
+      this.assertNotBootstrap("startThread");
+      const cwd = source.cwd?.trim();
+      const checkoutKey = descriptor.directoryKey ?? (cwd ? `directory:${cwd}` : undefined);
+      let directoryKey: string | undefined;
+      if (process.platform === "win32" && checkoutKey?.startsWith("directory:")) {
+        try {
+          directoryKey = await resolvePendingWindowsDirectoryKey(
+            checkoutKey, this.navigationDirectoriesByKey, this.overlayStore.readProjectCheckoutGroups?.(),
+          );
+        } catch (error) {
+          backendRegistryLog.warn("pending thread directory lookup failed", { startId: descriptor.startId, error: String(error) });
+        }
+      }
+      const pending = this.beginPendingThreadStart(source, directoryKey ? { ...descriptor, directoryKey } : descriptor);
+      try {
+        await pending.report("starting");
+        return await run(pending);
+      } finally {
+        // Last, after any workspace rollback.
+        await pending.report("ended");
+      }
     } finally {
-      // Last, after any workspace rollback.
-      await pending.report("ended");
+      endUpdateBlockingWork();
     }
   }
 
@@ -9905,6 +9911,27 @@ export class DesktopBackendRegistry {
     return this.listQuietRestartTargets();
   }
 
+  holdAdmissionForIdleUpdate(): (() => void) | undefined {
+    if (this.hasDispatchBlockingIdleUpdate()) return undefined;
+    const release = holdUpdateBlockingWork();
+    if (!release) return undefined;
+    try {
+      this.beginQuietRestart();
+    } catch (error) {
+      release();
+      this.cancelQuietRestart();
+      throw error;
+    }
+    return () => {
+      release();
+      this.cancelQuietRestart();
+    };
+  }
+
+  hasDispatchBlockingIdleUpdate(): boolean {
+    return this.isRestartGateClosed() || this.threadTurnQueue.hasDispatchInProgress();
+  }
+
   /** Restore admission, and recover checkpointed work if preparation had already quieted it. */
   cancelQuietRestart(resumeCheckpoint = false): void {
     if (resumeCheckpoint) {
@@ -11268,13 +11295,18 @@ export class DesktopBackendRegistry {
     agentMessages?: ThreadTurnQueueEntry["agentMessages"];
     invalidIdRecoveryAttempted?: boolean;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
-    assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
-    await this.assertThreadCodexInferenceAvailable(params);
-    if (params.id && scheduledActionIdFromTurnQueueEntry(params.id)
-      && this.durableRestartContinuations.has(params.id)) {
-      await this.assertThreadNotLocked(params.backend, params.threadId);
+    const endUpdateBlockingWork = beginUpdateBlockingWork();
+    try {
+      assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
+      await this.assertThreadCodexInferenceAvailable(params);
+      if (params.id && scheduledActionIdFromTurnQueueEntry(params.id)
+        && this.durableRestartContinuations.has(params.id)) {
+        await this.assertThreadNotLocked(params.backend, params.threadId);
+      }
+      return await listingDiagnostics.trace("workflow", { query: "submit-acceptance" }, () => this.prepareAndStartTurn(params));
+    } finally {
+      endUpdateBlockingWork();
     }
-    return await listingDiagnostics.trace("workflow", { query: "submit-acceptance" }, () => this.prepareAndStartTurn(params));
   }
 
   private async prepareAndStartTurn(params: Parameters<DesktopBackendRegistry["startTurnNow"]>[0]): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
@@ -11362,6 +11394,10 @@ export class DesktopBackendRegistry {
             ...(this.subAgentMonitorService.taskMonitorForThread(params) ? { strictMcpConfig: true } : {}),
             // PwrAgent's server lists tools by this member's containment.
             ...(owned ? { agentToolCatalogKey: localMemberRole() } : {}),
+            ...(owned && !this.subAgentMonitorService.isTaskMonitorThread(params)
+              && isAgentToolAdvertisedLocally("create_monitor_delegation") ? {
+              jobMonitorCreationEnabled: await this.isJobMonitorCreationEnabled(params),
+            } : {}),
             // Directories attached to the thread, so Claude can work in them too.
             attachedDirectories: overlay?.extraLinkedDirectories,
             shellEnvironment: setupVariablesForAgent(
@@ -15993,14 +16029,16 @@ export class DesktopBackendRegistry {
       : undefined;
   }
 
-  async setThreadJobMonitorCreation({ threadId, enabled }: {
+  async setThreadJobMonitorCreation({ backend = "codex", threadId, enabled }: {
+    backend?: "codex" | "claude";
     threadId: string;
     enabled: boolean;
   }): Promise<{ threadId: string; enabled: boolean }> {
-    if (typeof threadId !== "string" || !threadId.trim() || typeof enabled !== "boolean") {
+    if ((backend !== "codex" && backend !== "claude")
+      || typeof threadId !== "string" || !threadId.trim() || typeof enabled !== "boolean") {
       throw new Error("Changing Job Monitor creation requires a thread and an enabled state.");
     }
-    const identity = { backend: "codex", threadId } as const;
+    const identity = { backend, threadId };
     const deferredTurnId = enabled && !(await this.isJobMonitorCreationEnabled(identity))
       ? this.jobMonitorCreationTurnId(identity) : undefined;
     this.overlayStore.setThreadJobMonitorCreation({ ...identity, enabled });
@@ -16016,6 +16054,7 @@ export class DesktopBackendRegistry {
   }
 
   private jobMonitorCreationTurnId(identity: { backend: AppServerBackendKind; threadId: string }): string | undefined {
+    if (identity.backend === "claude") return this.getActiveTurnForThread(identity)?.turnId;
     if (identity.backend !== "codex") return undefined;
     const pendingId = buildPendingTurnId(identity.threadId);
     return this.context.turnState.pendingStartedTurnId(identity.threadId)
@@ -16030,15 +16069,20 @@ export class DesktopBackendRegistry {
     }
   }
 
-  private async isJobMonitorCreationEnabled(context: { backend: AppServerBackendKind; threadId: string; turnId?: string }): Promise<boolean> {
-    return await this.jobMonitorCreationAvailability(context) === "enabled";
+  private async isJobMonitorCreationEnabled(
+    context: { backend: AppServerBackendKind; threadId: string; turnId?: string },
+    options?: { forCatalog: boolean },
+  ): Promise<boolean> {
+    return await this.jobMonitorCreationAvailability(context, options) === "enabled";
   }
 
   private async jobMonitorCreationAvailability({ backend, threadId, turnId }: {
     backend: AppServerBackendKind; threadId: string; turnId?: string;
-  }): Promise<"enabled" | "off" | "next-turn"> {
+  }, options?: { forCatalog: boolean }): Promise<"enabled" | "off" | "next-turn"> {
     if ((await this.overlayStore.getThreadOverlayState({ backend, threadId }))?.jobMonitorCreationEnabled === false) return "off";
-    return turnId && this.jobMonitorCreationDeferredTurns.has(buildActiveTurnKey(backend, threadId, turnId))
+    return turnId && (this.jobMonitorCreationDeferredTurns.has(buildActiveTurnKey(backend, threadId, turnId))
+      // A reconnect must be able to list the desired catalog before calls can use it.
+      || (!options?.forCatalog && backend === "claude" && this.claudeBackend.jobMonitorCreationEnabledForTurn(threadId, turnId) === false))
       ? "next-turn" : "enabled";
   }
 

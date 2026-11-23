@@ -84,6 +84,8 @@ export async function buildOwnerFixture(directory: string, kind: "desktop" | "he
         export const requestShowThread = () => {}, requestOpenThreadMaintenance = () => false;
         export const checkForAppUpdatesNow = () => {}, installDownloadedAppUpdate = () => {}, readAppUpdateStatus = () => {}, requestQuit = () => {};
         export const readAppUpdateStateToken = () => "fixture", reserveAppUpdateQuit = () => () => {};
+        export const readMessagingInstallTarget = () => undefined, getCurrentQuitBlockers = () => ({ count: 0 });
+        export const subscribeAppUpdateNotices = () => () => {};
         export const downloadAppUpdate = () => {}, cancelAppUpdateDownload = () => ({ canceled: false });
         export const sendStarMapCommand = () => {}, readStarMapView = () => {}, readOperatorFocus = () => {};`, loader: "js" }));
       builder.onResolve({ filter: /acp-instance-discovery$/ }, () => ({ path: "acp", namespace: "no-installed-agents" }));

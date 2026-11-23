@@ -58,15 +58,18 @@ code side).
 | `tools.instance_management` | tools (danger: med) | Let the agent manage PwrAgent itself and inspect automations (`manage_pwragent`). |
 | `tools.instance_lifecycle` | tools (danger: high) | Additional explicit grant for `manage_pwragent`, including status. Requires a designated Agent thread and a retained actor whose current provider access is verified. Admin is the only built-in role granting it. Power User + Tools does not. |
 | `tools.messaging_profile_settings` | tools (danger: med) | Read and change the profile default for Development-thread Working Updates. Requires an attributed, active local messaging turn and current provider and RBAC admission. Admin is the only built-in role granting it. |
+| `tools.forge_write` | tools (danger: med) | Let the agent use the operator's GitHub or GitLab account to open, edit, review, and merge pull requests or merge requests, create and edit issues, post comments, resolve review threads, and rerun failed CI jobs. Granted to Admin and Power User + Tools. See [Agent forge tools](forge-agent-tools.md). |
 | `thread.execution.full_access` | danger (danger: high) | Select or resume into full-access execution — near-complete control of the host. |
 | `federation.remote_control` | danger (danger: high) | Browse and drive threads that live on federated peers, not just this machine. Required *in addition to* the action's own permission — see "Federation scope" below. |
 
 Notes on the danger tiers:
 
-- The three `tools.*` permissions gate the **agent acting for the messaging
-  user beyond the bound thread** — a distinct privilege from operating one's
-  own thread, because it can cross-thread-disclose or escalate. `mutate_thread`
-  is the exception: it is gated **per field** at parity with the status-card
+- The `tools.*` permissions govern agent actions on behalf of the messaging
+  user, including cross-thread access, instance and profile management, and
+  forge writes. Forge reads use `tools.thread_inspection`. Forge writes use
+  `tools.forge_write` and remain subject to the
+  [agent forge tool policy](forge-agent-tools.md).
+- `mutate_thread` is gated **per field** at parity with the status-card
   buttons (`permissionsForThreadMutation`), including the full-access danger
   gate for `executionMode: "full-access"`. `archive` has no status-card
   button to match, so it has a permission of its own rather than riding on
@@ -90,7 +93,7 @@ reserved: `admin`, `power_user`, `power_user_tools`, `chat_user`,
 |---|---|---|
 | **Admin** | The whole catalog, computed — it can never silently miss a newly added capability. Includes `federation.remote_control`, so Admin is the only built-in that reaches other instances. | The operator's own accounts. |
 | **Power User** | Everything a thread operator needs EXCEPT `approval.respond.escalation`, `thread.control.archive`, the `tools.*` agent surface, and full access. Enumerated explicitly so new permissions are opt-in. | A trusted colleague driving their own threads. |
-| **Power User + Tools** | Power User plus the three `tools.*` permissions. | A Power User also trusted to let the agent reach beyond the bound thread — but still only on *this* machine. |
+| **Power User + Tools** | Power User plus `tools.thread_inspection`, `tools.thread_orchestration`, `tools.instance_management`, and `tools.forge_write`. | A Power User also trusted to let the agent operate across local threads, manage this instance, and make GitHub or GitLab changes. |
 | **Chat User** | `message.reply`, `elicitation.answer`, `thread.status.view`. | Converse and observe; no control surface. |
 | **Limited Chat User** | `message.reply`, `elicitation.answer`. | Reply and answer questions only. |
 
@@ -157,6 +160,15 @@ handoff threads. An actor or custom role named “owner” confers no authority 
 name; a custom role needs explicit grants. The local provider transport supplies
 thread/turn identity. Discovery and execution re-resolve the persisted Agent
 designation and retained actor, including after response acknowledgement.
+
+An app update card requires the same two permissions. It resolves the actor
+from the provider callback, so neither tap starts an Agent turn. The owner
+checks the current provider account, conversation membership, local binding,
+and opt-in on every tap and again before installation. The confirmation
+belongs to the actor who opened it. An authorized actor in another conversation
+showing the same pending update can cancel the wait. The native installer runs
+once the owner is idle, including the initiating Agent's queue. Open terminals
+also block a chat-requested restart.
 
 `get_messaging_working_updates_default` and
 `set_messaging_working_updates_default` use the current messaging request on

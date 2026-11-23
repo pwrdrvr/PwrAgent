@@ -36,6 +36,10 @@ export class MessagingTurnAdmission {
     },
   ) {}
 
+  hasPendingWork(): boolean {
+    return this.pendingByThreadActorKey.size > 0 || this.startingThreadKeys.size > 0;
+  }
+
   async append(params: {
     binding: MessagingBindingRecord;
     event: MessagingTurnInputEvent;

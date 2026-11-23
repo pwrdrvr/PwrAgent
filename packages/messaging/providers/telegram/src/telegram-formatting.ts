@@ -218,7 +218,7 @@ export function textForTelegramIntent(intent: MessagingSurfaceIntent): string {
     case "approval":
       return renderTelegramHtml([intent.title, intent.body].join("\n\n"), "markdown");
     case "confirmation":
-      return renderTelegramHtml([intent.title, intent.body].join("\n\n"), "plain");
+      return withTelegramAttribution(renderTelegramHtml([intent.title, intent.body].join("\n\n"), "plain"), intent.attribution);
     case "error":
       return renderTelegramHtml([intent.title, intent.body].join("\n\n"), "plain");
     case "dismiss":

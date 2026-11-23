@@ -205,7 +205,7 @@ export function buildSlackBlocksForIntent(params: {
   }
 
   if (
-    (params.intent.kind === "message" || params.intent.kind === "stream_update")
+    (params.intent.kind === "message" || params.intent.kind === "stream_update" || params.intent.kind === "confirmation")
     && params.intent.attribution
   ) {
     blocks.push({

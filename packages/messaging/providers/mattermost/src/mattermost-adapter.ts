@@ -1881,6 +1881,10 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     );
   }
 
+  isAuthorizedNoticeDestination(channel: MessagingChannelRef): boolean {
+    return channel.channel === this.channel && this.isAuthorizedMattermostConversation(channel, channel.conversation.workspaceId);
+  }
+
   private emitUnauthorizedConversation(params: {
     actor: MessagingActorIdentity;
     channel: MessagingChannelRef;

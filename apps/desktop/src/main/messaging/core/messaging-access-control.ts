@@ -22,6 +22,7 @@ import type { DynamicToolPermissionResult } from "../messaging-agent-tool-servic
 import type { MessagingRequestSource } from "./messaging-storage";
 import type { MessagingBindingRecord, MessagingBrowseSessionRecord, MessagingConfirmationIntent, MessagingInboundEvent } from "@pwragent/messaging-interface";
 import { MESSAGING_CALLBACK_HANDLE_TTL_MS } from "@pwragent/messaging-interface";
+import { isAcceptedDeliveryOutcome } from "./messaging-reply-receipts";
 import { buildConfirmationIntent, buildErrorIntent } from "./messaging-renderer.js";
 import { isPromiseLike, type FullAccessRiskPresentationMode } from "./messaging-inbound-helpers";
 import type { MessagingAccessContext } from "./messaging-access-context";
@@ -87,7 +88,7 @@ export class MessagingAccessControl {
     context: FullAccessEscalationContext,
     event: MessagingInboundEvent,
     options: { presentationMode?: FullAccessRiskPresentationMode } = {},
-  ): Promise<void> {
+  ): Promise<{ expiresAt?: number } | undefined> {
     const controls = await this.resolveFullAccessControls();
     const warning = await this.resolveFullAccessWarning(controls, event);
     const actionContext: FullAccessRiskWarningContext =
@@ -193,13 +194,21 @@ export class MessagingAccessControl {
       event,
       expiresAt === undefined ? undefined : { expiresAt },
     );
-    const result = await this.context.host().deliver(intent, presentation.binding, event);
+    const result = await this.context.host().deliver(intent, presentation.binding, event).catch(async (error: unknown) => {
+      await this.context.store.deletePendingIntent(pending.id);
+      throw error;
+    });
+    if (!isAcceptedDeliveryOutcome(result.outcome)) {
+      await this.context.store.deletePendingIntent(pending.id);
+      return undefined;
+    }
     if (result.surface) {
       await this.context.store.upsertPendingIntent({
         ...pending,
         surface: result.surface,
       });
     }
+    return { expiresAt };
   }
 
   async canResumeFullAccessThreads(): Promise<boolean> {

@@ -5913,12 +5913,17 @@ export function useThreadNavigation(
     );
     const hydrated = optimisticThread && threadSummaryIdentityKey(detailThread) === threadSummaryIdentityKey(optimisticThread)
       ? mergeHydratedThreadWithOptimisticState(detailThread, optimisticThread) : detailThread;
-    // The detail read carries no child count; the loaded row does. The Pricing
-    // rail reads it to decide whether a sub-thread total is worth fetching.
+    // The loaded row carries cross-thread projections. Pricing reads its
+    // child count and Pull requests reads its stack membership.
     const row: NavigationPresentedThread | undefined = selectedRow;
-    const configured: NavigationPresentedThread = row?.ordinaryChildCount !== undefined
+    const configured: NavigationPresentedThread = row
       && threadSummaryIdentityKey(row) === threadSummaryIdentityKey(hydrated)
-      ? { ...hydrated, ordinaryChildCount: row.ordinaryChildCount } : hydrated;
+      ? {
+          ...hydrated,
+          ...(row.ordinaryChildCount !== undefined ? { ordinaryChildCount: row.ordinaryChildCount } : {}),
+          stacks: row.stacks,
+        }
+      : hydrated;
     return rendererFederationTarget?.scope !== "remote" && configured.federation?.ref.target.scope === "remote"
       ? { ...configured, pinnedRank: selectedRow?.pinnedRank } : configured;
   }, [selectedDetail.state?.detail?.thread, selectedRow, optimisticThread, pendingEnvironmentFailures, rendererFederationTarget]);
