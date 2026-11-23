@@ -80,6 +80,7 @@ import { type SubmitServerRequestRequest } from "@pwragent/shared/contracts/agen
 import { Sidebar } from "./features/navigation/Sidebar";
 import type { ProjectRevealRequest } from "./features/navigation/DirectoriesList";
 import { isSubthreadLaunchpadDraft, pendingThreadTitleLine } from "./features/navigation/StartingThreadRow";
+import { isPendingThreadStartSelectionKey } from "./features/navigation/pending-thread-starts";
 import { SidebarResizeHandle } from "./features/navigation/SidebarResizeHandle";
 import { useThreadJump } from "./features/navigation/useThreadJump";
 import { useLensHotkeys } from "./features/navigation/useLensHotkeys";
@@ -4662,8 +4663,16 @@ function DesktopAppShell(props: {
             inert={layerView !== undefined}
             directoryDisclosure={navigation.directoryDisclosure}
             pendingLaunchpadCreations={navigation.pendingLaunchpadCreations}
+            pendingThreadStartRows={navigation.pendingThreadStartRows}
             subthreadLaunchpadDrafts={navigation.subthreadLaunchpadDrafts}
             onSelectPendingLaunchpad={(entry) => {
+              if (isPendingThreadStartSelectionKey(entry.selectionKey)) {
+                // No starting view: open its thread, or the thread whose
+                // to-do tray reports the start.
+                const target = navigation.pendingThreadStartTarget(entry.selectionKey);
+                if (target) showThreadFromLink(target);
+                return;
+              }
               setMainView("thread");
               if (isSubthreadLaunchpadDraft(entry)) {
                 navigation.selectDirectoryLaunchpad(entry.directoryKey);

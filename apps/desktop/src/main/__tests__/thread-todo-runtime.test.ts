@@ -72,6 +72,34 @@ function fakeRegistry(source: HandoffSourceSettings) {
 }
 
 describe("thread to-do Start thread", () => {
+  it("gives every run its own starting row, titled without the whole prompt", async () => {
+    // A list retires a start's id once it ends. A retried card that reused
+    // its card id drew no row while its worktree and setup ran again.
+    const { registry, runners } = fakeRegistry(FULL_ACCESS_SOL);
+    const run = async (todo: { id: string; title?: string }, prompt: string) => await runners.startThread({
+      sourceBackend: "codex",
+      sourceThreadId: "source-thread",
+      cwd: "/repo",
+      crossProject: false,
+      todo,
+      action: { type: "start_thread", prompt, workMode: "worktree" },
+    });
+
+    await run(CARD, "Rewrite the CLI");
+    await run(CARD, "Rewrite the CLI");
+    const longPrompt = `Untitled card\n${"x".repeat(20_000)}`;
+    await run({ id: "todo-2" }, longPrompt);
+
+    const starts = registry.startThread.mock.calls.map(([params]) =>
+      (params as unknown as { pendingStart: { startId: string; title: string; progressThread: unknown } }).pendingStart);
+    expect(starts[0]!.startId).toMatch(/^thread-todo:todo-1:/);
+    expect(starts[1]!.startId).toMatch(/^thread-todo:todo-1:/);
+    expect(starts[1]!.startId).not.toBe(starts[0]!.startId);
+    expect(starts[0]).toMatchObject({ title: "Rewrite the CLI", progressThread: { backend: "codex", threadId: "source-thread" } });
+    expect(starts[2]!.title.startsWith("Untitled card\n")).toBe(true);
+    expect(starts[2]!.title.length).toBeLessThanOrEqual(500);
+  });
+
   it("starts the new thread with the source thread's access, model, and effort", async () => {
     // A card that names none of them ran from a Full Access GPT-6.1-Sol
     // thread and started a Default Access thread on the catalog's default

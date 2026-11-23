@@ -31,6 +31,7 @@ import type {
   ThreadLock,
   ThreadPrAutoDispatchPending,
   ThreadSubAgentSummary,
+  LaunchpadWorkMode,
 } from "./navigation";
 import type {
   ThreadPricingSummary,
@@ -2246,6 +2247,37 @@ export type AppServerMcpElicitationRequestNotification = {
   };
 };
 
+export type AppServerPendingThreadStartPhase = "starting" | "landed" | "ended";
+
+/**
+ * What a list needs to draw a start in the slot its thread will take. The
+ * owner fills it from the start request; nothing here comes from the thread,
+ * which does not exist yet.
+ */
+export type AppServerPendingThreadStart = {
+  /** The same id on every phase of one start. */
+  startId: string;
+  title: string;
+  submittedAt: number;
+  backend: AppServerBackendKind;
+  model?: string;
+  workMode?: LaunchpadWorkMode;
+  /** The checkout the start begins from. A top-level start lands in its project. */
+  cwd?: string;
+  /** The project row the start files under, when the caller knows it. */
+  directoryKey?: string;
+  directoryLabel?: string;
+  parentThreadId?: string;
+  parentThreadBackend?: AppServerBackendKind;
+  parentThreadInstanceId?: string;
+  /**
+   * The thread on this machine whose view reports the start's progress, such
+   * as the thread holding the to-do card. Selecting the row opens it until
+   * the new thread lands.
+   */
+  progressThread?: { backend: AppServerBackendKind; threadId: string };
+};
+
 export type AppServerNotification =
   | { method: "thread/operatorQuestions/changed"; params: { backend: AppServerBackendKind; threadId: string } }
   | { method: "thread/operatorRequests/changed" | "thread/operatorRequestDetails/changed"; params: import("./operator-requests").OperatorRequestsChangedEvent }
@@ -2789,6 +2821,22 @@ export type AppServerNotification =
       params: {
         threadId?: string;
         thread?: Record<string, unknown>;
+      };
+    }
+  | {
+      /**
+       * A start that prepares a workspace before its thread exists, such as
+       * a to-do card's new worktree and its environment setup. Each start
+       * reports `starting` before any workspace work, `landed` once the
+       * provider names the thread and before the owner announces it, and
+       * `ended` exactly once, last, after any rollback.
+       */
+      method: "thread/start/pending";
+      params: {
+        start: AppServerPendingThreadStart;
+        phase: AppServerPendingThreadStartPhase;
+        /** The created thread. Set on `landed`, and on `ended` after it. */
+        createdThreadId?: string;
       };
     }
   | {

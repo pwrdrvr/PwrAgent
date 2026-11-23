@@ -1,3 +1,4 @@
+import { directoryIncludesCheckout } from "@pwragent/shared/directory-navigation";
 import {
   findRemoteHomeDirectoryIndex,
   remoteThreadPlaceholderDirectory,
@@ -22,7 +23,7 @@ export type StartingThreadPlacement = {
   target?: FederationTarget;
 };
 
-type HomeCandidate = Pick<NavigationDirectorySummary, "key" | "kind" | "label" | "localAvailability" | "path">;
+type HomeCandidate = Pick<NavigationDirectorySummary, "checkoutPaths" | "key" | "kind" | "label" | "localAvailability" | "path">;
 
 /**
  * Whether main files this starting thread by `findRemoteHomeDirectoryIndex`:
@@ -87,9 +88,10 @@ export function startingThreadHomeDirectoryKey(
   windowTarget?: FederationRemoteTarget,
 ): string | undefined {
   if (!isPeerThreadInLocalList(creation, windowTarget)) {
-    return directories.some((directory) => directory.key === creation.directoryKey)
-      ? creation.directoryKey
-      : undefined;
+    // A start from a linked checkout, such as a to-do card raised in a
+    // worktree thread, lands in the project that groups that checkout.
+    return directories.find((directory) => directory.key === creation.directoryKey)?.key
+      ?? directories.find((directory) => directoryIncludesCheckout(directory, creation.directoryKey))?.key;
   }
   const index = findRemoteHomeDirectoryIndex(directories, startingPeerThread(creation));
   return index === undefined ? undefined : directories[index]!.key;
