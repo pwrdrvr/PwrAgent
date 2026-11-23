@@ -132,6 +132,11 @@ types declaration emit erases. The desktop editor and bundler use
 When changing test root patterns, update the corresponding exclusions in
 `apps/desktop/tsconfig.production.json`.
 
+The main test, E2E, and script stage defaults to two checkers and a
+`4608MiB` soft memory limit for the Go compiler. The other stages default
+to four checkers. Pass `--checkers` or set `GOMEMLIMIT` to override these
+defaults.
+
 Use `pnpm typecheck --clean` to clear the generated typecheck outputs and
 `pnpm typecheck --verbose` to see which projects are rebuilt.
 
