@@ -1,5 +1,12 @@
 {
-  "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "lib": ["ES2023"], "types": ["node"] },
-  "include": ["src/**/*.ts"]
+  "extends": "../../tsconfig.declarations.json",
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "rootDir": "src"
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../shared" }
+  ]
 }

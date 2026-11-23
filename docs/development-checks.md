@@ -112,6 +112,28 @@ Read this before source edits, dependency installation, test execution, lint/too
 - Dependency-boundary checks run uncached so resolution configuration changes
   always rebuild the graph.
 
+### Typecheck projects
+
+`pnpm typecheck` builds the workspace package references and checks desktop
+production. It uses separate compiler processes for desktop main tests, E2E and
+scripts, and for renderer tests. Use `pnpm --filter @pwragent/desktop typecheck`
+for desktop and its dependencies, or run an individual package's typecheck
+script. Add workspace projects to `tsconfig.typecheck.json` and declare their
+direct TypeScript references in the consuming configs.
+
+Workspace packages emit declarations and build state to their local
+`node_modules/.cache/pwragent-typecheck/` directories. Project references
+redirect TypeScript to these declarations while runtime bundlers resolve the
+existing source exports. The desktop test projects resolve implementation
+source because some tests and benchmark scripts exercise private members whose
+types declaration emit erases. The desktop editor and bundler use
+`apps/desktop/tsconfig.json`.
+When changing test root patterns, update the corresponding exclusions in
+`apps/desktop/tsconfig.production.json`.
+
+Use `pnpm typecheck --clean` to clear the generated typecheck outputs and
+`pnpm typecheck --verbose` to see which projects are rebuilt.
+
 ### Main function bytecode budget
 
 - Run `pnpm check:main-bytecode` after main-process or reachable first-party

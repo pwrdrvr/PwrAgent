@@ -19,6 +19,6 @@
     "better-sqlite3": "^13.0.3"
   },
   "scripts": {
-    "typecheck": "node ../../node_modules/typescript-native/bin/tsc --noEmit -p tsconfig.json"
+    "typecheck": "node ../../node_modules/typescript-native/bin/tsc --build tsconfig.json --stopBuildOnErrors"
   }
 }

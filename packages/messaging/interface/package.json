@@ -11,7 +11,7 @@
     "@pwragent/shared": "workspace:*"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "node ../../../node_modules/typescript-native/bin/tsc --build tsconfig.json --stopBuildOnErrors"
   },
   "license": "MIT"
 }
