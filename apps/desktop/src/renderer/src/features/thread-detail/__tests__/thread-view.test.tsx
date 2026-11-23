@@ -27,6 +27,9 @@ import type { PendingMcpInteractionState } from "../mcp-elicitation";
 import type { PendingQuestionnaireState } from "../questionnaire";
 import { handoffLaunchpadComposer } from "../../composer/launchpad-composer-handoff";
 import { useComposerDraftStore } from "../../composer/useComposerDraftStore";
+import { threadTodoThreadKey, type ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
+import { launchThreadTodo, resetThreadTodoLaunchesForTests } from "../../thread-todos/thread-todo-launches";
+import type { ThreadTodosView } from "../../thread-todos/thread-todos-view";
 
 vi.mock("../IntegratedTerminal", () => ({
   IntegratedTerminal: (props: {
@@ -240,6 +243,57 @@ beforeEach(() => {
 describe("ThreadView", () => {
   afterEach(() => {
     cleanup();
+  });
+
+  it.each([
+    { state: "empty", loading: false },
+    { state: "loading", loading: true },
+    { state: "error", loading: false, transcriptError: "Could not load history." },
+  ])("focuses the transcript after closing the last to-do launch with $state history", async ({ state: _state, ...history }) => {
+    const selectedThread = buildTimestampTargetThread("todo-source", "Housekeeping");
+    const todo: ThreadTodo = {
+      id: "todo-launch", backend: "codex", threadId: selectedThread.id, kind: "handoff",
+      title: "Check the audit log", status: "open", createdAt: 1, updatedAt: 1,
+      action: { type: "start_thread", prompt: "Check the audit log" },
+    };
+    const threadTodos: ThreadTodosView = {
+      open: [], openByThreadKey: new Map(), revision: 0, runningIds: new Set(), instances: [],
+      threadTitle: () => selectedThread.title, resolve: vi.fn(), run: vi.fn(), setItemChecked: vi.fn(),
+      openThread: vi.fn(), openStartedThread: vi.fn(), waits: [], waitsByThreadKey: new Map(),
+      seenKeys: new Set(), markSeen: vi.fn(), respond: vi.fn(), dismissQuestion: vi.fn(),
+      dismissedQuestionKeys: new Set(), openWait: vi.fn(), threadTitleForKey: () => selectedThread.title,
+      threadProjectForKey: () => undefined,
+    };
+    await launchThreadTodo({ todo, threadKey: threadTodoThreadKey(todo) }, async () => ({
+      ...todo, status: "done", startedThread: { backend: "codex", threadId: "started-thread" },
+    }));
+    try {
+      render(<ThreadView
+        {...history}
+        addOptimisticUserMessage={() => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled
+        contextRailPinned={false}
+        loadingMore={false}
+        messageCount={0}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={() => undefined}
+        selectedThread={selectedThread}
+        skills={[]}
+        threadTodos={threadTodos}
+        transcriptEntries={[]}
+      />);
+      const transcript = screen.getByRole("region", { name: "Transcript" });
+      expect(transcript.querySelector(".transcript-list__items")).toBeNull();
+      const close = screen.getByRole("button", { name: "Close: Check the audit log" });
+      act(() => { close.focus(); });
+      fireEvent.click(close);
+      expect(document.activeElement).toBe(transcript);
+    } finally {
+      cleanup();
+      resetThreadTodoLaunchesForTests();
+    }
   });
 
   it.each([false, true])("preserves the document viewer across navigation refreshes and connection changes (remote: %s)", async (remote) => {

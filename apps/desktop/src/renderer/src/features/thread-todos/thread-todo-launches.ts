@@ -79,10 +79,12 @@ export function followDeckSelection(
 // Module scope, like the stack's collapse memory: a start outlives the
 // stack that began it (thread switches, a search that unmounts the view),
 // and its row is there again when the operator comes back.
-let launches: readonly ThreadTodoLaunch[] = [];
+type TrackedLaunch = { launch: ThreadTodoLaunch; returnedToDeck?: true };
+
+let launches: readonly TrackedLaunch[] = [];
 const listeners = new Set<() => void>();
 
-function publish(next: readonly ThreadTodoLaunch[]): void {
+function publish(next: readonly TrackedLaunch[]): void {
   launches = next;
   for (const listener of listeners) listener();
 }
@@ -92,7 +94,7 @@ function subscribe(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
-function snapshot(): readonly ThreadTodoLaunch[] {
+function snapshot(): readonly TrackedLaunch[] {
   return launches;
 }
 
@@ -107,29 +109,29 @@ export function launchThreadTodo(
   run: (begin: () => void) => Promise<ThreadTodo | undefined>,
 ): Promise<void> {
   const id = params.todo.id;
-  let begun = false;
+  let started: ThreadTodoLaunch | undefined;
   const begin = (): void => {
-    if (begun) return;
-    begun = true;
-    publish([...launches.filter((entry) => entry.id !== id), {
+    if (started) return;
+    started = {
       id,
       threadKey: params.threadKey,
       title: params.todo.title,
       phase: "starting",
       startedAt: Date.now(),
       todo: params.todo,
-    }]);
+    };
+    publish([...launches.filter((entry) => entry.launch.id !== id), { launch: started }]);
   };
   const settle = (outcome: Parameters<typeof settleThreadTodoLaunch>[1]): void => {
     // A run that ended without reporting its start still reports how it ended.
     begin();
-    // A row the operator closed meanwhile stays closed.
-    const current = launches.find((entry) => entry.id === id);
-    if (!current || current.phase !== "starting") return;
-    const settled = settleThreadTodoLaunch(current, outcome);
+    // Match this run even if its pending row was hidden by Show card.
+    const current = launches.find((entry) => entry.launch === started);
+    if (!current) return;
+    const settled = settleThreadTodoLaunch(current.launch, outcome);
     publish(settled
-      ? launches.map((entry) => (entry.id === id ? settled : entry))
-      : launches.filter((entry) => entry.id !== id));
+      ? launches.map((entry) => (entry === current ? { launch: settled } : entry))
+      : launches.filter((entry) => entry !== current));
   };
   let pending: Promise<ThreadTodo | undefined>;
   try {
@@ -144,16 +146,35 @@ export function launchThreadTodo(
   );
 }
 
-/** Removes a settled row; a failed card goes back to the deck. */
-export function dismissThreadTodoLaunch(id: string): void {
-  if (!launches.some((entry) => entry.id === id && entry.phase !== "starting")) return;
-  publish(launches.filter((entry) => entry.id !== id));
+/** Hides a pending row while keeping its run tracked until the owner replies. */
+export function showStartingThreadTodoCard(id: string): void {
+  publish(launches.map((entry) => (entry.launch.id === id && entry.launch.phase === "starting"
+    ? { launch: entry.launch, returnedToDeck: true }
+    : entry)));
 }
 
-/** The tray rows of one thread, oldest start first. */
-export function useThreadTodoLaunches(threadKey: string): readonly ThreadTodoLaunch[] {
+/** Removes a settled row; a failed card goes back to the deck. */
+export function dismissThreadTodoLaunch(id: string): void {
+  if (!launches.some(({ launch }) => launch.id === id && launch.phase !== "starting")) return;
+  publish(launches.filter(({ launch }) => launch.id !== id));
+}
+
+/** The tray rows (oldest first) and pending cards returned to the deck. */
+export function useThreadTodoLaunches(threadKey: string): {
+  launches: readonly ThreadTodoLaunch[];
+  returnedIds: ReadonlySet<string>;
+} {
   const all = useSyncExternalStore(subscribe, snapshot, snapshot);
-  return useMemo(() => all.filter((entry) => entry.threadKey === threadKey), [all, threadKey]);
+  return useMemo(() => {
+    const launches: ThreadTodoLaunch[] = [];
+    const returnedIds = new Set<string>();
+    for (const { launch, returnedToDeck } of all) {
+      if (launch.threadKey !== threadKey) continue;
+      if (returnedToDeck) returnedIds.add(launch.id);
+      else launches.push(launch);
+    }
+    return { launches, returnedIds };
+  }, [all, threadKey]);
 }
 
 /** Test seam: forgets every start. */

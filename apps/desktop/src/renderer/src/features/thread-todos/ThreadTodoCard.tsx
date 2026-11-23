@@ -14,6 +14,7 @@ import {
   type ComponentType,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  type Ref,
 } from "react";
 import type { PrMergeQueueStatus } from "@pwragent/shared/contracts/navigation";
 import type { ThreadReviewItem } from "@pwragent/shared/contracts/thread-reviews";
@@ -150,6 +151,7 @@ export type ThreadTodoCardHandlers = {
 };
 
 export type ThreadTodoCardProps = ThreadTodoCardHandlers & {
+  cardRef?: Ref<HTMLElement>;
   todo: ThreadTodo;
   running: boolean;
   /** The owning thread has an active turn; another repair must wait. */
@@ -401,6 +403,8 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
       data-kind={todo.kind}
       data-todo-id={todo.id}
       aria-labelledby={titleId}
+      ref={props.cardRef}
+      tabIndex={props.cardRef ? -1 : undefined}
       onMouseDown={copying.onMouseDown}
       onContextMenu={copying.onContextMenu}
     >
@@ -412,6 +416,7 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
         onOpen={props.onShowReview ? () => props.onShowReview?.(todo) : undefined}
         openLabel="Show review in transcript"
         dismissLabel="Dismiss review"
+        dismissDisabled={props.running}
         onDismiss={() => props.onResolve(todo, "dismissed")}
       />
       <ThreadTodoCardMeta todo={todo} now={props.now} progress={progress} />
@@ -544,6 +549,7 @@ function ThreadTodoCardHead(props: {
   onOpen?: () => void;
   openLabel?: string;
   dismissLabel: string;
+  dismissDisabled: boolean;
   onDismiss: () => void;
 }) {
   const { todo, copying } = props;
@@ -594,6 +600,7 @@ function ThreadTodoCardHead(props: {
           className="thread-todo-card__icon-button"
           aria-label={props.dismissLabel}
           title="Dismiss"
+          disabled={props.dismissDisabled}
           onClick={props.onDismiss}
         >
           <CloseIcon size={13} />
@@ -1124,6 +1131,8 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
       data-kind={todo.kind}
       data-todo-id={todo.id}
       aria-labelledby={titleId}
+      ref={props.cardRef}
+      tabIndex={props.cardRef ? -1 : undefined}
       onMouseDown={copying.onMouseDown}
       onContextMenu={copying.onContextMenu}
     >
@@ -1134,6 +1143,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
         copying={copying}
         onCollapse={props.onCollapse}
         dismissLabel={`Dismiss to-do: ${ciTitle ?? todo.title}`}
+        dismissDisabled={props.running}
         onDismiss={() => props.onResolve(todo, "dismissed")}
       />
       <ThreadTodoCardMeta
