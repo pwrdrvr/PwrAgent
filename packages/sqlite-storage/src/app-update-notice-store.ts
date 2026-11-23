@@ -42,10 +42,18 @@ END;
 `;
 
 export function ensureAppUpdateNoticeSchema(db: BetterSqlite3.Database): void {
+  const hasReadySurface = db.prepare(
+    "SELECT 1 FROM pragma_table_info('app_update_notice_deliveries') WHERE name = 'ready_surface'",
+  );
+  const existingObjects = db.prepare(`SELECT COUNT(*) FROM sqlite_schema
+    WHERE name IN ('app_update_notice_agents', 'app_update_notice_deliveries',
+      'app_update_notice_eligible_agents', 'app_update_notice_remove_ineligible_agent')`).pluck().get();
+  if (existingObjects === 4 && hasReadySurface.get()) return;
+
   db.transaction(() => {
     db.exec(APP_UPDATE_NOTICE_SCHEMA);
-    const columns = db.prepare("PRAGMA table_info(app_update_notice_deliveries)").all() as Array<{ name: string }>;
-    if (!columns.some(({ name }) => name === "ready_surface")) {
+    // Another opener may have added the column while this connection waited.
+    if (!hasReadySurface.get()) {
       db.exec("ALTER TABLE app_update_notice_deliveries ADD COLUMN ready_surface TEXT");
     }
   }).immediate();
