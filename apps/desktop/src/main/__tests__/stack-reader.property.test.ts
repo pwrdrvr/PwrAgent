@@ -48,7 +48,7 @@ describe("stack checkout demand", () => {
       const run = async (extra: readonly ReturnType<typeof row>[]) => {
         start.mockClear();
         const result = await new StackReader().read([selectedRow, ...extra], [], [selected]);
-        return { result, starts: start.mock.calls.map(([cwd, args]) => [cwd, args[0]]) };
+        return { result, starts: start.mock.calls.map(([cwd, args]) => `${cwd}\0${args[0]}`).sort() };
       };
       const scoped = await run([]);
       expect(scoped.result.stacks[0]?.layers[0]?.thread?.key).toBe("codex:selected");
