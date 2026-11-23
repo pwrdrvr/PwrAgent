@@ -490,6 +490,10 @@ async function scanCopyChips(page: Page, appearance: AuditAppearance): Promise<v
     await expect(page.getByRole("button", {
       name: "Copy branch feature/copy-chip-audit",
     })).toBeVisible();
+    // Startup hydrates the transcript and then checks its linked checkout.
+    // Wait for both before scanning the full window in either launch mode.
+    await expect(page.getByText("The copy chip row is live.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "This thread’s worktree is gone" })).toBeVisible();
     await expect.poll(() => page.locator("html").evaluate((root) => ({
       scheme: root.getAttribute("data-theme"),
       colorTheme: root.getAttribute("data-color-theme"),
