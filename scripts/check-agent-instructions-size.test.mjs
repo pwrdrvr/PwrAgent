@@ -251,7 +251,7 @@ describe("listAgentInstructionFiles", () => {
     const repo = mkdtempSync(join(tmpdir(), "agent-instructions-"));
     try {
       const git = (...args) =>
-        execFileSync("git", args, { cwd: repo, encoding: "utf8" });
+        execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
       git("init", "-q");
       const write = (path) => {
         mkdirSync(dirname(join(repo, path)), { recursive: true });
@@ -260,7 +260,8 @@ describe("listAgentInstructionFiles", () => {
       write("AGENTS.md");
       write("a/AGENTS.md");
       write("b/AGENTS.md");
-      git("add", ".");
+      // Keep the fixtures LF and let Git reject any irreversible conversion.
+      git("-c", "core.autocrlf=false", "-c", "core.safecrlf=true", "add", ".");
       git(
         "-c",
         "user.name=test",

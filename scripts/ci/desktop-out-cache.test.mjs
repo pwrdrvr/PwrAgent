@@ -32,7 +32,7 @@ let cacheRoot;
 let builds;
 
 const git = (...args) =>
-  execFileSync("git", args, { cwd: repoRoot, encoding: "utf8" }).trim();
+  execFileSync("git", ["-C", repoRoot, ...args], { encoding: "utf8" }).trim();
 
 const outFile = (relative) =>
   path.join(repoRoot, "apps", "desktop", "out", relative);
@@ -72,7 +72,8 @@ beforeEach(() => {
   git("config", "commit.gpgsign", "false");
   // Mirror the repository: out/ and .local/ are ignored build products.
   writeFileSync(path.join(repoRoot, ".gitignore"), "out/\n.local/\n");
-  git("add", ".gitignore");
+  // Keep the fixture LF and let Git reject any irreversible conversion.
+  git("-c", "core.autocrlf=false", "-c", "core.safecrlf=true", "add", ".gitignore");
   commit("v1");
 });
 
