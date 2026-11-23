@@ -68,7 +68,7 @@ async function locateCheckout(cwd: string, demand?: PrMetadataDemand): Promise<C
   }
 }
 
-/** One stack read can use the same evidence for preflight and projection. */
+/** Directory hints and live reads shared within one stack request. */
 export class StackReadObservation {
   readonly hints: ReturnType<typeof createStackCheckoutHints>;
   readonly inventoryDemand: PrMetadataDemand;
@@ -360,22 +360,29 @@ function possibleInferredLayers(threads: readonly StackThreadRow[], knownPrs: re
 }
 
 export class StackReader {
-  private readonly inventoryCheckouts = new Map<string, { version: string; checkout: Checkout }>();
+  private readonly inventoryCheckouts = new Map<string, {
+    version: string; checkout: Checkout | undefined; expiresAt: number;
+  }>();
+
+  constructor(private readonly now: () => number = () => performance.now()) {}
 
   private async readInventoryCheckout(
     cwd: string, observation: StackReadObservation, candidates: readonly string[],
   ): Promise<Checkout | undefined> {
     const { hints, inventoryDemand } = observation;
-    const identity = await hints.checkoutIdentity(cwd);
+    const identity = candidates.length ? await hints.checkoutIdentity(cwd) : undefined;
     const before = identity && candidates.includes(identity.commonDir) ? identity : undefined;
+    const version = before?.version ?? (!candidates.length ? hints.installedGitVersion : undefined);
     const cached = this.inventoryCheckouts.get(cwd);
-    if (before && cached?.version === before.version) return cached.checkout;
+    if (version && cached?.version === version && cached.expiresAt > this.now()) return cached.checkout;
     this.inventoryCheckouts.delete(cwd);
 
     const checkout = await observation.checkout(cwd, inventoryDemand);
-    if (before && checkout?.root === before.root && checkout.commonDir === before.commonDir
-      && (await hints.checkoutIdentity(cwd))?.version === before.version) {
-      this.inventoryCheckouts.set(cwd, { version: before.version, checkout });
+    const agreed = before ? checkout?.root === before.root && checkout.commonDir === before.commonDir
+      && (await hints.checkoutIdentity(cwd))?.version === version : !checkout;
+    if (version && agreed) {
+      const expiresAt = hints.installedGitVersion ? this.now() + 30_000 : Infinity;
+      this.inventoryCheckouts.set(cwd, { version, checkout, expiresAt });
       if (this.inventoryCheckouts.size > 2_048) this.inventoryCheckouts.delete(this.inventoryCheckouts.keys().next().value!);
     }
     return checkout;
@@ -403,13 +410,16 @@ export class StackReader {
     const paths = !directories || wanted.size || eligible.size
       ? [...new Set(local.flatMap(threadDirectories))].sort() : [];
     const hinted = new Set<string>();
+    const located = new Map<string, Checkout>();
     const scan = new IterableMapper(paths, async (cwd) => {
       const found = anchorPaths.has(cwd) ? undefined : await hints.possibleCommonDirs(cwd);
-      if (found) {
+      if (found && !hints.requiresGitDiscovery) {
         if (found.length) hinted.add(cwd);
         return [cwd, found] as const;
       }
-      const checkout = await observation.checkout(cwd, inventoryDemand);
+      const checkout = found && hints.installedGitVersion
+        ? await this.readInventoryCheckout(cwd, observation, found) : await observation.checkout(cwd, inventoryDemand);
+      if (checkout) located.set(cwd, checkout);
       return [cwd, checkout ? [checkout.commonDir] : []] as const;
     }, STACK_CHECKOUT_SCAN_LIMITS);
     const possible = new Map<string, readonly string[]>();
@@ -441,8 +451,7 @@ export class StackReader {
     }
     const verify = new IterableMapper(admitted, async (cwd) => ({
       // Explicit anchors already have a live result in this observation.
-      checkout: hinted.has(cwd) ? await this.readInventoryCheckout(cwd, observation, possible.get(cwd)!)
-        : await observation.checkout(cwd, inventoryDemand),
+      checkout: hinted.has(cwd) ? await this.readInventoryCheckout(cwd, observation, possible.get(cwd)!) : located.get(cwd),
     }), STACK_CHECKOUT_SCAN_LIMITS);
     const verified = new Map<string, Checkout>();
     for await (const { checkout } of verify) if (checkout) verified.set(checkout.cwd, checkout);

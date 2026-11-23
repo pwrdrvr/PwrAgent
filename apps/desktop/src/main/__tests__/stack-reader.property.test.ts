@@ -402,7 +402,7 @@ describe("stack checkout demand", () => {
     }
   });
 
-  it("uses one checkout and catalog observation for a PR preflight and its projection", async () => {
+  it("uses one live checkout and catalog read after PR admission", async () => {
     const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-preflight-"));
     const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
     try {
@@ -412,7 +412,7 @@ describe("stack checkout demand", () => {
       const rows = [row(sandbox, "preflight")];
       const project = async () => {
         const observation = new StackReadObservation();
-        expect((await observation.presentCatalogs([sandbox]))[0]?.status).toBe("ok");
+        expect(await observation.hints.markerCandidates([sandbox])).toEqual([sandbox]);
         expect((await reader.read(rows, [], [sandbox], undefined, observation)).stacks).toHaveLength(1);
       };
       vi.mocked(open).mockClear();
@@ -423,6 +423,48 @@ describe("stack checkout demand", () => {
       await project();
       expect(checkoutStarts()).toHaveLength(2);
     } finally {
+      start.mockRestore();
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses verified positive and negative inventory with an installed Git", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-installed-git-"));
+    const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    try {
+      const tracked = path.join(sandbox, "tracked");
+      const ordinary = path.join(sandbox, "ordinary");
+      const missing = path.join(sandbox, "missing");
+      await Promise.all([mkdir(tracked), mkdir(ordinary)]);
+      initialize(tracked);
+      initialize(ordinary);
+      await writeCatalog(tracked, "tracked");
+      vi.stubEnv("PWRAGENT_GIT_PATH", await gitExecutable.resolveGitExecutable());
+      let now = 0;
+      const reader = new StackReader(() => now);
+      const rows = [row(tracked, "tracked"), row(ordinary, "ordinary"), row(missing, "missing")];
+      const count = () => start.mock.calls.filter(([, args]) => args[0] === "rev-parse").length;
+      const cold = await reader.read(rows, []);
+      expect(cold.stacks).toHaveLength(1);
+      expect(count()).toBe(3);
+      start.mockClear();
+      expect(await reader.read(rows, [])).toEqual(cold);
+      expect(count()).toBe(0);
+      await reader.read(rows, [], [tracked]);
+      expect(count()).toBe(1);
+
+      await mkdir(missing);
+      initialize(missing);
+      await writeCatalog(missing, "new");
+      start.mockClear();
+      expect((await reader.read(rows, [])).stacks).toHaveLength(2);
+      expect(count()).toBe(1);
+      start.mockClear();
+      now += 31_000;
+      expect((await reader.read(rows, [])).stacks).toHaveLength(2);
+      expect(count()).toBe(3);
+    } finally {
+      vi.unstubAllEnvs();
       start.mockRestore();
       await rm(sandbox, { recursive: true, force: true });
     }

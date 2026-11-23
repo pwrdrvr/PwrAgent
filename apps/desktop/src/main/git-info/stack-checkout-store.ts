@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { access, lstat, realpath } from "node:fs/promises";
 import path from "node:path";
@@ -29,7 +30,15 @@ async function status(file: string) {
  * marker. If we cannot enumerate the candidates, let Git resolve the path.
  */
 export function createStackCheckoutHints(demand: PrMetadataDemand) {
-  const useGit = gitCommandPreference(process.env) || hasGitDiscoveryOverrides();
+  const configuredGit = gitCommandPreference(process.env);
+  const discoveryOverrides = hasGitDiscoveryOverrides();
+  const requiresGitDiscovery = Boolean(configuredGit || discoveryOverrides);
+  // A selected executable can be a wrapper. Its Git result is required on
+  // the first read and retained only while the environment and disk agree.
+  const installedGitVersion = configuredGit && !discoveryOverrides && !Object.keys(process.env).some((key) =>
+    /^GIT_(?:CONFIG(?:_|$)|TEST_|NAMESPACE$|OBJECT_DIRECTORY$)/i.test(key))
+    ? createHash("sha256").update(JSON.stringify([configuredGit, Object.entries(process.env).sort()])).digest("hex")
+    : undefined;
   const ancestors = new Map<string, Promise<readonly string[] | undefined>>();
   const paths = new Map<string, Promise<readonly string[] | undefined>>();
   const markerPresence = new Map<string, Promise<boolean>>();
@@ -89,7 +98,7 @@ export function createStackCheckoutHints(demand: PrMetadataDemand) {
   }
 
   async function observePath(cwd: string): Promise<readonly string[] | undefined> {
-    if (useGit || !path.isAbsolute(cwd)) return undefined;
+    if ((requiresGitDiscovery && !installedGitVersion) || !path.isAbsolute(cwd)) return undefined;
     try {
       const directory = await probe(async (signal) => {
         const info = await status(cwd);
@@ -131,11 +140,14 @@ export function createStackCheckoutHints(demand: PrMetadataDemand) {
   }
 
   return {
+    requiresGitDiscovery,
+    installedGitVersion,
     async checkoutIdentity(cwd: string) {
       // Nonstandard discovery or runtime settings belong to Git. Do not
       // transfer a confirmed inventory checkout across these environments.
       const env = process.env;
-      if (useGit || gitCommandPreference(env) || hasGitDiscoveryOverrides() || Object.keys(env).some((key) =>
+      if ((requiresGitDiscovery && !installedGitVersion)
+        || gitCommandPreference(env) !== configuredGit || hasGitDiscoveryOverrides() || Object.keys(env).some((key) =>
         /^GIT_(?:CONFIG(?:_|$)|TEST_|NAMESPACE$|OBJECT_DIRECTORY$)/i.test(key))) return undefined;
       const runtime = getSelectedManagedGit();
       return await runPrMetadataFileProbe(async (signal) => {
@@ -152,7 +164,7 @@ export function createStackCheckoutHints(demand: PrMetadataDemand) {
         return {
           root: observed.checkoutRoot,
           commonDir,
-          version: JSON.stringify([observed.relationship, observed.head, commonDir, runtime,
+          version: JSON.stringify([observed.relationship, observed.head, commonDir, runtime, installedGitVersion,
             env.HOME, env.USERPROFILE, env.XDG_CONFIG_HOME, env.SUDO_UID]),
         };
       }, demand);
@@ -160,6 +172,8 @@ export function createStackCheckoutHints(demand: PrMetadataDemand) {
     possibleCommonDirs,
     hasMarker,
     async markerCandidates(directories: readonly string[], marker = "gh-stack"): Promise<string[]> {
+      demand.signal?.throwIfAborted();
+      if (requiresGitDiscovery) return [...new Set(directories)];
       const scan = new IterableMapper(new Set(directories), async (cwd) => {
         const commonDirs = await possibleCommonDirs(cwd);
         if (!commonDirs) return { cwd, present: true };
