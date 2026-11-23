@@ -2,6 +2,7 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "incremental": true,
+    "lib": ["ES2023", "ES2024.Promise", "DOM", "DOM.Iterable"],
     "tsBuildInfoFile": "node_modules/.cache/pwragent-typecheck/production.tsbuildinfo"
   },
   "include": [
@@ -10,13 +11,13 @@
     "src/**/*.tsx"
   ],
   "exclude": [
+    "src/renderer/**/*",
     "src/**/__tests__/**/*",
     "src/**/*.test.ts",
     "src/**/*.test.tsx",
     "src/**/*.spec.ts",
     "src/**/*.spec.tsx",
-    "src/test-setup/**/*",
-    "src/renderer/src/test/**/*"
+    "src/test-setup/**/*"
   ],
   "references": [
     { "path": "../../packages/agent-tools" },

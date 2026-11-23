@@ -10,7 +10,7 @@ if (desktopOnly) options.shift();
 const projects = [
   desktopOnly ? "apps/desktop/tsconfig.production.json" : "tsconfig.typecheck.json",
   "apps/desktop/tsconfig.tests.json",
-  "apps/desktop/tsconfig.renderer-tests.json",
+  "apps/desktop/tsconfig.renderer.json",
 ];
 
 // Each compiler process releases its heap before the next desktop slice.

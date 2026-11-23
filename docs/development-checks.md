@@ -115,8 +115,9 @@ Read this before source edits, dependency installation, test execution, lint/too
 ### Typecheck projects
 
 `pnpm typecheck` builds the workspace package references and checks desktop
-production. It uses separate compiler processes for desktop main tests, E2E and
-scripts, and for renderer tests. Use `pnpm --filter @pwragent/desktop typecheck`
+production code outside the renderer. It uses separate compiler processes
+for desktop main tests, E2E and scripts, and for renderer code and tests.
+Use `pnpm --filter @pwragent/desktop typecheck`
 for desktop and its dependencies, or run an individual package's typecheck
 script. Add workspace projects to `tsconfig.typecheck.json` and declare their
 direct TypeScript references in the consuming configs.
