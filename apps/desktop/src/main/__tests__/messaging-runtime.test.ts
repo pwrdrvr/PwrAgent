@@ -95,6 +95,7 @@ vi.mock("../profile", async (importOriginal) => {
 
 const tempDirs: string[] = [];
 const activeRuntimes: DesktopMessagingRuntime[] = [];
+const disposeConnectionFixtures: Array<() => void> = [];
 // Collection owns the cold transform/evaluation of this integration graph.
 // Keep no exports here: afterEach resets the module cache, so each hook must
 // import its own generation before constructing that test's federation owner.
@@ -128,6 +129,9 @@ afterEach(async () => {
     activeRuntimes.splice(0).map((runtime) => runtime.stop().catch(() => {})),
   );
   await flushMicrotasks();
+  // The fixture deletes the profile on teardown. Windows requires every
+  // connection database handle to be closed before unlinking its file.
+  for (const dispose of disposeConnectionFixtures.splice(0)) dispose();
   const { resetAppStateForTests } = await import("../state/app-state");
   resetAppStateForTests();
   useFileBackedStateDb = false;
@@ -143,6 +147,18 @@ afterEach(async () => {
 describe("DesktopMessagingRuntime", () => {
   it("only admits observed messages for the verified running Telegram connection", async () => {
     await prepareRuntimeStore();
+    const storage = await import("../storage/desktop-messaging-storage");
+    const openConnectionStorage = storage.openMessagingConnectionStorage;
+    const connections: Array<ReturnType<typeof openConnectionStorage>> = [];
+    const openFixture = vi.spyOn(storage, "openMessagingConnectionStorage").mockImplementation((id) => {
+      const connection = openConnectionStorage(id);
+      connections.push(connection);
+      return connection;
+    });
+    disposeConnectionFixtures.push(() => {
+      openFixture.mockRestore();
+      for (const connection of connections) connection.close();
+    });
     const { DesktopMessagingRuntime: Runtime } = await import("../messaging/messaging-runtime");
     const { buildSourceEventKey } = await import("../automations/automation-trigger-matcher");
     const seen = vi.fn(async () => true);
@@ -169,6 +185,7 @@ describe("DesktopMessagingRuntime", () => {
       automationInboundHandler: seen,
     }));
     await runtime.start();
+    expect(openFixture.mock.calls).toEqual([[idA], [idB]]);
     const send = async (adapter: typeof adapterA, connectionId?: string) => {
       await adapter.listener?.({
         id: "same-update", kind: "text", text: "Fixture", observedOnly: true,

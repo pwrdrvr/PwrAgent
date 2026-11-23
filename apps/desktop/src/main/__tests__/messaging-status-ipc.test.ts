@@ -4,6 +4,7 @@ const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const runtimeMock = vi.hoisted(() => ({
   applyConfig: vi.fn(async (_config: unknown, _options?: unknown) => undefined),
   deliverPairingOutcome: vi.fn(async () => undefined),
+  getConnectionPairingStore: vi.fn((_connectionId?: string) => pairingStoreMock),
   getPlatformStatuses: vi.fn(() => []),
   isEnabled: vi.fn(() => true),
   listPairingRequests: vi.fn((): { entries: unknown[] } => ({ entries: [] })),
@@ -168,6 +169,7 @@ describe("messaging status ipc", () => {
     handlers.clear();
     runtimeMock.applyConfig.mockClear();
     runtimeMock.deliverPairingOutcome.mockClear();
+    runtimeMock.getConnectionPairingStore.mockClear();
     runtimeMock.getPlatformStatuses.mockClear();
     runtimeMock.isEnabled.mockClear();
     runtimeMock.isEnabled.mockReturnValue(true);
@@ -395,6 +397,7 @@ describe("messaging status ipc", () => {
 
     await expect(handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.({}, { entryId: "fixture-old-bot" }))
       .rejects.toThrow("This pairing request belongs to a different bot.");
+    expect(runtimeMock.getConnectionPairingStore).toHaveBeenCalledExactlyOnceWith(undefined);
     expect(settingsServiceMock.writeConfigPatchTargeted).not.toHaveBeenCalled();
     expect(pairingStoreMock.markStatus).not.toHaveBeenCalled();
   });
