@@ -162,7 +162,7 @@ import { mergeCausalMessagingContext } from "./causal-messaging-context";
 import { rememberBoundedMap } from "../bounded-map";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -3643,6 +3643,25 @@ export class DesktopBackendRegistry {
 
   prepareStackWorktree(...args: Parameters<GitDirectoryService["prepareStackWorktree"]>) {
     return this.gitDirectoryService.prepareStackWorktree(...args);
+  }
+
+  async inspectCodexStackThread(child: StackThreadRef, worktreePath: string, priorHome?: string): Promise<"present" | "missing" | "unverified"> {
+    return await this.withCodexThreadClient(child.threadId, async (client) => {
+      let thread: AppServerThreadSummary | undefined;
+      try {
+        thread = await client.readThreadSummary?.(child.threadId);
+      } catch (error) {
+        // Codex thread/read with includeTurns:false reads loaded and persisted
+        // sessions. This is its explicit absence response, not a list miss.
+        if (!(error instanceof Error) || error.message !== `json-rpc error (-32600): thread not loaded: ${child.threadId}`
+          || !priorHome || !client.readCodexHome) return "unverified";
+        const currentHome = await client.readCodexHome();
+        const [prior, current] = await Promise.all([realpath(priorHome), realpath(currentHome)]);
+        return path.relative(prior, current) === "" ? "missing" : "unverified";
+      }
+      if (thread?.id !== child.threadId || !thread.projectKey) return "unverified";
+      return path.relative(worktreePath, await realpath(thread.projectKey)) === "" ? "present" : "unverified";
+    }, undefined, false).catch(() => "unverified" as const);
   }
 
   async registerStackLayerThread(child: StackThreadRef, lead: StackThreadRef, worktreePath: string): Promise<void> {
@@ -8869,6 +8888,7 @@ export class DesktopBackendRegistry {
             ...request,
             ...modelSettings,
             cwd,
+            ...(stackWorktree ? { includeStartScope: true } : {}),
             approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
             approvalsReviewer: modeSettings.approvalsReviewer,
             sandbox: ownerSandboxForMode(getOwnerHostServices().runtimePolicy, effectiveExecutionMode, request.sandbox, modeSettings.sandbox),

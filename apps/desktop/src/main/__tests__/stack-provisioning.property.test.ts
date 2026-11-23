@@ -1,8 +1,9 @@
-import { lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, inject, it, onTestFinished, vi } from "vitest";
 import { StackGit } from "@pwragent/owner-core/stacks/engine/git";
+import { ThreadStartNotAdmittedError } from "@pwragent/owner-core/thread-creation-lifecycle";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { GitDirectoryService } from "../app-server/git-directory-service";
 import { GhStackCatalogStore, stackGitRunner, type RuntimeJournal } from "../stacks/stack-engine-ports";
@@ -13,10 +14,15 @@ import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 vi.mock("../native-relay-path", () => ({ nativeRelayPath: () => inject("nativeHelperFixtures").stackEngine!.relay }));
 vi.mock("../app-server/subthread-order-actions", () => ({ updateLocalSubthreadOrder: vi.fn() }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const fs = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...fs, link: vi.fn(fs.link) };
+});
 
 const actor = { backend: "codex" as const, threadId: "lead" };
 const child = { backend: "codex" as const, threadId: "accepted" };
-type Fault = "before checkout" | "after checkout" | "after carry" | "lost acceptance" | "after acceptance";
+type Fault = "before checkout" | "after checkout" | "after carry" | "lost acceptance" | "after acceptance"
+  | "unlisted empty session" | "vanished empty session" | "definite refusal" | "failed hook";
 const crashed = () => new Error("Injected host crash");
 
 async function setupProvisioning(fault: Fault) {
@@ -48,6 +54,14 @@ async function setupProvisioning(fault: Fault) {
   const unrelated = join(root, "unrelated");
   await repo.output(["worktree", "add", unrelated, "main"]);
   await writeFile(join(unrelated, "keep.txt"), "unrelated edit\n");
+  if (fault === "failed hook") {
+    const hooks = join(root, "hooks");
+    await mkdir(hooks);
+    const hook = join(hooks, "post-checkout");
+    await writeFile(hook, "#!/bin/sh\nprintf kept > hook-edit.txt\nexit 1\n");
+    await chmod(hook, 0o755);
+    await repo.output(["config", "core.hooksPath", hooks]);
+  }
   const repository = "github.com:fixture/stack";
   await repo.output(["remote", "add", "origin", "https://github.com/fixture/stack.git"]);
   const commonDir = join(cwd, ".git");
@@ -67,23 +81,24 @@ async function setupProvisioning(fault: Fault) {
     await directoryService.recordCodexWorktreeOwnerThread({ worktreePath: path, threadId: thread.threadId, preserveExisting: true });
   });
   const accept = vi.fn(async () => {
-    // The provider retains this thread even if the owner crashes before it
-    // can publish a parent or worktree association.
     expect((await readJournal()).provisioning?.stage).toBe("admitting");
-    workspaces.set(child.threadId, checkout!);
+    if (shouldCrash && fault === "definite refusal") throw new ThreadStartNotAdmittedError(crashed());
+    const threadId = !shouldCrash && fault === "vanished empty session" ? "replacement" : child.threadId;
+    workspaces.set(threadId, checkout!);
     if (shouldCrash && fault === "lost acceptance") throw crashed();
-    return { threadId: child.threadId };
+    return { threadId, codexHome: root };
   });
   const start = vi.fn(async ({ stackWorktree }: Parameters<DesktopBackendRegistry["startThread"]>[0]) => {
     const workspace = await stackWorktree!.prepare();
     checkout = workspace.cwd!;
     if (shouldCrash && fault === "after carry") throw crashed();
     await stackWorktree!.admit(accept);
-    if (shouldCrash && fault === "after acceptance") throw crashed();
+    if (shouldCrash && (fault === "after acceptance" || fault === "vanished empty session" || fault === "unlisted empty session")) throw crashed();
     return child;
   });
   const registry = {
-    listThreads: async () => [...workspaces].map(([id, path]) => ({ id, source: "codex", title: id, linkedDirectories: [{ path }] })),
+    listThreads: async () => fault === "unlisted empty session" ? [] :
+      [...workspaces].map(([id, path]) => ({ id, source: "codex", title: id, linkedDirectories: [{ path }] })),
     isIncompleteThreadList: () => false,
     stackThreadActive: () => false,
     withStackWorktreeMutation: <T>(dir: string, work: () => Promise<T>) => directoryService.withStackWorktreeMutation(dir, work),
@@ -102,6 +117,8 @@ async function setupProvisioning(fault: Fault) {
       return workspace;
     },
     registerStackLayerThread: register,
+    inspectCodexStackThread: async ({ threadId }: typeof child, _worktree: string, priorHome?: string) =>
+      workspaces.has(threadId) ? "present" : priorHome === root ? "missing" : "unverified",
     resolveThreadWorkspaceCwd: async () => cwd,
     onEvent: () => () => undefined,
     hasStackNotice: (_thread: typeof actor, id: string, branch = "") => notices.has(`${id}:${branch}`),
@@ -115,7 +132,7 @@ async function setupProvisioning(fault: Fault) {
   const service = new StackOperationsService();
   const scope = { repository, directories: [cwd], branch: "parent", infer: async () => [] };
   const { opId } = await service.call("apply_stack_operation",
-    { operation: "add_branch", name: "child", newThread: true, carryChanges: true }, actor, scope, registry) as { opId: string };
+    { operation: "add_branch", name: "child", newThread: true, carryChanges: fault !== "failed hook" }, actor, scope, registry) as { opId: string };
   await expect.poll(() => service.call("manage_stack_operation", { action: "status", opId }, actor, scope, registry), { timeout: 5_000 })
     .toMatchObject({ status: "paused" });
   const beforeRestart = (await readJournal()).provisioning;
@@ -128,14 +145,15 @@ async function setupProvisioning(fault: Fault) {
     workspaceWrites: () => workspaceWrites,
     restart: async () => {
       shouldCrash = false;
-      return await new StackOperationsService().resumeInterrupted([cwd], registry);
+      if (fault === "vanished empty session") workspaces.delete(child.threadId);
+      return await new StackOperationsService("restarted-owner").resumeInterrupted([cwd], registry);
     },
   };
 }
 
 // Crash model: restart may repeat pre-admission work, but the committed
-// operation may create at most one checkout and admit at most one provider.
-it.each<Fault>(["before checkout", "after checkout", "after carry", "lost acceptance", "after acceptance"])(
+// operation may create only one checkout and retain only one provider thread.
+it.each<Fault>(["before checkout", "after checkout", "after carry", "lost acceptance", "after acceptance", "unlisted empty session"])(
   "reconciles an interrupted start %s against Git and provider state", async (fault) => {
     const fixture = await setupProvisioning(fault);
     const { accept, checkoutPath, commonDir, cwd, opId, notices, register, registry, repo, scope, tip, unrelated } = fixture;
@@ -144,7 +162,7 @@ it.each<Fault>(["before checkout", "after checkout", "after carry", "lost accept
     expect(Boolean(pointerBefore)).toBe(fault !== "before checkout");
     expect(register).not.toHaveBeenCalled();
     const errors = await fixture.restart();
-    const admitted = fault === "lost acceptance" || fault === "after acceptance";
+    const admitted = fault === "lost acceptance" || fault === "after acceptance" || fault === "unlisted empty session";
     expect(registry.startThread).toHaveBeenCalledTimes(admitted ? 1 : 2);
     expect(accept).toHaveBeenCalledTimes(1);
     expect(fixture.workspaceWrites()).toBe(1);
@@ -184,6 +202,45 @@ it.each<Fault>(["before checkout", "after checkout", "after carry", "lost accept
     expect(await store.hasJournal(commonDir)).toBe(false);
   },
 );
+
+it.each(["vanished empty session", "definite refusal"] as const)("reuses the checkout after %s", async (fault) => {
+  const { accept, checkoutPath, commonDir, register, restart, workspaceWrites } = await setupProvisioning(fault);
+  expect(await restart()).toEqual([]);
+  expect(workspaceWrites()).toBe(1);
+  expect(accept).toHaveBeenCalledTimes(2);
+  const recoveredChild = fault === "vanished empty session" ? { ...child, threadId: "replacement" } : child;
+  expect(register).toHaveBeenCalledExactlyOnceWith(recoveredChild, actor, checkoutPath);
+  expect(await readFile(join(checkoutPath, "carry.txt"), "utf8")).toContain("untracked");
+  expect(await new GhStackCatalogStore().hasJournal(commonDir)).toBe(false);
+});
+
+it("keeps a registered checkout held after its post-checkout hook fails", async () => {
+  const { accept, checkoutPath, commonDir, restart, repo } = await setupProvisioning("failed hook");
+  // The Git oracle confirms HEAD and the hook's file outlive the failed add.
+  expect((await repo.output(["symbolic-ref", "HEAD"], undefined, checkoutPath)).trim()).toBe("refs/heads/child");
+  expect(await restart()).toEqual([expect.stringContaining("checkout setup failed")]);
+  expect(accept).not.toHaveBeenCalled();
+  expect(await readFile(join(checkoutPath, "hook-edit.txt"), "utf8")).toBe("kept");
+  expect(await new GhStackCatalogStore().hasJournal(commonDir)).toBe(true);
+});
+
+it("publishes a complete owner marker atomically and preserves competing owners", async () => {
+  const { checkoutPath, repo } = await setupProvisioning("after checkout");
+  const gitDir = (await repo.output(["rev-parse", "--absolute-git-dir"], undefined, checkoutPath)).trim();
+  const marker = join(gitDir, "codex-thread.json");
+  const directoryService = new GitDirectoryService();
+  const record = (threadId: string) => directoryService.recordCodexWorktreeOwnerThread({
+    worktreePath: checkoutPath, threadId, preserveExisting: true,
+  });
+  vi.mocked(link).mockRejectedValueOnce(crashed());
+  await expect(record(child.threadId)).rejects.toThrow("Injected host crash");
+  await expect(readFile(marker)).rejects.toMatchObject({ code: "ENOENT" });
+  const claims = await Promise.allSettled([record(child.threadId), record("other")]);
+  const owner = claims[0]?.status === "fulfilled" ? child.threadId : "other";
+  expect(claims.map(({ status }) => status).sort()).toEqual(["fulfilled", "rejected"]);
+  expect(JSON.parse(await readFile(marker, "utf8"))).toEqual({ version: 1, ownerThreadId: owner });
+  await expect(record(owner)).resolves.toBeUndefined();
+});
 
 it.each(["directory", "owner", "branch", "tip"] as const)("keeps local files when the reserved checkout changes %s", async (change) => {
   const { accept, checkoutPath, commonDir, restart, repo } = await setupProvisioning("after checkout");

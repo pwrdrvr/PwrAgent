@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import type { BigIntStats } from "node:fs";
-import { lstat, mkdir, readFile, readdir, realpath, rmdir, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, open, readFile, readdir, realpath, rmdir, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
@@ -93,7 +94,7 @@ export type StackWorktreeReservation = {
 
 export type StackWorktreeStart = {
   prepare(): Promise<PreparedLaunchpadWorkspace>;
-  admit(submit: () => Promise<{ threadId: string }>): Promise<{ threadId: string }>;
+  admit(submit: () => Promise<{ threadId: string; codexHome?: string }>): Promise<{ threadId: string }>;
 };
 
 type WorktreePathIdentity = { dev: string; ino: string; birthtimeNs: string };
@@ -289,10 +290,27 @@ export async function recordCodexWorktreeOwnerThread(params: {
 
   await mkdir(path.dirname(ownerFile), { recursive: true });
   const content = `${JSON.stringify({ version: 1, ownerThreadId: threadId }, null, 2)}\n`;
-  await writeFile(ownerFile, content, { encoding: "utf8", flag: params.preserveExisting ? "wx" : "w" })
-    .catch(async (error: NodeJS.ErrnoException) => {
-      if (!params.preserveExisting || error.code !== "EEXIST" || !await matchesStackWorktreeOwner(ownerFile, threadId)) throw error;
+  if (!params.preserveExisting) {
+    await writeFile(ownerFile, content, "utf8");
+    return;
+  }
+  const temporary = `${ownerFile}.${randomUUID()}.tmp`;
+  const file = await open(temporary, "wx", 0o600);
+  try {
+    try {
+      await file.writeFile(content, "utf8");
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+    // A same-directory hard link publishes the completed file without
+    // replacing an owner which claimed this checkout concurrently.
+    await link(temporary, ownerFile).catch(async (error: NodeJS.ErrnoException) => {
+      if (error.code !== "EEXIST" || !await matchesStackWorktreeOwner(ownerFile, threadId)) throw error;
     });
+  } finally {
+    await unlink(temporary);
+  }
 }
 
 async function matchesStackWorktreeOwner(ownerFile: string, threadId?: string): Promise<boolean> {
@@ -1436,7 +1454,7 @@ export class GitDirectoryService {
   }
 
   async prepareStackWorktree(cwd: string, reservation: StackWorktreeReservation, options: {
-    create: boolean; ownerThreadId?: string;
+    create: boolean; ownerThreadId?: string; onAddFailed?: () => Promise<void>;
   }): Promise<Required<Pick<PreparedLaunchpadWorkspace, "cwd" | "repositoryPath" | "workMode">>> {
     const { path: checkout, commonDir, branch, tip, directory } = reservation;
     const git = (at: string, args: string[]) => this.runGitCommand(at, args, this.gitEnv);
@@ -1463,7 +1481,13 @@ export class GitDirectoryService {
         || path.relative(checkout, entry.path) === "") || (await readdir(checkout)).length !== 0) throw refused();
       // Never detach another checkout or force-remove a partial checkout. Git
       // can finish the add before the host sees its result (e.g. a checkout hook).
-      await addManagedWorktree({ repoRoot, worktreePath: checkout, addArgs: ["--", checkout, branch], git: (args) => git(repoRoot, args) });
+      try {
+        await addManagedWorktree({ repoRoot, worktreePath: checkout, addArgs: ["--", checkout, branch], git: (args) => git(repoRoot, args) });
+      } catch (error) {
+        // A failing post-checkout hook can leave a valid-looking checkout.
+        if (await statIfPresent(pointer)) await options.onAddFailed?.();
+        throw error;
+      }
       added = true;
       entries = await readEntries();
     }

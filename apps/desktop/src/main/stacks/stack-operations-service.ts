@@ -5,6 +5,7 @@ import { StackEngine, requireWritableCatalog, type ApplyHooks, type GhStackCatal
 import { stackRoot } from "@pwragent/owner-core/stacks/engine/plan";
 import { StackGit } from "@pwragent/owner-core/stacks/engine/git";
 import { StackCoordinator, StackOperationError, type StackApplyOptions, type StackNotification, type StackParticipant, type StackThreadRef } from "@pwragent/owner-core/stacks/stack-coordinator";
+import { ThreadStartNotAdmittedError } from "@pwragent/owner-core/thread-creation-lifecycle";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
 import { stackLayerBinding, type StackSummary } from "@pwragent/shared/stacks/stack-status";
@@ -46,10 +47,14 @@ function stackLeadKey(commonDir: string, root: string): string {
   return createHash("sha256").update(JSON.stringify([commonDir, root])).digest("hex");
 }
 
+const ownerEpoch = randomUUID();
+
 export class StackOperationsService {
   private readonly sessions = new Map<string, StackCoordinator>();
   private readonly finishing = new Map<string, Promise<StackThreadRef | undefined>>();
   private readonly abandoning = new Map<string, Promise<boolean>>();
+
+  constructor(private readonly epoch: string = ownerEpoch) {}
 
   async resumeInterrupted(directories: readonly string[], registry: DesktopBackendRegistry): Promise<string[]> {
     const results = await Promise.allSettled((await readStackClones(directories))
@@ -286,6 +291,10 @@ export class StackOperationsService {
     }
     const checkpoint = (provisioning: StackProvisioning) => store.writeProvisioning(clone.commonDir, entry, provisioning);
     let state = entry.provisioning;
+    if (state?.stage === "checkout_failed") {
+      throw new StackOperationError("stack_checkout_failed",
+        `The checkout setup failed at ${state.worktree.path}. Its files were kept. Inspect the checkout and abandon provisioning before starting a thread manually.`);
+    }
     if (state?.stage !== "pending" && state?.stage !== "reserved" && state?.stage !== "accepted") {
       throw await this.provisioningUncertain(registry, entry, state?.stage === "admitting" ? state.worktree.path : undefined);
     }
@@ -302,6 +311,34 @@ export class StackOperationsService {
       || state.worktree.branch !== move.branch || state.worktree.tip !== move.next)) {
       throw new StackOperationError("stale_plan", "The reserved worktree no longer matches the stack operation.");
     }
+    const inspectAccepted = async (accepted: Extract<StackProvisioning, { stage: "accepted" }>) => {
+      const { child, worktree, codex } = accepted;
+      if (child.backend !== backend || !child.threadId) return "unverified";
+      await registry.prepareStackWorktree(clone.cwd, worktree, { create: false, ownerThreadId: backend === "codex" ? child.threadId : undefined });
+      if (await assertOwner(child)) return "present";
+      if (backend !== "codex") return "unverified";
+      // A live owner may still have the child in an older App Server
+      // generation. Absence can authorize replacement only after owner restart.
+      const home = codex && codex.ownerEpoch !== this.epoch ? codex.home : undefined;
+      const observed = await registry.inspectCodexStackThread(child, worktree.path, home);
+      return observed === "missing" && !home ? "unverified" : observed;
+    };
+    let acceptedPresent = false;
+    if (state.stage === "accepted") {
+      const observed = await inspectAccepted(state);
+      if (observed === "missing" && !(await storage.getThreadMetadata(state.child))?.parent) {
+        // A previously registered child (including a marker installed before
+        // the parent write) cannot be replaced by this operation.
+        await registry.prepareStackWorktree(clone.cwd, state.worktree, { create: false });
+        const reserved = { stage: "reserved" as const, worktree: state.worktree, lead: parent };
+        await checkpoint(reserved);
+        state = reserved;
+      } else if (observed === "present") {
+        acceptedPresent = true;
+      } else {
+        throw await this.provisioningUncertain(registry, entry, state.worktree.path);
+      }
+    }
     if (state.stage !== "accepted") {
       let reservation = state.stage === "reserved" ? state.worktree : undefined;
       try {
@@ -315,7 +352,11 @@ export class StackOperationsService {
                 reservation = await registry.reserveStackWorktree({ ...clone, backend, branch: move.branch, tip });
                 await checkpoint({ stage: "reserved", worktree: reservation, lead: parent });
               }
-              const workspace = await registry.prepareStackWorktree(clone.cwd, reservation, { create: true });
+              const worktree = reservation;
+              const workspace = await registry.prepareStackWorktree(clone.cwd, worktree, {
+                create: true,
+                onAddFailed: () => checkpoint({ stage: "checkout_failed", worktree, lead: parent }),
+              });
               await assertOwner();
               if (notification.carry) await applyStackLayerEdits(workspace.cwd, notification.carry, tip);
               return workspace;
@@ -325,8 +366,15 @@ export class StackOperationsService {
               await registry.prepareStackWorktree(clone.cwd, reservation, { create: false });
               await assertOwner();
               await checkpoint({ stage: "admitting", worktree: reservation, lead: parent });
-              const result = await submit();
-              await checkpoint({ stage: "accepted", worktree: reservation, lead: parent, child: { backend, threadId: result.threadId } });
+              const worktree = reservation;
+              const result = await submit().catch(async (error: unknown) => {
+                if (error instanceof ThreadStartNotAdmittedError) await checkpoint({ stage: "reserved", worktree, lead: parent });
+                throw error;
+              });
+              await checkpoint({
+                stage: "accepted", worktree, lead: parent, child: { backend, threadId: result.threadId },
+                ...(backend === "codex" && result.codexHome ? { codex: { home: result.codexHome, ownerEpoch: this.epoch } } : {}),
+              });
               return result;
             },
           },
@@ -343,8 +391,7 @@ export class StackOperationsService {
       throw await this.provisioningUncertain(registry, entry);
     }
     const { child, worktree } = state;
-    await registry.prepareStackWorktree(clone.cwd, worktree, { create: false, ownerThreadId: backend === "codex" ? child.threadId : undefined });
-    if (!await assertOwner(child)) throw await this.provisioningUncertain(registry, entry, worktree.path);
+    if (!acceptedPresent && await inspectAccepted(state) !== "present") throw await this.provisioningUncertain(registry, entry, worktree.path);
     await registry.registerStackLayerThread(child, parent, worktree.path);
     const existing = await storage.getThreadMetadata(child);
     const leadOverlay = await storage.getThreadOverlayState(parent);

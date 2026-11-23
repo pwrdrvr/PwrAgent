@@ -26,8 +26,9 @@ const foreignJournals = {
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT";
 export type StackProvisioning =
   | { stage: "pending" }
-  | { stage: "reserved" | "admitting"; worktree: StackWorktreeReservation; lead: StackThreadRef }
-  | { stage: "accepted"; worktree: StackWorktreeReservation; lead: StackThreadRef; child: StackThreadRef };
+  | { stage: "reserved" | "admitting" | "checkout_failed"; worktree: StackWorktreeReservation; lead: StackThreadRef }
+  | { stage: "accepted"; worktree: StackWorktreeReservation; lead: StackThreadRef; child: StackThreadRef;
+      codex?: { home: string; ownerEpoch: string } };
 export type RuntimeJournal = StackJournal & { notification: StackNotification; committed?: true; provisioning?: StackProvisioning };
 
 function initialProvisioning(notification?: StackNotification): StackProvisioning | undefined {
