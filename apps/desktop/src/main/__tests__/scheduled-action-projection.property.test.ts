@@ -170,8 +170,8 @@ it("admits owner history when the conservative JSON bound alone exceeds the limi
 it.each([
   { version: 85, missingTriggerOnly: false },
   { version: 86, missingTriggerOnly: false },
-  { version: 87, missingTriggerOnly: false },
-  { version: 87, missingTriggerOnly: true },
+  { version: CURRENT_STATE_DB_USER_VERSION + 1, missingTriggerOnly: false },
+  { version: CURRENT_STATE_DB_USER_VERSION + 1, missingTriggerOnly: true },
 ])("repairs scheduled projections at v$version (only update trigger absent: $missingTriggerOnly)", ({ version, missingTriggerOnly }) => {
   const { dbPath, tempDir } = createTempStateDb("scheduled-projection-migration-");
   let db = StateDb.open(dbPath);

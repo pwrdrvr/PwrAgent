@@ -1,18 +1,19 @@
 import { getRuntimeFederationLeaseCoordinator } from "../runtime-federation-lease";
 import { getRuntimeMessagingLeaseCoordinator } from "../runtime-messaging-lease";
 import { getDesktopConfigStore } from "../settings/config-store/desktop-config-store-singleton";
-import { getDesktopAutomationService } from "../automations/desktop-automation-service";
+import { getDesktopAutomationService, getDesktopAutomationStore } from "../automations/desktop-automation-service";
 import { getScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 import { getMcpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
 import { afterAll, expect, expectTypeOf, it, vi } from "vitest";
 import type { ResearchPorts } from "@pwragent/owner-core/research-service";
 import type { NavigationDirectorySummary } from "@pwragent/shared/contracts/navigation";
+import type { AppServerNotification } from "@pwragent/shared/contracts/normalized-app-server";
 import * as navigationQuerySource from "../app-server/navigation-query-source";
 import * as researchRuntime from "../research/research-runtime";
 import type { RegistryContext } from "../app-server/registry-context";
 import { getOwnerHostServices } from "../owner-host";
 import { startOwnerServices, disposeOwnerServices, disposeOwnerServicesSync, prepareOwnerShutdown } from "../owner-services";
-import { getDesktopBackendRegistry } from "../app-server/backend-registry";
+import { getDesktopBackendRegistry, getExistingDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopAppServerService } from "../app-server/desktop-app-server-service";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
@@ -197,11 +198,63 @@ it("turning Codex Tool Discovery off stops only the native runs a Codex thread c
   }
 });
 
+it("persists live automation prices published during the clean shutdown drain", async () => {
+  const registry = getExistingDesktopBackendRegistry()
+    ?? (await startOwnerServices(getOwnerHostServices(), { bootMode: "bootstrap", startedAt: 0 })).registry;
+  const store = getDesktopAutomationStore();
+  const automation = store.createAutomation({
+    backend: "codex", threadId: "shutdown-owner", name: "Check mail", taskPrompt: "Check mail.",
+    schedule: { kind: "interval", every: 5, unit: "minutes" }, now: 1,
+  });
+  const run = store.createRun({ automationId: automation.id, trigger: "manual", now: 2 })!;
+  const threadId = "shutdown-execution";
+  const turnId = "shutdown-execution-turn";
+  store.markRunStarted({ runId: run.id, backendThreadId: threadId, backendTurnId: turnId, now: 3 });
+  const priced: number[] = [];
+  const allowLedgerWrite = Promise.withResolvers<void>();
+  const usageStore = registry.context.stores.usage;
+  const writeUsage = usageStore.upsertThreadUsageLines!;
+  const holdUsageWrite = vi.spyOn(usageStore, "upsertThreadUsageLines").mockImplementation(async (input) => {
+    await allowLedgerWrite.promise;
+    return await writeUsage(input);
+  });
+  const unsubscribe = registry.onEvent(({ notification }) => {
+    if (notification.method !== "thread/pricing/updated") return;
+    const { params } = notification as Extract<AppServerNotification, { method: "thread/pricing/updated" }>;
+    if (params.threadId !== threadId) return;
+    const line = params.pricing.lines.find((line) => line.turnId === turnId);
+    if (line?.priceStatus === "priced" && line.turnUsageAttributed === false) priced.push(line.totalCostMicros);
+  });
+  try {
+    const usage = { inputTokens: 1_000, cachedInputTokens: 100, outputTokens: 20, totalTokens: 1_020 };
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/tokenUsage/updated",
+        params: { threadId, turnId, model: "gpt-5.4", tokenUsage: { total: usage } },
+      },
+    });
+    expect(priced).toEqual([]);
+    prepareOwnerShutdown();
+    // The Electron shell disposes synchronous resources before the async drain.
+    disposeOwnerServicesSync({ releaseFederationLease: false });
+    const shutdown = disposeOwnerServices("test");
+    allowLedgerWrite.resolve();
+    await shutdown;
+    expect(registry.context.lifecycle.closed).toBe(true);
+    expect(priced.at(-1)).toBeGreaterThan(0);
+    expect(store.getRun(run.id)?.usage?.totalCostMicros).toBe(priced.at(-1));
+    expect(store.getAutomation(automation.id)?.lifetimeCost?.totalMicros).toBe(priced.at(-1));
+  } finally {
+    allowLedgerWrite.resolve();
+    holdUsageWrite.mockRestore();
+    unsubscribe();
+  }
+});
+
 afterAll(async () => {
-  const context = getDesktopBackendRegistry().context;
   prepareOwnerShutdown();
   await disposeOwnerServices("test");
-  expect(context.lifecycle.closed).toBe(true);
   disposeOwnerServicesSync();
   disposeAppState();
 });

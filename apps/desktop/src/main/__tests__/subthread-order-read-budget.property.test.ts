@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
-import { StateDb } from "../state/state-db";
+import { CURRENT_STATE_DB_USER_VERSION, StateDb } from "../state/state-db";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
 it("seeks stored subthread membership by parent or child ID regardless of unrelated overlays", async () => {
@@ -85,7 +85,7 @@ it.each([86, 87, 999])("converges v%i profiles with missing or obsolete indexes"
       const store = new SqliteOverlayStore(reader);
       const scopes = () => [...store.readSubthreadGroup("codex", "root").scopes].map(([backend, ids]) => [backend, [...ids]]);
       expect(scopes()).toEqual([["codex", ["root"]], ["claude", ["root"]], ["acp:grok", ["root", "legacy"]]]);
-      expect(reader.raw.pragma("user_version", { simple: true })).toBe(Math.max(87, version));
+      expect(reader.raw.pragma("user_version", { simple: true })).toBe(Math.max(CURRENT_STATE_DB_USER_VERSION, version));
       const indexes = reader.raw.prepare("SELECT name FROM sqlite_schema WHERE name LIKE 'idx_threads_subthread_%' ORDER BY name");
       expect(indexes.pluck().all()).toEqual(["idx_threads_subthread_noncanonical_id", "idx_threads_subthread_parent"]);
       expect([...store.readSubthreadGroup("codex", "payload-id").scopes.keys()]).toEqual(["codex", "claude"]);

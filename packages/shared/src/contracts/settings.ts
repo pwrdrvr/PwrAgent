@@ -1420,21 +1420,29 @@ export type DesktopTokenMiserUsage = {
   estimatedParentTokensSaved: number;
 };
 
+export type ManagedCodexTrackTags = {
+  /** Newest promoted tag observed in the release list. */
+  latestTag?: string;
+  /** Newest tag overall, promoted or not. */
+  prereleaseTag?: string;
+};
+
+export type ManagedCodexTrackLookup = ManagedCodexTrackTags & {
+  /** When GitHub last returned or revalidated the release list. */
+  observedAt: number;
+};
+
 export type DesktopSettingsSnapshot = {
   fetchedAt: number;
   configPath: string;
   configError?: string;
   runtime: {
     tokenMiser?: {
-      managedCodex?: {
+      managedCodex?: ManagedCodexTrackTags & {
         state: "pending-switch" | "ready" | "unavailable";
         reason?: string;
         version?: string;
         checkedAt?: number;
-        /** Newest promoted tag the last release check saw. */
-        latestTag?: string;
-        /** Newest tag overall the last release check saw, promoted or not. */
-        prereleaseTag?: string;
       };
       /**
        * Whether the Codex-side gate is actually installed. The feature fails

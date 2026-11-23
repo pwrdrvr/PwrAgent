@@ -143,6 +143,27 @@ describe("persistent GitHub release budget", () => {
     await first;
   });
 
+  it("lets a manual Codex check wait for another process's metadata lookup", async () => {
+    const codex = "https://api.github.com/repos/pwrdrvr/codex/releases?per_page=20";
+    vi.useRealTimers();
+    let now = Date.now();
+    const clock = { now: () => now };
+    await read(codex, { ...clock, manual: true });
+    now += RELEASE_AUTOMATIC_TTL_MS;
+    const response = Promise.withResolvers<Response>();
+    network.mockReturnValueOnce(response.promise);
+    const lookup = read(codex, clock);
+    vi.resetModules();
+    const otherProcess = await import("../github-release-cache");
+    const waitOptions = { ...options(), ...clock, manual: true, waitForReservation: true };
+    const check = otherProcess.fetchGitHubReleaseMetadata(codex, {}, waitOptions);
+    const result = expect(check).resolves.toMatchObject({ ok: true });
+    expect(network).toHaveBeenCalledTimes(2);
+    response.resolve(Response.json([]));
+    await Promise.all([lookup, result]);
+    expect(network).toHaveBeenCalledTimes(3);
+  });
+
   it("retains the attempt reservation after an interrupted request", async () => {
     await defer(read());
     vi.setSystemTime(Date.now() + RELEASE_FIRST_CHECK_DELAY_MS);

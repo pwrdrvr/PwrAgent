@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatAutomationCost,
   formatAutomationRunRuntime,
   formatAutomationRunUsage,
   formatCostTodayMicros,
@@ -94,4 +95,13 @@ describe("formatCostTodayMicros", () => {
   it("labels the figure so it cannot be read as a lifetime total", () => {
     expect(formatCostTodayMicros(480_000)).toBe("$0.48 today");
   });
+});
+
+it("labels the tracked total with its coverage start even when the corrected total is zero", () => {
+  const since = new Date(2026, 7, 11, 12).getTime();
+  const date = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(since);
+  const lifetimeCost = { since, totalMicros: 0 };
+  expect(formatAutomationCost({ lifetimeCost })).toBe(`$0.00 total since ${date}`);
+  expect(formatAutomationCost({ costTodayMicros: 480_000, lifetimeCost }))
+    .toBe(`$0.48 today · $0.00 total since ${date}`);
 });

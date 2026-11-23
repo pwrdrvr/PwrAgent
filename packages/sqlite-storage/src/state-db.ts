@@ -48,7 +48,7 @@ import {
 import { ensureThreadPricingSummaryDeltas } from "./thread-pricing-summary-schema";
 import { ensureThreadManagedMembershipSchema, reclaimEmptyLegacyMembershipIndex } from "./thread-managed-membership";
 
-export const CURRENT_STATE_DB_USER_VERSION = 87;
+export const CURRENT_STATE_DB_USER_VERSION = 88;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -560,6 +560,42 @@ CREATE TABLE IF NOT EXISTS automation_run_artifacts (
 CREATE INDEX IF NOT EXISTS idx_automation_run_artifacts_automation_updated
   ON automation_run_artifacts(automation_id, updated_at DESC);
 `;
+
+const AUTOMATION_PRUNED_RUN_COST_SCHEMA = `
+CREATE TABLE IF NOT EXISTS automation_pruned_run_costs (
+  run_id              TEXT PRIMARY KEY,
+  automation_id       TEXT NOT NULL REFERENCES automations(automation_id) ON DELETE CASCADE,
+  backend             TEXT NOT NULL,
+  backend_turn_id     TEXT NOT NULL,
+  execution_thread_id TEXT,
+  total_cost_micros   INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_automation_pruned_run_costs_turn
+  ON automation_pruned_run_costs(backend, backend_turn_id);
+`;
+
+function ensureAutomationCostAccounting(db: BetterSqlite3.Database): void {
+  if ((db.pragma("user_version", { simple: true }) as number) >= 88
+    && tableColumnExists(db, "automations", "cost_since")
+    && tableColumnExists(db, "automation_pruned_run_costs", "execution_thread_id")
+    && !db.prepare("SELECT 1 FROM automations WHERE cost_since IS NULL LIMIT 1").get()) return;
+
+  db.transaction(() => {
+    if (!tableColumnExists(db, "automations", "cost_since")) {
+      db.exec(`ALTER TABLE automations ADD COLUMN cost_since INTEGER;
+               ALTER TABLE automations ADD COLUMN total_cost_micros INTEGER;
+               ALTER TABLE automation_runs ADD COLUMN accounted_cost_micros INTEGER;`);
+    }
+    db.exec(AUTOMATION_PRUNED_RUN_COST_SCHEMA);
+    if (!tableColumnExists(db, "automation_pruned_run_costs", "execution_thread_id")) {
+      db.exec("ALTER TABLE automation_pruned_run_costs ADD COLUMN execution_thread_id TEXT");
+    }
+    // Retained history is partial. Start coverage now for both migrated rows
+    // and rows inserted by older versions that left cost_since unset.
+    db.prepare("UPDATE automations SET cost_since = ? WHERE cost_since IS NULL").run(Date.now());
+    if ((db.pragma("user_version", { simple: true }) as number) < 88) db.pragma("user_version = 88");
+  }).immediate();
+}
 
 const SCHEDULED_THREAD_ACTION_SCHEMA = `
 CREATE TABLE IF NOT EXISTS scheduled_thread_actions (
@@ -2326,6 +2362,7 @@ export class StateDb {
           if ((db.pragma("user_version", { simple: true }) as number) < 87) db.pragma("user_version = 87");
         }).immediate();
       }
+      ensureAutomationCostAccounting(db);
       db.exec(OWNER_JOB_SCHEMA);
       // Converge a profile whose v79 or v80 came from another branch. On a
       // current profile every statement is IF NOT EXISTS and writes nothing.
@@ -4607,7 +4644,9 @@ function tableColumnExists(
   db: BetterSqlite3.Database,
   tableName:
     | "app_runtime_instances"
+    | "automation_pruned_run_costs"
     | "automation_runs"
+    | "automations"
     | "openai_decision_versions"
     | "pr_lookup_cache"
     | "pr_status_cache"
@@ -4649,7 +4688,9 @@ function readTableInfo(
   db: BetterSqlite3.Database,
   tableName:
     | "app_runtime_instances"
+    | "automation_pruned_run_costs"
     | "automation_runs"
+    | "automations"
     | "openai_decision_versions"
     | "pr_lookup_cache"
     | "pr_status_cache"
@@ -4675,10 +4716,14 @@ function readTableInfo(
       return db.prepare("PRAGMA table_info(app_runtime_instances)").all() as Array<{
         name: string;
       }>;
+    case "automation_pruned_run_costs":
+      return db.prepare("PRAGMA table_info(automation_pruned_run_costs)").all() as Array<{ name: string }>;
     case "automation_runs":
       return db.prepare("PRAGMA table_info(automation_runs)").all() as Array<{
         name: string;
       }>;
+    case "automations":
+      return db.prepare("PRAGMA table_info(automations)").all() as Array<{ name: string }>;
     case "pr_lookup_cache":
       return db.prepare("PRAGMA table_info(pr_lookup_cache)").all() as Array<{
         name: string;

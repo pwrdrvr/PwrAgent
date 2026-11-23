@@ -911,6 +911,8 @@ export const SETTINGS_REFRESH_CODEX_MODEL_PROVIDER_CATALOGS_CHANNEL =
   "settings:refresh-codex-model-provider-catalogs";
 export const SETTINGS_SCAN_CODEX_MODEL_PROVIDER_IMPORTS_CHANNEL =
   "settings:scan-codex-model-provider-imports";
+export const SETTINGS_READ_MANAGED_CODEX_TRACK_TAGS_CHANNEL =
+  "settings:read-managed-codex-track-tags";
 export const SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL =
   "settings:refresh-codex-discovery";
 export const SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL =
