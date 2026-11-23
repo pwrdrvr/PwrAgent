@@ -8194,6 +8194,9 @@ export class DesktopBackendRegistry {
     run: (pending?: PendingThreadStartReporter) => Promise<T>,
   ): Promise<T> {
     if (!descriptor) return await run();
+    // A start this owner refuses outright draws no row.
+    this.assertThreadOwnership();
+    this.assertNotBootstrap("startThread");
     const pending = this.beginPendingThreadStart(source, descriptor);
     try {
       await pending.report("starting");
