@@ -141,6 +141,123 @@ afterEach(async () => {
 });
 
 describe("DesktopMessagingRuntime", () => {
+  it("only admits observed messages for the verified running Telegram connection", async () => {
+    await prepareRuntimeStore();
+    const { DesktopMessagingRuntime: Runtime } = await import("../messaging/messaging-runtime");
+    const { buildSourceEventKey } = await import("../automations/automation-trigger-matcher");
+    const seen = vi.fn(async () => true);
+    const adapterA = createAdapter("telegram", { readVerifiedBotAccountId: () => "111" });
+    const adapterB = createAdapter("telegram", { readVerifiedBotAccountId: () => "222", authorizedActorIds: [] });
+    const unverified = createAdapter("telegram", { readDmPairingAccountId: () => "222" });
+    const [idA, idB] = ["a", "b"].map((char) => `mc_${char.repeat(32)}`);
+    const named = [idA, idB].map((id, index) => ({
+      channel: "telegram" as const, botToken: `${index}:fixture`, configuredConnectionId: id,
+      expectedBotAccountId: index === 0 ? "111" : "222",
+      authorizedActorIds: [],
+    }));
+    const runtime = trackRuntime(new Runtime({
+      adapterFactory: ({ config }) => {
+        if (config.telegram?.configuredConnectionId === idA) return [adapterA];
+        if (config.telegram?.configuredConnectionId === idB) {
+          return [config.telegram.botToken === "broken" ? unverified : adapterB];
+        }
+        return [];
+      },
+      backendBridge: createBackendBridge(),
+      config: { telegramConnections: named },
+      automationInboundMatches: () => true,
+      automationInboundHandler: seen,
+    }));
+    await runtime.start();
+    const send = async (adapter: typeof adapterA, connectionId?: string) => {
+      await adapter.listener?.({
+        id: "same-update", kind: "text", text: "Fixture", observedOnly: true,
+        actor: { platformUserId: "user-1" },
+        channel: { channel: "telegram", connectionId, conversation: { kind: "dm", id: "user-1" } },
+        receivedAt: 1,
+      });
+    };
+    await send(adapterA);
+    await send(adapterA, idB);
+    await send(adapterB, idA);
+    expect(seen).not.toHaveBeenCalled();
+    await send(adapterA, idA);
+    await send(adapterB, idB);
+    const events = seen.mock.calls as unknown as Array<[MessagingInboundEvent]>;
+    expect(events.map(([event]) => event.channel.connectionId)).toEqual([idA, idB]);
+    expect(new Set(events.map(([event]) => buildSourceEventKey(event))).size).toBe(2);
+    for (const [adapter, connectionId] of [[adapterA, idA], [adapterB, idB]] as const) {
+      await adapter.listener?.({
+        id: "same-help", kind: "command", command: "help", args: [], rawText: "/help",
+        actor: { platformUserId: "user-1" },
+        channel: { channel: "telegram", connectionId, conversation: { kind: "dm", id: "user-1" } },
+        receivedAt: 2,
+      });
+    }
+    expect(adapterA.delivered.length).toBeGreaterThan(0);
+    expect(adapterA.delivered.some((intent) => intent.id.startsWith("unauthorized"))).toBe(false);
+    expect(adapterB.delivered.some((intent) => intent.id.startsWith("unauthorized"))).toBe(true);
+    expect(adapterA.delivered.map((intent) => intent.audit?.channel.connectionId)).toEqual(
+      adapterA.delivered.map(() => idA),
+    );
+    expect(runtime.generatePairingToken({ platform: "telegram", scope: "user_dm", connectionId: idA }).entry)
+      .toMatchObject({ connectionId: idA, instanceId: "account:111" });
+    expect(runtime.listPairingRequests({ connectionId: idB }).entries).toEqual([]);
+
+    await runtime.applyConfig({ telegramConnections: [named[0], { ...named[1], botToken: "broken" }] });
+    await send(unverified, idB);
+    expect(() => runtime.generatePairingToken({ platform: "telegram", scope: "user_dm", connectionId: idB }))
+      .toThrow(/Connect this Telegram bot/);
+    await runtime.applyConfig({ telegramConnections: [named[0]] });
+    await send(adapterB, idB);
+    expect(seen).toHaveBeenCalledTimes(2);
+    expect(() => runtime.listPairingRequests({ connectionId: idB })).toThrow(/unavailable/);
+  });
+
+  it("rehydrates exact Telegram bindings and callbacks while the legacy database sees only singleton rows", async () => {
+    await prepareRuntimeStore();
+    const { openMessagingConnectionStorage } = await import("../storage/desktop-messaging-storage");
+    const { getDesktopMessagingStore } = await import("../messaging/desktop-messaging-store");
+    const scopes = [undefined, `mc_${"a".repeat(32)}`, `mc_${"b".repeat(32)}`];
+    const channel = (connectionId: string | undefined) => ({
+      channel: "telegram" as const,
+      ...(connectionId === undefined ? {} : { connectionId }),
+      conversation: { id: "10", kind: "topic" as const, parentId: "-1000123" },
+    });
+    for (const [index, id] of scopes.entries()) {
+      const scoped = id === undefined ? undefined : openMessagingConnectionStorage(id);
+      const store = scoped?.bindings ?? getDesktopMessagingStore();
+      try {
+        const binding = {
+          id: "same-binding-id", channel: channel(id), backend: "codex" as const, threadId: `thread-${index}`,
+          authorizedActorIds: ["same-actor"], createdAt: 1, updatedAt: 1,
+        };
+        await store.upsertBinding(binding);
+        await store.upsertCallbackHandle({
+          id: "same-handle-id", channel: channel(id), handle: "same-button", actionId: `action-${index}`,
+          bindingId: binding.id, allowedActorIds: ["same-actor"], createdAt: 1, updatedAt: 1, expiresAt: 100,
+        });
+      } finally {
+        scoped?.close();
+      }
+    }
+    for (const [index, id] of scopes.entries()) {
+      const reopened = id === undefined ? undefined : openMessagingConnectionStorage(id);
+      const store = reopened?.bindings ?? getDesktopMessagingStore();
+      try {
+        expect((await store.findActiveBindings()).map((row) => row.channel.connectionId)).toEqual([id]);
+        for (const queried of scopes) {
+          const ref = channel(queried);
+          expect((await store.findActiveBindingForChannel(ref))?.threadId).toBe(queried === id ? `thread-${index}` : undefined);
+          expect((await store.resolveCallbackHandle({ actorId: "same-actor", channel: ref, handle: "same-button", now: 3 }))?.actionId)
+            .toBe(queried === id ? `action-${index}` : undefined);
+        }
+      } finally {
+        reopened?.close();
+      }
+    }
+  });
+
   // Rule: a run a restart interrupted reaches each bound conversation once,
   // whether the automation service published it before the channel started
   // (startup reports it from `automations.start()`, before messaging) or while

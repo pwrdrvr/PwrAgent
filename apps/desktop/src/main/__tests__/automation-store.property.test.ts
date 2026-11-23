@@ -4,6 +4,35 @@ import type { AutomationStorage } from "@pwragent/owner-core/automation-storage"
 import { AutomationStore } from "../storage/automation-store";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
+it("round trips named automation routes while leaving an unloaded definition for older stores", () => {
+  const db = openInMemoryStateDb();
+  try {
+    fc.assert(fc.property(fc.uuid(), fc.boolean(), (connectionId, namedTrigger) => {
+      const store = new AutomationStore(db);
+      const legacy = { channel: "telegram" as const, conversationId: "-100111", conversationKind: "channel" as const };
+      const named = { ...legacy, connectionId };
+      const automation = store.createAutomation({
+        backend: "codex", threadId: "owner", name: "Orchard updates", taskPrompt: "Check.",
+        triggers: [{ kind: "inbound_message", id: "fixture", conversation: namedTrigger ? named : legacy }],
+        outputActions: [{ kind: "messaging_target", id: "reply", target: namedTrigger ? legacy : named }],
+        now: 1,
+      });
+      const stored = db.raw.prepare("SELECT payload FROM automations WHERE automation_id = ?")
+        .get(automation.id) as { payload: string };
+      const old = JSON.parse(stored.payload);
+      expect(old.triggers).toEqual([]);
+      expect(old.outputActions).toBeUndefined();
+      expect(old.schedule).toBeUndefined();
+      expect(new AutomationStore(db).getAutomation(automation.id)).toMatchObject({
+        triggers: automation.triggers,
+        outputActions: automation.outputActions,
+      });
+    }), { numRuns: 8 });
+  } finally {
+    db.close();
+  }
+});
+
 const statusRank = {
   pending: 0,
   queued: 1,

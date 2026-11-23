@@ -42,6 +42,7 @@ import { validateLocalModelIds } from "@pwragent/shared/local-model-pricing";
 import fs from "node:fs";
 import { validateCodexConfigOverrides } from "./codex-config-overrides";
 import { requireMessagingSafetyAcknowledgment } from "./messaging-safety";
+import { parseTelegramConnections, telegramConnectionConfigRows } from "./telegram-connections-config";
 import { normalizeOpenAIDecisionsAccountId } from "@pwragent/shared/openai-decisions";
 import os from "node:os";
 import path from "node:path";
@@ -52,6 +53,7 @@ import type {
   DesktopAppearanceTheme,
   DesktopChatReplyComposer,
   DesktopAuthorizedContact,
+  DesktopTelegramConnection,
   DesktopCodexProfileModel,
   DesktopContextMoonStyle,
   DesktopOpenAIDecisionsSettings,
@@ -299,6 +301,7 @@ export type DesktopSettingsConfig = {
       streamingResponses?: boolean;
       authorizedUserIds?: AuthorizedContactConfig[];
       authorizedSupergroups?: AuthorizedContactConfig[];
+      connections?: DesktopTelegramConnection[];
     };
     discord?: {
       enabled?: boolean;
@@ -1767,6 +1770,22 @@ export function desktopSettingsPatchToEdits(
   }
 
   const telegram = patch.messaging?.telegram;
+  if (telegram?.connections !== undefined) {
+    const path = ["messaging", "telegram", "connections"];
+    const rows = telegramConnectionConfigRows(telegram.connections);
+    const normalized = parseTelegramConnections(rows);
+    if (!normalized || normalized.length !== rows.length) throw new Error("Invalid Telegram connections configuration.");
+    edits.push({ op: "delete", path });
+    edits.push({ op: "deleteTableArray", path });
+    if (normalized.length === 0) {
+      set(path, []);
+    } else {
+      edits.push({
+        op: "setTableArray", path, value: telegramConnectionConfigRows(normalized),
+        comment: "# pwragent-legacy-settings: [messaging.telegram] keeps the first bot for older versions.",
+      });
+    }
+  }
   if (telegram?.enabled !== undefined) {
     set(["messaging", "telegram", "enabled"], telegram.enabled);
   }
@@ -2726,6 +2745,7 @@ function normalizeDesktopConfig(
         maxAttachmentCount: readNumber(attachments?.max_attachment_count),
       },
       telegram: {
+        connections: parseTelegramConnections(telegram?.connections),
         enabled: readBoolean(telegram?.enabled),
         responseMode: readMessagingResponseMode(telegram?.response_mode),
         streamingResponses: readBoolean(telegram?.streaming_responses),

@@ -154,6 +154,8 @@ export type MessagingControllerOptions = {
   ) => void;
   backend: MessagingBackendBridge;
   channel?: MessagingChannelKind;
+  connectionId?: string;
+  isConnectionAvailable?: () => boolean;
   interactionMapper?: MessagingInteractionMapper;
   logger?: MessagingControllerLogger;
   now?: () => number;
@@ -745,17 +747,17 @@ export class MessagingController {
     source: AutomationRunSourceMetadata;
     text: string;
   }): Promise<{ message?: string; ok: boolean; unsupported?: boolean; errorMessage?: string }> {
-    if (
-      this.options.channel &&
-      this.options.channel !== params.source.conversation.channel
-    ) {
+    if (!this.matchesAutomationConnection(params.source.conversation)) {
       return {
         ok: false,
         unsupported: true,
-        errorMessage: "Source-message delivery belongs to another provider.",
+        errorMessage: "The source messaging connection is unavailable.",
       };
     }
     const event = messagingEventFromAutomationSource(params.source);
+    if (this.options.connectionId !== undefined && this.adapter.isAuthorizedNoticeDestination?.(event.channel) !== true) {
+      return { ok: false, errorMessage: "The source conversation no longer has access to this Telegram connection." };
+    }
     const result = await this.deliver(
       {
         id: params.intentId,
@@ -800,11 +802,11 @@ export class MessagingController {
     target: AutomationMessagingConversationSnapshot;
     text: string;
   }): Promise<{ message?: string; ok: boolean; unsupported?: boolean; errorMessage?: string }> {
-    if (this.options.channel && this.options.channel !== params.target.channel) {
+    if (!this.matchesAutomationConnection(params.target)) {
       return {
         ok: false,
         unsupported: true,
-        errorMessage: "Messaging target belongs to another provider.",
+        errorMessage: "The target messaging connection is unavailable.",
       };
     }
     const event: MessagingInboundTextEvent = {
@@ -813,6 +815,7 @@ export class MessagingController {
       actor: { platformUserId: "pwragent-automation", isBot: true },
       channel: {
         channel: params.target.channel,
+        ...(params.target.connectionId === undefined ? {} : { connectionId: params.target.connectionId }),
         conversation: {
           id: params.target.conversationId,
           kind: params.target.conversationKind ?? "channel",
@@ -844,7 +847,7 @@ export class MessagingController {
             errorMessage: resolved.errorMessage ?? "Could not resolve direct-message recipient.",
           };
         }
-        event.channel = { channel: params.target.channel, conversation: resolved.conversation };
+        event.channel = { ...event.channel, conversation: resolved.conversation };
         event.routingState = resolved.routingState;
       } catch (error) {
         return {
@@ -852,6 +855,9 @@ export class MessagingController {
           errorMessage: error instanceof Error ? error.message : String(error),
         };
       }
+    }
+    if (this.options.connectionId !== undefined && this.adapter.isAuthorizedNoticeDestination?.(event.channel) !== true) {
+      return { ok: false, errorMessage: "This destination has not been approved for the Telegram connection." };
     }
     const result = await this.deliver(
       {
@@ -4866,8 +4872,15 @@ export class MessagingController {
   }
 
   private isChannelInScope(channel: MessagingBindingRecord["channel"] | undefined): boolean {
-    return channel?.connectionId === undefined
+    return (this.options.isConnectionAvailable?.() ?? true)
+      && channel?.connectionId === this.options.connectionId
       && (!this.options.channel || channel?.channel === this.options.channel);
+  }
+
+  private matchesAutomationConnection(target: AutomationMessagingConversationSnapshot): boolean {
+    return (this.options.isConnectionAvailable?.() ?? true)
+      && (!this.options.channel || target.channel === this.options.channel)
+      && target.connectionId === this.options.connectionId;
   }
 
   /**
@@ -5136,6 +5149,7 @@ function messagingEventFromAutomationSource(
     },
     channel: {
       channel: source.conversation.channel,
+      ...(source.conversation.connectionId === undefined ? {} : { connectionId: source.conversation.connectionId }),
       conversation: {
         id: source.conversation.conversationId,
         kind: source.conversation.conversationKind ?? "channel",

@@ -95,6 +95,8 @@ type DeliveryLaneState = {
 interface MessagingOutboundDeliveryOptions {
   readonly adapter: MessagingAdapter;
   readonly channel?: MessagingChannelKind;
+  readonly connectionId?: string;
+  readonly isConnectionAvailable?: () => boolean;
   readonly store: Pick<MessagingStoreLike, "recordDelivery" | "revokeBinding" | "settleDelivery">;
   readonly deliveryBudget?: MessagingDeliveryBudget;
   readonly deliveryLane?: MessagingDeliveryLane;
@@ -215,9 +217,9 @@ export class MessagingOutboundDelivery {
     guard?: MessagingDeliveryGuard,
     receiptRequest?: MessagingReplyReceiptRequest,
   ): Promise<MessagingDeliveryResult> {
-    if (binding?.channel.connectionId !== undefined
-      || event?.channel.connectionId !== undefined
-      || intent.audit?.channel.connectionId !== undefined) {
+    if (this.options.isConnectionAvailable?.() === false
+      || [binding?.channel, event?.channel, intent.audit?.channel].some((channel) =>
+        channel && channel.connectionId !== this.options.connectionId)) {
       return {
         channel: binding?.channel.channel ?? this.options.channel ?? "telegram",
         deliveredAt: this.context.now(),
@@ -649,7 +651,8 @@ export class MessagingOutboundDelivery {
         if (receipt) receipt.notSent = "adapter-stopped";
         return cancelledResult();
       }
-      if (guard?.isCancelled()) {
+      if (guard?.isCancelled() || this.options.isConnectionAvailable?.() === false) {
+        if (receipt) receipt.notSent = "adapter-stopped";
         return cancelledResult();
       }
       if (receipt) {

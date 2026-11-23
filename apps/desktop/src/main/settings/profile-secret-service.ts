@@ -72,6 +72,9 @@ export function writeDesktopSecretsToProfile(
   }
 
   const entries = Object.entries(request.secrets);
+  if (entries.some(([name]) => name.startsWith("telegramBotToken:"))) {
+    throw new Error("Use Telegram connection setup to save scoped bot credentials.");
+  }
   if (entries.some(([name, value]) =>
     typeof value === "string"
     && value.length > 0

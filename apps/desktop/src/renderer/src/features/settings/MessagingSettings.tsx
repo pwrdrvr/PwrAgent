@@ -41,6 +41,8 @@ import {
   type DesktopSettingsSecretName,
   type DesktopSettingsSnapshot,
   type DesktopTelegramPairingGrants,
+  type SaveTelegramConnectionRequest,
+  type TelegramConnectionStatus,
   type DesktopMessagingFullAccessWarningGlobalPolicy,
   type DesktopMessagingFullAccessWarningUserPolicy,
   type InspectDiscordThreadPermissionsResponse,
@@ -821,6 +823,13 @@ export function MessagingSettings(props: {
         chipKind={chipKindForBotToken(telegram.botToken)}
       >
         <div className="settings-fields">
+          <TelegramConnections
+            desktopApi={props.desktopApi}
+            disabled={platformControlsDisabled}
+            hasLegacy={telegram.botToken.configured}
+            settings={telegram}
+            onChanged={props.onPairingSettingsChanged}
+          />
           <ToggleField
             checked={telegram.enabled.value}
             disabled={platformControlsDisabled}
@@ -3024,8 +3033,163 @@ function SlackStartSection(props: {
   );
 }
 
+function TelegramConnections(props: {
+  desktopApi?: DesktopApi;
+  disabled: boolean;
+  hasLegacy: boolean;
+  settings: DesktopSettingsSnapshot["messaging"]["telegram"];
+  onChanged?: () => Promise<void>;
+}) {
+  const [connections, setConnections] = useState<TelegramConnectionStatus[]>([]);
+  const [selected, setSelected] = useState<string>();
+  const [displayName, setDisplayName] = useState("");
+  const [token, setToken] = useState("");
+  const [enabled, setEnabled] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [error, setError] = useState<string>();
+  const [accessRevision, setAccessRevision] = useState(0);
+  const { desktopApi } = props;
+  useEffect(() => {
+    let disposed = false;
+    void desktopApi?.listTelegramConnections?.().then(
+      (rows) => { if (!disposed) setConnections(rows); },
+      (caught: unknown) => { if (!disposed) setError(caught instanceof Error ? caught.message : String(caught)); },
+    );
+    return () => { disposed = true; };
+  }, [desktopApi, props.settings]);
+
+  const loadGrants = useCallback(async () => {
+    return selected && selected !== "add" ? await desktopApi?.readTelegramPairingGrants?.(selected) : undefined;
+  }, [desktopApi, selected]);
+  if (!desktopApi?.saveTelegramConnection) return null;
+  const named = connections.filter((connection) => !connection.legacy);
+  const current = named.find((connection) => connection.id === selected);
+  const canAdd = named.length + Number(props.hasLegacy || connections.some((row) => row.legacy)) < 2;
+  const select = (connection?: TelegramConnectionStatus) => {
+    setSelected(connection?.id ?? "add");
+    setDisplayName(connection?.displayName ?? "");
+    setEnabled(connection?.enabled ?? true);
+    setToken("");
+    setError(undefined);
+    setConfirmRemove(false);
+  };
+  const save = async (request: SaveTelegramConnectionRequest) => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      const rows = await desktopApi.saveTelegramConnection?.(request);
+      if (!rows) return;
+      setConnections(rows);
+      setToken("");
+      setConfirmRemove(false);
+      setSelected(request.kind === "remove" ? undefined
+        : request.kind === "add" ? rows.find((row) => row.displayName === displayName.trim())?.id : request.id);
+      await props.onChanged?.();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <SettingsField
+        label="Telegram connections"
+        sub="Use a separate bot for a different audience."
+        error={error}
+        control={(
+          <div className="settings-pairing">
+            {props.hasLegacy && (
+              <div className="settings-pairing__controls">
+                <span>Telegram</span>
+                <span>{props.settings.enabled.value ? "Default connection" : "Disabled"}</span>
+              </div>
+            )}
+            {named.map((row) => (
+              <div className="settings-pairing__controls" key={row.id}>
+                <span>{row.displayName}</span>
+                <span role="status">{!row.enabled ? "Disabled" : row.verified ? "Connected" : row.startupError ?? "Waiting to connect"}</span>
+                <button className="button button--secondary" type="button" disabled={busy} onClick={() => select(row)}>
+                  {row.verified ? "Manage" : "Set up"}
+                </button>
+              </div>
+            ))}
+            {canAdd && (
+              <button className="button button--secondary" type="button" disabled={props.disabled || busy} onClick={() => select()}>
+                Add Telegram connection
+              </button>
+            )}
+          </div>
+        )}
+      />
+      {selected !== undefined && (
+        <form onSubmit={(event) => {
+          event.preventDefault();
+          if (current) void save({ kind: "update", id: current.id, displayName, enabled, ...(token.trim() ? { token } : {}) });
+          else void save({ kind: "add", displayName, token });
+        }}>
+          <SettingsField label="Connection name" control={
+            <input aria-label="Connection name" className="settings-input" maxLength={100} required value={displayName}
+              onChange={(event) => setDisplayName(event.currentTarget.value)} />
+          } />
+          <SettingsField
+            label={current ? "Replacement bot token" : "Bot token"}
+            sub={current ? "Optional. Use a new token for the same bot."
+              : "Create a bot with BotFather. Give it a unique username ending in bot, then paste its token."}
+            control={
+              <input aria-label={current ? "Replacement bot token" : "New bot token"} className="settings-input" type="password"
+                autoComplete="off" required={!current} value={token} onChange={(event) => setToken(event.currentTarget.value)} />
+            }
+          />
+          {current && <ToggleField label="Enabled" checked={enabled} onChange={async (value) => setEnabled(value)} disabled={busy} />}
+          <SettingsField label="Connection settings" control={(
+            <div className="settings-pairing__controls">
+              <button className="button button--primary" type="submit" disabled={busy || props.disabled || !displayName.trim() || (!current && !token.trim())}>
+                {busy ? "Saving…" : !current || token.trim() ? "Verify and save" : "Save"}
+              </button>
+              <button className="button button--ghost" type="button" disabled={busy} onClick={() => {
+                setSelected(undefined);
+                setToken("");
+                setError(undefined);
+              }}>Close</button>
+              {current && (
+                <button className="button button--secondary" type="button" disabled={busy} onClick={() => {
+                  if (confirmRemove) void save({ kind: "remove", id: current.id });
+                  else setConfirmRemove(true);
+                }}>{confirmRemove ? "Confirm removal" : "Remove connection"}</button>
+              )}
+            </div>
+          )} />
+        </form>
+      )}
+      {current?.verified && (
+        <div key={current.id}>
+          <PairingTokenField
+            desktopApi={desktopApi}
+            connectionId={current.id}
+            disabled={props.disabled}
+            platform="telegram"
+            scopeOptions={TELEGRAM_PAIRING_SCOPE_OPTIONS}
+            supportsBucket
+            onSettingsChanged={async () => setAccessRevision((revision) => revision + 1)}
+          />
+          <TelegramPairingGrantField
+            key={accessRevision}
+            settings={props.settings}
+            load={loadGrants}
+            revoke={desktopApi.revokeTelegramPairingGrant && ((request) => desktopApi.revokeTelegramPairingGrant!({ ...request, connectionId: current.id }))}
+          />
+        </div>
+      )}
+    </>
+  );
+}
+
 function PairingTokenField(props: {
   desktopApi?: DesktopApi;
+  connectionId?: string;
   disabled: boolean;
   /** Promote Generate to a primary CTA (e.g. nothing is authorized yet). */
   highlight?: boolean;
@@ -3070,20 +3234,24 @@ function PairingTokenField(props: {
     if (!props.desktopApi?.listMessagingPairingRequests) return;
     const result = await props.desktopApi.listMessagingPairingRequests({
       platform: props.platform,
+      ...(props.connectionId ? { connectionId: props.connectionId } : {}),
     });
     setEntries(result.entries);
-  }, [props.desktopApi, props.platform]);
+  }, [props.desktopApi, props.platform, props.connectionId]);
 
   useEffect(() => {
-    void refresh();
+    const refreshSafely = () => void refresh().catch((caught: unknown) => {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    });
+    refreshSafely();
     return props.desktopApi?.onMessagingPairingChanged?.((event) => {
-      if (event.entry.platform !== props.platform) return;
+      if (event.entry.platform !== props.platform || event.entry.connectionId !== props.connectionId) return;
       if (event.entry.id === messageEntryIdRef.current && event.entry.status !== "pending") {
         setGeneratedMessage(undefined);
       }
-      void refresh();
+      refreshSafely();
     });
-  }, [props.desktopApi, props.platform, refresh, setGeneratedMessage]);
+  }, [props.desktopApi, props.platform, props.connectionId, refresh, setGeneratedMessage]);
 
   const selectScope = (nextScope: MessagingPairingScope) => {
     setScope(nextScope);
@@ -3107,6 +3275,7 @@ function PairingTokenField(props: {
       const result = await props.desktopApi.generateMessagingPairingToken({
         platform: props.platform,
         scope: selectedScope,
+        ...(props.connectionId ? { connectionId: props.connectionId } : {}),
       });
       setGeneratedMessage(result);
       // Auto-copy the freshly generated code so the operator can paste it
@@ -3133,6 +3302,7 @@ function PairingTokenField(props: {
       if (decision === "approve") {
         const result = await props.desktopApi?.approveMessagingPairing?.({
           entryId: entry.id,
+          ...(props.connectionId ? { connectionId: props.connectionId } : {}),
           ...(target ? { target } : {}),
           ...(consume === false ? { consume: false } : {}),
         });
@@ -3143,7 +3313,10 @@ function PairingTokenField(props: {
           await props.onSettingsChanged?.();
         }
       } else {
-        const result = await props.desktopApi?.rejectMessagingPairing?.({ entryId: entry.id });
+        const result = await props.desktopApi?.rejectMessagingPairing?.({
+          entryId: entry.id,
+          ...(props.connectionId ? { connectionId: props.connectionId } : {}),
+        });
         if (result?.entry.id === messageEntryId) {
           setGeneratedMessage(undefined);
         }
@@ -3208,7 +3381,9 @@ function PairingTokenField(props: {
   return (
     <SettingsField
       label="Pairing"
-      sub={props.hideDescription ? undefined : PAIRING_FIELD_DESCRIPTION}
+      sub={props.hideDescription ? undefined : props.connectionId
+        ? "Approve people as Power Users on this connection. Pair a group to allow its conversation."
+        : PAIRING_FIELD_DESCRIPTION}
       error={error}
       control={
         <div className="settings-pairing">

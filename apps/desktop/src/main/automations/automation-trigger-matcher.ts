@@ -90,6 +90,7 @@ function matchesInboundTrigger(
     {
       ...event.channel.conversation,
       channel: event.channel.channel,
+      connectionId: event.channel.connectionId,
       conversationId: event.channel.conversation.id,
       conversationKind: event.channel.conversation.kind,
     },
@@ -136,6 +137,7 @@ function buildRunSourceMetadata(params: {
     },
     conversation: {
       channel: params.event.channel.channel,
+      ...(params.event.channel.connectionId === undefined ? {} : { connectionId: params.event.channel.connectionId }),
       conversationId: params.event.channel.conversation.id,
       conversationKind: params.event.channel.conversation.kind,
       isDirectMessage: params.event.channel.conversation.isDirectMessage,
@@ -232,7 +234,7 @@ export function buildReplayRunSourceMetadata(params: {
   return {
     kind: "messaging",
     eventId: message.id,
-    sourceEventKey: `replay:${message.id}:${params.now ?? Date.now()}`,
+    sourceEventKey: scopeMessagingRoutingKey(message.connectionId, `replay:${message.id}:${params.now ?? Date.now()}`),
     receivedAt: message.receivedAt,
     matchedTriggerId: trigger.id,
     matchedTriggerName: trigger.name,
@@ -245,6 +247,7 @@ export function buildReplayRunSourceMetadata(params: {
     },
     conversation: {
       channel: message.provider,
+      ...(message.connectionId === undefined ? {} : { connectionId: message.connectionId }),
       conversationId: message.conversationId,
       conversationKind: message.conversationKind,
       isDirectMessage: message.isDirectMessage,

@@ -58,10 +58,14 @@ export class SqliteMessagingRequestStore<InboundEvent> implements MessagingReque
       ...(projection.configuredConnectionId === undefined ? [] : [projection.configuredConnectionId])]);
     const selector = digest([principalScope, projection.destinationIdentity]);
     const requestId = digest([selector, projection.eventId]);
-    const existing = this.get({ ownerId: this.ownerId, requestId });
+    const existing = this.get({ ownerId: this.ownerId, requestId, connectionId: projection.configuredConnectionId });
     if (existing) return existing;
     const source: MessagingRequestSource<InboundEvent> = {
-      ref: { ownerId: this.ownerId, requestId, surfaceSelector: selector, ...(params.instanceId ? { instanceId: params.instanceId } : {}) },
+      ref: {
+        ownerId: this.ownerId, requestId, surfaceSelector: selector,
+        ...(params.instanceId ? { instanceId: params.instanceId } : {}),
+        ...(projection.configuredConnectionId === undefined ? {} : { connectionId: projection.configuredConnectionId }),
+      },
       selector,
       principalScope,
       agent: params.agent,
@@ -86,7 +90,8 @@ export class SqliteMessagingRequestStore<InboundEvent> implements MessagingReque
     if (ref.ownerId !== this.ownerId) return undefined;
     const row = this.db.prepare("SELECT payload FROM messaging_requests WHERE request_id = ?")
       .get(ref.requestId) as { payload: string } | undefined;
-    return row ? JSON.parse(row.payload) as MessagingRequestSource<InboundEvent> : undefined;
+    const stored = row ? JSON.parse(row.payload) as MessagingRequestSource<InboundEvent> : undefined;
+    return stored?.ref.connectionId === ref.connectionId ? stored : undefined;
   }
 
   destination(source: MessagingRequestSource<InboundEvent>, selector: string): MessagingRequestSource<InboundEvent> | undefined {

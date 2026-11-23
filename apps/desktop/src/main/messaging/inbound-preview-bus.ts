@@ -64,10 +64,11 @@ export function onInboundPreviewScopesChanged(listener: () => void): () => void 
  */
 export function activeInboundPreviewConversationIds(
   provider: InboundPreviewScope["provider"],
+  connectionId?: string,
 ): string[] {
   const ids = new Set<string>();
   for (const scope of activeScopes.values()) {
-    if (scope.provider !== provider || scope.recipientUserId) continue;
+    if (scope.provider !== provider || scope.connectionId !== connectionId || scope.recipientUserId) continue;
     ids.add(scope.conversationId);
     if (scope.parentId) ids.add(scope.parentId);
   }
@@ -113,6 +114,7 @@ function matchesAnyScope(
       conversationId: conversation.id,
       conversationKind: conversation.kind,
       channel: event.channel.channel,
+      connectionId: event.channel.connectionId,
     }, event.actor.platformUserId)) return true;
   }
   return false;
@@ -141,6 +143,7 @@ function toPreviewMessage(
   return {
     id: event.id,
     provider: event.channel.channel,
+    ...(event.channel.connectionId === undefined ? {} : { connectionId: event.channel.connectionId }),
     conversationId: event.channel.conversation.id,
     conversationKind: event.channel.conversation.kind,
     isDirectMessage: event.channel.conversation.isDirectMessage,

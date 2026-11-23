@@ -953,6 +953,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
   // The conversation the fields currently describe. It is one source among
   // possibly several: `extraSources` holds the rest.
   const fieldConversation = readInboundConversation({
+    connectionId: fieldOrigin?.channel === inboundProvider ? fieldOrigin.connectionId : undefined,
     groupId: inboundGroupId,
     groupTitle: selectedGroup?.title ?? capturedGroupTitle ?? storedGroupTitle,
     provider: inboundProvider,
@@ -1205,6 +1206,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
         void start({
           subscriptionId: subscriptionIds[index],
           provider: scope.channel,
+          ...(scope.connectionId === undefined ? {} : { connectionId: scope.connectionId }),
           conversationId: scope.conversationId,
           ...(scope.parentId ? { parentId: scope.parentId } : {}),
           recipientUserId: scope.recipientUserId,
@@ -1636,6 +1638,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
       schedule: selectedSchedule.ok ? selectedSchedule.schedule : undefined,
       sources: inboundSources,
       target: buildDestinationSnapshot({
+        connectionId: initialTargetSnapshot?.channel === destProvider ? initialTargetSnapshot.connectionId : undefined,
         groupId: destGroupId,
         groupTitle: selectedDestGroup?.title,
         provider: destProvider,
@@ -3794,6 +3797,7 @@ type InboundConversationField =
  * and "Watch another", and none of them can disagree about what is selected.
  */
 function readInboundConversation(params: {
+  connectionId?: string;
   groupId: string;
   groupTitle?: string;
   provider: MessagingChannelKind;
@@ -3813,6 +3817,7 @@ function readInboundConversation(params: {
   const conversation: AutomationMessagingConversationSnapshot | undefined = isTopic
     ? {
         channel: params.provider,
+        ...(params.connectionId === undefined ? {} : { connectionId: params.connectionId }),
         conversationId: topicId,
         conversationKind: "topic",
         parentId: groupId,
@@ -4183,6 +4188,7 @@ function initialReplySubDestination(
 }
 
 function buildDestinationSnapshot(params: {
+  connectionId?: string;
   groupId: string;
   groupTitle?: string;
   provider: MessagingChannelKind;
@@ -4190,11 +4196,15 @@ function buildDestinationSnapshot(params: {
 }): AutomationMessagingConversationSnapshot | undefined {
   const groupId = params.groupId.trim();
   if (!groupId) return undefined;
+  const channel = {
+    channel: params.provider,
+    ...(params.connectionId === undefined ? {} : { connectionId: params.connectionId }),
+  };
   if (isContactSelection(groupId)) {
     const userId = contactUserId(groupId);
     if (!userId) return undefined;
     return {
-      channel: params.provider,
+      ...channel,
       conversationId: userId,
       conversationKind: "dm",
       recipientUserId: userId,
@@ -4204,7 +4214,7 @@ function buildDestinationSnapshot(params: {
   const topicId = params.topicId.trim();
   if (params.provider === "telegram" && topicId) {
     return {
-      channel: params.provider,
+      ...channel,
       conversationId: topicId,
       conversationKind: "topic",
       parentId: groupId,
@@ -4212,7 +4222,7 @@ function buildDestinationSnapshot(params: {
     };
   }
   return {
-    channel: params.provider,
+    ...channel,
     conversationId: groupId,
     conversationKind: "channel",
     ...(params.groupTitle ? { title: params.groupTitle } : {}),

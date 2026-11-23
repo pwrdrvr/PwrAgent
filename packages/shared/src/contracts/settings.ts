@@ -684,6 +684,27 @@ export type DesktopTelegramPairingGrants = {
   supergroups: DesktopAuthorizedContact[];
 };
 
+export type DesktopTelegramConnection = {
+  id: string;
+  displayName: string;
+  botAccountId: string;
+  enabled: boolean;
+  /** The first bot keeps its historical unscoped route keys. */
+  legacy: boolean;
+  authorizedUserIds: string[];
+  authorizedSupergroupIds: string[];
+};
+
+export type TelegramConnectionSecretName = `telegramBotToken:${string}`;
+
+export type SaveTelegramConnectionRequest =
+  | { kind: "add"; displayName: string; token: string }
+  | { kind: "update"; id: string; displayName: string; enabled: boolean; token?: string }
+  | { kind: "remove"; id: string };
+
+export type TelegramConnectionStatus = Pick<DesktopTelegramConnection, "id" | "displayName" | "enabled" | "legacy">
+  & { verified: boolean; startupError?: string };
+
 export type DesktopMessagingResponseMode = "every_message" | "mention_only";
 export type DesktopMessagingAuthorizationMode = "approved_only" | "allow_all";
 export type DesktopMessagingSlackDmAccessMode =
@@ -750,6 +771,7 @@ export type DesktopMessagingContactLookupResponse = {
 
 export type DesktopSettingsSecretName =
   | "telegramBotToken"
+  | TelegramConnectionSecretName
   | "discordBotToken"
   | "mattermostBotToken"
   | "mattermostHmacSecret"
@@ -798,6 +820,7 @@ export type DesktopSettingsSecretName =
 export function isMessagingRuntimeSecret(
   name: DesktopSettingsSecretName,
 ): boolean {
+  if (name.startsWith("telegramBotToken:")) return true;
   switch (name) {
     case "telegramBotToken":
     case "discordBotToken":
@@ -828,6 +851,8 @@ export function isMessagingRuntimeSecret(
     case "openaiDecisionsApiKey":
     case "openaiTranscriptionApiKey":
     case "codexModelProviderKeys":
+      return false;
+    default:
       return false;
   }
 }
@@ -2000,6 +2025,7 @@ export type DesktopSettingsConfigPatch = {
       streamingResponses?: boolean;
       authorizedUserIds?: DesktopAuthorizedContact[];
       authorizedSupergroups?: DesktopAuthorizedContact[];
+      connections?: DesktopTelegramConnection[];
     };
     discord?: {
       enabled?: boolean;

@@ -343,6 +343,7 @@ export type AutomationInboundConditionGroup = {
 
 export type AutomationMessagingConversationSnapshot = {
   channel: MessagingChannelKind;
+  connectionId?: string;
   conversationId: string;
   conversationKind?: MessagingConversationKind;
   /** A selected contact addresses their 1:1 DM, not a conversation with this ID. */
@@ -364,7 +365,7 @@ export function matchesAutomationConversation(
   actorId: string,
   includeThreadReplies = true,
 ): boolean {
-  if (actual.channel !== expected.channel) return false;
+  if (actual.channel !== expected.channel || actual.connectionId !== expected.connectionId) return false;
   const isDm = actual.conversationKind === "dm" || actual.isDirectMessage === true;
   if (expected.recipientUserId) {
     if (!isDm || actorId !== expected.recipientUserId) return false;
@@ -429,19 +430,15 @@ export type AutomationInboundMessageTriggerDefinition = {
 export function automationConversationKey(
   conversation: Pick<
     AutomationMessagingConversationSnapshot,
-    "channel" | "conversationId" | "parentId" | "recipientUserId"
+    "channel" | "connectionId" | "conversationId" | "parentId" | "recipientUserId"
   >,
 ): string {
   // A contact is matched by who sends, not by a conversation ID, so it keys on
   // the contact and cannot collide with a shared conversation's key.
-  if (conversation.recipientUserId) {
-    return [conversation.channel, "dm", conversation.recipientUserId].join(":");
-  }
-  return [
-    conversation.channel,
-    conversation.parentId ?? "",
-    conversation.conversationId,
-  ].join(":");
+  const key = conversation.recipientUserId
+    ? [conversation.channel, "dm", conversation.recipientUserId].join(":")
+    : [conversation.channel, conversation.parentId ?? "", conversation.conversationId].join(":");
+  return conversation.connectionId === undefined ? key : JSON.stringify([conversation.connectionId, key]);
 }
 
 /**
@@ -464,6 +461,7 @@ export function findAutomationConversationIndexForMessage(
   message: Pick<
     InboundPreviewMessage,
     | "actor"
+    | "connectionId"
     | "conversationId"
     | "conversationKind"
     | "isDirectMessage"

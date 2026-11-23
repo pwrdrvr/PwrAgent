@@ -49,10 +49,15 @@ export function readFederationThreadDependencyProvenance(value: unknown): Causal
     ? provenance as Record<string, unknown> : {};
   if (ambiguous === undefined && source === undefined) return {};
   if (ambiguous !== undefined || !source || typeof source !== "object") return { causalMessagingAmbiguous: true };
-  const { ownerId, requestId, surfaceSelector, instanceId } = source as Record<string, unknown>;
+  const { ownerId, requestId, surfaceSelector, instanceId, connectionId } = source as Record<string, unknown>;
   if (typeof ownerId !== "string" || typeof requestId !== "string" || typeof instanceId !== "string" || !instanceId
-    || (surfaceSelector !== undefined && typeof surfaceSelector !== "string")) return { causalMessagingAmbiguous: true };
-  return { causalMessagingSource: { ownerId, requestId, instanceId, ...(surfaceSelector !== undefined ? { surfaceSelector } : {}) } };
+    || (surfaceSelector !== undefined && typeof surfaceSelector !== "string")
+    || (connectionId !== undefined && typeof connectionId !== "string")) return { causalMessagingAmbiguous: true };
+  return { causalMessagingSource: {
+    ownerId, requestId, instanceId,
+    ...(surfaceSelector !== undefined ? { surfaceSelector } : {}),
+    ...(connectionId !== undefined ? { connectionId } : {}),
+  } };
 }
 
 /**
