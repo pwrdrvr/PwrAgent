@@ -55,12 +55,15 @@ it("retains an already-committed journal through a failed completion and clears 
   });
   await store.recover(dir, async (entry) => {
     expect(entry.committed).toBe(true);
+    await store.markJournalCommitted(dir, entry, { ...entry.notification, provisioningAbandoned: true });
     return "retain";
   });
   await expect(store.withOperationLock(dir, async () => undefined)).rejects.toMatchObject({ code: "gh_stack_busy" });
   await expect(store.recover(dir, async () => { throw new Error("provider offline"); })).rejects.toThrow("provider offline");
   expect(await store.hasJournal(dir)).toBe(true);
-  await store.recover(dir, async (entry) => expect(entry.notification.opId).toBe(notice.opId));
+  await store.recover(dir, async (entry) => {
+    expect(entry.notification).toMatchObject({ opId: notice.opId, provisioningAbandoned: true });
+  });
   expect(await store.hasJournal(dir)).toBe(false);
 });
 

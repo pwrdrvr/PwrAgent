@@ -121,15 +121,18 @@ export class GhStackCatalogStore implements CatalogStore {
       const file = await open(join(commonDir, ownJournal), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
         .catch((error: unknown) => { if (!missing(error)) throw error; });
       if (!file) return;
+      let entry: RuntimeJournal;
       try {
         const info = await file.stat();
         if (!info.isFile() || info.size > 4 * 1024 * 1024) throw new Error("Invalid PwrAgent stack journal");
-        const entry = JSON.parse(await file.readFile("utf8")) as RuntimeJournal;
+        entry = JSON.parse(await file.readFile("utf8")) as RuntimeJournal;
         if (!entry.notification || (entry.direction !== "apply" && entry.direction !== "undo")) throw new Error("Invalid PwrAgent stack journal");
-        if (await recover(entry) === "retain") return;
       } finally {
         await file.close();
       }
+      // The callback can replace the journal under this lock. Windows
+      // cannot replace it while our read handle is open.
+      if (await recover(entry) === "retain") return;
       await this.clearJournal(commonDir);
     });
   }
