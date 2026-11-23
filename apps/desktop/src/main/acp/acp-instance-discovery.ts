@@ -36,6 +36,7 @@ import {
   resolveAntigravityCommandPath,
   type ManagedAntigravityRuntime,
 } from "./antigravity-managed-runtime.js";
+import { rememberAntigravitySelection } from "./antigravity-runtime-retention.js";
 import { resolveBundledGrokCommand } from "./acp-bundled-agent.js";
 import {
   ensureManagedGrokRuntime,
@@ -123,6 +124,8 @@ export type DiscoverAcpAgentInstancesOptions = {
   };
   /** Include the locally installed Antigravity runtime without checking for updates. */
   useManagedAntigravity?: boolean;
+  /** Config file whose relative Antigravity override discovery is resolving. */
+  antigravitySelectionConfigPath?: string;
   /** Injectable local status reader (tests). */
   readManagedAntigravity?: typeof readManagedAntigravityStatus;
   /** Injectable managed-runtime resolver (tests). */
@@ -244,17 +247,17 @@ export async function discoverLocalAcpAgentRecords(
     }
     const backendId = group.backendId as AcpBackendId;
     const strategy = strategyById(group.strategyId);
+    const antigravity = group.strategyId === "antigravity"
+      ? await resolveAntigravityDiscoverySelection(active, managedAntigravity, options)
+      : undefined;
+    const command = antigravity?.command ?? active.command;
     const launchDescriptor = normalizeAcpLaunchDescriptor({
       backendId,
       registryId: group.strategyId,
       distributionKind: "local",
-      command: active.command,
-      ...(group.strategyId === "antigravity"
-        && active.command === managedAntigravity?.command
-        && active.source !== "override"
-        && preferences.antigravity?.overridePath?.trim() !== active.command
-        && preferences.antigravity?.selectedPath?.trim() !== active.command
-        ? { managedAntigravityFallback: true as const }
+      command,
+      ...(antigravity?.managed
+        ? { managedAntigravityFallback: !antigravity.explicit }
         : {}),
       args: group.args,
       env: {
@@ -272,11 +275,7 @@ export async function discoverLocalAcpAgentRecords(
           )
           ? { GROK_INSTALLER: "pwragent" }
           : {}),
-        ...(group.strategyId === "antigravity"
-          && (active.command === managedAntigravity?.command
-            || await isManagedAntigravityCommand(active.command, { env: options?.env }))
-          ? MANAGED_ANTIGRAVITY_ENV
-          : {}),
+        ...(antigravity?.managed ? MANAGED_ANTIGRAVITY_ENV : {}),
       },
     });
     const registryAgent: AcpRegistryAgent = {
@@ -300,7 +299,7 @@ export async function discoverLocalAcpAgentRecords(
       name: group.name,
       ...(active.version !== undefined ? { version: active.version } : {}),
       distributionKind: "local",
-      distributionSource: `${active.command} ${group.args.join(" ")}`.trim(),
+      distributionSource: `${command} ${group.args.join(" ")}`.trim(),
       installStatus: "installed",
       authStatus: "not-required",
       verificationStatus: "not-applicable",
@@ -310,15 +309,41 @@ export async function discoverLocalAcpAgentRecords(
       capabilities: acpAgentCapabilitiesForRegistryId(group.strategyId),
       launchDescriptor,
       registryAgent,
-      instances: classified.instances,
+      instances: command === active.command ? classified.instances
+        : classified.instances.map((instance) => instance === active ? { ...instance, command } : instance),
       ...(classified.incompatibleInstances.length > 0
         ? { incompatibleInstances: classified.incompatibleInstances }
         : {}),
       ...(rejectedInstances.length > 0 ? { rejectedInstances } : {}),
-      activeCommand: active.command,
+      activeCommand: command,
     });
   }
   return records;
+}
+
+async function resolveAntigravityDiscoverySelection(
+  active: AcpAgentInstance,
+  managedRuntime: ManagedAntigravityRuntime | undefined,
+  options: DiscoverAcpAgentInstancesOptions | undefined,
+) {
+  const environment = { env: options?.env };
+  const resolved = await resolveAntigravityCommandPath(active.command, environment);
+  const managed = active.command === managedRuntime?.command
+    || await isManagedAntigravityCommand(resolved ?? active.command, environment);
+  const override = options?.preferences?.antigravity?.overridePath?.trim();
+  const selected = options?.preferences?.antigravity?.selectedPath?.trim();
+  const matches = async (preference: string | undefined) => Boolean(preference
+    && (preference === active.command
+      || (resolved && await resolveAntigravityCommandPath(preference, environment) === resolved)));
+  const selectedByOverride = await matches(override);
+  const explicit = active.source === "override" || selectedByOverride || await matches(selected);
+  if (options?.antigravitySelectionConfigPath && override && resolved && selectedByOverride) {
+    await rememberAntigravitySelection(options.antigravitySelectionConfigPath, override, resolved);
+  }
+  // Bare commands were probed with the login-shell PATH. Keep that exact
+  // executable for spawns, whose PATH can differ from discovery.
+  const command = path.basename(active.command) === active.command && resolved ? resolved : active.command;
+  return { command, managed, explicit };
 }
 
 async function discoverAcpGroups(options: DiscoverAcpAgentInstancesOptions | undefined) {

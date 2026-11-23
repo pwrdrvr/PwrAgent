@@ -243,6 +243,9 @@ export function createLocalAcpAgentDiscovery(params: {
     const records = await discoverLocalAcpAgentRecords({
       enabledRegistryIds,
       useManagedAntigravity: true,
+      antigravitySelectionConfigPath: getAppStateMode() === "bootstrap"
+        ? resolveBootstrapProfilePath("config.toml")
+        : resolveActiveProfilePath("config.toml"),
       managedGrok: {
         channel: managedGrokBuildChannelFromSnapshot(providers),
         enabled:
@@ -597,6 +600,19 @@ function normalizeInstalledAcpAgent(
   return runtimeCapabilities === agent.runtimeCapabilities
     ? agent
     : { ...agent, runtimeCapabilities };
+}
+
+function recoverLegacyAntigravitySelection(agent: AcpInstalledAgentRecord): AcpInstalledAgentRecord {
+  const descriptor = agent.launchDescriptor;
+  if (agent.registryId !== "antigravity" || !descriptor
+    || descriptor.managedAntigravityFallback !== undefined
+    || descriptor.env.AGY_CLI_DISABLE_AUTO_UPDATE !== MANAGED_ANTIGRAVITY_ENV.AGY_CLI_DISABLE_AUTO_UPDATE) return agent;
+  // Old discovery persisted both managed ownership and where the chosen
+  // instance came from. Only those records can establish automatic selection.
+  const source = agent.instances?.find((instance) => instance.command === descriptor.command)?.source;
+  return source === "path" || source === "fallback"
+    ? { ...agent, launchDescriptor: { ...descriptor, managedAntigravityFallback: true } }
+    : agent;
 }
 
 function rewindPointShowsPrompt(
@@ -2519,7 +2535,7 @@ export class AcpBackendAdapter {
     if (agent.authStatus !== "not-required" && agent.authStatus !== "authenticated") {
       throw new Error(`ACP backend authentication required: ${backend}`);
     }
-    return agent;
+    return recoverLegacyAntigravitySelection(agent);
   }
 
   /**

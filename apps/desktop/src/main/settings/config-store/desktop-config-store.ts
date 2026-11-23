@@ -263,7 +263,7 @@ export class DesktopConfigStore {
   ): Promise<ConfigUpdateResult<K>> {
     const antigravityPath = patch.acpAgents?.antigravity?.cliPath;
     const write = () => this.writePatch(patch, returnDomains);
-    return antigravityPath === undefined ? write() : await writeAntigravitySelection(antigravityPath, write);
+    return antigravityPath === undefined ? write() : await writeAntigravitySelection(this.options.configPath, antigravityPath, write);
   }
 
   private writePatch<K extends keyof ConfigDomainMap>(

@@ -10,8 +10,8 @@ export type AcpLaunchDescriptor = {
   env: Record<string, string>;
   cwd?: string;
   installPath?: string;
-  /** Automatic managed selection may use the active release if this path was pruned. */
-  managedAntigravityFallback?: true;
+  /** Automatic managed selections may fall forward. Explicit managed paths are exact. */
+  managedAntigravityFallback?: boolean;
 };
 
 export function acpAgentLaunchIdentity(agent: {

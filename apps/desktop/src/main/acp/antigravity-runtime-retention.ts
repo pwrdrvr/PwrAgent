@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { constants, renameSync, rmSync, writeFileSync } from "node:fs";
-import { access, lstat, readdir, readFile, readlink, realpath, rm, stat } from "node:fs/promises";
+import { access, lstat, mkdir, readdir, readFile, readlink, realpath, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { lock } from "proper-lockfile";
 import { getMainLogger } from "../log.js";
@@ -159,7 +159,7 @@ export async function withAntigravityRuntimeLock<T>(
   }
 }
 
-export async function writeAntigravitySelection<T>(command: string, write: () => T): Promise<T> {
+export async function writeAntigravitySelection<T>(configPath: string, command: string, write: () => T): Promise<T> {
   const root = managedAntigravityRoot();
   const canonicalRoot = await realpath(root).catch(missingPath);
   if (!canonicalRoot) return write();
@@ -168,6 +168,10 @@ export async function writeAntigravitySelection<T>(command: string, write: () =>
     const target = selected && await resolveSelectedPath(selected).catch(() => undefined);
     if (target && managedReleaseName(canonicalRoot, target) && !await realpath(target).catch(missingPath)) {
       throw new Error("The selected managed Antigravity release is no longer installed.");
+    }
+    assertLocked();
+    if ((selected || undefined) !== await readProfileSelection(configPath)) {
+      await rm(selectionReceiptPath(configPath), { force: true });
     }
     assertLocked();
     return write();
@@ -183,6 +187,67 @@ function processGroupAlive(pid: number): boolean {
   }
 }
 
+function managedExecutableKind(root: string, command: string): "release" | "staging" | undefined {
+  if (managedReleaseName(root, command)) return "release";
+  if (path.basename(command) === "agy" && path.dirname(path.dirname(command)) === root
+    && STAGING_PATTERN.test(path.basename(path.dirname(command)))) return "staging";
+  return undefined;
+}
+
+async function withResolvedAntigravityExecutable<T>(
+  command: string,
+  environment: CommandEnvironment,
+  useActiveIfMissing: boolean | undefined,
+  use: (command: string, kind?: "release" | "staging") => T,
+): Promise<T> {
+  const root = managedAntigravityRoot();
+  if (process.platform === "win32" || !(await lstat(root).catch(missingPath))?.isDirectory()) {
+    return use(command);
+  }
+  const canonicalRoot = await realpath(root);
+  const resolved = await resolveAntigravityCommandPath(command, environment);
+  // Use the resolved standalone executable directly so a concurrent alias
+  // change cannot redirect a lock-free launch into the managed directory.
+  if (resolved && !managedExecutableKind(canonicalRoot, resolved)) return use(resolved);
+  return await withAntigravityRuntimeLock(root, async (assertLocked) => {
+    const target = await resolveAntigravityCommandPath(command, environment);
+    const active = !target && useActiveIfMissing ? await readActiveAntigravityRuntime(root) : undefined;
+    const executable = target ?? (active && await realpath(active.command));
+    assertLocked();
+    return use(executable ?? command, executable ? managedExecutableKind(canonicalRoot, executable) : undefined);
+  });
+}
+
+/** Keep a resolved executable across a multi-process setup operation. */
+export async function holdAntigravityExecutable(
+  command: string,
+  environment: CommandEnvironment,
+  useActiveIfMissing?: boolean,
+) {
+  return await withResolvedAntigravityExecutable(command, environment, useActiveIfMissing, (executable, kind) => {
+    const marker = kind ? createOwnerMarker(executable) : undefined;
+    return {
+      command: executable,
+      managed: kind === "release",
+      release: () => { if (marker) removeUseMarker(marker); },
+    };
+  });
+}
+
+function createOwnerMarker(command: string): string {
+  const marker = path.join(path.dirname(command), `.pwragent-use-owner-${process.pid}-${randomUUID()}`);
+  writeFileSync(marker, "", { flag: "wx", mode: 0o600 });
+  return marker;
+}
+
+function removeUseMarker(marker: string): void {
+  try {
+    rmSync(marker, { force: true });
+  } catch {
+    // The next prune can collect a marker after its process exits.
+  }
+}
+
 /** Resolve an alias to the executable we actually spawn. Publish the hold
  * before unlocking so another installer cannot prune between lookup and exec. */
 export async function spawnWithAntigravityRuntimeHold<T extends OwnedChildProcess>(
@@ -192,45 +257,20 @@ export async function spawnWithAntigravityRuntimeHold<T extends OwnedChildProces
   assertOpen: () => void,
   useActiveIfMissing?: boolean,
 ): Promise<T> {
-  const root = managedAntigravityRoot();
-  const rootInfo = await lstat(root).catch(missingPath);
-  if (!rootInfo?.isDirectory()) {
+  return await withResolvedAntigravityExecutable(command, environment, useActiveIfMissing, (executable, kind) => {
     assertOpen();
-    return start(command, false);
-  }
-  return await withAntigravityRuntimeLock(root, async (assertLocked) => {
-    const canonicalRoot = await realpath(root);
-    const resolved = await resolveAntigravityCommandPath(command, environment);
-    const active = !resolved && useActiveIfMissing ? await readActiveAntigravityRuntime(root) : undefined;
-    const commandPath = resolved ?? (active && await realpath(active.command));
-    const name = commandPath && managedReleaseName(canonicalRoot, commandPath);
-    const staged = commandPath && path.basename(commandPath) === "agy"
-      && path.dirname(path.dirname(commandPath)) === canonicalRoot
-      && STAGING_PATTERN.test(path.basename(path.dirname(commandPath)));
-    assertOpen();
-    assertLocked();
-    if (!commandPath || (!name && !staged)) return start(command, false);
+    if (!kind) return start(executable, false);
 
-    const directory = path.dirname(commandPath);
-    const token = randomUUID();
-    let marker = path.join(directory, `.pwragent-use-owner-${process.pid}-${token}`);
-    writeFileSync(marker, "", { flag: "wx", mode: 0o600 });
-    const removeMarker = () => {
-      try {
-        rmSync(marker, { force: true });
-      } catch {
-        // The next prune can collect a marker after its process exits.
-      }
-    };
+    let marker = createOwnerMarker(executable);
     let child: T;
     try {
-      child = start(commandPath, Boolean(name));
+      child = start(executable, kind === "release");
     } catch (error) {
-      removeMarker();
+      removeUseMarker(marker);
       throw error;
     }
     if (child.pid) {
-      const childMarker = path.join(directory, `.pwragent-use-child-${child.pid}-${token}`);
+      const childMarker = path.join(path.dirname(marker), `.pwragent-use-child-${child.pid}-${randomUUID()}`);
       try {
         renameSync(marker, childMarker);
         marker = childMarker;
@@ -240,7 +280,7 @@ export async function spawnWithAntigravityRuntimeHold<T extends OwnedChildProces
     }
     child.once("close", () => {
       // The ACP parent may exit while a process-per-session child is alive.
-      if (!child.pid || !processGroupAlive(child.pid)) removeMarker();
+      if (!child.pid || !processGroupAlive(child.pid)) removeUseMarker(marker);
     });
     return child;
   });
@@ -253,7 +293,58 @@ async function directoryEntries(directory: string) {
   });
 }
 
-async function selectedReleases(root: string): Promise<Set<string>> {
+function selectionReceiptPath(configPath: string): string {
+  return path.join(path.dirname(configPath), "state", "antigravity-selection.json");
+}
+
+async function readProfileSelection(configPath: string): Promise<string | undefined> {
+  const source = await readFile(configPath, "utf8").catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (source === undefined) return undefined;
+  const tables = parseTomlTables(source, configPath, { requiredValuePaths: ["acp_agents.antigravity.cli_path"] });
+  const command = tables["acp_agents.antigravity"]?.cli_path;
+  return typeof command === "string" ? command.trim() || undefined : undefined;
+}
+
+/** Remember the discovery resolution of a profile-relative path. Other
+ * owners cannot reproduce this profile's login-shell environment. */
+export async function rememberAntigravitySelection(
+  configPath: string,
+  command: string,
+  resolved: string,
+): Promise<void> {
+  const root = managedAntigravityRoot();
+  if (process.platform === "win32" || path.isAbsolute(command)
+    || !(await lstat(root).catch(() => undefined))?.isDirectory()) return;
+  await withAntigravityRuntimeLock(root, async (assertLocked) => {
+    if (await readProfileSelection(configPath) !== command || !await realpath(resolved).catch(missingPath)) return;
+    const receipt = selectionReceiptPath(configPath);
+    const json = JSON.stringify({ command, resolved });
+    if (await readFile(receipt, "utf8").catch(missingPath) === json) return;
+    await mkdir(path.dirname(receipt), { recursive: true, mode: 0o700 });
+    const temporary = `${receipt}.${randomUUID()}.tmp`;
+    assertLocked();
+    writeFileSync(temporary, json, { flag: "wx", mode: 0o600 });
+    try {
+      renameSync(temporary, receipt);
+    } finally {
+      rmSync(temporary, { force: true });
+    }
+  }).catch((error) => log.warn("Could not remember the Antigravity profile selection", { error: String(error) }));
+}
+
+async function readSelectionReceipt(configPath: string, command: string): Promise<string | undefined> {
+  const json = await readFile(selectionReceiptPath(configPath), "utf8").catch(missingPath);
+  if (json === undefined) return undefined;
+  const record = JSON.parse(json) as { command?: string; resolved?: string } | null;
+  const resolved = record?.resolved;
+  return record?.command === command && typeof resolved === "string" && path.isAbsolute(resolved)
+    ? resolved : undefined;
+}
+
+async function selectedReleases(root: string): Promise<Set<string> | undefined> {
   const canonicalRoot = await realpath(root);
   const profiles = path.join(resolvePwragentRoot(), "profiles");
   const configDirs = (await directoryEntries(profiles))
@@ -269,15 +360,19 @@ async function selectedReleases(root: string): Promise<Set<string>> {
   };
   await protect(process.env[ACP_AGENTS_ANTIGRAVITY_CLI_PATH_ENV]);
   for (const directory of configDirs) {
-    const file = path.join(directory, "config.toml");
-    const source = await readFile(file, "utf8").catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return undefined;
-      throw error;
-    });
-    if (source === undefined) continue;
-    const tables = parseTomlTables(source, file, { requiredValuePaths: ["acp_agents.antigravity.cli_path"] });
-    const command = tables["acp_agents.antigravity"]?.cli_path;
-    if (typeof command === "string") await protect(command);
+    const configPath = path.join(directory, "config.toml");
+    const command = await readProfileSelection(configPath);
+    if (!command) continue;
+    if (path.isAbsolute(command)) {
+      await protect(command);
+    } else {
+      const resolved = await readSelectionReceipt(configPath, command);
+      // A legacy or newly configured relative pin can name any installed
+      // release. Wait for discovery to resolve it before reclaiming releases.
+      if (!resolved) return undefined;
+      const name = managedReleaseName(canonicalRoot, resolved);
+      if (name) selections.add(name);
+    }
   }
   return selections;
 }
@@ -316,6 +411,7 @@ export async function pruneAntigravityRuntime(
   const versions = path.join(root, "versions");
   if (!(await lstat(versions).catch(missingPath))?.isDirectory()) return;
   const keep = await selectedReleases(root);
+  if (!keep) return;
   const activeName = path.basename(path.dirname(activeCommand));
   const previousName = previousCommand && path.basename(path.dirname(previousCommand));
   assertLocked();

@@ -7,6 +7,7 @@ import fc from "fast-check";
 import { create } from "tar";
 import { describe, expect, it, vi } from "vitest";
 import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
+import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
 import {
   installManagedAntigravityRuntime,
   readManagedAntigravityStatus,
@@ -69,6 +70,75 @@ it("keeps unsupported platforms off the release feed", async () => {
 });
 
 describe.skipIf(process.platform === "win32")("managed Antigravity activation", () => {
+  it("protects relative profile pins resolved through a different login-shell PATH", async () => {
+    await withRuntimeRoot(async (directory) => {
+      const archive = await makeArchive(directory);
+      await fc.assert(fc.asyncProperty(fc.integer({ min: 0, max: 20 }), async (patch) => {
+        const root = await mkdtemp(path.join(directory, "login-path-"));
+        const launchBin = path.join(root, "login-bin");
+        const desktopBin = path.join(root, "desktop-bin");
+        const configPath = path.join(root, "profiles", "offline", "config.toml");
+        vi.stubEnv("PWRAGENT_HOME", root);
+        vi.stubEnv("PATH", desktopBin);
+        try {
+          const install = (offset: number) => installManagedAntigravityRuntime({
+            ...appleSilicon, fetch: releaseFetch(archive, `1.5.${patch + offset}`), verify: async () => {},
+          });
+          const pinned = await install(0);
+          await mkdir(launchBin);
+          await symlink(pinned.command, path.join(launchBin, "agy"));
+          await mkdir(path.dirname(configPath), { recursive: true });
+          await writeFile(configPath, '[acp_agents.antigravity]\ncli_path = "agy"\n');
+          const [record] = await discoverLocalAcpAgentRecords({
+            antigravitySelectionConfigPath: configPath,
+            preferences: { antigravity: { overridePath: "agy" } },
+            env: { PATH: launchBin },
+            discover: async () => [{
+              strategyId: "antigravity", backendId: "acp:antigravity", name: "Antigravity",
+              args: ["acp"], env: {}, discoveredAt: 0, instances: [{ command: "agy", source: "override" }],
+            }],
+          });
+          expect(record?.launchDescriptor?.managedAntigravityFallback).toBe(false);
+          expect(record?.launchDescriptor?.command).toBe(await realpath(pinned.command));
+          const unused = await install(1);
+          await install(2);
+          await install(3);
+          expect(await readFile(pinned.command, "utf8")).toBe(fixtureBinary);
+          await expect(readFile(unused.command)).rejects.toMatchObject({ code: "ENOENT" });
+        } finally {
+          vi.unstubAllEnvs();
+          await rm(root, { recursive: true, force: true });
+        }
+      }), { numRuns: 12 });
+    });
+  });
+
+  it("starts a standalone executable while a different owner holds the managed lock", async () => {
+    await withRuntimeRoot(async (directory) => {
+      vi.stubEnv("PWRAGENT_HOME", directory);
+      try {
+        const root = path.join(directory, "agents", "antigravity");
+        await mkdir(root, { recursive: true });
+        const command = path.join(directory, "standalone");
+        await writeFile(command, fixtureBinary, { mode: 0o700 });
+        const transport = new AcpStdioJsonRpcTransport({
+          launchDescriptor: {
+            backendId: "acp:antigravity", registryId: "antigravity", distributionKind: "local",
+            command, args: [], env: {},
+          },
+          spawn: () => spawn(process.execPath, ["-e", "process.stdin.resume()"], { detached: true }),
+        });
+        try {
+          await withAntigravityRuntimeLock(root, async () => { await transport.connect(); });
+        } finally {
+          await transport.close();
+        }
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+  });
+
   it("collects abandoned staging and bounds unused releases while preserving every profile selection", async () => {
     await withRuntimeRoot(async (directory) => {
       const archive = await makeArchive(directory);
@@ -166,24 +236,26 @@ describe.skipIf(process.platform === "win32")("managed Antigravity activation", 
 
           // A cached automatic selection can recover, while a saved exact
           // path must never silently change to a different binary.
-          for (const automatic of [false, true]) {
-            const start = vi.fn(() => spawn(process.execPath, ["-e", "process.stdin.resume()"], { detached: true }));
-            const transport = new AcpStdioJsonRpcTransport({
-              launchDescriptor: {
-                backendId: "acp:antigravity", registryId: "antigravity", distributionKind: "local",
-                command: held.command, args: [], env: {},
-                ...(automatic ? { managedAntigravityFallback: true } : {}),
-              },
-              spawn: (command) => {
-                expect(command).toContain(automatic ? "1.5.4-" : "1.5.0-");
-                return start();
-              },
-            });
-            try {
-              await transport.connect();
-              expect(start).toHaveBeenCalledOnce();
-            } finally {
-              await transport.close();
+          for (const command of [held.command, alias]) {
+            for (const automatic of [false, true]) {
+              const start = vi.fn(() => spawn(process.execPath, ["-e", "process.stdin.resume()"], { detached: true }));
+              const transport = new AcpStdioJsonRpcTransport({
+                launchDescriptor: {
+                  backendId: "acp:antigravity", registryId: "antigravity", distributionKind: "local",
+                  command, args: [], env: {}, managedAntigravityFallback: automatic,
+                },
+                spawn: (executable) => {
+                  if (automatic) expect(executable).toContain("1.5.4-");
+                  else expect(executable).toBe(command);
+                  return start();
+                },
+              });
+              try {
+                await transport.connect();
+                expect(start).toHaveBeenCalledOnce();
+              } finally {
+                await transport.close();
+              }
             }
           }
         } finally {
