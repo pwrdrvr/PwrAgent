@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { chmod, link, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,10 +9,20 @@ import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { GitDirectoryService } from "../app-server/git-directory-service";
 import { GhStackCatalogStore, stackGitRunner, type RuntimeJournal } from "../stacks/stack-engine-ports";
 import { StackOperationsService } from "../stacks/stack-operations-service";
-import { resetDesktopOverlayStoreForTests, setDesktopOverlayStoreForTests } from "../storage/desktop-overlay-store";
+import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { SqliteOverlayStore } from "../storage/overlay-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
+const caseOverlay = new AsyncLocalStorage<SqliteOverlayStore>();
+
+vi.mock("../state/app-state", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../state/app-state")>(),
+  getAppOverlayStore: () => {
+    const storage = caseOverlay.getStore();
+    if (!storage) throw new Error("Stack provisioning requires a case-owned overlay store");
+    return storage;
+  },
+}));
 vi.mock("../native-relay-path", () => ({ nativeRelayPath: () => inject("nativeHelperFixtures").stackEngine!.relay }));
 vi.mock("../app-server/subthread-order-actions", () => ({ updateLocalSubthreadOrder: vi.fn() }));
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -25,17 +36,50 @@ type Fault = "before checkout" | "after checkout" | "after carry" | "lost accept
   | "unlisted empty session" | "vanished empty session" | "definite refusal" | "failed hook";
 const crashed = () => new Error("Injected host crash");
 
-async function setupProvisioning(fault: Fault) {
+it("keeps each case's overlay when an earlier case finishes late", async () => {
+  const earlierDb = openInMemoryStateDb();
+  const laterDb = openInMemoryStateDb();
+  const earlierStore = new SqliteOverlayStore(earlierDb);
+  const laterStore = new SqliteOverlayStore(laterDb);
+  const finishEarlier = Promise.withResolvers<void>();
+  const earlier = caseOverlay.run(earlierStore, async () => {
+    try {
+      await finishEarlier.promise;
+      return getDesktopOverlayStore();
+    } finally {
+      earlierDb.close();
+    }
+  });
+  try {
+    await caseOverlay.run(laterStore, async () => {
+      finishEarlier.resolve();
+      const earlierOverlay = await earlier;
+      expect(getDesktopOverlayStore()).toBe(laterStore);
+      expect(earlierOverlay).toBe(earlierStore);
+    });
+  } finally {
+    laterDb.close();
+  }
+});
+
+async function withProvisioning(fault: Fault, check: (fixture: Awaited<ReturnType<typeof setupProvisioning>>) => Promise<void>) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "pwragent-stack-provision-")));
-  const cwd = join(root, "repo");
   const db = openInMemoryStateDb();
   const storage = new SqliteOverlayStore(db);
-  setDesktopOverlayStoreForTests(storage);
+  const service = new StackOperationsService();
+  const work = caseOverlay.run(storage, () => setupProvisioning(fault, root, storage, service).then(check));
   onTestFinished(async () => {
-    resetDesktopOverlayStoreForTests();
+    // Vitest can finish a timed-out test while its async body still owns the fixture.
+    await Promise.allSettled([work]);
+    await service.drainBackgroundRuns();
     db.close();
     await rm(root, { recursive: true, force: true });
   });
+  await work;
+}
+
+async function setupProvisioning(fault: Fault, root: string, storage: SqliteOverlayStore, service: StackOperationsService) {
+  const cwd = join(root, "repo");
   const git = new StackGit(stackGitRunner, root);
   await git.output(["init", "-b", "main", cwd]);
   const repo = new StackGit(stackGitRunner, cwd);
@@ -129,12 +173,12 @@ async function setupProvisioning(fault: Fault) {
     startThread: start,
     renameThread: vi.fn(),
   } as unknown as DesktopBackendRegistry;
-  const service = new StackOperationsService();
   const scope = { repository, directories: [cwd], branch: "parent", infer: async () => [] };
   const { opId } = await service.call("apply_stack_operation",
     { operation: "add_branch", name: "child", newThread: true, carryChanges: fault !== "failed hook" }, actor, scope, registry) as { opId: string };
-  await expect.poll(() => service.call("manage_stack_operation", { action: "status", opId }, actor, scope, registry), { timeout: 5_000 })
-    .toMatchObject({ status: "paused" });
+  await service.drainBackgroundRuns();
+  await expect(service.call("manage_stack_operation", { action: "status", opId }, actor, scope, registry))
+    .resolves.toMatchObject({ status: "paused" });
   const beforeRestart = (await readJournal()).provisioning;
   expect(beforeRestart?.stage).not.toBe("pending");
   const reservation = beforeRestart && "worktree" in beforeRestart ? beforeRestart.worktree : undefined;
@@ -154,8 +198,7 @@ async function setupProvisioning(fault: Fault) {
 // Crash model: restart may repeat pre-admission work, but the committed
 // operation may create only one checkout and retain only one provider thread.
 it.each<Fault>(["before checkout", "after checkout", "after carry", "lost acceptance", "after acceptance", "unlisted empty session"])(
-  "reconciles an interrupted start %s against Git and provider state", async (fault) => {
-    const fixture = await setupProvisioning(fault);
+  "reconciles an interrupted start %s against Git and provider state", (fault) => withProvisioning(fault, async (fixture) => {
     const { accept, checkoutPath, commonDir, cwd, opId, notices, register, registry, repo, scope, tip, unrelated } = fixture;
     const checkoutBefore = await lstat(checkoutPath, { bigint: true });
     const pointerBefore = await lstat(join(checkoutPath, ".git")).catch(() => undefined);
@@ -200,11 +243,11 @@ it.each<Fault>(["before checkout", "after checkout", "after carry", "lost accept
       expect(register).toHaveBeenCalledTimes(1);
     }
     expect(await store.hasJournal(commonDir)).toBe(false);
-  },
+  }),
 );
 
-it.each(["vanished empty session", "definite refusal"] as const)("reuses the checkout after %s", async (fault) => {
-  const { accept, checkoutPath, commonDir, register, restart, workspaceWrites } = await setupProvisioning(fault);
+it.each(["vanished empty session", "definite refusal"] as const)("reuses the checkout after %s", (fault) => withProvisioning(fault, async (fixture) => {
+  const { accept, checkoutPath, commonDir, register, restart, workspaceWrites } = fixture;
   expect(await restart()).toEqual([]);
   expect(workspaceWrites()).toBe(1);
   expect(accept).toHaveBeenCalledTimes(2);
@@ -212,20 +255,20 @@ it.each(["vanished empty session", "definite refusal"] as const)("reuses the che
   expect(register).toHaveBeenCalledExactlyOnceWith(recoveredChild, actor, checkoutPath);
   expect(await readFile(join(checkoutPath, "carry.txt"), "utf8")).toContain("untracked");
   expect(await new GhStackCatalogStore().hasJournal(commonDir)).toBe(false);
-});
+}));
 
-it("keeps a registered checkout held after its post-checkout hook fails", async () => {
-  const { accept, checkoutPath, commonDir, restart, repo } = await setupProvisioning("failed hook");
+it("keeps a registered checkout held after its post-checkout hook fails", () => withProvisioning("failed hook", async (fixture) => {
+  const { accept, checkoutPath, commonDir, restart, repo } = fixture;
   // The Git oracle confirms HEAD and the hook's file outlive the failed add.
   expect((await repo.output(["symbolic-ref", "HEAD"], undefined, checkoutPath)).trim()).toBe("refs/heads/child");
   expect(await restart()).toEqual([expect.stringContaining("checkout setup failed")]);
   expect(accept).not.toHaveBeenCalled();
   expect(await readFile(join(checkoutPath, "hook-edit.txt"), "utf8")).toBe("kept");
   expect(await new GhStackCatalogStore().hasJournal(commonDir)).toBe(true);
-});
+}));
 
-it("publishes a complete owner marker atomically and preserves competing owners", async () => {
-  const { checkoutPath, repo } = await setupProvisioning("after checkout");
+it("publishes a complete owner marker atomically and preserves competing owners", () => withProvisioning("after checkout", async (fixture) => {
+  const { checkoutPath, repo } = fixture;
   const gitDir = (await repo.output(["rev-parse", "--absolute-git-dir"], undefined, checkoutPath)).trim();
   const marker = join(gitDir, "codex-thread.json");
   const directoryService = new GitDirectoryService();
@@ -240,10 +283,10 @@ it("publishes a complete owner marker atomically and preserves competing owners"
   expect(claims.map(({ status }) => status).sort()).toEqual(["fulfilled", "rejected"]);
   expect(JSON.parse(await readFile(marker, "utf8"))).toEqual({ version: 1, ownerThreadId: owner });
   await expect(record(owner)).resolves.toBeUndefined();
-});
+}));
 
-it.each(["directory", "owner", "branch", "tip"] as const)("keeps local files when the reserved checkout changes %s", async (change) => {
-  const { accept, checkoutPath, commonDir, restart, repo } = await setupProvisioning("after checkout");
+it.each(["directory", "owner", "branch", "tip"] as const)("keeps local files when the reserved checkout changes %s", (change) => withProvisioning("after checkout", async (fixture) => {
+  const { accept, checkoutPath, commonDir, restart, repo } = fixture;
   const gitDir = (await repo.output(["rev-parse", "--absolute-git-dir"], undefined, checkoutPath)).trim();
   const marker = join(gitDir, "codex-thread.json");
   if (change === "owner") await writeFile(marker, JSON.stringify({ version: 1, ownerThreadId: "unrelated" }));
@@ -259,4 +302,4 @@ it.each(["directory", "owner", "branch", "tip"] as const)("keeps local files whe
   expect(await readFile(join(checkoutPath, "keep.txt"), "utf8")).toBe("other owner's edit");
   if (change === "owner") expect(JSON.parse(await readFile(marker, "utf8")).ownerThreadId).toBe("unrelated");
   expect(await new GhStackCatalogStore().hasJournal(commonDir)).toBe(true);
-});
+}));
