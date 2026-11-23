@@ -22,7 +22,7 @@ nonempty `allOf` list. Fields never satisfy a requirement on another rule.
 | `connectionId` | Exact opaque profile-local connection ID. Omission matches only an inbound event in the legacy namespace, with no profile-local connection ID. Existing retained provider-account IDs and Federation instance IDs are separate identities. |
 | `conversation` | An exact `kind`, `id`, `parentId`, and `workspaceId` tuple. Optional tuple components must agree, including absence. Omitting the entire selector allows any admitted conversation in the rule's namespace. |
 | `actor-id` | Exact normalized actor ID from provider admission. |
-| `rbac-role` | Exact role ID explicitly resolved for the admitted actor on this admission path. Legacy implicit Admin is insufficient. |
+| `rbac-role` | Exact nonempty role ID explicitly resolved for the admitted actor on this admission path, including any whitespace preserved by RBAC. Legacy implicit Admin is insufficient. |
 | `provider-property` | The supported equality predicate `slack.workspace-admin` with boolean value `true`. |
 
 The canonical validator is `isAgentTrustPolicy` in
@@ -35,7 +35,7 @@ requirements. It never repairs or removes a clause.
 Slack workspace administrator evidence is a positive `is_admin` assertion
 from the authenticated Slack `users.info` call. The response must identify the
 same user and the local workspace. Evidence belongs to the current admission,
-must match the exact inbound actor and workspace, and expires five seconds
+must match the exact inbound actor and a nonempty inbound workspace ID, and expires five seconds
 after observation. Missing evidence, missing scope, an unavailable lookup,
 and expired evidence fail the predicate. The grammar provides no email,
 display-name, free-text, or other provider-property comparison.

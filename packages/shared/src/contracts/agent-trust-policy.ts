@@ -59,7 +59,8 @@ function isRequirement(value: unknown, provider: AgentTrustProvider): value is A
     case "actor-id":
       return hasOnlyFields(value, ["kind", "actorId"]) && isReference(value.actorId);
     case "rbac-role":
-      return hasOnlyFields(value, ["kind", "roleId"]) && isReference(value.roleId);
+      // RBAC persists role IDs as opaque nonempty strings.
+      return hasOnlyFields(value, ["kind", "roleId"]) && typeof value.roleId === "string" && value.roleId.length > 0;
     case "provider-property":
       return provider === "slack" && hasOnlyFields(value, ["kind", "key", "value"])
         && value.key === "slack.workspace-admin" && value.value === true;
@@ -134,7 +135,7 @@ export function evaluateAgentTrustPolicy(policy: unknown, evidence: AgentTrustEv
   if (forActor.length === 0) return reject("actor");
   const admin = evidence.workspaceAdmin;
   const freshAdmin = admin !== undefined && admin.actorId === evidence.actorId
-    && admin.workspaceId === evidence.conversation.workspaceId
+    && isReference(evidence.conversation.workspaceId) && admin.workspaceId === evidence.conversation.workspaceId
     && Number.isFinite(now) && Number.isFinite(admin.observedAt)
     && now >= admin.observedAt && now - admin.observedAt <= AGENT_TRUST_PROPERTY_MAX_AGE_MS;
   return forActor.some((rule) => freshAdmin || rule.allOf.every((requirement) => requirement.kind !== "provider-property"))
