@@ -3951,7 +3951,7 @@ class DesktopAppServerService {
     const byLayer = new Map(open.map((pr) => [`${pr.provider}:${pr.org}/${pr.repo}#${pr.number}`.toLowerCase(), pr]));
     // Inferred stacks can hold dispatch but cannot publish automatically.
     const observation = new StackReadObservation();
-    const directories = await observation.hints.catalogCandidates(open.flatMap((pr) => this.prStackDirectories(pr)));
+    const directories = await observation.hints.markerCandidates(open.flatMap((pr) => this.prStackDirectories(pr)));
     if (!directories.length) return;
     const { stacks } = await this.readScopedStacks(directories, undefined, observation);
     await Promise.all(stacks.flatMap((stack) => {

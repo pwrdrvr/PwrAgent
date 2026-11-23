@@ -5,7 +5,9 @@ import path from "node:path";
 import fc from "fast-check";
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { describe, expect, it, vi } from "vitest";
+import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
+import { StackOperationsService } from "../stacks/stack-operations-service";
 import { StackReader, StackReadObservation, readStackClones } from "../stacks/stack-reader";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -245,6 +247,23 @@ describe("stack checkout demand", () => {
       expect(vi.mocked(open).mock.calls.filter(([file]) => path.basename(String(file)) === "gh-stack")).toHaveLength(1);
       await project();
       expect(checkoutStarts()).toHaveLength(2);
+    } finally {
+      start.mockRestore();
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("skips Git for startup recovery when the checkouts have no journal", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-recovery-demand-"));
+    const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    try {
+      initialize(sandbox);
+      await writeCatalog(sandbox, "without-journal");
+      const child = path.join(sandbox, "child");
+      await mkdir(child);
+      const registry = {} as DesktopBackendRegistry;
+      expect(await new StackOperationsService().resumeInterrupted([sandbox, child], registry)).toEqual([]);
+      expect(start).not.toHaveBeenCalled();
     } finally {
       start.mockRestore();
       await rm(sandbox, { recursive: true, force: true });

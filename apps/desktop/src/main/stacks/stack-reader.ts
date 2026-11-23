@@ -13,12 +13,11 @@ import { resolveCheckState } from "@pwragent/shared/pull-request-rollup";
 import { stackAutomationGates } from "@pwragent/shared/stacks/stack-automation";
 import { runGitCommand } from "../app-server/git-executable";
 import { PR_METADATA_PRIORITY, runPrMetadataProcess, type PrMetadataDemand } from "../pr-status/pr-metadata-process";
-import { createStackCheckoutHints } from "../git-info/stack-checkout-store";
+import { createStackCheckoutHints, STACK_CHECKOUT_SCAN_LIMITS } from "../git-info/stack-checkout-store";
 
 type CatalogRead = GhStackCatalogRead | { status: "missing" | "unavailable" };
 
 const CATALOG_BYTES = 1024 * 1024;
-const CHECKOUT_SCAN_CONCURRENCY = 8;
 const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 export async function readGhStackCatalog(commonDir: string): Promise<CatalogRead> {
@@ -109,10 +108,16 @@ export class StackReadObservation {
     return read;
   }
 
-  async clones(directories: readonly string[]): Promise<Clone[]> {
+  async checkoutsByClone(directories: readonly string[]): Promise<Checkout[]> {
     const checkouts = await Promise.all([...new Set(directories)].map((cwd) => this.checkout(cwd)));
+    this.demand.signal?.throwIfAborted();
     const clones = new Map(checkouts.flatMap((entry) => entry ? [[entry.commonDir, entry] as const] : []));
-    const catalogs = await Promise.all([...clones.values()].map(async (clone) => ({
+    return [...clones.values()];
+  }
+
+  async clones(directories: readonly string[]): Promise<Clone[]> {
+    const clones = await this.checkoutsByClone(directories);
+    const catalogs = await Promise.all(clones.map(async (clone) => ({
       ...clone, catalog: await this.catalog(clone.commonDir),
     })));
     this.demand.signal?.throwIfAborted();
@@ -120,7 +125,7 @@ export class StackReadObservation {
   }
 
   async presentCatalogs(directories: readonly string[]): Promise<CatalogRead[]> {
-    return (await this.clones(await this.hints.catalogCandidates(directories))).map(({ catalog }) => catalog);
+    return (await this.clones(await this.hints.markerCandidates(directories))).map(({ catalog }) => catalog);
   }
 }
 
@@ -379,20 +384,19 @@ export class StackReader {
     }));
     const paths = !directories || wanted.size || eligible.size
       ? [...new Set(local.flatMap(threadDirectories))].sort() : [];
-    const scanLimits = { concurrency: CHECKOUT_SCAN_CONCURRENCY, maxUnread: CHECKOUT_SCAN_CONCURRENCY };
     const scan = new IterableMapper(paths, async (cwd) => {
       const found = anchorPaths.has(cwd) ? undefined : await hints.possibleCommonDirs(cwd);
       if (found) return [cwd, found] as const;
       const checkout = await observation.checkout(cwd, inventoryDemand);
       return [cwd, checkout ? [checkout.commonDir] : []] as const;
-    }, scanLimits);
+    }, STACK_CHECKOUT_SCAN_LIMITS);
     const possible = new Map<string, readonly string[]>();
     for await (const [cwd, commonDirs] of scan) possible.set(cwd, commonDirs);
     if (!directories) {
       const candidateDirs = new Set([...possible.values()].flat());
       const catalogs = new IterableMapper(candidateDirs, async (commonDir) => ({
-        commonDir, present: await hints.hasCatalog(commonDir),
-      }), scanLimits);
+        commonDir, present: await hints.hasMarker(commonDir),
+      }), STACK_CHECKOUT_SCAN_LIMITS);
       for await (const { commonDir, present } of catalogs) if (present) wanted.add(commonDir);
     }
     for (const row of local) {
