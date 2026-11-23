@@ -615,7 +615,7 @@ it.each([4, 8])("persists one changed owner pin once across a full refresh with 
 });
 
 
-it.each(["changed catalog", "failed checkout lookup", "failed preflight lookup"] as const)(
+it.each(["changed catalog", "failed checkout lookup", "failed preflight lookup", "failed inferred checkout lookup"] as const)(
   "keeps stack automation gated with a %s", async (change) => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-hold-recheck-"));
   const db = openInMemoryStateDb();
@@ -638,7 +638,10 @@ it.each(["changed catalog", "failed checkout lookup", "failed preflight lookup"]
       schemaVersion: 1, repository: "github.com:fixture/stack",
       stacks: [{ trunk: { branch: "main", head }, branches }],
     }));
-    await write(...(change === "changed catalog" ? [layer("upper", 2)] : [layer("lower", 1), layer("upper", 2)]));
+    const inferred = change === "failed inferred checkout lookup";
+    if (!inferred) {
+      await write(...(change === "changed catalog" ? [layer("upper", 2)] : [layer("lower", 1), layer("upper", 2)]));
+    }
     current.store = new SqliteOverlayStore(db);
     resetAppServerServiceForTests();
     const service = initializeDesktopAppServerService();
@@ -650,7 +653,13 @@ it.each(["changed catalog", "failed checkout lookup", "failed preflight lookup"]
     const pr: PrSummary = {
       number: 2, provider: "github.com", org: "fixture", repo: "stack", state: "passing",
       lifecycleState: "open", url: "https://github.com/fixture/stack/pull/2", headRefName: "upper",
+      ...(inferred && { baseRefName: "lower" }),
     };
+    if (inferred) {
+      vi.spyOn(service as unknown as { knownStackPullRequests: () => PrSummary[] }, "knownStackPullRequests").mockReturnValue([{
+        ...pr, number: 1, url: "https://github.com/fixture/stack/pull/1", headRefName: "lower", baseRefName: "main",
+      }]);
+    }
     const failCheckout = () => {
       const runGitCommand = gitExecutable.runGitCommand;
       vi.spyOn(gitExecutable, "runGitCommand").mockImplementation((directory, args, options) =>

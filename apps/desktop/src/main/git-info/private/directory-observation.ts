@@ -82,7 +82,7 @@ async function fileState(target: string, signal?: AbortSignal, followSymlinks = 
  * files are read only when their stat signature changes. This reads Git's
  * workspace metadata, never the coding harness's private storage.
  */
-export function createGitDirectoryObserver(options: { navigation?: boolean } = {}): (
+export function createGitDirectoryObserver(options: { navigation?: boolean; requireRegularHead?: boolean } = {}): (
   cwd: string,
   onCheckoutBoundary?: (root: string) => void,
   signal?: AbortSignal,
@@ -174,9 +174,9 @@ export function createGitDirectoryObserver(options: { navigation?: boolean } = {
     const config = await observeFile(configPath);
     const worktreeConfig = await observeFile(path.join(gitdir, "config.worktree"));
     const backlink = await observeFile(path.join(gitdir, "gitdir"));
-    // Git interprets a HEAD symlink's literal target. Filesystem resolution
-    // can normalize it to the same file even after Git rejects the checkout.
-    const head = await fileState(path.join(gitdir, "HEAD"), signal, !options.navigation);
+    // A reusable checkout identity must defer to Git for HEAD symlinks. The
+    // same referent can outlive a literal target change that Git rejects.
+    const head = await fileState(path.join(gitdir, "HEAD"), signal, !options.requireRegularHead);
     if (!head?.file) return undefined;
     if (options.navigation) {
       const owner = process.getuid?.();

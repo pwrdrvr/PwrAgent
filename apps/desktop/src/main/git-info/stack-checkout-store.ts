@@ -12,7 +12,7 @@ import { gitCommandPreference } from "../git-runtime";
 import { runPrMetadataFileProbe, type PrMetadataDemand } from "../pr-status/pr-metadata-process";
 
 export const STACK_CHECKOUT_SCAN_LIMITS = { concurrency: 8, maxUnread: 8 };
-const observeInventoryCheckout = createGitDirectoryObserver({ navigation: true });
+const observeInventoryCheckout = createGitDirectoryObserver({ navigation: true, requireRegularHead: true });
 
 async function status(file: string) {
   try {
