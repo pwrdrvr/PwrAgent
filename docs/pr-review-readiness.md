@@ -18,6 +18,7 @@ change** as any of them.
 | `needs_review` | CI is green, no review covers the head, and the latest review has no unsettled findings. | **Review #N** (`start_review`) |
 | `findings_open` | The newest covering review has unsettled findings. Or no review covers the head while the latest review has unsettled findings: the new commits are its fixes. | None. The review offer is withdrawn. |
 | `ready_to_merge` | The newest covering review is settled, and CI is green. | **Merge #N** (`merge_pull_request`) |
+| `stack_parent_open` | A lower stack layer is still outstanding, the PR still targets a parent, or GitHub cannot verify stack order. | No new merge offer. |
 | `ci_pending`, `ci_failing`, `ci_untested` | CI is running, failing, or skipped every check. | None. |
 | `conflicting`, `draft`, `queued`, `no_head` | The PR cannot merge yet, or is already in a merge queue. | None. |
 | `closed` | Merged or closed. | Any offer is withdrawn. |
@@ -134,14 +135,37 @@ so a merge card could appear before any review.
 
 ## Cost
 
-PwrAgent does no scan at startup, runs no timer, and makes no forge request.
+PwrAgent uses the existing status poller and review events. There is no
+separate poll or repository scan for merge offers.
 
-- **Triggers.** A PR status transition that moves CI, the head, the
+- **Triggers.** A PR status transition that moves CI, the head, the base ref,
   lifecycle, mergeability, the merge queue, or draft state can trigger an
   evaluation. So can a change to one of the owning thread's reviews.
   Transitions come from polling and refreshes PwrAgent already performs, and
   only for PRs attached to threads. The first observation after a restart
-  emits none.
+  emits none. One already-polled green attached PR per batch can rebuild the
+  reverse dependency index after restart or retry an unavailable forge read.
+  A tracked lower PR's lifecycle change reconciles only its indexed green
+  children. The in-memory index retains up to 128 children and 32 lower
+  layers per child.
+- **Stack evidence.** After CI and review coverage qualify the head, an
+  offer checks stack order through the same GitHub guard as merge execution.
+  An ordinary uncatalogued PR costs a PR read and one filtered timeline
+  read. The timeline is limited to 16 retarget events, four branch names,
+  and one bounded same-repository PR lookup and commit comparison per
+  branch. The offer leaves four shared request tokens available to the
+  poller and foreground tools. A confirmed hold withdraws a merge offer.
+  A transient read failure defers a new offer and existing cards revalidate
+  before executing.
+- **History.** GitHub's retarget timeline provides ref names and timestamps.
+  PwrAgent matches a same-repository PR whose lifetime overlaps that base
+  window and checks commit ancestry before indexing its number. A fork or
+  a PR that opened after the retarget cannot become the prior parent.
+  Truncated or inconsistent history, and a plausible parent whose ancestry
+  cannot be verified, hold the merge. On older GitHub Enterprise schemas,
+  a bounded REST timeline can establish there was no retarget. It cannot
+  establish old and new refs for a retarget, so that case holds the merge
+  unless a local catalog establishes the ordering. [GitHub timeline schema](https://docs.github.com/en/graphql/reference/pulls#baserefchangedevent)
 - **Scope.** Each PR has one owning thread: the elected Auto-fix owner, or
   the first primary-attached thread. The thread must not be archived. Its
   project's forge activity must not be paused, and its Forge Automation
@@ -182,6 +206,8 @@ PwrAgent does no scan at startup, runs no timer, and makes no forge request.
 | Raise an offer (`pr-review-offer-raise`) | 1 | ~29 KB |
 | Swap review offer for merge offer (`pr-review-offer-swap-to-merge`) | 1 | ~29 KB |
 | Evaluation with nothing to change (`pr-review-offer-unchanged`) | 0 | 0 |
+| Eligible stack child released by a base change or final lower-layer merge (`pr-review-stack-*-offer`) | 1 per child | ~29 KB |
+| Repeat of the same stack event (`pr-review-stack-*-repeat`) | 0 | 0 |
 | Record the fixed-through commit (`pr-review-fixed-through`) | 1 | ~8 KB |
 
 At about 100 offers a day, this is about 3 MB of WAL a day. Each PR

@@ -207,7 +207,12 @@ async function projectClone(clone: Clone, threads: readonly CloneThread[], known
       if (!stack.branches.length) continue;
       const name = stack.branches[0]!.branch;
       const layers = await projectCatalogLayers({ stack, clone, refs, prs, worktrees, threads: bindings });
-      stacks.push({ key: `${prefix}:catalog:${stack.id ?? name}`, name, repository, inferred: false, trunk: stack.trunk.branch, layers });
+      const identity = stack.id ?? name;
+      const key = `${prefix}:catalog:${identity}`;
+      stacks.push({
+        key: key.length <= 512 ? key : createHash("sha256").update(key).digest("hex"),
+        name, repository, inferred: false, trunk: stack.trunk.branch, layers,
+      });
     }
     for (const chain of inferred) {
       const name = chain[0]!.headRefName!;

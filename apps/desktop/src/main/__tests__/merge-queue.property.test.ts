@@ -13,7 +13,7 @@ import { ForgeCiClient } from "../pr-status/forge-ci-client";
 import type { ForgeRepository } from "../pr-status/forge-tool-contract";
 import type { ForgePrToolContext } from "../pr-status/forge-pr-tool-shared";
 import { GithubPrToolClient } from "../pr-status/github-pr-tool-client";
-import { GithubPrFetcher } from "../pr-status/github-pr-fetcher";
+import { GithubPrFetcher, installGithubMergeStackTransport } from "../pr-status/github-pr-fetcher";
 import { forgetMergeQueueRepositories, isMergeQueueRepository, noteMergeQueueRepository } from "../pr-status/merge-queue-repositories";
 import { buildBatchedPrQuery, mapGraphqlPrNode, type GraphqlPrNode } from "../pr-status/github-graphql-client";
 import { GitLabPrFetcher } from "../pr-status/gitlab-pr-fetcher";
@@ -281,7 +281,10 @@ function expectedAction(gate: Gate): "direct" | "none" | "auto_merge" | "enqueue
 const QUEUE_REFUSAL = "Repository rule violations found\n\nChanges must be made through the merge queue";
 /** What `gh pr merge` prints when it queues the PR itself instead of merging. */
 const GH_QUEUED = "! The merge strategy for main is set by the merge queue\n✓ Pull request fixture/project#3631 will be added to the merge queue for main when ready";
-const trunkTarget = { base: { ref: "main", repo: { default_branch: "main" } } };
+const trunkTarget = { created_at: "2026-11-10T00:00:00Z", head: { sha: head },
+  base: { ref: "main", repo: { default_branch: "main" } } };
+const stackHistoryData = { repository: { pullRequest: { baseRefName: "main", headRefOid: head,
+  timelineItems: { pageInfo: { hasPreviousPage: false }, nodes: [] } } } };
 
 function seenRepository(seen: boolean, host = "github.com") {
   forgetMergeQueueRepositories();
@@ -355,8 +358,9 @@ describe("merge_pull_request and merge queues", () => {
       seenRepository(true);
       const writes: string[] = [];
       const fetcher = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
-        if (init?.method === "GET") return json({ state: "open", base: { ref: "main", repo: { default_branch: "main" } } });
+        if (init?.method === "GET") return json(trunkTarget);
         const query = init?.body ? JSON.parse(String(init.body)).query : undefined;
+        if (query?.includes("PwrAgentStackHistory")) return json({ data: stackHistoryData });
         if (query?.includes("isMergeQueueEnabled")) {
           const data = gateData({ required, entry: null, checks: "SUCCESS", lastRemoved: false });
           return json({ data: { repository: { pullRequest: { ...data.repository.pullRequest, baseRefName: "parent" } } } });
@@ -374,6 +378,9 @@ describe("merge_pull_request and merge queues", () => {
         discoverGhCommands: async () => ({ selectedCommand: "/fixture/gh" }) as never,
         runGhCommand: async (_command, args) => {
           if (args[0] === "api" && args[1] === "graphql") {
+            if (args.some((arg) => arg.startsWith("query=") && arg.includes("PwrAgentStackHistory"))) {
+              return { stdout: JSON.stringify({ data: stackHistoryData }) };
+            }
             const data = gateData({ required, entry: null, checks: "SUCCESS", lastRemoved: false });
             data.repository.pullRequest.baseRefName = "parent";
             return { stdout: JSON.stringify({ data }) };
@@ -389,7 +396,51 @@ describe("merge_pull_request and merge queues", () => {
     }), { examples: [[false], [true]] });
   });
 
-  it("never merges past a queue, and asks nothing more of a repository never seen with one", async () => {
+  it("uses the owning forge transport to block a historical parent on both checkout-less merge routes", async () => {
+    const requests: string[] = [];
+    const writes: string[] = [];
+    const parentSha = "b".repeat(40);
+    const ci = new ForgeCiClient({
+      githubToken: async () => "fixture-token", gitlab: { readApi: vi.fn() }, enabled: () => true,
+      takeToken: () => { requests.push("admitted"); return true; },
+      fetch: (async (input: string | URL | Request, init?: RequestInit) => {
+        const url = new URL(String(input));
+        const query: string | undefined = init?.body ? JSON.parse(String(init.body)).query : undefined;
+        if (query?.includes("PwrAgentStackHistory")) return json({ data: { repository: { pullRequest: {
+          ...stackHistoryData.repository.pullRequest, timelineItems: { pageInfo: { hasPreviousPage: false }, nodes: [{
+            previousRefName: "lower", currentRefName: "main", createdAt: "2026-11-12T00:00:00Z",
+          }] },
+        } } } });
+        if (url.pathname.endsWith("/pulls") && url.searchParams.get("head") === "fixture:lower") {
+          return json([{ number: 6, state: "open", created_at: "2026-11-10T00:00:00Z",
+            head: { ref: "lower", sha: parentSha, repo: { full_name: "fixture/project" } } }]);
+        }
+        if (url.pathname.includes("/compare/")) return json({ merge_base_commit: { sha: parentSha } });
+        if (url.pathname.endsWith("/pulls/7")) return json(trunkTarget);
+        writes.push(String(init?.method));
+        return json({ merged: true });
+      }) as typeof fetch,
+    });
+    const uninstall = installGithubMergeStackTransport(ci);
+    const gh = new GithubPrFetcher({
+      graphqlClient: { fetchPullRequests: vi.fn(), fetchPullRequestsForBranches: vi.fn() },
+      discoverGhCommands: async () => ({ selectedCommand: "/fixture/gh" }) as never,
+      runGhCommand: async (_command, args) => { writes.push(args.join(" ")); return { stdout: "" }; },
+    });
+    try {
+      const agent = new GithubPrToolClient({ ci });
+      await expect(agent.execute("merge_pull_request", { number: 7, expectedHeadSha: head }, ctx()))
+        .rejects.toMatchObject({ code: "stack_parent_open", message: expect.stringContaining("#6") });
+      await expect(gh.mergePullRequest({ pullRequest: "https://github.com/fixture/project/pull/7", method: "squash", checkStackOrder: true }))
+        .rejects.toMatchObject({ code: "stack_parent_open", message: expect.stringContaining("#6") });
+      expect(requests).toHaveLength(8);
+      expect(writes).toEqual([]);
+    } finally {
+      uninstall();
+    }
+  });
+
+  it("never merges past a queue, and only reads stack history on a repository never seen with one", async () => {
     await fc.assert(fc.asyncProperty(gateArb, fc.boolean(), async (gate, seen) => {
       seenRepository(seen);
       const calls: Array<{ method: string; url: string; query?: string; status: number }> = [];
@@ -403,6 +454,7 @@ describe("merge_pull_request and merge queues", () => {
         if (query.includes("enqueuePullRequest")) return respond({ data: { enqueuePullRequest: { mergeQueueEntry: { state: "QUEUED", position: 4, enqueuedAt: "2026-11-11T18:10:00Z" } } } });
         if (query.includes("enablePullRequestAutoMerge")) return respond({ data: { enablePullRequestAutoMerge: { pullRequest: { autoMergeRequest: { enabledAt: "2026-11-11T18:10:00Z" } } } } });
         if (query.includes("isMergeQueueEnabled")) return respond({ data: gateData(gate) });
+        if (query.includes("PwrAgentStackHistory")) return respond({ data: stackHistoryData });
         if ((init?.method ?? "GET") === "GET") return respond(trunkTarget);
         if (init?.method === "PUT") {
           return gate.required
@@ -427,7 +479,7 @@ describe("merge_pull_request and merge queues", () => {
       if (action === "direct") {
         expect(result).toMatchObject({ merged: true, method: "rebase" });
         // A repository never seen with a queue merges exactly as before.
-        expect(graphqlCalls).toHaveLength(seen ? 1 : 0);
+        expect(graphqlCalls).toHaveLength(seen ? 2 : 1);
       } else {
         // An unseen repository learns its queue from GitHub's refusal.
         expect(puts).toHaveLength(seen ? 0 : 1);
@@ -467,6 +519,7 @@ describe("merge_pull_request and merge queues", () => {
         calls.push(init?.method ?? "GET");
         if ((init?.method ?? "GET") === "GET") return json(trunkTarget);
         if (init?.method === "PUT") return json({ merged: true, sha: "c".repeat(40) });
+        if (String(init?.body).includes("PwrAgentStackHistory")) return json({ data: stackHistoryData });
         return gateResponse();
       }) as unknown as typeof fetch;
       const client = new GithubPrToolClient({ ci: new ForgeCiClient({
@@ -475,7 +528,7 @@ describe("merge_pull_request and merge queues", () => {
       const context = { ...ctx(), repository: { ...repo, host } };
       await expect(client.execute("merge_pull_request", { number: 3631, expectedHeadSha: head, method: "squash" }, context))
         .resolves.toMatchObject({ merged: true, method: "squash" });
-      expect(calls).toEqual(["GET", "POST", "PUT"]);
+      expect(calls).toEqual(["GET", "POST", "POST", "PUT"]);
     }), { numRuns: 16 });
   });
 
@@ -503,6 +556,7 @@ describe("merge_pull_request and merge queues", () => {
     const fetcher = (async (_input: string | URL | Request, init?: RequestInit) => {
       if ((init?.method ?? "GET") === "GET") return json(trunkTarget);
       const query = (init?.body ? JSON.parse(String(init.body)) as { query?: string } : {}).query ?? "";
+      if (query.includes("PwrAgentStackHistory")) return json({ data: stackHistoryData });
       if (query.includes("enablePullRequestAutoMerge")) return json({ data: { enablePullRequestAutoMerge: { pullRequest: { autoMergeRequest: null } } } });
       return json({ data: gateData(pending) });
     }) as unknown as typeof fetch;

@@ -1,4 +1,4 @@
-import type { PrSummary } from "@pwragent/shared/contracts/navigation";
+import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type { ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
 import type { ThreadTodo, ThreadTodoAction } from "@pwragent/shared/contracts/thread-todos";
@@ -53,7 +53,7 @@ export type PrReviewOfferPorts = {
   threadPrKeys(thread: PrReviewOfferThread): string[];
   /** The status registry's current PR. No forge request is made. */
   getPr(prKey: string): PrSummary | undefined;
-  stackBlocksMerge?(thread: PrReviewOfferThread, pr: PrSummary): Promise<boolean>;
+  stackMergeEvidence?(thread: PrReviewOfferThread, pr: PrSummary): Promise<{ blocked: boolean; lowerKeys: string[]; retryOnObservation?: boolean }>;
   /** Checkouts where Git can read this PR's commits; the first one is used. */
   directories(thread: PrReviewOfferThread, pr: PrSummary): string[];
   /**
@@ -70,9 +70,12 @@ export type PrReviewOfferPorts = {
 
 /** A review count past this is history; the newest decide. */
 const MAX_REVIEWS_CONSIDERED = 8;
+const MAX_TRACKED_CHILDREN = 128;
+const MAX_TRACKED_LOWERS = 32;
 
 /** The fields that can move a PR's readiness. Title and others cannot. */
 const READINESS_FIELDS = [
+  "baseRefName",
   "checkState",
   "headSha",
   "lifecycleState",
@@ -110,13 +113,20 @@ export type PrReviewOfferEvaluation = {
 /**
  * Raises "review this PR" and "merge this PR" offers as to-do cards, in that
  * order, from events PwrAgent already receives: a PR status transition from
- * polling or a refresh, and a change to one of the thread's reviews. It never
- * polls, never asks the forge, and never scans PRs at startup. Git runs only
+ * polling or a refresh, and a change to one of the thread's reviews. Only a
+ * green, reviewed head asks for stack evidence. Git runs only
  * when CI is green, in the thread's own checkout, and caches by commit.
  */
 export class PrReviewOfferCoordinator {
-  private readonly inFlight = new Map<string, { again: boolean; done: Promise<void> }>();
+  private readonly inFlight = new Map<string, { again: boolean; recoveryOnly: boolean; done: Promise<void> }>();
   private readonly pending = new Set<Promise<void>>();
+  private readonly lowerKeysByChild = new Map<string, string[]>();
+  private readonly childKeysByLower = new Map<string, Set<string>>();
+  private readonly lowerChanges = new Map<string, number>();
+  private lowerChangeSequence = 0;
+  private readonly evaluated = new Set<string>();
+  private observationReconciliationPending = false;
+  private lastObservedCandidate: string | undefined;
   private closed = false;
 
   constructor(private readonly ports: PrReviewOfferPorts) {}
@@ -125,10 +135,65 @@ export class PrReviewOfferCoordinator {
   handleTransition(transition: PrStatusTransition): void {
     if (this.closed) return;
     if (!READINESS_FIELDS.some((field) => transition.changed[field] !== undefined)) return;
-    this.track((async () => {
-      const thread = await this.ports.ownerThread(transition.prKey);
-      if (thread) this.schedule(thread, transition.prKey);
-    })());
+    const keys = new Set([transition.prKey]);
+    const lifecycle = transition.changed.lifecycleState;
+    if (lifecycle && lifecycle.from !== lifecycle.to) {
+      this.lowerChanges.delete(transition.prKey);
+      this.lowerChanges.set(transition.prKey, ++this.lowerChangeSequence);
+      if (this.lowerChanges.size > MAX_TRACKED_CHILDREN) {
+        this.lowerChanges.delete(this.lowerChanges.keys().next().value!);
+      }
+      for (const child of this.childKeysByLower.get(transition.prKey) ?? []) {
+        const pr = this.ports.getPr(child);
+        if (pr && !prGateReadiness(pr)) keys.add(child);
+      }
+    }
+    this.track(this.reconcile(keys));
+  }
+
+  /** Recover the index on fresh child observations, one per existing poll
+   * result. No startup query, dedicated timer, or repository-wide fan-out. */
+  handleObservations(prs: readonly PrSummary[]): void {
+    if (this.closed || this.observationReconciliationPending) return;
+    const keys = prs.filter((pr) => !prGateReadiness(pr)).map(buildPullRequestStatusKey);
+    const offset = keys.indexOf(this.lastObservedCandidate ?? "") + 1;
+    const candidate = [...keys.slice(offset), ...keys.slice(0, offset)].find((key) => !this.evaluated.has(key));
+    if (!candidate) return;
+    this.lastObservedCandidate = candidate;
+    this.observationReconciliationPending = true;
+    this.track(this.reconcile([candidate], true).finally(() => {
+      this.observationReconciliationPending = false;
+    }));
+  }
+
+  private async reconcile(keys: Iterable<string>, recoveryOnly = false): Promise<void> {
+    for (const key of keys) {
+      if (this.closed) return;
+      const thread = await this.ports.ownerThread(key);
+      if (thread) await this.schedule(thread, key, recoveryOnly);
+      else this.trackLowers(key, []);
+    }
+  }
+
+  private trackLowers(child: string, lowerKeys: readonly string[]): void {
+    const forget = (key: string) => {
+      for (const lower of this.lowerKeysByChild.get(key) ?? []) {
+        const children = this.childKeysByLower.get(lower)!;
+        children.delete(key);
+        if (!children.size) this.childKeysByLower.delete(lower);
+      }
+      this.lowerKeysByChild.delete(key);
+    };
+    forget(child);
+    const lowers = [...new Set(lowerKeys)].filter((key) => key !== child).slice(0, MAX_TRACKED_LOWERS);
+    if (!lowers.length) return;
+    if (this.lowerKeysByChild.size >= MAX_TRACKED_CHILDREN) forget(this.lowerKeysByChild.keys().next().value!);
+    this.lowerKeysByChild.set(child, lowers);
+    for (const lower of lowers) {
+      const children = this.childKeysByLower.get(lower) ?? new Set<string>();
+      children.add(child);
+      this.childKeysByLower.set(lower, children);
+    }
   }
 
   /** A review on a thread was recorded, settled, or reopened. */
@@ -184,21 +249,24 @@ export class PrReviewOfferCoordinator {
    * runs fold into a single rerun, so a burst of transitions costs at most
    * two evaluations.
    */
-  private schedule(thread: PrReviewOfferThread, prKey: string): void {
+  private schedule(thread: PrReviewOfferThread, prKey: string, recoveryOnly = false): Promise<void> | undefined {
     if (this.closed) return;
     const key = JSON.stringify([thread.backend, thread.threadId, prKey]);
     const running = this.inFlight.get(key);
     if (running) {
-      running.again = true;
-      return;
+      if (!recoveryOnly) {
+        running.recoveryOnly = false;
+        running.again = true;
+      }
+      return running.done;
     }
-    const entry = { again: false, done: Promise.resolve() };
+    const entry = { again: false, recoveryOnly, done: Promise.resolve() };
     entry.done = (async () => {
       try {
         do {
           entry.again = false;
           try {
-            await this.evaluate(thread, prKey);
+            await this.evaluate(thread, prKey, entry.recoveryOnly);
           } catch (error) {
             this.ports.log?.("pr review offer evaluation failed", {
               prKey,
@@ -212,9 +280,10 @@ export class PrReviewOfferCoordinator {
       }
     })();
     this.inFlight.set(key, entry);
+    return entry.done;
   }
 
-  async evaluate(thread: PrReviewOfferThread, prKey: string): Promise<PrReviewOfferEvaluation | undefined> {
+  async evaluate(thread: PrReviewOfferThread, prKey: string, recoveryOnly = false): Promise<PrReviewOfferEvaluation | undefined> {
     const pr = this.ports.getPr(prKey);
     if (!pr) return undefined;
     const gitBefore = this.ports.identity.gitProcessCount;
@@ -235,7 +304,33 @@ export class PrReviewOfferCoordinator {
     // offer for this head that a newer review has findings against.
     const withdrawable = open?.kind === "review"
       || (open?.kind === "merge" && open.headSha === pr.headSha);
-    const assessment = await this.assessPr(thread, pr, withdrawable, true);
+    const lowerSequence = this.lowerChangeSequence;
+    const assessment = await this.assessPr(thread, pr, withdrawable, !recoveryOnly);
+    const latest = this.ports.getPr(prKey);
+    if (this.closed || !latest || latest.headSha !== pr.headSha || latest.baseRefName !== pr.baseRefName
+      || prGateReadiness(latest) !== prGateReadiness(pr)) return undefined;
+    if (!assessment.retryOnObservation) {
+      this.evaluated.delete(prKey);
+      this.evaluated.add(prKey);
+      if (this.evaluated.size > MAX_TRACKED_CHILDREN) this.evaluated.delete(this.evaluated.values().next().value!);
+    } else {
+      this.evaluated.delete(prKey);
+    }
+    if (assessment.lowerKeys) {
+      const lowers = assessment.retryOnObservation
+        ? [...(this.lowerKeysByChild.get(prKey) ?? []), ...assessment.lowerKeys] : assessment.lowerKeys;
+      this.trackLowers(prKey, lowers);
+      if (assessment.lowerKeys.some((key) => (this.lowerChanges.get(key) ?? 0) > lowerSequence)) {
+        this.schedule(thread, prKey);
+        return undefined;
+      }
+    } else if (assessment.readiness === "closed") {
+      this.trackLowers(prKey, []);
+    }
+    if (recoveryOnly && assessment.standing !== "ready_to_merge") return undefined;
+    // A transient transport failure defers a new offer. A previously
+    // verified card stays put; executing it always rechecks live evidence.
+    if (assessment.retryOnObservation && open?.kind === "merge") return undefined;
     const { readiness, reviewId, headContentId, headCovered, standing } = assessment;
     const desired = desiredPrOffer({
       prKey,
@@ -302,10 +397,15 @@ export class PrReviewOfferCoordinator {
   async mergeOfferRefusal(thread: PrReviewOfferThread, prKey: string): Promise<string | undefined> {
     const pr = this.ports.getPr(prKey);
     if (!pr) return undefined;
-    if (await this.ports.stackBlocksMerge?.(thread, pr)) return `#${pr.number} is waiting for its lower stack layers to merge and its base to be trunk.`;
     const assessment = await this.assessPr(thread, pr, true, false);
+    if (assessment.readiness === "stack_parent_open") return `#${pr.number} is waiting for its lower stack layers to merge and its base to be trunk.`;
     if (!assessment.headSha || assessment.readiness === "closed") return undefined;
-    if (assessment.headCovered && (assessment.openFindings ?? 0) === 0) return undefined;
+    if (assessment.headCovered && (assessment.openFindings ?? 0) === 0) {
+      if (prGateReadiness(pr) && (await this.ports.stackMergeEvidence?.(thread, pr))?.blocked) {
+        return `#${pr.number} is waiting for its lower stack layers to merge and its base to be trunk.`;
+      }
+      return undefined;
+    }
     return `${describePrReviewReadiness({
       prNumber: pr.number,
       readiness: assessment.readiness,
@@ -325,7 +425,7 @@ export class PrReviewOfferCoordinator {
     pr: PrSummary,
     coverageWhileWaiting: boolean,
     forOffer: boolean,
-  ): Promise<PrReviewAssessment> {
+  ): Promise<PrReviewAssessment & { lowerKeys?: string[]; retryOnObservation?: boolean }> {
     const gate = prGateReadiness(pr);
     const head = pr.headSha;
     if (gate && (!coverageWhileWaiting || !head || gate === "closed" || gate === "no_head")) {
@@ -335,9 +435,12 @@ export class PrReviewOfferCoordinator {
     // The review side holds while CI runs, so the merge-card gate still sees
     // open findings then.
     const standing = deriveReviewStanding(coverage.reviews);
-    const stackBlocked = standing.readiness === "ready_to_merge" && await this.ports.stackBlocksMerge?.(thread, pr);
+    const stack = !gate && standing.readiness === "ready_to_merge"
+      ? await this.ports.stackMergeEvidence?.(thread, pr) : undefined;
     return {
-      readiness: stackBlocked ? "stack_parent_open" : gate ?? standing.readiness,
+      readiness: stack?.blocked ? "stack_parent_open" : gate ?? standing.readiness,
+      ...(stack ? { lowerKeys: stack.lowerKeys } : {}),
+      ...(stack?.retryOnObservation ? { retryOnObservation: true } : {}),
       standing: standing.readiness,
       headSha: head!,
       headCovered: coverage.reviews.some((review) => review.coversHead),

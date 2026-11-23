@@ -30,6 +30,7 @@ export type PrStatusFieldChange<T> = {
  * with no changes is never emitted).
  */
 export type PrStatusTransitionChanges = {
+  baseRefName?: PrStatusFieldChange<string>;
   checkState?: PrStatusFieldChange<PrChipState | undefined>;
   headSha?: PrStatusFieldChange<string | undefined>;
   lifecycleState?: PrStatusFieldChange<PrLifecycleState | undefined>;
@@ -66,6 +67,7 @@ export type PrStatusTransition = {
  * `commitShas` remain context only.
  */
 const TRACKED_FIELDS = [
+  "baseRefName",
   "checkState",
   "headSha",
   "lifecycleState",
@@ -127,7 +129,7 @@ export function computePrStatusTransition(
     // Older durable cache rows predate `headSha`. Treat the first populated
     // head as hydration, not a new event, so an upgrade cannot auto-dispatch
     // every already-failing PR on its first poll.
-    if (field === "headSha" && (!from || !to)) {
+    if ((field === "headSha" || field === "baseRefName") && (!from || !to)) {
       continue;
     }
     if (from !== to) {

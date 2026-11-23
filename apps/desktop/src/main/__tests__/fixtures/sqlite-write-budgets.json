@@ -1,4 +1,8 @@
 {
+  "pr-review-stack-lower-repeat": {"commits": 0, "note": "A repeated observation after the offer is open costs 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "pr-review-stack-lower-offer": {"commits": 1, "note": "One eligible child becomes ready: one card commit. At 100 child offers/day and ~29 KB WAL/offer, ~2.9 MB/day.", "observedWalBytes": 28872, "rowsChanged": 1, "statements": 1},
+  "pr-review-stack-base-repeat": {"commits": 0, "note": "A repeated observation after the offer is open costs 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "pr-review-stack-base-offer": {"commits": 1, "note": "One eligible child becomes ready: one card commit. At 100 child offers/day and ~29 KB WAL/offer, ~2.9 MB/day.", "observedWalBytes": 28872, "rowsChanged": 1, "statements": 1},
   "telegram-pairing-grant-revoke": {"commits": 1, "note": "Remove one bot-scoped Telegram pairing grant.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
   "telegram-pairing-grant-dismiss-warning": {"commits": 1, "note": "Update the warning setting for one paired Telegram user.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
   "telegram-pairing-grant-approve": {"commits": 1, "note": "Upsert the bot-scoped grant and consume the observed request in one transaction.", "observedWalBytes": 16480, "rowsChanged": 2, "statements": 2},

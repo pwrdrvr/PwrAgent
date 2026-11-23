@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import {
@@ -24,6 +25,14 @@ function pr(overrides: Partial<PrSummary> = {}): PrSummary {
 }
 
 describe("computePrStatusTransition", () => {
+  it("observes every change of an established base ref at the same head", () => {
+    fc.assert(fc.property(fc.nat(), fc.nat(), (from, to) => {
+      const previous = pr({ baseRefName: `branch-${from}` });
+      const next = pr({ baseRefName: `branch-${to}` });
+      expect(computePrStatusTransition(previous, next)?.changed).toEqual(from === to
+        ? undefined : { baseRefName: { from: previous.baseRefName, to: next.baseRefName } });
+    }));
+  });
   it("returns undefined on first sight (no previous), so boot emits nothing", () => {
     expect(computePrStatusTransition(undefined, pr())).toBeUndefined();
   });

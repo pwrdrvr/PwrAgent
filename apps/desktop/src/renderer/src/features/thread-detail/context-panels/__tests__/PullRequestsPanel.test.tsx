@@ -34,6 +34,35 @@ function threadWithPrs(prs: PrSummary[]): NavigationThreadSummary {
 }
 
 describe("PullRequestsPanel", () => {
+  it("loads the selected stack layers from the thread's owning peer", async () => {
+    const target = { scope: "remote" as const, instanceId: "peer-123" };
+    const read = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async ({ ref, collection }) => ({
+      protocol: 2, ref, revision: "stack-revision", readiness: "ready", identity: "present",
+      collectionPage: {
+        name: "stackLayers", revision: "stack-revision", complete: Boolean(collection?.cursor),
+        ...(!collection?.cursor ? { nextCursor: "second-layer" } : {}),
+        values: { stackLayers: [{
+          stackKey: "stack",
+          ...(!collection?.cursor ? { stack: { key: "stack", name: "Example", trunk: "main",
+            repository: "github.com:example/project", inferred: false } } : {}),
+          position: collection?.cursor ? 2 : 1,
+          layer: { branch: collection?.cursor ? "top-layer" : "bottom-layer", parent: "main", health: "in_sync", role: "layer" },
+        }] },
+      },
+    }));
+    render(<PullRequestsPanel desktopApi={{ getNavigationSelectedDetail: read }} thread={{
+      ...baseThread, linkedDirectories: [{ id: "work", kind: "local", label: "Project", path: "/example" }],
+      federation: { instanceLabel: "Owner", ref: { backend: baseThread.source, threadId: baseThread.id, target } },
+    }} />);
+    await screen.findByText("top-layer");
+    expect(screen.getByText("bottom-layer")).toBeVisible();
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(read).toHaveBeenLastCalledWith(expect.objectContaining({
+      ref: { backend: "codex", threadId: baseThread.id, ownerInstanceId: target.instanceId },
+      federationTarget: target, collection: { name: "stackLayers", cursor: "second-layer" },
+    }));
+  });
+
   it("renders a card with a clickable PrChip, status pills, title, and repo", () => {
     const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
     render(

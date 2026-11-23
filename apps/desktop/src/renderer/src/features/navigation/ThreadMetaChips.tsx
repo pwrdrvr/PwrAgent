@@ -565,7 +565,7 @@ const ThreadMetaChipsContent = memo(function ThreadMetaChipsContent({
         : linkedDirectoryChips.slice(0, maxLinkedDirectories)}
 
       {prChips}
-      {thread.stacks?.length ? <StackPositionChips thread={thread} /> : null}
+      {thread.stackMemberships?.length || thread.stacks?.length ? <StackPositionChips thread={thread} /> : null}
 
       {branchChip && showBranch ? (
         <CopyableThreadChip

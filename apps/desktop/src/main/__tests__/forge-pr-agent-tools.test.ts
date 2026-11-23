@@ -25,6 +25,9 @@ const pull = (number: number, extra: Record<string, unknown> = {}) => ({
   head: { ref: "topic", sha: "a".repeat(40), repo: { full_name: "fixture/project" } }, base: { ref: "main", sha: "b".repeat(40) },
   labels: [{ name: "bug" }], requested_reviewers: [], assignees: [], html_url: `https://github.com/fixture/project/pull/${number}`, ...extra,
 });
+const stackHistory = (baseRefName: string) => json({ data: { repository: { pullRequest: {
+  headRefOid: "a".repeat(40), baseRefName, timelineItems: { pageInfo: { hasPreviousPage: false }, nodes: [] },
+} } } });
 
 type Call = { url: string; method: string; body?: unknown; accept?: string };
 function harness(routes: (call: Call) => Response | Promise<Response>, runGh?: GhRunner) {
@@ -231,27 +234,32 @@ describe("GitHub tool client", () => {
   });
 
   it("merges only the head the agent checked", async () => {
-    const { calls, client } = harness(({ method }) => method === "GET"
-      ? json(pull(9, { base: { ref: "main", repo: { default_branch: "main" } } }))
-      : json({ message: "Head branch was modified. Review and try the merge again." }, 409));
+    const { calls, client } = harness(({ method }) => {
+      if (method === "POST") return stackHistory("main");
+      if (method === "GET") return json(pull(9, {
+        created_at: "2026-11-22T10:00:00Z", base: { ref: "main", repo: { default_branch: "main" } },
+      }));
+      return json({ message: "Head branch was modified. Review and try the merge again." }, 409);
+    });
     await expect(client.execute("merge_pull_request", { number: 9, expectedHeadSha: "c".repeat(40) }, ctx())).rejects.toMatchObject({ code: "head_changed" });
-    expect(calls[1]).toMatchObject({ method: "PUT", body: { merge_method: "squash", sha: "c".repeat(40) } });
+    expect(calls[2]).toMatchObject({ method: "PUT", body: { merge_method: "squash", sha: "c".repeat(40) } });
   });
 
   it("refuses an inferred child when its parent merged while it still targets the parent branch", async () => {
     const { calls, client } = harness((call) => {
+      if (call.method === "POST") return stackHistory("topic");
       if (call.method !== "GET") return json({ merged: true });
       if (call.url.includes("/pulls?")) return json([pull(8, {
-        state: "closed", merged_at: "2026-11-22T12:00:00Z",
+        state: "closed", created_at: "2026-11-22T09:00:00Z", merged_at: "2026-11-22T12:00:00Z",
       })]);
       return json(pull(9, {
         created_at: "2026-11-22T10:00:00Z",
-        base: { ref: "topic", repo: { default_branch: "main" } },
+        base: { ref: "topic", sha: "a".repeat(40), repo: { default_branch: "main" } },
       }));
     });
     await expect(client.execute("merge_pull_request", { number: 9, expectedHeadSha: "a".repeat(40) }, ctx()))
       .rejects.toMatchObject({ code: "stack_parent_open" });
-    expect(calls.map((call) => call.method)).toEqual(["GET", "GET"]);
+    expect(calls.map((call) => call.method)).toEqual(["GET", "POST", "GET"]);
   });
 
   it("resolves only review threads in this repository", async () => {

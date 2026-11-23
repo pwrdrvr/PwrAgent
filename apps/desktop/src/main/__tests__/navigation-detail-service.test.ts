@@ -111,6 +111,31 @@ function collectionCursor(offset: number, revision: string): string {
 }
 
 describe("NavigationDetailService", () => {
+  it("pages selected stack layers under the owner wire budget without hiding the other selected collections", async () => {
+    const layers = Array.from({ length: 20 }, (_, index) => ({
+      position: index + 1,
+      stackKey: "stack",
+      ...(index === 0 ? { stack: { key: "stack", name: "Example", repository: "github.com:example/project", trunk: "main", inferred: false } } : {}),
+      layer: { branch: `layer-${index}`, parent: "main", health: "in_sync" as const, role: "layer" as const,
+        thread: { key: `codex:layer-${index}`, title: "💡".repeat(4_000) } },
+    }));
+    const page = vi.fn((offset: number, limit: number) => layers.slice(offset, offset + limit));
+    const read = vi.fn(async () => ({ count: layers.length, revision: "stack-revision", page }));
+    const service = new NavigationDetailService({
+      getThreadInfo: () => undefined, getCachedThreadSummary: () => thread("selected"),
+    } as unknown as DesktopBackendRegistry, read);
+    const request = { ...selectedCollectionRequest, collection: { name: "stackLayers" as const } };
+    const first = await service.readSelectedDetail(request);
+    expect(Buffer.byteLength(JSON.stringify(first))).toBeLessThanOrEqual(NAVIGATION_QUERY_MAX_RESULT_BYTES);
+    expect(first.collectionPage?.complete).toBe(false);
+    const second = await service.readSelectedDetail({ ...request,
+      collection: { ...request.collection, cursor: first.collectionPage?.nextCursor },
+    });
+    expect(second.collectionPage?.complete).toBe(true);
+    expect([...first.collectionPage!.values.stackLayers!, ...second.collectionPage!.values.stackLayers!]).toEqual(layers);
+    expect(read).toHaveBeenCalledWith(request.ref, undefined);
+  });
+
   it("includes a continuation cursor in the queue wire-byte admission check", () => {
     const entries: ThreadQueuedTurnSummary[] = [{ queueEntryId: "first", createdAt: 1, displayText: "", origin: "manual", position: 0 }];
     const service = new NavigationDetailService({

@@ -1,6 +1,7 @@
 import path from "node:path";
+import { createHash } from "node:crypto";
 import type { AppServerBackendScope, AppServerThreadSummary, LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
-import type { NavigationDirectorySummary, NavigationQueryRequest, PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { NavigationDirectorySummary, NavigationIdentity, NavigationQueryRequest, PrSummary } from "@pwragent/shared/contracts/navigation";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { navigationPathIdentity } from "@pwragent/shared/directory-navigation";
 import { isWorkspaceHandoffDirectory } from "@pwragent/shared/navigation-state";
@@ -27,7 +28,8 @@ import {
 import { getMainLogger } from "../log";
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
 import { PR_METADATA_PRIORITY } from "../pr-status/pr-metadata-process";
-import { StackReader, stackMemberships } from "../stacks/stack-reader";
+import { StackReader } from "../stacks/stack-reader";
+import { compactStackMembership, type CompactStackMembership, type SelectedStackLayer, type StackSummary } from "@pwragent/shared/stacks/stack-status";
 import { readNavigationCheckout } from "../git-info/directory-store";
 import { collectConcurrent } from "../../shared/concurrent-work";
 
@@ -175,8 +177,8 @@ export async function loadLocalNavigationQueryIndex(params: {
     if (params.includeStacks) {
       // Share the same membership and viewer projection with stack-free queries.
       const local = await loadLocalNavigationQueryIndex({ ...params, includeStacks: false, signal });
-      const threads = await projectNavigationStacks(local.threads, registry, signal);
-      return threads === local.threads ? local : createNavigationQuerySnapshot({ ...local, threads }, undefined, local);
+      const projection = await projectNavigationStacks(local.threads, registry, signal);
+      return projection ? createNavigationQuerySnapshot({ ...local, ...projection }, undefined, local) : local;
     }
     if (params.viewer) {
       const local = await loadLocalNavigationQueryIndex({ ...params, viewer: undefined, signal });
@@ -342,11 +344,11 @@ async function projectNavigationStacks(
   threads: NavigationQueryIndex["threads"],
   registry: DesktopBackendRegistry,
   signal: AbortSignal,
-): Promise<NavigationQueryIndex["threads"]> {
+): Promise<Pick<NavigationQueryIndex, "threads" | "stacks"> | undefined> {
   const candidates = threads.filter((thread) => !thread.federation && (thread.linkedDirectories?.some((directory) =>
     directory.gitBranch || directory.worktreePath || directory.repositoryKey)
     || ((thread.observedGitBranch || thread.gitBranch) && thread.linkedDirectories?.length)));
-  if (!candidates.length) return threads;
+  if (!candidates.length) return undefined;
   const attachments = getDesktopOverlayStore().readNavigationPullRequests(
     candidates.map((thread) => ({ backend: thread.source, threadId: thread.id })),
   );
@@ -358,11 +360,70 @@ async function projectNavigationStacks(
   signal.throwIfAborted();
   const { stacks } = await stackReader.read(rows, []);
   signal.throwIfAborted();
-  const memberships = stackMemberships(stacks);
-  return memberships.size ? threads.map((thread) => {
-    const stacks = memberships.get(buildThreadIdentityKey(thread.source, thread.id));
-    return stacks ? { ...thread, stacks } : thread;
-  }) : threads;
+  const memberships = new Map<string, CompactStackMembership[]>();
+  for (const stack of stacks) {
+    const detailRevision = stackRevision(stack);
+    for (const [offset, layer] of stack.layers.entries()) {
+      if (!layer.thread) continue;
+      const entries = memberships.get(layer.thread.key) ?? [];
+      if (entries.length >= 8) continue;
+      entries.push({ ...compactStackMembership(stack, offset + 1)!, detailRevision });
+      memberships.set(layer.thread.key, entries);
+    }
+  }
+  return memberships.size ? { stacks, threads: threads.map((thread) => {
+    const stackMemberships = memberships.get(buildThreadIdentityKey(thread.source, thread.id));
+    return stackMemberships ? { ...thread, stackMemberships } : thread;
+  }) } : undefined;
+}
+
+const stackRevisions = new WeakMap<StackSummary, string>();
+
+function stackRevision(stack: StackSummary): string {
+  const known = stackRevisions.get(stack);
+  if (known) return known;
+  const computed = createHash("sha256").update(JSON.stringify(stack)).digest("base64url");
+  stackRevisions.set(stack, computed);
+  return computed;
+}
+
+export async function readNavigationStackLayers(ref: NavigationIdentity, signal?: AbortSignal) {
+  const index = await loadLocalNavigationQueryIndex({ callerReason: "selected-stack-detail", includeStacks: true, signal });
+  const thread = index.threads.find((row) => !row.federation && row.source === ref.backend && row.id === ref.threadId);
+  const membership = new Set(thread?.stackMemberships?.map(({ key }) => key));
+  const stacks = (index.stacks ?? []).filter(({ key }) => membership.has(key));
+  const revisions = stacks.map(stackRevision);
+  return {
+    count: stacks.reduce((total, stack) => total + stack.layers.length, 0),
+    revision: createHash("sha256").update(JSON.stringify([ref, revisions])).digest("base64url"),
+    page(offset: number, limit: number): SelectedStackLayer[] {
+      const rows: SelectedStackLayer[] = [];
+      for (const { layers, ...stack } of stacks) {
+        if (offset >= layers.length) {
+          offset -= layers.length;
+          continue;
+        }
+        for (let index = offset; index < layers.length && rows.length < limit; index++) {
+          const layer = layers[index]!;
+          rows.push({
+            stackKey: stack.key,
+            ...(index === 0 ? { stack: { ...stack, name: stack.name.slice(0, 1024), trunk: stack.trunk.slice(0, 1024) } } : {}),
+            position: index + 1,
+            layer: {
+              ...layer,
+              branch: layer.branch.slice(0, 4096),
+              parent: layer.parent.slice(0, 4096),
+              ...(layer.activeBase ? { activeBase: layer.activeBase.slice(0, 4096) } : {}),
+              ...(layer.thread ? { thread: { key: layer.thread.key.slice(0, 1024), title: layer.thread.title.slice(0, 1024) } } : {}),
+            },
+          });
+        }
+        if (rows.length >= limit) break;
+        offset = 0;
+      }
+      return rows;
+    },
+  };
 }
 
 async function buildLocalNavigationQueryIndex(params: {

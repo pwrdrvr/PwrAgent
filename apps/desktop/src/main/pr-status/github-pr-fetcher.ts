@@ -1,5 +1,6 @@
 import { parsePullRequestReferenceUrl, type PullRequestReferenceIdentity } from "./forge-reference";
 import { readStackClones } from "../stacks/stack-reader";
+import type { ForgeCiClient } from "./forge-ci-client";
 import { assertGithubStackMergeAllowed, assertStackMergeBaseUnchanged } from "../stacks/stack-merge-guard";
 import { describeMergeQueueState } from "@pwragent/shared/pr-merge-queue";
 import {
@@ -118,6 +119,17 @@ function collectAnsweredPullRequests<R>(params: {
 }
 
 export type GhAuthStatus = GhStatus;
+
+// The card and federation merge runners share the owner runtime's forge
+// budget. The standalone fetcher still supports gh-backed reads in tests.
+let stackTransport: Pick<ForgeCiClient, "requestGithub"> | undefined;
+
+export function installGithubMergeStackTransport(transport: NonNullable<typeof stackTransport>): () => void {
+  stackTransport = transport;
+  return () => {
+    if (stackTransport === transport) stackTransport = undefined;
+  };
+}
 
 export type GithubPrFetcherOptions = {
   /** Share the app's in-process GraphQL client; tests inject a stub. */
@@ -295,12 +307,27 @@ export class GithubPrFetcher {
     run: (args: string[]) => Promise<{ stdout: string }>,
   ): Promise<string> {
     const catalogs = cwd ? (await readStackClones([cwd])).flatMap(({ catalog }) => catalog.status === "ok" ? [catalog.catalog] : []) : [];
-    return await assertGithubStackMergeAllowed({
-      provider: "github", host: reference.provider, owner: reference.org, repo: reference.repo,
-    }, reference.number, catalogs, async (route) => {
-      const endpoint = `repos/${encodeURIComponent(reference.org)}/${encodeURIComponent(reference.repo)}${route}`;
-      const response = await run(["api", "--hostname", reference.provider, endpoint]);
+    const endpoint = `repos/${encodeURIComponent(reference.org)}/${encodeURIComponent(reference.repo)}`;
+    const repository = { provider: "github" as const, host: reference.provider, owner: reference.org, repo: reference.repo };
+    const transport = stackTransport;
+    return await assertGithubStackMergeAllowed(repository, reference.number, catalogs, async (route) => {
+      if (transport) return await transport.requestGithub(repository, { path: endpoint + route });
+      const response = await run(["api", "--hostname", reference.provider, endpoint + route]);
       return JSON.parse(response.stdout);
+    }, async (query, variables) => {
+      if (transport) {
+        return (await transport.requestGithub(repository, { graphql: true, path: "", body: { query, variables } }) as { data?: unknown }).data;
+      }
+      try {
+        const response = await run(["api", "graphql", "--hostname", reference.provider, "-f", `query=${query}`,
+          "-f", `owner=${variables.owner}`, "-f", `repo=${variables.repo}`, "-F", `number=${variables.number}`]);
+        const parsed = JSON.parse(response.stdout) as { data?: unknown; errors?: unknown[] };
+        if (parsed.errors?.length) throw new Error("GitHub returned partial stack history.");
+        return parsed.data;
+      } catch (error) {
+        const detail = (error as { stderr?: string }).stderr?.trim() || String(error);
+        throw new Error(detail.split("\n")[0], { cause: error });
+      }
     });
   }
 

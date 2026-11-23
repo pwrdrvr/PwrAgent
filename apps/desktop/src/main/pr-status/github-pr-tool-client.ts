@@ -484,7 +484,7 @@ export class GithubPrToolClient {
       }
       case "merge_pull_request": {
         ctx.assertCanMerge?.(r, args.number!);
-        const checkedBase = await assertGithubStackMergeAllowed(r, args.number!, ctx.stackCatalogs ?? [], (route) => call("GET", route));
+        const checkedBase = await assertGithubStackMergeAllowed(r, args.number!, ctx.stackCatalogs ?? [], (route) => call("GET", route), graphql);
         // Read the queue only when it can matter. A queue read that fails
         // never blocks a merge: GitHub itself refuses a direct merge past one.
         const readGate = async () => {
