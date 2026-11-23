@@ -46,6 +46,41 @@ async function writeCatalog(cwd: string, name: string) {
 }
 
 describe("stack checkout demand", () => {
+  it("admits the catalog Git finds when a checkout moves after the inventory hint", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-moved-after-hint-"));
+    const before = path.join(sandbox, "before");
+    const after = path.join(sandbox, "after");
+    const alias = path.join(sandbox, "thread");
+    try {
+      await Promise.all([mkdir(before), mkdir(after)]);
+      initialize(before);
+      initialize(after);
+      await Promise.all([writeCatalog(before, "before"), writeCatalog(after, "after")]);
+      await symlink(before, alias, "junction");
+      const runGitCommand = gitExecutable.runGitCommand;
+      let moved = false;
+      const run = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (cwd, args, options) => {
+        if (!moved && cwd === alias && args[0] === "rev-parse") {
+          await rm(alias);
+          await symlink(after, alias, "junction");
+          expect(await realpath(git(alias, "rev-parse", "--path-format=absolute", "--git-common-dir")))
+            .toBe(await realpath(path.join(after, ".git")));
+          moved = true;
+        }
+        return await runGitCommand(cwd, args, options);
+      });
+      try {
+        const result = await new StackReader().read([row(alias, "thread")], []);
+        expect(moved).toBe(true);
+        expect(result.stacks.map(({ repository }) => repository)).toEqual(["github.com:fixture/after"]);
+      } finally {
+        run.mockRestore();
+      }
+    } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
   it("keeps scoped Git launches independent of thread paths outside the selected clone", async () => {
     const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-demand-"));
     const selected = path.join(sandbox, "selected");
