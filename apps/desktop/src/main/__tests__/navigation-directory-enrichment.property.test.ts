@@ -29,6 +29,8 @@ vi.mock("../storage/desktop-overlay-store", () => {
     },
     readDirectoryGitStatusCache: async () => ({}),
     listAllActivePrStatusWatches: async () => [],
+    readNavigationPullRequests: (threads: Parameters<SqliteOverlayStore["readNavigationPullRequests"]>[0]) =>
+      threads.map(() => []),
   };
   return { getDesktopOverlayStore: () => overlays.current ?? store };
 });
