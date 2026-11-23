@@ -239,6 +239,7 @@ export function createLocalAcpAgentDiscovery(params: {
     const env = await params.resolveEnv?.();
     const records = await discoverLocalAcpAgentRecords({
       enabledRegistryIds,
+      useManagedAntigravity: true,
       managedGrok: {
         channel: managedGrokBuildChannelFromSnapshot(providers),
         enabled:

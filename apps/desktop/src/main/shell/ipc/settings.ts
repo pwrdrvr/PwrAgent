@@ -847,6 +847,7 @@ async function listInstalledAndLocalAcpAgents(
       }
       discovered = (await discoverLocalAcpAgentRecords({
         enabledRegistryIds: discoveryRegistryIds,
+        useManagedAntigravity: true,
         managedGrok: {
           channel: managedGrokBuildChannelFromSnapshot(providers),
           enabled:

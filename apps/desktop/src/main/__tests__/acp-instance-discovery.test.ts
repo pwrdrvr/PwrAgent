@@ -68,6 +68,64 @@ describe("resolveActiveAcpInstance", () => {
   });
 });
 
+describe("managed Antigravity discovery", () => {
+  const managed = { command: "/managed/agy", version: "1.5.14" };
+  const external = instance("/bin/agy", "path", "1.5.13");
+  const manual = instance("/custom/agy", "override", "1.5.12");
+
+  it.each([
+    { instances: [], selectedPath: undefined, expected: managed.command },
+    { instances: [external], selectedPath: undefined, expected: managed.command },
+    { instances: [external], selectedPath: external.command, expected: external.command },
+    { instances: [manual, external], selectedPath: external.command, expected: manual.command },
+  ])("uses the same active command for Settings and launch ($expected)", async ({ instances, selectedPath, expected }) => {
+    const options = {
+      enabledRegistryIds: ["antigravity"],
+      useManagedAntigravity: true,
+      readManagedAntigravity: async () => ({ status: "installed" as const, runtime: managed }),
+      discover: async () => instances.length ? [group("antigravity", instances)] : [],
+      ...(selectedPath ? { preferences: { antigravity: { selectedPath } } } : {}),
+    };
+    const [settings, [record]] = await Promise.all([
+      discoverAcpAgentInstances(options),
+      discoverLocalAcpAgentRecords(options),
+    ]);
+    const antigravity = settings.get("antigravity");
+    expect(antigravity?.activeCommand).toBe(expected);
+    expect(antigravity?.instances.map(({ command }) => command)).toEqual([
+      ...(instances.includes(manual) ? [manual.command] : []),
+      managed.command,
+      ...(instances.includes(external) ? [external.command] : []),
+    ]);
+    expect(record).toMatchObject({
+      backendId: "acp:antigravity",
+      activeCommand: expected,
+      instances: antigravity?.instances,
+      launchDescriptor: { command: expected },
+    });
+    expect(record?.launchDescriptor?.env.AGY_CLI_DISABLE_AUTO_UPDATE).toBe(
+      expected === managed.command ? "true" : undefined,
+    );
+    if (instances.length === 0) {
+      expect(record?.launchDescriptor?.args).toEqual(["acp", "--process-per-session"]);
+    }
+  });
+
+  it("falls back to PATH when managed status cannot be read and skips status when disabled", async () => {
+    const readManagedAntigravity = vi.fn(async () => { throw new Error("Unreadable runtime root"); });
+    const options = {
+      enabledRegistryIds: ["antigravity"],
+      useManagedAntigravity: true,
+      readManagedAntigravity,
+      discover: async () => [group("antigravity", [external])],
+    };
+    const [record] = await discoverLocalAcpAgentRecords(options);
+    expect(record?.activeCommand).toBe(external.command);
+    await discoverAcpAgentInstances({ ...options, enabledRegistryIds: [], discover: async () => [] });
+    expect(readManagedAntigravity).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("discoverAcpAgentInstances", () => {
   it("maps kit groups to a per-registryId view and resolves the active instance", async () => {
     const discover = vi.fn(async () => [

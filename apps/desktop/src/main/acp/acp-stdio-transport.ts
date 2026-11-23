@@ -43,6 +43,8 @@ export type AcpStdioSpawn = (
 
 export type AcpStdioJsonRpcTransportOptions = {
   launchDescriptor: AcpLaunchDescriptor;
+  /** Replace the inherited environment for isolated runtime verification. */
+  baseEnv?: NodeJS.ProcessEnv;
   requestTimeoutMs?: number;
   observer?: JsonRpcObserver;
   spawn?: AcpStdioSpawn;
@@ -51,7 +53,7 @@ export type AcpStdioJsonRpcTransportOptions = {
   bundledToolsDirectory?: string;
 };
 
-function appendExecutableSearchPaths(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+function appendExecutableSearchPaths(env: NodeJS.ProcessEnv, home: string | undefined): NodeJS.ProcessEnv {
   if (process.platform === "win32") {
     return env;
   }
@@ -62,8 +64,8 @@ function appendExecutableSearchPaths(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv 
   for (const candidate of [
     "/opt/homebrew/bin",
     "/usr/local/bin",
-    `${process.env.HOME ?? ""}/.local/bin`,
-    `${process.env.HOME ?? ""}/bin`,
+    `${home ?? ""}/.local/bin`,
+    `${home ?? ""}/bin`,
   ]) {
     if (candidate && !pathSet.has(candidate)) {
       pathEntries.push(candidate);
@@ -95,6 +97,7 @@ export class AcpStdioJsonRpcTransport implements AcpJsonRpcTransport {
   constructor(options: AcpStdioJsonRpcTransportOptions) {
     this.lineTransport = new AcpLineStdioTransport({
       launchDescriptor: options.launchDescriptor,
+      baseEnv: options.baseEnv,
       spawn: options.spawn,
       platform: options.platform,
       bundledToolsDirectory: options.bundledToolsDirectory,
@@ -191,6 +194,7 @@ class AcpLineStdioTransport implements JsonRpcTransport {
   constructor(
     private readonly options: {
       launchDescriptor: AcpLaunchDescriptor;
+      baseEnv?: NodeJS.ProcessEnv;
       spawn?: AcpStdioSpawn;
       platform?: NodeJS.Platform;
       bundledToolsDirectory?: string;
@@ -216,10 +220,12 @@ class AcpLineStdioTransport implements JsonRpcTransport {
     this.stderrPreview = "";
 
     const descriptor = normalizeAcpLaunchDescriptor(this.options.launchDescriptor);
+    const baseEnv = this.options.baseEnv ?? process.env;
     const env = prependBundledToolsToPath(
       buildPwrAgentChildProcessEnv(
         appendExecutableSearchPaths(
-          buildPwrAgentChildProcessEnv(process.env, descriptor.env),
+          buildPwrAgentChildProcessEnv(baseEnv, descriptor.env),
+          baseEnv.HOME,
         ),
       ),
       {
