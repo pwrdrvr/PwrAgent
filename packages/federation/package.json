@@ -9,11 +9,11 @@
   },
   "dependencies": {
     "@pwragent/shared": "workspace:*",
-    "ws": "8.22.2",
+    "ws": "8.23.0",
     "@xterm/headless": "6.1.0-beta.335",
     "@xterm/addon-serialize": "0.15.0-beta.331",
     "fflate": "^0.8.2",
-    "tar": "7.5.22"
+    "tar": "7.5.23"
   },
   "devDependencies": {
     "@types/ws": "8.18.2"
