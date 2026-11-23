@@ -155,10 +155,6 @@ export class StackReadObservation {
     return catalogs;
   }
 
-  async presentCatalogs(directories: readonly string[]): Promise<CatalogRead[]> {
-    return (await this.clones(await this.hints.markerCandidates(directories))).map(({ catalog }) => catalog);
-  }
-
   async preflightCatalogs(directories: readonly string[], lookup?: (cwd: string) => Promise<Checkout | undefined>): Promise<CatalogRead[]> {
     const candidates = await this.hints.markerCandidates(directories);
     return (await this.clones(candidates, (cwd) => this.recordCheckout(cwd, lookup))).map(({ catalog }) => catalog);

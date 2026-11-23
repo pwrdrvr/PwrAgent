@@ -323,6 +323,40 @@ describe("stack checkout demand", () => {
     }
   });
 
+  it.skipIf(process.platform === "win32")("follows Git when a HEAD symlink changes without changing its referent", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-head-link-"));
+    try {
+      const nested = path.join(sandbox, "nested");
+      await mkdir(nested);
+      initialize(sandbox);
+      initialize(nested);
+      await Promise.all([writeCatalog(sandbox, "outer"), writeCatalog(nested, "nested")]);
+      const head = path.join(nested, ".git", "HEAD");
+      const target = "refs/heads/topic";
+      const retarget = async (value: string) => {
+        await rm(head);
+        await symlink(value, head);
+      };
+      const reader = new StackReader();
+      const project = async () => (await reader.read([row(nested, "nested")], [])).stacks.map(({ repository }) => repository);
+      const gitRoot = async () => await realpath(git(nested, "rev-parse", "--show-toplevel"));
+      await retarget(target);
+      const referent = await realpath(head);
+      expect(await gitRoot()).toBe(await realpath(nested));
+      expect(await project()).toEqual(["github.com:fixture/nested"]);
+      expect(await project()).toEqual(["github.com:fixture/nested"]);
+      await retarget("./" + target);
+      expect(await realpath(head)).toBe(referent);
+      expect(await gitRoot()).toBe(await realpath(sandbox));
+      expect(await project()).toEqual(["github.com:fixture/outer"]);
+      await retarget(target);
+      expect(await gitRoot()).toBe(await realpath(nested));
+      expect(await project()).toEqual(["github.com:fixture/nested"]);
+    } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
   it("checks a catalog created after a negative fleet read and uses Git under discovery overrides", async () => {
     const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-admission-"));
     try {
@@ -580,12 +614,14 @@ describe("stack checkout demand", () => {
     const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
     try {
       initialize(sandbox);
+      const reader = new StackReader();
+      const read = () => reader.preflightCatalogs([sandbox], new StackReadObservation());
       for (let pass = 0; pass < 3; pass++) {
-        expect(await new StackReadObservation().presentCatalogs([sandbox])).toEqual([]);
+        expect(await read()).toEqual([]);
       }
       expect(start).not.toHaveBeenCalled();
       await writeCatalog(sandbox, "offer");
-      expect(await new StackReadObservation().presentCatalogs([sandbox])).toMatchObject([{ status: "ok" }]);
+      expect(await read()).toMatchObject([{ status: "ok" }]);
       expect(start.mock.calls.map(([, args]) => args[0])).toEqual(["rev-parse"]);
     } finally {
       start.mockRestore();
