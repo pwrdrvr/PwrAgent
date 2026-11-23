@@ -19,10 +19,11 @@ import type { AcpLaunchDescriptor } from "../acp/acp-launch-descriptor";
 
 class MockAcpChildProcess extends EventEmitter {
   readonly writes: string[] = [];
+  writeError?: Error;
   readonly stdin = new Writable({
     write: (chunk, _encoding, callback) => {
       this.writes.push(chunk.toString());
-      callback();
+      callback(this.writeError);
     },
   });
   readonly stdout = new PassThrough();
@@ -405,7 +406,35 @@ describe("AcpStdioJsonRpcTransport", () => {
     );
   });
 
-  it("rejects and reaps a live ACP child that closes stdin after initialize", async () => {
+  it("rejects and reaps an ACP child when writing session/new fails after initialize", async () => {
+    const child = new MockAcpChildProcess();
+    const kill = vi.spyOn(child, "kill");
+    const transport = new AcpStdioJsonRpcTransport({
+      launchDescriptor: createDescriptor(),
+      requestTimeoutMs: 1_000,
+      spawn: () => child,
+    });
+    try {
+      const initialize = transport.request("initialize");
+      await vi.waitFor(() => expect(child.writes).toHaveLength(1));
+      const { id } = JSON.parse(child.writes[0]);
+      const result = { protocolVersion: 1 };
+      child.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
+      await expect(initialize).resolves.toEqual(result);
+
+      const error = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+      child.writeError = error;
+      await expect(transport.request("session/new")).rejects.toBe(error);
+      expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+    } finally {
+      await transport.close();
+    }
+    expect(kill).toHaveBeenCalledTimes(1);
+  });
+
+  // Closing fd 0 in this subprocess fixture produces a kernel pipe error on
+  // POSIX. On Windows CI the request timed out waiting for a reply.
+  it.runIf(process.platform !== "win32")("rejects and reaps a live POSIX ACP child that closes stdin after initialize", async () => {
     const pipeErrors: string[] = [];
     let exited: Promise<unknown[]> | undefined;
     const spawn: AcpStdioSpawn = (_command, _args, options) => {
