@@ -495,6 +495,9 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
         const monitors = menu.getByRole("menuitemcheckbox", { name: "Job Monitors", exact: true });
         const include = ".composer-thread-options__menu";
         await expect(monitors).toHaveAttribute("aria-checked", "true");
+        const mcpAccess = menu.getByRole("menuitem", { name: /^PwrAgent MCPs/ });
+        await expect(mcpAccess).toContainText("none selected");
+        await mcpAccess.hover();
         await runAxe(app.window, "Job Monitors on", { include });
         await monitors.click();
         await expect(monitors).toHaveAttribute("aria-checked", "false");

@@ -47364,8 +47364,8 @@ button.composer__subthread-source-parent:hover {
 /* A highlighted option lays the accent tint under the description, and
    `--text-muted` on it falls to 4.37:1 in Tangerine. It goes one step up
    the text ladder instead, as `.select-option__description` does. */
-.composer-dropdown__option:hover:not([aria-disabled="true"]) .composer-dropdown__option-description,
-.composer-dropdown__option:focus-visible:not([aria-disabled="true"]) .composer-dropdown__option-description {
+.composer-dropdown__option:hover:not([aria-disabled="true"]) :is(.composer-dropdown__option-description, .composer-thread-options__note),
+.composer-dropdown__option:focus-visible:not([aria-disabled="true"]) :is(.composer-dropdown__option-description, .composer-thread-options__note) {
   color: var(--text-secondary);
 }
 
@@ -47434,6 +47434,11 @@ button.composer__subthread-source-parent:hover {
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 400;
+}
+
+.composer-thread-options__note--dependency {
+  display: inline-block;
+  max-width: 100%;
 }
 
 .composer-thread-options__detail {

@@ -2498,7 +2498,7 @@ function ComposerThreadOptionsMenu(props: {
               >
                 <span className="composer-thread-options__label">
                   Monitor job suggestions
-                  {monitorCreationOff ? <span className="composer-thread-options__note" id={`${menuId}-monitor-suggestions-description`}> · needs Job Monitors</span> : null}
+                  {monitorCreationOff ? <span className="composer-thread-options__note composer-thread-options__note--dependency" id={`${menuId}-monitor-suggestions-description`}> · needs Job Monitors</span> : null}
                 </span>
                 <span aria-hidden="true" className={`composer-thread-options__toggle${
                   !monitorCreationOff && (props.monitorJobSuggestions ?? true) ? " is-checked" : ""
