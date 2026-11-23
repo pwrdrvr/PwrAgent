@@ -4628,6 +4628,7 @@ export class DesktopBackendRegistry {
     params: {
       archived?: boolean;
       enrichDirectories: boolean;
+      forceRefresh?: boolean;
       filter?: string;
       limit?: number;
       maxPages?: number;
@@ -4648,6 +4649,7 @@ export class DesktopBackendRegistry {
       const listed = await this.listCodexThreads({
         archived: params.archived,
         enrichDirectories: params.enrichDirectories,
+        ...(params.enrichDirectories && params.forceRefresh ? { revalidateDirectories: true } : {}),
         filter: params.filter,
         limit: params.limit,
         maxPages: params.maxPages,
@@ -16338,6 +16340,7 @@ export class DesktopBackendRegistry {
       backend: params.backend ?? "all",
       codexDirectoryBackfill,
       enrichDirectories: params.enrichDirectories === true,
+      revalidateDirectories: includesCodex && params.enrichDirectories === true && params.forceRefresh === true,
       filter: params.filter?.trim() ?? "",
       limit: params.limit,
       maxPages: params.maxPages,
@@ -16488,6 +16491,7 @@ export class DesktopBackendRegistry {
   private async listCodexThreads(params: {
     archived?: boolean;
     enrichDirectories?: boolean;
+    revalidateDirectories?: boolean;
     filter?: string;
     limit?: number;
     maxPages?: number;

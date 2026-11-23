@@ -47,6 +47,10 @@ export function createThreadDirectoryEnricher(options: { now?: () => number } = 
     before: GitDirectoryObservation | undefined,
     context: DirectoryEnrichmentContext,
   ): Promise<string[]> {
+    // Git's inventory prints the admin directory for a separate git-dir.
+    // Git has already confirmed the checkout root with --show-toplevel.
+    if (before?.separateGitDirectory && before.checkoutRoot
+      && path.relative(repoRoot, before.checkoutRoot) === "" && !hasGitDiscoveryOverrides()) return [repoRoot];
     if (!before?.commonDirectory || !before.commonVersion) {
       return parseGitWorktrees(await runGit(key, ["worktree", "list", "--porcelain"], context));
     }
@@ -138,6 +142,9 @@ export function createThreadDirectoryEnricher(options: { now?: () => number } = 
       return { linkedDirectories: [] };
     }
     const key = path.resolve(projectKey.trim());
+    // Membership actions must observe topology now, even inside the normal
+    // display TTL. The listing already deduplicates paths within its scan.
+    if (caller === "verified-directory-list") return refresh(key, caller);
     return reads.read(key, () => refresh(key, caller), {
       ...request, caller,
     }, (reason) => directoryEnrichmentDiagnostics.record(
@@ -173,6 +180,7 @@ export function readNavigationCheckoutDirectory(cwd: string): Promise<LinkedDire
       if (observed?.repository === false) return [buildFallbackLinkedDirectory(key)];
       if (!observed?.checkoutRoot || !observed.gitDirectory) return undefined;
       if (!observed.dotGitDirectory) {
+        if (observed.separateGitDirectory) return [buildCheckoutLinkedDirectory(observed.checkoutRoot)];
         const linked = await resolveWorktreeRepositoryDirectory(observed.checkoutRoot, true);
         return linked && [linked];
       }

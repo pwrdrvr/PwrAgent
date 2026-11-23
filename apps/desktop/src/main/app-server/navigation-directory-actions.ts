@@ -65,6 +65,13 @@ export async function removeLocalNavigationDirectory(
     }
     if (request.archiveThreads && directory) {
       const keys = new Set(directory.threadKeys);
+      const visible = await loadLocalNavigationQueryIndex({ callerReason: "remove-navigation-directory" });
+      const displayed = visible.directories.find((candidate) => candidate.key === request.directoryKey);
+      if (changedDuringRead || (visible.coverage && visible.coverage.state !== "complete")
+        || !displayed || displayed.threadKeys.length !== keys.size
+        || displayed.threadKeys.some((key) => !keys.has(key))) {
+        throw new Error("Directory membership changed. Refresh navigation and try again.");
+      }
       const threads = new Map(index.threads.map((thread) => [buildThreadIdentityKey(thread.source, thread.id), thread]));
       members = [...keys].map((key) => {
         const thread = threads.get(key);

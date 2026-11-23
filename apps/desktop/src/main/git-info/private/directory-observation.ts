@@ -30,6 +30,7 @@ export type GitDirectoryObservation = {
   checkoutRoot?: string;
   gitDirectory?: string;
   dotGitDirectory?: boolean;
+  separateGitDirectory?: boolean;
   commonDirectory?: string;
   commonVersion?: string;
 };
@@ -90,6 +91,18 @@ export function createGitDirectoryObserver(options: { navigation?: boolean } = {
     return value;
   }
 
+  async function isBareBoundary(directory: string): Promise<boolean> {
+    const headPath = path.join(directory, "HEAD");
+    const head = await fileState(headPath);
+    if (!head?.file) return false;
+    const [objects, refs] = await Promise.all([
+      fileState(path.join(directory, "objects")),
+      fileState(path.join(directory, "refs")),
+    ]);
+    if (!objects?.directory || !refs?.directory) return false;
+    return /^(?:ref:\s*refs\/[^\s]+|[a-f0-9]{40}|[a-f0-9]{64})$/i.test((await pointer(headPath, head)).trim());
+  }
+
   return async (cwd) => {
     const directory = await fileState(cwd);
     if (!directory?.directory) return undefined;
@@ -99,22 +112,28 @@ export function createGitDirectoryObserver(options: { navigation?: boolean } = {
     let parent = resolved;
     let dotGit: FileState;
     let dotGitPath: string;
+    const belowCheckout: string[] = [];
+    const unversioned = () => ({
+      repository: false,
+      relationship: JSON.stringify([resolved, directory.signature, "unversioned"]),
+      head: "",
+    });
     for (;;) {
       dotGitPath = path.join(parent, ".git");
       dotGit = await fileState(dotGitPath);
       if (dotGit) break;
       const next = path.dirname(parent);
-      if (parent === next) {
-        return {
-          repository: false,
-          relationship: JSON.stringify([resolved, directory.signature, "unversioned"]),
-          head: "",
-        };
-      }
+      if (parent === next) return unversioned();
       // Git stops at a filesystem boundary unless an environment override
       // permits it. Navigation does not project directories under overrides.
       if (options.navigation && (await fileState(next))?.device !== directory.device) return undefined;
+      belowCheckout.push(parent);
       parent = next;
+    }
+    // A bare repository can stop Git before an enclosing .git entry. Paths
+    // with no enclosing checkout already use the ordinary directory fallback.
+    for (const directory of belowCheckout) {
+      if (await isBareBoundary(directory)) return options.navigation ? unversioned() : undefined;
     }
     const link = dotGit.directory ? "" : await pointer(dotGitPath, dotGit);
     const gitdirMatch = link.match(/^gitdir:\s*(.+?)\s*$/m);
@@ -164,6 +183,7 @@ export function createGitDirectoryObserver(options: { navigation?: boolean } = {
       checkoutRoot: parent,
       gitDirectory: gitdir,
       dotGitDirectory: dotGit.directory,
+      separateGitDirectory: !dotGit.directory && !commonState && !backlink,
       commonDirectory: commonDir,
       commonVersion: JSON.stringify([commonDir, commonInfo.signature, config?.signature]),
       relationship: JSON.stringify([

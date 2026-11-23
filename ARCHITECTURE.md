@@ -402,7 +402,8 @@ filesystem reads to group ordinary checkouts and linked worktrees. It keeps the
 provider folder when discovery is ambiguous and leaves branch verification to
 selected-thread reads. Navigation can reuse completed Git-enriched lists.
 Directory actions that require verified checkout membership request Git
-enrichment and use a separate index read.
+enrichment in a separate index read. They take a new filesystem observation
+before reusing verified directory facts and leave sidebar membership untouched.
 
 ## Thread state and lifecycle
 

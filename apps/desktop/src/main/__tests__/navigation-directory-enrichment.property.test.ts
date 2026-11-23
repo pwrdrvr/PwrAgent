@@ -5,6 +5,7 @@ import path from "node:path";
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
+import { buildDirectorySummaries } from "@pwragent/shared/directory-navigation";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
 import { CodexAppServerClient } from "../codex-app-server/desktop-client";
@@ -16,16 +17,17 @@ vi.mock("../app-server/scratch-projects", () => ({ resolveScratchProjectsRoots: 
 vi.mock("../messaging/desktop-messaging-store", () => ({
   getDesktopMessagingStore: () => ({ findActiveBindings: async () => [] }),
 }));
-vi.mock("../storage/desktop-overlay-store", () => ({
-  getDesktopOverlayStore: () => ({
-    readNavigationQueryIndex: ({ threads }: { threads: AppServerThreadSummary[] }) => ({
-      threads: threads.map((thread) => ({ ...thread, inbox: { inInbox: false } })),
-      directories: [],
-    }),
+vi.mock("../storage/desktop-overlay-store", () => {
+  const store = {
+    readNavigationQueryIndex: ({ threads }: { threads: AppServerThreadSummary[] }) => {
+      const rows = threads.map((thread) => ({ ...thread, inbox: { inInbox: false } }));
+      return { threads: rows, directories: buildDirectorySummaries({ threads: rows }) };
+    },
     readDirectoryGitStatusCache: async () => ({}),
     listAllActivePrStatusWatches: async () => [],
-  }),
-}));
+  };
+  return { getDesktopOverlayStore: () => store };
+});
 
 const normalize = (cwd: string) => cwd.replace(/\\/g, "/");
 const originUrl = "https://github.com/example/project.git";
@@ -40,16 +42,27 @@ function navigationFixture(paths: string[], now?: () => number) {
   Object.defineProperty(client, "connection", {
     value: { request: async () => ({ data: rows, nextCursor: null }) },
   });
+  let verified: AppServerThreadSummary[] | undefined;
   const registry = {
-    listThreads: (params: Parameters<typeof client.listThreads>[0]) =>
-      client.listThreads({ ...params, skipArchivedMetadataRefresh: true }),
+    listThreads: async (params: NonNullable<Parameters<typeof client.listThreads>[0]> & { forceRefresh?: boolean }) => {
+      if (params.enrichDirectories && verified && !params.forceRefresh) return verified;
+      const rows = await client.listThreads({
+        ...params, revalidateDirectories: params.enrichDirectories && params.forceRefresh, skipArchivedMetadataRefresh: true,
+      });
+      if (params.enrichDirectories) verified = rows;
+      return rows;
+    },
     withNavigationPrimaryGitRepositories: (threads: unknown[]) => threads,
     hydrateThreadGitWorkingStates: async (threads: unknown[]) => threads,
     withNavigationSubAgentActivity: (threads: unknown[]) => threads,
     getNavigationInputRequestThreadKeys: () => new Set<string>(),
   } as unknown as DesktopBackendRegistry;
-  return { client, rows, read: (refreshProviders = false) =>
-    loadLocalNavigationQueryIndex({ registry, callerReason: "renderer-navigation-query", refreshProviders }) };
+  return {
+    client, rows,
+    read: (refreshProviders = false) =>
+      loadLocalNavigationQueryIndex({ registry, callerReason: "renderer-navigation-query", refreshProviders }),
+    verify: () => loadLocalNavigationQueryIndex({ registry, callerReason: "remove-navigation-directory", requireVerifiedDirectories: true }),
+  };
 }
 
 it("keeps navigation inventory independent of historical checkout discovery and refreshes the selected checkout", async () => {
@@ -88,7 +101,8 @@ it("keeps navigation inventory independent of historical checkout discovery and 
             expect(index.threads[indexPosition]?.gitOriginUrl).toBe(originUrl);
             const [directory] = index.threads[indexPosition]!.linkedDirectories;
             if (cwd === missing) {
-              expect(directory).toBeUndefined();
+              expect(directory).toMatchObject({ path: normalize(primary!), kind: "worktree" });
+              expect(normalize(directory!.worktreePath!)).toBe(normalize(missing));
             } else if (cwd === linked || cwd === nested) {
               expect(directory).toMatchObject({ path: normalize(primary!), worktreePath: normalize(worktree!), kind: "worktree" });
             } else {
@@ -121,7 +135,7 @@ it("refreshes a previously verified parent mapping when a nested checkout appear
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-navigation-nested-")));
   const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { stdio: "pipe", encoding: "utf8" });
   const cwd = path.join(root, "nested");
-  const { client, read } = navigationFixture([cwd]);
+  const { client, read, verify } = navigationFixture([cwd, root], () => 0);
   vi.stubEnv("PWRAGENT_GIT_PATH", "git");
   try {
     await mkdir(cwd);
@@ -134,6 +148,8 @@ it("refreshes a previously verified parent mapping when a nested checkout appear
     expect((await read()).threads[0]).toMatchObject({
       linkedDirectories: [{ path: normalize(root) }], observedGitBranch: "parent",
     });
+    const parent = `directory:${normalize(root)}`;
+    expect((await verify()).directories.find((directory) => directory.key === parent)?.threadKeys).toHaveLength(2);
     git(cwd, "init", "--initial-branch=child");
     const clock = vi.spyOn(performance, "now").mockReturnValue(performance.now() + 1_001);
     const launches = vi.spyOn(gitSubprocessDiagnostics, "startGit");
@@ -142,6 +158,11 @@ it("refreshes a previously verified parent mapping when a nested checkout appear
       expect(thread).toMatchObject({ linkedDirectories: [{ path: git(cwd, "rev-parse", "--show-toplevel").trim() }] });
       expect(thread?.observedGitBranch).toBeUndefined();
       expect(launches.mock.calls.filter((call) => call[2] === "directory-enrichment")).toHaveLength(0);
+      const visible = await read(true);
+      const verified = await verify();
+      const members = (index: typeof visible) => Object.fromEntries(index.directories.map(({ key, threadKeys }) => [key, threadKeys]));
+      expect(members(verified)).toEqual(members(visible));
+      expect(members(verified)[parent]).toEqual(["codex:thread-1"]);
     } finally {
       launches.mockRestore();
       clock.mockRestore();
@@ -198,6 +219,32 @@ it("observes ordinary and linked checkout roots, leaving Git overrides to live v
     git(repo, "worktree", "remove", moved);
     expect(await readNavigationCheckoutDirectory(path.join(moved, "nested"))).toEqual([]);
   } finally {
+    vi.unstubAllEnvs();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("matches Git discovery for a nested bare boundary and a separate Git directory", async () => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-navigation-layout-")));
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { stdio: "pipe", encoding: "utf8" });
+  const mirror = path.join(root, "mirror.git");
+  const mirrorCwd = path.join(mirror, "objects");
+  const checkout = path.join(root, "checkout");
+  const checkoutCwd = path.join(checkout, "nested");
+  const { client, read, verify } = navigationFixture([mirrorCwd, checkoutCwd]);
+  vi.stubEnv("PWRAGENT_GIT_PATH", "git");
+  try {
+    git(root, "init", "--initial-branch=outer");
+    git(root, "init", "--bare", mirror);
+    await mkdir(checkoutCwd, { recursive: true });
+    git(checkout, "init", "--separate-git-dir", path.join(root, "admin"));
+    expect(() => git(mirrorCwd, "rev-parse", "--show-toplevel")).toThrow();
+    const separateRoot = git(checkoutCwd, "rev-parse", "--show-toplevel").trim();
+    const projected = (await read()).threads.map((thread) => normalize(thread.linkedDirectories[0]!.path));
+    expect(projected).toEqual([normalize(mirrorCwd), separateRoot]);
+    expect((await verify()).threads.map((thread) => normalize(thread.linkedDirectories[0]!.path))).toEqual(projected);
+  } finally {
+    await client.close();
     vi.unstubAllEnvs();
     await rm(root, { recursive: true, force: true });
   }

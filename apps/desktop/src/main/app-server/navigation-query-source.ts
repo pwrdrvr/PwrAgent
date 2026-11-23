@@ -10,6 +10,7 @@ import {
 import { getDesktopBackendRegistry, type DesktopBackendRegistry } from "./backend-registry";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
+import { hydrateMissingLinkedDirectoriesFromSiblingRepos } from "@pwragent/owner-core/codex-app-server/thread-directory-fallback";
 import { createNavigationQuerySnapshot } from "@pwragent/owner-core/navigation-query-projection";
 import type { NavigationPullRequestProjection } from "@pwragent/owner-core/navigation-query-store";
 import { resolveScratchProjectsRoots } from "./scratch-projects";
@@ -29,6 +30,7 @@ import { readNavigationCheckoutDirectory } from "../git-info/directory-store";
 import { collectConcurrent } from "../../shared/concurrent-work";
 
 const indexReads = new NavigationIndexReadPool(1_000);
+const actionIndexReads = new NavigationIndexReadPool();
 
 export function navigationPullRequestProjection(options: {
   kind: NavigationQueryRequest["query"]["kind"];
@@ -125,11 +127,12 @@ export async function loadLocalNavigationQueryIndex(params: {
   const registry = params.registry ?? getDesktopBackendRegistry();
   const overlayStore = getDesktopOverlayStore();
   const backend = params.backend ?? "all";
+  const reads = params.requireVerifiedDirectories ? actionIndexReads : indexReads;
+  const publishesSidebar = backend === "all" && !params.requireVerifiedDirectories;
   // A refresh reads under its own key: it must not be served a retained or
   // in-flight index that predates it, nor overtake other readers' scans.
   const key = JSON.stringify([sourceId(registry), sourceId(overlayStore), backend,
     ...(params.viewer ? ["viewer", sourceId(params.viewer.source)] : []),
-    ...(params.requireVerifiedDirectories ? ["verified-directories"] : []),
     ...(params.refreshProviders ? ["refresh-providers"] : [])]);
   // An index's coverage reads the startup refresh state, so an index built
   // while startup was checking must not serve a reader after it finishes.
@@ -137,7 +140,7 @@ export async function loadLocalNavigationQueryIndex(params: {
   // before the pool's (owner PR metadata) would join the stale index.
   const version = `${overlayStore.readNavigationSourceVersion?.() ?? ""}|${
     registry.getStartupProviderRefreshStatus?.()?.state ?? ""}`;
-  return indexReads.read(key, async (signal, checkpoint) => {
+  return reads.read(key, async (signal, checkpoint) => {
     let navigationChanged = false;
     // An event during a scan stops later readers from joining it; they share
     // one follow-up scan. Each run owns its listener, because the pool can
@@ -151,7 +154,7 @@ export async function loadLocalNavigationQueryIndex(params: {
         && navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params))
         || (params.viewer && event.notification.method === "federation/peerStatus/changed")) {
         navigationChanged = true;
-        indexReads.invalidate(key);
+        reads.invalidate(key);
       }
     });
     // The pool owns this listener through its bounded completed reuse window.
@@ -171,9 +174,9 @@ export async function loadLocalNavigationQueryIndex(params: {
     // listings for a boundary before it tells listeners, so this listing
     // reflects every boundary observed before this value.
     const observedAt = nextNavigationObservation();
-    const visibilitySourceVersion = backend === "all" ? overlayStore.readNavigationSourceVersion?.() : undefined;
-    const directoryScopeCheckpoint = registry.navigationDirectoryScope?.checkpoint();
-    if (backend === "all") latestVisibilityScanByRegistry.set(registry, observedAt);
+    const visibilitySourceVersion = publishesSidebar ? overlayStore.readNavigationSourceVersion?.() : undefined;
+    const directoryScopeCheckpoint = publishesSidebar ? registry.navigationDirectoryScope?.checkpoint() : undefined;
+    if (publishesSidebar) latestVisibilityScanByRegistry.set(registry, observedAt);
     const index = { ...await buildLocalNavigationQueryIndex({ ...params, registry, signal, checkpoint }), observedAt };
     // Creation uses the same complete membership that the sidebar just read.
     // Waiting for owner PR metadata work can leave visibility uninitialized
@@ -181,7 +184,7 @@ export async function loadLocalNavigationQueryIndex(params: {
     // Normal and forced-refresh scans have independent pool keys. Only the
     // latest scan may publish, and an intervening mutation also makes its
     // membership and pin ranks obsolete even when its coverage is complete.
-    if (backend === "all"
+    if (publishesSidebar
       && latestVisibilityScanByRegistry.get(registry) === observedAt
       && !navigationChanged
       && visibilitySourceVersion === overlayStore.readNavigationSourceVersion?.()) {
@@ -189,7 +192,7 @@ export async function loadLocalNavigationQueryIndex(params: {
       if (index.coverage?.state === "complete") registry.rememberNavigationVisibilityIndex?.(index);
     }
     // Only the whole-owner index is what viewers read as its directory set.
-    if (backend === "all" && !params.registry) {
+    if (publishesSidebar && !params.registry) {
       getNavigationDirectorySetAnnouncer().observe(index.directories);
     }
     return createNavigationQuerySnapshot(index);
@@ -234,7 +237,7 @@ async function projectNavigationCheckoutDirectories(
       projected.set(row, { ...row, linkedDirectories: directories, observedGitBranch: undefined });
     }
   });
-  return threads.map((thread) => projected.get(thread) ?? thread);
+  return hydrateMissingLinkedDirectoriesFromSiblingRepos(threads.map((thread) => projected.get(thread) ?? thread));
 }
 
 const directorySetLog = getMainLogger("pwragent:navigation-directory-set");
@@ -290,7 +293,7 @@ async function buildLocalNavigationQueryIndex(params: {
       callerReason: params.callerReason,
       enrichDirectories: params.requireVerifiedDirectories === true,
       skipPendingDirectoryEnrichment: !params.requireVerifiedDirectories,
-      ...(params.refreshProviders ? { forceRefresh: true } : {}),
+      ...(params.refreshProviders || params.requireVerifiedDirectories ? { forceRefresh: true } : {}),
     }));
   params.signal?.throwIfAborted();
   // An overtaken scan whose follow-up already has readers hands them over

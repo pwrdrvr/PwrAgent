@@ -208,6 +208,7 @@ export type BackendClient = {
     params?: {
       archived?: boolean;
       enrichDirectories?: boolean;
+      revalidateDirectories?: boolean;
       filter?: string;
       limit?: number;
       maxPages?: number;
