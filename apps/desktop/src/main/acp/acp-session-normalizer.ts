@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
@@ -51,6 +52,17 @@ export type AcpSessionUpdate = {
    */
   deferTurnCompletion?: boolean;
 };
+
+export type AcpReplayPromptIdentity = {
+  receivedAt: number;
+  textDigest: string;
+  turnId: string;
+  steerMessageId?: string;
+};
+
+export function acpReplayPromptTextDigest(text: string): string {
+  return createHash("sha256").update(text.trim()).digest("hex");
+}
 
 export type AcpSessionReplayNormalizerOptions = {
   surfaceThoughtsAsMessages?: boolean;
@@ -320,6 +332,11 @@ export class AcpSessionReplayNormalizer {
   /** The automatic compaction whose row is still in progress, if any. */
   private openCompactionId?: string;
   private readonly subAgents = new Map<string, AcpSubAgentState>();
+  private providerPromptReplay?: {
+    prompts: AcpReplayPromptIdentity[];
+    steeredTurns: Set<string>;
+    nextIndex: number;
+  };
 
   /** How this session's edits are read; the workspace can arrive later. */
   private fileEditOptions: ReadAcpFileEditOptions;
@@ -337,6 +354,21 @@ export class AcpSessionReplayNormalizer {
    */
   setWorkspace(cwd: string): void {
     this.fileEditOptions = { ...this.fileEditOptions, cwd };
+  }
+
+  beginProviderPromptReplay(prompts: AcpReplayPromptIdentity[]): void {
+    this.providerPromptReplay = {
+      prompts,
+      steeredTurns: new Set(prompts.filter((prompt) => prompt.steerMessageId).map((prompt) => prompt.turnId)),
+      nextIndex: 0,
+    };
+  }
+
+  endProviderPromptReplay(completedAt: number | undefined): void {
+    this.providerPromptReplay = undefined;
+    if (this.currentTurnId && completedAt !== undefined) {
+      this.recordTurnFinished(this.currentTurnId, completedAt);
+    }
   }
 
   recordUserPrompt(params: {
@@ -583,7 +615,7 @@ export class AcpSessionReplayNormalizer {
     } else if (kind === "user_message_chunk") {
       this.activeAssistantMessageId = undefined;
       this.activeAssistantMessagePhase = undefined;
-      this.knownToolCallIds.clear();
+      if (!this.providerPromptReplay) this.knownToolCallIds.clear();
       this.applyUserMessageChunk(update, createdAt);
     } else if (kind === "available_commands_update") {
       // Command metadata belongs in provider capabilities, not the transcript.
@@ -699,6 +731,8 @@ export class AcpSessionReplayNormalizer {
           ...(turnId ? { turnId } : {}),
           receivedAt: createdAt,
         });
+      } else if (kind === "pwragent_antigravity_prompt_identity") {
+        // Identity metadata is applied only to matching provider replay rows.
       } else if (kind === "pwragent_rewind_marker") {
         this.rewindToPromptIndex(
           readNumber(update.update, "targetPromptIndex") ?? -1,
@@ -799,7 +833,11 @@ export class AcpSessionReplayNormalizer {
       // are setup/control text the agent saw, not user-authored turns.
       return;
     }
-    if (this.currentTurnId) {
+    if (this.providerPromptReplay) {
+      if (this.applyProviderPromptIdentity(update, createdAt, text)) return;
+      this.knownToolCallIds.clear();
+      if (this.currentTurnId) this.recordTurnFinished(this.currentTurnId, createdAt);
+    } else if (this.currentTurnId) {
       const localPromptId = `user:${this.currentTurnId}`;
       if (this.messageIndexes.has(localPromptId)) {
         return;
@@ -807,7 +845,8 @@ export class AcpSessionReplayNormalizer {
     }
     const lastUserMessage = this.lastUserMessageIndex === undefined
       ? undefined : this.messages[this.lastUserMessageIndex];
-    if (lastUserMessage?.text.trim() === text.trim()) {
+    if (lastUserMessage?.text.trim() === text.trim()
+      && (!this.providerPromptReplay || lastUserMessage.createdAt === createdAt)) {
       return;
     }
     const id =
@@ -815,6 +854,55 @@ export class AcpSessionReplayNormalizer {
       readString(update.update, "id") ??
       `user:${update.sessionId}:${createdAt}:${this.generatedMessageSequence++}`;
     this.appendMessageChunk({ id, role: "user", text, createdAt });
+  }
+
+  private applyProviderPromptIdentity(update: AcpSessionUpdate, createdAt: number, text: string): boolean {
+    const replay = this.providerPromptReplay;
+    if (!replay || readAcpUpdateTimestamp(update.update) === undefined) return false;
+    const textDigest = acpReplayPromptTextDigest(text);
+    // The same host timestamps both streams. Allow for dispatch/receipt and
+    // timestamp rounding, and consume each matching occurrence in wire order.
+    const timestampSlopMs = 1_000;
+    while (replay.nextIndex < replay.prompts.length
+      && replay.prompts[replay.nextIndex]!.receivedAt < createdAt - timestampSlopMs) {
+      replay.nextIndex += 1;
+    }
+    let matchIndex = -1;
+    let matchDistance = timestampSlopMs + 1;
+    for (let index = replay.nextIndex; index < replay.prompts.length; index += 1) {
+      const prompt = replay.prompts[index]!;
+      if (prompt.receivedAt > createdAt + timestampSlopMs) break;
+      if (prompt.steerMessageId && prompt.turnId !== this.currentTurnId) continue;
+      const distance = Math.abs(prompt.receivedAt - createdAt);
+      if (distance > timestampSlopMs || prompt.textDigest !== textDigest) continue;
+      if (prompt.steerMessageId) {
+        // Repeated steers within this turn use occurrence order, including
+        // when provider timestamps were rounded to the same second.
+        matchIndex = index;
+        break;
+      }
+      if (distance < matchDistance) {
+        matchIndex = index;
+        matchDistance = distance;
+      }
+    }
+    if (matchIndex === -1) return false;
+    const identity = replay.prompts[matchIndex]!;
+    replay.nextIndex = matchIndex + 1;
+    if (!replay.steeredTurns.has(identity.turnId)) return false;
+    const params = {
+      sessionId: update.sessionId,
+      prompt: text,
+      turnId: identity.turnId,
+      receivedAt: createdAt,
+    };
+    if (identity.steerMessageId) {
+      this.recordSteeredUserPrompt({ ...params, messageId: identity.steerMessageId });
+    } else {
+      if (this.currentTurnId) this.recordTurnFinished(this.currentTurnId, createdAt);
+      this.recordUserPrompt(params);
+    }
+    return true;
   }
 
   private applyAgentThoughtChunk(update: AcpSessionUpdate, createdAt: number): void {

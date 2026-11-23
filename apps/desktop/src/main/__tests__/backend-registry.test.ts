@@ -11909,6 +11909,57 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it.each(["item-first", "receipt-first"])(
+    "retains accepted Antigravity steer attachments when %s",
+    async (order) => {
+      const backend = "acp:antigravity";
+      const threadId = "agy-attachment-session";
+      const turnId = "turn-attachment";
+      const { registry } = createKimiAcpRegistry({
+        acpBackendId: backend,
+        installedAgent: {
+          ...createKimiAgentRecord(backend),
+          registryId: "antigravity",
+          version: "1.5.15",
+        },
+        sessions: [{
+          backendId: backend, sessionId: threadId, title: "Test",
+          createdAt: 1, updatedAt: 2, executionMode: "default", status: "active",
+        }],
+        supportsTurnSteering: true,
+        steerSession: async ({ text }) => {
+          if (order === "item-first") await emitUserItem(text);
+          return { delivery: "currentTurn" };
+        },
+      });
+      const emitUserItem = async (text: string) => {
+        await (registry as unknown as { emit(event: AgentEvent): Promise<void> }).emit({
+          backend,
+          notification: {
+            method: "item/completed",
+            params: { threadId, turnId, item: { id: "steered-item", type: "userMessage", text } },
+          },
+        });
+      };
+      try {
+        await emitStartedTurn(registry, backend, threadId, turnId);
+        await registry.steerTurn({
+          backend, threadId, expectedTurnId: turnId, requestId: "steer-with-image",
+          input: [
+            { type: "text", text: "Use this image" },
+            { type: "image", name: "steer.png", url: "data:image/png;base64,BAUG" },
+          ],
+        });
+        if (order === "receipt-first") await emitUserItem("Use this image");
+        expect(registry.getTurnInputAttachments({ backend, threadId, turnId })).toEqual([
+          expect.objectContaining({ type: "localImage", name: "steer.png" }),
+        ]);
+      } finally {
+        await registry.close();
+      }
+    },
+  );
+
   it("rejects a stale Grok steer before it can reach a replacement turn", async () => {
     const backend = "acp:grok" as AcpBackendId;
     const sessions: AcpSessionMetadata[] = [{

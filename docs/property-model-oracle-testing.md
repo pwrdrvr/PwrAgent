@@ -123,7 +123,9 @@ against the pre-fix code:
 - **State and concurrency:** `ThreadTurnQueue`, automation run lifecycle,
   scheduled actions, update download and replacement, renderer query stores
   whose reads can land out of order. Write a model (`fc.commands`,
-  `fc.scheduler`).
+  `fc.scheduler`). In the Antigravity steering model, vary whether a prompt
+  response and the first update from its replacement arrive in the same
+  stdout read. The accepted steer must precede that update in both transcripts.
 - **Anything that re-derives state another system owns.** Use the owner as
   the oracle:
   - git, through real git commands in a temp dir, for worktrees, branches,

@@ -20,6 +20,7 @@ import type {
 } from "@pwragent/shared/contracts/backend";
 import {
   AcpSessionReplayNormalizer,
+  acpReplayPromptTextDigest,
   acpSessionReplayNormalizerOptions,
   isAcpUserBoilerplateMessage,
   readAcpContentText,
@@ -27,6 +28,7 @@ import {
   readAcpUpdateTimestamp,
   type AcpSessionReplayNormalizerOptions,
   type AcpSessionUpdate,
+  type AcpReplayPromptIdentity,
 } from "./acp-session-normalizer.js";
 import {
   acpRuntimeSupportsSessionLoad,
@@ -249,6 +251,7 @@ type AcpSuppressedControlPrompt = {
 
 type AcpHydratedSessionHistory = {
   isComplete: boolean;
+  antigravityReplayPrompts?: AcpReplayPromptIdentity[];
 };
 
 export type AcpAgentClientOptions = {
@@ -942,14 +945,12 @@ export class AcpAgentClient {
     const messageId = `user:${activeTurn.turnId}:steer:${params.interjectionId}`;
     const displayPrompt = params.prompt ?? params.text;
     const handoff = Promise.withResolvers<void>();
-    let adopted = false;
     let nextPromptSettled = false;
 
     const adoptSteer = (): void => {
-      if (adopted) {
-        return;
-      }
-      adopted = true;
+      // This receipt describes provider acceptance. The history write can
+      // fail after ownership has already moved to the replacement prompt.
+      handoff.resolve();
       const receivedAt = this.now();
       const replay = this.normalizerFor(params.sessionId).recordSteeredUserPrompt({
         sessionId: params.sessionId,
@@ -967,15 +968,22 @@ export class AcpAgentClient {
         turnId: activeTurn.turnId,
         createdAt: receivedAt,
       };
-      this.appendHistoryUpdate(params.sessionId, receivedAt, update);
-      this.markSessionHasConversationHistory(params.sessionId, receivedAt);
+      try {
+        this.appendHistoryUpdate(params.sessionId, receivedAt, update);
+        this.markSessionHasConversationHistory(params.sessionId, receivedAt);
+      } catch (error) {
+        acpClientLog.warn("Could not persist accepted Antigravity steering message", {
+          sessionId: params.sessionId,
+          turnId: activeTurn.turnId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       void this.notifySessionUpdate({
         sessionId: params.sessionId,
         replay,
         turnId: activeTurn.turnId,
         update,
       });
-      handoff.resolve();
     };
 
     activeTurn.pendingSteerHandoff = {
@@ -1007,41 +1015,29 @@ export class AcpAgentClient {
       throw error;
     }
 
-    const observedNextPrompt = nextPrompt.then(
-      (result) => {
+    void nextPrompt.then(
+      () => {
         nextPromptSettled = true;
-        if (
-          !adopted
-          && this.activeTurns.get(params.sessionId) === activeTurn
-          && activeTurn.pendingSteerHandoff?.nextGeneration === nextGeneration
-        ) {
-          activeTurn.pendingSteerHandoff = undefined;
-          activeTurn.promptGeneration = nextGeneration;
-          adoptSteer();
-        }
-        return result;
       },
       (error) => {
         nextPromptSettled = true;
-        if (!adopted) {
-          if (
-            this.activeTurns.get(params.sessionId) === activeTurn
-            && activeTurn.pendingSteerHandoff?.nextGeneration === nextGeneration
-          ) {
-            activeTurn.pendingSteerHandoff = undefined;
-          }
+        if (activeTurn.pendingSteerHandoff?.nextGeneration === nextGeneration) {
+          activeTurn.pendingSteerHandoff = undefined;
           handoff.reject(error);
-          return undefined;
         }
-        throw error;
       },
     );
-    this.observeActiveTurnPrompt({
-      sessionId: params.sessionId,
-      activeTurn,
-      generation: nextGeneration,
-      promptPromise: observedNextPrompt,
-    });
+    // A successful overlapping request alone does not show that it took
+    // over this turn. Observe its lifecycle only after the displaced prompt
+    // confirms that the replacement owns the turn.
+    void handoff.promise.then(() => {
+      this.observeActiveTurnPrompt({
+        sessionId: params.sessionId,
+        activeTurn,
+        generation: nextGeneration,
+        promptPromise: nextPrompt,
+      });
+    }, () => undefined);
 
     await handoff.promise;
     return { delivery: "currentTurn" };
@@ -1288,16 +1284,29 @@ export class AcpAgentClient {
     if (this.supportsSessionLoad()) {
       const protocolSessionId = this.protocolSessionIdFor(metadata.sessionId);
       this.sessionLoadReplays.delete(protocolSessionId);
-      // Give session/load a clean normalizer only when the fallback already
-      // holds a complete transcript. An incomplete fallback still contributes
-      // timestamps that providers such as Kimi do not send, so it must merge
-      // with the incoming replay instead.
-      if (localHistory.isComplete) {
+      const replayPrompts = localHistory.antigravityReplayPrompts;
+      // Antigravity's prompt identities annotate a clean provider transcript.
+      // Other incomplete fallbacks provide timestamps that agents such as
+      // Kimi omit, so those fallbacks merge with the incoming replay.
+      if (localHistory.isComplete || replayPrompts) {
         this.normalizers.delete(metadata.sessionId);
       }
-      await this.ensureSession(hydratedMetadata, {
-        suppressTranscriptReplay: false,
-      });
+      const providerNormalizer = replayPrompts && this.normalizerFor(metadata.sessionId);
+      if (replayPrompts) providerNormalizer?.beginProviderPromptReplay(replayPrompts);
+      try {
+        await this.ensureSession(hydratedMetadata, {
+          suppressTranscriptReplay: false,
+        });
+      } catch (error) {
+        if (providerNormalizer && fallbackNormalizer) {
+          this.normalizers.set(metadata.sessionId, fallbackNormalizer);
+        }
+        throw error;
+      } finally {
+        providerNormalizer?.endProviderPromptReplay(
+          this.sessionLoadReplays.get(protocolSessionId)?.lastTimestampedTranscriptAt,
+        );
+      }
       const sessionLoadReplay = this.sessionLoadReplays.get(protocolSessionId);
       if (
         sessionLoadReplay?.lastTimestampedTranscriptAt !== undefined ||
@@ -1457,13 +1466,15 @@ export class AcpAgentClient {
         if (activeTurn.pendingSteerHandoff) {
           const handoff = activeTurn.pendingSteerHandoff;
           activeTurn.pendingSteerHandoff = undefined;
-          if (!cancelled) {
+          if (!activeTurn.terminalResponseGraceStarted && isAntigravityPromptDetach(result)) {
             activeTurn.promptGeneration = handoff.nextGeneration;
             handoff.accept();
             return;
           }
           handoff.reject(
-            new Error("The active Antigravity turn was cancelled before steering was accepted"),
+            new Error(cancelled
+              ? "The active Antigravity turn was cancelled before steering was accepted"
+              : "The active Antigravity turn finished before steering was accepted"),
           );
         }
         const responseError = this.missingPromptResponseError(sessionId, result);
@@ -2278,6 +2289,7 @@ export class AcpAgentClient {
       this.normalizerOptionsFor(metadata.cwd),
     );
     let hasTranscriptHistory = false;
+    const antigravityReplayPrompts: AcpReplayPromptIdentity[] = [];
     const records = this.options.rolloutStore.readUpdates({
       backendId: this.options.backendId,
       sessionId: metadata.sessionId,
@@ -2285,6 +2297,10 @@ export class AcpAgentClient {
     for (const record of records) {
       if (isPwrAgentSyntheticAcpUpdate(record.update)) {
         continue;
+      }
+      if (this.options.backendId === "acp:antigravity") {
+        const identity = readAntigravityReplayPromptIdentity(record);
+        if (identity) antigravityReplayPrompts.push(identity);
       }
       if (isTranscriptReplayUpdate(record.update)) {
         hasTranscriptHistory = true;
@@ -2300,6 +2316,8 @@ export class AcpAgentClient {
     const hasReplay = replay.messages.length > 0 || replay.entries.length > 0;
     return {
       isComplete: (hasTranscriptHistory || hasReplay) && replay.threadStatus === "idle",
+      antigravityReplayPrompts: antigravityReplayPrompts.some((prompt) => prompt.steerMessageId)
+        ? antigravityReplayPrompts : undefined,
     };
   }
 
@@ -2944,7 +2962,17 @@ export class AcpAgentClient {
     // cannot prove that session/load returned usable transcript history, and
     // providers such as Kimi still need the local timestamps they omit.
     if (verifiedReplay?.lastTimestampedTranscriptAt !== undefined) {
-      return;
+      if (this.options.backendId !== "acp:antigravity") return;
+      const identity = readAntigravityReplayPromptIdentity({ type: "update", receivedAt, update });
+      if (!identity) return;
+      // The provider owns the transcript. Keep only the metadata required
+      // to recognize local prompt boundaries on its next replay.
+      update = {
+        kind: "pwragent_antigravity_prompt_identity",
+        turnId: identity.turnId,
+        messageId: identity.steerMessageId,
+        textDigest: identity.textDigest,
+      };
     }
     this.options.rolloutStore?.appendUpdate({
       backendId: this.options.backendId,
@@ -3402,6 +3430,29 @@ function promptWasCancelled(result: unknown): boolean {
   const resultRecord = asRecord(result);
   return resultRecord?.stopReason === "cancelled"
     || resultRecord?.stop_reason === "cancelled";
+}
+
+function isAntigravityPromptDetach(result: unknown): boolean {
+  const record = asRecord(result);
+  // The captured handoff is end_turn with no usage. A naturally completed
+  // Antigravity prompt returns usage even when a second prompt is in flight.
+  return record?.stopReason === "end_turn" && !Object.hasOwn(record, "usage");
+}
+
+function readAntigravityReplayPromptIdentity(record: AcpRolloutRecord): AcpReplayPromptIdentity | undefined {
+  const { update, receivedAt } = record;
+  const turnId = typeof update.turnId === "string" ? update.turnId : undefined;
+  if (!turnId) return undefined;
+  const kind = readUpdateKind(update);
+  const steerMessageId = typeof update.messageId === "string" ? update.messageId : undefined;
+  if (kind === "pwragent_antigravity_prompt_identity" && typeof update.textDigest === "string") {
+    return { turnId, receivedAt, steerMessageId, textDigest: update.textDigest };
+  }
+  if ((kind === "pwragent_user_prompt" || kind === "pwragent_steered_user_prompt")
+    && typeof update.prompt === "string") {
+    return { turnId, receivedAt, steerMessageId, textDigest: acpReplayPromptTextDigest(update.prompt) };
+  }
+  return undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
