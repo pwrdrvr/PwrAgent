@@ -7342,15 +7342,12 @@ describe("SettingsScreen", () => {
   it("keeps a replacement Telegram pairing if the previous expiry callback already queued", async () => {
     const snapshot = createSnapshot();
     snapshot.messaging.telegram.enabled = { value: true, source: "config" };
-    const first = pairingFixture("first-code");
-    const replacement = pairingFixture("replacement-code", 120_000);
-    const nativeSetTimeout = globalThis.setTimeout;
-    let priorExpiry: (() => void) | undefined;
-    const timers = vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
-      if (delay !== undefined && delay > 30_000 && delay <= 60_000) priorExpiry = () => callback(...args);
-      return nativeSetTimeout(callback, delay, ...args);
-    });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 10, 23));
+    const timers = vi.spyOn(globalThis, "setTimeout");
     try {
+      const firstTtlMs = 61_234;
+      const first = pairingFixture("first-code", firstTtlMs);
+      const replacement = pairingFixture("replacement-code", 120_000);
       const desktopApi: DesktopApi = {
         generateMessagingPairingToken: vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(replacement),
         listMessagingPairingRequests: vi.fn(async () => ({ entries: [] })),
@@ -7358,16 +7355,19 @@ describe("SettingsScreen", () => {
       render(<SettingsScreen desktopApi={desktopApi} settings={createSettingsState(snapshot)}
         initialSection="messaging" initialSubsection="telegram" onClose={() => undefined} />);
       const generate = screen.getAllByRole("button", { name: "Generate" })[0]!;
-      fireEvent.click(generate);
-      expect(await screen.findByText(first.message)).toBeInTheDocument();
-      const expiry = priorExpiry;
+      await act(async () => { fireEvent.click(generate); });
+      expect(screen.getByText(first.message)).toBeInTheDocument();
+      const expiry = timers.mock.calls.findLast(([, delay]) => delay === firstTtlMs)?.[0];
       expect(expiry).toBeDefined();
-      fireEvent.click(generate);
-      expect(await screen.findByText(replacement.message)).toBeInTheDocument();
+      await act(async () => { fireEvent.click(generate); });
+      expect(screen.getByText(replacement.message)).toBeInTheDocument();
+      // Model the old timer already dequeued before React cancels it.
+      clock.mockReturnValue(first.expiresAt);
       act(() => expiry!());
       expect(screen.getByText(replacement.message)).toBeInTheDocument();
     } finally {
       timers.mockRestore();
+      clock.mockRestore();
     }
   });
 
