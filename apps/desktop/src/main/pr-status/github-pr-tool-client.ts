@@ -489,10 +489,12 @@ export class GithubPrToolClient {
         // never blocks a merge: GitHub itself refuses a direct merge past one.
         const readGate = async () => {
           providerRequests++;
-          return await this.mergeQueueGate(r, args.number!, ctx.signal).catch((error: unknown) => {
+          const gate = await this.mergeQueueGate(r, args.number!, ctx.signal).catch((error: unknown) => {
             if (ctx.signal?.aborted) throw error;
             return undefined;
           });
+          if (gate) assertStackMergeBaseUnchanged(checkedBase, gate.baseRef);
+          return gate;
         };
         const enqueue = async (gate: GithubMergeQueueGate) => {
           // Never a direct merge here, with or without bypass rights.
@@ -500,7 +502,6 @@ export class GithubPrToolClient {
           if (gate.headSha && args.expectedHeadSha && gate.headSha !== args.expectedHeadSha) {
             throw new ForgeReadError("head_changed", `The pull request's head is no longer ${args.expectedHeadSha}. Read it again before merging.`);
           }
-          assertStackMergeBaseUnchanged(checkedBase, gate.baseRef);
           const url = `${repositoryUrl(r)}/pull/${args.number}`;
           const queued = (status: PrMergeQueueStatus | undefined, extra: Record<string, unknown>) => writeResult({
             merged: false, queued: true, number: args.number,

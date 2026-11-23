@@ -341,8 +341,8 @@ export class GithubPrFetcher {
       });
       return undefined;
     }
-    if (!gate.required) return undefined;
     if (checkedBase !== undefined) assertStackMergeBaseUnchanged(checkedBase, gate.baseRef);
+    if (!gate.required) return undefined;
     const result = await runGithubQueueMerge(gate, async (query, variables) => await graphql(query, [
       "-f", `id=${variables.id}`, ...(variables.head ? ["-f", `head=${variables.head}`] : []),
     ]));

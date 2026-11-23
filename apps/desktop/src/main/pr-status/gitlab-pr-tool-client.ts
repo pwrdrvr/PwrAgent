@@ -450,9 +450,11 @@ export class GitlabPrToolClient {
           candidate: { number: args.number!, base },
           readMerged: async () => false,
           findParent: async (branch) => {
-            const params = new URLSearchParams({ source_branch: branch, state: "opened", per_page: "100" });
+            const params = new URLSearchParams({ source_branch: branch, state: "all", order_by: "updated_at", sort: "desc", per_page: "100" });
             const rows = items(await get(`/merge_requests?${params}`));
-            return num(rows.find((row) => row.state === "opened" && row.source_branch === branch
+            const childCreated = Date.parse(str(mr.created_at, 64) ?? "");
+            return num(rows.find((row) => (row.state === "opened" || (row.state === "merged"
+              && Date.parse(str(row.merged_at, 64) ?? "") >= childCreated)) && row.source_branch === branch
               && row.source_project_id !== undefined && row.source_project_id === mr.target_project_id)?.iid);
           },
         });

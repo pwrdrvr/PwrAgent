@@ -100,6 +100,22 @@ describe("GitLab merge request tools", () => {
     expect(writeCalls).toEqual([]);
   });
 
+  it.each(["opened", "merged"])("blocks a child still targeting a %s same-project parent", async (state) => {
+    const { client, writeCalls } = harness((endpoint) => {
+      if (endpoint.includes("/merge_requests?")) {
+        const filter = new URLSearchParams(endpoint.split("?")[1]).get("state");
+        return filter === "all" || filter === state ? [mr(8, {
+          state, source_branch: "parent", source_project_id: 7, target_project_id: 7,
+          merged_at: state === "merged" ? "2026-11-22T12:00:00Z" : null,
+        })] : [];
+      }
+      return mr(9, { target_branch: "parent", target_project_id: 7, created_at: "2026-11-22T10:00:00Z" });
+    });
+    await expect(client.execute("merge_pull_request", { number: 9, expectedHeadSha: "a".repeat(40) }, ctx()))
+      .rejects.toMatchObject({ code: "stack_parent_open" });
+    expect(writeCalls).toEqual([]);
+  });
+
   it("finds the thread's merge request by source branch and reads it back", async () => {
     const { client, readCalls } = harness((endpoint) => endpoint.includes("/merge_requests?") ? [mr(7)] : mr(7));
     const result = await client.execute("get_pull_request", {}, ctx()) as { pullRequest: Record<string, unknown> };

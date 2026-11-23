@@ -125,16 +125,22 @@ async function projectCatalogLayers(input: {
     const parent = stack.branches[index - 1] ?? stack.trunk;
     const pr = pullRequest(branch);
     const parentPr = pullRequest(parent);
+    const retargeted = index > 0 && pr?.baseRefName === stack.trunk.branch
+      && stack.branches.slice(0, index).every((lower) => {
+        const observed = pullRequest(lower)?.lifecycleState;
+        return observed ? observed === "merged" : lower.pullRequest?.merged === true;
+      });
     const number = branch.pullRequest?.number ?? pr?.number;
     const binding = stackLayerBinding({ branch: branch.branch, pullRequest: number, worktrees, threads });
     const current = local(branch);
     const localHead = current?.head;
-    const parentTip = local(parent)?.head;
+    const activeParent = retargeted ? stack.trunk : parent;
+    const parentTip = local(activeParent)?.head;
     const remoteHead = current?.upstream ? refs.get(current.upstream)?.head : undefined;
-    const compareBase = branch.base === parentTip ? branch.base : undefined;
+    const compareBase = retargeted || branch.base === parentTip ? parentTip : undefined;
     const compareRemote = remoteHead !== branch.head && remoteHead !== pr?.headSha ? remoteHead : undefined;
     const trunkTip = local(stack.trunk)?.head;
-    const parentIntegrated = !parentPr && !parent.pullRequest && index > 0
+    const parentIntegrated = !retargeted && !parentPr && !parent.pullRequest && index > 0
       && trunkTip && parentTip && SHA.test(trunkTip) && SHA.test(parentTip)
       ? await git(clone.cwd, ["cherry", trunkTip, parentTip]).then((output) => !output.trim(), () => undefined)
       : undefined;
@@ -144,7 +150,12 @@ async function projectCatalogLayers(input: {
     ]);
     return {
       branch: branch.branch, parent: parent.branch, role: binding.role,
-      health: stackLayerHealth({ branch, parent, pr, parentPr, localHead, parentTip, remoteHead, baseIsAncestor, remoteIsAncestor, parentIntegrated, ambiguous: binding.role === "ambiguous" }),
+      ...(retargeted ? { activeBase: activeParent.branch } : {}),
+      health: stackLayerHealth({
+        branch: retargeted && parentTip ? { ...branch, base: parentTip } : branch,
+        parent: activeParent, pr, parentPr: retargeted ? undefined : parentPr, localHead, parentTip, remoteHead,
+        baseIsAncestor, remoteIsAncestor, parentIntegrated, ambiguous: binding.role === "ambiguous",
+      }),
       ...(number !== undefined ? { pullRequest: {
         number, lifecycleState: pr?.lifecycleState ?? (branch.pullRequest?.merged ? "merged" : undefined),
       } } : {}),
@@ -161,7 +172,7 @@ function clonePrs(threads: readonly CloneThread[], knownPrs: readonly PrSummary[
 async function projectClone(clone: Clone, threads: readonly CloneThread[], knownPrs: readonly PrSummary[]) {
   const catalog = clone.catalog.status === "ok" ? clone.catalog.catalog : undefined;
   const repositories = new Set(threads.flatMap(({ row }) => (row.prs ?? []).map(prRepository)));
-  if (catalog?.repository) repositories.add(catalog.repository.toLowerCase());
+  if (catalog?.stacks.length) repositories.add(catalog.repository.toLowerCase());
   const stacks: StackSummary[] = [];
   if (!repositories.size) return stacks;
   const plans = [...repositories].sort().flatMap((repository) => {

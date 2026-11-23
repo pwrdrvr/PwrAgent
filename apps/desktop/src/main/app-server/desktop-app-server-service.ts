@@ -37,7 +37,7 @@ import type { ForgePrToolArgs, ForgePrToolOperation } from "../pr-status/forge-p
 import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation } from "../pr-status/forge-tool-contract";
 import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
 import { StackReader, stackMemberships } from "../stacks/stack-reader";
-import { githubStackRepository } from "../stacks/stack-merge-guard";
+import { githubStackRepository, isObservedStackParent } from "../stacks/stack-merge-guard";
 import { catalogMergeBlock, type StackSummary } from "@pwragent/shared/stacks/stack-status";
 import { readLocalHeadPastPrHead } from "../pr-status/local-pr-head";
 import { PrChangeIdentityReader } from "../pr-status/pr-change-identity";
@@ -435,7 +435,7 @@ import {
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import { searchNavigationOwners } from "../app-server/navigation-jump-search";
 import { appendViewerNavigationPins, archivedRemoteThreadPinMounts, attachRemoteThreadsToLocalDirectories, loadViewerNavigationPins, loadViewerWatchedNavigationRows } from "../app-server/navigation-viewer-pins";
-import { awaitStartupProviderCoverage, loadLocalNavigationQueryIndex, navigationPullRequestProjection } from "../app-server/navigation-query-source";
+import { awaitStartupProviderCoverage, loadLocalNavigationQueryIndex, navigationPullRequestProjection, navigationQueryShowsStacks } from "../app-server/navigation-query-source";
 import { reconcileWindowsDirectoryAliases } from "../app-server/navigation-windows-directory-aliases";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
@@ -2067,6 +2067,7 @@ class DesktopAppServerService {
         const index = await loadLocalNavigationQueryIndex({
           backend: request.backend,
           callerReason: "renderer-navigation-query",
+          includeStacks: navigationQueryShowsStacks(request.query),
           signal: rpcOptions?.signal,
           ...(summaries ? { viewer: { source: summaries, project: async (local: NavigationQueryIndex) => {
             const pins = await loadViewerNavigationPins(getDesktopOverlayStore(), summaries);
@@ -3789,12 +3790,14 @@ class DesktopAppServerService {
   private async stackMergeBlocked(thread: PrReviewOfferThread, pr: PrSummary): Promise<boolean> {
     if (pr.lifecycleState === "closed" || pr.lifecycleState === "merged") return false;
     const repository = `${pr.provider}:${pr.org}/${pr.repo}`.toLowerCase();
+    let matched = false;
     for (const catalog of await this.stackReader.readCatalogs(this.prReviewOfferDirectories(thread, pr))) {
       if (catalog.status !== "ok" || catalog.catalog.repository.toLowerCase() !== repository) continue;
       for (const stack of catalog.catalog.stacks) {
         const index = stack.branches.findIndex((branch) => branch.pullRequest?.number === pr.number
           || (!branch.pullRequest && !pr.sourceRepository && branch.branch === pr.headRefName));
         if (index < 0) continue;
+        matched = true;
         const merged = new Set(stack.branches.slice(0, index).flatMap(({ pullRequest }) => {
           if (!pullRequest) return [];
           const saved = this.prStatusRegistry.get(getPrStatusKey({ provider: pr.provider, org: pr.org, repo: pr.repo, number: pullRequest.number }))?.pr.lifecycleState;
@@ -3803,11 +3806,7 @@ class DesktopAppServerService {
         if (catalogMergeBlock(stack, index, pr.baseRefName, merged)) return true;
       }
     }
-    return this.knownStackPullRequests().some((parent) =>
-      parent.number !== pr.number && parent.lifecycleState === "open"
-      && parent.headRefName !== undefined && parent.headRefName === pr.baseRefName
-      && `${parent.provider}:${parent.org}/${parent.repo}`.toLowerCase() === repository
-      && (!parent.sourceRepository || `${parent.sourceRepository.provider}:${parent.sourceRepository.org}/${parent.sourceRepository.repo}`.toLowerCase() === repository));
+    return !matched && this.knownStackPullRequests().some((parent) => isObservedStackParent(parent, pr));
   }
 
   private async readScopedStacks(directories: readonly string[], scope: { backend: string; threadId: string; prs: PrSummary[] }) {
@@ -4932,8 +4931,8 @@ class DesktopAppServerService {
       if (!stack) return [];
       const index = stack.layers.findIndex((layer) => layer.pullRequest?.number === pr.number);
       const layer = stack.layers[index]!;
-      const parent = stack.layers[index - 1]?.pullRequest?.number;
-      return [`#${pr.number} is layer ${index + 1} of ${stack.layers.length} in ${stack.inferred ? "inferred " : ""}stack ${stack.name}, with expected base ${layer.parent}${parent === undefined ? "" : ` (#${parent})`} and health ${layer.health.replaceAll("_", " ")}. Merge or enable auto-merge only after all lower layers have merged and the PR targets ${stack.trunk}.`];
+      const parent = layer.activeBase ? undefined : stack.layers[index - 1]?.pullRequest?.number;
+      return [`#${pr.number} is layer ${index + 1} of ${stack.layers.length} in ${stack.inferred ? "inferred " : ""}stack ${stack.name}, with expected base ${layer.activeBase ?? layer.parent}${parent === undefined ? "" : ` (#${parent})`} and health ${layer.health.replaceAll("_", " ")}. Merge or enable auto-merge only after all lower layers have merged and the PR targets ${stack.trunk}.`];
     });
   }
 

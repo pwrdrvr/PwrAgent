@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { StackReader, readStackClones } from "../stacks/stack-reader";
 
 describe("stack catalog reads", () => {
-  it("resolves linked worktrees through Git and derives drift without changing refs or the catalog", async () => {
+  it.each(["github.com:fixture/project", ""])("reads linked worktrees and derives health for repository %j", async (repository) => {
     const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stacks-"));
     const root = path.join(sandbox, "catalog-clone");
     const worktree = path.join(sandbox, "linked checkout");
@@ -25,7 +25,7 @@ describe("stack catalog reads", () => {
       const head = git(worktree, "rev-parse", "HEAD");
       const catalogPath = path.join(root, ".git", "gh-stack");
       const bytes = JSON.stringify({
-        schemaVersion: 1, repository: "github.com:fixture/project",
+        schemaVersion: 1, repository,
         stacks: [{ trunk: { branch: "main", head: base }, branches: [{ branch: "feature/model", head, base }] }],
       });
       await writeFile(catalogPath, bytes);
@@ -40,10 +40,28 @@ describe("stack catalog reads", () => {
       expect((await reader.read(threads, [])).stacks[0]?.layers[0]).toMatchObject({ health: "in_sync", role: "layer", thread: { key: "codex:model" } });
 
       git(root, "commit", "--allow-empty", "-m", "advance trunk");
+      const nextTrunk = git(root, "rev-parse", "HEAD");
       const refs = git(root, "show-ref");
       expect((await reader.read(threads, [])).stacks[0]?.layers[0]).toMatchObject({ health: "needs_restack" });
       expect(git(root, "show-ref")).toBe(refs);
       expect(await readFile(catalogPath, "utf8")).toBe(bytes);
+      if (repository) {
+        git(root, "branch", "feature/upper", nextTrunk);
+        await writeFile(catalogPath, JSON.stringify({
+          schemaVersion: 1, repository, stacks: [{
+            trunk: { branch: "main", head: base },
+            branches: [
+              { branch: "feature/model", head, base, pullRequest: { number: 1, merged: true } },
+              { branch: "feature/upper", head: nextTrunk, base: head, pullRequest: { number: 2 } },
+            ],
+          }],
+        }));
+        const retargeted = await reader.read(threads, [{
+          number: 2, provider: "github.com", org: "fixture", repo: "project", state: "passing", lifecycleState: "open",
+          headRefName: "feature/upper", headSha: nextTrunk, baseRefName: "main", url: "https://github.com/fixture/project/pull/2",
+        }]);
+        expect(retargeted.stacks[0]?.layers[1]).toMatchObject({ parent: "feature/model", activeBase: "main", health: "in_sync" });
+      }
     } finally {
       await rm(sandbox, { recursive: true, force: true });
     }

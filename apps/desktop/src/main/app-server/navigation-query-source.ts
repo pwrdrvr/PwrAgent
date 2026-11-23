@@ -53,6 +53,11 @@ export function navigationPullRequestProjection(options: {
     },
   };
 }
+export function navigationQueryShowsStacks(query: NavigationQueryRequest["query"]): boolean {
+  return query.kind === "lens" || query.kind === "directory" || query.kind === "children"
+    || query.kind === "exact" || query.kind === "search" || query.kind === "star-map";
+}
+
 const latestVisibilityScanByRegistry = new WeakMap<DesktopBackendRegistry, number>();
 const sourceIds = new WeakMap<object, number>();
 let nextSourceId = 0;
@@ -118,6 +123,8 @@ export async function loadLocalNavigationQueryIndex(params: {
   refreshProviders?: boolean;
   /** Actions that use checkout membership as authority need live Git verification. */
   requireVerifiedDirectories?: boolean;
+  /** This caller renders thread stack membership. */
+  includeStacks?: boolean;
   registry?: DesktopBackendRegistry;
   signal?: AbortSignal;
   /** Viewer projection shares this pass's fences, lifetime and byte budget.
@@ -136,6 +143,7 @@ export async function loadLocalNavigationQueryIndex(params: {
   // in-flight index that predates it, nor overtake other readers' scans.
   const key = JSON.stringify([sourceId(registry), sourceId(overlayStore), backend,
     ...(params.viewer ? ["viewer", sourceId(params.viewer.source)] : []),
+    ...(params.includeStacks ? ["stacks"] : []),
     ...(params.refreshProviders ? ["refresh-providers"] : [])]);
   // An index's coverage reads the startup refresh state, so an index built
   // while startup was checking must not serve a reader after it finishes.
@@ -153,7 +161,8 @@ export async function loadLocalNavigationQueryIndex(params: {
       // changing SQLite membership or the local provider inventory.
       // A PR status observation changes page chips, not the compact index's
       // attachments. The page reads those statuses from the live registry.
-      if ((event.notification.method !== "pullRequest/status/updated"
+      if ((params.includeStacks && event.notification.method === "pullRequest/status/updated")
+        || (event.notification.method !== "pullRequest/status/updated"
         && navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params))
         || (params.viewer && event.notification.method === "federation/peerStatus/changed")) {
         navigationChanged = true;
@@ -163,10 +172,13 @@ export async function loadLocalNavigationQueryIndex(params: {
     // The pool owns this listener through its bounded completed reuse window.
     // Eviction/expiry/cancellation aborts the lifetime and releases it.
     signal.addEventListener("abort", () => unsubscribe?.(), { once: true });
+    if (params.includeStacks) {
+      // Share the same membership and viewer projection with stack-free queries.
+      const local = await loadLocalNavigationQueryIndex({ ...params, includeStacks: false, signal });
+      const threads = await projectNavigationStacks(local.threads, registry, signal);
+      return threads === local.threads ? local : createNavigationQuerySnapshot({ ...local, threads }, undefined, local);
+    }
     if (params.viewer) {
-      // Owner consumers and viewers still share the physical local scan.
-      // The derived inventory uses this same pool's byte/admission budget;
-      // it adds no unbounded or separately timed snapshot cache.
       const local = await loadLocalNavigationQueryIndex({ ...params, viewer: undefined, signal });
       checkpoint();
       const projected = await params.viewer.project(local);
@@ -199,7 +211,7 @@ export async function loadLocalNavigationQueryIndex(params: {
       getNavigationDirectorySetAnnouncer().observe(index.directories);
     }
     return createNavigationQuerySnapshot(index);
-  }, params.signal, version, params.viewer ? "projection" : "source");
+  }, params.signal, version, params.viewer || params.includeStacks ? "projection" : "source");
 }
 
 async function projectNavigationCheckoutDirectories(
@@ -326,6 +338,33 @@ export function getNavigationDirectorySetAnnouncer(): NavigationDirectorySetAnno
   return directorySetAnnouncer;
 }
 
+async function projectNavigationStacks(
+  threads: NavigationQueryIndex["threads"],
+  registry: DesktopBackendRegistry,
+  signal: AbortSignal,
+): Promise<NavigationQueryIndex["threads"]> {
+  const candidates = threads.filter((thread) => !thread.federation && (thread.linkedDirectories?.some((directory) =>
+    directory.gitBranch || directory.worktreePath || directory.repositoryKey)
+    || ((thread.observedGitBranch || thread.gitBranch) && thread.linkedDirectories?.length)));
+  if (!candidates.length) return threads;
+  const attachments = getDesktopOverlayStore().readNavigationPullRequests(
+    candidates.map((thread) => ({ backend: thread.source, threadId: thread.id })),
+  );
+  const demand = { signal, priority: () => PR_METADATA_PRIORITY.background };
+  const rows = await Promise.all(candidates.map(async (thread, index) => ({
+    ...thread,
+    prs: attachments[index]?.length ? await registry.canonicalizeNavigationPullRequests(attachments[index]!, demand) : [],
+  })));
+  signal.throwIfAborted();
+  const { stacks } = await stackReader.read(rows, []);
+  signal.throwIfAborted();
+  const memberships = stackMemberships(stacks);
+  return memberships.size ? threads.map((thread) => {
+    const stacks = memberships.get(buildThreadIdentityKey(thread.source, thread.id));
+    return stacks ? { ...thread, stacks } : thread;
+  }) : threads;
+}
+
 async function buildLocalNavigationQueryIndex(params: {
   backend?: AppServerBackendScope;
   callerReason: string;
@@ -378,23 +417,6 @@ async function buildLocalNavigationQueryIndex(params: {
     probeMissing: false,
   });
   params.signal?.throwIfAborted();
-  const stackCandidates = threads.filter((thread) => thread.linkedDirectories?.some((directory) =>
-    directory.gitBranch || directory.worktreePath || directory.repositoryKey)
-    || ((thread.observedGitBranch || thread.gitBranch) && thread.linkedDirectories?.length));
-  const attachments = stackCandidates.length ? overlayStore.readNavigationPullRequests(
-    stackCandidates.map((thread) => ({ backend: thread.source, threadId: thread.id })),
-  ) : [];
-  const observedPrs = attachments.flat();
-  const canonical = observedPrs.length
-    ? await registry.canonicalizeNavigationPullRequests(observedPrs, { signal: params.signal, priority: () => PR_METADATA_PRIORITY.background })
-    : [];
-  const { stacks } = await stackReader.read(stackCandidates.map((thread, i) => ({ ...thread, prs: attachments[i] })), canonical);
-  params.signal?.throwIfAborted();
-  const memberships = stackMemberships(stacks);
-  const withStacks = memberships.size ? threads.map((thread) => {
-    const stacks = memberships.get(buildThreadIdentityKey(thread.source, thread.id));
-    return stacks ? { ...thread, stacks } : thread;
-  }) : threads;
   const directoryStatusCache = await overlayStore.readDirectoryGitStatusCache();
   params.signal?.throwIfAborted();
   const withGitStatus: NavigationDirectorySummary[] = index.directories.map(
@@ -417,7 +439,7 @@ async function buildLocalNavigationQueryIndex(params: {
       : registry.isIncompleteThreadList?.(listedThreads)
         ? { state: "degraded", failedProviders: 1 }
         : { state: "complete" };
-  return { ...projects, threads: registry.withNavigationSubAgentActivity(withStacks), inputRequestThreadKeys: registry.getNavigationInputRequestThreadKeys(),
+  return { ...projects, threads: registry.withNavigationSubAgentActivity(threads), inputRequestThreadKeys: registry.getNavigationInputRequestThreadKeys(),
     coverage,
   };
 }

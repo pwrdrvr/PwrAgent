@@ -30,6 +30,8 @@ export type StackLayerBinding =
 export type StackLayer = {
   branch: string;
   parent: string;
+  /** When a merged historical parent has been replaced by the stack trunk. */
+  activeBase?: string;
   health: StackLayerHealth;
   pullRequest?: { number: number; lifecycleState?: StackPullRequest["lifecycleState"] };
   thread?: Pick<StackThread, "key" | "title">;

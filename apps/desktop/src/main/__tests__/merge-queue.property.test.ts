@@ -350,6 +350,45 @@ describe("merge_pull_request and merge queues", () => {
     ));
   });
 
+  it("refuses an observed retarget before either merge path", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), async (required) => {
+      seenRepository(true);
+      const writes: string[] = [];
+      const fetcher = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+        if (init?.method === "GET") return json({ state: "open", base: { ref: "main", repo: { default_branch: "main" } } });
+        const query = init?.body ? JSON.parse(String(init.body)).query : undefined;
+        if (query?.includes("isMergeQueueEnabled")) {
+          const data = gateData({ required, entry: null, checks: "SUCCESS", lastRemoved: false });
+          return json({ data: { repository: { pullRequest: { ...data.repository.pullRequest, baseRefName: "parent" } } } });
+        }
+        writes.push(init?.method ?? "");
+        return json({ merged: true });
+      }) as unknown as typeof fetch;
+      const client = new GithubPrToolClient({ ci: new ForgeCiClient({
+        fetch: fetcher, githubToken: async () => "fixture-token", gitlab: { readApi: vi.fn() }, enabled: () => true, takeToken: () => true,
+      }) });
+      await expect(client.execute("merge_pull_request", { number: 7, expectedHeadSha: head }, ctx()))
+        .rejects.toMatchObject({ code: "stack_parent_open" });
+      const gh = new GithubPrFetcher({
+        graphqlClient: { fetchPullRequests: vi.fn(), fetchPullRequestsForBranches: vi.fn() },
+        discoverGhCommands: async () => ({ selectedCommand: "/fixture/gh" }) as never,
+        runGhCommand: async (_command, args) => {
+          if (args[0] === "api" && args[1] === "graphql") {
+            const data = gateData({ required, entry: null, checks: "SUCCESS", lastRemoved: false });
+            data.repository.pullRequest.baseRefName = "parent";
+            return { stdout: JSON.stringify({ data }) };
+          }
+          if (args[0] === "api") return { stdout: JSON.stringify(trunkTarget) };
+          writes.push(args.join(" "));
+          return { stdout: "" };
+        },
+      });
+      await expect(gh.mergePullRequest({ pullRequest: "https://github.com/fixture/project/pull/7", method: "squash", checkStackOrder: true }))
+        .rejects.toMatchObject({ code: "stack_parent_open" });
+      expect(writes).toEqual([]);
+    }), { examples: [[false], [true]] });
+  });
+
   it("never merges past a queue, and asks nothing more of a repository never seen with one", async () => {
     await fc.assert(fc.asyncProperty(gateArb, fc.boolean(), async (gate, seen) => {
       seenRepository(seen);
