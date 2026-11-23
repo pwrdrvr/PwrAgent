@@ -38907,6 +38907,12 @@ div.composer-error-row__toggle {
   border: 1px solid var(--border-subtle);
 }
 
+.skill-chip[data-skill-hidden] {
+  border-style: dashed;
+  color: var(--text-secondary);
+  text-decoration: line-through;
+}
+
 .skill-chip--transcript {
   cursor: pointer;
   -webkit-user-select: none;
@@ -50074,6 +50080,59 @@ button.composer__subthread-source-parent:hover {
   margin: 6px 4px;
   color: var(--text-secondary);
   font-size: 12px;
+}
+
+.composer__autocomplete-option--hidden {
+  cursor: default;
+}
+
+.skill-profile-editor {
+  padding: 12px;
+}
+
+.skill-profile-editor__catalog {
+  max-height: 280px;
+  overflow: auto;
+}
+
+.skill-profile-editor__group,
+.skill-profile-editor__footer,
+.skill-profile-editor__skill {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-block: 4px;
+}
+
+.skill-profile-editor__skill input {
+  appearance: none;
+  display: inline-grid;
+  place-items: center;
+  inline-size: 14px;
+  block-size: 14px;
+  margin: 0;
+  border: 1px solid var(--text-muted);
+  border-radius: 3px;
+  background: var(--bg-input);
+}
+
+.skill-profile-editor__skill input:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.skill-profile-editor__skill input:checked::after {
+  content: "";
+  inline-size: 4px;
+  block-size: 7px;
+  border: solid var(--button-text);
+  border-width: 0 2px 2px 0;
+  transform: translateY(-1px) rotate(45deg);
+}
+
+.skill-profile-editor__skill:has(input:checked) .skill-profile-editor__name {
+  text-decoration: line-through;
 }
 
 .composer__skill-picker-options,

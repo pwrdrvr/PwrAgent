@@ -1886,6 +1886,7 @@ export class ThreadDirectoryService {
       reasoningEffort: launchpad.reasoningEffort,
       serviceTier: launchpad.serviceTier,
       fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
+      codexSkillProfileId: launchpad.backend === "codex" ? launchpad.codexSkillProfileId ?? undefined : undefined,
       mcpConnectionIds: launchpad.mcpConnectionIds,
       // Same Codex-only guard as `fastMode` above: switching a draft's
       // provider leaves the stale isolation flag behind, and the ACP path
@@ -1957,10 +1958,12 @@ export class ThreadDirectoryService {
         worktreePath: workspace.cwd,
       });
     }
+    const skillProfileFailure = startThreadResponse.codexSkillProfilePersistenceFailure;
     const materializedThread = {
       backend: startThreadResponse.backend,
       threadId: startThreadResponse.threadId,
       executionMode: startThreadResponse.executionMode,
+      codexSkillProfile: startThreadResponse.codexSkillProfile,
       ...(startThreadResponse.pinnedRank
         ? { pinnedRank: startThreadResponse.pinnedRank }
         : {}),
@@ -1970,7 +1973,8 @@ export class ThreadDirectoryService {
       ...(linkedDirectories?.[0] ? { linkedDirectory: linkedDirectories[0] } : {}),
       workMode: workspace.workMode,
       codexEnvironmentRuntime,
-      codexEnvironmentStartupFailure,
+      codexEnvironmentStartupFailure: skillProfileFailure ? undefined : codexEnvironmentStartupFailure,
+      ...(skillProfileFailure ? { codexSkillProfilePersistenceFailure: skillProfileFailure } : {}),
     } satisfies MaterializedDirectoryLaunchpadThread;
     const pendingLaunch: PendingEnvironmentLaunch = {
       backend: startThreadResponse.backend,
@@ -1984,7 +1988,9 @@ export class ThreadDirectoryService {
       backend: startThreadResponse.backend,
       threadId: startThreadResponse.threadId,
     };
-    if (codexEnvironmentStartupFailure) {
+    if (skillProfileFailure) {
+      continuation.turnStartFailure = { ...skillProfileFailure, phase: request.reviewTarget ? "review" : "turn" };
+    } else if (codexEnvironmentStartupFailure) {
       const retainedInput = await ownThreadInputAttachments(
         request.input ?? (launchpad.prompt.trim() ? [{ type: "text", text: launchpad.prompt }] : []),
         pendingLaunch,
@@ -1994,7 +2000,7 @@ export class ThreadDirectoryService {
     }
     const origin = await options?.onThreadMaterialized?.(materializedThread);
     operation?.commit();
-    if (!codexEnvironmentStartupFailure) {
+    if (!skillProfileFailure && !codexEnvironmentStartupFailure) {
       continuation = await this.startMaterializedLaunchpadRequest(
         origin ? { ...pendingLaunch, messageOrigin: origin } : pendingLaunch,
       );

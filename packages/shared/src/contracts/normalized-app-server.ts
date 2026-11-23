@@ -1,3 +1,4 @@
+import type { CodexSkillProfile } from "./codex-skill-profiles";
 import type { SubAgentLens } from "../subagent-kind";
 import type { ProjectForgeAutomation } from "../project-forge-automation";
 import type { ToolAccountingTotals } from "../thread-tool-display";
@@ -2114,6 +2115,8 @@ export type AppServerListSkillsRequest = {
 export type AppServerListSkillsResponse = {
   backend: AppServerBackendKind;
   fetchedAt: number;
+  /** Owner-local profiles. Older Federation peers omit this field. */
+  codexSkillProfiles?: CodexSkillProfile[];
   /**
    * This machine's PwrAgent bundled skill root, as configured and with
    * symlinks resolved, for `classifySkillOrigin`. Set only on a local
@@ -2124,6 +2127,7 @@ export type AppServerListSkillsResponse = {
   data: Array<{
     commands?: AppServerAvailableCommandSummary[];
     cwd?: string;
+    errors?: string[];
     skills: AppServerSkillSummary[];
   }>;
 };

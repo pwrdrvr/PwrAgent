@@ -7950,6 +7950,9 @@ function localBackendOperations(): FederationBackendOperations {
         backend,
         fetchedAt: Date.now(),
         data: response.data,
+        ...(backend === "codex"
+          ? { codexSkillProfiles: getDesktopSettingsService().readModelsConfig().codex?.skillProfiles ?? [] }
+          : {}),
       };
     },
     async listBackends(request = {}) {

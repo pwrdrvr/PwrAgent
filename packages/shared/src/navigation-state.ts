@@ -330,6 +330,7 @@ export function materializeNavigationThreads(params: {
       serviceTier: overlay?.serviceTier ?? thread.serviceTier,
       fastMode: overlay?.fastMode ?? thread.fastMode,
       tokenMiserEnabled: overlay?.tokenMiserEnabled,
+      codexSkillProfile: overlay?.codexSkillProfile,
       monitorJobSuggestionsEnabled: overlay?.monitorJobSuggestionsEnabled,
       jobMonitorCreationEnabled: overlay?.jobMonitorCreationEnabled,
       prAutoDispatchEnabled: overlay?.prAutoDispatchEnabled ?? false,

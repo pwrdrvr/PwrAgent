@@ -1,6 +1,38 @@
 import { describe, expect, it } from "vitest";
-import { desktopSettingsPatchToEdits } from "../settings/desktop-config";
-import { parseTomlTables } from "../settings/toml-editor";
+import { desktopSettingsPatchToEdits, parseDesktopSettingsToml } from "../settings/desktop-config";
+import { applyTomlEdits, parseTomlTables } from "../settings/toml-editor";
+
+describe("Codex skill profile settings", () => {
+  const file = "/fixture/config.toml";
+  const initial = '[models.codex]\nconfig_overrides = ["skills.include_instructions=true"]\n';
+
+  it("round trips profiles and deletion while preserving the operator's launch flags", () => {
+    const patch = { models: { codex: { skillProfiles: [
+      { id: "p1", name: "  Reviews  ", hiddenSkills: ["scaffold", "scaffold", "preview"] },
+      { id: "p2", name: "Planning", hiddenSkills: [] },
+    ] } } };
+    const edit = (source: string, input: typeof patch) =>
+      applyTomlEdits(source, desktopSettingsPatchToEdits(input, parseTomlTables(source, file)));
+    const saved = edit(initial, patch);
+    expect(parseDesktopSettingsToml(saved, file).models?.codex).toMatchObject({
+      configOverrides: ["skills.include_instructions=true"],
+      skillProfiles: [
+        { id: "p1", name: "Reviews", hiddenSkills: ["scaffold", "preview"] },
+        { id: "p2", name: "Planning", hiddenSkills: [] },
+      ],
+    });
+    const deleted = edit(saved, { models: { codex: { skillProfiles: [] } } });
+    expect(parseDesktopSettingsToml(deleted, file).models?.codex?.skillProfiles).toBeUndefined();
+    expect(deleted).toContain('config_overrides = ["skills.include_instructions=true"]');
+  });
+
+  it("rejects profile names that differ only in capitalization or whitespace", () => {
+    expect(() => desktopSettingsPatchToEdits({ models: { codex: { skillProfiles: [
+      { id: "p1", name: "Reviews", hiddenSkills: [] },
+      { id: "p2", name: " reviews ", hiddenSkills: [] },
+    ] } } })).toThrow("already exists");
+  });
+});
 
 describe("desktopSettingsPatchToEdits — general", () => {
   it("writes developer mode", () => {

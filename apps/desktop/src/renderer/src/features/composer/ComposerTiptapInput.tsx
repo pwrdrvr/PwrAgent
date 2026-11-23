@@ -31,7 +31,7 @@ import {
   parseBacktickFenceLine,
   repairNestedLanguageFences,
 } from "../../lib/markdown-fences";
-import { buildSkillTooltip, findSkillTrigger } from "../../lib/skill-mentions";
+import { buildSkillTooltip, findSkillTrigger, skillLabelMatcher } from "../../lib/skill-mentions";
 import {
   buildDirectoryReferenceTooltip,
   buildFileReferenceTooltip,
@@ -108,6 +108,7 @@ type ComposerTiptapInputProps = {
     index: number;
   };
   skillTokens: ComposerSkillToken[];
+  hiddenSkillNames?: readonly string[];
   value: string;
 };
 
@@ -187,6 +188,7 @@ const SkillMention = Mention.extend({
         parseHTML: (element) =>
           element.hasAttribute("data-skill-origin-shown") ? true : null,
       },
+      hiddenByProfile: { default: null },
       // Pull-request chips only. The dot color is a fact about the PR, and
       // Tiptap's DOM specs cannot mount `PrChip` to look it up, so the
       // `pr-chip--*` modifiers `resolvePrChipPresentation` produced when the
@@ -362,6 +364,7 @@ const SkillMention = Mention.extend({
         "data-id": String(node.attrs.id ?? ""),
         "data-label": skill.name,
         "data-skill-name": skill.name,
+        ...(node.attrs.hiddenByProfile ? { "data-skill-hidden": "" } : {}),
         ...(skill.path ? { "data-skill-path": skill.path } : {}),
         ...(skill.description
           ? { "data-skill-description": skill.description }
@@ -482,6 +485,27 @@ export function buildCommandChipDecorations(
       } : {}),
     }),
   ]);
+}
+
+function addHiddenSkillDecorations(
+  doc: ProseMirrorNode,
+  decorations: DecorationSet,
+  names: readonly string[] | undefined,
+): DecorationSet {
+  if (!names?.length) return decorations;
+  const matcher = skillLabelMatcher(names);
+  const hidden: Decoration[] = [];
+  doc.descendants((node, position) => {
+    if (!node.isText || !node.text) return;
+    for (const match of node.text.matchAll(matcher)) {
+      const from = match.index + match[1]!.length;
+      hidden.push(Decoration.inline(position + from, position + from + match[2]!.length, {
+        class: "chip skill-chip composer-tiptap-input__mention",
+        "data-skill-hidden": "",
+      }));
+    }
+  });
+  return decorations.add(doc, hidden);
 }
 
 // Drafts saved before underline was removed can carry the mark. Tiptap
@@ -2461,6 +2485,7 @@ function getSkillMentionAttrs(skill: ComposerSkillToken): Record<string, unknown
     prChipModifiers: skill.prChipModifiers ?? null,
     origin: skill.kind ? null : skill.origin ?? null,
     showOrigin: !skill.kind && skill.showOrigin && skill.origin ? true : null,
+    hiddenByProfile: skill.hiddenByProfile || null,
   };
 }
 
@@ -2529,6 +2554,7 @@ function getContentSignature(params: {
       // catalog arrives and shows a second skill of the same name.
       shownOrigin:
         !token.kind && token.showOrigin ? token.origin?.label : undefined,
+      hiddenByProfile: token.hiddenByProfile,
     })),
   });
 }
@@ -2816,22 +2842,22 @@ export const ComposerTiptapInput = forwardRef<
       Extension.create({
         name: "composerCommandChip",
         addProseMirrorPlugins() {
-          const readCommandChipDecorations = (doc: ProseMirrorNode): DecorationSet =>
-            buildCommandChipDecorations(
+          const readDraftDecorations = (doc: ProseMirrorNode): DecorationSet =>
+            addHiddenSkillDecorations(doc, buildCommandChipDecorations(
               doc,
               propsRef.current.commandChip,
               propsRef.current.markdownConversion ? "markdown" : "text",
-            );
+            ), propsRef.current.hiddenSkillNames);
           return [
             // Rebuilt only when the document or the chip changes; a caret
             // move maps nothing and must not re-walk the document.
             new Plugin<DecorationSet>({
               key: commandChipPluginKey,
               state: {
-                init: (_config, state) => readCommandChipDecorations(state.doc),
+                init: (_config, state) => readDraftDecorations(state.doc),
                 apply: (tr, previous, _oldState, newState) =>
                   tr.docChanged || tr.getMeta(commandChipPluginKey)
-                    ? readCommandChipDecorations(newState.doc)
+                    ? readDraftDecorations(newState.doc)
                     : previous,
               },
               props: {
@@ -3688,12 +3714,13 @@ export const ComposerTiptapInput = forwardRef<
   // own needs a transaction before ProseMirror redraws the decorations.
   const commandChipText = props.commandChip?.text;
   const commandChipTooltip = props.commandChip?.tooltip;
+  const hiddenSkillNamesKey = JSON.stringify(props.hiddenSkillNames ?? []);
   useEffect(() => {
     if (!editor || editor.isDestroyed) {
       return;
     }
     editor.view.dispatch(editor.state.tr.setMeta(commandChipPluginKey, true));
-  }, [commandChipText, commandChipTooltip, editor]);
+  }, [commandChipText, commandChipTooltip, editor, hiddenSkillNamesKey]);
 
   useImperativeHandle(ref, () => ({
     appendPlainText: (text, options) => {

@@ -1,3 +1,4 @@
+import { snapshotCodexSkillProfile } from "@pwragent/shared/contracts/codex-skill-profiles";
 import type { CheckoutToolHandler } from "../agent-tools/pwragent-resource-checkout-agent-tools";
 import type { ThreadModelSettings } from "./thread-model-settings";
 import type { AcpSessionRuntimeOptions } from "./acp-session-runtime-options";
@@ -2009,6 +2010,9 @@ export class DesktopBackendRegistry {
       providerDeliveredAgentInstructions(
         (await this.overlayStore.getThreadOverlayState({ backend: "codex", threadId }))?.agent,
       ));
+    this.codexClient.provideThreadSkillExclusions?.(async (threadId) =>
+      (await this.overlayStore.getThreadOverlayState({ backend: "codex", threadId }))
+        ?.codexSkillProfile?.hiddenSkills);
 
     this.subAgentStartupReconciliation =
       this.subAgentMonitorService.reconcileOrphanedThreadSubAgentsAtStartup().catch((error) => {
@@ -8250,6 +8254,7 @@ export class DesktopBackendRegistry {
     fastMode?: boolean;
     mcpConnectionIds?: string[];
     mcpProviderServersEnabled?: boolean;
+    codexSkillProfileId?: string;
     agent?: StartThreadRequest["agent"];
     acpRuntime?: BackendAcpSessionRuntimeState;
     workMode?: NavigationLaunchpadDraft["workMode"];
@@ -8398,7 +8403,7 @@ export class DesktopBackendRegistry {
     });
   }
 
-  private async prepareThreadCreation(params: Parameters<DesktopBackendRegistry["startThread"]>[0], resources: ThreadCreationPreparation, pending?: PendingThreadStartReporter): Promise<PreparedThreadCreation<Pick<StartThreadResponse, "executionMode" | "codexEnvironmentRuntime" | "codexEnvironmentStartupFailure">>> {
+  private async prepareThreadCreation(params: Parameters<DesktopBackendRegistry["startThread"]>[0], resources: ThreadCreationPreparation, pending?: PendingThreadStartReporter): Promise<PreparedThreadCreation<Omit<StartThreadResponse, "backend" | "threadId" | "pinnedRank" | "autoPinFailure">>> {
     this.assertThreadOwnership();
     this.assertNotBootstrap("startThread");
     const {
@@ -8418,10 +8423,18 @@ export class DesktopBackendRegistry {
       tokenMiserEnabled: tokenMiserOverride,
       mcpConnectionIds: requestedMcpConnectionIds,
       mcpProviderServersEnabled,
+      codexSkillProfileId,
       rerunCodexEnvironmentSetup,
       pendingStart: _pendingStart,
       ...request
     } = params;
+    const skillProfile = backend === "codex" && codexSkillProfileId
+      ? getDesktopSettingsService().readModelsConfig().codex?.skillProfiles?.find(({ id }) => id === codexSkillProfileId)
+      : undefined;
+    if (backend === "codex" && codexSkillProfileId && !skillProfile) {
+      throw new Error("That skill profile is no longer available. Choose another profile or Codex skills and try again.");
+    }
+    const codexSkillProfile = skillProfile ? snapshotCodexSkillProfile(skillProfile) : undefined;
     // A launchpad's access defaults to Auto for Codex and Claude. A Codex older
     // than 0.153.0 cannot run Auto, so start on Default Access instead of
     // sending a mode the runtime does not have.
@@ -8657,6 +8670,9 @@ export class DesktopBackendRegistry {
     const agentName = request.agent?.name?.trim();
     let gitBranch: string | undefined;
     let currentMigration: DesktopProviderThreadModelMigration | undefined;
+    const metadata: Omit<StartThreadResponse, "backend" | "threadId" | "pinnedRank" | "autoPinFailure"> = {
+      executionMode: effectiveExecutionMode, codexEnvironmentRuntime, codexEnvironmentStartupFailure,
+    };
     return { options: {
       backend,
       systemPlaceholder: !agentName,
@@ -8694,6 +8710,7 @@ export class DesktopBackendRegistry {
                   defaultModeRequestUserInput:
                     this.resolveCodexDefaultModeRequestUserInputFn(),
                   developerInstructions: providerDeliveredAgentInstructions(request.agent),
+                  ...(codexSkillProfile ? { skillExclusions: codexSkillProfile.hiddenSkills } : {}),
                   threadSource: "user" as CodexThreadSource,
                   ...(codexThreadConfig ? { config: codexThreadConfig } : {}),
                   ...(pwrdrvrTokenMiser
@@ -8748,7 +8765,22 @@ export class DesktopBackendRegistry {
         await this.recordCodexWorktreeOwnerThread({ ...identity, worktreePath: cwd });
       },
       invalidate: ({ threadId }) => { this.invalidateThreadListCache(backend, true, threadId, cwd ? [cwd] : []); },
-      persistExecutionMode: async (identity) => await this.overlayStore.setThreadExecutionMode({ ...identity, executionMode: effectiveExecutionMode }),
+      persistExecutionMode: async (identity) => {
+        try {
+          await this.overlayStore.setThreadExecutionMode({
+            ...identity, executionMode: effectiveExecutionMode,
+            ...(codexSkillProfile ? { codexSkillProfile } : {}),
+          });
+          metadata.codexSkillProfile = codexSkillProfile;
+        } catch (error) {
+          if (codexSkillProfile) {
+            metadata.codexSkillProfilePersistenceFailure = {
+              message: "The thread was created, but its skill profile could not be saved. Start a new thread to use the profile.",
+            };
+          }
+          throw error;
+        }
+      },
       persistTokenMiser: async (identity) => await this.overlayStore.setThreadTokenMiser?.({ ...identity, enabled: tokenMiserOverride! }),
       persistPdfCatalog: async (identity) => await this.overlayStore.setThreadMessagingPdfToolCatalogVersion?.({
         ...identity, version: PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
@@ -8799,7 +8831,7 @@ export class DesktopBackendRegistry {
           error: error instanceof Error ? error.message : String(error),
         });
       },
-    }, metadata: { executionMode: effectiveExecutionMode, codexEnvironmentRuntime, codexEnvironmentStartupFailure } };
+    }, metadata };
   }
 
   /**
@@ -9089,6 +9121,7 @@ export class DesktopBackendRegistry {
           approvalsReviewer: modeSettings.approvalsReviewer,
           sandbox: ownerSandboxForMode(getOwnerHostServices().runtimePolicy, executionMode, request.sandbox, modeSettings.sandbox),
           codexEnvironmentRuntime: forkedCodexEnvironmentRuntime,
+          skillExclusions: sourceOverlay?.codexSkillProfile?.hiddenSkills,
           ...(codexThreadConfig ? { config: codexThreadConfig } : {}),
         }, pending, codexEnvironmentStartupFailure));
         pdfMcpRegistration?.bindThread(result.threadId);
@@ -9148,6 +9181,9 @@ export class DesktopBackendRegistry {
         backend,
         threadId: result.threadId,
         executionMode,
+        ...(backend === "codex" && sourceOverlay?.codexSkillProfile
+          ? { codexSkillProfile: sourceOverlay.codexSkillProfile }
+          : {}),
       });
       if (backend === "codex" && sourceOverlay?.tokenMiserEnabled !== undefined) {
         await this.overlayStore.setThreadTokenMiser({
