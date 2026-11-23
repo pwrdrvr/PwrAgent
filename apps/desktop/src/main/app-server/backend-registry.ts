@@ -21257,6 +21257,7 @@ export class DesktopBackendRegistry {
     try {
       getDesktopNotificationService().notifyTerminal({
         enabled: this.notificationsEnabled(),
+        status,
         key:
           typeof threadId === "string"
             ? buildTerminalNotificationKey({

@@ -1,12 +1,19 @@
 import { BrowserWindow, Notification } from "electron";
-import type {
-  MessagingApprovalDecision,
-  MessagingApprovalIntent,
+import {
+  MessagingRateLimitGate,
+  type MessagingApprovalDecision,
+  type MessagingApprovalIntent,
 } from "@pwragent/messaging-interface";
 import { getMainLogger } from "../../log";
+import type { TerminalNotification } from "../../owner-host";
 
 const notificationLog = getMainLogger("pwragent:notifications");
 const NATIVE_NOTIFICATION_BODY_MAX_LENGTH = 220;
+const ROUTINE_TERMINAL_NOTIFICATION_BUDGET = {
+  id: "desktop-routine-terminal",
+  intervalMs: 15 * 60_000,
+  limit: 1,
+};
 
 type NativeNotificationAction = {
   text: string;
@@ -29,6 +36,11 @@ export class DesktopNotificationService {
   private readonly attentionKeys = new Set<string>();
   private readonly attentionNotifications = new Map<string, Set<Notification>>();
   private readonly liveNotifications = new Set<Notification>();
+  private readonly terminalNotificationGate: MessagingRateLimitGate;
+
+  constructor(now: () => number = Date.now) {
+    this.terminalNotificationGate = new MessagingRateLimitGate(now);
+  }
 
   clearAttentionKey(key: string): void {
     this.attentionKeys.delete(key);
@@ -105,13 +117,7 @@ export class DesktopNotificationService {
     });
   }
 
-  notifyTerminal(params: {
-    key?: string;
-    enabled: boolean;
-    title: string;
-    body: string;
-    onShow?: () => void;
-  }): void {
+  notifyTerminal(params: TerminalNotification): void {
     if (!params.enabled || (params.key && this.attentionKeys.has(params.key))) {
       return;
     }
@@ -119,6 +125,12 @@ export class DesktopNotificationService {
       return;
     }
     if (!Notification.isSupported()) {
+      return;
+    }
+    // Drop routine outcomes during the shared cooldown. The next eligible
+    // outcome after it expires should describe current activity.
+    if (params.status !== "failed"
+      && !this.terminalNotificationGate.admit(ROUTINE_TERMINAL_NOTIFICATION_BUDGET).admitted) {
       return;
     }
     if (params.key) {

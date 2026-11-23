@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import type { MessagingApprovalIntent } from "@pwragent/messaging-interface";
 import { DesktopNotificationService } from "../shell/notifications/desktop-notification-service";
 
@@ -162,6 +163,87 @@ describe("DesktopNotificationService", () => {
     getAllWindows.mockReturnValue([]);
   });
 
+  it("shows two routine notices and all three approvals across 30 completions in 30 minutes", () => {
+    let now = 0;
+    const service = new DesktopNotificationService(() => now);
+
+    for (let minute = 0; minute < 30; minute++) {
+      now = minute === 1 ? 0 : minute * 60_000;
+      service.notifyTerminal({
+        enabled: true,
+        key: `codex:thread-${minute}:turn-terminal`,
+        status: "completed",
+        title: "PwrAgent turn completed",
+        body: `Thread ${minute} completed`,
+      });
+      if (minute === 7 || minute === 14 || minute === 21) {
+        service.notifyApproval({
+          enabled: true,
+          key: `codex:approval-${minute}`,
+          intent: approvalIntent({ body: `Request ${minute}` }),
+        });
+      }
+    }
+
+    expect(shownNotifications.map(({ body }) => body)).toEqual([
+      "Thread 0 completed",
+      "Command Approval: Request 7",
+      "Command Approval: Request 14",
+      "Thread 15 completed",
+      "Command Approval: Request 21",
+    ]);
+  });
+
+  it("spends the shared 15-minute cooldown only on eligible routine terminal notifications", () => {
+    const cooldownMs = 15 * 60_000;
+    const event = fc.record({
+      kind: fc.constantFrom("completed", "cancelled", "failed", "input"),
+      enabled: fc.boolean(),
+      focused: fc.boolean(),
+      supported: fc.boolean(),
+      elapsed: fc.oneof(fc.nat(cooldownMs), fc.constantFrom(0, cooldownMs - 1, cooldownMs)),
+    });
+
+    fc.assert(fc.property(fc.array(event, { maxLength: 30, size: "max" }), (events) => {
+      shownNotifications.length = 0;
+      let now = 0;
+      let lastRoutine: number | undefined;
+      const expected: string[] = [];
+      const service = new DesktopNotificationService(() => now);
+
+      for (const [index, event] of events.entries()) {
+        now += event.elapsed;
+        const notice = {
+          key: `thread-${index}`,
+          enabled: event.enabled,
+          title: event.kind,
+          body: `Event ${index}`,
+        };
+        getAllWindows.mockReturnValue([
+          { isDestroyed: () => false, isFocused: () => event.focused, isMinimized: () => false },
+        ]);
+        MockNotification.isSupported.mockReturnValue(event.supported);
+
+        if (event.kind === "input") {
+          service.notifyAttention(notice);
+        } else {
+          service.notifyTerminal({ ...notice, status: event.kind });
+        }
+
+        if (event.enabled && !event.focused && event.supported) {
+          if (event.kind === "input" || event.kind === "failed") {
+            expected.push(notice.body);
+          } else if (lastRoutine === undefined || now - lastRoutine >= cooldownMs) {
+            expected.push(notice.body);
+            lastRoutine = now;
+          }
+        }
+      }
+
+      expect(shownNotifications.map(({ body }) => body)).toEqual(expected);
+    }));
+  });
+
   it("emits attention notifications only once per key", () => {
     const service = new DesktopNotificationService();
     getAllWindows.mockReturnValue([
@@ -196,6 +278,7 @@ describe("DesktopNotificationService", () => {
       kind: "terminal",
       notify: (service: DesktopNotificationService) => service.notifyTerminal({
         enabled: true,
+        status: "completed",
         title: "Turn completed",
         body: "Done",
       }),
@@ -230,7 +313,8 @@ describe("DesktopNotificationService", () => {
   });
 
   it("renders terminal notifications as body-click notifications until explicit cleanup", () => {
-    const service = new DesktopNotificationService();
+    let now = 0;
+    const service = new DesktopNotificationService(() => now);
     const onShow = vi.fn();
     getAllWindows.mockReturnValue([
       { isDestroyed: () => false, isFocused: () => false, isMinimized: () => false },
@@ -250,6 +334,7 @@ describe("DesktopNotificationService", () => {
     service.notifyTerminal({
       enabled: true,
       key: "codex:thread-1:turn-terminal",
+      status: "completed",
       title: "PwrAgent turn completed",
       body: "PwrAgent > npm view eslint · turn completed.",
       onShow,
@@ -273,9 +358,11 @@ describe("DesktopNotificationService", () => {
       ),
     ).toBe(true);
 
+    now += 15 * 60_000;
     service.notifyTerminal({
       enabled: true,
       key: "codex:thread-1:turn-terminal",
+      status: "completed",
       title: "PwrAgent turn completed",
       body: "PwrAgent > npm view eslint · turn completed again.",
       onShow,
@@ -465,6 +552,7 @@ describe("DesktopNotificationService", () => {
 
     service.notifyTerminal({
       enabled: true,
+      status: "completed",
       title: "Turn complete",
       body: "Fixture thread finished.",
     });
