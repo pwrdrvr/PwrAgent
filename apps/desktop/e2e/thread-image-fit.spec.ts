@@ -4,12 +4,19 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect, test, type Locator } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { writeOwnerProfileConfig } from "./fixtures/fake-agent-executables";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 const fixtureImagePath = path.resolve(
   specDir,
   "fixtures/thread-image-fit/thread-image.png"
 );
+
+async function seedSvgReplayProfile(homeRoot: string): Promise<void> {
+  // Startup discovery can run a host Kimi version probe even in Codex replay.
+  // Kimi extracts a native bundle into this fixture home during that probe.
+  await writeOwnerProfileConfig({ homeRoot, contents: "[acp_agents.kimi]\nenabled = false\n" });
+}
 
 function createSvgImageDataUrl(params: {
   color: string;
@@ -400,6 +407,7 @@ test("runs SVG flamegraph controls in an isolated lightbox frame", async () => {
     fixturePath: fixture.fixturePath,
     homeRoot,
     env: { CODEX_HOME: codexHome },
+    preLaunchHook: seedSvgReplayProfile,
   });
 
   try {
@@ -525,6 +533,7 @@ for (const shape of INTERACTIVE_SVG_SHAPES) {
       fixturePath: fixture.fixturePath,
       homeRoot,
       env: { CODEX_HOME: codexHome },
+      preLaunchHook: seedSvgReplayProfile,
       windowSize: { width: 1280, height: 900 },
     });
 
