@@ -126,6 +126,12 @@ describe("review Auto-fix handoff", () => {
       expect(client.lastSteerTurnParams).toBeUndefined();
       expect(Object.values(readReviewAutoFixStatus(thread).runs)[0]?.phase).toBe("running");
       if (steerDuringFix) {
+        // The provider's stale-target rejection must reach the held fallback.
+        vi.spyOn(client, "steerTurn").mockRejectedValueOnce(new Error("expected active turn id turn-review-1, found next-0"));
+        await expect(registry.steerTurn({
+          ...thread, expectedTurnId: reviewTurnId, requestId: "stale-steer",
+          input: [{ type: "text", text: "Guidance for the finished review" }],
+        })).rejects.toThrow("expected active turn id turn-review-1, found next-0");
         const steered = await registry.steerTurn({
           ...thread, expectedTurnId: "next-0", requestId: "operator-steer",
           input: [{ type: "text", text: "New guidance" }],
@@ -167,6 +173,66 @@ describe("review Auto-fix handoff", () => {
 
   it("releases the queue after a refused fix admission", async () => {
     await checkHandoff(["message"], "refusal");
+  });
+
+  // A terminal may start another review, whose synthetic turn/started event
+  // is itself delivered on the parent thread. The terminal and start must
+  // both settle even when delivery of the first review's result overlaps.
+  async function checkScheduledReview(overlap: boolean): Promise<void> {
+    const client = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start", "review/start"] },
+      startThreadResult: { threadId: "review-child" },
+    });
+    const registry = createDesktopBackendRegistry({
+      codexClient: client, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null,
+    });
+    const resultEntered = createDeferred<void>();
+    const releaseResult = createDeferred<void>();
+    const scheduledStarted = createDeferred<void>();
+    const delivered: string[] = [];
+    registry.onEvent(async ({ notification }) => {
+      if (notification.method === "item/completed" && notification.params.turnId === reviewTurnId) {
+        resultEntered.resolve();
+        await releaseResult.promise;
+        delivered.push("result");
+      }
+      if (notification.method === "turn/completed" && notification.params.turnId === reviewTurnId) {
+        delivered.push("terminal");
+      }
+      if (notification.method === "thread/reviewStart/updated" && notification.params.status === "started") {
+        scheduledStarted.resolve();
+      }
+    });
+    try {
+      const request = { ...thread, target: { type: "uncommittedChanges" as const } };
+      await registry.startReview(request);
+      expect(await registry.submitReview({ ...request, runMode: "pwragent-sub-agent" }))
+        .toMatchObject({ status: "scheduled", invokingTurnId: reviewTurnId });
+      const result = client.emit(findings);
+      await resultEntered.promise;
+      if (!overlap) {
+        releaseResult.resolve();
+        await result;
+      }
+      const terminal = client.emit(completed(reviewTurnId));
+      if (overlap) await new Promise<void>((resolve) => setImmediate(resolve));
+      releaseResult.resolve();
+      await Promise.all([result, terminal, scheduledStarted.promise]);
+      expect(delivered).toEqual(["result", "terminal"]);
+      expect(client.startTurnCalls).toHaveLength(1);
+    } finally {
+      releaseResult.resolve();
+      resetReviewAutoFixArmingForTests();
+      await registry.close();
+    }
+  }
+
+  it("starts a scheduled managed review after an overlapping result and terminal", async () => {
+    await checkScheduledReview(true);
+  });
+
+  it("settles both reviews across overlapping and consecutive deliveries", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), checkScheduledReview), { numRuns: 8 });
   });
 
   it("gives the review and fix consecutive turns across queued messages and guidance", async () => {

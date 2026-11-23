@@ -13318,7 +13318,8 @@ export class DesktopBackendRegistry {
       await this.assertThreadNotLocked(request.backend, request.threadId);
     },
     isRestartGateClosed: () => this.isRestartGateClosed(),
-    isReviewAutoFixActive: (request) => this.threadTurnQueue.hasActiveReviewAutoFix(request),
+    isReviewAutoFixActive: (request) => this.threadTurnQueue.hasActiveReviewAutoFix(request)
+      && this.getActiveTurnForThread(request)?.turnId === request.expectedTurnId,
     queue: async (params, messageOrigin, origin) => {
       // Recovery belongs only to the compacted assignment, never a later turn.
       if (messageOrigin?.systemReason === "compaction-recovery") throw new CompactionRecoveryRevoked();
@@ -21433,27 +21434,48 @@ export class DesktopBackendRegistry {
     return this.threadArchiveCoordinator.withArchiveWorkspaceWrite(paths, work);
   }
 
-  private readonly orderedThreadEventWork = new Map<string, Promise<void>>();
+  private readonly reviewResultDeliveries = new Map<string, Promise<void>>();
+  private readonly transcriptImageWork = new Map<string, Promise<void>>();
+
+  private emitWithOrderedReviewResult(
+    event: AgentEvent, codexStatusSequence?: number, codexStartDelivery?: CodexStartDeliveryReceipt,
+  ): Promise<void> {
+    const { method, params } = event.notification;
+    const deliver = () => this.emitWithTranscriptImages(event, codexStatusSequence, codexStartDelivery);
+    if (!("threadId" in params) || typeof params.threadId !== "string") return deliver();
+    const key = buildThreadIdentityKey(event.backend, params.threadId);
+    const previous = this.reviewResultDeliveries.get(key);
+    const afterResult = () => previous ? previous.catch(() => undefined).then(deliver) : deliver();
+    if (method === "item/completed" && readRecord(params.item)?.type === "exitedReviewMode") {
+      const result = Promise.resolve(previous).catch(() => undefined).then(deliver).finally(() => {
+        if (this.reviewResultDeliveries.get(key) === result) this.reviewResultDeliveries.delete(key);
+      });
+      this.reviewResultDeliveries.set(key, result);
+      return result;
+    }
+    // A release waits for the earlier result to claim Auto-fix. The release
+    // itself can start a scheduled review and await its synthetic start.
+    if (method === "turn/completed" || method === "turn/failed" || method === "turn/cancelled"
+      || method === "thread/status/changed") return afterResult();
+    return deliver();
+  }
 
   private emitWithTranscriptImages(event: AgentEvent, codexStatusSequence?: number, codexStartDelivery?: CodexStartDeliveryReceipt): Promise<void> {
     const notification = event.notification;
     if (!("threadId" in notification.params) || typeof notification.params.threadId !== "string") return this.emitEvent(event, codexStatusSequence, codexStartDelivery);
     const threadId = notification.params.threadId;
     const key = `${event.backend}:${threadId}`;
-    const previous = this.orderedThreadEventWork.get(key);
+    const previous = this.transcriptImageWork.get(key);
     const item = notification.method === "item/completed" ? readRecord(notification.params.item) : undefined;
     const materializeImages = item?.type === "agentMessage" || item?.type === "imageView"
       || item?.type === "mcpToolCall" || item?.type === "dynamicToolCall";
-    const reviewResult = item?.type === "exitedReviewMode";
     // Keep lifecycle bookkeeping (including queue release) and subsequent
     // transcript events behind image work, in arrival order. Extend the chain
     // through delivery, so idle or the next turn cannot overtake a held terminal.
     const orderedNotification = notification.method.startsWith("turn/")
       || notification.method === "thread/status/changed"
       || notification.method.startsWith("item/");
-    // A review result owns the Auto-fix handoff. A concurrent terminal must
-    // wait for result listeners to claim it before retiring the arm.
-    if (!materializeImages && !reviewResult && (!previous || !orderedNotification)) {
+    if (!materializeImages && (!previous || !orderedNotification)) {
       return this.emitEvent(event, codexStatusSequence, codexStartDelivery);
     }
     const work = (async () => {
@@ -21471,9 +21493,9 @@ export class DesktopBackendRegistry {
       }) : event;
       await this.emitEvent(materialized, codexStatusSequence, codexStartDelivery);
     })();
-    this.orderedThreadEventWork.set(key, work);
+    this.transcriptImageWork.set(key, work);
     void work.finally(() => {
-      if (this.orderedThreadEventWork.get(key) === work) this.orderedThreadEventWork.delete(key);
+      if (this.transcriptImageWork.get(key) === work) this.transcriptImageWork.delete(key);
     }).catch(() => undefined);
     return work;
   }
@@ -21532,8 +21554,8 @@ export class DesktopBackendRegistry {
       const emitted = event.notification.method === "thread/deleted"
         ? this.deleteOwnedThreadAssets({ backend: event.backend, threadId: event.notification.params.threadId })
             .catch((error) => backendRegistryLog.warn("thread asset cleanup failed", { error: error instanceof Error ? error.message : String(error) }))
-            .then(() => this.emitWithTranscriptImages(event, codexStatusSequence, codexStartDelivery))
-        : this.emitWithTranscriptImages(event, codexStatusSequence, codexStartDelivery);
+            .then(() => this.emitWithOrderedReviewResult(event, codexStatusSequence, codexStartDelivery))
+        : this.emitWithOrderedReviewResult(event, codexStatusSequence, codexStartDelivery);
       return await emitted;
     } finally {
       if (terminalDelivery) {

@@ -93,6 +93,7 @@ import {
   queuedTurnOwnerCanMove,
   requestOwnerQueuedTurnMove,
   settleQueuedTurnMove,
+  withOwnerQueueEntryPosition,
 } from "./queued-turn-move";
 import {
   canPauseQueuedTurn,
@@ -4843,6 +4844,9 @@ function useComposerController(props: ComposerProps) {
   // Retry answers the row the queue would send next, which can sit behind
   // paused rows.
   const firstWaitingQueuedIndex = queuedTurns.findIndex((queued) => !queued.paused);
+  const firstWaitingOwnerQueuedIndex = queuedTurns.findIndex((queued) =>
+    queued.queueEntryId && !queued.reviewCommand && !queued.paused
+  );
   const futureScheduledDraftSendAt = getFutureScheduledSendAt(
     scheduledDraftSendAt,
     scheduleNow,
@@ -7296,6 +7300,7 @@ function useComposerController(props: ComposerProps) {
               manualReleaseRequired?: unknown;
               paused?: unknown;
               pauseRevision?: unknown;
+              position?: unknown;
               queueEntryId?: unknown;
               queueEntryCreatedAt?: unknown;
               status?: unknown;
@@ -7346,8 +7351,9 @@ function useComposerController(props: ComposerProps) {
             ? { pauseRevision: turnQueueRecord.pauseRevision }
             : {}),
         };
+        let next: ComposerQueuedTurnSnapshot[] | undefined;
         if (matchingIndex >= 0) {
-          const next = mirrorCurrent.map((queued, index) =>
+          next = mirrorCurrent.map((queued, index) =>
             index === matchingIndex
               ? withOwnerPause({
                   ...queued,
@@ -7367,7 +7373,6 @@ function useComposerController(props: ComposerProps) {
                 }, ownerPause)
               : queued
           );
-          draftStore.setQueuedTurns(mirrorScopeKey, next);
         } else if (!mirrorCurrent.some((queued) => queued.backendQueuePending)) {
           const mirrored = withOwnerPause<ComposerQueuedTurnSnapshot>({
               id: `backend-queued:${turnQueueRecord.queueEntryId}`,
@@ -7385,11 +7390,14 @@ function useComposerController(props: ComposerProps) {
               imageAttachments: [],
               fileAttachments: [],
           }, ownerPause);
+          next = manualReleaseRequired && turnQueueRecord.position === undefined
+            ? [mirrored, ...mirrorCurrent]
+            : [...mirrorCurrent, mirrored];
+        }
+        if (next) {
           draftStore.setQueuedTurns(
             mirrorScopeKey,
-            manualReleaseRequired
-              ? [mirrored, ...mirrorCurrent]
-              : [...mirrorCurrent, mirrored],
+            withOwnerQueueEntryPosition(next, turnQueueRecord.queueEntryId, turnQueueRecord.position),
           );
         }
       }
@@ -9659,14 +9667,18 @@ function useComposerController(props: ComposerProps) {
       if (response.disposition === "queued") {
         if (steeringRequestIdRef.current === pending.id) {
           steeringRequestIdRef.current = undefined;
+          props.onPendingStatusChange?.(response.queueEntryId
+            ? activeTurnIdRef.current ? "Thinking" : undefined
+            : "Queued");
         }
-        updatePendingSteer((current) =>
-          current?.id === pending.id
-            ? { ...current, status: "queued" }
-            : current
-        );
+        // An owner queue receipt is projected by queue events, including a
+        // cancellation that may already have arrived. Provider buffering
+        // keeps the pending steer until a transcript item acknowledges it.
+        updatePendingSteer((current) => {
+          if (current?.id !== pending.id) return current;
+          return response.queueEntryId ? undefined : { ...current, status: "queued" };
+        });
         setSendError(undefined);
-        props.onPendingStatusChange?.("Queued");
       }
       if (
         (response.disposition === "scheduled" || response.disposition === "started")
@@ -14192,7 +14204,11 @@ function useComposerController(props: ComposerProps) {
                     {queued.steerWhenReady ? "Queue instead" : "Steer when ready"}
                   </button>
                 ) : null
-              ) : queued.manualReleaseRequired && index === firstWaitingQueuedIndex ? (
+              ) : queued.manualReleaseRequired && index === (
+                queued.queueEntryId && !queued.reviewCommand
+                  ? firstWaitingOwnerQueuedIndex
+                  : firstWaitingQueuedIndex
+              ) ? (
                 <button
                   className="composer__secondary-action"
                   disabled={
