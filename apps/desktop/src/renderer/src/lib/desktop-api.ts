@@ -1,4 +1,5 @@
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
+import type { AgentPreset, ManageAgentPresetsRequest } from "@pwragent/shared/contracts/agent-presets";
 import type { DecisionModelListing, DecisionProviderId } from "@pwragent/shared/decision-models";
 import type {
   ReadWorktreeReflinkCapabilitiesRequest,
@@ -2110,6 +2111,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   listModelSettingsRecents?: (
     request: ListModelSettingsRecentsRequest,
   ) => Promise<ListModelSettingsRecentsResponse>;
+  manageAgentPresets?: (request: ManageAgentPresetsRequest) => Promise<AgentPreset[]>;
   /** Fire-and-forget record of a combination the operator just ran. */
   recordModelSettingsRecent?: (
     request: RecordModelSettingsRecentRequest,

@@ -19,6 +19,7 @@ import {
   isRemoteLaunchpadStorageKey,
   launchpadStorageKey,
   parseRemoteLaunchpadStorageKey,
+  projectFederatedLaunchpad,
 } from "@pwragent/shared/contracts/navigation";
 import { providerPickerValue } from "@pwragent/shared/provider-picker";
 import { type FederationTarget } from "@pwragent/shared/contracts/federation";
@@ -699,6 +700,7 @@ export class ThreadDirectoryService {
       // only repeats the current ids is not an edit: the MCP access panel
       // sends them along with its agent-servers switch.
       ...("mcpConnectionIds" in request.patch
+        && !("mcpConnectionIdsFromDefaults" in request.patch)
         && !sameMcpConnectionIds(
           request.patch.mcpConnectionIds,
           current.mcpConnectionIds,
@@ -1465,7 +1467,8 @@ export class ThreadDirectoryService {
     const policy = getOwnerHostServices().runtimePolicy;
     let proxyDraft: NavigationLaunchpadDraft | undefined;
     if (policy?.codexOpenAiProviderEnabled === false) {
-      const draft = request.launchpad ?? await this.context.stores.launchpads.getDirectoryLaunchpad({ directoryKey: request.directoryKey });
+      const stored = request.launchpad ?? await this.context.stores.launchpads.getDirectoryLaunchpad({ directoryKey: request.directoryKey });
+      const draft = stored && options?.sourceInstanceId && !request.launchpad ? projectFederatedLaunchpad(stored) : stored;
       if (draft?.backend === "codex") {
         assertOwnerCodexModelSelection(policy, { backend: draft.backend, model: request.launchpad?.model, collaborationMode: request.collaborationMode });
         const projected = projectNavigationLaunchpadProviderSettings(draft);
@@ -1526,7 +1529,7 @@ export class ThreadDirectoryService {
     operation?.check();
     const materialize = (request: MaterializeDirectoryLaunchpadRequest) =>
       listingDiagnostics.trace("workflow", { query: "first-send" }, () => this.materializeLaunchpadDraftPrepared(request, options, operation, proxyLaunchpad));
-    if (!request.releaseLaunchpadOnSubmit) {
+    if (!request.releaseLaunchpadOnSubmit || options?.sourceInstanceId) {
       return await materialize(request);
     }
     const launchpad =
@@ -1537,6 +1540,7 @@ export class ThreadDirectoryService {
     if (!launchpad) {
       throw new Error(`No launchpad found for ${request.directoryKey}`);
     }
+    if (request.directoryKey !== launchpad.directoryKey) return await materialize(request);
     // Release the draft before the slow part (worktree, environment setup,
     // thread start) so the operator can compose the next thread in this
     // directory while this one starts.
@@ -1602,14 +1606,14 @@ export class ThreadDirectoryService {
     request: MaterializeDirectoryLaunchpadRequest,
     sourceInstanceId?: FederationInstanceId,
   ): Promise<NavigationLaunchpadDraft> {
-    const draft =
-      request.launchpad ??
-      (await this.context.stores.launchpads.getDirectoryLaunchpad({
+    const stored = request.launchpad ??
+      await this.context.stores.launchpads.getDirectoryLaunchpad({
         directoryKey: request.directoryKey,
-      }));
-    if (!draft) {
+      });
+    if (!stored) {
       throw new Error(`No launchpad found for ${request.directoryKey}`);
     }
+    const draft = sourceInstanceId && !request.launchpad ? projectFederatedLaunchpad(stored) : stored;
     const projectedDraft = await this.resolveLaunchpadProviderModel(projectNavigationLaunchpadProviderSettings(draft));
     await this.host().admitNewThreadModelSettings(projectedDraft.backend, projectedDraft);
     return sourceInstanceId ? await this.resolveRemoteLaunchpadModelSettings(draft) : projectedDraft;
@@ -1924,18 +1928,16 @@ export class ThreadDirectoryService {
       );
     }
 
-    if (!request.releaseLaunchpadOnSubmit) {
-      await this.resetLaunchpadDraft(launchpad);
-    } else if (launchpad.prompt.trim()) {
-      // Released at submit. A draft save the renderer sent just before
-      // submitting can still land after that release and bring the sent
-      // prompt back. Clear it again only if it is still that prompt, so a
-      // new draft the operator started meanwhile survives.
-      const current = await this.context.stores.launchpads.getDirectoryLaunchpad({
-        directoryKey: launchpad.directoryKey,
-      });
-      if (current?.prompt === launchpad.prompt) {
+    // A messaging launch uses a separate creation key even when it borrows
+    // the project's settings. A peer also owns its draft on its own viewer.
+    if (!options?.sourceInstanceId && request.directoryKey === launchpad.directoryKey) {
+      if (!request.releaseLaunchpadOnSubmit) {
         await this.resetLaunchpadDraft(launchpad);
+      } else if (launchpad.prompt.trim()) {
+        // A save sent before release can land late. Clear the sent prompt
+        // again only if the operator has not replaced it with a new one.
+        const current = await this.context.stores.launchpads.getDirectoryLaunchpad({ directoryKey: launchpad.directoryKey });
+        if (current?.prompt === launchpad.prompt) await this.resetLaunchpadDraft(launchpad);
       }
     }
 

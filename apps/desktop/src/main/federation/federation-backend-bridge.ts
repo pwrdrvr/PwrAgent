@@ -59,6 +59,7 @@ import type {
 } from "@pwragent/shared/project-forge-automation";
 import { projectFederationThreadRead, materializeFederationThreadRead, type FederationThreadReadResponse } from "./federation-thread-read";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared/contracts/navigation";
+import { projectFederatedLaunchpad } from "@pwragent/shared/contracts/navigation";
 import type {
   FederationMergeThreadPullRequestRequestV1,
   FederationMergeThreadPullRequestResultV1,
@@ -2131,10 +2132,12 @@ export function registerFederationBackendHandlers(params: {
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.ensureDirectoryLaunchpad,
-    async (envelope) =>
-      await params.backend.ensureDirectoryLaunchpad(
+    async (envelope) => {
+      const response = await params.backend.ensureDirectoryLaunchpad(
         envelope.params as EnsureDirectoryLaunchpadRequest,
-      ),
+      );
+      return { ...response, launchpad: projectFederatedLaunchpad(response.launchpad) };
+    },
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.listRecentFileReferences,
