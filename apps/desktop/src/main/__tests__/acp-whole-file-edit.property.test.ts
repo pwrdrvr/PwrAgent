@@ -212,7 +212,7 @@ describe("whole-file ACP edit diffs", () => {
     const line = fc.constantFrom("alpha", "beta", "gamma", "");
     fc.assert(fc.property(fc.array(line, { maxLength: 30 }), fc.nat(), (lines, offset) => {
       const before = [...lines];
-      const after = [...before];
+      const after: string[] = [...before];
       after.splice(offset % (after.length + 1), 0, "inserted line");
       const frames = antigravityEditFrames({
         oldText: before.length ? `${before.join("\n")}\n` : "",

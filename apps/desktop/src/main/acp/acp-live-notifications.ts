@@ -18,6 +18,8 @@ import {
   readAcpWebSearch,
 } from "./acp-command-extraction.js";
 import { sanitizeAcpToolOutput } from "./acp-tool-output.js";
+import { readAcpFileEdit } from "./acp-file-edit.js";
+import { fileBaseName } from "./acp-file-read.js";
 import {
   foldAcpTurnUsage,
   readAcpUsageEnvelope,
@@ -246,6 +248,8 @@ export class AcpLiveToolUpdateResolver {
 }
 
 export function acpToolUpdateNotifications(params: {
+  backendId?: string;
+  cwd?: string;
   threadId: string;
   turnId?: string;
   update: Record<string, unknown>;
@@ -258,7 +262,7 @@ export function acpToolUpdateNotifications(params: {
     return [];
   }
 
-  const item = liveItemForAcpToolUpdate(params.update);
+  const item = antigravityFileEditItem(params) ?? liveItemForAcpToolUpdate(params.update);
   if (!item) {
     return [];
   }
@@ -274,6 +278,32 @@ export function acpToolUpdateNotifications(params: {
       },
     } as AppServerNotification,
   ];
+}
+
+function antigravityFileEditItem(params: {
+  backendId?: string;
+  cwd?: string;
+  update: Record<string, unknown>;
+}): Record<string, unknown> | undefined {
+  if (params.backendId !== "acp:antigravity") {
+    return undefined;
+  }
+  const id = readAcpToolCallId(params.update);
+  const edit = readAcpFileEdit(params.update, { wholeFileDiffContent: true, cwd: params.cwd });
+  if (!id || !edit) {
+    return undefined;
+  }
+  const status = normalizeAcpToolStatus(readString(params.update, "status"));
+  const output = status === "failed" ? readAcpToolOutput(params.update) : undefined;
+  return {
+    type: "acpFileEdit",
+    id,
+    title: `${edit.verb} ${fileBaseName(edit.path)}`,
+    path: edit.path,
+    status,
+    ...(edit.fileDiff ? { fileDiff: edit.fileDiff } : {}),
+    ...(output ? { data: { output } } : {}),
+  };
 }
 
 export function acpUsageNotification(params: {

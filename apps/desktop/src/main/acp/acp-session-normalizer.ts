@@ -1765,6 +1765,7 @@ function toolActivity(
           kind: "write",
           label,
           path: fileEdit.path,
+          ...(status ? { status } : {}),
           ...(fileEdit.fileDiff ? { fileDiff: fileEdit.fileDiff } : {}),
           ...(failure
             ? {
@@ -1900,6 +1901,7 @@ function mergeActivity(
     .map((detail) => ({
       ...detail,
       label: settledSearchLabel(detail.label, status),
+      ...(detail.kind === "write" && detail.path && status ? { status } : {}),
     }));
   return {
     ...existing,

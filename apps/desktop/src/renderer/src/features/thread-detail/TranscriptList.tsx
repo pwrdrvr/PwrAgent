@@ -1016,6 +1016,7 @@ export function TranscriptList(props: TranscriptListProps) {
     () =>
       buildTranscriptRenderItems({
         entries: transcriptEntries,
+        backend: props.parentThreadBackend,
         activeTurnId: props.activeTurnId,
         activeTurnStartedAt: props.activeTurnStartedAt,
         activeMessageId:
@@ -1026,6 +1027,7 @@ export function TranscriptList(props: TranscriptListProps) {
     [
       props.activeTurnId,
       props.activeTurnStartedAt,
+      props.parentThreadBackend,
       props.pendingAssistantMessage?.id,
       props.transientMessage?.id,
       alwaysVisibleTransientMessageIds,

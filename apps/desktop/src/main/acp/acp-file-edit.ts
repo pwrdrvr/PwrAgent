@@ -37,11 +37,13 @@ const CONTEXT_LINES = 3;
  *   `_meta.kind` of `add`, `modify` or `delete` on live updates.
  * - Qwen Code 0.26.9 sends the same, without `_meta`; a file too large to
  *   keep arrives as text content instead.
+ * - Antigravity sends full snapshots for edit_file and omits oldText for a
+ *   new file written by write_file.
  * - Kimi Code 0.34 sends the edit's `old_string` and `new_string`, and Grok
  *   sends snippets positioned by `_meta.details`.
  */
 export function acpDiffContentIsWholeFile(backendId: string): boolean {
-  return backendId === "acp:gemini" || backendId === "acp:qwen";
+  return backendId === "acp:gemini" || backendId === "acp:qwen" || backendId === "acp:antigravity";
 }
 
 export type ReadAcpFileEditOptions = {
@@ -69,12 +71,20 @@ export function readAcpFileEdit(
     readString(rawInput, "file_path")
     ?? readString(rawInput, "path")
     ?? diffs[0]?.path
-    ?? readFirstLocationPath(record);
+    ?? readFirstLocationPath(record)
+    ?? readString(rawInput, "Path");
   if (!path) {
     return undefined;
   }
+  const writeFile = record.name === "write_file";
   const verb =
-    providerTool?.name === "write" || toolKind === "write" ? "Wrote" : "Edited";
+    providerTool?.name === "write" || toolKind === "write" || writeFile ? "Wrote" : "Edited";
+  if (writeFile && options.wholeFileDiffContent) {
+    for (const diff of diffs) {
+      // ACP permits either null or omission for a new file.
+      diff.oldText ??= null;
+    }
+  }
   const fileDiff = buildFileDiff(path, diffs, options);
   return { path, verb, ...(fileDiff ? { fileDiff } : {}) };
 }
