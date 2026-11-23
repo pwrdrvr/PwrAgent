@@ -8170,6 +8170,11 @@ export class DesktopBackendRegistry {
     pendingStart?: Pick<AppServerPendingThreadStart, "startId" | "title" | "directoryKey" | "directoryLabel" | "progressThread">;
   }): Promise<StartThreadResponse> {
     assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
+    // A start this owner refuses outright draws no row.
+    if (params.pendingStart) {
+      this.assertThreadOwnership();
+      this.assertNotBootstrap("startThread");
+    }
     const pending = params.pendingStart ? this.beginPendingThreadStart(params, params.pendingStart) : undefined;
     try {
       if (pending) await pending.report("starting");

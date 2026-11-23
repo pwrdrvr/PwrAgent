@@ -4503,7 +4503,11 @@ export function useThreadNavigation(
           applyPendingThreadStartReport(current, report, retiredPendingThreadStartIdsRef.current));
         if (report.phase !== "ended") return;
         if (!report.createdThreadId) {
+          // React runs the updater above lazily, after this line has marked
+          // the start retired, so that updater skips the report. Remove the
+          // row here instead.
           retiredPendingThreadStartIdsRef.current.add(startId);
+          setPendingThreadStarts((current) => retirePendingThreadStart(current, startId));
           return;
         }
         // The thread's row replaces the starting row once a read brings it

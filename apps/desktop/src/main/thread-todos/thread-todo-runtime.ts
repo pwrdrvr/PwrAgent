@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { assertMergeNotHeld } from "../app-server/thread-dependency-merge-hold";
 import { ciApprovalsForDependency } from "../app-server/thread-dependency-ci-runs";
@@ -767,9 +768,14 @@ export function createThreadTodoRunners(params: {
         // The lists draw the card's thread as starting while its worktree
         // and setup run; the thread's own row takes the slot when it lands.
         pendingStart: {
-          startId: `thread-todo:${todo.id}`,
-          // The row shows the first line of the prompt when the card has no title.
-          title: action.title?.trim() || todo.title?.trim() || action.prompt,
+          // Each run is its own start: a list retires a start's id once it
+          // ends, so a retried card under the same id would draw no row.
+          startId: `thread-todo:${todo.id}:${randomUUID()}`,
+          // The row shows the first line of the prompt when the card has no
+          // title. Every window receives the report, so send no more than a
+          // title needs.
+          title: action.title?.trim() || todo.title?.trim()
+            || action.prompt.slice(0, PENDING_START_PROMPT_TITLE_MAX_LENGTH),
           ...(project ? { directoryKey: project.key, directoryLabel: project.label } : {}),
           // The card's tray in this thread reports the start until it lands.
           progressThread: { backend: sourceBackend, threadId: sourceThreadId },
@@ -986,6 +992,9 @@ export function createThreadTodoRunners(params: {
       : {}),
   };
 }
+
+/** Prompt text a starting row's title may carry; the row shows its first line. */
+const PENDING_START_PROMPT_TITLE_MAX_LENGTH = 500;
 
 function optional<K extends string, V>(
   key: K,
