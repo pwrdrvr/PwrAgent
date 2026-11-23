@@ -182,6 +182,7 @@ Read this before changing thread lenses, Attention membership/order, unread stat
 ### Starting rows
 
 - A thread that is still starting has a starting row in the slot its thread will take.
+- A cwd-only start with a Windows path uses the listed project or grouped checkout's path identity when the exact key is missing. If more than one project matches the normalized path, the start stays unplaced.
 - The thread's own row takes that slot once it renders (`selectUnlandedStartingThreads`). No frame shows both rows or neither.
 - A renderer launchpad draws its own starting row in the window that sent it. The owner leaves that row to the renderer for local and peer submissions, including older peer requests without an operation ID or a message origin.
 - The owner draws starting rows for to-do cards, prepared direct starts, and clean or fork-seeded handoffs that prepare a worktree or run setup.

@@ -10,6 +10,7 @@ import {
   type PendingThreadStartReport,
 } from "../pending-thread-starts";
 import { selectUnlandedStartingThreads } from "../StartingThreadRow";
+import { startingThreadHomeDirectoryKey } from "../starting-thread-home";
 
 /**
  * The rule the starting row keeps in the list: a start is drawn exactly once
@@ -162,6 +163,31 @@ describe("pending thread starts in the list", () => {
     expect(pendingThreadStartRows(starts, undefined)[0]).not.toHaveProperty("threadKey");
     starts = applyPendingThreadStartReport(starts, { start: start(0), phase: "landed", createdThreadId: "thread-0" }, new Set());
     expect(pendingThreadStartRows(starts, undefined)[0]).toMatchObject({ threadKey: "codex:thread-0" });
+  });
+
+  it("places a start by Windows checkout identity when the owner only reports a cwd", () => {
+    fc.assert(fc.property(
+      fc.constantFrom("C:/Projects", "//Server/Share"),
+      fc.string({ unit: fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz"), minLength: 1, maxLength: 12 }),
+      (root, name) => {
+        const checkoutPath = `${root}/${name}`;
+        const cwd = checkoutPath.toLowerCase().replaceAll("/", "\\");
+        const directStart = { ...start(0), cwd, parentThreadId: undefined, progressThread: undefined };
+        const starts = applyPendingThreadStartReport([], { start: directStart, phase: "starting" }, new Set());
+        const [row] = pendingThreadStartRows(starts, undefined);
+        const checkout = { key: `directory:${checkoutPath}`, kind: "directory" as const, label: "Checkout" };
+        const project = { ...checkout, key: `directory:${root}/Main`, label: "Project",
+          checkoutPaths: [`${root}/Main`, checkoutPath] };
+        const unrelated = { ...checkout, key: `${checkout.key}-other` };
+        const exact = { ...checkout, key: `directory:${cwd}` };
+        const caseVariant = { ...checkout, key: `directory:${checkoutPath.toUpperCase()}` };
+
+        expect(startingThreadHomeDirectoryKey(row!, [unrelated, checkout])).toBe(checkout.key);
+        expect(startingThreadHomeDirectoryKey(row!, [unrelated, project])).toBe(project.key);
+        expect(startingThreadHomeDirectoryKey(row!, [project, exact])).toBe(exact.key);
+        expect(startingThreadHomeDirectoryKey(row!, [checkout, caseVariant])).toBeUndefined();
+      },
+    ));
   });
 
   it("keys a peer parent by its machine, and a parent on this machine locally", () => {

@@ -1,4 +1,4 @@
-import { directoryIncludesCheckout } from "@pwragent/shared/directory-navigation";
+import { directoryIncludesCheckout, navigationPathIdentity } from "@pwragent/shared/directory-navigation";
 import {
   findRemoteHomeDirectoryIndex,
   remoteThreadPlaceholderDirectory,
@@ -13,6 +13,7 @@ import {
   type NavigationLaunchpadDraft,
   type NavigationThreadSummary,
 } from "@pwragent/shared/contracts/navigation";
+import { isWindowsFilesystemPath } from "@pwragent/shared/path-display";
 
 /** What a starting row carries that decides where it renders. */
 export type StartingThreadPlacement = {
@@ -90,8 +91,18 @@ export function startingThreadHomeDirectoryKey(
   if (!isPeerThreadInLocalList(creation, windowTarget)) {
     // A start from a linked checkout, such as a to-do card raised in a
     // worktree thread, lands in the project that groups that checkout.
-    return directories.find((directory) => directory.key === creation.directoryKey)?.key
+    const exactKey = directories.find((directory) => directory.key === creation.directoryKey)?.key
       ?? directories.find((directory) => directoryIncludesCheckout(directory, creation.directoryKey))?.key;
+    if (exactKey) return exactKey;
+
+    // A cwd-only start can use a native Windows spelling of a listed checkout.
+    const [, checkoutPath] = /^directory:(.+)$/.exec(creation.directoryKey) ?? [];
+    if (!checkoutPath || !isWindowsFilesystemPath(checkoutPath)) return undefined;
+    const identity = navigationPathIdentity(checkoutPath, true);
+    const matches = directories.filter((directory) =>
+      navigationPathIdentity(directory.key, true) === `directory:${identity}`
+      || directory.checkoutPaths?.some((path) => navigationPathIdentity(path, true) === identity));
+    return matches.length === 1 ? matches[0]?.key : undefined;
   }
   const index = findRemoteHomeDirectoryIndex(directories, startingPeerThread(creation));
   return index === undefined ? undefined : directories[index]!.key;
