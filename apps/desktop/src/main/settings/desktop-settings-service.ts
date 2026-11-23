@@ -1,3 +1,5 @@
+import { assertHotCpuCaptureRules, primaryHotCpuRule } from "@pwragent/shared/hot-cpu-rules";
+import { resolveHotCpuRules } from "../diagnostics/hot-cpu-profile-config";
 import { CommandDiscoveryLifetime } from "./command-discovery-lifetime";
 import {
   DEFAULT_FORGE_AGENT_TOOL_POLICY,
@@ -72,6 +74,7 @@ import type {
   DesktopUpdateTrain,
   DesktopWorktreeFolder,
   DesktopWorktreeStorageLocation,
+  ManagedCodexTrackLookup,
 } from "@pwragent/shared/contracts/settings";
 import type {
   DesktopHelperModelSettings,
@@ -84,7 +87,7 @@ import type { ThreadTodoMergeMethod } from "@pwragent/shared/contracts/thread-to
 import { execFile } from "node:child_process";
 import { readFile, realpath } from "node:fs/promises";
 import { accessSync, constants, statSync } from "node:fs";
-import { retainManagedCodexCommand } from "../codex-managed-runtime";
+import { readManagedCodexTrackTags, retainManagedCodexCommand } from "../codex-managed-runtime";
 import { managedCodexTagForCommand } from "../codex-build-channel";
 import { buildCodexVersionAdvisory } from "./codex-version-advisory";
 import path from "node:path";
@@ -1120,11 +1123,15 @@ export class DesktopSettingsService {
         hotCpuProfilingStartDelayMs: this.resolveHotCpuProfileStartDelayMs(
           config.general?.hotCpuProfilingStartDelayMs,
         ),
+        hotCpuProfilingCaptureRules: this.resolveHotCpuProfilingCaptureRules(config.general),
         hotCpuProfilingTriggerMode: this.resolveHotCpuProfileTriggerMode(
-          config.general?.hotCpuProfilingTriggerMode,
+          config.general?.hotCpuProfilingCaptureRules
+            ? primaryHotCpuRule(config.general.hotCpuProfilingCaptureRules)
+            : config.general?.hotCpuProfilingTriggerMode,
         ),
         hotCpuProfilingSlowburnThresholdPercent: this.resolveHotCpuSlowburnThresholdPercent(
           config.general?.hotCpuProfilingSlowburnThresholdPercent,
+          config.general?.hotCpuProfilingCaptureRules?.slowburn.thresholdPercent,
         ),
         hotCpuProfilingCaptureChromiumTrace: this.resolveConfigBoolean(
           config.general?.hotCpuProfilingCaptureChromiumTrace,
@@ -2231,14 +2238,17 @@ export class DesktopSettingsService {
   }
 
   resolveHotCpuProfilingTriggerMode(): DesktopHotCpuProfileTriggerMode {
-    return this.resolveHotCpuProfileTriggerMode(
-      this.readGeneralConfig().hotCpuProfilingTriggerMode,
-    ).value;
+    const settings = this.readGeneralConfig();
+    return settings.hotCpuProfilingCaptureRules
+      ? primaryHotCpuRule(settings.hotCpuProfilingCaptureRules)
+      : this.resolveHotCpuProfileTriggerMode(settings.hotCpuProfilingTriggerMode).value;
   }
 
   resolveHotCpuProfilingSlowburnThresholdPercent(): number {
+    const settings = this.readGeneralConfig();
     return this.resolveHotCpuSlowburnThresholdPercent(
-      this.readGeneralConfig().hotCpuProfilingSlowburnThresholdPercent,
+      settings.hotCpuProfilingSlowburnThresholdPercent,
+      settings.hotCpuProfilingCaptureRules?.slowburn.thresholdPercent,
     ).value;
   }
 
@@ -2333,6 +2343,10 @@ export class DesktopSettingsService {
       this.resolveTokenMiserEnabled(),
       this.configStore.read("models").codex?.managedBuilds ?? false,
     );
+  }
+
+  async readManagedCodexTrackTags(): Promise<ManagedCodexTrackLookup | undefined> {
+    return this.resolveManagedCodexEnabled() ? await readManagedCodexTrackTags() : undefined;
   }
 
   /** Which pwrdrvr/codex track the managed runtime follows. */
@@ -2581,6 +2595,9 @@ export class DesktopSettingsService {
     patch: DesktopSettingsConfigPatch,
     discoveryPermit?: ProviderDiscoveryPermit,
   ): Promise<ConfigUpdateResult<keyof ConfigDomainMap>> {
+    if (patch.general?.hotCpuProfilingCaptureRules !== undefined) {
+      assertHotCpuCaptureRules(patch.general.hotCpuProfilingCaptureRules);
+    }
     const fileStatus = this.configStore.fileStatus();
     if (fileStatus.kind === "invalid") {
       throw new Error(
@@ -4602,7 +4619,9 @@ export class DesktopSettingsService {
 
   private resolveHotCpuHeapSnapshotLimit(
     configValue: number | undefined,
+    canonicalValue?: number,
   ): DesktopSettingsValue<number> {
+    if (canonicalValue !== undefined) return { value: canonicalValue, source: "config" };
     const rounded =
       configValue === undefined
         ? DEFAULT_HOT_CPU_HEAP_SNAPSHOT_LIMIT
@@ -4634,6 +4653,24 @@ export class DesktopSettingsService {
     };
   }
 
+  private resolveHotCpuProfilingCaptureRules(general: DesktopSettingsConfig["general"]) {
+    const options = {
+      captureRules: general?.hotCpuProfilingCaptureRules,
+      triggerMode: general?.hotCpuProfilingTriggerMode,
+      slowburnThresholdPercent: general?.hotCpuProfilingSlowburnThresholdPercent,
+    };
+    const { configured, plan: effective } = resolveHotCpuRules(options, this.env);
+    const hasEnv = Object.keys(effective.overrides).length > 0;
+    const hasConfig = Object.values(options).some((value) => value !== undefined);
+    const source = hasEnv ? "env" as const : hasConfig ? "config" as const : "default" as const;
+    return {
+      value: configured,
+      effective,
+      source,
+      overriddenByEnv: hasEnv && hasConfig,
+    };
+  }
+
   private resolveHotCpuProfileTriggerMode(
     configValue: DesktopHotCpuProfileTriggerMode | undefined,
   ): DesktopSettingsValue<DesktopHotCpuProfileTriggerMode> {
@@ -4645,7 +4682,9 @@ export class DesktopSettingsService {
 
   private resolveHotCpuSlowburnThresholdPercent(
     configValue: number | undefined,
+    canonicalValue?: number,
   ): DesktopSettingsValue<number> {
+    if (canonicalValue !== undefined) return { value: canonicalValue, source: "config" };
     const rounded =
       configValue === undefined
         ? DESKTOP_HOT_CPU_PROFILE_SLOWBURN_THRESHOLD_DEFAULT_PERCENT

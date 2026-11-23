@@ -1806,7 +1806,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       ts: body.message?.ts,
     });
     if (!ids || !action?.value) return;
-    const signed = this.parseSignedCallbackValue(action.value);
+    const signed = this.parseSignedCallbackValue(action.value, receipt.receivedAt);
     if (!signed) return;
     const handleValidation = validateSlackCallbackHandle(signed.handle);
     if (!handleValidation.ok) {
@@ -1861,6 +1861,11 @@ export class SlackAdapter implements SlackProviderAdapter {
         channelId: channel.conversation.id,
         conversationKind: channel.conversation.kind,
         handleHash: createHash("sha256").update(signed.handle).digest("hex").slice(0, 8),
+      });
+      this.emitInboundRejected({
+        kind: "validation",
+        reason: "callback-handle-unavailable",
+        receivedAt: receipt.receivedAt,
       });
       return;
     }
@@ -2994,6 +2999,7 @@ export class SlackAdapter implements SlackProviderAdapter {
 
   private parseSignedCallbackValue(
     value: string,
+    receivedAt: number,
   ): { handle: string; intentId: string; issuedAt: number } | undefined {
     let parsed: unknown;
     try {
@@ -3022,6 +3028,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       this.logger.warn?.("slack callback signature rejected", {
         handleHash: createHash("sha256").update(record.h).digest("hex").slice(0, 8),
       });
+      this.emitInboundRejected({ kind: "validation", reason: "callback-signature", receivedAt });
       return undefined;
     }
     return { handle: record.h, intentId: record.i, issuedAt: record.t };

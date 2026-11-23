@@ -767,6 +767,7 @@ describe("StarMapChatCard sub-agents", () => {
           {
             monitorId: "monitor-1",
             task: "Watch the production rollout",
+            displayTitle: "Production rollout",
             status: "running",
             createdAt: Date.now(),
             updatedAt: Date.now(),
@@ -779,7 +780,7 @@ describe("StarMapChatCard sub-agents", () => {
     });
 
     const strip = screen.getByRole("region", { name: "Active sub-agents" });
-    expect(strip.textContent).toContain("Watch the production rollout");
+    expect(strip.textContent).toContain("Production rollout");
     expect(strip.compareDocumentPosition(screen.getByRole("textbox")))
       .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
@@ -812,7 +813,7 @@ describe("StarMapChatCard sub-agents", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Stop sub-agent: Watch the peer rollout",
+        name: "Stop sub-agent: the peer rollout",
       }),
     );
 

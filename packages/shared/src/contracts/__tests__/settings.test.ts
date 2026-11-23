@@ -1,3 +1,4 @@
+import { migrateHotCpuCaptureRules } from "../../hot-cpu-rules";
 import { describe, expect, it } from "vitest";
 
 import type { DesktopSettingsSnapshot } from "../settings";
@@ -62,6 +63,15 @@ describe("desktop settings contracts", () => {
         hotCpuProfilingStartDelayMs: {
           value: 0,
           source: "default",
+        },
+        hotCpuProfilingCaptureRules: {
+          value: migrateHotCpuCaptureRules(),
+          source: "default",
+          effective: {
+            intervalMs: 2_000,
+            rules: [{ id: "sustained", thresholdPercent: 50, durationMs: 4_000, sampleCount: 2 }],
+            overrides: {},
+          },
         },
         hotCpuProfilingTriggerMode: {
           value: "sustained",

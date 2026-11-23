@@ -33,6 +33,7 @@ import {
   registerScheduledActionIpcHandlers,
 } from "./ipc/scheduled-actions-ipc";
 import { registerThreadTodoIpcHandlers } from "./ipc/thread-todos-ipc";
+import { registerThreadPullRequestMergeIpcHandlers } from "./ipc/thread-pull-request-merge-ipc";
 import { registerCodexEnvironmentEditorIpcHandlers } from "./ipc/codex-environment-editor-ipc";
 import { registerResourceCheckoutIpcHandlers } from "./ipc/resource-checkout-ipc";
 import { registerOperatorRequestIpcHandlers } from "./ipc/operator-requests-ipc";
@@ -1417,6 +1418,7 @@ export function bootstrapApp(): void {
     registerAgentIpcHandlers();
     registerScheduledActionIpcHandlers();
     registerThreadTodoIpcHandlers(ownerServices.queues.events);
+    registerThreadPullRequestMergeIpcHandlers();
     registerCodexEnvironmentEditorIpcHandlers();
     registerOperatorRequestIpcHandlers(ownerServices.queues);
     registerResourceCheckoutIpcHandlers(ownerServices.resourceCheckouts);
@@ -1459,6 +1461,7 @@ export function bootstrapApp(): void {
           patch.general?.developerMode !== undefined ||
           patch.general?.hotCpuProfilingEnabled !== undefined ||
           patch.general?.hotCpuProfilingStartDelayMs !== undefined ||
+          patch.general?.hotCpuProfilingCaptureRules !== undefined ||
           patch.general?.hotCpuProfilingTriggerMode !== undefined ||
           patch.general?.hotCpuProfilingSlowburnThresholdPercent !== undefined ||
           patch.general?.hotCpuProfilingCaptureHeapSnapshot !== undefined ||

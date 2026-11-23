@@ -84,6 +84,18 @@ authorized bot messages as ordinary `text` or `media` events with
 provider alerts such as Slack posts from monitoring bots without looping on
 PwrAgent's own replies.
 
+Use the separate `onInboundRejected` observer for terminal adapter validation
+failures, such as bad callback signatures or unresolved callback handles. Emit
+`kind: "validation"`, a fixed reason, and the local `receivedAt` only. The
+activity log records these as `inbound-rejected` with
+`rejectionStage: "adapter-validation"`, at most once per platform and reason
+every 30 minutes while the owner is running. If the write fails, the next
+attempt for that platform and reason can run after one minute. Send any
+webhook rejection response before notifying validation observers. This path
+performs no destination lookup and carries no request fields. Actor and
+conversation authorization rejections use the same observer with
+route-resolution metadata and retain their actionability rules.
+
 ## Lifecycle
 
 `stop()` is valid as soon as `start()` has been invoked, not only after the
@@ -224,7 +236,11 @@ on the active binding and notifies local surfaces without waiting for a
 provider metadata echo.
 Adapters that implement title updates should also implement
 `supportsConversationTitle` with the same surface predicate they use before a
-title update. `get_current_messaging_surface` reports that result separately
+title update. The status card uses the predicate to show Sync name, and both
+callback and Agent tool requests recheck support before attempting a rename.
+Mattermost can update headers for top-level channels and DMs. Replies share
+the parent conversation ID and have no title of their own.
+`get_current_messaging_surface` reports support separately
 from the initiating actor's `thread.settings.name` permission as
 `conversationCapabilities.rename.supported` and `.allowed`.
 

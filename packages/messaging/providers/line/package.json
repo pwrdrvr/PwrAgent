@@ -5,7 +5,8 @@
   "license": "MIT",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./rich-menu.png": "./assets/pwragent-line-rich-menu.png"
   },
   "dependencies": {
     "@line/bot-sdk": "^11.0.0",

@@ -1,6 +1,7 @@
+import { readAppMetrics } from "./app-metrics";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { app, BrowserWindow } from "electron";
+import { BrowserWindow } from "electron";
 import { readRenderingSnapshot, type RenderingCaptureResult } from "../../../shared/rendering-diagnostics";
 import { acquireChromiumTrace } from "../../diagnostics/chromium-trace-lease";
 import { RENDERER_UPDATE_EVENT_NAMES } from "../../../shared/renderer-update-diagnostics";
@@ -57,7 +58,7 @@ async function sampleWindows(ownedWindow: BrowserWindow) {
   const windows = BrowserWindow.getAllWindows().filter((window) => window !== ownedWindow);
   return {
     // Electron CPU is not a GPU utilization counter. Numeric PID joins identify the GPU helper.
-    processes: app.getAppMetrics().slice(0, 64).map((metric) => ({
+    processes: readAppMetrics().metrics.slice(0, 64).map((metric) => ({
       pid: metric.pid, type: metric.type, cpuPercent: metric.cpu.percentCPUUsage,
     })),
     omittedWindows: Math.max(0, windows.length - 16),

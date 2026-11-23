@@ -4,6 +4,7 @@ import { graphql } from "@octokit/graphql";
 import {
   resolvePullRequestIdentity,
   type PrLifecycleState,
+  type PrMergeMethod,
   type PrMergeQueueStatus,
   type PrSummary,
 } from "@pwragent/shared/contracts/navigation";
@@ -228,7 +229,8 @@ export function parsePrRefFromUrl(url: string): PrRef | undefined {
  * which would churn snapshot equality for something no surface displays.
  *
  * `isMergeQueueEnabled` and `mergeQueueEntry` are a scalar and an object, and
- * cost no rate-limit points. The queue's last event is a connection
+ * cost no rate-limit points. So do the three `baseRepository` merge settings,
+ * which tell the PR card which merge methods to offer. The queue's last event is a connection
  * (`PR_QUEUE_EVENTS_FRAGMENT`), so only the poll of a repository known to use
  * a queue asks for it.
  */
@@ -254,6 +256,7 @@ fragment PrStatus on PullRequest {
   headRepositoryOwner { login }
   isMergeQueueEnabled
   mergeQueueEntry { state position enqueuedAt }
+  baseRepository { squashMergeAllowed rebaseMergeAllowed mergeCommitAllowed }
   commits(last: 1) {
     totalCount
     nodes {
@@ -350,6 +353,11 @@ export type GraphqlPrNode = {
     state?: string | null;
     position?: number | null;
     enqueuedAt?: string | null;
+  } | null;
+  baseRepository?: {
+    squashMergeAllowed?: boolean | null;
+    rebaseMergeAllowed?: boolean | null;
+    mergeCommitAllowed?: boolean | null;
   } | null;
   queueEvents?: {
     nodes?: ({
@@ -683,6 +691,7 @@ export function mapGraphqlPrNode(
   const headSha = node.headRefOid?.trim() || commitShas[0];
   const lifecycleState = deriveLifecycleState(shaped);
   const mergeQueue = readGraphqlMergeQueue(node, lifecycleState);
+  const allowedMergeMethods = readAllowedMergeMethods(node.baseRepository);
   // The poll already carries the queue setting, so a merge in this
   // repository learns about its queue without a request of its own.
   if (node.isMergeQueueEnabled === true && node.url) {
@@ -711,6 +720,7 @@ export function mapGraphqlPrNode(
     reviewState: deriveReviewState(shaped),
     mergeState: deriveMergeState(shaped),
     ...(mergeQueue ? { mergeQueue } : {}),
+    ...(allowedMergeMethods ? { allowedMergeMethods } : {}),
     ...(headSha ? { headSha } : {}),
     ...(commitShas.length > 0 ? { commitShas } : {}),
     ...readPrCount(node.additions, "additions"),
@@ -722,6 +732,27 @@ export function mapGraphqlPrNode(
     ...readPrTimestamp(node.closedAt, "closedAt"),
     url: node.url,
   };
+}
+
+/**
+ * The repository's merge buttons, in the to-do card's order. Only a setting
+ * GitHub answered counts: a missing one leaves the list unknown, not empty.
+ */
+function readAllowedMergeMethods(
+  repository: GraphqlPrNode["baseRepository"],
+): PrMergeMethod[] | undefined {
+  const squash = repository?.squashMergeAllowed;
+  const rebase = repository?.rebaseMergeAllowed;
+  const merge = repository?.mergeCommitAllowed;
+  if (typeof squash !== "boolean" || typeof rebase !== "boolean" || typeof merge !== "boolean") {
+    return undefined;
+  }
+  const allowed: PrMergeMethod[] = [
+    ...(squash ? ["squash" as const] : []),
+    ...(rebase ? ["rebase" as const] : []),
+    ...(merge ? ["merge" as const] : []),
+  ];
+  return allowed.length > 0 ? allowed : undefined;
 }
 
 function readGraphqlMergeQueue(

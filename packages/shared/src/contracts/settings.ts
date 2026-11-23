@@ -1,3 +1,4 @@
+import type { HotCpuCaptureRules, HotCpuRulePlan } from "../hot-cpu-rules";
 import type { DesktopThreadArchivePolicy } from "../thread-archive-policy";
 import type { DesktopCheckoutHibernationPolicy } from "../checkout-hibernation-policy";
 import type { MessagingToolUpdateMode } from "./messaging";
@@ -973,6 +974,7 @@ export type DesktopGeneralSettingsSnapshot = {
   developerMode: DesktopSettingsValue<boolean>;
   hotCpuProfilingEnabled: DesktopSettingsValue<boolean>;
   hotCpuProfilingStartDelayMs: DesktopSettingsValue<DesktopHotCpuProfileStartDelayMs>;
+  hotCpuProfilingCaptureRules: DesktopSettingsValue<HotCpuCaptureRules> & { effective: HotCpuRulePlan };
   hotCpuProfilingTriggerMode: DesktopSettingsValue<DesktopHotCpuProfileTriggerMode>;
   hotCpuProfilingSlowburnThresholdPercent: DesktopSettingsValue<number>;
   hotCpuProfilingCaptureChromiumTrace: DesktopSettingsValue<boolean>;
@@ -1418,21 +1420,29 @@ export type DesktopTokenMiserUsage = {
   estimatedParentTokensSaved: number;
 };
 
+export type ManagedCodexTrackTags = {
+  /** Newest promoted tag observed in the release list. */
+  latestTag?: string;
+  /** Newest tag overall, promoted or not. */
+  prereleaseTag?: string;
+};
+
+export type ManagedCodexTrackLookup = ManagedCodexTrackTags & {
+  /** When GitHub last returned or revalidated the release list. */
+  observedAt: number;
+};
+
 export type DesktopSettingsSnapshot = {
   fetchedAt: number;
   configPath: string;
   configError?: string;
   runtime: {
     tokenMiser?: {
-      managedCodex?: {
+      managedCodex?: ManagedCodexTrackTags & {
         state: "pending-switch" | "ready" | "unavailable";
         reason?: string;
         version?: string;
         checkedAt?: number;
-        /** Newest promoted tag the last release check saw. */
-        latestTag?: string;
-        /** Newest tag overall the last release check saw, promoted or not. */
-        prereleaseTag?: string;
       };
       /**
        * Whether the Codex-side gate is actually installed. The feature fails
@@ -1853,6 +1863,7 @@ export type DesktopSettingsConfigPatch = {
     developerMode?: boolean;
     hotCpuProfilingEnabled?: boolean;
     hotCpuProfilingStartDelayMs?: DesktopHotCpuProfileStartDelayMs;
+    hotCpuProfilingCaptureRules?: HotCpuCaptureRules;
     hotCpuProfilingTriggerMode?: DesktopHotCpuProfileTriggerMode;
     hotCpuProfilingSlowburnThresholdPercent?: number;
     hotCpuProfilingCaptureChromiumTrace?: boolean;
@@ -2313,18 +2324,33 @@ export type CheckDesktopCodexAuthProfileStatusResponse = {
 /** Agents Get started reads recent projects from. */
 export type RecentProjectAgent = AppServerBackendKind;
 
-export type DiscoverRecentProjectsRequest = {
-  /**
-   * Read this computer's Codex threads. False when the profile being set up
-   * signs in to Codex on its own: that login's threads are not these.
-   */
-  includeCodex: boolean;
-};
+/**
+ * Get started asks for each part on its own, at the same time, so a slow
+ * Claude Code history read never holds back the projects the other reads
+ * found. `agents` reads Codex and PwrAgent's own thread lists;
+ * `claude-history` reads Claude Code's session history. A request without a
+ * part runs every read and answers once. A window's newer request for a part
+ * replaces only its older request for that part.
+ */
+export type RecentProjectDiscoveryPart = "agents" | "claude-history";
+
+export type DiscoverRecentProjectsRequest =
+  | {
+    /**
+     * Read this computer's Codex threads. False when the profile being set up
+     * signs in to Codex on its own: that login's threads are not these.
+     */
+    includeCodex: boolean;
+    part?: "agents";
+  }
+  | { part: "claude-history" };
 
 /**
- * How one agent's read went. `complete` read every thread; `partial` stopped
- * at its budget, so older projects may be missing; `failed` could not read;
- * `skipped` was not asked for or has nothing PwrAgent may read.
+ * How one agent's discovery went. `complete` finished the work; `partial`
+ * hit a budget, so older projects may be missing; `failed` could not finish
+ * a read; `skipped` was not asked for or has nothing PwrAgent may read.
+ * Claude Code history and PwrAgent threads share one Claude report. The
+ * worst attempted status wins, and observations can survive a failed read.
  */
 export type RecentProjectSourceReport = {
   agent: RecentProjectAgent;
@@ -2338,7 +2364,7 @@ export type RecentProjectObservation = {
   /** The project root: a repository's primary checkout, else the folder. */
   path: string;
   agent: RecentProjectAgent;
-  /** Epoch milliseconds of the newest thread there, when the agent said. */
+  /** Epoch milliseconds of the newest activity there, when the agent reported it. */
   lastActiveAt?: number;
 };
 
@@ -3024,6 +3050,19 @@ export type SettingsCredentialTestResult = {
 export type SettingsCredentialTestRequest = {
   kind: SettingsCredentialTestKind;
 };
+
+export type LineRichMenuSetupRequest =
+  | { action: "check" }
+  | { action: "install" | "remove"; accountId: string };
+
+export type LineRichMenuSetupResponse =
+  | { kind: "unconfigured" }
+  | { kind: "error"; reason: "busy" | "changed" | "recovery-required" | "request-failed" | "rolled-back" }
+  | ({ accountId: string; preview: string; version: string; cleanupRequired: boolean } & (
+    | { kind: "available" }
+    | { kind: "installed"; revision: string; updateAvailable: boolean }
+    | { kind: "blocked"; reason: "administrator" | "different-menu" }
+  ));
 
 /** Prepare the current Slack manifest for a new or existing app. */
 export type SlackCreateAppRequest = {

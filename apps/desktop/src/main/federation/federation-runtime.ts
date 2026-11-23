@@ -27,6 +27,13 @@ import { FEDERATION_OPERATOR_QUESTION_CAPABILITIES, FEDERATION_OPERATOR_QUESTION
   registerFederationOperatorQuestionHandlers, type OperatorQuestionOperation,
   type OperatorQuestionOperationRequest, type OperatorQuestionOperationResponse } from "./federation-operator-questions";
 import { localThreadTodoOperations } from "../thread-todos/thread-todo-operations";
+import { desktopThreadPullRequestMergeDeps } from "../pr-status/desktop-thread-pull-request-merge";
+import {
+  mergeThreadPullRequest,
+  readThreadPullRequestMerge,
+  readThreadPullRequestMergeThread,
+} from "../pr-status/thread-pull-request-merge";
+import { mergeThreadPullRequestForPeer } from "../pr-status/thread-pull-request-merge-federation";
 import { FEDERATION_THREAD_TODO_CAPABILITIES, FEDERATION_THREAD_TODO_METHODS, registerFederationThreadTodoHandlers,
   type ThreadTodoOperation, type ThreadTodoOperationRequest, type ThreadTodoOperationResponse } from "./federation-thread-todos";
 import { createTerminalHistoryStore } from "../terminal/terminal-history";
@@ -596,6 +603,12 @@ export class FederationNavigationUpgradeRequiredError extends Error {
   }
 }
 
+/** A peer's merge refreshes PR status the way a peer's refresh request does. */
+function peerThreadPullRequestMergeDeps() {
+  return desktopThreadPullRequestMergeDeps(async (thread) => await getDesktopBackendRegistry()
+    .refreshOwnedThreadPullRequests({ backend: thread.backend, threadId: thread.threadId, trigger: "user" }));
+}
+
 function navigationUpgradeRequired(
   instanceId: FederationInstanceId,
 ): FederationNavigationUpgradeRequiredError {
@@ -779,6 +792,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "operator_requests",
   "thread_display_bulk_reads",
   "thread_pr_watch_control_v1",
+  "thread_pull_request_merge_v1",
   "thread_dependencies_v1",
   "thread_dependency_provenance_v1",
 ];
@@ -2497,6 +2511,10 @@ export class DesktopFederationRuntime {
     store.revokePeer(peerId, revokedAt);
     this.server?.closePeer(peerId);
     this.unregisterPeer(peerId);
+    if (peer.capabilities.includes("turn_control")) {
+      void Promise.resolve().then(() => getDesktopBackendRegistry().pauseGoalsAfterTurnControlRevocation())
+        .catch((error) => log.warn("Could not clean up Codex goals after peer access was revoked", { peerId, error }));
+    }
     this.remotePeerDirectory.delete(peerId);
     this.publishPeerStatus(peerId, "revoked");
     this.broadcastPeerDirectory();
@@ -7294,7 +7312,9 @@ export class DesktopFederationRuntime {
   }
 
   private forwardLocalBackendEvent(event: AgentEvent): void {
-    if (!this.router || event.notification.method === "thread/start/pending") return;
+    if (!this.router
+      || event.notification.method === "thread/start/pending"
+      || event.notification.method.startsWith("thread/goal/")) return;
     const invalidation = navigationInvalidationForLocalEvent(event);
     if (invalidation) this.forwardLocalBackendEvent(invalidation);
     const ownerInstanceId = this.ensureLocalInstanceId();
@@ -8106,6 +8126,18 @@ function localBackendOperations(): FederationBackendOperations {
     async manageThreadPrWatchesV1(request) {
       // The router already required the viewer's turn_control grant.
       return await getDesktopBackendRegistry().manageThreadPrWatchesForPeer(request);
+    },
+    // A peer's PR card merge. The router already required turn_control; the
+    // owner reads only the allowlisted fields and runs the same validation,
+    // holds and `gh` as its own window's merge.
+    async readThreadPullRequestMergeV1(request) {
+      const owned = readThreadPullRequestMergeThread(request);
+      if (!owned) throw new Error("backend and threadId are required.");
+      return await readThreadPullRequestMerge(peerThreadPullRequestMergeDeps(), owned);
+    },
+    async mergeThreadPullRequestV1(request) {
+      return await mergeThreadPullRequestForPeer(request, async (owned) =>
+        await mergeThreadPullRequest(peerThreadPullRequestMergeDeps(), owned));
     },
     // A peer's requests for this instance's projects. The router already
     // required turn_control; the service validates and applies them exactly

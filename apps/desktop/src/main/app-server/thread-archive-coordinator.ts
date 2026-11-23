@@ -203,7 +203,7 @@ export type ThreadArchiveCoordinatorHandlers = Pick<RegistryHandlers, "messaging
  */
 export interface ThreadArchiveCoordinatorHost extends Pick<RegistryHostPorts,
   "getCachedThreadSummary" | "getClient" | "publishLocalEvent" | "threadHasActiveTurn"
-  | "resolveThreadEnvironmentCwd" | "withCodexThreadClient"
+  | "resolveThreadEnvironmentCwd" | "withCodexThreadClient" | "withGoalHibernation"
 >, ArchiveCleanupInventoryHost {
   deleteOwnedThreadAssets(owner: ThreadAssetOwner): Promise<void>;
   readonly codexBackgroundTerminals: ReadonlyMap<string, CodexBackgroundTerminal[]>;
@@ -1149,7 +1149,7 @@ export class ThreadArchiveCoordinator {
         // snapshot holds exactly these files.
         let saved: Extract<Awaited<ReturnType<typeof inspectHibernationWorkspace>>, { keep?: undefined }> | undefined;
         try {
-          snapshot = await this.withHibernatingCheckout(key, target.worktreePath, async () => await this.host().worktreeArchiveService.hibernate({
+          const hibernate = () => this.withHibernatingCheckout(key, target.worktreePath, async () => await this.host().worktreeArchiveService.hibernate({
             backend, threadId,
             worktreePath: target.worktreePath,
             repositoryPath: target.repositoryPath,
@@ -1208,6 +1208,7 @@ export class ThreadArchiveCoordinator {
               return assertCurrent;
             },
           }));
+          snapshot = await this.host().withGoalHibernation({ backend, threadId }, hibernate);
         } catch (error) {
           if (error instanceof AutomaticArchiveCancelledError) return false;
           if (error instanceof CheckoutHibernationKeptError) return error.reason;

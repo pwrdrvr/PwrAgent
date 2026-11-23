@@ -130,6 +130,13 @@ export const FEDERATION_CAPABILITIES = [
    */
   "thread_pr_watch_control_v1",
   /**
+   * The owner answers `backend.readThreadPullRequestMergeV1` and
+   * `backend.mergeThreadPullRequestV1`: a viewer merges a PR attached to one
+   * of the owner's threads from its PR card, and the owner validates and
+   * runs it as its own window's merge. A viewer offers no merge without it.
+   */
+  "thread_pull_request_merge_v1",
+  /**
    * The owner sends each of its Directories projects' Forge Automation on
    * its rows and answers `backend.setProjectForgeAutomation`,
    * `backend.listProjectHeldWakeups` and `backend.resolveProjectHeldWakeups`.

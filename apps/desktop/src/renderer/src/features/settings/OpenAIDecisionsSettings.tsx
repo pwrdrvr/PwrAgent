@@ -4,6 +4,7 @@ import type {
   DesktopSettingsSecretState,
   DesktopSettingsSnapshot,
 } from "@pwragent/shared/contracts/settings";
+import { decisionImageCapabilities, decisionImageCapabilityLabel } from "@pwragent/shared/decision-models";
 import { DraftTextField } from "./DecisionModelSettings";
 import { SecretField } from "./SecretField";
 import {
@@ -68,7 +69,7 @@ export function OpenAIDecisionsScreen(props: {
       <SettingsPanelHead
         eyebrow="AI Providers"
         title="OpenAI Decisions"
-        help="Agents in any thread can register a decision once and run it again on new evidence. A decision registered for OpenAI runs on its Decisions API with gpt-6-luna. Agents can also register decisions for TypeSafe Jev or the local decision model, which use their own settings."
+        help={`Agents can register a decision once and run it again on new evidence. OpenAI decisions run on gpt-6-luna. ${decisionImageCapabilityLabel(decisionImageCapabilities("openai"))}.`}
       />
       <SettingsSection
         title="Connection"

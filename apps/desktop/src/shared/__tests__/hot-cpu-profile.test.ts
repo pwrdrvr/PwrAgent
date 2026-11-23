@@ -109,7 +109,7 @@ describe("hot CPU profile handoff message", () => {
         "Captured at: 2026-06-10T12:00:00.000Z",
         "PwrAgent version: Unavailable",
         "PwrAgent build: Unavailable",
-        "Trigger: Slowburn (2 consecutive samples >= 15%; trigger sample 24.3%)",
+        "Trigger: Slow burn (2 consecutive samples >= 15%; trigger sample 24.3%)",
         "Session basename: 20260610T120000Z",
         "Session directory path: /Users/test/.pwragent/profiles/dev/diagnostics/hot-cpu/20260610T120000Z",
         "CPU profile basename: renderer-hot-0001.cpuprofile",
@@ -117,6 +117,27 @@ describe("hot CPU profile handoff message", () => {
         "Open the .cpuprofile in Chrome DevTools Performance, or inspect the full session directory for samples, events, and optional heap snapshots.",
       ].join("\n"),
     );
+  });
+
+  it("labels nominal windows separately from measured CPU for every matched rule", () => {
+    const message = buildHotCpuProfileHandoffMessage({
+      ...capturedEvent,
+      matchedRules: [
+        {
+          id: "sustained", thresholdPercent: 50, durationMs: 4_000, sampleCount: 2,
+          intervalMs: 2_000, measuredDurationMs: 4_010, triggerCpuPercent: 61,
+          peakCpuPercent: 70, minimumCpuPercent: 61, usedElectronInterval: false,
+        },
+        {
+          id: "slowburn", thresholdPercent: 15, durationMs: 4_000, sampleCount: 2,
+          intervalMs: 2_000, measuredDurationMs: 4_010, triggerCpuPercent: 61,
+          peakCpuPercent: 70, minimumCpuPercent: 61, usedElectronInterval: true,
+        },
+      ],
+    });
+    expect(message).toContain("Sustained (50% threshold over 4 s, 2 samples. Measured 61% at trigger, 70% peak)");
+    expect(message).toContain("and Slow burn (15% threshold over 4 s, 2 samples. Measured 61% at trigger, 70% peak)");
+    expect(message).toContain("includes Electron’s interval estimate");
   });
 
   it("includes heap snapshot artifacts when present", () => {

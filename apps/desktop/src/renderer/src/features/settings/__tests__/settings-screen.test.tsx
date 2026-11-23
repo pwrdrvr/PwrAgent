@@ -1,3 +1,4 @@
+import { migrateHotCpuCaptureRules } from "@pwragent/shared/hot-cpu-rules";
 import type {
   NavigationQueryPage,
   NavigationQueryRequest,
@@ -144,6 +145,15 @@ function createSnapshot(
       hotCpuProfilingStartDelayMs: {
         value: 0,
         source: "default",
+      },
+      hotCpuProfilingCaptureRules: {
+        value: migrateHotCpuCaptureRules(),
+        source: "default",
+        effective: {
+          intervalMs: 2_000,
+          rules: [{ id: "sustained", thresholdPercent: 50, durationMs: 4_000, sampleCount: 2 }],
+          overrides: {},
+        },
       },
       hotCpuProfilingTriggerMode: {
         value: "sustained",
@@ -582,6 +592,7 @@ function createSettingsState(
     saving: false,
     snapshot,
     writeConfig: vi.fn(async () => true),
+    writeConfigWithSnapshot: vi.fn(async () => snapshot),
   };
 }
 
@@ -2281,7 +2292,7 @@ describe("SettingsScreen", () => {
         screen.getByRole("radiogroup", { name: "Profiling start delay" }),
       ).getByRole("radio", { name: /5 seconds/ }),
     ).not.toBeDisabled();
-    expect(screen.getByRole("radio", { name: /Slowburn/ })).not.toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: "Slow burn" })).not.toBeDisabled();
     const chromiumTrace = getLabeledSwitch("Chromium trace");
     expect(chromiumTrace).toHaveAttribute("aria-checked", "false");
     fireEvent.click(chromiumTrace);
@@ -2969,6 +2980,12 @@ describe("SettingsScreen", () => {
         },
       });
     });
+    fireEvent.click(screen.getByRole("button", { name: "Stop Capture" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: { hotCpuProfilingEnabled: false, hotCpuProfilingCaptureHeapSnapshot: false },
+      });
+    });
   });
 
   it("copies Troubleshooting diagnostics with the profile, PIDs, and log path", async () => {
@@ -3213,7 +3230,7 @@ describe("SettingsScreen", () => {
     ).toBeDisabled();
   });
 
-  it("saves hot CPU profiling delay and trigger mode presets", async () => {
+  it("saves hot CPU start delay and independently enables Slow burn", async () => {
     const baseSnapshot = createSnapshot();
     const settings = createSettingsState(
       createSnapshot({
@@ -3245,14 +3262,74 @@ describe("SettingsScreen", () => {
       });
     });
 
-    fireEvent.click(screen.getByRole("radio", { name: /Slowburn/ }));
+    const rules = screen.getByRole("group", { name: "Capture rules" });
+    fireEvent.click(within(rules).getByRole("checkbox", { name: "High CPU" }));
+    expect(within(rules).getByRole("status")).toHaveTextContent("At least one rule stays on");
+    fireEvent.click(within(rules).getByRole("checkbox", { name: "Slow burn" }));
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {
-          hotCpuProfilingTriggerMode: "slowburn",
+          hotCpuProfilingCaptureRules: {
+            ...migrateHotCpuCaptureRules(),
+            slowburn: { enabled: true, thresholdPercent: 15, durationMs: 4_000 },
+          },
         },
       });
     });
+  });
+
+  it("saves a threshold and a following checkbox edit without losing either", async () => {
+    let finishThreshold!: (value: boolean) => void;
+    const thresholdSaved = new Promise<boolean>((resolve) => { finishThreshold = resolve; });
+    const settings = createSettingsState();
+    const writeConfig = vi.fn<typeof settings.writeConfig>()
+      .mockReturnValueOnce(thresholdSaved).mockResolvedValue(true);
+    render(<SettingsScreen
+      initialSection="troubleshooting"
+      settings={{ ...settings, writeConfig }}
+      onClose={() => undefined}
+    />);
+
+    const rules = within(screen.getByRole("group", { name: "Capture rules" }));
+    const threshold = rules.getByRole("spinbutton", { name: "Sustained CPU threshold" });
+    fireEvent.change(threshold, { target: { value: "85" } });
+    fireEvent.blur(threshold);
+    fireEvent.click(rules.getByRole("checkbox", { name: "Slow burn" }));
+    finishThreshold(true);
+    await waitFor(() => expect(writeConfig).toHaveBeenCalledTimes(2));
+    expect(writeConfig).toHaveBeenLastCalledWith({
+      general: { hotCpuProfilingCaptureRules: {
+        ...migrateHotCpuCaptureRules(),
+        sustained: { thresholdPercent: 85, durationMs: 4_000 },
+        slowburn: { enabled: true, thresholdPercent: 15, durationMs: 4_000 },
+      } },
+    });
+  });
+
+  it("shows the effective legacy window until the operator selects a duration", async () => {
+    const snapshot = createSnapshot();
+    const defaults = migrateHotCpuCaptureRules();
+    snapshot.general.hotCpuProfilingCaptureRules = {
+      value: { ...defaults, sustained: { ...defaults.sustained, legacyIntervalTiming: true } },
+      source: "env",
+      effective: {
+        intervalMs: 250,
+        overrides: { interval: "PWRAGENT_HOT_CPU_PROFILING_INTERVAL_MS" },
+        rules: [{ id: "sustained", thresholdPercent: 50, durationMs: 500, sampleCount: 2 }],
+      },
+    };
+    const settings = createSettingsState(snapshot);
+    render(<SettingsScreen
+      initialSection="troubleshooting"
+      settings={settings}
+      onClose={() => undefined}
+    />);
+    const duration = screen.getByRole("combobox", { name: "Sustained duration" });
+    expect(duration).toHaveTextContent("0.5 s · 2 samples");
+    chooseSelectOption(duration, "4 s · 16 samples");
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({
+      general: { hotCpuProfilingCaptureRules: defaults },
+    }));
   });
 
   it("defaults the missing Codex skill questions flag to off and persists changes", async () => {
@@ -3765,8 +3842,8 @@ describe("SettingsScreen", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("groups active-profile scratch projects as Workspaces and hides inactive profile roots", async () => {
-    const activeWorkspaceRoot = "/Users/fixture-user/.pwragent/profiles/dev/projects";
+  it.each(["/Users/fixture-user/.pwragent", "/state"])("groups active-profile scratch projects under %s as Workspaces", async (profileHome) => {
+    const activeWorkspaceRoot = `${profileHome}/profiles/dev/projects`;
     const listThreads = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: 3_000,
@@ -3795,6 +3872,14 @@ describe("SettingsScreen", () => {
           createdAt: 1_000,
           updatedAt: 4_000,
           projectKey: `${activeWorkspaceRoot}/2026-05-10-883761`,
+          linkedDirectories: [],
+          source: "codex" as const,
+        },
+        {
+          id: "thread-inactive-workspace",
+          title: "Archived on another profile",
+          titleSource: "explicit" as const,
+          projectKey: `${profileHome}/profiles/other/projects/2026-05-10-991047`,
           linkedDirectories: [],
           source: "codex" as const,
         },
@@ -3840,6 +3925,7 @@ describe("SettingsScreen", () => {
       screen.queryByRole("heading", { name: "2026-05-10-883761" }),
     ).not.toBeInTheDocument();
     expect(screen.queryByText("Key Lime Pie yum")).not.toBeInTheDocument();
+    expect(screen.queryByText("Archived on another profile")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: "projects" }),
     ).not.toBeInTheDocument();
@@ -5143,6 +5229,164 @@ describe("SettingsScreen", () => {
     expect(screen.getByText(/checked just now/)).toBeInTheDocument();
   });
 
+  async function expectManagedCodexTrackRefresh(previous: number, published: number) {
+    const snapshot = createSnapshot();
+    snapshot.models.codex.managedBuilds = { value: true, source: "config" };
+    snapshot.runtime.tokenMiser = {
+      managedCodex: {
+        state: "ready",
+        version: `0.${previous}.0-pwragent.1`,
+        checkedAt: Date.now() - 21 * 24 * 60 * 60_000,
+        latestTag: `pwragent-v0.${previous}.0-pwragent.1`,
+        prereleaseTag: `pwragent-v0.${previous}.1-pwragent.1`,
+      },
+    };
+    const settings = createSettingsState(snapshot);
+    const readManagedCodexTrackTags = vi.fn(async () => ({
+      observedAt: Date.now(),
+      latestTag: `pwragent-v0.${published}.0-pwragent.1`,
+      prereleaseTag: `pwragent-v0.${published}.1-pwragent.1`,
+    }));
+    const refreshCodexDiscovery = vi.fn();
+    const listBackends = vi.fn(async () => ({ fetchedAt: Date.now(), backends: [] }));
+    const desktopApi = { listBackends, readManagedCodexTrackTags, refreshCodexDiscovery };
+    const view = render(
+      <SettingsScreen
+        desktopApi={desktopApi as unknown as DesktopApi}
+        initialSection="models"
+        initialSubsection="codex"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    try {
+      await act(async () => {});
+      const track = screen.getByRole("radiogroup", { name: "Build track" });
+      // Opening Codex Settings should show the releases reported by the
+      // publisher even when the last installed build is weeks old.
+      const latest = within(track).getByRole("radio", { name: /^Latest/ });
+      const prerelease = within(track).getByRole("radio", { name: /^Prerelease/ });
+      expect(latest).toHaveAttribute("aria-checked", "true");
+      expect(within(latest).getByText(`0.${published}.0-pwragent.1`)).toBeInTheDocument();
+      expect(within(prerelease).getByText(`0.${published}.1-pwragent.1`)).toBeInTheDocument();
+      expect(readManagedCodexTrackTags).toHaveBeenCalledOnce();
+      expect(refreshCodexDiscovery).not.toHaveBeenCalled();
+      expect(settings.writeConfig).not.toHaveBeenCalled();
+      expect(settings.writeConfigWithSnapshot).not.toHaveBeenCalled();
+      expect(listBackends).not.toHaveBeenCalledWith(expect.objectContaining({
+        refreshModels: "codex",
+      }));
+    } finally {
+      view.unmount();
+    }
+  }
+
+  it("updates weeks-old Codex track labels on open before switching tracks", async () => {
+    await expectManagedCodexTrackRefresh(162, 171);
+  });
+
+  it("shows the published Codex tracks on open for any older installed version", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.integer({ min: 150, max: 300 }),
+      fc.integer({ min: 1, max: 40 }),
+      async (previous, releasesSinceInstall) => {
+        await expectManagedCodexTrackRefresh(previous, previous + releasesSinceInstall);
+      },
+    ), { numRuns: 25 });
+  });
+
+  it.each([
+    {
+      lookupAge: 3000,
+      name: "an older REST result",
+      expectedLatest: "0.160.0-pwragent.1",
+      expectedPrerelease: "0.171.0-pwragent.1",
+    },
+    {
+      lookupAge: 1000,
+      name: "a fresh list with no promoted release",
+      expectedLatest: "Unavailable",
+      expectedPrerelease: "0.170.0-pwragent.1",
+    },
+    {
+      lookupAge: undefined,
+      name: "an unavailable release list",
+      expectedLatest: "0.160.0-pwragent.1",
+      expectedPrerelease: "0.171.0-pwragent.1",
+    },
+  ])("shows authoritative Codex tracks with $name", async ({ lookupAge, expectedLatest, expectedPrerelease }) => {
+    const now = Date.now();
+    const snapshot = createSnapshot();
+    snapshot.models.codex.managedBuilds = { value: true, source: "config" };
+    snapshot.runtime.tokenMiser = {
+      managedCodex: {
+        state: "ready",
+        version: "0.171.0-pwragent.1",
+        checkedAt: now - 2000,
+        latestTag: "pwragent-v0.160.0-pwragent.1",
+        prereleaseTag: "pwragent-v0.171.0-pwragent.1",
+      },
+    };
+    const readManagedCodexTrackTags = vi.fn(async () => lookupAge === undefined ? undefined : ({
+      observedAt: now - lookupAge,
+      prereleaseTag: "pwragent-v0.170.0-pwragent.1",
+    }));
+    render(
+      <SettingsScreen
+        desktopApi={{ readManagedCodexTrackTags }}
+        initialSection="models"
+        initialSubsection="codex"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+    await act(async () => {});
+    const track = within(screen.getByRole("radiogroup", { name: "Build track" }));
+    expect(track.getByRole("radio", { name: /^Latest/ })).toHaveTextContent(expectedLatest);
+    expect(track.getByRole("radio", { name: /^Prerelease/ })).toHaveTextContent(expectedPrerelease);
+  });
+
+  it("rediscovers models if a track switch installs a build newer than its advertised version", async () => {
+    const snapshot = createSnapshot();
+    snapshot.models.codex.managedBuilds = { value: true, source: "config" };
+    snapshot.models.codex.managedBuildChannel = { value: "prerelease", source: "config" };
+    snapshot.runtime.tokenMiser = {
+      managedCodex: {
+        state: "ready",
+        version: "0.160.0-pwragent.1",
+        latestTag: "pwragent-v0.160.0-pwragent.1",
+        prereleaseTag: "pwragent-v0.160.0-pwragent.1",
+      },
+    };
+    const savedSnapshot = {
+      ...snapshot,
+      runtime: {
+        ...snapshot.runtime,
+        tokenMiser: {
+          managedCodex: { state: "ready" as const, version: "0.171.0-pwragent.1" },
+        },
+      },
+    };
+    const settings = createSettingsState(snapshot);
+    vi.mocked(settings.writeConfigWithSnapshot).mockResolvedValue(savedSnapshot);
+    const listBackends = vi.fn(async () => ({ fetchedAt: Date.now(), backends: [] }));
+    render(
+      <SettingsScreen
+        desktopApi={{ listBackends }}
+        initialSection="models"
+        initialSubsection="codex"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+    await act(async () => {});
+    const track = within(screen.getByRole("radiogroup", { name: "Build track" }));
+    expect(track.getByRole("radio", { name: /^Latest/ })).toHaveTextContent("0.160.0-pwragent.1");
+    await act(async () => { fireEvent.click(track.getByRole("radio", { name: /^Latest/ })); });
+    expect(listBackends).toHaveBeenCalledWith(expect.objectContaining({ refreshModels: "codex" }));
+  });
+
   it("names both managed Codex tracks and switches to the one picked", async () => {
     const snapshot = createSnapshot();
     snapshot.models.codex.managedBuilds = { value: true, source: "config" };
@@ -5155,6 +5399,15 @@ describe("SettingsScreen", () => {
       },
     };
     const settings = createSettingsState(snapshot);
+    vi.mocked(settings.writeConfigWithSnapshot).mockResolvedValue({
+      ...snapshot,
+      runtime: {
+        ...snapshot.runtime,
+        tokenMiser: {
+          managedCodex: { state: "ready", version: "0.162.0-pwragent.1" },
+        },
+      },
+    });
     const listBackends = vi.fn(async () => ({ fetchedAt: Date.now(), backends: [] }));
 
     render(
@@ -5182,7 +5435,7 @@ describe("SettingsScreen", () => {
 
     fireEvent.click(within(track).getByRole("radio", { name: /Prerelease/ }));
 
-    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({
+    await waitFor(() => expect(settings.writeConfigWithSnapshot).toHaveBeenCalledWith({
       models: { codex: { managedBuildChannel: "prerelease" } },
     }));
     // The track's build is a different Codex, so its models are rediscovered.
@@ -5222,9 +5475,10 @@ describe("SettingsScreen", () => {
       within(track).getByRole("radio", { name: /Prerelease/ }),
     ).toBeEnabled());
     listBackends.mockClear();
-    fireEvent.click(within(track).getByRole("radio", { name: /Prerelease/ }));
-
-    await waitFor(() => expect(settings.refresh).toHaveBeenCalled());
+    await act(async () => {
+      fireEvent.click(within(track).getByRole("radio", { name: /Prerelease/ }));
+    });
+    expect(settings.writeConfigWithSnapshot).toHaveBeenCalledOnce();
     // The switch installed nothing, so there is nothing to rediscover.
     expect(listBackends).not.toHaveBeenCalledWith(expect.objectContaining({
       refreshModels: "codex",
@@ -5234,10 +5488,11 @@ describe("SettingsScreen", () => {
   it("offers no managed Codex track while the PwrAgent build is off", () => {
     const snapshot = createSnapshot();
     snapshot.models.codex.managedBuilds = { value: false, source: "config" };
+    const readManagedCodexTrackTags = vi.fn();
 
     render(
       <SettingsScreen
-        desktopApi={{} as unknown as DesktopApi}
+        desktopApi={{ readManagedCodexTrackTags }}
         initialSection="models"
         initialSubsection="codex"
         settings={createSettingsState(snapshot)}
@@ -5248,6 +5503,7 @@ describe("SettingsScreen", () => {
     expect(screen.getByText("PwrAgent build")).toBeInTheDocument();
     expect(screen.queryByRole("radiogroup", { name: "Build track" }))
       .not.toBeInTheDocument();
+    expect(readManagedCodexTrackTags).not.toHaveBeenCalled();
   });
 
   it("rediscovers Codex models after installing a newer managed build", async () => {

@@ -7,6 +7,7 @@ import type {
 import {
   checkedProjectPaths,
   isProjectChecked,
+  keepListedChoices,
   PRECHECKED_PROJECT_COUNT,
   projectRecencyLabel,
   rankProjectCandidates,
@@ -142,6 +143,35 @@ describe("Get started project rules", () => {
           const chosen = choices.get(candidate.key);
           expect(isProjectChecked(candidate, choices))
             .toBe(chosen ?? candidate.rank < PRECHECKED_PROJECT_COUNT);
+        }
+      },
+    ));
+  });
+
+  it("never changes a listed row when a later answer adds rows; added rows start by rank", () => {
+    fc.assert(fc.property(
+      arbInput.chain(({ observations }) => {
+        const keys = rankProjectCandidates(observations).map((candidate) => candidate.key);
+        const toggles: fc.Arbitrary<Array<[string, boolean]>> = keys.length === 0
+          ? fc.constant([])
+          : fc.array(fc.tuple(fc.constantFrom(...keys), fc.boolean()), { maxLength: 20 });
+        // Which answer each observation arrives in: the first, or a later one.
+        const arrivals = fc.array(fc.boolean(), { minLength: observations.length, maxLength: observations.length });
+        return fc.tuple(fc.constant(observations), arrivals, toggles);
+      }),
+      ([observations, arrivals, toggles]) => {
+        const first = observations.filter((_, index) => arrivals[index]);
+        const listed = rankProjectCandidates(first);
+        const listedKeys = new Set(listed.map((candidate) => candidate.key));
+        // The operator toggles only rows that are on screen.
+        const choices = new Map(toggles.filter(([key]) => listedKeys.has(key)));
+        const shown = new Map(listed.map((candidate) => [candidate.key, isProjectChecked(candidate, choices)]));
+
+        const kept = keepListedChoices(listed, choices);
+        for (const candidate of rankProjectCandidates(observations)) {
+          const before = shown.get(candidate.key);
+          expect(isProjectChecked(candidate, kept))
+            .toBe(before ?? candidate.rank < PRECHECKED_PROJECT_COUNT);
         }
       },
     ));

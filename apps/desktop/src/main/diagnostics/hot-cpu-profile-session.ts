@@ -8,6 +8,7 @@ export type HotCpuProfileSample = {
   pid: number;
   cpuPercent: number;
   electronCpuPercent?: number;
+  cpuMeasurementSource?: "cumulative" | "electron-interval" | "baseline";
   cumulativeCpuDeltaSeconds?: number;
   cumulativeCpuSeconds?: number;
   recorderRotationCpuSeconds?: number;
@@ -57,6 +58,7 @@ type HotCpuProfileSessionManifest = {
     startDelayMs: number;
     triggerMode: string;
     intervalMs: number;
+    rules: Extract<HotCpuProfileConfig, { enabled: true }>["rules"];
     thresholdPercent: number;
     slowburnThresholdPercent: number;
     consecutiveSamples: number;
@@ -122,6 +124,7 @@ export async function createHotCpuProfileSession(options: {
       startDelayMs: options.config.startDelayMs,
       triggerMode: options.config.triggerMode,
       intervalMs: options.config.intervalMs,
+      rules: options.config.rules,
       thresholdPercent: options.config.thresholdPercent,
       slowburnThresholdPercent: options.config.slowburnThresholdPercent,
       consecutiveSamples: options.config.consecutiveSamples,

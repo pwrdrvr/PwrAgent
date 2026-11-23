@@ -3,6 +3,7 @@ import type {
 } from "./contracts/normalized-app-server";
 import type { ThreadActiveSubAgent, ThreadSubAgentSummary } from "./contracts/navigation";
 import { isDecisionBatchSubAgent, isHarnessSubAgent } from "./subagent-kind";
+import { taskMonitorDisplayTitle } from "./task-monitor-display-title";
 
 export const CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS = 60 * 60 * 1000;
 export const CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -48,17 +49,21 @@ export function projectActiveThreadSubAgents(
   return subAgents
     .filter((agent) => !isDecisionBatchSubAgent(agent))
     .filter((agent) => agent.status === "failed" || agent.status === "failure" || !hasTerminalEvidence(agent))
-    .map((agent) => ({
-      monitorId: agent.monitorId,
-      ...(agent.attemptId ? { attemptId: agent.attemptId } : {}),
-      task: agent.task,
-      status: agent.status,
-      createdAt: agent.createdAt,
-      updatedAt: agent.updatedAt,
-      monitorThreadId: agent.monitorThreadId,
-      monitorTurnId: agent.monitorTurnId,
-      ...(agent.agentName ? { agentName: agent.agentName } : {}),
-    }));
+    .map((agent) => {
+      const displayTitle = taskMonitorDisplayTitle(agent);
+      return {
+        monitorId: agent.monitorId,
+        ...(agent.attemptId ? { attemptId: agent.attemptId } : {}),
+        task: agent.task,
+        ...(displayTitle ? { displayTitle } : {}),
+        status: agent.status,
+        createdAt: agent.createdAt,
+        updatedAt: agent.updatedAt,
+        monitorThreadId: agent.monitorThreadId,
+        monitorTurnId: agent.monitorTurnId,
+        ...(agent.agentName ? { agentName: agent.agentName } : {}),
+      };
+    });
 }
 
 /**

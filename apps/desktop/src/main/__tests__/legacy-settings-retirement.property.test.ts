@@ -64,11 +64,12 @@ describe("legacy settings retirement", () => {
     }
   });
 
-  it("registers the [experimental] Markdown keys to go after the 1.5 series", () => {
+  it("registers the legacy Markdown and CPU trigger keys through the 1.5 series", () => {
     expect(LEGACY_SETTINGS_RETIREMENTS.map(({ legacy, keptThroughSeries }) =>
       [legacy.join("."), keptThroughSeries])).toEqual([
       ["experimental.incremental_markdown_rendering", "1.5"],
       ["experimental.markdown_math_rendering", "1.5"],
+      ["general.hot_cpu_profiling_trigger_mode", "1.5"],
     ]);
   });
 

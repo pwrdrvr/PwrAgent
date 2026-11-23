@@ -47,7 +47,8 @@ vi.mock("../shell/app-build-metadata", () => ({
   // so metadata must not depend on child-process startup on the host.
   resolveAppBuildMetadata: resolveAppBuildMetadataMock,
 }));
-vi.mock("../diagnostics/hot-cpu-profile-config", () => ({
+vi.mock("../diagnostics/hot-cpu-profile-config", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../diagnostics/hot-cpu-profile-config")>(),
   resolveHotCpuProfileConfig: resolveHotCpuProfileConfigMock,
 }));
 vi.mock("../diagnostics/hot-cpu-profile-session", () => ({
@@ -59,13 +60,14 @@ vi.mock("../diagnostics/main-process-hot-cpu-target", () => ({
 vi.mock("../shell/diagnostics/hot-cpu-profiler", () => ({
   HotCpuProfiler: vi.fn(function (options: { target: HotCpuTarget }) {
     return options.target === mainHotTarget
-      ? { start: hotMainStart, stop: hotMainStop }
+      ? { start: hotMainStart, stop: hotMainStop, updateRules: vi.fn() }
       : {
         get hasActiveProfile() { return hotRendererHasActiveProfile(); },
         start: async () => {
           await options.target.setListingDiagnosticsEnabled?.(true);
           await hotRendererStart();
         },
+        updateRules: vi.fn(),
         rearmListingDiagnostics: () => options.target.setListingDiagnosticsEnabled?.(true),
         stop: async (reason: string) => {
           await hotRendererStop(reason, options.target);

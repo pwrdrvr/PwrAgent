@@ -1,3 +1,4 @@
+import { HOT_CPU_RULE_LABELS, type EffectiveHotCpuRule } from "@pwragent/shared/hot-cpu-rules";
 import type { AppBuildMetadata } from "./app-metadata";
 import { buildAppIdentityDiagnosticsLines } from "./local-diagnostics-info";
 
@@ -7,6 +8,15 @@ export type HotCpuProfileHeapSnapshotArtifact = {
   filename: string;
   path: string;
   phase: string;
+};
+
+export type HotCpuRuleMatch = EffectiveHotCpuRule & {
+  intervalMs: number;
+  measuredDurationMs: number;
+  triggerCpuPercent: number;
+  peakCpuPercent: number;
+  minimumCpuPercent: number;
+  usedElectronInterval: boolean;
 };
 
 export type HotCpuProfileCapturedEvent = {
@@ -25,6 +35,7 @@ export type HotCpuProfileCapturedEvent = {
   triggerConsecutiveSamples: number;
   triggerCpuPercent: number;
   triggerMode: HotCpuProfileTriggerMode;
+  matchedRules?: HotCpuRuleMatch[];
   triggerThresholdPercent: number;
 };
 
@@ -35,25 +46,28 @@ function formatPercent(value: number): string {
 export function formatHotCpuProfileTriggerMode(
   mode: HotCpuProfileTriggerMode,
 ): string {
-  switch (mode) {
-    case "spike":
-      return "Spike";
-    case "sustained":
-      return "Sustained";
-    case "slowburn":
-      return "Slowburn";
-  }
+  return HOT_CPU_RULE_LABELS[mode];
 }
 
 export function formatHotCpuProfileTriggerSummary(
   event: Pick<
     HotCpuProfileCapturedEvent,
+    | "matchedRules"
     | "triggerConsecutiveSamples"
     | "triggerCpuPercent"
     | "triggerMode"
     | "triggerThresholdPercent"
   >,
 ): string {
+  if (event.matchedRules?.length) {
+    const matches = event.matchedRules.map((match) => {
+      const count = match.sampleCount === 1 ? "1 sample" : `${match.sampleCount} samples`;
+      return `${HOT_CPU_RULE_LABELS[match.id]} (${formatPercent(match.thresholdPercent)}% threshold over ${match.durationMs / 1_000} s, ${count}. Measured ${formatPercent(match.triggerCpuPercent)}% at trigger, ${formatPercent(match.peakCpuPercent)}% peak)`;
+    });
+    return matches.join(" and ") + (event.matchedRules.some((match) => match.usedElectronInterval)
+      ? " (includes Electron’s interval estimate)"
+      : "");
+  }
   const sampleLabel =
     event.triggerConsecutiveSamples === 1
       ? "1 sample"

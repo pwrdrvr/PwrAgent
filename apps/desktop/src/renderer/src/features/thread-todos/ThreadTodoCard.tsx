@@ -27,6 +27,7 @@ import type {
   ThreadTodoModelSettings,
   ThreadTodoResolution,
 } from "@pwragent/shared/contracts/thread-todos";
+import { pullRequestMergeMethods } from "@pwragent/shared/pull-request-merge-offer";
 import {
   describeMergeQueueRemoval,
   describeMergeQueueState,
@@ -993,7 +994,11 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
             </>
           );
         }
-        const method = resolveThreadTodoMergeMethod(todo, props.mergeMethods);
+        // The live PR knows which methods its repository allows; a pick it
+        // refuses gives way to the first one it takes, as main's does.
+        const offered = mergePullRequest ? pullRequestMergeMethods(mergePullRequest) : THREAD_TODO_MERGE_METHODS;
+        const resolved = resolveThreadTodoMergeMethod(todo, props.mergeMethods);
+        const method = offered.includes(resolved) ? resolved : offered[0] ?? resolved;
         if (mergeQueue) {
           // The queue's ruleset picks the method, so there is no method menu.
           const inQueue = isMergeQueueActive(mergeQueue);
@@ -1023,7 +1028,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
               Icon={MergeIcon}
               menuLabel="Merge options"
               onClick={() => setConfirmingMerge({ method, remember: false })}
-              entries={THREAD_TODO_MERGE_METHODS.map((option) => ({
+              entries={offered.map((option) => ({
                 kind: "item",
                 id: option,
                 label: THREAD_TODO_MERGE_METHOD_LABELS[option].menu,

@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
-import { StateDb } from "../state/state-db";
+import { CURRENT_STATE_DB_USER_VERSION, StateDb } from "../state/state-db";
 import { FileScheduledThreadActionPayloadStore, MemoryScheduledThreadActionPayloadStore } from "../storage/scheduled-thread-action-payload-store";
 import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
@@ -197,7 +197,7 @@ it.each([
     db.close();
 
     db = StateDb.open(dbPath);
-    expect(db.raw.pragma("user_version", { simple: true })).toBe(Math.max(version, 86));
+    expect(db.raw.pragma("user_version", { simple: true })).toBe(Math.max(version, CURRENT_STATE_DB_USER_VERSION));
     const reopened = new ScheduledThreadActionStore(db);
     const expected = [{ ...retained, errorMessage }];
     expect(reopened.listProjectionPage({ ...history, terminalUpdatedAfter: 2 }).actions).toEqual(expected);

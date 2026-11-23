@@ -1,6 +1,18 @@
 export type { LineAuthorizedContact, LineMessagingConfig } from "./line-config.ts";
 export { validateCredentials } from "./validate-credentials.ts";
 export type { LineCredentialValidationConfig } from "./validate-credentials.ts";
+export { LINE_RICH_MENU_LAYOUT, LINE_RICH_MENU_VERSION } from "./line-rich-menu-design.ts";
+export {
+  createLineRichMenuApi,
+  LineRichMenuSetup,
+  LineRichMenuSetupError,
+  readLineRichMenuOwnership,
+  type LineRichMenuApi,
+  type LineRichMenuDefault,
+  type LineRichMenuDesign,
+  type LineRichMenuOwnership,
+  type LineRichMenuStatus,
+} from "./line-rich-menu.ts";
 export type {
   LineAdapterOptions,
   LineApi,

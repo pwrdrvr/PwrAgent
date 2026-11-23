@@ -200,6 +200,9 @@ export type BackendClient = {
   close(): Promise<void>;
   getInitializeResult(): Promise<InitializeResult>;
   readServerCapabilities?(): Promise<CodexServerCapabilities>;
+  readThreadGoal?: CodexAppServerClient["readThreadGoal"];
+  setThreadGoal?: CodexAppServerClient["setThreadGoal"];
+  clearThreadGoal?: CodexAppServerClient["clearThreadGoal"];
   isTokenMiserActivationNegotiated?(): boolean;
   readCodexHome?(): Promise<string>;
   readConfiguredMcpServerNames?(params?: {

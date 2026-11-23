@@ -32,6 +32,7 @@ export type DesktopSettingsState = {
     value: string,
   ) => Promise<boolean>;
   writeConfig: (patch: DesktopSettingsConfigPatch) => Promise<boolean>;
+  writeConfigWithSnapshot: (patch: DesktopSettingsConfigPatch) => Promise<DesktopSettingsSnapshot | undefined>;
 };
 
 export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsState {
@@ -100,11 +101,11 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
     });
   }, [desktopApi, read]);
 
-  const writeConfig = useCallback(
-    async (patch: DesktopSettingsConfigPatch): Promise<boolean> => {
+  const writeConfigWithSnapshot = useCallback(
+    async (patch: DesktopSettingsConfigPatch): Promise<DesktopSettingsSnapshot | undefined> => {
       if (!desktopApi?.writeSettingsConfig) {
         setError("Settings are unavailable.");
-        return false;
+        return undefined;
       }
 
       readGenerationRef.current += 1;
@@ -129,10 +130,10 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
         ) {
           window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
         }
-        return true;
+        return response.snapshot;
       } catch (writeError) {
         setError(writeError instanceof Error ? writeError.message : String(writeError));
-        return false;
+        return undefined;
       } finally {
         configWriteInFlightRef.current = false;
         setSaving(false);
@@ -152,6 +153,10 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
     },
     [desktopApi, read],
   );
+
+  const writeConfig = useCallback(async (patch: DesktopSettingsConfigPatch): Promise<boolean> =>
+    (await writeConfigWithSnapshot(patch)) !== undefined,
+  [writeConfigWithSnapshot]);
 
   const replaceSecret = useCallback(
     async (secret: DesktopSettingsSecretName, value: string): Promise<boolean> => {
@@ -236,6 +241,7 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
       saving,
       snapshot,
       writeConfig,
+      writeConfigWithSnapshot,
     }),
     [
       applySnapshot,
@@ -247,6 +253,7 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
       saving,
       snapshot,
       writeConfig,
+      writeConfigWithSnapshot,
     ],
   );
 }

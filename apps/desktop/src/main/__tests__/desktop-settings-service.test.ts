@@ -1,3 +1,4 @@
+import { migrateHotCpuCaptureRules, type HotCpuCaptureRules } from "@pwragent/shared/hot-cpu-rules";
 import { bundledGitDirectory, bundledGitExecutable, bundledGitLfsExecutable } from "../bundled-git";
 import fs from "node:fs";
 import os from "node:os";
@@ -6,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DesktopSettingsService } from "../settings/desktop-settings-service";
 import * as gitDiscovery from "../settings/git-discovery";
 import { suggestedSlackAppName } from "../messaging/messaging-settings-domain";
-import { managedGrokBuildsEnabledForRuntime } from "../settings/desktop-config";
+import { managedGrokBuildsEnabledForRuntime, readDesktopSettingsConfig, retireLegacyDesktopSettings } from "../settings/desktop-config";
 import {
   MemoryDesktopSecretStore,
   type DesktopSecretStore,
@@ -1377,6 +1378,130 @@ describe("DesktopSettingsService", () => {
       value: true,
       source: "default",
     });
+  });
+
+  it("lazily migrates CPU rules, keeps a downgrade mirror and round-trips the pruned config", async () => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    const legacy = [
+      "[general]",
+      "# Representative operator comment",
+      'hot_cpu_profiling_trigger_mode = "slowburn"',
+      "hot_cpu_profiling_slowburn_threshold_percent = 26",
+      "",
+    ].join("\n");
+    fs.writeFileSync(configPath, legacy);
+    const service = new DesktopSettingsService({ configPath, env: {}, secretStore: new MemoryDesktopSecretStore() });
+    const initial = (await service.readSettingsProjection()).general.hotCpuProfilingCaptureRules;
+    expect(initial).toMatchObject({
+      source: "config", value: migrateHotCpuCaptureRules("slowburn", 26),
+      effective: { rules: [{ id: "slowburn", thresholdPercent: 26, durationMs: 4_000, sampleCount: 2 }] },
+    });
+    expect(fs.readFileSync(configPath, "utf8")).toBe(legacy);
+
+    const rules: HotCpuCaptureRules = {
+      ...initial.value,
+      highEnabled: true,
+      highMode: "spike",
+      spike: { thresholdPercent: 400, durationMs: 1_000 },
+      sustained: { thresholdPercent: 180, durationMs: 20_000 },
+      slowburn: { enabled: true, thresholdPercent: 105, durationMs: 60_000 },
+    };
+    await service.writeConfigPatchTargeted({ general: { hotCpuProfilingCaptureRules: rules } });
+    await service.writeConfigPatchTargeted({ general: { hotCpuProfilingCaptureRules: rules } });
+    const saved = fs.readFileSync(configPath, "utf8");
+    expect(saved.match(/pwragent-legacy-settings key=hot_cpu_profiling_trigger_mode/g)).toHaveLength(1);
+    expect(saved).toContain('hot_cpu_profiling_trigger_mode = "spike"');
+    expect(saved).toContain("# Representative operator comment");
+    expect(readDesktopSettingsConfig(configPath).general?.hotCpuProfilingCaptureRules).toEqual(rules);
+
+    // A downgraded client can change the mirror; the present rules remain authoritative.
+    fs.writeFileSync(configPath, saved.replace('trigger_mode = "spike"', 'trigger_mode = "sustained"'));
+    const withEnv = new DesktopSettingsService({
+      configPath,
+      env: {
+        PWRAGENT_HOT_CPU_PROFILING_TRIGGER_MODE: "slowburn",
+        PWRAGENT_HOT_CPU_PROFILING_SLOWBURN_THRESHOLD_PERCENT: "23.5",
+        PWRAGENT_HOT_CPU_PROFILING_INTERVAL_MS: "500",
+      },
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    expect((await withEnv.readSettingsProjection()).general.hotCpuProfilingCaptureRules).toMatchObject({
+      source: "env", overriddenByEnv: true, value: rules,
+      effective: { intervalMs: 500, rules: [{ id: "slowburn", thresholdPercent: 23.5, durationMs: 1_000, sampleCount: 2 }] },
+    });
+  });
+
+  it("keeps an overridden legacy sample count when saving only a CPU threshold", async () => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    fs.writeFileSync(configPath, '[general]\nhot_cpu_profiling_trigger_mode = "sustained"\n');
+    const service = new DesktopSettingsService({
+      configPath, env: { PWRAGENT_HOT_CPU_PROFILING_INTERVAL_MS: "250" },
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    const before = (await service.readSettingsProjection()).general.hotCpuProfilingCaptureRules;
+    expect(before.effective.rules[0]).toMatchObject({ sampleCount: 2, durationMs: 500 });
+    await service.writeConfigPatchTargeted({ general: { hotCpuProfilingCaptureRules: {
+      ...before.value, sustained: { ...before.value.sustained, thresholdPercent: 63 },
+    } } });
+    const after = (await service.readSettingsProjection()).general.hotCpuProfilingCaptureRules;
+    expect(after.effective.rules[0]).toEqual({ id: "sustained", thresholdPercent: 63, sampleCount: 2, durationMs: 500 });
+    const { legacyIntervalTiming: _legacy, ...sustained } = after.value.sustained;
+    await service.writeConfigPatchTargeted({ general: { hotCpuProfilingCaptureRules: {
+      ...after.value, sustained: { ...sustained, durationMs: 6_000 },
+    } } });
+    expect((await service.readSettingsProjection()).general.hotCpuProfilingCaptureRules.effective.rules[0])
+      .toMatchObject({ thresholdPercent: 63, sampleCount: 24, durationMs: 6_000 });
+  });
+
+  it.each(["", 'hot_cpu_profiling_trigger_mode = "invalid"\n'])(
+    "saves canonical CPU rules without writing an unrecognized downgrade mirror (%j)",
+    async (legacy) => {
+      const configPath = path.join(createTempRoot(), "config.toml");
+      if (legacy) fs.writeFileSync(configPath, "[general]\n" + legacy);
+      const service = new DesktopSettingsService({ configPath, env: {}, secretStore: new MemoryDesktopSecretStore() });
+      const rules = migrateHotCpuCaptureRules();
+      await service.writeConfigPatchTargeted({ general: { hotCpuProfilingCaptureRules: rules } });
+      const saved = fs.readFileSync(configPath, "utf8");
+      expect(saved).not.toContain("pwragent-legacy-settings");
+      expect(saved.match(/hot_cpu_profiling_trigger_mode.*\n/g) ?? []).toEqual(legacy ? [legacy] : []);
+      expect(readDesktopSettingsConfig(configPath).general?.hotCpuProfilingCaptureRules).toEqual(rules);
+    },
+  );
+
+  it("rejects all-off rules and safely repairs invalid stored values at read time", async () => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    const service = new DesktopSettingsService({ configPath, env: {}, secretStore: new MemoryDesktopSecretStore() });
+    const invalid = { ...migrateHotCpuCaptureRules(), highEnabled: false };
+    await expect(service.writeConfigPatchTargeted({ general: { hotCpuProfilingCaptureRules: invalid } }))
+      .rejects.toThrow("Enable at least one rule");
+    expect(fs.existsSync(configPath)).toBe(false);
+    fs.writeFileSync(configPath, [
+      "[general]",
+      'hot_cpu_profiling_trigger_mode = "slowburn"',
+      "hot_cpu_profiling_high_enabled = false",
+      "hot_cpu_profiling_slowburn_enabled = false",
+      "hot_cpu_profiling_spike_duration_ms = 3000",
+      "hot_cpu_profiling_sustained_threshold_percent = 401",
+    ].join("\n"));
+    const fromDisk = new DesktopSettingsService({ configPath, env: {}, secretStore: new MemoryDesktopSecretStore() });
+    expect((await fromDisk.readSettingsProjection()).general.hotCpuProfilingCaptureRules.value)
+      .toEqual(migrateHotCpuCaptureRules("slowburn"));
+  });
+
+  it("converts the legacy trigger when its downgrade mirror retires despite a malformed rule key", () => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    fs.writeFileSync(configPath, [
+      "[general]",
+      'hot_cpu_profiling_trigger_mode = "slowburn"',
+      "hot_cpu_profiling_slowburn_threshold_percent = 27",
+      'hot_cpu_profiling_high_mode = "typo"',
+    ].join("\n"));
+    expect(retireLegacyDesktopSettings(configPath, "1.5.9").changed).toBe(false);
+    expect(retireLegacyDesktopSettings(configPath, "1.6.0-alpha.1").retired)
+      .toContain("general.hot_cpu_profiling_trigger_mode");
+    const migrated = migrateHotCpuCaptureRules("slowburn", 27);
+    expect(readDesktopSettingsConfig(configPath).general?.hotCpuProfilingCaptureRules)
+      .toEqual({ ...migrated, slowburn: { ...migrated.slowburn, legacyIntervalTiming: true } });
   });
 
   it("defaults hot CPU profiling to disabled and persists overrides", async () => {

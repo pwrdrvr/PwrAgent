@@ -20,7 +20,10 @@ it("the actual Claude worker stops a pending SDK read when its owner IPC closes"
           process.send({ phase: "reading" });
           setInterval(() => {}, 1000);
           return await new Promise(() => {});
-        }; export const getSessionMessages = async () => []; export const getSubagentMessages = async () => [];`,
+        };
+        export const getSessionMessages = async () => [];
+        export const getSubagentMessages = async () => [];
+        export const listSessions = async () => [];`,
         loader: "js",
       }));
     } }],

@@ -5,7 +5,6 @@ import type { AcpAgentSettingsEntry, BackendSummary } from "@pwragent/shared/con
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   DesktopHotCpuProfileStartDelayMs,
-  DesktopHotCpuProfileTriggerMode,
   DesktopSettingsConfigPatch,
   DesktopSettingsSnapshot,
   DesktopMessagingImageProfile,
@@ -1175,7 +1174,14 @@ function SettingsSectionBody(props: {
           hotCpuProfilingEnabled: boolean,
         ) => {
           await props.settings.writeConfig({
-            general: { hotCpuProfilingEnabled },
+            general: {
+              hotCpuProfilingEnabled,
+              // Smart heap snapshots also arm the monitor. An explicit Stop
+              // cancels that pending capture in the same settings update.
+              ...(!hotCpuProfilingEnabled && props.snapshot.general.hotCpuProfilingCaptureHeapSnapshot.value
+                ? { hotCpuProfilingCaptureHeapSnapshot: false }
+                : {}),
+            },
           });
         }}
         onHotCpuProfilingStartDelayMsChange={async (
@@ -1185,13 +1191,9 @@ function SettingsSectionBody(props: {
             general: { hotCpuProfilingStartDelayMs },
           });
         }}
-        onHotCpuProfilingTriggerModeChange={async (
-          hotCpuProfilingTriggerMode: DesktopHotCpuProfileTriggerMode,
-        ) => {
-          await props.settings.writeConfig({
-            general: { hotCpuProfilingTriggerMode },
-          });
-        }}
+        onHotCpuProfilingCaptureRulesChange={(hotCpuProfilingCaptureRules) =>
+          props.settings.writeConfig({ general: { hotCpuProfilingCaptureRules } })
+        }
         onHotCpuProfilingCaptureChromiumTraceChange={async (hotCpuProfilingCaptureChromiumTrace) => {
           await props.settings.writeConfig({
             general: { hotCpuProfilingCaptureChromiumTrace },
@@ -1798,7 +1800,7 @@ function SettingsSectionBody(props: {
         });
       }}
       onManagedCodexBuildChannelChange={async (managedBuildChannel) => {
-        return await props.settings.writeConfig({
+        return await props.settings.writeConfigWithSnapshot({
           models: {
             codex: { managedBuildChannel },
           },
