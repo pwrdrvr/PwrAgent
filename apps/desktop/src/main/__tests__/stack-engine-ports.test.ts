@@ -90,7 +90,11 @@ it("keeps a carry snapshot through Git GC and can abandon provisioning after res
   await writeFile(join(cwd, "carry.txt"), "Keep these edits");
   const actor = { backend: "codex" as const, threadId: "lead" };
   const publish = vi.fn();
-  const start = vi.fn(async () => { throw new Error("Fixture child start refused"); });
+  const { promise: provisioningReached, resolve: markProvisioningReached } = Promise.withResolvers<void>();
+  const start = vi.fn(async () => {
+    markProvisioningReached();
+    throw new Error("Fixture child start refused");
+  });
   const registry = {
     listThreads: async () => [],
     isIncompleteThreadList: () => false,
@@ -105,8 +109,10 @@ it("keeps a carry snapshot through Git GC and can abandon provisioning after res
   const scope = { repository, directories: [cwd], branch: "parent", infer: async () => [] };
   const { opId } = await service.call("apply_stack_operation",
     { operation: "add_branch", name: "child", newThread: true, carryChanges: true }, actor, scope, registry) as { opId: string };
-  await expect.poll(async () => await service.call("manage_stack_operation", { action: "status", opId }, actor, scope, registry))
-    .toMatchObject({ issue: { code: "post_apply_failed" } });
+  // The child start runs only after Git commits and the operation lock is released.
+  await provisioningReached;
+  await expect(service.call("manage_stack_operation", { action: "status", opId }, actor, scope, registry))
+    .resolves.toMatchObject({ status: "paused", issue: { code: "post_apply_failed", message: expect.stringContaining("Fixture child start refused") } });
   const carryRef = `refs/pwragent/stack-carry/${opId}`;
   await git.output(["gc", "--prune=now"]);
   expect((await git.output(["show", `${carryRef}^3:carry.txt`])).trim()).toBe("Keep these edits");
