@@ -586,6 +586,8 @@ import type {
   SetThreadMonitorJobSuggestionsRequest,
   SetThreadTokenMiserResponse,
   SetThreadMonitorJobSuggestionsResponse,
+  SetThreadJobMonitorCreationRequest,
+  SetThreadJobMonitorCreationResponse,
   SetThreadAgentResponse,
   NavigationQueryPage,
   NavigationQueryRequest,
@@ -1278,6 +1280,7 @@ import {
   NAVIGATION_SET_THREAD_AGENT_CHANNEL,
   NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL,
   NAVIGATION_SET_THREAD_MONITOR_JOB_SUGGESTIONS_CHANNEL,
+  NAVIGATION_SET_THREAD_JOB_MONITOR_CREATION_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_SET_THREAD_LOCK_CHANNEL,
@@ -3280,6 +3283,10 @@ const desktopApi = Object.freeze({
     request: SetThreadMonitorJobSuggestionsRequest,
   ): Promise<SetThreadMonitorJobSuggestionsResponse> =>
     await ipcRenderer.invoke(NAVIGATION_SET_THREAD_MONITOR_JOB_SUGGESTIONS_CHANNEL, request),
+  setThreadJobMonitorCreation: async (
+    request: SetThreadJobMonitorCreationRequest,
+  ): Promise<SetThreadJobMonitorCreationResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_SET_THREAD_JOB_MONITOR_CREATION_CHANNEL, request),
   reorderThreadPins: async (
     request: ReorderThreadPinsRequest,
   ): Promise<ReorderThreadPinsResponse> =>

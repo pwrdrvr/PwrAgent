@@ -258,12 +258,31 @@ describe("WaitingForPanel", () => {
     }
   });
 
-  it("shows a suppressed monitor after rearm with Stop and zero pending wakes", () => {
+  it("explains that new Job Monitors are off while keeping the running monitor's Cancel action", async () => {
+    const monitor = WAKES.find((wake) => wake.kind === "monitor")!;
+    const onTurnOnJobMonitors = vi.fn(async () => undefined);
+    render(<WaitingForPanel thread={{ ...thread, source: "codex", jobMonitorCreationEnabled: false }}
+      controller={controller(ready([monitor], []))} now={NOW} onTurnOnJobMonitors={onTurnOnJobMonitors} />);
+    expect(screen.getByText("New Job Monitors off")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel: Monitor: Staging deploy reports healthy" })).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Turn on Job Monitors" })); });
+    expect(onTurnOnJobMonitors).toHaveBeenCalledOnce();
+  });
+
+  it("omits monitor creation from the empty-state instructions while Job Monitors is off", () => {
+    render(<WaitingForPanel thread={{ ...thread, source: "codex", jobMonitorCreationEnabled: false }}
+      controller={controller(ready([], []))} now={NOW} />);
+    expect(screen.getByText("The agent can still delegate work and use Continue After.")).toBeInTheDocument();
+    expect(screen.getByText(/Ask the agent to watch CI or wait for another thread/)).toBeInTheDocument();
+    expect(screen.queryByText(/or start a monitor/)).not.toBeInTheDocument();
+  });
+
+  it("shows a suppressed monitor after rearm with Cancel and zero pending wakes", () => {
     const monitor = WAKES.find((wake) => wake.kind === "monitor")!;
     render(<WaitingForPanel thread={thread} controller={controller(ready([{ ...monitor, wakeSuppressed: true }], []))} now={NOW} />);
     expect(screen.getByText("Nothing will wake this thread.")).toBeInTheDocument();
     expect(screen.getByText(/Automatic wake suppressed for this monitor/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Stop: Monitor: Staging deploy reports healthy" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel: Monitor: Staging deploy reports healthy" })).toBeInTheDocument();
   });
 
   it("stops a wake through its source and shows why a stop failed", async () => {
@@ -277,7 +296,7 @@ describe("WaitingForPanel", () => {
     });
     expect(stop).toHaveBeenCalledWith("pr_watch:w1");
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Stop: Monitor: Staging deploy reports healthy" }));
+      fireEvent.click(screen.getByRole("button", { name: "Cancel: Monitor: Staging deploy reports healthy" }));
     });
     expect(screen.getByRole("alert")).toHaveTextContent("Sub-agent is already completing.");
   });
@@ -408,11 +427,11 @@ describe("WaitingForPanel", () => {
         onTurnOffAutoFix={vi.fn()} onSendScheduledNow={vi.fn()} />,
     );
     // turn_control: the owner stops monitors and background tasks.
-    expect(screen.getByRole("button", { name: "Stop: Monitor: Staging deploy reports healthy" })).toBeInTheDocument();
+    const cancelMonitor = screen.getByRole("button", { name: "Cancel: Monitor: Staging deploy reports healthy" });
     expect(screen.getByRole("button", { name: "Stop: pnpm test:desktop-e2e --shard 2/4" })).toBeInTheDocument();
     // No PR watch control, no scheduled actions, and dependencies stay local.
     expect(screen.queryByRole("button", { name: /^Stop: Waiting for CI/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^Cancel:/ })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /^Cancel:/ })).toEqual([cancelMonitor]);
     expect(screen.queryByRole("button", { name: /^Turn Off:/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Send Now" })).not.toBeInTheDocument();
     expect(screen.getByText("Some of these run on studio-mac. Stop them there.")).toBeInTheDocument();

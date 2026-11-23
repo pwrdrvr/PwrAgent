@@ -471,6 +471,8 @@ export const NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL =
   "navigation:set-thread-token-miser";
 export const NAVIGATION_SET_THREAD_MONITOR_JOB_SUGGESTIONS_CHANNEL =
   "navigation:set-thread-monitor-job-suggestions";
+export const NAVIGATION_SET_THREAD_JOB_MONITOR_CREATION_CHANNEL =
+  "navigation:set-thread-job-monitor-creation";
 export const NAVIGATION_REORDER_THREAD_PINS_CHANNEL =
   "navigation:reorder-thread-pins";
 export const NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL =

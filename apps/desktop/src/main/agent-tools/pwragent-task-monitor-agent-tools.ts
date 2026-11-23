@@ -128,11 +128,13 @@ export type PwrAgentTaskMonitorHandler = (
 export function buildPwrAgentTaskMonitorToolDefinitions(
   handler: PwrAgentTaskMonitorHandler | undefined,
   role: "parent" | "monitor" | "all" = "parent",
+  creationEnabled = true,
 ): AgentToolDefinition<TaskMonitorAgentOperation>[] {
   const parentTools: AgentToolDefinition<TaskMonitorAgentOperation>[] = [
     {
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "create_monitor_delegation",
+      advertise: creationEnabled,
       annotations: { readOnlyHint: false },
       description: TASK_MONITOR_CREATE_TOOL_DESCRIPTION,
       inputSchema: TASK_MONITOR_CREATE_TOOL_INPUT_SCHEMA,

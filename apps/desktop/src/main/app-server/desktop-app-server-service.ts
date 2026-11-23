@@ -263,6 +263,8 @@ import {
   type SetThreadTokenMiserRequest,
   type SetThreadMonitorJobSuggestionsRequest,
   type SetThreadMonitorJobSuggestionsResponse,
+  type SetThreadJobMonitorCreationRequest,
+  type SetThreadJobMonitorCreationResponse,
   type SetThreadTokenMiserResponse,
   type SetThreadAgentResponse,
   type SetThreadPinRequest,
@@ -7162,6 +7164,12 @@ class DesktopAppServerService {
         ? { monitorJobSuggestionsEnabled: overlay.monitorJobSuggestionsEnabled }
         : {}),
     };
+  }
+
+  async setThreadJobMonitorCreation(
+    request: SetThreadJobMonitorCreationRequest,
+  ): Promise<SetThreadJobMonitorCreationResponse> {
+    return await getDesktopBackendRegistry().setThreadJobMonitorCreation(request);
   }
 
   async reorderThreadPins(

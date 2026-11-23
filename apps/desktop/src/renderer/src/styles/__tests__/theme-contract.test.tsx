@@ -3211,6 +3211,10 @@ describe("color theme contract", () => {
       }
       return undefined;
     };
+    const composerOptionRows = [
+      { tint: '.composer-dropdown__option:hover:not([aria-disabled="true"])' },
+      { tint: '.composer-dropdown__option:focus-visible:not([aria-disabled="true"])' },
+    ];
     const menus = [
       {
         panel: ".select-listbox",
@@ -3220,10 +3224,12 @@ describe("color theme contract", () => {
       {
         panel: ".composer-dropdown__menu",
         text: ".composer-dropdown__option-description",
-        rows: [
-          { tint: '.composer-dropdown__option:hover:not([aria-disabled="true"])' },
-          { tint: '.composer-dropdown__option:focus-visible:not([aria-disabled="true"])' },
-        ],
+        rows: composerOptionRows,
+      },
+      {
+        panel: ".composer-dropdown__menu",
+        text: ".composer-thread-options__note",
+        rows: composerOptionRows,
       },
       {
         // A disabled item takes no tint, so its description keeps the

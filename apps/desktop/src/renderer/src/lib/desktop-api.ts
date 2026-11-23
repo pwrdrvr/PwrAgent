@@ -528,6 +528,8 @@ import type {
   SetThreadMonitorJobSuggestionsRequest,
   SetThreadTokenMiserResponse,
   SetThreadMonitorJobSuggestionsResponse,
+  SetThreadJobMonitorCreationRequest,
+  SetThreadJobMonitorCreationResponse,
   SetThreadAgentResponse,
   SetNavigationBrowseModeRequest,
   SetNavigationBrowseModeResponse,
@@ -1921,6 +1923,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   setThreadMonitorJobSuggestions?: (
     request: SetThreadMonitorJobSuggestionsRequest
   ) => Promise<SetThreadMonitorJobSuggestionsResponse>;
+  setThreadJobMonitorCreation?: (
+    request: SetThreadJobMonitorCreationRequest
+  ) => Promise<SetThreadJobMonitorCreationResponse>;
   reorderThreadPins?: (
     request: ReorderThreadPinsRequest
   ) => Promise<ReorderThreadPinsResponse>;

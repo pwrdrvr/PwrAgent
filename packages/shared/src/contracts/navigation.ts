@@ -202,6 +202,7 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   tokenMiserEnabled?: boolean;
   /** Absent follows the profile default. */
   monitorJobSuggestionsEnabled?: boolean;
+  jobMonitorCreationEnabled?: boolean;
   /** User-curated position in the pinned section. Lower ranks sort first. */
   pinnedRank?: string;
   /**
@@ -3188,6 +3189,16 @@ export type SetThreadMonitorJobSuggestionsResponse = {
   monitorJobSuggestionsEnabled?: boolean;
 };
 
+export type SetThreadJobMonitorCreationRequest = {
+  threadId: ThreadIdentifier;
+  enabled: boolean;
+};
+
+export type SetThreadJobMonitorCreationResponse = {
+  threadId: ThreadIdentifier;
+  enabled: boolean;
+};
+
 /**
  * Thread pins have two tiers: pins kept at top, then ordinary pins (see
  * `isKeptAtTopRank`). A direction move stays inside the pin's tier. An anchor
@@ -3661,6 +3672,7 @@ export type ThreadWorktreeRegistration = {
 export type ThreadOverlayState = {
   /** Absent follows the profile default. */
   monitorJobSuggestionsEnabled?: boolean;
+  jobMonitorCreationEnabled?: boolean;
   /** Durable once-per-turn reminder claim, including failed delivery attempts. */
   monitorJobSuggestionTurnId?: string;
   backend: AppServerBackendKind;
