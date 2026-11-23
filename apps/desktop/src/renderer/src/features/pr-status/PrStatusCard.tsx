@@ -231,7 +231,10 @@ function PrStackSection({ member, pr, thread }: {
     stackRepository(candidate) === member.repository && (base
       ? candidate.number === base.number
       : member.hasOpenPr === undefined && member.position > 1 && pr.baseRefName === candidate.headRefName));
-  const basePr = parentPr ?? (base && { ...pr, ...base, state: base.checkState ?? "unknown", mergeState: base.mergeState });
+  const basePr = parentPr ?? (base && {
+    ...base, provider: pr.provider, org: pr.org, repo: pr.repo, url: "",
+    state: base.checkState ?? "unknown",
+  });
   const hold = member.heldBy && stackHoldLabel(member.heldBy);
   return (
     <div className="pr-status-card__section">
