@@ -133,6 +133,7 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   codexSkillProfile?: CodexThreadSkillProfile;
   /** Read-only stack membership projected by this checkout's owner. */
   stacks?: import("../stacks/stack-status").ThreadStackMembership[];
+  stackMemberships?: import("../stacks/stack-status").CompactStackMembership[];
   /** Owner-projected navigation group. Workspace paths still come from linkedDirectories. */
   checkoutProject?: NavigationCheckoutProject;
   /** Most recent completed probe for `gitWorkingState`, even when its value was unchanged. */
@@ -2366,7 +2367,9 @@ export type NavigationRowAgent = {
  * durable protocol identity; consumers must use it for owner-routed reads.
  */
 export type NavigationRow = {
+  /** Read compatibility for owners that still include full stacks on rows. */
   stacks?: NavigationThreadSummary["stacks"];
+  stackMemberships?: NavigationThreadSummary["stackMemberships"];
   ref: NavigationIdentity;
   rowRevision: string;
   id: ThreadIdentifier;
@@ -2831,7 +2834,7 @@ export type NavigationSelectedDetailRequest = {
   federationTarget?: FederationTarget;
   knownRevision?: string;
   /** Collections have independent paging and never gate composer configuration. */
-  collection?: { name: NavigationDetailCollectionName | "prs"; cursor?: string };
+  collection?: { name: NavigationDetailCollectionName | "prs" | "stackLayers"; cursor?: string };
 };
 
 export const NAVIGATION_DETAIL_COLLECTION_NAMES = [
@@ -2854,9 +2857,11 @@ export type NavigationSelectedDetailResponse = {
   thread?: NavigationThreadSummary;
   collections?: Array<{ name: NavigationDetailCollectionName; revision: string; count: number }>;
   collectionPage?: {
-    name: NavigationDetailCollectionName | "prs";
+    name: NavigationDetailCollectionName | "prs" | "stackLayers";
     revision: string;
-    values: NavigationDetailCollections & Pick<NavigationThreadSummary, "prs">;
+    values: NavigationDetailCollections & Pick<NavigationThreadSummary, "prs"> & {
+      stackLayers?: import("../stacks/stack-status").SelectedStackLayer[];
+    };
     complete: boolean;
     nextCursor?: string;
   };

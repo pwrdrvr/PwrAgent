@@ -81,6 +81,8 @@ export const FEDERATION_CAPABILITIES = [
   "thread_todo_dispatch_target",
   /** The owner accepts messageTarget on a handoff instead of starting a thread. */
   "thread_todo_message",
+  /** The owner accepts startNewThread on a handoff proposed for an existing thread. */
+  "thread_todo_start_from_message",
   /**
    * The owner answers `threadTodos.raisePlan`, raising a handoff card's
    * steps as the started thread's own `plan` card. A viewer starting a

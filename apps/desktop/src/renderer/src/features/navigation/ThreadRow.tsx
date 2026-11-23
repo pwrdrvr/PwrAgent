@@ -36,7 +36,7 @@ import { ThreadRowPrChip, ThreadRowPrRollupChip } from "./ThreadRowPrChips";
 import { ThreadRowDensityContext } from "./thread-row-density";
 import { ReactionPicker } from "./ReactionPicker";
 import { ThreadMetaChips } from "./ThreadMetaChips";
-import { isStaleStackLayer } from "@pwragent/shared/stacks/stack-status";
+import { isStaleStackLayer, readCompactStackMemberships } from "@pwragent/shared/stacks/stack-status";
 import {
   getThreadRowStatus,
   isThreadRemoteWorkHere,
@@ -484,9 +484,9 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
       ) : null}
       <div
         ref={rowRef}
-        data-stack-tray-layer={props.stackTrayKey && props.thread.stacks?.find(({ stack }) => stack.key === props.stackTrayKey)?.stack.key}
-        data-stack-tray-stale={props.stackTrayKey && props.thread.stacks?.some(({ stack, position }) =>
-          stack.key === props.stackTrayKey && isStaleStackLayer(stack.layers[position - 1]!.health)) || undefined}
+        data-stack-tray-layer={props.stackTrayKey && readCompactStackMemberships(props.thread).find(({ key }) => key === props.stackTrayKey)?.key}
+        data-stack-tray-stale={props.stackTrayKey && readCompactStackMemberships(props.thread).some(({ key, health }) =>
+          key === props.stackTrayKey && isStaleStackLayer(health)) || undefined}
         className={`thread-row${props.compact ? " thread-row--compact" : ""}${
           selected ? " is-selected" : ""
         }${

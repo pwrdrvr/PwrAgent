@@ -189,6 +189,7 @@ type OpenStepsConfirmation = {
   question: string;
   /** The confirming button: what goes ahead. */
   label: string;
+  startNewThread?: boolean;
   proceed: () => void;
 };
 
@@ -680,6 +681,14 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
     dispatch.choose(todo, (current) => ({ ...current, ...update }));
     setLocalMessageChoices((current) => ({ ...current, ...update }));
   };
+  const action = todo.action;
+  const canStartFromMessage = !todo.federationTarget
+    || props.instances?.some((instance) => instance.instanceId === todo.federationTarget?.instanceId && instance.startFromMessage) === true;
+  const startNewThread = action?.type === "send_message" && messageChoices.dispatchMode === "new_thread";
+  const startRequiresUpdate = startNewThread && !canStartFromMessage;
+  const sendingMessage = action?.type === "send_message" && !startNewThread
+    || action?.type === "start_thread" && messageChoices.dispatchMode === "message";
+  const startsThread = !sendingMessage && (action?.type === "start_thread" || startNewThread);
   const [localPick, setLocalPick] = useState<ThreadTodoModelSettings>();
   const selection = resolveThreadTodoModelSettings({
     thread: todo.dispatchDefaults?.thread ?? { backend: todo.backend },
@@ -693,6 +702,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
   };
   const target = useTodoDispatchTarget({
     todo,
+    startNewThread: startNewThread && canStartFromMessage,
     ...(props.instances ? { instances: props.instances } : {}),
     ...(props.localMachine ? { localMachine: props.localMachine } : {}),
     ownerSelection: selection,
@@ -717,11 +727,8 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
   const [copied, setCopied] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(copiedTimerRef.current), []);
-  const action = todo.action;
-  const sendingMessage = action?.type === "send_message" || messageChoices.dispatchMode === "message";
   const messageTarget = messageChoices.messageTarget ?? (action?.type === "send_message" ? action.target : undefined);
-  // An agent can address a request to the thread that raised it. That card's
-  // only useful action is Do it here, so it leads instead of a refused Send.
+  // A request for the thread that raised the card can be sent as a reply.
   const targetsOwnThread = sendingMessage && messageTarget !== undefined
     && messageTarget.backend === todo.backend && messageTarget.threadId === todo.threadId
     && (!messageTarget.instanceId || messageTarget.instanceId === todo.federationTarget?.instanceId);
@@ -762,6 +769,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
   // Ticking the last step while the question is up answers it: the card
   // goes back to its buttons instead of asking about "0 steps".
   const stepsConfirmation = openSteps > 0 ? confirmingSteps : undefined;
+  const confirmationRequiresUpdate = stepsConfirmation?.startNewThread === true && !canStartFromMessage;
   useEffect(() => {
     if (openSteps === 0) setConfirmingSteps(undefined);
   }, [openSteps]);
@@ -776,10 +784,9 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
     } else if (wasConfirmingRef.current) {
       wasConfirmingRef.current = false;
       if (!document.activeElement || document.activeElement === document.body) {
-        // Not a split button's menu chevron, which comes first in the DOM.
-        actionsRef.current
-          ?.querySelector<HTMLButtonElement>("button:not([aria-haspopup])")
-          ?.focus();
+        // Prefer the primary action. The menu still works while a start is blocked.
+        const primary = actionsRef.current?.querySelector<HTMLButtonElement>("button:not([aria-haspopup]):not(:disabled)");
+        (primary ?? actionsRef.current?.querySelector<HTMLButtonElement>("button[aria-haspopup]"))?.focus();
       }
     }
   }, [stepsConfirmation]);
@@ -812,14 +819,19 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
     );
   const runAction = (options?: ThreadTodoRunOptions): void =>
     completeCard(
-      { question: sendingMessage ? "Send the request anyway?" : "Start the thread anyway?", label: sendingMessage ? "Send request" : "Start thread" },
+      {
+        question: sendingMessage ? "Send the request anyway?" : "Start the thread anyway?",
+        label: sendingMessage ? "Send request" : "Start thread",
+        startNewThread,
+      },
       (allowOpenItems) => {
         if (sendingMessage && (!messageTarget || !canSendMessage)) return;
         // Freeze the attempted settings too: a failed start's Retry uses them
         // even if another card changes the thread's memory in the meantime.
-        if (!sendingMessage && target.onOwner) pickModel(selection.settings);
+        if (startsThread && target.onOwner) pickModel(selection.settings);
         props.onRun(todo, {
-          ...(sendingMessage ? { messageTarget } : action?.type === "start_thread" ? target.runOptions() : {}),
+          ...(sendingMessage ? { messageTarget } : startsThread ? target.runOptions() : {}),
+          ...(startNewThread ? { startNewThread: true } : {}),
           ...options,
           ...(allowOpenItems ? { allowOpenItems } : {}),
         });
@@ -854,6 +866,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
             type="button"
             className="button button--primary thread-todo-card__button"
             aria-describedby={confirmTextId}
+            disabled={confirmationRequiresUpdate}
             onClick={() => {
               const confirmation = stepsConfirmation;
               setConfirmingSteps(undefined);
@@ -1055,7 +1068,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
             onSelect: () => chooseMessage({ dispatchMode: "message" }),
           });
         }
-        if (action.type === "start_thread" && sendingMessage) {
+        if (sendingMessage && (action.type === "start_thread" || canStartFromMessage)) {
           entries.push({
             kind: "item", id: "new-thread", label: "Start a new thread", checked: false,
             onSelect: () => chooseMessage({ dispatchMode: "new_thread" }),
@@ -1091,7 +1104,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
             <TodoSplitButton
               label={sendingMessage ? "Send request" : todo.error ? "Retry" : "Start thread"}
               // Without Do it here, a send to the card's own thread is refused.
-              disabled={sendingMessage && (!messageTarget || !canSendMessage || targetsOwnThread)}
+              disabled={startRequiresUpdate || (sendingMessage && (!messageTarget || !canSendMessage || targetsOwnThread))}
               Icon={HandoffIcon}
               menuLabel="Handoff options"
               onClick={() => runAction()}
@@ -1216,12 +1229,13 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
           {sendingMessage ? (
             <TodoMessageDestination todo={todo} target={messageTarget} localMachine={props.localMachine}
               disabled={props.running} onSelect={(next) => chooseMessage({ messageTarget: next })} />
-          ) : action?.type === "start_thread" ? (
+          ) : startsThread ? (
             <TodoDispatchFacts
               todo={todo}
               target={target}
-              {...(action.executionMode ? { access: formatExecutionModeLabel(action.executionMode) } : {})}
-              disabled={props.running}
+              {...(action?.type === "start_thread" && action.executionMode
+                ? { access: formatExecutionModeLabel(action.executionMode) } : {})}
+              disabled={props.running || startRequiresUpdate}
             />
           ) : action?.type === "merge_pull_request" ? (
             <dl className="thread-todo-card__facts">
@@ -1235,6 +1249,9 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
           ) : null}
           {sendingMessage && !canSendMessage ? (
             <p role="status">Update the card's PwrAgent owner to send requests to existing threads.</p>
+          ) : null}
+          {startRequiresUpdate || confirmationRequiresUpdate ? (
+            <p role="status">Update the card's PwrAgent owner to start a new thread from this handoff.</p>
           ) : null}
           {prompt ? (
             <div className="thread-todo-card__prompt-block">

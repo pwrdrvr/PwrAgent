@@ -12,6 +12,18 @@ function deferred() {
 }
 
 describe("shared owner index reads", () => {
+  it("charges multilayer stack backing exactly across layer batches", async () => {
+    const pool = new NavigationIndexReadPool(1_000);
+    const fixture: NavigationQueryIndex = { directories: [], threads: [], stacks: Array.from({ length: 3 }, (_, i) => ({
+      key: `stack-${i}`, name: "Fixture", repository: "github.com:fixture/project", trunk: "main", inferred: false,
+      layers: Array.from({ length: 257 }, (_, layer) => ({
+        branch: `branch-${layer}💡`, parent: "main", health: "in_sync", role: "unbound",
+      })),
+    })) };
+    await pool.read("stacks", async () => fixture);
+    expect(pool.retainedUsage().bytes).toBe(Buffer.byteLength(JSON.stringify({ ...fixture, inputRequestThreadKeys: [] })));
+    pool.invalidate("stacks");
+  });
   it("charges prepared helpers to the existing retention budget", async () => {
     const pool = new NavigationIndexReadPool(1_000);
     const snapshot = createNavigationQuerySnapshot({ directories: [], threads: Array.from({ length: 16_000 }, (_, i) => ({

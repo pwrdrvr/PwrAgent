@@ -179,6 +179,7 @@ export const localThreadTodoOperations = {
     if (request.messageTarget !== undefined && !messageTarget) throw new Error("Choose a valid destination thread.");
     return {
       todo: await getThreadTodoService().runAction(request.id, {
+        ...(request.startNewThread === true ? { startNewThread: true } : {}),
         ...(messageTarget ? { messageTarget } : {}),
         ...(isThreadTodoMergeMethod(request.mergeMethod)
           ? {

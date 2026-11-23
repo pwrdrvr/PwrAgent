@@ -39,6 +39,7 @@ import { resolvePrimaryThreadRepoKey } from "../pr-status/primary-thread-reposit
 import { PR_METADATA_PRIORITY, type PrMetadataDemand } from "../pr-status/pr-metadata-process";
 import { boundThreadPendingWakes } from "./thread-pending-wakes";
 import { resolveScratchProjectsRoots } from "./scratch-projects";
+import { readNavigationStackLayers } from "./navigation-query-source";
 
 /** The most records one selected-collection page holds, before the byte budget. */
 const SELECTED_COLLECTION_PAGE_RECORDS = 100;
@@ -201,6 +202,7 @@ export type NavigationDetailRegistry = Pick<
 export class NavigationDetailService {
   constructor(
     private readonly registry: NavigationDetailRegistry = getDesktopBackendRegistry(),
+    private readonly readStackLayers = readNavigationStackLayers,
   ) {}
 
   async readLaunchpadConfig(
@@ -340,9 +342,12 @@ export class NavigationDetailService {
     const prDemand: PrMetadataDemand = { priority: () => PR_METADATA_PRIORITY.selected, signal: options.signal };
     if (request.collection) {
       const name = request.collection.name;
-      if (name !== "prs" && !NAVIGATION_DETAIL_COLLECTION_NAMES.includes(name)) throw new NavigationQueryError("navigation_invalid_request", "Unknown selected-detail collection.");
+      if (name !== "prs" && name !== "stackLayers" && !NAVIGATION_DETAIL_COLLECTION_NAMES.includes(name)) {
+        throw new NavigationQueryError("navigation_invalid_request", "Unknown selected-detail collection.");
+      }
       const store = getDesktopOverlayStore();
       let all: unknown[] | undefined;
+      let stackCollection: Awaited<ReturnType<typeof readNavigationStackLayers>> | undefined;
       let count: number;
       let manifestRevision: string;
       if (name === "subAgents") {
@@ -352,6 +357,10 @@ export class NavigationDetailService {
         const manifest = await this.subAgentCollectionManifest(request.ref, summary);
         count = manifest.count;
         manifestRevision = manifest.revision;
+      } else if (name === "stackLayers") {
+        stackCollection = await this.readStackLayers(request.ref, options.signal);
+        count = stackCollection.count;
+        manifestRevision = stackCollection.revision;
       } else {
         const overlay = await store.getThreadOverlayState({ backend: summary.source, threadId: summary.id });
         if (name === "prs") {
@@ -376,7 +385,7 @@ export class NavigationDetailService {
       const offset = cursor?.offset ?? 0;
       if (offset > count) throw new NavigationQueryError("navigation_invalid_request", "Selected collection cursor is outside its revision.");
       const limit = Math.min(SELECTED_COLLECTION_PAGE_RECORDS, count - offset);
-      const values = all ? all.slice(offset, offset + limit)
+      const values = stackCollection ? stackCollection.page(offset, limit) : all ? all.slice(offset, offset + limit)
         : await this.readSubAgentCollectionPage(summary, { offset, limit, count });
       // A stored card that does not parse is counted but never read. A short
       // read is the collection's end, so a viewer is never left without one.

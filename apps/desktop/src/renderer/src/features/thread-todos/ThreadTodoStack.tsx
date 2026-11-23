@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ThreadTodo, ThreadTodoCiApproval, ThreadTodoResolution } from "@pwragent/shared/contracts/thread-todos";
-import { threadTodoItemProgress } from "@pwragent/shared/contracts/thread-todos";
+import { threadTodoItemProgress, threadTodoStartActionForRun } from "@pwragent/shared/contracts/thread-todos";
 import { TodoIcon } from "../../icons";
 import { ThreadTodoCard } from "./ThreadTodoCard";
 import { consumeThreadTodoReveal, type ThreadTodoRevealRequest } from "./thread-todo-reveal";
@@ -246,7 +246,7 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
   const run = (target: ThreadTodo, options?: ThreadTodoRunOptions): void => {
     // A start leaves the deck at once and reports in the tray, so the
     // operator can go on to the card under it while setup runs.
-    if (target.action?.type === "start_thread" && !options?.messageTarget) {
+    if (threadTodoStartActionForRun(target.action, options)) {
       void launchThreadTodo({ todo: target, threadKey }, (begin) => view.run(target, options, {
         // After a Full Access prompt this runs later, so it reads the deck
         // as committed then, not as it was at the click.

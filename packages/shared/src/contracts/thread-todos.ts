@@ -791,6 +791,8 @@ export function isThreadTodoResolution(value: unknown): value is ThreadTodoResol
 export type RunThreadTodoActionRequest = {
   federationTarget?: FederationRemoteTarget;
   id: string;
+  /** Start a new thread from a handoff proposed for an existing thread. */
+  startNewThread?: boolean;
   /** Send a handoff's prompt to this existing thread instead of creating one. */
   messageTarget?: ThreadTodoMessageTarget;
   /**
@@ -844,6 +846,19 @@ export type RunThreadTodoActionRequest = {
    */
   seenExecutionMode?: ThreadTodoSeenExecutionMode;
 };
+
+/** The start proposal for this run, including an operator's redirect. */
+export function threadTodoStartActionForRun(
+  action: ThreadTodoAction | undefined,
+  options?: Pick<RunThreadTodoActionRequest, "startNewThread" | "messageTarget">,
+): Extract<ThreadTodoAction, { type: "start_thread" }> | undefined {
+  if (options?.messageTarget) return undefined;
+  if (action?.type === "start_thread") return action;
+  if (action?.type === "send_message" && options?.startNewThread === true) {
+    return { type: "start_thread", prompt: action.prompt };
+  }
+  return undefined;
+}
 
 /** A start card's access as shown: its named mode, or `inherit` for none. */
 export type ThreadTodoSeenExecutionMode = ThreadExecutionMode | "inherit";

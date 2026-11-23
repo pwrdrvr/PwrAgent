@@ -288,6 +288,10 @@ export class ForgeCiClient {
       response = await fetcher(url, { signal: requestSignal, redirect: "error" });
     }
     if (!response.ok) {
+      if (method === "GET" && /^repos\/[^/]+\/[^/]+\/pulls\/\d+$/.test(request.path)
+        && [301, 302, 307, 308].includes(response.status)) {
+        throw new ForgeReadError("pull_request_redirected", "GitHub moved this pull request to a different repository URL.");
+      }
       if (response.status === 429 || response.status === 403 && (response.headers.get("x-ratelimit-remaining") === "0" || response.headers.has("retry-after"))) {
         const retryHeader = response.headers.get("retry-after");
         const retry = retryHeader && Number.isFinite(Number(retryHeader)) ? Date.now() + Number(retryHeader) * 1000 : Date.parse(retryHeader ?? "");

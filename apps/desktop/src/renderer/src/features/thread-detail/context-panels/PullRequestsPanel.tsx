@@ -5,6 +5,7 @@ import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/t
 import {
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
+  NAVIGATION_QUERY_PROTOCOL_VERSION,
   pullRequestMatchesRepositoryKey,
 } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -29,7 +30,7 @@ import { orderPullRequestSet } from "@pwragent/shared/pull-request-review";
 import { isStaleStackLayer, type StackSummary } from "@pwragent/shared/stacks/stack-status";
 
 type PullRequestsPanelProps = {
-  desktopApi?: Pick<DesktopApi, "detachThreadPullRequest" | "manageThreadPrWatches">;
+  desktopApi?: Pick<DesktopApi, "detachThreadPullRequest" | "manageThreadPrWatches" | "getNavigationSelectedDetail" | "getNavigationQueryPage">;
   onRefreshNavigation?: () => Promise<void>;
   /** Backs the Auto-fix row's Turn Off. */
   onSetThreadPrAutoDispatch?: (enabled: boolean) => Promise<void>;
@@ -47,6 +48,91 @@ type WatchHistoryState = {
 const NO_WATCHES: readonly ThreadPullRequestWatchSummary[] = [];
 
 type CheckState = NonNullable<PrSummary["checkState"]>;
+
+function useSelectedStackDetails({ thread, desktopApi }: PullRequestsPanelProps) {
+  const target = thread.federation?.ref.target ?? readRendererFederationTarget();
+  const ownerInstanceId = target?.scope === "remote" ? target.instanceId : undefined;
+  const { id: threadId, source: backend } = thread;
+  const source = JSON.stringify([backend, threadId, ownerInstanceId, thread.stackMemberships,
+    thread.observedGitBranch, thread.prs?.map(({ number, baseRefName, headSha, lifecycleState }) =>
+      [number, baseRefName, headSha, lifecycleState])]);
+  const [loaded, setLoaded] = useState<{ source: string; stacks?: StackSummary[]; error?: string }>();
+  const [attempt, setAttempt] = useState(0);
+  const read = desktopApi?.getNavigationSelectedDetail;
+  const readLegacyRow = desktopApi?.getNavigationQueryPage;
+  const needsLegacyLookup = Boolean(ownerInstanceId && thread.stackMemberships?.length && !thread.stacks?.length);
+  const hasWorkspace = thread.linkedDirectories.length > 0;
+  useEffect(() => {
+    if (!read || !hasWorkspace) return;
+    let active = true;
+    const ref = { backend, threadId, ownerInstanceId };
+    const federationTarget = ownerInstanceId ? { scope: "remote" as const, instanceId: ownerInstanceId } : undefined;
+    void (async () => {
+      const stacks = new Map<string, StackSummary>();
+      const cursors = new Set<string>();
+      let revision: string | undefined;
+      let cursor: string | undefined;
+      let bytes = 0;
+      do {
+        const result = await read({
+          protocol: NAVIGATION_QUERY_PROTOCOL_VERSION, ref, federationTarget,
+          collection: { name: "stackLayers", cursor },
+        });
+        if (!active) return;
+        const page = result.collectionPage;
+        if (result.protocol !== NAVIGATION_QUERY_PROTOCOL_VERSION || result.readiness !== "ready"
+          || result.ref.backend !== backend || result.ref.threadId !== threadId || result.ref.ownerInstanceId !== ownerInstanceId
+          || page?.name !== "stackLayers" || (revision !== undefined && page.revision !== revision)) {
+          throw new Error("Stack details changed while loading.");
+        }
+        revision = page.revision;
+        const layers = page.values.stackLayers ?? [];
+        bytes += new TextEncoder().encode(JSON.stringify(layers)).byteLength;
+        if (bytes > 8 * 1024 * 1024) {
+          setLoaded({ source, error: "Stack details exceed the display limit." });
+          return;
+        }
+        for (const { stackKey, stack, layer, position } of layers) {
+          const current = stacks.get(stackKey) ?? (stack?.key === stackKey ? { ...stack, layers: [] } : undefined);
+          if (!current || position !== current.layers.length + 1) throw new Error("Stack details arrived out of order.");
+          current.layers.push(layer);
+          stacks.set(stackKey, current);
+        }
+        if (page.complete) {
+          setLoaded({ source, stacks: [...stacks.values()] });
+          return;
+        }
+        cursor = page.nextCursor;
+        if (!cursor || cursors.has(cursor) || !layers.length) throw new Error("Stack details did not finish loading.");
+        cursors.add(cursor);
+      } while (active);
+    })().catch(async (error: unknown) => {
+      // A mounted older owner can supply a full stack on one exact row.
+      if (!active) return;
+      const unsupported = error instanceof Error && error.message.includes("Unknown selected-detail collection");
+      if (unsupported && !needsLegacyLookup) return;
+      if (unsupported && readLegacyRow) {
+        const legacy = await readLegacyRow({
+          protocol: NAVIGATION_QUERY_PROTOCOL_VERSION, consumer: "main-sidebar", federationTarget,
+          query: { kind: "exact", identities: [ref] }, pageSize: 1,
+        }).catch(() => undefined);
+        if (!active) return;
+        const row = legacy?.entries.find(({ row }) => row.id === threadId && row.source === backend)?.row;
+        if (row?.stacks) {
+          setLoaded({ source, stacks: [...new Map(row.stacks.map(({ stack }) => [stack.key, stack])).values()] });
+          return;
+        }
+      }
+      setLoaded({ source, error: "Could not load stack details." });
+    });
+    return () => { active = false; };
+  }, [read, readLegacyRow, needsLegacyLookup, hasWorkspace, backend, threadId, ownerInstanceId, source, attempt]);
+  const current = loaded?.source === source ? loaded : undefined;
+  return { stacks: current?.stacks, error: current?.error, retry: () => {
+    setLoaded(undefined);
+    setAttempt((value) => value + 1);
+  } };
+}
 
 function StackRailCard({ stack }: { stack: StackSummary }) {
   return (
@@ -79,6 +165,7 @@ function StackRailCard({ stack }: { stack: StackSummary }) {
  * status pills (lifecycle, merge conflict, checks), above the title + repo.
  */
 export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequestsPanelProps) {
+  const selectedStacks = useSelectedStackDetails(props);
   const [pendingDetachPr, setPendingDetachPr] = useState<PrSummary>();
   const watchContext = useThreadPrWatchIndicatorsContext();
   const threadKey = buildThreadIdentityKey(props.thread.source, props.thread.id);
@@ -185,7 +272,7 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
     byRepo.set(label, group);
   }
   const prs = [...byRepo.values()].flatMap((group) => orderPullRequestSet(group, (pr) => pr).ordered);
-  const stacks = [...new Map(props.thread.stacks?.map(({ stack }) => [stack.key, stack])).values()];
+  const stacks = selectedStacks.stacks ?? [...new Map(props.thread.stacks?.map(({ stack }) => [stack.key, stack])).values()];
   const detachPr = async (pr: PrSummary): Promise<void> => {
     if (!props.desktopApi?.detachThreadPullRequest) {
       return;
@@ -213,8 +300,14 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
   return (
     <section className="context-panel__section">
       <h3>Pull requests</h3>
-      {prs.length > 0 || stacks.length > 0 ? (
+      {prs.length > 0 || stacks.length > 0 || selectedStacks.error ? (
         <ul className="context-list context-list--cards">
+          {selectedStacks.error ? (
+            <li className="rail-card">
+              <p className="rail-card__meta" role="status">{selectedStacks.error}</p>
+              <button className="button button--ghost" type="button" onClick={selectedStacks.retry}>Retry stack details</button>
+            </li>
+          ) : null}
           {stacks.map((stack) => <StackRailCard key={stack.key} stack={stack} />)}
           {prs.map((pr) => {
             const lifecycle = resolveLifecycleState(pr);

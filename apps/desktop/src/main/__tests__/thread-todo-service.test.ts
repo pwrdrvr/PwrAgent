@@ -1160,7 +1160,7 @@ describe("ThreadTodoService", () => {
       expect(todo.title.endsWith("…")).toBe(true);
     });
 
-    it("costs one commit for the plan card beside the start's own", async () => {
+    it.each(["start_thread", "send_message"] as const)("budgets a start with a plan from a %s proposal", async (proposal) => {
       const service = createService();
       service.setRunners({
         mergePullRequest: vi.fn(),
@@ -1171,11 +1171,15 @@ describe("ThreadTodoService", () => {
           return CHILD;
         },
       });
-      const todo = addHandoff(service, {
+      const { todo } = service.add({ ...THREAD, input: {
+        title: "Finish the smoke test",
         items: ["Run Windows lint, tests and a build", "Capture screenshots", "Attach the evidence"],
-      });
+        action: proposal === "send_message"
+          ? { type: "send_message", target: THREAD, prompt: "Finish it" }
+          : { type: "start_thread", prompt: "Finish it" },
+      } });
       const { writes } = await measureSqliteWrites(async () => {
-        await service.runAction(todo.id, { allowOpenItems: true });
+        await service.runAction(todo.id, { allowOpenItems: true, startNewThread: proposal === "send_message" });
       });
       expectSqliteWriteBudget({
         note: "one Start thread from a card with a 3-step plan: one commit for the new thread's "

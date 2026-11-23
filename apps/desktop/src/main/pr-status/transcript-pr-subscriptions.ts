@@ -91,6 +91,10 @@ export class TranscriptPrSubscriptions {
     this.senders.delete(sender);
   }
 
+  hasTarget(prKey: string): boolean {
+    return this.active.has(prKey);
+  }
+
   /** The scheduler's normal linear pass over distinct active PRs, never DOM nodes. */
   targets(): PrPollTarget[] {
     return [...this.active].map(([prKey, cached]) => this.target(prKey, cached));
