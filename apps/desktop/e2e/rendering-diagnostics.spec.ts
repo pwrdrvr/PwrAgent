@@ -384,7 +384,7 @@ test("production usage warning settles without sustaining compositor frames", as
 });
 
 test("status dots dip from one shared timer and leave offscreen dots still", async () => {
-  // Four captures, 18 seconds of tracing in all.
+  // Four captures, 20 seconds of observation in all.
   test.setTimeout(90_000);
   const app = await launchElectronApp({
     fixturePath: path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/smoke/replay.fixture.json"),
@@ -415,6 +415,7 @@ test("status dots dip from one shared timer and leave offscreen dots still", asy
     await expect(strip).toHaveAttribute("aria-expanded", "true");
     const dots = app.window.locator(".live-strip__list .status-dot--blink");
     await expect(dots).toHaveCount(6);
+    type PulseProbeWindow = Window & { statusPulseIterations: number[] };
     await app.window.evaluate(() => {
       // Keep only the dots moving. The strip header's thinking scanner has its
       // own loop, and the composer caret blinks on its own timer.
@@ -422,7 +423,22 @@ test("status dots dip from one shared timer and leave offscreen dots still", asy
       style.textContent = ".thinking-scanner { display: none !important; }";
       document.head.append(style);
       (document.activeElement as HTMLElement | null)?.blur();
+
+      // Record each real pulse start without polling or waking the compositor.
+      // A finite animation can start and finish between trace samples.
+      const starts: number[] = [];
+      (window as unknown as PulseProbeWindow).statusPulseIterations = starts;
+      const animate = Element.prototype.animate;
+      Element.prototype.animate = function (keyframes, options) {
+        const animation = animate.call(this, keyframes, options);
+        if (animation.id === "status-blink" && this.matches(".live-strip__list .status-dot--blink")) {
+          starts.push(animation.effect!.getTiming().iterations!);
+        }
+        return animation;
+      };
     });
+    const takePulseStarts = () => app.window.evaluate(() =>
+      (window as unknown as PulseProbeWindow).statusPulseIterations.splice(0));
     const pid = await app.electronApp.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0]!.webContents.getOSProcessId());
 
@@ -454,14 +470,18 @@ test("status dots dip from one shared timer and leave offscreen dots still", asy
       };
     };
 
-    // Baseline: the preference holds every dot at rest.
-    const still = await capture(3);
+    // Cover a full 4.5s pulse period under reduced motion.
+    const still = await capture(5);
+    expect(await takePulseStarts()).toEqual([]);
+    expect(still.animations.some(([name]) => name === "status-blink")).toBe(false);
     expect(still.animations.filter(([, , playState, infinite]) => infinite && playState === "running")).toEqual([]);
 
     // A 4.5s period plus the 1.6s dip fits regardless of the starting phase.
     await app.window.emulateMedia({ reducedMotion: "no-preference" });
     const pulses = await capture(7);
-    expect(pulses.animations).toContainEqual(["status-blink", ".status-dot", "running", false, true]);
+    const pulseStarts = await takePulseStarts();
+    expect(pulseStarts.length).toBeGreaterThan(0);
+    expect(pulseStarts.every((iterations) => iterations === 1)).toBe(true);
     expect(pulses.animations.some(([, , , infinite]) => infinite)).toBe(false);
 
     // Move both versions of the dots offscreen in the same renderer. The
@@ -486,6 +506,15 @@ test("status dots dip from one shared timer and leave offscreen dots still", asy
         .status-dot--blink { animation: former-status-blink 1.6s ease-in-out infinite; }`;
       document.head.append(style);
     });
+    // The stylesheet is inserted before the browser starts its animations.
+    // Flush style and wait for the positive control to start before tracing.
+    await expect.poll(() => dots.evaluateAll(async (elements) => {
+      const loops = elements.flatMap((element) => element.getAnimations())
+        .filter((animation) => animation instanceof CSSAnimation
+          && animation.animationName === "former-status-blink");
+      await Promise.all(loops.map((animation) => animation.ready));
+      return loops.filter((animation) => animation.playState === "running").length;
+    })).toBe(6);
     const formerOffscreen = await capture(3);
 
     console.log(JSON.stringify({ statusPulseFramesPerSecond: {

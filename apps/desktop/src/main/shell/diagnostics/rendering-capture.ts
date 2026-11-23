@@ -210,16 +210,6 @@ class RenderingCapture {
       d.on("message", this.message);
       d.on("detach", this.detached);
       this.startedAt = performance.now();
-      // Node measures a timer from the event loop's cached clock, which trails
-      // performance.now() by the synchronous work above. Wait out the rest on
-      // the clock the duration is reported in, so a capture is never short.
-      const endsAt = this.startedAt + seconds * 1000;
-      const expire = () => {
-        const remaining = endsAt - performance.now();
-        if (remaining > 0) this.timer = setTimeout(expire, Math.ceil(remaining));
-        else void this.stop("duration").catch(() => {});
-      };
-      this.timer = setTimeout(expire, seconds * 1000);
       // contentTracing.startRecording resolves even when it did not start a
       // recording. CDP rejects conflicts; only this acknowledgement grants ownership.
       await this.bounded(d.sendCommand("Tracing.start", {
@@ -240,7 +230,19 @@ class RenderingCapture {
         await this.bounded(d.sendCommand("Target.setDiscoverTargets", { discover: true }), this.startedAt + TRANSFER_BUDGET_MS);
         this.sample();
       }
-      const stream = await this.bounded(this.complete, this.startedAt + seconds * 1000 + TRANSFER_BUDGET_MS);
+      // Renderer attachment has its own deadline. Give the sampler the full
+      // requested duration once it can observe the attached windows.
+      const endsAt = performance.now() + (this.endRequested ? 0 : seconds * 1000);
+      if (!this.endRequested) {
+        const expire = () => {
+          // Node's cached loop clock can trail performance.now().
+          const remaining = endsAt - performance.now();
+          if (remaining > 0) this.timer = setTimeout(expire, Math.ceil(remaining));
+          else void this.stop("duration").catch(() => {});
+        };
+        this.timer = setTimeout(expire, seconds * 1000);
+      }
+      const stream = await this.bounded(this.complete, endsAt + TRANSFER_BUDGET_MS);
       clearTimeout(this.stopTimer);
       if (!stream || !this.endTask) throw failure();
       const deadline = performance.now() + TRANSFER_BUDGET_MS;
