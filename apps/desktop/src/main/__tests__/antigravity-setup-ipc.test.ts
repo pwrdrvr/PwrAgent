@@ -52,12 +52,13 @@ it("keeps managed installation passive until requested, then refreshes only loca
 });
 
 it("only accepts a code from the window that started the attempt and refreshes models after verification", async () => {
-  const refresh = vi.fn(async () => launch);
+  const refresh = vi.fn(async (probeCapabilities: boolean) => probeCapabilities
+    ? { ...launch, command: "/example/new-agy" } : launch);
   const dispose = registerAntigravitySetupIpc({ refresh });
   try {
     const call = mock.handle.mock.calls[0]![1];
     const initiator = owner();
-    const verification = Promise.withResolvers<void>();
+    const verification = Promise.withResolvers<string>();
     const submitCode = vi.fn();
     mock.start.mockReturnValue({ ready: Promise.resolve(), completed: verification.promise, submitCode });
     await expect(call(initiator, { action: "start", attemptId })).resolves.toMatchObject({ ok: true });
@@ -67,8 +68,8 @@ it("only accepts a code from the window that started the attempt and refreshes m
     await expect(call(initiator, { action: "submit", attemptId, code: "contrived" })).resolves.toEqual({ ok: true });
     expect(submitCode).toHaveBeenCalledExactlyOnceWith("contrived");
     expect(refresh.mock.calls).toEqual([[false]]);
-    verification.resolve();
-    await expect(finished).resolves.toEqual({ ok: true, verifiedCommand: launch.command });
+    verification.resolve("/example/verified-agy");
+    await expect(finished).resolves.toEqual({ ok: true, verifiedCommand: "/example/verified-agy" });
     expect(refresh.mock.calls).toEqual([[false], [true]]);
     expect(initiator.sender.listenerCount("destroyed")).toBe(0);
   } finally {

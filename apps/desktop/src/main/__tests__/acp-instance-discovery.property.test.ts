@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
@@ -69,7 +69,42 @@ it("uses a working PATH candidate after rejecting the exact managed path", async
   });
 });
 
+it("allows fallback after pruning only for an automatically selected managed executable", async () => {
+  await withManagedBinary(async (_root, command) => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("automatic", "override", "selected"), async (selection) => {
+      const [record] = await discoverLocalAcpAgentRecords({
+        ...discovery(command, []),
+        preferences: {
+          antigravity: {
+            ...(selection === "override" ? { overridePath: command } : {}),
+            ...(selection === "selected" ? { selectedPath: command } : {}),
+          },
+        },
+      });
+      expect(record?.launchDescriptor?.command).toBe(command);
+      expect(record?.launchDescriptor?.managedAntigravityFallback).toBe(selection === "automatic");
+    }), { numRuns: 15 });
+  });
+});
+
 describe.skipIf(process.platform === "win32")("managed Antigravity symlinks", () => {
+  it("lets automatic aliases fall forward while explicitly selected aliases stay exact", async () => {
+    await withManagedBinary(async (root, command) => {
+      const alias = path.join(root, "agy-alias");
+      await symlink(command, alias);
+      await fc.assert(fc.asyncProperty(fc.constantFrom(command, alias),
+        fc.constantFrom("automatic", "override", "selected"), async (candidate, selection) => {
+          const [record] = await discoverLocalAcpAgentRecords({
+            ...discovery(command, [{ command: candidate, source: selection === "override" ? "override" : "path" }]),
+            preferences: selection === "selected" ? { antigravity: { selectedPath: candidate } } : {},
+          });
+          expect(record?.launchDescriptor?.command).toBe(candidate);
+          expect(record?.launchDescriptor?.managedAntigravityFallback).toBe(selection === "automatic");
+        },
+      ), { numRuns: 20 });
+    });
+  });
+
   it("keeps a rejected relative PATH alias out of the active selection", async () => {
     await withManagedBinary(async (root, command) => {
       const alias = path.join(root, "agy");
@@ -130,8 +165,9 @@ describe.skipIf(process.platform === "win32")("managed Antigravity symlinks", ()
             discoverAcpAgentInstances(options), discoverLocalAcpAgentRecords(options),
           ]);
           expect(settings.get("antigravity")?.instances).toEqual([managed, external]);
-          expect(record?.instances).toEqual([managed, external]);
-          expect(record?.activeCommand).toBe(candidate);
+          const launch = candidate === "agy" ? await realpath(command) : candidate;
+          expect(record?.instances).toEqual([{ ...managed, command: launch }, external]);
+          expect(record?.activeCommand).toBe(launch);
           expect(record?.launchDescriptor?.env.AGY_CLI_DISABLE_AUTO_UPDATE).toBe("true");
         },
       ), { numRuns: 25 });

@@ -31,6 +31,7 @@ import {
   type ProviderDiscoveryPermit,
 } from "../provider-discovery-permit";
 import type { DesktopSettingsConfig } from "../desktop-config";
+import { writeAntigravitySelection } from "../../acp/antigravity-runtime-retention";
 import {
   parseRawConfigText,
   readRawConfigFile,
@@ -260,6 +261,15 @@ export class DesktopConfigStore {
     patch: DesktopSettingsConfigPatch,
     returnDomains: readonly K[],
   ): Promise<ConfigUpdateResult<K>> {
+    const antigravityPath = patch.acpAgents?.antigravity?.cliPath;
+    const write = () => this.writePatch(patch, returnDomains);
+    return antigravityPath === undefined ? write() : await writeAntigravitySelection(this.options.configPath, antigravityPath, write);
+  }
+
+  private writePatch<K extends keyof ConfigDomainMap>(
+    patch: DesktopSettingsConfigPatch,
+    returnDomains: readonly K[],
+  ): ConfigUpdateResult<K> {
     const previous = this.snapshot;
     const written = writeRawConfigPatch(this.options.configPath, patch);
     const observation = parseRawConfigText(

@@ -3,6 +3,7 @@ import { ANTIGRAVITY_SETUP_CHANNEL } from "../../../shared/ipc";
 import type { AntigravitySetupRequest, AntigravitySetupResult } from "../../../shared/antigravity-setup";
 import type { AcpLaunchDescriptor } from "../../acp/acp-launch-descriptor";
 import { installManagedAntigravityRuntime, readManagedAntigravityStatus } from "../../acp/antigravity-managed-runtime";
+import { resolveAntigravityCommandPath } from "../../acp/antigravity-runtime-retention";
 import { AntigravitySignIn, ANTIGRAVITY_SIGN_IN_TIMEOUT_MS, type AntigravitySignInAttempt } from "../../acp/antigravity-sign-in";
 import { createManagedRuntimeProgressReporter } from "../../managed-runtime-progress";
 
@@ -10,7 +11,6 @@ type SignIn = {
   id: string;
   owner: WebContents;
   expiresAt: number;
-  command?: string;
   attempt?: AntigravitySignInAttempt;
   cancel: () => void;
 };
@@ -81,7 +81,6 @@ export function registerAntigravitySetupIpc(options: {
     }
     try {
       current.expiresAt = Date.now() + ANTIGRAVITY_SIGN_IN_TIMEOUT_MS;
-      current.command = launch.command;
       current.attempt = signIn.start(launch);
       await current.attempt.ready;
       return { ok: true, expiresAt: current.expiresAt };
@@ -125,9 +124,14 @@ export function registerAntigravitySetupIpc(options: {
         return accepted;
       case "wait":
         try {
-          await attempt.completed;
-          if (login === current) await options.refresh(true).catch(() => undefined);
-          return { ok: true, verifiedCommand: current.command };
+          const verifiedCommand = await attempt.completed;
+          const selected = login === current ? await options.refresh(true).catch(() => undefined) : undefined;
+          const selectedPath = selected && await resolveAntigravityCommandPath(selected.command, {
+            cwd: selected.cwd,
+            env: { ...process.env, ...selected.env },
+          });
+          return { ok: true, verifiedCommand: selectedPath === verifiedCommand && selected
+            ? selected.command : verifiedCommand };
         } finally {
           release(current);
         }

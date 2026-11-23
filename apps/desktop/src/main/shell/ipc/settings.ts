@@ -223,7 +223,7 @@ import type {
   AcpRegistrySnapshot,
 } from "../../acp/acp-registry-types";
 import { resolveWindowsCodexLaunchCommand } from "../../codex-windows-launch";
-import { normalizeProfileName } from "../../profile";
+import { normalizeProfileName, resolveActiveProfilePath, resolveBootstrapProfilePath } from "../../profile";
 import {
   discoverRecentProjects,
   readRecentCodexDirectories,
@@ -880,6 +880,9 @@ async function listInstalledAndLocalAcpAgents(
       discovered = (await discoverLocalAcpAgentRecords({
         enabledRegistryIds: discoveryRegistryIds,
         useManagedAntigravity: true,
+        antigravitySelectionConfigPath: isBootstrapProfile()
+          ? resolveBootstrapProfilePath("config.toml")
+          : resolveActiveProfilePath("config.toml"),
         managedGrok: {
           channel: managedGrokBuildChannelFromSnapshot(providers),
           enabled:

@@ -23,6 +23,10 @@ import {
   terminateOwnedProcessTree,
   type OwnedChildProcess,
 } from "../process-tree.js";
+import {
+  MANAGED_ANTIGRAVITY_ENV,
+  spawnWithAntigravityRuntimeHold,
+} from "./antigravity-runtime-retention.js";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10 * 60_000;
 const PROCESS_CLOSE_TIMEOUT_MS = 5_000;
@@ -246,16 +250,16 @@ class AcpLineStdioTransport implements JsonRpcTransport {
   async connect(): Promise<void> {
     this.assertOpen();
     try {
-      this.launchChild();
+      await this.launchChild();
+      this.assertOpen();
     } catch (error) {
       this.disconnect(asError(error), true);
       await this.closePromise;
       throw error;
     }
-    this.assertOpen();
   }
 
-  private launchChild(): void {
+  private async launchChild(): Promise<void> {
     const descriptor = normalizeAcpLaunchDescriptor(this.options.launchDescriptor);
     const baseEnv = this.options.baseEnv ?? process.env;
     const env = prependBundledToolsToPath(
@@ -272,8 +276,28 @@ class AcpLineStdioTransport implements JsonRpcTransport {
         ...(this.options.platform ? { platform: this.options.platform } : {}),
       },
     );
+    if (descriptor.backendId === "acp:antigravity" && process.platform !== "win32") {
+      await spawnWithAntigravityRuntimeHold(
+        descriptor.command,
+        { env, cwd: descriptor.cwd },
+        (command, managed) => this.spawnChild(
+          descriptor, command, managed ? { ...env, ...MANAGED_ANTIGRAVITY_ENV } : env,
+        ),
+        () => this.assertOpen(),
+        descriptor.managedAntigravityFallback,
+      );
+      return;
+    }
+    this.spawnChild(descriptor, descriptor.command, env);
+  }
+
+  private spawnChild(
+    descriptor: AcpLaunchDescriptor,
+    command: string,
+    env: NodeJS.ProcessEnv,
+  ): AcpStdioChildProcess {
     const invocation = createCommandInvocation({
-      command: descriptor.command,
+      command,
       args: descriptor.args,
       env,
       platform: this.options.platform,
@@ -281,7 +305,7 @@ class AcpLineStdioTransport implements JsonRpcTransport {
     const spawnProcess = this.options.spawn ?? spawn;
     acpTransportLog.info("launch ACP agent", {
       backendId: descriptor.backendId,
-      command: descriptor.command,
+      command,
       distributionKind: descriptor.distributionKind,
       registryId: descriptor.registryId,
     });
@@ -304,9 +328,10 @@ class AcpLineStdioTransport implements JsonRpcTransport {
     stderr?.on("error", failPipe);
     child.on("error", (error) => this.disconnect(error, child.pid !== undefined));
     if (!stdin || !stdout || !stderr) {
-      throw new Error("ACP stdio pipes unavailable");
+      this.disconnect(new Error("ACP stdio pipes unavailable"), true);
+      return child;
     }
-    if (this.stopped) return;
+    if (this.stopped) return child;
 
     stdin.on("close", () => {
       if (child.exitCode === null && child.signalCode === null) {
@@ -332,6 +357,7 @@ class AcpLineStdioTransport implements JsonRpcTransport {
         false,
       );
     });
+    return child;
   }
 
   async close(): Promise<void> {

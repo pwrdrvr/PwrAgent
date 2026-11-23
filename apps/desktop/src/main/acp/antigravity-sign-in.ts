@@ -8,6 +8,7 @@ import { isSafeExternalOpenUrl } from "../external-url-policy.js";
 import { terminateOwnedProcessTree } from "../process-tree.js";
 import type { AcpLaunchDescriptor } from "./acp-launch-descriptor.js";
 import { AcpStdioJsonRpcTransport, type AcpStdioSpawn } from "./acp-stdio-transport.js";
+import { holdAntigravityExecutable, MANAGED_ANTIGRAVITY_ENV } from "./antigravity-runtime-retention.js";
 
 export const ANTIGRAVITY_SIGN_IN_TIMEOUT_MS = 5 * 60_000;
 const PROCESS_STOP_OPTIONS = { gracefulTimeoutMs: 1_000, forceTimeoutMs: 2_000 };
@@ -26,8 +27,8 @@ const ALTERNATE_CREDENTIAL_ENV = new Set([
 export type AntigravitySignInAttempt = {
   /** Resolves when the validated Google sign-in page has been opened. */
   ready: Promise<void>;
-  /** Resolves after a fresh ACP process opens a session. */
-  completed: Promise<void>;
+  /** The executable that opened a fresh ACP session after sign-in. */
+  completed: Promise<string>;
   submitCode(code: string): void;
   openPage(): Promise<void>;
   copyLink(writeText: (url: string) => void): void;
@@ -119,21 +120,36 @@ export class AntigravitySignIn {
     signal: AbortSignal,
     input: LoginInput,
     onReady: () => void,
-  ): Promise<void> {
+  ): Promise<string> {
     const cwd = await mkdtemp(path.join(tmpdir(), "pwragent-agy-sign-in-")).catch(() => {
       throw new Error("Could not create an Antigravity sign-in workspace.");
     });
     try {
       signal.throwIfAborted();
-      await this.runLogin({ ...launch, cwd }, signal, input, onReady);
-      signal.throwIfAborted();
-      await this.probe({ ...launch, cwd }, signal);
+      const hold = await holdAntigravityExecutable(
+        launch.command, { cwd, env: { ...process.env, ...launch.env } }, launch.managedAntigravityFallback,
+      );
+      try {
+        const exact = {
+          ...launch,
+          cwd,
+          command: hold.command,
+          env: hold.managed ? { ...launch.env, ...MANAGED_ANTIGRAVITY_ENV } : launch.env,
+          managedAntigravityFallback: false,
+        };
+        await this.runLogin(exact, signal, input, onReady);
+        signal.throwIfAborted();
+        await this.probe(exact, signal);
+        signal.throwIfAborted();
+        return hold.command;
+      } finally {
+        hold.release();
+      }
     } finally {
       await rm(cwd, { recursive: true, force: true }).catch(() => {
         throw new Error("Could not clean up the Antigravity sign-in workspace.");
       });
     }
-    signal.throwIfAborted();
   }
 
   private async runLogin(

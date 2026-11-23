@@ -1,6 +1,6 @@
 import { spawn as spawnProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -8,6 +8,7 @@ import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import type { AcpLaunchDescriptor } from "../acp/acp-launch-descriptor.js";
 import { AntigravitySignIn, type AntigravitySignInOptions } from "../acp/antigravity-sign-in.js";
+import { pruneAntigravityRuntime, withAntigravityRuntimeLock } from "../acp/antigravity-runtime-retention.js";
 
 type SignInSpawn = NonNullable<AntigravitySignInOptions["spawn"]>;
 
@@ -64,6 +65,61 @@ function fixture(options?: Partial<Pick<AntigravitySignInOptions, "openExternal"
 }
 
 describe("Antigravity personal sign-in", () => {
+  it.skipIf(process.platform === "win32")("holds the same resolved release through login and ACP verification", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), async (aliased) => {
+      const home = await mkdtemp(path.join(tmpdir(), "fixture-agy-held-sign-in-"));
+      vi.stubEnv("PWRAGENT_HOME", home);
+      try {
+        const root = path.join(home, "agents", "antigravity");
+        const makeRelease = async (patch: number) => {
+          const command = path.join(root, "versions", `1.5.${patch}-${"d".repeat(128)}`, "agy");
+          await mkdir(path.dirname(command), { recursive: true });
+          await writeFile(command, "fixture", { mode: 0o700 });
+          return await realpath(command);
+        };
+        const selected = await makeRelease(0);
+        const previous = await makeRelease(1);
+        const active = await makeRelease(2);
+        await symlink(path.relative(await realpath(root), active), path.join(root, "active"));
+        const alias = path.join(home, "agy-alias");
+        await symlink(selected, alias);
+        const prune = async () => await withAntigravityRuntimeLock(root,
+          async (assertLocked) => await pruneAntigravityRuntime(root, active, previous, assertLocked));
+        const { login, started, signIn, spawn } = fixture();
+        const probe = new FixtureChild();
+        probe.stdin.on("data", (wire) => {
+          const { id, method } = JSON.parse(String(wire));
+          const result = method === "initialize" ? { protocolVersion: 1 } : { sessionId: "fixture-session" };
+          probe.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
+        });
+        const attempt = signIn.start({
+          ...SELECTED, command: aliased ? alias : selected, managedAntigravityFallback: true,
+        });
+        try {
+          await started;
+          login.stdout.write(`${AUTH_URL}\n`);
+          await attempt.ready;
+          await rm(alias);
+          await symlink(active, alias);
+          await prune();
+          expect((await stat(selected)).isFile()).toBe(true);
+          spawn.mockImplementation(() => probe);
+          attempt.submitCode(FIXTURE_CODE);
+          login.close(0);
+          await expect(attempt.completed).resolves.toBe(selected);
+          expect(spawn.mock.calls.map(([command]) => command)).toEqual([selected, selected]);
+          await prune();
+          await expect(stat(selected)).rejects.toMatchObject({ code: "ENOENT" });
+        } finally {
+          await attempt.cancel();
+        }
+      } finally {
+        vi.unstubAllEnvs();
+        await rm(home, { recursive: true, force: true });
+      }
+    }), { numRuns: 12 });
+  });
+
   it.runIf(process.platform === "darwin")("keeps native open from reaching the inherited PATH", async () => {
     const inheritedBin = await mkdtemp(path.join(tmpdir(), "fixture-agy-open-"));
     // A native opener that reaches the inherited PATH stands in for a browser

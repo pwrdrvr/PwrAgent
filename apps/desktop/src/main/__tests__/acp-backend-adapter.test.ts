@@ -994,6 +994,50 @@ describe("isAcpSessionMissingForProjectError", () => {
 });
 
 describe("AcpBackendAdapter", () => {
+  it("recovers managed fallback for old records with automatic selection provenance", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom("override", "path", "fallback", undefined),
+      fc.boolean(),
+      fc.option(fc.boolean(), { nil: undefined }),
+      async (source, managed, fallback) => {
+        const command = "/fixture/pruned-agy";
+        const agent: AcpInstalledAgentRecord = {
+          ...buildInstalledAgent(),
+          backendId: "acp:antigravity",
+          registryId: "antigravity",
+          activeCommand: command,
+          instances: source ? [{ command, source }] : [],
+          launchDescriptor: {
+            backendId: "acp:antigravity", registryId: "antigravity", distributionKind: "local",
+            command, args: ["acp"], env: managed ? { AGY_CLI_DISABLE_AUTO_UPDATE: "true" } : {},
+            managedAntigravityFallback: fallback,
+          },
+        };
+        const discoverLocalAcpAgents = vi.fn(async () => []);
+        const adapter = createTestAcpBackendAdapter({
+          acpAgentStore: { getInstalledAgent: () => agent, listInstalledAgents: () => [agent], upsertInstalledAgent: vi.fn() },
+          acpSessionStore: null,
+          acpRolloutStore: null,
+          captureStores: [],
+          discoverLocalAcpAgents,
+          emit: async () => {},
+          handleServerRequest: async () => ({}),
+        });
+        try {
+          const launch = (await adapter.resolveInstalledAgent("acp:antigravity")).launchDescriptor;
+          const automatic = source === "path" || source === "fallback";
+          expect(launch?.managedAntigravityFallback).toBe(fallback ?? (managed && automatic ? true : undefined));
+          expect(discoverLocalAcpAgents).not.toHaveBeenCalled();
+        } finally {
+          await adapter.close();
+        }
+      },
+    ), {
+      examples: [["path", true, undefined], ["override", true, undefined]],
+      numRuns: 20,
+    });
+  });
+
   it("remembers failed ephemeral disposal after the prompt has already settled", async () => {
     const agent = { ...buildInstalledAgent(), launchDescriptor: {
       backendId: "acp:gemini" as const, registryId: "gemini", distributionKind: "local" as const,
