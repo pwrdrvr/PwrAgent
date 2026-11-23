@@ -172,6 +172,31 @@ describe("codex environment runtime", () => {
     }
   }, 30_000);
 
+  it.skipIf(!isWindows)("waits for redirected Bash descendants during untimed setup", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-untimed-setup-"));
+    try {
+      const result = await applyLocalCodexEnvironmentSelection({
+        cwd: root,
+        env: { ...process.env, SHELL: resolveWindowsBashShell() },
+        selection: {
+          executionTarget: "local",
+          runSetup: true,
+          environment: {
+            id: "env",
+            name: "Env",
+            sourcePath: "environment.toml",
+            setupScript: "(sleep 1; printf done > result) </dev/null >/dev/null 2>&1 &",
+            actions: [],
+          },
+        },
+      });
+      expect(result?.setupStatus).toBe("completed");
+      await expect(readFile(path.join(root, "result"), "utf8")).resolves.toBe("done");
+    } finally {
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  }, 30_000);
+
   it("treats a missing detached command as already gone", async () => {
     await expect(
       waitForCodexEnvironmentDetachedCommandGone({
@@ -464,10 +489,11 @@ describe("codex environment runtime", () => {
       }, isWindows ? WINDOWS_JOB_OVERALL_READY_TIMEOUT_MS : 10_000);
 
       if (isWindows) {
+        await waitForCodexEnvironmentDetachedCommandGone({ runId });
         const exit = await detachedExit;
         expect(exit, JSON.stringify(mainLogEntries)).toMatchObject({
-          exitCode: null,
-          exitSignal: "SIGTERM",
+          exitCode: 1,
+          exitSignal: null,
         });
       } else {
         await expect(detachedExit).resolves.toMatchObject({

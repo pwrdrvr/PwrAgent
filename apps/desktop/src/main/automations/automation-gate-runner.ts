@@ -1,29 +1,36 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import type { AutomationGateConfig, AutomationGateRunResult } from "@pwragent/shared/contracts/automations";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
+import { isOwnedProcessTreeAlive } from "../process-tree";
 import { wrapCommandInWindowsJob } from "../windows-job-wrapper";
 import { resolveWindowsBashShell } from "../windows-shell";
 
 const DEFAULT_GATE_TIMEOUT_MS = 60_000;
 const DEFAULT_GATE_OUTPUT_LIMIT_CHARS = 8_000;
-// After a timeout fires we kill the child (tree on Windows, process group on
-// POSIX) and wait for its `close` event to settle the gate. If `close` never
-// arrives — e.g. a Windows grandchild keeps a stdio pipe open after taskkill —
-// force-settle the gate as timed-out after this grace window so the caller can
-// never hang.
-const TIMEOUT_FORCE_SETTLE_GRACE_MS = 3_000;
+// Bound how long a stopped gate can wait on its stdio pipes.
+const STOP_FORCE_SETTLE_GRACE_MS = 3_000;
 
 export type AutomationGateRunner = {
   runGate(config: AutomationGateConfig): Promise<AutomationGateRunResult>;
+  stopAll?(): void;
 };
 
 export class ShellAutomationGateRunner implements AutomationGateRunner {
+  private readonly activeStops = new Set<() => void>();
+
   async runGate(config: AutomationGateConfig): Promise<AutomationGateRunResult> {
-    return await runShellGate(config);
+    return await runShellGate(config, this.activeStops);
+  }
+
+  stopAll(): void {
+    for (const stop of this.activeStops) stop();
   }
 }
 
-function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunResult> {
+function runShellGate(
+  config: AutomationGateConfig,
+  activeStops: Set<() => void>,
+): Promise<AutomationGateRunResult> {
   const command = config.command.trim();
   if (!command) {
     return Promise.resolve({
@@ -75,7 +82,7 @@ function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunRe
     try {
       child = spawn(launch.command, launch.args, {
         cwd: config.cwd,
-        detached: !windowsJobLaunch && Boolean(timeoutMs),
+        detached: !windowsJobLaunch,
         env: launch.env,
         stdio: "pipe",
         windowsHide: true,
@@ -92,7 +99,8 @@ function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunRe
     let output = "";
     let outputTruncated = false;
     let settled = false;
-    let timedOut = false;
+    let stoppedReason: string | undefined;
+    let groupPoll: ReturnType<typeof setInterval> | undefined;
     let forceSettleHandle: ReturnType<typeof setTimeout> | undefined;
     const appendOutput = (chunk: Buffer): void => {
       output += chunk.toString("utf8");
@@ -105,66 +113,17 @@ function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunRe
     const finish = (result: AutomationGateRunResult): void => {
       if (settled) return;
       settled = true;
-      clearTimeout(timeoutHandle);
-      if (forceSettleHandle) {
-        clearTimeout(forceSettleHandle);
-        forceSettleHandle = undefined;
-      }
-      windowsJobLaunch?.cleanup();
       resolve(result);
     };
 
-    const terminateChildTree = (): void => {
-      if (!child.pid) {
-        return;
-      }
-      try {
-        if (windowsJobLaunch) {
-          // The wrapper owns the shell and all descendants in a
-          // KILL_ON_JOB_CLOSE Job, so terminating this one process is atomic.
-          child.kill("SIGKILL");
-        } else if (process.platform !== "win32") {
-          process.kill(-child.pid, "SIGTERM");
-        } else {
-          // child.kill only terminates the immediate bash.exe; its children
-          // (the actual gate command, e.g. `pnpm test`) linger, which keeps the
-          // `close` event from firing (the gate hangs) and holds handles on the
-          // workspace. Kill the whole process tree, matching the timeout path in
-          // codex-environment-runtime.
-          spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
-            env: buildPwrAgentChildProcessEnv(process.env),
-            stdio: "ignore",
-          });
-        }
-      } catch {
-        // Best-effort last resort; the force-settle timer below still
-        // guarantees the gate promise resolves even if this throws.
-        child.kill("SIGKILL");
-      }
+    const releaseOwnership = (): void => {
+      if (!activeStops.delete(stopForShutdown)) return;
+      clearTimeout(timeoutHandle);
+      clearInterval(groupPoll);
+      clearTimeout(forceSettleHandle);
+      windowsJobLaunch?.cleanup();
     };
-
-    const timeoutHandle = setTimeout(() => {
-      timedOut = true;
-      terminateChildTree();
-      forceSettleHandle = setTimeout(() => {
-        finish({
-          status: "failed",
-          command,
-          cwd: config.cwd,
-          durationMs: Date.now() - startedAt,
-          output,
-          outputTruncated,
-          errorMessage: `Automation gate timed out after ${timeoutMs}ms.`,
-        });
-      }, TIMEOUT_FORCE_SETTLE_GRACE_MS);
-      forceSettleHandle.unref?.();
-    }, timeoutMs);
-    timeoutHandle.unref?.();
-
-    child.stdout?.on("data", appendOutput);
-    child.stderr?.on("data", appendOutput);
-
-    child.once("error", (error) => {
+    const finishFailed = (errorMessage: string): void => {
       finish({
         status: "failed",
         command,
@@ -172,22 +131,59 @@ function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunRe
         durationMs: Date.now() - startedAt,
         output,
         outputTruncated,
-        errorMessage: error.message,
+        errorMessage,
       });
+    };
+
+    const stop = (reason: string): void => {
+      if (stoppedReason) return;
+      stoppedReason = reason;
+      try {
+        if (windowsJobLaunch) {
+          // Closing the launcher's KILL_ON_JOB_CLOSE handle kills the Job.
+          child.kill("SIGKILL");
+        } else if (child.pid && isOwnedProcessTreeAlive(child)) {
+          process.kill(-child.pid, "SIGKILL");
+        }
+      } catch {
+        // The group can exit between probing and signaling it.
+      }
+      if (settled) {
+        releaseOwnership();
+        return;
+      }
+      forceSettleHandle = setTimeout(() => {
+        releaseOwnership();
+        finishFailed(reason);
+      }, STOP_FORCE_SETTLE_GRACE_MS);
+      forceSettleHandle.unref();
+    };
+    const stopForShutdown = () => stop("Automation gate stopped during owner shutdown.");
+    const timeoutHandle = setTimeout(() => stop(`Automation gate timed out after ${timeoutMs}ms.`), timeoutMs);
+    timeoutHandle.unref();
+    activeStops.add(stopForShutdown);
+
+    child.stdout?.on("data", appendOutput);
+    child.stderr?.on("data", appendOutput);
+
+    child.once("error", (error) => {
+      if (!child.pid) releaseOwnership();
+      finishFailed(stoppedReason ?? error.message);
     });
 
     child.once("close", (code, signal) => {
-      const durationMs = Date.now() - startedAt;
-      if (timedOut) {
-        finish({
-          status: "failed",
-          command,
-          cwd: config.cwd,
-          durationMs,
-          output,
-          outputTruncated,
-          errorMessage: `Automation gate timed out after ${timeoutMs}ms.`,
-        });
+      if (stoppedReason || windowsJobLaunch || !child.pid || !isOwnedProcessTreeAlive(child)) {
+        releaseOwnership();
+      } else {
+        // Keep the original deadline and the shutdown hook for descendants
+        // that closed or redirected their pipes before the shell exited.
+        groupPoll = setInterval(() => {
+          if (!isOwnedProcessTreeAlive(child)) releaseOwnership();
+        }, 50);
+        groupPoll.unref();
+      }
+      if (stoppedReason) {
+        finishFailed(stoppedReason);
         return;
       }
       const exitCode = typeof code === "number" ? code : undefined;
@@ -196,7 +192,7 @@ function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunRe
         command,
         cwd: config.cwd,
         exitCode,
-        durationMs,
+        durationMs: Date.now() - startedAt,
         output,
         outputTruncated,
         errorMessage:

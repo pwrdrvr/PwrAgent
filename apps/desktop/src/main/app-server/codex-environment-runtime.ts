@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   accessSync,
@@ -25,6 +25,7 @@ import {
 import { getMainLogger } from "../log";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import {
+  isOwnedProcessTreeAlive,
   isProcessIdAlive,
 } from "../process-tree";
 import {
@@ -32,6 +33,7 @@ import {
   formatWindowsJobStartupTimeout,
   readWindowsJobStartupTelemetry,
   startWindowsJobReadyPoll,
+  windowsJobCleanupVerified,
   wrapCommandInWindowsJob,
 } from "../windows-job-wrapper";
 import {
@@ -232,6 +234,7 @@ export type DetachedCommandSummary = DetachedCommandDescriptor & {
 type DetachedCommandProcess = {
   killTree: (signal: NodeJS.Signals) => void;
   closed: () => boolean;
+  drainUnverified?: boolean;
   killHandle?: NodeJS.Timeout;
   descriptor?: DetachedCommandDescriptor;
   pid?: number;
@@ -340,7 +343,6 @@ export function stopAllCodexEnvironmentDetachedCommands(): number {
       });
     }
   }
-  detachedCommandProcesses.clear();
   return stopped;
 }
 
@@ -359,10 +361,8 @@ export type CodexEnvironmentDetachedCommandGoneParams = {
 };
 
 /**
- * After `stop`/`terminate`, wait for the Node close bit AND the OS process
- * tree to die. `taskkill /T /F` returning 0 and `child.kill` on the Windows
- * Job PowerShell launcher both race handle release; callers that `rm` the
- * action cwd must wait here first.
+ * After `stop`/`terminate`, wait for both stdio close and process tree drain.
+ * Callers that remove the action's working directory must wait here first.
  */
 export async function waitForCodexEnvironmentDetachedCommandGone(
   params: CodexEnvironmentDetachedCommandGoneParams,
@@ -381,6 +381,9 @@ export async function waitForCodexEnvironmentDetachedCommandGone(
 
   const snapshot = () => {
     const entry = detachedCommandProcesses.get(params.runId);
+    if (entry?.drainUnverified) {
+      throw new Error(`Windows Job drain was not confirmed for detached environment command ${params.runId}`);
+    }
     return {
       closed: !entry || entry.closed(),
       alive: [...tracked].filter((pid) => isProcessIdAlive(pid)),
@@ -388,7 +391,7 @@ export async function waitForCodexEnvironmentDetachedCommandGone(
   };
 
   while (true) {
-    // Admission has already closed and the owned group/Job has been stopped.
+    // The owned group/Job has already been asked to stop.
     // Only the pre-stop snapshot can identify descendants after reparenting;
     // walking those PIDs again can adopt unrelated processes after PID reuse.
     // Keep the event loop free to deliver the child's actual stdio close.
@@ -417,6 +420,9 @@ export function stopCodexEnvironmentDetachedCommand(
   const processEntry = detachedCommandProcesses.get(terminationKey);
   if (!processEntry) {
     return { found: false, alreadyClosed: false };
+  }
+  if (processEntry.drainUnverified) {
+    return { found: true, alreadyClosed: false };
   }
   if (processEntry.closed()) {
     detachedCommandProcesses.delete(terminationKey);
@@ -822,9 +828,6 @@ function runShellCommand(
   const capture = params.captureShellEnvironment
     ? createShellEnvironmentCaptureTarget()
     : undefined;
-  const useWindowsJob =
-    process.platform === "win32"
-    && (params.mode === "detach" || Boolean(params.timeoutMs) || Boolean(params.signal));
   const shellArgs = params.shell === "powershell"
     ? [
         "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand",
@@ -834,12 +837,13 @@ function runShellCommand(
         ).toString("base64"),
       ]
     : ["-lc", wrapShellCommand(shell, params.command, capture?.filePath, processId)];
-  const windowsJobLaunch = useWindowsJob
+  const windowsJobLaunch = process.platform === "win32"
     ? wrapCommandInWindowsJob({
         args: shellArgs,
         command: shell,
         cwd: params.cwd,
         env: commandEnv,
+        keepDrainEvidenceOnStop: params.mode === "detach",
         terminateDescendantsOnExit: params.mode === "wait" && params.shell === "powershell",
       })
     : undefined;
@@ -903,36 +907,21 @@ function runShellCommand(
     };
 
     const terminateChild = (signal: NodeJS.Signals) => {
-      if (!child.pid) return;
+      if (!child.pid || closed) return;
       try {
         if (windowsJobLaunch) {
-          // The launcher is the only process outside its Job. Terminating it
-          // closes the KILL_ON_JOB_CLOSE handle and atomically terminates the
-          // shell plus every descendant, so no taskkill tree walk is needed.
-          child.kill(signal);
-        } else if (process.platform !== "win32") {
-          process.kill(-child.pid, signal);
-        } else {
-          const taskkillArgs = ["/pid", String(child.pid), "/t"];
-          if (signal === "SIGKILL") {
-            taskkillArgs.push("/f");
-          }
-          const taskkillEnv = buildPwrAgentChildProcessEnv(process.env);
-          const systemRoot = Object.entries(taskkillEnv).find(
-            ([key]) => key.toUpperCase() === "SYSTEMROOT",
-          )?.[1];
-          const taskkill = systemRoot
-            ? path.join(systemRoot, "System32", "taskkill.exe")
-            : "taskkill";
-          const result = spawnSync(taskkill, taskkillArgs, {
-            env: taskkillEnv,
-            stdio: "ignore",
-          });
-          if (result.status !== 0) {
+          if (windowsJobLaunch.requestStop) {
+            // Keep the launcher alive to confirm the Job has drained before
+            // a launchpad can roll back the working directory.
+            windowsJobLaunch.requestStop();
+          } else {
             child.kill(signal);
           }
+        } else {
+          process.kill(-child.pid, signal);
         }
       } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
         environmentRuntimeLog.warn("codex-environment-command-kill-failed", {
           processId,
           signal,
@@ -941,16 +930,19 @@ function runShellCommand(
       }
     };
 
+    let detachedProcess: DetachedCommandProcess | undefined;
     const registerDetachedProcess = () => {
       if (params.mode !== "detach" || !params.detachedTerminationKey) {
         return;
       }
-      detachedCommandProcesses.set(params.detachedTerminationKey, {
+      if (detachedProcess) return;
+      detachedProcess = {
         killTree: terminateChild,
         closed: () => closed,
         descriptor: params.detachedDescriptor,
         pid: child.pid,
-      });
+      };
+      detachedCommandProcesses.set(params.detachedTerminationKey, detachedProcess);
     };
 
     const settle = (callback: () => void) => {
@@ -978,7 +970,7 @@ function runShellCommand(
     };
 
     // Own the group/Job from spawn, including a cold Windows wrapper before
-    // readiness. Killing that Job's host closes KILL_ON_JOB_CLOSE atomically.
+    // readiness.
     const abort = () => {
       if (!closed) terminateChild("SIGKILL");
     };
@@ -1103,7 +1095,6 @@ function runShellCommand(
         processId,
         message,
       });
-      windowsJobLaunch?.cleanup();
       settle(() => {
         reject(new CodexEnvironmentCommandError(message));
       });
@@ -1173,7 +1164,8 @@ function runShellCommand(
           onTimeout: (startupTimeout) => {
             windowsJobReadyPoll = undefined;
             if (settled || closed) return;
-            terminateChild("SIGKILL");
+            registerDetachedProcess();
+            child.kill("SIGKILL");
             settle(() => {
               reject(
                 new CodexEnvironmentCommandError(
@@ -1189,17 +1181,14 @@ function runShellCommand(
       // onDetachedExit so callers can persist the exit details to
       // overlay state for the anchored env-action output UI.
       child.once("close", (code, signal) => {
-        closed = true;
         windowsJobReadyPoll?.cancel();
         windowsJobReadyPoll = undefined;
-        forgetDetachedProcess();
         // Cancel any pending throttled snapshot so it doesn't race past
         // onDetachedExit's final-output write to the overlay.
         if (snapshotTimer) {
           clearTimeout(snapshotTimer);
           snapshotTimer = undefined;
         }
-        const durationMs = Date.now() - startedAt;
         const output = combinedOutput.trimEnd();
         if (!settled) {
           const windowsStartup = windowsJobLaunch
@@ -1221,7 +1210,7 @@ function runShellCommand(
                     buildExitErrorSuffix(output),
                   ].join(""),
                   {
-                    durationMs,
+                    durationMs: Date.now() - startedAt,
                     exitCode: typeof code === "number" ? code : undefined,
                     output,
                   },
@@ -1230,45 +1219,72 @@ function runShellCommand(
             });
           }
         }
-        if (code === 0) {
-          environmentRuntimeLog.info("codex-environment-detached-exit", {
-            processId,
-            code,
-            signal,
-            durationMs,
-            cwd: params.cwd,
-          });
-        } else {
-          environmentRuntimeLog.error("codex-environment-detached-failed", {
-            processId,
-            code,
-            signal,
-            durationMs,
-            command: params.command,
-            cwd: params.cwd,
-            output: truncateForLog(output),
-          });
-        }
-        try {
-          params.onDetachedExit?.({
-            exitCode: typeof code === "number" ? code : null,
-            exitSignal: signal ?? null,
-            durationMs,
-            output,
-          });
-        } catch (callbackError) {
-          environmentRuntimeLog.warn(
-            "codex-environment-detached-exit-callback-failed",
-            {
+        const finishDetachedProcess = () => {
+          closed = true;
+          if (windowsJobLaunch && child.pid && !windowsJobCleanupVerified(windowsJobLaunch)) {
+            // The launcher disappeared without acknowledging drain. Retain
+            // the run ID so a later rollback cannot mistake that for success.
+            registerDetachedProcess();
+            if (detachedProcess) {
+              clearTimeout(detachedProcess.killHandle);
+              detachedProcess.drainUnverified = true;
+            }
+          } else {
+            forgetDetachedProcess();
+          }
+          const durationMs = Date.now() - startedAt;
+          if (code === 0) {
+            environmentRuntimeLog.info("codex-environment-detached-exit", {
               processId,
-              message:
-                callbackError instanceof Error
-                  ? callbackError.message
-                  : String(callbackError),
-            },
-          );
+              code,
+              signal,
+              durationMs,
+              cwd: params.cwd,
+            });
+          } else {
+            environmentRuntimeLog.error("codex-environment-detached-failed", {
+              processId,
+              code,
+              signal,
+              durationMs,
+              command: params.command,
+              cwd: params.cwd,
+              output: truncateForLog(output),
+            });
+          }
+          try {
+            params.onDetachedExit?.({
+              exitCode: typeof code === "number" ? code : null,
+              exitSignal: signal ?? null,
+              durationMs,
+              output,
+            });
+          } catch (callbackError) {
+            environmentRuntimeLog.warn(
+              "codex-environment-detached-exit-callback-failed",
+              {
+                processId,
+                message:
+                  callbackError instanceof Error
+                    ? callbackError.message
+                    : String(callbackError),
+              },
+            );
+          }
+          windowsJobLaunch?.cleanup();
+        };
+
+        if (windowsJobLaunch || !child.pid || !isOwnedProcessTreeAlive(child)) {
+          finishDetachedProcess();
+        } else {
+          // Redirected descendants can outlive the shell and its pipes.
+          const groupPoll = setInterval(() => {
+            if (isOwnedProcessTreeAlive(child)) return;
+            clearInterval(groupPoll);
+            finishDetachedProcess();
+          }, 50);
+          groupPoll.unref();
         }
-        windowsJobLaunch?.cleanup();
       });
       return;
     }
