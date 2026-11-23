@@ -50,6 +50,8 @@ import type {
   MessagingAdapterAuthorizationUpdate,
   MessagingAdapterDiagnosticEvent,
   MessagingAdapterRenderingPreferencesUpdate,
+  MessagingAdapterValidationRejection,
+  MessagingAuthorizationRejection,
   MessagingCapabilityProfile,
   MessagingDirectoryActor,
   MessagingChannelRef,
@@ -354,6 +356,14 @@ const RATE_LIMIT_HEALTH_BUFFER_MS = 2_000;
 const DELIVERY_BUDGET_WARNING_TTL_MS = 30_000;
 const DELIVERY_BUDGET_DIAGNOSTIC_THROTTLE_MS = 30_000;
 const REJECTED_ROUTE_AGENT_METADATA_TTL_MS = 60_000;
+const ADAPTER_VALIDATION_ACTIVITY_INTERVAL_MS = 30 * 60 * 1000;
+const ADAPTER_VALIDATION_ACTIVITY_RETRY_MS = 60 * 1000;
+const ADAPTER_VALIDATION_ACTIVITY_SUMMARY = {
+  "callback-signature": "Rejected callback with an invalid signature",
+  "callback-handle-unavailable": "Rejected callback with an unavailable action handle",
+  "command-authentication": "Rejected command with invalid authentication",
+  "webhook-authentication": "Rejected webhook with invalid authentication",
+} satisfies Record<MessagingAdapterValidationRejection["reason"], string>;
 const DEFAULT_ADAPTER_START_TIMEOUT_MS = 90_000;
 const FAILED_START_STOP_TIMEOUT_MS = 3_000;
 // How long a new start waits for an earlier adapter of the same platform to
@@ -497,6 +507,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     ReturnType<typeof setTimeout>
   >();
   private readonly deliveryBudgetDiagnosticLastLoggedAt = new Map<string, number>();
+  private readonly adapterValidationActivityNextAttemptAt = new Map<string, number>();
   // Rate-limit state outlives the adapter. A config change or a messaging
   // stop/start replaces the adapter and its controller, but the provider is
   // still limiting the bot, so the cool-off, slow mode and provider blocks
@@ -3239,7 +3250,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
 
   private recordActivityFromRejected(
     platform: MessagingChannelKind,
-    event: MessagingRejectedInboundEvent,
+    event: MessagingAuthorizationRejection,
     route: RejectedInboundRoute,
   ): void {
     try {
@@ -3293,6 +3304,10 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     event: MessagingRejectedInboundEvent,
     store: MessagingStoreLike,
   ): Promise<void> {
+    if (event.kind === "validation") {
+      this.recordAdapterValidationRejection(platform, event);
+      return;
+    }
     if (!isActionableRejectedInbound(event)) {
       return;
     }
@@ -3334,9 +3349,53 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     }
   }
 
+  private recordAdapterValidationRejection(
+    platform: MessagingChannelKind,
+    event: MessagingAdapterValidationRejection,
+  ): void {
+    if (!Object.hasOwn(ADAPTER_VALIDATION_ACTIVITY_SUMMARY, event.reason)
+      || !Number.isFinite(event.receivedAt)) {
+      return;
+    }
+    // The runtime survives adapter replacement. Key only on a configured
+    // platform and a fixed reason, and use a monotonic clock for the limit.
+    const key = `${platform}:${event.reason}`;
+    const nextAttemptAt = this.adapterValidationActivityNextAttemptAt.get(key);
+    if (nextAttemptAt !== undefined && performance.now() < nextAttemptAt) {
+      return;
+    }
+
+    try {
+      getDesktopMessagingActivityLog().record({
+        platform,
+        kind: "inbound-rejected",
+        createdAt: event.receivedAt,
+        summary: ADAPTER_VALIDATION_ACTIVITY_SUMMARY[event.reason],
+        payload: {
+          rejectionStage: "adapter-validation",
+          rejectionReason: event.reason,
+        },
+      });
+    } catch (error) {
+      this.adapterValidationActivityNextAttemptAt.set(
+        key, performance.now() + ADAPTER_VALIDATION_ACTIVITY_RETRY_MS,
+      );
+      messagingLog.warn("messaging adapter validation activity log write failed", {
+        platform,
+        reason: event.reason,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    this.adapterValidationActivityNextAttemptAt.set(
+      key, performance.now() + ADAPTER_VALIDATION_ACTIVITY_INTERVAL_MS,
+    );
+    this.emitPlatformActivity(platform);
+  }
+
   private async resolveRejectedInboundRoute(
     store: MessagingStoreLike,
-    event: MessagingRejectedInboundEvent,
+    event: MessagingAuthorizationRejection,
   ): Promise<RejectedInboundRoute | undefined> {
     const binding = await store.findActiveBindingForChannel(event.channel);
     const assignment = binding
@@ -3963,7 +4022,7 @@ function describeRejectedConversation(
 }
 
 function isActionableRejectedInbound(
-  event: MessagingRejectedInboundEvent,
+  event: MessagingAuthorizationRejection,
 ): boolean {
   if (
     event.channel.conversation.kind === "dm"
