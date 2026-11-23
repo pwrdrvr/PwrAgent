@@ -11,7 +11,7 @@ import type { HotCpuProfileConfig } from "../../diagnostics/hot-cpu-profile-conf
 import type { HotCpuProfileSession } from "../../diagnostics/hot-cpu-profile-session";
 import type { AppCpuEstimate, AppMetricsReading } from "./app-metrics";
 import { HotCpuRuleEvaluator, isCpuSampleInterval, type CpuInterval } from "../../diagnostics/hot-cpu-rule-evaluator";
-import type { ChromiumTrace } from "../../diagnostics/chromium-trace";
+import type { ChromiumTrace, TraceCapture } from "../../diagnostics/chromium-trace";
 import { getMainLogger } from "../../log";
 import { joinCpuProfiles } from "../../diagnostics/cpu-profile-history";
 import { acquireDebuggerLease, type DebuggerLease } from "../../diagnostics/debugger-lease";
@@ -44,6 +44,7 @@ type ActiveProfileTrigger = Pick<
 >;
 type ProfileTriggerTime = { capturedAt: string; monotonicMs: number };
 type ProfileCommandTime = { requestedAtMs: number; acknowledgedAtMs: number };
+type ActiveChromiumTrace = { path: string; triggeredAt: string; result: Promise<TraceCapture> };
 
 function serializeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -149,6 +150,7 @@ export class HotCpuProfiler {
   private samplingPausedForProfile = false;
   private activeProfileTrigger: ActiveProfileTrigger | null = null;
   private activeProfileTime: ProfileTriggerTime | undefined;
+  private activeChromiumTrace: ActiveChromiumTrace | undefined;
   private activeProfileHeapSnapshots: HotCpuProfileHeapSnapshotArtifact[] = [];
   private activeProfileHeapSnapshotCaptures = new Set<Promise<void>>();
   private stopped = false;
@@ -659,6 +661,9 @@ export class HotCpuProfiler {
       };
       this.profileCount += 1;
       const index = this.profileCount;
+      // Stop the rolling trace while it still contains the interval that
+      // tripped the CPU rule. V8 continues recording its own post-trigger tail.
+      this.activeChromiumTrace = this.captureChromiumTrace(index, this.activeProfileTime);
       this.lastProfileAtMs = Date.parse(options.capturedAt);
       await this.session.appendEvent({
         capturedAt: options.capturedAt,
@@ -695,6 +700,8 @@ export class HotCpuProfiler {
         this.config.profileDurationMs,
       );
     } catch (error) {
+      await this.discardChromiumTrace(this.activeChromiumTrace);
+      this.activeChromiumTrace = undefined;
       this.activeProfileTrigger = null;
       this.activeProfileTime = undefined;
       this.profiling = false;
@@ -744,22 +751,44 @@ export class HotCpuProfiler {
     }
   }
 
-  private async writeChromiumTrace(profilePath: string): Promise<string | undefined> {
-    if (!this.chromiumTrace || !this.activeProfileTime) return;
-    const tracePath = profilePath.replace(/\.cpuprofile$/, ".trace.json");
-    const filename = artifactFilename(tracePath);
+  private captureChromiumTrace(index: number, trigger: ProfileTriggerTime): ActiveChromiumTrace | undefined {
+    if (!this.chromiumTrace) return;
+    const tracePath = this.session.createProfilePath(index).replace(/\.cpuprofile$/, ".trace.json");
+    const result = this.chromiumTrace.capture(this, tracePath, trigger.monotonicMs).catch((): TraceCapture => ({
+      status: "failed", phase: "publish", category: "io",
+    }));
+    return { path: tracePath, triggeredAt: trigger.capturedAt, result };
+  }
+
+  private async discardChromiumTrace(trace: ActiveChromiumTrace | undefined): Promise<void> {
+    if (trace && (await trace.result).status === "written") {
+      await fs.rm(trace.path, { force: true }).catch(() => {
+        this.logger.warn("[pwragent:hot-cpu] Could not remove unregistered Chromium trace");
+      });
+    }
+  }
+
+  private async writeChromiumTrace(trace: ActiveChromiumTrace | undefined): Promise<string | undefined> {
+    if (!trace) return;
+    const filename = artifactFilename(trace.path);
+    const result = await trace.result;
     try {
-      const result = await this.chromiumTrace.capture(this, tracePath, this.activeProfileTime.monotonicMs);
       if (result.status === "written") await this.session.registerArtifact(filename);
+    } catch {
+      await this.discardChromiumTrace(trace);
+      this.logger.warn("[pwragent:hot-cpu] Chromium trace registration failed");
+      return;
+    }
+    try {
       await this.session.appendEvent({
         capturedAt: this.now().toISOString(),
         type: `chromium-trace-${result.status}`,
-        detail: { filename, triggeredAt: this.activeProfileTime.capturedAt, ...result },
+        detail: { filename, triggeredAt: trace.triggeredAt, ...result },
       });
-      if (result.status === "written") return tracePath;
     } catch {
       this.logger.warn("[pwragent:hot-cpu] Chromium trace bookkeeping failed");
     }
+    return result.status === "written" ? trace.path : undefined;
   }
 
   private async stopProfileInner(reason: string): Promise<void> {
@@ -767,6 +796,8 @@ export class HotCpuProfiler {
     this.clearProfileDurationTimer();
     this.clearHeapSnapshotMidTimer();
     const index = this.profileCount;
+    const trace = this.activeChromiumTrace;
+    let profileRegistered = false;
     const profilePath = this.session.createProfilePath(index);
     const profileFilename = artifactFilename(profilePath);
     const activeProfileTrigger =
@@ -796,7 +827,8 @@ export class HotCpuProfiler {
         "utf8",
       );
       await this.session.registerArtifact(profileFilename);
-      const chromiumTracePath = await this.writeChromiumTrace(profilePath);
+      profileRegistered = true;
+      const chromiumTracePath = await this.writeChromiumTrace(trace);
       await this.writeDiagnostics(profilePath);
       await this.session.appendEvent({
         capturedAt: this.now().toISOString(),
@@ -841,8 +873,10 @@ export class HotCpuProfiler {
       });
       this.logger.error("[pwragent:hot-cpu] CPU profile failed to stop", error);
     } finally {
+      if (!profileRegistered) await this.discardChromiumTrace(trace);
       this.activeProfileTrigger = null;
       this.activeProfileTime = undefined;
+      this.activeChromiumTrace = undefined;
       this.activeProfileHeapSnapshots = [];
       this.activeProfileHeapSnapshotCaptures.clear();
       this.previousRecording = null;

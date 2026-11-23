@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import { TRACE_CATEGORIES } from "./chromium-trace-filter";
 import { onChromiumTraceReleased, tryAcquireChromiumTrace } from "./chromium-trace-lease";
 
-const TRACE_BUFFER_KB = 32 * 1024;
+// Chromium converts the whole Perfetto ring to JSON before returning the
+// stream handle. Bound that native work as well as the bytes we read from it.
+const TRACE_BUFFER_KB = 8 * 1024;
 const START_TIMEOUT_MS = 1_000;
 const STOP_TIMEOUT_MS = 4_000;
 
@@ -15,20 +17,31 @@ export type ChromiumTraceConfig = {
 
 export type ChromiumTraceChunk = { data: string; base64Encoded?: boolean };
 
+type TraceFailureCategory = "timeout" | "protocol" | "invalid-data" | "limit" | "worker" | "io";
+export type TraceExportPhase = "stop" | "stream-open" | "stream-read" | "stream-close" | "filter" | "publish";
+type ReportTracePhase = (phase: TraceExportPhase) => void;
+
+export class ChromiumTraceExportError extends Error {
+  constructor(readonly category: TraceFailureCategory, readonly phase?: TraceExportPhase) {
+    super("Chromium trace export failed");
+  }
+}
+
 export type ChromiumTraceSession = {
   start: (config: ChromiumTraceConfig) => Promise<void>;
-  read: (signal: AbortSignal) => AsyncIterable<ChromiumTraceChunk>;
+  read: (signal: AbortSignal, reportPhase?: ReportTracePhase) => AsyncIterable<ChromiumTraceChunk>;
   dispose: () => void;
 };
 
-export type PublishChromiumTrace = (
-  chunks: AsyncIterable<ChromiumTraceChunk>, pendingPath: string, signal: AbortSignal,
-) => Promise<void>;
+export type ProcessChromiumTrace = (
+  chunks: AsyncIterable<ChromiumTraceChunk>, signal: AbortSignal,
+  reportPhase?: ReportTracePhase,
+) => Promise<Uint8Array>;
 
-type TraceCapture =
+export type TraceCapture =
   | { status: "written"; recordingStartedAtMs: number; recordingStoppedAtMs: number }
   | { status: "skipped"; reason: "not-recording" | "trigger-predates-recording" }
-  | { status: "failed" };
+  | { status: "failed"; phase: TraceExportPhase; category: TraceFailureCategory };
 
 type TraceOptions = {
   wallNow?: () => number;
@@ -55,7 +68,7 @@ async function withDeadline<T>(
       operation(controller.signal),
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => {
-          const error = new Error("Chromium tracing timed out");
+          const error = new ChromiumTraceExportError("timeout");
           controller.abort(error);
           reject(error);
         }, timeoutMs);
@@ -77,7 +90,7 @@ export class ChromiumTrace {
 
   constructor(
     private readonly createSession: () => ChromiumTraceSession,
-    private readonly publish: PublishChromiumTrace,
+    private readonly processTrace: ProcessChromiumTrace,
     private readonly warn: (message: string) => void,
     private readonly options: TraceOptions = {},
   ) {}
@@ -103,22 +116,41 @@ export class ChromiumTrace {
       }
       const recordingStoppedAtMs = this.options.wallNow?.() ?? Date.now();
       const pendingPath = `${filePath}.tmp`;
+      let ownsPendingFile = false;
+      let phase: TraceExportPhase = "stop";
+      const reportPhase: ReportTracePhase = (next) => { phase = next; };
       try {
-        await withDeadline(
-          (signal) => this.publish(recording.session.read(signal), pendingPath, signal),
+        const filtered = await withDeadline(
+          (signal) => this.processTrace(recording.session.read(signal, reportPhase), signal, reportPhase),
           this.options.stopTimeoutMs ?? STOP_TIMEOUT_MS,
         );
+        reportPhase("publish");
+        // The worker never writes a file, even when it completes after a timeout.
+        const file = await fs.open(pendingPath, "wx", 0o600);
+        ownsPendingFile = true;
+        try {
+          await file.writeFile(filtered);
+        } finally {
+          await file.close();
+        }
         await fs.rename(pendingPath, filePath);
         return { status: "written", recordingStartedAtMs: recording.wallMs, recordingStoppedAtMs };
-      } catch {
+      } catch (error) {
         // Protocol and parse errors can contain private input.
+        const failure = error instanceof ChromiumTraceExportError ? error : undefined;
         this.warn("Could not save Chromium trace");
-        return { status: "failed" };
+        return {
+          status: "failed",
+          phase: failure?.phase ?? phase,
+          category: failure?.category ?? (phase === "publish" ? "io" : "protocol"),
+        };
       } finally {
         this.discard();
-        await fs.rm(pendingPath, { force: true }).catch(() => {
-          this.warn("Could not remove pending Chromium trace");
-        });
+        if (ownsPendingFile) {
+          await fs.rm(pendingPath, { force: true }).catch(() => {
+            this.warn("Could not remove pending Chromium trace");
+          });
+        }
       }
     });
   }
