@@ -179,6 +179,8 @@ export type DesktopMessagingConfig = {
   pdfAnalysisEnabled?: boolean;
   slack?: SlackMessagingConfig;
   telegram?: TelegramMessagingConfig;
+  /** Runtime-only descriptors for enabled, credentialed named Telegram connections. */
+  telegramConnections?: ReadonlyArray<TelegramMessagingConfig & { configuredConnectionId: string; expectedBotAccountId: string }>;
   toolUpdateDefaultMode?: MessagingToolUpdateMode;
   managerToolUpdateDefaultMode?: MessagingToolUpdateMode;
   showStreamingOption?: boolean;
@@ -217,6 +219,7 @@ export const DESKTOP_MESSAGING_ROOT_CONFIG_FIELD_IMPACTS = {
   pdfAnalysisEnabled: "irrelevant",
   slack: "connection",
   telegram: "connection",
+  telegramConnections: "irrelevant",
   toolUpdateDefaultMode: "irrelevant",
   managerToolUpdateDefaultMode: "irrelevant",
   showStreamingOption: "irrelevant",
@@ -231,7 +234,9 @@ export const DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS = {
     authorizedSupergroupIds: "authorization",
     botToken: "connection",
     channel: "irrelevant",
+    configuredConnectionId: "connection",
     enabled: "connection",
+    expectedBotAccountId: "connection",
     responseMode: "authorization",
     streamingResponses: "rendering",
   },
@@ -364,7 +369,8 @@ export type DesktopMessagingSettingsSource = Pick<
   | "resolveFeishuVerificationTokenSync"
   | "resolveLineChannelAccessTokenSync"
   | "resolveLineChannelSecretSync"
-> & Partial<Pick<DesktopSettingsService, "readTelegramPairingGrants" | "dismissTelegramPairingGrantWarning">>;
+> & Partial<Pick<DesktopSettingsService, "readTelegramPairingGrants" | "dismissTelegramPairingGrantWarning"
+  | "readConfiguredTelegramConnections" | "resolveTelegramConnectionTokenSync">>;
 
 export type DesktopMessagingConfigLoadOptions = {
   logStartupEligibility?: boolean;
@@ -376,6 +382,7 @@ export function desktopMessagingConfigHasRunnableAdapters(
 ): boolean {
   return Boolean(
     config.telegram
+      || config.telegramConnections?.length
       || config.discord
       || config.mattermost
       || config.slack
@@ -734,8 +741,11 @@ export async function loadDesktopMessagingConfigFromSettings(
     },
     messaging: settings.readMessagingSettings(),
   };
-  const telegramBotToken =
-    envConfig.telegram?.botToken ?? settings.resolveTelegramBotTokenSync();
+  const telegramConnections = settings.readConfiguredTelegramConnections?.();
+  const legacyTelegram = telegramConnections?.find((connection) => connection.legacy);
+  const telegramBotToken = telegramConnections === undefined
+    ? envConfig.telegram?.botToken ?? settings.resolveTelegramBotTokenSync()
+    : legacyTelegram && settings.resolveTelegramConnectionTokenSync?.(legacyTelegram.id);
   const discordBotToken =
     envConfig.discord?.botToken ?? settings.resolveDiscordBotTokenSync();
   const mattermostBotToken =
@@ -764,10 +774,14 @@ export async function loadDesktopMessagingConfigFromSettings(
   const lineChannelSecret =
     envConfig.line?.channelSecret ?? settings.resolveLineChannelSecretSync();
   const telegramPairingGrants = settings.readTelegramPairingGrants?.(telegramBotToken);
-  const telegramConfiguredActorIds =
+  const telegramConfiguredActorIds = legacyTelegram && snapshot.messaging.telegram.authorizedUserIds.source === "env"
+    ? legacyTelegram.authorizedUserIds.map((id) => ({ id, displayName: "" }))
+    :
     envConfig.telegram?.authorizedActorIds
     ?? snapshot.messaging.telegram.authorizedUserIds.value;
-  const telegramConfiguredSupergroupIds =
+  const telegramConfiguredSupergroupIds = legacyTelegram && snapshot.messaging.telegram.authorizedSupergroups.source === "env"
+    ? legacyTelegram.authorizedSupergroupIds.map((id) => ({ id, displayName: "" }))
+    :
     envConfig.telegram?.authorizedSupergroupIds
     ?? snapshot.messaging.telegram.authorizedSupergroups.value;
   const telegramPairedUsers = env[TELEGRAM_AUTHORIZED_USER_IDS_ENV] === undefined
@@ -958,10 +972,22 @@ export async function loadDesktopMessagingConfigFromSettings(
     LINE_ENABLED_ENV,
   );
 
+  const namedTelegramConnections = (telegramConnections ?? []).flatMap((connection) => {
+    if (connection.legacy || !connection.enabled || !messagingEnabled) return [];
+    const botToken = settings.resolveTelegramConnectionTokenSync?.(connection.id);
+    if (!botToken) return [];
+    return [{
+      channel: "telegram" as const, botToken, configuredConnectionId: connection.id,
+      expectedBotAccountId: connection.botAccountId, enabled: true,
+      authorizedActorIds: connection.authorizedUserIds.map((id) => ({ id, displayName: "" })),
+      authorizedSupergroupIds: connection.authorizedSupergroupIds.map((id) => ({ id, displayName: "" })),
+    }];
+  });
   const telegramConfig = messagingEnabled && buildChannelConfig({
     log,
     channel: "telegram",
-    enabled: telegramEnabled,
+    enabled: telegramConnections === undefined ? telegramEnabled : legacyTelegram !== undefined
+      && (snapshot.messaging.telegram.enabled.source === "env" ? legacyTelegram.enabled : snapshot.messaging.telegram.enabled.value),
     hasToken: Boolean(telegramBotToken),
     logStartupEligibility: options.logStartupEligibility === true,
     authorizedActorCount: telegramAuthorizedActorIds.length,
@@ -971,6 +997,7 @@ export async function loadDesktopMessagingConfigFromSettings(
           channel: "telegram" as const,
           enabled: true,
           botToken: telegramBotToken!,
+          ...(legacyTelegram ? { expectedBotAccountId: legacyTelegram.botAccountId } : {}),
           responseMode: snapshot.messaging.telegram.responseMode.value,
           streamingResponses: snapshot.messaging.telegram.streamingResponses.value,
           authorizedActorIds: telegramAuthorizedActorIds,
@@ -1149,12 +1176,13 @@ export async function loadDesktopMessagingConfigFromSettings(
 
   return {
     enabled: messagingEnabled,
+    ...(namedTelegramConnections.length > 0 ? { telegramConnections: namedTelegramConnections } : {}),
     fullAccessControls: {
       allowEscalation: snapshot.messaging.allowFullAccessEscalation.value,
       allowThreadResume: snapshot.messaging.allowFullAccessThreadResume.value,
       warningPolicy: snapshot.messaging.fullAccessWarning.value,
       authorizedUsers: {
-        telegram: mergeTelegramContacts(snapshot.messaging.telegram.authorizedUserIds.value, telegramPairedUsers),
+        telegram: mergeTelegramContacts(telegramConfiguredActorIds, telegramPairedUsers),
         discord: snapshot.messaging.discord.authorizedUserIds.value,
         mattermost: snapshot.messaging.mattermost.authorizedUserIds.value,
         slack: snapshot.messaging.slack.authorizedUserIds.value,

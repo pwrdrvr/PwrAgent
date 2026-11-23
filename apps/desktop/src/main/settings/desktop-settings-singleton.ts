@@ -2,7 +2,7 @@ import { applicationHost as app, secretEncryption as safeStorage, getOwnerHostSe
 import { setGitCommandResolver, setManagedGitSelectionResolver } from "../git-command";
 import { codexAuthState } from "../codex-auth-state";
 import { DesktopSettingsService } from "./desktop-settings-service";
-import { createDesktopSecretStorage, getAppStateMode } from "../storage/desktop-settings-storage";
+import { createDesktopSecretStorage, getAppStateMode, releaseTelegramConnectionId, reserveTelegramConnectionId } from "../storage/desktop-settings-storage";
 import { getDesktopMessagingPairingStore } from "../messaging/desktop-messaging-pairing-store";
 import { resolveBootstrapProfilePath } from "../profile";
 import {
@@ -64,6 +64,13 @@ export function initializeDesktopSettingsService(): DesktopSettingsService {
       : createDesktopSecretStorage(safeStorage);
     desktopSettingsService = new DesktopSettingsService({
       telegramPairingStorage: getDesktopMessagingPairingStore(),
+      reserveTelegramConnectionId,
+      releaseTelegramConnectionId,
+      verifyTelegramConnectionToken: async (botToken) => {
+        const provider = await import("@pwragent/messaging-provider-telegram");
+        const result = await provider.validateCredentials({ botToken });
+        return result.status === "ok" ? result.providerAccountId : undefined;
+      },
       codexHome: getOwnerHostServices().runtimePolicy?.codexHome,
       defaultDeveloperMode: app.isPackaged === true ? false : true,
       configStore,

@@ -31,6 +31,7 @@ import type {
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { defaultAgentBackendSupport } from "./core/messaging-default-agent";
 import { getDesktopMessagingStore } from "./desktop-messaging-store";
+import { listNamedMessagingBindings } from "./named-messaging-bindings";
 
 type MessagingRoutesStore = Pick<
   ReturnType<typeof getDesktopMessagingStore>,
@@ -69,7 +70,7 @@ export async function listDesktopMessagingRoutes(
 ): Promise<ListMessagingRoutesResponse> {
   const store = dependencies.store ?? getDesktopMessagingStore();
   const registry = dependencies.registry ?? getDesktopBackendRegistry();
-  const [defaultAgents, bindings, observedSurfaces, backendResult, threadResult] =
+  const [defaultAgents, legacyBindings, observedSurfaces, backendResult, threadResult, namedBindings] =
     await Promise.all([
       store.findActiveDefaultAgentAssignments(),
       store.findActiveBindings(),
@@ -81,7 +82,9 @@ export async function listDesktopMessagingRoutes(
         callerReason: "messaging-routes-settings",
         enrichDirectories: false,
       }).catch(() => []),
+      dependencies.store ? [] : listNamedMessagingBindings(undefined, true),
     ]);
+  const bindings = [...legacyBindings.filter((binding) => binding.channel.connectionId === undefined), ...namedBindings];
   const backendLabels = new Map(
     backendResult.backends.map((backend) => [backend.kind, backend.label]),
   );
@@ -142,6 +145,7 @@ export async function listDesktopMessagingRoutes(
         : undefined;
       return {
         bindingId: binding.id,
+        ...(binding.channel.connectionId === undefined ? {} : { connectionId: binding.channel.connectionId }),
         platform: binding.channel.channel,
         conversation: {
           id: binding.channel.conversation.id,

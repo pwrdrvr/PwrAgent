@@ -41,9 +41,7 @@ export function PrStatusCard(props: {
    */
   withStatusPills?: boolean;
   /**
-   * The thread branch's base drift, when this is the PR on that branch. Only
-   * the sidebar row knows the thread, so other surfaces leave it out and the
-   * card draws no Local branch section.
+   * The thread branch's base drift, when this is the PR on that branch.
    */
   branchDrift?: PrBranchDrift;
   /** What wakes the chip's thread for this PR: CI, merge or close, Auto-fix. */

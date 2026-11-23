@@ -200,6 +200,12 @@ export type GetMessagingPlatformStatusesRequest = {
 
 export type MessagingPlatformStatusEvent =
   | {
+      kind: "connection-health-changed";
+      platform: "telegram";
+      connectionId: string;
+      at: number;
+    }
+  | {
       kind: "health-changed";
       platform: MessagingChannelKind;
       health: MessagingPlatformHealth;
@@ -285,6 +291,7 @@ export type GetMessagingActivitySummaryResponse = {
 };
 
 export type UnbindMessagingThreadRequest = {
+  connectionId?: string;
   bindingId: string;
 };
 
@@ -362,6 +369,7 @@ export type DesktopMessagingDefaultAgentRoute = {
 
 export type DesktopMessagingBindingRoute = {
   bindingId: string;
+  connectionId?: string;
   platform: MessagingChannelKind;
   conversation: {
     id: string;
@@ -486,6 +494,7 @@ export type MessagingPairingObservedChat = {
 };
 
 export type MessagingPairingEntry = {
+  connectionId?: string;
   id: string;
   platform: MessagingChannelKind;
   instanceId: string;
@@ -508,6 +517,7 @@ export type MessagingPairingEntry = {
 
 export type GenerateMessagingPairingTokenRequest = {
   platform: MessagingChannelKind;
+  connectionId?: string;
   instanceId?: string;
   scope: MessagingPairingScope;
   ttlMs?: number;
@@ -523,6 +533,7 @@ export type GenerateMessagingPairingTokenResponse = {
 
 export type ListMessagingPairingRequestsRequest = {
   platform?: MessagingChannelKind;
+  connectionId?: string;
   includeResolved?: boolean;
 };
 
@@ -534,6 +545,7 @@ export type MessagingPairingApprovalTarget = "actor" | "conversation" | "team";
 
 export type ApproveMessagingPairingRequest = {
   entryId: string;
+  connectionId?: string;
   target?: MessagingPairingApprovalTarget;
   /**
    * When `false`, apply the approval but keep the request `observed` so
@@ -552,12 +564,14 @@ export type TelegramPairingGrantKind = "users" | "supergroups";
 
 export type RevokeTelegramPairingGrantRequest = {
   accountId: string;
+  connectionId?: string;
   kind: TelegramPairingGrantKind;
   contactId: string;
 };
 
 export type RejectMessagingPairingRequest = {
   entryId: string;
+  connectionId?: string;
 };
 
 export type RejectMessagingPairingResponse = {
@@ -572,6 +586,7 @@ export type RejectMessagingPairingResponse = {
  * everything else is captured going-forward while the preview is open.
  */
 export type InboundPreviewMessage = {
+  connectionId?: string;
   conversationKind?: MessagingConversationKind;
   isDirectMessage?: boolean;
   parentConversationId?: string;
@@ -634,6 +649,7 @@ export type SearchMessagingSendersResponse = {
 };
 
 export type StartInboundPreviewRequest = {
+  connectionId?: string;
   conversationKind?: MessagingConversationKind;
   recipientUserId?: string;
   subscriptionId: string;

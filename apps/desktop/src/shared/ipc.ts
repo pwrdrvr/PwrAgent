@@ -905,6 +905,8 @@ export const SETTINGS_READ_CHANNEL = "settings:read";
 export const TOKEN_MISER_READ_USAGE_CHANNEL = "token-miser:read-usage";
 export const SETTINGS_READ_BOOTSTRAP_CHANNEL = "settings:read-bootstrap";
 export const SETTINGS_READ_MESSAGING_CHANNEL = "settings:read-messaging";
+export const MESSAGING_LIST_TELEGRAM_CONNECTIONS_CHANNEL = "messaging:list-telegram-connections";
+export const MESSAGING_SAVE_TELEGRAM_CONNECTION_CHANNEL = "messaging:save-telegram-connection";
 export const SETTINGS_READ_FULL_ACCESS_POLICY_CHANNEL =
   "settings:read-full-access-policy";
 export const SETTINGS_WRITE_CONFIG_CHANNEL = "settings:write-config";

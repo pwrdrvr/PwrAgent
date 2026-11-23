@@ -157,6 +157,10 @@ type AutomationPayload = {
   executionProfile?: AutomationExecutionProfile;
   priorRunLookback?: AutomationPriorRunLookback;
   outputActions?: AutomationOutputActionDefinition[];
+  connectionRouting?: {
+    triggers: AutomationTriggerDefinition[];
+    outputActions: AutomationOutputActionDefinition[];
+  };
   inboundCoalesceWindowMs?: number;
   maxRunsPerHour?: number | null;
   // Additive: a build that predates these ignores them on read, so it runs the
@@ -182,6 +186,7 @@ type AutomationRunPayload = {
   resumedAt?: number;
   coalescedCount?: number;
   source?: AutomationRunSourceMetadata;
+  connectionSource?: AutomationRunSourceMetadata;
   usage?: AutomationRunUsage;
 };
 
@@ -1324,15 +1329,23 @@ export class AutomationStore implements AutomationStorage {
   }
 
   private upsertAutomationRecord(record: AutomationRecord): void {
+    const connectionScoped = record.triggers.some((trigger) =>
+      trigger.kind === "inbound_message" && trigger.conversation.connectionId !== undefined)
+      || record.outputActions.some((action) =>
+        action.kind === "messaging_target" && action.target.connectionId !== undefined);
     const payload: AutomationPayload = {
       taskPrompt: record.taskPrompt,
       gate: record.gate,
-      triggers: record.triggers,
-      schedule: record.schedule,
+      // Pre-connection readers skip definitions with an explicit empty trigger
+      // list and no schedule. Their tools cannot enumerate or run these routes.
+      triggers: connectionScoped ? [] : record.triggers,
+      schedule: connectionScoped ? undefined : record.schedule,
       scheduleSummary: record.scheduleSummary,
       executionProfile: record.executionProfile,
       priorRunLookback: record.priorRunLookback,
-      outputActions: record.outputActions,
+      ...(connectionScoped
+        ? { connectionRouting: { triggers: record.triggers, outputActions: record.outputActions } }
+        : { outputActions: record.outputActions }),
       inboundCoalesceWindowMs: record.inboundCoalesceWindowMs,
       maxRunsPerHour: record.maxRunsPerHour,
       ...(record.runTimeoutMs !== undefined ? { runTimeoutMs: record.runTimeoutMs } : {}),
@@ -1467,7 +1480,9 @@ export class AutomationStore implements AutomationStorage {
       recoverOnRestart: run.recoverOnRestart,
       resumedAt: run.resumedAt,
       coalescedCount: run.coalescedCount,
-      source: run.source,
+      ...(run.source?.conversation.connectionId === undefined
+        ? { source: run.source }
+        : { connectionSource: run.source }),
       usage: run.usage,
     };
     this.stateDb.raw
@@ -1573,7 +1588,7 @@ export class AutomationStore implements AutomationStorage {
     }
     const triggers = normalizeAutomationTriggers({
       schedule: payload.schedule,
-      triggers: payload.triggers,
+      triggers: payload.connectionRouting?.triggers ?? payload.triggers,
     }, this.options.warn);
     if (Array.isArray(payload.triggers) && triggers.length === 0) {
       this.noteAutomationLoadIssue(
@@ -1611,7 +1626,7 @@ export class AutomationStore implements AutomationStorage {
           : formatAutomationTriggerSummary(triggers)),
       backlogPolicy: row.backlog_policy,
       executionProfile: payload.executionProfile,
-      outputActions: normalizeAutomationOutputActions(payload.outputActions),
+      outputActions: normalizeAutomationOutputActions(payload.connectionRouting?.outputActions ?? payload.outputActions),
       maxRunsPerHour: resolveAutomationRunsPerHour(payload.maxRunsPerHour),
       runTimeoutMs: resolveAutomationRunTimeoutMs(payload.runTimeoutMs),
       dailyRunLimit: resolveAutomationDailyRunLimit(payload.dailyRunLimit),
@@ -1646,7 +1661,7 @@ export class AutomationStore implements AutomationStorage {
       status: row.status,
       scheduledFor: row.scheduled_for ?? undefined,
       scheduledWindows: payload.scheduledWindows,
-      source: payload.source,
+      source: payload.connectionSource ?? payload.source,
       queuedAt: row.queued_at ?? undefined,
       queueEntryId: row.queue_entry_id ?? undefined,
       startedAt: row.started_at ?? undefined,

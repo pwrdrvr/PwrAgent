@@ -8,6 +8,7 @@ export function sameCausalMessagingSource(
   other: MessagingCausalSourceRef | undefined,
 ): boolean {
   return source.ownerId === other?.ownerId
+    && source.connectionId === other.connectionId
     && (source.requestId === other.requestId
       || Boolean(source.surfaceSelector && source.surfaceSelector === other.surfaceSelector));
 }

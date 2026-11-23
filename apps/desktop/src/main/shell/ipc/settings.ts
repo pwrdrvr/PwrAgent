@@ -2001,6 +2001,9 @@ export function registerSettingsIpcHandlers(
       request: WriteDesktopSettingsConfigRequest,
     ): Promise<DesktopSettingsWriteResponse> => {
       const activeService = getService(service);
+      if (request.patch.messaging?.telegram?.connections !== undefined) {
+        throw new Error("Use Telegram connection setup to change these settings.");
+      }
       // A downloaded Git is chosen only through the managed-Git action,
       // which verifies the release first.
       if (request.patch.applications?.git) {

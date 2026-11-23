@@ -406,10 +406,10 @@ describe("PrStatusCard local branch", () => {
     ]);
   }
 
-  const url = "https://github.com/pwrdrvr/PwrAgent/pull/1372";
+  const prKey = "github.com/pwrdrvr/pwragent#1372";
 
   it("names the base and counts commits behind and ahead, before the timeline", () => {
-    const container = renderWithDrift({ url, baseBranch: "main", behind: 4, ahead: 1 });
+    const container = renderWithDrift({ prKey, baseBranch: "main", behind: 4, ahead: 1 });
     expect(sectionRows(container)).toEqual([
       ["Behind main", "4 commits"],
       ["Ahead of main", "1 commit"],
@@ -420,16 +420,16 @@ describe("PrStatusCard local branch", () => {
   });
 
   it("shows a zero, because up to date is a known count", () => {
-    const container = renderWithDrift({ url, baseBranch: "main", behind: 0, ahead: 2 });
+    const container = renderWithDrift({ prKey, baseBranch: "main", behind: 0, ahead: 2 });
     expect(sectionRows(container)[0]).toEqual(["Behind main", "0 commits"]);
   });
 
   it("draws no section without drift, a base, or a usable count", () => {
     expect(sectionRows(renderWithDrift(undefined))).toEqual([]);
     cleanup();
-    expect(sectionRows(renderWithDrift({ url, baseBranch: " ", behind: 4 }))).toEqual([]);
+    expect(sectionRows(renderWithDrift({ prKey, baseBranch: " ", behind: 4 }))).toEqual([]);
     cleanup();
-    expect(sectionRows(renderWithDrift({ url, baseBranch: "main", behind: -1, ahead: Number.NaN })))
+    expect(sectionRows(renderWithDrift({ prKey, baseBranch: "main", behind: -1, ahead: Number.NaN })))
       .toEqual([]);
   });
 });

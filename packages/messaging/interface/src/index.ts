@@ -2421,6 +2421,8 @@ export type MessagingCredentialValidationResult = {
   /** Public identity: bot username, account name, etc.
    *  Always already-public information; never a secret. */
   account?: string;
+  /** Stable account identifier returned by the provider's authenticated probe. */
+  providerAccountId?: string;
   /** Short human-readable detail for the test row sub-line.
    *  e.g. host, library version. */
   detail?: string;

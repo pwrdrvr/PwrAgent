@@ -275,11 +275,13 @@ export function MessagingRoutesSettings(props: {
     }
   };
 
-  const unbind = async (bindingId: string) => {
+  const unbind = async (bindingId: string, connectionId?: string) => {
     if (!props.desktopApi?.unbindMessagingThread) return;
     setBusyId(bindingId);
     try {
-      await props.desktopApi.unbindMessagingThread({ bindingId });
+      await props.desktopApi.unbindMessagingThread({
+        bindingId, ...(connectionId === undefined ? {} : { connectionId }),
+      });
       await loadRoutes();
     } catch (mutationError) {
       setMutationError(
@@ -477,7 +479,7 @@ export function MessagingRoutesSettings(props: {
                       className="button button--ghost"
                       disabled={busyId === binding.bindingId}
                       type="button"
-                      onClick={() => void unbind(binding.bindingId)}
+                      onClick={() => void unbind(binding.bindingId, binding.connectionId)}
                     >
                       {busyId === binding.bindingId ? "Unbinding..." : "Unbind"}
                     </button>

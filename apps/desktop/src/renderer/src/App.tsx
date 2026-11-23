@@ -1831,7 +1831,10 @@ function DesktopAppShell(props: {
       binding: MessagingThreadBindingSummary,
     ) => {
       if (!desktopApi?.unbindMessagingThread) return;
-      await desktopApi.unbindMessagingThread({ bindingId: binding.bindingId });
+      await desktopApi.unbindMessagingThread({
+        bindingId: binding.bindingId,
+        ...(binding.connectionId === undefined ? {} : { connectionId: binding.connectionId }),
+      });
       await navigation.refresh?.("action/messaging-unbind");
     },
   );

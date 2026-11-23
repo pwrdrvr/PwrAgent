@@ -4,6 +4,7 @@ const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const runtimeMock = vi.hoisted(() => ({
   applyConfig: vi.fn(async (_config: unknown, _options?: unknown) => undefined),
   deliverPairingOutcome: vi.fn(async () => undefined),
+  getConnectionPairingStore: vi.fn((_connectionId?: string) => pairingStoreMock),
   getPlatformStatuses: vi.fn(() => []),
   isEnabled: vi.fn(() => true),
   listPairingRequests: vi.fn((): { entries: unknown[] } => ({ entries: [] })),
@@ -16,9 +17,11 @@ const runtimeMock = vi.hoisted(() => ({
 }));
 const settingsServiceMock = vi.hoisted(() => ({
   readMessagingSettings: vi.fn(),
+  readConfiguredTelegramConnections: vi.fn(() => []),
   readTelegramPairingGrants: vi.fn(),
   resolveSlackBotTokenSync: vi.fn(),
   resolveTelegramBotTokenSync: vi.fn(() => "654321:replacement-bot"),
+  saveTelegramConnection: vi.fn(async () => undefined),
   writeConfigPatchTargeted: vi.fn(async () => ({ configPath: "/tmp/pwragent-config.toml" })),
 }));
 const pairingStoreMock = vi.hoisted(() => ({
@@ -168,6 +171,7 @@ describe("messaging status ipc", () => {
     handlers.clear();
     runtimeMock.applyConfig.mockClear();
     runtimeMock.deliverPairingOutcome.mockClear();
+    runtimeMock.getConnectionPairingStore.mockClear();
     runtimeMock.getPlatformStatuses.mockClear();
     runtimeMock.isEnabled.mockClear();
     runtimeMock.isEnabled.mockReturnValue(true);
@@ -377,6 +381,24 @@ describe("messaging status ipc", () => {
     expect(pairingStoreMock.markStatus).not.toHaveBeenCalled();
   });
 
+  it("persists connection removals without starting session-disabled messaging", async () => {
+    const { MESSAGING_SAVE_TELEGRAM_CONNECTION_CHANNEL } = await import("../../shared/ipc");
+    registerMessagingStatusIpcHandlers();
+    vi.stubEnv("PWRAGENT_DISABLE_MESSAGING", "1");
+    runtimeMock.isEnabled.mockReturnValue(false);
+    leaseCoordinatorMock.snapshot.mockReturnValueOnce({ leaseHeld: true, leaseHolder: { instanceId: "fixture" } });
+    try {
+      const request = { kind: "remove", id: "fixture-connection" };
+      await expect(handlers.get(MESSAGING_SAVE_TELEGRAM_CONNECTION_CHANNEL)?.({}, request)).resolves.toEqual([]);
+      expect(settingsServiceMock.saveTelegramConnection).toHaveBeenCalledWith(request);
+      expect(leaseCoordinatorMock.applyLatestConfig).toHaveBeenCalledWith(
+        runtimeMock, expect.any(Function), { logStartupEligibility: true, allowStart: false },
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("refuses an observed Telegram request when the saved token changed before the old adapter stopped", async () => {
     const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
     runtimeMock.listPairingRequests.mockReturnValue({ entries: [{
@@ -395,6 +417,7 @@ describe("messaging status ipc", () => {
 
     await expect(handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.({}, { entryId: "fixture-old-bot" }))
       .rejects.toThrow("This pairing request belongs to a different bot.");
+    expect(runtimeMock.getConnectionPairingStore).toHaveBeenCalledExactlyOnceWith(undefined);
     expect(settingsServiceMock.writeConfigPatchTargeted).not.toHaveBeenCalled();
     expect(pairingStoreMock.markStatus).not.toHaveBeenCalled();
   });

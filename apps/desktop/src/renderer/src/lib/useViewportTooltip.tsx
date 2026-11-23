@@ -399,7 +399,8 @@ export function useViewportTooltip(options: {
     /**
      * Fill the gap between the trigger and the card with a transparent part
      * of the card (`tooltipBridgeRect`), so the pointer crosses straight
-     * from one to the other. For a card that opens next to its trigger over
+     * from one to the other. When a placement anchor is supplied, fill only
+     * the gap outside that anchor. For a card that opens next to its trigger over
      * other hover targets; the grace period alone loses to any of them that
      * claims the pointer on the way.
      */
@@ -685,8 +686,10 @@ export function useViewportTooltip(options: {
     const card = tooltipRef.current;
     if (!bridge || !card || state?.left === undefined || state.top === undefined) return;
     const box = card.getBoundingClientRect();
+    const target = targetRef.current;
+    const anchor = placement === "beside" && target ? getAnchorRectRef.current?.(target) : undefined;
     const rect = tooltipBridgeRect(
-      { top: state.targetTop, bottom: state.targetBottom, left: state.targetLeft, right: state.targetRight },
+      anchor ?? { top: state.targetTop, bottom: state.targetBottom, left: state.targetLeft, right: state.targetRight },
       { top: box.top, bottom: box.bottom, left: box.left, right: box.right },
     );
     if (!rect) {
@@ -700,7 +703,7 @@ export function useViewportTooltip(options: {
     bridge.style.top = `${rect.top - card.clientTop}px`;
     bridge.style.width = `${rect.width}px`;
     bridge.style.height = `${rect.height}px`;
-  }, [state]);
+  }, [state, placement]);
 
   const show = useCallback((target: HTMLElement, content: ReactNode): void => {
     recordRendererUpdate(RendererUpdateEvent.tooltipShow, tooltipId);

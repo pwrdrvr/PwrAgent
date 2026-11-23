@@ -296,8 +296,8 @@ export function installThreadTodoRuntime(params: {
     }
   };
   // A review started with auto-fix hands its open findings to the thread's
-  // own agent as soon as it lands. Behind a running turn it queues, never
-  // steers, so it cannot interrupt work the operator started.
+  // own agent as soon as it lands. Its own queue turn takes precedence over
+  // pending messages at the review-to-fix boundary.
   const reviewAutoFix = getReviewAutoFixArming();
   const reviewAutoFixRuns = getReviewAutoFixRuns();
   // Viewers read the armed reviews and each run from the owner; a change
@@ -412,7 +412,9 @@ export function installThreadTodoRuntime(params: {
       const review = importReview(completed.identity, completed.entry, "live");
       if (reviewAutoFix.takeOnCompletion(completed.identity, completed.turnId) && review) void sendReviewAutoFix(review.id);
     }
-    if (event.notification.method === "turn/completed") {
+    if (event.notification.method === "turn/completed"
+      || event.notification.method === "turn/failed"
+      || event.notification.method === "turn/cancelled") {
       const { threadId, turnId } = event.notification.params;
       if (typeof turnId === "string") reviewAutoFix.turnEnded({ backend: event.backend, threadId }, turnId);
     }

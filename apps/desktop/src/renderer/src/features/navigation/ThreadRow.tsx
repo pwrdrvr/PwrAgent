@@ -3,7 +3,6 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -11,10 +10,11 @@ import {
   type MouseEvent,
   type PointerEvent,
 } from "react";
-import type {
-  MessagingThreadBindingSummary,
-  NavigationThreadSummary,
-  PrSummary,
+import {
+  buildPullRequestStatusKey,
+  type MessagingThreadBindingSummary,
+  type NavigationThreadSummary,
+  type PrSummary,
 } from "@pwragent/shared/contracts/navigation";
 import { graphemePrefix } from "@pwragent/shared/text-graphemes";
 import { isKeptAtTopThread } from "@pwragent/shared/thread-pins";
@@ -30,7 +30,8 @@ import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { useThreadLinkHoverTarget } from "../../lib/thread-links";
 import { isNativeDragInteractionActive } from "../../lib/native-drag-interaction";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
-import { findBranchDriftPr, type PrBranchDrift } from "../pr-status/pr-branch-drift";
+import { useThreadPrBranchDrift } from "../pr-status/thread-pr-branch-drift";
+import { repositoryIdentityKey, threadPrimaryRepository } from "../pr-status/thread-pr-repository";
 import { resolvePrOverflow } from "../pr-status/pr-rollup";
 import { ThreadRowPrChip, ThreadRowPrRollupChip } from "./ThreadRowPrChips";
 import { ThreadRowDensityContext } from "./thread-row-density";
@@ -323,32 +324,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
       .map((pr) => pr.url)
       .join("\n")
     : "";
-  // The branch chip's base drift, for the hover card of the PR on that branch:
-  // Compact and Minimal hide the branch chip, and with it the only other
-  // place the counts appear. Built from scalars so the memoized chips see one
-  // object until a count moves.
-  const gitWorking = props.thread.gitWorkingState;
-  const driftBaseBranch = gitWorking?.baseBranch;
-  const threadRepositoryKey = primaryRepositoryKey(props.thread);
-  const branchDriftPrUrl = findBranchDriftPr({
-    prs,
-    branch: props.thread.observedGitBranch?.trim() || props.thread.gitBranch,
-    baseBranch: driftBaseBranch,
-    isThreadRepository: (pr) => isThreadRepositoryPr(threadRepositoryKey, pr),
-  })?.url;
-  const driftBehind = gitWorking?.baseBehindCommitCount;
-  const driftAhead = gitWorking?.baseAheadCommitCount;
-  const branchDrift = useMemo<PrBranchDrift | undefined>(
-    () => branchDriftPrUrl && driftBaseBranch
-      ? {
-        url: branchDriftPrUrl,
-        baseBranch: driftBaseBranch,
-        behind: driftBehind,
-        ahead: driftAhead,
-      }
-      : undefined,
-    [branchDriftPrUrl, driftBaseBranch, driftBehind, driftAhead],
-  );
+  const branchDrift = useThreadPrBranchDrift(props.thread);
   const detachPr = useEventCallback((targetPr: PrSummary) =>
     props.onDetachPullRequests?.(props.thread, [targetPr]));
   const detachPrs = useEventCallback((targetPrs: readonly PrSummary[]) =>
@@ -842,7 +818,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
                   thread={props.thread}
                   pr={leadPr}
                   showRepoPrefix={needsRepoPrefix(props.thread, leadPr, attachedPrs)}
-                  branchDrift={branchDrift?.url === leadPr.url ? branchDrift : undefined}
+                  branchDrift={branchDrift?.prKey === buildPullRequestStatusKey(leadPr) ? branchDrift : undefined}
                   onOpen={openPrStable}
                   onOpenContextMenu={
                     props.onOpenPullRequestContextMenu
@@ -1300,12 +1276,6 @@ function formatConversationType(binding: MessagingThreadBindingSummary): string 
   }
 }
 
-type RepositoryIdentity = {
-  provider: string;
-  org: string;
-  repo: string;
-};
-
 /** Whether a PR's chip names its repository (`org/repo#12`), not just `#12`. */
 export function needsRepoPrefix(
   thread: NavigationThreadSummary,
@@ -1329,107 +1299,6 @@ export function needsRepoPrefix(
   }
   const firstKey = `${prs[0]!.org}/${prs[0]!.repo}`;
   return prs.some((pr) => `${pr.org}/${pr.repo}` !== firstKey);
-}
-
-function primaryRepositoryKey(thread: NavigationThreadSummary): string | undefined {
-  const primaryRepository = threadPrimaryRepository(thread);
-  return primaryRepository ? repositoryIdentityKey(primaryRepository) : undefined;
-}
-
-/**
- * The owner resolves `primaryGitRepository` from the thread's primary
- * workspace. Prefer it to the provider's origin, which still names the
- * project the session started in after a move to another project.
- */
-function threadPrimaryRepository(
-  thread: NavigationThreadSummary,
-): RepositoryIdentity | undefined {
-  const primaryGitRepository = thread.primaryGitRepository?.trim();
-  return (primaryGitRepository
-    ? parseRepositoryIdentity(`https://${primaryGitRepository}`)
-    : undefined)
-    ?? parseRepositoryIdentity(thread.gitOriginUrl);
-}
-
-/**
- * Whether a PR belongs to the thread's checkout: its repository, or the fork
- * it pushes to. Without a parseable origin, the head-branch match alone
- * decides.
- */
-function isThreadRepositoryPr(
-  primaryKey: string | undefined,
-  pr: PrSummary,
-): boolean {
-  if (primaryKey === undefined) {
-    return true;
-  }
-  return repositoryIdentityKey(pr) === primaryKey
-    || (pr.sourceRepository !== undefined
-      && repositoryIdentityKey(pr.sourceRepository) === primaryKey);
-}
-
-function parseRepositoryIdentity(
-  remoteUrl?: string,
-): RepositoryIdentity | undefined {
-  const value = remoteUrl?.trim();
-  if (!value) {
-    return undefined;
-  }
-
-  const scpLike = value.match(/^[^@/]+@([^:]+):(.+)$/);
-  let provider: string;
-  let path: string;
-  if (scpLike) {
-    provider = scpLike[1]!;
-    path = scpLike[2]!;
-  } else {
-    try {
-      const parsed = new URL(value);
-      if (!parsed.hostname) {
-        return undefined;
-      }
-      provider = parsed.hostname;
-      path = parsed.pathname;
-    } catch {
-      return undefined;
-    }
-  }
-
-  const segments = path
-    .replace(/^\/+/, "")
-    .replace(/\.git$/i, "")
-    .replace(/\/+$/, "")
-    .split("/")
-    .filter(Boolean);
-  if (segments.length < 2) {
-    return undefined;
-  }
-
-  const repo = segments.at(-1);
-  const org = segments.slice(0, -1).join("/");
-  if (!org || !repo) {
-    return undefined;
-  }
-
-  return { provider, org, repo };
-}
-
-function repositoryIdentityKey(identity: RepositoryIdentity): string {
-  return [
-    normalizeRepositoryProvider(identity.provider),
-    identity.org,
-    identity.repo,
-  ]
-    .map((part) => part.trim().toLowerCase())
-    .join("/");
-}
-
-function normalizeRepositoryProvider(provider: string): string {
-  const normalized = provider.trim().toLowerCase();
-  // GitHub documents ssh.github.com:443 as an alternate SSH transport for
-  // networks that block port 22. PR URLs still identify that forge as
-  // github.com, so compare both hostnames as the same provider.
-  return normalized === "ssh.github.com" ? "github.com" : normalized;
 }
 
 function defaultOpenPullRequest(url: string): void {

@@ -727,6 +727,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       ? this.configuredBotId() : String(this.authenticatedBotId);
   }
 
+  readVerifiedBotAccountId(): string | undefined {
+    return this.authenticatedBotId === undefined ? undefined : String(this.authenticatedBotId);
+  }
+
   async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
     if (update.responseMode !== undefined) {
       this.options.config.responseMode = update.responseMode;
@@ -834,6 +838,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     const startup = new AbortController();
     this.startupAbort = startup;
     const { signal } = startup;
+    const { configuredConnectionId, expectedBotAccountId } = this.options.config;
+    this.authenticatedBotId = undefined;
+    this.botUsername = undefined;
     this.listener = listener;
     this.streamCleanupStopped = false;
 
@@ -849,6 +856,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       if (signal.aborted) return;
       this.authenticatedBotId = me?.is_bot && Number.isSafeInteger(me.id) && me.id > 0
         ? me.id : undefined;
+      if ((configuredConnectionId !== undefined || expectedBotAccountId !== undefined)
+        && (this.authenticatedBotId === undefined || String(this.authenticatedBotId) !== expectedBotAccountId)) {
+        throw new Error("Telegram could not verify the bot account for this connection.");
+      }
       if (me?.username) {
         this.botUsername = me.username.toLowerCase();
         this.options.logger?.debug(
@@ -1049,6 +1060,13 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   }
 
   async deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult> {
+    const { configuredConnectionId, expectedBotAccountId } = this.options.config;
+    if (configuredConnectionId !== undefined && (
+      intent.audit?.channel.connectionId !== configuredConnectionId
+      || this.readVerifiedBotAccountId() !== expectedBotAccountId
+    )) {
+      return { channel: this.channel, deliveredAt: this.now(), outcome: "discarded" };
+    }
     try {
       return await this.deliverSurface(intent);
     } catch (error) {
@@ -1082,6 +1100,16 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         errorMessage: "Telegram delivery target is missing.",
         outcome: "failed",
       };
+    }
+    // Pairing feedback must reach a group before it has an access grant.
+    const pairingFeedback = !intent.bindingId && !intent.audit?.bindingId && (
+      intent.audit?.action === "pairing.reply" || intent.audit?.action === "pairing.approved"
+      || intent.audit?.action === "pairing.rejected" || intent.audit?.action === "pairing.expired"
+    );
+    if (this.options.config.configuredConnectionId !== undefined && String(target.chatId).startsWith("-")
+      && !pairingFeedback
+      && !this.options.config.authorizedSupergroupIds?.some((contact) => contact.id === String(target.chatId))) {
+      return { channel: this.channel, deliveredAt: this.now(), outcome: "discarded" };
     }
 
     if (intent.kind === "activity") {
@@ -1714,7 +1742,8 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   }
 
   async authorizeRetainedSource(event: MessagingInboundEvent, verifyAccess = true): Promise<boolean | undefined> {
-    if (event.channel.channel !== this.channel || event.actor.isBot
+    if (event.channel.channel !== this.channel
+      || event.channel.connectionId !== this.options.config.configuredConnectionId || event.actor.isBot
       || !this.isAuthorizedActor(event.actor.platformUserId)) return false;
     const conversation = event.channel.conversation;
     if (conversation.kind === "dm") return conversation.id === event.actor.platformUserId;
@@ -1731,7 +1760,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   }
 
   isAuthorizedNoticeDestination(channel: MessagingChannelRef): boolean {
-    if (channel.channel !== this.channel) return false;
+    if (channel.channel !== this.channel || channel.connectionId !== this.options.config.configuredConnectionId) return false;
     const target = this.telegramStateFromChannel(channel.conversation);
     if (!target) return false;
     const id = String(target.chatId);
@@ -2944,6 +2973,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   }
 
   private channelFromMessage(message: TelegramMessage): MessagingInboundEvent["channel"] {
+    const { configuredConnectionId, expectedBotAccountId } = this.options.config;
+    const connectionId = this.readVerifiedBotAccountId() === expectedBotAccountId
+      ? configuredConnectionId : undefined;
+    const scope = connectionId === undefined ? {} : { connectionId };
     // Private DMs don't carry a chat title — synthesize one from the
     // sender's first/last name so the chip renders as "DM: Alice"
     // instead of "DM: ?".
@@ -2971,6 +3004,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       );
       return {
         channel: this.channel,
+        ...scope,
         conversation: {
           id: String(messageThreadId),
           kind: "topic",
@@ -2984,6 +3018,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
     return {
       channel: this.channel,
+      ...scope,
       conversation: {
         id: String(message.chat.id),
         kind: message.chat.type === "private" ? "dm" : "channel",

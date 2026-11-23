@@ -9,9 +9,10 @@ import {
   type ComponentProps,
   type KeyboardEvent,
   type MouseEvent,
+  type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import type { PrSummary } from "@pwragent/shared/contracts/navigation";
+import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import { CloseIcon, EyeIcon } from "../../icons";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import { useHoverTransitionGrace } from "../../lib/useHoverTransitionGrace";
@@ -23,6 +24,7 @@ import {
   type ThreadPrWatches,
 } from "../pr-watches/useThreadPrWatchIndicators";
 import { PrChip } from "./PrChip";
+import { PrCardActions } from "./PrCardActions";
 import { PrStatusCard } from "./PrStatusCard";
 import { placeRollupPopover } from "./pr-rollup-popover-placement";
 import {
@@ -85,7 +87,7 @@ type PrRollupChipProps = {
    * the lead leaves out, and opens the same list of every PR.
    */
   variant?: "rollup" | "overflow";
-  /** A single PR's card merges it, as the lead chip's does. */
+  /** Each attached PR's card can merge it, as the lead chip's does. */
   merge?: ComponentProps<typeof PrChip>["merge"];
 };
 
@@ -118,7 +120,7 @@ export const PrRollupChip = memo(function PrRollupChip(props: PrRollupChipProps)
         <PrChip
           pr={pr}
           showRepoPrefix={props.repoPrefixedUrls.split("\n").includes(pr.url)}
-          branchDrift={props.branchDrift?.url === pr.url ? props.branchDrift : undefined}
+          branchDrift={props.branchDrift?.prKey === buildPullRequestStatusKey(pr) ? props.branchDrift : undefined}
           watch={resolvePrChipWatch(props.prWatches, pr, props.autoFixRepository)}
           onOpen={props.onOpen}
           onOpenContextMenu={props.onOpenContextMenu}
@@ -174,6 +176,14 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
     /** The side the chip that opened the list is on: each row's PR chip sits there. */
     chipSide: "left" | "right";
   }>();
+  const { cancelHoverDismiss, dismissAfterGrace, dismissImmediately } =
+    useHoverTransitionGrace(() => close());
+  const { cancelHoverDismiss: holdCard, dismissAfterGrace: releaseCard } =
+    useHoverTransitionGrace(() => hideRowCard());
+  const leaveCard = (): void => {
+    releaseCard();
+    if (openMode === "hover") dismissAfterGrace();
+  };
   const {
     show: showCard,
     showAfterDelay: showCardAfterDelay,
@@ -182,11 +192,20 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
     visible: cardVisible,
     tooltipId: cardId,
     tooltipNode: cardNode,
+    getElement: getCardElement,
   } = useViewportTooltip({
-    className: "pr-status-card",
+    className: "pr-status-card pr-status-card--actions",
     placement: "beside",
     getAnchorRect: (target) =>
       popoverRef.current?.getBoundingClientRect() ?? target.getBoundingClientRect(),
+    interactive: {
+      bridge: true,
+      onPointerEnter: () => {
+        holdCard();
+        cancelHoverDismiss();
+      },
+      onPointerLeave: leaveCard,
+    },
   });
   const [cardUrl, setCardUrl] = useState<string>();
   // The row a PR menu opened from, outlined until focus comes back.
@@ -198,7 +217,31 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
   const waitingForCi = chipRollup?.ordered.some((pr) => watchFor(pr)?.ci);
   // Read from the live list, so a status update reaches an open card.
   const cardPr = ordered.find((pr) => pr.url === cardUrl);
-  const cardDrift = props.branchDrift?.url === cardUrl ? props.branchDrift : undefined;
+  const latestCardRef = useRef<ReactNode>(null);
+  const relayoutCard = useCallback(() => updateCard(latestCardRef.current), [updateCard]);
+  const { branchDrift, prWatches, autoFixRepository, merge, onDetach } = props;
+  const renderCard = useCallback((pr: PrSummary) => (
+    <>
+      <PrStatusCard
+        pr={pr}
+        branchDrift={branchDrift?.prKey === buildPullRequestStatusKey(pr) ? branchDrift : undefined}
+        watch={resolvePrChipWatch(prWatches, pr, autoFixRepository)}
+        watchStopHint={watchStopHint}
+      />
+      <PrCardActions
+        pr={pr}
+        merge={merge}
+        onDismiss={hideRowCard}
+        onDetach={onDetach ? () => {
+          // The trigger survives the detach confirmation and the list shortening.
+          triggerRef.current?.focus();
+          dismissImmediately();
+          onDetach(pr);
+        } : undefined}
+        onLayoutChange={relayoutCard}
+      />
+    </>
+  ), [branchDrift, prWatches, autoFixRepository, watchStopHint, merge, hideRowCard, onDetach, dismissImmediately, relayoutCard]);
 
   useEffect(() => {
     if (!cardVisible) return;
@@ -206,15 +249,9 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
       hideRowCard();
       return;
     }
-    updateCard(
-      <PrStatusCard
-        pr={cardPr}
-        branchDrift={cardDrift}
-        watch={resolvePrChipWatch(props.prWatches, cardPr, props.autoFixRepository)}
-        watchStopHint={watchStopHint}
-      />,
-    );
-  }, [cardVisible, cardPr, cardDrift, props.prWatches, props.autoFixRepository, watchStopHint, hideRowCard, updateCard]);
+    latestCardRef.current = renderCard(cardPr);
+    updateCard(latestCardRef.current);
+  }, [cardVisible, cardPr, renderCard, hideRowCard, updateCard]);
 
   const clearHoverTimer = (): void => {
     if (hoverTimerRef.current !== null) {
@@ -224,15 +261,10 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
   };
   // The first hover waits; moving between visible cards and focus show at once.
   const showRowCard = (pr: PrSummary, row: HTMLElement, immediate: boolean): void => {
+    holdCard();
     setCardUrl(pr.url);
-    const content = (
-      <PrStatusCard
-        pr={pr}
-        branchDrift={props.branchDrift?.url === pr.url ? props.branchDrift : undefined}
-        watch={watchFor(pr)}
-        watchStopHint={watchStopHint}
-      />
-    );
+    const content = renderCard(pr);
+    latestCardRef.current = content;
     if (immediate || cardVisible) {
       showCard(row, content);
     } else {
@@ -240,13 +272,12 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
     }
   };
   const close = useCallback((): void => {
+    holdCard();
     setOpenMode(null);
     setPosition(undefined);
     setMenuTargetUrl(undefined);
     hideRowCard();
-  }, [hideRowCard]);
-  const { cancelHoverDismiss, dismissAfterGrace, dismissImmediately } =
-    useHoverTransitionGrace(close);
+  }, [hideRowCard, holdCard]);
 
   useEffect(() => () => {
     clearHoverTimer();
@@ -257,6 +288,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
     onDismiss: close,
     surfaceRef: popoverRef,
     triggerRef,
+    getPortaledSurface: getCardElement,
   });
 
   // Below the chip, else above; a list too tall for either side scrolls.
@@ -307,6 +339,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
       && Boolean(
         popoverRef.current?.contains(target)
         || triggerRef.current?.contains(target)
+        || getCardElement()?.contains(target)
         || (target instanceof Element && target.closest(".thread-context-menu")),
       );
     const onPointerDown = (event: PointerEvent): void => {
@@ -330,7 +363,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
       window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", close);
     };
-  }, [open, close]);
+  }, [open, close, getCardElement]);
 
   const focusRow = (index: number): void => {
     const rows = popoverRef.current?.querySelectorAll<HTMLButtonElement>(
@@ -556,6 +589,15 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
               : { top: 0, left: 0, visibility: "hidden" }}
             onMouseEnter={cancelHoverDismiss}
             onMouseLeave={() => {
+              const card = getCardElement()?.getBoundingClientRect();
+              const popover = popoverRef.current?.getBoundingClientRect();
+              if (card?.width && card.height && popover && (
+                card.left >= popover.right || card.right <= popover.left
+                || card.top >= popover.bottom || card.bottom <= popover.top
+              )) {
+                leaveCard();
+                return;
+              }
               hideRowCard();
               if (openMode === "hover") dismissAfterGrace();
             }}
@@ -583,7 +625,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
               {ordered.map((pr, index) => {
                 const label = prNumberLabel(pr, repoPrefixed.has(pr.url)
                   || props.needsRepoPrefix?.(pr, listPrs) === true);
-                const behind = props.branchDrift?.url === pr.url
+                const behind = props.branchDrift?.prKey === buildPullRequestStatusKey(pr)
                   ? prBranchBehindLabel(props.branchDrift)
                   : undefined;
                 const isHeld = held && held.has(pr.url);
@@ -634,7 +676,9 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                           showRowCard(pr, event.currentTarget, true);
                         }
                       }}
-                      onBlur={hideRowCard}
+                      onBlur={(event) => {
+                        if (!getCardElement()?.contains(event.relatedTarget)) hideRowCard();
+                      }}
                       onClick={openRow}
                       aria-keyshortcuts={props.onDetach ? "Delete Backspace" : undefined}
                       onKeyDown={(event) => handleRowKeyDown(event, pr, index)}

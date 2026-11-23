@@ -316,8 +316,13 @@ review's turn, so nothing needs to outlive it.
 `review-auto-fix.property.test.ts` holds these rules against a model of the
 reviews.
 
-When an armed review lands with open findings, the owner submits one turn to
-the thread. Behind a running turn it queues and never steers. The prompt
+When an armed review lands with open findings, the owner reserves dispatch
+while it validates and admits the fix. The fix goes to the front of the turn
+queue and starts in its own turn once the review ends. Existing messages keep
+their relative order. Queued messages and steering wait until the fix turn
+ends. If fix admission fails, the reservation is released and the review
+card shows the failure. A review result that arrives before its terminal
+event is delivered first, even when the two deliveries overlap. The prompt
 (`autoFixReviewFindingsPrompt`) lists the findings by priority and asks the
 agent to settle each with `update_review_item`: fix a real problem in the
 change; defer work that needs a new system or is well outside the change,
@@ -328,7 +333,8 @@ card's **Auto-fix** sends the same prompt. The transcript folds the message
 to "Auto-fix started for <review>" with its finding count, from the
 `reviewAutoFix` message origin.
 
-Arming writes nothing to SQLite. The fix turn is an ordinary queued turn.
+Arming and reserving dispatch write nothing to SQLite. The fix follows the
+turn queue's existing lifecycle and hold rules.
 
 ### Auto-fix status
 

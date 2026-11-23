@@ -51,6 +51,7 @@ import type {
 } from "@pwragent/shared/decisions-rail";
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared/contracts/agent";
 import type { DesktopTelegramPairingGrants, DesktopWorktreeFolderCheck } from "@pwragent/shared/contracts/settings";
+import type { SaveTelegramConnectionRequest, TelegramConnectionStatus } from "@pwragent/shared/contracts/settings";
 import type { NativeVoiceApi } from "../../../shared/native-voice";
 import type { DictationApi } from "../../../shared/audio-transcription";
 import type { HtmlPreviewNavigationEvent } from "../../../shared/html-preview";
@@ -2281,6 +2282,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   ) => Promise<SetRbacEnforcedResponse>;
   getMessagingActivitySummary?: () =>
     Promise<GetMessagingActivitySummaryResponse>;
+  listTelegramConnections?: () => Promise<TelegramConnectionStatus[]>;
+  saveTelegramConnection?: (request: SaveTelegramConnectionRequest) => Promise<TelegramConnectionStatus[]>;
   generateMessagingPairingToken?: (
     request: GenerateMessagingPairingTokenRequest,
   ) => Promise<GenerateMessagingPairingTokenResponse>;
@@ -2293,7 +2296,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   rejectMessagingPairing?: (
     request: RejectMessagingPairingRequest,
   ) => Promise<RejectMessagingPairingResponse>;
-  readTelegramPairingGrants?: () => Promise<DesktopTelegramPairingGrants | undefined>;
+  readTelegramPairingGrants?: (connectionId?: string) => Promise<DesktopTelegramPairingGrants | undefined>;
   revokeTelegramPairingGrant?: (request: RevokeTelegramPairingGrantRequest) => Promise<void>;
   onMessagingPairingChanged?: (
     callback: (event: { at: number; entry: MessagingPairingEntry }) => void,

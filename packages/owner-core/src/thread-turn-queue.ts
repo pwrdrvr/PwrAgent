@@ -907,6 +907,14 @@ export class ThreadTurnQueue {
     return this.admissions.has(this.keyFor(params));
   }
 
+  /** A review fix owns its turn from dispatch through terminal, including against steers. */
+  hasActiveReviewAutoFix(params: { backend: AppServerBackendKind; threadId: ThreadIdentifier }): boolean {
+    const key = this.keyFor(params);
+    const admission = this.admissions.get(key);
+    return (admission?.phase !== "idle" && admission?.kind === "review-auto-fix")
+      || this.runningEntries.get(key)?.entry.messageOrigin?.reviewAutoFix !== undefined;
+  }
+
   /**
    * Puts back the continuations of turns a quiet restart stopped, at
    * startup and before any window reads the queue, so it emits nothing.
@@ -1303,7 +1311,9 @@ export class ThreadTurnQueue {
     if (!this.heldQueues.has(found.key) || !found.entry.manualReleaseRequired) {
       return { disposition: "not_held", entryId };
     }
-    const steer = found.entry.delivery === "queued-steer" && this.options.canSteerThread?.(found.entry);
+    const steer = found.entry.delivery === "queued-steer"
+      && !this.hasActiveReviewAutoFix(found.entry)
+      && this.options.canSteerThread?.(found.entry);
     if (
       this.closed
       || this.isDispatchHeld(found.entry)
@@ -1356,7 +1366,7 @@ export class ThreadTurnQueue {
     const admission = this.admissions.get(key);
     // Buffer identified outcomes through the started callback as well as the
     // backend handoff. Only the acknowledgement proves which turn they end.
-    if (params.turnId !== undefined && admission && admission.phase !== "idle" && admission.kind === "start") {
+    if (params.turnId !== undefined && admission && admission.phase !== "idle" && admission.kind !== "steer") {
       this.applyAdmission(key, {
         type: "terminal",
         terminal: { turnId: params.turnId, status: params.status, errorMessage: params.errorMessage },
@@ -1440,6 +1450,7 @@ export class ThreadTurnQueue {
     // A held head waits for its release. Entries ahead of every hold, which
     // an unlock released, still start.
     if (!head || head.manualReleaseRequired) return "none";
+    if (this.hasActiveReviewAutoFix(head)) return "none";
     if (this.isDispatchHeld(head)) return "none";
     const steer = head.delivery === "queued-steer" && this.options.canSteerThread?.(head);
     const currentPreflight = preflight?.entryId === head.id ? preflight : undefined;
@@ -1649,7 +1660,8 @@ export class ThreadTurnQueue {
     const key = this.keyFor(entry);
     const members = options?.members ?? [entry];
     const attempt = Symbol("queue admission");
-    this.applyAdmission(key, { type: "begin", attempt });
+    this.applyAdmission(key, { type: "begin", attempt,
+      kind: entry.messageOrigin?.reviewAutoFix ? "review-auto-fix" : "start" });
     for (const member of members) this.rememberAdmittedEntry({ entryId: member.id });
     let accepted: ThreadTurnQueueStartResult | undefined;
     try {

@@ -4,6 +4,7 @@ import fc from "fast-check";
 import { GrammyError, HttpError } from "grammy";
 import { describe, expect, it, vi } from "vitest";
 import { TelegramAdapter, type TelegramBotApi } from "../telegram-adapter.ts";
+import type { TelegramMessagingConfig } from "../telegram-config.ts";
 
 const startupMethods = ["getMe", "getWebhookInfo", "deleteWebhook", "setMyCommands"] as const;
 type StartupMethod = typeof startupMethods[number];
@@ -27,6 +28,7 @@ function setup(
   waitForStartupDelay = (delayMs: number, signal: AbortSignal) => delayMs === 5_000
     ? wait(delayMs, undefined, { signal })
     : waitForStartupRetry(delayMs, signal),
+  identity?: Pick<TelegramMessagingConfig, "configuredConnectionId" | "expectedBotAccountId">,
 ) {
   const api = {
     getMe: vi.fn().mockResolvedValue({ id: 42, is_bot: true, username: "TestBot" }),
@@ -38,13 +40,43 @@ function setup(
   const logger = { debug: vi.fn(), warn: vi.fn() };
   const options = {
     bot: { api: api as unknown as TelegramBotApi, start: poll },
-    config: { channel: "telegram" as const, botToken, authorizedActorIds: [] },
+    config: { channel: "telegram" as const, botToken, authorizedActorIds: [], ...identity },
     logger,
     waitForStartupDelay,
   };
   const adapter = new TelegramAdapter(options);
   return { adapter, api, logger, poll };
 }
+
+it("requires authenticated bot identity before a named connection touches polling or webhook setup", async () => {
+  await fc.assert(fc.asyncProperty(
+    fc.integer({ min: 1, max: 100_000 }),
+    fc.constantFrom("match", "different", "missing", "not-a-bot"),
+    async (id, result) => {
+      const { adapter, api, poll } = setup(`${id}:synthetic`, undefined, undefined, {
+        configuredConnectionId: "fixture-name",
+        expectedBotAccountId: String(id),
+      });
+      api.getMe.mockResolvedValue(result === "missing" ? undefined : {
+        id: result === "different" ? id + 1 : id, is_bot: result !== "not-a-bot", username: "FixtureBot",
+      });
+      try {
+        const started = adapter.start(vi.fn());
+        if (result === "match") {
+          await started;
+          expect(adapter.readVerifiedBotAccountId()).toBe(String(id));
+          expect(poll).toHaveBeenCalledOnce();
+        } else {
+          await expect(started).rejects.toThrow(/verify the bot account/);
+          expect(api.getWebhookInfo).not.toHaveBeenCalled();
+          expect(poll).not.toHaveBeenCalled();
+        }
+      } finally {
+        await adapter.stop();
+      }
+    },
+  ), { numRuns: 16 });
+});
 
 function startupClock() {
   let now = 0;

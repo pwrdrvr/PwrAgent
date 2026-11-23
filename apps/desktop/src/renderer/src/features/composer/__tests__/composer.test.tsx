@@ -14147,6 +14147,57 @@ describe("Composer", () => {
     expect(screen.queryByText("Queued by Grok")).not.toBeInTheDocument();
   });
 
+  it.each(["before receipt", "after receipt", "cancelled before receipt"])(
+    "leaves an owner-queued steer to the queue lifecycle (%s)",
+    async (timing) => {
+      const { result: { current: draftStore } } = renderHook(useComposerDraftStore);
+      const scope = buildThreadComposerScopeKey("codex", "thread-1");
+      let publish!: (event: AgentEvent) => void;
+      const receipt = { backend: "codex" as const, threadId: "thread-1", turnId: "fix-turn",
+        disposition: "queued" as const, queueEntryId: "owner-steer" };
+      const acknowledgement = Promise.withResolvers<typeof receipt>();
+      const steerTurn = vi.fn(() => acknowledgement.promise);
+      const onUserRepliedToThread = vi.fn();
+      const backend = backendSummary("codex");
+      render(<Composer activeTurnId="fix-turn" backends={[{
+        ...backend, capabilities: { ...backend.capabilities, steerTurn: true },
+      }]} draftStore={draftStore}
+        desktopApi={{ steerTurn, onAgentEvent: (listener) => { publish = listener; return () => undefined; } }}
+        onUserRepliedToThread={onUserRepliedToThread} disabled={false} skills={[]} thread={{
+          id: "thread-1", title: "Invented review", titleSource: "explicit", source: "codex",
+          executionMode: "default", linkedDirectories: [], inbox: { inInbox: false },
+        }} />);
+      const reply = screen.getByLabelText("Reply");
+      const sendSteer = (text: string) => {
+        fireEvent.change(reply, { target: { value: text } });
+        fireEvent.keyDown(reply, { key: "Enter", metaKey: true });
+      };
+      const queue = (status: "queued" | "cancelled") => act(async () => publish({
+        backend: "codex", notification: { method: "thread/turnQueue/updated", params: {
+          threadId: "thread-1", queueEntryId: receipt.queueEntryId, origin: "manual", status,
+          ...(status === "queued" ? { displayText: "Add a test", position: 1 } : {}),
+        } },
+      }));
+      sendSteer("Add a test");
+      await waitFor(() => expect(steerTurn).toHaveBeenCalledTimes(1));
+      if (timing !== "after receipt") await queue("queued");
+      if (timing === "cancelled before receipt") await queue("cancelled");
+      await act(async () => acknowledgement.resolve(receipt));
+      expect(onUserRepliedToThread).toHaveBeenCalledTimes(1);
+      if (timing === "after receipt") await queue("queued");
+      // The owner queue has the only visible row for this accepted steer.
+      expect(screen.queryByText("Queued by Grok")).toBeNull();
+      if (timing !== "cancelled before receipt") {
+        expect(screen.getAllByText("Add a test")).toHaveLength(1);
+        await queue("cancelled");
+      }
+      expect(draftStore.getQueuedTurns(scope)).toEqual([]);
+      expect(screen.queryByText("Add a test")).toBeNull();
+      sendSteer("Check another case");
+      await waitFor(() => expect(steerTurn).toHaveBeenCalledTimes(2));
+    },
+  );
+
   it("clears an image-only pending steer after Codex acknowledges the image", async () => {
     let agentEventHandler:
       | ((event: {
@@ -29169,6 +29220,36 @@ describe("queued message pausing", () => {
     act(() => publish(queueEvent()));
     expect(draftStore.getQueuedTurns(scopeKey)[1]).not.toHaveProperty("paused", true);
   });
+
+  it.each([[1, 0, 1], [undefined, 1, 0]] as const)(
+    "offers Retry on the owner FIFO head with admission position %s and held event order %s, %s",
+    async (admissionPosition, first, second) => {
+      const { result: { current: draftStore } } = renderHook(useComposerDraftStore);
+      const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
+      draftStore.setQueuedTurns(scopeKey, [mirror("follow-up")]);
+      let publish!: (event: AgentEvent) => void;
+      const releaseQueuedTurn = vi.fn(async () => ({ queueEntryId: "fix", disposition: "busy" as const }));
+      render(<Composer backends={[backendSummary("codex")]} draftStore={draftStore}
+        desktopApi={{ releaseQueuedTurn, onAgentEvent: (listener) => { publish = listener; return () => undefined; } }}
+        disabled={false} skills={[]} thread={thread} />);
+      const emit = (id: string, position: number | undefined, status: "held" | "queued") => act(async () => publish({
+        backend: "codex", notification: { method: "thread/turnQueue/updated", params: {
+          threadId: "thread-1", queueEntryId: id, origin: "manual", status, position,
+          displayText: `Message ${id}`, errorMessage: status === "held" ? "Provider refused" : undefined,
+        } },
+      }));
+      await emit("fix", admissionPosition, "queued");
+      if (admissionPosition !== undefined) {
+        expect(draftStore.getQueuedTurns(scopeKey).map((entry) => entry.queueEntryId)).toEqual(["fix", "follow-up"]);
+      }
+      const ids = ["fix", "follow-up"];
+      for (const index of [first, second]) await emit(ids[index]!, index + 1, "held");
+      expect(within(row("Message fix")).getByRole("button", { name: "Retry" })).toBeEnabled();
+      expect(within(row("Message follow-up")).queryByRole("button", { name: "Retry" })).toBeNull();
+      await clickButton("Retry");
+      expect(releaseQueuedTurn).toHaveBeenCalledExactlyOnceWith({ queueEntryId: "fix" });
+    },
+  );
 
   it("reports an owner that refused, and leaves the row as the owner has it", async () => {
     const draftStore = createComposerDraftStore();

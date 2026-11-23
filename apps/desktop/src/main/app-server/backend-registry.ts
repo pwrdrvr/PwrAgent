@@ -9620,6 +9620,22 @@ export class DesktopBackendRegistry {
     messageOrigin?: AppServerThreadMessageOrigin;
     delivery?: "new_turn";
   }, turnInputSource?: TurnInputSource): Promise<ThreadTurnQueueSubmissionResult> {
+    if (!params.messageOrigin?.reviewAutoFix) return await this.admitTurnSubmission(params, turnInputSource);
+    // Claim the review handoff before any asynchronous validation. An idle
+    // notification can arrive while the fix still has no queue entry.
+    const resume = this.threadTurnQueue.suspendDispatch(params);
+    try {
+      return await this.admitTurnSubmission(params, turnInputSource, 0);
+    } finally {
+      resume();
+    }
+  }
+
+  private async admitTurnSubmission(
+    params: Parameters<DesktopBackendRegistry["submitTurn"]>[0],
+    turnInputSource?: TurnInputSource,
+    queueIndex?: number,
+  ): Promise<ThreadTurnQueueSubmissionResult> {
     assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
     await this.assertThreadCodexInferenceAvailable(params);
     await this.assertAgentMessageWithinThreadAccess(params);
@@ -9648,7 +9664,7 @@ export class DesktopBackendRegistry {
       // messaging app's send keeps its own turn.
       return isSteerableAgentTraffic(entry.messageOrigin) && delivery !== "new_turn" && !hasTurnSettings
         ? this.threadTurnQueue.submitSteer(prepared, { onAdmission })
-        : this.threadTurnQueue.submit(prepared, { onAdmission });
+        : this.threadTurnQueue.submit(prepared, { onAdmission, queueIndex });
     });
   }
 
@@ -13467,9 +13483,11 @@ export class DesktopBackendRegistry {
       await this.assertThreadNotLocked(request.backend, request.threadId);
     },
     isRestartGateClosed: () => this.isRestartGateClosed(),
+    isReviewAutoFixActive: (request) => this.threadTurnQueue.hasActiveReviewAutoFix(request)
+      && this.getActiveTurnForThread(request)?.turnId === request.expectedTurnId,
     queue: async (params, messageOrigin, origin) => {
       // Recovery belongs only to the compacted assignment, never a later turn.
-      if (messageOrigin.systemReason === "compaction-recovery") throw new CompactionRecoveryRevoked();
+      if (messageOrigin?.systemReason === "compaction-recovery") throw new CompactionRecoveryRevoked();
       const queued = await this.admitThreadAttachments(
         { backend: params.backend, threadId: params.threadId, input: params.input },
         (input, onAdmission) => this.threadTurnQueue.submitSteer({
@@ -21582,7 +21600,31 @@ export class DesktopBackendRegistry {
     return this.threadArchiveCoordinator.withArchiveWorkspaceWrite(paths, work);
   }
 
+  private readonly reviewResultDeliveries = new Map<string, Promise<void>>();
   private readonly transcriptImageWork = new Map<string, Promise<void>>();
+
+  private emitWithOrderedReviewResult(
+    event: AgentEvent, codexStatusSequence?: number, codexStartDelivery?: CodexStartDeliveryReceipt,
+  ): Promise<void> {
+    const { method, params } = event.notification;
+    const deliver = () => this.emitWithTranscriptImages(event, codexStatusSequence, codexStartDelivery);
+    if (!("threadId" in params) || typeof params.threadId !== "string") return deliver();
+    const key = buildThreadIdentityKey(event.backend, params.threadId);
+    const previous = this.reviewResultDeliveries.get(key);
+    const afterResult = () => previous ? previous.catch(() => undefined).then(deliver) : deliver();
+    if (method === "item/completed" && readRecord(params.item)?.type === "exitedReviewMode") {
+      const result = Promise.resolve(previous).catch(() => undefined).then(deliver).finally(() => {
+        if (this.reviewResultDeliveries.get(key) === result) this.reviewResultDeliveries.delete(key);
+      });
+      this.reviewResultDeliveries.set(key, result);
+      return result;
+    }
+    // A release waits for the earlier result to claim Auto-fix. The release
+    // itself can start a scheduled review and await its synthetic start.
+    if (method === "turn/completed" || method === "turn/failed" || method === "turn/cancelled"
+      || method === "thread/status/changed") return afterResult();
+    return deliver();
+  }
 
   private emitWithTranscriptImages(event: AgentEvent, codexStatusSequence?: number, codexStartDelivery?: CodexStartDeliveryReceipt): Promise<void> {
     const notification = event.notification;
@@ -21691,8 +21733,8 @@ export class DesktopBackendRegistry {
       const emitted = event.notification.method === "thread/deleted"
         ? this.deleteOwnedThreadAssets({ backend: event.backend, threadId: event.notification.params.threadId })
             .catch((error) => backendRegistryLog.warn("thread asset cleanup failed", { error: error instanceof Error ? error.message : String(error) }))
-            .then(() => this.emitWithTranscriptImages(event, codexStatusSequence, codexStartDelivery))
-        : this.emitWithTranscriptImages(event, codexStatusSequence, codexStartDelivery);
+            .then(() => this.emitWithOrderedReviewResult(event, codexStatusSequence, codexStartDelivery))
+        : this.emitWithOrderedReviewResult(event, codexStatusSequence, codexStartDelivery);
       return await emitted;
     } finally {
       if (terminalDelivery) {

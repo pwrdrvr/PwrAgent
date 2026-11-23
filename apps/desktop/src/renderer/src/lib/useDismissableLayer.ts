@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 type Layer = {
   surfaceRef: RefObject<HTMLElement | null>;
   triggerRef?: RefObject<HTMLElement | null>;
+  getPortaledSurface?: () => HTMLElement | null;
   /** Read at dismiss time, so a re-rendered callback is never stale. */
   onDismiss: RefObject<() => void>;
 };
@@ -14,6 +15,14 @@ function depth(el: HTMLElement): number {
   let n = 0;
   for (let node = el.parentElement; node !== null; node = node.parentElement) n++;
   return n;
+}
+
+function surfaceHoldingFocus(layer: Layer, active: Element): HTMLElement | undefined {
+  const surface = layer.surfaceRef.current;
+  if (surface?.contains(active)) return surface;
+  const portal = layer.getPortaledSurface?.();
+  if (portal?.contains(active)) return portal;
+  return undefined;
 }
 
 /**
@@ -45,16 +54,11 @@ function escapeOwner(): Layer | undefined {
     let best: Layer | undefined;
     let bestDepth = -1;
     for (const layer of openLayers) {
-      const surface = layer.surfaceRef.current;
       const trigger = layer.triggerRef?.current;
       // A popup's trigger belongs to it as much as the popup does: focus
       // often stays on the button that opened it.
-      const holder =
-        surface?.contains(active) === true
-          ? surface
-          : trigger?.contains(active) === true
-            ? trigger
-            : null;
+      const holder = surfaceHoldingFocus(layer, active)
+        ?? (trigger?.contains(active) === true ? trigger : null);
       if (holder === null) continue;
       const d = depth(holder);
       // >= so a later-opened sibling at equal depth still wins.
@@ -100,7 +104,7 @@ function onGlobalKeyDown(event: KeyboardEvent): void {
   if (owner === undefined) return;
   event.preventDefault();
   event.stopPropagation();
-  restoreFocus(owner.triggerRef, owner.surfaceRef);
+  restoreFocus(owner);
   owner.onDismiss.current();
 }
 
@@ -135,6 +139,7 @@ export function useDismissableLayer({
   onDismiss,
   surfaceRef,
   triggerRef,
+  getPortaledSurface,
 }: {
   open: boolean;
   onDismiss: () => void;
@@ -142,6 +147,8 @@ export function useDismissableLayer({
   surfaceRef: RefObject<HTMLElement | null>;
   /** The control that opened a popup. Focus returns here on Escape. */
   triggerRef?: RefObject<HTMLElement | null>;
+  /** A control surface rendered in a separate portal but owned by this layer. */
+  getPortaledSurface?: () => HTMLElement | null;
 }): void {
   // Held in a ref so a fresh closure never re-registers the layer, which
   // would move it to the top of the stack.
@@ -156,10 +163,11 @@ export function useDismissableLayer({
       surfaceRef,
       onDismiss: onDismissRef,
       ...(triggerRef === undefined ? {} : { triggerRef }),
+      ...(getPortaledSurface === undefined ? {} : { getPortaledSurface }),
     };
     register(layer);
     return () => unregister(layer);
-  }, [open, surfaceRef, triggerRef]);
+  }, [open, surfaceRef, triggerRef, getPortaledSurface]);
 }
 
 /**
@@ -167,15 +175,12 @@ export function useDismissableLayer({
  * An Escape that closes a dialog leaves this to `useFocusTrap`, which knows
  * the dialog's opener.
  */
-function restoreFocus(
-  triggerRef: RefObject<HTMLElement | null> | undefined,
-  surfaceRef: RefObject<HTMLElement | null>,
-): void {
-  const trigger = triggerRef?.current;
+function restoreFocus(layer: Layer): void {
+  const trigger = layer.triggerRef?.current;
   if (trigger === null || trigger === undefined) return;
   const active = document.activeElement;
   const inside =
     active === trigger
-    || (active !== null && surfaceRef.current?.contains(active) === true);
+    || (active !== null && surfaceHoldingFocus(layer, active) !== undefined);
   if (inside) trigger.focus();
 }

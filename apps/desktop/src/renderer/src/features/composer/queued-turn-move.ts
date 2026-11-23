@@ -158,6 +158,21 @@ export function withOwnerQueueOrder<T extends MovableQueuedTurn>(
   return next;
 }
 
+/** Applies the owner's one-based FIFO position without moving non-FIFO rows. */
+export function withOwnerQueueEntryPosition<T extends MovableQueuedTurn>(
+  turns: T[],
+  queueEntryId: string,
+  position: unknown,
+): T[] {
+  if (typeof position !== "number" || !Number.isSafeInteger(position) || position < 1) return turns;
+  const order = ownerQueueOrder(turns);
+  const current = order.indexOf(queueEntryId);
+  if (current < 0 || current === position - 1) return turns;
+  order.splice(current, 1);
+  order.splice(position - 1, 0, queueEntryId);
+  return withOwnerQueueOrder(turns, order);
+}
+
 export function queuedTurnMoveFailureMessage(
   disposition: MoveQueuedTurnResponse["disposition"],
 ): string | undefined {

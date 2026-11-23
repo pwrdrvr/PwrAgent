@@ -1,10 +1,11 @@
-import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
+import { buildPullRequestStatusKey, type NavigationThreadSummary, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { ThreadDependency } from "@pwragent/shared/contracts/thread-dependencies";
 import {
   summarizeThreadDependencyMergeBuild,
   THREAD_DEPENDENCY_MERGE_BUILD_WAITING_REASON,
 } from "@pwragent/shared/contracts/thread-dependencies";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { parsePullRequestUrl } from "../../lib/pull-request-links";
 
 /**
  * Merge build watches as every PR surface shows them: the composer's PR
@@ -46,10 +47,18 @@ export function mergeBuildWaitPrUrl(dependency: ThreadDependency): string | unde
  * The thread's active merge build wait for `pr`, if any. A wait that names
  * no PR and has not found one yet is about no chip.
  */
-export function mergeBuildWaitForPr(waits: readonly ThreadDependency[] | undefined, pr: Pick<PrSummary, "url">): ThreadDependency | undefined {
-  // Forge owner and repository names are case-insensitive.
+export function mergeBuildWaitForPr(waits: readonly ThreadDependency[] | undefined, pr: PrSummary): ThreadDependency | undefined {
+  if (!waits?.length) return undefined;
   const url = pr.url.toLowerCase();
-  return waits?.find((dependency) => isActiveMergeBuildWait(dependency) && mergeBuildWaitPrUrl(dependency)?.toLowerCase() === url);
+  const key = buildPullRequestStatusKey(pr);
+  return waits.find((dependency) => {
+    if (!isActiveMergeBuildWait(dependency)) return false;
+    const watchUrl = mergeBuildWaitPrUrl(dependency);
+    if (!watchUrl) return false;
+    if (watchUrl.toLowerCase() === url) return true;
+    const target = parsePullRequestUrl(watchUrl);
+    return target !== undefined && buildPullRequestStatusKey(target) === key;
+  });
 }
 
 /**
