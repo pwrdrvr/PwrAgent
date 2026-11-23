@@ -202,8 +202,11 @@ async function startDesktopOwner(
 }
 
 /** The Outpost daemon on its Codex fixture, enrolled through a real invite. */
-async function startOutpostOwner(hostKind: "desktop" | "headless" = "headless"): Promise<OwnerHost> {
-  const outpost = await startConformanceDaemon({ capabilities: VIEWER_CAPABILITIES, hostKind });
+async function startOutpostOwner(
+  hostKind: "desktop" | "headless" = "headless",
+  options: { waitForCodexCommand?: boolean } = {},
+): Promise<OwnerHost> {
+  const outpost = await startConformanceDaemon({ capabilities: VIEWER_CAPABILITIES, hostKind, ...options });
   outpost.subscribe(EVENT_CLASSES);
   return { name: hostKind === "desktop" ? "desktop" : "outpost", ownerInstanceId: outpost.ownerInstanceId, client: outpost.client, methods: new Set(Object.keys(FEDERATION_BACKEND_METHOD_CAPABILITIES)),
     providerSteerCount: () => readFileSync(path.join(outpost.env.PWRAGENT_TEST_DATA!, "calls.jsonl"), "utf8")
@@ -2729,7 +2732,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     const desktop = await startDesktopOwner();
     let outpost: OwnerHost | undefined;
     try {
-      outpost = await startOutpostOwner();
+      outpost = await startOutpostOwner("headless", { waitForCodexCommand: true });
       const hosts = [desktop, outpost];
       const identities = await Promise.all(hosts.map((host) => host.client.startThread({
         backend: "codex", cwd: host.workspace, executionMode: "auto",
