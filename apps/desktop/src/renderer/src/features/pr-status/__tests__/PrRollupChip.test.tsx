@@ -59,7 +59,72 @@ function renderRollup(prs: PrSummary[], onRowClick = vi.fn()) {
   return { ...view, onOpen, onRowClick };
 }
 
+function focusRollupRow() {
+  const { container } = renderRollup([passing, failing]);
+  const trigger = container.querySelector<HTMLElement>("[data-pr-rollup]")!;
+  fireEvent.click(trigger);
+  const list = screen.getByRole("group");
+  const row = within(list).getByRole("button", { name: /^Open acme\/orbit#11\b/ });
+  act(() => row.focus());
+  return { trigger, list, card: screen.getByRole("tooltip") };
+}
+
 describe("PrRollupChip", () => {
+  it("covers only the gap outside the list when keyboard focus opens the card", () => {
+    const cases = [[300, 30], [380, 65]] as const;
+    for (const [width, chipWidth] of cases) {
+      const listRight = 24 + width;
+      vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+        if (this.classList.contains("pr-rollup-popover")) return new DOMRect(24, 80, width, 200);
+        if (this.classList.contains("pr-rollup-popover__row")) return new DOMRect(24, 120, width - chipWidth, 40);
+        if (this.classList.contains("pr-status-card")) return new DOMRect(listRight + 10, 120, 272, 120);
+        return new DOMRect(24, 60, 75, 20);
+      });
+      const { card } = focusRollupRow();
+      const bridge = card.querySelector<HTMLElement>(".tooltip-hover-bridge")!;
+      expect(bridge.style.width).toBe("10px");
+      expect(bridge.style.left).toBe("-10px");
+      cleanup();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("returns focus to the rollup trigger on Escape from a card button", () => {
+    const { trigger, list, card } = focusRollupRow();
+    const action = card.querySelector("button")!;
+    act(() => action.focus());
+    expect(action).toHaveFocus();
+    fireEvent.keyDown(action, { key: "Escape" });
+    expect(list).not.toBeInTheDocument();
+    expect(card).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it.each([
+    ["above", new DOMRect(24, 10, 272, 60), true],
+    ["below", new DOMRect(24, 290, 272, 60), true],
+    ["beside", new DOMRect(334, 110, 272, 60), true],
+    ["overlapping", new DOMRect(24, 250, 272, 60), false],
+  ] as const)("keeps the card reachable when it sits %s the list", (_placement, box, reachable) => {
+    vi.useFakeTimers();
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains("pr-rollup-popover")) return new DOMRect(24, 80, 300, 200);
+      if (this.classList.contains("pr-status-card")) return box;
+      return new DOMRect(24, 120, 200, 40);
+    });
+    const { list, card } = focusRollupRow();
+    fireEvent.mouseLeave(list);
+    if (!reachable) {
+      expect(card).not.toBeInTheDocument();
+      return;
+    }
+    act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS - 1));
+    expect(card).toBeInTheDocument();
+    fireEvent.mouseEnter(card);
+    act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS));
+    expect(card).toBeInTheDocument();
+  });
+
   it("offers the same footer as a standalone sidebar chip for every PR in the list", () => {
     fc.assert(fc.property(fc.shuffledSubarray([passing, failing, merged], {
       minLength: 2,

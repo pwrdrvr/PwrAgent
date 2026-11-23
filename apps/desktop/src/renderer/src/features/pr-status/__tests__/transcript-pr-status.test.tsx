@@ -58,6 +58,27 @@ it("shows the thread's local branch and Auto-fix only on its matching PR, includ
   ), { numRuns: 15 });
 });
 
+it("keeps Auto-fix on an explicitly attached fork when its display PR lacks attachment metadata", () => {
+  const sourceRepository = { provider: "github.com", org: "contributor", repo: "project" };
+  const display: PrSummary = { ...pr, state: "passing", lifecycleState: "open", sourceRepository };
+  const thread: NavigationThreadSummary = {
+    id: "thread", source: "codex", title: "Fork contribution", titleSource: "explicit",
+    inbox: { inInbox: false }, linkedDirectories: [],
+    primaryGitRepository: "github.com/example/project", prAutoDispatchEnabled: true,
+    prs: [{ ...display, explicitlyAttached: true }],
+  };
+  const authoredUrl = `${url}/files`;
+  render(
+    <TranscriptPrContextProvider thread={thread}>
+      <PullRequestLinkChip pr={{ ...display, url: authoredUrl }} />
+    </TranscriptPrContextProvider>,
+  );
+  const chip = screen.getByRole("button");
+  expect(chip).toHaveAttribute("data-pr-url", authoredUrl);
+  fireEvent.focus(chip);
+  expect(within(screen.getByRole("tooltip")).getByText("Auto-fix")).toBeInTheDocument();
+});
+
 const url = "https://github.com/example/project/pull/42";
 const pr: PrSummary = { provider: "github.com", org: "example", repo: "project", number: 42, url, state: "unknown" };
 const key = buildPullRequestStatusKey(pr);

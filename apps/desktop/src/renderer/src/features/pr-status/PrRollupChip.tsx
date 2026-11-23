@@ -285,6 +285,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
     onDismiss: close,
     surfaceRef: popoverRef,
     triggerRef,
+    getPortaledSurface: getCardElement,
   });
 
   // Below the chip, else above; a list too tall for either side scrolls.
@@ -587,7 +588,10 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
             onMouseLeave={() => {
               const card = getCardElement()?.getBoundingClientRect();
               const popover = popoverRef.current?.getBoundingClientRect();
-              if (card?.width && popover && (card.left >= popover.right || card.right <= popover.left)) {
+              if (card?.width && card.height && popover && (
+                card.left >= popover.right || card.right <= popover.left
+                || card.top >= popover.bottom || card.bottom <= popover.top
+              )) {
                 leaveCard();
                 return;
               }

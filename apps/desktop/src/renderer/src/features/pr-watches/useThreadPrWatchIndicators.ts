@@ -346,13 +346,16 @@ const withBlockedAutoFixCache = new WeakMap<ThreadPrAutoFixState, WeakMap<PrChip
  * The chip's `watch` prop. Identity is stable for unchanged data, so the
  * memoized chip bails out when only its row re-rendered.
  * `autoFixRepository` comes from `resolveThreadAutoFixRepository`.
+ * Transcript links provide the attachment separately because the status cache
+ * has the current lifecycle but does not own the thread's attachment metadata.
  */
 export function resolvePrChipWatch(
   watches: ThreadPrWatches | undefined,
   pr: PrSummary,
   autoFixRepository: string | undefined,
+  attachment: PrSummary = pr,
 ): PrChipWatch | undefined {
-  const chip = resolveCiChipWatch(watches, pr, autoFixRepository);
+  const chip = resolveCiChipWatch(watches, pr, autoFixRepository, attachment);
   const mergeBuild = mergeBuildWaitForPr(watches?.mergeBuildWaits, pr);
   if (!mergeBuild) return chip;
   const key = chip ?? NO_CHIP_WATCH;
@@ -375,6 +378,7 @@ function resolveCiChipWatch(
   watches: ThreadPrWatches | undefined,
   pr: PrSummary,
   autoFixRepository: string | undefined,
+  attachment: PrSummary,
 ): PrChipWatch | undefined {
   const prKey = buildPullRequestStatusKey(pr);
   const base = watches?.byPrKey.get(prKey);
@@ -382,7 +386,7 @@ function resolveCiChipWatch(
   // means nothing on a merged card or a linked directory's PR.
   if (
     resolveLifecycleState(pr) !== "open"
-    || !pullRequestMatchesRepositoryKey(pr, autoFixRepository)
+    || !pullRequestMatchesRepositoryKey(attachment, autoFixRepository)
   ) return base;
   // Main says when it will not repair here. No entry yet reads as active:
   // the candidate list catches up on main's next refresh.

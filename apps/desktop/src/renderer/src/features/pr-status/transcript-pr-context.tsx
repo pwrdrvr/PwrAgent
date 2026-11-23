@@ -17,7 +17,7 @@ const TranscriptPrContext = createContext<{
   branchDrift?: PrBranchDrift;
   watches?: ThreadPrWatches;
   autoFixRepository?: string;
-  attachedPrKeys?: ReadonlySet<string>;
+  attachmentsByKey?: ReadonlyMap<string, PrSummary>;
 } | undefined>(undefined);
 
 export function TranscriptPrContextProvider(props: {
@@ -28,20 +28,21 @@ export function TranscriptPrContextProvider(props: {
   const branchDrift = useThreadPrBranchDrift(props.thread);
   const watches = useThreadPrWatches(props.thread);
   const autoFixRepository = useThreadAutoFixRepository(props.thread);
-  const attachedPrKeys = useMemo(() => autoFixRepository && prs
-    ? new Set(prs.map(buildPullRequestStatusKey))
+  const attachmentsByKey = useMemo(() => autoFixRepository && prs
+    ? new Map(prs.map((pr) => [buildPullRequestStatusKey(pr), pr]))
     : undefined, [autoFixRepository, prs]);
-  const value = useMemo(() => ({ branchDrift, watches, autoFixRepository, attachedPrKeys }),
-    [branchDrift, watches, autoFixRepository, attachedPrKeys]);
+  const value = useMemo(() => ({ branchDrift, watches, autoFixRepository, attachmentsByKey }),
+    [branchDrift, watches, autoFixRepository, attachmentsByKey]);
 
   return <TranscriptPrContext.Provider value={value}>{props.children}</TranscriptPrContext.Provider>;
 }
 
 export function useTranscriptPrContext(pr: PrSummary, prKey: string) {
   const context = useContext(TranscriptPrContext);
+  const attachment = context?.attachmentsByKey?.get(prKey);
   return {
     branchDrift: context?.branchDrift?.prKey === prKey ? context.branchDrift : undefined,
     watch: resolvePrChipWatch(context?.watches, pr,
-      context?.attachedPrKeys?.has(prKey) ? context.autoFixRepository : undefined),
+      attachment ? context?.autoFixRepository : undefined, attachment),
   };
 }

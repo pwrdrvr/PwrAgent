@@ -215,15 +215,19 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
     pr.mergeQueue?.kind,
     pr.allowedMergeMethods?.join(","),
   ].join("|");
-  const pushedCardKeyRef = useRef<string | undefined>(undefined);
+  // A fresh build observation or a canceled watch changes the resolved wait
+  // object. The card renders that snapshot, including the time it was checked.
+  const mergeBuildWatch = props.watch?.mergeBuild;
+  const pushedCardRef = useRef<{ key: string; mergeBuildWatch: typeof mergeBuildWatch } | undefined>(undefined);
   useEffect(() => {
-    const moved = pushedCardKeyRef.current !== cardKey;
-    pushedCardKeyRef.current = cardKey;
+    const previous = pushedCardRef.current;
+    const moved = previous?.key !== cardKey || previous.mergeBuildWatch !== mergeBuildWatch;
+    pushedCardRef.current = { key: cardKey, mergeBuildWatch };
     if (!moved || !tooltipVisible) {
       return;
     }
     updateTooltip(latestCardRef.current);
-  }, [cardKey, tooltipVisible, updateTooltip]);
+  }, [cardKey, mergeBuildWatch, tooltipVisible, updateTooltip]);
 
   // The bridge tracks which sidebar card is up, so entering another chip can
   // close this one at once.
