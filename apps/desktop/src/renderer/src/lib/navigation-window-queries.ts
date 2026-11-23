@@ -1141,10 +1141,11 @@ export class NavigationWindowQueries {
             gitBytes: prior.gitBytes, bytes: (next.ownerProof?.bytes ?? 0) + prior.gitBytes };
         }
         assertRetained(next.state);
-        if (resuming && !resource.workingStateRead?.paths.size && next.state.page?.nextCursor && loadedRows(next.state.page) >= restoring
+        if (resuming && next.state.page?.nextCursor && loadedRows(next.state.page) >= restoring
           && loadedRows(next.state.page) < wanted && this.canResumeExpansion(budget) && Date.now() < extendUntil) {
           // Saved expansion must not withhold the ordinary first page, nor
           // replace a longer cached range with it.
+          if (this.needsWorkingStateReplacement(resource, next)) return;
           this.acceptState(resource, next);
           this.publish();
         }

@@ -494,34 +494,54 @@ it("preserves the remaining saved-depth budget for any matching row and notice t
   }), { numRuns: 30, examples: [[9, 1, 0], [8, 5, 2], [9, 0, 1]] });
 });
 
-it("continues a saved-depth restore when the owner proves the notified checkout is absent", async () => {
+async function checkOwnerProofFirstPaint(firstRows: number, extraRows: number) {
+  const savedRows = firstRows + extraRows;
   const target = { scope: "remote", instanceId: "peer" } as const;
   const request: NavigationQueryRequest = { ...checkoutDirectoryRequest, inventory: "owner", federationTarget: target };
   const dispatched = deferred<void>();
   const delivery = deferred<void>();
-  const workingStatePaths = Array.from({ length: 9 }, (_, i) => `/checkout/${i}`);
+  const continuationDispatched = deferred<void>();
+  const continuationDelivery = deferred<void>();
+  const workingStatePaths = Array.from({ length: savedRows }, (_, i) => `/checkout/${i}`);
   const read = vi.fn(async (sent: NavigationQueryRequest) => {
     if (!sent.cursor) {
       dispatched.resolve();
       await delivery.promise;
+    } else if (Number(sent.cursor) === firstRows) {
+      continuationDispatched.resolve();
+      await continuationDelivery.promise;
     }
-    return expandNavigationRemoteOwner({ ...checkoutPage("current", Number(sent.cursor ?? 0), 1, 9),
+    return expandNavigationRemoteOwner({ ...checkoutPage("current", Number(sent.cursor ?? 0), sent.cursor ? 1 : firstRows, savedRows),
       remoteOwner: { instanceId: target.instanceId, instanceLabel: "Peer" },
       metadataDependencies: { version: 1, threadKeys: [], prKeys: [], workingStatePaths } });
   });
   const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined,
-    { loadedRowsByQuery: { [navigationResumeQueryKey(request)]: 9 } });
+    { loadedRowsByQuery: { [navigationResumeQueryKey(request)]: savedRows } });
   try {
     queries.setDemand(new Map([["project", request]]));
     queries.invalidate(undefined, [target], { ...directoryChange, federationTarget: target });
     const refreshed = queries.refresh(undefined, [target], true);
     await dispatched.promise;
-    queries.invalidate(undefined, [target], { ...workingStateChange(9), federationTarget: target });
+    queries.invalidate(undefined, [target], { ...workingStateChange(savedRows), federationTarget: target });
     delivery.resolve();
+    await continuationDispatched.promise;
+    // An owner-certified opening page is displayable before optional depth arrives.
+    const visible = queries.getSnapshot().resources.get("project");
+    expect(visible?.state.page?.entries.map(({ row }) => row.id)).toEqual(Array.from({ length: firstRows }, (_, i) => `thread-${i}`));
+    expect(visible).toMatchObject({ loading: true, state: { stale: false } });
+    continuationDelivery.resolve();
     await refreshed;
-    expect(read.mock.calls.map(([sent]) => sent.cursor)).toEqual([undefined, "1", "2", "3", "4", "5", "6", "7", "8"]);
-    expect(queries.getSnapshot().resources.get("project")?.state.page?.entries).toHaveLength(9);
-  } finally { delivery.resolve(); queries.dispose(); }
+    expect(read.mock.calls.map(([sent]) => sent.cursor)).toEqual([undefined, ...Array.from({ length: extraRows }, (_, i) => String(firstRows + i))]);
+    expect(queries.getSnapshot().resources.get("project")?.state.page?.entries).toHaveLength(savedRows);
+  } finally { delivery.resolve(); continuationDelivery.resolve(); queries.dispose(); }
+}
+
+it("publishes an owner-certified first row before the saved-depth continuation responds", async () => {
+  await checkOwnerProofFirstPaint(1, 1);
+});
+
+it("does not hold first paint for optional continuation after a disjoint owner proof", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 6 }), fc.integer({ min: 1, max: 8 }), checkOwnerProofFirstPaint), { numRuns: 20 });
 });
 
 it("shares one continuation budget across metadata replacements", async () => {
