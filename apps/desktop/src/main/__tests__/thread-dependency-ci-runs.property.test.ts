@@ -280,11 +280,15 @@ describe("CI run URLs", () => {
 
   it("rejects settings patches that would silently ignore invalid or excess hosts", () => {
     const expectedRevision = DEFAULT_GITHUB_ENTERPRISE_HOSTS.revision;
-    const invalid = fc.constantFrom("*.example.com", "https://git.example.com", "git.example.com/path", "git.example.com:65536");
-    fc.assert(fc.property(invalid, (host) => {
+    // The editor shows no line numbers, so each rejection quotes the entry and its reason.
+    const invalid = fc.constantFrom(
+      ["*.example.com", "uses a wildcard"], ["https://git.example.com", "is a URL"], ["git.example.com/path", "includes a path"],
+      ["git.example.com:65536", "is not a hostname"], ["GitHub.com", "is not a GitHub Enterprise host"],
+    );
+    fc.assert(fc.property(invalid, ([host, reason]) => {
       expect(() => desktopSettingsPatchToEdits({
         git: { githubEnterpriseHosts: { hosts: ["git.example.com", host], expectedRevision } },
-      })).toThrow(/Invalid host entries on lines 2/);
+      })).toThrow(`Line 2 (${host}) ${reason}. Enter exact hostnames with an optional port.`);
     }));
     expect(() => desktopSettingsPatchToEdits({
       git: { githubEnterpriseHosts: { hosts: Array.from({ length: 17 }, (_, i) => `ghe${i}.example.com`), expectedRevision } },

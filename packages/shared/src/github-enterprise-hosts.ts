@@ -17,21 +17,34 @@ export function validateGithubEnterpriseHosts(
   error?: string;
 } {
   const hosts = new Set<string>();
-  const invalidLines: number[] = [];
+  const invalid: string[] = [];
   for (const [index, entry] of entries.entries()) {
     if (typeof entry === "string" && !entry.trim()) continue;
     const host = normalizeGithubEnterpriseHost(entry);
     // A host must be usable verbatim as the host of an HTTPS run URL.
     if (host && url.parse(`https://${host}`)?.host === host) hosts.add(host);
-    else invalidLines.push(index + 1);
+    else invalid.push(describeInvalidEntry(index + 1, entry));
   }
-  if (invalidLines.length) {
-    const lines = invalidLines.slice(0, 8).join(", ");
-    const more = invalidLines.length > 8 ? ` and ${invalidLines.length - 8} more` : "";
-    return { hosts: [...hosts], error: `Invalid host entries on lines ${lines}${more}. Enter exact GitHub Enterprise hostnames with an optional port.` };
+  if (invalid.length) {
+    // The editor shows no line numbers, so quote the entry and say what is wrong.
+    const more = invalid.length > 3 ? ` ${invalid.length - 3} more ${invalid.length === 4 ? "entry is" : "entries are"} invalid.` : "";
+    return { hosts: [...hosts], error: `${invalid.slice(0, 3).join(" ")}${more} Enter exact hostnames with an optional port.` };
   }
   if (hosts.size > CI_RUN_MAX_GITHUB_ENTERPRISE_HOSTS) {
     return { hosts: [...hosts], error: `Enter up to ${CI_RUN_MAX_GITHUB_ENTERPRISE_HOSTS} distinct hosts.` };
   }
   return { hosts: [...hosts] };
+}
+
+function describeInvalidEntry(line: number, entry: unknown): string {
+  if (typeof entry !== "string") return `Line ${line} is not text.`;
+  const text = entry.trim();
+  const lower = text.toLowerCase();
+  const problem = lower.includes("://") ? "is a URL"
+    : lower.includes("*") ? "uses a wildcard"
+    : lower.includes("/") ? "includes a path"
+    : ["github.com", "gitlab.com"].includes(lower.replace(/:443$/, "")) ? "is not a GitHub Enterprise host"
+    : "is not a hostname";
+  const quoted = text.length > 40 ? `${text.slice(0, 39)}…` : text;
+  return `Line ${line} (${quoted}) ${problem}.`;
 }

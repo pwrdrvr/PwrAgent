@@ -11,7 +11,7 @@ import {
 import { FORGE_KINDS, type ForgeKind } from "@pwragent/shared/forge-product";
 import { type AcpAgentSettingsEntry, type BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { ComponentProps } from "react";
-import { useId, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
@@ -34,7 +34,6 @@ import {
 import { type GhStatus } from "@pwragent/shared/contracts/navigation";
 import {
   CI_RUN_MAX_GITHUB_ENTERPRISE_HOSTS,
-  GITHUB_ENTERPRISE_HOSTS_CONFLICT,
   validateGithubEnterpriseHosts,
 } from "@pwragent/shared/github-enterprise-hosts";
 import { Select } from "../../components/Select";
@@ -654,6 +653,12 @@ function GithubEnterpriseHostsSection(props: {
 }) {
   const instructionsId = useId();
   const errorId = useId();
+  const fieldRef = useRef<HTMLTextAreaElement>(null);
+  // Save disables the field and its own button while it writes, which drops
+  // focus to the page. Return it to the field once the write settles.
+  const refocusRef = useRef(false);
+  const [settledSaves, setSettledSaves] = useState(0);
+  const [focused, setFocused] = useState(false);
   const [draftRevision, setDraftRevision] = useState<string>();
   const draft = useSettingsDraft({
     // Keep a malformed multiline TOML entry on one line so it cannot turn
@@ -664,8 +669,11 @@ function GithubEnterpriseHostsSection(props: {
   const savedRevision = props.hosts?.revision;
   const expectedRevision = draft.dirty ? draftRevision : savedRevision;
   const conflict = draft.dirty && expectedRevision !== savedRevision;
-  const fieldError = conflict ? GITHUB_ENTERPRISE_HOSTS_CONFLICT
-    : error ?? (draft.dirty ? undefined : props.hosts?.error);
+  // An entry being typed is not reported as invalid until the operator leaves
+  // the field; a half-typed host would otherwise be announced per keystroke.
+  const entryError = draft.dirty && focused ? undefined : error;
+  const fieldError = conflict ? hostsConflictMessage(props.hosts?.value ?? [])
+    : entryError ?? (draft.dirty ? undefined : props.hosts?.error);
   const canSave = !props.saving && expectedRevision !== undefined && !conflict && !error
     && (draft.dirty || !!props.hosts?.error);
   const save = async (): Promise<boolean> => {
@@ -677,6 +685,11 @@ function GithubEnterpriseHostsSection(props: {
   useUnsavedSettingsChanges(draft.dirty
     ? { label: "GitHub Enterprise hosts", save, discard: draft.discard }
     : undefined);
+  useEffect(() => {
+    if (!refocusRef.current || props.saving) return;
+    refocusRef.current = false;
+    fieldRef.current?.focus();
+  }, [settledSaves, props.saving]);
 
   return (
     <SettingsSection
@@ -688,59 +701,80 @@ function GithubEnterpriseHostsSection(props: {
         <SettingsField
           label="Allowed hosts"
           sub={
-            <>
-              <span id={instructionsId}>
-                Enter up to {CI_RUN_MAX_GITHUB_ENTERPRISE_HOSTS} exact hostnames, one per line.
-                Include the port if it differs from 443. Leave blank to clear the list.
-              </span>
-              {fieldError ? <span className="settings-error" id={errorId} role="status"> {fieldError}</span> : null}
-            </>
+            <span id={instructionsId}>
+              Enter up to {CI_RUN_MAX_GITHUB_ENTERPRISE_HOSTS} exact hostnames, one per line.
+              Include the port if it differs from 443. Leave blank to clear the list.
+            </span>
           }
           source={props.hosts ? sourceBadge(props.hosts) : undefined}
           control={
-            <textarea
-              aria-label="Allowed hosts"
-              aria-describedby={fieldError ? `${instructionsId} ${errorId}` : instructionsId}
-              aria-invalid={fieldError ? true : undefined}
-              className="settings-input settings-input--multiline"
-              disabled={props.saving || savedRevision === undefined}
-              placeholder="github.example.com"
-              rows={3}
-              spellCheck={false}
-              value={draft.values.hosts}
-              onChange={(event) => {
-                if (!draft.dirty) setDraftRevision(savedRevision);
-                draft.set("hosts", event.currentTarget.value);
-              }}
-            />
+            <>
+              <textarea
+                ref={fieldRef}
+                aria-label="Allowed hosts"
+                aria-describedby={fieldError ? `${instructionsId} ${errorId}` : instructionsId}
+                aria-invalid={fieldError ? true : undefined}
+                className="settings-input settings-input--multiline"
+                disabled={props.saving || savedRevision === undefined}
+                placeholder="github.example.com"
+                rows={3}
+                spellCheck={false}
+                value={draft.values.hosts}
+                onBlur={() => setFocused(false)}
+                onChange={(event) => {
+                  if (!draft.dirty) setDraftRevision(savedRevision);
+                  draft.set("hosts", event.currentTarget.value);
+                }}
+                onFocus={() => setFocused(true)}
+              />
+              {fieldError ? (
+                <p className="settings-row__error" id={errorId} role="alert">{fieldError}</p>
+              ) : null}
+            </>
+          }
+          actions={
+            <div className="settings-inline-actions">
+              <button
+                aria-label="Save GitHub Enterprise hosts"
+                className="button button--primary"
+                disabled={!canSave}
+                type="button"
+                onClick={() => {
+                  refocusRef.current = true;
+                  void save().finally(() => setSettledSaves((count) => count + 1));
+                }}
+              >
+                Save
+              </button>
+              {draft.dirty ? (
+                <button
+                  aria-label="Discard GitHub Enterprise host changes"
+                  className="button button--secondary"
+                  disabled={props.saving}
+                  type="button"
+                  onClick={() => {
+                    // This button unmounts with the draft; keep focus in the field.
+                    fieldRef.current?.focus();
+                    draft.discard();
+                    void props.onReload();
+                  }}
+                >
+                  Discard
+                </button>
+              ) : null}
+            </div>
           }
         />
       </div>
-      <div className="settings-button-row">
-        <button
-          className="button button--primary"
-          disabled={!canSave}
-          type="button"
-          onClick={() => void save()}
-        >
-          Save GitHub Enterprise hosts
-        </button>
-        {draft.dirty ? (
-          <button
-            className="button button--secondary"
-            disabled={props.saving}
-            type="button"
-            onClick={() => {
-              draft.discard();
-              void props.onReload();
-            }}
-          >
-            Discard draft and reload
-          </button>
-        ) : null}
-      </div>
     </SettingsSection>
   );
+}
+
+function hostsConflictMessage(saved: readonly string[]): string {
+  const now = saved.length === 0 ? "The saved list is now empty."
+    : saved.length > 3 ? `Saved now: ${saved.slice(0, 3).join(", ")} and ${saved.length - 3} more.`
+    : `Saved now: ${saved.join(", ")}.`;
+  return `The saved hosts changed while you were editing. ${now} Discard your changes to load the saved list, then edit it again.`;
 }
 
 function GitActionConfirmation(props: {

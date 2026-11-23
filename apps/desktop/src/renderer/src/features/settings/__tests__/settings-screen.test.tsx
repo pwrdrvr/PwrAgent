@@ -11964,8 +11964,11 @@ describe("SettingsScreen", () => {
     const save = screen.getByRole("button", { name: "Save GitHub Enterprise hosts" });
     expect(hosts).toHaveValue(rawHosts.join("\n"));
     expect(hosts).toHaveAttribute("aria-invalid", "true");
-    expect(hosts).toHaveAccessibleDescription(/one per line.*Invalid host entries/);
-    expect(screen.getByText(/Invalid host entries on lines 2, 3, 4/)).toBeInTheDocument();
+    expect(hosts).toHaveAccessibleDescription(/one per line.*Line 2 \(\*\.example\.com\) uses a wildcard/);
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Line 2 (*.example.com) uses a wildcard. Line 3 (https://git.example.com) is a URL."
+      + " Line 4 (git.example.com/path) includes a path.",
+    );
     expect(save).toBeDisabled();
 
     fireEvent.change(hosts, { target: { value: "git.example.com:8443\n\nother.example.com" } });
@@ -11978,6 +11981,37 @@ describe("SettingsScreen", () => {
         git: { githubEnterpriseHosts: { hosts: ["git.example.com:8443", "other.example.com"], expectedRevision: "original" } },
       });
     });
+    // Save disables itself once the draft is saved; focus stays in the field.
+    await waitFor(() => expect(hosts).toHaveFocus());
+  });
+
+  it("reports a GitHub Enterprise host typed into the field only after focus leaves it", () => {
+    const settings = createSettingsState();
+    const snapshot = settings.snapshot!;
+    settings.snapshot = {
+      ...snapshot,
+      git: { ...snapshot.git, githubEnterpriseHosts: { value: [], source: "default", revision: "unset" } },
+    };
+    render(<SettingsScreen initialSection="git" settings={settings} onClose={() => undefined} />);
+    const hosts = screen.getByRole("textbox", { name: "Allowed hosts" });
+    const save = screen.getByRole("button", { name: "Save GitHub Enterprise hosts" });
+
+    act(() => hosts.focus());
+    for (const value of ["g", "github.example.com\nghe", "github.example.com\nghe."]) {
+      fireEvent.change(hosts, { target: { value } });
+      expect(hosts).not.toHaveAttribute("aria-invalid");
+      expect(screen.queryByText(/is not a hostname/)).not.toBeInTheDocument();
+      expect(save).toBeDisabled();
+    }
+
+    act(() => hosts.blur());
+    expect(hosts).toHaveAttribute("aria-invalid", "true");
+    expect(hosts).toHaveAccessibleDescription(/Line 2 \(ghe\.\) is not a hostname/);
+
+    act(() => hosts.focus());
+    fireEvent.change(hosts, { target: { value: "github.example.com\nghe.internal.example" } });
+    expect(hosts).not.toHaveAttribute("aria-invalid");
+    expect(save).toBeEnabled();
   });
 
   it("keeps the host draft visible but blocks saving after another window removes a host", () => {
@@ -12002,12 +12036,13 @@ describe("SettingsScreen", () => {
 
     rerender(renderWithHosts(["keep.example.com"], "changed"));
     expect(hosts).toHaveValue(edited);
-    expect(hosts).toHaveAccessibleDescription(/changed while you were editing/);
+    expect(hosts).toHaveAccessibleDescription(/changed while you were editing\. Saved now: keep\.example\.com\./);
     expect(save).toBeDisabled();
     expect(settings.writeConfig).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Discard draft and reload" }));
+    fireEvent.click(screen.getByRole("button", { name: "Discard GitHub Enterprise host changes" }));
     expect(hosts).toHaveValue("keep.example.com");
+    expect(hosts).toHaveFocus();
     expect(settings.refresh).toHaveBeenCalledOnce();
   });
 
