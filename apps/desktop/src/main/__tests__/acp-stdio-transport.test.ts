@@ -1,4 +1,5 @@
-import { EventEmitter } from "node:events";
+import { spawn as spawnProcess } from "node:child_process";
+import { EventEmitter, once } from "node:events";
 import {
   chmodSync,
   mkdtempSync,
@@ -18,10 +19,11 @@ import type { AcpLaunchDescriptor } from "../acp/acp-launch-descriptor";
 
 class MockAcpChildProcess extends EventEmitter {
   readonly writes: string[] = [];
+  writeError?: Error;
   readonly stdin = new Writable({
     write: (chunk, _encoding, callback) => {
       this.writes.push(chunk.toString());
-      callback();
+      callback(this.writeError);
     },
   });
   readonly stdout = new PassThrough();
@@ -404,6 +406,145 @@ describe("AcpStdioJsonRpcTransport", () => {
     );
   });
 
+  it("rejects and reaps an ACP child when writing session/new fails after initialize", async () => {
+    const child = new MockAcpChildProcess();
+    const kill = vi.spyOn(child, "kill");
+    const transport = new AcpStdioJsonRpcTransport({
+      launchDescriptor: createDescriptor(),
+      requestTimeoutMs: 1_000,
+      spawn: () => child,
+    });
+    try {
+      const initialize = transport.request("initialize");
+      await vi.waitFor(() => expect(child.writes).toHaveLength(1));
+      const { id } = JSON.parse(child.writes[0]);
+      const result = { protocolVersion: 1 };
+      child.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
+      await expect(initialize).resolves.toEqual(result);
+
+      const error = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+      child.writeError = error;
+      await expect(transport.request("session/new")).rejects.toBe(error);
+      expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+    } finally {
+      await transport.close();
+    }
+    expect(kill).toHaveBeenCalledTimes(1);
+  });
+
+  // Closing fd 0 in this subprocess fixture produces a kernel pipe error on
+  // POSIX. On Windows CI the request timed out waiting for a reply.
+  it.runIf(process.platform !== "win32")("rejects and reaps a live POSIX ACP child that closes stdin after initialize", async () => {
+    const pipeErrors: string[] = [];
+    let exited: Promise<unknown[]> | undefined;
+    const spawn: AcpStdioSpawn = (_command, _args, options) => {
+      const child = spawnProcess(process.execPath, ["-e", String.raw`
+        const { closeSync, readSync } = require("node:fs");
+        let line = "";
+        const byte = Buffer.alloc(1);
+        while (readSync(0, byte, 0, 1) && byte[0] !== 10) line += byte.toString();
+        const { id } = JSON.parse(line);
+        closeSync(0);
+        setInterval(() => {}, 1000);
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result: { protocolVersion: 1 } }) + "\n");
+      `], options);
+      // Record the kernel error and keep the worker alive on the pre-fix code.
+      child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+        if (error.code) pipeErrors.push(error.code);
+      });
+      exited = once(child, "exit");
+      return child;
+    };
+    const transport = new AcpStdioJsonRpcTransport({
+      launchDescriptor: createDescriptor({ cwd: os.tmpdir() }),
+      requestTimeoutMs: 1_000,
+      spawn,
+    });
+
+    try {
+      await expect(transport.request("initialize")).resolves.toEqual({ protocolVersion: 1 });
+      await expect(transport.request("session/new")).rejects.toThrow(/broken pipe|EPIPE/u);
+      expect(pipeErrors).toEqual(["EPIPE"]);
+      await exited;
+    } finally {
+      await transport.close();
+    }
+  });
+
+  it("rejects a request whose outbound observer is still waiting when stdin fails", async () => {
+    const child = new MockAcpChildProcess();
+    const observing = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const transport = new AcpStdioJsonRpcTransport({
+      launchDescriptor: createDescriptor(),
+      spawn: () => child,
+      observer: {
+        onMessage: () => {
+          observing.resolve();
+          return release.promise;
+        },
+      },
+    });
+    try {
+      const pending = expect(transport.request("session/new")).rejects.toThrow("fixture EPIPE");
+      await observing.promise;
+      child.stdin.destroy(new Error("fixture EPIPE"));
+      await pending;
+      expect(child.writes).toEqual([]);
+      expect(child.killCalled).toBe(true);
+    } finally {
+      release.resolve();
+      await transport.close();
+    }
+  });
+
+  it("waits for the failed child to exit before restarting and drops its late reply", async () => {
+    const child = new MockAcpChildProcess();
+    const replacement = new MockAcpChildProcess();
+    const signalled = Promise.withResolvers<void>();
+    child.kill = vi.fn(() => {
+      signalled.resolve();
+      return true;
+    });
+    const spawn = vi.fn().mockReturnValueOnce(child).mockReturnValueOnce(replacement);
+    const transport = new AcpStdioJsonRpcTransport({
+      launchDescriptor: createDescriptor(),
+      spawn,
+    });
+    const handling = Promise.withResolvers<void>();
+    const handlerResult = Promise.withResolvers<unknown>();
+    transport.onRequest(() => {
+      handling.resolve();
+      return handlerResult.promise;
+    });
+    const exit = () => {
+      child.signalCode = "SIGTERM";
+      child.emit("close");
+    };
+    try {
+      await transport.connect();
+      child.stdout.write('{"jsonrpc":"2.0","id":1,"method":"session/request_permission"}\n');
+      await handling.promise;
+      child.stdin.destroy(new Error("fixture EPIPE"));
+      await signalled.promise;
+      const restarting = transport.connect();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(spawn).toHaveBeenCalledTimes(1);
+      child.stderr.destroy(new Error("late fixture EPIPE"));
+      exit();
+      await restarting;
+      expect(spawn).toHaveBeenCalledTimes(2);
+      handlerResult.resolve({ outcome: "cancelled" });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(replacement.writes).toEqual([]);
+      expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+    } finally {
+      handlerResult.resolve(undefined);
+      exit();
+      await transport.close();
+    }
+  });
+
   it("waits for ACP exit and escalates when SIGTERM is resisted", async () => {
     vi.useFakeTimers();
     try {
@@ -426,6 +567,34 @@ describe("AcpStdioJsonRpcTransport", () => {
 
       await expect(close).resolves.toBeUndefined();
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a timed-out ACP child fenced until it eventually exits", async () => {
+    vi.useFakeTimers();
+    const child = new MockAcpChildProcess();
+    child.kill = vi.fn(() => false);
+    const spawn = vi.fn().mockReturnValueOnce(child).mockReturnValueOnce(new MockAcpChildProcess());
+    const transport = new AcpStdioJsonRpcTransport({ launchDescriptor: createDescriptor(), spawn });
+    try {
+      await transport.connect();
+      child.stdin.emit("error", new Error("fixture EPIPE"));
+      const first = transport.connect().catch((error: Error) => error.message);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(first).resolves.toContain("SIGKILL");
+      await expect(transport.connect()).rejects.toThrow("SIGKILL");
+      expect(spawn).toHaveBeenCalledTimes(1);
+
+      child.exitCode = 0;
+      child.emit("close");
+      await transport.connect();
+      expect(spawn).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(child.kill).mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+    } finally {
+      const close = transport.close().catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(0);
+      await close;
       vi.useRealTimers();
     }
   });
