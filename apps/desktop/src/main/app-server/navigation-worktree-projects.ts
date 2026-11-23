@@ -1,10 +1,8 @@
 import path from "node:path";
-import { stat } from "node:fs/promises";
 import type { DirectoryOverlayState, NavigationDirectoryGitStatus, NavigationDirectorySummary, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { applyNavigationDirectoryOverlay, canonicalizeNavigationPath } from "@pwragent/shared/directory-navigation";
 import { navigationDirectoryRepositoryRevision, type NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
-import { readNavigationCheckout } from "../git-info/directory-store";
-import { resolveWorktreeRepositoryDirectory } from "../git-info/worktree-store";
+import { readSeparateGitProjectCheckout, resolveWorktreeRepositoryDirectory } from "../git-info/worktree-store";
 import { reconcileWindowsDirectoryAliases } from "./navigation-windows-directory-aliases";
 
 const PROJECT_PROBE_BATCH_SIZE = 16;
@@ -65,10 +63,8 @@ async function resolveGitWorktreeProjects(
       // A standalone Git admin directory does not name the primary checkout.
       // Both ends must be verified at roots in this owner's inventory.
       const checkoutPath = directory.path!;
-      const dotGit = await stat(path.join(checkoutPath, ".git")).catch(() => undefined);
-      if (!dotGit?.isFile()) return;
-      const separate = (await readNavigationCheckout(checkoutPath, true))?.separateGit;
-      if (!separate || path.relative(separate.checkoutRoot, checkoutPath) !== "") return;
+      const separate = await readSeparateGitProjectCheckout(checkoutPath);
+      if (!separate) return;
       if (separate.primary) {
         const primaryPath = canonicalizeNavigationPath(checkoutPath);
         const previous = separatePrimaries.get(separate.commonDirectory);

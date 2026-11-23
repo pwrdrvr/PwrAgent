@@ -1,5 +1,7 @@
 import path from "node:path";
+import { stat } from "node:fs/promises";
 import type { LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
+import { readNavigationCheckout } from "./directory-store";
 import { resolveWorktreeRepositoryDirectory as probe } from "./private/directory-probe";
 import { GitReadCache } from "./read-cache";
 
@@ -19,4 +21,12 @@ export function resolveWorktreeRepositoryDirectory(cwd: string, options?: {
   if (options?.fresh) return probe(root, options.rootOnly);
   const key = options?.rootOnly ? `project-root:${root}` : root;
   return cache.read(key, () => probe(root, options?.rootOnly));
+}
+
+/** Read separate Git metadata only for a project row with a .git pointer. */
+export async function readSeparateGitProjectCheckout(checkoutPath: string) {
+  const dotGit = await stat(path.join(checkoutPath, ".git")).catch(() => undefined);
+  if (!dotGit?.isFile()) return undefined;
+  const separate = (await readNavigationCheckout(checkoutPath, true))?.separateGit;
+  return separate && path.relative(separate.checkoutRoot, checkoutPath) === "" ? separate : undefined;
 }
