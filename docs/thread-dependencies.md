@@ -440,9 +440,10 @@ endpoint only for a required-reviewer gate.
 
 An agent supplies the run URL, and a read sends the operator's `gh`
 credentials for that host. A login alone is therefore not authorization. The
-operator lists each GitHub Enterprise Server host under **Settings → Git →
-GitHub Enterprise hosts**. The editor flags invalid entries before saving
-and writes the list to the profile's `config.toml`:
+operator turns on **Allowed** for each server under **Settings → Git →
+GitHub Enterprise hosts**. The list shows the servers GitHub CLI knows and the
+hosts saved in the profile's `config.toml`. Sign in to other servers in Terminal
+with `gh auth login --hostname <host>`, then click **Re-check**.
 
 ```toml
 [git]
@@ -457,8 +458,13 @@ github_enterprise_hosts = ["github.example.com", "ghe.internal.example:8443"]
 - The key takes effect at the next registration or check; no restart is
   needed. Removing a host stops reads of its waiting runs at once. Those
   waits then end with a failure after 24 hours.
-- Reads use `https://<host>/api/v3` with `gh auth token --hostname <host>`,
-  so the operator must also be signed in to that host with GitHub CLI.
+- Reads use `https://<host>/api/v3` and the active GitHub CLI account by
+  default. Choose a specific account to pin it. The pin is saved separately
+  under `[[git.github_enterprise_accounts]]` as a `host` and `login`. A missing
+  pinned sign-in fails the read. PwrAgent stores only the account name.
+- An unpinned host can use `GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN`
+  when `GH_HOST` names that exact host. Settings identifies an environment
+  token by its variable name.
 - The list authorizes `ci_run` reads only. It does not change automatic
   transcript PR reads, which stay on github.com and gitlab.com.
 

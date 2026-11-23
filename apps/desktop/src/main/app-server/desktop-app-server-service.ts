@@ -9074,7 +9074,7 @@ class DesktopAppServerService {
     const ref = parseCiRunUrl(url, this.ciRunUrlOptions());
     if (!ref || ref.repository.provider !== "github") throw new Error(`Not a GitHub Actions run PwrAgent may read: ${CI_RUN_URL_FORMS}.`);
     const client = this.getForgeCiClient();
-    return await readGithubRunGates(async (repository, path) => await client.requestGithub(repository, { path }), ref, Date.now());
+    return await readGithubRunGates(async (repository, path) => await client.requestGithub(repository, { path, enterpriseCi: true }), ref, Date.now());
   }
 
   /** Lets CI approval cards approve their gates on this owner's GitHub sign-in. */
@@ -9129,7 +9129,7 @@ class DesktopAppServerService {
     const client = this.getForgeCiClient();
     return await readCiRun(async (repository, path) => repository.provider === "gitlab"
       ? await client.readGitlab(repository, path)
-      : await client.requestGithub(repository, { path }), ref, Date.now());
+      : await client.requestGithub(repository, { path, enterpriseCi: true }), ref, Date.now());
   }
 
   private ciRunUrlOptions(): CiRunUrlOptions {

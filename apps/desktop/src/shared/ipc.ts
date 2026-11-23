@@ -901,6 +901,7 @@ export const LAUNCHPAD_ACCESS_NOTICE_READ_CHANNEL =
   "launchpad-access-notice:read";
 export const LAUNCHPAD_ACCESS_NOTICE_DISMISS_CHANNEL =
   "launchpad-access-notice:dismiss";
+export const SETTINGS_DISCOVER_GITHUB_ENTERPRISE_CHANNEL = "settings:discover-github-enterprise";
 export const SETTINGS_READ_CHANNEL = "settings:read";
 export const TOKEN_MISER_READ_USAGE_CHANNEL = "token-miser:read-usage";
 export const SETTINGS_READ_BOOTSTRAP_CHANNEL = "settings:read-bootstrap";

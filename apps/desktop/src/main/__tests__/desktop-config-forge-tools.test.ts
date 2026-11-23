@@ -103,6 +103,34 @@ describe("GitHub Enterprise hosts in settings", () => {
     expect(service.resolveGithubEnterpriseHosts()).toEqual(replacement);
   });
 
+  it("removes one unused entry at a time and saves pins separately from approval", async () => {
+    const { service, configPath } = createService([
+      "[git]",
+      'github_enterprise_hosts = ["ghe.example.com", "*.example.com", "https://example.com"]',
+      "# Keep this comment",
+      "watch_merge_builds = false",
+    ].join("\n"));
+    const original = (await service.readSettingsProjection()).git.githubEnterpriseHosts!;
+    await service.writeConfigPatchTargeted({
+      git: { githubEnterpriseAccounts: [{ host: "ghe.example.com", login: "build-bot" }] },
+    });
+    expect(service.resolveGithubEnterpriseAccount("ghe.example.com")).toBe("build-bot");
+    expect((await service.readSettingsProjection()).git.githubEnterpriseHosts).toEqual(original);
+    expect(fs.readFileSync(configPath, "utf8")).toContain('[[git.github_enterprise_accounts]]');
+    await service.writeConfigPatchTargeted({
+      git: { githubEnterpriseHosts: { hosts: ["ghe.example.com", "*.example.com"], expectedRevision: original.revision } },
+    });
+    const updated = (await service.readSettingsProjection()).git;
+    expect(updated.githubEnterpriseHosts?.value).toEqual(["ghe.example.com", "*.example.com"]);
+    expect(updated.githubEnterpriseAccounts).toEqual([{ host: "ghe.example.com", login: "build-bot" }]);
+    expect(fs.readFileSync(configPath, "utf8")).toContain("# Keep this comment");
+    await service.writeConfigPatchTargeted({
+      git: { githubEnterpriseAccounts: [{ host: "ghe.example.com", login: "" }] },
+    });
+    expect(service.resolveGithubEnterpriseAccount("ghe.example.com")).toBeUndefined();
+    expect((await service.readSettingsProjection()).git.githubEnterpriseHosts).toEqual(updated.githubEnterpriseHosts);
+  });
+
   it("shows ignored entries and updates both the settings snapshot and CI-run config", async () => {
     const rawHosts = ["github.example.com", "*.example.com", "https://github.example.com"];
     const { service } = createService(`[git]\ngithub_enterprise_hosts = ${JSON.stringify(rawHosts)}\n`);

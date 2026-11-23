@@ -11950,122 +11950,113 @@ describe("SettingsScreen", () => {
     expect(desktopApi.readAppUpdateStatus).toHaveBeenCalledTimes(1);
   });
 
-  it("shows ignored GitHub Enterprise hosts and saves only a corrected list", async () => {
-    const settings = createSettingsState();
-    const rawHosts = ["git.example.com:8443", "*.example.com", "https://git.example.com", "git.example.com/path"];
-    const snapshot = settings.snapshot!;
-    settings.snapshot = {
-      ...snapshot,
-      git: { ...snapshot.git, githubEnterpriseHosts: { value: rawHosts, source: "config", revision: "original" } },
-    };
-    render(<SettingsScreen initialSection="git" settings={settings} onClose={() => undefined} />);
-
-    const hosts = screen.getByRole("textbox", { name: "Allowed hosts" });
-    const save = screen.getByRole("button", { name: "Save GitHub Enterprise hosts" });
-    expect(hosts).toHaveValue(rawHosts.join("\n"));
-    expect(hosts).toHaveAttribute("aria-invalid", "true");
-    expect(hosts).toHaveAccessibleDescription(/one per line.*Line 2 \(\*\.example\.com\) uses a wildcard/);
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Line 2 (*.example.com) uses a wildcard. Line 3 (https://git.example.com) is a URL."
-      + " Line 4 (git.example.com/path) includes a path.",
-    );
-    expect(save).toBeDisabled();
-
-    fireEvent.change(hosts, { target: { value: "git.example.com:8443\n\nother.example.com" } });
-    expect(hosts).not.toHaveAttribute("aria-invalid", "true");
-    expect(hosts).toHaveAccessibleDescription(/one per line/);
-    expect(save).toBeEnabled();
-    fireEvent.click(save);
-    await waitFor(() => {
-      expect(settings.writeConfig).toHaveBeenCalledWith({
-        git: { githubEnterpriseHosts: { hosts: ["git.example.com:8443", "other.example.com"], expectedRevision: "original" } },
-      });
-    });
-    // Save disables itself once the draft is saved; focus stays in the field.
-    await waitFor(() => expect(hosts).toHaveFocus());
-  });
-
-  it("reports a GitHub Enterprise host typed into the field only after focus leaves it", () => {
-    const settings = createSettingsState();
-    const snapshot = settings.snapshot!;
-    settings.snapshot = {
-      ...snapshot,
-      git: { ...snapshot.git, githubEnterpriseHosts: { value: [], source: "default", revision: "unset" } },
-    };
-    render(<SettingsScreen initialSection="git" settings={settings} onClose={() => undefined} />);
-    const hosts = screen.getByRole("textbox", { name: "Allowed hosts" });
-    const save = screen.getByRole("button", { name: "Save GitHub Enterprise hosts" });
-
-    act(() => hosts.focus());
-    for (const value of ["g", "github.example.com\nghe", "github.example.com\nghe."]) {
-      fireEvent.change(hosts, { target: { value } });
-      expect(hosts).not.toHaveAttribute("aria-invalid");
-      expect(screen.queryByText(/is not a hostname/)).not.toBeInTheDocument();
-      expect(save).toBeDisabled();
+  describe("GitHub Enterprise hosts", () => {
+    function setup(hosts: string[], options?: { error?: string; login?: string; discoveryMissing?: boolean }) {
+      const settings = createSettingsState();
+      const snapshot = settings.snapshot!;
+      settings.snapshot = {
+        ...snapshot,
+        git: {
+          ...snapshot.git,
+          githubEnterpriseHosts: { value: hosts, source: "config", revision: "saved", error: options?.error },
+          githubEnterpriseAccounts: options?.login === undefined ? [] : [{ host: "ghe.example.com", login: options.login }],
+        },
+      };
+      const discoverGithubEnterpriseAccounts = vi.fn(async () => options?.discoveryMissing
+        ? { state: "missing" as const, servers: [] }
+        : {
+            state: "ready" as const,
+            servers: [{ host: "ghe.example.com", accounts: ["alice", "build-bot"], activeLogin: "alice" }],
+          });
+      render(
+        <SettingsScreen
+          initialSection="git"
+          desktopApi={{ discoverGithubEnterpriseAccounts }}
+          settings={settings}
+          onClose={() => undefined}
+        />,
+      );
+      return { settings, discoverGithubEnterpriseAccounts };
     }
 
-    act(() => hosts.blur());
-    expect(hosts).toHaveAttribute("aria-invalid", "true");
-    expect(hosts).toHaveAccessibleDescription(/Line 2 \(ghe\.\) is not a hostname/);
+    it("lists discovered hosts as opt-in and writes the exact switch without losing focus", async () => {
+      const { settings, discoverGithubEnterpriseAccounts } = setup(["ghe.internal.example", "*.example.com"]);
+      const list = screen.getByRole("list", { name: "GitHub Enterprise hosts" });
+      const control = await within(list).findByRole("switch", { name: "Allow Continue After on ghe.example.com" });
+      expect(control).not.toBeChecked();
+      expect(within(list).getByText(/uses a wildcard/)).toBeInTheDocument();
+      expect(within(list).getByText("gh auth login --hostname ghe.internal.example")).toBeInTheDocument();
+      act(() => control.focus());
+      fireEvent.click(control);
+      await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({
+        git: { githubEnterpriseHosts: { hosts: ["ghe.internal.example", "*.example.com", "ghe.example.com"], expectedRevision: "saved" } },
+      }, expect.any(Function)));
+      expect(control).toHaveFocus();
+      fireEvent.click(within(screen.getByRole("region", { name: "GitHub Enterprise hosts" })).getByRole("button", { name: /^Re-check$/ }));
+      await waitFor(() => expect(discoverGithubEnterpriseAccounts).toHaveBeenCalledTimes(2));
+    });
 
-    act(() => hosts.focus());
-    fireEvent.change(hosts, { target: { value: "github.example.com\nghe.internal.example" } });
-    expect(hosts).not.toHaveAttribute("aria-invalid");
-    expect(save).toBeEnabled();
-  });
+    it("keeps saved hosts and the selected account visible when gh is missing", async () => {
+      setup(["ghe.example.com"], { login: "build-bot", discoveryMissing: true });
+      const section = screen.getByRole("region", { name: "GitHub Enterprise hosts" });
+      expect(await within(section).findByText(/GitHub CLI is unavailable/)).toBeInTheDocument();
+      expect(within(section).getByText("Unknown")).toBeInTheDocument();
+      expect(within(section).getByText(/Pinned account: build-bot/)).toBeInTheDocument();
+      expect(within(section).getByRole("switch")).toBeChecked();
+      expect(within(section).getByRole("button", { name: "Remove ghe.example.com" })).toBeInTheDocument();
+    });
 
-  it("keeps the host draft visible but blocks saving after another window removes a host", () => {
-    const settings = createSettingsState();
-    const snapshot = settings.snapshot!;
-    const renderWithHosts = (value: string[], revision: string) => (
-      <SettingsScreen
-        initialSection="git"
-        settings={{
-          ...settings,
-          snapshot: { ...snapshot, git: { ...snapshot.git, githubEnterpriseHosts: { value, source: "config", revision } } },
-        }}
-        onClose={() => undefined}
-      />
-    );
-    const { rerender } = render(renderWithHosts(["old.example.com", "keep.example.com"], "original"));
-    const hosts = screen.getByRole("textbox", { name: "Allowed hosts" });
-    const save = screen.getByRole("button", { name: "Save GitHub Enterprise hosts" });
-    const edited = "old.example.com\nkeep.example.com\nnew.example.com";
-    fireEvent.change(hosts, { target: { value: edited } });
-    expect(save).toBeEnabled();
+    it("keeps a newly discovered host off when 16 hosts are allowed", async () => {
+      const { settings } = setup(Array.from({ length: 16 }, (_, i) => `ghe${i}.example.com`));
+      const control = await screen.findByRole("switch", { name: "Allow Continue After on ghe.example.com" });
+      expect(control).not.toBeChecked();
+      expect(control).toHaveAttribute("aria-disabled", "true");
+      expect(control).toHaveAccessibleDescription("Turn another host off first");
+      fireEvent.click(control);
+      expect(settings.writeConfig).not.toHaveBeenCalled();
+    });
 
-    rerender(renderWithHosts(["keep.example.com"], "changed"));
-    expect(hosts).toHaveValue(edited);
-    expect(hosts).toHaveAccessibleDescription(/changed while you were editing\. Saved now: keep\.example\.com\./);
-    expect(save).toBeDisabled();
-    expect(settings.writeConfig).not.toHaveBeenCalled();
+    it("shows what a removed pin used and lets the operator use the active account", async () => {
+      const { settings } = setup(["ghe.example.com"], { login: "former-user" });
+      expect(await screen.findByText(/former-user is not signed in/)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Use active account (alice)" }));
+      await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({
+        git: { githubEnterpriseAccounts: [{ host: "ghe.example.com", login: "" }] },
+      }));
+    });
 
-    fireEvent.click(screen.getByRole("button", { name: "Discard GitHub Enterprise host changes" }));
-    expect(hosts).toHaveValue("keep.example.com");
-    expect(hosts).toHaveFocus();
-    expect(settings.refresh).toHaveBeenCalledOnce();
-  });
+    it("lets the operator pin a second account without changing the allowed list", async () => {
+      const { settings } = setup(["ghe.example.com"]);
+      const account = await screen.findByRole("combobox", { name: "GitHub account for ghe.example.com" });
+      expect(account).toHaveTextContent("Active gh account (alice)");
+      chooseSelectOption(account, "build-bot");
+      await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({
+        git: { githubEnterpriseAccounts: [{ host: "ghe.example.com", login: "build-bot" }] },
+      }));
+    });
 
-  it("lets the operator explicitly clear an empty field with malformed saved hosts", async () => {
-    const settings = createSettingsState();
-    const snapshot = settings.snapshot!;
-    settings.snapshot = {
-      ...snapshot,
-      git: { ...snapshot.git, githubEnterpriseHosts: {
-        value: [], source: "config", revision: "malformed", error: "Expected an array of strings.",
-      } },
-    };
-    render(<SettingsScreen initialSection="git" settings={settings} onClose={() => undefined} />);
-    const hosts = screen.getByRole("textbox", { name: "Allowed hosts" });
-    const save = screen.getByRole("button", { name: "Save GitHub Enterprise hosts" });
-    expect(hosts).toHaveValue("");
-    expect(hosts).toHaveAccessibleDescription(/Expected an array of strings/);
-    expect(save).toBeEnabled();
-    fireEvent.click(save);
-    await waitFor(() => {
-      expect(settings.writeConfig).toHaveBeenCalledWith({
-        git: { githubEnterpriseHosts: { hosts: [], expectedRevision: "malformed" } },
+    it("keeps authorization locked until malformed config is explicitly cleared", async () => {
+      const { settings } = setup([], { error: "Expected an array of strings." });
+      const control = await screen.findByRole("switch", { name: "Allow Continue After on ghe.example.com" });
+      expect(control).toHaveAttribute("aria-disabled", "true");
+      expect(screen.getByRole("alert")).toHaveTextContent(/so none are allowed/);
+      fireEvent.click(screen.getByRole("button", { name: "Clear saved hosts" }));
+      await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({
+        git: { githubEnterpriseHosts: { hosts: [], expectedRevision: "saved" } },
+      }, expect.any(Function)));
+    });
+
+    it("reloads on a refused revision and announces that the host must be switched on again", async () => {
+      const { settings } = setup([]);
+      vi.mocked(settings.writeConfig).mockImplementation(async (_patch, onError) => {
+        onError?.("GitHub Enterprise hosts changed while you were editing. Reload the current list before saving.");
+        return false;
       });
+      const control = await screen.findByRole("switch", { name: "Allow Continue After on ghe.example.com" });
+      fireEvent.click(control);
+      expect(await screen.findByRole("alert")).toHaveTextContent(/Turn ghe.example.com on again/);
+      expect(settings.refresh).toHaveBeenCalledOnce();
+      expect(control).not.toBeChecked();
     });
   });
 

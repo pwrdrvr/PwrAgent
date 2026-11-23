@@ -11,7 +11,7 @@ import {
 import { FORGE_KINDS, type ForgeKind } from "@pwragent/shared/forge-product";
 import { type AcpAgentSettingsEntry, type BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { ComponentProps } from "react";
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
@@ -26,16 +26,13 @@ import {
   MIN_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
   type DesktopGithubEnterpriseHostsPatch,
   type DesktopSettingsSnapshot,
+  type GithubEnterpriseAccountPin,
 } from "@pwragent/shared/contracts/settings";
 import {
   DEFAULT_THREAD_TODO_MERGE_METHOD,
   type ThreadTodoMergeMethod,
 } from "@pwragent/shared/contracts/thread-todos";
 import { type GhStatus } from "@pwragent/shared/contracts/navigation";
-import {
-  CI_RUN_MAX_GITHUB_ENTERPRISE_HOSTS,
-  validateGithubEnterpriseHosts,
-} from "@pwragent/shared/github-enterprise-hosts";
 import { Select } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useNavigationSettingsPreview, isNavigationPreviewCancelled } from "../../lib/navigation-settings-preview";
@@ -56,8 +53,7 @@ import {
 } from "./ForgeProjectRules";
 import { decodeForgeRulesRoute, FORGE_AGENT_TOOLS_SECTION_ID } from "./forge-rules-route";
 import { acpAgentEnabledInSnapshot } from "./useAcpAgentCatalog";
-import { useSettingsDraft } from "./useSettingsDraft";
-import { useUnsavedSettingsChanges } from "./UnsavedSettingsChanges";
+import { GithubEnterpriseHostsSettings } from "./GithubEnterpriseHostsSettings";
 
 const DEFAULT_BACKGROUND_PR_POLLING_VALUE = {
   value: DEFAULT_BACKGROUND_PR_POLLING,
@@ -134,7 +130,8 @@ export function GitSettings(props: {
   onPrAutoDispatchAllowedChange: (enabled: boolean) => Promise<void>;
   onDefaultPrAutoDispatchEnabledChange: (enabled: boolean) => Promise<void>;
   onWatchMergeBuildsChange?: (enabled: boolean) => Promise<void>;
-  onGithubEnterpriseHostsChange: (patch: DesktopGithubEnterpriseHostsPatch) => Promise<boolean>;
+  onGithubEnterpriseHostsChange: (patch: DesktopGithubEnterpriseHostsPatch) => Promise<"saved" | "conflict" | "failed">;
+  onGithubEnterpriseAccountChange: (pin: GithubEnterpriseAccountPin) => Promise<boolean>;
   onPrAutoDispatchBudgetCapacityChange: (capacity: number) => Promise<void>;
   onPrAutoDispatchBudgetRefillPerMinuteChange: (
     refillPerMinute: number,
@@ -375,11 +372,14 @@ export function GitSettings(props: {
           {...forgeSections[provider]}
         />
       ))}
-      <GithubEnterpriseHostsSection
+      <GithubEnterpriseHostsSettings
         hosts={props.snapshot.git?.githubEnterpriseHosts}
+        accounts={props.snapshot.git?.githubEnterpriseAccounts}
+        desktopApi={props.desktopApi}
         saving={props.saving}
         onReload={props.onRefresh}
         onSave={props.onGithubEnterpriseHostsChange}
+        onAccountChange={props.onGithubEnterpriseAccountChange}
       />
       <SettingsSection
         eyebrow="Git"
@@ -643,138 +643,6 @@ export function GitSettings(props: {
       </SettingsSection>
     </SettingsSectionStack>
   );
-}
-
-function GithubEnterpriseHostsSection(props: {
-  hosts: DesktopSettingsSnapshot["git"]["githubEnterpriseHosts"];
-  saving: boolean;
-  onReload: () => Promise<void>;
-  onSave: (patch: DesktopGithubEnterpriseHostsPatch) => Promise<boolean>;
-}) {
-  const instructionsId = useId();
-  const errorId = useId();
-  const fieldRef = useRef<HTMLTextAreaElement>(null);
-  // Save disables the field and its own button while it writes, which drops
-  // focus to the page. Return it to the field once the write settles.
-  const refocusRef = useRef(false);
-  const [settledSaves, setSettledSaves] = useState(0);
-  const [focused, setFocused] = useState(false);
-  const [draftRevision, setDraftRevision] = useState<string>();
-  const draft = useSettingsDraft({
-    // Keep a malformed multiline TOML entry on one line so it cannot turn
-    // into two separately authorized hosts when another entry is edited.
-    hosts: props.hosts?.value.map((host) => /[\r\n]/.test(host) ? JSON.stringify(host) : host).join("\n") ?? "",
-  });
-  const { hosts, error } = validateGithubEnterpriseHosts(draft.values.hosts.split("\n"), URL);
-  const savedRevision = props.hosts?.revision;
-  const expectedRevision = draft.dirty ? draftRevision : savedRevision;
-  const conflict = draft.dirty && expectedRevision !== savedRevision;
-  // An entry being typed is not reported as invalid until the operator leaves
-  // the field; a half-typed host would otherwise be announced per keystroke.
-  const entryError = draft.dirty && focused ? undefined : error;
-  const fieldError = conflict ? hostsConflictMessage(props.hosts?.value ?? [])
-    : entryError ?? (draft.dirty ? undefined : props.hosts?.error);
-  const canSave = !props.saving && expectedRevision !== undefined && !conflict && !error
-    && (draft.dirty || !!props.hosts?.error);
-  const save = async (): Promise<boolean> => {
-    if (!canSave || expectedRevision === undefined) return false;
-    if (!await props.onSave({ hosts, expectedRevision })) return false;
-    draft.discard();
-    return true;
-  };
-  useUnsavedSettingsChanges(draft.dirty
-    ? { label: "GitHub Enterprise hosts", save, discard: draft.discard }
-    : undefined);
-  useEffect(() => {
-    if (!refocusRef.current || props.saving) return;
-    refocusRef.current = false;
-    fieldRef.current?.focus();
-  }, [settledSaves, props.saving]);
-
-  return (
-    <SettingsSection
-      eyebrow="GitHub"
-      title="GitHub Enterprise hosts"
-      description="Allow Continue After to read CI runs on these servers using your GitHub CLI sign-in for each host."
-    >
-      <div className="settings-fields">
-        <SettingsField
-          label="Allowed hosts"
-          sub={
-            <span id={instructionsId}>
-              Enter up to {CI_RUN_MAX_GITHUB_ENTERPRISE_HOSTS} exact hostnames, one per line.
-              Include the port if it differs from 443. Leave blank to clear the list.
-            </span>
-          }
-          source={props.hosts ? sourceBadge(props.hosts) : undefined}
-          control={
-            <>
-              <textarea
-                ref={fieldRef}
-                aria-label="Allowed hosts"
-                aria-describedby={fieldError ? `${instructionsId} ${errorId}` : instructionsId}
-                aria-invalid={fieldError ? true : undefined}
-                className="settings-input settings-input--multiline"
-                disabled={props.saving || savedRevision === undefined}
-                placeholder="github.example.com"
-                rows={3}
-                spellCheck={false}
-                value={draft.values.hosts}
-                onBlur={() => setFocused(false)}
-                onChange={(event) => {
-                  if (!draft.dirty) setDraftRevision(savedRevision);
-                  draft.set("hosts", event.currentTarget.value);
-                }}
-                onFocus={() => setFocused(true)}
-              />
-              {fieldError ? (
-                <p className="settings-row__error" id={errorId} role="alert">{fieldError}</p>
-              ) : null}
-            </>
-          }
-          actions={
-            <div className="settings-inline-actions">
-              <button
-                aria-label="Save GitHub Enterprise hosts"
-                className="button button--primary"
-                disabled={!canSave}
-                type="button"
-                onClick={() => {
-                  refocusRef.current = true;
-                  void save().finally(() => setSettledSaves((count) => count + 1));
-                }}
-              >
-                Save
-              </button>
-              {draft.dirty ? (
-                <button
-                  aria-label="Discard GitHub Enterprise host changes"
-                  className="button button--secondary"
-                  disabled={props.saving}
-                  type="button"
-                  onClick={() => {
-                    // This button unmounts with the draft; keep focus in the field.
-                    fieldRef.current?.focus();
-                    draft.discard();
-                    void props.onReload();
-                  }}
-                >
-                  Discard
-                </button>
-              ) : null}
-            </div>
-          }
-        />
-      </div>
-    </SettingsSection>
-  );
-}
-
-function hostsConflictMessage(saved: readonly string[]): string {
-  const now = saved.length === 0 ? "The saved list is now empty."
-    : saved.length > 3 ? `Saved now: ${saved.slice(0, 3).join(", ")} and ${saved.length - 3} more.`
-    : `Saved now: ${saved.join(", ")}.`;
-  return `The saved hosts changed while you were editing. ${now} Discard your changes to load the saved list, then edit it again.`;
 }
 
 function GitActionConfirmation(props: {

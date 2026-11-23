@@ -1,3 +1,4 @@
+import { discoverGithubEnterpriseAccounts } from "../../pr-status/github-enterprise-auth";
 import { addAbortListener } from "node:events";
 import { join } from "node:path";
 import { codexAuthState } from "../../codex-auth-state";
@@ -123,6 +124,7 @@ import {
   SETTINGS_PICK_GLAB_COMMAND_CHANNEL,
   SETTINGS_PICK_GIT_COMMAND_CHANNEL,
   SETTINGS_REFRESH_GIT_DISCOVERY_CHANNEL,
+  SETTINGS_DISCOVER_GITHUB_ENTERPRISE_CHANNEL,
   SETTINGS_READ_CHANNEL,
   SETTINGS_READ_MANAGED_CODEX_TRACK_TAGS_CHANNEL,
   MANAGED_RUNTIME_PROGRESS_READ_CHANNEL,
@@ -1926,6 +1928,11 @@ export function registerSettingsIpcHandlers(
     await getService(service).readTokenMiserUsage(),
   );
 
+  ipcMain.removeHandler(SETTINGS_DISCOVER_GITHUB_ENTERPRISE_CHANNEL);
+  ipcMain.handle(SETTINGS_DISCOVER_GITHUB_ENTERPRISE_CHANNEL, async () =>
+    await discoverGithubEnterpriseAccounts(getService(service).resolveGhCommandPreference()),
+  );
+
   ipcMain.removeHandler(SETTINGS_READ_CHANNEL);
   ipcMain.handle(
     SETTINGS_READ_CHANNEL,
@@ -2732,6 +2739,7 @@ export function disposeSettingsIpcHandlers(): void {
   ipcMain.removeHandler(PROVIDER_CATALOG_REFRESH_READ_CHANNEL);
   ipcMain.removeHandler(ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL);
   ipcMain.removeHandler(TOKEN_MISER_READ_USAGE_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_DISCOVER_GITHUB_ENTERPRISE_CHANNEL);
   ipcMain.removeHandler(SETTINGS_READ_CHANNEL);
   ipcMain.removeHandler(SETTINGS_READ_BOOTSTRAP_CHANNEL);
   ipcMain.removeHandler(SETTINGS_READ_MESSAGING_CHANNEL);

@@ -738,9 +738,17 @@ describe("profile IPC helpers", () => {
       expect(graduate().graduated).toBe(true);
       expect(readProfileConfigFile(targetPath).git?.githubEnterpriseHosts?.value).toEqual(["target.example.com"]);
 
-      fs.appendFileSync(bootstrapPath, 'github_enterprise_hosts = ["staged.example.com"]\n');
+      fs.appendFileSync(bootstrapPath, [
+        'github_enterprise_hosts = ["staged.example.com"]',
+        '[[git.github_enterprise_accounts]]',
+        'host = "staged.example.com"',
+        'login = "build-bot"',
+        "",
+      ].join("\n"));
       expect(graduate().graduated).toBe(true);
-      expect(readProfileConfigFile(targetPath).git?.githubEnterpriseHosts?.value).toEqual(["staged.example.com"]);
+      const config = readProfileConfigFile(targetPath).git;
+      expect(config?.githubEnterpriseHosts?.value).toEqual(["staged.example.com"]);
+      expect(config?.githubEnterpriseAccounts).toEqual([{ host: "staged.example.com", login: "build-bot" }]);
     });
   });
 

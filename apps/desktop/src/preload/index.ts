@@ -531,6 +531,7 @@ import type {
   SetDefaultDesktopPwrAgentProfileResponse,
   StartDesktopCodexAuthProfileLoginRequest,
   StartDesktopCodexAuthProfileLoginResponse,
+  GithubEnterpriseDiscovery,
   WriteDesktopSettingsConfigRequest,
 } from "@pwragent/shared/contracts/settings";
 import type {
@@ -1358,6 +1359,7 @@ import {
   SETTINGS_PICK_GIT_COMMAND_CHANNEL,
   SETTINGS_REFRESH_GIT_DISCOVERY_CHANNEL,
   SETTINGS_MANAGED_GIT_ACTION_CHANNEL,
+  SETTINGS_DISCOVER_GITHUB_ENTERPRISE_CHANNEL,
   SETTINGS_READ_CHANNEL,
   TOKEN_MISER_READ_USAGE_CHANNEL,
   SETTINGS_READ_BOOTSTRAP_CHANNEL,
@@ -2304,6 +2306,8 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL, request),
   readTokenMiserUsage: async (): Promise<DesktopTokenMiserUsage> =>
     await ipcRenderer.invoke(TOKEN_MISER_READ_USAGE_CHANNEL),
+  discoverGithubEnterpriseAccounts: async (): Promise<GithubEnterpriseDiscovery> =>
+    await ipcRenderer.invoke(SETTINGS_DISCOVER_GITHUB_ENTERPRISE_CHANNEL),
   readSettings: async (
     request?: ReadDesktopSettingsRequest,
   ): Promise<ReadDesktopSettingsResponse> =>

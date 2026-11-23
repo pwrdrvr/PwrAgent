@@ -39,7 +39,7 @@ import {
   type CodexModelProviderSettings,
 } from "@pwragent/shared/codex-model-providers";
 import { validateLocalModelIds } from "@pwragent/shared/local-model-pricing";
-import { GITHUB_ENTERPRISE_HOSTS_CONFLICT, validateGithubEnterpriseHosts } from "@pwragent/shared/github-enterprise-hosts";
+import { GITHUB_ENTERPRISE_HOSTS_CONFLICT, isGithubEnterpriseLogin, mergeGithubEnterpriseHosts, normalizeGithubEnterpriseHost, validateGithubEnterpriseHosts } from "@pwragent/shared/github-enterprise-hosts";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { validateCodexConfigOverrides } from "./codex-config-overrides";
@@ -61,6 +61,7 @@ import type {
   DesktopOpenAIDecisionsSettings,
   DesktopFederationMode,
   DesktopGithubEnterpriseHostsSetting,
+  GithubEnterpriseAccountPin,
   DesktopHotCpuProfileStartDelayMs,
   DesktopHotCpuProfileTriggerMode,
   DesktopIntegratedTerminalWindowsShell,
@@ -446,6 +447,7 @@ export type DesktopSettingsConfig = {
      * agent-supplied CI run URL may name. Keep invalid strings for Settings.
      */
     githubEnterpriseHosts?: DesktopGithubEnterpriseHostsSetting;
+    githubEnterpriseAccounts?: GithubEnterpriseAccountPin[];
     agentTools?: {
       enabled?: boolean;
       access?: Partial<Record<ForgeAgentToolGroup, ForgeAgentToolAccess>>;
@@ -2329,22 +2331,7 @@ export function desktopSettingsPatchToEdits(
   if (patch.git?.watchMergeBuilds !== undefined) {
     set(["git", "watch_merge_builds"], patch.git.watchMergeBuilds);
   }
-  if (patch.git?.githubEnterpriseHosts !== undefined) {
-    const update = patch.git.githubEnterpriseHosts;
-    if (!Array.isArray(update?.hosts)) {
-      throw new Error("GitHub Enterprise hosts must be a list of hostnames.");
-    }
-    const current = currentTables.git?.github_enterprise_hosts;
-    if (readGithubEnterpriseHostsSetting(current).revision !== update.expectedRevision) {
-      throw new Error(GITHUB_ENTERPRISE_HOSTS_CONFLICT);
-    }
-    const { hosts, error } = validateGithubEnterpriseHosts(update.hosts, URL);
-    if (error) throw new Error(error);
-    if (Array.isArray(current) && current.some((entry) => typeof entry !== "string")) {
-      edits.push({ op: "deleteTableArray", path: ["git", "github_enterprise_hosts"] });
-    }
-    set(["git", "github_enterprise_hosts"], hosts);
-  }
+  if (patch.git) edits.push(...githubEnterpriseSettingsEdits(patch.git, currentTables.git ?? {}));
   if (patch.git?.prAutoDispatchBudgetCapacity !== undefined) {
     set(
       ["git", "pr_auto_dispatch_budget_capacity"],
@@ -3021,6 +3008,7 @@ function normalizeDesktopConfig(
       ),
       defaultMergeMethod: readMergeMethod(git?.default_merge_method),
       githubEnterpriseHosts: readGithubEnterpriseHostsSetting(git?.github_enterprise_hosts),
+      githubEnterpriseAccounts: readGithubEnterpriseAccounts(git?.github_enterprise_accounts),
       agentTools: {
         enabled: readBoolean(gitAgentTools?.enabled),
         access: readForgeAgentToolAccess(gitAgentTools),
@@ -4029,6 +4017,75 @@ export const DEFAULT_GITHUB_ENTERPRISE_HOSTS: DesktopGithubEnterpriseHostsSettin
   source: "default",
   revision: "unset",
 };
+
+function githubEnterpriseSettingsEdits(
+  git: NonNullable<DesktopSettingsConfigPatch["git"]>,
+  current: TomlTables[string],
+): TomlEdit[] {
+  const edits: TomlEdit[] = [];
+  if (git.githubEnterpriseHosts !== undefined) {
+    const update = git.githubEnterpriseHosts;
+    if (!Array.isArray(update?.hosts)) {
+      throw new Error("GitHub Enterprise hosts must be a list of hostnames.");
+    }
+    const raw = current.github_enterprise_hosts;
+    const saved = readGithubEnterpriseHostsSetting(raw);
+    if (saved.revision !== update.expectedRevision) {
+      throw new Error(GITHUB_ENTERPRISE_HOSTS_CONFLICT);
+    }
+    const { hosts, error } = validateGithubEnterpriseHosts(update.hosts, URL);
+    const before = mergeGithubEnterpriseHosts(saved.value, [], URL);
+    const after = mergeGithubEnterpriseHosts(update.hosts, [], URL);
+    // Removing one bad row must preserve every other hand-edited entry.
+    // Only previously ignored entries can survive a write.
+    const retained = before.unused.map(({ entry }) => entry);
+    for (const { entry } of after.unused) {
+      const index = retained.indexOf(entry);
+      if (index < 0) throw new Error(error ?? "Only previously saved unused entries may remain.");
+      retained.splice(index, 1);
+    }
+    if (before.unused.some(({ overflowHost }) => overflowHost
+      && after.servers.some((server) => server.host === overflowHost && server.allowed))) {
+      throw new Error("Remove the unused hosts before changing the allowed hosts.");
+    }
+    if (Array.isArray(raw) && raw.some((entry) => typeof entry !== "string")) {
+      edits.push({ op: "deleteTableArray", path: ["git", "github_enterprise_hosts"] });
+    }
+    edits.push({
+      op: "set", path: ["git", "github_enterprise_hosts"],
+      value: after.unused.length ? update.hosts : hosts,
+    });
+  }
+  if (git.githubEnterpriseAccounts?.length) {
+    const pins = new Map(readGithubEnterpriseAccounts(current.github_enterprise_accounts)
+      .map((pin) => [pin.host, pin]));
+    for (const { host, login } of git.githubEnterpriseAccounts) {
+      if (!host || normalizeGithubEnterpriseHost(host) !== host || URL.parse(`https://${host}`)?.host !== host
+        || (login !== "" && !isGithubEnterpriseLogin(login))) {
+        throw new Error("Choose an account for an exact GitHub Enterprise hostname.");
+      }
+      if (login) pins.set(host, { host, login });
+      else pins.delete(host);
+    }
+    const path = ["git", "github_enterprise_accounts"];
+    edits.push({ op: "delete", path });
+    edits.push({ op: "setTableArray", path, value: [...pins.values()], identityKey: "host" });
+  }
+  return edits;
+}
+
+function readGithubEnterpriseAccounts(raw: TomlScalar | undefined): GithubEnterpriseAccountPin[] {
+  if (!Array.isArray(raw)) return [];
+  const pins = new Map<string, GithubEnterpriseAccountPin>();
+  for (const entry of raw) {
+    if (typeof entry !== "object") continue;
+    const host = normalizeGithubEnterpriseHost(entry.host);
+    if (!host) continue;
+    // An incomplete pin remains unusable until the operator clears it.
+    pins.set(host, { host, login: typeof entry.login === "string" ? entry.login : "" });
+  }
+  return [...pins.values()];
+}
 
 function readGithubEnterpriseHostsSetting(raw: TomlScalar | undefined): DesktopGithubEnterpriseHostsSetting {
   if (raw === undefined) return DEFAULT_GITHUB_ENTERPRISE_HOSTS;

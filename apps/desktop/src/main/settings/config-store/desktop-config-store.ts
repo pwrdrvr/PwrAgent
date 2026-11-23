@@ -1,3 +1,4 @@
+import { GITHUB_ENTERPRISE_HOSTS_CONFLICT } from "@pwragent/shared/github-enterprise-hosts";
 import type {
   DesktopSettingsConfigPatch,
   DesktopSettingsSecretName,
@@ -271,7 +272,15 @@ export class DesktopConfigStore {
     returnDomains: readonly K[],
   ): ConfigUpdateResult<K> {
     const previous = this.snapshot;
-    const written = writeRawConfigPatch(this.options.configPath, patch);
+    let written: ReturnType<typeof writeRawConfigPatch>;
+    try {
+      written = writeRawConfigPatch(this.options.configPath, patch);
+    } catch (error) {
+      if (error instanceof Error && error.message === GITHUB_ENTERPRISE_HOSTS_CONFLICT) {
+        this.reloadFromDisk("watch");
+      }
+      throw error;
+    }
     const observation = parseRawConfigText(
       written.text,
       this.options.configPath,

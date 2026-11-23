@@ -1,3 +1,4 @@
+import { isGithubEnterpriseLogin, normalizeGithubEnterpriseHost } from "@pwragent/shared/github-enterprise-hosts";
 import type { DesktopSettingsConfigPatch } from "@pwragent/shared/contracts/settings";
 import {
   DEFAULT_GITHUB_ENTERPRISE_HOSTS,
@@ -31,13 +32,22 @@ export function writeBootstrapConfigToProfile(
   configPath: string,
   config: DesktopSettingsConfig,
 ): void {
-  const { githubEnterpriseHosts, ...git } = config.git ?? {};
+  const { githubEnterpriseHosts, githubEnterpriseAccounts, ...git } = config.git ?? {};
   const patch: DesktopSettingsConfigPatch = { ...config, git };
   if (githubEnterpriseHosts?.source === "config" && !githubEnterpriseHosts.error) {
     // The bootstrap projection describes a different file. Use the
     // destination's revision so a concurrent edit there is still protected.
     const current = readDesktopSettingsConfig(configPath).git?.githubEnterpriseHosts ?? DEFAULT_GITHUB_ENTERPRISE_HOSTS;
-    patch.git = { ...git, githubEnterpriseHosts: { hosts: githubEnterpriseHosts.value, expectedRevision: current.revision } };
+    const allowed = githubEnterpriseHosts.value.map(normalizeGithubEnterpriseHost);
+    const accounts = githubEnterpriseAccounts?.filter((pin) => allowed.includes(pin.host));
+    if (accounts?.some((pin) => !isGithubEnterpriseLogin(pin.login))) {
+      throw new Error("Resolve the invalid pinned GitHub Enterprise account before copying the bootstrap settings.");
+    }
+    patch.git = {
+      ...git,
+      githubEnterpriseHosts: { hosts: githubEnterpriseHosts.value, expectedRevision: current.revision },
+      githubEnterpriseAccounts: accounts,
+    };
   }
   applyDesktopSettingsPatch(configPath, patch, { omitUnacknowledgedProviderEnables: true });
 }

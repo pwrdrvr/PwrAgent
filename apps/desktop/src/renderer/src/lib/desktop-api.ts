@@ -645,6 +645,7 @@ import type {
   SetDefaultDesktopPwrAgentProfileResponse,
   StartDesktopCodexAuthProfileLoginRequest,
   StartDesktopCodexAuthProfileLoginResponse,
+  GithubEnterpriseDiscovery,
   WriteDesktopSettingsConfigRequest,
 } from "@pwragent/shared/contracts/settings";
 import type {
@@ -1669,6 +1670,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
     request: AcknowledgeAcpAgentUpdateRequest,
   ) => Promise<AcknowledgeAcpAgentUpdateResponse>;
   readTokenMiserUsage?: () => Promise<DesktopTokenMiserUsage>;
+  discoverGithubEnterpriseAccounts?: () => Promise<GithubEnterpriseDiscovery>;
   readSettings?: (
     request?: ReadDesktopSettingsRequest
   ) => Promise<ReadDesktopSettingsResponse>;

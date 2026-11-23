@@ -1869,6 +1869,7 @@ export class DesktopSettingsService {
           DEFAULT_WATCH_MERGE_BUILDS,
         ),
         githubEnterpriseHosts: config.git?.githubEnterpriseHosts ?? DEFAULT_GITHUB_ENTERPRISE_HOSTS,
+        githubEnterpriseAccounts: config.git?.githubEnterpriseAccounts ?? [],
         prAutoDispatchBudgetCapacity: this.resolvePrAutoDispatchBudgetNumber(
           config.git?.prAutoDispatchBudgetCapacity,
           DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
@@ -2536,6 +2537,11 @@ export class DesktopSettingsService {
   resolveGithubEnterpriseHosts(): string[] {
     return this.configStore.read("git")?.githubEnterpriseHosts?.value ?? [];
   }
+
+  resolveGithubEnterpriseAccount(host: string): string | undefined {
+    return this.configStore.read("git")?.githubEnterpriseAccounts?.find((account) => account.host === host)?.login;
+  }
+
 
   /** `[git] watch_merge_builds`: arm a merge build watch when a thread's PR merges. */
   resolveWatchMergeBuilds(): boolean {
