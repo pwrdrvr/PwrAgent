@@ -546,10 +546,12 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         port: bindPortFromCallbackUrl(options.config.callbackBaseUrl),
         hmacSecret:
           options.config.callbackHmacSecret ?? generateMattermostHmacSecret(),
-        handler: (body, rawBody) =>
-          this.handleInteractiveCallback(body, rawBody),
-        slashCommandHandler: (body, rawBody) =>
-          this.handleSlashCommand(body, rawBody),
+        handler: (body, rawBody, receivedAt) =>
+          this.handleInteractiveCallback(body, rawBody, receivedAt),
+        slashCommandHandler: (body, rawBody, receivedAt) =>
+          this.handleSlashCommand(body, rawBody, receivedAt),
+        now: () => this.now(),
+        onValidationRejected: (event) => this.emitInboundRejected(event),
         validSlashCommandTokens: this.slashCommandTokens,
         logger: this.logger,
       });
@@ -1005,13 +1007,25 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     title: string;
     updatedAt: number;
   }> {
-    const channelId = request.channel.conversation.id;
+    const conversation = request.channel.conversation;
     const header = clampHeader(request.title);
+    if (!this.supportsConversationTitle(request)) {
+      return {
+        channel: this.channel,
+        conversation,
+        errorMessage: "Mattermost name sync needs a top-level channel or DM.",
+        outcome: "unsupported",
+        title: header,
+        updatedAt: this.now(),
+      };
+    }
+
+    const channelId = conversation.id;
     try {
       await this.client.patchChannel(channelId, { header });
       return {
         channel: this.channel,
-        conversation: request.channel.conversation,
+        conversation,
         outcome: "updated",
         title: header,
         updatedAt: this.now(),
@@ -1024,7 +1038,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       });
       return {
         channel: this.channel,
-        conversation: request.channel.conversation,
+        conversation,
         outcome: "failed",
         title: header,
         updatedAt: this.now(),
@@ -1034,9 +1048,13 @@ export class MattermostAdapter implements MattermostProviderAdapter {
   }
 
   supportsConversationTitle(
-    _request: MessagingConversationTitleSupportRequest,
+    request: MessagingConversationTitleSupportRequest,
   ): boolean {
-    return true;
+    const conversation = request.channel.conversation;
+    // A reply shares its channel ID. A root post ID still makes this a
+    // thread target on legacy references that carry kind "channel".
+    return (conversation.kind === "channel" || conversation.kind === "dm")
+      && !conversation.parentId;
   }
 
   // -------------------------------------------------------------
@@ -1363,8 +1381,9 @@ export class MattermostAdapter implements MattermostProviderAdapter {
   private async handleInteractiveCallback(
     body: MattermostInteractiveCallbackBody,
     rawBody: string,
+    receivedAt = this.now(),
   ): Promise<MattermostCallbackHandlerResult | void> {
-    const receipt = captureMessagingInboundReceipt(this.now());
+    const receipt = captureMessagingInboundReceipt(receivedAt);
     if (!this.listener) {
       return;
     }
@@ -1509,9 +1528,11 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       return;
     }
     if (!resolvedHandle) {
-      this.logger.warn("mattermost callback handle unknown or expired", {
-        handle,
-        actorId: body.user_id,
+      this.logger.warn("mattermost callback handle unknown or expired", {});
+      this.emitInboundRejected({
+        kind: "validation",
+        reason: "callback-handle-unavailable",
+        receivedAt,
       });
       return;
     }
@@ -1673,8 +1694,9 @@ export class MattermostAdapter implements MattermostProviderAdapter {
   private async handleSlashCommand(
     body: MattermostSlashCommandBody,
     rawBody: string,
+    receivedAt = this.now(),
   ): Promise<MattermostSlashCommandResult | void> {
-    const receipt = captureMessagingInboundReceipt(this.now());
+    const receipt = captureMessagingInboundReceipt(receivedAt);
     void rawBody;
     if (!this.listener) {
       return;

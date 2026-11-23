@@ -3,6 +3,7 @@ import {
   isThreadSubAgentVisibleInPanel,
 } from "@pwragent/shared/subagent-visibility";
 import { isTokenMiserSubAgent, subAgentLens, type SubAgentLens } from "@pwragent/shared/subagent-kind";
+import { taskMonitorDisplayTitle } from "@pwragent/shared/task-monitor-display-title";
 import { totalTokenMiserGateAccountings } from "@pwragent/shared/token-miser-savings-summary";
 import {
   type ThreadSubAgentSummary,
@@ -76,6 +77,26 @@ describe("thread sub-agent table", () => {
     cleanups.push(() => stateDb.close());
     return { dbPath: temp.dbPath, stateDb, store: new SqliteOverlayStore(stateDb) };
   }
+
+  it("reopens with the exact saved monitor title and the original task", async () => {
+    const { dbPath, stateDb, store } = openStore();
+    const parent = { backend: "codex" as const, threadId: "monitor-parent" };
+    const task = "Monitor PR #753 CI after pushing commit a40f3deeae808a1129ef59b07c3ffc33913ba4ca.";
+    const saved = card(1, { monitorId: "monitor-saved", task, displayTitle: "Stored CI title" });
+    const old = card(2, { monitorId: "monitor-old", task });
+    await store.upsertThreadSubAgents({ ...parent, subAgents: [saved, old] });
+    stateDb.close();
+
+    const reopened = StateDb.open(dbPath);
+    cleanups.push(() => reopened.close());
+    const loaded = new SqliteOverlayStore(reopened);
+    const savedCard = await loaded.getThreadSubAgent({ ...parent, monitorId: saved.monitorId });
+    const oldCard = await loaded.getThreadSubAgent({ ...parent, monitorId: old.monitorId });
+    expect(savedCard).toEqual(saved);
+    expect(oldCard).toEqual(old);
+    expect(savedCard && taskMonitorDisplayTitle(savedCard)).toBe("Stored CI title");
+    expect(oldCard && taskMonitorDisplayTitle(oldCard)).toBe("PR 753 CI");
+  });
 
   it("reads ended monitors by completion time without sampling unrelated card history", async () => {
     const { store } = openStore();

@@ -37,6 +37,7 @@ import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import { resolvePrimaryThreadRepoKey } from "../pr-status/primary-thread-repository";
 import { PR_METADATA_PRIORITY, type PrMetadataDemand } from "../pr-status/pr-metadata-process";
 import { boundThreadPendingWakes } from "./thread-pending-wakes";
+import { resolveScratchProjectsRoots } from "./scratch-projects";
 
 /** The most records one selected-collection page holds, before the byte budget. */
 const SELECTED_COLLECTION_PAGE_RECORDS = 100;
@@ -99,17 +100,17 @@ function boundActiveSubAgents(cards: readonly ThreadSubAgentSummary[], maxBytes:
   moreInPanel: boolean;
 } {
   const projected = projectActiveThreadSubAgents(cards.toSorted(compareComposerSubAgents));
-  const rows: ThreadActiveSubAgent[] = [];
+  const admitted: Array<{ preview: ThreadActiveSubAgent; displayTitle?: string }> = [];
   let addedBytes = 0;
   let omittedLive = false;
-  for (const row of projected) {
+  for (const { displayTitle, ...row } of projected) {
     const failed = isFailedSubAgent(row);
-    if (rows.length >= ACTIVE_SUB_AGENT_PREVIEW_ROWS || (failed && omittedLive)) break;
+    if (admitted.length >= ACTIVE_SUB_AGENT_PREVIEW_ROWS || (failed && omittedLive)) break;
     const task = row.task.length > ACTIVE_SUB_AGENT_TASK_PREVIEW_CHARS
       ? `${row.task.slice(0, ACTIVE_SUB_AGENT_TASK_PREVIEW_CHARS - 1).replace(/[\uD800-\uDBFF]$/u, "")}…`
       : row.task;
     const preview = { ...row, task };
-    const separatorBytes = Number(rows.length > 0);
+    const separatorBytes = Number(admitted.length > 0);
     const available = maxBytes - addedBytes - separatorBytes;
     let size = responseBytes(preview);
     if (size > available) {
@@ -122,9 +123,18 @@ function boundActiveSubAgents(cards: readonly ThreadSubAgentSummary[], maxBytes:
       preview.task = fitSubAgentTask(task, available - withoutTask);
       size = responseBytes(preview);
     }
-    rows.push(preview);
+    admitted.push({ preview, displayTitle });
     addedBytes += size + separatorBytes;
   }
+  // Spend only the remaining budget on display titles. A title on one row
+  // must never displace another row's action or take bytes from its task.
+  const rows = admitted.map(({ preview, displayTitle }) => {
+    if (!displayTitle) return preview;
+    const extraBytes = responseBytes({ displayTitle }) - 1; // Drop two braces, add a comma.
+    if (addedBytes + extraBytes > maxBytes) return preview;
+    addedBytes += extraBytes;
+    return { ...preview, displayTitle };
+  });
   const incomplete = rows.length < projected.length;
   if (!incomplete) return { rows, addedBytes, incomplete, moreInPanel: false };
   const shownIds = new Set(rows.map((row) => row.monitorId));
@@ -403,6 +413,7 @@ export class NavigationDetailService {
       thread: summary,
       messagingBindingsByThreadKey,
       queuedExecutionMode: this.registry.getQueuedExecutionModeForThread(request.ref),
+      workspaceRoots: resolveScratchProjectsRoots(),
     });
     const canonical = projected
       ? await this.registry.canonicalizeNavigationThreadPullRequests([projected], prDemand) : [];

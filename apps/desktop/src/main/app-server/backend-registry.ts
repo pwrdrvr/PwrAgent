@@ -8758,8 +8758,9 @@ export class DesktopBackendRegistry {
     const executionMode = request.executionMode ?? "default";
     const modeSettings = executionModeSettings(executionMode);
     const modelSettings = await this.admitNewThreadModelSettings(backend, request);
-    const directoryKind =
-      request.directoryKind ?? (request.directoryPath?.trim() ? "directory" : "workspace");
+    const directoryKind = request.directoryPath?.trim()
+      ? request.directoryKind ?? "directory"
+      : "workspace";
     const directoryLabel =
       request.directoryLabel?.trim() ||
       (request.directoryPath ? path.basename(request.directoryPath) : undefined) ||

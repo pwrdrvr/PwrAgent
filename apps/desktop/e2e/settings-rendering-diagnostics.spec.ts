@@ -95,8 +95,9 @@ test("Troubleshooting persists the Chromium trace opt-in independently of Start 
     const slowburn = rules.getByRole("checkbox", { name: "Slow burn", exact: true });
     await slowburn.click();
     await expect(slowburn).toBeChecked();
-    // Drive the renderer that owns this Settings page. Native window order
-    // and competing CPU samples vary between CI runs.
+    // Target the renderer that owns this Settings page. Keep every other
+    // process idle so a main-process Slow burn notice cannot cover the
+    // renderer's capture notice.
     const nativeWindow = await app.electronApp.browserWindow(page);
     const rendererPid = await nativeWindow.evaluate((window) => window.webContents.getOSProcessId());
     const hasRendererMetric = await app.electronApp.evaluate(({ app: electronApp }, pid) => {

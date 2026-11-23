@@ -343,3 +343,40 @@ it("does not narrow discovery during an unscoped refresh, and Git paths cross ba
     expect(queries.getSnapshot().resources.get("group-0")?.state.page?.countsRevision).toBe("0");
   } finally { queries.dispose(); }
 });
+
+it.each(["legacy notice", "failed read", "stream gap", "reopen"])("recovers a pending relationship refresh after a %s", async (scenario) => {
+  const target = { scope: "remote", instanceId: "owner" } as const;
+  const remoteRequest: NavigationQueryRequest = { ...request(0), inventory: "owner", federationTarget: target };
+  const ownerPage = (revision: string) => expandNavigationRemoteOwner({ ...page(remoteRequest, revision),
+    remoteOwner: { instanceId: target.instanceId, instanceLabel: "Owner" } });
+  const read = vi.fn(async () => ownerPage("initial"));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  let finish: () => void = () => undefined;
+  try {
+    queries.setDemand(new Map([["group-0", remoteRequest]]));
+    await until(() => idle(queries));
+    read.mockClear();
+    read.mockImplementation(async () => ownerPage("recovered"));
+    read.mockImplementationOnce(() => new Promise((resolve, reject) => {
+      finish = () => scenario === "failed read" ? reject(new Error("owner request dropped")) : resolve(ownerPage("overtaken"));
+    }));
+    const notice = (sourceMethod: string, extra?: { worktreePath: string }): AgentEvent => ({ backend: "codex", federationTarget: target,
+      notification: { method: "navigation/invalidated", params: { sourceMethod, ...extra } } });
+    queries.invalidate(undefined, [target], notice("navigation/threadDirectories/updated"));
+    const refreshing = queries.refresh(undefined, [target], true);
+    await until(() => read.mock.calls.length === 1);
+    queries.invalidate(undefined, [target], notice("navigation/threadGitWorkingState/updated",
+      scenario === "legacy notice" ? undefined : { worktreePath: "/unrelated" }));
+    if (scenario === "stream gap") queries.invalidate(undefined, [target], { backend: "codex", federationTarget: target,
+      notification: { method: "federation/eventStream/changed", params: { instanceId: target.instanceId, epoch: "reconnected" } } });
+    if (scenario === "reopen") {
+      queries.setVisible(false);
+      queries.setVisible(true);
+    }
+    finish();
+    await refreshing;
+    await until(() => idle(queries));
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(queries.getSnapshot().resources.get("group-0")?.state).toMatchObject({ page: { countsRevision: "recovered" }, stale: false });
+  } finally { finish(); queries.dispose(); }
+});

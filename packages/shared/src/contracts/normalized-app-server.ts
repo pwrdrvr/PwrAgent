@@ -392,6 +392,8 @@ export type LinkedDirectorySummary = {
    * Absent on legacy entries, which retain their existing cleanup behavior.
    */
   worktreeOwnership?: "external";
+  /** Scratch root identified by the thread's owning profile during navigation projection. */
+  scratchWorkspaceRoot?: string;
   /** Best-effort branch observed for this linked directory/worktree. */
   gitBranch?: string;
   kind: "local" | "worktree";

@@ -124,6 +124,7 @@ export function buildBindingStatusIntent(params: {
   allowFullAccessEscalation?: boolean;
   backendSummary?: BackendSummary;
   binding: MessagingBindingRecord;
+  canSyncName?: boolean;
   capabilityProfile?: MessagingCapabilityProfile;
   contextUsageSummary?: string;
   createdAt: number;
@@ -295,6 +296,7 @@ export function buildBindingStatusIntent(params: {
     actions: buildStatusActions({
       activeTurn,
       binding: params.binding,
+      canSyncName: params.canSyncName,
       capabilityProfile: params.capabilityProfile,
       allowFullAccessEscalation: params.allowFullAccessEscalation,
       fastMode,
@@ -600,6 +602,7 @@ function buildStatusActions(params: {
   activeTurn?: MessagingResolvedThreadState["activeTurn"];
   allowFullAccessEscalation?: boolean;
   binding: MessagingBindingRecord;
+  canSyncName?: boolean;
   capabilityProfile?: MessagingCapabilityProfile;
   fastMode: boolean | undefined;
   speed?: string;
@@ -729,13 +732,17 @@ function buildStatusActions(params: {
       fallbackText: "compact",
       priority: 12,
     },
-    {
-      id: "status:sync-name",
-      label: "Sync name",
-      style: "secondary",
-      fallbackText: "sync name",
-      priority: 13,
-    },
+    ...(params.canSyncName
+      ? [
+          {
+            id: "status:sync-name",
+            label: "Sync name",
+            style: "secondary" as const,
+            fallbackText: "sync name",
+            priority: 13,
+          },
+        ]
+      : []),
     {
       id: "status:skills",
       label: "Skills",

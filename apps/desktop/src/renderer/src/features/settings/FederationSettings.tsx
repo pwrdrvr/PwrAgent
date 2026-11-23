@@ -2100,6 +2100,7 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   thread_display_bulk_reads: "",
   turn_assistant_reply: "read a turn's reply images",
   thread_pr_watch_control_v1: "stop and start PR watches",
+  thread_pull_request_merge_v1: "merge pull requests",
   thread_dependencies_v1: "manage Continue After waits",
   // Keeping a contact's attribution is negotiation, not a remote action.
   thread_dependency_provenance_v1: "",
