@@ -39,7 +39,8 @@ import {
   type CodexModelProviderSettings,
 } from "@pwragent/shared/codex-model-providers";
 import { validateLocalModelIds } from "@pwragent/shared/local-model-pricing";
-import { validateGithubEnterpriseHosts } from "@pwragent/shared/github-enterprise-hosts";
+import { GITHUB_ENTERPRISE_HOSTS_CONFLICT, validateGithubEnterpriseHosts } from "@pwragent/shared/github-enterprise-hosts";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { validateCodexConfigOverrides } from "./codex-config-overrides";
 import { requireMessagingSafetyAcknowledgment } from "./messaging-safety";
@@ -59,6 +60,7 @@ import type {
   DesktopContextMoonStyle,
   DesktopOpenAIDecisionsSettings,
   DesktopFederationMode,
+  DesktopGithubEnterpriseHostsSetting,
   DesktopHotCpuProfileStartDelayMs,
   DesktopHotCpuProfileTriggerMode,
   DesktopIntegratedTerminalWindowsShell,
@@ -443,7 +445,7 @@ export type DesktopSettingsConfig = {
      * `[git] github_enterprise_hosts`: exact GitHub Enterprise hostnames an
      * agent-supplied CI run URL may name. Keep invalid strings for Settings.
      */
-    githubEnterpriseHosts?: string[];
+    githubEnterpriseHosts?: DesktopGithubEnterpriseHostsSetting;
     agentTools?: {
       enabled?: boolean;
       access?: Partial<Record<ForgeAgentToolGroup, ForgeAgentToolAccess>>;
@@ -658,7 +660,7 @@ export function applyDesktopSettingsPatch(
   const source = fs.existsSync(configPath)
     ? fs.readFileSync(configPath, "utf8")
     : "";
-  const tables = parseTomlTables(source, configPath, { retainUnsupportedValuePaths: ["messaging.telegram.connections"] });
+  const tables = parseTomlTables(source, configPath, { retainUnsupportedValuePaths: RETAIN_UNSUPPORTED_CONFIG_VALUES });
   const edits = desktopSettingsPatchToEdits(patch, tables);
   if (edits.length === 0) {
     return { changed: false, text: source };
@@ -2328,11 +2330,19 @@ export function desktopSettingsPatchToEdits(
     set(["git", "watch_merge_builds"], patch.git.watchMergeBuilds);
   }
   if (patch.git?.githubEnterpriseHosts !== undefined) {
-    if (!Array.isArray(patch.git.githubEnterpriseHosts)) {
+    const update = patch.git.githubEnterpriseHosts;
+    if (!Array.isArray(update?.hosts)) {
       throw new Error("GitHub Enterprise hosts must be a list of hostnames.");
     }
-    const { hosts, error } = validateGithubEnterpriseHosts(patch.git.githubEnterpriseHosts, URL);
+    const current = currentTables.git?.github_enterprise_hosts;
+    if (readGithubEnterpriseHostsSetting(current).revision !== update.expectedRevision) {
+      throw new Error(GITHUB_ENTERPRISE_HOSTS_CONFLICT);
+    }
+    const { hosts, error } = validateGithubEnterpriseHosts(update.hosts, URL);
     if (error) throw new Error(error);
+    if (Array.isArray(current) && current.some((entry) => typeof entry !== "string")) {
+      edits.push({ op: "deleteTableArray", path: ["git", "github_enterprise_hosts"] });
+    }
     set(["git", "github_enterprise_hosts"], hosts);
   }
   if (patch.git?.prAutoDispatchBudgetCapacity !== undefined) {
@@ -2480,12 +2490,14 @@ function worktreeFolderEdits(
   return edits;
 }
 
+const RETAIN_UNSUPPORTED_CONFIG_VALUES = ["messaging.telegram.connections", "git.github_enterprise_hosts"];
+
 export function parseDesktopSettingsToml(
   contents: string,
   filePath: string,
 ): DesktopSettingsConfig {
   return normalizeDesktopConfig(parseTomlTables(contents, filePath, {
-    retainUnsupportedValuePaths: ["messaging.telegram.connections"],
+    retainUnsupportedValuePaths: RETAIN_UNSUPPORTED_CONFIG_VALUES,
     requiredValuePaths: ["models.codex.config_overrides", "models.codex.local_model_ids", "research.harness.command", "research.harness.args", "research.harness.endpoint", "research.harness.model", "research.harness.api_key_env"],
   }));
 }
@@ -3008,7 +3020,7 @@ function normalizeDesktopConfig(
         git?.pause_pr_auto_dispatch_when_budget_empty,
       ),
       defaultMergeMethod: readMergeMethod(git?.default_merge_method),
-      githubEnterpriseHosts: readStringArray(git?.github_enterprise_hosts),
+      githubEnterpriseHosts: readGithubEnterpriseHostsSetting(git?.github_enterprise_hosts),
       agentTools: {
         enabled: readBoolean(gitAgentTools?.enabled),
         access: readForgeAgentToolAccess(gitAgentTools),
@@ -4010,6 +4022,25 @@ function readStringArray(value: TomlScalar | undefined): string[] | undefined {
     return undefined;
   }
   return value.map((item) => item.trim()).filter(Boolean);
+}
+
+export const DEFAULT_GITHUB_ENTERPRISE_HOSTS: DesktopGithubEnterpriseHostsSetting = {
+  value: [],
+  source: "default",
+  revision: "unset",
+};
+
+function readGithubEnterpriseHostsSetting(raw: TomlScalar | undefined): DesktopGithubEnterpriseHostsSetting {
+  if (raw === undefined) return DEFAULT_GITHUB_ENTERPRISE_HOSTS;
+  const value = readStringArray(raw);
+  return {
+    value: value ?? [],
+    source: "config",
+    revision: createHash("sha256").update(JSON.stringify(raw)).digest("hex"),
+    ...(value === undefined
+      ? { error: "GitHub Enterprise hosts must be an array of strings in config.toml. Enter a replacement list or save an empty list to clear it." }
+      : {}),
+  };
 }
 
 function normalizeHelperModelChoice(

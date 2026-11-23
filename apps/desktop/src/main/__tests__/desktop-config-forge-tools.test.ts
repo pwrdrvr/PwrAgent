@@ -87,20 +87,42 @@ describe("CI rerun policy config", () => {
 });
 
 describe("GitHub Enterprise hosts in settings", () => {
+  it.each([
+    ['[git]\ngithub_enterprise_hosts = "ghe.example.com"\n', []],
+    ['[git]\ngithub_enterprise_hosts = ["ghe.example.com", 42]\n', ["new.example.com"]],
+    ['[[git.github_enterprise_hosts]]\nhost = "ghe.example.com"\n', ["new.example.com"]],
+  ] as const)("reports and replaces malformed host configuration", async (contents, replacement) => {
+    const { service } = createService(contents);
+    const setting = (await service.readSettingsProjection()).git.githubEnterpriseHosts!;
+    expect(setting).toMatchObject({ value: [], source: "config", error: expect.stringMatching(/array of strings/) });
+    expect(service.resolveGithubEnterpriseHosts()).toEqual([]);
+    await service.writeConfigPatchTargeted({
+      git: { githubEnterpriseHosts: { hosts: [...replacement], expectedRevision: setting.revision } },
+    });
+    expect((await service.readSettingsProjection()).git.githubEnterpriseHosts?.error).toBeUndefined();
+    expect(service.resolveGithubEnterpriseHosts()).toEqual(replacement);
+  });
+
   it("shows ignored entries and updates both the settings snapshot and CI-run config", async () => {
     const rawHosts = ["github.example.com", "*.example.com", "https://github.example.com"];
     const { service } = createService(`[git]\ngithub_enterprise_hosts = ${JSON.stringify(rawHosts)}\n`);
-    expect((await service.readSettingsProjection()).git.githubEnterpriseHosts).toEqual({
+    const setting = (await service.readSettingsProjection()).git.githubEnterpriseHosts!;
+    expect(setting).toMatchObject({
       value: rawHosts,
       source: "config",
     });
 
     const hosts = ["ghe.internal.example:8443"];
-    await service.writeConfigPatchTargeted({ git: { githubEnterpriseHosts: hosts } });
-    expect((await service.readSettingsProjection()).git.githubEnterpriseHosts?.value).toEqual(hosts);
+    await service.writeConfigPatchTargeted({
+      git: { githubEnterpriseHosts: { hosts, expectedRevision: setting.revision } },
+    });
+    const saved = (await service.readSettingsProjection()).git.githubEnterpriseHosts!;
+    expect(saved.value).toEqual(hosts);
     expect(service.resolveGithubEnterpriseHosts()).toEqual(hosts);
 
-    await service.writeConfigPatchTargeted({ git: { githubEnterpriseHosts: [] } });
+    await service.writeConfigPatchTargeted({
+      git: { githubEnterpriseHosts: { hosts: [], expectedRevision: saved.revision } },
+    });
     expect((await service.readSettingsProjection()).git.githubEnterpriseHosts?.value).toEqual([]);
     expect(service.resolveGithubEnterpriseHosts()).toEqual([]);
   });

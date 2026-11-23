@@ -624,6 +624,16 @@ export type DesktopSettingsValue<T> = {
   error?: string;
 };
 
+export type DesktopGithubEnterpriseHostsSetting = DesktopSettingsValue<string[]> & {
+  /** Identifies the saved field value the editor started from. */
+  revision: string;
+};
+
+export type DesktopGithubEnterpriseHostsPatch = {
+  hosts: string[];
+  expectedRevision: string;
+};
+
 export type PrAutoDispatchBudgetConfig = {
   capacity: number;
   refillPerMinute: number;
@@ -1842,7 +1852,7 @@ export type DesktopSettingsSnapshot = {
      */
     watchMergeBuilds?: DesktopSettingsValue<boolean>;
     /** Configured entries, including entries ignored by the CI run parser. */
-    githubEnterpriseHosts?: DesktopSettingsValue<string[]>;
+    githubEnterpriseHosts?: DesktopGithubEnterpriseHostsSetting;
     prAutoDispatchBudgetCapacity: DesktopSettingsValue<number>;
     prAutoDispatchBudgetRefillPerMinute: DesktopSettingsValue<number>;
     pausePrAutoDispatchWhenBudgetEmpty: DesktopSettingsValue<boolean>;
@@ -2161,7 +2171,7 @@ export type DesktopSettingsConfigPatch = {
     defaultPrAutoDispatchEnabled?: boolean;
     watchMergeBuilds?: boolean;
     /** Replaces [git] github_enterprise_hosts. An empty list clears it. */
-    githubEnterpriseHosts?: string[];
+    githubEnterpriseHosts?: DesktopGithubEnterpriseHostsPatch;
     prAutoDispatchBudgetCapacity?: number;
     prAutoDispatchBudgetRefillPerMinute?: number;
     pausePrAutoDispatchWhenBudgetEmpty?: boolean;

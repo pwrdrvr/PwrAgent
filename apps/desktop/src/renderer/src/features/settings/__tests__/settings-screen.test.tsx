@@ -11956,7 +11956,7 @@ describe("SettingsScreen", () => {
     const snapshot = settings.snapshot!;
     settings.snapshot = {
       ...snapshot,
-      git: { ...snapshot.git, githubEnterpriseHosts: { value: rawHosts, source: "config" } },
+      git: { ...snapshot.git, githubEnterpriseHosts: { value: rawHosts, source: "config", revision: "original" } },
     };
     render(<SettingsScreen initialSection="git" settings={settings} onClose={() => undefined} />);
 
@@ -11964,16 +11964,72 @@ describe("SettingsScreen", () => {
     const save = screen.getByRole("button", { name: "Save GitHub Enterprise hosts" });
     expect(hosts).toHaveValue(rawHosts.join("\n"));
     expect(hosts).toHaveAttribute("aria-invalid", "true");
+    expect(hosts).toHaveAccessibleDescription(/one per line.*Invalid host entries/);
     expect(screen.getByText(/Invalid host entries on lines 2, 3, 4/)).toBeInTheDocument();
     expect(save).toBeDisabled();
 
     fireEvent.change(hosts, { target: { value: "git.example.com:8443\n\nother.example.com" } });
     expect(hosts).not.toHaveAttribute("aria-invalid", "true");
+    expect(hosts).toHaveAccessibleDescription(/one per line/);
     expect(save).toBeEnabled();
     fireEvent.click(save);
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
-        git: { githubEnterpriseHosts: ["git.example.com:8443", "other.example.com"] },
+        git: { githubEnterpriseHosts: { hosts: ["git.example.com:8443", "other.example.com"], expectedRevision: "original" } },
+      });
+    });
+  });
+
+  it("keeps the host draft visible but blocks saving after another window removes a host", () => {
+    const settings = createSettingsState();
+    const snapshot = settings.snapshot!;
+    const renderWithHosts = (value: string[], revision: string) => (
+      <SettingsScreen
+        initialSection="git"
+        settings={{
+          ...settings,
+          snapshot: { ...snapshot, git: { ...snapshot.git, githubEnterpriseHosts: { value, source: "config", revision } } },
+        }}
+        onClose={() => undefined}
+      />
+    );
+    const { rerender } = render(renderWithHosts(["old.example.com", "keep.example.com"], "original"));
+    const hosts = screen.getByRole("textbox", { name: "Allowed hosts" });
+    const save = screen.getByRole("button", { name: "Save GitHub Enterprise hosts" });
+    const edited = "old.example.com\nkeep.example.com\nnew.example.com";
+    fireEvent.change(hosts, { target: { value: edited } });
+    expect(save).toBeEnabled();
+
+    rerender(renderWithHosts(["keep.example.com"], "changed"));
+    expect(hosts).toHaveValue(edited);
+    expect(hosts).toHaveAccessibleDescription(/changed while you were editing/);
+    expect(save).toBeDisabled();
+    expect(settings.writeConfig).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Discard draft and reload" }));
+    expect(hosts).toHaveValue("keep.example.com");
+    expect(settings.refresh).toHaveBeenCalledOnce();
+  });
+
+  it("lets the operator explicitly clear an empty field with malformed saved hosts", async () => {
+    const settings = createSettingsState();
+    const snapshot = settings.snapshot!;
+    settings.snapshot = {
+      ...snapshot,
+      git: { ...snapshot.git, githubEnterpriseHosts: {
+        value: [], source: "config", revision: "malformed", error: "Expected an array of strings.",
+      } },
+    };
+    render(<SettingsScreen initialSection="git" settings={settings} onClose={() => undefined} />);
+    const hosts = screen.getByRole("textbox", { name: "Allowed hosts" });
+    const save = screen.getByRole("button", { name: "Save GitHub Enterprise hosts" });
+    expect(hosts).toHaveValue("");
+    expect(hosts).toHaveAccessibleDescription(/Expected an array of strings/);
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        git: { githubEnterpriseHosts: { hosts: [], expectedRevision: "malformed" } },
       });
     });
   });

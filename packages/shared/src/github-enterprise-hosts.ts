@@ -1,5 +1,7 @@
 const HOST = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+(?::\d{1,5})?$/;
 export const CI_RUN_MAX_GITHUB_ENTERPRISE_HOSTS = 16;
+export const GITHUB_ENTERPRISE_HOSTS_CONFLICT =
+  "GitHub Enterprise hosts changed while you were editing. Reload the current list before saving.";
 
 /** Canonical spelling for an exact CI-run host match. */
 export function normalizeGithubEnterpriseHost(value: unknown): string | undefined {

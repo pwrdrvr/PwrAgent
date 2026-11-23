@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import fc from "fast-check";
@@ -15,7 +15,7 @@ import {
   threadDependencyCiRunId,
   threadDependencyCiRunOutcomes,
 } from "@pwragent/shared/contracts/thread-dependencies";
-import { desktopSettingsPatchToEdits, parseDesktopSettingsToml, readDesktopSettingsConfig } from "../settings/desktop-config";
+import { DEFAULT_GITHUB_ENTERPRISE_HOSTS, applyDesktopSettingsPatch, desktopSettingsPatchToEdits, parseDesktopSettingsToml, readDesktopSettingsConfig } from "../settings/desktop-config";
 import { applyTomlEdits, parseTomlTables } from "../settings/toml-editor";
 import { StateDb } from "../state/state-db";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
@@ -249,7 +249,7 @@ describe("CI run URLs", () => {
     try {
       const configPath = join(dir, "config.toml");
       writeFileSync(configPath, '[git]\ngithub_enterprise_hosts = ["github.example.com", "*.example.com"]\n');
-      const hosts = readDesktopSettingsConfig(configPath).git?.githubEnterpriseHosts;
+      const hosts = readDesktopSettingsConfig(configPath).git?.githubEnterpriseHosts?.value;
       expect(hosts).toEqual(["github.example.com", "*.example.com"]);
       expect(parseCiRunUrl(GHES_URL, { githubEnterpriseHosts: hosts })?.url).toBe(GHES_URL);
       expect(parseCiRunUrl("https://ghe.example.com/example/app/actions/runs/77", { githubEnterpriseHosts: hosts })).toBeUndefined();
@@ -259,15 +259,16 @@ describe("CI run URLs", () => {
   it("replaces the exact hosts admitted by CI waits through the settings patch", () => {
     const existing = '[git]\n# Only internal hosts\ngithub_enterprise_hosts = ["old.example.com", "*.example.com"]\nwatch_merge_builds = false\n';
     const tables = parseTomlTables(existing, "test.toml");
+    const expectedRevision = parseDesktopSettingsToml(existing, "test.toml").git!.githubEnterpriseHosts!.revision;
     const host = fc.nat().map((id) => `ghe${id}.example.com:8443`);
     fc.assert(fc.property(fc.uniqueArray(host, { maxLength: 16, size: "max" }), (hosts) => {
       const edited = applyTomlEdits(existing, desktopSettingsPatchToEdits(
-        { git: { githubEnterpriseHosts: hosts } }, tables,
+        { git: { githubEnterpriseHosts: { hosts, expectedRevision } } }, tables,
       ));
       expect(edited).toContain("# Only internal hosts");
       const config = parseDesktopSettingsToml(edited, "test.toml");
       expect(config.git?.watchMergeBuilds).toBe(false);
-      const options = { githubEnterpriseHosts: config.git?.githubEnterpriseHosts };
+      const options = { githubEnterpriseHosts: config.git?.githubEnterpriseHosts?.value };
       expect(options.githubEnterpriseHosts).toEqual(hosts);
       for (const exact of hosts) {
         expect(parseCiRunUrl(`https://${exact}/example/app/actions/runs/77`, options)?.repository.host).toBe(exact);
@@ -278,15 +279,35 @@ describe("CI run URLs", () => {
   });
 
   it("rejects settings patches that would silently ignore invalid or excess hosts", () => {
+    const expectedRevision = DEFAULT_GITHUB_ENTERPRISE_HOSTS.revision;
     const invalid = fc.constantFrom("*.example.com", "https://git.example.com", "git.example.com/path", "git.example.com:65536");
     fc.assert(fc.property(invalid, (host) => {
       expect(() => desktopSettingsPatchToEdits({
-        git: { githubEnterpriseHosts: ["git.example.com", host] },
+        git: { githubEnterpriseHosts: { hosts: ["git.example.com", host], expectedRevision } },
       })).toThrow(/Invalid host entries on lines 2/);
     }));
     expect(() => desktopSettingsPatchToEdits({
-      git: { githubEnterpriseHosts: Array.from({ length: 17 }, (_, i) => `ghe${i}.example.com`) },
+      git: { githubEnterpriseHosts: { hosts: Array.from({ length: 17 }, (_, i) => `ghe${i}.example.com`), expectedRevision } },
     })).toThrow(/up to 16 distinct hosts/);
+  });
+
+  it("rejects a draft that would restore a host removed on disk", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pwragent-ci-run-conflict-"));
+    try {
+      const configPath = join(dir, "config.toml");
+      fc.assert(fc.property(fc.uniqueArray(fc.nat(), { minLength: 2, maxLength: 3 }), (ids) => {
+        const [revoked, added, retained] = ids.map((id) => `ghe${id}.example.com`);
+        const saved = retained ? [revoked!, retained] : [revoked!];
+        writeFileSync(configPath, `[git]\ngithub_enterprise_hosts = ${JSON.stringify(saved)}\n`);
+        const expectedRevision = readDesktopSettingsConfig(configPath).git!.githubEnterpriseHosts!.revision;
+        const changed = `[git]\ngithub_enterprise_hosts = ${JSON.stringify(saved.slice(1))}\n`;
+        writeFileSync(configPath, changed);
+        expect(() => applyDesktopSettingsPatch(configPath, {
+          git: { githubEnterpriseHosts: { hosts: [...saved, added!], expectedRevision } },
+        })).toThrow(/GitHub Enterprise hosts changed/);
+        expect(readFileSync(configPath, "utf8")).toBe(changed);
+      }), { numRuns: 30 });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
   it("names the run by the id at the end of its URL", () => {

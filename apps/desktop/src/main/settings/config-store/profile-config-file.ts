@@ -1,5 +1,6 @@
 import type { DesktopSettingsConfigPatch } from "@pwragent/shared/contracts/settings";
 import {
+  DEFAULT_GITHUB_ENTERPRISE_HOSTS,
   applyDesktopSettingsPatch,
   readDesktopSettingsConfig,
   type DesktopSettingsConfig,
@@ -28,7 +29,15 @@ export function writeProfileConfigPatch(
 /** Copy bootstrap settings and keep the target's existing provider enables. */
 export function writeBootstrapConfigToProfile(
   configPath: string,
-  patch: DesktopSettingsConfigPatch,
+  config: DesktopSettingsConfig,
 ): void {
+  const { githubEnterpriseHosts, ...git } = config.git ?? {};
+  const patch: DesktopSettingsConfigPatch = { ...config, git };
+  if (githubEnterpriseHosts?.source === "config" && !githubEnterpriseHosts.error) {
+    // The bootstrap projection describes a different file. Use the
+    // destination's revision so a concurrent edit there is still protected.
+    const current = readDesktopSettingsConfig(configPath).git?.githubEnterpriseHosts ?? DEFAULT_GITHUB_ENTERPRISE_HOSTS;
+    patch.git = { ...git, githubEnterpriseHosts: { hosts: githubEnterpriseHosts.value, expectedRevision: current.revision } };
+  }
   applyDesktopSettingsPatch(configPath, patch, { omitUnacknowledgedProviderEnables: true });
 }
