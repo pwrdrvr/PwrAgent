@@ -108,6 +108,33 @@ it("stores only serviceable stacks and pages past the compact membership preview
   }));
 });
 
+it("keeps the lead PR's position even when the thread holds more layers than the preview", () => {
+  fc.assert(fc.property(fc.integer({ min: 9, max: 36 }), fc.boolean(), (height, allHeld) => {
+    const prs = Array.from({ length: height }, (_, index) => ({
+      number: 1 + index, provider: "github.com", org: "fixture", repo: "project",
+      url: `https://github.com/fixture/project/pull/${index + 1}`, lifecycleState: "open" as const,
+      state: "passing" as const, createdAt: index + 1,
+    }));
+    const thread: NavigationThreadSummary = {
+      id: "selected", source: "codex", title: "Selected", titleSource: "derived",
+      linkedDirectories: [], inbox: { inInbox: false }, prs,
+    };
+    const stack: StackSummary = {
+      key: "fixture", name: "stack-1", repository: "github.com:fixture/project", inferred: false, trunk: "main",
+      layers: prs.map((pr, index) => ({
+        branch: `stack-${index + 1}`, parent: index ? `stack-${index}` : "main",
+        pullRequest: { number: pr.number, lifecycleState: "open" },
+        thread: { key: "codex:selected", title: "Selected" }, health: "in_sync", role: "holder",
+        ...(allHeld || index === height - 1 ? { heldBy: { branch: "base", reason: "CI running" } } : {}),
+      })),
+    };
+    const members = projectBoundNavigationStacks([thread], [stack])!.threads[0]!.stackMemberships!;
+    const expectedLead = allHeld ? height : height - 1;
+    expect(members).toHaveLength(8);
+    expect(members).toContainEqual(expect.objectContaining({ position: expectedLead, number: expectedLead, trunk: "main" }));
+  }));
+});
+
 it("publishes the repository once when a same-named worktree has a saved project registration", async () => {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-project-index-")));
   const previous = mocks.store.readNavigationQueryIndex.getMockImplementation();

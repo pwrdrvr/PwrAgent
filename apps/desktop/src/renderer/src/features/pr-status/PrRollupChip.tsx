@@ -12,7 +12,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
+import { buildPullRequestStatusKey, type NavigationThreadSummary, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import { CloseIcon, EyeIcon } from "../../icons";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import { useHoverTransitionGrace } from "../../lib/useHoverTransitionGrace";
@@ -23,6 +23,12 @@ import {
   resolvePrChipWatch,
   type ThreadPrWatches,
 } from "../pr-watches/useThreadPrWatchIndicators";
+import { MAX_COMPACT_STACK_MEMBERSHIPS, type CompactStackMembership } from "@pwragent/shared/stacks/stack-status";
+import { sidebarPrCardBridge } from "../../lib/hover-card-bridge";
+import { getDesktopApi } from "../../lib/desktop-api";
+import { useSelectedStackDetails } from "../stacks/useSelectedStackDetails";
+import { StackHeading, StackNode, StackTrunk } from "../stacks/StackBody";
+import { groupStackRollup, knownPrStatus, stackHealthLabel, stackMembershipForPr, staleStackSpine } from "../stacks/stack-pr-data";
 import { PrChip } from "./PrChip";
 import { PrCardActions } from "./PrCardActions";
 import { PrStatusCard } from "./PrStatusCard";
@@ -45,6 +51,7 @@ import {
 
 type PrRollupChipProps = {
   prs: PrSummary[];
+  stackThread?: NavigationThreadSummary;
   /** Newline-joined URLs whose readiness the stack chip represents. */
   heldPrUrls?: string;
   /** Names the popover for assistive tech: "Pull requests for <title>". */
@@ -120,6 +127,7 @@ export const PrRollupChip = memo(function PrRollupChip(props: PrRollupChipProps)
         <PrChip
           pr={pr}
           showRepoPrefix={props.repoPrefixedUrls.split("\n").includes(pr.url)}
+          stackThread={props.stackThread}
           branchDrift={props.branchDrift?.prKey === buildPullRequestStatusKey(pr) ? props.branchDrift : undefined}
           watch={resolvePrChipWatch(props.prWatches, pr, props.autoFixRepository)}
           onOpen={props.onOpen}
@@ -147,7 +155,18 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
   const moreCount = Math.max(0, count - 1);
   const rollup = resolvePrRollup(props.prs)!;
   const listRollup = listPrs === props.prs ? rollup : resolvePrRollup(listPrs);
-  const ordered = listRollup?.ordered ?? [];
+  const stackPreview = props.stackThread?.stackMemberships;
+  const needStackDetails = open && Boolean(stackPreview && (stackPreview.length >= MAX_COMPACT_STACK_MEMBERSHIPS
+    || stackPreview.some(({ count, trunk }) => count > 1 && !trunk)));
+  const stackDetails = useSelectedStackDetails({
+    thread: needStackDetails ? props.stackThread : undefined,
+    desktopApi: needStackDetails ? getDesktopApi() : undefined,
+    allowLegacyLookup: false,
+  });
+  const entries = open ? groupStackRollup(listRollup?.ordered ?? [], props.stackThread, stackDetails.stacks) : [];
+  const ordered = entries.flatMap((entry) => "stack" in entry ? entry.rows.map(({ pr }) => pr) : [entry]);
+  const orderIndices = new Map(ordered.map((pr, index) => [pr.url, index]));
+  const groupCount = entries.length;
   const held = props.heldPrUrls && new Set(props.heldPrUrls.split("\n"));
   const visiblePreview = held ? props.prs.filter((pr) => !held.has(pr.url)) : props.prs;
   const signalPrs = held ? listPrs.filter((pr) => !held.has(pr.url)) : listPrs;
@@ -219,7 +238,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
   const cardPr = ordered.find((pr) => pr.url === cardUrl);
   const latestCardRef = useRef<ReactNode>(null);
   const relayoutCard = useCallback(() => updateCard(latestCardRef.current), [updateCard]);
-  const { branchDrift, prWatches, autoFixRepository, merge, onDetach } = props;
+  const { branchDrift, prWatches, autoFixRepository, merge, onDetach, stackThread } = props;
   const renderCard = useCallback((pr: PrSummary) => (
     <>
       <PrStatusCard
@@ -227,6 +246,8 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
         branchDrift={branchDrift?.prKey === buildPullRequestStatusKey(pr) ? branchDrift : undefined}
         watch={resolvePrChipWatch(prWatches, pr, autoFixRepository)}
         watchStopHint={watchStopHint}
+        stack={stackThread && stackMembershipForPr(stackThread, pr)}
+        stackThread={stackThread}
       />
       <PrCardActions
         pr={pr}
@@ -241,7 +262,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
         onLayoutChange={relayoutCard}
       />
     </>
-  ), [branchDrift, prWatches, autoFixRepository, watchStopHint, merge, hideRowCard, onDetach, dismissImmediately, relayoutCard]);
+  ), [branchDrift, prWatches, autoFixRepository, watchStopHint, merge, hideRowCard, onDetach, dismissImmediately, relayoutCard, stackThread]);
 
   useEffect(() => {
     if (!cardVisible) return;
@@ -325,7 +346,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
       && current.chipSide === next.chipSide
         ? current
         : next);
-  }, [open, ordered.length, incomplete]);
+  }, [open, groupCount, ordered.length, incomplete]);
 
   // An outside press or a scroll of the chip's ancestors closes it: the
   // popover is fixed to where the chip was. Sibling panes (including the
@@ -495,6 +516,123 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
   ].join(" ");
   const dotRef = presentation?.hasFailingChecksStillRunning ? statusPulseRef : undefined;
 
+  const renderRow = (pr: PrSummary, index: number, member?: CompactStackMembership) => {
+    const label = prNumberLabel(pr, repoPrefixed.has(pr.url)
+      || props.needsRepoPrefix?.(pr, listPrs) === true);
+    const behind = props.branchDrift?.prKey === buildPullRequestStatusKey(pr)
+      ? prBranchBehindLabel(props.branchDrift)
+      : undefined;
+    const isHeld = held && held.has(pr.url);
+    const status = isHeld && !member?.heldBy ? "Held by a lower stack layer" : behind
+      ? `${prStatusLabel(pr)} · ${behind}`
+      : prStatusLabel(pr);
+    // The time each stack sorts by, so the order reads as one.
+    // It leads, so a long open status never cuts it off. A
+    // finished PR's status says only that it merged or closed,
+    // which the time already says; a merge queue's account of
+    // the merge stays.
+    const stackTime = prStackTimeLabel(pr);
+    const lifecycle = resolveLifecycleState(pr);
+    const statusLine = !stackTime
+      ? status
+      : lifecycle === "closed"
+        || (lifecycle === "merged" && pr.mergeQueue?.state !== "merged_by_queue")
+        ? stackTime
+        : `${stackTime} · ${status}`;
+    const health = member && stackHealthLabel(member);
+    const displayStatus = member ? knownPrStatus(statusLine) : statusLine;
+    const rowPresentation = isHeld ? undefined : resolvePrChipPresentation(pr);
+    const rowWaitingForCi = !isHeld && Boolean(watchFor(pr)?.ci);
+    const openRow = (): void => {
+      dismissImmediately();
+      props.onOpen(pr.url);
+    };
+    return (
+      // The card and the PR menu cover the row's chip too.
+      <li
+        key={pr.url}
+        className={["pr-rollup-popover__item", member ? "stack-display__layer" : "", menuTargetUrl === pr.url ? "is-menu-target" : ""].filter(Boolean).join(" ")}
+        data-position={member?.position}
+        data-stale={member && staleStackSpine(member.health) || undefined}
+        onMouseEnter={(event) => {
+          if (!menuTargetUrl) showRowCard(pr, event.currentTarget, false);
+        }}
+        onContextMenu={(event) => openRowContextMenu(event, pr)}
+      >
+        {member ? <StackNode pr={pr} /> : null}
+        <button
+          type="button"
+          className="pr-rollup-popover__row"
+          aria-label={`Open ${pr.org}/${pr.repo}#${pr.number}${
+            pr.title ? `, ${pr.title}` : ""
+          } (${member ? [knownPrStatus(status), health].filter(Boolean).join(" · ") : status}) in browser${rowWaitingForCi ? ", waiting for CI" : ""}`}
+          aria-describedby={
+            cardUrl === pr.url && cardVisible ? cardId : undefined
+          }
+          onFocus={(event) => {
+            // Focus back from this row's own menu shows no card.
+            if (!openingMenuRef.current && menuTargetUrl !== pr.url) {
+              showRowCard(pr, event.currentTarget, true);
+            }
+          }}
+          onBlur={(event) => {
+            if (!getCardElement()?.contains(event.relatedTarget)) hideRowCard();
+          }}
+          onClick={openRow}
+          aria-keyshortcuts={props.onDetach ? "Delete Backspace" : undefined}
+          onKeyDown={(event) => handleRowKeyDown(event, pr, index)}
+        >
+          <span className="pr-rollup-popover__title">
+            {pr.title ?? `${pr.org}/${pr.repo}`}
+          </span>
+          <span className="pr-rollup-popover__status">
+            {member ? `${member.position}/${member.count}` : null}
+            {member && displayStatus ? " · " : null}
+            {displayStatus}
+            {health ? <span className="stack-display__warning"> · {health}</span> : null}
+          </span>
+        </button>
+        {/* The chip as Mission Control draws it, ✕ included. It is
+            a pointer shortcut beside the row's button, not a second
+            control: its number opens the PR as the row does, and
+            Delete on the row is the keyboard's detach. */}
+        <span
+          aria-hidden="true"
+          className={[
+            "pr-chip",
+            "pr-rollup-popover__chip",
+            ...(rowPresentation ? prChipModifierClasses(rowPresentation) : []),
+          ].join(" ")}
+          onClick={openRow}
+        >
+          {member ? null : <span
+            className="pr-chip__dot"
+            ref={rowPresentation?.hasFailingChecksStillRunning ? statusPulseRef : undefined}
+          />}
+          <span className="pr-chip__label">{label}</span>
+          {rowWaitingForCi ? (
+            <span className="pr-chip__watch">
+              <EyeIcon size={12} />
+            </span>
+          ) : null}
+          {props.onDetach ? (
+            <span
+              className="pr-chip__detach"
+              title={`Detach ${pr.org}/${pr.repo}#${pr.number} from thread`}
+              onMouseEnter={hideRowCard}
+              onClick={(event) => {
+                event.stopPropagation();
+                detachRow(pr, index, false);
+              }}
+            >
+              <CloseIcon size={11} aria-hidden="true" />
+            </span>
+          ) : null}
+        </span>
+      </li>
+    );
+  };
+
   return (
     <span
       className={overflow ? "thread-row__pr-overflow" : "thread-row__pr-rollup"}
@@ -531,7 +669,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
           clearHoverTimer();
           hoverTimerRef.current = window.setTimeout(() => {
             hoverTimerRef.current = null;
-            setOpenMode((current) => current ?? "hover");
+            if (!sidebarPrCardBridge.hasPinnedCard()) setOpenMode((current) => current ?? "hover");
           }, TOOLTIP_HOVER_DELAY_MS);
         }}
         onMouseLeave={() => {
@@ -622,112 +760,15 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
             </div>
             {/* A scrolled list moves the row out from under its card. */}
             <ul className="pr-rollup-popover__list" onScroll={hideRowCard}>
-              {ordered.map((pr, index) => {
-                const label = prNumberLabel(pr, repoPrefixed.has(pr.url)
-                  || props.needsRepoPrefix?.(pr, listPrs) === true);
-                const behind = props.branchDrift?.prKey === buildPullRequestStatusKey(pr)
-                  ? prBranchBehindLabel(props.branchDrift)
-                  : undefined;
-                const isHeld = held && held.has(pr.url);
-                const status = isHeld ? "Held by a lower stack layer" : behind
-                  ? `${prStatusLabel(pr)} · ${behind}`
-                  : prStatusLabel(pr);
-                // The time each stack sorts by, so the order reads as one.
-                // It leads, so a long open status never cuts it off. A
-                // finished PR's status says only that it merged or closed,
-                // which the time already says; a merge queue's account of
-                // the merge stays.
-                const stackTime = prStackTimeLabel(pr);
-                const lifecycle = resolveLifecycleState(pr);
-                const statusLine = !stackTime
-                  ? status
-                  : lifecycle === "closed"
-                    || (lifecycle === "merged" && pr.mergeQueue?.state !== "merged_by_queue")
-                    ? stackTime
-                    : `${stackTime} · ${status}`;
-                const rowPresentation = isHeld ? undefined : resolvePrChipPresentation(pr);
-                const rowWaitingForCi = !isHeld && Boolean(watchFor(pr)?.ci);
-                const openRow = (): void => {
-                  dismissImmediately();
-                  props.onOpen(pr.url);
-                };
-                return (
-                  // The card and the PR menu cover the row's chip too.
-                  <li
-                    key={pr.url}
-                    className={menuTargetUrl === pr.url ? "is-menu-target" : undefined}
-                    onMouseEnter={(event) => {
-                      if (!menuTargetUrl) showRowCard(pr, event.currentTarget, false);
-                    }}
-                    onContextMenu={(event) => openRowContextMenu(event, pr)}
-                  >
-                    <button
-                      type="button"
-                      className="pr-rollup-popover__row"
-                      aria-label={`Open ${pr.org}/${pr.repo}#${pr.number}${
-                        pr.title ? `, ${pr.title}` : ""
-                      } (${status}) in browser${rowWaitingForCi ? ", waiting for CI" : ""}`}
-                      aria-describedby={
-                        cardUrl === pr.url && cardVisible ? cardId : undefined
-                      }
-                      onFocus={(event) => {
-                        // Focus back from this row's own menu shows no card.
-                        if (!openingMenuRef.current && menuTargetUrl !== pr.url) {
-                          showRowCard(pr, event.currentTarget, true);
-                        }
-                      }}
-                      onBlur={(event) => {
-                        if (!getCardElement()?.contains(event.relatedTarget)) hideRowCard();
-                      }}
-                      onClick={openRow}
-                      aria-keyshortcuts={props.onDetach ? "Delete Backspace" : undefined}
-                      onKeyDown={(event) => handleRowKeyDown(event, pr, index)}
-                    >
-                      <span className="pr-rollup-popover__title">
-                        {pr.title ?? `${pr.org}/${pr.repo}`}
-                      </span>
-                      <span className="pr-rollup-popover__status">{statusLine}</span>
-                    </button>
-                    {/* The chip as Mission Control draws it, ✕ included. It is
-                        a pointer shortcut beside the row's button, not a second
-                        control: its number opens the PR as the row does, and
-                        Delete on the row is the keyboard's detach. */}
-                    <span
-                      aria-hidden="true"
-                      className={[
-                        "pr-chip",
-                        "pr-rollup-popover__chip",
-                        ...(rowPresentation ? prChipModifierClasses(rowPresentation) : []),
-                      ].join(" ")}
-                      onClick={openRow}
-                    >
-                      <span
-                        className="pr-chip__dot"
-                        ref={rowPresentation?.hasFailingChecksStillRunning ? statusPulseRef : undefined}
-                      />
-                      <span className="pr-chip__label">{label}</span>
-                      {rowWaitingForCi ? (
-                        <span className="pr-chip__watch">
-                          <EyeIcon size={12} />
-                        </span>
-                      ) : null}
-                      {props.onDetach ? (
-                        <span
-                          className="pr-chip__detach"
-                          title={`Detach ${pr.org}/${pr.repo}#${pr.number} from thread`}
-                          onMouseEnter={hideRowCard}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            detachRow(pr, index, false);
-                          }}
-                        >
-                          <CloseIcon size={11} aria-hidden="true" />
-                        </span>
-                      ) : null}
-                    </span>
-                  </li>
-                );
-              })}
+              {entries.map((entry) => "stack" in entry ? (
+                <li key={entry.stack.key} className="pr-rollup-popover__stack">
+                  <StackHeading count={entry.stack.count} trunk={entry.trunk} inferred={entry.stack.inferred} grouped />
+                  <ol className="stack-display__list" reversed>
+                    {entry.rows.map(({ pr, member }) => renderRow(pr, orderIndices.get(pr.url)!, member))}
+                    <StackTrunk trunk={entry.stack.trunk!} />
+                  </ol>
+                </li>
+              ) : renderRow(entry, orderIndices.get(entry.url)!))}
             </ul>
             {props.onDetachAll && !incomplete && ordered.length ? (
               <div className="pr-rollup-popover__foot">

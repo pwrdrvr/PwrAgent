@@ -1,3 +1,4 @@
+import type { PrSummary } from "../contracts/navigation";
 import type { StackAutomationBlock, StackLayerHealth, StackUnsettledReason } from "./stack-automation";
 import type { GhStack, GhStackBranch } from "./catalog";
 import { pullRequestStackOrder } from "../pull-request-review";
@@ -26,6 +27,9 @@ export type StackLayerBinding =
   | { role: "layer" | "holder" | "remote"; thread: StackThread }
   | { role: "ambiguous" | "unbound" };
 
+export type StackLayerPullRequest = Pick<PrSummary, "number" | "lifecycleState" | "title" | "url"
+  | "state" | "checkState" | "checksStillRunning" | "reviewState" | "mergeState" | "mergeQueue" | "mergedAt">;
+
 export type StackLayer = {
   branch: string;
   parent: string;
@@ -34,7 +38,7 @@ export type StackLayer = {
   health: StackLayerHealth;
   heldBy?: StackAutomationBlock;
   unsettled?: StackUnsettledReason;
-  pullRequest?: { number: number; lifecycleState?: StackPullRequest["lifecycleState"] };
+  pullRequest?: Pick<StackLayerPullRequest, "number"> & Partial<StackLayerPullRequest>;
   thread?: Pick<StackThread, "key" | "title">;
   role: StackLayerBinding["role"];
 };
@@ -54,6 +58,8 @@ export type ThreadStackMembership = {
   position: number;
 };
 
+export const MAX_COMPACT_STACK_MEMBERSHIPS = 8;
+
 export type CompactStackMembership = {
   key: string;
   name: string;
@@ -69,6 +75,9 @@ export type CompactStackMembership = {
   threadKey?: string;
   parentThreadKey?: string;
   parentMerged?: boolean;
+  trunk?: string;
+  hasOpenPr?: boolean;
+  basePr?: Pick<StackLayerPullRequest, "number" | "lifecycleState" | "checkState" | "mergeState">;
 };
 
 export type SelectedStackLayer = {
@@ -79,10 +88,15 @@ export type SelectedStackLayer = {
   layer: StackLayer;
 };
 
-export function compactStackMembership(stack: StackSummary, position: number): CompactStackMembership | undefined {
+export function compactStackMembership(
+  stack: StackSummary,
+  position: number,
+  hasOpenPr = stack.layers.some((layer) => layer.pullRequest?.lifecycleState === "open"),
+): CompactStackMembership | undefined {
   const layer = stack.layers[position - 1];
   if (!layer) return undefined;
   const parent = stack.layers[position - 2];
+  const base = parent?.pullRequest;
   return {
     key: stack.key,
     name: stack.name.slice(0, 160),
@@ -90,6 +104,11 @@ export function compactStackMembership(stack: StackSummary, position: number): C
     position,
     count: stack.layers.length,
     repository: stack.repository,
+    trunk: stack.trunk.slice(0, 160),
+    hasOpenPr,
+    ...(base && layer.activeBase !== stack.trunk ? { basePr: {
+      number: base.number, lifecycleState: base.lifecycleState, checkState: base.checkState, mergeState: base.mergeState,
+    } } : {}),
     ...(layer.pullRequest ? { number: layer.pullRequest.number } : {}),
     health: layer.health,
     ...(layer.heldBy ? { heldBy: layer.heldBy } : {}),

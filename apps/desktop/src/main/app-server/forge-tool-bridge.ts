@@ -1410,11 +1410,11 @@ export class ForgeToolBridge {
   }
 
   async canonicalizeNavigationPullRequests(prs: NonNullable<NavigationSnapshot["threads"][number]["prs"]>,
-    demand?: PrMetadataDemand): Promise<typeof prs> {
+    demand?: PrMetadataDemand, verifyAttachments?: boolean): Promise<typeof prs> {
     const canonicalizer = this.threadPullRequestCanonicalizer;
     if (!canonicalizer) return prs;
     try {
-      return await canonicalizer(prs, demand);
+      return await canonicalizer(prs, demand, verifyAttachments);
     } catch (error) {
       demand?.signal?.throwIfAborted();
       this.logNavigationPrProjectionFailure(error);

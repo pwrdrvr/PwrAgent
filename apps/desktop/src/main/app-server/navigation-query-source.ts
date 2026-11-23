@@ -29,7 +29,8 @@ import { getMainLogger } from "../log";
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
 import { PR_METADATA_PRIORITY } from "../pr-status/pr-metadata-process";
 import { StackReader } from "../stacks/stack-reader";
-import { compactStackMembership, type CompactStackMembership, type SelectedStackLayer, type StackSummary } from "@pwragent/shared/stacks/stack-status";
+import { compactStackMembership, MAX_COMPACT_STACK_MEMBERSHIPS, type CompactStackMembership, type SelectedStackLayer, type StackSummary } from "@pwragent/shared/stacks/stack-status";
+import { comparePullRequestStack } from "@pwragent/shared/pull-request-rollup";
 import { readNavigationCheckout } from "../git-info/directory-store";
 import { collectConcurrent } from "../../shared/concurrent-work";
 
@@ -127,6 +128,8 @@ export async function loadLocalNavigationQueryIndex(params: {
   requireVerifiedDirectories?: boolean;
   /** This caller renders thread stack membership. */
   includeStacks?: boolean;
+  /** Selected stack cards use registry status without revalidating forge attachments. */
+  verifyStackAttachments?: false;
   registry?: DesktopBackendRegistry;
   signal?: AbortSignal;
   /** Viewer projection shares this pass's fences, lifetime and byte budget.
@@ -145,7 +148,7 @@ export async function loadLocalNavigationQueryIndex(params: {
   // in-flight index that predates it, nor overtake other readers' scans.
   const key = JSON.stringify([sourceId(registry), sourceId(overlayStore), backend,
     ...(params.viewer ? ["viewer", sourceId(params.viewer.source)] : []),
-    ...(params.includeStacks ? ["stacks"] : []),
+    ...(params.includeStacks ? ["stacks", params.verifyStackAttachments !== false] : []),
     ...(params.refreshProviders ? ["refresh-providers"] : [])]);
   // An index's coverage reads the startup refresh state, so an index built
   // while startup was checking must not serve a reader after it finishes.
@@ -176,8 +179,8 @@ export async function loadLocalNavigationQueryIndex(params: {
     signal.addEventListener("abort", () => unsubscribe?.(), { once: true });
     if (params.includeStacks) {
       // Share the same membership and viewer projection with stack-free queries.
-      const local = await loadLocalNavigationQueryIndex({ ...params, includeStacks: false, signal });
-      const projection = await projectNavigationStacks(local.threads, registry, signal);
+      const local = await loadLocalNavigationQueryIndex({ ...params, includeStacks: false, verifyStackAttachments: undefined, signal });
+      const projection = await projectNavigationStacks(local.threads, registry, signal, params.verifyStackAttachments);
       return projection ? createNavigationQuerySnapshot({ ...local, ...projection }, undefined, local) : local;
     }
     if (params.viewer) {
@@ -344,6 +347,7 @@ async function projectNavigationStacks(
   threads: NavigationQueryIndex["threads"],
   registry: DesktopBackendRegistry,
   signal: AbortSignal,
+  verifyAttachments?: false,
 ): Promise<Pick<NavigationQueryIndex, "threads" | "stacks"> | undefined> {
   const candidates = threads.filter((thread) => !thread.federation && (thread.linkedDirectories?.some((directory) =>
     directory.gitBranch || directory.worktreePath || directory.repositoryKey)
@@ -355,7 +359,7 @@ async function projectNavigationStacks(
   const demand = { signal, priority: () => PR_METADATA_PRIORITY.background };
   const rows = await Promise.all(candidates.map(async (thread, index) => ({
     ...thread,
-    prs: attachments[index]?.length ? await registry.canonicalizeNavigationPullRequests(attachments[index]!, demand) : [],
+    prs: attachments[index]?.length ? await registry.canonicalizeNavigationPullRequests(attachments[index]!, demand, verifyAttachments) : [],
   })));
   signal.throwIfAborted();
   const { stacks } = await stackReader.read(rows, [], undefined,
@@ -367,11 +371,15 @@ async function projectNavigationStacks(
         || await registry.stackRepairActive?.(thread) === true) };
     });
   signal.throwIfAborted();
-  return projectBoundNavigationStacks(threads, stacks);
+  return projectBoundNavigationStacks(threads, stacks, new Map(rows.map((row) => [
+    buildThreadIdentityKey(row.source, row.id), row.prs,
+  ])));
 }
 
 export function projectBoundNavigationStacks(
-  threads: NavigationQueryIndex["threads"], stacks: readonly StackSummary[],
+  threads: NavigationQueryIndex["threads"],
+  stacks: readonly StackSummary[],
+  prsByThread?: ReadonlyMap<string, readonly PrSummary[]>,
 ): Pick<NavigationQueryIndex, "threads" | "stacks"> | undefined {
   const localKeys = new Set(threads.filter((thread) => !thread.federation)
     .map((thread) => buildThreadIdentityKey(thread.source, thread.id)));
@@ -381,19 +389,39 @@ export function projectBoundNavigationStacks(
     if (!stack.layers.some((layer) => layer.thread && localKeys.has(layer.thread.key))) continue;
     boundStacks.push(stack);
     const detailRevision = stackRevision(stack);
+    const hasOpenPr = stack.layers.some((layer) => layer.pullRequest?.lifecycleState === "open");
     for (const [offset, layer] of stack.layers.entries()) {
       if (!layer.thread || !localKeys.has(layer.thread.key)) continue;
       const entries = memberships.get(layer.thread.key) ?? [];
-      if (entries.length >= 8) continue;
-      entries.push({ ...compactStackMembership(stack, offset + 1)!, detailRevision });
+      entries.push({ ...compactStackMembership(stack, offset + 1, hasOpenPr)!, detailRevision });
       memberships.set(layer.thread.key, entries);
     }
   }
   return memberships.size ? { stacks: boundStacks, threads: threads.map((thread) => {
     if (thread.federation) return thread;
-    const stackMemberships = memberships.get(buildThreadIdentityKey(thread.source, thread.id));
+    const key = buildThreadIdentityKey(thread.source, thread.id);
+    const entries = memberships.get(key);
+    const stackMemberships = entries && previewStackMemberships(entries, prsByThread?.get(key) ?? thread.prs);
     return stackMemberships ? { ...thread, stackMemberships } : thread;
   }) } : undefined;
+}
+
+function previewStackMemberships(members: CompactStackMembership[], prs?: readonly PrSummary[]) {
+  if (members.length <= MAX_COMPACT_STACK_MEMBERSHIPS) return members;
+  const byPr = new Map<string, CompactStackMembership>();
+  for (const member of members) {
+    const identity = `${member.repository}#${member.number}`;
+    if (!byPr.has(identity)) byPr.set(identity, member);
+  }
+  // Retain the membership of the lead PR even when its position is beyond
+  // the compact preview. The row prefers an unheld PR, if one is attached.
+  const ordered = prs?.toReversed().sort(comparePullRequestStack);
+  const membership = (pr: PrSummary) => byPr.get(`${pr.provider}:${pr.org}/${pr.repo}`.toLowerCase() + `#${pr.number}`);
+  const lead = ordered?.find((pr) => !membership(pr)?.heldBy) ?? ordered?.[0];
+  const keep = lead && membership(lead);
+  const preview = members.slice(0, MAX_COMPACT_STACK_MEMBERSHIPS);
+  if (keep && !preview.includes(keep)) preview[preview.length - 1] = keep;
+  return preview;
 }
 
 const stackRevisions = new WeakMap<StackSummary, string>();
@@ -407,7 +435,7 @@ function stackRevision(stack: StackSummary): string {
 }
 
 export async function readNavigationStackLayers(ref: NavigationIdentity, signal?: AbortSignal) {
-  const index = await loadLocalNavigationQueryIndex({ callerReason: "selected-stack-detail", includeStacks: true, signal });
+  const index = await loadLocalNavigationQueryIndex({ callerReason: "selected-stack-detail", includeStacks: true, verifyStackAttachments: false, signal });
   return projectSelectedStackLayers(index, ref);
 }
 

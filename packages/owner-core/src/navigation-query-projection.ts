@@ -29,7 +29,7 @@ import type {
 } from "@pwragent/shared/contracts/navigation";
 import type { NavigationStarMapSignals } from "@pwragent/shared/navigation-star-map-filters";
 import { STACK_UNSETTLED_REASONS } from "@pwragent/shared/stacks/stack-automation";
-import { readCompactStackMemberships, type StackSummary } from "@pwragent/shared/stacks/stack-status";
+import { MAX_COMPACT_STACK_MEMBERSHIPS, readCompactStackMemberships, type StackSummary } from "@pwragent/shared/stacks/stack-status";
 import {
   buildThreadIdentityKey,
   isNavigationThreadRunning,
@@ -515,10 +515,10 @@ export function projectNavigationPullRequests(prs?: PrSummary[]): Pick<Navigatio
 }
 
 function projectStackMemberships(thread: Pick<NavigationThreadSummary, "stacks" | "stackMemberships">): Pick<NavigationRow, "stackMemberships"> {
-  const stackMemberships = readCompactStackMemberships(thread).slice(0, 8).flatMap((entry) => {
+  const stackMemberships = readCompactStackMemberships(thread).slice(0, MAX_COMPACT_STACK_MEMBERSHIPS).flatMap((entry) => {
     if (typeof entry.key !== "string" || typeof entry.name !== "string" || !Number.isSafeInteger(entry.position)
       || !Number.isSafeInteger(entry.count) || entry.position < 1 || entry.position > entry.count) return [];
-    const heldBy = entry.heldBy;
+    const { heldBy, basePr } = entry;
     const positiveNumber = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
     return [{
       key: entry.key.length <= 512 ? entry.key : createHash("sha256").update(entry.key).digest("hex"),
@@ -528,6 +528,16 @@ function projectStackMemberships(thread: Pick<NavigationThreadSummary, "stacks" 
       count: entry.count,
       ...(typeof entry.repository === "string" && entry.repository.length <= 512 ? { repository: entry.repository } : {}),
       ...(positiveNumber(entry.number) ? { number: entry.number } : {}),
+      ...(typeof entry.trunk === "string" ? { trunk: entry.trunk.slice(0, 160) } : {}),
+      ...(typeof entry.hasOpenPr === "boolean" ? { hasOpenPr: entry.hasOpenPr } : {}),
+      ...(basePr && positiveNumber(basePr.number) ? {
+        basePr: {
+          number: basePr.number,
+          ...(["open", "merged", "closed"].includes(basePr.lifecycleState ?? "") ? { lifecycleState: basePr.lifecycleState } : {}),
+          ...(["passing", "failing", "pending", "unknown"].includes(basePr.checkState ?? "") ? { checkState: basePr.checkState } : {}),
+          ...(basePr.mergeState === "conflicting" ? { mergeState: basePr.mergeState } : {}),
+        },
+      } : {}),
       ...(STACK_UNSETTLED_REASONS.includes(entry.unsettled!) ? { unsettled: entry.unsettled } : {}),
       ...(heldBy && typeof heldBy.branch === "string" && STACK_UNSETTLED_REASONS.includes(heldBy.reason) ? {
         heldBy: { branch: heldBy.branch.slice(0, 160), reason: heldBy.reason,

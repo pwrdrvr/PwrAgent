@@ -7,7 +7,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
-import type { PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
 import { CloseIcon, EyeIcon, MergeQueueIcon } from "../../icons";
 import {
   cardIsBesideSidebar,
@@ -30,6 +30,8 @@ import {
 } from "./pr-chip-state";
 import { PrStatusCard } from "./PrStatusCard";
 import { prNumberLabel } from "./pr-rollup";
+import { showsStackTag, stackMembershipForPr } from "../stacks/stack-pr-data";
+import { StackTag } from "../stacks/StackTag";
 
 type PrChipProps = {
   pr: PrSummary;
@@ -78,11 +80,14 @@ type PrChipProps = {
    * window that merges. Keep its identity stable for unchanged data.
    */
   merge?: PrCardMerge;
+  stackThread?: NavigationThreadSummary;
+  showStackTag?: boolean;
   onVisibilityChange?: (visible: boolean) => void;
 };
 
 export const PrChip = memo(function PrChip(props: PrChipProps) {
-  const { pr } = props;
+  const { pr, stackThread } = props;
+  const stack = stackThread && stackMembershipForPr(stackThread, pr);
   const contextMenuInvokerRef = useRef<HTMLSpanElement>(null);
   const onVisibilityChange = props.onVisibilityChange;
   useEffect(() => {
@@ -139,6 +144,8 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
         branchDrift={props.branchDrift}
         watch={props.watch}
         watchStopHint={watchStopHint}
+        stack={stack}
+        stackThread={stackThread}
       />
       {cardActions ? (
         <PrCardActions
@@ -187,6 +194,17 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
     pr.createdAt,
     pr.mergedAt,
     pr.closedAt,
+    stack?.key,
+    stack?.position,
+    stack?.count,
+    stack?.trunk,
+    stack?.basePr?.number,
+    stack?.basePr?.lifecycleState,
+    stack?.basePr?.checkState,
+    stack?.basePr?.mergeState,
+    stack?.heldBy?.number,
+    stack?.heldBy?.branch,
+    stack?.heldBy?.reason,
     props.branchDrift?.baseBranch,
     props.branchDrift?.behind,
     props.branchDrift?.ahead,
@@ -274,135 +292,148 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
     props.onDetach?.(pr);
   };
 
+  const separated = props.showStackTag && stack && stackThread && showsStackTag(stack, pr, stackThread);
+  // The pointer shortcut stays inside the number on an ordinary chip.
+  // A stacked chip gives the tag its own focus stop before the shortcut.
+  const detach = props.onDetach && !props.hideDetachButton ? (
+    <span
+      aria-hidden="true"
+      className="pr-chip__detach"
+      title={`Detach ${pr.org}/${pr.repo}#${pr.number} from thread`}
+      onClick={handleDetach}
+    >
+      <CloseIcon size={11} aria-hidden="true" />
+    </span>
+  ) : null;
+  const draftBar = isDraft ? <span className="pr-chip__draft-bar" aria-hidden="true" /> : null;
+
+  const number = (
+    <span
+      ref={contextMenuInvokerRef}
+      role="button"
+      tabIndex={0}
+      aria-haspopup="menu"
+      aria-label={`Open ${pr.org}/${pr.repo}#${pr.number} (${status}) in browser${
+        props.watch?.ci ? ", waiting for CI" : ""
+      }`}
+      // The card's numbers are a DESCRIPTION, not part of this control's
+      // name — packing them into the label makes every chip in a sidebar
+      // read like a paragraph. The portal sits outside this subtree, so
+      // pointing at it by id is what makes the card audible at all.
+      aria-describedby={tooltipVisible ? tooltipController.tooltipId : undefined}
+      className={separated ? "pr-chip__trigger" : className}
+      data-pr-chip=""
+      data-pr-url={pr.url}
+      draggable={false}
+      // Focus moving onto the card's own buttons keeps it.
+      onBlur={(event) => {
+        const card = tooltipController.getElement();
+        if (!card || !card.contains(event.relatedTarget as Node | null)) {
+          tooltipController.hide();
+        }
+      }}
+      onClick={handleActivate}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        window.getSelection()?.removeAllRanges();
+        tooltipController.hide();
+        const rect = event.currentTarget.getBoundingClientRect();
+        const position = {
+          x: event.clientX,
+          y: event.clientY,
+          anchorTop: rect.top,
+        };
+        if (props.onOpenContextMenu) {
+          props.onOpenContextMenu(pr, position);
+        } else {
+          contextMenuInvokerRef.current = event.currentTarget;
+          setContextMenuPosition(position);
+        }
+      }}
+      onDragStart={(event) => event.preventDefault()}
+      onFocus={(event) => tooltipController.show(event.currentTarget, card)}
+      // The ✕ is pointer-only, so Delete is the keyboard's way to detach.
+      aria-keyshortcuts={props.onDetach ? "Delete Backspace" : undefined}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          handleActivate(event);
+        } else if (
+          props.onDetach
+          && (event.key === "Delete" || event.key === "Backspace")
+          && !event.metaKey
+          && !event.ctrlKey
+          && !event.altKey
+          && !event.shiftKey
+        ) {
+          tooltipController.hide();
+          handleDetach(event);
+        }
+      }}
+      onMouseEnter={(event) => {
+        // Another sidebar card is up: swap to this one at once.
+        if (cardActions && sidebarPrCardBridge.enterTrigger(bridgeCardRef.current)) {
+          tooltipController.show(event.currentTarget, latestCardRef.current);
+          return;
+        }
+        tooltipController.showAfterDelay(
+          event.currentTarget,
+          () => latestCardRef.current,
+        );
+      }}
+      onMouseLeave={(event) => {
+        // Bridge to a card the pointer can reach; one drawn over the rows
+        // closes as before, so it never blocks the next row.
+        if (
+          cardActions
+          && tooltipVisible
+          && cardIsBesideSidebar(tooltipController.getElement(), event.currentTarget)
+        ) {
+          sidebarPrCardBridge.leaveTrigger(bridgeCardRef.current);
+          return;
+        }
+        tooltipController.hide();
+      }}
+    >
+      <span
+        className="pr-chip__dot"
+        aria-hidden="true"
+        ref={!props.statusOverride && presentation.hasFailingChecksStillRunning ? statusPulseRef : undefined}
+      />
+      <span className="pr-chip__label">{label}</span>
+      {queueBadge ? (
+        // The chip's name already says it in words (`prStatusLabel`).
+        <span
+          aria-hidden="true"
+          className={`pr-chip__queue pr-chip__queue--${queueBadge.state}`}
+        >
+          <MergeQueueIcon size={11} />
+          {queueBadge.state === "removed"
+            ? <CloseIcon size={9} />
+            : queueBadge.position ?? null}
+        </span>
+      ) : null}
+      {props.watch?.ci ? (
+        // Not a target: the chip is the control, and the card explains it.
+        <span className="pr-chip__watch" aria-hidden="true">
+          <EyeIcon size={12} />
+        </span>
+      ) : null}
+      {separated ? null : detach}
+      {separated ? null : draftBar}
+    </span>
+  );
+
   return (
     <>
-      <span
-        ref={contextMenuInvokerRef}
-        role="button"
-        tabIndex={0}
-        aria-haspopup="menu"
-        aria-label={`Open ${pr.org}/${pr.repo}#${pr.number} (${status}) in browser${
-          props.watch?.ci ? ", waiting for CI" : ""
-        }`}
-        // The card's numbers are a DESCRIPTION, not part of this control's
-        // name — packing them into the label makes every chip in a sidebar
-        // read like a paragraph. The portal sits outside this subtree, so
-        // pointing at it by id is what makes the card audible at all.
-        aria-describedby={tooltipVisible ? tooltipController.tooltipId : undefined}
-        className={className}
-        data-pr-chip=""
-        data-pr-url={pr.url}
-        draggable={false}
-        // Focus moving onto the card's own buttons keeps it.
-        onBlur={(event) => {
-          const card = tooltipController.getElement();
-          if (!card || !card.contains(event.relatedTarget as Node | null)) {
-            tooltipController.hide();
-          }
-        }}
-        onClick={handleActivate}
-        onContextMenu={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          window.getSelection()?.removeAllRanges();
-          tooltipController.hide();
-          const rect = event.currentTarget.getBoundingClientRect();
-          const position = {
-            x: event.clientX,
-            y: event.clientY,
-            anchorTop: rect.top,
-          };
-          if (props.onOpenContextMenu) {
-            props.onOpenContextMenu(pr, position);
-          } else {
-            contextMenuInvokerRef.current = event.currentTarget;
-            setContextMenuPosition(position);
-          }
-        }}
-        onDragStart={(event) => event.preventDefault()}
-        onFocus={(event) => tooltipController.show(event.currentTarget, card)}
-        // The ✕ is pointer-only, so Delete is the keyboard's way to detach.
-        aria-keyshortcuts={props.onDetach ? "Delete Backspace" : undefined}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            handleActivate(event);
-          } else if (
-            props.onDetach
-            && (event.key === "Delete" || event.key === "Backspace")
-            && !event.metaKey
-            && !event.ctrlKey
-            && !event.altKey
-            && !event.shiftKey
-          ) {
-            tooltipController.hide();
-            handleDetach(event);
-          }
-        }}
-        onMouseEnter={(event) => {
-          // Another sidebar card is up: swap to this one at once.
-          if (cardActions && sidebarPrCardBridge.enterTrigger(bridgeCardRef.current)) {
-            tooltipController.show(event.currentTarget, latestCardRef.current);
-            return;
-          }
-          tooltipController.showAfterDelay(
-            event.currentTarget,
-            () => latestCardRef.current,
-          );
-        }}
-        onMouseLeave={(event) => {
-          // Bridge to a card the pointer can reach; one drawn over the rows
-          // closes as before, so it never blocks the next row.
-          if (
-            cardActions
-            && tooltipVisible
-            && cardIsBesideSidebar(tooltipController.getElement(), event.currentTarget)
-          ) {
-            sidebarPrCardBridge.leaveTrigger(bridgeCardRef.current);
-            return;
-          }
-          tooltipController.hide();
-        }}
-      >
-        <span
-          className="pr-chip__dot"
-          aria-hidden="true"
-          ref={!props.statusOverride && presentation.hasFailingChecksStillRunning ? statusPulseRef : undefined}
-        />
-        <span className="pr-chip__label">{label}</span>
-        {queueBadge ? (
-          // The chip's name already says it in words (`prStatusLabel`).
-          <span
-            aria-hidden="true"
-            className={`pr-chip__queue pr-chip__queue--${queueBadge.state}`}
-          >
-            <MergeQueueIcon size={11} />
-            {queueBadge.state === "removed"
-              ? <CloseIcon size={9} />
-              : queueBadge.position ?? null}
-          </span>
-        ) : null}
-        {props.watch?.ci ? (
-          // Not a target: the chip is the control, and the card explains it.
-          <span className="pr-chip__watch" aria-hidden="true">
-            <EyeIcon size={12} />
-          </span>
-        ) : null}
-        {props.onDetach && !props.hideDetachButton ? (
-          // A pointer shortcut, not a second control: a button inside the
-          // chip's button is nested-interactive, and at 16px it is under the
-          // 24px target floor. Keyboards detach with Delete on the chip or
-          // from its menu.
-          <span
-            aria-hidden="true"
-            className="pr-chip__detach"
-            title={`Detach ${pr.org}/${pr.repo}#${pr.number} from thread`}
-            onClick={handleDetach}
-          >
-            <CloseIcon size={11} aria-hidden="true" />
-          </span>
-        ) : null}
-        {isDraft ? <span className="pr-chip__draft-bar" aria-hidden="true" /> : null}
-      </span>
+      {separated ? (
+        <span className={`${className} pr-chip--stacked`}>
+          {number}
+          <StackTag thread={stackThread} pr={pr} member={stack} onOpen={props.onOpen} />
+          {detach}
+          {draftBar}
+        </span>
+      ) : number}
       {tooltipController.tooltipNode}
       {contextMenuPosition && contextMenuInvokerRef.current ? (
         <PrChipContextMenu

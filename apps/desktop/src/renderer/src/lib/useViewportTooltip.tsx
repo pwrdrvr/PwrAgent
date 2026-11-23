@@ -394,6 +394,8 @@ export function useViewportTooltip(options: {
    * order; the trigger keeps the keyboard's way to each action.
    */
   interactive?: {
+    /** An interactive popup which can take keyboard focus. */
+    dialogLabel?: string;
     onPointerEnter: () => void;
     onPointerLeave: () => void;
     /**
@@ -901,7 +903,8 @@ export function useViewportTooltip(options: {
       if (
         interactiveRef.current
         && event.target instanceof Node
-        && tooltipRef.current?.contains(event.target)
+        && (tooltipRef.current?.contains(event.target)
+          || (interactiveRef.current.dialogLabel && targetRef.current?.contains(event.target)))
       ) {
         return;
       }
@@ -928,7 +931,8 @@ export function useViewportTooltip(options: {
       ? createPortal(
           <div
             ref={tooltipRef}
-            role="tooltip"
+            role={interactive?.dialogLabel ? "dialog" : "tooltip"}
+            aria-label={interactive?.dialogLabel}
             id={tooltipId}
             className={className}
             onMouseEnter={interactive ? () => interactiveRef.current?.onPointerEnter() : undefined}

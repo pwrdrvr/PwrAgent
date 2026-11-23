@@ -60,12 +60,14 @@ describe("stack catalog reads", () => {
         await writeFile(catalogPath, JSON.stringify(unnumberedCatalog));
         const parentPr = {
           ...childPr, number: 1, baseRefName: "main", headRefName: "feature/model", headSha: head,
-          url: "https://github.com/fixture/project/pull/1",
+          url: "https://github.com/fixture/project/pull/1", title: "Approval schema",
         };
         const reusedName = { ...parentPr, number: 3, lifecycleState: "merged" as const, headSha: base };
         for (const lifecycleState of ["open", "merged"] as const) {
           const observed = await reader.read(threads, [reusedName, { ...parentPr, lifecycleState }, childPr]);
-          expect(observed.stacks[0]?.layers[0]?.pullRequest).toEqual({ number: 1, lifecycleState });
+          expect(observed.stacks[0]?.layers[0]?.pullRequest).toMatchObject({
+            number: 1, lifecycleState, title: "Approval schema", checkState: "passing",
+          });
           if (lifecycleState === "merged") {
             expect(observed.stacks[0]?.layers[1]).toMatchObject({ health: "parent_merged", unsettled: "needs sync" });
             expect(observed.stacks[0]?.layers[1]?.heldBy).toBeUndefined();

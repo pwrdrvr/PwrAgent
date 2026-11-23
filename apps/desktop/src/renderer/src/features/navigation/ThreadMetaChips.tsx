@@ -36,7 +36,6 @@ import { InstanceChip } from "../federation/InstanceGlyph";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import { AgentThreadChip } from "./AgentThreadChip";
-import { StackPositionChips } from "../stacks/stack-presentation";
 
 const NO_WAITS: OperatorWait[] = [];
 
@@ -565,7 +564,6 @@ const ThreadMetaChipsContent = memo(function ThreadMetaChipsContent({
         : linkedDirectoryChips.slice(0, maxLinkedDirectories)}
 
       {prChips}
-      {thread.stackMemberships?.length || thread.stacks?.length ? <StackPositionChips thread={thread} /> : null}
 
       {branchChip && showBranch ? (
         <CopyableThreadChip

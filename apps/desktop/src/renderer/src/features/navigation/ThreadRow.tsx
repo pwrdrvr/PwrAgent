@@ -276,14 +276,15 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
   // Compact rows serve the chips immediately. The disclosure reads the
   // owner's full collection when the row only carries a preview.
   const attachedPrs = props.thread.prs ?? [];
-  // The stack chip is the primary signal while a lower layer holds this PR.
+  // Prefer a PR the operator can act on, and keep a lead when all are held.
   const heldPrUrls = readCompactStackMemberships(props.thread).some(({ heldBy }) => heldBy)
     ? attachedPrs.filter((pr) => stackHoldForPr(props.thread, pr)).map((pr) => pr.url) : [];
   const prs = heldPrUrls.length ? attachedPrs.filter((pr) => !heldPrUrls.includes(pr.url)) : attachedPrs;
   const heldPrUrlList = heldPrUrls.length ? heldPrUrls.join("\n") : undefined;
   const attachmentThread = props.thread.prsTruncated ? props.thread : undefined;
   // The chips line's one PR chip; the rest sit behind a `+N PRs` chip.
-  const leadPr = prs.length > 1 ? resolvePrOverflow(prs)!.lead : prs[0];
+  const leadCandidates = prs.length ? prs : attachedPrs;
+  const leadPr = leadCandidates.length > 1 ? resolvePrOverflow(leadCandidates)!.lead : leadCandidates[0];
   // PR watches reach the chips through ThreadRowPrChips, which read their
   // context themselves: a watch change must not re-render every row body.
   const density = useContext(ThreadRowDensityContext);
@@ -716,7 +717,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
             {/* Minimal density's one PR chip. CSS hides it while X-ray is
                 held, so a peek re-renders no row. It sits right of the pin
                 so the hover-only pin button never shifts it. */}
-            {density === "minimal" && (prs.length > 0 || attachedPrs.length > 1) ? (
+            {density === "minimal" && attachedPrs.length > 0 ? (
               <ThreadRowPrRollupChip
                 thread={props.thread}
                 prs={attachedPrs}
