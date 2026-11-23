@@ -38,6 +38,7 @@ export function projectMessagingRequest(input: MessagingInboundEvent) {
     eventId: event.id,
     platform: event.channel.channel,
     workspaceId: event.channel.conversation.workspaceId,
+    ...(event.channel.connectionId !== undefined ? { configuredConnectionId: event.channel.connectionId } : {}),
     actorId: event.actor.platformUserId,
     destinationIdentity: messagingDestinationIdentity(event.channel),
     receivedAt: event.receivedAt,

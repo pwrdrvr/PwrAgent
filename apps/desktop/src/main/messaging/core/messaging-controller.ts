@@ -965,6 +965,7 @@ export class MessagingController {
     return this.monitorHostPorts ??= {
       cleanupExpiredPrivateReplyContinuations: (...args) => this.inboundTurns.cleanupExpiredPrivateReplyContinuations(...args),
       filterBindingsForChannel: (...args) => this.filterBindingsForChannel(...args),
+      isChannelInScope: (...args) => this.isChannelInScope(...args),
       deliver: (...args) => this.deliver(...args),
       newIntentId: (...args) => this.newIntentId(...args),
       monitorAuthorizedActorIds: (...args) => this.accessControl.monitorAuthorizedActorIds(...args),
@@ -1910,10 +1911,15 @@ export class MessagingController {
       const bindingId = row.bindingId;
       if (!receipt || !bindingId) continue;
       if (this.options.channel && row.channel !== this.options.channel) continue;
-      summary.open += 1;
-      const decision = decideOpenReplyReceipt({ openId: row.id, receipt, now: this.now() });
-      if (decision.action === "skip" || !claimReplyReceipt(row.id)) continue;
+      let claimed = false;
       try {
+        const binding = await store.getBinding(bindingId);
+        if (this.disposed) break;
+        if (binding && !this.isChannelInScope(binding.channel)) continue;
+        summary.open += 1;
+        const decision = decideOpenReplyReceipt({ openId: row.id, receipt, now: this.now() });
+        if (decision.action === "skip" || !claimReplyReceipt(row.id)) continue;
+        claimed = true;
         const outcome = await this.recoverDeliveryReceipt({ ...row, bindingId }, receipt, decision);
         summary[outcome] += 1;
       } catch (error) {
@@ -1922,7 +1928,7 @@ export class MessagingController {
           error: error instanceof Error ? error.message : String(error),
         });
       } finally {
-        releaseReplyReceipt(row.id);
+        if (claimed) releaseReplyReceipt(row.id);
       }
     }
     const fields = { channel: this.options.channel, ...summary };

@@ -13,6 +13,7 @@ export type MessagingRequestProjection<InboundEvent> = {
   eventId: string;
   platform: string;
   workspaceId?: string;
+  configuredConnectionId?: string;
   actorId: string;
   destinationIdentity: string;
   receivedAt: number;
@@ -50,9 +51,11 @@ export class SqliteMessagingRequestStore<InboundEvent> implements MessagingReque
     const projection = this.projectEvent(params.event);
     if (!projection) return undefined;
     const { event } = projection;
+    // Append a configured connection only when present so retained singleton refs still resolve.
     const principalScope = digest([this.ownerId, projection.platform,
       projection.workspaceId ?? null, params.connectionId ?? null,
-      params.agent.backend, params.agent.threadId, projection.actorId]);
+      params.agent.backend, params.agent.threadId, projection.actorId,
+      ...(projection.configuredConnectionId === undefined ? [] : [projection.configuredConnectionId])]);
     const selector = digest([principalScope, projection.destinationIdentity]);
     const requestId = digest([selector, projection.eventId]);
     const existing = this.get({ ownerId: this.ownerId, requestId });
