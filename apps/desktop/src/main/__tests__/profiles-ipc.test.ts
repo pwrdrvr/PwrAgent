@@ -720,6 +720,36 @@ describe("profile IPC helpers", () => {
       const profilesToml = fs.readFileSync(path.join(root, "profiles.toml"), "utf8");
       expect(profilesToml).toContain('default_profile = "personal"');
     });
+
+    it("copies explicitly configured bootstrap hosts using the target profile revision", async () => {
+      const root = createRoot();
+      vi.stubEnv(PWRAGENT_HOME_ENV, root);
+      getAppStateModeMock.mockReturnValue("bootstrap");
+      ensureNamedProfileExists("personal");
+      const targetPath = path.join(root, "profiles", "personal", "config.toml");
+      fs.appendFileSync(targetPath, '\n[git]\ngithub_enterprise_hosts = ["target.example.com"]\n');
+      const bootstrapDir = path.join(root, ".bootstrap");
+      fs.mkdirSync(bootstrapDir);
+      const bootstrapPath = path.join(bootstrapDir, "config.toml");
+      fs.writeFileSync(bootstrapPath, "[git]\nwatch_merge_builds = false\n");
+      const { graduateDesktopBootstrapConfigToProfile } = await import("../shell/ipc/profiles");
+      const graduate = () => graduateDesktopBootstrapConfigToProfile({ targetProfile: "personal" });
+
+      expect(graduate().graduated).toBe(true);
+      expect(readProfileConfigFile(targetPath).git?.githubEnterpriseHosts?.value).toEqual(["target.example.com"]);
+
+      fs.appendFileSync(bootstrapPath, [
+        'github_enterprise_hosts = ["staged.example.com", "*.example.com"]',
+        '[[git.github_enterprise_accounts]]',
+        'host = "staged.example.com"',
+        'login = "build-bot"',
+        "",
+      ].join("\n"));
+      expect(graduate().graduated).toBe(true);
+      const config = readProfileConfigFile(targetPath).git;
+      expect(config?.githubEnterpriseHosts?.value).toEqual(["staged.example.com"]);
+      expect(config?.githubEnterpriseAccounts).toEqual([{ host: "staged.example.com", login: "build-bot" }]);
+    });
   });
 
   describe("writeDesktopSecretsToProfile", () => {

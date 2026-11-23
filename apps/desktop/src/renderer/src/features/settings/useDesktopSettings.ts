@@ -31,7 +31,7 @@ export type DesktopSettingsState = {
     secret: DesktopSettingsSecretName,
     value: string,
   ) => Promise<boolean>;
-  writeConfig: (patch: DesktopSettingsConfigPatch) => Promise<boolean>;
+  writeConfig: (patch: DesktopSettingsConfigPatch, onError?: (message: string) => void) => Promise<boolean>;
   writeConfigWithSnapshot: (patch: DesktopSettingsConfigPatch) => Promise<DesktopSettingsSnapshot | undefined>;
 };
 
@@ -102,7 +102,7 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
   }, [desktopApi, read]);
 
   const writeConfigWithSnapshot = useCallback(
-    async (patch: DesktopSettingsConfigPatch): Promise<DesktopSettingsSnapshot | undefined> => {
+    async (patch: DesktopSettingsConfigPatch, onError?: (message: string) => void): Promise<DesktopSettingsSnapshot | undefined> => {
       if (!desktopApi?.writeSettingsConfig) {
         setError("Settings are unavailable.");
         return undefined;
@@ -132,7 +132,9 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
         }
         return response.snapshot;
       } catch (writeError) {
-        setError(writeError instanceof Error ? writeError.message : String(writeError));
+        const message = writeError instanceof Error ? writeError.message : String(writeError);
+        setError(message);
+        onError?.(message);
         return undefined;
       } finally {
         configWriteInFlightRef.current = false;
@@ -154,8 +156,8 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
     [desktopApi, read],
   );
 
-  const writeConfig = useCallback(async (patch: DesktopSettingsConfigPatch): Promise<boolean> =>
-    (await writeConfigWithSnapshot(patch)) !== undefined,
+  const writeConfig = useCallback(async (patch: DesktopSettingsConfigPatch, onError?: (message: string) => void): Promise<boolean> =>
+    (await writeConfigWithSnapshot(patch, onError)) !== undefined,
   [writeConfigWithSnapshot]);
 
   const replaceSecret = useCallback(

@@ -9315,7 +9315,7 @@ class DesktopAppServerService {
     const ref = parseCiRunUrl(url, this.ciRunUrlOptions());
     if (!ref || ref.repository.provider !== "github") throw new Error(`Not a GitHub Actions run PwrAgent may read: ${CI_RUN_URL_FORMS}.`);
     const client = this.getForgeCiClient();
-    return await readGithubRunGates(async (repository, path) => await client.requestGithub(repository, { path }), ref, Date.now());
+    return await readGithubRunGates(async (repository, path) => await client.requestGithub(repository, { path, enterpriseCi: true }), ref, Date.now());
   }
 
   /** Lets CI approval cards approve their gates on this owner's GitHub sign-in. */
@@ -9352,11 +9352,11 @@ class DesktopAppServerService {
       throw new CiDeploymentReviewRefusal("not_allowed", `${setting} in Settings → Git → Agent forge tools, so PwrAgent does not approve deployments. Review it on GitHub, or change the setting.`);
     }
     const client = this.getForgeCiClient();
-    const approved = await approveGithubCiDeployment({
-      request: async (repository, request) => await client.requestGithub(repository, request),
+    const approved = await client.withCiDeploymentCredential((request) => approveGithubCiDeployment({
+      request,
       reviewed,
       urls: this.ciRunUrlOptions(),
-    });
+    }));
     appServerLog.info("approved a GitHub deployment gate from a card", {
       repository: reviewed.repository, runId: reviewed.runId, attempt: reviewed.attempt, environments: approved.environments,
     });
@@ -9370,7 +9370,7 @@ class DesktopAppServerService {
     const client = this.getForgeCiClient();
     return await readCiRun(async (repository, path) => repository.provider === "gitlab"
       ? await client.readGitlab(repository, path)
-      : await client.requestGithub(repository, { path }), ref, Date.now());
+      : await client.requestGithub(repository, { path, enterpriseCi: true }), ref, Date.now());
   }
 
   private ciRunUrlOptions(): CiRunUrlOptions {

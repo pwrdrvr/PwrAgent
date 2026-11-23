@@ -105,6 +105,26 @@ describe("approving a reviewed deployment gate", () => {
     }), { numRuns: 400 });
   });
 
+  it("uses the enterprise credential route for preflight and approval", async () => {
+    await fc.assert(fc.asyncProperty(reviewedArb, fc.nat(), async (reviewed, id) => {
+      const host = `ghe${id}.example.com`;
+      const github = fakeGithub(() => ({
+        fullName: reviewed.repository, attempt: reviewed.attempt, headSha: reviewed.headSha, status: "waiting",
+        pending: ENVIRONMENTS.map((entry) => ({ ...entry, canApprove: true })),
+      }));
+      await expect(approveGithubCiDeployment({
+        reviewed: { ...reviewed, url: URL.replace("github.com", host) },
+        urls: { githubEnterpriseHosts: [host] },
+        request: async (repository, call) => {
+          expect(repository.host).toBe(host);
+          expect(call).toMatchObject({ enterpriseCi: true });
+          return github.request(repository, call);
+        },
+      })).resolves.toEqual({ environments: reviewed.environments });
+      expect(github.posts).toHaveLength(1);
+    }));
+  });
+
   it("judges the reads made just before the write, whatever changed between the operator's view and the click", async () => {
     // Each GitHub call may first apply a change someone else made: another
     // reviewer approves, the run is rerun, or a push replaces the commit.

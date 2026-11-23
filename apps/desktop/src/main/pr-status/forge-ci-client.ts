@@ -1,7 +1,9 @@
+import { mergeGithubEnterpriseHosts } from "@pwragent/shared/github-enterprise-hosts";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { discoverGhCommands } from "../settings/gh-discovery";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import { readEnterpriseGithubToken } from "./github-enterprise-auth";
 import { readGithubAuthToken } from "./github-graphql-client";
 import { GitLabReadError, type GitLabPrFetcher } from "./gitlab-pr-fetcher";
 import { ForgeReadError, repositoryUrl, type ForgeReadArgs, type ForgeReadOperation, type ForgeRepository } from "./forge-tool-contract";
@@ -21,6 +23,8 @@ export type GithubRequest = {
   graphql?: boolean;
   /** Archive path to write the ZIP response to. */
   downloadArtifact?: string;
+  /** Apply a profile’s enterprise account selection for Continue After. */
+  enterpriseCi?: boolean;
 };
 const FAILED = new Set(["failure", "failed", "timed_out", "action_required", "startup_failure"]);
 function object(value: unknown): Payload {
@@ -219,6 +223,28 @@ export class ForgeCiClient {
     return this.admit(r, signal, () => this.github(r, request, signal));
   }
 
+  /** Bind the preflight and approval to one credential for the life of a card action. */
+  withCiDeploymentCredential<T>(
+    review: (request: (repository: ForgeRepository, request: GithubRequest) => Promise<unknown>) => Promise<T>,
+  ): Promise<T> {
+    let credential: { host: string; login?: string; token: Promise<string | null> } | undefined;
+    return review(async (repository, request) => {
+      if (repository.provider !== "github") throw new ForgeReadError("unsupported_provider", "CI deployment review requires GitHub.");
+      if (repository.host === "github.com") return await this.requestGithub(repository, request);
+      return await this.admit(repository, undefined, () => this.github(
+        repository, { ...request, enterpriseCi: true }, undefined, async () => {
+          const host = repository.host;
+          const login = getDesktopSettingsService().resolveGithubEnterpriseAccount(host);
+          credential ??= { host, login, token: this.readToken(host, true) };
+          if (credential.host !== host || credential.login !== login) {
+            throw new ForgeReadError("unauthenticated", "The GitHub account changed during approval. Review the deployment again.");
+          }
+          return await credential.token;
+        },
+      ));
+    });
+  }
+
   /** A GitLab GET through the same admission as CI reads. `endpoint` is built by first-party code, never an agent. */
   async readGitlab(r: ForgeRepository, endpoint: string, signal?: AbortSignal): Promise<unknown> {
     if (r.provider !== "gitlab") throw new ForgeReadError("unsupported_provider", "This read supports GitLab projects only.");
@@ -262,12 +288,20 @@ export class ForgeCiClient {
     } finally { this.active--; }
   }
 
-  private async github(r: ForgeRepository, request: GithubRequest, signal?: AbortSignal): Promise<unknown> {
+  private async github(
+    r: ForgeRepository,
+    request: GithubRequest,
+    signal?: AbortSignal,
+    readToken: () => Promise<string | null> = () => this.readToken(r.host, request.enterpriseCi),
+  ): Promise<unknown> {
     const raw = request.raw === true;
-    const token = this.options.githubToken ? await this.options.githubToken(r.host) : await this.token(r.host);
+    const checkHost = request.enterpriseCi && r.host !== "github.com";
+    if (checkHost) this.assertEnterpriseCiHost(r.host);
+    const token = await readToken();
     if (!token) throw new ForgeReadError("unauthenticated", `Sign in with GitHub CLI for ${r.host} in Settings → Git.`);
     signal?.throwIfAborted();
     if (!this.options.enabled("github")) throw new ForgeReadError("provider_disabled", "GitHub was disabled before the request started.");
+    if (checkHost) this.assertEnterpriseCiHost(r.host);
     const fetcher = this.options.fetch ?? fetch;
     const timeout = AbortSignal.timeout(30_000);
     const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
@@ -345,9 +379,30 @@ export class ForgeCiClient {
     }
     return parsed;
   }
-  private async token(host: string): Promise<string | null> {
+  private assertEnterpriseCiHost(host: string): void {
+    const saved = getDesktopSettingsService().resolveGithubEnterpriseHosts();
+    if (!mergeGithubEnterpriseHosts(saved, [], URL).servers.some((server) => server.host === host)) {
+      throw new ForgeReadError("forbidden", "This GitHub Enterprise host is no longer allowed in Settings → Git.");
+    }
+  }
+  private readToken(host: string, enterpriseCi?: boolean): Promise<string | null> {
+    return this.options.githubToken ? this.options.githubToken(host) : this.token(host, enterpriseCi);
+  }
+
+  private async token(host: string, enterpriseCi?: boolean): Promise<string | null> {
     const discovery = await discoverGhCommands({ configuredCommand: getDesktopSettingsService().resolveGhCommandPreference() });
     if (!discovery.selectedCommand) throw new ForgeReadError("unavailable", "Install GitHub CLI or select its path in Settings → Git.");
+    if (enterpriseCi && host !== "github.com") {
+      const login = getDesktopSettingsService().resolveGithubEnterpriseAccount(host);
+      const token = await readEnterpriseGithubToken(discovery.selectedCommand, host, login);
+      if (getDesktopSettingsService().resolveGithubEnterpriseAccount(host) !== login) {
+        throw new ForgeReadError("unauthenticated", "The GitHub account changed before the request started. Check again.");
+      }
+      if (!token && login !== undefined) {
+        throw new ForgeReadError("unauthenticated", `The pinned GitHub account for ${host} is not signed in. Check Settings → Git.`);
+      }
+      return token;
+    }
     return readGithubAuthToken(discovery.selectedCommand, host);
   }
 }
