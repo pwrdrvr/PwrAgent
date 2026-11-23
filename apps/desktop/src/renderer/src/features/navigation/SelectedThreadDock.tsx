@@ -89,6 +89,31 @@ function extentOf(element: Element): DockExtent {
   return { top, bottom };
 }
 
+function unreservedStickyExtent(element: Element, listTop: number, reserve: number, zoom: number): DockExtent {
+  const extent = extentOf(element);
+  if (reserve === 0 || extent.top <= listTop || extent.bottom === extent.top) return extent;
+
+  const divider = element.matches(STICKY_DIVIDER);
+  const baseInset = divider
+    ? Number.parseFloat(getComputedStyle(element).getPropertyValue("--directory-row-header-height"))
+    : 0;
+  const stickyTop = listTop + baseInset * zoom;
+  // The box is already leaving its section, or has not reached the sticky
+  // inset even with the reserve. Allow for Chromium snapping the sticky
+  // inset to a layout unit before it reports the rectangle.
+  if (!(extent.top > stickyTop && extent.top <= stickyTop + reserve + 1)) return extent;
+
+  // A sticky box can only move down from its normal position. Its current
+  // top is already capped by the end of the containing section, so lowering
+  // the inset just clamps it between its normal position and the base inset.
+  const origin = divider ? element.previousElementSibling : element.parentElement;
+  if (!origin) return extent;
+  const flowInset = divider ? 0 : origin.clientTop + Number.parseFloat(getComputedStyle(origin).paddingTop || "0");
+  const flowTop = origin.getBoundingClientRect().top + flowInset * zoom;
+  const top = Math.max(stickyTop, Math.min(extent.top, flowTop));
+  return { top, bottom: top + (extent.bottom - extent.top) };
+}
+
 function threadRows(region: HTMLElement, threadKey: string): HTMLElement[] {
   return [...region.querySelectorAll<HTMLElement>(
     `.thread-row-shell[data-thread-key="${CSS.escape(threadKey)}"] > .thread-row`,
@@ -150,7 +175,7 @@ function measure(
   threadKey: string,
   holders: Holders,
   elements: DockElements,
-  liftReserve: () => void,
+  reserve: number,
 ): { state: DockState; row: HTMLElement | undefined } | undefined {
   // A drag reads the list's edges for auto-scroll and drop targets.
   elements.dragging ??= region.querySelector(DRAGGING) !== null;
@@ -189,9 +214,8 @@ function measure(
   if (!(held[0] && isProjectSection(held[0]))
     && extents.some((extent) => extent.top < listTop + STICKY_REACH_PX)
     && !(view.height > STICKY_REACH_PX && extents.every((extent) => extent.bottom <= listTop))) {
-    // Read sticky boxes without the reserve they acquire from the dock.
+    // Resolve sticky boxes without the reserve they acquire from the dock.
     // Otherwise a row at the very start could stay covered forever.
-    liftReserve();
     if (elements.sticky?.lane !== lane) {
       elements.sticky = {
         lane,
@@ -199,7 +223,12 @@ function measure(
         dividers: [...lane.querySelectorAll(STICKY_DIVIDER)],
       };
     }
-    bandTop = stuckBandTop(listTop, elements.sticky.headers, elements.sticky.dividers, extentOf);
+    // Computed insets use CSS pixels, while the client rectangles include
+    // the effective CSS zoom of the lane.
+    const zoom = lane.currentCSSZoom ?? 1;
+    const stickyEdge = reserve > 0 ? listTop + lane.clientTop * zoom : listTop;
+    bandTop = stuckBandTop(listTop, elements.sticky.headers, elements.sticky.dividers,
+      (element) => unreservedStickyExtent(element, stickyEdge, reserve * zoom, zoom));
   }
   const band = { top: bandTop, bottom: view.bottom };
   const placement = selectedThreadDockPlacement(extents, band);
@@ -384,10 +413,7 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
   const sync = useCallback((elements?: DockElements): void => {
     const region = regionRef.current;
     const reserved = reservedRegionRef.current;
-    // What the headers stick under now. The measure below lifts the reserve
-    // for its reads, so compare the result with this, not with mid-measure.
     const reserveBefore = region ? topDockReserve(region) : 0;
-    let hasReserve = reserved === region && region?.classList.contains(TOP_DOCK_CLASS);
     if (reserved && reserved !== region) {
       reserved.classList.remove(TOP_DOCK_CLASS);
       reserved.style.removeProperty(RESERVE_PROPERTY);
@@ -397,13 +423,7 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
       ? measure(region, threadKey, {
         ancestorThreadKeys: ancestorsKey ? ancestorsKey.split("\n") : [],
         directoryKeys: directoriesKey ? directoriesKey.split("\n") : [],
-      }, elements, () => {
-        // Keep the custom property to avoid restyling the entire region.
-        if (hasReserve) {
-          region.classList.remove(TOP_DOCK_CLASS);
-          hasReserve = false;
-        }
-      })
+      }, elements, reserveBefore)
       : undefined;
     rowRef.current = measured?.row;
     const reserve = measured?.state.edge === "top"
@@ -416,8 +436,8 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
       }
       if (!region.classList.contains(TOP_DOCK_CLASS)) region.classList.add(TOP_DOCK_CLASS);
       reservedRegionRef.current = region;
-    } else if (hasReserve) {
-      region?.classList.remove(TOP_DOCK_CLASS);
+    } else if (region && reserved === region && reserveBefore > 0) {
+      region.classList.remove(TOP_DOCK_CLASS);
     }
     if (region && topDockReserve(region) !== reserveBefore) {
       region.dispatchEvent(new Event(TOP_DOCK_RESERVE_CHANGE_EVENT));

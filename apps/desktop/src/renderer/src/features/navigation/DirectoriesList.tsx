@@ -2049,6 +2049,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                     (directoryUnpinnedThreadCount > 0
                       || (startingRootSlot === "unpinned" && startingRootThreads.length > 0)) ? (
                       <div className="directory-row__threads-slot" role="listitem">
+                        <span className="directory-row__thread-divider-origin" aria-hidden="true" />
                         <button
                           type="button"
                           className="recents-pinned-divider directory-row__thread-divider"

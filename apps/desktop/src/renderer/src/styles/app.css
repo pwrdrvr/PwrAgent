@@ -5687,11 +5687,8 @@ textarea,
    the card. It spans the lane inset to inset, as the rows do, and leaves
    the scrollbar's column alone.
 
-   The shift hangs on the class, not on the property's value. The dock
-   takes the class off when placement needs the unshifted sticky boxes.
-   Changing an inherited custom property
-   there restyles every row under the region (38ms a frame at 360 rows);
-   a class with these four descendant selectors restyles the headers. */
+   The shift hangs on the class, not on the property's value. Placement
+   measures the unshifted boxes without toggling the class. */
 .selected-thread-dock-band {
   position: absolute;
   z-index: 7;
@@ -5712,7 +5709,7 @@ textarea,
 }
 
 .sidebar__scroll-region.has-selected-thread-dock-top .directory-row__thread-divider {
-  top: calc(var(--directory-row-header-height, 24px) + var(--selected-thread-dock-reserve, 0px));
+  top: calc(var(--directory-row-header-height) + var(--selected-thread-dock-reserve, 0px));
 }
 
 .selected-thread-dock--bottom {
@@ -10063,6 +10060,7 @@ button.stack-position-chip:hover {
 }
 
 .directory-row {
+  --directory-row-header-height: 24px;
   /* Sidebar-tightening pass: the previous 10px top padding + 44px
      summary min-height + 34px launchpad button meant each
      directory header took ~54px. Recovered ~20px per row by halving
@@ -10647,6 +10645,9 @@ button.stack-position-chip:hover {
 }
 
 .directory-row__threads {
+  --directory-thread-row-gap: 2px;
+  --directory-thread-divider-margin: 4px;
+  row-gap: var(--directory-thread-row-gap);
   /* Mirror the 8px left inset on the right so the sticky directory
      header (which spans the full `.directory-row` width) covers a
      selected row's accent border with the same 8px overlap on both
@@ -10847,6 +10848,17 @@ button.stack-position-chip:hover {
   color: var(--text-primary);
 }
 
+/* The dock reads the divider's normal-flow top from this marker. Cancel the
+   extra flex gap and align the marker with the button's top margin. */
+.directory-row__thread-divider-origin {
+  position: relative;
+  inset-block-start: var(--directory-thread-divider-margin);
+  block-size: 0;
+  flex: none;
+  margin-block-end: calc(-1 * var(--directory-thread-row-gap));
+  pointer-events: none;
+}
+
 .directory-row__thread-divider {
   appearance: none;
   padding: 0;
@@ -10864,7 +10876,7 @@ button.stack-position-chip:hover {
      a hair wider than the 2px the cards keep between each other — it
      is a section label, not a card. (The bottom stays at the base 2px:
      with the list gap it totals 4.) */
-  margin-top: 4px;
+  margin-top: var(--directory-thread-divider-margin);
   /* WCAG 2.5.8: the band is a real button, and its 11px label alone made
      it 13px tall — under the 24px minimum, with only 23px of safe
      clickable space between the rows above and below it. `align-items:
@@ -10881,7 +10893,7 @@ button.stack-position-chip:hover {
      is the header's measured height, published on the section by
      DirectoriesList; 24px is the summary's floor, for the first frame. */
   position: sticky;
-  top: var(--directory-row-header-height, 24px);
+  top: var(--directory-row-header-height);
   z-index: 5;
   /* Opaque and as wide as the header: out to the section edges over the
      lane's 8px insets (`.directory-row__threads`), so a selected row's
