@@ -14,7 +14,7 @@ import {
 import { parseRemoteOperatorItemKey } from "@pwragent/shared/contracts/operator-requests";
 import { threadTodoThreadKey } from "@pwragent/shared/contracts/thread-todos";
 import { StartupTiming } from "../composer/StartupTiming";
-import { LaunchpadStartupCancelledError } from "../../lib/launchpad-creation-client";
+import { LaunchpadSkillProfilePersistenceError, LaunchpadStartupCancelledError } from "../../lib/launchpad-creation-client";
 import { ThreadServices } from "../federation/ThreadServices";
 import type { BackgroundTerminalsViewProps } from "./BackgroundTerminalsView";
 import type { AgentCommandsStatus } from "../../lib/useThreadSessionState";
@@ -3074,7 +3074,7 @@ export function ThreadView(props: ThreadViewProps) {
         scheduledFor,
       );
     } catch (error) {
-      if (error instanceof LaunchpadStartupCancelledError) {
+      if (error instanceof LaunchpadStartupCancelledError || error instanceof LaunchpadSkillProfilePersistenceError) {
         setLaunchpadMaterializing(false);
         setLaunchpadSubmittedInput([]);
         setLaunchpadMaterializeError(undefined);

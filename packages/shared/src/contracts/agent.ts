@@ -73,6 +73,7 @@ export type StartThreadResponse = {
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   codexEnvironmentStartupFailure?: CodexEnvironmentStartupFailure;
   codexSkillProfile?: CodexThreadSkillProfile;
+  codexSkillProfilePersistenceFailure?: { message: string };
 };
 
 export type CodexEnvironmentStartupFailure = {
@@ -1254,6 +1255,7 @@ export type MaterializedDirectoryLaunchpadThread = {
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   codexEnvironmentStartupFailure?: CodexEnvironmentStartupFailure;
   codexSkillProfile?: CodexThreadSkillProfile;
+  codexSkillProfilePersistenceFailure?: StartThreadResponse["codexSkillProfilePersistenceFailure"];
 };
 
 export type MaterializeDirectoryLaunchpadOptions = {

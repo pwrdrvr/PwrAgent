@@ -92,7 +92,7 @@ export function CodexSkillProfilesSettings(props: {
   const saved = props.profiles.find(({ id }) => id === editId);
   const editor = editId ? (
     <SkillProfileEditor
-      key={editId}
+      key={`editor-${editId}`}
       id={editId}
       saved={saved}
       catalog={catalog}
@@ -114,7 +114,7 @@ export function CodexSkillProfilesSettings(props: {
         {!props.profiles.length && !editId ? (
           <p className="settings-empty">No profiles. New threads use your Codex skill settings. Make one to keep skills you don’t need out of a thread’s skill list.</p>
         ) : null}
-        {props.profiles.map((profile) => {
+        {props.profiles.flatMap((profile) => {
           const hidden = profile.hiddenSkills;
           const absent = installed ? hidden.filter((name) => !installed.has(name)).length : 0;
           const details = [
@@ -123,7 +123,7 @@ export function CodexSkillProfilesSettings(props: {
             hidden.length > 3 ? `+${hidden.length - 3}` : "",
             absent ? `${absent} not installed now` : "",
           ].filter(Boolean).join(" · ");
-          return (
+          const row = (
             <div key={profile.id}>
               <SettingsPathRow
                 title={profile.name}
@@ -133,11 +133,10 @@ export function CodexSkillProfilesSettings(props: {
                 disabled={Boolean(editId)}
                 onUse={() => setEditId(profile.id)}
               />
-              {profile.id === editId ? editor : null}
             </div>
           );
-        })}
-        {editId && !saved ? editor : null}
+          return profile.id === editId ? [row, editor] : [row];
+        }).concat(saved ? [] : [editor])}
       </div>
       <div className="settings-inline-actions">
         <button
@@ -165,9 +164,13 @@ function SkillProfileEditor(props: {
   onClose: (message?: string) => void;
   onRetry: () => void;
 }) {
+  const [lastSaved, setLastSaved] = useState(props.saved);
+  if (props.saved && props.saved !== lastSaved) setLastSaved(props.saved);
+  const savedValues = props.saved ?? lastSaved;
+  const deleted = !props.saved && lastSaved !== undefined;
   const draft = useSettingsDraft({
-    name: props.saved?.name ?? "",
-    hidden: JSON.stringify(props.saved?.hiddenSkills ?? []),
+    name: savedValues?.name ?? "",
+    hidden: JSON.stringify(savedValues?.hiddenSkills ?? []),
   });
   const [query, setQuery] = useState("");
   const [deleting, setDeleting] = useState(false);
@@ -190,8 +193,8 @@ function SkillProfileEditor(props: {
   };
   const name = draft.values.name.trim();
   const nameError = codexSkillProfileNameError(name, props.profiles, props.id);
-  const canSave = !saving && draft.dirty && !nameError && props.catalog.state !== "loading"
-    && (props.catalog.state === "ready" || Boolean(props.saved));
+  const canSave = !saving && (draft.dirty || deleted) && !nameError && props.catalog.state !== "loading"
+    && (props.catalog.state === "ready" || Boolean(savedValues));
   const persist = useCallback(async (profiles: CodexSkillProfile[], message?: string) => {
     setSaving(true);
     setError(undefined);
@@ -208,7 +211,7 @@ function SkillProfileEditor(props: {
   }, [props.onClose, props.onSave]);
   const save = () => {
     if (!canSave) return Promise.resolve(false);
-    const entry = { id: props.id, name, hiddenSkills: [...hidden] };
+    const entry = { id: deleted ? crypto.randomUUID() : props.id, name, hiddenSkills: [...hidden] };
     return persist(props.saved
       ? props.profiles.map((profile) => profile.id === props.id ? entry : profile)
       : [...props.profiles, entry]);
@@ -232,6 +235,7 @@ function SkillProfileEditor(props: {
 
   return (
     <form className="settings-fields skill-profile-editor" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+      {deleted ? <p role="status" className="settings-field__help">This profile was deleted in another window. You can save your edits as a new profile.</p> : null}
       <SettingsField label="Name" labelId="codex-skill-profile-name-label"
         error={nameError && draft.dirty ? nameError : undefined}
         control={<input
@@ -316,7 +320,9 @@ function SkillProfileEditor(props: {
           {props.saved ? <button type="button" className="button button--secondary" disabled={saving} onClick={() => setDeleting(true)}>Delete profile</button> : null}
           <span className="settings-field__help">Applies to new threads</span>
           <button type="button" className="button button--secondary" disabled={saving} onClick={() => props.onClose()}>Cancel</button>
-          <button type="submit" className="button button--primary" disabled={!canSave}>{saving ? "Saving…" : "Save"}</button>
+          <button type="submit" className="button button--primary" disabled={!canSave}>
+            {saving ? "Saving…" : deleted ? "Save as new profile" : "Save"}
+          </button>
         </div>
       )}
     </form>

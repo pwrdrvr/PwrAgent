@@ -41,6 +41,7 @@ export type ThreadActionErrorKind =
   | "rename-thread"
   | "reorder-sidebar"
   | "save-collapsed"
+  | "save-skill-profile"
   | "set-thread-parent"
   | "unlink-thread"
   | "update-pin";
@@ -62,6 +63,7 @@ const THREAD_ACTION_ERROR_TITLES: Record<ThreadActionErrorKind, string> = {
   "rename-thread": "Rename failed",
   "reorder-sidebar": "Reorder failed",
   "save-collapsed": "Could not save collapsed state",
+  "save-skill-profile": "Could not save skill profile",
   "set-thread-parent": "Could not change parent thread",
   "unlink-thread": "Unlink failed",
   "update-pin": "Pin change failed",

@@ -113,7 +113,7 @@ export function useThreadSkills(params: {
   );
 
   const loadTarget = useCallback(
-    async (options: { force?: boolean } = {}): Promise<void> => {
+    async (options: { force?: boolean; replacePending?: boolean } = {}): Promise<void> => {
       if (!skillTarget) {
         return;
       }
@@ -131,7 +131,7 @@ export function useThreadSkills(params: {
       }
 
       const currentState = stateByThreadKeyRef.current[skillTarget.key];
-      if (currentState?.loading || (!options.force && currentState?.response)) {
+      if ((currentState?.loading && !options.replacePending) || (!options.force && currentState?.response)) {
         return;
       }
 
@@ -313,8 +313,16 @@ export function useThreadSkills(params: {
   const autoLoadedKeysRef = useRef<Set<string>>(new Set());
   const needsRemoteProfiles = skillTarget?.federationTarget?.scope === "remote"
     && skillTarget.backend === "codex" && (!thread || Boolean(thread.codexSkillProfile));
+  const remoteLaunchpadKey = !thread && needsRemoteProfiles ? skillTarget?.key : undefined;
+  const previousRemoteLaunchpadKey = useRef<string>(undefined);
   const autoLoadKey = originDirectories.length > 1 || needsRemoteProfiles ? skillTarget?.key : undefined;
   useEffect(() => {
+    const selectedNewRemoteLaunchpad = remoteLaunchpadKey !== previousRemoteLaunchpadKey.current;
+    previousRemoteLaunchpadKey.current = remoteLaunchpadKey;
+    if (remoteLaunchpadKey) {
+      if (selectedNewRemoteLaunchpad) void loadTarget({ force: true, replacePending: true });
+      return;
+    }
     if (!autoLoadKey || autoLoadedKeysRef.current.has(autoLoadKey)) {
       return;
     }
@@ -323,7 +331,7 @@ export function useThreadSkills(params: {
     // `loadTarget` is deliberately not a dependency: it is re-created for
     // every thread summary, and the key is what decides whether to ask.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoLoadKey]);
+  }, [autoLoadKey, remoteLaunchpadKey]);
 
   // Main sends its bundled skill root only on a local listing. A peer's skill
   // paths are on the peer's machine, so a remote target never uses one, even

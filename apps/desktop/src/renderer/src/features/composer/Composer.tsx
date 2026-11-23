@@ -222,7 +222,7 @@ import { openImageGallery } from "../thread-detail/ImageGalleryLayer";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { LaunchpadStartupCancelledError } from "../../lib/launchpad-creation-client";
+import { LaunchpadSkillProfilePersistenceError, LaunchpadStartupCancelledError } from "../../lib/launchpad-creation-client";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import { prefersClaudeCodeReview, resolveReviewRunMode } from "../../lib/review-run-mode";
 import { ReviewAutoFixSwitch } from "./ReviewAutoFixSwitch";
@@ -7666,7 +7666,9 @@ function useComposerController(props: ComposerProps) {
         props.onPendingStatusChange?.(undefined);
         restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
         releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
-        setSendError(error instanceof Error ? error.message : String(error));
+        if (!(error instanceof LaunchpadSkillProfilePersistenceError)) {
+          setSendError(error instanceof Error ? error.message : String(error));
+        }
       } finally {
         updateSending(false);
       }
@@ -9322,7 +9324,9 @@ function useComposerController(props: ComposerProps) {
       } else {
         draftStore.pushDraft(submittedScopeKey, submittedSnapshot);
       }
-      setSendError(error instanceof Error ? error.message : String(error));
+      if (!(error instanceof LaunchpadSkillProfilePersistenceError)) {
+        setSendError(error instanceof Error ? error.message : String(error));
+      }
     } finally {
       props.onPendingStatusChange?.(undefined);
       updateSending(false);
@@ -10383,7 +10387,9 @@ function useComposerController(props: ComposerProps) {
           draftStore.pushDraft(submittedScopeKey, submittedSnapshot);
         }
         props.onPendingStatusChange?.(undefined);
-        if (!launchpadMaterializingRef.current && !(error instanceof LaunchpadStartupCancelledError)) {
+        if (!launchpadMaterializingRef.current
+          && !(error instanceof LaunchpadStartupCancelledError)
+          && !(error instanceof LaunchpadSkillProfilePersistenceError)) {
           setSendError(error instanceof Error ? error.message : String(error));
         }
       } finally {
@@ -16058,6 +16064,7 @@ function useComposerController(props: ComposerProps) {
             <CodexSkillProfileControl
               profiles={props.codexSkillProfiles}
               selected={launchpadSkillProfile}
+              selectionId={props.launchpad?.codexSkillProfileId}
               snapshot={threadSkillProfile}
               disabled={launchpadSubmitting || composerDisabled}
               onChange={props.launchpad ? (id) => handleLaunchpadPatch({ codexSkillProfileId: id }) : undefined}

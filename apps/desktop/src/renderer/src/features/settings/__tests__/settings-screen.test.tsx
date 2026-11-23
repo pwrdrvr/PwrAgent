@@ -59,12 +59,45 @@ import {
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
 import type { AppearanceController } from "../../../lib/useAppearance";
 import { SettingsScreen } from "../SettingsScreen";
+import { CodexSkillProfilesSettings } from "../CodexSkillProfilesSettings";
 import { AppNoticeToast, type AppNoticeToastNotice } from "../../notifications/AppNoticeToast";
 import { CodexLaunchNotice } from "../../notifications/CodexLaunchNotice";
 import type { ConfirmSettingsLeave } from "../UnsavedSettingsChanges";
 import type { DesktopSettingsState } from "../useDesktopSettings";
 
 const originalScrollTo = window.scrollTo;
+
+it.each([false, true])("keeps the skill profile draft and untouched exclusions across deletion (skills edited: %s)", async (editSkills) => {
+  const profile = { id: "release", name: "Release", hiddenSkills: ["publish"] };
+  const desktopApi: DesktopApi = {
+    listSkills: async () => ({
+      backend: "codex", fetchedAt: 1,
+      data: [{ skills: [
+        { name: "publish", description: "Publish a release" },
+        { name: "deploy", description: "Deploy an app" },
+      ] }],
+    }),
+  };
+  const onSave = vi.fn(async () => true);
+  const { rerender } = render(<CodexSkillProfilesSettings desktopApi={desktopApi} profiles={[profile]} onSave={onSave} />);
+  fireEvent.click(screen.getByRole("button", { name: /^Edit$/ }));
+  const name = screen.getByRole("textbox", { name: "Name" });
+  const publish = await screen.findByRole("checkbox", { name: /publish a release/i });
+  const deploy = screen.getByRole("checkbox", { name: /deploy an app/i });
+  fireEvent.change(name, { target: { value: "My release" } });
+  if (editSkills) fireEvent.click(deploy);
+  rerender(<CodexSkillProfilesSettings desktopApi={desktopApi} profiles={[]} onSave={onSave} />);
+  expect(screen.getByRole("textbox", { name: "Name" })).toBe(name);
+  expect(name).toHaveValue("My release");
+  expect(publish).toBeChecked();
+  expect(deploy).toHaveProperty("checked", editSkills);
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Save as new profile" }));
+  });
+  expect(onSave).toHaveBeenCalledWith([
+    { id: expect.not.stringMatching(/^release$/), name: "My release", hiddenSkills: editSkills ? ["publish", "deploy"] : ["publish"] },
+  ]);
+});
 
 afterEach(() => {
   cleanup();

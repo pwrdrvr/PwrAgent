@@ -8352,7 +8352,7 @@ export class DesktopBackendRegistry {
     });
   }
 
-  private async prepareThreadCreation(params: Parameters<DesktopBackendRegistry["startThread"]>[0], resources: ThreadCreationPreparation, pending?: PendingThreadStartReporter): Promise<PreparedThreadCreation<Pick<StartThreadResponse, "executionMode" | "codexEnvironmentRuntime" | "codexEnvironmentStartupFailure" | "codexSkillProfile">>> {
+  private async prepareThreadCreation(params: Parameters<DesktopBackendRegistry["startThread"]>[0], resources: ThreadCreationPreparation, pending?: PendingThreadStartReporter): Promise<PreparedThreadCreation<Omit<StartThreadResponse, "backend" | "threadId" | "pinnedRank" | "autoPinFailure">>> {
     this.assertThreadOwnership();
     this.assertNotBootstrap("startThread");
     const {
@@ -8380,6 +8380,9 @@ export class DesktopBackendRegistry {
     const skillProfile = backend === "codex" && codexSkillProfileId
       ? getDesktopSettingsService().readModelsConfig().codex?.skillProfiles?.find(({ id }) => id === codexSkillProfileId)
       : undefined;
+    if (backend === "codex" && codexSkillProfileId && !skillProfile) {
+      throw new Error("That skill profile is no longer available. Choose another profile or Codex skills and try again.");
+    }
     const codexSkillProfile = skillProfile ? snapshotCodexSkillProfile(skillProfile) : undefined;
     // A launchpad's access defaults to Auto for Codex and Claude. A Codex older
     // than 0.153.0 cannot run Auto, so start on Default Access instead of
@@ -8615,6 +8618,9 @@ export class DesktopBackendRegistry {
     const agentName = request.agent?.name?.trim();
     let gitBranch: string | undefined;
     let currentMigration: DesktopProviderThreadModelMigration | undefined;
+    const metadata: Omit<StartThreadResponse, "backend" | "threadId" | "pinnedRank" | "autoPinFailure"> = {
+      executionMode: effectiveExecutionMode, codexEnvironmentRuntime, codexEnvironmentStartupFailure,
+    };
     return { options: {
       backend,
       systemPlaceholder: !agentName,
@@ -8707,10 +8713,22 @@ export class DesktopBackendRegistry {
         await this.recordCodexWorktreeOwnerThread({ ...identity, worktreePath: cwd });
       },
       invalidate: ({ threadId }) => { this.invalidateThreadListCache(backend, true, threadId, cwd ? [cwd] : []); },
-      persistExecutionMode: async (identity) => await this.overlayStore.setThreadExecutionMode({
-        ...identity, executionMode: effectiveExecutionMode,
-        ...(codexSkillProfile ? { codexSkillProfile } : {}),
-      }),
+      persistExecutionMode: async (identity) => {
+        try {
+          await this.overlayStore.setThreadExecutionMode({
+            ...identity, executionMode: effectiveExecutionMode,
+            ...(codexSkillProfile ? { codexSkillProfile } : {}),
+          });
+          metadata.codexSkillProfile = codexSkillProfile;
+        } catch (error) {
+          if (codexSkillProfile) {
+            metadata.codexSkillProfilePersistenceFailure = {
+              message: "The thread was created, but its skill profile could not be saved. Start a new thread to use the profile.",
+            };
+          }
+          throw error;
+        }
+      },
       persistTokenMiser: async (identity) => await this.overlayStore.setThreadTokenMiser?.({ ...identity, enabled: tokenMiserOverride! }),
       persistPdfCatalog: async (identity) => await this.overlayStore.setThreadMessagingPdfToolCatalogVersion?.({
         ...identity, version: PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
@@ -8761,7 +8779,7 @@ export class DesktopBackendRegistry {
           error: error instanceof Error ? error.message : String(error),
         });
       },
-    }, metadata: { executionMode: effectiveExecutionMode, codexEnvironmentRuntime, codexEnvironmentStartupFailure, codexSkillProfile } };
+    }, metadata };
   }
 
   /**

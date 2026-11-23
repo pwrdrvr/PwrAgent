@@ -5,6 +5,7 @@ import { ComposerDropdown } from "./ComposerDropdown";
 export function CodexSkillProfileControl(props: {
   profiles?: readonly CodexSkillProfile[];
   selected?: CodexSkillProfile;
+  selectionId?: string | null;
   snapshot?: CodexThreadSkillProfile;
   disabled: boolean;
   onChange?: (id: string | null) => void;
@@ -30,8 +31,11 @@ export function CodexSkillProfileControl(props: {
       </span>
     );
   }
-  if (!props.profiles?.length || !props.onChange) return null;
+  if ((!props.profiles?.length && !props.selectionId) || !props.onChange) return null;
   const selected = props.selected;
+  const missingProfile = !selected && props.selectionId
+    ? { value: props.selectionId, label: "Profile unavailable", disabled: true, description: "Choose another profile or Codex skills." }
+    : undefined;
   return (
     <ComposerDropdown
       ariaLabel="Skill profile"
@@ -42,7 +46,8 @@ export function CodexSkillProfileControl(props: {
       onChange={(value) => props.onChange?.(value || null)}
       options={[
         { value: "", label: "Codex skills", description: "Nothing hidden. Uses your Codex settings." },
-        ...props.profiles.map(({ id, name, hiddenSkills }) => ({
+        ...(missingProfile ? [missingProfile] : []),
+        ...(props.profiles ?? []).map(({ id, name, hiddenSkills }) => ({
           value: id,
           label: name,
           selectedLabel: `${name} −${hiddenSkills.length}`,
@@ -51,8 +56,8 @@ export function CodexSkillProfileControl(props: {
       ]}
       tooltip={selected
         ? `${selected.name} hides ${selected.hiddenSkills.length} skills on this thread. Other skills keep their Codex settings.`
-        : "Nothing hidden. Uses your Codex settings."}
-      value={selected?.id ?? ""}
+        : missingProfile?.description ?? "Nothing hidden. Uses your Codex settings."}
+      value={props.selectionId ?? ""}
     />
   );
 }

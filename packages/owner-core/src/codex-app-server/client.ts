@@ -9448,11 +9448,15 @@ export class CodexAppServerClient {
         throw recoveryError;
       }
 
+      const [, resumePayload] = await this.withThreadResumeSettings([
+        "thread/resume",
+        { threadId: params.threadId, excludeTurns: true } satisfies CodexThreadResumeParams,
+      ]);
       assertNotClosed();
       await requestWithFallbacks({
         client: this.rawConnection,
         methods: ["thread/resume"],
-        payloads: [{ threadId: params.threadId, excludeTurns: true } satisfies CodexThreadResumeParams],
+        payloads: [resumePayload],
         timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       });
       return { recovered: recoveryResult! };
