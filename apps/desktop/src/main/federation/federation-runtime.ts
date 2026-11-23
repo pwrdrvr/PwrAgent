@@ -2511,6 +2511,10 @@ export class DesktopFederationRuntime {
     store.revokePeer(peerId, revokedAt);
     this.server?.closePeer(peerId);
     this.unregisterPeer(peerId);
+    if (peer.capabilities.includes("turn_control")) {
+      void Promise.resolve().then(() => getDesktopBackendRegistry().pauseGoalsAfterTurnControlRevocation())
+        .catch((error) => log.warn("Could not clean up Codex goals after peer access was revoked", { peerId, error }));
+    }
     this.remotePeerDirectory.delete(peerId);
     this.publishPeerStatus(peerId, "revoked");
     this.broadcastPeerDirectory();
@@ -7308,7 +7312,7 @@ export class DesktopFederationRuntime {
   }
 
   private forwardLocalBackendEvent(event: AgentEvent): void {
-    if (!this.router) return;
+    if (!this.router || event.notification.method.startsWith("thread/goal/")) return;
     const invalidation = navigationInvalidationForLocalEvent(event);
     if (invalidation) this.forwardLocalBackendEvent(invalidation);
     const ownerInstanceId = this.ensureLocalInstanceId();

@@ -7,10 +7,11 @@ import type {
   UpdateSubthreadOrderRequest,
   UpdateSubthreadOrderResponse,
 } from "@pwragent/shared/contracts/navigation";
-import { getDesktopBackendRegistry } from "./backend-registry";
-import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
-import { loadLocalNavigationQueryIndex } from "./navigation-query-source";
-import { loadViewerNavigationPins } from "./navigation-viewer-pins";
+import { getDesktopBackendRegistry, type DesktopBackendRegistry } from "./backend-registry";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
+import { getDesktopOverlayStore, type DesktopOwnerStorage } from "../storage/desktop-overlay-store";
+import { archivedRemoteThreadPinMounts } from "./navigation-viewer-pins";
+import type { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
 import { peerSubthreadKey } from "./thread-archive-sweeper";
 
 /**
@@ -68,7 +69,7 @@ export type PeerChildSource = {
   /** This machine's federation identity. Without one, no peer can link a child here. */
   localInstanceId: () => Promise<string | undefined>;
   /** The live peer summaries the sidebar reads its mounted peer threads through. */
-  summaries: Parameters<typeof loadViewerNavigationPins>[1];
+  summaries: Pick<RemoteThreadSummaryCache, "readPinnedThreads">;
 };
 
 /**
@@ -96,53 +97,14 @@ export async function updateLocalSubthreadOrder(
 ): Promise<UpdateSubthreadOrderResponse> {
   const backend = request.backend ?? "codex";
   const relative = Boolean(request.move || request.insertAfter);
-  let children: {
-    backend: NavigationThreadSummary["source"];
-    id: string;
-    createdAt?: number;
-    ownerInstanceId?: string;
-  }[] | undefined;
   const store = getDesktopOverlayStore();
-  if (relative) {
-    // List only the providers with a stake in this group. A provider that
-    // fails to list blocks the move, because a missing child would drop out
-    // of the order; one with no row here must not block it.
-    const scopes = [...new Set([backend, ...store.readSubthreadGroupBackends(request.parentThreadId)])];
-    const indexes = await Promise.all(scopes.map((scope) =>
-      loadLocalNavigationQueryIndex({ backend: scope, callerReason: "relative-child-move" })));
-    if (indexes.some((index) => index.coverage && index.coverage.state !== "complete")) {
-      throw new Error("Wait for complete owner discovery before moving a child.");
-    }
-    const local = indexes.flatMap((index, position) =>
-      index.threads.filter((thread) => thread.source === scopes[position] && !thread.federation));
-    if (!local.some((thread) => thread.source === backend && thread.id === request.parentThreadId
-      && !thread.archivedAt)) throw new Error("The owning group no longer exists.");
-    const byKey = new Map(local.map((thread) => [buildThreadIdentityKey(thread.source, thread.id), thread]));
-    const parentKey = buildThreadIdentityKey(backend, request.parentThreadId);
-    children = local.filter((thread) => thread.parentThreadId === request.parentThreadId
-      && !thread.parentThreadInstanceId && !thread.archivedAt && !thread.codexNativeSubAgent
-      && resolveThreadParentKey(thread, byKey) === parentKey)
-      .map(({ source, id, createdAt }) => ({ backend: source, id, createdAt }));
-    const localInstanceId = await options.peers?.localInstanceId();
-    if (options.peers && localInstanceId) {
-      for (const thread of await loadViewerNavigationPins(store, options.peers.summaries)) {
-        const ref = thread.federation?.ref;
-        if (!ref || !isRemoteFederationTarget(ref.target) || thread.federation?.derivedFromMountedParent
-          || !isPeerChildOfLocalThread({ ownerInstanceId: ref.target.instanceId, summary: thread,
-            parent: { backend, threadId: request.parentThreadId }, localInstanceId })) continue;
-        children.push({ backend: ref.backend, id: ref.threadId, createdAt: thread.createdAt,
-          ownerInstanceId: ref.target.instanceId });
-      }
-    }
-  }
-  const threadIds = await store.updateSubthreadOrder({
-    backend,
-    parentThreadId: request.parentThreadId,
-    ...(request.move ? { move: request.move, children }
-      : request.insertAfter ? { insertAfter: request.insertAfter, children } : { threadIds: request.threadIds }),
-  });
+  const registry = getDesktopBackendRegistry();
+  const target = { backend, parentThreadId: request.parentThreadId };
+  const threadIds = relative
+    ? await updateRelativeOrder(store, registry, target, request, options.peers)
+    : await store.updateSubthreadOrder({ ...target, threadIds: request.threadIds });
 
-  await getDesktopBackendRegistry().publishLocalEvent({
+  await registry.publishLocalEvent({
     backend,
     notification: {
       method: "thread/subthreadOrder/updated",
@@ -154,4 +116,129 @@ export async function updateLocalSubthreadOrder(
   });
 
   return { backend, parentThreadId: request.parentThreadId, ...(relative ? {} : { threadIds }) };
+}
+
+async function updateRelativeOrder(
+  store: DesktopOwnerStorage,
+  registry: DesktopBackendRegistry,
+  target: { backend: NavigationThreadSummary["source"]; parentThreadId: string },
+  request: Omit<UpdateSubthreadOrderRequest, "federationTarget">,
+  peers: PeerChildSource | undefined,
+): Promise<string[]> {
+  const { backend, parentThreadId } = target;
+  const group = store.readSubthreadGroup(backend, parentThreadId);
+  let ownerChanged = false;
+  const unsubscribe = registry.onEvent(({ backend: source, notification, federationTarget }) => {
+    if (federationTarget?.scope === "remote") return;
+    const { method, params } = notification;
+    const id = method === "thread/started" ? params.threadId ?? (params.thread as { id?: unknown } | undefined)?.id
+      : method === "thread/archived" || method === "thread/unarchived" || method === "thread/deleted"
+        ? params.threadId : undefined;
+    if (typeof id === "string" && group.scopes.get(source)?.has(id)) ownerChanged = true;
+  });
+  try {
+    const assertComplete = () => {
+      if (registry.getStartupProviderRefreshStatus()?.state === "checking") {
+        throw new Error("Wait for complete owner discovery before moving a child.");
+      }
+    };
+    assertComplete();
+    // The old compatibility repair walks provider rows in listing order. A
+    // single hop reads durable data either way, but a chain can observe an
+    // earlier repair, so preserve canonical order for those providers.
+    const orderedProviders = new Set<NavigationThreadSummary["source"]>();
+    for (const row of group.overlays.values()) {
+      if (!row.handoffSourceBackend || !row.handoffSourceThreadId || row.parentThreadId !== parentThreadId) continue;
+      const origin = group.overlays.get(buildThreadIdentityKey(row.handoffSourceBackend, row.handoffSourceThreadId));
+      if (origin?.parentThreadId === parentThreadId && origin.handoffSourceThreadId) {
+        orderedProviders.add(row.handoffSourceBackend);
+      }
+    }
+    const listings = await Promise.all([...group.scopes].map(async ([scope, ids]) => {
+      // A confirmed archive leaves its parent link in the overlay. A broken
+      // Claude sidecar can only make discovery incomplete for a live candidate.
+      // Keep all IDs in the event and storage fences so a racing restore retries.
+      const candidates = scope === "claude" ? new Set([...ids].filter((id) => {
+        const row = group.overlays.get(buildThreadIdentityKey(scope, id));
+        return !row || (row.archived === null && row.tombstoned === null);
+      })) : ids;
+      if (!candidates.size) return [];
+      const threads = await registry.readSubthreadOrderProviderRows(scope, candidates, orderedProviders.has(scope));
+      return threads.filter((thread) => thread.source === scope && candidates.has(thread.id)
+        && !group.managed.has(buildThreadIdentityKey(scope, thread.id)));
+    }));
+    const children = resolveLocalSubthreadOrderChildren(target, group, listings);
+    const observedLocalKeys = new Set(listings.flatMap((listing) =>
+      listing.map(({ source, id }) => buildThreadIdentityKey(source, id))));
+    const localInstanceId = await peers?.localInstanceId();
+    let peerPins: Parameters<DesktopOwnerStorage["commitSubthreadOrder"]>[0]["peerPins"];
+    if (peers && localInstanceId) {
+      const saved = store.readSubthreadOrderPeerPins();
+      // Resolve and commit without yielding to a newer live cache publication.
+      const resolved = peers.summaries.readPinnedThreads(saved.pins);
+      peerPins = { fingerprint: saved.fingerprint, archived: archivedRemoteThreadPinMounts(saved.pins, resolved.archived),
+        refreshed: resolved.refreshed, acknowledgeArchiveDeletion: resolved.acknowledgeArchiveDeletion };
+      for (const thread of resolved.threads) {
+        const ref = thread.federation?.ref;
+        if (!ref || !isRemoteFederationTarget(ref.target) || thread.federation?.derivedFromMountedParent
+          || !isPeerChildOfLocalThread({ ownerInstanceId: ref.target.instanceId, summary: thread,
+            parent: { backend, threadId: parentThreadId }, localInstanceId })) continue;
+        children.push({ backend: ref.backend, id: ref.threadId, createdAt: thread.createdAt,
+          ownerInstanceId: ref.target.instanceId });
+      }
+    }
+    assertComplete();
+    if (ownerChanged) throw new Error("The owning group changed while discovering its children. Try the move again.");
+    return store.commitSubthreadOrder({
+      ...target, children, groupFingerprint: group.fingerprint, observedLocalKeys, peerPins,
+      ...(request.move ? { move: request.move } : { insertAfter: request.insertAfter }),
+    });
+  } finally {
+    unsubscribe();
+  }
+}
+
+function resolveLocalSubthreadOrderChildren(
+  { backend, parentThreadId }: { backend: NavigationThreadSummary["source"]; parentThreadId: string },
+  group: ReturnType<DesktopOwnerStorage["readSubthreadGroup"]>,
+  listings: AppServerThreadSummary[][],
+): Array<{ backend: NavigationThreadSummary["source"]; id: string; createdAt?: number; ownerInstanceId?: string }> {
+  const local = listings.flatMap((listing) => {
+    const byKey = new Map(listing.map(({ source, id, createdAt, archivedAt, codexNativeSubAgent }) => {
+      const key = buildThreadIdentityKey(source, id);
+      const row = group.overlays.get(key);
+      return [key, { source, id, createdAt, archivedAt, codexNativeSubAgent,
+        parentThreadId: row?.parentThreadId ?? undefined,
+        parentThreadBackend: row?.parentThreadBackend ?? undefined,
+        parentThreadInstanceId: row?.parentThreadInstanceId ?? undefined }];
+    }));
+    // Match the sidebar's ordered compatibility repair for a handoff that
+    // lost its remote parent owner. Any origin with the same parent ID is
+    // already a candidate. It must be listed on this provider, and a real
+    // local parent wins.
+    for (const [key, thread] of byKey) {
+      const row = group.overlays.get(key);
+      if (thread.parentThreadId !== parentThreadId || thread.parentThreadInstanceId
+        || !row?.handoffSourceBackend || !row.handoffSourceThreadId) continue;
+      const parentBackend = thread.parentThreadBackend ?? thread.source;
+      if (byKey.has(buildThreadIdentityKey(parentBackend, parentThreadId))) continue;
+      const origin = byKey.get(buildThreadIdentityKey(row.handoffSourceBackend, row.handoffSourceThreadId));
+      if (origin?.parentThreadInstanceId && origin.parentThreadId === parentThreadId
+        && (origin.parentThreadBackend ?? origin.source) === parentBackend) {
+        thread.parentThreadInstanceId = origin.parentThreadInstanceId;
+      }
+    }
+    return [...byKey.values()];
+  });
+  const byKey = new Map(local.map((thread) => [buildThreadIdentityKey(thread.source, thread.id), thread]));
+  const parentKey = buildThreadIdentityKey(backend, parentThreadId);
+  const parent = byKey.get(parentKey);
+  if (!parent || parent.archivedAt) throw new Error("The owning group no longer exists.");
+  // Only same-ID roots affect the legacy fallback. Passing just those
+  // identities keeps resolution independent of unrelated rows and siblings.
+  const parents = new Map([...byKey].filter(([, thread]) => thread.id === parentThreadId));
+  return local.filter((thread) => thread.parentThreadId === parentThreadId
+    && !thread.parentThreadInstanceId && !thread.archivedAt && !thread.codexNativeSubAgent
+    && resolveThreadParentKey(thread, parents) === parentKey)
+    .map(({ source, id, createdAt }) => ({ backend: source, id, createdAt }));
 }

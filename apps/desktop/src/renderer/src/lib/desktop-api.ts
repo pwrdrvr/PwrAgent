@@ -829,6 +829,12 @@ import type {
 } from "../../../shared/app-metadata";
 
 export type DesktopApi = Partial<NativeVoiceApi> & {
+  readThreadGoal?: (threadId: string) => Promise<import("@pwragent/shared/contracts/thread-goal").ThreadGoalState>;
+  setThreadGoal?: (threadId: string, objective: string, confirmedObjective?: string) => Promise<import("@pwragent/shared/contracts/thread-goal").ThreadGoalState>;
+  pauseThreadGoal?: (threadId: string) => Promise<import("@pwragent/shared/contracts/thread-goal").ThreadGoalState>;
+  resumeThreadGoal?: (threadId: string) => Promise<import("@pwragent/shared/contracts/thread-goal").ThreadGoalState>;
+  clearThreadGoal?: (threadId: string, confirmedObjective?: string) => Promise<import("@pwragent/shared/contracts/thread-goal").ThreadGoalState>;
+  cancelThreadGoalActivation?: (threadId: string) => Promise<import("@pwragent/shared/contracts/thread-goal").ThreadGoalState>;
   replayFixtureActive?: boolean;
   copyText?: (text: string) => Promise<void>;
   copyRichText?: (payload: { text: string; html: string }) => Promise<void>;

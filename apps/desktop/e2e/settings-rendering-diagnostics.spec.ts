@@ -95,22 +95,23 @@ test("Troubleshooting persists the Chromium trace opt-in independently of Start 
     const slowburn = rules.getByRole("checkbox", { name: "Slow burn", exact: true });
     await slowburn.click();
     await expect(slowburn).toBeChecked();
-    // Exercise the shared interval fallback alongside the live main-process
-    // sampler, debugger, trace publication and capture notice.
-    // Every other process reads idle: the main process samples the same
-    // metrics, and on a busy runner its real CPU crosses Slow burn's 15%,
-    // captures first, and its notice covers the renderer's.
-    await app.electronApp.evaluate(({ app: electronApp, BrowserWindow }) => {
-      const rendererPid = BrowserWindow.getAllWindows()[0].webContents.getOSProcessId();
+    // Target the renderer that owns this Settings page. Keep every other
+    // process idle so a main-process Slow burn notice cannot cover the
+    // renderer's capture notice.
+    const nativeWindow = await app.electronApp.browserWindow(page);
+    const rendererPid = await nativeWindow.evaluate((window) => window.webContents.getOSProcessId());
+    const hasRendererMetric = await app.electronApp.evaluate(({ app: electronApp }, pid) => {
       const readMetrics = electronApp.getAppMetrics.bind(electronApp);
       electronApp.getAppMetrics = () => readMetrics().map((metric) => ({
         ...metric,
         cpu: {
-          percentCPUUsage: metric.pid === rendererPid ? 95 : 0,
+          percentCPUUsage: metric.pid === pid ? 95 : 0,
           idleWakeupsPerSecond: 0,
         },
       }));
-    });
+      return readMetrics().some((metric) => metric.pid === pid);
+    }, rendererPid);
+    expect(hasRendererMetric).toBe(true);
     await pane.getByRole("button", { name: "Start Capture (Immediate)", exact: true }).click();
     const rendererNotice = page.getByText("Renderer CPU profile captured", { exact: true });
     const nextNotice = page.getByRole("navigation", { name: "Durable notices", exact: true })
