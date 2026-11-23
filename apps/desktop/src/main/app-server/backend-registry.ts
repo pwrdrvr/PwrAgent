@@ -15218,15 +15218,10 @@ export class DesktopBackendRegistry {
     return this.threadDirectoryService.resetDirectoryLaunchpad(request, options);
   }
 
-  async runCodexEnvironmentAction(
+  runCodexEnvironmentAction(
     request: RunCodexEnvironmentActionRequest,
   ): Promise<RunCodexEnvironmentActionResponse> {
-    const endUpdateBlockingWork = beginUpdateBlockingWork();
-    try {
-      return await this.threadDirectoryService.runCodexEnvironmentAction(request);
-    } finally {
-      endUpdateBlockingWork();
-    }
+    return this.threadDirectoryService.runCodexEnvironmentAction(request);
   }
 
   /**

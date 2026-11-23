@@ -13,6 +13,7 @@ import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwrag
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import { joinConcurrent } from "../../shared/concurrent-work";
 import { getOwnerHostServices } from "../owner-host";
+import { beginUpdateBlockingWork } from "../app-update-admission";
 import { assertOwnerCodexModelSelection } from "../owner-runtime-policy";
 import {
   navigationLaunchpadProviderKey,
@@ -864,6 +865,7 @@ export class ThreadDirectoryService {
   async runCodexEnvironmentAction(
     request: RunCodexEnvironmentActionRequest,
   ): Promise<RunCodexEnvironmentActionResponse> {
+    const endUpdateBlockingWork = beginUpdateBlockingWork();
     // Serialise the read-modify-write under the per-thread lock so two
     // concurrent Run-button clicks can't clobber each other's appended
     // run entry.
@@ -965,7 +967,7 @@ export class ThreadDirectoryService {
           codexEnvironmentRuntime: nextRuntime,
         };
       },
-    );
+    ).finally(endUpdateBlockingWork);
   }
 
   async stopCodexEnvironmentAction(
