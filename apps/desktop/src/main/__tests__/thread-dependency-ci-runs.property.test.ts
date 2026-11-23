@@ -15,7 +15,8 @@ import {
   threadDependencyCiRunId,
   threadDependencyCiRunOutcomes,
 } from "@pwragent/shared/contracts/thread-dependencies";
-import { readDesktopSettingsConfig } from "../settings/desktop-config";
+import { desktopSettingsPatchToEdits, parseDesktopSettingsToml, readDesktopSettingsConfig } from "../settings/desktop-config";
+import { applyTomlEdits, parseTomlTables } from "../settings/toml-editor";
 import { StateDb } from "../state/state-db";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
 import { ThreadDependencyCoordinator, buildDependencyPrompt } from "../app-server/thread-dependency-coordinator";
@@ -253,6 +254,39 @@ describe("CI run URLs", () => {
       expect(parseCiRunUrl(GHES_URL, { githubEnterpriseHosts: hosts })?.url).toBe(GHES_URL);
       expect(parseCiRunUrl("https://ghe.example.com/example/app/actions/runs/77", { githubEnterpriseHosts: hosts })).toBeUndefined();
     } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("replaces the exact hosts admitted by CI waits through the settings patch", () => {
+    const existing = '[git]\n# Only internal hosts\ngithub_enterprise_hosts = ["old.example.com", "*.example.com"]\nwatch_merge_builds = false\n';
+    const tables = parseTomlTables(existing, "test.toml");
+    const host = fc.nat().map((id) => `ghe${id}.example.com:8443`);
+    fc.assert(fc.property(fc.uniqueArray(host, { maxLength: 16, size: "max" }), (hosts) => {
+      const edited = applyTomlEdits(existing, desktopSettingsPatchToEdits(
+        { git: { githubEnterpriseHosts: hosts } }, tables,
+      ));
+      expect(edited).toContain("# Only internal hosts");
+      const config = parseDesktopSettingsToml(edited, "test.toml");
+      expect(config.git?.watchMergeBuilds).toBe(false);
+      const options = { githubEnterpriseHosts: config.git?.githubEnterpriseHosts };
+      expect(options.githubEnterpriseHosts).toEqual(hosts);
+      for (const exact of hosts) {
+        expect(parseCiRunUrl(`https://${exact}/example/app/actions/runs/77`, options)?.repository.host).toBe(exact);
+        expect(parseCiRunUrl(`https://sub.${exact}/example/app/actions/runs/77`, options)).toBeUndefined();
+      }
+      expect(parseCiRunUrl("https://old.example.com/example/app/actions/runs/77", options)).toBeUndefined();
+    }));
+  });
+
+  it("rejects settings patches that would silently ignore invalid or excess hosts", () => {
+    const invalid = fc.constantFrom("*.example.com", "https://git.example.com", "git.example.com/path", "git.example.com:65536");
+    fc.assert(fc.property(invalid, (host) => {
+      expect(() => desktopSettingsPatchToEdits({
+        git: { githubEnterpriseHosts: ["git.example.com", host] },
+      })).toThrow(/Invalid host entries on lines 2/);
+    }));
+    expect(() => desktopSettingsPatchToEdits({
+      git: { githubEnterpriseHosts: Array.from({ length: 17 }, (_, i) => `ghe${i}.example.com`) },
+    })).toThrow(/up to 16 distinct hosts/);
   });
 
   it("names the run by the id at the end of its URL", () => {

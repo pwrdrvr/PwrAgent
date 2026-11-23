@@ -440,8 +440,9 @@ endpoint only for a required-reviewer gate.
 
 An agent supplies the run URL, and a read sends the operator's `gh`
 credentials for that host. A login alone is therefore not authorization. The
-operator lists each GitHub Enterprise Server host in the profile's
-`config.toml`:
+operator lists each GitHub Enterprise Server host under **Settings → Git →
+GitHub Enterprise hosts**. The editor flags invalid entries before saving
+and writes the list to the profile's `config.toml`:
 
 ```toml
 [git]

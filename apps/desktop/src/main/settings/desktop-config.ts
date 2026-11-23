@@ -39,6 +39,7 @@ import {
   type CodexModelProviderSettings,
 } from "@pwragent/shared/codex-model-providers";
 import { validateLocalModelIds } from "@pwragent/shared/local-model-pricing";
+import { validateGithubEnterpriseHosts } from "@pwragent/shared/github-enterprise-hosts";
 import fs from "node:fs";
 import { validateCodexConfigOverrides } from "./codex-config-overrides";
 import { requireMessagingSafetyAcknowledgment } from "./messaging-safety";
@@ -440,8 +441,7 @@ export type DesktopSettingsConfig = {
     defaultMergeMethod?: ThreadTodoMergeMethod;
     /**
      * `[git] github_enterprise_hosts`: exact GitHub Enterprise hostnames an
-     * agent-supplied CI run URL may name. Read-only here; the operator edits
-     * the file.
+     * agent-supplied CI run URL may name. Keep invalid strings for Settings.
      */
     githubEnterpriseHosts?: string[];
     agentTools?: {
@@ -2326,6 +2326,14 @@ export function desktopSettingsPatchToEdits(
   }
   if (patch.git?.watchMergeBuilds !== undefined) {
     set(["git", "watch_merge_builds"], patch.git.watchMergeBuilds);
+  }
+  if (patch.git?.githubEnterpriseHosts !== undefined) {
+    if (!Array.isArray(patch.git.githubEnterpriseHosts)) {
+      throw new Error("GitHub Enterprise hosts must be a list of hostnames.");
+    }
+    const { hosts, error } = validateGithubEnterpriseHosts(patch.git.githubEnterpriseHosts, URL);
+    if (error) throw new Error(error);
+    set(["git", "github_enterprise_hosts"], hosts);
   }
   if (patch.git?.prAutoDispatchBudgetCapacity !== undefined) {
     set(

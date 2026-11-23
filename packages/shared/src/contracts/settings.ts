@@ -1841,6 +1841,8 @@ export type DesktopSettingsSnapshot = {
      * its merge commit on the target branch and wake the thread if it fails.
      */
     watchMergeBuilds?: DesktopSettingsValue<boolean>;
+    /** Configured entries, including entries ignored by the CI run parser. */
+    githubEnterpriseHosts?: DesktopSettingsValue<string[]>;
     prAutoDispatchBudgetCapacity: DesktopSettingsValue<number>;
     prAutoDispatchBudgetRefillPerMinute: DesktopSettingsValue<number>;
     pausePrAutoDispatchWhenBudgetEmpty: DesktopSettingsValue<boolean>;
@@ -2158,6 +2160,8 @@ export type DesktopSettingsConfigPatch = {
     prAutoDispatchAllowed?: boolean;
     defaultPrAutoDispatchEnabled?: boolean;
     watchMergeBuilds?: boolean;
+    /** Replaces [git] github_enterprise_hosts. An empty list clears it. */
+    githubEnterpriseHosts?: string[];
     prAutoDispatchBudgetCapacity?: number;
     prAutoDispatchBudgetRefillPerMinute?: number;
     pausePrAutoDispatchWhenBudgetEmpty?: boolean;

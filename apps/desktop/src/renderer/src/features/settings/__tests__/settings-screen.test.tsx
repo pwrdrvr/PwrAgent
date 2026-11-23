@@ -11950,6 +11950,34 @@ describe("SettingsScreen", () => {
     expect(desktopApi.readAppUpdateStatus).toHaveBeenCalledTimes(1);
   });
 
+  it("shows ignored GitHub Enterprise hosts and saves only a corrected list", async () => {
+    const settings = createSettingsState();
+    const rawHosts = ["git.example.com:8443", "*.example.com", "https://git.example.com", "git.example.com/path"];
+    const snapshot = settings.snapshot!;
+    settings.snapshot = {
+      ...snapshot,
+      git: { ...snapshot.git, githubEnterpriseHosts: { value: rawHosts, source: "config" } },
+    };
+    render(<SettingsScreen initialSection="git" settings={settings} onClose={() => undefined} />);
+
+    const hosts = screen.getByRole("textbox", { name: "Allowed hosts" });
+    const save = screen.getByRole("button", { name: "Save GitHub Enterprise hosts" });
+    expect(hosts).toHaveValue(rawHosts.join("\n"));
+    expect(hosts).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText(/Invalid host entries on lines 2, 3, 4/)).toBeInTheDocument();
+    expect(save).toBeDisabled();
+
+    fireEvent.change(hosts, { target: { value: "git.example.com:8443\n\nother.example.com" } });
+    expect(hosts).not.toHaveAttribute("aria-invalid", "true");
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        git: { githubEnterpriseHosts: ["git.example.com:8443", "other.example.com"] },
+      });
+    });
+  });
+
   it("configures GitHub Auto-fix PR and gates it on background PR status", async () => {
     const settings = createSettingsState();
     render(

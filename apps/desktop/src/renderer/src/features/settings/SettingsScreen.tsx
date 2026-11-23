@@ -1616,6 +1616,8 @@ function SettingsSectionBody(props: {
             git: { watchMergeBuilds: enabled },
           });
         }}
+        onGithubEnterpriseHostsChange={(hosts) =>
+          props.settings.writeConfig({ git: { githubEnterpriseHosts: hosts } })}
         onPrAutoDispatchBudgetCapacityChange={async (capacity: number) => {
           await props.settings.writeConfig({
             git: { prAutoDispatchBudgetCapacity: capacity },

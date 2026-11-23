@@ -86,6 +86,26 @@ describe("CI rerun policy config", () => {
   });
 });
 
+describe("GitHub Enterprise hosts in settings", () => {
+  it("shows ignored entries and updates both the settings snapshot and CI-run config", async () => {
+    const rawHosts = ["github.example.com", "*.example.com", "https://github.example.com"];
+    const { service } = createService(`[git]\ngithub_enterprise_hosts = ${JSON.stringify(rawHosts)}\n`);
+    expect((await service.readSettingsProjection()).git.githubEnterpriseHosts).toEqual({
+      value: rawHosts,
+      source: "config",
+    });
+
+    const hosts = ["ghe.internal.example:8443"];
+    await service.writeConfigPatchTargeted({ git: { githubEnterpriseHosts: hosts } });
+    expect((await service.readSettingsProjection()).git.githubEnterpriseHosts?.value).toEqual(hosts);
+    expect(service.resolveGithubEnterpriseHosts()).toEqual(hosts);
+
+    await service.writeConfigPatchTargeted({ git: { githubEnterpriseHosts: [] } });
+    expect((await service.readSettingsProjection()).git.githubEnterpriseHosts?.value).toEqual([]);
+    expect(service.resolveGithubEnterpriseHosts()).toEqual([]);
+  });
+});
+
 describe("forge tool project rules config", () => {
   it("reads no rules from a config that predates them", () => {
     const parsed = parseDesktopSettingsToml("[git.agent_tools]\npull_requests = \"ask\"\n", "test.toml");

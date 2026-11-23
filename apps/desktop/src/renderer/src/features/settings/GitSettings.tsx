@@ -11,7 +11,7 @@ import {
 import { FORGE_KINDS, type ForgeKind } from "@pwragent/shared/forge-product";
 import { type AcpAgentSettingsEntry, type BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { ComponentProps } from "react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useId, useMemo, useState, type ReactNode } from "react";
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
@@ -31,6 +31,10 @@ import {
   type ThreadTodoMergeMethod,
 } from "@pwragent/shared/contracts/thread-todos";
 import { type GhStatus } from "@pwragent/shared/contracts/navigation";
+import {
+  CI_RUN_MAX_GITHUB_ENTERPRISE_HOSTS,
+  validateGithubEnterpriseHosts,
+} from "@pwragent/shared/github-enterprise-hosts";
 import { Select } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useNavigationSettingsPreview, isNavigationPreviewCancelled } from "../../lib/navigation-settings-preview";
@@ -51,6 +55,8 @@ import {
 } from "./ForgeProjectRules";
 import { decodeForgeRulesRoute, FORGE_AGENT_TOOLS_SECTION_ID } from "./forge-rules-route";
 import { acpAgentEnabledInSnapshot } from "./useAcpAgentCatalog";
+import { useSettingsDraft } from "./useSettingsDraft";
+import { useUnsavedSettingsChanges } from "./UnsavedSettingsChanges";
 
 const DEFAULT_BACKGROUND_PR_POLLING_VALUE = {
   value: DEFAULT_BACKGROUND_PR_POLLING,
@@ -127,6 +133,7 @@ export function GitSettings(props: {
   onPrAutoDispatchAllowedChange: (enabled: boolean) => Promise<void>;
   onDefaultPrAutoDispatchEnabledChange: (enabled: boolean) => Promise<void>;
   onWatchMergeBuildsChange?: (enabled: boolean) => Promise<void>;
+  onGithubEnterpriseHostsChange: (hosts: string[]) => Promise<boolean>;
   onPrAutoDispatchBudgetCapacityChange: (capacity: number) => Promise<void>;
   onPrAutoDispatchBudgetRefillPerMinuteChange: (
     refillPerMinute: number,
@@ -367,6 +374,11 @@ export function GitSettings(props: {
           {...forgeSections[provider]}
         />
       ))}
+      <GithubEnterpriseHostsSection
+        hosts={props.snapshot.git?.githubEnterpriseHosts}
+        saving={props.saving}
+        onSave={props.onGithubEnterpriseHostsChange}
+      />
       <SettingsSection
         eyebrow="Git"
         title="Background pull request status"
@@ -628,6 +640,75 @@ export function GitSettings(props: {
         />
       </SettingsSection>
     </SettingsSectionStack>
+  );
+}
+
+function GithubEnterpriseHostsSection(props: {
+  hosts: DesktopSettingsSnapshot["git"]["githubEnterpriseHosts"];
+  saving: boolean;
+  onSave: (hosts: string[]) => Promise<boolean>;
+}) {
+  const errorId = useId();
+  const draft = useSettingsDraft({
+    // Keep a malformed multiline TOML entry on one line so it cannot turn
+    // into two separately authorized hosts when another entry is edited.
+    hosts: props.hosts?.value.map((host) => /[\r\n]/.test(host) ? JSON.stringify(host) : host).join("\n") ?? "",
+  });
+  const { hosts, error } = validateGithubEnterpriseHosts(draft.values.hosts.split("\n"), URL);
+  const save = async (): Promise<boolean> => {
+    if (error || props.saving) return false;
+    if (!await props.onSave(hosts)) return false;
+    draft.discard();
+    return true;
+  };
+  useUnsavedSettingsChanges(draft.dirty
+    ? { label: "GitHub Enterprise hosts", save, discard: draft.discard }
+    : undefined);
+
+  return (
+    <SettingsSection
+      eyebrow="GitHub"
+      title="GitHub Enterprise hosts"
+      description="Allow Continue After to read CI runs on these servers using your GitHub CLI sign-in for each host."
+    >
+      <div className="settings-fields">
+        <SettingsField
+          label="Allowed hosts"
+          sub={
+            <>
+              Enter up to {CI_RUN_MAX_GITHUB_ENTERPRISE_HOSTS} exact hostnames, one per line.
+              Include the port if it differs from 443. Leave blank to clear the list.
+              {error ? <span className="settings-error" id={errorId} role="status"> {error}</span> : null}
+            </>
+          }
+          source={props.hosts ? sourceBadge(props.hosts) : undefined}
+          control={
+            <textarea
+              aria-label="Allowed hosts"
+              aria-describedby={error ? errorId : undefined}
+              aria-invalid={error ? true : undefined}
+              className="settings-input settings-input--multiline"
+              disabled={props.saving}
+              placeholder="github.example.com"
+              rows={3}
+              spellCheck={false}
+              value={draft.values.hosts}
+              onChange={(event) => draft.set("hosts", event.currentTarget.value)}
+            />
+          }
+        />
+      </div>
+      <div className="settings-button-row">
+        <button
+          className="button button--primary"
+          disabled={props.saving || !draft.dirty || !!error}
+          type="button"
+          onClick={() => void save()}
+        >
+          Save GitHub Enterprise hosts
+        </button>
+      </div>
+    </SettingsSection>
   );
 }
 

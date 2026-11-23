@@ -1867,6 +1867,9 @@ export class DesktopSettingsService {
           config.git?.watchMergeBuilds,
           DEFAULT_WATCH_MERGE_BUILDS,
         ),
+        githubEnterpriseHosts: config.git?.githubEnterpriseHosts === undefined
+          ? { value: [], source: "default" }
+          : { value: config.git.githubEnterpriseHosts, source: "config" },
         prAutoDispatchBudgetCapacity: this.resolvePrAutoDispatchBudgetNumber(
           config.git?.prAutoDispatchBudgetCapacity,
           DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
