@@ -1101,6 +1101,16 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         outcome: "failed",
       };
     }
+    // Pairing feedback must reach a group before it has an access grant.
+    const pairingFeedback = !intent.bindingId && !intent.audit?.bindingId && (
+      intent.audit?.action === "pairing.reply" || intent.audit?.action === "pairing.approved"
+      || intent.audit?.action === "pairing.rejected" || intent.audit?.action === "pairing.expired"
+    );
+    if (this.options.config.configuredConnectionId !== undefined && String(target.chatId).startsWith("-")
+      && !pairingFeedback
+      && !this.options.config.authorizedSupergroupIds?.some((contact) => contact.id === String(target.chatId))) {
+      return { channel: this.channel, deliveredAt: this.now(), outcome: "discarded" };
+    }
 
     if (intent.kind === "activity") {
       return await this.deliverActivity(intent, target);

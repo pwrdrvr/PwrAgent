@@ -156,6 +156,8 @@ export type MessagingControllerOptions = {
   channel?: MessagingChannelKind;
   connectionId?: string;
   isConnectionAvailable?: () => boolean;
+  isConnectionRegistered?: () => boolean;
+  isDeliveryAdapterAvailable?: (adapter: MessagingAdapter) => boolean;
   interactionMapper?: MessagingInteractionMapper;
   logger?: MessagingControllerLogger;
   now?: () => number;

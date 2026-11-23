@@ -67,6 +67,8 @@ export type TomlEdit =
       value: readonly Record<string, TomlEditScalar | readonly string[]>[];
       /** A generated compatibility marker immediately before the first row. */
       comment?: string;
+      /** Update existing rows in place using this stable identity field. */
+      identityKey?: string;
     }
   | { op: "deleteTableArray"; path: readonly string[] };
 
@@ -136,7 +138,7 @@ const FLOAT_LITERAL = /^-?(?:\d+\.\d+(?:[eE][-+]?\d+)?|\d+[eE][-+]?\d+)$/;
 export function parseTomlTables(
   source: string,
   filePath: string,
-  options: { requiredValuePaths?: readonly string[] } = {},
+  options: { requiredValuePaths?: readonly string[]; retainUnsupportedValuePaths?: readonly string[] } = {},
 ): TomlTables {
   const lines = source.split(/\r?\n/);
   const tables: TomlTables = {};
@@ -210,6 +212,11 @@ export function parseTomlTables(
       const valuePath = currentTable ? `${currentTable}.${key}` : key;
       if (options.requiredValuePaths?.includes(valuePath)) {
         throw new Error(`Unsupported TOML value for ${valuePath} on line ${i + 1} in ${filePath}.`);
+      }
+      if (options.retainUnsupportedValuePaths?.includes(valuePath)) {
+        (currentTarget ?? (tables[currentTable] ??= {}))[key] = valueText;
+        i = endLine + 1;
+        continue;
       }
       console.warn(
         `Skipping unsupported TOML value for key '${key}' on line ${i + 1} in ${filePath}.`,
@@ -378,6 +385,48 @@ function planEdits(model: SourceModel, edits: readonly TomlEdit[]): EditPlan {
   const newTableArrays: NewTableArrayPlan[] = [];
 
   for (const edit of edits) {
+    if (edit.op === "setTableArray" && edit.identityKey !== undefined) {
+      const tableName = edit.path.join(".");
+      const identityKey = edit.identityKey;
+      const entries = new Map(edit.value.map((row) => [row[identityKey], row]));
+      const sections = findTableArraySections(model, tableName);
+      for (const section of sections) {
+        const key = findKey(section, identityKey);
+        const identity = key && parseExistingValue(model.lines, key)?.value;
+        const row = typeof identity === "string" ? entries.get(identity) : undefined;
+        if (!row) {
+          lineOps.push({ kind: "replace", startLine: section.headerLine, endLine: section.headerLine, newLines: [] });
+          for (const field of section.keys) {
+            lineOps.push({ kind: "replace", startLine: field.startLine, endLine: field.endLine, newLines: [] });
+          }
+          continue;
+        }
+        entries.delete(row[identityKey]);
+        for (const [name, value] of Object.entries(row)) {
+          const field = findKey(section, name);
+          if (!field) {
+            lineOps.push({
+              kind: "insert", insertionLine: (section.keys.at(-1)?.endLine ?? section.headerLine) + 1,
+              newLines: formatKeyValue(name, value, ""),
+            });
+            continue;
+          }
+          const existing = parseExistingValue(model.lines, field);
+          if (existing && valuesEqual(existing, value)) continue;
+          const newLines = formatKeyValue(name, value, "");
+          const lastLine = model.lines[field.endLine];
+          const comment = lastLine.slice(stripComment(lastLine).length).trimStart();
+          if (comment) newLines[newLines.length - 1] += ` ${comment}`;
+          lineOps.push({ kind: "replace", startLine: field.startLine, endLine: field.endLine, newLines });
+        }
+      }
+      if (entries.size) {
+        const comment = edit.comment && !sections.length && !model.lines.includes(edit.comment)
+          ? edit.comment : undefined;
+        newTableArrays.push({ tableName, entries: [...entries.values()], comment });
+      }
+      continue;
+    }
     if (edit.op === "deleteTableArray" || edit.op === "setTableArray") {
       let comment = edit.op === "setTableArray" ? edit.comment : undefined;
       for (const section of findTableArraySections(model, edit.path.join("."))) {

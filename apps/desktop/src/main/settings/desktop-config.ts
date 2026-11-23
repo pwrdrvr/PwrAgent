@@ -302,6 +302,7 @@ export type DesktopSettingsConfig = {
       authorizedUserIds?: AuthorizedContactConfig[];
       authorizedSupergroups?: AuthorizedContactConfig[];
       connections?: DesktopTelegramConnection[];
+      invalidConnections?: true;
     };
     discord?: {
       enabled?: boolean;
@@ -657,7 +658,7 @@ export function applyDesktopSettingsPatch(
   const source = fs.existsSync(configPath)
     ? fs.readFileSync(configPath, "utf8")
     : "";
-  const tables = parseTomlTables(source, configPath);
+  const tables = parseTomlTables(source, configPath, { retainUnsupportedValuePaths: ["messaging.telegram.connections"] });
   const edits = desktopSettingsPatchToEdits(patch, tables);
   if (edits.length === 0) {
     return { changed: false, text: source };
@@ -1775,16 +1776,30 @@ export function desktopSettingsPatchToEdits(
     const rows = telegramConnectionConfigRows(telegram.connections);
     const normalized = parseTelegramConnections(rows);
     if (!normalized || normalized.length !== rows.length) throw new Error("Invalid Telegram connections configuration.");
-    edits.push({ op: "delete", path });
-    edits.push({ op: "deleteTableArray", path });
+    const stored = currentTables["messaging.telegram"]?.connections;
+    const current = parseTelegramConnections(stored);
+    if (current === null) throw new Error("Correct the malformed Telegram connections in config.toml before saving.");
+    const previous = new Map(telegramConnectionConfigRows(current ?? []).map((row) => [row.id, row]));
+    const storedRows = Array.isArray(stored) ? stored.filter((row) => typeof row === "object") : [];
+    const previousStored = new Map(storedRows.map((row) => [row.id, row]));
+    const editedRows = rows.map((row) => {
+      const old = previous.get(row.id);
+      const raw = previousStored.get(row.id);
+      if (!old || !raw) return row;
+      return Object.fromEntries(Object.entries(row).flatMap(([key, value]) => {
+        if (JSON.stringify(value) !== JSON.stringify(old[key as keyof typeof old])) return [[key, value]];
+        return Object.hasOwn(raw, key) ? [[key, raw[key]]] : [];
+      }));
+    });
     if (normalized.length === 0) {
       set(path, []);
     } else {
-      edits.push({
-        op: "setTableArray", path, value: telegramConnectionConfigRows(normalized),
-        comment: "# pwragent-legacy-settings: [messaging.telegram] keeps the first bot for older versions.",
-      });
+      edits.push({ op: "delete", path });
     }
+    edits.push({
+      op: "setTableArray", path, value: editedRows, identityKey: "id",
+      comment: "# pwragent-legacy-settings: [messaging.telegram] keeps the first bot for older versions.",
+    });
   }
   if (telegram?.enabled !== undefined) {
     set(["messaging", "telegram", "enabled"], telegram.enabled);
@@ -2462,6 +2477,7 @@ export function parseDesktopSettingsToml(
   filePath: string,
 ): DesktopSettingsConfig {
   return normalizeDesktopConfig(parseTomlTables(contents, filePath, {
+    retainUnsupportedValuePaths: ["messaging.telegram.connections"],
     requiredValuePaths: ["models.codex.config_overrides", "models.codex.local_model_ids", "research.harness.command", "research.harness.args", "research.harness.endpoint", "research.harness.model", "research.harness.api_key_env"],
   }));
 }
@@ -2486,6 +2502,7 @@ function normalizeDesktopConfig(
   const messaging = tables["messaging"];
   const attachments = tables["messaging.attachments"];
   const telegram = tables["messaging.telegram"];
+  const telegramConnections = parseTelegramConnections(telegram?.connections);
   const discord = tables["messaging.discord"];
   const mattermost = tables["messaging.mattermost"];
   const slack = tables["messaging.slack"];
@@ -2745,7 +2762,8 @@ function normalizeDesktopConfig(
         maxAttachmentCount: readNumber(attachments?.max_attachment_count),
       },
       telegram: {
-        connections: parseTelegramConnections(telegram?.connections),
+        connections: telegramConnections ?? undefined,
+        ...(telegramConnections === null ? { invalidConnections: true } : {}),
         enabled: readBoolean(telegram?.enabled),
         responseMode: readMessagingResponseMode(telegram?.response_mode),
         streamingResponses: readBoolean(telegram?.streaming_responses),

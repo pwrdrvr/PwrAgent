@@ -79,6 +79,7 @@ export function useMessagingPlatformStatuses(
 
     const unsubscribe = desktopApi.onMessagingPlatformStatusEvent?.(
       (event: MessagingPlatformStatusEvent) => {
+        if (event.kind === "connection-health-changed") return;
         if (event.kind === "activity") {
           setActiveAtByPlatform((current) => ({
             ...current,

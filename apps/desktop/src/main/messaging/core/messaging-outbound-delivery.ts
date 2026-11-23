@@ -96,7 +96,8 @@ interface MessagingOutboundDeliveryOptions {
   readonly adapter: MessagingAdapter;
   readonly channel?: MessagingChannelKind;
   readonly connectionId?: string;
-  readonly isConnectionAvailable?: () => boolean;
+  readonly isConnectionRegistered?: () => boolean;
+  readonly isDeliveryAdapterAvailable?: (adapter: MessagingAdapter) => boolean;
   readonly store: Pick<MessagingStoreLike, "recordDelivery" | "revokeBinding" | "settleDelivery">;
   readonly deliveryBudget?: MessagingDeliveryBudget;
   readonly deliveryLane?: MessagingDeliveryLane;
@@ -217,7 +218,7 @@ export class MessagingOutboundDelivery {
     guard?: MessagingDeliveryGuard,
     receiptRequest?: MessagingReplyReceiptRequest,
   ): Promise<MessagingDeliveryResult> {
-    if (this.options.isConnectionAvailable?.() === false
+    if (this.options.isConnectionRegistered?.() === false
       || [binding?.channel, event?.channel, intent.audit?.channel].some((channel) =>
         channel && channel.connectionId !== this.options.connectionId)) {
       return {
@@ -445,6 +446,9 @@ export class MessagingOutboundDelivery {
     const scopeAdapter = this.context.disposed
       ? await this.adapterForSend()
       : this.options.adapter;
+    if (guard?.isCancelled()) {
+      return { channel: binding?.channel.channel ?? this.options.channel ?? "telegram", deliveredAt: this.context.now(), outcome: "discarded" };
+    }
     if (!scopeAdapter) {
       if (receipt) receipt.notSent = "adapter-stopped";
       return {
@@ -642,6 +646,9 @@ export class MessagingOutboundDelivery {
         return cancelledResult();
       }
       const adapter = await this.adapterForSend();
+      if (guard?.isCancelled()) {
+        return cancelledResult();
+      }
       if (!adapter) {
         this.context.logger.info?.("messaging delivery discarded: adapter stopped and nothing replaced it", {
           bindingId: binding?.id ?? intent.bindingId,
@@ -651,7 +658,7 @@ export class MessagingOutboundDelivery {
         if (receipt) receipt.notSent = "adapter-stopped";
         return cancelledResult();
       }
-      if (guard?.isCancelled() || this.options.isConnectionAvailable?.() === false) {
+      if (this.options.isDeliveryAdapterAvailable?.(adapter) === false) {
         if (receipt) receipt.notSent = "adapter-stopped";
         return cancelledResult();
       }

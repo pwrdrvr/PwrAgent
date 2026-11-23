@@ -91,6 +91,7 @@ import {
 } from "./SettingsLayout";
 import { LineRichMenuSettings } from "./LineRichMenuSettings";
 import { SecretField } from "./SecretField";
+import { useUnsavedSettingsChanges } from "./UnsavedSettingsChanges";
 import { AutomationStage } from "../automations/AutomationFunnel";
 import {
   SlackAppNameField,
@@ -3052,17 +3053,26 @@ function TelegramConnections(props: {
   const { desktopApi } = props;
   useEffect(() => {
     let disposed = false;
-    void desktopApi?.listTelegramConnections?.().then(
-      (rows) => { if (!disposed) setConnections(rows); },
-      (caught: unknown) => { if (!disposed) setError(caught instanceof Error ? caught.message : String(caught)); },
-    );
-    return () => { disposed = true; };
+    let refreshRevision = 0;
+    const refresh = () => {
+      const revision = ++refreshRevision;
+      void desktopApi?.listTelegramConnections?.().then(
+        (rows) => { if (!disposed && revision === refreshRevision) setConnections(rows); },
+        (caught: unknown) => {
+          if (!disposed && revision === refreshRevision) setError(caught instanceof Error ? caught.message : String(caught));
+        },
+      );
+    };
+    const unsubscribe = desktopApi?.onMessagingPlatformStatusEvent?.((event) => {
+      if (event.kind === "connection-health-changed") refresh();
+    });
+    refresh();
+    return () => { disposed = true; unsubscribe?.(); };
   }, [desktopApi, props.settings]);
 
   const loadGrants = useCallback(async () => {
     return selected && selected !== "add" ? await desktopApi?.readTelegramPairingGrants?.(selected) : undefined;
   }, [desktopApi, selected]);
-  if (!desktopApi?.saveTelegramConnection) return null;
   const named = connections.filter((connection) => !connection.legacy);
   const current = named.find((connection) => connection.id === selected);
   const canAdd = named.length + Number(props.hasLegacy || connections.some((row) => row.legacy)) < 2;
@@ -3078,20 +3088,40 @@ function TelegramConnections(props: {
     setBusy(true);
     setError(undefined);
     try {
-      const rows = await desktopApi.saveTelegramConnection?.(request);
-      if (!rows) return;
+      const rows = await desktopApi?.saveTelegramConnection?.(request);
+      if (!rows) return false;
       setConnections(rows);
       setToken("");
       setConfirmRemove(false);
-      setSelected(request.kind === "remove" ? undefined
-        : request.kind === "add" ? rows.find((row) => row.displayName === displayName.trim())?.id : request.id);
+      const saved = request.kind === "remove" ? undefined : rows.find((row) =>
+        request.kind === "add" ? row.displayName === request.displayName.trim() : row.id === request.id);
+      setSelected(saved?.id);
+      setDisplayName(saved?.displayName ?? "");
+      setEnabled(saved?.enabled ?? true);
       await props.onChanged?.();
+      return true;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
+      return false;
     } finally {
       setBusy(false);
     }
   };
+  const discard = () => {
+    setSelected(undefined);
+    setToken("");
+    setError(undefined);
+  };
+  const saveDraft = async () => {
+    if (busy || props.disabled || !displayName.trim()) return false;
+    if (current) return await save({ kind: "update", id: current.id, displayName, enabled, ...(token.trim() ? { token } : {}) });
+    if (selected === "add" && token.trim()) return await save({ kind: "add", displayName, token });
+    return false;
+  };
+  const dirty = selected !== undefined && (Boolean(token.trim())
+    || displayName !== (current?.displayName ?? "") || enabled !== (current?.enabled ?? true));
+  useUnsavedSettingsChanges(dirty ? { label: "Telegram connection", save: saveDraft, discard } : undefined);
+  if (!desktopApi?.saveTelegramConnection) return null;
 
   return (
     <>
@@ -3127,8 +3157,7 @@ function TelegramConnections(props: {
       {selected !== undefined && (
         <form onSubmit={(event) => {
           event.preventDefault();
-          if (current) void save({ kind: "update", id: current.id, displayName, enabled, ...(token.trim() ? { token } : {}) });
-          else void save({ kind: "add", displayName, token });
+          void saveDraft();
         }}>
           <SettingsField label="Connection name" control={
             <input aria-label="Connection name" className="settings-input" maxLength={100} required value={displayName}

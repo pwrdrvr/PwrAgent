@@ -513,6 +513,7 @@ export type ThreadSubAgentSummary = {
 export type MessagingThreadBindingSummary = {
   /** Stable id of the binding row in sqlite — pass back to unbind. */
   bindingId: string;
+  connectionId?: string;
   platform: MessagingChannelKind;
   /**
    * Conversation kind (DM / channel / topic / thread). Drives the chip

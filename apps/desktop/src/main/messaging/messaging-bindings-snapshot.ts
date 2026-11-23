@@ -11,6 +11,7 @@ import {
   isBindingForThread,
 } from "./core/messaging-binding-thread-match";
 import { getDesktopMessagingStore } from "./desktop-messaging-store";
+import { listNamedMessagingBindings } from "./named-messaging-bindings";
 import { getMainLogger } from "../log";
 
 const log = getMainLogger("pwragent:messaging-bindings");
@@ -61,9 +62,12 @@ async function readActiveBindings(
   try {
     const store = getDesktopMessagingStore();
     const only = threads.length === 1 ? threads[0] : undefined;
-    return only
-      ? await store.findActiveBindingsForThread({ backend: only.source, threadId: only.id })
-      : await store.findActiveBindings();
+    const thread = only && { backend: only.source, threadId: only.id };
+    const [singleton, named] = await Promise.all([
+      thread ? store.findActiveBindingsForThread(thread) : store.findActiveBindings(),
+      listNamedMessagingBindings(thread),
+    ]);
+    return [...singleton.filter((binding) => binding.channel.connectionId === undefined), ...named];
   } catch (error) {
     log.warn("messaging bindings unavailable for navigation", {
       error: error instanceof Error ? error.message : String(error),
@@ -109,6 +113,7 @@ export function toMessagingThreadBindingSummary(
   const conversation = binding.channel.conversation;
   return {
     bindingId: binding.id,
+    ...(binding.channel.connectionId === undefined ? {} : { connectionId: binding.channel.connectionId }),
     platform: binding.channel.channel,
     conversationKind: conversation.kind,
     // Title of the conversation NODE itself — topic name, channel

@@ -1569,13 +1569,13 @@ export class MessagingCallbackHandlers {
     if (item.action === "close") {
       result = await this.context.adapter.closeManagedConversation?.({
         actor: event.actor,
-        channel: topicChannelRef(topic),
+        channel: topicChannelRef(topic, event.channel.connectionId),
         routingState: topic.routingState,
       });
     } else if (item.action === "delete") {
       result = await this.context.adapter.deleteManagedConversation?.({
         actor: event.actor,
-        channel: topicChannelRef(topic),
+        channel: topicChannelRef(topic, event.channel.connectionId),
         routingState: topic.routingState,
       });
     }

@@ -265,9 +265,10 @@ export function normalizeMonitorCallbackAction(actionId: string): MonitorCommand
   return { kind: "refresh" };
 }
 
-export function topicChannelRef(topic: MessagingManagedTopicRecord): MessagingChannelRef {
+export function topicChannelRef(topic: MessagingManagedTopicRecord, connectionId?: string): MessagingChannelRef {
   return {
     channel: topic.channel,
+    ...(connectionId === undefined ? {} : { connectionId }),
     conversation: topic.conversation,
   };
 }

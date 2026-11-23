@@ -712,7 +712,7 @@ export function registerMessagingStatusIpcHandlers(): void {
     await service.saveTelegramConnection(request);
     await coordinator.applyLatestConfig(
       runtime, (options) => loadDesktopMessagingConfigFromSettings(service, process.env, options),
-      { logStartupEligibility: true },
+      { logStartupEligibility: true, allowStart: !resolveRuntimeMessagingOverride().disabled || runtime.isEnabled() },
     );
     return telegramConnections();
   });

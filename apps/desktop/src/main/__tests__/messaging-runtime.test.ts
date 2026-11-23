@@ -145,6 +145,36 @@ afterEach(async () => {
 });
 
 describe("DesktopMessagingRuntime", () => {
+  it("does not restore an obsolete named registration from an older queued configuration", async () => {
+    await prepareRuntimeStore();
+    const { DesktopMessagingRuntime: Runtime } = await import("../messaging/messaging-runtime");
+    const factoryStarted = createDeferred<void>();
+    const releaseFactory = createDeferred<void>();
+    const named = {
+      channel: "telegram" as const, botToken: "123:fixture", expectedBotAccountId: "123",
+      configuredConnectionId: `mc_${"a".repeat(32)}`, authorizedActorIds: [],
+    };
+    const namedFactory = vi.fn(() => []);
+    const runtime = trackRuntime(new Runtime({
+      adapterFactory: async ({ config }) => {
+        if (config.inputDebounceMs === 1) {
+          factoryStarted.resolve();
+          await releaseFactory.promise;
+        }
+        return config.telegram?.configuredConnectionId ? namedFactory() : [];
+      },
+      backendBridge: createBackendBridge(),
+      config: {},
+    }));
+    const before = runtime.applyConfig({ inputDebounceMs: 1 });
+    await factoryStarted.promise;
+    const queued = runtime.applyConfig({ telegramConnections: [named] });
+    const removed = runtime.applyConfig({ telegramConnections: [] });
+    releaseFactory.resolve();
+    await Promise.all([before, queued, removed]);
+    expect(namedFactory).not.toHaveBeenCalled();
+  });
+
   it("only admits observed messages for the verified running Telegram connection", async () => {
     await prepareRuntimeStore();
     const storage = await import("../storage/desktop-messaging-storage");
@@ -163,7 +193,11 @@ describe("DesktopMessagingRuntime", () => {
     const { buildSourceEventKey } = await import("../automations/automation-trigger-matcher");
     const seen = vi.fn(async () => true);
     const adapterA = createAdapter("telegram", { readVerifiedBotAccountId: () => "111" });
-    const adapterB = createAdapter("telegram", { readVerifiedBotAccountId: () => "222", authorizedActorIds: [] });
+    let notifyFailure: ((reason: string) => void) | undefined;
+    const adapterB = createAdapter("telegram", {
+      readVerifiedBotAccountId: () => "222", authorizedActorIds: [],
+      onRuntimeError: (notify) => { notifyFailure = notify; return () => { notifyFailure = undefined; }; },
+    });
     const unverified = createAdapter("telegram", { readDmPairingAccountId: () => "222" });
     const [idA, idB] = ["a", "b"].map((char) => `mc_${char.repeat(32)}`);
     const named = [idA, idB].map((id, index) => ({
@@ -184,6 +218,8 @@ describe("DesktopMessagingRuntime", () => {
       automationInboundMatches: () => true,
       automationInboundHandler: seen,
     }));
+    const onStatus = vi.fn();
+    runtime.onPlatformStatus(onStatus);
     await runtime.start();
     expect(openFixture.mock.calls).toEqual([[idA], [idB]]);
     const send = async (adapter: typeof adapterA, connectionId?: string) => {
@@ -220,6 +256,11 @@ describe("DesktopMessagingRuntime", () => {
     expect(runtime.generatePairingToken({ platform: "telegram", scope: "user_dm", connectionId: idA }).entry)
       .toMatchObject({ connectionId: idA, instanceId: "account:111" });
     expect(runtime.listPairingRequests({ connectionId: idB }).entries).toEqual([]);
+    notifyFailure?.("Fixture polling failure");
+    expect(onStatus).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "connection-health-changed", connectionId: idB,
+    }));
+    expect(runtime.getTelegramConnectionHealth(idB)?.health).toBe("errored");
 
     await runtime.applyConfig({ telegramConnections: [named[0], { ...named[1], botToken: "broken" }] });
     await send(unverified, idB);
@@ -4410,6 +4451,42 @@ describe("DesktopMessagingRuntime", () => {
       origin: "ui",
     });
     expect(result).toEqual({ revoked: false, notifiedPlatform: false });
+  });
+
+  it.each(["detach", "archive"] as const)("lists and revokes offline named bindings on %s", async (action) => {
+    await prepareRuntimeStore();
+    const { DesktopMessagingRuntime: Runtime } = await import("../messaging/messaging-runtime");
+    const { openMessagingConnectionStorage } = await import("../storage/desktop-messaging-storage");
+    const id = `mc_${"a".repeat(32)}`;
+    const other = `mc_${"b".repeat(32)}`;
+    const first = openMessagingConnectionStorage(id);
+    const second = openMessagingConnectionStorage(other);
+    try {
+      for (const [connectionId, scope] of [[id, first], [other, second]] as const) {
+        await scope.bindings.upsertBinding({
+          id: "same-binding", backend: "codex", threadId: "thread-1",
+          channel: { channel: "telegram", connectionId, conversation: { kind: "dm", id: "42" } },
+          authorizedActorIds: ["42"], createdAt: 1, updatedAt: 1,
+        });
+      }
+      const runtime = trackRuntime(new Runtime({
+        adapterFactory: () => [], config: {}, backendBridge: createBackendBridge(),
+        readSavedTelegramConnectionIds: async () => [id, other],
+      }));
+      expect(await runtime.listNamedBindings(undefined, true)).toHaveLength(2);
+      if (action === "detach") {
+        await expect(runtime.requestBindingRevoke({ bindingId: "same-binding", connectionId: id, origin: "ui" }))
+          .resolves.toEqual({ revoked: true, notifiedPlatform: false });
+      } else {
+        await expect(runtime.requestBindingRevokeAllForThread({ backend: "codex", threadId: "thread-1", origin: "ui" }))
+          .resolves.toEqual({ revokedCount: 2, notifiedCount: 0 });
+      }
+      expect(await first.bindings.findActiveBindings()).toHaveLength(0);
+      expect(await second.bindings.findActiveBindings()).toHaveLength(action === "detach" ? 1 : 0);
+    } finally {
+      first.close();
+      second.close();
+    }
   });
 
   it("requestBindingRevokeAllForThread fans out to every binding on the thread, regardless of platform", async () => {

@@ -2967,6 +2967,10 @@ export class DesktopSettingsService {
 
   saveTelegramConnection(input: SaveTelegramConnectionRequest): Promise<void> {
     return this.serializeTelegramSettings(async () => {
+      this.configStore.reloadFromDisk("watch");
+      if (this.readMessagingConfig().telegram?.invalidConnections) {
+        throw new Error("Correct the malformed Telegram connections in config.toml before saving.");
+      }
       if (input.kind === "add") await this.addTelegramConnection(input);
       else await this.updateTelegramConnection(input);
     });
@@ -2991,11 +2995,13 @@ export class DesktopSettingsService {
   }
 
   private async updateTelegramConnection(input: Exclude<SaveTelegramConnectionRequest, { kind: "add" }>): Promise<void> {
-    this.configStore.reloadFromDisk("watch");
     const current = this.readConfiguredTelegramConnections() ?? [];
     const connection = current.find((row) => row.id === input.id && !row.legacy);
     if (!connection) throw new Error("This Telegram connection is unavailable.");
     if (input.kind === "remove") {
+      // Delete before publishing so an interrupted removal can be retried
+      // with the saved row and the named token already unavailable.
+      await this.options.secretStore.deleteSecret(telegramConnectionSecretName(connection.id));
       this.options.releaseTelegramConnectionId?.(`new:${connection.botAccountId}`, connection.id);
       await this.writeConfigPatchTargeted({ messaging: { telegram: {
         connections: current.filter((row) => row.id !== connection.id),
@@ -3018,7 +3024,8 @@ export class DesktopSettingsService {
       }
     }
     this.configStore.reloadFromDisk("watch");
-    if (JSON.stringify(this.readConfiguredTelegramConnections()) !== JSON.stringify(current)) {
+    if (this.readMessagingConfig().telegram?.invalidConnections
+      || JSON.stringify(this.readConfiguredTelegramConnections()) !== JSON.stringify(current)) {
       throw new Error("Telegram settings changed during setup. Try saving again.");
     }
     await this.writeConfigPatchTargeted({ messaging: { telegram: {
@@ -3027,7 +3034,6 @@ export class DesktopSettingsService {
   }
 
   private async addTelegramConnection(input: { displayName: string; token: string }): Promise<DesktopTelegramConnection> {
-    this.configStore.reloadFromDisk("watch");
     this.configStore.requireSavedMessagingSafetyAcknowledgment();
     const verify = this.options.verifyTelegramConnectionToken;
     const reserve = this.options.reserveTelegramConnectionId;
@@ -3078,7 +3084,8 @@ export class DesktopSettingsService {
       },
       publish: async (connections) => {
         this.configStore.reloadFromDisk("watch");
-        if (JSON.stringify(this.readConfiguredTelegramConnections()) !== JSON.stringify(previous)
+        if (this.readMessagingConfig().telegram?.invalidConnections
+          || JSON.stringify(this.readConfiguredTelegramConnections()) !== JSON.stringify(previous)
           || (previous === undefined && this.resolveTelegramBotTokenSync() !== legacyToken)) {
           throw new Error("Telegram settings changed during setup. Try saving again.");
         }

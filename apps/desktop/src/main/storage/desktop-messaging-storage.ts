@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import type { MessagingActivityStorage } from "@pwragent/owner-core/messaging-activity-storage";
 import { AppUpdateNoticeStore } from "@pwragent/sqlite-storage/app-update-notice-store";
 import type { MessagingPairingStorage } from "@pwragent/owner-core/messaging-pairing-storage";
@@ -31,11 +32,28 @@ export function createMessagingRequestStorage(): MessagingRequestStore {
   return new SqliteMessagingRequestStore(getAppStateDb().raw);
 }
 
-export function openMessagingConnectionStorage(connectionId: string) {
+function messagingConnectionPath(connectionId: string): string {
   if (!/^mc_[a-f0-9]{32}$/.test(connectionId)) throw new Error("Invalid messaging connection ID.");
+  return resolveActiveProfilePath(`state/messaging-connections/${connectionId}.db`);
+}
+
+export async function withExistingMessagingConnectionBindings<T>(
+  connectionId: string, operation: (store: DesktopMessagingStorage) => Promise<T>,
+): Promise<T | undefined> {
+  const path = messagingConnectionPath(connectionId);
+  if (!existsSync(path)) return undefined;
+  const db = StateDb.open(path);
+  try {
+    return await operation(new SqliteMessagingStore(db));
+  } finally {
+    db.close();
+  }
+}
+
+export function openMessagingConnectionStorage(connectionId: string) {
   // Legacy clients only open state/state.db. No renamed binding or handle is
   // projected into their data, even when their provider identifiers coincide.
-  const db = StateDb.open(resolveActiveProfilePath(`state/messaging-connections/${connectionId}.db`));
+  const db = StateDb.open(messagingConnectionPath(connectionId));
   return {
     bindings: new SqliteMessagingStore(db),
     pairing: new MessagingPairingStore(db),

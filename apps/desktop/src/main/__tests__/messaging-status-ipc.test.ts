@@ -17,9 +17,11 @@ const runtimeMock = vi.hoisted(() => ({
 }));
 const settingsServiceMock = vi.hoisted(() => ({
   readMessagingSettings: vi.fn(),
+  readConfiguredTelegramConnections: vi.fn(() => []),
   readTelegramPairingGrants: vi.fn(),
   resolveSlackBotTokenSync: vi.fn(),
   resolveTelegramBotTokenSync: vi.fn(() => "654321:replacement-bot"),
+  saveTelegramConnection: vi.fn(async () => undefined),
   writeConfigPatchTargeted: vi.fn(async () => ({ configPath: "/tmp/pwragent-config.toml" })),
 }));
 const pairingStoreMock = vi.hoisted(() => ({
@@ -377,6 +379,24 @@ describe("messaging status ipc", () => {
       .rejects.toThrow("Approve this pairing in the PwrAgent instance running Messaging for this profile.");
     expect(settingsServiceMock.writeConfigPatchTargeted).not.toHaveBeenCalled();
     expect(pairingStoreMock.markStatus).not.toHaveBeenCalled();
+  });
+
+  it("persists connection removals without starting session-disabled messaging", async () => {
+    const { MESSAGING_SAVE_TELEGRAM_CONNECTION_CHANNEL } = await import("../../shared/ipc");
+    registerMessagingStatusIpcHandlers();
+    vi.stubEnv("PWRAGENT_DISABLE_MESSAGING", "1");
+    runtimeMock.isEnabled.mockReturnValue(false);
+    leaseCoordinatorMock.snapshot.mockReturnValueOnce({ leaseHeld: true, leaseHolder: { instanceId: "fixture" } });
+    try {
+      const request = { kind: "remove", id: "fixture-connection" };
+      await expect(handlers.get(MESSAGING_SAVE_TELEGRAM_CONNECTION_CHANNEL)?.({}, request)).resolves.toEqual([]);
+      expect(settingsServiceMock.saveTelegramConnection).toHaveBeenCalledWith(request);
+      expect(leaseCoordinatorMock.applyLatestConfig).toHaveBeenCalledWith(
+        runtimeMock, expect.any(Function), { logStartupEligibility: true, allowStart: false },
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("refuses an observed Telegram request when the saved token changed before the old adapter stopped", async () => {

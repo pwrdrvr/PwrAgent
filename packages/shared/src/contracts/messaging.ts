@@ -200,6 +200,12 @@ export type GetMessagingPlatformStatusesRequest = {
 
 export type MessagingPlatformStatusEvent =
   | {
+      kind: "connection-health-changed";
+      platform: "telegram";
+      connectionId: string;
+      at: number;
+    }
+  | {
       kind: "health-changed";
       platform: MessagingChannelKind;
       health: MessagingPlatformHealth;
@@ -363,6 +369,7 @@ export type DesktopMessagingDefaultAgentRoute = {
 
 export type DesktopMessagingBindingRoute = {
   bindingId: string;
+  connectionId?: string;
   platform: MessagingChannelKind;
   conversation: {
     id: string;
