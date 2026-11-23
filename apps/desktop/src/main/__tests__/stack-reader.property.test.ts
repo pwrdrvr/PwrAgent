@@ -492,17 +492,24 @@ describe("stack checkout demand", () => {
         const handle = await originalOpen(...args);
         if (String(args[0]) === catalogPath && !replaced) {
           const stat = handle.stat.bind(handle);
-          vi.spyOn(handle, "stat").mockImplementationOnce(async (...options) => {
+          let stats = 0;
+          vi.spyOn(handle, "stat").mockImplementation(async (...options) => {
             const info = await stat(...options);
-            await rename(replacement, catalogPath);
-            replaced = true;
+            if (++stats === 2) {
+              // Replace after the read and handle checks. Windows can reject
+              // replacing a destination that still has an open handle.
+              await handle.close();
+              await rename(replacement, catalogPath);
+              replaced = true;
+            }
             return info;
           });
         }
         return handle;
       });
-      expect(await readGhStackCatalog(common)).toMatchObject({ status: "ok", catalog: { repository: "github.com:fixture/after" } });
+      const catalog = await readGhStackCatalog(common);
       expect(replaced).toBe(true);
+      expect(catalog).toMatchObject({ status: "ok", catalog: { repository: "github.com:fixture/after" } });
     } finally {
       vi.mocked(open).mockImplementation(originalOpen);
       await rm(sandbox, { recursive: true, force: true });
