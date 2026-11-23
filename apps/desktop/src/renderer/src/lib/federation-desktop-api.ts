@@ -10,6 +10,7 @@ export function scopeDesktopApiToFederationTarget(
   }
   const setThreadAgent = desktopApi.setThreadAgent;
   const setThreadTokenMiser = desktopApi.setThreadTokenMiser;
+  const setThreadJobMonitorCreation = desktopApi.setThreadJobMonitorCreation;
   const openApplication = desktopApi.openApplication;
   const resolveTranscriptFiles = desktopApi.resolveTranscriptFiles;
   const readMarkdownFile = desktopApi.readMarkdownFile;
@@ -33,6 +34,9 @@ export function scopeDesktopApiToFederationTarget(
       : undefined,
     setThreadTokenMiser: setThreadTokenMiser
       ? async (request) => await setThreadTokenMiser({ ...request, federationTarget })
+      : undefined,
+    setThreadJobMonitorCreation: setThreadJobMonitorCreation
+      ? async (request) => await setThreadJobMonitorCreation({ ...request, federationTarget })
       : undefined,
     openApplication: openApplication
       ? async (request) => await openApplication({

@@ -2092,6 +2092,7 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   operator_requests: "operator request queue",
   operator_questions: "dismiss async questions",
   thread_mcp_connections: "Thread MCP connections",
+  thread_job_monitor_control: "Change thread Job Monitor settings",
   turn_queue_reorder: "reorder queued messages",
   turn_queue_pause: "pause queued messages",
   // Negotiated support for a dismissal authorized by turn_control.

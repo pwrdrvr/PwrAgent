@@ -1,4 +1,5 @@
 import { projectClaudeSessionThread } from "@pwragent/owner-core/claude-profile-storage";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import { createHash, randomUUID } from "node:crypto";
 import { readFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -146,6 +147,7 @@ export type ClaudeBackendOptions = {
    * False lets the turn run.
    */
   holdSelfStartedTurn?: (params: ClaudeSelfStartedTurn & { threadId: string }) => Promise<boolean>;
+  readJobMonitorCreationPreference?: (threadId: string) => Promise<boolean>;
   /**
    * Saves the Sub-agents cards for Claude's own sub-agents (Agent tool
    * tasks). Called with the cards that changed, as each one starts and ends.
@@ -296,6 +298,13 @@ async function configureClaudeStartupMcp(
   } finally {
     timer.abort();
   }
+}
+
+async function readClaudeJobMonitorCatalog(query: Query): Promise<boolean | undefined> {
+  const server = (await query.mcpServerStatus()).find(({ name }) => name === PWRAGENT_TOOL_NAMESPACE);
+  return server?.status === "connected"
+    ? server.tools?.some(({ name }) => name === "create_monitor_delegation")
+    : undefined;
 }
 
 /**
@@ -460,6 +469,7 @@ type ClaudeSessionConfig = {
   strictMcpConfig?: boolean;
   /** The agent tool catalog PwrAgent's MCP server listed when the process started. */
   agentToolCatalogKey?: string;
+  jobMonitorCreationEnabled?: boolean | "unverified";
   /** Tools Claude runs without asking, fixed when the process starts. */
   allowedTools: string[];
   /** The thread's other linked directories, fixed when the process starts. */
@@ -482,6 +492,7 @@ type LiveSession = {
   input: ClaudeInputStream;
   inputWrites: Promise<void>;
   config: ClaudeSessionConfig;
+  jobMonitorCatalogRefresh?: Promise<void>;
   /** The desktop turn now open, if any. */
   turn?: RunningTurn;
   /** The latest desktop turn; a request between turns belongs to it. */
@@ -558,6 +569,8 @@ type ClaudeTurnParams = {
    * and keeps the list, so a change relaunches the session.
    */
   agentToolCatalogKey?: string;
+  /** Expected creation-tool availability in the PwrAgent MCP catalog for this prompt. */
+  jobMonitorCreationEnabled?: boolean;
   /** Plan runs this turn in Claude's read-only plan mode. */
   collaborationMode?: AppServerCollaborationModeRequest;
   /** Directories attached to the thread after it was created. */
@@ -597,6 +610,7 @@ function claudeSessionConfig(params: ClaudeTurnParams, session: ClaudeSession): 
     mcpKey: JSON.stringify(params.mcpServers ?? {}),
     strictMcpConfig: params.strictMcpConfig,
     agentToolCatalogKey: params.agentToolCatalogKey,
+    jobMonitorCreationEnabled: params.jobMonitorCreationEnabled,
     allowedTools: claudeAllowedTools(params.mcpServers),
     additionalDirectories: claudeAdditionalDirectories(session, params.attachedDirectories),
     shellEnvironment: params.shellEnvironment,
@@ -1216,6 +1230,15 @@ export class ClaudeBackend {
     }
   }
 
+  jobMonitorCreationEnabledForTurn(threadId: string, turnId: string): boolean | undefined {
+    const live = this.sessions.get(threadId);
+    if (live?.turn?.turnId === turnId) {
+      const listed = live.config.jobMonitorCreationEnabled;
+      return listed === "unverified" ? false : listed;
+    }
+    return undefined;
+  }
+
   /** Launch a query for the thread, with this turn's message as its prompt. */
   private async startSession(params: ClaudeTurnParams): Promise<ClaudeTurnStart> {
     const { threadId } = params;
@@ -1366,6 +1389,12 @@ export class ClaudeBackend {
         if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
           await configureClaudeStartupMcp(current.query, config.mcpServers, initializeMcp, controller.signal,
             this.options.mcpStartupTimeoutMs ?? CLAUDE_MCP_STARTUP_TIMEOUT_MS);
+        }
+        if (config.jobMonitorCreationEnabled !== undefined) {
+          // A startup status without a tool list gives no evidence of drift.
+          // Keep the launch setting so an unchanged preference can reuse the session.
+          const listed = await claudeTelemetry(() => readClaudeJobMonitorCatalog(current.query!));
+          current.config.jobMonitorCreationEnabled = listed ?? config.jobMonitorCreationEnabled;
         }
         // A fork's totals start from its source's, so it reads them too.
         if ((session.sdkSessionId ?? session.forkFromSdkSessionId) && !session.modelUsage) {
@@ -1526,6 +1555,7 @@ export class ClaudeBackend {
         live.config.mcpServers = config.mcpServers;
         live.config.mcpKey = config.mcpKey;
       }
+      await this.refreshJobMonitorCatalog(live, config.jobMonitorCreationEnabled);
       return true;
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -1535,6 +1565,27 @@ export class ClaudeBackend {
       if (!keepTasks) return false;
       throw new Error(`Claude could not apply this message's settings while its background tasks run: ${detail}`, { cause: error });
     }
+  }
+
+  private async refreshJobMonitorCatalog(live: LiveSession, enabled: ClaudeSessionConfig["jobMonitorCreationEnabled"]): Promise<void> {
+    const query = live.query;
+    if (!query || typeof enabled !== "boolean") return;
+    while (live.jobMonitorCatalogRefresh) await live.jobMonitorCatalogRefresh.catch(() => undefined);
+    if (live.closing || enabled === live.config.jobMonitorCreationEnabled) return;
+    // Reconnecting the same server refreshes its tool list. Keep dispatch
+    // closed until Claude confirms the new list.
+    live.config.jobMonitorCreationEnabled = "unverified";
+    const refresh = (async () => {
+      const listed = await claudeTelemetry(async () => {
+        await query.reconnectMcpServer(PWRAGENT_TOOL_NAMESPACE);
+        return await readClaudeJobMonitorCatalog(query);
+      });
+      if (listed !== enabled) throw new Error("Claude could not confirm the Job Monitors tool catalog. Try sending again.");
+      live.config.jobMonitorCreationEnabled = enabled;
+    })();
+    live.jobMonitorCatalogRefresh = refresh;
+    try { await refresh; }
+    finally { live.jobMonitorCatalogRefresh = undefined; }
   }
 
   /** Show the operator's message and open the desktop turn. */
@@ -1868,23 +1919,35 @@ export class ClaudeBackend {
    */
   private async holdSelfStartedTurn(live: LiveSession, input: UserPromptSubmitHookInput): Promise<boolean> {
     const hold = this.options.holdSelfStartedTurn;
-    if (!hold || live.closing) return false;
+    if (live.closing) return false;
     // An init can open the follow-up turn before this asks. Until Claude
     // writes into it, that turn is still the prompt's own.
     const openFollowUp = live.turn?.followUp === true && live.turn.entries.size === 0;
     const selfStarted = claudeSelfStartedTurn(input, Boolean(live.turn) && !openFollowUp);
     if (!selfStarted) return false;
     const threadId = live.session.thread.id;
-    let held: boolean;
+    let held = false;
     try {
-      held = await hold({ ...selfStarted, threadId });
+      held = await hold?.({ ...selfStarted, threadId }) ?? false;
     } catch (error) {
       claudeBackendLog.warn("Could not hold a turn Claude started while the thread is locked; it runs", {
         threadId, source: selfStarted.source, error: error instanceof Error ? error.message : String(error),
       });
+    }
+    if (!held) {
+      // Native wakes bypass reconfigure(). This hook runs before Claude sends
+      // the prompt, including when init has already opened its desktop turn.
+      if (live.config.jobMonitorCreationEnabled !== undefined) {
+        try {
+          await this.refreshJobMonitorCatalog(live, await this.options.readJobMonitorCreationPreference?.(threadId));
+        } catch (error) {
+          claudeBackendLog.warn("Could not refresh Job Monitors for a native Claude turn", {
+            threadId, source: selfStarted.source, error: claudeExceptionMessage(error, ""),
+          });
+        }
+      }
       return false;
     }
-    if (!held) return false;
     // An open follow-up turn takes the dropped prompt's result and ends.
     if (!openFollowUp) live.heldSelfStarts += 1;
     // A CLI that names no source may be firing a wake; match that by prompt only.

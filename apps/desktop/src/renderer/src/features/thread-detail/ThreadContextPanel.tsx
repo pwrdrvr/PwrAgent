@@ -52,6 +52,7 @@ import {
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import { readRendererFederationTarget } from "../../lib/federation-window";
+import { threadJobMonitorControl } from "../../lib/job-monitor-control";
 import { resolveThreadWorkingStatePath } from "../../lib/thread-working-state-path";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { ThreadAutomationsPanel } from "../automations/ThreadAutomationsPanel";
@@ -1058,9 +1059,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         const resolveHeld = props.desktopApi?.resolveProjectHeldWakeups;
         const turnOffAutoFix = props.onSetThreadPrAutoDispatch;
         const openContinueAfter = dependencyContext?.open;
-        const setJobMonitorCreation = !federationTarget || federationTarget.scope === "local"
-          ? props.desktopApi?.setThreadJobMonitorCreation
-          : undefined;
+        const setJobMonitorCreation = threadJobMonitorControl(props.desktopApi, thread, federationTarget);
         return (
           <WaitingForPanel
             key={JSON.stringify([thread.source, thread.id, federationTarget])}
@@ -1069,8 +1068,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             onFocusHeading={props.onFocusWaitingHeading}
             ownerLabel={ownerLabel}
             onTurnOffAutoFix={turnOffAutoFix ? async () => await turnOffAutoFix(false) : undefined}
-            onTurnOnJobMonitors={thread.source === "codex" && setJobMonitorCreation ? async () => {
-              await setJobMonitorCreation({ threadId: thread.id, enabled: true });
+            onTurnOnJobMonitors={setJobMonitorCreation ? async () => {
+              await setJobMonitorCreation(true);
               await props.onRefreshNavigation?.().catch(() => undefined);
             } : undefined}
             onSendScheduledNow={sendNow ? async (id) => {
