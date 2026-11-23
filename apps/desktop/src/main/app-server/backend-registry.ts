@@ -1136,6 +1136,7 @@ export class DesktopBackendRegistry {
   private readonly codexEnvironmentCommandEnv?: NodeJS.ProcessEnv;
   private readonly threadListCacheOwnerId = `backend-thread-list-cache-${++threadListCacheSequence}`;
   private readonly threadListCache = new Map<string, ThreadListCacheState>();
+  private threadListCacheRevision = 0;
   private createdThreadDirectoryVisibility = new Map<
     string,
     CreatedThreadDirectoryVisibility
@@ -5107,6 +5108,7 @@ export class DesktopBackendRegistry {
     this.startupProviderRefreshAttempted = true;
     this.startupProviderRefreshStatus = { state: "checking" };
     const observationSequence = this.reserveThreadInfoObservation();
+    const cacheRevision = this.threadListCacheRevision;
     this.startupProviderRefreshPromise = Promise.resolve().then(async () => {
       if (this.shutdownRequested) return;
       const startedAt = Date.now();
@@ -5150,6 +5152,7 @@ export class DesktopBackendRegistry {
           result.status === "fulfilled" ? [result.value] : [],
         ),
         observationSequence,
+        cacheRevision,
       );
       if (this.closed) return;
       await this.emit({
@@ -5175,6 +5178,8 @@ export class DesktopBackendRegistry {
     if (this.closed) return;
     this.invalidateThreadListCache(undefined, true);
     await this.listBackends({ refreshModels: "codex" }, permit);
+    const observationSequence = this.reserveThreadInfoObservation();
+    const cacheRevision = this.threadListCacheRevision;
     const threads = await this.listThreads({
       backend: "codex",
       callerReason: "authentication-recovery",
@@ -5182,7 +5187,7 @@ export class DesktopBackendRegistry {
       forceRefresh: true,
     });
     if (this.closed) return;
-    await this.publishRefreshedProviderThreadsToCache([{ backends: ["codex"], threads }]);
+    await this.publishRefreshedProviderThreadsToCache([{ backends: ["codex"], threads }], observationSequence, cacheRevision);
     if (this.closed) return;
     const failedProviders = Math.max(
       0,
@@ -5258,6 +5263,7 @@ export class DesktopBackendRegistry {
   private async publishRefreshedProviderThreadsToCache(
     refreshes: readonly StartupProviderThreadRefresh[],
     observationSequence = this.reserveThreadInfoObservation(),
+    cacheRevision = this.threadListCacheRevision,
   ): Promise<void> {
     if (!this.providerThreadSnapshotStore) {
       return;
@@ -5287,7 +5293,6 @@ export class DesktopBackendRegistry {
       if (!latest?.title || (latest.title === thread.title && (latest.titleSource ?? thread.titleSource) === thread.titleSource)) return thread;
       return { ...thread, title: latest.title, titleSource: latest.titleSource ?? thread.titleSource };
     });
-    this.invalidateThreadListCache();
     this.rememberThreadListContexts(
       currentThreads.filter(thread => !isAcpBackendId(thread.source)),
       observationSequence,
@@ -5297,6 +5302,10 @@ export class DesktopBackendRegistry {
     // ACP was reread from its native session store above, independently of
     // the completed provider inventories, so it owns that read's sequence.
     this.rememberThreadListContexts(acpThreads, acpObservationSequence, false, false);
+    // A thread or turn can start during discovery. Keep any newer listing
+    // already cached or in flight when discarding the earlier inventory.
+    if (this.threadListCacheRevision !== cacheRevision) return;
+    this.invalidateThreadListCache();
     const cacheKey = this.buildThreadListCacheKey({
       callerReason: "navigation-snapshot",
       enrichDirectories: false,
@@ -17197,6 +17206,7 @@ export class DesktopBackendRegistry {
   // Display metadata and navigation refreshes do not change checkout ownership.
   // Only actual workspace mutations may invalidate a removal's safety scan.
   private invalidateThreadListCache(backend?: AppServerBackendKind, workspaceChanged = false, threadId?: string, paths: readonly string[] = []): void {
+    this.threadListCacheRevision++;
     if (workspaceChanged) {
       this.threadArchiveCoordinator.advanceArchiveWorkspaceRevision();
       if (backend) this.threadArchiveCoordinator.recordArchiveWorkspaceChange(threadId ? buildThreadIdentityKey(backend, threadId) : undefined, paths, paths.length > 0);

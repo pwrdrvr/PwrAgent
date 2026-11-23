@@ -53,6 +53,15 @@ export async function buildOwnerFixture(directory: string, kind: "desktop" | "he
       }
       return { contents: source + "\n" + extraExports, loader: "ts" };
     });
+    if (transport === "in-process") builder.onLoad({ filter: /[\\/]app-server[\\/]backend-registry\.ts$/ }, args => ({
+      contents: `import { holdOwnerFixtureBoundary } from ${JSON.stringify(fixture)};\n` + replaceOnce(
+        args.path, fs.readFileSync(args.path, "utf8"), "    await this.discoverCodexBackend(permit);", `
+    if (process.env.PWRAGENT_TEST_STARTUP_INVENTORY_PORT) {
+      await holdOwnerFixtureBoundary(process.env.PWRAGENT_TEST_STARTUP_INVENTORY_PORT);
+    }
+    await this.discoverCodexBackend(permit);`,
+      ), loader: "ts",
+    }));
     builder.onLoad({ filter: /codex-discovery-coordinator\.ts$/ }, args => ({
       contents: replaceOnce(args.path, fs.readFileSync(args.path, "utf8"), "export class CodexDiscoveryCoordinator", "class FixtureCoordinatorBase") + `
         export class CodexDiscoveryCoordinator extends FixtureCoordinatorBase {
