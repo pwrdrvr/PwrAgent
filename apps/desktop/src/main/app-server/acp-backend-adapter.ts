@@ -101,6 +101,7 @@ import {
   AcpRolloutStore,
   isPwrAgentSyntheticAcpUpdate,
 } from "../acp/acp-rollout-store";
+import { acpWorkspaceHistory, prependAcpWorkspaceHistory } from "../acp/acp-workspace-history";
 import type { AcpInstalledAgentRecord, AcpRegistrySnapshot } from "../acp/acp-registry-types";
 import {
   acpRuntimeSupportsHttpMcp,
@@ -204,6 +205,7 @@ export type AcpRuntimeClient = Pick<
   Partial<
     Pick<
       AcpAgentClient,
+      | "antigravityWorkspaceMatches"
       | "closeIdleSessions"
       | "closeSessionForArchive"
       | "closeSessionForTransfer"
@@ -217,6 +219,7 @@ export type AcpRuntimeClient = Pick<
       | "offersThoughtLevel"
       | "ownsSession"
       | "readProviderStatus"
+      | "rebindAntigravityWorkspace"
       | "sendControlPrompt"
       | "setRuntimeOption"
       | "steerSession"
@@ -1026,6 +1029,10 @@ function mergeAcpReplayWithSyntheticHistory(
   };
 }
 
+function antigravityWorkspaceAgentSessionId(session: AcpSessionMetadata): string | undefined {
+  return session.antigravityWorkspaceRebound ? session.agentSessionId ?? session.sessionId : undefined;
+}
+
 function selectedAcpModel(
   agent: AcpInstalledAgentRecord,
   session: AcpSessionMetadata | undefined,
@@ -1782,6 +1789,15 @@ export class AcpBackendAdapter {
         executionMode,
         antigravityFullAccessConfirmed: executionMode === "full-access" ? true : undefined,
       });
+    });
+  }
+
+  async rebindAntigravityWorkspace(client: AcpRuntimeClient, session: AcpSessionMetadata): Promise<AcpSessionMetadata> {
+    return await this.environmentClientLocks.run(JSON.stringify([session.backendId, session.sessionId]), async () => {
+      if (client !== this.findSessionOwner("acp:antigravity", session.sessionId)?.client || !client.rebindAntigravityWorkspace) {
+        throw new Error("Couldn't open Antigravity in the destination workspace. Try sending the prompt again.");
+      }
+      return await client.rebindAntigravityWorkspace(session);
     });
   }
 
@@ -2593,6 +2609,7 @@ export class AcpBackendAdapter {
         backendId: session.backendId,
         sessionId: session.sessionId,
         cwd: session.cwd,
+        workspaceAgentSessionId: antigravityWorkspaceAgentSessionId(session),
       }) ?? new AcpSessionReplayNormalizer().replay();
     this.logSessionReplaySource({
       backend: session.backendId,
@@ -2618,10 +2635,13 @@ export class AcpBackendAdapter {
       acpSessionReplayNormalizerOptions(session.backendId, session.cwd),
     );
     let syntheticUpdateCount = 0;
-    for (const record of this.acpRolloutStore.readUpdates({
+    const records = this.acpRolloutStore.readUpdates({
       backendId: session.backendId,
       sessionId: session.sessionId,
-    })) {
+    });
+    const { previous } = acpWorkspaceHistory(records, antigravityWorkspaceAgentSessionId(session));
+    replay = prependAcpWorkspaceHistory(previous, replay);
+    for (const record of records) {
       if (!isPwrAgentSyntheticAcpUpdate(record.update)) {
         continue;
       }
@@ -2663,6 +2683,7 @@ export class AcpBackendAdapter {
           backendId: session.backendId,
           sessionId: session.sessionId,
           cwd: session.cwd,
+          workspaceAgentSessionId: antigravityWorkspaceAgentSessionId(session),
         }) ?? new AcpSessionReplayNormalizer().replay();
       if (rolloutReplay.entries.length > 0) {
         this.logSessionReplaySource({
@@ -2710,6 +2731,7 @@ export class AcpBackendAdapter {
         backendId: session.backendId,
         sessionId: session.sessionId,
         cwd: session.cwd,
+        workspaceAgentSessionId: antigravityWorkspaceAgentSessionId(session),
       }) ?? new AcpSessionReplayNormalizer().replay();
     if (rolloutReplay.entries.length === 0) {
       this.logSessionReplaySource({
@@ -2747,6 +2769,7 @@ export class AcpBackendAdapter {
         backendId: params.session.backendId,
         sessionId: params.session.sessionId,
         cwd: params.session.cwd,
+        workspaceAgentSessionId: antigravityWorkspaceAgentSessionId(params.session),
       }) ?? new AcpSessionReplayNormalizer().replay();
     if (rolloutReplay.entries.length > 0) {
       this.logSessionReplaySource({

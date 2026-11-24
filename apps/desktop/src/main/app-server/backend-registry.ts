@@ -927,6 +927,7 @@ import {
   isLikelyToolManagedWorktreePath,
   linkedDirectoryWorktreePath,
   normalizeLinkedDirectoryKind,
+  overlayHasHandoffWorkspace,
   pendingStartedThreadMatchesFilter,
   pendingStartedThreadWorkspaceMatches,
   readCurrentGitBranch,
@@ -6311,6 +6312,20 @@ export class DesktopBackendRegistry {
       throw new Error(`ACP session not found: ${params.threadId}`);
     }
     let sessionForTurn = await this.resolveAcpSessionForTurn(params.backend, session);
+    // Previous builds could commit an Antigravity handoff even though the
+    // provider kept its original primary directory.
+    if (params.backend === "acp:antigravity"
+      && sessionForTurn.hasConversationHistory
+      && !sessionForTurn.antigravityWorkspaceRebound
+      && !sessionForTurn.requiresAgentSessionRebind
+      && overlayHasHandoffWorkspace(overlay ?? undefined)) {
+      if (!client.antigravityWorkspaceMatches) {
+        throw new Error("Couldn't verify Antigravity's primary workspace. Try sending the prompt again.");
+      }
+      if (!await client.antigravityWorkspaceMatches(sessionForTurn)) {
+        sessionForTurn = { ...sessionForTurn, requiresAgentSessionRebind: true };
+      }
+    }
     if (
       sessionForTurn.requiresAgentSessionRebind ||
       (sessionForTurn.cwd && sessionForTurn.cwd !== session.cwd)

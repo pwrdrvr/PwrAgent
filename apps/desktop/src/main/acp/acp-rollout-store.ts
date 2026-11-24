@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { ACP_WORKSPACE_HANDOFF_RECORD, acpWorkspaceHistory, prependAcpWorkspaceHistory } from "./acp-workspace-history.js";
 import {
   type AcpBackendId,
   type AppServerThreadReplay,
@@ -98,18 +99,24 @@ export class AcpRolloutStore {
     sessionId: string;
     /** The session's workspace, which edit diffs name files relative to. */
     cwd?: string;
+    workspaceAgentSessionId?: string;
   }): AppServerThreadReplay {
     const normalizer = new AcpSessionReplayNormalizer(
       acpSessionReplayNormalizerOptions(params.backendId, params.cwd),
     );
-    for (const record of this.readUpdates(params)) {
+    const records = this.readUpdates(params);
+    const { current, previous } = acpWorkspaceHistory(records, params.workspaceAgentSessionId);
+    const updates = previous
+      ? [...records.slice(0, records.length - current.length).filter(({ update }) => isPwrAgentSyntheticAcpUpdate(update)), ...current]
+      : current;
+    for (const record of updates) {
       normalizer.apply({
         sessionId: params.sessionId,
         receivedAt: record.receivedAt,
         update: record.update,
       });
     }
-    return normalizer.replay();
+    return prependAcpWorkspaceHistory(previous, normalizer.replay());
   }
 
   flushAll(): void {
@@ -180,7 +187,8 @@ export class AcpRolloutStore {
         receivedAt: params.receivedAt,
         update: params.update,
       } satisfies AcpRolloutRecord)}\n`,
-      "utf8",
+      // The owner commits the replacement provider ID after this boundary.
+      { encoding: "utf8", flush: params.update.kind === ACP_WORKSPACE_HANDOFF_RECORD },
     );
   }
 

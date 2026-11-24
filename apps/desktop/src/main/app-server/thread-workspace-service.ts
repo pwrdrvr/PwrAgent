@@ -399,6 +399,10 @@ export class ThreadWorkspaceService {
     session: AcpSessionMetadata,
   ): Promise<AcpSessionMetadata> {
     if (acpSessionHasConversationHistory(session)) {
+      if (session.backendId === "acp:antigravity") {
+        return await this.threadArchiveCoordinator.withArchiveWorkspaceWrite([session.cwd ?? ""],
+          async () => await this.context.providers.acp.rebindAntigravityWorkspace(client, session));
+      }
       await this.threadArchiveCoordinator.withArchiveWorkspaceWrite([session.cwd ?? ""], async () => await client.ensureSession(session));
       const rebound = { ...session };
       delete rebound.requiresAgentSessionRebind;

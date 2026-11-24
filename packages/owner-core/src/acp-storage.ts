@@ -38,6 +38,8 @@ export type AcpSessionMetadata = {
   status: "active" | "idle" | "failed" | "unknown";
   hidden?: boolean;
   hasConversationHistory?: boolean;
+  /** The provider session was opened after a workspace handoff. Older turns are in the ACP rollout. */
+  antigravityWorkspaceRebound?: true;
   requiresAgentSessionRebind?: boolean;
   /**
    * Digest of the Agent instruction block this agent session was last sent.

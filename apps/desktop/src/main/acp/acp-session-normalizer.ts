@@ -14,6 +14,7 @@ import type {
 import { buildPendingTurnId } from "@pwragent/shared/turn-placeholder";
 import { formatWebSearchLabel } from "@pwragent/shared/command-action-labels";
 import { stripAgentMemoryChunk } from "@pwragent/shared/contracts/agent-memory";
+import { ACP_WORKSPACE_HISTORY_URI } from "./acp-workspace-history.js";
 import { stripManagedReviewContextBlock } from "../../shared/review-command.js";
 import { stripAcpAgentInstructionChunk } from "../../shared/agent-instruction-delivery.js";
 import {
@@ -1727,7 +1728,8 @@ export function isAcpSystemReminderBoilerplate(text: string | undefined): boolea
 export function isAcpUserBoilerplateMessage(text: string | undefined): boolean {
   return (
     isAcpSessionContextBoilerplate(text) ||
-    isAcpSystemReminderBoilerplate(text)
+    isAcpSystemReminderBoilerplate(text) ||
+    text?.trimStart().startsWith(`Content of ${ACP_WORKSPACE_HISTORY_URI}:\n`) === true
   );
 }
 
