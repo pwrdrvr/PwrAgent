@@ -1,5 +1,5 @@
 export type GitRemote = { name: string; url: string };
-export type GitRemoteConfiguration = { names: string[]; remotes: GitRemote[] };
+export type GitRemoteConfiguration = { names: string[]; remotes: GitRemote[]; hasConditionalIncludes?: true };
 
 type FetchUrlRewrite = { base: string; prefix: string };
 
@@ -32,6 +32,7 @@ export function parseGitRemoteConfiguration(stdout: string): GitRemoteConfigurat
   const fetchUrls = new Map<string, string[]>();
   const configuredInRepository = new Set<string>();
   const rewrites: FetchUrlRewrite[] = [];
+  let hasConditionalIncludes: true | undefined;
   for (let index = 0; index < records.length; index += 2) {
     const scope = records[index];
     if (!/^(system|global|local|worktree|command)$/.test(scope)) return undefined;
@@ -39,6 +40,7 @@ export function parseGitRemoteConfiguration(stdout: string): GitRemoteConfigurat
     const newline = record.indexOf("\n");
     const key = newline < 0 ? record : record.slice(0, newline);
     const value = newline < 0 ? undefined : record.slice(newline + 1);
+    if (key.startsWith("includeif.")) hasConditionalIncludes = true;
     const rewrite = /^url\.(.*)\.(insteadof|pushinsteadof)$/.exec(key);
     if (rewrite) {
       if (value === undefined) return undefined;
@@ -81,5 +83,5 @@ export function parseGitRemoteConfiguration(stdout: string): GitRemoteConfigurat
     }
     for (const url of effective) remotes.push({ name, url });
   }
-  return { names, remotes };
+  return hasConditionalIncludes ? { names, remotes, hasConditionalIncludes } : { names, remotes };
 }

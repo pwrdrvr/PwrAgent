@@ -85,6 +85,7 @@ function parseConfigWithOrigins(cwd: string, stdout: string) {
         ? configPath(path.dirname(file), record.slice("include.path\n".length)) : undefined;
       if (included) includes.add(included);
       else canTrackIncludes = false;
+      if (record.startsWith("includeif.")) config.push(scope, record);
     } else {
       config.push(scope, record);
     }
@@ -117,7 +118,7 @@ export async function observeScheduledPrPrefetchMetadata(
       ? await observePrCheckoutConfigFiles(cwd, [...inputs.paths, ...knownIncludes])
       : undefined;
     const readConfig = () => runPrMetadataGit(cwd, [
-      "config", "--null", "--show-scope", "--show-origin", "--includes", "--get-regexp", `${REMOTE_CONFIG_KEYS}|^include\\.|^includeif\\.`,
+      "config", "--null", "--show-scope", "--show-origin", "--includes", "--get-regexp", `${REMOTE_CONFIG_KEYS}|^include\\.`,
     ], { purpose: "pr-remotes", env: inputs.env, maxBuffer: 64 * 1024, timeout: 2_000 }).then((output) => ({
       ...output, sampleOrder: repositories.nextSampleOrder(),
     })).catch((error: unknown) => {

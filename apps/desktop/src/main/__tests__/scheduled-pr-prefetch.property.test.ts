@@ -655,6 +655,35 @@ it.skipIf(process.platform === "win32")("rechecks a symlinked HTTPS include afte
   expect(readObservedGitOrigin(cwd)).toBeUndefined();
 });
 
+it.skipIf(process.platform === "win32").each(["matching", "nonmatching"])("keeps the warm launch budget with a %s conditional include", async (kind) => {
+  const cwd = await fixture();
+  await readGit(cwd, "remote", "remove", "upstream");
+  const included = path.join(cwd, "conditional-config");
+  const original = "https://github.com/fixture/origin.git";
+  const rewritten = "https://github.com/fixture/conditional.git";
+  await readGit(cwd, "config", "--file", included, `url.${rewritten}.insteadOf`, original);
+  const gitdir = path.join(await fs.realpath(cwd), kind === "matching" ? ".git" : "absent/.git");
+  await readGit(cwd, "config", "--global", `includeIf.gitdir:${gitdir}.path`, included);
+  expect(await readGit(cwd, "config", "--includes", "--get-regexp", "^includeif\\.")).toContain(included);
+  expect(await readGit(cwd, "remote", "get-url", "origin")).toBe(kind === "matching" ? rewritten : original);
+  await resolveGitHubRepoForDirectory(cwd);
+
+  const expected = await oracle(cwd);
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  const starts = recordPrefetchStarts();
+  for (const branch of ["topic-0", "main", "topic-1"]) await expectEligible(resolve, cwd, branch, expected(branch));
+  const { rows, startsByCaller } = starts.snapshot();
+  expect(startsByCaller).toEqual({
+    "pr-scheduled-prefetch": 9, "pr-live-branch-lookup": 0, "pr-stored-attachment-validation": 0,
+  });
+  expect(Object.fromEntries(rows.map((row) => [`${row.purpose}/${row.command}`, row.started]))).toEqual({
+    "pr-remotes/remote-list": 3, "pr-discovery/symbolic-ref": 3, "pr-discovery/refs": 3,
+  });
+
+  await remoteHead(cwd, "origin", "release");
+  await expectEligible(resolve, cwd, "release", (await oracle(cwd))("release"));
+});
+
 it.skipIf(process.platform === "win32").each(["symlinked include", "custom Git", "native URLs"])("filters a default branch added during %s SSH fallback", async (kind) => {
   const cwd = await fixture();
   await readGit(cwd, "remote", "set-url", "origin", "git@fixture-ssh:fixture/origin.git");
