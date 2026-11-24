@@ -86,7 +86,42 @@ function declarations(body: string): Array<[string, string]> {
 }
 
 type Paint = Map<string, string>;
-type Element = { hover: Paint; chosen: Map<string, Paint>; hoverSelectors: Set<string> };
+type Declared = { selector: string; last: string; order: number; paint: Paint };
+type Element = {
+  hover: Paint;
+  chosen: Map<string, Paint>;
+  hoverRules: Declared[];
+  chosenRules: Array<Declared & { state: string; token: string }>;
+  /** `.is-active:hover` and the like: a chosen row's own hover paint. */
+  combinedRules: Declared[];
+};
+
+/**
+ * [ids, classes + attributes + pseudo-classes, types]. `:where()` adds
+ * nothing; `:not()`, `:is()` and `:has()` add their heaviest argument.
+ */
+function specificity(selector: string): [number, number, number] {
+  const total: [number, number, number] = [0, 0, 0];
+  let rest = selector.replace(/:where\((?:[^()]|\([^()]*\))*\)/g, "");
+  rest = rest.replace(/:(?:not|is|has)\(((?:[^()]|\([^()]*\))*)\)/g, (_, inner: string) => {
+    const heaviest = inner
+      .split(",")
+      .map((argument) => specificity(argument.trim()))
+      .reduce((best, next) => (compare(next, best) > 0 ? next : best), [0, 0, 0] as [number, number, number]);
+    total[0] += heaviest[0];
+    total[1] += heaviest[1];
+    total[2] += heaviest[2];
+    return " ";
+  });
+  total[0] += rest.match(/#[\w-]+/g)?.length ?? 0;
+  total[1] += rest.match(/\.[\w-]+|\[[^\]]*\]|:(?!:)[\w-]+/g)?.length ?? 0;
+  total[2] += rest.match(/(?:^|[\s>+~])[a-z][\w-]*/gi)?.length ?? 0;
+  return total;
+}
+
+function compare(a: readonly number[], b: readonly number[]): number {
+  return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+}
 
 /** Elements whose focus ring is drawn on a pseudo-element or a container. */
 function ringedElsewhere(): Set<string> {
@@ -104,7 +139,7 @@ function ringedElsewhere(): Set<string> {
 
 function collectElements(): Map<string, Element> {
   const elements = new Map<string, Element>();
-  for (const rule of appStyleRules) {
+  for (const [order, rule] of appStyleRules.entries()) {
     if (rule.atRules.some((atRule) => /^@(?:keyframes|font-face)/.test(atRule))) continue;
     const paint = declarations(rule.body);
     if (paint.length === 0) continue;
@@ -118,19 +153,23 @@ function collectElements(): Map<string, Element> {
       const hovered = last.replace(/:not\((?:[^()]|\([^()]*\))*\)/g, "").includes(":hover");
       const chosen = CHOSEN_STATES.filter(([, pattern]) =>
         pattern.test(last.replace(/:not\((?:[^()]|\([^()]*\))*\)/g, "")));
-      // `.is-selected:hover` is its own combined state, not either side.
-      if (hovered === (chosen.length > 0)) continue;
+      if (!hovered && chosen.length === 0) continue;
       const key = [...rule.atRules, [...parts.slice(0, -1), stripStates(last)].join(" ")].join(" | ");
       let element = elements.get(key);
       if (!element) {
-        element = { hover: new Map(), chosen: new Map(), hoverSelectors: new Set() };
+        element = { hover: new Map(), chosen: new Map(), hoverRules: [], chosenRules: [], combinedRules: [] };
         elements.set(key, element);
       }
-      if (hovered) {
-        element.hoverSelectors.add(selector);
+      // `.is-selected:hover` is its own combined state, not either side.
+      if (hovered && chosen.length > 0) {
+        element.combinedRules.push({ selector, last, order, paint: new Map(paint) });
+      } else if (hovered) {
+        element.hoverRules.push({ selector, last, order, paint: new Map(paint) });
         for (const [property, value] of paint) element.hover.set(property, value);
       } else {
-        for (const [state] of chosen) {
+        for (const [state, pattern] of chosen) {
+          const token = last.replace(/:not\((?:[^()]|\([^()]*\))*\)/g, "").match(pattern)![0];
+          element.chosenRules.push({ selector, last, order, paint: new Map(paint), state, token });
           const statePaint = element.chosen.get(state) ?? new Map<string, string>(
             state === "keyboard focus" ? [["outline", GLOBAL_FOCUS_RING]] : [],
           );
@@ -158,6 +197,42 @@ describe("hover is not a selection", () => {
         }
         const own = [...effective].filter(([property, value]) => element.hover.get(property) !== value);
         if (own.length === 0) failures.push(`${key} — ${state} paints only what hover paints`);
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it("never lets a hover rule repaint the chosen row it is resting on", () => {
+    // A hover selector that out-ranks the chosen one (or ties it and comes
+    // later) wins on a row that is both, and takes the chosen paint away
+    // while the pointer is there. The autocomplete's
+    // `:hover:not(:disabled)` is (0,3,0) against `.is-active`'s (0,2,0):
+    // without its `:not(.is-active)` the cursor row lost its accent under
+    // the pointer. Each such hover has to exclude the state it would beat.
+    const failures: string[] = [];
+    for (const element of collectElements().values()) {
+      for (const hover of element.hoverRules) {
+        const hoverWeight = specificity(hover.selector);
+        for (const chosen of element.chosenRules) {
+          const beats = compare(hoverWeight, specificity(chosen.selector)) || hover.order - chosen.order;
+          if (beats <= 0) continue;
+          const excluded = [...hover.last.matchAll(/:not\(((?:[^()]|\([^()]*\))*)\)/g)]
+            .some(([, inner]) => inner.includes(chosen.token));
+          if (excluded) continue;
+          // A rule for the chosen row's own hover that out-ranks this one
+          // and restates the property puts the chosen paint back.
+          const restated = (property: string): boolean => element.combinedRules.some((combined) =>
+            combined.last.replace(/:not\((?:[^()]|\([^()]*\))*\)/g, "").includes(chosen.token)
+            && combined.paint.has(property)
+            && (compare(specificity(combined.selector), hoverWeight) || combined.order - hover.order) > 0);
+          const repainted = [...chosen.paint].filter(([property, value]) =>
+            hover.paint.has(property) && hover.paint.get(property) !== value && !restated(property));
+          if (repainted.length > 0) {
+            failures.push(
+              `${hover.selector} beats ${chosen.selector} on ${repainted.map(([property]) => property).join(", ")}`,
+            );
+          }
+        }
       }
     }
     expect(failures).toEqual([]);

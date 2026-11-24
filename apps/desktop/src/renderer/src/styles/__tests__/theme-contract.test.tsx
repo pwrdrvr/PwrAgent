@@ -3094,6 +3094,28 @@ describe("color theme contract", () => {
     }
   });
 
+  it("keeps muted metadata readable on the hover wash in every theme", () => {
+    // A hovered row keeps its muted metadata (compact skill descriptions,
+    // branch and commit times, agent picker meta), so the wash is held to
+    // the muted ink's floor rather than each row lifting its own. At 7% it
+    // fell to 4.47:1 in Tangerine dark, and at 6% to 4.46:1 over Tangerine
+    // light's panel.
+    for (const [name, theme] of Object.entries({
+      tangerine: extractRootTokens(css),
+      "tangerine-light": { ...extractRootTokens(css), ...extractTokensForSelector(css, ':root[data-theme="light"]') },
+      ...themes,
+    })) {
+      for (const surface of ["bg-panel-elevated", "bg-panel"]) {
+        const base = paint(theme, theme[surface], "#000000");
+        const hovered = paint(theme, theme["surface-overlay-hover"], base);
+        expect(
+          contrastRatio(paint(theme, theme["text-muted"], hovered), hovered),
+          `${name}: --text-muted on the hover wash over --${surface}`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
   it("keeps the composer autocomplete popup's text at its floor in every theme", () => {
     // The `$` and `@` popups are a raised panel. The keyboard-active row lays
     // the 12% accent tint over it, and a hovered row the neutral wash. The sweep above tints the

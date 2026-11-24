@@ -187,8 +187,11 @@
      already chosen, and a hovered row must never look like either
      (UI-THEME.md, "Hover is not a selection"). An overlay rather than
      `--bg-panel-hover`, because that flat surface is darker than
-     `--bg-panel-elevated` in some themes and vanishes on a popover. */
-  --surface-overlay-hover: color-mix(in srgb, var(--text-primary) 7%, transparent);
+     `--bg-panel-elevated` in some themes and vanishes on a popover. 5% is
+     about the most it can take: a hovered row keeps its muted metadata,
+     and at 6% `--text-muted` on it falls to 4.46:1 over Tangerine light's
+     `--bg-panel` (4.47:1 over Tangerine dark's raised panel at 7%). */
+  --surface-overlay-hover: color-mix(in srgb, var(--text-primary) 5%, transparent);
 
   /* Popover backdrops use the panel base at high alpha so they read as
      the same surface as the rest of the panel. */
@@ -4450,7 +4453,8 @@ textarea,
   cursor: pointer;
 }
 
-.log-window__button:hover:not(:disabled) {
+/* A pressed filter keeps its accent under the pointer. */
+.log-window__button:hover:not(:disabled):not([aria-pressed="true"]) {
   border-color: var(--border-strong);
   color: var(--text-primary);
 }
@@ -6934,7 +6938,9 @@ a.button {
 
 .button--ghost:hover,
 .thread-row:hover,
-.lens-switch__button:hover {
+/* Not the active lens: this rule out-ranks `.is-active` on source order and
+   swapped its fill for the hover fill under the pointer. */
+.lens-switch__button:hover:not(.is-active) {
   background: var(--bg-panel-hover);
 }
 
@@ -14985,7 +14991,7 @@ button.stack-display__thread,
 
 /* Hover is a neutral wash. It shared the paint below with the current page,
    so pointing at another page drew a second current page. */
-.settings-nav__button:hover:not(.is-active) {
+.settings-nav__button:hover:not(.is-active):not(:focus-visible) {
   background: var(--surface-overlay-hover);
   color: var(--text-primary);
 }
@@ -15093,7 +15099,7 @@ button.stack-display__thread,
   padding-top: 2px;
 }
 
-.settings-nav__subbutton:hover:not(.is-active) {
+.settings-nav__subbutton:hover:not(.is-active):not(:focus-visible) {
   border-left-color: var(--border-strong);
   color: var(--text-primary);
 }
@@ -23887,6 +23893,7 @@ button.stack-display__thread,
 }
 
 .star-map-instance__action[aria-pressed="true"]:hover {
+  border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
@@ -38501,7 +38508,7 @@ div.composer-error-row__toggle {
 
 /* Hover is neutral: it shared the chosen answer's accent, so pointing at a
    second answer drew two chosen answers. */
-.transcript-questionnaire__option:hover:not(:disabled):not(.is-selected) {
+.transcript-questionnaire__option:hover:not(:disabled):not(.is-selected):not(:focus-visible) {
   border-color: var(--border-strong);
   background: var(--surface-overlay-hover);
 }
@@ -41180,7 +41187,7 @@ div.composer-error-row__toggle {
   cursor: pointer;
 }
 
-.automation-agent-picker__tab:hover:not(.is-active) {
+.automation-agent-picker__tab:hover:not(.is-active):not(:focus-visible) {
   background: var(--surface-overlay-hover);
   color: var(--text-primary);
 }
@@ -41261,7 +41268,7 @@ div.composer-error-row__toggle {
 }
 
 /* `aria-selected` is the chosen agent, which the pointer does not change. */
-.automation-agent-picker__option:hover:not([aria-selected="true"]) {
+.automation-agent-picker__option:hover:not([aria-selected="true"]):not(:focus-visible) {
   background: var(--surface-overlay-hover);
 }
 
@@ -50062,7 +50069,8 @@ button.composer__subthread-source-parent:hover {
   cursor: pointer;
 }
 
-.thread-handoff-dialog__machine:hover:not(:disabled) {
+/* The chosen machine keeps its accent fill under the pointer. */
+.thread-handoff-dialog__machine:hover:not(:disabled):not([aria-checked="true"]) {
   background: var(--bg-panel-hover);
 }
 
@@ -50629,8 +50637,10 @@ button.composer__subthread-source-parent:hover {
     color 120ms ease;
 }
 
-.composer__toggle:hover:not(:disabled),
-.composer__toggle:focus-visible {
+/* An on toggle keeps its accent border and label under the pointer: this
+   rule out-ranks `.is-active` and made an on toggle look off when hovered. */
+.composer__toggle:hover:not(:disabled):not(.is-active),
+.composer__toggle:focus-visible:not(.is-active) {
   border-color: var(--accent-border);
   color: var(--text-primary);
 }
@@ -51949,7 +51959,7 @@ button.composer__subthread-source-parent:hover {
   opacity: 0.48;
 }
 
-.composer__review-after:disabled:hover {
+.composer__review-after:disabled:hover:not([aria-checked="true"]) {
   color: var(--text-secondary);
 }
 
@@ -58022,7 +58032,8 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   cursor: pointer;
 }
 
-.review-todo__chip:hover:not(:disabled) {
+/* A pressed chip keeps its accent under the pointer. */
+.review-todo__chip:hover:not(:disabled):not([aria-pressed="true"]) {
   background: var(--bg-panel-hover);
   color: var(--text-primary);
 }
