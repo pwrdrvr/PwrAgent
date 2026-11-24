@@ -615,6 +615,7 @@ export class AcpAgentClient {
       this.loadedSessionCwds.delete(protocolSessionId);
       this.sessionLoadReplays.delete(protocolSessionId);
       this.sessionConfigOptions.delete(protocolSessionId);
+      this.sessionModeMenus.delete(protocolSessionId);
       this.agentSessionIdsByAppSessionId.delete(sessionId);
       this.appSessionIdsByAgentSessionId.delete(protocolSessionId);
       this.retainableSessionIds.delete(sessionId);
