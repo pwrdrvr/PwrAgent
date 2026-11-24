@@ -350,6 +350,7 @@ export function ResourcesScreen(props: {
               now={now}
               onIntent={onIntent}
               onOpenThread={props.onOpenThread}
+              {...(snapshot ? { localInstanceId: snapshot.viewer.instanceId } : {})}
             />
           </div>
         ) : view.status === "loading" ? (

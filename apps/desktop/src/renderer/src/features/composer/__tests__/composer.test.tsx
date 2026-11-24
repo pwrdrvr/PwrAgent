@@ -7389,19 +7389,7 @@ describe("Composer", () => {
         serviceTiers: ["standard", "priority"],
       }),
       label: "Grok CLI",
-      executionModes: [
-        {
-          mode: "default" as const,
-          label: "Default Access",
-          available: true,
-          isDefault: true,
-        },
-        {
-          mode: "full-access" as const,
-          label: "Full Access",
-          available: true,
-        },
-      ],
+      executionModes: [],
       acp: {
         registryId: "grok",
         distributionKinds: ["local"],
@@ -7560,7 +7548,7 @@ describe("Composer", () => {
       imageAttachments: undefined,
       prompt: "",
     });
-    expect(screen.getByLabelText(/^Access mode(?::|$)/)).toHaveValue("full-access");
+    expect(screen.queryByLabelText(/^Access mode(?::|$)/)).not.toBeInTheDocument();
     expect(screen.getByLabelText(/^Agent mode(?::|$)/)).toHaveValue("yolo");
     expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("grok-4.5-pro");
     expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("low");
@@ -9073,6 +9061,43 @@ describe("Composer", () => {
       .toEqual([{ type: "pullRequest", url: prs[1].url }, { type: "pullRequest", url: prs[0].url }]);
   });
 
+  it.each(["accepted", "rejected"] as const)("keeps the next reply when a later PR review is %s", async (outcome) => {
+    // Only the initial submission owns the review draft. Later batch receipts
+    // must leave any reply written after submission in the editor.
+    const { element, prs, scheduledApi } = stackReviewFixture("codex");
+    const create = scheduledApi.createScheduledThreadAction;
+    const accept = create.getMockImplementation()!;
+    const firstReceipt = Promise.withResolvers<void>();
+    const secondReceipt = Promise.withResolvers<void>();
+    create.mockImplementationOnce(async (request) => {
+      await firstReceipt.promise;
+      return accept(request);
+    });
+    create.mockImplementationOnce(async (request) => {
+      await secondReceipt.promise;
+      return accept(request);
+    });
+    render(element);
+    await openReviewComposer();
+    fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
+    choosePullRequest(prs[0].url);
+    choosePullRequest(prs[1].url);
+    fireEvent.click(screen.getByRole("button", { name: "Start 2 reviews" }));
+    expect(create).toHaveBeenCalledOnce();
+    const reply = "A reply while the batch is being queued";
+    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: reply } });
+
+    await act(async () => firstReceipt.resolve());
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(screen.getByLabelText("Reply")).toHaveValue(reply);
+    await act(async () => {
+      if (outcome === "rejected") secondReceipt.reject(new Error("Owner rejected the review"));
+      else secondReceipt.resolve();
+    });
+    expect(screen.getByLabelText("Reply")).toHaveValue(reply);
+  });
+
   /**
    * Rule: a Claude thread reviews as Claude Code's /code-review by default,
    * offers only the targets that command takes, shows the exact command, and
@@ -9881,6 +9906,29 @@ describe("Composer", () => {
     expect(screen.getByLabelText("Scheduled message")).toHaveTextContent(
       "Review changes against main"
     );
+  });
+
+  it.each(["15m", "30m", "1h"])("retries a rejected review with the original %s schedule", async (delay) => {
+    // The owner must see the same timestamp on retry after a failed admission.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));
+    const api = createScheduledActionApi();
+    const create = api.createScheduledThreadAction;
+    create.mockRejectedValueOnce(new Error("Owner rejected the review"));
+    render(<Composer desktopApi={{ ...api, onAgentEvent: () => () => undefined }}
+      disabled={false} skills={[]} thread={reviewTargetThread({})} />);
+    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/review" } });
+    fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: `Send in ${delay}` }));
+
+    const submit = () => within(screen.getByRole("group", { name: "Review target" }))
+      .getByRole("button", { name: /^Send in / });
+    await act(async () => fireEvent.click(submit()));
+    expect(create).toHaveBeenCalledOnce();
+    await act(async () => fireEvent.click(submit()));
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[1][0].scheduledFor).toBe(create.mock.calls[0][0].scheduledFor);
   });
 
   it("hides the schedule toggle while the review-config panel owns the schedule", async () => {
@@ -29046,6 +29094,32 @@ describe("Composer", () => {
         expect(onCancel).toHaveBeenCalledTimes(1);
       });
     });
+
+    it.each([["plan", "Plan"], ["auto", "Auto"], ["accept-edits", "Accept Edits"]])(
+      "names the queued native %s mode and lets the operator cancel it",
+      async (queuedNativeMode, label) => {
+        const onCancel = vi.fn(async () => undefined);
+        const thread = {
+          ...baseQueuedThread({ executionMode: "default", queuedExecutionMode: "default" }),
+          source: "acp:antigravity" as const,
+          queuedNativeMode,
+        };
+        render(
+          <Composer
+            activeTurnId="turn-1"
+            backends={[backendSummary("acp:antigravity")]}
+            desktopApi={{ onAgentEvent: () => () => undefined }}
+            skills={[]}
+            thread={thread}
+            onCancelExecutionModeQueue={onCancel}
+          />,
+        );
+        const indicator = screen.getByLabelText("Queued permissions change");
+        expect(within(indicator).getByText(`Will switch to ${label} when the current turn ends`)).toBeInTheDocument();
+        fireEvent.click(within(indicator).getByRole("button", { name: "Cancel" }));
+        await waitFor(() => expect(onCancel).toHaveBeenCalledOnce());
+      },
+    );
 
     it("does not render the indicator when queuedExecutionMode is undefined", () => {
       render(

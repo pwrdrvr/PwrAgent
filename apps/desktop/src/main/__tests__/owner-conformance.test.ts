@@ -2933,61 +2933,61 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     };
   }
 
+  // Keep each publication order across the real Outpost boundary. The registry
+  // and Attention model cover the cache and repeated-read permutations.
   it.each(["first read", "repeated read"] as const)("headless attention ranks count each admitted turn once when startup publishes before the %s", async (publication) => {
-    await fc.assert(fc.asyncProperty(fc.boolean(), fc.nat(4), async (promoteOnTurnEnd, duplicates) => {
-      const [discovery, nativeStart] = await Promise.all([openCodexGate(), openCodexGate()]);
-      let host: Awaited<ReturnType<typeof startConformanceDaemon>> | undefined;
-      try {
-        const owner = host = await startConformanceDaemon({ capabilities: VIEWER_CAPABILITIES, env: {
-          PWRAGENT_TEST_STARTUP_INVENTORY_PORT: discovery.port,
-          PWRAGENT_TEST_CODEX_TURN_STARTED_PORT: nativeStart.port,
-        } });
-        owner.subscribe(EVENT_CLASSES);
-        const attentionView = { id: `provisional-${randomUUID()}`, promoteOnTurnEnd };
-        const page = () => owner.client.getNavigationQueryPage({ protocol: 2, consumer: "remote-window",
-          query: { kind: "lens", lens: "attention" }, attentionView });
-        const publishStartupInventory = async () => {
-          await discovery.release();
-          await owner.waitForEvent("navigation/providerThreads/refreshed", () => true, AbortSignal.timeout(5_000));
-        };
-        // Startup has already listed Codex, but cannot publish that inventory yet.
-        await discovery.held;
-        await page();
-        const ref = { backend: "codex" as const, threadId: (await owner.client.startThread({ backend: "codex", cwd: owner.workspace, executionMode: "auto" })).threadId };
-        const baseline = await page();
-        const nextRank = Math.max(0, ...baseline.entries.map(entry => entry.attentionRank ?? 0)) + 1;
-        const turn = await owner.client.startTurn({ ...ref, input: [{ type: "text", text: "slow" }] });
-        expect(turn.queueStatus).toBe("started");
-        const rank = async () => (await page()).entries.find(entry => entry.row.id === ref.threadId)?.attentionRank;
-        if (publication === "first read") await publishStartupInventory();
-        expect(await rank(), "accepted turn before native start").toBe(nextRank);
-        await nativeStart.release();
-        await owner.waitForEvent("turn/started", ({ notification }) => notification.method === "turn/started"
-          && notification.params.threadId === ref.threadId
-          && (notification.params.turn as { id?: string } | undefined)?.id === turn.turnId, AbortSignal.timeout(5_000));
-        expect(await rank(), "after native start").toBe(nextRank);
-        if (publication === "repeated read") {
-          const callsPath = path.join(owner.env.PWRAGENT_TEST_DATA!, "calls.jsonl");
-          const countListings = () => readFileSync(callsPath, "utf8").trim().split("\n")
-            .filter(line => JSON.parse(line).method === "thread/list").length;
-          // Startup's older inventory must leave the post-start listing reusable.
-          const listings = countListings();
-          await publishStartupInventory();
-          expect(await rank(), "after startup publication").toBe(nextRank);
-          expect(countListings(), "provider walks after startup publication").toBe(listings);
-        }
-        for (let duplicate = 0; duplicate <= duplicates; duplicate++) {
-          await owner.client.readThread(ref);
-          expect(await rank(), "after the older startup inventory and a repeated read").toBe(nextRank);
-        }
-        await owner.client.interruptTurn({ ...ref, turnId: turn.turnId! });
-        await owner.waitForEvent("turn/completed", event => (event.notification.params as { turn?: { id?: string } }).turn?.id === turn.turnId,
-          AbortSignal.timeout(5_000));
-      } finally {
-        try { await Promise.all([discovery.close(), nativeStart.close()]); }
-        finally { await host?.close(); }
+    const [discovery, nativeStart] = await Promise.all([openCodexGate(), openCodexGate()]);
+    let host: Awaited<ReturnType<typeof startConformanceDaemon>> | undefined;
+    try {
+      const owner = host = await startConformanceDaemon({ capabilities: VIEWER_CAPABILITIES, env: {
+        PWRAGENT_TEST_STARTUP_INVENTORY_PORT: discovery.port,
+        PWRAGENT_TEST_CODEX_TURN_STARTED_PORT: nativeStart.port,
+      } });
+      owner.subscribe(EVENT_CLASSES);
+      const attentionView = { id: `provisional-${randomUUID()}`, promoteOnTurnEnd: true };
+      const page = () => owner.client.getNavigationQueryPage({ protocol: 2, consumer: "remote-window",
+        query: { kind: "lens", lens: "attention" }, attentionView });
+      const publishStartupInventory = async () => {
+        await discovery.release();
+        await owner.waitForEvent("navigation/providerThreads/refreshed", () => true, AbortSignal.timeout(5_000));
+      };
+      // Startup has already listed Codex, but cannot publish that inventory yet.
+      await discovery.held;
+      await page();
+      const ref = { backend: "codex" as const, threadId: (await owner.client.startThread({ backend: "codex", cwd: owner.workspace, executionMode: "auto" })).threadId };
+      const baseline = await page();
+      const nextRank = Math.max(0, ...baseline.entries.map(entry => entry.attentionRank ?? 0)) + 1;
+      const turn = await owner.client.startTurn({ ...ref, input: [{ type: "text", text: "slow" }] });
+      expect(turn.queueStatus).toBe("started");
+      const rank = async () => (await page()).entries.find(entry => entry.row.id === ref.threadId)?.attentionRank;
+      if (publication === "first read") await publishStartupInventory();
+      expect(await rank(), "accepted turn before native start").toBe(nextRank);
+      await nativeStart.release();
+      await owner.waitForEvent("turn/started", ({ notification }) => notification.method === "turn/started"
+        && notification.params.threadId === ref.threadId
+        && (notification.params.turn as { id?: string } | undefined)?.id === turn.turnId, AbortSignal.timeout(5_000));
+      expect(await rank(), "after native start").toBe(nextRank);
+      if (publication === "repeated read") {
+        const callsPath = path.join(owner.env.PWRAGENT_TEST_DATA!, "calls.jsonl");
+        const countListings = () => readFileSync(callsPath, "utf8").trim().split("\n")
+          .filter(line => JSON.parse(line).method === "thread/list").length;
+        // Startup's older inventory must leave the post-start listing reusable.
+        const listings = countListings();
+        await publishStartupInventory();
+        expect(await rank(), "after startup publication").toBe(nextRank);
+        expect(countListings(), "provider walks after startup publication").toBe(listings);
       }
-    }), { numRuns: 4, examples: [[true, 2]] });
+      for (let read = 0; read < 2; read++) {
+        await owner.client.readThread(ref);
+        expect(await rank(), "after the older startup inventory and a repeated read").toBe(nextRank);
+      }
+      await owner.client.interruptTurn({ ...ref, turnId: turn.turnId! });
+      await owner.waitForEvent("turn/completed", event => (event.notification.params as { turn?: { id?: string } }).turn?.id === turn.turnId,
+        AbortSignal.timeout(5_000));
+    } finally {
+      try { await Promise.all([discovery.close(), nativeStart.close()]); }
+      finally { await host?.close(); }
+    }
   }, 120_000);
 
   it("fresh desktop and headless owner roots conform strictly across the whole thread lifecycle", async () => {

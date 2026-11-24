@@ -2584,6 +2584,52 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it.each(["before", "after"] as const)("keeps the live inventory when startup publishes %s the first live read", async (publication) => {
+    const listed = createDeferred<void>();
+    const publish = createDeferred<void>();
+    const thread: AppServerThreadSummary = {
+      id: "thread-1", source: "codex", title: "Fixture thread", titleSource: "explicit",
+      linkedDirectories: [], threadStatus: "idle",
+    };
+    const codexClient = new MockBackendClient({ threads: [thread] });
+    const registry = createDesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      discoverLocalAcpAgents: async () => [],
+      providerThreadSnapshotStore: { list: () => [], replace: vi.fn() },
+      resolveCodexRuntimeCommand: async () => {
+        // Discovery reaches this port after taking its provider inventory.
+        listed.resolve();
+        await publish.promise;
+        return { command: "/fixture/codex" };
+      },
+    });
+    const list = () => registry.listThreads({ callerReason: "navigation-snapshot", enrichDirectories: false });
+    await list(); // Consume durable startup hydration before the live reads.
+    const startup = registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+    const assertLive = async () => expect(await list()).toEqual([
+      expect.objectContaining({ id: thread.id, threadStatus: "active" }),
+    ]);
+    try {
+      await listed.promise;
+      codexClient.setThreads([{ ...thread, threadStatus: "active" }]);
+      await codexClient.emit({ method: "turn/started", params: { threadId: thread.id, turnId: "turn-1", turn: { id: "turn-1" } } });
+      if (publication === "after") await assertLive();
+      const walks = codexClient.listThreadsCallCount;
+      publish.resolve();
+      await startup;
+      await assertLive();
+      // Startup's older inventory cannot displace a reusable live listing.
+      expect(codexClient.listThreadsCallCount).toBe(walks + Number(publication === "before"));
+      await assertLive();
+      expect(codexClient.listThreadsCallCount).toBe(walks + Number(publication === "before"));
+    } finally {
+      publish.resolve();
+      try { await startup; }
+      finally { await registry.close(); }
+    }
+  });
+
   it("ACP cache publication preserves the ordinary listing's worktree and environment enrichment", async () => {
     await fc.assert(fc.asyncProperty(fc.stringMatching(/^[A-Za-z]{1,10}$/),
       fc.array(fc.constantFrom("startup", "authentication", "delete", "hide", "rename"), { maxLength: 5 }), async (name, commands) => {

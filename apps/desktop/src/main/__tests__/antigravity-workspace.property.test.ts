@@ -50,6 +50,7 @@ async function checkWorkspaceMove(params: {
   withoutDestinationPromptTimestamp?: boolean;
   repeatedProviderReplyId?: boolean;
   roundTrip?: boolean;
+  replacementStartsInPlan?: boolean;
 }) {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-antigravity-workspace-"));
   const base = createKimiAgentRecord(backend, {
@@ -61,6 +62,11 @@ async function checkWorkspaceMove(params: {
     launchDescriptor: { ...base.launchDescriptor!, registryId: "antigravity", command: "agy", args: ["acp", "--process-per-session"] },
   };
   const workspace = new Map([[sourceId, params.alreadyRooted ? targetCwd : sourceCwd]]);
+  const modes = new Map<string, string>();
+  const modeOptions = (currentValue: string) => [{
+    type: "select", id: "mode", category: "mode", name: "Mode", currentValue,
+    options: [{ value: "default", name: "Default" }, { value: "plan", name: "Plan" }],
+  }];
   const history = new Map<string, Record<string, unknown>[]>([[sourceId, [
     { sessionUpdate: "user_message_chunk", content: { type: "text", text: oldPrompt },
       ...(params.withoutSourcePromptTimestamp ? {} : { timestamp: "2026-11-23T12:00:00Z" }) },
@@ -70,6 +76,7 @@ async function checkWorkspaceMove(params: {
   const calls: string[] = [];
   const newSession = vi.fn();
   const dispatched = vi.fn();
+  let nativeModeAtDispatch: string | undefined;
   const overlays = createOverlayStoreMock();
   if (params.legacy) {
     await overlays.replaceWorkspaceLinkedDirectory({ ...identity, directory: targetDirectory, gitBranch: "HEAD" });
@@ -135,9 +142,19 @@ async function checkWorkspaceMove(params: {
               const id = `destination-${workspace.size}`;
               workspace.set(id, String(data?.cwd));
               newSession(data?.cwd, launch.launchDescriptor?.args.includes("--dangerously-skip-permissions"));
+              if (params.replacementStartsInPlan) {
+                modes.set(id, "plan");
+                return { sessionId: id, configOptions: modeOptions("plan") };
+              }
               return { sessionId: id };
             }
+            case "session/set_config_option": {
+              expect(data).toMatchObject({ configId: "mode", value: "default" });
+              modes.set(sessionId, "default");
+              return { configOptions: modeOptions("default") };
+            }
             case "session/prompt": {
+              nativeModeAtDispatch = modes.get(sessionId);
               const content = data?.prompt as { type: string; text?: string; resource?: { uri: string; text: string } }[];
               const context = content.find((part) => part.type === "resource")?.resource;
               const cwd = workspace.get(sessionId);
@@ -213,6 +230,7 @@ async function checkWorkspaceMove(params: {
       await continueThread();
     }
     unsubscribe();
+    if (params.replacementStartsInPlan) expect(nativeModeAtDispatch).toBe("default");
     if (params.alreadyRooted || params.roundTrip) {
       expect(newSession).not.toHaveBeenCalled();
       expect(dispatched).toHaveBeenCalledWith({ sessionId: sourceId, cwd: destination, context: undefined });
@@ -265,6 +283,12 @@ async function checkWorkspaceMove(params: {
 
 it("moves a populated Full Access thread into a fresh worktree and keeps its history across restart", async () => {
   await checkWorkspaceMove({ access: "full-access", legacy: false, alreadyRooted: false, restart: true });
+});
+
+it("starts the replacement Full Access session in native Default even if session/new reports Plan", async () => {
+  await checkWorkspaceMove({
+    access: "full-access", legacy: false, alreadyRooted: false, restart: false, replacementStartsInPlan: true,
+  });
 });
 
 it("delivers prior context when a monitor reports before the first destination prompt", async () => {
@@ -339,7 +363,10 @@ it("dispatches every Antigravity handoff in its destination while preserving thr
   await fc.assert(fc.asyncProperty(
     fc.constantFrom("default", "full-access"),
     fc.constantFrom("new-move", "legacy-mismatch", "legacy-correct", "round-trip"),
-    fc.record({ restart: fc.boolean(), monitorBeforePrompt: fc.boolean(), withoutSourcePromptTimestamp: fc.boolean() }),
+    fc.record({
+      restart: fc.boolean(), monitorBeforePrompt: fc.boolean(), withoutSourcePromptTimestamp: fc.boolean(),
+      replacementStartsInPlan: fc.boolean(),
+    }),
     async (access, state, options) => {
       await checkWorkspaceMove({
         access,
@@ -347,6 +374,8 @@ it("dispatches every Antigravity handoff in its destination while preserving thr
         alreadyRooted: state === "legacy-correct",
         roundTrip: state === "round-trip",
         ...options,
+        replacementStartsInPlan: options.replacementStartsInPlan && access === "full-access"
+          && (state === "new-move" || state === "legacy-mismatch"),
       });
     },
   ), { numRuns: 16 });

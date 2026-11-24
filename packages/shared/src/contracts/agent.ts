@@ -850,6 +850,16 @@ export type SetThreadExecutionModeRequest = {
   federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   executionMode: ThreadExecutionMode;
+  /**
+   * Optional ACP runtime mode paired with this access change (used by hybrid
+   * providers like Antigravity so process access and native mode transition
+   * atomically through one owner state machine).
+   */
+  acpMode?: {
+    source: BackendAcpRuntimeOptionSource;
+    optionId: string;
+    value: string;
+  };
 };
 
 export type SetThreadExecutionModeResponse = {

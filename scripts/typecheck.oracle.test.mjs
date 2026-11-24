@@ -50,6 +50,8 @@ afterEach(() => {
   for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
+// Each relink sequence invokes several synchronous native compilers. Budget
+// the whole sequence separately from the 10-second limit on each child.
 it.each([
   ["workspace", "a direct dependency"],
   ["package", "a direct dependency"],
@@ -104,7 +106,7 @@ it.each([
     expect(warm.status === 0, warm.stdout + warm.stderr).toBe(fresh.status === 0);
     if (kind === "string") expect(warm.stdout).toContain("TS2322");
   }
-});
+}, 30_000);
 
 it.each(["--watch", "-w", "--WATCH"])("desktop %s selects the same files as the full desktop project", (flag) => {
   const root = fixture();

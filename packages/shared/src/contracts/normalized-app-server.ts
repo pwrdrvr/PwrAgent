@@ -2929,6 +2929,9 @@ export type AppServerNotification =
         threadId: string;
         queuedExecutionMode: ThreadExecutionMode;
         queuedAt: number;
+        queuedNativeMode?: string;
+        fromLabel?: string;
+        toLabel?: string;
       };
     }
   | {
