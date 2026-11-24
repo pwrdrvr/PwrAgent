@@ -179,6 +179,44 @@ it.each(["warm", "cold"])("avoids repeated URL probes in a %s single-branch clon
   await expectEligible(resolve, cwd, "topic-3", (await oracle(cwd))("topic-3"));
 });
 
+it("shares complete HTTPS URL reads across prefetch and live discovery", async () => {
+  const { cwd, branches: [first, second] } = await singleBranchClone();
+  for (const remote of ["mirror", "upstream"]) {
+    await readGit(cwd, "remote", "add", remote, `https://github.com/fixture/${remote}.git`);
+    await remoteHead(cwd, remote, "main");
+  }
+  const expected = await oracle(cwd);
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  const starts = recordPrefetchStarts();
+  for (const branch of [first, second]) await expectEligible(resolve, cwd, branch, expected(branch));
+  const fetchAllPullRequestsForBranch = vi.fn(async () => []);
+  for (const branch of [first, second]) {
+    await detectPullRequestsForThread({ branch, directoryPaths: [cwd], fetcher: { fetchAllPullRequestsForBranch } });
+  }
+
+  expect(fetchAllPullRequestsForBranch.mock.calls).toEqual([first, second].map((branch) => [{ cwd, branch }]));
+  expect(starts.calls.filter(([, args]) => args[0] === "remote" && args[1] === "get-url")).toHaveLength(3);
+});
+
+it.each(["cold", "warm"])("keeps the %s retry window for a missing checkout", async (cache) => {
+  const source = await fixture();
+  const cwd = path.join(source, "missing");
+  let now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  onTestFinished(() => { clock.mockRestore(); });
+  if (cache === "warm") await resolveGitHubRepoForDirectory(cwd);
+  const retryAt = readObservedGitOrigin(cwd)?.retryAt ?? now + 5 * 60_000;
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  const starts = recordPrefetchStarts();
+  for (const branch of topics.slice(0, 3)) await expectEligible(resolve, cwd, branch, []);
+  expect(starts.calls.map(([, args]) => args[0])).toEqual(cache === "cold" ? ["config", "remote"] : []);
+  expect(readObservedGitOrigin(cwd)?.conclusive).toBe(cache === "warm" ? false : undefined);
+
+  await readGit(source, "worktree", "add", "--detach", cwd);
+  now = retryAt;
+  await expectEligible(resolve, cwd, "topic-3", (await oracle(cwd))("topic-3"));
+});
+
 it("refreshes fallback URLs at the original live cache expiry", async () => {
   const { cwd, branches: [first, second] } = await singleBranchClone();
   let now = Date.now();
@@ -327,7 +365,7 @@ it.skipIf(process.platform === "win32")("leaves a failed SSH resolution out of t
   await expect(resolveGitHubRepoForDirectory(cwd)).resolves.toEqual({ host: "github.com", owner: "fixture", repo: "origin" });
 });
 
-it.skipIf(process.platform === "win32")("skips the second config probe when a remote has no HEAD", async () => {
+it.skipIf(process.platform === "win32")("reuses verified config when a remote has no HEAD", async () => {
   const cwd = await fixture();
   const included = path.join(cwd, "included-config");
   await writeFile(included, "[user]\n\tname = Fixture\n");
@@ -340,10 +378,38 @@ it.skipIf(process.platform === "win32")("skips the second config probe when a re
   for (const branch of topics.slice(0, 3)) await expectEligible(resolve, cwd, branch, expected(branch));
 
   const commands = starts.calls.map(([, args]) => args[0]);
-  expect(commands.filter((command) => command === "config")).toHaveLength(3);
+  expect(commands.filter((command) => command === "config")).toHaveLength(2);
   expect(commands.filter((command) => command === "symbolic-ref")).toHaveLength(6);
   expect(commands.filter((command) => command === "for-each-ref")).toHaveLength(3);
-  expect(commands).toHaveLength(12);
+  expect(commands).toHaveLength(11);
+});
+
+it.skipIf(process.platform === "win32")("matches Git after an include changes between the config read and fallback verification", async () => {
+  const cwd = await fixture();
+  const included = path.join(cwd, "included-config");
+  await writeFile(included, "[user]\n\tname = Fixture\n");
+  await readGit(cwd, "config", "--global", "include.path", included);
+  await readGit(cwd, "symbolic-ref", "--delete", "refs/remotes/upstream/HEAD");
+  const before = (await oracle(cwd))("topic-0");
+  const url = "https://github.com/fixture/origin.git";
+  const rewritten = "https://github.com/fixture/after-race.git";
+  let edited = false;
+  const runner = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (directory, args, options) => {
+    const answer = await runGitCommand(directory, args, options);
+    if (!edited && directory === cwd && args[0] === "config" && args.includes("--show-origin")) {
+      edited = true;
+      await readGit(cwd, "config", "--file", included, `url.${rewritten}.insteadOf`, url);
+    }
+    return answer;
+  });
+  onTestFinished(() => { runner.mockRestore(); });
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  const actual = await resolve(cwd, "topic-0");
+  expect(edited).toBe(true);
+  expect(await readGit(cwd, "remote", "get-url", "origin")).toBe(rewritten);
+  const expected = (await oracle(cwd))("topic-0");
+  expect(expected).not.toEqual(before);
+  expect(actual.map(({ host, owner, repo }) => `https://${host}/${owner}/${repo}.git`).sort()).toEqual(expected);
 });
 
 it.skipIf(process.platform === "win32")("uses native HEAD reads after one rejected checkout proof", async () => {
@@ -373,9 +439,11 @@ it.skipIf(process.platform === "win32")("keeps two warm single-remote lookups wi
     await expectEligible((directory, head) => resolve(directory, head, 2), cwd, branch, expected(branch));
   }
 
-  expect(starts.calls.map(([, args]) => args[0])).toEqual([
-    "config", "symbolic-ref", "for-each-ref", "config", "symbolic-ref", "for-each-ref",
-  ]);
+  const commands = starts.calls.map(([, args]) => args[0]);
+  expect(commands.filter((command) => command === "config")).toHaveLength(2);
+  expect(commands.filter((command) => command === "symbolic-ref")).toHaveLength(2);
+  expect(commands.filter((command) => command === "for-each-ref")).toHaveLength(2);
+  expect(commands).toHaveLength(6);
 });
 
 it.skipIf(process.platform === "win32").each([1, 2])("reuses SSH remote discovery for %i configured remotes", async (remoteCount) => {

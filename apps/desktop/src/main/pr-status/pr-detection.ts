@@ -154,6 +154,7 @@ type ScheduledCheckoutMetadata = {
   repos: GitHubRepoRef[];
   remoteNames: string[];
   defaults?: DefaultBranchInfo;
+  nativeHeadReads?: true;
   unchanged: () => Promise<boolean>;
   publish?: () => void;
 };
@@ -180,6 +181,7 @@ export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string, che
           if (heads) branchDefaults = await readDefaultBranchInfo(cwd, undefined, remoteNames, heads);
           metadata = {
             repos: observed.repos, remoteNames, unchanged, publish: observed.publish,
+            nativeHeadReads: observed.nativeHeadReads,
             defaults: heads?.size === remoteNames.length ? branchDefaults : undefined,
           };
         } else {
@@ -187,7 +189,9 @@ export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string, che
         }
       }
       if (metadata) {
-        const plan = await resolvePrLookupPlan({ cwd, branch, remoteNames: metadata.remoteNames, defaultBranchInfo: branchDefaults });
+        const plan = await resolvePrLookupPlan({
+          cwd, branch, remoteNames: metadata.remoteNames, defaultBranchInfo: branchDefaults, nativeHeadReads: metadata.nativeHeadReads,
+        });
         if (await metadata.unchanged()) {
           checkout.verified = metadata;
           if (!plan.branches.includes(branch)) return [];

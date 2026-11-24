@@ -107,6 +107,7 @@ type RemoteCacheEntry = {
   unconfirmedEmpty?: true;
   readWithGitRemote?: true;
   sshResolutionFailed?: true;
+  readFailed?: true;
   fetchedAt: number;
 };
 type ParsedRemoteObservation = Omit<RemoteCacheEntry, "fetchedAt">;
@@ -247,14 +248,15 @@ export function createScheduledPrefetchRemoteReader(cwd: string) {
     const fetchedAt = reused && observation.value === reused.value ? reused.fetchedAt : Date.now();
     const snapshot = { ...observation, fetchedAt };
     const complete = hasAllRemoteUrls(observation);
-    if ((observation.unconfirmedEmpty || complete)
+    if ((observation.readFailed || observation.unconfirmedEmpty || complete)
       && (repos.length > 0 || !options.validateNegative || await options.validateNegative())) {
       previous = snapshot;
     }
     const identityExpiresAt = observation.value.some(({ url }) => readSshHost(url)) ? fetchedAt + REMOTE_CACHE_TTL_MS : undefined;
-    // The live phase can reuse a successful SSH resolution once the caller
-    // accepts this sample. Leave existing live observations and reads alone.
-    const publish = repos.length && complete && identityExpiresAt !== undefined && !observation.sshResolutionFailed
+    // The live phase can reuse successful SSH or native URL discovery once
+    // the caller accepts this sample. Leave current live reads alone.
+    const publish = repos.length && complete && !observation.sshResolutionFailed
+      && (identityExpiresAt !== undefined || observation.readWithGitRemote)
       ? () => {
         if (remoteCacheGeneration === cacheGeneration && isCurrentRemoteObservation(snapshot)
           && !isCurrentRemoteObservation(remoteCache.get(cwd)) && !remoteLookups.has(cwd)) remoteCache.set(cwd, snapshot);
@@ -265,9 +267,11 @@ export function createScheduledPrefetchRemoteReader(cwd: string) {
   return {
     read,
     usesGitRemote: () => observationForReuse()?.readWithGitRemote === true,
-    hasCachedNegative: () => {
+    shouldSkipLookup: () => {
       const observation = observationForReuse();
-      return Boolean(observation && (observation.unconfirmedEmpty || hasAllRemoteUrls(observation))
+      // Unavailable checkouts retry on the same schedule as ordinary reads.
+      // Their failure has no remote names and establishes no absence.
+      return Boolean(observation && (observation.readFailed || observation.unconfirmedEmpty || hasAllRemoteUrls(observation))
         && collectForgeRepositories(observation.value, "github").length === 0);
     },
   };
@@ -394,7 +398,7 @@ async function loadParsedGitRemotes(
   } catch {
     demand.signal?.throwIfAborted();
     // Preserve the bounded negative cache, including non-git directories.
-    return { value: [] };
+    return { value: [], readFailed: true };
   }
 }
 

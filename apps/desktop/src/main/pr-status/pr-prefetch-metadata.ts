@@ -58,14 +58,19 @@ function parseConfigWithOrigins(cwd: string, stdout: string) {
   const records = stdout.split("\0");
   if (records.pop() !== "" || records.length % 3 !== 0) return undefined;
   const origins = new Set<string>();
+  const localOrigins = new Set<string>();
   const includes = new Set<string>();
   const config: string[] = [];
   let canTrackIncludes = true;
   for (let index = 0; index < records.length; index += 3) {
     const [scope, origin, record] = records.slice(index, index + 3);
     const file = origin.startsWith("file:") ? configPath(cwd, origin.slice("file:".length)) : undefined;
-    if (file) origins.add(file);
-    else canTrackIncludes = false;
+    if (file) {
+      origins.add(file);
+      if (scope === "local") localOrigins.add(file);
+    } else {
+      canTrackIncludes = false;
+    }
     if (record.startsWith("include.") || record.startsWith("includeif.")) {
       // Conditional includes can change without a write to the including file.
       const included = file && record.startsWith("include.path\n")
@@ -79,7 +84,7 @@ function parseConfigWithOrigins(cwd: string, stdout: string) {
   const configuration = parseGitRemoteConfiguration([...config, ""].join("\0"));
   return configuration && {
     configuration,
-    sources: canTrackIncludes && includes.size <= MAX_CONFIG_INCLUDES ? { origins, includes } : undefined,
+    sources: canTrackIncludes && includes.size <= MAX_CONFIG_INCLUDES ? { origins, localOrigins, includes } : undefined,
   };
 }
 
@@ -90,7 +95,7 @@ export async function observeScheduledPrPrefetchMetadata(
     try { return prefetchGitInputs(cwd); } catch { return undefined; }
   };
   try {
-    if (repositories.hasCachedNegative()) return { repos: [], refreshedRemoteNames: [] };
+    if (repositories.shouldSkipLookup()) return { repos: [], refreshedRemoteNames: [] };
     if (repositories.usesGitRemote()) return undefined;
     const inputs = currentInputs();
     if (!inputs) return undefined;
@@ -126,27 +131,33 @@ export async function observeScheduledPrPrefetchMetadata(
     // The first Git read discovers include paths, even absent ones. Before
     // retaining that answer, bracket a second read with all those inputs.
     const extra = [...sources.includes].filter((file) => !roots.paths.has(file));
-    // A single remote still needs one native HEAD read per branch. Its
-    // config proof only saves launches beyond the initial proof cost.
-    if (remoteNames.length === 1 && branchCount <= (extra.length ? 3 : 2)) return await currentSample();
+    // A single remote still needs one native HEAD read per branch.
+    if (remoteNames.length === 1 && !extra.length && branchCount <= 2) return await currentSample();
     const files = extra.length ? await observePrCheckoutConfigFiles(cwd, [...inputs.paths, ...extra]) : roots;
-    if (!files || [...sources.origins].some((file) => !files.paths.has(file))) return await currentSample();
+    if (!files || [...sources.origins].some((file) => !files.paths.has(file))) {
+      return extra.length ? undefined : await currentSample();
+    }
 
     const proof = await observeProvenRemoteHeads(cwd, remoteNames);
     if (proof && (proof.gitDir !== files.gitDir || proof.commonDir !== files.commonDir)) return undefined;
-    // For a single remote, Git still resolves HEAD per branch. Confirm the
-    // checkout once so later branches can reuse just its remote configuration.
-    if (!proof && (remoteNames.length !== 1 || !await confirmPrFilesCheckout(cwd, files, inputs.env))) {
-      return await files.unchanged() && inputsUnchanged() ? { ...sample, nativeHeadReads: true } : undefined;
-    }
-    // Re-read includes only when Git proved a checkout observation we can keep.
+    // Included files were discovered after the first config read. Confirm the
+    // same answer with those files observed before accepting either path.
     if (extra.length) {
       const confirmed = await readConfig();
       if (confirmed.stderr !== "" || confirmed.stdout !== config?.stdout || !await roots.unchanged()) return undefined;
     }
+    // Git's exact local config origin can establish config reuse without a
+    // HEAD proof. Native HEAD and tracking reads still run for each branch.
+    const configOnly = !proof && (Boolean(extra.length && sources.localOrigins.has(path.join(files.commonDir, "config")))
+      || (remoteNames.length === 1 && branchCount > (extra.length ? 3 : 2) && await confirmPrFilesCheckout(cwd, files, inputs.env)));
     const unchanged = async () => Boolean(await files.unchanged() && (!proof || await proof.unchanged()) && inputsUnchanged()
       && (identityExpiresAt === undefined || Date.now() < identityExpiresAt));
-    return await unchanged() ? { ...sample, proof: { heads: proof?.heads, unchanged } } : undefined;
+    if (!await unchanged()) return undefined;
+    return {
+      ...sample,
+      nativeHeadReads: proof ? undefined : true,
+      proof: proof || configOnly ? { heads: proof?.heads, unchanged } : undefined,
+    };
   } catch {
     // Let the ordinary Git commands decide unsupported or unstable reads.
     return undefined;
