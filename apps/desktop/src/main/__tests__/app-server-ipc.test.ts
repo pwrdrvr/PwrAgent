@@ -1553,6 +1553,7 @@ describe("app server ipc", () => {
     const { runGitCommand } = await import("../app-server/git-executable");
     const { gitSubprocessDiagnostics } = await import("../diagnostics/git-subprocess-diagnostics");
     const { branchRefKey } = await import("../pr-status/github-graphql-client");
+    const { observeForgeRepositoriesForDirectory } = await import("../pr-status/git-remote");
     const { appServerService } = await import("../shell/ipc/app-server");
     const cwd = await mkdtemp(path.join(os.tmpdir(), "pwragent-scheduled-discovery-"));
     const restore = isolateProcessGitEnvironment(cwd);
@@ -1571,6 +1572,15 @@ describe("app server ipc", () => {
     }
     const branches = ["topic", "main", "other"];
     for (const branch of ["topic", "other"]) await runGitCommand(cwd, ["branch", branch]);
+    const singleton = path.join(cwd, "singleton");
+    await mkdir(singleton);
+    await runGitCommand(singleton, ["init", "-b", "main", "--ref-format=files", "--object-format=sha1"]);
+    await runGitCommand(singleton, ["-c", "commit.gpgsign=false", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+      "commit", "--allow-empty", "-m", "fixture"]);
+    await runGitCommand(singleton, ["remote", "add", "origin", "https://github.com/fixture/singleton.git"]);
+    await runGitCommand(singleton, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+    await runGitCommand(singleton, ["branch", "single"]);
+    await observeForgeRepositoriesForDirectory(singleton, "github");
     const service = appServerService as unknown as {
       primeDiscoveryBranchLookups: (contexts: { branch: string; directoryPaths: string[] }[]) => Promise<void>;
       getPrGraphqlClient: () => unknown;
@@ -1584,15 +1594,28 @@ describe("app server ipc", () => {
     const starts = vi.spyOn(gitSubprocessDiagnostics, "startGit");
     onTestFinished(() => { transport.mockRestore(); fetcher.mockRestore(); starts.mockRestore(); });
 
-    await service.primeDiscoveryBranchLookups(branches.map((branch) => ({ branch, directoryPaths: [cwd] })));
+    await service.primeDiscoveryBranchLookups([
+      ...branches.map((branch) => ({ branch, directoryPaths: [cwd] })),
+      { branch: "single", directoryPaths: [singleton] },
+      { branch: "single", directoryPaths: [singleton] },
+    ]);
     expect(fetchPullRequestsForBranches).toHaveBeenCalledExactlyOnceWith(
-      ["topic", "other"].flatMap((branch) => remotes.map((repo) => ({ branch, repo, owner: "fixture" }))),
+      [
+        ...["topic", "other"].flatMap((branch) => remotes.map((repo) => ({ branch, repo, owner: "fixture" }))),
+        { branch: "single", repo: "singleton", owner: "fixture" },
+      ],
     );
-    expect(primeBranchLookup).toHaveBeenCalledExactlyOnceWith(["topic", "other"].map((branch) => ({
-      cwd, branch, prs: [], repos: remotes.map((repo) => ({ host: "github.com", owner: "fixture", repo })),
-    })));
+    expect(primeBranchLookup).toHaveBeenCalledExactlyOnceWith([
+      ...["topic", "other"].map((branch) => ({
+        cwd, branch, prs: [], repos: remotes.map((repo) => ({ host: "github.com", owner: "fixture", repo })),
+      })),
+      { cwd: singleton, branch: "single", prs: [], repos: [{ host: "github.com", owner: "fixture", repo: "singleton" }] },
+    ]);
     expect(starts.mock.calls.filter(([directory]) => directory === cwd).map(([, args]) => args[0])).toEqual([
       "config", "rev-parse", "for-each-ref", "for-each-ref", "for-each-ref",
+    ]);
+    expect(starts.mock.calls.filter(([directory]) => directory === singleton).map(([, args]) => args[0])).toEqual([
+      "remote", "symbolic-ref", "for-each-ref",
     ]);
   });
 

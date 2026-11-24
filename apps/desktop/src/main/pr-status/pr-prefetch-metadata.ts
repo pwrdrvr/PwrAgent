@@ -4,7 +4,7 @@ import { bundledGitExecutable } from "../bundled-git";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getSelectedManagedGit } from "../git-command";
 import { gitCommandPreference, gitRuntimeEnvironment } from "../git-runtime";
-import { readFreshGitHubReposForPrefetch, REMOTE_CONFIG_KEYS, type GitHubRepoRef } from "./git-remote";
+import { REMOTE_CONFIG_KEYS, type createScheduledPrefetchRemoteReader, type GitHubRepoRef } from "./git-remote";
 import { parseGitRemoteConfiguration } from "./git-remote-config";
 import { runPrMetadataGit } from "./pr-metadata-process";
 import { confirmPrFilesCheckout, observePrCheckoutConfigFiles, observeProvenRemoteHeads } from "./pr-remote-heads";
@@ -74,7 +74,9 @@ function parseConfigWithOrigins(cwd: string, stdout: string) {
   };
 }
 
-export async function observeScheduledPrPrefetchMetadata(cwd: string): Promise<PrefetchMetadata | undefined> {
+export async function observeScheduledPrPrefetchMetadata(
+  cwd: string, readRepositories: ReturnType<typeof createScheduledPrefetchRemoteReader>,
+): Promise<PrefetchMetadata | undefined> {
   const currentInputs = () => {
     try { return prefetchGitInputs(cwd); } catch { return undefined; }
   };
@@ -92,7 +94,7 @@ export async function observeScheduledPrPrefetchMetadata(cwd: string): Promise<P
     const { configuration, sources } = parsed;
     // Resolve identities from the config Git already sampled. OpenSSH aliases
     // use one expansion per observation, bounded by the scheduled batch.
-    const { repos } = await readFreshGitHubReposForPrefetch(cwd, configuration);
+    const { repos } = await readRepositories(configuration);
     const remoteNames = configuration.names;
     const sample = { repos, refreshedRemoteNames: remoteNames };
     const inputsUnchanged = () => isDeepStrictEqual(inputs, currentInputs());

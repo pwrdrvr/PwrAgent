@@ -107,6 +107,7 @@ type RemoteCacheEntry = {
   unconfirmedEmpty?: true;
   fetchedAt: number;
 };
+type ParsedRemoteObservation = Omit<RemoteCacheEntry, "fetchedAt">;
 
 const remoteCache = new Map<string, RemoteCacheEntry>();
 const remoteLookups = new Map<string, SharedPrMetadataRead<RemoteCacheEntry>>();
@@ -220,15 +221,18 @@ export async function observeForgeRepositoriesForDirectory(
   };
 }
 
-/** A scheduled batch needs a fresh fallback sample without changing the shared live cache. */
-export async function readFreshGitHubReposForPrefetch(cwd: string, configuration?: GitRemoteConfiguration) {
-  const observation = await loadParsedGitRemotes(cwd, {
-    fresh: true,
-    ...(configuration ? { readRemotes: async () => configuration.remotes } : {}),
-  }, {});
-  return {
-    repos: collectForgeRepositories(observation.value, "github"),
-    refreshedRemoteNames: configuration?.names ?? observation.names,
+/** Sample current Git config while reusing completed identity resolution for matching URLs. */
+export function createScheduledPrefetchRemoteReader(cwd: string) {
+  let previous: ParsedRemoteObservation | undefined;
+  return async (configuration?: GitRemoteConfiguration) => {
+    const live = remoteCache.get(cwd);
+    const warm = live && Date.now() - live.fetchedAt < REMOTE_CACHE_TTL_MS ? live : undefined;
+    const observation = await loadParsedGitRemotes(cwd, { fresh: true }, {}, { configuration, previous: previous ?? warm });
+    const repos = collectForgeRepositories(observation.value, "github");
+    const namesWithUrls = new Set(observation.value.map(({ name }) => name));
+    if (repos.length && observation.names?.every((name) => namesWithUrls.has(name))) previous = observation;
+    // Scheduled probes never publish into the live cache, including on failure.
+    return { repos, refreshedRemoteNames: observation.names };
   };
 }
 
@@ -292,16 +296,23 @@ async function loadParsedGitRemotes(
   cwd: string,
   options: ResolveGitHubRepoOptions,
   demand: PrMetadataDemand,
-): Promise<Omit<RemoteCacheEntry, "fetchedAt">> {
+  prefetch?: { configuration?: GitRemoteConfiguration; previous?: ParsedRemoteObservation },
+): Promise<ParsedRemoteObservation> {
   const resolveSshHostname =
     options.resolveSshHostname ?? defaultResolveSshHostname;
   // Also retain resolved values within this probe, including negative answers.
   const localSshLookups = new Map<string, Promise<string | undefined>>();
   try {
     demand.signal?.throwIfAborted();
-    const { names, remotes, unconfirmedEmpty } = options.readRemotes
+    const raw: Awaited<ReturnType<typeof defaultReadRemotes>> = prefetch?.configuration ?? (options.readRemotes
       ? { remotes: await options.readRemotes(cwd) }
-      : await defaultReadRemotes(cwd, demand, Boolean(options.confirmEmpty || options.fresh));
+      : await defaultReadRemotes(cwd, demand, Boolean(options.confirmEmpty || options.fresh)));
+    const { names, remotes, unconfirmedEmpty } = raw;
+    const previous = prefetch?.previous?.value;
+    if (previous && previous.length === remotes.length && remotes.every(({ name, url }, index) =>
+      name === previous[index].name && url === previous[index].url)) {
+      return { names, value: previous, unconfirmedEmpty };
+    }
     const value = await Promise.all(
       remotes.map(async (remote) => {
         const repo = parseForgeRemote(remote.url);

@@ -2,7 +2,7 @@ import type { LinkedDirectorySummary } from "@pwragent/shared/contracts/normaliz
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { prGitSubprocessCaller } from "../diagnostics/git-subprocess-diagnostics";
-import { observeForgeRepositoriesForDirectory, readFreshGitHubReposForPrefetch, type GitHubRepoRef } from "./git-remote";
+import { createScheduledPrefetchRemoteReader, observeForgeRepositoriesForDirectory, type GitHubRepoRef } from "./git-remote";
 import type { GithubPrFetcher } from "./github-pr-fetcher";
 import { runPrMetadataGit, SharedPrMetadataRead, type PrMetadataDemand } from "./pr-metadata-process";
 import { prMatchesSourceRepository } from "./pr-source-repository";
@@ -156,19 +156,22 @@ type ScheduledCheckoutMetadata = {
   defaults?: DefaultBranchInfo;
   unchanged: () => Promise<boolean>;
 };
-type ScheduledPrefetchBatch = Map<string, ScheduledCheckoutMetadata>;
+type ScheduledPrefetchCheckout = {
+  verified?: ScheduledCheckoutMetadata;
+  readRepositories: ReturnType<typeof createScheduledPrefetchRemoteReader>;
+};
 
 /** Resolve the GitHub repositories eligible for scheduled branch prefetch. */
-export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string, batch?: ScheduledPrefetchBatch): Promise<GitHubRepoRef[]> {
+export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string, checkout?: ScheduledPrefetchCheckout): Promise<GitHubRepoRef[]> {
   return prGitSubprocessCaller.run("pr-scheduled-prefetch", async () => {
     let sampled;
-    if (batch) {
-      const cached = batch.get(cwd);
+    if (checkout) {
+      const cached = checkout.verified;
       let metadata = cached && await cached.unchanged() ? cached : undefined;
       let branchDefaults = metadata?.defaults;
       if (!metadata) {
-        batch.delete(cwd);
-        const observed = await observeScheduledPrPrefetchMetadata(cwd);
+        checkout.verified = undefined;
+        const observed = await observeScheduledPrPrefetchMetadata(cwd, checkout.readRepositories);
         if (observed?.proof) {
           const { heads, unchanged } = observed.proof;
           const remoteNames = observed.refreshedRemoteNames;
@@ -184,26 +187,30 @@ export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string, bat
       if (metadata) {
         const plan = await resolvePrLookupPlan({ cwd, branch, remoteNames: metadata.remoteNames, defaultBranchInfo: branchDefaults });
         if (await metadata.unchanged()) {
-          batch.set(cwd, metadata);
+          checkout.verified = metadata;
           return plan.branches.includes(branch) ? metadata.repos : [];
         }
-        batch.delete(cwd);
+        checkout.verified = undefined;
       }
     }
 
-    const { repos, refreshedRemoteNames } = sampled ?? (batch
-      ? await readFreshGitHubReposForPrefetch(cwd)
+    const { repos, refreshedRemoteNames } = sampled ?? (checkout
+      ? await checkout.readRepositories()
       : await observeForgeRepositoriesForDirectory(cwd, "github"));
     if (repos.length === 0) return [];
-    const plan = await resolvePrLookupPlan({ cwd, branch, remoteNames: batch ? refreshedRemoteNames : undefined });
+    const plan = await resolvePrLookupPlan({ cwd, branch, remoteNames: checkout ? refreshedRemoteNames : undefined });
     return plan.branches.includes(branch) ? repos : [];
   });
 }
 
 /** Each discovery batch owns its observations, keyed by the exact cwd passed to Git. */
 export function createScheduledPrPrefetchRepoResolver(): (cwd: string, branch: string) => Promise<GitHubRepoRef[]> {
-  const batch: ScheduledPrefetchBatch = new Map();
-  return (cwd, branch) => resolveScheduledPrPrefetchRepos(cwd, branch, batch);
+  const batch = new Map<string, ScheduledPrefetchCheckout>();
+  return (cwd, branch) => {
+    const checkout = batch.get(cwd) ?? { readRepositories: createScheduledPrefetchRemoteReader(cwd) };
+    batch.set(cwd, checkout);
+    return resolveScheduledPrPrefetchRepos(cwd, branch, checkout);
+  };
 }
 
 type PrLookupPlan = {

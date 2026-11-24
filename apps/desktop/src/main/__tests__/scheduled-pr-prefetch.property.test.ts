@@ -4,6 +4,7 @@ import path from "node:path";
 import fc from "fast-check";
 import { expect, it, onTestFinished, vi } from "vitest";
 import * as gitExecutable from "../app-server/git-executable";
+import { bundledGitExecutable } from "../bundled-git";
 import { GitSubprocessDiagnostics, gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 import { clearGitHubRemoteCache, resolveGitHubRepoForDirectory } from "../pr-status/git-remote";
 import { createScheduledPrPrefetchRepoResolver } from "../pr-status/pr-detection";
@@ -168,6 +169,37 @@ it.skipIf(process.platform === "win32").each([1, 2])("reuses SSH remote discover
   expect(starts.calls.filter(([, args]) => args[0] === "config").length).toBe(1);
   expect(starts.calls.filter(([, args]) => args[0] === "rev-parse").length).toBe(1);
   expect(ssh.mock.calls.filter(([command]) => command === "ssh-config").length).toBe(1);
+});
+
+it.skipIf(process.platform === "win32").each(["warm", "cold"])("reuses %s fallback SSH identity while re-reading refs", async (cache) => {
+  const cwd = await fixture();
+  const bin = path.join(cwd, "bin");
+  await mkdir(bin);
+  await writeFile(path.join(bin, "ssh"), "#!/bin/sh\nprintf 'hostname github.com\\n'\n", { mode: 0o755 });
+  vi.stubEnv("PATH", `${bin}${path.delimiter}${process.env.PATH}`);
+  vi.stubEnv("PWRAGENT_GIT_PATH", bundledGitExecutable());
+  onTestFinished(() => { vi.unstubAllEnvs(); });
+  await readGit(cwd, "remote", "set-url", "origin", "git@fixture-ssh:fixture/origin.git");
+  await readGit(cwd, "remote", "remove", "upstream");
+  if (cache === "warm") await resolveGitHubRepoForDirectory(cwd);
+
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  const starts = recordPrefetchStarts();
+  const ssh = vi.spyOn(gitSubprocessDiagnostics, "start");
+  onTestFinished(() => { ssh.mockRestore(); });
+  await expectEligible(resolve, cwd, "topic-0", ["https://github.com/fixture/origin.git"]);
+  await remoteHead(cwd, "origin", "release");
+  await expectEligible(resolve, cwd, "release", []);
+  await expectEligible(resolve, cwd, "topic-1", ["https://github.com/fixture/origin.git"]);
+
+  const commands = starts.calls.filter(([, , purpose]) => purpose === "pr-remotes" || purpose === "pr-discovery").map(([, args]) => args[0]);
+  expect(ssh.mock.calls.filter(([command]) => command === "ssh-config")).toHaveLength(cache === "warm" ? 0 : 1);
+  // Each fallback samples config instead of listing remote names separately.
+  expect(commands.filter((command) => command === "config" || command === "remote")).toHaveLength(3);
+  expect(commands.filter((command) => command === "symbolic-ref")).toHaveLength(3);
+  expect(commands.filter((command) => command === "for-each-ref")).toHaveLength(3);
+  await readGit(cwd, "remote", "set-url", "origin", "git@fixture-ssh:fixture/renamed.git");
+  await expectEligible(resolve, cwd, "topic-2", ["https://github.com/fixture/renamed.git"]);
 });
 
 it.skipIf(process.platform === "win32")("reobserves a changed remote HEAD and URL once per checkout observation", async () => {

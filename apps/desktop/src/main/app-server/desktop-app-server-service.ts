@@ -457,6 +457,7 @@ import { ForgePrFetcher, parseForgePrRefFromUrl as parsePrRefFromUrl, type Forge
 import {
   createScheduledPrPrefetchRepoResolver,
   filterStoredDiscoveredPullRequests,
+  resolveScheduledPrPrefetchRepos,
 } from "../pr-status/pr-detection";
 import {
   GithubGraphqlPrClient,
@@ -6420,10 +6421,8 @@ class DesktopAppServerService {
   ): Promise<void> {
     if (!this.getPrFetcher().isProviderEnabled("github")) return;
     const resolvePrefetchRepos = createScheduledPrPrefetchRepoResolver();
-    const wanted = new Map<
-      string,
-      { cwd: string; branch: string; repos: GitHubRepoRef[]; refs: BranchRef[] }
-    >();
+    const candidates: { cwd: string; branch: string }[] = [];
+    const branchesByCheckout = new Map<string, Set<string>>();
     for (const context of contexts) {
       const branch = context.branch.trim();
       // "HEAD" contexts are not branch lookups, and the detection path skips
@@ -6432,32 +6431,30 @@ class DesktopAppServerService {
         continue;
       }
       for (const cwd of context.directoryPaths) {
-        const dedupeKey = `${cwd} ${branch}`;
-        if (wanted.has(dedupeKey)) {
-          continue;
-        }
-        const repos = await resolvePrefetchRepos(cwd, branch);
-        if (repos.length === 0) {
-          continue;
-        }
-        wanted.set(dedupeKey, {
-          cwd,
-          branch,
-          repos,
-          refs: repos.map((repo) => ({
-            owner: repo.owner,
-            repo: repo.repo,
-            branch,
-          })),
-        });
+        const branches = branchesByCheckout.get(cwd) ?? new Set<string>();
+        if (branches.has(branch)) continue;
+        branches.add(branch);
+        branchesByCheckout.set(cwd, branches);
+        candidates.push({ cwd, branch });
       }
     }
 
-    if (wanted.size === 0) {
+    const entries: { cwd: string; branch: string; repos: GitHubRepoRef[]; refs: BranchRef[] }[] = [];
+    for (const { cwd, branch } of candidates) {
+      const resolve = branchesByCheckout.get(cwd)!.size > 1 ? resolvePrefetchRepos : resolveScheduledPrPrefetchRepos;
+      const repos = await resolve(cwd, branch);
+      if (repos.length === 0) continue;
+      entries.push({
+        cwd,
+        branch,
+        repos,
+        refs: repos.map(({ owner, repo }) => ({ owner, repo, branch })),
+      });
+    }
+    if (entries.length === 0) {
       return;
     }
 
-    const entries = [...wanted.values()];
     const refs = entries.flatMap((entry) => entry.refs);
     const byRefKey = await this.getPrGraphqlClient().fetchPullRequestsForBranches(
       refs,
