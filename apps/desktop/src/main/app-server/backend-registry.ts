@@ -3922,7 +3922,11 @@ export class DesktopBackendRegistry {
     if ((!policy || policy.enabledBackends.includes("claude")) && (request.refreshModels === true || request.refreshModels === "claude")) {
       await this.claudeBackend.discover();
     }
-    const acpSummaries = !policy || policy.enabledBackends.some(isAcpBackendId) ? await this.acpBackend.describeInstalledBackends() : [];
+    const refreshAntigravityQuota = request.refreshRateLimits === true
+      && (!policy || policy.enabledBackends.includes("acp:antigravity"));
+    const acpSummaries = !policy || policy.enabledBackends.some(isAcpBackendId)
+      ? await this.acpBackend.describeInstalledBackends(refreshAntigravityQuota)
+      : [];
     const summaries = [codexSummary, this.claudeBackend.summary()];
     const enabled = [...summaries, ...acpSummaries].filter(backend => !policy || policy.enabledBackends.includes(backend.kind))
       .map(backend => !policy ? backend : { ...backend,

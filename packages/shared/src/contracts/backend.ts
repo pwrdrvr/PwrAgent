@@ -408,7 +408,7 @@ export type BackendSummary = {
 };
 
 export type ListBackendsRequest = {
-  /** Refresh account quotas for the already discovered Codex provider. */
+  /** Refresh account quotas for already discovered providers that support it. */
   refreshRateLimits?: boolean;
   includeUnavailable?: boolean;
   /**
