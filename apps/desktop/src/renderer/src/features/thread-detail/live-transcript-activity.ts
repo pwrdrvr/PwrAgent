@@ -19,9 +19,11 @@ export {
 } from "@pwragent/shared/thread-usage-display";
 import {
   classifyExplorationLabel,
+  formatCommandLabel,
   formatExplorationSummary,
   formatSearchCommandActionLabel,
   formatWebSearchLabel,
+  normalizeCommandText,
 } from "@pwragent/shared/command-action-labels";
 import {
   type AppServerSource,
@@ -265,48 +267,6 @@ function formatElapsedMs(elapsedMs: number): string {
   }
   const seconds = elapsedMs / 1_000;
   return seconds >= 10 ? `${seconds.toFixed(0)}s` : `${seconds.toFixed(1)}s`;
-}
-
-// Strip a leading shell-interpreter wrapper so we show the command the agent
-// actually ran rather than the interpreter's full path. Handles POSIX login
-// shells (`/bin/sh -lc <cmd>`, `bash -lc <cmd>`) and Windows interpreters
-// (`"C:\...\powershell.exe" -Command <cmd>`, `cmd.exe /c <cmd>`,
-// `bash.exe -lc <cmd>`). The full, unmodified command is preserved separately
-// as `rawCommand` for the expanded details view.
-//
-// The Windows branch matches the interpreter path in two forms: quoted
-// (`"[^"]*…\.exe"`, which permits spaces — e.g. `"C:\Program Files\Git\bin\
-// bash.exe"`) and unquoted (`[^\s"]*…\.exe`, no spaces). A single
-// `[^\s"]*` couldn't span a spaced path inside quotes, so a quoted Git-bash
-// invocation under "Program Files" would otherwise show the full path.
-function stripShellWrapper(command: string): string {
-  return command
-    .trim()
-    .replace(/^(?:\/\S+\/)?(?:ba|z)?sh\s+-lc\s+/i, "")
-    .replace(
-      /^(?:"[^"]*(?:powershell|pwsh|cmd|bash)\.exe"|[^\s"]*(?:powershell|pwsh|cmd|bash)\.exe)\s+(?:-Command|-lc|-c|\/d\s+\/s\s+\/c|\/c)\s+/i,
-      "",
-    )
-    .trim();
-}
-
-function normalizeCommandText(command: string): string {
-  return stripShellWrapper(command)
-    .replace(/^['"]|['"]$/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function formatCommandLabel(command: string | undefined): string {
-  if (!command) {
-    return "Ran command";
-  }
-  const collapsed = normalizeCommandText(command);
-  if (!collapsed) {
-    return "Ran command";
-  }
-
-  return collapsed.length > 72 ? `${collapsed.slice(0, 69)}...` : collapsed;
 }
 
 function readDisplayCommand(command: string | undefined): string | undefined {

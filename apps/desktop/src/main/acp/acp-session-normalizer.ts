@@ -12,7 +12,11 @@ import type {
   AppServerTranscriptPhase,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import { buildPendingTurnId } from "@pwragent/shared/turn-placeholder";
-import { formatWebSearchLabel } from "@pwragent/shared/command-action-labels";
+import {
+  formatCommandLabel,
+  formatWebSearchLabel,
+  normalizeCommandText,
+} from "@pwragent/shared/command-action-labels";
 import { stripAgentMemoryChunk } from "@pwragent/shared/contracts/agent-memory";
 import { ACP_WORKSPACE_HISTORY_URI } from "./acp-workspace-history.js";
 import { stripManagedReviewContextBlock } from "../../shared/review-command.js";
@@ -1944,8 +1948,13 @@ function toolActivity(
     ? fileRead.label
     : webFetchUrl
       ? `Fetched ${webFetchUrl}`
-      : displayCommand && isGenericShellToolTitle(labelCandidate)
-        ? displayCommand
+      : displayCommand
+          && (
+            isGenericShellToolTitle(labelCandidate)
+            // Antigravity titles a `run_command` with the whole script.
+            || normalizeCommandText(labelCandidate) === normalizeCommandText(displayCommand)
+          )
+        ? formatCommandLabel(displayCommand)
         : labelCandidate;
   const status = readToolActivityStatus(update.update);
   const path =
