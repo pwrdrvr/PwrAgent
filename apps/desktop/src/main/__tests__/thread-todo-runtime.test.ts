@@ -555,8 +555,17 @@ describe("dispatch access mode compatibility", () => {
       todo: CARD,
       action: { type: "start_thread", prompt: "Build it" } });
     expect(registry.startThread).toHaveBeenLastCalledWith(expect.objectContaining({ executionMode: "auto" }));
-    // Only the provider switch reads the destination's modes.
-    expect(registry.listBackends).toHaveBeenCalledTimes(1);
+    // Every start reads its destination's modes, as the card does.
+    expect(registry.listBackends).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses a card mode the destination does not offer, before starting anything", async () => {
+    const { registry, runners } = fakeRegistry({ ...FULL_ACCESS_SOL, executionMode: "default" });
+    await expect(runners.startThread({ sourceBackend: "codex", sourceThreadId: "source", crossProject: false,
+      todo: CARD,
+      action: { type: "start_thread", prompt: "Build it", executionMode: "auto" }, modelSettings: { backend: "acp:kimi" } }))
+      .rejects.toThrow("acp:kimi does not offer Auto. Choose one of its modes.");
+    expect(registry.startThread).not.toHaveBeenCalled();
   });
 });
 
@@ -623,6 +632,42 @@ describe("dispatch onto an agent's native access modes", () => {
         expect(order.indexOf(started.executionMode)).toBeLessThanOrEqual(order.indexOf(inherited));
       },
     ), { numRuns: 100 });
+  });
+
+  it("starts in the agent mode the operator stored on the card, including one without a PwrAgent level", async () => {
+    const { registry, runners } = fakeRegistry({ ...FULL_ACCESS_SOL, executionMode: "full-access" });
+    withNativeDestination(registry, { modes: { availableModes: ANTIGRAVITY_SESSION_MODES, currentModeId: "default" } });
+    await runners.startThread({ sourceBackend: "codex", sourceThreadId: "source", crossProject: false,
+      todo: CARD,
+      action: { type: "start_thread", prompt: "Plan it", executionMode: "default",
+        nativeAccessMode: { backend: "acp:antigravity", id: "plan" } },
+      modelSettings: { backend: "acp:antigravity" } });
+    expect(registry.startThread).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "acp:antigravity", executionMode: "default", acpRuntime: expect.objectContaining({ currentModeId: "plan" }),
+    }));
+  });
+
+  it("starts an operator's Yolo pick at Full Access, and ignores a pick made for another agent", async () => {
+    const { registry, runners } = fakeRegistry({ ...FULL_ACCESS_SOL, executionMode: "default" });
+    withNativeDestination(registry, { configOptions: [{
+      id: "permission_mode", label: "Permissions", type: "select", category: "mode",
+      values: [{ value: "default" }, { value: "auto" }, { value: "plan" }, { value: "yolo" }],
+    }] });
+    const start = (backend: AppServerBackendKind, id: string, executionMode: ThreadExecutionMode) => runners.startThread({
+      sourceBackend: "codex", sourceThreadId: "source", crossProject: false, todo: CARD,
+      action: { type: "start_thread", prompt: "Ship it", executionMode, nativeAccessMode: { backend, id } },
+      modelSettings: { backend: "acp:antigravity" },
+    });
+    await start("acp:antigravity", "yolo", "full-access");
+    expect(registry.startThread).toHaveBeenLastCalledWith(expect.objectContaining({
+      executionMode: "full-access", acpRuntime: expect.objectContaining({ configValues: { permission_mode: "yolo" } }),
+    }));
+    // A Plan pick stored for Kimi leaves this agent to the card's level,
+    // mapped onto its own modes.
+    await start("acp:kimi", "plan", "default");
+    expect(registry.startThread).toHaveBeenLastCalledWith(expect.objectContaining({
+      executionMode: "default", acpRuntime: expect.objectContaining({ configValues: { permission_mode: "default" } }),
+    }));
   });
 });
 

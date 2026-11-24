@@ -16,6 +16,15 @@ import {
   threadTodoActionProject,
 } from "@pwragent/shared/contracts/thread-todos";
 import {
+  resolveThreadTodoStartAccess,
+  sameThreadTodoAccessOption,
+  threadTodoAccessForPick,
+  type ThreadTodoAccessCard,
+  type ThreadTodoAccessOption,
+  type ThreadTodoStartAccess,
+} from "@pwragent/shared/thread-todo-access";
+import { formatAcpRuntimeModeLabel, formatExecutionModeLabel } from "../../lib/execution-mode";
+import {
   ChevronDownIcon,
   ChevronUpIcon,
   FileCodeIcon,
@@ -77,6 +86,8 @@ export type TodoDispatchTarget = {
   setWorkMode: (workMode: ThreadTodoWorkMode) => void;
   setPlacement: (placement: ThreadTodoPlacement) => void;
   setEnvironment: (environment: string) => void;
+  /** Undefined when the card's owner does not say what its thread's access is. */
+  access?: TodoDispatchAccess;
   /** A dispatch provider holds the choices, so every mounted copy of the card shares them. */
   choicesShared: boolean;
   /** The labelled grid is open instead of the chip row. Window-local, per card. */
@@ -84,6 +95,20 @@ export type TodoDispatchTarget = {
   setSettingsExpanded: (expanded: boolean) => void;
   /** The run request's dispatch fields, as the chips show them. */
   runOptions: () => ThreadTodoRunOptions;
+};
+
+/** The access a start-thread card starts with, and the operator's pick of it. */
+export type TodoDispatchAccess = {
+  resolved: ThreadTodoStartAccess;
+  /** The destination provider's name. */
+  providerLabel: string;
+  /** The operator can pick: the card is stored on an owner that applies the pick, and starts there. */
+  editable: boolean;
+  /** Why the operator cannot pick, when the card shows a mode it cannot change. */
+  lockedReason?: string;
+  pending: boolean;
+  error?: string;
+  pick: (option: ThreadTodoAccessOption) => void;
 };
 
 /**
@@ -167,6 +192,17 @@ export function useTodoDispatchTarget(params: {
       : environmentDefault
     : undefined;
 
+  const access = useDispatchAccess({
+    todo,
+    owner,
+    onOwner,
+    legacy,
+    canConfigureStart,
+    destinationBackend: model?.settings.backend,
+    destination: backend,
+    catalogLoaded: machineBackends !== undefined,
+  });
+
   const choose = (update: Parameters<typeof context.choose>[1]) => context.choose(todo, update);
   if (legacy) {
     return {
@@ -177,6 +213,7 @@ export function useTodoDispatchTarget(params: {
       workModeChanged: false,
       placement,
       environment: { status: "loading", changed: false },
+      ...(access ? { access } : {}),
       setMachine: () => {},
       pickModel: params.pickOwnerModel,
       setSpeed: () => {},
@@ -211,6 +248,7 @@ export function useTodoDispatchTarget(params: {
       ...(environmentSelected ? { selected: environmentSelected } : {}),
       changed: environmentSelected !== undefined && environmentSelected !== environmentDefault,
     },
+    ...(access ? { access } : {}),
     setMachine: (key) => choose((current) => ({ ...current, machine: key === owner.key ? undefined : key })),
     pickModel: (settings) => {
       if (onOwner) {
@@ -240,6 +278,74 @@ export function useTodoDispatchTarget(params: {
       ...(environmentSelected ? { environment: environmentSelected } : {}),
     }),
   };
+}
+
+/**
+ * The access the card's new thread starts with, derived as its owner derives
+ * it, from the card, the raising thread's mode and the destination's catalog.
+ * A pick is stored on the card's owner, so every window shows it, the owner
+ * applies it, and starting the card passes the Full Access gate on it.
+ */
+function useDispatchAccess(params: {
+  todo: ThreadTodo;
+  owner: TodoDispatchMachine;
+  onOwner: boolean;
+  legacy: boolean;
+  canConfigureStart: boolean;
+  destinationBackend: BackendSummary["kind"] | undefined;
+  destination: BackendSummary | undefined;
+  catalogLoaded: boolean;
+}): TodoDispatchAccess | undefined {
+  const { todo, onOwner, destinationBackend } = params;
+  const api = useTodoDispatchContext().api;
+  // The card whose pick is being stored.
+  const [pending, setPending] = useState<string>();
+  const [error, setError] = useState<{ todoId: string; message: string }>();
+  const stored = todo.action?.type === "start_thread" ? todo.action : undefined;
+  const card: ThreadTodoAccessCard = stored ?? {};
+  const sourceMode = todo.dispatchDefaults?.threadExecutionMode;
+  const wanted = card.executionMode ?? sourceMode;
+  if (!params.canConfigureStart || !wanted || !destinationBackend) return undefined;
+  const providerLabel = params.destination?.label ?? destinationBackend;
+  // Another machine applies only the card's mode, against its own catalog.
+  const resolved = resolveThreadTodoStartAccess({
+    card: onOwner ? card : { ...(card.executionMode ? { executionMode: card.executionMode } : {}) },
+    sourceBackend: todo.backend,
+    sourceExecutionMode: sourceMode ?? wanted,
+    destination: onOwner && params.catalogLoaded ? params.destination : undefined,
+    destinationBackend,
+  });
+  const setAccess = api?.setThreadTodoAccess;
+  const lockedReason = !stored ? undefined
+    : !onOwner ? `Access is chosen on ${params.owner.label}, the card's machine.`
+    : params.legacy || !params.owner.access || !setAccess ? `Update PwrAgent on ${params.owner.label} to choose access here.`
+    : undefined;
+  const editable = stored !== undefined && lockedReason === undefined && resolved.options.length > 0;
+  const pendingHere = pending === todo.id;
+  return {
+    resolved,
+    providerLabel,
+    editable,
+    ...(lockedReason && stored ? { lockedReason } : {}),
+    pending: pendingHere,
+    ...(error?.todoId === todo.id ? { error: error.message } : {}),
+    pick: (option) => {
+      if (!setAccess || !editable || pendingHere) return;
+      if (resolved.status === "ready" && sameThreadTodoAccessOption(resolved.selected, option) && resolved.source === "card") return;
+      setPending(todo.id);
+      setError(undefined);
+      void setAccess({ id: todo.id, ...threadTodoAccessForPick(option, destinationBackend) })
+        .catch((cause: unknown) => {
+          setError({ todoId: todo.id, message: cause instanceof Error ? cause.message : String(cause) });
+        })
+        .finally(() => setPending(undefined));
+    },
+  };
+}
+
+/** The menu's name for an access option, as the composer names it. */
+export function todoAccessOptionLabel(option: ThreadTodoAccessOption): string {
+  return option.kind === "mode" ? formatExecutionModeLabel(option.mode) : formatAcpRuntimeModeLabel(option.label);
 }
 
 /**
@@ -572,6 +678,69 @@ export function TodoDispatchFacts(props: {
     />
   );
 
+  const access = target.access;
+  const resolvedAccess = access?.resolved;
+  const selectedAccess = resolvedAccess?.status === "ready" ? resolvedAccess.selected : undefined;
+  const wantedAccess = resolvedAccess ? formatExecutionModeLabel(resolvedAccess.wanted) : undefined;
+  const accessValue = !resolvedAccess ? props.access
+    : resolvedAccess.status === "refused" ? "Choose access"
+    : selectedAccess ? todoAccessOptionLabel(selectedAccess) : "Agent default";
+  const threadMode = todo.dispatchDefaults?.threadExecutionMode;
+  const accessEntries: TodoFactMenuEntry[] = (resolvedAccess?.options ?? []).map((option) => {
+    const level = option.kind === "mode" ? option.mode : option.executionMode;
+    const detail = level === "full-access" ? "Asks to confirm"
+      : option.kind === "mode" && option.mode === threadMode && target.model?.settings.backend === todo.backend ? "This thread"
+      : undefined;
+    return {
+      kind: "item",
+      key: option.kind === "mode" ? `mode:${option.mode}` : `native:${option.id}`,
+      label: todoAccessOptionLabel(option),
+      ...(detail ? { detail } : {}),
+      checked: sameThreadTodoAccessOption(selectedAccess, option),
+      onSelect: () => access?.pick(option),
+    };
+  });
+  const selectedLabel = selectedAccess ? todoAccessOptionLabel(selectedAccess) : undefined;
+  const accessNote = !access || !resolvedAccess ? undefined
+    : resolvedAccess.status === "refused" ? resolvedAccess.message
+    : resolvedAccess.source === "lowered" && selectedLabel
+      ? `${access.providerLabel} has no ${wantedAccess}, so the thread starts at ${selectedLabel}.`
+    : resolvedAccess.source === "agent"
+      ? `${access.providerLabel} has no mode at or below ${wantedAccess}, so it starts in its own default. Choose one of its modes to set it.`
+    : undefined;
+  const accessTooltip = access?.lockedReason ?? (accessValue ? `Access: ${accessValue}` : undefined);
+  const accessChip = !accessValue ? null : access && access.resolved.options.length > 0 && (access.editable || access.lockedReason) ? (
+    <TodoFactMenu
+      label="Access for the new thread"
+      value={access.pending ? "Saving…" : accessValue}
+      entries={accessEntries}
+      disabled={props.disabled || !access.editable || access.pending}
+      testId="todo-dispatch-access"
+      {...(compact
+        ? { icon: ShieldIcon, ...(accessTooltip ? { tooltip: accessTooltip } : {}) }
+        : access.lockedReason ? { tooltip: access.lockedReason } : {})}
+    />
+  ) : compact ? (
+    <span
+      className="todo-dispatch-chips__static tooltip-target"
+      data-tooltip={`Access: ${accessValue}`}
+      aria-label={`Access for the new thread: ${accessValue}`}
+      role="img"
+      data-testid="todo-dispatch-access"
+    >
+      <ShieldIcon size={12} aria-hidden="true" />
+      <span className="todo-dispatch-chips__static-label">{accessValue}</span>
+    </span>
+  ) : accessValue;
+  const accessNotes = (
+    <>
+      {accessNote ? (
+        <p className="todo-model-picker__provenance" role="status" data-testid="todo-dispatch-access-note">{accessNote}</p>
+      ) : null}
+      {access?.error ? <p className="todo-model-picker__error" role="alert">{access.error}</p> : null}
+    </>
+  );
+
   const provenance = target.onOwner ? (
     <TodoModelProvenance todo={todo} selection={target.model!} onPick={target.pickModel} disabled={props.disabled} />
   ) : fitNote ? (
@@ -585,22 +754,13 @@ export function TodoDispatchFacts(props: {
           {machine}
           {model}
           {speedChip}
-          {props.access ? (
-            <span
-              className="todo-dispatch-chips__static tooltip-target"
-              data-tooltip={`Access: ${props.access}`}
-              aria-label={`Access for the new thread: ${props.access}`}
-              role="img"
-            >
-              <ShieldIcon size={12} aria-hidden="true" />
-              <span className="todo-dispatch-chips__static-label">{props.access}</span>
-            </span>
-          ) : null}
+          {accessChip}
           {threadChip}
           {where}
           {env}
           {toggle}
         </div>
+        {accessNotes}
         {provenance}
       </>
     );
@@ -626,10 +786,10 @@ export function TodoDispatchFacts(props: {
               <dd>{speedChip}</dd>
             </div>
           ) : null}
-          {props.access ? (
-            <div className="thread-todo-card__fact">
+          {accessChip ? (
+            <div className={`thread-todo-card__fact${typeof accessChip === "string" ? "" : " thread-todo-card__fact--model"}`}>
               <dt>Access</dt>
-              <dd>{props.access}</dd>
+              <dd>{accessChip}</dd>
             </div>
           ) : null}
           <div className="thread-todo-card__fact thread-todo-card__fact--model">
@@ -649,6 +809,7 @@ export function TodoDispatchFacts(props: {
         </dl>
         {toggle}
       </div>
+      {accessNotes}
       {provenance}
     </>
   );

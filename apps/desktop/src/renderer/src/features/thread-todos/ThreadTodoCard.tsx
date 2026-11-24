@@ -708,6 +708,10 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
     ownerSelection: selection,
     pickOwnerModel: pickModel,
   });
+  // The destination offers neither the card's access nor a fallback: the
+  // card says so beside its Access menu, and starts once one is chosen.
+  const accessBlocksStart = startsThread
+    && (target.access?.resolved.status === "refused" || target.access?.pending === true);
   const [confirmingMerge, setConfirmingMerge] = useState<MergeConfirmation>();
   const [confirmingApproval, setConfirmingApproval] = useState<ThreadTodoCiApproval>();
   const canApprove = (approval: ThreadTodoCiApproval): boolean =>
@@ -1104,7 +1108,8 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
             <TodoSplitButton
               label={sendingMessage ? "Send request" : todo.error ? "Retry" : "Start thread"}
               // Without Do it here, a send to the card's own thread is refused.
-              disabled={startRequiresUpdate || (sendingMessage && (!messageTarget || !canSendMessage || targetsOwnThread))}
+              disabled={startRequiresUpdate || accessBlocksStart
+                || (sendingMessage && (!messageTarget || !canSendMessage || targetsOwnThread))}
               Icon={HandoffIcon}
               menuLabel="Handoff options"
               onClick={() => runAction()}

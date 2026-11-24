@@ -102,6 +102,12 @@ export const FEDERATION_CAPABILITIES = [
    * sub-thread.
    */
   "thread_todo_placement_sibling",
+  /**
+   * A start card's owner stores an operator's Access pick
+   * (`threadTodos.setAccess`) and applies the destination's own access
+   * modes. A viewer offers the Access menu only on such an owner's cards.
+   */
+  "thread_todo_access",
   /** Owner-persisted async question dismissals and change notifications. */
   "operator_questions",
   "operator_requests",

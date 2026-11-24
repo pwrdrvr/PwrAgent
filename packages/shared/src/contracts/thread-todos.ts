@@ -4,6 +4,7 @@ import type { FederationRemoteTarget, FederationTarget } from "./federation";
 import { federatedThreadIdentityKey } from "./federation";
 import { buildThreadIdentityKey, isAppServerBackendKind } from "./navigation";
 import { isThreadExecutionMode } from "../thread-execution-mode";
+import type { ThreadTodoNativeAccessMode } from "../thread-todo-access";
 
 import type {
   AppServerBackendKind,
@@ -278,6 +279,12 @@ export type ThreadTodoAction =
       reasoningEffort?: string;
       /** The new thread's permissions. Absent inherits the source's mode. */
       executionMode?: ThreadExecutionMode;
+      /**
+       * The operator's pick of an agent's own access mode on the card, set
+       * only by the operator. It applies to that agent alone; `executionMode`
+       * holds its level. An agent's change of `executionMode` clears it.
+       */
+      nativeAccessMode?: ThreadTodoNativeAccessMode;
       workMode?: ThreadTodoWorkMode;
       /**
        * Sibling of the raising thread, sub-thread of it, or a new top-level
@@ -437,6 +444,8 @@ export type ThreadTodo = {
     lastDispatch?: ThreadTodoModelSettings;
     /** The raising thread's speed, which a same-provider start inherits. */
     threadSpeed?: { serviceTier?: string; fastMode?: boolean };
+    /** The raising thread's access, which a card without a mode inherits. */
+    threadExecutionMode?: ThreadExecutionMode;
     /** The raising thread's parent, which a sibling is filed under. */
     threadParent?: ThreadTodoParentThread;
   };
@@ -845,6 +854,12 @@ export type RunThreadTodoActionRequest = {
    * and the run.
    */
   seenExecutionMode?: ThreadTodoSeenExecutionMode;
+  /**
+   * Handoff cards that start a thread: the agent mode the operator saw
+   * picked on the card (`threadTodoSeenNativeAccessMode`). Checked like
+   * `seenExecutionMode`.
+   */
+  seenNativeAccessMode?: string;
 };
 
 /** The start proposal for this run, including an operator's redirect. */
@@ -884,9 +899,19 @@ export function threadTodoSeenExecutionMode(
 export function threadTodoStartAccessChanged(
   action: Extract<ThreadTodoAction, { type: "start_thread" }>,
   seen: ThreadTodoSeenExecutionMode | undefined,
+  seenNative?: string,
 ): boolean {
+  if (seenNative !== undefined && threadTodoSeenNativeAccessMode(action) !== seenNative) return true;
   if (seen === undefined) return action.executionMode === "full-access";
   return threadTodoSeenExecutionMode(action) !== seen;
+}
+
+/** A start card's agent-mode pick as shown: `backend mode`, or `none`. */
+export function threadTodoSeenNativeAccessMode(
+  action: Extract<ThreadTodoAction, { type: "start_thread" }>,
+): string {
+  const native = action.nativeAccessMode;
+  return native ? `${native.backend} ${native.id}` : "none";
 }
 
 /**
@@ -956,6 +981,19 @@ export type SetThreadTodoProjectRequest = {
   federationTarget?: FederationRemoteTarget;
   id: string;
   projectKey: string | null;
+};
+
+/**
+ * The operator's pick from a start card's Access menu, stored on the card.
+ * Starting it still passes the Full Access gate, which judges the stored
+ * mode. A native pick names one of the destination agent's own modes, with
+ * its level as `executionMode`.
+ */
+export type SetThreadTodoAccessRequest = {
+  federationTarget?: FederationRemoteTarget;
+  id: string;
+  executionMode: ThreadExecutionMode;
+  nativeAccessMode?: ThreadTodoNativeAccessMode;
 };
 
 /**

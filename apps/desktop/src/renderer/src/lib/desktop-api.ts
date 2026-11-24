@@ -72,6 +72,7 @@ import type {
   RunThreadTodoActionRequest,
   SetThreadTodoItemCheckedRequest,
   ReviewThreadTodoCiDeploymentRequest,
+  SetThreadTodoAccessRequest,
   SetThreadTodoProjectRequest,
   ThreadTodoMutationResponse,
   ThreadTodosChangedEvent,
@@ -1459,6 +1460,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
     request: ListThreadTodoDispatchEnvironmentsRequest,
   ) => Promise<ListThreadTodoDispatchEnvironmentsResponse>;
   /** The operator's pick from a card's project menu. */
+  /** A start card's Access pick, stored on the card's owner. */
+  setThreadTodoAccess?: (
+    request: SetThreadTodoAccessRequest,
+  ) => Promise<ThreadTodoMutationResponse>;
   setThreadTodoProject?: (
     request: SetThreadTodoProjectRequest,
   ) => Promise<ThreadTodoMutationResponse>;

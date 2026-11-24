@@ -24,6 +24,7 @@ import type {
   ThreadTodoWorkMode,
 } from "@pwragent/shared/contracts/thread-todos";
 import type { CodexSpeed } from "@pwragent/shared/codex-speed";
+import type { ThreadTodoNativeAccessMode } from "@pwragent/shared/thread-todo-access";
 import {
   DEFAULT_THREAD_TODO_MERGE_METHOD,
   THREAD_TODO_MAX_OPEN_PER_THREAD,
@@ -798,6 +799,52 @@ export class ThreadTodoService {
   }
 
   /**
+   * The operator's pick from a start card's Access menu. The pick is stored
+   * on the card, so every window shows it and the owner applies it; starting
+   * the card still passes the Full Access gate, which judges this stored
+   * mode. One commit, and none when the card already says it.
+   */
+  setAccess(params: {
+    id: string;
+    executionMode: ThreadExecutionMode;
+    nativeAccessMode?: ThreadTodoNativeAccessMode;
+  }): ThreadTodo {
+    const before = this.requireOpen(params.id);
+    if (before.action?.type !== "start_thread") {
+      throw new ThreadTodoError("invalid_arguments", "Only a card that starts a thread has access to choose.");
+    }
+    const sameNative = (action: StartThreadAction) => action.nativeAccessMode?.backend === params.nativeAccessMode?.backend
+      && action.nativeAccessMode?.id === params.nativeAccessMode?.id;
+    if (before.action.executionMode === params.executionMode && sameNative(before.action)) return before;
+    const todo = this.store.transaction(() => {
+      const current = this.requireOpen(params.id);
+      if (this.running.has(current.id)) {
+        throw new ThreadTodoError("conflict", "This to-do's action is running now.");
+      }
+      if (current.action?.type !== "start_thread") {
+        throw new ThreadTodoError("invalid_arguments", "Only a card that starts a thread has access to choose.");
+      }
+      const { nativeAccessMode: _previous, ...rest } = current.action;
+      return this.store.replaceContent({
+        id: current.id,
+        kind: current.kind,
+        title: current.title,
+        detail: current.detail,
+        items: current.items ?? [],
+        action: {
+          ...rest,
+          executionMode: params.executionMode,
+          ...(params.nativeAccessMode ? { nativeAccessMode: { ...params.nativeAccessMode } } : {}),
+        },
+        targetProject: current.targetProject,
+        now: this.now(),
+      });
+    });
+    this.emit(todo);
+    return todo;
+  }
+
+  /**
    * Tick and untick steps by id, from the card or an agent. One commit, and
    * none when every step already reads that way. Checking the last step does
    * not resolve the card: Done stays the operator's click.
@@ -900,6 +947,8 @@ export class ThreadTodoService {
       allowOpenItems?: boolean;
       /** The access the operator saw on a start card. */
       seenExecutionMode?: ThreadTodoSeenExecutionMode;
+      /** The agent mode the operator saw picked on a start card. */
+      seenNativeAccessMode?: string;
       /** The operator's placement, replacing the card's proposal. */
       placement?: ThreadTodoPlacement;
     } & ThreadTodoStartChoices = {},
@@ -923,7 +972,7 @@ export class ThreadTodoService {
     // agent can change a card's access at any time, so the start runs only
     // if the stored card still matches it.
     if (
-      startAction && threadTodoStartAccessChanged(startAction, options.seenExecutionMode)
+      startAction && threadTodoStartAccessChanged(startAction, options.seenExecutionMode, options.seenNativeAccessMode)
     ) {
       throw new ThreadTodoError(
         "conflict",
@@ -1213,6 +1262,9 @@ function patchAction(
       );
     }
     const next: StartThreadAction = { ...action };
+    // The operator's agent-mode pick carried the card's old level. An agent
+    // that names another access replaces it, and cannot keep a raised pick.
+    if (patch.executionMode !== undefined) delete next.nativeAccessMode;
     for (const field of START_THREAD_PATCH_FIELDS) {
       const value = patch[field];
       if (value === undefined) continue;

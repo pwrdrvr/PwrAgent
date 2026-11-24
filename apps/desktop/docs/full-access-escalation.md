@@ -24,6 +24,16 @@ says when to read this document. Relative links were updated for this location.
   the window's copy of the card, so the run carries the access it showed
   (`seenExecutionMode`) and the owner refuses the start if the stored card
   changed since; an agent's `update_todo` cannot slip a raise in between.
+- A start card's Access menu shows the access the new thread gets, derived by
+  `resolveThreadTodoStartAccess` (`packages/shared/src/thread-todo-access.ts`),
+  the same function the owner's start runs, and offers only the destination's
+  modes: PwrAgent modes, or an agent's own modes (Antigravity's Default /
+  Accept Edits / Auto / Plan, Kimi's Yolo). A pick is stored on the card
+  through `setThreadTodoAccess`, never held only in the window. A native pick
+  stores its level as the card's mode, so Yolo is stored at Full Access and
+  the start passes this gate; `seenNativeAccessMode` makes the owner refuse a
+  start whose stored pick changed. An agent's `update_todo` that names a mode
+  drops the operator's native pick.
 - Messaging surfaces deliberately do NOT share this gate. An escalation
   requested over Telegram or Discord is made by a remote actor, so
   `MessagingAccessControl.ensureFullAccessEscalationAllowed` gates it on the

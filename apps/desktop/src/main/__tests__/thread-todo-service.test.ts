@@ -690,6 +690,58 @@ describe("ThreadTodoService", () => {
     });
   });
 
+  it("stores the operator's Access pick in one commit, and none when the card already says it", async () => {
+    const service = createService();
+    const todo = service.add({
+      ...THREAD,
+      input: { title: "Hand off", action: { type: "start_thread", prompt: "Go", executionMode: "default" } },
+    }).todo;
+    const pick = { id: todo.id, executionMode: "full-access" as const, nativeAccessMode: { backend: "acp:kimi" as const, id: "yolo" } };
+    const { writes } = await measureSqliteWrites(() => {
+      service.setAccess(pick);
+      service.setAccess(pick);
+    });
+    expect(service.get(todo.id)?.action).toEqual({
+      type: "start_thread", prompt: "Go", executionMode: "full-access", nativeAccessMode: { backend: "acp:kimi", id: "yolo" },
+    });
+    expectSqliteWriteBudget({
+      note: "one Access pick on a start card, then the same pick again: one commit rewriting the card's action, "
+        + "and the unchanged repeat opens no transaction; only on an operator menu pick, ~0.4 MB/day at 100 picks",
+      scenario: "thread-todo-set-access",
+      writes,
+    });
+  });
+
+  it("drops the operator's agent-mode pick when an agent names another access, and keeps it otherwise", () => {
+    const service = createService();
+    const todo = service.add({
+      ...THREAD,
+      input: { title: "Hand off", action: { type: "start_thread", prompt: "Go" } },
+    }).todo;
+    service.setAccess({ id: todo.id, executionMode: "default", nativeAccessMode: { backend: "acp:antigravity", id: "plan" } });
+    service.update({ id: todo.id, action: { model: "gemini-3" } });
+    expect(service.get(todo.id)?.action).toMatchObject({ nativeAccessMode: { backend: "acp:antigravity", id: "plan" } });
+    service.update({ id: todo.id, action: { executionMode: "full-access" } });
+    const action = service.get(todo.id)?.action;
+    expect(action).toMatchObject({ executionMode: "full-access" });
+    expect(action && "nativeAccessMode" in action).toBe(false);
+  });
+
+  it("refuses a start whose agent-mode pick changed after the operator saw the card", async () => {
+    const startThread = vi.fn(async () => ({ backend: "codex" as const, threadId: "child" }));
+    const service = createService({ startThread, mergePullRequest: vi.fn() } as unknown as ThreadTodoActionRunners);
+    const todo = service.add({
+      ...THREAD,
+      input: { title: "Hand off", action: { type: "start_thread", prompt: "Go" } },
+    }).todo;
+    service.setAccess({ id: todo.id, executionMode: "auto", nativeAccessMode: { backend: "acp:antigravity", id: "auto" } });
+    await expect(service.runAction(todo.id, { seenExecutionMode: "auto", seenNativeAccessMode: "acp:antigravity plan" }))
+      .rejects.toThrow("This card's access changed after you saw it.");
+    expect(startThread).not.toHaveBeenCalled();
+    await service.runAction(todo.id, { seenExecutionMode: "auto", seenNativeAccessMode: "acp:antigravity auto" });
+    expect(startThread).toHaveBeenCalledTimes(1);
+  });
+
   it("costs one commit to edit a card", async () => {
     const service = createService();
     const todo = service.add({

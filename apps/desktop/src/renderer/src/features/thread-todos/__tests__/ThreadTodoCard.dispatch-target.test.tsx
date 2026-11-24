@@ -5,6 +5,7 @@ import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import type {
   ListThreadTodoDispatchEnvironmentsRequest,
   ListThreadTodoDispatchEnvironmentsResponse,
+  SetThreadTodoAccessRequest,
   ThreadTodo,
 } from "@pwragent/shared/contracts/thread-todos";
 import type {
@@ -114,6 +115,7 @@ function setup(options: {
     listModelSettingsRecents: vi.fn(async () => ({ recents: [] })),
     listThreadTodoDispatchEnvironments: vi.fn(async (request: ListThreadTodoDispatchEnvironmentsRequest) =>
       ENVIRONMENTS[request.federationTarget?.scope === "remote" ? request.federationTarget.instanceId : "owner"]!),
+    setThreadTodoAccess: vi.fn(async (_request: SetThreadTodoAccessRequest) => ({ todo })),
   };
   const tree = (value: ThreadTodo, visible = true) => (
     <TodoDispatchProvider api={api}
@@ -695,5 +697,91 @@ describe("to-do dispatch target", () => {
     const unsupported = menu.getByRole("menuitemradio", { name: /old-box/ });
     expect(unsupported.getAttribute("aria-disabled")).toBe("true");
     expect(unsupported.textContent).toBe("old-boxUnsupported");
+  });
+});
+
+describe("to-do card access", () => {
+  const modes = (...available: Array<"default" | "auto" | "full-access">) =>
+    (["default", "auto", "full-access"] as const).map((mode) => ({ mode, label: mode, available: available.includes(mode) }));
+  const antigravity = {
+    kind: "acp:antigravity", label: "Antigravity", available: true, capabilities: { createThread: true },
+    executionModes: [],
+    acp: { runtime: { schemaVersion: 1, status: "ready", modes: { currentModeId: "default", availableModes: [
+      { id: "default", label: "Default" }, { id: "accept-edits", label: "Accept edits" },
+      { id: "auto", label: "Auto" }, { id: "plan", label: "Plan" },
+    ] } } },
+    launchpadOptions: { models: [{ id: "gemini", label: "Gemini 3", current: true }] },
+  } as unknown as BackendSummary;
+  const startButton = () => screen.getByRole("button", { name: "Start thread" }) as HTMLButtonElement;
+  const accessChip = () => screen.getByTestId("todo-dispatch-access");
+
+  it("shows the inherited access and offers only the provider's available modes", async () => {
+    setup({
+      todo: { ...card, dispatchDefaults: { thread, threadExecutionMode: "auto" } },
+      local: [{ ...claude, executionModes: modes("default", "auto") }, codex()],
+    });
+    await settle();
+    expect(accessChip().getAttribute("aria-label")).toBe("Access for the new thread: Auto");
+    await act(async () => { fireEvent.click(accessChip()); });
+    const menu = screen.getByRole("menu", { name: "Access for the new thread" });
+    expect(within(menu).getAllByRole("menuitemradio").map((item) => item.textContent))
+      .toEqual(["Default Access", "AutoThis thread"]);
+  });
+
+  it("shows the agent's own mode for a native-mode agent, and stores the operator's pick on the card", async () => {
+    const todo: ThreadTodo = {
+      ...card,
+      action: { type: "start_thread", prompt: "Run the focused suite", backend: "acp:antigravity" },
+      dispatchDefaults: { thread, threadExecutionMode: "full-access" },
+    };
+    const { api } = setup({ todo, local: [{ ...claude, executionModes: modes("default", "full-access") }, antigravity] });
+    await settle();
+    expect(accessChip().getAttribute("aria-label")).toBe("Access for the new thread: Auto");
+    expect(screen.getByTestId("todo-dispatch-access-note").textContent)
+      .toBe("Antigravity has no Full Access, so the thread starts at Auto.");
+    await act(async () => { fireEvent.click(accessChip()); });
+    const menu = screen.getByRole("menu", { name: "Access for the new thread" });
+    expect(within(menu).getAllByRole("menuitemradio").map((item) => item.textContent))
+      .toEqual(["Default", "Accept Edits", "Auto", "Plan"]);
+    await act(async () => { fireEvent.click(within(menu).getByRole("menuitemradio", { name: /^Plan/ })); });
+    expect(api.setThreadTodoAccess).toHaveBeenCalledWith({
+      id: "card", executionMode: "default", nativeAccessMode: { backend: "acp:antigravity", id: "plan" },
+    });
+  });
+
+  it("says when the destination offers neither the inherited access nor Default Access, and holds Start until one is chosen", async () => {
+    const todo: ThreadTodo = {
+      ...card,
+      action: { type: "start_thread", prompt: "Run the focused suite", backend: "codex" },
+      dispatchDefaults: { thread, threadExecutionMode: "auto" },
+    };
+    const { api } = setup({ todo, local: [claude, codex({ executionModes: modes("full-access") })] });
+    await settle();
+    expect(accessChip().getAttribute("aria-label")).toBe("Access for the new thread: Choose access");
+    expect(screen.getByTestId("todo-dispatch-access-note").textContent)
+      .toBe("OpenAI cannot use the inherited access mode or Default Access. Choose one of its modes.");
+    expect(startButton().disabled).toBe(true);
+    await act(async () => { fireEvent.click(accessChip()); });
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole("menu", { name: "Access for the new thread" }))
+        .getByRole("menuitemradio", { name: /^Full Access/ }));
+    });
+    expect(api.setThreadTodoAccess).toHaveBeenCalledWith({ id: "card", executionMode: "full-access" });
+  });
+
+  it("shows a viewer's card from an owner that cannot store a pick, without letting it change", async () => {
+    const todo: ThreadTodo = {
+      ...card,
+      id: "remote-todo:win:card",
+      federationTarget: { scope: "remote", instanceId: "win" },
+      action: { type: "start_thread", prompt: "Run the focused suite", executionMode: "default" },
+      dispatchDefaults: { thread: { backend: "codex", model: "sol" }, threadExecutionMode: "default" },
+    };
+    setup({ todo, instances: [WIN], win: [codex({ executionModes: modes("default", "full-access") })] });
+    await settle();
+    const chipButton = accessChip() as HTMLButtonElement;
+    expect(chipButton.getAttribute("aria-label")).toBe("Access for the new thread: Default Access");
+    expect(chipButton.disabled).toBe(true);
+    expect(chipButton.getAttribute("data-tooltip")).toBe("Update PwrAgent on win-lab / dev to choose access here.");
   });
 });

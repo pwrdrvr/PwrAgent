@@ -1,0 +1,195 @@
+import fc from "fast-check";
+import { describe, expect, it } from "vitest";
+import type { AppServerBackendKind, ThreadExecutionMode } from "../contracts/normalized-app-server";
+import {
+  resolveThreadTodoStartAccess,
+  sameThreadTodoAccessOption,
+  threadTodoAccessForPick,
+  type ThreadTodoAccessCard,
+  type ThreadTodoAccessDestination,
+  type ThreadTodoAccessOption,
+} from "../thread-todo-access";
+
+const ORDER: ThreadExecutionMode[] = ["default", "auto", "full-access"];
+const rank = (mode: ThreadExecutionMode) => ORDER.indexOf(mode);
+/** The native ids that carry a PwrAgent level, as agents name them. */
+const LEVEL_OF: Record<string, ThreadExecutionMode> = { default: "default", auto: "auto", yolo: "full-access" };
+const BACKENDS: AppServerBackendKind[] = ["codex", "claude", "acp:antigravity", "acp:kimi"];
+
+/** A provider as its catalog lists it: PwrAgent modes, an agent's own modes, or neither. */
+const destinationArb = (kind: AppServerBackendKind): fc.Arbitrary<ThreadTodoAccessDestination> => fc.oneof(
+  fc.uniqueArray(fc.record({ mode: fc.constantFrom(...ORDER), available: fc.boolean() }), {
+    selector: (entry) => entry.mode, minLength: 1, maxLength: 3,
+  }).map((modes) => ({
+    kind, label: kind, executionModes: modes.map((entry) => ({ ...entry, label: entry.mode })),
+  }) as ThreadTodoAccessDestination),
+  fc.tuple(
+    fc.uniqueArray(fc.constantFrom("default", "accept-edits", "auto", "plan", "yolo", "architect"), { maxLength: 6 }),
+    fc.boolean(),
+  ).map(([ids, asPermissionOption]) => ({
+    kind,
+    label: kind,
+    executionModes: [],
+    acp: {
+      runtime: asPermissionOption
+        ? { schemaVersion: 1, status: "ready", configOptions: [{
+            id: "permission_mode", label: "Permissions", type: "select", category: "mode",
+            values: ids.map((value) => ({ value })),
+          }] }
+        : { schemaVersion: 1, status: "ready", modes: { availableModes: ids.map((id) => ({ id, label: id })) } },
+    },
+  }) as unknown as ThreadTodoAccessDestination),
+);
+
+type Scenario = {
+  sourceBackend: AppServerBackendKind;
+  sourceExecutionMode: ThreadExecutionMode;
+  destinationBackend: AppServerBackendKind;
+  destination: ThreadTodoAccessDestination;
+  card: ThreadTodoAccessCard;
+};
+
+/**
+ * A card as the system makes one: an agent proposes no mode or one mode,
+ * and the operator may then pick from the menu some destination showed,
+ * possibly another provider's before the provider was changed.
+ */
+const scenarioArb: fc.Arbitrary<Scenario> = fc.record({
+  sourceBackend: fc.constantFrom(...BACKENDS),
+  sourceExecutionMode: fc.constantFrom(...ORDER),
+  destinationBackend: fc.constantFrom(...BACKENDS),
+  proposed: fc.option(fc.constantFrom(...ORDER), { nil: undefined }),
+  pickedOn: fc.option(fc.constantFrom(...BACKENDS), { nil: undefined }),
+  pickIndex: fc.nat(),
+}).chain((base) => fc.record({
+  destination: destinationArb(base.destinationBackend),
+  pickDestination: destinationArb(base.pickedOn ?? base.destinationBackend),
+}).map(({ destination, pickDestination }) => {
+  const proposed: ThreadTodoAccessCard = base.proposed ? { executionMode: base.proposed } : {};
+  let card = proposed;
+  if (base.pickedOn) {
+    // The menu the operator picked from: the same provider's catalog, or another provider's.
+    const pickedFrom = base.pickedOn === base.destinationBackend ? destination : pickDestination;
+    const shown = resolveThreadTodoStartAccess({
+      card: proposed, sourceBackend: base.sourceBackend, sourceExecutionMode: base.sourceExecutionMode,
+      destination: pickedFrom, destinationBackend: base.pickedOn,
+    });
+    const option = shown.options[base.pickIndex % Math.max(shown.options.length, 1)];
+    if (option) card = threadTodoAccessForPick(option, base.pickedOn);
+  }
+  return {
+    sourceBackend: base.sourceBackend,
+    sourceExecutionMode: base.sourceExecutionMode,
+    destinationBackend: base.destinationBackend,
+    destination,
+    card,
+  };
+}));
+
+function nativeIds(destination: ThreadTodoAccessDestination): string[] {
+  const runtime = destination.acp?.runtime;
+  const permission = runtime?.configOptions?.find((option) => option.id === "permission_mode");
+  const ids = permission ? permission.values.map((value) => value.value) : runtime?.modes?.availableModes.map((mode) => mode.id) ?? [];
+  return ids.length < 2 ? [] : ids;
+}
+
+type Expected =
+  | { status: "refused" }
+  | { status: "ready"; selected: ThreadTodoAccessOption | undefined; executionMode: ThreadExecutionMode };
+
+/** Slow and literal: the rules as the to-do card and the escalation doc state them. */
+function oracle(scenario: Scenario): Expected {
+  const { card, destination } = scenario;
+  const wanted = card.executionMode ?? scenario.sourceExecutionMode;
+  const sameBackend = scenario.destinationBackend === scenario.sourceBackend;
+  if (destination.executionModes.length > 0) {
+    const offered = (mode: ThreadExecutionMode) =>
+      destination.executionModes.some((entry) => entry.mode === mode && entry.available);
+    if (card.executionMode !== undefined) {
+      return offered(wanted) ? { status: "ready", selected: { kind: "mode", mode: wanted }, executionMode: wanted } : { status: "refused" };
+    }
+    if (offered(wanted) || sameBackend) return { status: "ready", selected: { kind: "mode", mode: wanted }, executionMode: wanted };
+    if (offered("default")) return { status: "ready", selected: { kind: "mode", mode: "default" }, executionMode: "default" };
+    return { status: "refused" };
+  }
+  const ids = nativeIds(destination);
+  const recorded = (id: string): ThreadExecutionMode => LEVEL_OF[id] === "full-access" ? "full-access" : "default";
+  const native = (id: string): ThreadTodoAccessOption => ({
+    kind: "native", id, label: id, ...(LEVEL_OF[id] ? { executionMode: LEVEL_OF[id] } : {}),
+  });
+  if (card.nativeAccessMode?.backend === scenario.destinationBackend && ids.includes(card.nativeAccessMode.id)) {
+    return { status: "ready", selected: native(card.nativeAccessMode.id), executionMode: recorded(card.nativeAccessMode.id) };
+  }
+  let best: string | undefined;
+  for (const id of ids) {
+    const level = LEVEL_OF[id];
+    if (level === undefined || rank(level) > rank(wanted)) continue;
+    if (best === undefined || rank(level) > rank(LEVEL_OF[best]!)) best = id;
+  }
+  if (best) return { status: "ready", selected: native(best), executionMode: recorded(best) };
+  const fallback = card.executionMode !== undefined || sameBackend ? wanted : "default";
+  return { status: "ready", selected: ids.length > 0 ? undefined : { kind: "mode", mode: fallback }, executionMode: fallback };
+}
+
+const resolve = (scenario: Scenario) => resolveThreadTodoStartAccess(scenario);
+
+describe("resolveThreadTodoStartAccess", () => {
+  it("matches the stated rules for every card, source and destination", () => {
+    fc.assert(fc.property(scenarioArb, (scenario) => {
+      const actual = resolve(scenario);
+      const expected = oracle(scenario);
+      expect(actual.status).toBe(expected.status);
+      if (actual.status !== "ready" || expected.status !== "ready") return;
+      expect(sameThreadTodoAccessOption(actual.selected, expected.selected)).toBe(true);
+      expect(actual.executionMode).toBe(expected.executionMode);
+    }), { numRuns: 400 });
+  });
+
+  it("never starts above the card's stored access, or the raising thread's when the card names none", () => {
+    fc.assert(fc.property(scenarioArb, (scenario) => {
+      const access = resolve(scenario);
+      if (access.status !== "ready") return;
+      const ceiling = scenario.card.executionMode ?? scenario.sourceExecutionMode;
+      expect(rank(access.executionMode)).toBeLessThanOrEqual(rank(ceiling));
+      const level = access.selected?.kind === "mode" ? access.selected.mode : access.selected?.executionMode;
+      if (level) expect(rank(level)).toBeLessThanOrEqual(rank(ceiling));
+    }));
+  });
+
+  it("offers only the destination's available modes, and shows one of them", () => {
+    fc.assert(fc.property(scenarioArb, (scenario) => {
+      const access = resolve(scenario);
+      const { destination } = scenario;
+      const listed = destination.executionModes.length > 0
+        ? ORDER.filter((mode) => destination.executionModes.some((entry) => entry.mode === mode && entry.available))
+          .map((mode): ThreadTodoAccessOption => ({ kind: "mode", mode }))
+        : nativeIds(destination).map((id): ThreadTodoAccessOption => ({ kind: "native", id, label: id }));
+      expect(access.options.length).toBe(listed.length);
+      listed.forEach((option, index) => expect(sameThreadTodoAccessOption(access.options[index], option)).toBe(true));
+      // The raising thread already runs at its mode on its own provider.
+      const keepsSourceMode = access.status === "ready" && access.source === "inherited"
+        && scenario.destinationBackend === scenario.sourceBackend && destination.executionModes.length > 0;
+      if (access.status === "ready" && access.selected && access.options.length > 0 && !keepsSourceMode) {
+        expect(access.options.some((option) => sameThreadTodoAccessOption(option, access.selected))).toBe(true);
+      }
+    }));
+  });
+
+  it("starts with exactly the operator's pick, and gates it as Full Access when it carries Full Access", () => {
+    fc.assert(fc.property(scenarioArb, fc.nat(), (scenario, index) => {
+      const shown = resolve(scenario);
+      fc.pre(shown.options.length > 0);
+      const option = shown.options[index % shown.options.length]!;
+      const card = threadTodoAccessForPick(option, scenario.destinationBackend);
+      const started = resolve({ ...scenario, card });
+      expect(started.status).toBe("ready");
+      if (started.status !== "ready") return;
+      expect(sameThreadTodoAccessOption(started.selected, option)).toBe(true);
+      expect(started.source).toBe("card");
+      // The desktop gate holds back a card whose stored mode is Full Access.
+      const level = option.kind === "mode" ? option.mode : option.executionMode;
+      expect(card.executionMode === "full-access").toBe(level === "full-access");
+      expect(started.executionMode === "full-access").toBe(level === "full-access");
+    }));
+  });
+});
