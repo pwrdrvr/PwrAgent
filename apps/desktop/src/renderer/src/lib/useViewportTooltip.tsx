@@ -120,6 +120,13 @@ export function portalViewportTop(): number {
  * unrelated tooltip.
  */
 let activePlainTooltip: { current: () => void } | null = null;
+let latestPlainTooltipRequest = 0;
+
+/** Record the triggering event when a plain tooltip must mount before it can show. */
+export function reservePlainTooltipRequest(): number {
+  latestPlainTooltipRequest += 1;
+  return latestPlainTooltipRequest;
+}
 
 export type TooltipPoint = { x: number; y: number };
 
@@ -420,7 +427,8 @@ export function useViewportTooltip(options: {
    * naming an absent element is a dangling reference.
    */
   tooltipId: string;
-  show: (target: HTMLElement, content: ReactNode) => void;
+  /** A deferred plain tooltip passes the request it reserved at the trigger. */
+  show: (target: HTMLElement, content: ReactNode, reservedRequest?: number) => void;
   /**
    * Show beside the pointer instead of above or below `target`, for a target
    * too large for its edge to say what the tooltip is about. `target` is
@@ -527,10 +535,11 @@ export function useViewportTooltip(options: {
   hideRef.current = hide;
 
   /** Take the window's one plain-tooltip slot, hiding whoever held it. */
-  const claimPlainTooltipSlot = useCallback((): void => {
+  const claimPlainTooltipSlot = useCallback((reservedRequest: number | undefined): void => {
     if (interactiveRef.current) {
       return;
     }
+    if (reservedRequest === undefined) reservePlainTooltipRequest();
     const previous = activePlainTooltip;
     activePlainTooltip = hideRef;
     if (previous && previous !== hideRef) {
@@ -711,8 +720,12 @@ export function useViewportTooltip(options: {
     bridge.style.height = `${rect.height}px`;
   }, [state, placement]);
 
-  const show = useCallback((target: HTMLElement, content: ReactNode): void => {
+  const show = useCallback((target: HTMLElement, content: ReactNode, reservedRequest?: number): void => {
     recordRendererUpdate(RendererUpdateEvent.tooltipShow, tooltipId);
+    if (reservedRequest !== undefined && reservedRequest !== latestPlainTooltipRequest) {
+      onDismiss?.(target);
+      return;
+    }
     clearHoverDelay();
     setDelayPending(false);
     if (isNativeDragInteractionActive()) {
@@ -729,7 +742,7 @@ export function useViewportTooltip(options: {
       onDismiss?.(target);
       return;
     }
-    claimPlainTooltipSlot();
+    claimPlainTooltipSlot(reservedRequest);
     const horizontalBounds = getHorizontalBounds?.(target);
     pointerRef.current = null;
     pointerBoundsRef.current = horizontalBounds;

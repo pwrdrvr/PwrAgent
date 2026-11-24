@@ -68,6 +68,26 @@ it("keeps the tooltip with the latest chip, including across rows and unmount", 
   expect(screen.queryByRole("tooltip")).toBeNull();
 });
 
+it.each(["draft", "branch"] as const)("gives the last %s event the window tooltip in a shared React batch", (last) => {
+  render(<ThreadMetaChips thread={{ ...thread, gitBranch: "fixture-branch" }} hasUnsentDraft />);
+  const draft = screen.getByRole("img", { name: "Unsent draft" });
+  const branch = screen.getByRole("button", { name: "Copy branch fixture-branch" });
+  const actions = {
+    draft: () => fireEvent.mouseEnter(draft),
+    branch: () => branch.focus(),
+  };
+
+  // The last opening event owns the slot even if an earlier chip still
+  // needs its portal to mount. Commit order cannot reverse event order.
+  act(() => {
+    actions[last === "draft" ? "branch" : "draft"]();
+    actions[last]();
+  });
+  expect(document.activeElement).toBe(branch);
+  expect(screen.getByRole("tooltip").textContent)
+    .toContain(last === "draft" ? "Unsent draft" : "fixture-branch");
+});
+
 it("keeps a keyboard-open tooltip when a previous chip leaves, and releases a removed anchor", async () => {
   const open = vi.fn();
   const tree = (hasDependency: boolean) => (

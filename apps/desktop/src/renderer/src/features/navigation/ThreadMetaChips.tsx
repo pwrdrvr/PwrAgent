@@ -33,7 +33,7 @@ import {
   useThreadDependencyIndicatorsContext,
 } from "../thread-dependencies/useThreadDependencyIndicators";
 import { InstanceChip } from "../federation/InstanceGlyph";
-import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import { reservePlainTooltipRequest, useViewportTooltip } from "../../lib/useViewportTooltip";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import { AgentThreadChip } from "./AgentThreadChip";
 
@@ -101,7 +101,7 @@ type ThreadMetaChipItems = {
   openContinueAfter?: (thread: NavigationThreadSummary) => void;
 };
 
-type ChipTooltipRequest = { target: HTMLElement; content: string };
+type ChipTooltipRequest = { target: HTMLElement; content: string; order: number };
 
 function ThreadMetaTooltip({ request, dismiss }: {
   request: ChipTooltipRequest;
@@ -109,7 +109,7 @@ function ThreadMetaTooltip({ request, dismiss }: {
 }) {
   const { show, tooltipNode } = useViewportTooltip({ className: "viewport-tooltip", onDismiss: dismiss });
   useLayoutEffect(() => {
-    show(request.target, request.content);
+    show(request.target, request.content, request.order);
   }, [request, show]);
   return tooltipNode;
 }
@@ -170,7 +170,7 @@ const ThreadMetaChipsContent = memo(function ThreadMetaChipsContent({
     setTooltip((current) => current?.target === target ? null : current);
   }, []);
   const showTooltip = (target: HTMLElement, content: string): void => {
-    setTooltip({ target, content });
+    setTooltip({ target, content, order: reservePlainTooltipRequest() });
   };
   const leaveTooltip = (event: SyntheticEvent<HTMLElement>): void => {
     dismissTooltip(event.currentTarget);
