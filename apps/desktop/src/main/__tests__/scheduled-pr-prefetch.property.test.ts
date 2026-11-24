@@ -150,7 +150,7 @@ it("uses the existing Git remote HEAD fallback with one configured remote", asyn
   for (const branch of ["topic-0", "topic-1"]) await expectEligible(resolve, cwd, branch, expected(branch));
   const metadata = process.platform === "win32" ? ["config", "remote"] : ["config", "rev-parse"];
   expect(starts.calls.map(([, args]) => args[0])).toEqual([
-    ...metadata, "symbolic-ref", "for-each-ref", ...(process.platform === "win32" ? ["remote"] : []), "symbolic-ref", "for-each-ref",
+    ...metadata, "symbolic-ref", "for-each-ref", ...(process.platform === "win32" ? metadata : []), "symbolic-ref", "for-each-ref",
   ]);
 });
 
@@ -667,6 +667,8 @@ it.skipIf(process.platform === "win32").each(["symlinked include", "custom Git"]
 
   await expectEligible(resolve, cwd, "topic-0", expected("topic-0"));
   if (!symlinked) {
+    expect(readObservedGitOrigin(cwd)).toBeUndefined();
+    await resolveGitHubReposForDirectory(cwd);
     starts.clear();
     await expectEligible(resolve, cwd, "topic-1", expected("topic-1"));
     expect(starts.calls.filter(([, args]) => args[0] === "config" || args[0] === "remote").map(([, args]) => args))
@@ -974,8 +976,12 @@ it.skipIf(process.platform === "win32")("reobserves a changed remote HEAD and UR
     .map(([, args]) => args[0])).toEqual(["config", "rev-parse", "config", "rev-parse", "config", "rev-parse"]);
 });
 
-it("rechecks an absent global include when it appears during the batch", async () => {
+it.each(["bundled", "manually selected"])("rechecks an absent global include when it appears during the batch with %s Git", async (selection) => {
   const cwd = await fixture();
+  if (selection === "manually selected") {
+    vi.stubEnv("PWRAGENT_GIT_PATH", bundledGitExecutable());
+    onTestFinished(() => { vi.unstubAllEnvs(); });
+  }
   const included = path.join(cwd, "included-config");
   await runGitCommand(cwd, ["config", "--global", "include.path", included]);
   const resolve = createScheduledPrPrefetchRepoResolver();
@@ -1026,8 +1032,12 @@ it("falls back to Git for a packed abbreviation conflict that appears after reus
   expect(starts.calls.some(([, args, purpose]) => purpose === "pr-discovery" && args[0] === "symbolic-ref")).toBe(true);
 });
 
-it("keeps fresh eligibility through the Git fallback on reftable", async () => {
+it.each(["bundled", "manually selected"])("keeps fresh eligibility through the Git fallback on reftable with %s Git", async (selection) => {
   const cwd = await fixture("reftable");
+  if (selection === "manually selected") {
+    vi.stubEnv("PWRAGENT_GIT_PATH", bundledGitExecutable());
+    onTestFinished(() => { vi.unstubAllEnvs(); });
+  }
   const resolve = createScheduledPrPrefetchRepoResolver();
   await expectEligible(resolve, cwd, "release", (await oracle(cwd))("release"));
   await remoteHead(cwd, "origin", "release");

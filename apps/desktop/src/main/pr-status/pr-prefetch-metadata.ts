@@ -105,7 +105,7 @@ export async function observeScheduledPrPrefetchMetadata(
   const currentInputs = () => {
     try { return prefetchGitInputs(cwd); } catch { return undefined; }
   };
-  const readFallback = async (options: { useGitRemote?: true; preferCachedIdentity?: true }) => {
+  const readFallback = async (options: { useGitRemote?: true; preferLiveIdentity?: true }) => {
     const observation = await repositories.read(undefined, options);
     return { ...observation, refreshedRemoteNames: observation.refreshedRemoteNames ?? [] };
   };
@@ -113,7 +113,7 @@ export async function observeScheduledPrPrefetchMetadata(
     if (repositories.shouldSkipLookup()) return { repos: [], refreshedRemoteNames: [] };
     if (scope.configOutputTooLarge || repositories.usesGitRemote()) return undefined;
     const inputs = currentInputs();
-    if (inputs === "native-only") return await readFallback({ preferCachedIdentity: true });
+    if (inputs === "native-only") return await readFallback({ preferLiveIdentity: true });
     if (!inputs) return undefined;
     const roots = await observePrCheckoutConfigFiles(cwd, inputs.paths);
     if (!roots) return undefined;

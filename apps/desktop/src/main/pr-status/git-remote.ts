@@ -247,13 +247,16 @@ export function createScheduledPrefetchRemoteReader(cwd: string) {
   };
   const read = async (
     configuration?: GitRemoteConfiguration,
-    options: { useGitRemote?: boolean; preferCachedIdentity?: boolean; configSampleOrder?: number; validateNegative?: () => Promise<boolean> } = {},
+    options: { useGitRemote?: boolean; preferLiveIdentity?: boolean; configSampleOrder?: number; validateNegative?: () => Promise<boolean> } = {},
   ) => {
     const cacheGeneration = remoteCacheGeneration;
     const reused = observationForReuse();
+    // Only an established live cache entry can opt into the ordinary TTL.
+    // A batch-local config sample alone says nothing about later URL edits.
+    const preferCachedIdentity = options.preferLiveIdentity && reused !== undefined && reused.value === remoteCache.get(cwd)?.value;
     const { observation, refreshRemoteNames } = await loadParsedGitRemotes(cwd, {}, {}, {
       configuration, configSampleOrder: options.configSampleOrder, previous: reused,
-      useGitRemote: options.useGitRemote, preferCachedIdentity: options.preferCachedIdentity,
+      useGitRemote: options.useGitRemote, preferCachedIdentity,
     });
     const repos = collectForgeRepositories(observation.value, "github");
     // Matching names or URLs do not refresh the resolved identity's age.
