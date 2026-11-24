@@ -135,6 +135,41 @@ describe("owner Attention order properties (AGENTS.md: Attention order)", () => 
     }));
   });
 
+  it.each(["before", "after"] as const)("keeps one admission rank when startup publishes %s the first live read", (publication) => {
+    fc.assert(fc.property(fc.boolean(), fc.nat(4), fc.nat(4), (promoteOnTurnEnd, beforeNative, afterNative) => {
+      const idle = thread("a", false, 1);
+      const key = navigationAttentionIdentity(idle);
+      const initial = reconcileNavigationAttentionOrder({ threads: [idle], observedAt: 1, promoteOnTurnEnd });
+      const rank = initial.nextRank;
+      let order = observeNavigationAttentionTurn({ previous: initial, key, active: true,
+        turnId: "pending:a", observedAt: 3, promoteOnTurnEnd });
+      const assertAdmission = () => {
+        expect(order.members.get(key)).toMatchObject({ rank, active: true });
+        expect(order.nextRank).toBe(rank + 1);
+      };
+      const read = (row: NavigationThreadSummary, observedAt: number) => {
+        order = reconcileNavigationAttentionOrder({ previous: order, threads: [row], observedAt, promoteOnTurnEnd });
+        assertAdmission();
+      };
+      assertAdmission();
+      // Startup observed idle before admission. Its result can arrive before
+      // the first read or after the native event and a newer provider listing.
+      if (publication === "before") read(idle, 2);
+      for (let i = 0; i <= beforeNative; i++) read(idle, 4 + i);
+      order = observeNavigationAttentionTurn({ previous: order, key, active: true,
+        turnId: "turn-1", observedAt: 9, promoteOnTurnEnd });
+      assertAdmission();
+      const live = thread("a", true, 10);
+      read(live, 10);
+      if (publication === "after") read(idle, 2);
+      for (let i = 0; i <= afterNative; i++) read(live, 11 + i);
+      order = observeNavigationAttentionTurn({ previous: order, key, active: false,
+        turnId: "turn-1", observedAt: 16, promoteOnTurnEnd });
+      expect(order.members.get(key)).toMatchObject({ rank: rank + Number(promoteOnTurnEnd), active: false });
+      expect(order.nextRank).toBe(rank + 1 + Number(promoteOnTurnEnd));
+    }), { examples: [[true, 0, 1], [false, 1, 0]] });
+  });
+
   it("a stale listing cannot resurrect a removed member; a fresh return gets a new top rank", () => {
     fc.assert(fc.property(fc.integer({ min: 2, max: 1_000 }), fc.nat(1_000), (removedAt, delay) => {
       const rows = ids.map((id) => thread(id, false, 1));

@@ -1,9 +1,11 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { StackEngine } from "../index";
 import { StackGit } from "../git";
 import { pushStackLayers } from "../publish";
-import { commit, git, memoryStore, repository, runner, withRepo, withStack } from "./fixture.test-support";
+import { commit, git, memoryStore, repository, runner, withRepo } from "./fixture.test-support";
 
 test.each(["last parent tip", "already retargeted", "earlier parent tip"])("sync excludes the merged parent using %s", async (scenario) =>
   withRepo(async (cwd, old) => {
@@ -49,43 +51,85 @@ test.each(["last parent tip", "already retargeted", "earlier parent tip"])("sync
     expect((await store.read(common)).catalog.stacks[0]?.branches[0]?.pullRequest).toMatchObject({ merged: true, mergedHead: parent });
   }));
 
+type PublishFixture = {
+  local: StackGit;
+  remote: string;
+  bottom: string;
+  nextBottom: string;
+  top: string;
+  racedTop: string;
+  nextTop: string;
+};
+
+async function withPublishRepos(testPublish: (fixture: PublishFixture) => Promise<void>) {
+  const dir = await mkdtemp(join(tmpdir(), "pwragent-stack-publish-"));
+  try {
+    const cwd = join(dir, "local.git");
+    const remote = join(dir, "remote.git");
+    await git(dir, "init", "-q", "--bare", "-b", "bottom", cwd);
+    const local = new StackGit(runner, cwd);
+    const tree = (await local.output(["mktree"], "")).trim();
+    const addCommit = async (message: string, ...parents: string[]) =>
+      (await local.output(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+        "commit-tree", tree, "-m", message, ...parents.flatMap(parent => ["-p", parent]),
+      ])).trim();
+    const bottom = await addCommit("bottom");
+    const top = await addCommit("top", bottom);
+    const nextBottom = await addCommit("next bottom", bottom);
+    const racedTop = await addCommit("collaborator", top);
+    const nextTop = await addCommit("next top", racedTop);
+
+    // Seed the Git objects once. Only publication under test uses the push transport.
+    await local.output(["update-ref", "--stdin"],
+      `create refs/heads/bottom ${nextBottom}\ncreate refs/heads/top ${nextTop}\n`);
+    await git(dir, "clone", "-q", "--bare", "--shared", cwd, remote);
+    await new StackGit(runner, remote).output(["update-ref", "--stdin"],
+      `update refs/heads/bottom ${bottom}\nupdate refs/heads/top ${top}\n`);
+    await testPublish({ local, remote, bottom, nextBottom, top, racedTop, nextTop });
+  } finally {
+    await rm(dir, { force: true, recursive: true, maxRetries: 5 });
+  }
+}
+
+test("publishes when the second ref is already at its intended tip", async () =>
+  withPublishRepos(async ({ local, remote, bottom, nextBottom, top, nextTop }) => {
+    await git(remote, "update-ref", "refs/heads/top", nextTop, top);
+    await pushStackLayers(local, remote, [
+      { branch: "bottom", previous: bottom, expected: bottom, next: nextBottom },
+      { branch: "top", previous: top, expected: top, next: nextTop },
+    ]);
+    expect(await git(remote, "show-ref", "--heads"))
+      .toBe(`${nextBottom} refs/heads/bottom\n${nextTop} refs/heads/top`);
+  }));
+
+test("publishes an ahead layer and preserves a collaborator's divergent tip", async () =>
+  withPublishRepos(async ({ local, remote, bottom, nextBottom, top, nextTop }) => {
+    await git(remote, "update-ref", "refs/heads/top", nextBottom, top);
+    await pushStackLayers(local, remote, [
+      { branch: "bottom", previous: nextBottom, expected: bottom, next: nextBottom },
+      { branch: "top", previous: nextTop, expected: nextTop, next: nextTop },
+    ]);
+    expect(await git(remote, "show-ref", "--heads"))
+      .toBe(`${nextBottom} refs/heads/bottom\n${nextBottom} refs/heads/top`);
+  }));
+
 test("an exact lease makes a raced multi-ref push all-or-nothing", async () =>
-  withStack(async ({ cwd, bottom, top }) => {
-    const remote = join(cwd, "remote.git");
-    await git(cwd, "init", "-q", "--bare", remote);
-    await git(cwd, "push", remote, "bottom", "top");
-    const ref = new StackGit(runner, cwd);
-    await git(cwd, "switch", "-q", "bottom");
-    const newerBottom = await commit(cwd, "fix.txt", "fix\n");
-    await git(cwd, "switch", "-q", "top");
-    const newerTop = await commit(cwd, "top-fix.txt", "fix\n");
-    await git(cwd, "push", remote, "top");
-    await expect(pushStackLayers(ref, remote, [
-      { branch: "bottom", previous: bottom, expected: bottom, next: newerBottom },
-      { branch: "top", previous: top, expected: top, next: newerTop },
-    ])).resolves.toBeUndefined();
-    // Git considers the second branch already up to date. A divergent head,
-    // however, must reject both ref updates even when the first lease matches.
-    await git(cwd, "switch", "-q", "main");
-    const outside = await commit(cwd, "outside.txt", "collaborator\n");
-    await git(cwd, "push", remote, `+${outside}:refs/heads/top`);
-    await git(cwd, "switch", "-q", "bottom");
-    const latestBottom = await commit(cwd, "next.txt", "next\n");
-    await expect(pushStackLayers(ref, remote, [
-      { branch: "bottom", previous: latestBottom, expected: newerBottom, next: latestBottom },
-      { branch: "top", previous: newerTop, expected: newerTop, next: newerTop },
-    ])).resolves.toBeUndefined();
-    await git(cwd, "switch", "-q", "top");
-    const latestTop = await commit(cwd, "another.txt", "another\n");
-    await git(cwd, "switch", "-q", "bottom");
-    const finalBottom = await commit(cwd, "final.txt", "final\n");
-    await expect(pushStackLayers(ref, remote, [
-      { branch: "bottom", previous: finalBottom, expected: latestBottom, next: finalBottom },
-      { branch: "top", previous: latestTop, expected: newerTop, next: latestTop },
+  withPublishRepos(async ({ local, remote, bottom, nextBottom, top, racedTop, nextTop }) => {
+    // The remote advances after the expected tip was recorded. An unleased
+    // push could fast-forward it again, so Git's fast-forward check alone passes.
+    await git(remote, "update-ref", "refs/heads/top", racedTop, top);
+    await expect(pushStackLayers(local, remote, [
+      { branch: "bottom", previous: bottom, expected: bottom, next: nextBottom },
+      { branch: "top", previous: top, expected: top, next: nextTop },
     ])).rejects.toThrow();
-    expect(await git(cwd, "ls-remote", remote, "refs/heads/bottom", "refs/heads/top"))
-      .toBe(`${latestBottom}\trefs/heads/bottom\n${outside}\trefs/heads/top`);
-    await expect(pushStackLayers(ref, remote, [
-      { branch: "top", previous: latestTop, expected: outside, next: latestTop },
+    expect(await git(remote, "show-ref", "--heads"))
+      .toBe(`${bottom} refs/heads/bottom\n${racedTop} refs/heads/top`);
+  }));
+
+test("rejects rewriting a remote tip missing from the local input", async () =>
+  withPublishRepos(async ({ local, remote, top, nextBottom, nextTop }) => {
+    await git(remote, "update-ref", "refs/heads/top", nextBottom, top);
+    await expect(pushStackLayers(local, remote, [
+      { branch: "top", previous: top, expected: nextBottom, next: nextTop },
     ])).rejects.toThrow("history changed");
   }));

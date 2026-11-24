@@ -10,6 +10,7 @@ import { researchToolsOffered } from "./agent-tools/pwragent-research-agent-tool
 import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
 import { initializeDesktopAutomationService, prepareDesktopAutomationShutdown, disposeDesktopAutomationService } from "./automations/desktop-automation-service";
 import { initializeScheduledThreadActionService } from "./scheduled-actions/scheduled-thread-action-service";
+import { getThreadTodoService } from "./thread-todos/thread-todo-runtime";
 import { setManagedGrokSignatureRejectionReporter } from "./acp/grok-managed-runtime";
 import { subscribeManagedRuntimeProgress } from "./managed-runtime-progress";
 import { setInboundPreviewSink } from "./messaging/inbound-preview-bus";
@@ -441,7 +442,9 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
   ownerSubscriptions.add(installGithubMergeStackTransport({
     requestGithub: (...args) => service.getForgeCiClient().requestGithub(...args),
   }));
-  const scheduledActions = initializeScheduledThreadActionService(registry);
+  const scheduledActions = initializeScheduledThreadActionService(registry, (todo) =>
+    getThreadTodoService().resolveStartedReview(todo),
+  );
   const automations = initializeDesktopAutomationService(registry);
   if (bootMode === "active-profile") {
     registry.onEvent(async (event) => {
@@ -454,7 +457,10 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
   }
   const federationRuntime = initializeDesktopFederationRuntime();
   const resourceCheckouts = bootMode === "active-profile"
-    ? await initializeResourceCheckouts(federationRuntime, options.approvedLabCheckouts, host.application.isPackaged)
+    ? await initializeResourceCheckouts(
+      federationRuntime, options.approvedLabCheckouts, host.application.isPackaged,
+      ({ backend, threadId }) => getExistingDesktopBackendRegistry()?.getThreadInfo({ backend, threadId })?.title,
+    )
     : undefined;
   const resourceCheckoutsEnabled = () => getDesktopSettingsService().resolveResourceCheckoutsEnabled?.() === true;
   if (resourceCheckouts) registry.setResourceCheckoutHandler(

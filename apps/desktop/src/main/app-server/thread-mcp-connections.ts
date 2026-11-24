@@ -550,6 +550,7 @@ export class ThreadMcpConnections {
     request: DescribeThreadMcpConnectionsRequest,
   ): Promise<DescribeThreadMcpConnectionsResponse> {
     const selection = await this.readThreadMcpConnections(request);
+    const viaGateway = this.context.providers.acp.usesManagedMcpGateway(request.backend, request.threadId);
     // Through the injected seam, like every other connection call here.
     // Reaching for the module singleton would leave this one method
     // unstubbable and silently outside whatever a caller injected.
@@ -581,12 +582,12 @@ export class ThreadMcpConnections {
     const connections: ThreadMcpConnectionReport[] = selection.connectionIds
       .map((connectionId) => {
         const status = byId.get(connectionId);
-        const serverNameInAgent = this.threadMcpServerNameInAgent(connectionId, request);
+        const serverNameInAgent = viaGateway ? undefined : this.threadMcpServerNameInAgent(connectionId, request);
         const toolCount = serverNameInAgent
           ? toolCounts.get(serverNameInAgent)
           : undefined;
         const sessionStates = sessions?.[connectionId];
-        const ended = sessionStates?.native === "ended" || sessionStates?.gateway === "ended";
+        const ended = (!viaGateway && sessionStates?.native === "ended") || sessionStates?.gateway === "ended";
         return {
           connectionId,
           displayName: status?.displayName ?? connectionId,
@@ -594,17 +595,18 @@ export class ThreadMcpConnections {
           state: ended && status?.state === "ready" ? "temporarily_unavailable" : status?.state ?? "disconnected",
           configured: status?.configured ?? false,
           enabled: status?.enabled ?? false,
-          ...(sessionStates ? { sessions: sessionStates } : {}),
+          ...(sessionStates ? { sessions: viaGateway ? { ...sessionStates, native: "not_started" } : sessionStates } : {}),
           ...(toolCount === undefined ? {} : { toolCount }),
         } satisfies ThreadMcpConnectionReport;
       });
-    const handedOverAt = service?.threadHandoverAt?.(request.threadId);
+    const handedOverAt = viaGateway ? undefined : service?.threadHandoverAt?.(request.threadId);
     return {
       backend: request.backend,
       threadId: request.threadId,
       connections,
       providerServersEnabled: selection.providerServersEnabled,
-      appliesAt: mcpSelectionApplyTiming(request.backend),
+      appliesAt: viaGateway ? "next_turn" : mcpSelectionApplyTiming(request.backend),
+      ...(viaGateway ? { managedConnectionsViaGateway: true } : {}),
       ...(handedOverAt === undefined ? {} : { handedOverAt }),
       agentInventoryAvailable,
     };

@@ -1088,6 +1088,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     agentToolMcpServer,
     readJobMonitorCreationPreference: (backend, threadId) => ports.isJobMonitorCreationEnabled({ backend, threadId }),
     captureStores: captureStores,
+    managedMcpGatewayAvailable: mcpGatewayTools !== undefined,
     createAcpClient: options?.createAcpClient,
     createAcpTransport: options?.createAcpTransport,
     discoverLocalAcpAgents:

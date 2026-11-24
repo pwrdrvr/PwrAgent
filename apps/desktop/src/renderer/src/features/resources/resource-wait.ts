@@ -6,6 +6,7 @@ import type {
   ResourceHolder,
   ResourceQueueEntry,
   ResourceScope,
+  ResourceThreadRef,
 } from "@pwragent/shared/contracts/resource-checkouts";
 import { capacitySummary, effectiveCondition, findAuthority, freeUnits, holderLabel, presentCondition } from "./resource-view-model";
 
@@ -23,7 +24,8 @@ export type ResourceWaitPlace =
   | { kind: "queued"; position: number; ahead: number; queueLength: number; hold: QueueEntryHold; holds?: number }
   | { kind: "not_queued"; queueLength: number };
 
-export type ResourceWaitHolder = { label: string; grantedAt: number; deadlineAt: number; units?: number };
+/** `thread` is set when an agent thread holds it, so the card can link it. */
+export type ResourceWaitHolder = { label: string; thread?: ResourceThreadRef; grantedAt: number; deadlineAt: number; units?: number };
 
 /** What the Waiting for tab says about one resource wait. */
 export type ResourceWaitSummary = {
@@ -189,6 +191,7 @@ export function summarizeResourceWait(
       .filter((allocation) => !isWaiter(allocation.holder, waiter))
       .map((allocation) => ({
         label: holderLabel(allocation.holder),
+        ...(allocation.holder.kind === "thread" ? { thread: allocation.holder.thread } : {}),
         grantedAt: allocation.grantedAt,
         deadlineAt: allocation.deadlineAt,
         ...(allocation.units !== undefined ? { units: allocation.units } : {}),

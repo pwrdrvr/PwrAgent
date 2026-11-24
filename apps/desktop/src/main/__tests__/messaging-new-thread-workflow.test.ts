@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import { MessagingNewThreadWorkflow } from "../messaging/core/messaging-new-thread-workflow";
 import type { MessagingNewThreadContext } from "../messaging/core/messaging-new-thread-context";
@@ -132,6 +133,41 @@ describe("messaging new-thread owner ports", () => {
       expect(gate).toHaveBeenCalledWith({ kind: "new-thread", label: "Full Access", optionId: "mode", sessionId: session.id, source: "mode", value: "yolo" }, expect.anything());
       expect(real.sticky).toEqual([]);
       expect((await real.session())?.preferences?.acpRuntime).toBeUndefined();
+    } finally { await real.close(); }
+  });
+
+  it("carries only the selected provider's runtime settings into a native access choice", async () => {
+    const real = await messagingNewThreadHarness();
+    try {
+      await real.open();
+      real.controls.providers.push("acp:antigravity");
+      const session = { ...(await real.session())!, backend: "acp:antigravity" as const };
+      const navigation = await readMessagingLaunchpadContext({ backend: real.backend, project: session.selectedProject });
+      const owner = messagingModules(real.controller).newThreads;
+      const promptGate = vi.spyOn(owner, "presentNewThreadPromptGate").mockResolvedValue();
+      await fc.assert(fc.asyncProperty(
+        fc.constantFrom("plan", "auto", "accept-edits"),
+        fc.constantFrom("ask", "always-allow"),
+        async (mode, permissionMode) => {
+          await owner.setNewThreadPermissions(session, {
+            ...real.event(),
+            kind: "callback",
+            actionId: "browse:new:set-permissions",
+            value: { executionMode: "default", acpMode: { source: "configOption", optionId: "mode", value: mode } },
+            interaction: { channel: real.channel.channel, id: "fixture-interaction" },
+          }, {
+            ...navigation,
+            // No directory runtime defaults for the selected provider.
+            directory: undefined,
+            launchpadDefaults: {
+              ...navigation.launchpadDefaults,
+              backend: "acp:grok",
+              acpRuntime: { configValues: { permission_mode: permissionMode }, updatedAt: 1 },
+            },
+          });
+          expect(promptGate.mock.lastCall?.[0].preferences?.acpRuntime?.configValues).toEqual({ mode });
+        },
+      ), { numRuns: 8 });
     } finally { await real.close(); }
   });
 });

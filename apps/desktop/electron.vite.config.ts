@@ -174,6 +174,7 @@ export default defineConfig(({ command }) => {
           input: {
             index: resolve(desktopRoot, "src/main/index.ts"),
             "chromium-trace-worker": resolve(desktopRoot, "src/main/diagnostics/chromium-trace-worker.ts"),
+            "chromium-trace-utility": resolve(desktopRoot, "src/main/shell/diagnostics/chromium-trace-utility.ts"),
             "storage-maintenance-worker": resolve(desktopRoot, "src/main/state/storage-maintenance-worker.ts"),
             "claude-session-reader-worker": resolve(desktopRoot, "src/main/claude/claude-session-reader-worker.ts"),
             "mcp-connection-bridge": resolve(

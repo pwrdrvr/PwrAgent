@@ -11,13 +11,13 @@ import type {
 import {
   RESOURCE_CHECKOUTS_CONTRACT_VERSION, type ResourceAuthority, type ResourceCheckoutActionResult,
   type ResourceCheckoutsSnapshot, type ResourceViewer, type ResourceDomain, type ResourceAdvertisement, type ResourceCheckoutActionRequest,
-  type ResourceHolder, type ResourceOwnershipConflict,
+  type ResourceHolder, type ResourceOwnershipConflict, type ResourceThreadRef,
 } from "@pwragent/shared/contracts/resource-checkouts";
 import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import { parseCheckoutAction, parseCheckoutToken, object, text } from "./checkout-input";
 import type { ExternalBinding } from "./checkout-configuration";
-import { projectCheckoutDomain, UNEXPLAINED_OWNERSHIP_CONFLICT } from "./checkout-projection";
+import { labelResourceThreads, projectCheckoutDomain, UNEXPLAINED_OWNERSHIP_CONFLICT } from "./checkout-projection";
 import { misboundAuthorityConflict, OWNERSHIP_CONFLICTS } from "./checkout-ownership";
 
 export const CHECKOUT_FEDERATION_METHOD = "resourceCheckouts.authority.v1";
@@ -46,6 +46,12 @@ type Options = {
   bootId?: string;
   readMachineAdvertisements?: () => ResourceAdvertisement[];
   requestPeer: <T>(instanceId: string, request: unknown) => Promise<T>;
+  /**
+   * A thread's current title, when this instance can name it: its own
+   * threads, and peers' threads it has seen. Holders are stored with the
+   * title they had when they asked, so a rename shows on the next read.
+   */
+  threadTitle?: (thread: ResourceThreadRef) => string | undefined;
   warn: (error: unknown) => void;
   now?: () => number;
 };
@@ -162,11 +168,31 @@ export class DesktopResourceCheckoutService {
   }
 
   threadActor(backend: AppServerBackendKind, threadId: string): CheckoutActor {
+    const { instanceId, instanceLabel, profile } = this.options.viewer;
     return {
-      key: JSON.stringify([this.options.viewer.instanceId, backend, threadId]),
-      holder: { kind: "thread", thread: { backend, threadId, title: "Agent thread" } },
+      key: JSON.stringify([instanceId, backend, threadId]),
+      // Other profiles and peers read this holder as stored, so it carries
+      // the title and owner they cannot look up themselves.
+      holder: { kind: "thread", thread: {
+        backend, threadId, title: this.threadTitle({ backend, threadId, instanceId }, "Agent thread"),
+        instanceId, instanceLabel: `${instanceLabel} · ${profile}`,
+      } },
       manage: this.options.allowAgentDrafts === true,
     };
+  }
+
+  private threadTitle(thread: Omit<ResourceThreadRef, "title">, fallback: string): string {
+    try {
+      return this.options.threadTitle?.({ ...thread, title: fallback })?.trim() || fallback;
+    } catch (error) {
+      this.options.warn(error);
+      return fallback;
+    }
+  }
+
+  /** Every thread a view names, with the current title where this instance knows it. */
+  private labelView(view: ExternalView): ExternalView {
+    return { ...view, resource: labelResourceThreads(view.resource, (thread) => ({ ...thread, title: this.threadTitle(thread, thread.title) })) };
   }
 
   private authorityView(definition: CheckoutDefinition, kind: ResourceAuthority["kind"], status: ResourceAuthority["status"]): ResourceAuthority {
@@ -257,7 +283,7 @@ export class DesktopResourceCheckoutService {
         }, actor, authority) });
       }
     }
-    return local;
+    return local.map((view) => this.labelView(view));
   }
 
   read(): ResourceCheckoutsSnapshot {
@@ -696,7 +722,7 @@ export class DesktopResourceCheckoutService {
     }
     if (request.epoch !== binding.definition.epoch) throw new Error("The configured authority epoch is stale.");
     const actor = this.peerActor(sourceInstanceId, request.subject);
-    if (request.operation === "read") return this.externalView(binding, actor);
+    if (request.operation === "read") return this.labelView(this.externalView(binding, actor));
     if (request.operation === "status") return this.external!.status(actor, text(request.key, "request key"), id) ?? null;
     if (request.operation === "lab_execution") {
       const token = parseCheckoutToken(request.token);
@@ -727,7 +753,10 @@ export class DesktopResourceCheckoutService {
     // The authenticated owner can delegate a subject on its own instance only.
     return {
       key: JSON.stringify([sourceInstanceId, backend, threadId]), manage: false,
-      holder: { kind: "thread", thread: { backend, threadId, title: "Federation agent thread", instanceId: sourceInstanceId } },
+      holder: { kind: "thread", thread: {
+        backend, threadId, instanceId: sourceInstanceId,
+        title: this.threadTitle({ backend, threadId, instanceId: sourceInstanceId }, "Federation agent thread"),
+      } },
     };
   }
 

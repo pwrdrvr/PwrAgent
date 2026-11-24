@@ -8,7 +8,7 @@ import type {
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { ThreadExecutionMode } from "@pwragent/shared/contracts/normalized-app-server";
 import { resolveThreadTodoStartAccess, threadTodoAccessForPick } from "@pwragent/shared/thread-todo-access";
-import { getAcpRuntimeModeControl } from "../execution-mode";
+import { getAcpRuntimeModeControl, getProviderAccessControl } from "../execution-mode";
 
 const MODE_IDS = ["default", "accept-edits", "auto", "auto-edit", "plan", "yolo", "architect"];
 
@@ -120,20 +120,19 @@ describe("the composer's mode picker and a start card's Access menu", () => {
     }), { numRuns: 500 });
   });
 
-  it("offer Antigravity only its own modes that the composer lists, beside its process access", () => {
+  it("offer Antigravity the exact same unified option set in the composer and on start cards", () => {
     fc.assert(fc.property(runtimeArb, (runtime) => {
       const backend = antigravityFor(runtime);
-      const composer = getAcpRuntimeModeControl(backend, undefined);
+      const composer = getProviderAccessControl(backend, undefined);
       const card = cardAccess(backend);
-      const native = card.options.flatMap((option) => option.kind === "native" ? [option.id] : []);
-      const listed = composer?.options.map((option) => option.value) ?? [];
-      expect(native.every((id) => listed.includes(id))).toBe(true);
+      expect(card.options.map((option) => option.kind === "native" ? option.id : option.mode))
+        .toEqual(composer?.options.map((option) => option.value) ?? []);
       // Full Access is the process, never Yolo through the Agent mode.
       expect(card.options.some((option) => option.kind === "native" && option.executionMode === "full-access")).toBe(false);
     }), { numRuns: 500 });
   });
 
-  it("start Antigravity's picked or saved mode through the selector the composer writes, at either process", () => {
+  it("start Antigravity's picked mode through the unified selector, and reset Full Access to default native mode", () => {
     fc.assert(fc.property(runtimeArb, fc.nat(), fc.boolean(), (runtime, index, fullAccess) => {
       const backend = antigravityFor(runtime);
       const native = cardAccess(backend).options.filter((option) => option.kind === "native");
@@ -152,7 +151,16 @@ describe("the composer's mode picker and a start card's Access menu", () => {
       expect(access.status).toBe("ready");
       if (access.status !== "ready") return;
       expect(access.executionMode).toBe(fullAccess ? "full-access" : "default");
-      expectComposerWrite(backend, access.acpRuntime, option.id);
+      const thread = {
+        executionMode: access.executionMode,
+        acpRuntime: access.acpRuntime,
+      } as unknown as NavigationThreadSummary;
+      if (fullAccess) {
+        expect(getProviderAccessControl(backend, thread)?.value).toBe("full-access");
+      } else {
+        expectComposerWrite(backend, access.acpRuntime, option.id);
+        expect(getProviderAccessControl(backend, thread)?.value).toBe(option.id);
+      }
     }), { numRuns: 500 });
   });
 });

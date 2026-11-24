@@ -90,9 +90,14 @@ export function applyNavigationThreadEvent(thread: NavigationThreadSummary, even
     case "thread/executionMode/updated":
       return { ...thread, executionMode: notification.params.executionMode };
     case "thread/executionMode/queued":
-      return { ...thread, queuedExecutionMode: notification.params.queuedExecutionMode, queuedExecutionModeAt: notification.params.queuedAt };
+      return {
+        ...thread,
+        queuedExecutionMode: notification.params.queuedExecutionMode,
+        queuedNativeMode: notification.params.queuedNativeMode,
+        queuedExecutionModeAt: notification.params.queuedAt,
+      };
     case "thread/executionMode/queueCleared":
-      return { ...thread, queuedExecutionMode: undefined, queuedExecutionModeAt: undefined };
+      return { ...thread, queuedExecutionMode: undefined, queuedNativeMode: undefined, queuedExecutionModeAt: undefined };
     case "thread/modelSettings/updated": {
       const params = notification.params;
       return { ...thread, ...("model" in params ? { model: params.model } : {}),

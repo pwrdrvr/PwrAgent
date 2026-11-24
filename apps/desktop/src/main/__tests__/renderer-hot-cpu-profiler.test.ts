@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createTemporaryTestDirectory } from "../shell/testing/test-harness";
 import type { ProcessMetric } from "electron";
 import { resolveHotCpuProfileConfig } from "../diagnostics/hot-cpu-profile-config";
-import { ChromiumTrace } from "../diagnostics/chromium-trace";
+import { ChromiumTrace, ChromiumTraceExportError } from "../diagnostics/chromium-trace";
 import { createHotCpuProfileSession } from "../diagnostics/hot-cpu-profile-session";
 import { acquireDebuggerLease } from "../diagnostics/debugger-lease";
 import { HotCpuProfiler } from "../shell/diagnostics/hot-cpu-profiler";
@@ -270,7 +270,9 @@ describe("HotCpuProfiler", () => {
     }
   });
 
-  it.each(["settings-changed", "exhausted", "window-closed", "native-timeout", "cpu-stop-failed", "trace-register-failed"] as const)(
+  it.each([
+    "settings-changed", "exhausted", "window-closed", "native-timeout", "filter-failed", "cpu-stop-failed", "trace-register-failed",
+  ] as const)(
     "settles renderer trace ownership when %s",
     async (transition) => {
       const workspace = await createTemporaryTestDirectory();
@@ -333,7 +335,8 @@ describe("HotCpuProfiler", () => {
               signal.throwIfAborted();
               result.push(Buffer.from(data));
             }
-            return Buffer.concat(result);
+            if (transition === "filter-failed") throw new ChromiumTraceExportError("worker", "filter");
+            return { bytes: Buffer.concat(result), filterCpuMs: 12, filterElapsedMs: 18, filterPid: 42 };
           },
           vi.fn(), { stopTimeoutMs: transition === "native-timeout" ? 200 : undefined },
         ),
@@ -372,13 +375,14 @@ describe("HotCpuProfiler", () => {
         expect((await fs.readdir(directoryPath)).filter((file) => file.endsWith(".trace.json"))).toEqual([]);
       } else {
         const traceFilename = "renderer-hot-0001.trace.json";
-        const hasTrace = transition !== "native-timeout" && transition !== "trace-register-failed";
+        const hasTrace = transition !== "native-timeout" && transition !== "filter-failed"
+          && transition !== "trace-register-failed";
         expect(artifacts).toEqual([
           "renderer-hot-0001.cpuprofile",
           ...(hasTrace ? [traceFilename] : []),
           ...(transition === "trace-register-failed" ? ["renderer-hot-0001.diagnostics.json"] : []),
         ]);
-        if (transition === "trace-register-failed") {
+        if (!hasTrace) {
           expect((await fs.readdir(directoryPath)).includes(traceFilename)).toBe(false);
         }
         expect(onProfileWritten).toHaveBeenCalledOnce();
@@ -391,6 +395,12 @@ describe("HotCpuProfiler", () => {
           expect(events).toContainEqual(expect.objectContaining({
             type: "chromium-trace-failed",
             detail: expect.objectContaining({ status: "failed", phase: "stop", category: "timeout" }),
+          }));
+        }
+        if (transition === "filter-failed") {
+          expect(events).toContainEqual(expect.objectContaining({
+            type: "chromium-trace-failed",
+            detail: expect.objectContaining({ status: "failed", phase: "filter", category: "worker" }),
           }));
         }
       }
@@ -430,7 +440,9 @@ describe("HotCpuProfiler", () => {
           async *read() { yield { data: '{"traceEvents":[]}' }; },
           dispose() {},
         }), async (chunks) => {
-          for await (const chunk of chunks) return Buffer.from(chunk.data);
+          for await (const chunk of chunks) {
+            return { bytes: Buffer.from(chunk.data), filterCpuMs: 12, filterElapsedMs: 18, filterPid: 42 };
+          }
           throw new Error("Contrived trace stream was empty");
         }, vi.fn(), { monotonicNow: () => sampleTimeMs }),
         target: createTarget().target,

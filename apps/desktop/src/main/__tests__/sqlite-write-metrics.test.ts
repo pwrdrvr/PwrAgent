@@ -32,6 +32,8 @@ import { DesktopAutomationService } from "../automations/desktop-automation-serv
 import { RuntimeLeaseManager } from "../runtime-lease-manager";
 import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store";
+import { ThreadTodoStore } from "../storage/thread-todo-store";
+import { ThreadTodoService } from "../thread-todos/thread-todo-service";
 import { McpCredentialVault } from "../mcp-connections/mcp-credential-vault";
 import { McpConnectionBrokerDiscovery } from "../mcp-connections/mcp-connection-broker-discovery";
 import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registry";
@@ -1289,6 +1291,79 @@ describe("sqlite write metrics", () => {
       scenario: "held-scheduled-action-retry",
       writes,
     });
+  });
+
+  it.each(["started", "failed", "cancelled"] as const)("completes a scheduled review to-do only when the owner reports started (%s)", async (status) => {
+    // Keep the original card open through scheduling, restart and queueing.
+    // The owner's terminal event is the oracle, including duplicate delivery.
+    const actionStore = new ScheduledThreadActionStore(stateDb);
+    const todos = new ThreadTodoService({ store: new ThreadTodoStore(stateDb), now: () => 2_000 });
+    const thread = { backend: "codex" as const, threadId: "thread-1" };
+    const { todo } = todos.add({ ...thread, input: {
+      title: "Review the changes",
+      action: { type: "start_review" },
+      items: ["Check the worktree"],
+    } });
+    const listeners = new Set<(event: AgentEvent) => void | Promise<void>>();
+    const registry = {
+      onEvent: (listener: (event: AgentEvent) => void | Promise<void>) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      publishLocalEvent: vi.fn(async () => undefined),
+      submitReview: vi.fn(async () => ({ status: "scheduled", pendingReviewId: "review-1", invokingTurnId: "busy-turn" })),
+    } as unknown as DesktopBackendRegistry;
+    const createScheduler = () => new ScheduledThreadActionService({
+      registry,
+      store: actionStore,
+      now: () => 2_000,
+      resolveStartedReviewTodo: (request) => todos.resolveStartedReview(request),
+    });
+    const scheduler = createScheduler();
+    const { action } = await scheduler.create({
+      ...thread,
+      kind: "review",
+      scheduledFor: 10_000,
+      displayText: "Review the changes",
+      review: { target: { type: "uncommittedChanges" }, todo: { id: todo.id, allowOpenItems: true } },
+    });
+    expect(action.status).toBe("scheduled");
+    expect(todos.get(todo.id).status).toBe("open");
+    await scheduler.update({
+      id: action.id,
+      scheduledFor: 12_000,
+      review: { target: { type: "baseBranch", branch: "main" } },
+    });
+
+    const restarted = createScheduler();
+    restarted.start();
+    try {
+      expect((await restarted.sendNow({ id: action.id })).action.status).toBe("queued");
+      expect(todos.get(todo.id).status).toBe("open");
+      const event: AgentEvent = {
+        backend: thread.backend,
+        notification: { method: "thread/reviewStart/updated", params: {
+          threadId: thread.threadId,
+          pendingReviewId: "review-1",
+          status,
+          ...(status === "started" ? { reviewTurnId: "review-turn" } : {}),
+        } },
+      };
+      const deliver = () => Promise.all([...listeners].map((listener) => listener(event)));
+      const { writes } = await measureSqliteWrites(deliver);
+      expect(actionStore.get(action.id)?.status).toBe(status);
+      expect(todos.get(todo.id).status).toBe(status === "started" ? "done" : "open");
+      expect((await measureSqliteWrites(deliver)).writes.commits).toBe(0);
+      if (status === "started") {
+        expectSqliteWriteBudget({
+          scenario: "scheduled-review-todo-start",
+          note: "One owner-reported review start transitions the action and completes its linked to-do, about 3.30 MB/day at 100 starts/day.",
+          writes,
+        });
+      }
+    } finally {
+      restarted.dispose();
+    }
   });
 
   it("holds one queued scheduled action to its write budget", async () => {

@@ -82,7 +82,15 @@ export type CompactComposerSettingsMenu = {
    * reads must not pay for a backend describe it never shows.
    */
   onOpen?: () => void;
-  executionModes?: Array<{ label: string; mode: ThreadExecutionMode }>;
+  executionModes?: Array<{
+    label: string;
+    mode: ThreadExecutionMode;
+    value?: string;
+    selected?: boolean;
+    danger?: boolean;
+  }>;
+  /** Override display label for the Access row when a provider has named native modes (e.g. Antigravity). */
+  accessLabel?: string;
   /** The current models. Arrange them with `buildModelMenu`. */
   models?: CompactComposerSettingsOption[];
   /** Superseded models, listed behind an Other row in the Model view. */
@@ -95,6 +103,7 @@ export type CompactComposerSettingsMenu = {
   speed?: CodexSpeed;
   onSelectSpeed?: (speed: CodexSpeed) => void;
   onSelectExecutionMode?: (mode: ThreadExecutionMode) => void;
+  onSelectAccessOption?: (value: string) => void;
   onSelectModel?: (model: string) => void;
   onSelectReasoningEffort?: (effort: string) => void;
   onToggleFastMode?: (enabled: boolean) => void;
@@ -807,7 +816,7 @@ export function CompactComposer(props: CompactComposerProps) {
     settings?.onToggleFastMode && settings.supportsFastMode,
   );
   const accessSection = Boolean(
-    settings?.onSelectExecutionMode
+    (settings?.onSelectAccessOption || settings?.onSelectExecutionMode)
       && (settings.executionModes?.length ?? 0) > 1,
   );
   const hasSettingsRows =
@@ -972,11 +981,17 @@ export function CompactComposer(props: CompactComposerProps) {
         MENU_VIEW_TITLES.access,
         modes.map((entry) =>
           optionRow({
-            checked: entry.mode === props.executionMode,
-            danger: entry.mode === "full-access",
-            key: entry.mode,
+            checked: entry.selected ?? (entry.mode === props.executionMode),
+            danger: entry.danger ?? (entry.mode === "full-access"),
+            key: entry.value ?? entry.mode,
             label: entry.label,
-            onSelect: () => settings?.onSelectExecutionMode?.(entry.mode),
+            onSelect: () => {
+              if (settings?.onSelectAccessOption && entry.value !== undefined) {
+                settings.onSelectAccessOption(entry.value);
+                return;
+              }
+              settings?.onSelectExecutionMode?.(entry.mode);
+            },
           }),
         ),
       );
@@ -1034,11 +1049,11 @@ export function CompactComposer(props: CompactComposerProps) {
               "Access",
               props.executionMode === "full-access" ? (
                 <span className="compact-composer__danger-pill">
-                  {accessLabel}
+                  {settings?.accessLabel ?? accessLabel}
                 </span>
               ) : (
                 <span className="compact-composer__menu-value">
-                  {accessLabel ?? formatExecutionModeLabel("default")}
+                  {settings?.accessLabel ?? accessLabel ?? formatExecutionModeLabel("default")}
                 </span>
               ),
               "access",

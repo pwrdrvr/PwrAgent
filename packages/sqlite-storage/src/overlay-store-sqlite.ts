@@ -54,7 +54,7 @@ import {
 } from "@pwragent/shared/project-forge-automation";
 import path from "node:path";
 import { relativePinRanks } from "./relative-pin-order";
-import { managedChildKeyFromCard, ThreadSubAgentTable } from "./thread-sub-agents";
+import { managedChildKeyFromParent, ThreadSubAgentTable } from "./thread-sub-agents";
 import { managedKeysFromLegacyProjection, prepareScopedManagedMembership } from "./thread-managed-membership";
 import { ThreadDependencyStore } from "./thread-dependency-store";
 import { prepareSubthreadGroup } from "./subthread-group-sqlite";
@@ -1091,8 +1091,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     // from silently expanding retained navigation metadata.
     let inputBytes = 0;
     const nativeCounts = new Map<string, number>();
-    const providerRows = params.threads.filter((thread) => !managed.has(buildThreadIdentityKey(thread.source, thread.id))).map((thread) => {
-      nativeCounts.set(buildThreadIdentityKey(thread.source, thread.id), thread.codexNativeSubAgents?.length ?? 0);
+    const providerRows: AppServerThreadSummary[] = [];
+    const keys: string[] = [];
+    for (const thread of params.threads) {
+      const key = buildThreadIdentityKey(thread.source, thread.id);
+      if (managed.has(key)) continue;
+      nativeCounts.set(key, thread.codexNativeSubAgents?.length ?? 0);
       const row = {
         id: thread.id, source: thread.source, title: thread.title, titleSource: thread.titleSource,
         threadStatus: thread.threadStatus, projectKey: thread.projectKey, createdAt: thread.createdAt,
@@ -1104,9 +1108,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       };
       inputBytes += Buffer.byteLength(JSON.stringify(row), "utf8");
       if (inputBytes > 32 * 1024 * 1024) throw new Error("Owner navigation metadata exceeds its 32 MiB admission budget.");
-      return row;
-    });
-    const keys = providerRows.map((thread) => encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(thread.source, thread.id)));
+      providerRows.push(row);
+      keys.push(encodeThreadIdentityKeyForStorage(key));
+    }
     const overlays: Record<string, ThreadOverlayState | undefined> = {};
     const handoffSources = new Map<string, { sourceBackend: AppServerBackendKind; sourceThreadId: string }>();
     const rows = this.readNavigationOverlayRows(keys, 32 * 1024 * 1024 - inputBytes);
@@ -1135,12 +1139,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     // Read-only compatibility for handoffs that dropped the remote root owner.
     // Carry only provenance IDs through this bounded index, never the task or
     // workspace payload. Explicit owners and real local parents always win.
-    const localKeys = new Set(providerRows.map((thread) => buildThreadIdentityKey(thread.source, thread.id)));
     for (const [key, origin] of handoffSources) {
       const child = overlays[key];
       if (!child?.parentThreadId || child.parentThreadInstanceId) continue;
       const parentBackend = child.parentThreadBackend ?? child.backend;
-      if (localKeys.has(buildThreadIdentityKey(parentBackend, child.parentThreadId))) continue;
+      if (nativeCounts.has(buildThreadIdentityKey(parentBackend, child.parentThreadId))) continue;
       const source = overlays[buildThreadIdentityKey(origin.sourceBackend, origin.sourceThreadId)];
       if (source?.parentThreadInstanceId && source.parentThreadId === child.parentThreadId
         && (source.parentThreadBackend ?? source.backend) === parentBackend) {
@@ -1220,7 +1223,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       this.navigationOverlayCache = { ...generation, rows: new Map(), bytes: 0 };
     }
     const cache = inTransaction ? undefined : this.navigationOverlayCache;
-    const missing = [...new Set(keys)].filter((key) => !cache?.rows.has(key));
+    const missing: string[] = [];
     const values = new Map<string, string | null>();
     let inputBytes = 0;
     const admit = (key: string, compact: string | null) => {
@@ -1229,7 +1232,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       values.set(key, compact);
     };
     for (const key of new Set(keys)) {
-      if (cache?.rows.has(key)) admit(key, cache.rows.get(key)!);
+      const compact = cache?.rows.get(key);
+      if (compact === undefined) missing.push(key);
+      else admit(key, compact);
     }
     if (missing.length > 0) {
       for (const key of missing) values.set(key, null);
@@ -1321,7 +1326,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
      */
     queuedExecutionModesByThreadKey?: Record<
       string,
-      { mode: ThreadExecutionMode; queuedAt: number } | undefined
+      { mode: ThreadExecutionMode; queuedAt: number; nativeMode?: string } | undefined
     >;
     /**
      * Read projection of the registry's in-memory turn FIFO. Attached to
@@ -1474,6 +1479,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
             ? {
                 ...overlay,
                 queuedExecutionMode: queue.mode,
+                queuedNativeMode: queue.nativeMode,
                 queuedExecutionModeAt: queue.queuedAt,
               }
             : {
@@ -1482,6 +1488,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
                 executionMode: thread.executionMode ?? "default",
                 extraLinkedDirectories: [],
                 queuedExecutionMode: queue.mode,
+                queuedNativeMode: queue.nativeMode,
                 queuedExecutionModeAt: queue.queuedAt,
               };
           return [threadKey, merged];
@@ -1589,7 +1596,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   async projectNavigationThreadDetail(params: {
     thread: AppServerThreadSummary;
     messagingBindingsByThreadKey?: Record<string, MessagingThreadBindingSummary[] | undefined>;
-    queuedExecutionMode?: { mode: ThreadExecutionMode; queuedAt: number };
+    queuedExecutionMode?: { mode: ThreadExecutionMode; queuedAt: number; nativeMode?: string };
     workspaceRoots?: string[];
   }): Promise<NavigationThreadSummary> {
     const thread = params.thread;
@@ -1604,7 +1611,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       overlayByThreadKey: { [threadKey]: queue ? {
         backend: thread.source, threadId: thread.id,
         executionMode: thread.executionMode ?? "default", extraLinkedDirectories: [],
-        ...overlay, queuedExecutionMode: queue.mode, queuedExecutionModeAt: queue.queuedAt,
+        ...overlay, queuedExecutionMode: queue.mode, queuedNativeMode: queue.nativeMode, queuedExecutionModeAt: queue.queuedAt,
       } : overlay },
       threads: [thread],
       workspaceRoots: params.workspaceRoots,
@@ -10854,7 +10861,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
 
   /** Private execution threads, which navigation never lists. */
   readManagedSubAgentThreadKeys(): ReadonlySet<string> {
-    return this.listManagedSubAgentThreadKeys();
+    const keys = this.listManagedSubAgentThreadKeys();
+    return keys === this.managedSubAgentThreadKeysCache?.keys ? new Set(keys) : keys;
   }
 
   /** Check private execution membership only for the named owner keys. */
@@ -10863,7 +10871,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return this.scopedManagedMembership(keys);
   }
 
-  private listManagedSubAgentThreadKeys(): Set<string> {
+  /** Internal readers only probe membership. The public reader owns its result. */
+  private listManagedSubAgentThreadKeys(): ReadonlySet<string> {
     // Transactions can reuse a generation after a savepoint rollback. Never
     // consume or publish the committed cache while reading such a snapshot.
     const generation = this.stateDb.raw.inTransaction ? undefined : (
@@ -10872,49 +10881,59 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       ).get() as { generation: number }
     ).generation;
     if (generation !== undefined && this.managedSubAgentThreadKeysCache?.generation === generation) {
-      return new Set(this.managedSubAgentThreadKeysCache.keys);
+      return this.managedSubAgentThreadKeysCache.keys;
     }
     // One statement reads card references, legacy payload references and
     // child flags from the same SQLite snapshot. Persistent triggers cover
     // older/shared-profile writers.
-    const rows = this.stateDb.raw.prepare(
+    const rows = this.stateDb.raw.prepare<[], [
+      threadId: string, projection: string | null, grouped: number, backend: string | null, child: string | null,
+    ]>(
       `SELECT thread_id, managed_children AS projection, grouped_subthread, NULL AS backend, NULL AS child
          FROM thread_navigation_relationships
        UNION ALL
        SELECT thread_id, NULL, 0, backend, monitor_thread_id
          FROM thread_sub_agents INDEXED BY thread_sub_agents_child
          WHERE monitor_thread_id IS NOT NULL`,
-    ).all() as Array<{
-      thread_id: string;
-      projection: string | null;
-      grouped_subthread: number;
-      backend: string | null;
-      child: string | null;
-    }>;
-    const groupedKeys = new Set(rows.filter((row) => row.grouped_subthread === 1).map((row) => row.thread_id));
+    ).raw().all();
+    const groupedKeys = new Set<string>();
     const threadKeys = new Set<string>();
-    for (const row of rows) {
-      if (row.child !== null) {
-        const key = managedChildKeyFromCard(row.thread_id, row.backend, row.child);
+    // Busy parents can own many cards. Reuse decoded identities in this
+    // rebuild and cap the scratch map independently of the profile size.
+    const parents = new Map<string, NonNullable<ReturnType<typeof parseThreadIdentityKey>>>();
+    for (const [threadId, projection, grouped, backend, child] of rows) {
+      if (grouped === 1) groupedKeys.add(threadId);
+      if (child !== null) {
+        let parent = parents.get(threadId);
+        if (!parent) {
+          parent = parseThreadIdentityKey(threadId);
+          if (parent && parents.size < 1024) parents.set(threadId, parent);
+        }
+        const key = managedChildKeyFromParent(parent, backend, child);
         if (key) threadKeys.add(key);
         continue;
       }
-      if (row.projection) {
-        for (const key of managedKeysFromLegacyProjection(row.projection)) {
+      if (projection) {
+        for (const key of managedKeysFromLegacyProjection(projection)) {
           threadKeys.add(key);
         }
       }
     }
     // Ordinary grouped handoffs stay visible even when an older writer
     // recreates a stale native-worker card. Missing child overlays stay hidden.
-    for (const key of threadKeys) {
-      if (groupedKeys.has(encodeThreadIdentityKeyForStorage(key))) threadKeys.delete(key);
+    if (groupedKeys.size > 0) {
+      for (const key of threadKeys) {
+        // Built-in backend names are already their SQLite representation.
+        // ACP and imported backend strings still use the exact legacy codec.
+        const storageKey = key.startsWith("codex:") || key.startsWith("claude:")
+          ? key : encodeThreadIdentityKeyForStorage(key);
+        if (groupedKeys.has(storageKey)) threadKeys.delete(key);
+      }
     }
     // Read the stamp BEFORE the rows: an intervening external commit may cause
     // one redundant rebuild next time, but can never stamp old rows as current.
     if (generation !== undefined) {
       this.managedSubAgentThreadKeysCache = { generation, keys: threadKeys };
-      return new Set(threadKeys);
     }
     return threadKeys;
   }
@@ -11341,6 +11360,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     // source of truth; never duplicate either category in overlay JSON.
     const {
       queuedExecutionMode: _queuedExecutionMode,
+      queuedNativeMode: _queuedNativeMode,
       queuedExecutionModeAt: _queuedExecutionModeAt,
       prAutoDispatchPending: _prAutoDispatchPending,
       // Cards and usage activities are rows in their own tables, never

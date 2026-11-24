@@ -637,8 +637,10 @@ export class NavigationDetailService {
       hash.update(encoded).update("\n");
       entryCount += 1;
     }
-    const queuedExecutionMode = this.registry.getQueuedExecutionModeForThread(request.ref)?.mode;
-    const queueRevision = hash.update(JSON.stringify({ queuedExecutionMode })).digest("base64url");
+    const queuedAccess = this.registry.getQueuedExecutionModeForThread(request.ref);
+    const queuedExecutionMode = queuedAccess?.mode;
+    const queuedNativeMode = queuedAccess?.nativeMode;
+    const queueRevision = hash.update(JSON.stringify({ queuedExecutionMode, queuedNativeMode })).digest("base64url");
     if (!request.cursor && request.knownRevision === queueRevision) {
       return {
         protocol: NAVIGATION_QUERY_PROTOCOL_VERSION,
@@ -672,6 +674,7 @@ export class NavigationDetailService {
       complete: false,
       entries: [],
       ...(queuedExecutionMode ? { queuedExecutionMode } : {}),
+      ...(queuedNativeMode !== undefined ? { queuedNativeMode } : {}),
     };
     let nextOffset = offset;
     let position = 0;

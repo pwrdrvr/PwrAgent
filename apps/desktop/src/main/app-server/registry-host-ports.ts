@@ -45,7 +45,7 @@ import type {
   ThreadTurnQueueOrigin,
   ThreadTurnQueueSubmissionResult,
 } from "@pwragent/owner-core/thread-turn-queue";
-import type { AcpMcpServerRegistration } from "../acp/acp-client";
+import type { AcpMcpRegistrationSource } from "../acp/acp-client";
 import type { BackendModelCatalogCallerReason } from "./backend-model-catalog";
 import type { ThreadRenameOptions } from "@pwragent/owner-core/thread-naming-lifecycle";
 import type { StackWorktreeStart, WorktreeBaseSource } from "./git-directory-service";
@@ -196,7 +196,7 @@ export interface RegistryHostPorts {
     executionMode: ThreadExecutionMode;
     acpRuntime?: BackendAcpSessionRuntimeState;
     reasoningEffort?: string;
-    mcpRegistration?: AcpMcpServerRegistration;
+    mcpRegistration?: AcpMcpRegistrationSource;
     hidden?: boolean;
   }): Promise<{ threadId: string; executionMode: ThreadExecutionMode }>;
   startAcpTurn(params: {

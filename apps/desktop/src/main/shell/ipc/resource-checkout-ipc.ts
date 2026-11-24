@@ -1,7 +1,7 @@
 import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from "electron";
-import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
-import { readResourceCheckoutsWindowFocus, type ResourceThreadRef } from "@pwragent/shared/contracts/resource-checkouts";
+import { readResourceCheckoutsWindowFocus } from "@pwragent/shared/contracts/resource-checkouts";
 import { RESOURCE_CHECKOUTS_CHANGED_CHANNEL, RESOURCE_CHECKOUTS_OPEN_THREAD_CHANNEL, RESOURCE_CHECKOUTS_PERFORM_CHANNEL, RESOURCE_CHECKOUTS_READ_CHANNEL, RESOURCE_CHECKOUTS_WINDOW_OPEN_CHANNEL } from "../../../shared/ipc";
+import { resourceThreadShowRequest } from "../../resource-checkouts/checkout-projection";
 import type { DesktopResourceCheckoutService } from "../../resource-checkouts/resource-checkout-service";
 import { requestShowThreadInPrimaryMainWindow } from "../primary-main-window";
 import { showResourcesWindow } from "../resources-window";
@@ -31,17 +31,9 @@ export function registerResourceCheckoutIpcHandlers(service?: DesktopResourceChe
       readResourceCheckoutsWindowFocus(focus),
     );
   });
-  ipcMain.handle(RESOURCE_CHECKOUTS_OPEN_THREAD_CHANNEL, (event, thread?: ResourceThreadRef) => {
+  ipcMain.handle(RESOURCE_CHECKOUTS_OPEN_THREAD_CHANNEL, (event, thread?: unknown) => {
     checkLocalWindow(event);
-    if (!thread || typeof thread.backend !== "string" || !isAppServerBackendKind(thread.backend)
-      || typeof thread.threadId !== "string" || !thread.threadId.trim()
-      || (thread.instanceId !== undefined && typeof thread.instanceId !== "string")) return;
-    requestShowThreadInPrimaryMainWindow({
-      backend: thread.backend,
-      threadId: thread.threadId,
-      ...(thread.instanceId && thread.instanceId !== service.handoffInstanceId()
-        ? { federationTarget: { scope: "remote", instanceId: thread.instanceId } } : {}),
-    });
+    requestShowThreadInPrimaryMainWindow(resourceThreadShowRequest(thread, service.handoffInstanceId()));
   });
   ipcMain.handle(RESOURCE_CHECKOUTS_READ_CHANNEL, (event) => {
     checkLocalWindow(event);
