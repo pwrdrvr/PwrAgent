@@ -4732,13 +4732,11 @@ describe("DesktopBackendRegistry", () => {
       source: "configOption",
       optionId: "mode",
       value: "auto",
+      sessionStartMode: true,
     });
-    expect(acpClient.setRuntimeOption).not.toHaveBeenCalledWith({
-      sessionId: "qwen-session-1",
-      source: "mode",
-      optionId: "mode",
-      value: "default",
-    });
+    expect(acpClient.setRuntimeOption).not.toHaveBeenCalledWith(
+      expect.objectContaining({ source: "mode", value: "default" }),
+    );
     expect(sessions[0]).toMatchObject({
       executionMode: "default",
       acpRuntime: expect.objectContaining({
@@ -6597,6 +6595,7 @@ describe("DesktopBackendRegistry", () => {
       source: "mode",
       optionId: "mode",
       value: "default",
+      sessionStartMode: true,
     });
     expect(setRuntimeOption).not.toHaveBeenCalledWith(
       expect.objectContaining({ value: "yolo" }),

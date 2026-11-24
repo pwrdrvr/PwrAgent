@@ -22,7 +22,9 @@ Flags: `--cmd` (required), `--args` (comma-separated), `--cwd`, `--prompt`,
 `--allow-tools`. Exit code is 0 only on a completed capture. For helper
 sessions: `--session-meta <json>` (the `_meta` of `session/new`, such as a
 Grok agent profile), `--config model=<id>,reasoning_effort=<level>`
-(`session/set_config_option` writes before the prompt), `--deny-cancelled`
+(`session/set_config_option` writes before the prompt), `--mode <id>,<id>`
+(`session/set_mode` writes after those; a refusal is recorded, not fatal),
+`--deny-cancelled`
 (answer permission requests `cancelled`, as a `deny-all` session does),
 `--after session/close,_x.ai/session/delete` (methods called with
 `{ sessionId }` after the answer), and `--list-sessions` (`session/list` for
@@ -168,6 +170,29 @@ requests offered `allow_always`.
 
 Raw captures are under the ignored `apps/desktop/.local/protocol-captures/`
 in a directory named `antigravity-default-mcp.*`.
+
+### Antigravity mode the session does not list
+
+The November 23, 2026 macOS capture of Antigravity 1.5.15
+(`acp --process-per-session`, disposable cwd) listed `default`,
+`accept-edits`, `auto` and `plan` in `session/new`, both as `modes` and as
+the `mode` config option.
+
+| Request | Reply |
+| --- | --- |
+| `session/set_mode` `yolo` | JSON-RPC error `-32602`, `Unknown mode: yolo` |
+| `session/set_mode` `nonexistent` | JSON-RPC error `-32602`, `Unknown mode: nonexistent` |
+| `session/set_config_option` `mode` = `yolo` | JSON-RPC error `-32602`, `Unknown mode: yolo` |
+| `session/set_mode` `auto`, after the refusals | `{}`, then `current_mode_update` to `auto` |
+
+A refusal leaves the session usable; the prompt after it completed. A cached
+mode menu comes from another session, and some sessions have no native Auto,
+so a session start writes a mode only when the new session's own reply lists
+it. Otherwise it falls back to the highest listed mode at or below the
+requested access level, or keeps the session's mode (`acpSessionStartMode`).
+
+Raw captures are under the ignored
+`apps/desktop/.local/protocol-captures/antigravity-unoffered-mode/`.
 
 ### Antigravity ACP turn steering
 

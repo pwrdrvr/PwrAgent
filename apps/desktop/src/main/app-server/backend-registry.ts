@@ -485,6 +485,7 @@ import {
   type AcpRuntimeClient,
   type AcpSessionMetadata,
 } from "./acp-backend-adapter";
+import { applyAcpRuntimeSelection } from "./acp-runtime-selection";
 import {
   CodexThreadBusyBeforeStartError,
   extractRateLimitSummaries,
@@ -6382,9 +6383,6 @@ export class DesktopBackendRegistry {
     }
   }
 
-  // `reasoningEffort` is sent with `runtime.currentModelId`, so it must be a
-  // level of that model. On Kimi the model decides which levels exist, and a
-  // level chosen for another model is refused with -32602.
   private async applyAcpRuntimeSelection(
     backend: AcpBackendId,
     client: AcpRuntimeClient,
@@ -6392,54 +6390,13 @@ export class DesktopBackendRegistry {
     runtime: BackendAcpSessionRuntimeState | undefined,
     reasoningEffort?: string,
   ): Promise<void> {
-    // A thought level is only valid for the model the session holds, so the
-    // model's option has to be written first. `configValues` carries whatever
-    // insertion order earlier merges left, and a level measured against the
-    // agent's default model is dropped by the session's own menu.
-    const capabilities = this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities;
-    const thoughtLevelOptionId = findAcpThoughtLevelConfigOption(capabilities)?.id;
-    const modeConfigOption = capabilities?.configOptions?.find(
-      (option) => option.category === "mode"
-        && option.id !== findAcpPermissionModeConfigOption(capabilities)?.id
-        && option.values.some((value) => value.value === runtime?.currentModeId),
-    );
-    // Legacy mode selectors mirror currentModeId. The independent permission
-    // config owns its value in configValues; currentModeId remains planning.
-    const configValues = Object.entries({
-      ...runtime?.configValues,
-      ...(modeConfigOption && runtime?.currentModeId
-        ? { [modeConfigOption.id]: runtime.currentModeId }
-        : {}),
-    }).sort(
-      ([left], [right]) =>
-        Number(left === thoughtLevelOptionId)
-        - Number(right === thoughtLevelOptionId),
-    );
-    for (const [optionId, value] of configValues) {
-      await client.setRuntimeOption?.({
-        sessionId,
-        source: "configOption",
-        optionId,
-        value,
-      });
-    }
-    if (runtime?.currentModeId && !modeConfigOption) {
-      await client.setRuntimeOption?.({
-        sessionId,
-        source: "mode",
-        optionId: "mode",
-        value: runtime.currentModeId,
-      });
-    }
-    if (runtime?.currentModelId) {
-      await client.setRuntimeOption?.({
-        sessionId,
-        source: "model",
-        optionId: "model",
-        value: runtime.currentModelId,
-        reasoningEffort,
-      });
-    }
+    await applyAcpRuntimeSelection({
+      capabilities: this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities,
+      client,
+      sessionId,
+      runtime,
+      reasoningEffort,
+    });
   }
 
   setAcpSessionRuntimeOption(
@@ -8987,7 +8944,11 @@ export class DesktopBackendRegistry {
             updatedAt: startedAt,
             executionMode: effectiveExecutionMode,
             ...modelSettings,
-            acpRuntime,
+            // What the session applied: a start falls back from a mode the
+            // new session does not list.
+            acpRuntime: isAcpBackendId(backend)
+              ? this.acpBackend.getSession(backend, threadId)?.acpRuntime ?? acpRuntime
+              : acpRuntime,
             codexEnvironmentRuntime,
             linkedDirectories: dedupeLinkedDirectoriesByNormalizedIdentity(
               (
