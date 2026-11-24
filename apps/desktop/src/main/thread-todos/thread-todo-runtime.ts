@@ -38,7 +38,7 @@ import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federati
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getMainLogger } from "../log.js";
 import { buildPullRequestReferenceUrl } from "../pr-status/forge-reference";
-import { resolveGitHubRepoForDirectory } from "../pr-status/git-remote";
+import { resolveGitHubRepoForCheckoutAction } from "../pr-status/git-remote";
 import { parsePrRefFromUrl } from "../pr-status/github-graphql-client";
 import { GithubPrFetcher } from "../pr-status/github-pr-fetcher.js";
 import { createThreadTodoStorage } from "../storage/desktop-runtime-storage.js";
@@ -102,14 +102,17 @@ export function setThreadTodoMergeOfferGate(gate: MergeOfferGate | undefined): v
 }
 
 async function resolveReviewPullRequestNumber(
+  registry: Pick<DesktopBackendRegistry, "canonicalizeNavigationPullRequests">,
   thread: Pick<ThreadTodo, "backend" | "threadId">,
   cwd: string | undefined,
   number: number,
 ): Promise<string> {
+  const [stored = []] = getDesktopOverlayStore().readNavigationPullRequests([thread]);
+  const prs = stored.length ? await registry.canonicalizeNavigationPullRequests(stored) : [];
   const attached = new Map<string, string>();
-  for (const url of getDesktopOverlayStore().readThreadPullRequestUrls(thread)) {
-    if (parsePrRefFromUrl(url)?.number === number) {
-      const normalized = normalizePullRequestUrl(url);
+  for (const pr of prs) {
+    if (typeof pr?.url === "string" && parsePrRefFromUrl(pr.url)?.number === number) {
+      const normalized = normalizePullRequestUrl(pr.url);
       attached.set(normalized.toLowerCase(), normalized);
     }
   }
@@ -120,8 +123,8 @@ async function resolveReviewPullRequestNumber(
   if (attachedUrl) return attachedUrl;
 
   if (cwd && Number.isSafeInteger(number)) {
-    const repo = await resolveGitHubRepoForDirectory(cwd);
-    if (repo?.host === "github.com") {
+    const repo = await resolveGitHubRepoForCheckoutAction(cwd);
+    if (repo) {
       const url = buildPullRequestReferenceUrl({ provider: repo.host, org: repo.owner, repo: repo.repo, number });
       const pr = await new GithubPrFetcher().fetchPullRequestByUrl({ cwd, url });
       if (pr) return pr.url;
@@ -680,7 +683,7 @@ export function installThreadTodoRuntime(params: {
       ]);
       const action = input.action;
       if (action?.type === "start_review" && action.pullRequest && /^[1-9]\d*$/.test(action.pullRequest)) {
-        const pullRequest = await resolveReviewPullRequestNumber(context, cwd, Number(action.pullRequest));
+        const pullRequest = await resolveReviewPullRequestNumber(registry, context, cwd, Number(action.pullRequest));
         input = { ...input, action: { ...action, pullRequest } };
       }
       const targetProject = input.project
