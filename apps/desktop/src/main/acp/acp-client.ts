@@ -208,14 +208,15 @@ function toAcpMcpServerWireConfigs(
 /**
  * Antigravity names an MCP call `mcp_<server>_<tool>`. Returns the session
  * server and tool that name refers to, or undefined when no server, or more
- * than one, could have produced it. Antigravity may fold `-` to `_`, so a
- * server matching only after folding still counts as a possible source.
+ * than one, could have produced it. Antigravity may fold `-` to `_` or change
+ * case, so a server matching only after folding still counts as a possible
+ * source.
  */
 export function resolveAntigravityMcpToolTarget(
   reportedName: string,
   serverNames: readonly string[],
 ): { serverName: string; toolName: string } | undefined {
-  const fold = (value: string) => value.replace(/-/gu, "_");
+  const fold = (value: string) => value.replace(/-/gu, "_").toLowerCase();
   const foldedName = fold(reportedName);
   const sources = [...new Set(serverNames)].filter((serverName) => {
     const prefix = `mcp_${fold(serverName)}_`;
@@ -2719,6 +2720,12 @@ export class AcpAgentClient {
   ): void {
     const agentNames = wireConfigs.map((server) => server.name);
     const sent = new Set(agentNames);
+    // A grant names a tool as the agent flattened it. When the servers behind
+    // those names change, the same name can reach a different server.
+    const previous = this.sessionMcpServers.get(sessionId);
+    if (previous && !sameNames(previous.agentNames, agentNames)) {
+      this.sessionMcpToolGrants.delete(sessionId);
+    }
     this.sessionMcpServers.set(sessionId, {
       agentNames,
       registeredNames: new Set(registration.servers
@@ -3483,6 +3490,13 @@ function permissionOutcomeFromResponse(
   return optionId
     ? { outcome: { outcome: "selected", optionId } }
     : cancelledPermissionOutcome();
+}
+
+function sameNames(left: readonly string[], right: readonly string[]): boolean {
+  const sortedLeft = [...new Set(left)].sort();
+  const sortedRight = [...new Set(right)].sort();
+  return sortedLeft.length === sortedRight.length
+    && sortedLeft.every((name, index) => name === sortedRight[index]);
 }
 
 function allowOncePermissionOptionId(options: AcpPermissionOption[]): string | undefined {

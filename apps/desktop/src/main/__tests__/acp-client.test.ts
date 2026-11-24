@@ -1628,7 +1628,7 @@ describe("AcpAgentClient", () => {
   });
 
   it("resolves an Antigravity MCP name to one session server or none", () => {
-    const segment = fc.stringMatching(/^[a-z][a-z0-9]{0,5}$/);
+    const segment = fc.stringMatching(/^[a-zA-Z][a-zA-Z0-9]{0,5}$/);
     const serverName = fc.array(segment, { minLength: 1, maxLength: 3 })
       .chain((parts) => fc.constantFrom(parts.join("_"), parts.join("-")));
     fc.assert(fc.property(
@@ -1637,9 +1637,10 @@ describe("AcpAgentClient", () => {
       fc.array(segment, { minLength: 1, maxLength: 3 }),
       (servers, pick, toolParts) => {
         const reported = `mcp_${servers[pick % servers.length]}_${toolParts.join("_")}`;
-        const fold = (value: string) => value.replace(/-/gu, "_");
+        const fold = (value: string) => value.replace(/-/gu, "_").toLowerCase();
         // Oracle: every server whose name, before or after Antigravity folds
-        // `-` to `_`, prefixes the reported name could have produced it.
+        // `-` to `_` or changes case, prefixes the reported name could have
+        // produced it.
         const sources = [...new Set(servers)].filter((server) =>
           fold(reported).startsWith(`mcp_${fold(server)}_`)
           && fold(reported).length > `mcp_${fold(server)}_`.length);
