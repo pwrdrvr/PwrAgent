@@ -128,6 +128,13 @@ resource counts one unit per allocation and per queue entry.
   after the revision fingerprint, so time passing never publishes a
   revision. The last point holds until the next revision, and the renderer
   extends it to now. Peers never send `usage`.
+- **The snapshot's clock.** Main stamps the points and `observedAt` with a
+  clock that never steps back, so after the wall clock does, main runs
+  ahead of the renderer's `Date.now()`. `useResourceCheckouts` records
+  `observedAt - Date.now()` when it accepts a snapshot, and the screen adds
+  it to its 30-second tick to get the chart's clock. `usageChart` returns
+  the `now` it drew to, and the readout and the recording note measure ages
+  from it. `__tests__/ResourcesScreen.property.test.tsx` holds this rule.
 - **One moment per bar.** `usageChart` (`resource-usage.ts`) draws each
   bucket's busiest moment, by held plus waiting then by held, so a bar's
   two segments come from the same instant. The heading's peaks are each

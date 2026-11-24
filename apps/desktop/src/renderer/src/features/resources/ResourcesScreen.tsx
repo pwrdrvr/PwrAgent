@@ -111,8 +111,10 @@ export function ResourcesScreen(props: {
   /** Select this resource, clearing filters that would hide it. */
   focus?: ResourceFocusRequest;
 }): ReactElement {
-  const { view, pending, settled, perform, refresh, dismissSettled } = useResourceCheckouts(props.source);
+  const { view, clockOffset, pending, settled, perform, refresh, dismissSettled } = useResourceCheckouts(props.source);
   const now = useNow(30_000);
+  // The tick on the snapshot's clock, which stamped the usage points.
+  const snapshotNow = now + clockOffset;
   const [filter, setFilter] = useState<ResourceFilter>("all");
   const [scope, setScope] = useState<ResourceScopeFilter>("all");
   const [query, setQuery] = useState("");
@@ -348,6 +350,7 @@ export function ResourcesScreen(props: {
               busyKind={pending.find(({ request }) => "resourceId" in request && request.resourceId === selected?.resource.resourceId)?.request.kind}
               item={selected}
               now={now}
+              snapshotNow={snapshotNow}
               onIntent={onIntent}
               onOpenThread={props.onOpenThread}
               {...(snapshot ? { localInstanceId: snapshot.viewer.instanceId } : {})}

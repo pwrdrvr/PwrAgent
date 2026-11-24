@@ -56,6 +56,10 @@ export function useResourceCheckouts(source: ResourceCheckoutsSource) {
   const [view, setView] = useState<ResourceCheckoutsView>({ status: "loading" });
   const [pending, setPending] = useState<readonly PendingResourceAction[]>([]);
   const [settled, setSettled] = useState<SettledResourceAction | null>(null);
+  // How far the serving process's clock is ahead of this renderer's
+  // `Date.now()`, measured when the shown snapshot arrived. Main's clock never
+  // steps back, so after the wall clock does, it runs ahead of the renderer.
+  const [clockOffset, setClockOffset] = useState(0);
   const shownRef = useRef<ResourceCheckoutsSnapshot | undefined>(undefined);
   const mountedRef = useRef(true);
   const readSeqRef = useRef(0);
@@ -69,6 +73,7 @@ export function useResourceCheckouts(source: ResourceCheckoutsSource) {
       succeededSeqRef.current = Math.max(succeededSeqRef.current, seq);
       if (!acceptSnapshot(shownRef.current, snapshot)) return;
       shownRef.current = snapshot;
+      setClockOffset(snapshot.observedAt - Date.now());
       setView({ status: "ready", snapshot });
     } catch (error) {
       // A read started after this one already succeeded, so what is on
@@ -128,5 +133,5 @@ export function useResourceCheckouts(source: ResourceCheckoutsSource) {
 
   const dismissSettled = useCallback(() => setSettled(null), []);
 
-  return { view, pending, settled, perform, refresh, dismissSettled };
+  return { view, clockOffset, pending, settled, perform, refresh, dismissSettled };
 }

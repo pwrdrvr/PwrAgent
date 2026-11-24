@@ -65,6 +65,8 @@ const AUTHORITY_KIND_LABEL = {
 export function ResourceInspector(props: {
   item: PresentedResource | undefined;
   now: number;
+  /** Now on the snapshot's clock, which stamped the usage history. */
+  snapshotNow: number;
   busyKind: string | undefined;
   onIntent: (intent: ResourceInspectorIntent) => void;
   onOpenThread: (thread: ResourceThreadRef) => void;
@@ -105,7 +107,7 @@ export function ResourceInspector(props: {
   const firstRequest = resource.queue[0]?.units;
   const free = freeUnits(resource);
   const waitingForSlots = condition === "busy" && firstRequest !== undefined && free !== undefined && firstRequest > free;
-  const usage = usageChart(resource, props.now);
+  const usage = usageChart(resource, props.snapshotNow);
   const queueOrder = queueOrderOf(resource);
 
   return (
@@ -154,7 +156,7 @@ export function ResourceInspector(props: {
 
         {usage ? (
           <Section title="Last 30 minutes" aside={`peak ${usage.peakHeld} held · ${usage.peakWaiting} waiting`}>
-            <ResourceUsageChart chart={usage} now={props.now} unitLabel={unitLabel} />
+            <ResourceUsageChart chart={usage} unitLabel={unitLabel} />
           </Section>
         ) : null}
 

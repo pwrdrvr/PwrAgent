@@ -13,9 +13,10 @@ const SEGMENT_GAP = 0.8;
 /**
  * Held and waiting units over the last 30 minutes, one stacked bar per
  * 30 seconds, against the resource's capacity. Pointing at a bar reads it
- * out below the chart; the readout otherwise shows the current bar.
+ * out below the chart; the readout otherwise shows the current bar. Ages
+ * are measured from `chart.now`, on the same clock as the bars.
  */
-export function ResourceUsageChart(props: { chart: UsageChart; now: number; unitLabel: string }): ReactElement {
+export function ResourceUsageChart(props: { chart: UsageChart; unitLabel: string }): ReactElement {
   const { chart } = props;
   const [pointed, setPointed] = useState<number>();
   const count = chart.bars.length;
@@ -91,7 +92,7 @@ export function ResourceUsageChart(props: { chart: UsageChart; now: number; unit
       </div>
       <figcaption className="resources-usage__readout" data-testid="resources-usage-readout">
         <span className="resources-usage__when resources-mono">
-          {pointed === undefined || pointed === count - 1 ? "Now" : ago(shown.endAt, props.now)}
+          {pointed === undefined || pointed === count - 1 ? "Now" : ago(shown.endAt, chart.now)}
         </span>
         {shown.observed ? (
           <>
@@ -114,7 +115,7 @@ export function ResourceUsageChart(props: { chart: UsageChart; now: number; unit
       </figcaption>
       {chart.observedSince === undefined ? null : (
         <p className="resources-note">
-          Recording began {ago(chart.observedSince, props.now)}, when PwrAgent started watching.
+          Recording began {ago(chart.observedSince, chart.now)}, when PwrAgent started watching.
         </p>
       )}
     </figure>
