@@ -101,7 +101,7 @@ import {
   AcpRolloutStore,
   isPwrAgentSyntheticAcpUpdate,
 } from "../acp/acp-rollout-store";
-import { acpWorkspaceHistory, prependAcpWorkspaceHistory } from "../acp/acp-workspace-history";
+import { acpWorkspaceHistory, mergeAcpSyntheticHistory, prependAcpWorkspaceHistory } from "../acp/acp-workspace-history";
 import type { AcpInstalledAgentRecord, AcpRegistrySnapshot } from "../acp/acp-registry-types";
 import {
   acpRuntimeSupportsHttpMcp,
@@ -992,41 +992,6 @@ export function acpSessionThreadStatus(
   return status === "active" || status === "idle" || status === "unknown"
     ? status
     : "unknown";
-}
-
-function mergeAcpReplayWithSyntheticHistory(
-  replay: AppServerThreadReplay,
-  syntheticReplay: AppServerThreadReplay,
-): AppServerThreadReplay {
-  const entryIds = new Set(replay.entries.map((entry) => entry.id));
-  const messageIds = new Set(replay.messages.map((message) => message.id));
-  const entries = [
-    ...replay.entries,
-    ...syntheticReplay.entries.filter((entry) => !entryIds.has(entry.id)),
-  ].sort(
-    (left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0),
-  );
-  const messages = [
-    ...replay.messages,
-    ...syntheticReplay.messages.filter((message) => !messageIds.has(message.id)),
-  ].sort(
-    (left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0),
-  );
-  return {
-    ...replay,
-    entries,
-    messages,
-    lastUserMessage:
-      [...messages]
-        .reverse()
-        .find((message) => message.role === "user")?.text
-      ?? replay.lastUserMessage,
-    lastAssistantMessage:
-      [...messages]
-        .reverse()
-        .find((message) => message.role === "assistant")?.text
-      ?? replay.lastAssistantMessage,
-  };
 }
 
 function antigravityWorkspaceAgentSessionId(session: AcpSessionMetadata): string | undefined {
@@ -2654,7 +2619,7 @@ export class AcpBackendAdapter {
     }
     return inferAcpReplayTurns(
       syntheticUpdateCount > 0
-        ? mergeAcpReplayWithSyntheticHistory(replay, normalizer.replay())
+        ? mergeAcpSyntheticHistory(replay, normalizer.replay())
         : replay,
     );
   }

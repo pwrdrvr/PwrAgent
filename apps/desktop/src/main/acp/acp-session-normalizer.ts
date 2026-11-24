@@ -67,6 +67,8 @@ export function acpReplayPromptTextDigest(text: string): string {
 
 export type AcpSessionReplayNormalizerOptions = ReadAcpFileEditOptions & {
   surfaceThoughtsAsMessages?: boolean;
+  /** Scope provider message IDs after a handoff, keeping the original segment's IDs intact. */
+  workspaceSessionId?: string;
 };
 
 export function shouldSurfaceAcpThoughtsAsMessages(backendId: string): boolean {
@@ -845,17 +847,18 @@ export class AcpSessionReplayNormalizer {
       readString(update.update, "messageId") ??
       readString(update.update, "id") ??
       `user:${update.sessionId}:${createdAt}:${this.generatedMessageSequence++}`;
-    this.appendMessageChunk({ id, role: "user", text, createdAt });
+    this.appendMessageChunk({ id: this.providerMessageId(id), role: "user", text, createdAt });
   }
 
   private applyProviderPromptIdentity(update: AcpSessionUpdate, createdAt: number, text: string): boolean {
     const replay = this.providerPromptReplay;
-    if (!replay || readAcpUpdateTimestamp(update.update) === undefined) return false;
+    const timestamped = readAcpUpdateTimestamp(update.update) !== undefined;
+    if (!replay || (!timestamped && !this.options.workspaceSessionId)) return false;
     const textDigest = acpReplayPromptTextDigest(text);
     // The same host timestamps both streams. Allow for dispatch/receipt and
     // timestamp rounding, and consume each matching occurrence in wire order.
     const timestampSlopMs = 1_000;
-    while (replay.nextIndex < replay.prompts.length
+    while (timestamped && replay.nextIndex < replay.prompts.length
       && replay.prompts[replay.nextIndex]!.receivedAt < createdAt - timestampSlopMs) {
       replay.nextIndex += 1;
     }
@@ -863,11 +866,11 @@ export class AcpSessionReplayNormalizer {
     let matchDistance = timestampSlopMs + 1;
     for (let index = replay.nextIndex; index < replay.prompts.length; index += 1) {
       const prompt = replay.prompts[index]!;
-      if (prompt.receivedAt > createdAt + timestampSlopMs) break;
+      if (timestamped && prompt.receivedAt > createdAt + timestampSlopMs) break;
       if (prompt.steerMessageId && prompt.turnId !== this.currentTurnId) continue;
       const distance = Math.abs(prompt.receivedAt - createdAt);
-      if (distance > timestampSlopMs || prompt.textDigest !== textDigest) continue;
-      if (prompt.steerMessageId) {
+      if ((timestamped && distance > timestampSlopMs) || prompt.textDigest !== textDigest) continue;
+      if (!timestamped || prompt.steerMessageId) {
         // Repeated steers within this turn use occurrence order, including
         // when provider timestamps were rounded to the same second.
         matchIndex = index;
@@ -881,12 +884,12 @@ export class AcpSessionReplayNormalizer {
     if (matchIndex === -1) return false;
     const identity = replay.prompts[matchIndex]!;
     replay.nextIndex = matchIndex + 1;
-    if (!replay.steeredTurns.has(identity.turnId)) return false;
+    if (!this.options.workspaceSessionId && !replay.steeredTurns.has(identity.turnId)) return false;
     const params = {
       sessionId: update.sessionId,
       prompt: text,
       turnId: identity.turnId,
-      receivedAt: createdAt,
+      receivedAt: timestamped ? createdAt : identity.receivedAt,
     };
     if (identity.steerMessageId) {
       this.recordSteeredUserPrompt({ ...params, messageId: identity.steerMessageId });
@@ -928,14 +931,21 @@ export class AcpSessionReplayNormalizer {
       readString(update.update, "messageId") ??
       readString(update.update, "message_id");
     if (explicitId) {
-      this.activeAssistantMessageId = explicitId;
-      return explicitId;
+      this.activeAssistantMessageId = this.providerMessageId(explicitId);
+      return this.activeAssistantMessageId;
     }
     if (!this.activeAssistantMessageId) {
-      this.activeAssistantMessageId =
-        `assistant:${this.currentTurnId ?? update.sessionId}:${this.assistantMessageSequence++}`;
+      this.activeAssistantMessageId = this.providerMessageId(
+        `assistant:${this.currentTurnId ?? update.sessionId}:${this.assistantMessageSequence++}`,
+      );
     }
     return this.activeAssistantMessageId;
+  }
+
+  private providerMessageId(id: string): string {
+    return this.options.workspaceSessionId
+      ? `acp:${encodeURIComponent(this.options.workspaceSessionId)}:${id}`
+      : id;
   }
 
   /**

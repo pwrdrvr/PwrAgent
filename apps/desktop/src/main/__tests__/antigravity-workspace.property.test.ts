@@ -39,7 +39,18 @@ const targetDirectory = {
   worktreeOwnership: "external" as const,
 };
 
-async function checkWorkspaceMove(params: { access: Access; legacy: boolean; alreadyRooted: boolean; restart: boolean; measureWrites?: boolean }) {
+async function checkWorkspaceMove(params: {
+  access: Access;
+  legacy: boolean;
+  alreadyRooted: boolean;
+  restart: boolean;
+  measureWrites?: boolean;
+  monitorBeforePrompt?: boolean;
+  withoutSourcePromptTimestamp?: boolean;
+  withoutDestinationPromptTimestamp?: boolean;
+  repeatedProviderReplyId?: boolean;
+  roundTrip?: boolean;
+}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-antigravity-workspace-"));
   const base = createKimiAgentRecord(backend, {
     schemaVersion: 1, status: "discovered", source: "initialize", discoveredAt: 1,
@@ -50,9 +61,11 @@ async function checkWorkspaceMove(params: { access: Access; legacy: boolean; alr
     launchDescriptor: { ...base.launchDescriptor!, registryId: "antigravity", command: "agy", args: ["acp", "--process-per-session"] },
   };
   const workspace = new Map([[sourceId, params.alreadyRooted ? targetCwd : sourceCwd]]);
-  const history = new Map([[sourceId, [
-    { sessionUpdate: "user_message_chunk", content: { type: "text", text: oldPrompt }, timestamp: "2026-11-23T12:00:00Z" },
-    { sessionUpdate: "agent_message_chunk", content: { type: "text", text: oldAnswer }, timestamp: "2026-11-23T12:00:01Z" },
+  const history = new Map<string, Record<string, unknown>[]>([[sourceId, [
+    { sessionUpdate: "user_message_chunk", content: { type: "text", text: oldPrompt },
+      ...(params.withoutSourcePromptTimestamp ? {} : { timestamp: "2026-11-23T12:00:00Z" }) },
+    { sessionUpdate: "agent_message_chunk", content: { type: "text", text: oldAnswer }, timestamp: "2026-11-23T12:00:01Z",
+      ...(params.repeatedProviderReplyId ? { messageId: "provider-reply" } : {}) },
   ]]]);
   const calls: string[] = [];
   const newSession = vi.fn();
@@ -70,17 +83,37 @@ async function checkWorkspaceMove(params: { access: Access; legacy: boolean; alr
     ...(params.access === "full-access" ? { antigravityFullAccessConfirmed: true } : {}),
   });
   const agents = createAcpAgentStoreMock([agent]);
-  const handoff = vi.fn(async () => ({
+  const handoff = vi.fn(async ({ targetPath = targetCwd }: { targetPath?: string }) => ({
     ...identity, workMode: "worktree", direction: "worktree-to-worktree", repositoryPath: "/repo",
-    targetPath: targetCwd, linkedDirectory: targetDirectory, branch: "HEAD", warnings: [], completedAt: 1000,
+    targetPath, linkedDirectory: { ...targetDirectory, worktreePath: targetPath }, branch: "HEAD",
+    warnings: [], completedAt: 1000,
   }));
+  const rollouts = new AcpRolloutStore(root);
+  if (params.monitorBeforePrompt) {
+    const upsert = sessions.upsertSession.bind(sessions);
+    let injected = false;
+    vi.spyOn(sessions, "upsertSession").mockImplementation((session) => {
+      if (session.agentSessionId === "destination-1" && !injected) {
+        injected = true;
+        // The monitor writes local transcript history before the provider
+        // has accepted the first destination prompt.
+        rollouts.appendUpdate({ backendId: backend, sessionId: threadId, receivedAt: Date.now(), update: {
+          sessionUpdate: "agent_message_chunk", messageId: "monitor-report",
+          content: { type: "text", text: "Monitor finished" }, _meta: { pwragentSynthetic: true },
+        } });
+        upsert({ ...session, hasConversationHistory: true });
+      } else {
+        upsert(session);
+      }
+    });
+  }
   function startOwner() {
     return createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: overlays,
       acpAgentStore: agents,
       acpSessionStore: sessions,
-      acpRolloutStore: new AcpRolloutStore(root),
+      acpRolloutStore: rollouts,
       createAcpTransport: (launch) => new class extends FakeAcpAgentTransport {
         override async request(method: string, data?: Record<string, unknown>): Promise<unknown> {
           calls.push(method);
@@ -113,9 +146,11 @@ async function checkWorkspaceMove(params: { access: Access; legacy: boolean; alr
                 sessionUpdate: "agent_message_chunk",
                 content: { type: "text", text: `Ran from ${cwd}` },
                 timestamp: new Date().toISOString(),
+                ...(params.repeatedProviderReplyId ? { messageId: "provider-reply" } : {}),
               };
               const replay = [
-                { ...update, sessionUpdate: "user_message_chunk", content: { type: "text", text: newPrompt } },
+                { sessionUpdate: "user_message_chunk", content: { type: "text", text: newPrompt },
+                  ...(params.withoutDestinationPromptTimestamp ? {} : { timestamp: update.timestamp }) },
                 ...(context ? [{
                   ...update, sessionUpdate: "user_message_chunk",
                   content: { type: "text", text: `\nContent of ${workspaceHistoryUri}:\n${context.text}\n` },
@@ -142,9 +177,22 @@ async function checkWorkspaceMove(params: { access: Access; legacy: boolean; alr
         repositoryPath: "/repo", sourcePath: sourceCwd, targetPath: targetCwd,
       });
       expect(handoff).toHaveBeenCalledOnce();
+      if (params.roundTrip) {
+        await registry.handoffThreadWorkspace({
+          ...identity, direction: "worktree-to-worktree", baseRef: "origin/main",
+          repositoryPath: "/repo", sourcePath: targetCwd, targetPath: sourceCwd,
+        });
+      }
     }
+    const destination = params.roundTrip ? sourceCwd : targetCwd;
     const terminal = Promise.withResolvers<void>();
+    let liveReplyId: string | undefined;
     const unsubscribe = registry.onEvent((event) => {
+      if (event.notification.method === "item/agentMessage/delta"
+        && event.notification.params.delta === `Ran from ${destination}`
+        && typeof event.notification.params.itemId === "string") {
+        liveReplyId = event.notification.params.itemId;
+      }
       if (event.notification.method === "turn/completed") terminal.resolve();
     });
     const continueThread = async () => {
@@ -165,9 +213,10 @@ async function checkWorkspaceMove(params: { access: Access; legacy: boolean; alr
       await continueThread();
     }
     unsubscribe();
-    if (params.alreadyRooted) {
+    if (params.alreadyRooted || params.roundTrip) {
       expect(newSession).not.toHaveBeenCalled();
-      expect(dispatched).toHaveBeenCalledWith({ sessionId: sourceId, cwd: targetCwd, context: undefined });
+      expect(dispatched).toHaveBeenCalledWith({ sessionId: sourceId, cwd: destination, context: undefined });
+      expect(sessions.getSession(backend, threadId)?.requiresAgentSessionRebind).not.toBe(true);
     } else {
       expect(dispatched).toHaveBeenCalledWith(expect.objectContaining({ cwd: targetCwd }));
       expect(newSession).toHaveBeenCalledExactlyOnceWith(targetCwd, params.access === "full-access");
@@ -185,9 +234,28 @@ async function checkWorkspaceMove(params: { access: Access; legacy: boolean; alr
       registry = startOwner();
     }
     const { replay } = await registry.readThread(identity);
-    expect(replay.messages.map((message) => message.text)).toEqual([
-      oldPrompt, oldAnswer, newPrompt, `Ran from ${targetCwd}`,
+    const providerMessages = replay.messages.filter(({ id }) => id !== "monitor-report");
+    expect(providerMessages.map((message) => message.text)).toEqual([
+      oldPrompt, oldAnswer, newPrompt, `Ran from ${destination}`,
     ]);
+    expect(new Set(providerMessages.map(({ id }) => id)).size).toBe(providerMessages.length);
+    if (!params.alreadyRooted && !params.roundTrip) {
+      expect(providerMessages.at(-1)?.id).toBe(liveReplyId);
+    }
+    expect(replay.entries.flatMap((entry) => entry.type === "message" && entry.id !== "monitor-report" ? [entry.text] : []))
+      .toEqual(providerMessages.map(({ text }) => text));
+    if (params.monitorBeforePrompt && params.restart && !params.alreadyRooted && !params.roundTrip) {
+      const secondTerminal = Promise.withResolvers<void>();
+      const stopListening = registry.onEvent((event) => {
+        if (event.notification.method === "turn/completed") secondTerminal.resolve();
+      });
+      await registry.startTurn({ ...identity, input: [{ type: "text", text: "Continue in the destination" }] });
+      await secondTerminal.promise;
+      stopListening();
+      expect(dispatched).toHaveBeenLastCalledWith({
+        sessionId: "destination-1", cwd: destination, context: undefined,
+      });
+    }
   } finally {
     await registry.close();
     db?.close();
@@ -197,6 +265,34 @@ async function checkWorkspaceMove(params: { access: Access; legacy: boolean; alr
 
 it("moves a populated Full Access thread into a fresh worktree and keeps its history across restart", async () => {
   await checkWorkspaceMove({ access: "full-access", legacy: false, alreadyRooted: false, restart: true });
+});
+
+it("delivers prior context when a monitor reports before the first destination prompt", async () => {
+  await checkWorkspaceMove({
+    access: "full-access", legacy: false, alreadyRooted: false, restart: true, monitorBeforePrompt: true,
+  });
+});
+
+it("preserves source event order when a prompt has no provider timestamp", async () => {
+  await checkWorkspaceMove({
+    access: "default", legacy: false, alreadyRooted: false, restart: true, withoutSourcePromptTimestamp: true,
+  });
+});
+
+it("retains the original provider session when two moves return to its checkout before prompting", async () => {
+  await checkWorkspaceMove({ access: "default", legacy: false, alreadyRooted: false, restart: false, roundTrip: true });
+});
+
+it("uses the live message ID after a cold reload even when the provider omits the prompt timestamp", async () => {
+  await checkWorkspaceMove({
+    access: "default", legacy: false, alreadyRooted: false, restart: true, withoutDestinationPromptTimestamp: true,
+  });
+});
+
+it("isolates a reply ID reused by the source and destination providers", async () => {
+  await checkWorkspaceMove({
+    access: "default", legacy: false, alreadyRooted: false, restart: true, repeatedProviderReplyId: true,
+  });
 });
 
 it("replays each committed workspace's history once despite abandoned replacement sessions", () => {
@@ -242,11 +338,15 @@ it("bounds SQLite writes for the replacement session and its first turn", async 
 it("dispatches every Antigravity handoff in its destination while preserving thread identity and history", async () => {
   await fc.assert(fc.asyncProperty(
     fc.constantFrom("default", "full-access"),
-    fc.constantFrom("new-move", "legacy-mismatch", "legacy-correct"),
-    fc.boolean(),
-    async (access, state, restart) => {
+    fc.constantFrom("new-move", "legacy-mismatch", "legacy-correct", "round-trip"),
+    fc.record({ restart: fc.boolean(), monitorBeforePrompt: fc.boolean(), withoutSourcePromptTimestamp: fc.boolean() }),
+    async (access, state, options) => {
       await checkWorkspaceMove({
-        access, restart, legacy: state !== "new-move", alreadyRooted: state === "legacy-correct",
+        access,
+        legacy: state.startsWith("legacy"),
+        alreadyRooted: state === "legacy-correct",
+        roundTrip: state === "round-trip",
+        ...options,
       });
     },
   ), { numRuns: 16 });

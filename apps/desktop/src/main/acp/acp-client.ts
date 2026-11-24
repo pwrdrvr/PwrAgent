@@ -305,6 +305,7 @@ type AcpActiveTurn = {
   /** The agent compacted its history while this prompt ran. */
   compacted?: boolean;
   sentAgentMemory?: boolean;
+  sentWorkspaceContext?: boolean;
   cancelBeforePrompt?: () => void;
   onTerminalUpdate?: () => void;
   terminalResponseGraceStarted?: boolean;
@@ -1332,6 +1333,7 @@ export class AcpAgentClient {
       ...(params.approvalPolicy ? { approvalPolicy: params.approvalPolicy } : {}),
       acpRuntime: combinedRuntimeState,
       ...(params.hidden ? { hidden: true } : {}),
+      ...(this.options.backendId === "acp:antigravity" ? { antigravityPrimaryCwd: cwd } : {}),
       ...(handoff ? { antigravityWorkspaceRebound: true } : {}),
       status: "idle",
     };
@@ -1341,9 +1343,6 @@ export class AcpAgentClient {
     // normalizer without a workspace.
     this.normalizers.get(appSessionId)?.setWorkspace(cwd);
     this.loadedSessionCwds.set(sessionId, cwd);
-    if (this.options.backendId === "acp:antigravity" && params.sessionId) {
-      this.antigravityPrimaryCwds.set(sessionId, cwd);
-    }
     this.touchSession(appSessionId);
     if (params.sessionMeta || params.mcpServers === "none") {
       this.sessionsWithoutFaithfulReload.add(appSessionId);
@@ -1515,7 +1514,7 @@ export class AcpAgentClient {
     this.options.assertSessionOwner?.(metadata.sessionId);
     const cwd = metadata.cwd;
     const protocolSessionId = protocolSessionIdForMetadata(metadata);
-    const primaryCwd = this.antigravityPrimaryCwds.get(protocolSessionId)
+    const primaryCwd = metadata.antigravityPrimaryCwd ?? this.antigravityPrimaryCwds.get(protocolSessionId)
       ?? (cwd && await this.withOperation(async () => await this.readAntigravityPrimaryCwd(protocolSessionId, cwd)));
     if (!cwd || !primaryCwd) {
       throw new Error("Couldn't verify Antigravity's primary workspace. Try sending the prompt again.");
@@ -1605,6 +1604,9 @@ export class AcpAgentClient {
       ...(this.options.antigravityFullAccess !== undefined && stored
         ? { executionMode: acpSessionExecutionMode(stored), antigravityFullAccessConfirmed: stored.antigravityFullAccessConfirmed }
         : {}),
+      ...(stored?.antigravityWorkspaceContextDelivered && protocolSessionIdForMetadata(stored) === protocolSessionIdForMetadata(metadata)
+        ? { antigravityWorkspaceContextDelivered: true }
+        : {}),
       ...(storedDigest ? { agentInstructionsDigest: storedDigest } : {}),
     };
     if (this.idleClosedSessions.has(metadata.sessionId)) {
@@ -1642,7 +1644,7 @@ export class AcpAgentClient {
   }): Promise<{ sessionId: string; turnId: string }> {
     this.assertPromptAccess(params.sessionId);
     const session = this.options.store.getSession(this.options.backendId, params.sessionId);
-    const needsWorkspaceContext = session?.antigravityWorkspaceRebound && !session.hasConversationHistory;
+    const needsWorkspaceContext = session?.antigravityWorkspaceRebound && !session.antigravityWorkspaceContextDelivered;
     const prompt = params.promptContent ? [...params.promptContent] : textPrompt(params.prompt);
     if (needsWorkspaceContext) {
       const priorWorkspace = this.workspaceHistory(session).previous;
@@ -1654,6 +1656,7 @@ export class AcpAgentClient {
     }
     const turnId = params.turnId ?? `pending:${params.sessionId}:${this.now()}`;
     const activeTurn = this.startTrackedTurn(params.sessionId, turnId);
+    activeTurn.sentWorkspaceContext = needsWorkspaceContext;
     const acceptance = Promise.withResolvers<{ sessionId: string; turnId: string }>();
     let dispatched = false;
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
@@ -1753,6 +1756,7 @@ export class AcpAgentClient {
           sessionId,
           receivedAt,
           cancelled ? "interrupted" : "completed",
+          !cancelled && activeTurn.sentWorkspaceContext,
         );
         this.appendHistoryUpdate(sessionId, receivedAt, {
           kind: "turn_finished",
@@ -2656,9 +2660,12 @@ export class AcpAgentClient {
     }
   }
 
-  /** The backend's normalizer options, with the session's workspace. */
-  private normalizerOptionsFor(cwd?: string): AcpSessionReplayNormalizerOptions {
-    return cwd ? { ...this.normalizerOptions, cwd } : this.normalizerOptions;
+  private normalizerOptionsFor(metadata?: AcpSessionMetadata): AcpSessionReplayNormalizerOptions {
+    return {
+      ...this.normalizerOptions,
+      cwd: metadata?.cwd,
+      workspaceSessionId: metadata?.antigravityWorkspaceRebound ? protocolSessionIdForMetadata(metadata) : undefined,
+    };
   }
 
   private normalizerFor(sessionId: string): AcpSessionReplayNormalizer {
@@ -2666,7 +2673,7 @@ export class AcpAgentClient {
     if (!normalizer) {
       normalizer = new AcpSessionReplayNormalizer(
         this.normalizerOptionsFor(
-          this.options.store.getSession(this.options.backendId, sessionId)?.cwd,
+          this.options.store.getSession(this.options.backendId, sessionId),
         ),
       );
       this.normalizers.set(sessionId, normalizer);
@@ -2692,7 +2699,7 @@ export class AcpAgentClient {
       return { isComplete: false };
     }
     const normalizer = new AcpSessionReplayNormalizer(
-      this.normalizerOptionsFor(metadata.cwd),
+      this.normalizerOptionsFor(metadata),
     );
     let hasTranscriptHistory = false;
     const antigravityReplayPrompts: AcpReplayPromptIdentity[] = [];
@@ -2719,7 +2726,8 @@ export class AcpAgentClient {
     const hasReplay = replay.messages.length > 0 || replay.entries.length > 0;
     return {
       isComplete: (hasTranscriptHistory || hasReplay) && replay.threadStatus === "idle",
-      antigravityReplayPrompts: antigravityReplayPrompts.some((prompt) => prompt.steerMessageId)
+      antigravityReplayPrompts: ((metadata.antigravityWorkspaceRebound && antigravityReplayPrompts.length > 0)
+        || antigravityReplayPrompts.some((prompt) => prompt.steerMessageId))
         ? antigravityReplayPrompts : undefined,
     };
   }
@@ -3271,6 +3279,7 @@ export class AcpAgentClient {
     sessionId: string,
     completedAt: number,
     status: "completed" | "interrupted" = "completed",
+    workspaceContextDelivered?: boolean,
   ): {
     assistantText: string;
     replay: AppServerThreadReplay;
@@ -3285,7 +3294,9 @@ export class AcpAgentClient {
       completedAt,
       status,
     );
-    this.updateSessionStatus(sessionId, "idle");
+    // Use the existing idle write so remembering one accepted context block
+    // does not introduce another per-turn commit.
+    this.updateSessionStatus(sessionId, "idle", this.now(), { workspaceContextDelivered });
     return {
       assistantText: activeTurn?.assistantText ?? "",
       replay,
@@ -3424,7 +3435,7 @@ export class AcpAgentClient {
     sessionId: string,
     status: AcpSessionMetadata["status"],
     receivedAt = this.now(),
-    options: AcpSessionMetadataUpdateOptions = {},
+    options: AcpSessionMetadataUpdateOptions & { workspaceContextDelivered?: boolean } = {},
   ): void {
     const metadata = this.options.store.getSession(this.options.backendId, sessionId);
     if (!metadata) {
@@ -3433,6 +3444,7 @@ export class AcpAgentClient {
     this.options.store.upsertSession({
       ...metadata,
       status,
+      ...(options.workspaceContextDelivered ? { antigravityWorkspaceContextDelivered: true } : {}),
       updatedAt:
         options.touchActivity === false
           ? metadata.updatedAt

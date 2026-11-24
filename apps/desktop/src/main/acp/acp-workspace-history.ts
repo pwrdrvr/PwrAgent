@@ -40,11 +40,43 @@ export function prependAcpWorkspaceHistory(
   if (!previous) return current;
   return {
     ...current,
-    entries: [...previous.entries, ...current.entries].sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0)),
-    messages: [...previous.messages, ...current.messages].sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0)),
+    entries: [...previous.entries, ...current.entries],
+    messages: [...previous.messages, ...current.messages],
     lastUserMessage: current.lastUserMessage ?? previous.lastUserMessage,
     lastAssistantMessage: current.lastAssistantMessage ?? previous.lastAssistantMessage,
   };
+}
+
+/** Place local reports by receipt time while preserving the provider's event order. */
+export function mergeAcpSyntheticHistory(
+  replay: AppServerThreadReplay,
+  synthetic: AppServerThreadReplay,
+): AppServerThreadReplay {
+  const entries = insertSyntheticEntries(replay.entries, synthetic.entries);
+  const messages = insertSyntheticEntries(replay.messages, synthetic.messages);
+  return {
+    ...replay,
+    entries,
+    messages,
+    lastUserMessage: messages.findLast(({ role }) => role === "user")?.text ?? replay.lastUserMessage,
+    lastAssistantMessage: messages.findLast(({ role }) => role === "assistant")?.text ?? replay.lastAssistantMessage,
+  };
+}
+
+function insertSyntheticEntries<T extends { id: string; createdAt?: number }>(entries: T[], synthetic: T[]): T[] {
+  const ids = new Set(entries.map(({ id }) => id));
+  const missing = synthetic.filter(({ id }) => !ids.has(id))
+    .sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0));
+  if (missing.length === 0) return entries;
+  const combined: T[] = [];
+  let index = 0;
+  for (const entry of entries) {
+    while (index < missing.length && (missing[index]!.createdAt ?? 0) < (entry.createdAt ?? 0)) {
+      combined.push(missing[index++]!);
+    }
+    combined.push(entry);
+  }
+  return combined.concat(missing.slice(index));
 }
 
 export function acpWorkspaceContinuationText(replay: AppServerThreadReplay): string {

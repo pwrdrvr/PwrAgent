@@ -40,6 +40,10 @@ export type AcpSessionMetadata = {
   hasConversationHistory?: boolean;
   /** The provider session was opened after a workspace handoff. Older turns are in the ACP rollout. */
   antigravityWorkspaceRebound?: true;
+  /** The destination provider accepted the prior workspace context. Local messages do not set this. */
+  antigravityWorkspaceContextDelivered?: true;
+  /** Primary cwd established by session/new, before any pending workspace change. */
+  antigravityPrimaryCwd?: string;
   requiresAgentSessionRebind?: boolean;
   /**
    * Digest of the Agent instruction block this agent session was last sent.

@@ -476,6 +476,7 @@ import { permissionForDynamicTool, type MessagingDynamicToolCategory } from "@pw
 import { type TaskMonitorUsageSnapshot } from "@pwragent/shared/contracts/task-monitor-tools";
 import {
   AcpBackendAdapter,
+  acpSessionHasConversationHistory,
   acpSessionToThreadSummary,
   findAcpModelConfigOption,
   findAcpThoughtLevelConfigOption,
@@ -6312,24 +6313,24 @@ export class DesktopBackendRegistry {
       throw new Error(`ACP session not found: ${params.threadId}`);
     }
     let sessionForTurn = await this.resolveAcpSessionForTurn(params.backend, session);
-    // Previous builds could commit an Antigravity handoff even though the
-    // provider kept its original primary directory.
+    // The provider keeps its primary workspace until PwrAgent replaces its
+    // session. A round trip back to that workspace cancels the pending rebind.
     if (params.backend === "acp:antigravity"
-      && sessionForTurn.hasConversationHistory
-      && !sessionForTurn.antigravityWorkspaceRebound
-      && !sessionForTurn.requiresAgentSessionRebind
-      && overlayHasHandoffWorkspace(overlay ?? undefined)) {
+      && acpSessionHasConversationHistory(sessionForTurn)
+      && (sessionForTurn.requiresAgentSessionRebind
+        || (!sessionForTurn.antigravityWorkspaceRebound && overlayHasHandoffWorkspace(overlay ?? undefined)))) {
       if (!client.antigravityWorkspaceMatches) {
         throw new Error("Couldn't verify Antigravity's primary workspace. Try sending the prompt again.");
       }
       if (!await client.antigravityWorkspaceMatches(sessionForTurn)) {
         sessionForTurn = { ...sessionForTurn, requiresAgentSessionRebind: true };
+      } else if (sessionForTurn.requiresAgentSessionRebind) {
+        const { requiresAgentSessionRebind: _pending, ...confirmed } = sessionForTurn;
+        sessionForTurn = confirmed;
+        this.acpBackend.upsertSession(confirmed);
       }
     }
-    if (
-      sessionForTurn.requiresAgentSessionRebind ||
-      (sessionForTurn.cwd && sessionForTurn.cwd !== session.cwd)
-    ) {
+    if (sessionForTurn.requiresAgentSessionRebind) {
       await this.threadWorkspaceService.assertAcpSessionCanRebindForWorkspace(params.backend, sessionForTurn);
       sessionForTurn = await this.threadWorkspaceService.rebindAcpSessionForWorkspace(client, sessionForTurn);
     } else {

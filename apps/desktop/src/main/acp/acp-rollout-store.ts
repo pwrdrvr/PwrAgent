@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { ACP_WORKSPACE_HANDOFF_RECORD, acpWorkspaceHistory, prependAcpWorkspaceHistory } from "./acp-workspace-history.js";
+import {
+  ACP_WORKSPACE_HANDOFF_RECORD, acpWorkspaceHistory, mergeAcpSyntheticHistory, prependAcpWorkspaceHistory,
+} from "./acp-workspace-history.js";
 import {
   type AcpBackendId,
   type AppServerThreadReplay,
@@ -101,22 +103,29 @@ export class AcpRolloutStore {
     cwd?: string;
     workspaceAgentSessionId?: string;
   }): AppServerThreadReplay {
-    const normalizer = new AcpSessionReplayNormalizer(
-      acpSessionReplayNormalizerOptions(params.backendId, params.cwd),
-    );
+    const options = acpSessionReplayNormalizerOptions(params.backendId, params.cwd);
+    const normalizer = new AcpSessionReplayNormalizer({ ...options, workspaceSessionId: params.workspaceAgentSessionId });
     const records = this.readUpdates(params);
     const { current, previous } = acpWorkspaceHistory(records, params.workspaceAgentSessionId);
-    const updates = previous
-      ? [...records.slice(0, records.length - current.length).filter(({ update }) => isPwrAgentSyntheticAcpUpdate(update)), ...current]
-      : current;
-    for (const record of updates) {
+    for (const record of current) {
+      if (previous && isPwrAgentSyntheticAcpUpdate(record.update)) continue;
       normalizer.apply({
         sessionId: params.sessionId,
         receivedAt: record.receivedAt,
         update: record.update,
       });
     }
-    return prependAcpWorkspaceHistory(previous, normalizer.replay());
+    if (!previous) return normalizer.replay();
+    const synthetic = new AcpSessionReplayNormalizer(options);
+    for (const record of records) {
+      if (!isPwrAgentSyntheticAcpUpdate(record.update)) continue;
+      synthetic.apply({
+        sessionId: params.sessionId,
+        receivedAt: record.receivedAt,
+        update: record.update,
+      });
+    }
+    return mergeAcpSyntheticHistory(prependAcpWorkspaceHistory(previous, normalizer.replay()), synthetic.replay());
   }
 
   flushAll(): void {
