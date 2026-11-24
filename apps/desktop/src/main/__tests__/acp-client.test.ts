@@ -620,6 +620,203 @@ describe("AcpAgentClient", () => {
     await client.dispose();
   });
 
+  it("accepts Antigravity steering when the detached prompt returns usage after tool rounds and sums turn usage", async () => {
+    const prompts: Array<ReturnType<typeof createDeferred<unknown>>> = [];
+    const transport = new FakeAcpAgentTransport({
+      "session/new": { sessionId: "agy-session" },
+    });
+    const baseRequest = transport.request.bind(transport);
+    transport.request = async (method, params, timeoutMs) => {
+      if (method === "session/prompt") {
+        transport.requests.push({ method, params, timeoutMs });
+        const deferred = createDeferred<unknown>();
+        prompts.push(deferred);
+        return await deferred.promise;
+      }
+      return await baseRequest(method, params, timeoutMs);
+    };
+    const updates: Array<Record<string, unknown>> = [];
+    const onPromptError = vi.fn();
+    const client = new AcpAgentClient({
+      backendId: "acp:antigravity",
+      store,
+      transport,
+      onSessionUpdate: ({ update }) => { updates.push(update); },
+      onPromptError,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({ cwd: "/repo", executionMode: "default", mcpServers: "none" });
+    await client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "Inspect CPU resource checkouts.",
+      turnId: "turn-1",
+    });
+
+    // Tool calls and thoughts ran before steering, with no final assistant text yet.
+    transport.emitSessionUpdate("agy-session", {
+      sessionUpdate: "agent_thought_chunk",
+      content: { type: "text", text: "Checking resource checkout files..." },
+    });
+    transport.emitSessionUpdate("agy-session", {
+      sessionUpdate: "tool_call",
+      toolCallId: "call-1",
+      name: "run_command",
+      status: "in_progress",
+    });
+    transport.emitSessionUpdate("agy-session", {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "call-1",
+      name: "run_command",
+      status: "completed",
+    });
+    transport.emitSessionUpdate("agy-session", {
+      sessionUpdate: "tool_call",
+      toolCallId: "call-2",
+      name: "run_command",
+      status: "in_progress",
+    });
+
+    const steer = client.steerSession({
+      sessionId: session.sessionId,
+      text: "Check what is asking for 16 CPUs too.",
+      prompt: "Check what is asking for 16 CPUs too.",
+      parts: [{ type: "text", text: "Check what is asking for 16 CPUs too." }],
+      content: [{ type: "text", text: "Check what is asking for 16 CPUs too." }],
+      interjectionId: "steer-after-tools",
+    });
+    await vi.waitFor(() => expect(prompts).toHaveLength(2));
+
+    // Antigravity 1.5.15 detaches the running prompt with end_turn AND accumulated usage.
+    prompts[0]!.resolve({
+      stopReason: "end_turn",
+      usage: {
+        inputTokens: 16_937,
+        outputTokens: 208,
+        cachedReadTokens: 12_614,
+        cachedWriteTokens: 0,
+        thoughtTokens: 116,
+        totalTokens: 29_759,
+      },
+    });
+    await expect(steer).resolves.toEqual({ delivery: "currentTurn" });
+
+    expect(client.hasActiveTurns()).toBe(true);
+    expect(store.getSession("acp:antigravity", session.sessionId)?.status).toBe("active");
+    expect(transport.notifications.some((n) => n.method === "session/cancel")).toBe(false);
+    expect(onPromptError).not.toHaveBeenCalled();
+    expect(updates.some((u) => u.kind === "turn_finished")).toBe(false);
+
+    transport.emitSessionUpdate("agy-session", {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "call-2",
+      name: "run_command",
+      status: "completed",
+    });
+    transport.emitSessionUpdate("agy-session", {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "MANGO" },
+    });
+    prompts[1]!.resolve({
+      stopReason: "end_turn",
+      usage: {
+        inputTokens: 2_443,
+        outputTokens: 41,
+        cachedReadTokens: 12_831,
+        cachedWriteTokens: 0,
+        thoughtTokens: 38,
+        totalTokens: 15_315,
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(updates.filter((u) => u.kind === "turn_finished")).toHaveLength(1);
+    });
+    expect(onPromptError).not.toHaveBeenCalled();
+    expect(updates.find((u) => u.kind === "turn_finished")?.usage).toEqual({
+      inputTokens: 19_380,
+      outputTokens: 249,
+      cachedReadTokens: 25_445,
+      cachedWriteTokens: 0,
+      thoughtTokens: 154,
+      totalTokens: 45_074,
+    });
+    expect(client.readReplay(session.sessionId).messages.map((m) => ({ role: m.role, text: m.text }))).toEqual([
+      { role: "user", text: "Inspect CPU resource checkouts." },
+      { role: "assistant", text: "Checking resource checkout files..." },
+      { role: "user", text: "Check what is asking for 16 CPUs too." },
+      { role: "assistant", text: "MANGO" },
+    ]);
+    await client.dispose();
+  });
+
+  it("preserves detached Antigravity prompt usage when the replacement prompt fails", async () => {
+    const prompts: Array<ReturnType<typeof createDeferred<unknown>>> = [];
+    const transport = new FakeAcpAgentTransport({
+      "session/new": { sessionId: "agy-session" },
+    });
+    const baseRequest = transport.request.bind(transport);
+    transport.request = async (method, params, timeoutMs) => {
+      if (method === "session/prompt") {
+        transport.requests.push({ method, params, timeoutMs });
+        const deferred = createDeferred<unknown>();
+        prompts.push(deferred);
+        return await deferred.promise;
+      }
+      return await baseRequest(method, params, timeoutMs);
+    };
+    const onPromptError = vi.fn();
+    const client = new AcpAgentClient({
+      backendId: "acp:antigravity",
+      store,
+      transport,
+      onPromptError,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({ cwd: "/repo", executionMode: "default", mcpServers: "none" });
+    await client.startPrompt({ sessionId: session.sessionId, prompt: "First", turnId: "turn-1" });
+
+    const steer = client.steerSession({
+      sessionId: session.sessionId,
+      text: "Second",
+      content: [{ type: "text", text: "Second" }],
+      interjectionId: "s-err",
+    });
+    await vi.waitFor(() => expect(prompts).toHaveLength(2));
+
+    prompts[0]!.resolve({
+      stopReason: "end_turn",
+      usage: {
+        inputTokens: 1_000,
+        cachedReadTokens: 500,
+        cachedWriteTokens: 0,
+        outputTokens: 50,
+        thoughtTokens: 20,
+        totalTokens: 1_550,
+      },
+    });
+    await expect(steer).resolves.toEqual({ delivery: "currentTurn" });
+
+    prompts[1]!.reject(new Error("upstream disconnect"));
+    await vi.waitFor(() => expect(onPromptError).toHaveBeenCalledTimes(1));
+    expect(onPromptError).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: session.sessionId,
+      turnId: "turn-1",
+      usage: {
+        scope: "turn",
+        tokenUsage: {
+          inputTokens: 1_500,
+          cachedInputTokens: 500,
+          outputTokens: 50,
+          reasoningOutputTokens: 20,
+          totalTokens: 1_550,
+        },
+      },
+    }));
+    await client.dispose();
+  });
+
   it("lists and executes Grok conversation-only rewind extensions", async () => {
     const transport = new FakeAcpAgentTransport({
       "session/new": { sessionId: "grok-session" },

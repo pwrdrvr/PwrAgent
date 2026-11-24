@@ -29,30 +29,87 @@ function createDeferredPrompt(): DeferredPrompt {
   return { promise, resolve, reject };
 }
 
+type AntigravityWireUsage = {
+  inputTokens: number;
+  cachedReadTokens: number;
+  cachedWriteTokens: number;
+  outputTokens: number;
+  thoughtTokens: number;
+  totalTokens: number;
+};
+
 type SteerStep =
   | { kind: "thought"; text: string }
   | { kind: "assistant"; text: string }
-  | { kind: "steer_accept"; text: string }
+  | { kind: "tool"; name: string }
+  | { kind: "steer_accept"; text: string; detachUsage?: AntigravityWireUsage }
   | { kind: "steer_reject"; text: string };
 
 type TerminalStep =
-  | { kind: "end_turn" }
-  | { kind: "cancelled" }
+  | { kind: "end_turn"; usage?: AntigravityWireUsage }
+  | { kind: "cancelled"; usage?: AntigravityWireUsage }
   | { kind: "cancel_mid_steer"; text: string; lateOutcome: "reject" | "resolve_cancelled" }
   | { kind: "fail"; message: string };
 
 const nonEmptyWord = fc.stringMatching(/^[A-Za-z0-9]{1,12}$/);
 
+const antigravityUsageArbitrary: fc.Arbitrary<AntigravityWireUsage> = fc
+  .record({
+    inputTokens: fc.integer({ min: 1, max: 50_000 }),
+    cachedReadTokens: fc.integer({ min: 0, max: 50_000 }),
+    cachedWriteTokens: fc.integer({ min: 0, max: 10_000 }),
+    thoughtTokens: fc.integer({ min: 0, max: 5_000 }),
+    visibleOutputTokens: fc.integer({ min: 1, max: 5_000 }),
+  })
+  .map(({ inputTokens, cachedReadTokens, cachedWriteTokens, thoughtTokens, visibleOutputTokens }) => {
+    const outputTokens = thoughtTokens + visibleOutputTokens;
+    return {
+      inputTokens,
+      cachedReadTokens,
+      cachedWriteTokens,
+      outputTokens,
+      thoughtTokens,
+      totalTokens: inputTokens + cachedReadTokens + cachedWriteTokens + outputTokens,
+    };
+  });
+
+function sumWireUsage(
+  left: AntigravityWireUsage | undefined,
+  right: AntigravityWireUsage | undefined,
+): AntigravityWireUsage | undefined {
+  if (!left) return right ? { ...right } : undefined;
+  if (!right) return { ...left };
+  return {
+    inputTokens: left.inputTokens + right.inputTokens,
+    cachedReadTokens: left.cachedReadTokens + right.cachedReadTokens,
+    cachedWriteTokens: left.cachedWriteTokens + right.cachedWriteTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+    thoughtTokens: left.thoughtTokens + right.thoughtTokens,
+    totalTokens: left.totalTokens + right.totalTokens,
+  };
+}
+
 const stepArbitrary: fc.Arbitrary<SteerStep> = fc.oneof(
   nonEmptyWord.map((text): SteerStep => ({ kind: "thought", text })),
   nonEmptyWord.map((text): SteerStep => ({ kind: "assistant", text })),
-  nonEmptyWord.map((text): SteerStep => ({ kind: "steer_accept", text })),
+  nonEmptyWord.map((name): SteerStep => ({ kind: "tool", name })),
+  fc.record({
+    kind: fc.constant("steer_accept" as const),
+    text: nonEmptyWord,
+    detachUsage: fc.option(antigravityUsageArbitrary, { nil: undefined }),
+  }),
   nonEmptyWord.map((text): SteerStep => ({ kind: "steer_reject", text })),
 );
 
 const terminalArbitrary: fc.Arbitrary<TerminalStep> = fc.oneof(
-  fc.constant<TerminalStep>({ kind: "end_turn" }),
-  fc.constant<TerminalStep>({ kind: "cancelled" }),
+  fc.record({
+    kind: fc.constant("end_turn" as const),
+    usage: fc.option(antigravityUsageArbitrary, { nil: undefined }),
+  }),
+  fc.record({
+    kind: fc.constant("cancelled" as const),
+    usage: fc.option(antigravityUsageArbitrary, { nil: undefined }),
+  }),
   fc.record({
     kind: fc.constant("cancel_mid_steer" as const),
     text: nonEmptyWord,
@@ -84,7 +141,7 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
   });
 
   async function checkWireHandoff(
-    outcome: "detach" | "finish" | "write-failure",
+    outcome: "detach" | "detach-with-usage" | "cancel" | "write-failure",
     together: boolean,
     text: string,
     verifiedReplay = false,
@@ -125,27 +182,34 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
     const initial = Promise.withResolvers<string>();
     const replacement = Promise.withResolvers<string>();
     let promptCount = 0;
+    let cancelRequests = 0;
     child.stdin.on("data", (value: Buffer) => {
-      const { id, method } = JSON.parse(value.toString());
-      if (method === "initialize") {
-        child.stdout.write(response(id, {
-          protocolVersion: 1,
-          agentInfo: { version: "1.5.15" },
-          agentCapabilities: { loadSession: verifiedReplay },
-        }));
-      } else if (method === "session/new") {
-        child.stdout.write(response(id, { sessionId }));
-      } else if (method === "session/load") {
-        child.stdout.write(frame({
-          method: "session/update",
-          params: { sessionId, update: {
-            sessionUpdate: "user_message_chunk",
-            createdAt: Date.now() - 10_000,
-            content: { type: "text", text: "Earlier provider prompt" },
-          } },
-        }) + response(id, {}));
-      } else if (method === "session/prompt") {
-        (promptCount++ === 0 ? initial : replacement).resolve(id);
+      for (const rawLine of value.toString().split("\n")) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        const { id, method } = JSON.parse(line);
+        if (method === "initialize") {
+          child.stdout.write(response(id, {
+            protocolVersion: 1,
+            agentInfo: { version: "1.5.15" },
+            agentCapabilities: { loadSession: verifiedReplay },
+          }));
+        } else if (method === "session/new") {
+          child.stdout.write(response(id, { sessionId }));
+        } else if (method === "session/load") {
+          child.stdout.write(frame({
+            method: "session/update",
+            params: { sessionId, update: {
+              sessionUpdate: "user_message_chunk",
+              createdAt: Date.now() - 10_000,
+              content: { type: "text", text: "Earlier provider prompt" },
+            } },
+          }) + response(id, {}));
+        } else if (method === "session/prompt") {
+          (promptCount++ === 0 ? initial : replacement).resolve(id);
+        } else if (method === "session/cancel") {
+          cancelRequests += 1;
+        }
       }
     });
     const rolloutStore = new AcpRolloutStore(runDir);
@@ -160,6 +224,7 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
     });
     const terminal = Promise.withResolvers<"finished" | "failed">();
     const order: string[] = [];
+    let finalTurnUsage: unknown;
     const client = new AcpAgentClient({
       backendId: "acp:antigravity",
       store,
@@ -168,7 +233,10 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
       onSessionUpdate: ({ update }) => {
         if (update.kind === "pwragent_steered_user_prompt") order.push("steer");
         if (update.sessionUpdate === "agent_message_chunk") order.push("answer");
-        if (update.kind === "turn_finished") terminal.resolve("finished");
+        if (update.kind === "turn_finished") {
+          finalTurnUsage = update.usage;
+          terminal.resolve("finished");
+        }
       },
       onPromptError: () => terminal.resolve("failed"),
     });
@@ -189,11 +257,32 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
         sessionId, text, content: [{ type: "text", text }], interjectionId: "wire",
       }).then(() => "accepted", () => "rejected");
       const nextId = await replacement.promise;
-      const final = { stopReason: "end_turn", usage: { outputTokens: 5 } };
-      const followup = outcome === "finish"
-        ? frame({ id: nextId, error: { code: -32603, message: "no active turn" } })
+      const detachUsage = {
+        inputTokens: 100,
+        cachedReadTokens: 50,
+        cachedWriteTokens: 0,
+        outputTokens: 20,
+        thoughtTokens: 8,
+        totalTokens: 170,
+      };
+      const finalUsage = {
+        inputTokens: 10,
+        cachedReadTokens: 60,
+        cachedWriteTokens: 0,
+        outputTokens: 5,
+        thoughtTokens: 2,
+        totalTokens: 75,
+      };
+      const final = { stopReason: "end_turn", usage: finalUsage };
+      const followup = outcome === "cancel"
+        ? frame({ id: nextId, error: { code: -32603, message: "the running prompt is being cancelled" } })
         : chunk("After") + response(nextId, final);
-      const oldResponse = response(oldId, outcome === "finish" ? final : { stopReason: "end_turn" });
+      const oldResult = outcome === "cancel"
+        ? { stopReason: "cancelled", usage: detachUsage }
+        : outcome === "detach-with-usage"
+          ? { stopReason: "end_turn", usage: detachUsage }
+          : { stopReason: "end_turn" };
+      const oldResponse = response(oldId, oldResult);
       child.stdout.write(together ? oldResponse + followup : oldResponse);
       if (!together) {
         await new Promise<void>((resolve) => setImmediate(resolve));
@@ -201,9 +290,22 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
       }
       const terminalKind = await terminal.promise;
       expect(await Promise.race([receipt, new Promise((resolve) => setImmediate(() => resolve("pending")))]))
-        .toBe(outcome === "finish" ? "rejected" : "accepted");
+        .toBe(outcome === "cancel" ? "rejected" : "accepted");
       expect(terminalKind).toBe("finished");
-      expect(order).toEqual(outcome === "finish" ? ["answer"] : ["answer", "steer", "answer"]);
+      expect(order).toEqual(outcome === "cancel" ? ["answer"] : ["answer", "steer", "answer"]);
+      if (outcome !== "cancel") {
+        expect(cancelRequests).toBe(0);
+      }
+      if (outcome === "detach-with-usage") {
+        expect(finalTurnUsage).toEqual({
+          inputTokens: 110,
+          cachedReadTokens: 110,
+          cachedWriteTokens: 0,
+          outputTokens: 25,
+          thoughtTokens: 10,
+          totalTokens: 245,
+        });
+      }
       if (verifiedReplay) {
         const records = rolloutStore.readUpdates({ backendId: "acp:antigravity", sessionId });
         expect(records.map(({ update }) => update.kind)).toEqual([
@@ -219,7 +321,7 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
       } else if (outcome !== "write-failure") {
         const replay = rolloutStore.readReplay({ backendId: "acp:antigravity", sessionId });
         expect(replay.messages.map((message) => message.text)).toEqual(
-          outcome === "finish" ? ["Initial prompt", "Before"] : ["Initial prompt", "Before", text, "After"],
+          outcome === "cancel" ? ["Initial prompt", "Before"] : ["Initial prompt", "Before", text, "After"],
         );
       } else {
         expect(failedWrite).toHaveBeenCalledTimes(1);
@@ -229,7 +331,7 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
     }
   }
 
-  it.each(["detach", "finish", "write-failure"] as const)(
+  it.each(["detach", "detach-with-usage", "cancel", "write-failure"] as const)(
     "keeps prompt ownership and receipt settlement independent of stdout batching on %s",
     async (outcome) => {
       await fc.assert(fc.asyncProperty(fc.boolean(), nonEmptyWord, async (together, text) => {
@@ -277,8 +379,9 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
           let clock = 1_795_000_000_000;
           let turnFinishedEvents = 0;
           let lastStopReason: unknown;
+          let lastTurnUsage: unknown;
           const steeredUpdates: string[] = [];
-          const promptErrors: unknown[] = [];
+          const promptErrors: Array<{ error: unknown; usage?: unknown }> = [];
           const client = new AcpAgentClient({
             backendId: "acp:antigravity",
             store,
@@ -289,12 +392,13 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
               if (update.kind === "turn_finished") {
                 turnFinishedEvents += 1;
                 lastStopReason = update.stopReason;
+                lastTurnUsage = update.usage;
               } else if (update.kind === "pwragent_steered_user_prompt" && typeof update.prompt === "string") {
                 steeredUpdates.push(update.prompt);
               }
             },
-            onPromptError: ({ error }) => {
-              promptErrors.push(error);
+            onPromptError: ({ error, usage }) => {
+              promptErrors.push({ error, usage });
             },
           });
 
@@ -313,9 +417,11 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
 
             // Reference model state
             const expectedUserMessages = ["Initial prompt"];
+            let expectedUsage: AntigravityWireUsage | undefined;
             let activeOwnerIndex = 0;
             let sawAssistantText = false;
             let steerSeq = 0;
+            let toolSeq = 0;
 
             for (const step of steps) {
               if (step.kind === "thought") {
@@ -328,6 +434,20 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
                 transport.emitSessionUpdate("agy-prop-session", {
                   sessionUpdate: "agent_message_chunk",
                   content: { type: "text", text: step.text },
+                });
+              } else if (step.kind === "tool") {
+                const toolCallId = `tool-${++toolSeq}`;
+                transport.emitSessionUpdate("agy-prop-session", {
+                  sessionUpdate: "tool_call",
+                  toolCallId,
+                  name: step.name,
+                  status: "in_progress",
+                });
+                transport.emitSessionUpdate("agy-prop-session", {
+                  sessionUpdate: "tool_call_update",
+                  toolCallId,
+                  name: step.name,
+                  status: "completed",
                 });
               } else if (step.kind === "steer_accept") {
                 steerSeq += 1;
@@ -342,10 +462,14 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
                   interjectionId: `id-${steerSeq}`,
                 });
                 await vi.waitFor(() => expect(prompts.length).toBe(nextIndex + 1));
-                prompts[activeOwnerIndex]!.resolve({ stopReason: "end_turn" });
+                prompts[activeOwnerIndex]!.resolve({
+                  stopReason: "end_turn",
+                  ...(step.detachUsage ? { usage: step.detachUsage } : {}),
+                });
                 await expect(steerPromise).resolves.toEqual({ delivery: "currentTurn" });
                 activeOwnerIndex = nextIndex;
                 expectedUserMessages.push(text);
+                expectedUsage = sumWireUsage(expectedUsage, step.detachUsage);
               } else {
                 const text = `rejected-${++steerSeq}-${step.text}`;
                 const nextIndex = prompts.length;
@@ -367,6 +491,7 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
               expect(store.getSession("acp:antigravity", session.sessionId)?.status).toBe("active");
               expect(turnFinishedEvents).toBe(0);
               expect(promptErrors).toHaveLength(0);
+              expect(transport.notifications.some((n) => n.method === "session/cancel")).toBe(false);
               expect(
                 client.readReplay(session.sessionId).messages
                   .filter((message) => message.role === "user")
@@ -383,16 +508,26 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
             }
 
             if (terminal.kind === "end_turn") {
-              prompts[activeOwnerIndex]!.resolve({ stopReason: "end_turn" });
+              prompts[activeOwnerIndex]!.resolve({
+                stopReason: "end_turn",
+                ...(terminal.usage ? { usage: terminal.usage } : {}),
+              });
+              expectedUsage = sumWireUsage(expectedUsage, terminal.usage);
               await flushMicrotasks();
               expect(turnFinishedEvents).toBe(1);
               expect(lastStopReason).toBeUndefined();
+              expect(lastTurnUsage).toEqual(expectedUsage);
               expect(promptErrors).toHaveLength(0);
             } else if (terminal.kind === "cancelled") {
-              prompts[activeOwnerIndex]!.resolve({ stopReason: "cancelled" });
+              prompts[activeOwnerIndex]!.resolve({
+                stopReason: "cancelled",
+                ...(terminal.usage ? { usage: terminal.usage } : {}),
+              });
+              expectedUsage = sumWireUsage(expectedUsage, terminal.usage);
               await flushMicrotasks();
               expect(turnFinishedEvents).toBe(1);
               expect(lastStopReason).toBe("cancelled");
+              expect(lastTurnUsage).toEqual(expectedUsage);
               expect(promptErrors).toHaveLength(0);
             } else if (terminal.kind === "cancel_mid_steer") {
               const text = `cancelled-steer-${++steerSeq}-${terminal.text}`;
@@ -416,12 +551,30 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
               await flushMicrotasks();
               expect(turnFinishedEvents).toBe(1);
               expect(lastStopReason).toBe("cancelled");
+              expect(lastTurnUsage).toEqual(expectedUsage);
               expect(promptErrors).toHaveLength(0);
             } else {
               prompts[activeOwnerIndex]!.reject(new Error(terminal.message));
               await flushMicrotasks();
               expect(turnFinishedEvents).toBe(0);
               expect(promptErrors).toHaveLength(1);
+              if (expectedUsage) {
+                expect(promptErrors[0]?.usage).toMatchObject({
+                  scope: "turn",
+                  tokenUsage: {
+                    inputTokens:
+                      expectedUsage.inputTokens
+                      + expectedUsage.cachedReadTokens
+                      + expectedUsage.cachedWriteTokens,
+                    cachedInputTokens: expectedUsage.cachedReadTokens,
+                    outputTokens: expectedUsage.outputTokens,
+                    reasoningOutputTokens: expectedUsage.thoughtTokens,
+                    totalTokens: expectedUsage.totalTokens,
+                  },
+                });
+              } else {
+                expect(promptErrors[0]?.usage).toBeUndefined();
+              }
             }
 
             // Post-turn invariants:
@@ -488,15 +641,25 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
                   return { protocolVersion: 1, agentCapabilities: { loadSession: true } };
                 }
                 expect(method).toBe("session/load");
-                for (const message of liveReplay.entries) {
-                  if (message.type !== "message") continue;
+                for (const entry of liveReplay.entries) {
+                  if (entry.type === "activity") {
+                    provider.emitSessionUpdate(session.sessionId, {
+                      sessionUpdate: "tool_call",
+                      toolCallId: entry.id,
+                      name: entry.summary,
+                      status: "completed",
+                      createdAt: (entry.createdAt ?? clock) + providerTimestampOffset,
+                    });
+                    continue;
+                  }
+                  if (entry.type !== "message") continue;
                   provider.emitSessionUpdate(session.sessionId, {
-                    sessionUpdate: message.role === "user" ? "user_message_chunk"
-                      : message.phase === "commentary" ? "agent_thought_chunk" : "agent_message_chunk",
-                    createdAt: (message.createdAt ?? clock) + providerTimestampOffset,
+                    sessionUpdate: entry.role === "user" ? "user_message_chunk"
+                      : entry.phase === "commentary" ? "agent_thought_chunk" : "agent_message_chunk",
+                    createdAt: (entry.createdAt ?? clock) + providerTimestampOffset,
                     content: {
                       type: "text",
-                      text: message.role === "user" ? message.text : "Provider: " + message.text,
+                      text: entry.role === "user" ? entry.text : "Provider: " + entry.text,
                     },
                   });
                 }
