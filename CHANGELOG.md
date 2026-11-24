@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.5.0-prerelease.5 - 2026-11-24
+
+- Resources - Show the last 30 minutes of held and waiting units against capacity, with thread links for identified holders. Keep the chart moving and show accurate sample ages when viewing a peer's resource. Smaller requests can use free capacity when they won't delay the first request in that resource's queue. A thread must release its existing reservation before waiting for more of the same resource. Agent checkout tools are opt-in under Settings → Experimental → Federation resources.
+- Antigravity and ACP - Use one access-mode picker in desktop and messaging. Carry Antigravity sessions to the destination worktree, restore selected MCP tools, and handle larger tool requests. Show readable shell command titles while preserving full invocations and line breaks in the details. Check for updates to the managed Antigravity CLI in Settings.
+- Codex Setup and Models - Install PwrAgent's managed Codex build from Get Started when Codex is missing, too old, or cannot start. Group unavailable model providers in an **Other** submenu.
+- Reviews and Pull Requests - Open a review card on the PR it names, including agent-raised cards. Run managed Antigravity reviews in native Auto mode. Keep stack attachments across checkout path aliases, keep sub-thread trays in thread order, and choose one eligible watcher for the post-merge build. Close the review setup cleanly after sending.
+- Composer - Preserve nested inline code when pasting Markdown and accept code fences with three or more delimiters.
+- Responsiveness - Reuse stack details across hovers, reduce Git discovery for stack navigation, avoid unnecessary Project Index layout work, and bound transcript refresh and usage reads. Keep Chromium trace redaction separate from main-process CPU profiling.
+
 ## v1.5.0-prerelease.4 - 2026-11-24
 
 - Claude Code - Sign in interactively through a compatible LLM gateway from Settings → AI Providers → Claude. PwrAgent opens the gateway's device sign-in page and surfaces Claude Code's trust and account confirmations. Settings identifies gateway sessions and shows that usage is billed by the gateway.
