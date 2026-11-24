@@ -52,7 +52,7 @@
     "test:sqlite-writes": "node ./scripts/run-sqlite-write-report.mjs",
     "test:nice": "node ./scripts/nice-run.mjs pnpm test",
     "test:watch": "vitest --config vitest.workspace.mts",
-    "typecheck": "pnpm -r --if-present typecheck",
+    "typecheck": "node scripts/typecheck.mjs",
     "lint:oxlint": "node ./scripts/lint-syntax.mjs",
     "lint:oxlint:typed": "node ./scripts/lint-typed.mjs"
   },

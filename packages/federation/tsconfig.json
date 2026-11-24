@@ -1,5 +1,11 @@
 {
-  "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "lib": ["ES2023"] },
-  "include": ["src/**/*.ts"]
+  "extends": "../../tsconfig.declarations.json",
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "rootDir": "src"
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../shared" }
+  ]
 }

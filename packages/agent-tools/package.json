@@ -16,6 +16,6 @@
     "@types/node": "^24.12.4"
   },
   "scripts": {
-    "typecheck": "node ../../node_modules/typescript-native/bin/tsc --noEmit -p tsconfig.json"
+    "typecheck": "node ../../scripts/typecheck.mjs --package"
   }
 }
