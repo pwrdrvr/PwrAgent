@@ -5753,6 +5753,7 @@ describe("AcpBackendAdapter", () => {
       const createAcpClient = vi.fn((_agent: AcpInstalledAgentRecord) => ({
         initialize: vi.fn(async () => undefined),
         ensureSession: vi.fn(async () => undefined),
+        closeSessionForTransfer: vi.fn(async () => undefined),
         dispose: vi.fn(async () => undefined),
         ownsSession: () => true,
         supportsSessionLoad: () => true,

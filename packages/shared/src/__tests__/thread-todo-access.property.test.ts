@@ -140,6 +140,43 @@ function oracle(scenario: Scenario): Expected {
 const resolve = (scenario: Scenario) => resolveThreadTodoStartAccess(scenario);
 
 describe("resolveThreadTodoStartAccess", () => {
+  it("shows and starts Antigravity Auto on the Default process when the agent offers it", () => {
+    fc.assert(fc.property(fc.boolean(), fc.boolean(), (explicit, offersNativeAuto) => {
+      const destinationBackend = "acp:antigravity";
+      const destination: ThreadTodoAccessDestination = {
+        kind: destinationBackend, label: "Antigravity",
+        executionModes: [
+          { mode: "default", available: true, label: "Default Access" },
+          { mode: "full-access", available: true, label: "Full Access" },
+        ],
+        acp: {
+          registryId: "antigravity", distributionKinds: ["local"], installStatus: "installed",
+          authStatus: "not-required", verificationStatus: "not-applicable",
+          runtime: { schemaVersion: 1, status: "discovered", modes: { availableModes: [
+            { id: "default", label: "Default" },
+            ...(offersNativeAuto ? [{ id: "auto", label: "Auto" }] : [{ id: "plan", label: "Plan" }]),
+          ] } },
+        },
+      };
+      const access = resolveThreadTodoStartAccess({
+        card: explicit ? { executionMode: "auto" } : {},
+        sourceBackend: "codex", sourceExecutionMode: explicit ? "default" : "auto",
+        destination, destinationBackend,
+      });
+      if (!offersNativeAuto) {
+        expect(access.status).toBe(explicit ? "refused" : "ready");
+        if (access.status === "ready") expect(access.executionMode).toBe("default");
+        return;
+      }
+      const nativeAuto = { kind: "native", id: "auto", label: "Auto", executionMode: "auto" };
+      expect(access).toMatchObject({
+        status: "ready", selected: nativeAuto, executionMode: "default",
+        acpRuntime: { currentModeId: "auto" },
+        options: expect.arrayContaining([nativeAuto, { kind: "mode", mode: "full-access" }]),
+      });
+    }));
+  });
+
   it("matches the stated rules for every card, source and destination", () => {
     fc.assert(fc.property(scenarioArb, (scenario) => {
       const actual = resolve(scenario);

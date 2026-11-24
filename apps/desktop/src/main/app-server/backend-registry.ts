@@ -3135,6 +3135,9 @@ export class DesktopBackendRegistry {
     overlay?: ThreadOverlayState;
   }): Promise<ThreadExecutionMode> {
     const { backend, threadId, turnId, overlay } = params;
+    if (backend === "acp:antigravity") {
+      return this.acpBackend.getSession(backend, threadId)?.executionMode ?? "default";
+    }
     return (
       (backend === "codex" && turnId
         ? this.context.turnState.executionMode({ threadId: threadId, turnId: turnId })
@@ -4118,7 +4121,8 @@ export class DesktopBackendRegistry {
       const projected = this.withObservedThreadName({
         ...thread,
         ...(thread.source === "codex" ? projectOverlayThreadTitle(thread, overlay) : {}),
-        executionMode: thread.source === "claude" ? thread.executionMode ?? overlay?.executionMode : overlay?.executionMode ?? thread.executionMode,
+        executionMode: thread.source === "acp:antigravity" ? thread.executionMode
+          : thread.source === "claude" ? thread.executionMode ?? overlay?.executionMode : overlay?.executionMode ?? thread.executionMode,
         model: overlay?.model ?? thread.model,
         reasoningEffort: overlay?.reasoningEffort ?? thread.reasoningEffort,
         serviceTier: overlay?.serviceTier ?? thread.serviceTier,
@@ -4488,7 +4492,8 @@ export class DesktopBackendRegistry {
       thread: this.withObservedThreadName({
         ...thread,
         ...(ref.backend === "codex" ? projectOverlayThreadTitle(thread, overlay) : {}),
-        executionMode: ref.backend === "claude" ? thread.executionMode ?? overlay?.executionMode : overlay?.executionMode ?? thread.executionMode,
+        executionMode: ref.backend === "acp:antigravity" ? thread.executionMode
+          : ref.backend === "claude" ? thread.executionMode ?? overlay?.executionMode : overlay?.executionMode ?? thread.executionMode,
         model: overlay?.model ?? thread.model,
         reasoningEffort: overlay?.reasoningEffort ?? thread.reasoningEffort,
       }),
@@ -5927,9 +5932,9 @@ export class DesktopBackendRegistry {
           backend: backendId,
           threadId: thread.id,
         });
-        const executionMode =
-          this.latestAppliedExecutionModeFromOverlay(overlay) ??
-          thread.executionMode;
+        const executionMode = backendId === "acp:antigravity"
+          ? thread.executionMode
+          : this.latestAppliedExecutionModeFromOverlay(overlay) ?? thread.executionMode;
         const cwd = resolveThreadWorkspaceCwd(
           thread,
           overlay?.extraLinkedDirectories ?? [],
@@ -6170,7 +6175,7 @@ export class DesktopBackendRegistry {
     if (params.executionMode === "auto") {
       throw new Error("Auto access is supported only by Codex.");
     }
-    const client = await this.acpBackend.getClient(params.backend);
+    const client = await this.acpBackend.getClient(params.backend, params.executionMode);
     const initialExecutionMode = this.usesSlashControlledAcpExecutionModes(
       params.backend,
     )
@@ -6187,7 +6192,7 @@ export class DesktopBackendRegistry {
       this.usesSlashControlledAcpExecutionModes(params.backend) &&
       params.executionMode !== "default"
     ) {
-      await this.applySlashControlledAcpThreadExecutionMode({
+      await this.applyAcpThreadExecutionMode({
         backend: params.backend,
         threadId: session.sessionId,
         executionMode: params.executionMode,
@@ -6212,7 +6217,12 @@ export class DesktopBackendRegistry {
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     return await this.acpSessionPromptLocks.run(
       executionModeQueueKey(params.backend, params.threadId),
-      async () => await this.startAcpTurnLocked(params),
+      async () => {
+        if (params.backend === "acp:antigravity") {
+          await this.flushQueuedExecutionModeLocked(params.threadId, params.backend);
+        }
+        return await this.startAcpTurnLocked(params);
+      },
     );
   }
 
@@ -13673,7 +13683,9 @@ export class DesktopBackendRegistry {
   async setThreadExecutionMode(
     params: SetThreadExecutionModeRequest
   ): Promise<SetThreadExecutionModeResponse> {
-    return await this.executionModeSelectionLocks.run(
+    const locks = params.backend === "acp:antigravity"
+      ? this.acpSessionPromptLocks : this.executionModeSelectionLocks;
+    return await locks.run(
       executionModeQueueKey(params.backend, params.threadId),
       () => this.setThreadExecutionModeOnce(params),
     );
@@ -13695,9 +13707,9 @@ export class DesktopBackendRegistry {
       }
       if (
         isAcpBackendId(params.backend) &&
-        this.usesSlashControlledAcpExecutionModes(params.backend)
+        (params.backend === "acp:antigravity" || this.usesSlashControlledAcpExecutionModes(params.backend))
       ) {
-        return await this.setSlashControlledAcpExecutionMode({
+        return await this.setQueuedAcpExecutionMode({
           ...params,
           backend: params.backend,
         });
@@ -13811,7 +13823,7 @@ export class DesktopBackendRegistry {
     return await this.applyThreadExecutionMode(params);
   }
 
-  private async setSlashControlledAcpExecutionMode(
+  private async setQueuedAcpExecutionMode(
     params: SetThreadExecutionModeRequest & { backend: AcpBackendId },
   ): Promise<SetThreadExecutionModeResponse> {
     const currentApplied = await this.readAppliedExecutionMode(
@@ -13995,7 +14007,7 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
   ): boolean {
     return (
-      backend === "codex" || this.usesSlashControlledAcpExecutionModes(backend)
+      backend === "codex" || backend === "acp:antigravity" || this.usesSlashControlledAcpExecutionModes(backend)
     );
   }
 
@@ -14004,6 +14016,7 @@ export class DesktopBackendRegistry {
     threadId: string,
   ): Promise<ThreadExecutionMode> {
     if (backend === "claude") return this.claudeBackend.executionMode(threadId);
+    if (backend === "acp:antigravity") return this.acpBackend.getSession(backend, threadId)?.executionMode ?? "default";
     if (backend === "codex") {
       const overlay = await this.overlayStore.getThreadOverlayState({
         backend,
@@ -14188,9 +14201,9 @@ export class DesktopBackendRegistry {
       }
       if (
         isAcpBackendId(params.backend) &&
-        this.usesSlashControlledAcpExecutionModes(params.backend)
+        (params.backend === "acp:antigravity" || this.usesSlashControlledAcpExecutionModes(params.backend))
       ) {
-        return await this.applySlashControlledAcpThreadExecutionMode(
+        return await this.applyAcpThreadExecutionMode(
           {
             ...params,
             backend: params.backend,
@@ -14320,7 +14333,7 @@ export class DesktopBackendRegistry {
     };
   }
 
-  private async applySlashControlledAcpThreadExecutionMode(
+  private async applyAcpThreadExecutionMode(
     params: SetThreadExecutionModeRequest & { backend: AcpBackendId },
     options?: { fromQueue?: boolean; queueId?: string },
   ): Promise<SetThreadExecutionModeResponse> {
@@ -14329,6 +14342,26 @@ export class DesktopBackendRegistry {
       throw new Error(`ACP session not found: ${params.threadId}`);
     }
     const previousApplied = session.executionMode ?? "default";
+    if (params.backend === "acp:antigravity") {
+      await this.acpBackend.moveAntigravitySession(params.threadId, params.executionMode);
+    } else {
+      await this.applyAcpAccessControlPrompt(params, previousApplied);
+      const updatedAt = Date.now();
+      this.acpBackend.upsertSession({
+        ...session,
+        executionMode: params.executionMode,
+        updatedAt: Math.max(session.updatedAt, updatedAt),
+      });
+    }
+    return await this.publishAcpThreadExecutionMode(params, previousApplied, options);
+  }
+
+  private async applyAcpAccessControlPrompt(
+    params: SetThreadExecutionModeRequest & { backend: AcpBackendId },
+    previousApplied: ThreadExecutionMode,
+  ): Promise<void> {
+    const session = this.acpBackend.getSession(params.backend, params.threadId);
+    if (!session) throw new Error(`ACP session not found: ${params.threadId}`);
     const client = await this.acpBackend.getClientForSession(
       params.backend,
       params.threadId,
@@ -14358,18 +14391,29 @@ export class DesktopBackendRegistry {
       );
     }
 
+  }
+
+  private async publishAcpThreadExecutionMode(
+    params: SetThreadExecutionModeRequest & { backend: AcpBackendId },
+    previousApplied: ThreadExecutionMode,
+    options?: { fromQueue?: boolean; queueId?: string },
+  ): Promise<SetThreadExecutionModeResponse> {
     const updatedAt = Date.now();
-    this.acpBackend.upsertSession({
-      ...session,
-      executionMode: params.executionMode,
-      updatedAt: Math.max(session.updatedAt, updatedAt),
-    });
+    const handleProjectionError = (error: unknown) => {
+      if (params.backend !== "acp:antigravity") throw error;
+      // The route and applied mode are already committed in session storage.
+      // Publish them even if a secondary overlay write fails.
+      backendRegistryLog.warn("Could not persist the Antigravity access overlay", {
+        threadId: params.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    };
     await this.overlayStore.setThreadExecutionMode({
       backend: params.backend,
       threadId: params.threadId,
       executionMode: params.executionMode,
       updatedAt,
-    });
+    }).catch(handleProjectionError);
 
     await this.appendPermissionTransition({
       backend: params.backend,
@@ -14382,7 +14426,7 @@ export class DesktopBackendRegistry {
         occurredAt: updatedAt,
         queueId: options?.queueId,
       },
-    });
+    }).catch(handleProjectionError);
 
     await this.emit({
       backend: params.backend,
@@ -14766,6 +14810,20 @@ export class DesktopBackendRegistry {
     threadId: string,
     backend: AppServerBackendKind = "codex",
   ): Promise<void> {
+    if (backend === "acp:antigravity") {
+      await this.acpSessionPromptLocks.run(
+        executionModeQueueKey(backend, threadId),
+        () => this.flushQueuedExecutionModeLocked(threadId, backend),
+      );
+      return;
+    }
+    await this.flushQueuedExecutionModeLocked(threadId, backend);
+  }
+
+  private async flushQueuedExecutionModeLocked(
+    threadId: string,
+    backend: AppServerBackendKind,
+  ): Promise<void> {
     const queueKey = executionModeQueueKey(backend, threadId);
     const activeFlush = this.queuedExecutionModeFlushes.get(queueKey);
     if (activeFlush) {
@@ -14775,6 +14833,7 @@ export class DesktopBackendRegistry {
 
     const queue = this.queuedExecutionModes.get(queueKey);
     if (!queue) return;
+    if (backend === "acp:antigravity" && this.threadHasActiveTurn(threadId, backend)) return;
     // Atomic claim: in JS's single-threaded event loop, `Map.delete`
     // returning true gives this caller exclusive ownership of the
     // apply. Concurrent flushes (one from the emit-listener turn-end
@@ -19261,7 +19320,7 @@ export class DesktopBackendRegistry {
         message: "This contained member does not allow this PwrAgent tool.",
       });
     }
-    if (isAcpBackendId(backend) && isAcpPermissionRequest(request)) {
+    if (isAcpBackendId(backend) && backend !== "acp:antigravity" && isAcpPermissionRequest(request)) {
       const session = this.acpBackend.getSession(backend, request.params.threadId);
       const runtimeCapabilities =
         this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities;
@@ -22257,7 +22316,10 @@ export class DesktopBackendRegistry {
         notification.params.threadId,
       );
     } else if (isAcpBackendId(event.backend)) {
-      if (this.usesSlashControlledAcpExecutionModes(event.backend)) {
+      if (event.backend === "acp:antigravity") {
+        // The prompt admission lock may still be held by a failed dispatch.
+        void this.flushQueuedExecutionModeIfPresent(notification.params.threadId, event.backend);
+      } else if (this.usesSlashControlledAcpExecutionModes(event.backend)) {
         await this.flushQueuedExecutionModeIfPresent(
           notification.params.threadId,
           event.backend,
@@ -22393,7 +22455,9 @@ export class DesktopBackendRegistry {
           });
         }
         if (isAcpBackendId(event.backend)) {
-          if (this.usesSlashControlledAcpExecutionModes(event.backend)) {
+          if (event.backend === "acp:antigravity") {
+            void this.flushQueuedExecutionModeIfPresent(event.notification.params.threadId, event.backend);
+          } else if (this.usesSlashControlledAcpExecutionModes(event.backend)) {
             await this.flushQueuedExecutionModeIfPresent(
               event.notification.params.threadId,
               event.backend,

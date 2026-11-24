@@ -128,6 +128,33 @@ permission request for a particular tool call.
 Raw captures are under the ignored
 `apps/desktop/.local/protocol-captures/antigravity-auto/`.
 
+### Antigravity Full Access across processes
+
+The November 23, 2026 macOS probe used Antigravity 1.5.15 and two live
+`agy acp --process-per-session` processes sharing one disposable app data
+directory. Only the Full Access process received
+`--dangerously-skip-permissions`. Each row used a separate prompt and
+verified the tool's effect in the workspace or at a loopback MCP server.
+
+| Tool | Default process, request cancelled by the client | Full Access process |
+| --- | --- | --- |
+| Native file edit | 1 permission request, file absent | 0 requests, file written |
+| Shell command | 1 permission request, file absent | 0 requests, file written |
+| MCP marker tool | 1 permission request, no call | 0 requests, marker received |
+
+The driver waited for `session/close` before sending `session/load` for the
+same ID to the other process. Full Access replayed both original user and
+assistant turns. Default then replayed all five turns and all three tool
+calls after the return trip. Both ACP front processes stayed up.
+
+PwrAgent's Access mode chooses the process. Antigravity's Agent mode keeps
+its own selection across a move, including Plan. Plan still instructs
+Antigravity to plan. Full Access auto-approves the tools the agent does run,
+including any tools available in Plan.
+
+Raw captures are under the ignored
+`apps/desktop/.local/protocol-captures/antigravity-full-access/`.
+
 ### Antigravity ACP turn steering
 
 The November 23, 2026 macOS capture of Antigravity CLI `1.5.15` (`agy acp --process-per-session`) verified how Antigravity steers an active turn over ACP:

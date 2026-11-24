@@ -90,6 +90,7 @@ const MODE_WORDS: Record<ThreadExecutionMode, string> = {
  * approval policy lists no PwrAgent modes: the operator's pick of one of its
  * modes stands, and otherwise its highest mode at or below the wanted access
  * is used, so a provider switch never raises access.
+ * Antigravity can also offer native Auto on its Default process.
  */
 export function resolveThreadTodoStartAccess(input: {
   card: ThreadTodoAccessCard;
@@ -110,12 +111,26 @@ export function resolveThreadTodoStartAccess(input: {
 
   // A peer's older catalog may leave the list out.
   const listed = destination.executionModes ?? [];
+  const runtime = destination.acp?.runtime;
   if (listed.length > 0) {
     const options: ThreadTodoAccessOption[] = ACCESS_ORDER
       .filter((mode) => listed.some((entry) => entry.mode === mode && entry.available))
       .map((mode) => ({ kind: "mode", mode }));
     const offers = (mode: ThreadExecutionMode) =>
       options.some((option) => option.kind === "mode" && option.mode === mode);
+    const antigravityAuto = input.destinationBackend === "acp:antigravity" && offers("default") && !offers("auto")
+      ? acpNativeAccessOptions(runtime).find((option) => option.id === "auto")
+      : undefined;
+    if (antigravityAuto) {
+      const selected = { kind: "native" as const, ...antigravityAuto };
+      options.splice(1, 0, selected);
+      if (wanted === "auto") {
+        return {
+          status: "ready", selected, source: named, wanted, executionMode: "default",
+          acpRuntime: acpNativeAccessRuntime(runtime, selected.id), options,
+        };
+      }
+    }
     const ready = (mode: ThreadExecutionMode, source: ThreadTodoAccessSource): ThreadTodoStartAccess => ({
       status: "ready", selected: { kind: "mode", mode }, source, wanted, executionMode: mode, options,
     });
@@ -139,7 +154,6 @@ export function resolveThreadTodoStartAccess(input: {
     };
   }
 
-  const runtime = destination.acp?.runtime;
   const options: ThreadTodoAccessOption[] = acpNativeAccessOptions(runtime)
     .map((option) => ({ kind: "native", ...option }));
   // The Full Access gate judges the card's mode, so a pick above it, which
