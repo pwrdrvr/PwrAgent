@@ -1576,6 +1576,46 @@ describe("AcpSessionReplayNormalizer", () => {
     ]);
   });
 
+  it("replays the full title-only script through a sparse completion", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+    const title = "if true; then\n  echo ok\nfi";
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "script",
+        kind: "execute",
+        title,
+        status: "in_progress",
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "script",
+        status: "completed",
+      },
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        summary: "if true; then echo ok fi",
+        status: "completed",
+        details: [expect.objectContaining({
+          label: "if true; then echo ok fi",
+          command: expect.objectContaining({
+            displayCommand: title,
+            source: "tool",
+            rawCommand: undefined,
+          }),
+        })],
+      }),
+    ]);
+  });
+
   it("uses Grok command descriptions while preserving the full command", () => {
     const normalizer = new AcpSessionReplayNormalizer();
     const command = "python3 - <<'PY'\nprint('Grok 4.5')\nPY";

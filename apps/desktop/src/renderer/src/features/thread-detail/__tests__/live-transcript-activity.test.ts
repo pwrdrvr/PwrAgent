@@ -127,7 +127,7 @@ describe("buildLiveToolDetails", () => {
         label: description,
         status: "completed",
         command: expect.objectContaining({
-          displayCommand: "python3 - <<'PY' print('Grok 4.5') PY",
+          displayCommand: command,
           rawCommand: command,
           output: "Grok 4.5",
         }),

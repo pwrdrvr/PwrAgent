@@ -23,7 +23,7 @@ import {
   formatExplorationSummary,
   formatSearchCommandActionLabel,
   formatWebSearchLabel,
-  normalizeCommandText,
+  unwrapCommandText,
 } from "@pwragent/shared/command-action-labels";
 import {
   type AppServerSource,
@@ -269,25 +269,21 @@ function formatElapsedMs(elapsedMs: number): string {
   return seconds >= 10 ? `${seconds.toFixed(0)}s` : `${seconds.toFixed(1)}s`;
 }
 
-function readDisplayCommand(command: string | undefined): string | undefined {
-  if (!command) {
-    return undefined;
-  }
-  return normalizeCommandText(command) || undefined;
-}
-
 function buildLiveCommandDetail(
   item: Record<string, unknown>,
   command: string | undefined,
   elapsedMs: number | undefined
 ): AppServerThreadCommandDetail | undefined {
-  const displayCommand = readDisplayCommand(command);
+  if (!command) {
+    return undefined;
+  }
+  const source = readString(item, "commandSource");
+  const displayCommand = source === "tool" ? command : unwrapCommandText(command).trim();
   if (!displayCommand) {
     return undefined;
   }
 
   const output = readCommandOutputText(item);
-  const source = readString(item, "commandSource");
   const exitCode = readExitCode(item);
   const cwd = readString(item, "cwd") ??
     readString(item, "workingDirectory") ??

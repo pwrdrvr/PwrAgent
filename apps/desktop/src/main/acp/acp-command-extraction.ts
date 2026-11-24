@@ -45,7 +45,15 @@ export function readAcpToolInvocation(
     return `web_fetch(url=${formatInvocationValue(webFetchUrl)})`;
   }
 
-  return readAcpCodeSearch(record)?.invocation;
+  const codeSearch = readAcpCodeSearch(record);
+  if (codeSearch) {
+    return codeSearch.invocation;
+  }
+  // Some ACP executors supply the script only as the title.
+  const title = readString(record, "title");
+  return title && /[\r\n]/.test(title) && isShellLikeAcpTool(record)
+    ? title
+    : undefined;
 }
 
 /** Grok's MCP dispatcher exposes the invoked tool inside its UseTool input. */
