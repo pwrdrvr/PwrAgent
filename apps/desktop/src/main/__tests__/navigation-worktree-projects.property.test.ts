@@ -12,7 +12,10 @@ import { resolvePendingWindowsDirectoryKey } from "../app-server/navigation-wind
 import { ProjectForgeAutomationIndex } from "../app-server/project-forge-automation-index";
 
 vi.mock("node:fs/promises", { spy: true });
-vi.mock("../git-info/worktree-store", () => ({ resolveWorktreeRepositoryDirectory: async () => undefined }));
+vi.mock("../git-info/worktree-store", () => ({
+  resolveWorktreeRepositoryDirectory: async () => undefined,
+  readSeparateGitProjectCheckout: async () => undefined,
+}));
 
 beforeEach(() => {
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");

@@ -2,7 +2,7 @@ import path from "node:path";
 import type { DirectoryOverlayState, NavigationDirectoryGitStatus, NavigationDirectorySummary, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { applyNavigationDirectoryOverlay, canonicalizeNavigationPath } from "@pwragent/shared/directory-navigation";
 import { navigationDirectoryRepositoryRevision, type NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
-import { resolveWorktreeRepositoryDirectory } from "../git-info/worktree-store";
+import { readSeparateGitProjectCheckout, resolveWorktreeRepositoryDirectory } from "../git-info/worktree-store";
 import { reconcileWindowsDirectoryAliases } from "./navigation-windows-directory-aliases";
 
 const PROJECT_PROBE_BATCH_SIZE = 16;
@@ -50,16 +50,35 @@ async function resolveGitWorktreeProjects(
   const candidates = directories.filter((directory) => directory.kind === "directory"
     && !directory.localAvailability && directory.path && path.isAbsolute(directory.path));
   const worktreeParents = new Map<string, string>();
+  const separatePrimaries = new Map<string, string | null>();
+  const separateWorktrees = new Map<string, string>();
   for (let start = 0; start < candidates.length; start += PROJECT_PROBE_BATCH_SIZE) {
     signal?.throwIfAborted();
     await Promise.all(candidates.slice(start, start + PROJECT_PROBE_BATCH_SIZE).map(async (directory) => {
       const owner = await resolveWorktreeRepositoryDirectory(directory.path!, { rootOnly: true });
       if (owner && owner.path !== canonicalizeNavigationPath(directory.path!)) {
         worktreeParents.set(directory.key, owner.path);
+        return;
+      }
+      // A standalone Git admin directory does not name the primary checkout.
+      // Both ends must be verified at roots in this owner's inventory.
+      const checkoutPath = directory.path!;
+      const separate = await readSeparateGitProjectCheckout(checkoutPath);
+      if (!separate) return;
+      if (separate.primary) {
+        const primaryPath = canonicalizeNavigationPath(checkoutPath);
+        const previous = separatePrimaries.get(separate.commonDirectory);
+        separatePrimaries.set(separate.commonDirectory, previous === undefined || previous === primaryPath ? primaryPath : null);
+      } else {
+        separateWorktrees.set(directory.key, separate.commonDirectory);
       }
     }));
   }
   signal?.throwIfAborted();
+  for (const [key, commonDirectory] of separateWorktrees) {
+    const primary = separatePrimaries.get(commonDirectory);
+    if (primary) worktreeParents.set(key, primary);
+  }
   if (!worktreeParents.size) return { directories };
 
   const projects = new Map(directories.filter((directory) => !worktreeParents.has(directory.key))
