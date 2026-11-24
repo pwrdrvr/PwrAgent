@@ -19,7 +19,7 @@ import {
   vi,
 } from "vitest";
 import { applyNavigationLaunchpadDefaultsPatch, buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
-import { claimAgentReviewBudget, type AgentReviewAdmission, type AgentReviewBudget } from "@pwragent/owner-core/agent-review-admission";
+import { claimAgentReviewBudget, rearmAgentReviewBudget, type AgentReviewAdmission, type AgentReviewBudget, type OperatorReviewInput } from "@pwragent/owner-core/agent-review-admission";
 import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import { buildNavigationSnapshot } from "@pwragent/shared/navigation-state";
 import { buildAppendPinRank, buildPrependPinRank } from "@pwragent/shared/thread-pins";
@@ -580,6 +580,11 @@ export function createOverlayStoreMock(params?: {
       if (typeof next === "string") return next;
       reviewBudgets.set(key, next);
       return undefined;
+    },
+    rearmAgentReviews: ({ backend, threadId }: Pick<AgentReviewAdmission, "backend" | "threadId">, input: OperatorReviewInput) => {
+      const key = buildThreadIdentityKey(backend, threadId);
+      const next = rearmAgentReviewBudget(reviewBudgets.get(key), input);
+      if (next) reviewBudgets.set(key, next);
     },
     listAllActivePrStatusWatches: async (): Promise<ThreadPullRequestWatchSummary[]> => [],
     listActiveThreadPrStatusWatches: async (_params: {

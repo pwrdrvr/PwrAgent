@@ -1516,6 +1516,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         upsertManagedReviewEntry: (...args) => overlayStore.upsertManagedReviewEntry(...args),
         readAgentReviewBudget: (...args) => overlayStore.readAgentReviewBudget(...args),
         claimAgentReview: (...args) => overlayStore.claimAgentReview(...args),
+        rearmAgentReviews: (...args) => overlayStore.rearmAgentReviews(...args),
       },
       archive: {
         setThreadArchiveTombstone: (...args) => overlayStore.setThreadArchiveTombstone(...args),

@@ -25,7 +25,7 @@ export type {
 } from "@pwragent/owner-core/pr-status-storage";
 import { canonicalizeDetachedPrKeys, normalizeDetachedPrKeys } from "@pwragent/owner-core/detached-pr-keys";
 import { patchOwnerThreadMetadata, type OwnerThreadIdentity, type OwnerThreadMetadataPatch, type OwnerThreadRecord, type OwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
-import { claimAgentReviewBudget, type AgentReviewAdmission, type AgentReviewBudget, type AgentReviewRefusal } from "@pwragent/owner-core/agent-review-admission";
+import { claimAgentReviewBudget, rearmAgentReviewBudget, type AgentReviewAdmission, type AgentReviewBudget, type AgentReviewRefusal, type OperatorReviewInput } from "@pwragent/owner-core/agent-review-admission";
 import { buildLegacyEncodedThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { mergeCausalMessagingContext } from "@pwragent/shared/messaging-causal-context";
 import {
@@ -5660,6 +5660,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       if (typeof next === "string") return next;
       this.stateDb.setMeta(this.agentReviewBudgetKey(request), JSON.stringify(next));
       return undefined;
+    }).immediate();
+  }
+
+  rearmAgentReviews(thread: OwnerThreadIdentity, operatorInput: OperatorReviewInput): void {
+    // Most operator turns have no review attempts to clear, so avoid taking
+    // the write lock unless a reset would change the persisted budget.
+    if (!rearmAgentReviewBudget(this.readAgentReviewBudget(thread), operatorInput)) return;
+    this.stateDb.raw.transaction(() => {
+      const next = rearmAgentReviewBudget(this.readAgentReviewBudget(thread), operatorInput);
+      if (next) this.stateDb.setMeta(this.agentReviewBudgetKey(thread), JSON.stringify(next));
     }).immediate();
   }
 
@@ -13075,6 +13085,7 @@ export type OverlayStoreLike = Pick<
   | "upsertManagedReviewEntry"
   | "readAgentReviewBudget"
   | "claimAgentReview"
+  | "rearmAgentReviews"
   | "consumeManagedReviewContexts"
   | "upsertThreadUsageLine"
   | "readThreadPricing"

@@ -124,7 +124,7 @@ most three agent requests on a thread between operator turns. New commits,
 CI wakes, review-fix turns and call IDs do not reset the limit. The owner
 records the claim before scheduling it, so a restart cannot replay that
 admission. Even a failed start counts as an attempt. A new turn started
-by the operator allows a fresh set of requests. The operator can also start
+by the operator clears used attempts durably. The operator can also start
 an individual review directly.
 
 ## Import and the queue

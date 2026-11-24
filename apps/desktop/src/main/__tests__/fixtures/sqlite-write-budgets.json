@@ -1,4 +1,6 @@
 {
+  "agent-review-operator-reset-empty": {"commits": 0, "note": "An accepted operator turn with no used review attempts makes no review admission writes.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "agent-review-operator-reset": {"commits": 1, "note": "An accepted operator turn clears used review attempts in one commit. At 100 resets/day and 8,240 WAL bytes per commit, about 0.82 MB/day.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
   "agent-review-refusal": {"commits": 0, "note": "A review refused at the limit makes no writes.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "agent-review-admission": {"commits": 1, "note": "One commit per admitted agent review. At 100 admissions/day and 8,240 WAL bytes per commit, about 0.82 MB/day.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
   "antigravity-access-session-move": {"commits": 10, "note": "One idle Antigravity access change, including the session reload and the applied permission audit entry", "observedWalBytes": 123600, "rowsChanged": 10, "statements": 10},

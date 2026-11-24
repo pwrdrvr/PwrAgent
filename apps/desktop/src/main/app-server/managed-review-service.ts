@@ -192,7 +192,17 @@ export class ManagedReviewService {
     if (!isOperatorReviewInput(source)) return;
     const key = buildThreadIdentityKey(turn.backend, turn.threadId);
     if (this.operatorReviewInputs.get(key)?.turnId === turn.turnId) return;
-    this.operatorReviewInputs.set(key, { turnId: turn.turnId, observedAt: Date.now() });
+    const input = { turnId: turn.turnId, observedAt: Date.now() };
+    try {
+      this.context.stores.reviews.rearmAgentReviews(turn, input);
+      this.operatorReviewInputs.set(key, input);
+    } catch (error) {
+      // The provider already accepted the operator turn. A bookkeeping
+      // failure cannot turn that successful send into a reported failure.
+      backendRegistryLog.warn("could not persist operator review budget reset", {
+        backend: turn.backend, threadId: turn.threadId, error: String(error),
+      });
+    }
   }
 
   turnEventObservers(): Record<"forwarding" | "output" | "terminal" | "boundary" | "metadata", TurnEventObserver> {
@@ -2087,6 +2097,14 @@ export class ManagedReviewService {
       : undefined;
   }
 
+  private async resolveAgentReviewDiff(request: StartReviewRequest): Promise<string | undefined> {
+    if (request.target.type !== "commit" || request.cwd) return immutableReviewDiffHash(request);
+    const { backend, threadId } = request;
+    const overlay = await this.context.stores.threads.getThreadOverlayState({ backend, threadId });
+    const cwd = await this.host().resolveThreadEnvironmentCwd(backend, threadId, overlay);
+    return immutableReviewDiffHash({ ...request, cwd });
+  }
+
   async startReviewFromAgentTool(
     request: PwrAgentThreadOrchestrationRequest<"start_review">,
   ): Promise<PwrAgentThreadOrchestrationResponse> {
@@ -2199,13 +2217,14 @@ export class ManagedReviewService {
         }),
         this.host().readDelegatedTurnAncestry(request.context),
       ]);
+      const diff = await this.resolveAgentReviewDiff(prepared);
       // Resolution yields to other calls and terminal events. Check and claim
       // together, before any new request can consume the same admission.
       const concurrent = checkAdmission();
       if (concurrent) return concurrent;
       this.host().assertThreadOwnership();
       const claimRefusal = this.context.stores.reviews.claimAgentReview({
-        ...turn, operatorInput: this.operatorReviewInputs.get(threadKey), diff: immutableReviewDiffHash(prepared),
+        ...turn, operatorInput: this.operatorReviewInputs.get(threadKey), diff,
       });
       if (claimRefusal) return this.agentReviewRefused(claimRefusal);
       const pending = this.scheduleReviewStart({

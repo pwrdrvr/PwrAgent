@@ -22,20 +22,25 @@ function commit(value: number): AppServerReviewTarget {
   return { type: "commit", sha: value.toString(16).padStart(40, "0"), title: null };
 }
 
-async function withReviewOwner(run: (owner: {
+async function withReviewOwner<T>(run: (owner: {
   registry: DesktopBackendRegistry;
-  ask: (turnId: string, target: AppServerReviewTarget, callId: string) => Promise<boolean>;
+  ask: (turnId: string, target: AppServerReviewTarget, callId: string, cwd?: string) => Promise<boolean>;
   complete: (turnId: string) => Promise<void>;
   start: (source: "automation" | "desktop") => Promise<string>;
   providerStarts: () => number;
-}) => Promise<void>, options: {
+}) => Promise<T>, options: {
   overlayStore?: ReturnType<typeof createOverlayStoreMock> | SqliteOverlayStore;
   turnPrefix?: string;
   beforeReview?: () => Promise<void>;
-} = {}): Promise<void> {
+  cwd?: string;
+} = {}): Promise<T> {
   let started = 0;
   const codexClient = new MockBackendClient({
     initializeResult: { methods: ["turn/start", "review/start", "thread/resume"] },
+    ...(options.cwd ? { threads: [{
+      id: thread.threadId, source: thread.backend, title: "Review parent", titleSource: "explicit",
+      linkedDirectories: [{ id: options.cwd, kind: "local", label: "Project", path: options.cwd }],
+    }] } : {}),
     startTurnResults: Array.from({ length: 20 }, (_, index) => ({
       threadId: thread.threadId, turnId: `${options.turnPrefix ?? "turn"}-${index}`,
     })),
@@ -49,11 +54,11 @@ async function withReviewOwner(run: (owner: {
     codexClient, overlayStore: options.overlayStore ?? createOverlayStoreMock(), threadTitleGenerationService: null,
   });
   try {
-    await run({
+    return await run({
       registry,
-      ask: async (turnId, target, callId) => {
+      ask: async (turnId, target, callId, cwd) => {
         const result = await callRegistryMcpTool({
-          registry, ...thread, turnId, tool: "start_review", args: { target }, callId,
+          registry, ...thread, turnId, tool: "start_review", args: { target, ...(cwd ? { cwd } : {}) }, callId,
         });
         return result?.isError !== true && result?.structuredContent?.status === "scheduled";
       },
@@ -166,6 +171,25 @@ describe("agent review submission", () => {
     });
   });
 
+  it("deduplicates a full commit when either request names the thread checkout explicitly", async () => {
+    const cwd = "/repo/review-parent";
+    await fc.assert(fc.asyncProperty(
+      fc.integer({ min: 1, max: 100 }), fc.boolean(),
+      async (value, explicitFirst) => await withReviewOwner(async (owner) => {
+        const first = await owner.start("automation");
+        expect(await owner.ask(first, commit(value), "first", explicitFirst ? cwd : undefined)).toBe(true);
+        await owner.complete(first);
+        await owner.complete("review-1");
+        const later = await owner.start("automation");
+        const duplicate = await owner.ask(later, commit(value), "duplicate", explicitFirst ? undefined : cwd);
+        await owner.complete(later);
+        if (duplicate) await owner.complete("review-2");
+        expect(duplicate).toBe(false);
+        expect(owner.providerStarts()).toBe(1);
+      }, { cwd }),
+    ), { numRuns: 12, examples: [[1, false], [1, true]] });
+  });
+
   it("keeps the next independent review waiting when the invoking terminal is redelivered", async () => {
     const enteringProvider = createDeferred<void>();
     const providerRelease = createDeferred<void>();
@@ -233,6 +257,55 @@ describe("agent review submission", () => {
           : "A review refused at the limit makes no writes.",
         writes,
       });
+    }
+  });
+
+  it("preserves an operator turn's reset across a restart before another review is requested", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const { dbPath, tempDir } = createTempStateDb("review-rearm-");
+    try {
+      const beforeRestart = StateDb.open(dbPath);
+      const measured = await withReviewOwner(async (owner) => {
+        for (const value of [1, 2, 3]) {
+          const turn = await owner.start("automation");
+          expect(await owner.ask(turn, commit(value), `review-${value}`)).toBe(true);
+          await owner.complete(turn);
+          await owner.complete(`review-${value}`);
+        }
+        const reset = await measureSqliteWrites(() => owner.start("desktop"));
+        await owner.complete(reset.result);
+        const idle = await measureSqliteWrites(() => owner.start("desktop"));
+        await owner.complete(idle.result);
+        return { reset: reset.writes, idle: idle.writes };
+      }, { overlayStore: new SqliteOverlayStore(beforeRestart), turnPrefix: "before-rearm-restart" }).finally(() => {
+        beforeRestart.close();
+      });
+      const afterRestart = StateDb.open(dbPath);
+      try {
+        await withReviewOwner(async (owner) => {
+          const turn = await owner.start("automation");
+          const accepted = await owner.ask(turn, commit(1), "after-restart");
+          await owner.complete(turn);
+          if (accepted) await owner.complete("review-1");
+          expect(accepted).toBe(true);
+          expect(owner.providerStarts()).toBe(1);
+        }, { overlayStore: new SqliteOverlayStore(afterRestart), turnPrefix: "after-rearm-restart" });
+      } finally {
+        afterRestart.close();
+      }
+      expectSqliteWriteBudget({
+        scenario: "agent-review-operator-reset",
+        note: "An accepted operator turn clears used review attempts in one commit. At 100 resets/day and 8,240 WAL bytes per commit, about 0.82 MB/day.",
+        writes: measured.reset,
+      });
+      expectSqliteWriteBudget({
+        scenario: "agent-review-operator-reset-empty",
+        note: "An accepted operator turn with no used review attempts makes no review admission writes.",
+        writes: measured.idle,
+      });
+    } finally {
+      removeTempStateDbDir(tempDir);
+      vi.unstubAllEnvs();
     }
   });
 });

@@ -12,6 +12,7 @@ export type AgentReviewRefusal = "duplicate_turn" | "duplicate_diff" | "limit";
 export interface AgentReviewAdmissionStore {
   readAgentReviewBudget(thread: OwnerThreadIdentity): AgentReviewBudget | undefined;
   claimAgentReview(request: AgentReviewAdmission): AgentReviewRefusal | undefined;
+  rearmAgentReviews(thread: OwnerThreadIdentity, operatorInput: OperatorReviewInput): void;
 }
 
 function reviewBudget(current: AgentReviewBudget | undefined, operatorInput?: OperatorReviewInput): AgentReviewBudget {
@@ -20,6 +21,16 @@ function reviewBudget(current: AgentReviewBudget | undefined, operatorInput?: Op
     return { operatorInput, attempts: [] };
   }
   return current;
+}
+
+/** Persist a new boundary only when it clears attempts that could survive a restart. */
+export function rearmAgentReviewBudget(
+  current: AgentReviewBudget | undefined,
+  operatorInput: OperatorReviewInput,
+): AgentReviewBudget | undefined {
+  if (!current?.attempts.length) return undefined;
+  const next = reviewBudget(current, operatorInput);
+  return next === current ? undefined : next;
 }
 
 export function canClaimAgentReview(current: AgentReviewBudget | undefined, request: Pick<AgentReviewAdmission, "operatorInput" | "turnId" | "diff">): AgentReviewRefusal | undefined {

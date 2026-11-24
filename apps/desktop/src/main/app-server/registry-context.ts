@@ -1,4 +1,5 @@
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { AgentReviewAdmissionStore } from "@pwragent/owner-core/agent-review-admission";
 import type { ClaudeBackend } from "../claude/claude-backend";
 import type { AcpBackendAdapter } from "./acp-backend-adapter";
 import type { BackendClient, BackendRegistryOverlayStoreLike } from "./backend-registry-types";
@@ -44,9 +45,8 @@ export type RegistryPullRequestStore = Pick<BackendRegistryOverlayStoreLike,
   | "readPrStatusCache"
 >;
 
-export type RegistryReviewStore = Pick<BackendRegistryOverlayStoreLike,
-  "upsertManagedReviewEntry" | "readAgentReviewBudget" | "claimAgentReview"
->;
+export type RegistryReviewStore = Pick<BackendRegistryOverlayStoreLike, "upsertManagedReviewEntry">
+  & AgentReviewAdmissionStore;
 
 export type RegistryArchiveStore = Pick<BackendRegistryOverlayStoreLike,
   "setThreadArchiveTombstone" | "setThreadKeepCheckoutAwake" | "upsertWorktreeSnapshot"
