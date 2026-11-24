@@ -499,6 +499,8 @@ function describeClaudeSignIn(
       return "API key";
     case "claude-account":
       return "Claude account";
+    case "gateway":
+      return "LLM gateway";
     case "external":
       return "External provider";
     default:

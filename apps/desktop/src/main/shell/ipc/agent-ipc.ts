@@ -6,6 +6,7 @@ import type {
 } from "@pwragent/shared/contracts/background-terminals";
 import { registerResearchIpcHandlers, disposeResearchIpcHandlers } from "./research-ipc";
 import type { ThreadGoalRequest, ThreadGoalState } from "@pwragent/shared/contracts/thread-goal";
+import type { ClaudeGatewayRequest, ClaudeGatewayResponse } from "@pwragent/shared/contracts/claude-gateway";
 import { registerDecisionsRailIpcHandlers, disposeDecisionsRailIpcHandlers } from "./decisions-rail-ipc";
 import {
   AGENT_LIST_BACKGROUND_TERMINALS_CHANNEL,
@@ -159,6 +160,7 @@ import {
   AGENT_UNDO_THREAD_REWIND_CHANNEL,
   AGENT_CONTINUE_CLAUDE_THREAD_IN_NEW_SESSION_CHANNEL,
   AGENT_SIGN_IN_CLAUDE_CHANNEL,
+  AGENT_CLAUDE_GATEWAY_CHANNEL,
   AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
@@ -1213,6 +1215,12 @@ export function registerAgentIpcHandlers(): void {
     await registry.signInClaude();
   });
 
+  ipcMain.removeHandler(AGENT_CLAUDE_GATEWAY_CHANNEL);
+  ipcMain.handle(AGENT_CLAUDE_GATEWAY_CHANNEL, async (event, request: ClaudeGatewayRequest): Promise<ClaudeGatewayResponse> => {
+    if (federationTargetForChannelSubscriber(event.sender)) throw new Error("Sign in on the machine running Claude Code.");
+    return await registry.claudeGateway(request);
+  });
+
   ipcMain.removeHandler(AGENT_UNDO_THREAD_REWIND_CHANNEL);
   ipcMain.handle(
     AGENT_UNDO_THREAD_REWIND_CHANNEL,
@@ -1659,6 +1667,7 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_UNDO_THREAD_REWIND_CHANNEL);
   ipcMain.removeHandler(AGENT_CONTINUE_CLAUDE_THREAD_IN_NEW_SESSION_CHANNEL);
   ipcMain.removeHandler(AGENT_SIGN_IN_CLAUDE_CHANNEL);
+  ipcMain.removeHandler(AGENT_CLAUDE_GATEWAY_CHANNEL);
   ipcMain.removeHandler(AGENT_CONFIGURE_GROK_WORKFLOW_BUDGET_CHANNEL);
   ipcMain.removeHandler(AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL);
   ipcMain.removeHandler(AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL);

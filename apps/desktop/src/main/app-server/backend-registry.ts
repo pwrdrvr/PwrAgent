@@ -1,4 +1,5 @@
 import { snapshotCodexSkillProfile } from "@pwragent/shared/contracts/codex-skill-profiles";
+import type { ClaudeGatewayRequest, ClaudeGatewayResponse } from "@pwragent/shared/contracts/claude-gateway";
 import type { CheckoutToolHandler } from "../agent-tools/pwragent-resource-checkout-agent-tools";
 import type { ThreadModelSettings } from "./thread-model-settings";
 import type { AcpSessionRuntimeOptions } from "./acp-session-runtime-options";
@@ -13358,6 +13359,12 @@ export class DesktopBackendRegistry {
     const policy = getOwnerHostServices().runtimePolicy;
     if (policy && !policy.enabledBackends.includes("claude")) throw new Error("Claude is disabled on this instance.");
     await this.claudeBackend.signIn();
+  }
+
+  async claudeGateway(request: ClaudeGatewayRequest): Promise<ClaudeGatewayResponse> {
+    const policy = getOwnerHostServices().runtimePolicy;
+    if (policy && !policy.enabledBackends.includes("claude")) throw new Error("Claude is disabled on this instance.");
+    return await this.claudeBackend.claudeGateway(request);
   }
 
   /** A Claude thread whose session Claude Code deleted continues in a new
