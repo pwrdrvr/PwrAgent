@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { act, render, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import type {
@@ -75,8 +75,14 @@ async function checkLayoutHistory(signal: AbortSignal, changes: LayoutChange[], 
     readPwrSnapConnectionStatus: status.read,
   };
   const view = render(<Launchpad desktopApi={desktopApi} sidebarHidden={false} contextRailPinned />);
+  const { promise: aborted, resolve: resolveAbort } = Promise.withResolvers<void>();
+  const stopWaiting = () => resolveAbort();
+  signal.addEventListener("abort", stopWaiting, { once: true });
   try {
-    await act(async () => { await status.ready; });
+    // Let act flush on abort before throwing cancellation to the caller.
+    await act(async () => {
+      if (!signal.aborted) await Promise.race([status.ready, aborted]);
+    });
     signal.throwIfAborted();
     const tileButton = () => within(view.container).getByRole("button", { name: "Update PwrSnap" });
     const button = tileButton();
@@ -86,6 +92,7 @@ async function checkLayoutHistory(signal: AbortSignal, changes: LayoutChange[], 
       expect(status.read).toHaveBeenCalledTimes(1);
     }
   } finally {
+    signal.removeEventListener("abort", stopWaiting);
     view.unmount();
     view.container.remove();
   }
@@ -101,7 +108,7 @@ it("retains connection tile identity through window layout changes", async ({ on
   await work;
 });
 
-it("stops the layout history when the test ends during connection status loading", async () => {
+it("unmounts the layout history on abort while the connection status is pending", async ({ onTestFinished }) => {
   const controller = new AbortController();
   const reason = new Error("layout history ended before connection status was ready");
   const pending = Promise.withResolvers<Awaited<ReturnType<ReadStatus>>>();
@@ -109,10 +116,16 @@ it("stops the layout history when the test ends during connection status loading
   const changes = [{ sidebarHidden: true, contextRailPinned: false }];
 
   const work = checkLayoutHistory(controller.signal, changes, status);
+  onTestFinished(async () => {
+    pending.resolve(availableStatus);
+    await work.catch(() => undefined);
+  });
+  const input = screen.getByLabelText("New thread");
+  expect(status.read).toHaveBeenCalledTimes(1);
   controller.abort(reason);
-  pending.resolve(availableStatus);
 
   await expect(work).rejects.toBe(reason);
+  expect(input).not.toBeInTheDocument();
   await expect(checkLayoutHistory(controller.signal, changes, status)).rejects.toBe(reason);
   expect(status.read).toHaveBeenCalledTimes(1);
 });
