@@ -154,6 +154,7 @@ type ScheduledCheckoutMetadata = {
   repos: GitHubRepoRef[];
   remoteNames: string[];
   defaults?: DefaultBranchInfo;
+  verifiedHeads?: ReadonlyMap<string, string>;
   nativeHeadReads?: true;
   unchanged: () => Promise<boolean>;
   publish?: () => void;
@@ -171,18 +172,17 @@ export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string, che
     if (checkout) {
       const cached = checkout.verified;
       let metadata = cached && await cached.unchanged() ? cached : undefined;
-      let branchDefaults = metadata?.defaults;
       if (!metadata) {
         checkout.verified = undefined;
         const observed = await observeScheduledPrPrefetchMetadata(cwd, checkout.repositories, checkout.branchCount);
         if (observed?.proof) {
           const { heads, unchanged } = observed.proof;
           const remoteNames = observed.refreshedRemoteNames;
-          if (heads) branchDefaults = await readDefaultBranchInfo(cwd, undefined, remoteNames, heads);
+          const defaults = heads?.size === remoteNames.length ? await readDefaultBranchInfo(cwd, undefined, remoteNames, heads) : undefined;
           metadata = {
             repos: observed.repos, remoteNames, unchanged, publish: observed.publish,
             nativeHeadReads: observed.nativeHeadReads,
-            defaults: heads?.size === remoteNames.length ? branchDefaults : undefined,
+            defaults, verifiedHeads: defaults ? undefined : heads,
           };
         } else {
           sampled = observed;
@@ -190,7 +190,8 @@ export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string, che
       }
       if (metadata) {
         const plan = await resolvePrLookupPlan({
-          cwd, branch, remoteNames: metadata.remoteNames, defaultBranchInfo: branchDefaults, nativeHeadReads: metadata.nativeHeadReads,
+          cwd, branch, remoteNames: metadata.remoteNames, defaultBranchInfo: metadata.defaults,
+          nativeHeadReads: metadata.nativeHeadReads, verifiedHeads: metadata.verifiedHeads,
         });
         if (await metadata.unchanged()) {
           checkout.verified = metadata;
@@ -241,9 +242,10 @@ async function resolvePrLookupPlan(params: {
   remoteNames?: string[];
   defaultBranchInfo?: DefaultBranchInfo;
   nativeHeadReads?: true;
+  verifiedHeads?: ReadonlyMap<string, string>;
 }): Promise<PrLookupPlan> {
   const defaultBranchInfo = params.defaultBranchInfo ?? await readDefaultBranchInfo(
-    params.cwd, undefined, params.remoteNames, params.nativeHeadReads ? null : undefined,
+    params.cwd, undefined, params.remoteNames, params.nativeHeadReads ? null : params.verifiedHeads,
   );
   // A timed-out/failed git probe must not turn a default branch into an
   // eligible head-name lookup against every contributor's fork.

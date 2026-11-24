@@ -78,13 +78,13 @@ async function fileStatus(file: string): Promise<BigIntStats | undefined> {
 function sameFile(a?: BigIntStats, b?: BigIntStats): boolean {
   if (!a || !b) return a === b;
   return a.dev === b.dev && a.ino === b.ino && a.mode === b.mode
-    && a.ctimeNs === b.ctimeNs && a.mtimeNs === b.mtimeNs && a.size === b.size;
+    && a.uid === b.uid && a.gid === b.gid && a.ctimeNs === b.ctimeNs && a.mtimeNs === b.mtimeNs && a.size === b.size;
 }
 
 /** A single observation of the loose and packed files used in a ref answer. */
 class RefFiles {
   private readonly observed = new Map<string, Promise<BigIntStats | undefined>>();
-  private readonly directories = new Map<string, string>();
+  private readonly directories = new Map<string, { resolved: string; info: BigIntStats }>();
 
   constructor(private readonly signal: AbortSignal) {}
 
@@ -101,7 +101,9 @@ class RefFiles {
   async directory(target: string): Promise<string> {
     this.signal.throwIfAborted();
     const resolved = await realpath(target);
-    this.directories.set(target, resolved);
+    const info = await fileStatus(resolved);
+    if (!info?.isDirectory()) throw new Error("Unrecognized Git checkout directory");
+    this.directories.set(target, { resolved, info });
     return resolved;
   }
 
@@ -135,9 +137,14 @@ class RefFiles {
   }
 
   async unchanged(signal: AbortSignal): Promise<boolean> {
-    for (const [target, observed] of this.directories) {
+    for (const [target, { resolved, info }] of this.directories) {
       signal.throwIfAborted();
-      if (await realpath(target) !== observed) return false;
+      if (await realpath(target) !== resolved) return false;
+      const current = await fileStatus(resolved);
+      // Git checks worktree ownership. Directory timestamps also change when
+      // unrelated files are created, so compare identity and access metadata.
+      if (!current?.isDirectory() || current.dev !== info.dev || current.ino !== info.ino
+        || current.uid !== info.uid || current.gid !== info.gid || current.mode !== info.mode) return false;
     }
     for (const [file, info] of this.observed) {
       signal.throwIfAborted();

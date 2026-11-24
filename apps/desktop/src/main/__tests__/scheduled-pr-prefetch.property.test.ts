@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
@@ -9,6 +10,11 @@ import { GitSubprocessDiagnostics, gitSubprocessDiagnostics } from "../diagnosti
 import { clearGitHubRemoteCache, readObservedGitOrigin, resolveGitHubRepoForDirectory } from "../pr-status/git-remote";
 import { createScheduledPrPrefetchRepoResolver, detectPullRequestsForThread } from "../pr-status/pr-detection";
 import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof fs>();
+  return { ...actual, lstat: vi.fn(actual.lstat) };
+});
 
 const runGitCommand = gitExecutable.runGitCommand;
 const readGit = async (cwd: string, ...args: string[]) => (await runGitCommand(cwd, args)).stdout.trim();
@@ -384,14 +390,19 @@ it.skipIf(process.platform === "win32")("reuses verified config when a remote ha
   expect(commands).toHaveLength(11);
 });
 
-it.skipIf(process.platform === "win32")("matches Git after an include changes between the config read and fallback verification", async () => {
+it.skipIf(process.platform === "win32").each(["positive", "negative"])("matches Git after an include changes a %s config sample", async (kind) => {
   const cwd = await fixture();
   const included = path.join(cwd, "included-config");
   await writeFile(included, "[user]\n\tname = Fixture\n");
   await readGit(cwd, "config", "--global", "include.path", included);
   await readGit(cwd, "symbolic-ref", "--delete", "refs/remotes/upstream/HEAD");
+  const url = kind === "negative" ? "https://gitlab.com/fixture/origin.git" : "https://github.com/fixture/origin.git";
+  if (kind === "negative") {
+    await readGit(cwd, "remote", "set-url", "origin", url);
+    await readGit(cwd, "remote", "set-url", "upstream", "https://gitlab.com/fixture/upstream.git");
+  }
   const before = (await oracle(cwd))("topic-0");
-  const url = "https://github.com/fixture/origin.git";
+  if (kind === "negative") expect(before).toEqual([]);
   const rewritten = "https://github.com/fixture/after-race.git";
   let edited = false;
   const runner = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (directory, args, options) => {
@@ -410,6 +421,7 @@ it.skipIf(process.platform === "win32")("matches Git after an include changes be
   const expected = (await oracle(cwd))("topic-0");
   expect(expected).not.toEqual(before);
   expect(actual.map(({ host, owner, repo }) => `https://${host}/${owner}/${repo}.git`).sort()).toEqual(expected);
+  await expectEligible(resolve, cwd, "topic-1", (await oracle(cwd))("topic-1"));
 });
 
 it.skipIf(process.platform === "win32")("uses native HEAD reads after one rejected checkout proof", async () => {
@@ -587,10 +599,12 @@ it("keeps a warm live identity after a scheduled fallback probe fails", async ()
   const runner = vi.spyOn(gitExecutable, "runGitCommand").mockRejectedValue(new Error("git remote probe timed out"));
   onTestFinished(() => { runner.mockRestore(); });
 
-  await expect(createScheduledPrPrefetchRepoResolver()(cwd, "topic-0")).resolves.toEqual([]);
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  await expect(resolve(cwd, "topic-0")).resolves.toEqual([]);
   expect(runner.mock.calls.some(([, , options]) => options?.purpose === "pr-remotes")).toBe(true);
   runner.mockRestore();
   await expect(resolveGitHubRepoForDirectory(cwd)).resolves.toEqual(identity);
+  await expectEligible(resolve, cwd, "topic-1", (await oracle(cwd))("topic-1"));
 });
 
 it.skipIf(process.platform === "win32")("uses a partial HEAD proof once and observes the missing ref again on the next branch", async () => {
@@ -600,13 +614,40 @@ it.skipIf(process.platform === "win32")("uses a partial HEAD proof once and obse
   const before = await oracle(cwd);
   const starts = recordPrefetchStarts();
   await expectEligible(resolve, cwd, "topic-0", before("topic-0"));
-  const firstCommands = starts.calls.map(([, args]) => args[0]);
+  await expectEligible(resolve, cwd, "topic-1", before("topic-1"));
+  expect(starts.calls.map(([, args]) => args[0])).toEqual([
+    "config", "rev-parse", "symbolic-ref", "for-each-ref", "symbolic-ref", "for-each-ref",
+  ]);
   await remoteHead(cwd, "third", "release");
   const after = await oracle(cwd);
   expect(after("release")).toEqual([]);
   await expectEligible(resolve, cwd, "release", after("release"));
 
-  expect(firstCommands).toEqual(["config", "rev-parse", "symbolic-ref", "for-each-ref"]);
+});
+
+it.skipIf(process.platform === "win32")("stops reusing a checkout when Git rejects its changed ownership", async () => {
+  const cwd = await fixture();
+  const canonical = await fs.realpath(cwd);
+  const { lstat } = await vi.importActual<typeof fs>("node:fs/promises");
+  let changed = false;
+  // Simulate chown in the filesystem observation and let native Git judge
+  // the same ownership transition through its test-only child environment.
+  vi.mocked(fs.lstat).mockImplementation((async (...args: Parameters<typeof lstat>) => {
+    const stats = await lstat(...args);
+    if (changed && args[0] === canonical && typeof stats.uid === "bigint") {
+      return Object.assign(stats, { uid: stats.uid + 1n });
+    }
+    return stats;
+  }) as typeof fs.lstat);
+  const foreignOwner = { ...process.env, GIT_TEST_ASSUME_DIFFERENT_OWNER: "1" };
+  const runner = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation((directory, args, options) =>
+    runGitCommand(directory, args, changed && directory === cwd ? { ...options, env: foreignOwner } : options));
+  onTestFinished(() => { runner.mockRestore(); vi.mocked(fs.lstat).mockImplementation(lstat); });
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  await expectEligible(resolve, cwd, "topic-0", (await oracle(cwd))("topic-0"));
+  changed = true;
+  await expect(runGitCommand(cwd, ["remote"], { env: foreignOwner })).rejects.toThrow(/dubious ownership/);
+  await expectEligible(resolve, cwd, "topic-1", []);
 });
 
 it.skipIf(process.platform === "win32")("follows Git when an external object directory disappears between branches", async () => {

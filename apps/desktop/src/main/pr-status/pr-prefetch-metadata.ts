@@ -117,40 +117,40 @@ export async function observeScheduledPrPrefetchMetadata(
     }
     const { configuration, sources } = parsed;
     const inputsUnchanged = () => isDeepStrictEqual(inputs, currentInputs());
-    const configUnchanged = async () => Boolean(await roots.unchanged() && inputsUnchanged());
+    // A discovered include could have changed before we could observe its
+    // file. Confirm the first answer with the complete graph watched before
+    // retaining either a positive or a negative result.
+    const extra = sources ? [...sources.includes].filter((file) => !roots.paths.has(file)) : [];
+    const files = extra.length ? await observePrCheckoutConfigFiles(cwd, [...inputs.paths, ...extra]) : roots;
+    if (!files || (sources && [...sources.origins].some((file) => !files.paths.has(file)))) return undefined;
+    if (extra.length) {
+      const confirmed = await readConfig();
+      if (confirmed.stderr !== "" || confirmed.stdout !== config?.stdout) return undefined;
+    }
+    const configUnchanged = async () => Boolean(await files.unchanged()
+      && (files === roots || await roots.unchanged()) && inputsUnchanged());
     // Resolve identities from the config Git already sampled. OpenSSH aliases
     // use one expansion per observation, bounded by the scheduled batch.
-    const { repos, identityExpiresAt, publish } = await repositories.read(configuration, { validateNegative: configUnchanged });
+    const { repos, identityExpiresAt, publish } = await repositories.read(configuration, {
+      validateNegative: async () => Boolean((!config || sources) && await configUnchanged()),
+    });
     const remoteNames = configuration.names;
-    const sample = { repos, refreshedRemoteNames: remoteNames, publish };
+    const sample = { repos, refreshedRemoteNames: remoteNames, publish: sources ? publish : undefined };
     const currentSample = async () => await configUnchanged() ? sample : undefined;
     // Keep Git's current config answer for the ordinary branch path even
     // when it cannot support reuse of the checkout observation.
     if (!sources || !repos.length) return await currentSample();
 
-    // The first Git read discovers include paths, even absent ones. Before
-    // retaining that answer, bracket a second read with all those inputs.
-    const extra = [...sources.includes].filter((file) => !roots.paths.has(file));
     // A single remote still needs one native HEAD read per branch.
     if (remoteNames.length === 1 && !extra.length && branchCount <= 2) return await currentSample();
-    const files = extra.length ? await observePrCheckoutConfigFiles(cwd, [...inputs.paths, ...extra]) : roots;
-    if (!files || [...sources.origins].some((file) => !files.paths.has(file))) {
-      return extra.length ? undefined : await currentSample();
-    }
 
     const proof = await observeProvenRemoteHeads(cwd, remoteNames);
     if (proof && (proof.gitDir !== files.gitDir || proof.commonDir !== files.commonDir)) return undefined;
-    // Included files were discovered after the first config read. Confirm the
-    // same answer with those files observed before accepting either path.
-    if (extra.length) {
-      const confirmed = await readConfig();
-      if (confirmed.stderr !== "" || confirmed.stdout !== config?.stdout || !await roots.unchanged()) return undefined;
-    }
     // Git's exact local config origin can establish config reuse without a
     // HEAD proof. Native HEAD and tracking reads still run for each branch.
     const configOnly = !proof && (Boolean(extra.length && sources.localOrigins.has(path.join(files.commonDir, "config")))
       || (remoteNames.length === 1 && branchCount > (extra.length ? 3 : 2) && await confirmPrFilesCheckout(cwd, files, inputs.env)));
-    const unchanged = async () => Boolean(await files.unchanged() && (!proof || await proof.unchanged()) && inputsUnchanged()
+    const unchanged = async () => Boolean((!proof || await proof.unchanged()) && await configUnchanged()
       && (identityExpiresAt === undefined || Date.now() < identityExpiresAt));
     if (!await unchanged()) return undefined;
     return {

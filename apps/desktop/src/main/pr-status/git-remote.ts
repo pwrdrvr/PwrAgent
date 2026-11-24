@@ -230,8 +230,9 @@ export async function observeForgeRepositoriesForDirectory(
 export function createScheduledPrefetchRemoteReader(cwd: string) {
   let previous: RemoteCacheEntry | undefined;
   const observationForReuse = () => {
-    if (isCurrentRemoteObservation(previous)) return previous;
     const live = remoteCache.get(cwd);
+    if (isCurrentRemoteObservation(previous)
+      && (!previous.readFailed || !isCurrentRemoteObservation(live) || live.readFailed)) return previous;
     return isCurrentRemoteObservation(live) ? live : undefined;
   };
   const read = async (
@@ -248,7 +249,9 @@ export function createScheduledPrefetchRemoteReader(cwd: string) {
     const fetchedAt = reused && observation.value === reused.value ? reused.fetchedAt : Date.now();
     const snapshot = { ...observation, fetchedAt };
     const complete = hasAllRemoteUrls(observation);
-    if ((observation.readFailed || observation.unconfirmedEmpty || complete)
+    const keepUsableIdentity = observation.readFailed && isCurrentRemoteObservation(reused)
+      && collectForgeRepositories(reused.value, "github").length > 0;
+    if (!keepUsableIdentity && (observation.readFailed || observation.unconfirmedEmpty || complete)
       && (repos.length > 0 || !options.validateNegative || await options.validateNegative())) {
       previous = snapshot;
     }
