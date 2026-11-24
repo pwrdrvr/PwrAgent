@@ -7878,6 +7878,11 @@ function useComposerController(props: ComposerProps) {
                 : {}),
             }),
       });
+      // Claude publishes the /code-review user message when it accepts the
+      // turn. It has no review-start item to replace the temporary header.
+      if (claudeCodeReview && optimisticReviewId) {
+        props.removeOptimisticMessage?.(optimisticReviewId);
+      }
       if (pickedReviewer) {
         // Only an explicit pick is worth replaying; recording inherited
         // settings would push real picks off the list.
