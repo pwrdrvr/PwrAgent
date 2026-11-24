@@ -836,6 +836,8 @@ function installDevelopmentDockIcon(): void {
 
 let lastFocusedWindow: BrowserWindow | undefined;
 let applicationMenu: Electron.Menu | undefined;
+/** Whether the installed menu was built with View → Resources. */
+let applicationMenuOffersResources = false;
 // Windows that are on screen, even if covered. On macOS "hide" also fires
 // when another window covers one, while isVisible() still reports true.
 const shownWindows = new WeakSet<BrowserWindow>();
@@ -930,6 +932,7 @@ function refreshProfileMenus(): void {
 }
 
 function installApplicationMenu(): void {
+  const resourceCheckouts = getResourceCheckoutService();
   const developerMode =
     getDesktopConfigStore().read("general").settings.developerMode
     ?? !app.isPackaged;
@@ -1058,7 +1061,7 @@ function installApplicationMenu(): void {
       showUsageActivityWindow: () => {
         showUsageActivityWindow({ sourceWindow: BrowserWindow.getFocusedWindow() ?? undefined });
       },
-      ...(getResourceCheckoutService() ? {
+      ...(resourceCheckouts ? {
         showResourcesWindow: () => {
           showResourcesWindow({ sourceWindow: BrowserWindow.getFocusedWindow() ?? undefined });
         },
@@ -1068,6 +1071,7 @@ function installApplicationMenu(): void {
 
   applicationMenu = Menu.buildFromTemplate(template);
   Menu.setApplicationMenu(applicationMenu);
+  applicationMenuOffersResources = Boolean(resourceCheckouts);
   reapplyAuxiliaryWindowMenuBars();
 }
 
@@ -1433,8 +1437,8 @@ export function bootstrapApp(): void {
     registerCodexEnvironmentEditorIpcHandlers();
     registerOperatorRequestIpcHandlers(ownerServices.queues);
     registerResourceCheckoutIpcHandlers(ownerServices.resourceCheckouts);
-    // The menu went up before the owner services; View gains Resources now.
-    if (ownerServices.resourceCheckouts) installApplicationMenu();
+    // A menu built before the owner services started lacks View → Resources.
+    if (ownerServices.resourceCheckouts && !applicationMenuOffersResources) installApplicationMenu();
     registerApplicationIpcHandlers();
     registerAutomationIpcHandlers();
     registerAppMetadataIpcHandlers();
