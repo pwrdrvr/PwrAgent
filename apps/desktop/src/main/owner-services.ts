@@ -462,6 +462,7 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
       ({ backend, threadId }) => getExistingDesktopBackendRegistry()?.getThreadInfo({ backend, threadId })?.title,
     )
     : undefined;
+  const resourceCheckoutsEnabled = () => getDesktopSettingsService().resolveResourceCheckoutsEnabled?.() === true;
   if (resourceCheckouts) registry.setResourceCheckoutHandler(
     createResourceCheckoutToolHandler(
       resourceCheckouts,
@@ -471,6 +472,8 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
       }, prompt, bind),
     ),
     (entry, id) => service.prepareResourceCheckoutWakeup(entry, id),
+    resourceCheckoutsEnabled,
+    (backend, threadId) => resourceCheckouts.hasAgentCheckoutToCleanUp(backend, threadId),
   );
   getDesktopBackendRegistry().setPwrAgentAppManagementHandler(
     createPwrAgentAppManagementHandler({

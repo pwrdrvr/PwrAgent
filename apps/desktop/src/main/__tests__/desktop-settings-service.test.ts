@@ -5999,6 +5999,30 @@ describe("DesktopSettingsService", () => {
     }
   });
 
+  it("defaults Federation resource checkout tools to off and persists the additive flag", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(configPath, "# keep this comment\n[experimental]\nmanaged_review = true\n");
+    const service = new DesktopSettingsService({ configPath, env: {}, secretStore: new MemoryDesktopSecretStore() });
+    expect((await service.readSettingsProjection()).experimental.resourceCheckoutsEnabled).toEqual({
+      value: false,
+      source: "default",
+    });
+    expect(service.resolveResourceCheckoutsEnabled()).toBe(false);
+    for (const enabled of [true, false, true]) {
+      await service.writeConfigPatchTargeted({ experimental: { resourceCheckoutsEnabled: enabled } });
+      const reopened = new DesktopSettingsService({ configPath, env: {}, secretStore: new MemoryDesktopSecretStore() });
+      expect((await reopened.readSettingsProjection()).experimental.resourceCheckoutsEnabled).toEqual({
+        value: enabled,
+        source: "config",
+      });
+      expect(reopened.resolveResourceCheckoutsEnabled()).toBe(enabled);
+      expect(fs.readFileSync(configPath, "utf8")).toContain(`resource_checkouts_enabled = ${enabled}`);
+      expect(fs.readFileSync(configPath, "utf8")).toContain("# keep this comment");
+      expect(fs.readFileSync(configPath, "utf8")).toContain("managed_review = true");
+    }
+  });
+
   it("defaults managed review to false and persists the additive flag", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
