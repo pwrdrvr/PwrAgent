@@ -106,7 +106,7 @@ function schemaBudgetNotice(tool: McpGatewaySource, antigravity: boolean, includ
       message: `The exact schema for ${name} exceeds this result's size budget. ${guidance}`,
     };
   }
-  const query = longName ? "Search part of its name with this connectionId alone" : "Search its exact name alone";
+  const query = longName ? "Search part of its name with this connectionId alone," : "Search its exact name alone";
   return {
     connectionId: tool.connectionId,
     message: `The exact schema for ${name} exceeds this result's size budget. ${query} or use native MCP invocation.`,
