@@ -251,6 +251,8 @@ win:
   extraResources:
     - from: resources/embedded-git
       to: git
+    - from: build/windows-job-launcher/pwragent-windows-job.exe
+      to: windows-job-launcher/pwragent-windows-job.exe
   icon: build/icon.png
   # Windows .ico is generated from the 512x512 build/icon.png by electron-builder.
   artifactName: "${productName}-${version}-windows-${arch}.${ext}"

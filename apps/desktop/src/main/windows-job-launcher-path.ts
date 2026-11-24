@@ -1,0 +1,13 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { isDevelopmentRuntime, runtimeResourcesPath } from "./runtime-resources";
+
+export function windowsGitJobLauncher(): string | undefined {
+  const resources = runtimeResourcesPath();
+  const directory = !isDevelopmentRuntime() && resources
+    ? path.join(resources, "windows-job-launcher")
+    : path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../build/windows-job-launcher");
+  const launcher = path.join(directory, "pwragent-windows-job.exe");
+  return existsSync(launcher) ? launcher : undefined;
+}

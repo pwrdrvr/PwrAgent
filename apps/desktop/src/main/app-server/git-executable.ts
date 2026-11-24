@@ -5,6 +5,7 @@ import { noteBundledGitCommand } from "../bundled-git-lfs-advisory";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { gitRuntimeEnvironment, resolveRuntimeGitExecutable } from "../git-runtime";
 import { formatWindowsJobStartupTimeout, startWindowsJobReadyPoll, windowsJobCleanupVerified, wrapCommandInWindowsJob } from "../windows-job-wrapper";
+import { windowsGitJobLauncher } from "../windows-job-launcher-path";
 import { terminateOwnedProcessTree } from "../process-tree";
 import { gitSubprocessDiagnostics, type GitSubprocessPurpose } from "../diagnostics/git-subprocess-diagnostics";
 
@@ -54,6 +55,8 @@ export async function runGitCommand(
           env,
           cwd: os.tmpdir(),
           keepDrainEvidenceOnStop: true,
+          compiledLauncher: options.purpose === "stack-checkout" || options.purpose === "stack-status"
+            ? windowsGitJobLauncher() : undefined,
         })
       : undefined;
   const launch = windowsJobLaunch ?? {

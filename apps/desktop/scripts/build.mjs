@@ -3,6 +3,7 @@
 import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildWindowsJobLauncher } from "./build-windows-job-launcher.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const desktopRoot = resolve(dirname(scriptPath), "..");
@@ -31,4 +32,5 @@ export function buildDesktop(args = [], options = {}) {
 
 if (process.argv[1] && resolve(process.argv[1]) === scriptPath) {
   process.exitCode = buildDesktop(process.argv.slice(2));
+  if (process.exitCode === 0) buildWindowsJobLauncher();
 }

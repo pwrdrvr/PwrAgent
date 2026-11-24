@@ -13,12 +13,24 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 3
       - uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f
         with:
           node-version: "^24.22.1"
           working-directory: .
-      - name: Measure synthetic stack projections
+      - name: Measure paired synthetic stack projections
         shell: pwsh
         run: |
           $env:PWRAGENT_GIT_PATH = (Get-Command git.exe).Source
-          node scripts/probe-windows-stack-git.mjs
+          node apps/desktop/scripts/build-windows-job-launcher.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/probe-windows-stack-git.mjs --baseline
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/probe-windows-stack-git.mjs --compiled
+      - name: Test native Job startup, cancellation and drain
+        if: ${{ !cancelled() }}
+        run: >-
+          pnpm test apps/desktop/src/main/__tests__/windows-git-job-launcher.test.ts
+          apps/desktop/src/main/__tests__/windows-job-wrapper.test.ts
+          apps/desktop/src/main/__tests__/pr-discovery-launch.property.test.ts

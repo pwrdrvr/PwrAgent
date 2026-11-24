@@ -9,7 +9,9 @@ import { build } from "esbuild";
 const gitPath = process.env.PWRAGENT_GIT_PATH;
 assert(gitPath && path.isAbsolute(gitPath));
 const scratch = await mkdtemp(path.join(os.tmpdir(), "stack git proof-"));
-const output = path.resolve(`.stack-git-probe-${process.pid}.cjs`);
+const output = path.resolve(`apps/desktop/out/main/.stack-git-probe-${process.pid}.cjs`);
+const baseline = process.argv.includes("--baseline");
+const compiled = process.argv.includes("--compiled");
 const git = (...args) => execFileSync(gitPath, args, {
   cwd: scratch, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
 }).trim();
@@ -26,16 +28,20 @@ try {
     bundle: true,
     platform: "node",
     external: ["electron"],
+    define: { "import.meta.url": "probeModuleUrl" },
+    banner: { js: 'const probeModuleUrl = require("node:url").pathToFileURL(__filename).href;' },
     plugins: [{
       name: "observe-stack-metadata",
       setup(builder) {
-        builder.onLoad({ filter: /[/\\](pr-metadata-process|git-executable)\.ts$/ }, async ({ path: file }) => {
-          let source = await readFile(file, "utf8");
+        builder.onLoad({ filter: /[/\\](pr-metadata-process|git-executable|windows-job-wrapper)\.ts$/ }, async ({ path: file }) => {
+          let source = baseline && !file.endsWith("pr-metadata-process.ts")
+            ? execFileSync(gitPath, ["show", `511460506fbbb8b1c1c5873926a95614590591a1:${path.relative(process.cwd(), file).replaceAll("\\", "/")}`], { encoding: "utf8" })
+            : await readFile(file, "utf8");
           if (file.endsWith("pr-metadata-process.ts")) {
             source = replace(source, "waiting.add(job);", "waiting.add(job); globalThis.stackProbe('enqueue', job);");
             source = replace(source, "waiting.delete(next);", "waiting.delete(next); globalThis.stackProbe('admit', next);");
             source = replace(source, "await job.run(fileSlot);", "try { await job.run(fileSlot); } finally { globalThis.stackProbe('settle', job); }");
-          } else {
+          } else if (file.endsWith("git-executable.ts")) {
             source = replace(source, 'stdio: ["pipe", "pipe", "pipe"],\n  });', 'stdio: ["pipe", "pipe", "pipe"],\n  });\n  child.once("spawn", () => globalThis.stackProbe("spawn", launch.command));');
           }
           return { contents: source, loader: "ts" };
@@ -107,6 +113,10 @@ try {
     assert.equal(active.size + queued.size, 0);
     const gitStarts = (await readFile(trace, "utf8")).split(/\r?\n/).filter(Boolean)
       .map((line) => JSON.parse(line)).filter(({ event }) => event === "start").length;
+    if (compiled) {
+      assert.equal(powershell, 0, "Cancellable stack reads should start no PowerShell hosts");
+      assert.equal(launches, gitStarts, "Each owned launch should start one Git command");
+    }
     (samples[name] ??= []).push({ wall, launches, powershell, gitStarts, slotMs, waitMs, peakActive, peakQueued });
   };
   for (let index = 0; index < 7; index++) {
@@ -115,7 +125,7 @@ try {
     await record("warm fleet", fleet, undefined, 1);
     await record("selected", fleet, [linked], 2);
   }
-  console.log(`Windows ${os.release()} ${process.arch}; ${git("--version")}; ${process.version}`);
+  console.log(`${baseline ? "Baseline" : "Candidate"}: ${os.type()} ${os.release()} ${process.arch}; ${git("--version")}; ${process.version}`);
   for (const [name, rows] of Object.entries(samples)) {
     const metrics = Object.fromEntries(Object.keys(rows[0]).map((field) => {
       const values = rows.map((row) => row[field]).sort((left, right) => left - right).map(Math.round);
