@@ -534,6 +534,7 @@ export class StackReader {
       ? [...new Set(local.flatMap(threadDirectories))].sort() : [];
     const hinted = new Set<string>();
     const located = new Map<string, Checkout>();
+    const unavailablePaths = new Set<string>();
     const scan = new IterableMapper(paths, async (cwd) => {
       const found = anchorPaths.has(cwd) ? undefined : await hints.possibleCommonDirs(cwd);
       if (found && !hints.requiresGitDiscovery) {
@@ -541,8 +542,12 @@ export class StackReader {
         return [cwd, found] as const;
       }
       const checkout = found && hints.installedGitVersion
-        ? await this.readInventoryCheckout(cwd, observation, found) : await observation.checkout(cwd, inventoryDemand);
-      if (!checkout || checkout === "unavailable") return [cwd, []] as const;
+        ? await this.readInventoryCheckout(cwd, observation, found) : await observation.checkoutLookup(cwd, inventoryDemand);
+      if (checkout === "unavailable") {
+        unavailablePaths.add(cwd);
+        return [cwd, found ?? []] as const;
+      }
+      if (!checkout) return [cwd, []] as const;
       located.set(cwd, checkout);
       return [cwd, [checkout.commonDir]] as const;
     }, STACK_CHECKOUT_SCAN_LIMITS);
@@ -555,9 +560,9 @@ export class StackReader {
       }), STACK_CHECKOUT_SCAN_LIMITS);
       for await (const { commonDir, present } of catalogs) if (present) wanted.add(commonDir);
     }
+    const inferredRows = local.filter((row) => row.prs?.some((pr) => eligible.has(prIdentity(pr))));
     const inferredPaths = new Set<string>();
-    for (const row of local) {
-      if (!row.prs?.some((pr) => eligible.has(prIdentity(pr)))) continue;
+    for (const row of inferredRows) {
       for (const cwd of threadDirectories(row)) {
         inferredPaths.add(cwd);
         for (const commonDir of possible.get(cwd) ?? []) {
@@ -576,20 +581,54 @@ export class StackReader {
       for (const cwd of paths) if (possible.get(cwd)?.length) admitted.add(cwd);
     }
     let retargetedHints: typeof hints | undefined;
+    const rediscoveredClones = new Set<string>();
     const verify = new IterableMapper(admitted, async (cwd) => {
       // Explicit anchors already have a live result in this observation.
       const candidates = possible.get(cwd)!;
       const checkout = hinted.has(cwd) ? await this.readInventoryCheckout(cwd, observation, candidates) : located.get(cwd);
-      if (checkout === "unavailable") return undefined;
+      if (checkout === "unavailable") {
+        unavailablePaths.add(cwd);
+        return { checkout: undefined };
+      }
       if (checkout && !directories && !candidates.includes(checkout.commonDir)
         && (inferredPaths.has(cwd)
           || await (retargetedHints ??= createStackCheckoutHints(inventoryDemand)).hasMarker(checkout.commonDir))) {
         wanted.add(checkout.commonDir);
+        rediscoveredClones.add(checkout.commonDir);
       }
-      return checkout;
+      return { checkout };
     }, STACK_CHECKOUT_SCAN_LIMITS);
     const verified = new Map<string, Checkout>();
-    for await (const checkout of verify) if (checkout) verified.set(checkout.cwd, checkout);
+    for await (const { checkout } of verify) if (checkout) verified.set(checkout.cwd, checkout);
+    if (rediscoveredClones.size) {
+      // A shared alias can move more than the path that exposed the retarget.
+      // Refresh hints once for other rows before binding the new clone.
+      const refreshed = retargetedHints ??= createStackCheckoutHints(inventoryDemand);
+      const siblings = paths.filter((cwd) => !rediscoveredClones.has(verified.get(cwd)?.commonDir ?? ""));
+      const recheck = new IterableMapper(siblings, async (cwd) => {
+        const candidates = await refreshed.possibleCommonDirs(cwd);
+        if (!candidates?.some((commonDir) => rediscoveredClones.has(commonDir))) return { cwd };
+        return { cwd, checkout: await locateCheckout(cwd, inventoryDemand) };
+      }, STACK_CHECKOUT_SCAN_LIMITS);
+      for await (const result of recheck) {
+        if (!("checkout" in result)) continue;
+        const { cwd, checkout } = result;
+        if (!checkout || checkout === "unavailable") verified.delete(cwd);
+        else verified.set(cwd, checkout);
+      }
+    }
+    if (directories && unavailablePaths.size && !unavailable.length) {
+      const inScope = (cwd: string) => possible.get(cwd)?.some((commonDir) => scopedClones.has(commonDir));
+      const scopedRepositories = new Set(inferredRows.filter((row) => threadDirectories(row).some(inScope))
+        .flatMap((row) => (row.prs ?? []).filter((pr) => eligible.has(prIdentity(pr))).map(prRepository)));
+      const missingSibling = inferredRows.some((row) => {
+        const sharesRepository = row.prs?.some((pr) =>
+          eligible.has(prIdentity(pr)) && scopedRepositories.has(prRepository(pr)));
+        return threadDirectories(row).some((cwd) => unavailablePaths.has(cwd)
+          && (possible.get(cwd)?.length ? inScope(cwd) : sharesRepository));
+      });
+      if (missingSibling) unavailable.push({ status: "unavailable" });
+    }
     const checkouts = new Map(anchors.map((entry) => [entry.cwd, entry] as const));
     // Keep the existing path order regardless of which probes finish first.
     for (const cwd of paths) {

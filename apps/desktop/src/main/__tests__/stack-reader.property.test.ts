@@ -46,6 +46,125 @@ async function writeCatalog(cwd: string, name: string) {
 }
 
 describe("stack checkout demand", () => {
+  it.each(["bundled", "installed"])("keeps scoped inference inconclusive when a linked sibling checkout times out under %s Git", async (runtime) => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-inferred-sibling-"));
+    const primary = path.join(sandbox, "primary");
+    const sibling = path.join(sandbox, "sibling");
+    try {
+      await mkdir(primary);
+      initialize(primary);
+      git(primary, "config", "include.path", "fixture-git-include");
+      git(primary, "worktree", "add", "-b", "lower", sibling);
+      if (runtime === "installed") process.env.PWRAGENT_GIT_PATH = await gitExecutable.resolveGitExecutable();
+      const head = git(primary, "rev-parse", "HEAD");
+      const upper: PrSummary = {
+        number: 2, provider: "github.com", org: "fixture", repo: "stack", state: "passing", lifecycleState: "open",
+        url: "https://github.com/fixture/stack/pull/2", headRefName: "topic", baseRefName: "lower", headSha: head,
+      };
+      const lower: PrSummary = {
+        ...upper, number: 1, url: "https://github.com/fixture/stack/pull/1", headRefName: "lower", baseRefName: "main",
+      };
+      const rows = [{ ...row(primary, "upper"), prs: [upper] }, { ...row(sibling, "lower"), prs: [lower] }];
+      const reader = new StackReader();
+      expect((await reader.read(rows, [], [primary])).stacks[0]).toMatchObject({ inferred: true });
+      const runGitCommand = gitExecutable.runGitCommand;
+      const run = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation((cwd, args, options) =>
+        cwd === sibling && args[0] === "rev-parse"
+          ? Promise.reject(Object.assign(new Error("fixture sibling checkout timeout"), { killed: true }))
+          : runGitCommand(cwd, args, options));
+      try {
+        const result = await reader.read(rows, [], [primary]);
+        expect(result.stacks).toEqual([]);
+        expect(result.catalogs).toContainEqual({ status: "unavailable" });
+      } finally {
+        run.mockRestore();
+      }
+    } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses a linked checkout after Git replaces the common reftable list", async (context) => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-reftable-"));
+    const repo = path.join(sandbox, "primary");
+    const sibling = path.join(sandbox, "sibling");
+    const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    try {
+      await mkdir(repo);
+      try {
+        git(repo, "init", "--ref-format=reftable", "-b", "topic");
+      } catch (error) {
+        if (String(error).includes("unknown option") && String(error).includes("ref-format")) {
+          context.skip("Git cannot create a reftable fixture");
+        }
+        throw error;
+      }
+      const commit = () => git(repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+        "commit", "--allow-empty", "-m", "topic");
+      commit();
+      git(repo, "worktree", "add", "-b", "sibling", sibling);
+      await writeCatalog(repo, "reftable");
+      const tables = path.join(repo, ".git", "reftable", "tables.list");
+      const initialTable = await readFile(tables, "utf8");
+      const discover = () => git(sibling, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir");
+      const initialCheckout = discover();
+      const reader = new StackReader();
+      const rows = [row(sibling, "sibling")];
+      const checkoutStarts = () => start.mock.calls.filter(([, args]) => args[0] === "rev-parse").length;
+      expect((await reader.read(rows, [])).stacks).toHaveLength(1);
+      expect(checkoutStarts()).toBe(1);
+      commit();
+      expect(await readFile(tables, "utf8")).not.toBe(initialTable);
+      expect(discover()).toBe(initialCheckout);
+      expect((await reader.read(rows, [])).stacks).toHaveLength(1);
+      expect(checkoutStarts()).toBe(1);
+    } finally {
+      start.mockRestore();
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("rechecks both sibling paths when a shared alias moves to a tracked clone", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-shared-retarget-"));
+    const before = path.join(sandbox, "before");
+    const after = path.join(sandbox, "after");
+    const alias = path.join(sandbox, "thread");
+    const first = path.join(alias, "one");
+    const second = path.join(alias, "two");
+    try {
+      await Promise.all([before, after].flatMap((root) => ["one", "two"].map((child) =>
+        mkdir(path.join(root, child), { recursive: true }))));
+      initialize(path.join(before, "one"));
+      initialize(after);
+      await Promise.all([writeCatalog(path.join(before, "one"), "before"), writeCatalog(after, "after")]);
+      await symlink(before, alias, "junction");
+      const runGitCommand = gitExecutable.runGitCommand;
+      let moved = false;
+      const run = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (cwd, args, options) => {
+        if (!moved && cwd === first && args[0] === "rev-parse") {
+          await rm(alias);
+          await symlink(after, alias, "junction");
+          moved = true;
+        }
+        return await runGitCommand(cwd, args, options);
+      });
+      try {
+        const result = await new StackReader().read([row(first, "one"), row(second, "two")], []);
+        expect(moved).toBe(true);
+        for (const cwd of [first, second]) {
+          expect(await realpath(git(cwd, "rev-parse", "--show-toplevel"))).toBe(await realpath(after));
+        }
+        expect(result.stacks).toHaveLength(1);
+        expect(result.stacks[0]?.repository).toBe("github.com:fixture/after");
+        expect(result.stacks[0]?.layers[0]).toMatchObject({ role: "ambiguous" });
+      } finally {
+        run.mockRestore();
+      }
+    } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
   it("admits the catalog Git finds when a checkout moves after the inventory hint", async () => {
     const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-moved-after-hint-"));
     const before = path.join(sandbox, "before");

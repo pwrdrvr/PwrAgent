@@ -219,7 +219,9 @@ export function createGitDirectoryObserver(options: { navigation?: boolean; requ
         gitdir, admin.signature, common, commonState?.signature, commonInfo.signature,
         config?.signature, worktreeConfig?.signature, backlink?.signature,
       ]),
-      head: JSON.stringify([head.signature, refs?.signature, commonRefs?.signature]),
+      // Ref table contents matter to branch enrichment, but refreshing refs
+      // does not change the checkout identity used by the stack reader.
+      head: JSON.stringify(options.requireRegularHead ? [head.signature] : [head.signature, refs?.signature, commonRefs?.signature]),
     };
   };
 }
