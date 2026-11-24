@@ -4,7 +4,11 @@ import type { Editor } from "@tiptap/react";
 import { expect, it } from "vitest";
 import fc from "fast-check";
 import { fromMarkdown } from "mdast-util-from-markdown";
-import { ComposerTiptapInput } from "../ComposerTiptapInput";
+import {
+  ComposerTiptapInput,
+  getDraftIndexAtDocumentPosition,
+  getPositionAtDocumentDraftIndex,
+} from "../ComposerTiptapInput";
 import type { ComposerInputHandle, ComposerSkillToken } from "../ComposerInputTypes";
 
 type Accessibility = { disabled: boolean; readOnly: boolean; expanded: boolean };
@@ -185,31 +189,105 @@ function typeTextWithInputRules(editor: Editor, text: string): void {
   }
 }
 
+function withTypedFence(opener: string, check: (editor: Editor, readMarkdown: () => string) => void): void {
+  let markdown = "";
+  const view = render(
+    <ComposerTiptapInput
+      id="code-fence-input-rule"
+      label="Reply"
+      markdownConversion
+      onChange={(next) => { markdown = next; }}
+      placeholder="Reply"
+      skillTokens={[]}
+      value=""
+    />,
+  );
+  try {
+    const textbox = view.getByRole("textbox", { name: "Reply" });
+    const editor = (textbox as HTMLElement & { editor: Editor }).editor;
+    act(() => typeTextWithInputRules(editor, opener));
+    check(editor, () => markdown);
+  } finally {
+    view.unmount();
+  }
+}
+
+function checkCodeFenceRoundTrip(fenceLength: number, language: string, body: string): void {
+  withTypedFence(`${"`".repeat(fenceLength)}${language} `, (editor, readMarkdown) => {
+    act(() => {
+      editor.commands.insertContent({ type: "text", text: body });
+    });
+
+    const { doc } = editor.state;
+    const block = doc.firstChild;
+    expect(block?.type.name).toBe("codeBlock");
+    expect(block?.textContent).toBe(body);
+    const markdown = readMarkdown();
+    expect(fromMarkdown(markdown).children).toEqual([
+      expect.objectContaining({ type: "code", lang: block?.attrs.language, value: block?.textContent }),
+    ]);
+    const bodyStart = markdown.indexOf("\n") + 1;
+    expect(getDraftIndexAtDocumentPosition(doc, 1, "markdown")).toBe(bodyStart);
+    expect(getPositionAtDocumentDraftIndex(doc, bodyStart + body.length, "markdown"))
+      .toBe(1 + body.length);
+  });
+}
+
+it("sends typed fenced blocks as one CommonMark code block even with closing fences in the body", () => {
+  const bodyFence = fc.record({
+    length: fc.integer({ min: 3, max: 8 }),
+    indent: fc.integer({ min: 0, max: 3 }),
+    trailing: fc.constantFrom("", " ", "\t"),
+  });
+  fc.assert(fc.property(
+    fc.integer({ min: 3, max: 8 }),
+    fc.constantFrom("", "markdown", "c++"),
+    fc.array(bodyFence, { minLength: 1, maxLength: 4 }),
+    (fenceLength, language, fences) => {
+      const lines = fences.map(({ length, indent, trailing }) =>
+        `${" ".repeat(indent)}${"`".repeat(length)}${trailing}`,
+      );
+      checkCodeFenceRoundTrip(fenceLength, language, ["before", ...lines, "after"].join("\n"));
+    },
+  ), { numRuns: 25 });
+});
+
+it("sends a four-backtick block containing bare triple-backtick lines intact", () => {
+  checkCodeFenceRoundTrip(4, "", "```\nexample\n```");
+});
+
+function checkLiteralTildeOpener(fenceLength: number, language: string): void {
+  const opener = `${"~".repeat(fenceLength)}${language} `;
+  withTypedFence(opener, (editor, readMarkdown) => {
+    expect(editor.state.doc.firstChild?.type.name).toBe("paragraph");
+    const markdown = readMarkdown();
+    expect(markdown).toBe(opener);
+    expect(fromMarkdown(markdown).children).toEqual([
+      expect.objectContaining({ type: "code", lang: language, value: "" }),
+    ]);
+  });
+}
+
+it("keeps tilde openers literal when a backtick in the info string prevents conversion", () => {
+  fc.assert(fc.property(
+    fc.integer({ min: 3, max: 8 }),
+    fc.constantFrom("js`", "`ruby", "json`5"),
+    checkLiteralTildeOpener,
+  ), { numRuns: 25 });
+});
+
+it("keeps the typed ~~~js` opener in the emitted Markdown", () => {
+  checkLiteralTildeOpener(3, "js`");
+});
+
 it("starts a code block on space for any 3+ backtick or tilde fence and leaves shorter runs as prose", () => {
   const marker = fc.constantFrom("`", "~");
   const fenceLength = fc.integer({ min: 1, max: 8 });
   const language = fc.constantFrom("", "ts", "markdown", "c++", "json5");
 
   fc.assert(fc.property(marker, fenceLength, language, (fenceChar, count, lang) => {
-    const view = render(
-      <ComposerTiptapInput
-        id="code-fence-input-rule-prop"
-        label="Reply"
-        markdownConversion
-        onChange={() => {}}
-        placeholder="Reply"
-        skillTokens={[]}
-        value=""
-      />,
-    );
-    try {
-      const textbox = view.getByRole("textbox", { name: "Reply" });
-      const editor = (textbox as HTMLElement & { editor: Editor }).editor;
-      act(() => {
-        typeTextWithInputRules(editor, `${fenceChar.repeat(count)}${lang} `);
-      });
-
-      const codeBlock = textbox.querySelector("pre code");
+    withTypedFence(`${fenceChar.repeat(count)}${lang} `, (editor) => {
+      const codeBlock = editor.view.dom.querySelector("pre code");
       if (count >= 3) {
         expect(codeBlock).not.toBeNull();
         expect(editor.state.doc.firstChild?.type.name).toBe("codeBlock");
@@ -218,8 +296,6 @@ it("starts a code block on space for any 3+ backtick or tilde fence and leaves s
         expect(codeBlock).toBeNull();
         expect(editor.state.doc.firstChild?.type.name).toBe("paragraph");
       }
-    } finally {
-      view.unmount();
-    }
+    });
   }), { numRuns: 30 });
 });

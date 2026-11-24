@@ -467,7 +467,8 @@ const IgnoreUnderlineShortcut = Extension.create({
 // 3+ backticks or tildes and non-alphabetic info strings (such as `c++` or
 // `json5`), so typing 4+ backticks before Space still starts a code block.
 const FLEXIBLE_BACKTICK_CODE_BLOCK_REGEX = /^`{3,}([^`\s]+)?[\s\n]$/;
-const FLEXIBLE_TILDE_CODE_BLOCK_REGEX = /^~{3,}([^~\s]+)?[\s\n]$/;
+// Typed tilde fences serialize as backtick fences, whose info strings cannot contain backticks.
+const FLEXIBLE_TILDE_CODE_BLOCK_REGEX = /^~{3,}([^~`\s]+)?[\s\n]$/;
 
 const FlexibleCodeBlockInputRules = Extension.create({
   name: "flexibleCodeBlockInputRules",
@@ -1671,8 +1672,8 @@ function appendMarkdownBlock(
   }
 
   if (node.type.name === "codeBlock") {
-    const language = typeof node.attrs.language === "string" ? node.attrs.language : "";
-    state.value += `\`\`\`${language}\n${node.textContent}\n\`\`\``;
+    const { prefix, content, suffix } = getCodeBlockMarkdownParts(node);
+    state.value += `${prefix}${content}${suffix}`;
     return;
   }
 
@@ -2100,18 +2101,25 @@ function pastePlainMarkdownText(
 }
 
 function getCodeBlockMarkdownParts(node: ProseMirrorNode): {
-  contentLength: number;
-  prefixLength: number;
+  content: string;
+  prefix: string;
+  suffix: string;
   totalLength: number;
 } {
   const language = typeof node.attrs.language === "string" ? node.attrs.language : "";
-  const prefixLength = `\`\`\`${language}\n`.length;
-  const contentLength = node.textContent.length;
-  const suffixLength = "\n```".length;
+  const content = node.textContent;
+  let fenceLength = 3;
+  for (const [run] of content.matchAll(/`{3,}/g)) {
+    fenceLength = Math.max(fenceLength, run.length + 1);
+  }
+  const fence = "`".repeat(fenceLength);
+  const prefix = `${fence}${language}\n`;
+  const suffix = `\n${fence}`;
   return {
-    contentLength,
-    prefixLength,
-    totalLength: prefixLength + contentLength + suffixLength,
+    content,
+    prefix,
+    suffix,
+    totalLength: prefix.length + content.length + suffix.length,
   };
 }
 
@@ -2276,7 +2284,7 @@ export function getDraftIndexAtDocumentPosition(
           index += codeBlock.totalLength;
           return false;
         }
-        index += codeBlock.prefixLength;
+        index += codeBlock.prefix.length;
         return true;
       }
       if (position <= pos + 1) {
@@ -2401,10 +2409,10 @@ export function getPositionAtDocumentDraftIndex(
       if (mode === "markdown" && node.type.name === "codeBlock") {
         const codeBlock = getCodeBlockMarkdownParts(node);
         if (draftIndex <= index + codeBlock.totalLength) {
-          const codeContentIndex = draftIndex - index - codeBlock.prefixLength;
+          const codeContentIndex = draftIndex - index - codeBlock.prefix.length;
           if (codeContentIndex <= 0) {
             position = pos + 1;
-          } else if (codeContentIndex <= codeBlock.contentLength) {
+          } else if (codeContentIndex <= codeBlock.content.length) {
             position = pos + 1 + codeContentIndex;
           } else {
             position = pos + node.nodeSize;
