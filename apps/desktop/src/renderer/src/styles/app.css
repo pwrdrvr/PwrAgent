@@ -7319,7 +7319,7 @@ button.stack-display__thread,
   padding: 0 4px;
   border-radius: 3px;
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: 9px;
   font-weight: 600;

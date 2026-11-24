@@ -77,7 +77,7 @@ export type CompactStackMembership = {
   parentMerged?: boolean;
   trunk?: string;
   hasOpenPr?: boolean;
-  basePr?: Pick<StackLayerPullRequest, "number" | "lifecycleState" | "checkState" | "mergeState">;
+  basePr?: Pick<StackLayerPullRequest, "number" | "lifecycleState" | "checkState" | "mergeState"> & { branch?: string };
 };
 
 export type SelectedStackLayer = {
@@ -107,6 +107,7 @@ export function compactStackMembership(
     trunk: stack.trunk.slice(0, 160),
     hasOpenPr,
     ...(base && layer.activeBase !== stack.trunk ? { basePr: {
+      ...(parent.branch.length <= 1024 ? { branch: parent.branch } : {}),
       number: base.number, lifecycleState: base.lifecycleState, checkState: base.checkState, mergeState: base.mergeState,
     } } : {}),
     ...(layer.pullRequest ? { number: layer.pullRequest.number } : {}),

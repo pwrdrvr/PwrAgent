@@ -46,16 +46,21 @@ function text(container: HTMLElement, selector: string): string | undefined {
 
 describe("PrStatusCard", () => {
   it("uses the base PR's own readiness when only compact stack details are available", () => {
-    const { container } = render(
-      <PrStatusCard pr={basePr({ lifecycleState: "merged", checkState: "passing" })} now={NOW}
+    const card = (baseRefName: string) => (
+      <PrStatusCard pr={basePr({ baseRefName, lifecycleState: "merged", checkState: "passing" })} now={NOW}
         stack={{
           key: "ledger", name: "ledger-base", inferred: true, position: 2, count: 2,
-          trunk: "main", health: "in_sync", basePr: { number: 25 },
-        }} />,
+          trunk: "main", health: "in_sync", basePr: { number: 25, branch: "ledger-base" },
+        }} />
     );
+    const { container, rerender } = render(card("ledger-base"));
     const base = container.querySelector(".pr-status-card__stack-base");
     expect(base?.textContent).toBe("#25");
     expect(base?.querySelector(".stack-display__node")?.getAttribute("data-tone")).toBe("unknown");
+    for (const otherBase of ["main", "release", "ledger-fix"]) {
+      rerender(card(otherBase));
+      expect(container.querySelector(".pr-status-card__stack-base")).toBeNull();
+    }
   });
 
   it("lists what wakes the thread: the CI attempt, merge or close, and Auto-fix", () => {

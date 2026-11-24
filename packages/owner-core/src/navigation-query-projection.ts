@@ -468,7 +468,7 @@ function limitRecords<T>(items: readonly T[] | undefined): {
   };
 }
 
-function previewPullRequests(prs: PrSummary[] | undefined): PrSummary[] | undefined {
+function previewPullRequests(prs: PrSummary[] | undefined, stackLeadPrKey?: string): PrSummary[] | undefined {
   if (!prs || prs.length <= MAX_ROW_NESTED_RECORDS) return prs;
   // The newest PR in stack order leads. Readiness ties use attachment order
   // for Minimal and stack order for the overflow after removing the lead.
@@ -497,6 +497,10 @@ function previewPullRequests(prs: PrSummary[] | undefined): PrSummary[] | undefi
   }
   // Fill the remaining slots with recent active work, then completed history.
   const retained = new Set([lead, representative, overflowRepresentative]);
+  if (stackLeadPrKey) {
+    const stackLead = prs.findIndex((pr) => buildPullRequestStatusKey(pr) === stackLeadPrKey);
+    if (stackLead >= 0) retained.add(stackLead);
+  }
   for (const index of [...active, ...finished]) {
     if (retained.size === MAX_ROW_NESTED_RECORDS) break;
     retained.add(index);
@@ -506,8 +510,8 @@ function previewPullRequests(prs: PrSummary[] | undefined): PrSummary[] | undefi
     .map((index) => prs[index]!);
 }
 
-export function projectNavigationPullRequests(prs?: PrSummary[]): Pick<NavigationRow, "prs" | "prsTruncated" | "prCount"> {
-  const preview = previewPullRequests(prs);
+export function projectNavigationPullRequests(prs?: PrSummary[], stackLeadPrKey?: string): Pick<NavigationRow, "prs" | "prsTruncated" | "prCount"> {
+  const preview = previewPullRequests(prs, stackLeadPrKey);
   return {
     ...(preview?.length ? { prs: preview } : {}),
     ...(prs && prs.length > MAX_ROW_NESTED_RECORDS ? { prsTruncated: true, prCount: prs.length } : {}),
@@ -533,6 +537,7 @@ function projectStackMemberships(thread: Pick<NavigationThreadSummary, "stacks" 
       ...(basePr && positiveNumber(basePr.number) ? {
         basePr: {
           number: basePr.number,
+          ...(typeof basePr.branch === "string" && basePr.branch.length <= 1024 ? { branch: basePr.branch } : {}),
           ...(["open", "merged", "closed"].includes(basePr.lifecycleState ?? "") ? { lifecycleState: basePr.lifecycleState } : {}),
           ...(["passing", "failing", "pending", "unknown"].includes(basePr.checkState ?? "") ? { checkState: basePr.checkState } : {}),
           ...(basePr.mergeState === "conflicting" ? { mergeState: basePr.mergeState } : {}),
@@ -651,7 +656,8 @@ function projectNavigationRow(params: {
     ...(thread.lock ? { lock: thread.lock } : {}),
     ...(thread.checkoutHibernated ? { checkoutHibernated: true } : {}),
     ...(thread.keepCheckoutAwake ? { keepCheckoutAwake: true } : {}),
-    ...(!params.omitPullRequests ? projectNavigationPullRequests(thread.prs) : {}),
+    ...(!params.omitPullRequests ? projectNavigationPullRequests(thread.prs, thread.stackLeadPrKey) : {}),
+    ...(thread.stackLeadPrKey && thread.stackLeadPrKey.length <= 1024 ? { stackLeadPrKey: thread.stackLeadPrKey } : {}),
     ...projectStackMemberships(thread),
     ...(messagingBindings.items
       ? { messagingBindings: messagingBindings.items }

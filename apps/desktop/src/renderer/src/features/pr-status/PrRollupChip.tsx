@@ -52,6 +52,7 @@ import {
 type PrRollupChipProps = {
   prs: PrSummary[];
   stackThread?: NavigationThreadSummary;
+  leadPrUrl?: string;
   /** Newline-joined URLs whose readiness the stack chip represents. */
   heldPrUrls?: string;
   /** Names the popover for assistive tech: "Pull requests for <title>". */
@@ -174,8 +175,10 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
   const overflowLabel = countUnknown ? "More PRs" : prOverflowLabel(moreCount);
   // The PRs the chip itself speaks for: all of them, or the ones the lead
   // chip beside it leaves out. The list always holds every PR.
-  const overflowLead = overflow ? resolvePrOverflow(visiblePreview)?.lead ?? visiblePreview[0] : undefined;
-  const chipRollup = resolvePrRollup(overflowLead ? signalPrs.filter((pr) => pr.url !== overflowLead.url) : signalPrs);
+  const overflowLeadUrl = overflow
+    ? props.leadPrUrl ?? (resolvePrOverflow(visiblePreview)?.lead ?? visiblePreview[0])?.url
+    : undefined;
+  const chipRollup = resolvePrRollup(overflowLeadUrl ? signalPrs.filter((pr) => pr.url !== overflowLeadUrl) : signalPrs);
   const repoPrefixed = new Set(props.repoPrefixedUrls.split("\n"));
   const summaryText = incomplete ? (attachments.failed ? "Couldn’t load all PRs" : "Loading PRs…")
     : held ? resolvePrRollup(signalPrs)?.summary ?? "Held by lower stack layers" : listRollup?.summary;
@@ -186,6 +189,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
     : undefined;
   const triggerRef = useRef<HTMLSpanElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
+  const focusedRow = useRef<{ url: string; element: HTMLButtonElement } | undefined>(undefined);
   const hoverTimerRef = useRef<number | null>(null);
   const popoverId = useId();
   const [position, setPosition] = useState<{
@@ -294,6 +298,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
   };
   const close = useCallback((): void => {
     holdCard();
+    focusedRow.current = undefined;
     setOpenMode(null);
     setPosition(undefined);
     setMenuTargetUrl(undefined);
@@ -385,6 +390,19 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
       window.removeEventListener("resize", close);
     };
   }, [open, close, getCardElement]);
+
+  // Loading the stack can reparent the focused row into its group.
+  useLayoutEffect(() => {
+    const previous = focusedRow.current;
+    if (!previous || previous.element.isConnected || document.activeElement !== document.body) return;
+    const rows = popoverRef.current?.querySelectorAll<HTMLButtonElement>(".pr-rollup-popover__row");
+    for (const row of rows ?? []) {
+      if (row.dataset.prRollupUrl === previous.url) {
+        row.focus();
+        break;
+      }
+    }
+  }, [stackDetails.stacks]);
 
   const focusRow = (index: number): void => {
     const rows = popoverRef.current?.querySelectorAll<HTMLButtonElement>(
@@ -565,6 +583,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
         <button
           type="button"
           className="pr-rollup-popover__row"
+          data-pr-rollup-url={pr.url}
           aria-label={`Open ${pr.org}/${pr.repo}#${pr.number}${
             pr.title ? `, ${pr.title}` : ""
           } (${accessibleStatus}) in browser${rowWaitingForCi ? ", waiting for CI" : ""}`}
@@ -572,12 +591,14 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
             cardUrl === pr.url && cardVisible ? cardId : undefined
           }
           onFocus={(event) => {
+            focusedRow.current = { url: pr.url, element: event.currentTarget };
             // Focus back from this row's own menu shows no card.
             if (!openingMenuRef.current && menuTargetUrl !== pr.url) {
               showRowCard(pr, event.currentTarget, true);
             }
           }}
           onBlur={(event) => {
+            if (event.relatedTarget) focusedRow.current = undefined;
             if (!getCardElement()?.contains(event.relatedTarget)) hideRowCard();
           }}
           onClick={openRow}
@@ -765,7 +786,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                   <StackHeading count={entry.stack.count} trunk={entry.trunk} inferred={entry.stack.inferred} grouped />
                   <ol className="stack-display__list" reversed>
                     {entry.rows.map(({ pr, member }) => renderRow(pr, orderIndices.get(pr.url)!, member))}
-                    <StackTrunk trunk={entry.stack.trunk!} />
+                    <StackTrunk trunk={entry.trunk} />
                   </ol>
                 </li>
               ) : renderRow(entry, orderIndices.get(entry.url)!))}

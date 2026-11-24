@@ -91,11 +91,11 @@ function layerStatus(pr: PrSummary | undefined) {
   return knownPrStatus(prStatusLabel(pr));
 }
 
-export function StackBody({ stack, thread, position, onOpen, onThreadOpen }: {
+export function StackBody({ stack, thread, currentPr, onOpen, onThreadOpen }: {
   stack: StackSummary;
   thread: NavigationThreadSummary;
   /** Set for one PR's popover, absent when the rail marks every attached layer. */
-  position?: number;
+  currentPr?: PrSummary;
   onOpen: (url: string) => void;
   onThreadOpen?: () => void;
 }) {
@@ -109,10 +109,10 @@ export function StackBody({ stack, thread, position, onOpen, onThreadOpen }: {
           const layerPosition = stack.layers.length - index;
           const other = layer.thread?.key !== thisThreadKey ? layer.thread : undefined;
           const owner = other && navigation?.findThread(thread, other.key);
-          const current = position === undefined
+          const current = !currentPr
             ? layer.thread?.key === thisThreadKey || thread.prs?.some((pr) =>
               pr.number === layer.pullRequest?.number && stackRepository(pr) === stack.repository)
-            : layerPosition === position;
+            : stackRepository(currentPr) === stack.repository && currentPr.number === layer.pullRequest?.number;
           const pr = readLayerPr(stack, layer, [...(owner?.prs ?? []), ...(thread.prs ?? [])]);
           const title = pr?.title?.trim() || layer.pullRequest?.title?.trim() || layer.branch;
           const prefix = layer.pullRequest ? `#${layer.pullRequest.number}` : "no PR yet";
@@ -141,7 +141,7 @@ export function StackBody({ stack, thread, position, onOpen, onThreadOpen }: {
                 ) : null}
               </div>
               <div className="stack-display__position">
-                {current && position !== undefined ? <span className="stack-display__current">This PR</span> : null}
+                {current && currentPr ? <span className="stack-display__current">This PR</span> : null}
                 {layerPosition}/{stack.layers.length}
               </div>
             </li>
@@ -153,6 +153,6 @@ export function StackBody({ stack, thread, position, onOpen, onThreadOpen }: {
   );
 }
 
-export function StackRailCard(props: Omit<ComponentProps<typeof StackBody>, "position">) {
+export function StackRailCard(props: Omit<ComponentProps<typeof StackBody>, "currentPr">) {
   return <li className="rail-card stack-rail-card"><StackBody {...props} /></li>;
 }

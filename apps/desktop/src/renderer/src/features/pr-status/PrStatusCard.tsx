@@ -225,16 +225,17 @@ function PrStackSection({ member, pr, thread }: {
   thread?: NavigationThreadSummary;
 }) {
   const navigation = useContext(StackNavigationContext);
-  const base = member.trunk && member.trunk === pr.baseRefName ? undefined : member.basePr;
+  const baseBranch = pr.baseRefName;
+  const base = baseBranch && baseBranch !== member.trunk ? member.basePr : undefined;
   const parent = thread && member.parentThreadKey ? navigation?.findThread(thread, member.parentThreadKey) : undefined;
   const parentPr = [...(parent?.prs ?? []), ...(thread?.prs ?? [])].find((candidate) =>
-    stackRepository(candidate) === member.repository && (base
-      ? candidate.number === base.number
-      : member.hasOpenPr === undefined && member.position > 1 && pr.baseRefName === candidate.headRefName));
-  const basePr = parentPr ?? (base && {
+    baseBranch && baseBranch !== member.trunk && candidate.headRefName === baseBranch
+      && stackRepository(candidate) === member.repository
+      && (base ? candidate.number === base.number : member.hasOpenPr === undefined && member.position > 1));
+  const basePr = parentPr ?? (base && base.branch === baseBranch ? {
     ...base, provider: pr.provider, org: pr.org, repo: pr.repo, url: "",
     state: base.checkState ?? "unknown",
-  });
+  } : undefined);
   const hold = member.heldBy && stackHoldLabel(member.heldBy);
   return (
     <div className="pr-status-card__section">

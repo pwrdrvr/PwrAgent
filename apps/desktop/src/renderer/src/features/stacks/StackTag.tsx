@@ -1,4 +1,4 @@
-import { useContext, useEffect, useLayoutEffect, useRef, type KeyboardEvent, type RefObject } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useRef, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { CompactStackMembership } from "@pwragent/shared/stacks/stack-status";
 import { getDesktopApi } from "../../lib/desktop-api";
@@ -17,7 +17,8 @@ type StackTagProps = {
   onOpen: (url: string) => void;
 };
 
-function StackPopover({ thread, member, onOpen, close, focus, body }: Omit<StackTagProps, "pr"> & {
+function StackPopover({ thread, pr, member, onOpen, close, focus, body, onResize }: StackTagProps & {
+  onResize: () => void;
   close: () => void;
   focus: boolean;
   body: RefObject<HTMLDivElement | null>;
@@ -32,12 +33,29 @@ function StackPopover({ thread, member, onOpen, close, focus, body }: Omit<Stack
     // The portalled surface takes one layout pass before it is visible.
     const frame = requestAnimationFrame(() => {
       const surface = body.current;
-      if (surface && (document.activeElement === surface || !surface.contains(document.activeElement))) {
+      if (surface && !surface.contains(document.activeElement)) {
         (surface.querySelector<HTMLButtonElement>(".stack-display__open") ?? surface).focus();
       }
     });
     return () => cancelAnimationFrame(frame);
+  }, [body, focus]);
+
+  // The details may arrive after the operator has moved on.
+  useLayoutEffect(() => {
+    const surface = body.current;
+    if (focus && stack && surface && document.activeElement === surface) {
+      surface.querySelector<HTMLButtonElement>(".stack-display__open")?.focus();
+    }
   }, [body, focus, stack]);
+
+  // Selected-detail IPC changes the body size independently of the portal.
+  useLayoutEffect(() => {
+    const surface = body.current;
+    if (!surface || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(onResize);
+    observer.observe(surface);
+    return () => observer.disconnect();
+  }, [body, onResize]);
 
   function moveBetweenRows(event: KeyboardEvent<HTMLDivElement>) {
     event.stopPropagation();
@@ -53,7 +71,7 @@ function StackPopover({ thread, member, onOpen, close, focus, body }: Omit<Stack
 
   return (
     <div ref={body} className="stack-popover__body" tabIndex={-1} onKeyDown={moveBetweenRows}>
-      {stack ? <StackBody stack={stack} thread={thread} position={member.position} onThreadOpen={close} onOpen={(url) => {
+      {stack ? <StackBody stack={stack} thread={thread} currentPr={pr} onThreadOpen={close} onOpen={(url) => {
         close();
         onOpen(url);
       }} /> : <>
@@ -92,13 +110,14 @@ export function StackTag({ thread, pr, member, onOpen }: StackTagProps) {
   const { hide, update, visible } = tooltip;
   const bridge = useRef<BridgedHoverCard>({ hide, isPinned: () => pinned.current });
   bridge.current.hide = hide;
-  const content = <StackPopover thread={thread} member={member} onOpen={onOpen} body={surface} close={hide} focus={pinned.current} />;
-  const latest = useRef(content);
-  latest.current = content;
+  const latest = useRef<ReactNode>(null);
+  const relayout = useCallback(() => update(latest.current), [update]);
+  latest.current = <StackPopover thread={thread} pr={pr} member={member} onOpen={onOpen}
+    body={surface} close={hide} focus={pinned.current} onResize={relayout} />;
 
   useEffect(() => {
     if (visible) update(latest.current);
-  }, [thread, member, onOpen, visible, update]);
+  }, [thread, pr, member, onOpen, visible, update]);
   useEffect(() => {
     const card = bridge.current;
     if (visible) sidebarPrCardBridge.shown(card);
@@ -119,7 +138,9 @@ export function StackTag({ thread, pr, member, onOpen }: StackTagProps) {
     }
     pinned.current = true;
     sidebarPrCardBridge.enterCard(bridge.current);
-    tooltip.show(target, <StackPopover thread={thread} member={member} onOpen={onOpen} body={surface} close={hide} focus />);
+    latest.current = <StackPopover thread={thread} pr={pr} member={member} onOpen={onOpen}
+      body={surface} close={hide} focus onResize={relayout} />;
+    tooltip.show(target, latest.current);
   }
 
   return (

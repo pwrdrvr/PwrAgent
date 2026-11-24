@@ -5918,7 +5918,7 @@ class DesktopAppServerService {
   private async filterStoredDiscoveredPrs(prs: PrSummary[], demand?: PrMetadataDemand): Promise<PrSummary[]> {
     return await filterStoredDiscoveredPullRequests(prs, {
       demand,
-      resolveRepositoryNames: async (repos) => {
+      resolveRepositoryNames: demand?.allowForgeLookup === false ? undefined : async (repos) => {
         if (!getDesktopSettingsService().isForgeEnabled("github")) return;
         await this.getPrGraphqlClient().resolveRepositoryNames(repos);
       },

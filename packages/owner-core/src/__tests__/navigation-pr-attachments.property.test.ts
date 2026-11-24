@@ -1,12 +1,12 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
+import { buildPullRequestStatusKey, type NavigationThreadSummary, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import { projectNavigationQuery } from "../navigation-query-projection";
 
-function preview(prs: PrSummary[]) {
+function preview(prs: PrSummary[], stackLeadPrKey?: string) {
   const thread: NavigationThreadSummary = {
     id: "thread", source: "codex", title: "Thread", titleSource: "derived",
-    linkedDirectories: [], inbox: { inInbox: false }, prs,
+    linkedDirectories: [], inbox: { inInbox: false }, prs, stackLeadPrKey,
   };
   return projectNavigationQuery({
     index: { threads: [thread], directories: [] },
@@ -40,6 +40,21 @@ describe("navigation PR attachment previews", () => {
         expect(row?.prCount).toBe(count);
       },
     ));
+  });
+
+  it("preserves an older owner-selected stack lead within the bounded attachment preview", () => {
+    fc.assert(fc.property(fc.integer({ min: 20, max: 128 }), (count) => {
+      const prs = Array.from({ length: count }, (_, index) => ({
+        ...pullRequest(index, index === 0 ? "passing" : "failing"),
+        createdAt: index + 1,
+      }));
+      const lead = prs[0]!;
+      const leadKey = buildPullRequestStatusKey(lead);
+      const row = preview(prs, leadKey);
+      expect(row?.stackLeadPrKey).toBe(leadKey);
+      expect(row?.prs).toHaveLength(16);
+      expect(row?.prs).toContain(lead);
+    }));
   });
 
   it("retains the lead, the least-ready PR, and the least-ready PR behind the lead", () => {

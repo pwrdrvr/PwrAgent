@@ -91,7 +91,10 @@ function pullRequestPositions(generation: NavigationQueryGeneration, start: numb
 async function readPullRequestPositions(generation: NavigationQueryGeneration, positions: number[], load: NavigationPullRequestProjection["read"]): Promise<PullRequestObservation[]> {
   if (!positions.length) return [];
   const results = await load(positions.map((position) => generation.materialization.entries[position]!.row.ref));
-  return positions.map((position, index) => [position, projectNavigationPullRequests(results[index])] as const);
+  return positions.map((position, index) => [
+    position,
+    projectNavigationPullRequests(results[index], generation.materialization.entries[position]!.row.stackLeadPrKey),
+  ] as const);
 }
 
 function withPullRequestPositions(generation: NavigationQueryGeneration, rows: PullRequestObservation[]): NavigationQueryGeneration {

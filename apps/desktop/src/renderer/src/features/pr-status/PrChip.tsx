@@ -199,6 +199,7 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
     stack?.count,
     stack?.trunk,
     stack?.basePr?.number,
+    stack?.basePr?.branch,
     stack?.basePr?.lifecycleState,
     stack?.basePr?.checkState,
     stack?.basePr?.mergeState,

@@ -2,7 +2,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import type { AppServerBackendScope, AppServerThreadSummary, LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type { NavigationDirectorySummary, NavigationIdentity, NavigationQueryRequest, PrSummary } from "@pwragent/shared/contracts/navigation";
-import { buildThreadIdentityKey, parseThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { buildPullRequestStatusKey, buildThreadIdentityKey, parseThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { navigationPathIdentity } from "@pwragent/shared/directory-navigation";
 import { isWorkspaceHandoffDirectory } from "@pwragent/shared/navigation-state";
 import {
@@ -128,8 +128,6 @@ export async function loadLocalNavigationQueryIndex(params: {
   requireVerifiedDirectories?: boolean;
   /** This caller renders thread stack membership. */
   includeStacks?: boolean;
-  /** Selected stack cards use registry status without revalidating forge attachments. */
-  verifyStackAttachments?: false;
   registry?: DesktopBackendRegistry;
   signal?: AbortSignal;
   /** Viewer projection shares this pass's fences, lifetime and byte budget.
@@ -148,7 +146,7 @@ export async function loadLocalNavigationQueryIndex(params: {
   // in-flight index that predates it, nor overtake other readers' scans.
   const key = JSON.stringify([sourceId(registry), sourceId(overlayStore), backend,
     ...(params.viewer ? ["viewer", sourceId(params.viewer.source)] : []),
-    ...(params.includeStacks ? ["stacks", params.verifyStackAttachments !== false] : []),
+    ...(params.includeStacks ? ["stacks"] : []),
     ...(params.refreshProviders ? ["refresh-providers"] : [])]);
   // An index's coverage reads the startup refresh state, so an index built
   // while startup was checking must not serve a reader after it finishes.
@@ -179,8 +177,8 @@ export async function loadLocalNavigationQueryIndex(params: {
     signal.addEventListener("abort", () => unsubscribe?.(), { once: true });
     if (params.includeStacks) {
       // Share the same membership and viewer projection with stack-free queries.
-      const local = await loadLocalNavigationQueryIndex({ ...params, includeStacks: false, verifyStackAttachments: undefined, signal });
-      const projection = await projectNavigationStacks(local.threads, registry, signal, params.verifyStackAttachments);
+      const local = await loadLocalNavigationQueryIndex({ ...params, includeStacks: false, signal });
+      const projection = await projectNavigationStacks(local.threads, registry, signal);
       return projection ? createNavigationQuerySnapshot({ ...local, ...projection }, undefined, local) : local;
     }
     if (params.viewer) {
@@ -347,7 +345,6 @@ async function projectNavigationStacks(
   threads: NavigationQueryIndex["threads"],
   registry: DesktopBackendRegistry,
   signal: AbortSignal,
-  verifyAttachments?: false,
 ): Promise<Pick<NavigationQueryIndex, "threads" | "stacks"> | undefined> {
   const candidates = threads.filter((thread) => !thread.federation && (thread.linkedDirectories?.some((directory) =>
     directory.gitBranch || directory.worktreePath || directory.repositoryKey)
@@ -356,10 +353,12 @@ async function projectNavigationStacks(
   const attachments = getDesktopOverlayStore().readNavigationPullRequests(
     candidates.map((thread) => ({ backend: thread.source, threadId: thread.id })),
   );
-  const demand = { signal, priority: () => PR_METADATA_PRIORITY.background };
+  // Navigation and detail reads share locally verified stack attachments.
+  // Opening a stack cannot initiate forge repository-name lookups.
+  const demand = { signal, priority: () => PR_METADATA_PRIORITY.background, allowForgeLookup: false as const };
   const rows = await Promise.all(candidates.map(async (thread, index) => ({
     ...thread,
-    prs: attachments[index]?.length ? await registry.canonicalizeNavigationPullRequests(attachments[index]!, demand, verifyAttachments) : [],
+    prs: attachments[index]?.length ? await registry.canonicalizeNavigationPullRequests(attachments[index]!, demand) : [],
   })));
   signal.throwIfAborted();
   const { stacks } = await stackReader.read(rows, [], undefined,
@@ -401,13 +400,13 @@ export function projectBoundNavigationStacks(
     if (thread.federation) return thread;
     const key = buildThreadIdentityKey(thread.source, thread.id);
     const entries = memberships.get(key);
-    const stackMemberships = entries && previewStackMemberships(entries, prsByThread?.get(key) ?? thread.prs);
-    return stackMemberships ? { ...thread, stackMemberships } : thread;
+    const preview = entries && previewStackMemberships(entries, prsByThread?.get(key) ?? thread.prs);
+    return preview ? { ...thread, ...preview } : thread;
   }) } : undefined;
 }
 
 function previewStackMemberships(members: CompactStackMembership[], prs?: readonly PrSummary[]) {
-  if (members.length <= MAX_COMPACT_STACK_MEMBERSHIPS) return members;
+  if (members.length <= MAX_COMPACT_STACK_MEMBERSHIPS) return { stackMemberships: members };
   const byPr = new Map<string, CompactStackMembership>();
   for (const member of members) {
     const identity = `${member.repository}#${member.number}`;
@@ -421,7 +420,7 @@ function previewStackMemberships(members: CompactStackMembership[], prs?: readon
   const keep = lead && membership(lead);
   const preview = members.slice(0, MAX_COMPACT_STACK_MEMBERSHIPS);
   if (keep && !preview.includes(keep)) preview[preview.length - 1] = keep;
-  return preview;
+  return { stackMemberships: preview, stackLeadPrKey: lead && buildPullRequestStatusKey(lead) };
 }
 
 const stackRevisions = new WeakMap<StackSummary, string>();
@@ -435,7 +434,7 @@ function stackRevision(stack: StackSummary): string {
 }
 
 export async function readNavigationStackLayers(ref: NavigationIdentity, signal?: AbortSignal) {
-  const index = await loadLocalNavigationQueryIndex({ callerReason: "selected-stack-detail", includeStacks: true, verifyStackAttachments: false, signal });
+  const index = await loadLocalNavigationQueryIndex({ callerReason: "selected-stack-detail", includeStacks: true, signal });
   return projectSelectedStackLayers(index, ref);
 }
 

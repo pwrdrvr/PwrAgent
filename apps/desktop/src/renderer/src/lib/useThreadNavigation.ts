@@ -5923,6 +5923,7 @@ export function useThreadNavigation(
           ...(row.ordinaryChildCount !== undefined ? { ordinaryChildCount: row.ordinaryChildCount } : {}),
           stacks: row.stacks,
           stackMemberships: row.stackMemberships,
+          stackLeadPrKey: row.stackLeadPrKey,
         }
       : hydrated;
     return rendererFederationTarget?.scope !== "remote" && configured.federation?.ref.target.scope === "remote"

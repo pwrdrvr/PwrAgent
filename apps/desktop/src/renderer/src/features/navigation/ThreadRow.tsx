@@ -284,7 +284,9 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
   const attachmentThread = props.thread.prsTruncated ? props.thread : undefined;
   // The chips line's one PR chip; the rest sit behind a `+N PRs` chip.
   const leadCandidates = prs.length ? prs : attachedPrs;
-  const leadPr = leadCandidates.length > 1 ? resolvePrOverflow(leadCandidates)!.lead : leadCandidates[0];
+  const ownerLead = props.thread.stackLeadPrKey;
+  const leadPr = (ownerLead ? attachedPrs.find((pr) => buildPullRequestStatusKey(pr) === ownerLead) : undefined)
+    ?? (leadCandidates.length > 1 ? resolvePrOverflow(leadCandidates)!.lead : leadCandidates[0]);
   // PR watches reach the chips through ThreadRowPrChips, which read their
   // context themselves: a watch change must not re-render every row body.
   const density = useContext(ThreadRowDensityContext);
@@ -831,6 +833,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
                 {attachedPrs.length > 1 ? (
                   <ThreadRowPrRollupChip
                     variant={leadPr ? "overflow" : "rollup"}
+                    leadPrUrl={leadPr?.url}
                     thread={props.thread}
                     prs={attachedPrs}
                     heldPrUrls={heldPrUrlList}

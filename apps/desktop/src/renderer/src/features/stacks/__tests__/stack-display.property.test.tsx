@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
+import { buildPullRequestStatusKey, type NavigationThreadSummary, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import { compactStackMembership, type StackLayer, type StackSummary } from "@pwragent/shared/stacks/stack-status";
 import { ThreadRow } from "../../navigation/ThreadRow";
 import { PrChip } from "../../pr-status/PrChip";
@@ -125,4 +125,38 @@ it("keeps a held lead visible with its warning on the tag", () => {
   expect(tag.getAttribute("data-warning")).toBe("true");
   expect(tag.closest(".pr-chip")?.querySelector("[data-pr-url]")?.getAttribute("data-pr-url")).toBe(top.url);
   expect(view.container.querySelector(".stack-position-chip")).toBeNull();
+});
+
+it("uses the owner's tagged lead when the preview omits newer held layers", () => {
+  const { prs, thread } = fixture(9, false);
+  const lead = prs[0]!;
+  const stackMemberships = thread.stackMemberships!.slice(0, 8).map((member) => ({
+    ...member,
+    ...(member.position > 1 ? { heldBy: { number: lead.number, branch: "ledger-1", reason: "CI running" as const } } : {}),
+  }));
+  render(<ThreadRow thread={{ ...thread, stackMemberships, stackLeadPrKey: buildPullRequestStatusKey(lead) }}
+    onSelectThread={vi.fn()} onOpenContextMenu={vi.fn()} />);
+  expect(screen.getByRole("button", { name: "Stack position 1 of 9 for #10" })).toBeDefined();
+});
+
+it("matches the current PR after an earlier stack layer is removed", () => {
+  const { prs, thread } = fixture(3, false);
+  const pr = prs[1]!;
+  const stack = thread.stacks![0]!.stack;
+  render(<PrChip stackThread={{ ...thread, stacks: [{ stack: { ...stack, layers: stack.layers.slice(1) }, position: 1 }] }}
+    pr={pr} onOpen={vi.fn()} showRepoPrefix={false} showStackTag />);
+  fireEvent.click(screen.getByRole("button", { name: "Stack position 2 of 3 for #11" }));
+  const popover = screen.getByRole("dialog", { name: /^Stack for/ });
+  expect(within(popover).getByText("This PR").closest("li")?.textContent).toContain("#11");
+});
+
+it("draws the bottom PR's base as the trunk for older compact rows", () => {
+  const { prs, thread } = fixture(2, false);
+  render(<PrRollupChip stackThread={{
+    ...thread, stacks: undefined,
+    stackMemberships: thread.stackMemberships!.map((member) => ({ ...member, trunk: undefined })),
+  }} prs={prs} threadTitle={thread.title} repoPrefixedUrls="" onOpen={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: /^2 pull requests/ }));
+  const rollup = screen.getByRole("group", { name: /^Pull requests for/ });
+  expect(rollup.querySelector(".stack-display__trunk")?.textContent).toBe("main");
 });
