@@ -1,9 +1,34 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { types } from "node:util";
+import { Worker } from "node:worker_threads";
 import { build } from "esbuild";
 import { expect, it } from "vitest";
-import { chromiumTraceProcessor } from "../diagnostics/chromium-trace-processor";
+import { ChromiumTraceExportError, type FilteredChromiumTrace } from "../diagnostics/chromium-trace";
+import { chromiumTraceProcessor, type ChromiumTraceFilterProcess } from "../diagnostics/chromium-trace-processor";
+import type { ChromiumTraceWorkerResult } from "../diagnostics/chromium-trace-worker";
 import { createTemporaryTestDirectory } from "../shell/testing/test-harness";
+
+function startNodeFilter(path: string): ChromiumTraceFilterProcess {
+  const worker = new Worker(path);
+  const result = new Promise<FilteredChromiumTrace>((resolve, reject) => {
+    const fail = () => reject(new ChromiumTraceExportError("worker", "filter"));
+    worker.once("error", fail);
+    worker.once("exit", fail);
+    worker.once("message", (message: ChromiumTraceWorkerResult | "invalid-data") => {
+      if (message !== "invalid-data" && types.isUint8Array(message.bytes)) {
+        resolve({ ...message, filterCpuMs: 1 });
+      } else {
+        reject(new ChromiumTraceExportError("invalid-data", "filter"));
+      }
+    });
+  });
+  return {
+    send: (chunk) => worker.postMessage(chunk),
+    result,
+    close: async () => { await worker.terminate(); },
+  };
+}
 
 it("processes a large chunked export in the worker and returns only filtered JSON", async () => {
   const root = await createTemporaryTestDirectory();
@@ -25,9 +50,9 @@ it("processes a large chunked export in the worker and returns only filtered JSO
       yield { data: `${row}]}` };
     }
 
-    const processTrace = chromiumTraceProcessor(worker);
-    const output = await processTrace(chunks(), new AbortController().signal);
-    const filtered = JSON.parse(Buffer.from(output).toString("utf8")).traceEvents;
+    const processTrace = chromiumTraceProcessor(() => startNodeFilter(worker));
+    const { bytes } = await processTrace(chunks(), new AbortController().signal);
+    const filtered = JSON.parse(Buffer.from(bytes).toString("utf8")).traceEvents;
     expect(filtered).toHaveLength(96 * 110 + 1);
     expect(filtered.every((event: unknown) => JSON.stringify(event) === JSON.stringify({
       pid: 1, tid: 2, cat: "devtools.timeline", name: "Layout", ph: "X", ts: 3,
@@ -62,7 +87,7 @@ it("surfaces an unavailable worker while Chromium is still opening the stream", 
     yield { data: "{}" };
   }
   try {
-    const processTrace = chromiumTraceProcessor(path.join(root.path, "missing.cjs"));
+    const processTrace = chromiumTraceProcessor(() => startNodeFilter(path.join(root.path, "missing.cjs")));
     await expect(processTrace(nativeStream(), new AbortController().signal)).rejects
       .toMatchObject({ phase: "filter", category: "worker" });
   } finally {

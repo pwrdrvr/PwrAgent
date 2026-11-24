@@ -10,6 +10,7 @@ import { headlessEntries } from "../../../scripts/build-headless.mjs";
 const desktop = path.resolve(import.meta.dirname, "../../..");
 const main = path.join(desktop, "src/main");
 const accessMarker = "__PWRAGENT_OWNER_GETTER_ORACLE__";
+const chromiumTraceUtility = "src/main/shell/diagnostics/chromium-trace-utility.ts";
 const sharedMainWorkerEntries = [
   "src/main/state/storage-maintenance-worker.ts",
   "src/main/claude/claude-session-reader-worker.ts",
@@ -20,6 +21,7 @@ const entries = [
   "src/main/index.ts",
   ...sharedMainWorkerEntries,
   "src/main/diagnostics/chromium-trace-worker.ts",
+  chromiumTraceUtility,
   "src/preload/entry.ts",
   "src/preload/storage-maintenance.ts",
   "src/renderer/index.html",
@@ -239,7 +241,7 @@ it("covers every configured production entry, inline worker, and audio worklet",
   }
   expect(workers).toEqual([worker]);
   expect(worklets).toEqual([audioWorklet]);
-  expect(nodeWorkerLaunchers).toEqual([path.join(main, "diagnostics/chromium-trace-processor.ts")]);
+  expect(nodeWorkerLaunchers).toEqual([path.join(desktop, chromiumTraceUtility)]);
   expect(otherWorkerDeclarations).toEqual([]);
   expect(walkFiles(desktop).filter((file) => file.endsWith("electron.vite.config.ts")))
     .toEqual([path.join(desktop, "electron.vite.config.ts")]);
