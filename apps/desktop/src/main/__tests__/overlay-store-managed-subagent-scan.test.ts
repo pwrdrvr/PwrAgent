@@ -176,7 +176,7 @@ describe("managed subagent navigation reads", () => {
 
   it("isolates returned set mutations from later reads and other store instances", () => {
     seed("parent", { subAgents: [card("child")] });
-    const returned = store["listManagedSubAgentThreadKeys"]();
+  const returned = store.readManagedSubAgentThreadKeys() as Set<string>;
     returned.clear();
     returned.add("codex:invented");
     expect(keys()).toEqual(["codex:child"]);

@@ -27,6 +27,7 @@ import {
   type ResourceActionDescriptor,
 } from "./resource-view-model";
 import { allocationHoldTime, describeQueueEntryHold, holderAlsoQueued, queueEntryHold } from "./resource-wait";
+import { ResourceThreadChip } from "./ResourceThreadChip";
 
 /** The header controls group recovery steps behind one Recover control. */
 export type ResourceInspectorIntent =
@@ -62,6 +63,8 @@ export function ResourceInspector(props: {
   busyKind: string | undefined;
   onIntent: (intent: ResourceInspectorIntent) => void;
   onOpenThread: (thread: ResourceThreadRef) => void;
+  /** The snapshot viewer's instance: its own threads are local links. */
+  localInstanceId?: string;
 }): ReactElement {
   const item = props.item;
   if (!item) {
@@ -156,6 +159,7 @@ export function ResourceInspector(props: {
                 unitLabel={unitLabel}
                 now={props.now}
                 onOpenThread={props.onOpenThread}
+                {...(props.localInstanceId ? { localInstanceId: props.localInstanceId } : {})}
               />
             ))
           )}
@@ -175,7 +179,7 @@ export function ResourceInspector(props: {
                 <li key={entry.queueEntryId} className={entry.viewerOwns ? "is-mine" : undefined}>
                   <span className="resources-queue__pos resources-mono">#{entry.position}</span>
                   <span className="resources-queue__who">
-                    <HolderName holder={entry.requester} onOpenThread={props.onOpenThread} />
+                    <HolderName holder={entry.requester} localInstanceId={props.localInstanceId} onOpenThread={props.onOpenThread} />
                     <span className="resources-row__meta">
                       {entry.purpose}
                       {entry.units !== undefined ? ` · ${entry.units} ${unitLabel}${entry.units === 1 ? "" : "s"} requested` : ""}
@@ -423,6 +427,7 @@ function AllocationDetail(props: {
   unitLabel: string;
   now: number;
   onOpenThread: (thread: ResourceThreadRef) => void;
+  localInstanceId?: string;
 }): ReactElement {
   const { allocation } = props;
   const inRecovery = allocation.state === "recovery_required";
@@ -447,7 +452,7 @@ function AllocationDetail(props: {
       <dl className="resources-pairs">
         <dt>Holder</dt>
         <dd>
-          <HolderName holder={allocation.holder} onOpenThread={props.onOpenThread} />
+          <HolderName holder={allocation.holder} localInstanceId={props.localInstanceId} onOpenThread={props.onOpenThread} />
           {allocation.lastKnown ? <span className="resources-note"> · last known</span> : null}
         </dd>
         <dt>Task</dt>
@@ -479,15 +484,21 @@ function AllocationDetail(props: {
 
 function HolderName(props: {
   holder: ResourceHolder;
+  localInstanceId: string | undefined;
   onOpenThread: (thread: ResourceThreadRef) => void;
 }): ReactElement {
   if (props.holder.kind === "thread") {
     const thread = props.holder.thread;
+    const remote = thread.instanceId !== undefined && thread.instanceId !== props.localInstanceId;
     return (
-      <button className="resources-link" type="button" onClick={() => props.onOpenThread(thread)}>
-        {thread.title}
-        {thread.instanceLabel ? <span className="resources-row__meta"> · {thread.instanceLabel}</span> : null}
-      </button>
+      <span className="resources-holder-name">
+        <ResourceThreadChip
+          thread={thread}
+          onOpen={props.onOpenThread}
+          {...(props.localInstanceId ? { localInstanceId: props.localInstanceId } : {})}
+        />
+        {remote && thread.instanceLabel ? <span className="resources-row__meta">{thread.instanceLabel}</span> : null}
+      </span>
     );
   }
   return <span>{holderLabel(props.holder)}</span>;

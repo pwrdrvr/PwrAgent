@@ -9073,6 +9073,43 @@ describe("Composer", () => {
       .toEqual([{ type: "pullRequest", url: prs[1].url }, { type: "pullRequest", url: prs[0].url }]);
   });
 
+  it.each(["accepted", "rejected"] as const)("keeps the next reply when a later PR review is %s", async (outcome) => {
+    // Only the initial submission owns the review draft. Later batch receipts
+    // must leave any reply written after submission in the editor.
+    const { element, prs, scheduledApi } = stackReviewFixture("codex");
+    const create = scheduledApi.createScheduledThreadAction;
+    const accept = create.getMockImplementation()!;
+    const firstReceipt = Promise.withResolvers<void>();
+    const secondReceipt = Promise.withResolvers<void>();
+    create.mockImplementationOnce(async (request) => {
+      await firstReceipt.promise;
+      return accept(request);
+    });
+    create.mockImplementationOnce(async (request) => {
+      await secondReceipt.promise;
+      return accept(request);
+    });
+    render(element);
+    await openReviewComposer();
+    fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
+    choosePullRequest(prs[0].url);
+    choosePullRequest(prs[1].url);
+    fireEvent.click(screen.getByRole("button", { name: "Start 2 reviews" }));
+    expect(create).toHaveBeenCalledOnce();
+    const reply = "A reply while the batch is being queued";
+    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: reply } });
+
+    await act(async () => firstReceipt.resolve());
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(screen.getByLabelText("Reply")).toHaveValue(reply);
+    await act(async () => {
+      if (outcome === "rejected") secondReceipt.reject(new Error("Owner rejected the review"));
+      else secondReceipt.resolve();
+    });
+    expect(screen.getByLabelText("Reply")).toHaveValue(reply);
+  });
+
   /**
    * Rule: a Claude thread reviews as Claude Code's /code-review by default,
    * offers only the targets that command takes, shows the exact command, and
@@ -9881,6 +9918,29 @@ describe("Composer", () => {
     expect(screen.getByLabelText("Scheduled message")).toHaveTextContent(
       "Review changes against main"
     );
+  });
+
+  it.each(["15m", "30m", "1h"])("retries a rejected review with the original %s schedule", async (delay) => {
+    // The owner must see the same timestamp on retry after a failed admission.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));
+    const api = createScheduledActionApi();
+    const create = api.createScheduledThreadAction;
+    create.mockRejectedValueOnce(new Error("Owner rejected the review"));
+    render(<Composer desktopApi={{ ...api, onAgentEvent: () => () => undefined }}
+      disabled={false} skills={[]} thread={reviewTargetThread({})} />);
+    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/review" } });
+    fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: `Send in ${delay}` }));
+
+    const submit = () => within(screen.getByRole("group", { name: "Review target" }))
+      .getByRole("button", { name: /^Send in / });
+    await act(async () => fireEvent.click(submit()));
+    expect(create).toHaveBeenCalledOnce();
+    await act(async () => fireEvent.click(submit()));
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[1][0].scheduledFor).toBe(create.mock.calls[0][0].scheduledFor);
   });
 
   it("hides the schedule toggle while the review-config panel owns the schedule", async () => {

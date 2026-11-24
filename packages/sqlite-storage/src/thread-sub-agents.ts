@@ -2,6 +2,7 @@ import type BetterSqlite3 from "better-sqlite3";
 import {
   buildThreadIdentityKey,
   parseThreadIdentityKey,
+  type ThreadIdentityKeyParts,
   type ThreadSubAgentSummary,
 } from "@pwragent/shared/contracts/navigation";
 import { type FailedSubAgentAttempt } from "@pwragent/shared/contracts/agent";
@@ -416,7 +417,14 @@ export function managedChildKeyFromCard(
   backend: string | null,
   monitorThreadId: unknown,
 ): string | undefined {
-  const parent = parseThreadIdentityKey(parentStorageKey);
+  return managedChildKeyFromParent(parseThreadIdentityKey(parentStorageKey), backend, monitorThreadId);
+}
+
+export function managedChildKeyFromParent(
+  parent: ThreadIdentityKeyParts | undefined,
+  backend: string | null,
+  monitorThreadId: unknown,
+): string | undefined {
   const childId = typeof monitorThreadId === "string" ? monitorThreadId.trim() : "";
   if (!parent || !childId) return undefined;
   const childBackend = (backend ?? parent.backend) as typeof parent.backend;

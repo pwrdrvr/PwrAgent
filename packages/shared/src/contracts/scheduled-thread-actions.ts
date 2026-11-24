@@ -232,6 +232,8 @@ export type ScheduledThreadTurnPayload = {
 
 export type ScheduledThreadReviewPayload = {
   target: AppServerReviewTarget;
+  /** An operator's review card, completed by the owner when this review starts. */
+  todo?: { id: string; allowOpenItems?: boolean };
   draftText?: string;
   delivery?: AppServerReviewDelivery;
   runMode?: ReviewRunMode;

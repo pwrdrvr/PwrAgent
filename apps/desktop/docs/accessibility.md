@@ -45,16 +45,22 @@ Things to know when extending the audit:
   launch; a recovery-required job goes in after the operator's hold is
   released, and the app reads it on its next poll. Never feed the screen the
   preview fixtures.
-- **Every surface is audited in every color theme.** The file wraps its
-  `describe` in `for (... of AUDIT_APPEARANCES)`: the Tangerine dark and
-  light pair plus each other dark theme in the dark scheme and each light
-  theme in the light scheme. It threads that appearance into
-  `launchAuditApp(appearance)`, so a new block is gated in all of them for
-  free. This matters because contrast is the one rule class that is
+- **Every surface is audited in every color theme.** Both the per-appearance
+  loop and `registerSharedAudit` use `AUDIT_APPEARANCES`: the Tangerine
+  dark and light pair, the other dark themes in the dark scheme, and the
+  other light themes in the light scheme. This matters because contrast is the one rule class that is
   genuinely theme-dependent — roles, names, and focus order are not. The
   gate ran dark-only for its whole life, which is how three token-level
   light-theme contrast failures shipped unnoticed. Add a new color theme to
   `AUDIT_DARK_THEMES` or `AUDIT_LIGHT_THEMES`.
+- **Share a launch when the surface survives theme changes.** Register the
+  fixture with `registerSharedAudit` and call its `scan` callback while each
+  surface is settled. The callback disables CSS transitions on the audited
+  page and waits for the applied appearance before each scan. Set
+  `PWRAGENT_E2E_A11Y_FRESH_FIXTURES=1` with the same selectors to audit
+  each appearance in a fresh launch. The `axe:` attachments identify each
+  scenario, surface, and appearance and retain each rule's outcome and
+  ID-free structural targets.
 - **Work that reads no color runs once.** A color theme sets color tokens
   only. Tangerine dark and light run the full WCAG AA tag set; the other
   color themes run only `COLOR_RULES` (`color-contrast`,

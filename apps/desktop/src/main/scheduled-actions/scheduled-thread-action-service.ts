@@ -76,6 +76,8 @@ const activeSchedulerOwnerIds = new Set<string>();
 export type ScheduledThreadActionServiceOptions = {
   registry: DesktopBackendRegistry;
   store: ScheduledThreadActionStorage;
+  resolveStartedReviewTodo?: (todo: NonNullable<ScheduledThreadReviewPayload["todo"]>
+    & Pick<ScheduledThreadAction, "backend" | "threadId">) => void;
   now?: () => number;
   setTimer?: (
     callback: () => void,
@@ -113,6 +115,7 @@ export function getAgentNotificationCenter(): AgentNotificationCenter | undefine
 
 export function initializeScheduledThreadActionService(
   registry = getDesktopBackendRegistry(),
+  resolveStartedReviewTodo?: ScheduledThreadActionServiceOptions["resolveStartedReviewTodo"],
 ): ScheduledThreadActionService {
   if (!service) {
     // The service is constructed below; the center reads it only once running.
@@ -137,6 +140,7 @@ export function initializeScheduledThreadActionService(
     const nextService = new ScheduledThreadActionService({
       registry,
       store: getAppScheduledThreadActionStore(),
+      resolveStartedReviewTodo,
       deliverAgentNotification: (action) => center.deliver(action),
       agentNotificationLimits: () => getDesktopSettingsService().resolveAgentNotificationLimits(),
     });
@@ -454,6 +458,7 @@ export class ScheduledThreadActionService {
   ): Promise<ScheduledThreadActionMutationResponse> {
     const current = this.requireAction(request.id);
     if (request.turn) request = { ...request, turn: withSteerFallbackSource(request.turn, current.turn?.steerFallbackInputSource) };
+    if (request.review) request = { ...request, review: { ...request.review, todo: current.review?.todo } };
     const candidate = {
       ...current,
       ...request,
@@ -938,6 +943,18 @@ export class ScheduledThreadActionService {
     action: ScheduledThreadAction,
   ): Promise<void> {
     if (action.status === "started") {
+      if (action.kind === "review" && action.review?.todo) {
+        try {
+          this.options.resolveStartedReviewTodo?.({
+            id: action.review.todo.id,
+            allowOpenItems: action.review.todo.allowOpenItems === true,
+            backend: action.backend,
+            threadId: action.threadId,
+          });
+        } catch (error) {
+          scheduledActionLog.warn("started review could not complete its to-do", { actionId: action.id, error: String(error) });
+        }
+      }
       await this.options.registry.markScheduledThreadBorn?.({
         actionId: action.id,
         backend: action.backend,
