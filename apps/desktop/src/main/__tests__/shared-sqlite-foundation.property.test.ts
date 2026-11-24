@@ -20,7 +20,8 @@ function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersio
   // operator-request scope, pricing summary, gate pricing, usage completion,
   // automation turn, and PR watch indexes, plus pricing summary deltas and scheduled
   // action projections, app update notices, targeted managed membership,
-  // subthread lookup indexes, pin mount tokens, and lifetime automation cost.
+  // subthread lookup indexes, pin mount tokens, lifetime automation cost,
+  // and transcript accounting indexes.
   // Restore the v80 SQL for the indexes replaced by v83 and v84.
   const compared = rows.filter(row =>
     row.tbl_name !== "owner_jobs"
@@ -53,6 +54,9 @@ function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersio
     && row.name !== "idx_thread_usage_lines_gate_child_source"
     && row.name !== "idx_thread_usage_lines_gate_usage_turn"
     && row.name !== "idx_thread_usage_lines_completion_turn"
+    && row.name !== "idx_thread_usage_lines_child_turn"
+    && row.name !== "idx_thread_usage_lines_unpriced_thread"
+    && row.name !== "idx_thread_usage_lines_unpriced_parent"
     && row.name !== "idx_automation_runs_backend_turn"
     && row.tbl_name !== "automation_pruned_run_costs"
     && row.name !== "idx_pr_status_watches_retry"

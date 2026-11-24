@@ -152,6 +152,7 @@ import {
 import {
   projectThreadDisplay,
   readThreadSubAgentPanel,
+  threadDisplayAccountingTurns,
   type ThreadSubAgentPanel,
 } from "./thread-display";
 import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared/contracts/agent";
@@ -7433,6 +7434,16 @@ export class DesktopBackendRegistry {
         backend, threadId: request.threadId, fetchedAt: Date.now(),
         replay: { entries: [{ ...entry, usageLine: undefined }], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } },
       };
+    }
+    if (request.display.resource === "accounting") {
+      this.assertNotBootstrap("readThread");
+      const thread = { backend, threadId: request.threadId };
+      const turnIds = [...new Set(threadDisplayAccountingTurns(request.display).map(({ id }) => id))];
+      const pricing = await this.threadUsageLedger.readThreadTurnUsageWithLiveTokenMiser({ ...thread, turnIds });
+      return projectThreadDisplay({
+        ...thread, fetchedAt: Date.now(), pricing,
+        replay: { entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } },
+      }, request, { activeTurnId: this.getActiveTurnForThread(thread)?.turnId });
     }
     const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId: request.threadId });
     if (request.display.resource === "transcript") {

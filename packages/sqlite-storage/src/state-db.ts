@@ -3098,6 +3098,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     ensureThreadUsageRequestPricingColumns(db);
     ensureThreadUsagePricingIndexes(db);
     ensureThreadPricingSummaryReadIndexes(db);
+    ensureThreadAccountingReadIndexes(db);
     // Current and newer partial profiles skip the numbered migration ladder.
     // Repair the mapping after FTS convergence, in this same transaction. Older
     // profiles first finish identity migrations, then create it in v82.
@@ -3916,6 +3917,23 @@ CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_gate_child_source
 CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_gate_usage_turn
   ON thread_usage_lines(backend, thread_id, usage_turn_id)
   WHERE status != 'superseded' AND usage_turn_id IS NOT NULL;
+`);
+}
+
+function ensureThreadAccountingReadIndexes(db: BetterSqlite3.Database): void {
+  // Direct turn reads reuse the existing identity index. Keep the child
+  // index specific to turn rows and the repair indexes specific to unpriced
+  // rows so normal priced root writes do not maintain any of these indexes.
+  db.exec(`
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_child_turn
+  ON thread_usage_lines(backend, parent_thread_id, turn_id)
+  WHERE scope = 'turn' AND status != 'superseded' AND parent_thread_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_unpriced_thread
+  ON thread_usage_lines(backend, thread_id, created_at DESC, usage_line_id DESC)
+  WHERE status != 'superseded' AND price_status != 'priced';
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_unpriced_parent
+  ON thread_usage_lines(backend, parent_thread_id, created_at DESC, usage_line_id DESC)
+  WHERE status != 'superseded' AND price_status != 'priced' AND parent_thread_id IS NOT NULL;
 `);
 }
 

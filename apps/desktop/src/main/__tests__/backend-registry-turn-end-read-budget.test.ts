@@ -343,12 +343,8 @@ describe("turn end read budget", () => {
     expect(overlayParseBytes).toBeLessThan(overlayParses * 1_024);
   }, 60_000);
 
-  // Each display read rebuilds the thread's whole display: Token Miser
-  // accounting, the sub-agent cards its pricing lines name, the overlay, and
-  // tool accounting. No read lists every card. A
-  // renderer refresh after a turn end therefore asks for every loaded turn
-  // and every loaded Pricing row in one read each, not in 256-turn chunks and
-  // 20-row pages.
+  // A turn-end refresh batches the loaded turns in one indexed usage read
+  // and the loaded Pricing rows in one full display build.
   async function measureRendererRefresh(historicalTurns: number) {
     const stateDb = openInMemoryStateDb();
     cleanups.push(() => stateDb.close());
@@ -358,11 +354,13 @@ describe("turn end read budget", () => {
       cardLists: vi.spyOn(store, "listThreadSubAgents"),
       cardReads: vi.spyOn(store, "getThreadSubAgents"),
       overlays: vi.spyOn(store, "getThreadOverlayState"),
+      pricingLedgers: vi.spyOn(store, "readThreadPricing"),
       tokenMiser: vi.spyOn(
         registryModules(registry).threadUsageLedger,
         "withTokenMiserAccounting",
       ),
       toolAccounting: vi.spyOn(store, "readThreadToolAccounting"),
+      turnUsage: vi.spyOn(store, "readThreadTurnUsageLines"),
     };
     const loadedTurns = [
       ...Array.from({ length: historicalTurns }, (_, index) => `turn-${index}`),
@@ -392,10 +390,12 @@ describe("turn end read budget", () => {
     return Object.fromEntries(Object.entries(builds).map(([name, spy]) => [name, spy.mock.calls.length]));
   }
 
-  it("serves a renderer refresh with one display build per resource for a small and a large thread", async () => {
+  it("serves a renderer refresh with one indexed usage batch and one Pricing build", async () => {
     const small = await measureRendererRefresh(20);
     const large = await measureRendererRefresh(2_000);
-    expect(small).toEqual({ cardLists: 0, cardReads: 2, overlays: 2, tokenMiser: 2, toolAccounting: 2 });
+    expect(small).toEqual({
+      cardLists: 0, cardReads: 1, overlays: 1, pricingLedgers: 1, tokenMiser: 1, toolAccounting: 1, turnUsage: 1,
+    });
     expect(large).toEqual(small);
   }, 60_000);
 
