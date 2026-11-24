@@ -43,6 +43,104 @@ async function writeCatalog(cwd: string, name: string) {
 }
 
 describe("stack checkout demand", () => {
+  it("refreshes a scoped catalog changed during sibling checkout discovery", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-catalog-during-discovery-"));
+    const primary = path.join(sandbox, "primary");
+    const sibling = path.join(sandbox, "sibling");
+    try {
+      await mkdir(primary);
+      initialize(primary);
+      git(primary, "branch", "main");
+      git(primary, "worktree", "add", "-b", "lower", sibling);
+      const head = git(primary, "rev-parse", "HEAD");
+      const upper = { branch: "topic", head, base: head, pullRequest: { number: 2 } };
+      const lower = { ...upper, branch: "lower", pullRequest: { number: 1 } };
+      const catalog = path.join(primary, ".git", "gh-stack");
+      const write = (...branches: (typeof upper)[]) => writeFile(catalog, JSON.stringify({
+        schemaVersion: 1, repository: "github.com:fixture/stack",
+        stacks: [{ trunk: { branch: "main", head }, branches }],
+      }));
+      await write(upper);
+      const runGitCommand = gitExecutable.runGitCommand;
+      let changed = false;
+      const run = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (cwd, args, options) => {
+        if (!changed && cwd === sibling && args[0] === "rev-parse") {
+          await write(lower, upper);
+          changed = true;
+        }
+        return await runGitCommand(cwd, args, options);
+      });
+      try {
+        const { stacks } = await new StackReader().read([row(primary, "upper"), row(sibling, "lower")], [], [primary],
+          async (key) => ({ repair: key === "codex:lower" }));
+        expect(changed).toBe(true);
+        expect(stacks[0]?.layers.find(({ branch }) => branch === "topic")?.heldBy)
+          .toMatchObject({ branch: "lower", number: 1, reason: "repair in progress" });
+      } finally {
+        run.mockRestore();
+      }
+    } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("verifies the other clone before binding a pathless PR after an alias retarget", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-retarget-provenance-"));
+    const before = path.join(sandbox, "before");
+    const after = path.join(sandbox, "after");
+    const other = path.join(sandbox, "other");
+    const alias = path.join(sandbox, "alias");
+    const first = path.join(alias, "one");
+    const second = path.join(alias, "two");
+    try {
+      await Promise.all([
+        mkdir(path.join(before, "one"), { recursive: true }), mkdir(path.join(before, "two"), { recursive: true }),
+        mkdir(path.join(after, "one"), { recursive: true }), mkdir(path.join(after, "two"), { recursive: true }), mkdir(other),
+      ]);
+      initialize(path.join(before, "one"));
+      initialize(after);
+      initialize(other);
+      await writeCatalog(path.join(before, "one"), "before");
+      const head = git(after, "rev-parse", "HEAD");
+      git(after, "branch", "layer");
+      await writeFile(path.join(after, ".git", "gh-stack"), JSON.stringify({
+        schemaVersion: 1, repository: "github.com:fixture/after",
+        stacks: [{ trunk: { branch: "main", head }, branches: [{ branch: "layer", head, base: head, pullRequest: { number: 2 } }] }],
+      }));
+      await symlink(before, alias, "junction");
+      const runGitCommand = gitExecutable.runGitCommand;
+      let moved = false;
+      const run = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (cwd, args, options) => {
+        if (!moved && cwd === first && args[0] === "rev-parse") {
+          await rm(alias);
+          await symlink(after, alias, "junction");
+          moved = true;
+        }
+        return await runGitCommand(cwd, args, options);
+      });
+      try {
+        const linked = row(second, "linked");
+        const pr: PrSummary = {
+          number: 2, provider: "github.com", org: "fixture", repo: "after", state: "passing", lifecycleState: "open",
+          url: "https://github.com/fixture/after/pull/2", headRefName: "layer", baseRefName: "main", headSha: head,
+        };
+        const rows = [row(first, "trigger"), {
+          ...linked, linkedDirectories: [...linked.linkedDirectories, ...row(other, "other").linkedDirectories], prs: [pr],
+        }];
+        const { stacks } = await new StackReader().read(rows, []);
+        expect(moved).toBe(true);
+        expect(await realpath(git(second, "rev-parse", "--show-toplevel"))).toBe(await realpath(after));
+        expect(await realpath(git(other, "rev-parse", "--show-toplevel"))).toBe(await realpath(other));
+        expect(stacks.find(({ repository }) => repository === "github.com:fixture/after")?.layers[0])
+          .toMatchObject({ role: "unbound" });
+      } finally {
+        run.mockRestore();
+      }
+    } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     ["bundled", "inferred", false], ["installed", "inferred", false],
     ["bundled", "tracked", false], ["bundled", "tracked", true],

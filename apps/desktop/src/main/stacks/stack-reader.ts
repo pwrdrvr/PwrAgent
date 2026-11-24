@@ -141,6 +141,26 @@ export class StackReadObservation {
     return (await read).catalog;
   }
 
+  async revalidateCatalog(commonDir: string): Promise<boolean> {
+    const read = this.catalogs.get(commonDir);
+    if (!read) return false;
+    const previous = await read;
+    const current = await runPrMetadataFileProbe(async () => {
+      try {
+        return catalogVersion(await lstat(path.join(commonDir, "gh-stack"), { bigint: true }));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+        throw error;
+      }
+    }, this.inventoryDemand);
+    if (current === "missing" ? previous.catalog.status === "missing"
+      : current !== undefined && current === previous.version) return false;
+    const refreshed = observeCatalog(commonDir);
+    this.catalogs.set(commonDir, refreshed);
+    const next = await refreshed;
+    return previous.version !== next.version || previous.catalog.status !== next.catalog.status;
+  }
+
   private async recordCheckout(cwd: string, lookup?: (cwd: string) => Promise<CheckoutLookup>): Promise<CheckoutLookup> {
     const before = await this.hints.checkoutIdentity(cwd);
     const checkout = await (lookup ? lookup(cwd) : this.checkoutLookup(cwd));
@@ -200,12 +220,7 @@ export class StackReadObservation {
         throw new Error("Stack checkout evidence is unavailable.");
       }
     });
-    const catalogs = [...this.catalogs].map(async ([commonDir, read]) => {
-      const previous = (await read).version;
-      const current = previous && await runPrMetadataFileProbe(async () =>
-        catalogVersion(await lstat(path.join(commonDir, "gh-stack"), { bigint: true })), this.inventoryDemand);
-      if (!previous || previous !== current) this.catalogs.delete(commonDir);
-    });
+    const catalogs = [...this.catalogs.keys()].map((commonDir) => this.revalidateCatalog(commonDir));
     await Promise.all([...checkouts, ...catalogs]);
     this.demand.signal?.throwIfAborted();
   }
@@ -521,6 +536,13 @@ export class StackReader {
     activity?: (threadKey: string) => Promise<{ held?: boolean; repair?: boolean }>,
     observation = new StackReadObservation(),
   ) {
+    return await this.readProjection(threads, knownPrs, directories, activity, observation, false);
+  }
+
+  private async readProjection(threads: readonly StackThreadRow[], knownPrs: readonly PrSummary[],
+    directories: readonly string[] | undefined, activity: ((threadKey: string) => Promise<{ held?: boolean; repair?: boolean }>) | undefined,
+    observation: StackReadObservation, catalogRetried: boolean,
+  ): Promise<{ stacks: StackSummary[]; catalogs: CatalogRead[] }> {
     const { demand, hints, inventoryDemand } = observation;
     demand.signal?.throwIfAborted();
     const local = threads.filter((row) => !row.federation);
@@ -582,8 +604,8 @@ export class StackReader {
     const admitted = new Set(paths.filter(participates));
     // An attachment without path provenance is attributed only when the row
     // belongs to exactly one clone. Include its other paths for that decision.
-    for (const row of local) {
-      if (!row.prs?.some((pr) => !pr.linkedDirectoryPaths?.length)) continue;
+    const unprovenAttachments = local.filter((row) => row.prs?.some((pr) => !pr.linkedDirectoryPaths?.length));
+    for (const row of unprovenAttachments) {
       const paths = threadDirectories(row);
       if (!paths.some(participates)) continue;
       for (const cwd of paths) if (possible.get(cwd)?.length) admitted.add(cwd);
@@ -621,9 +643,40 @@ export class StackReader {
       for await (const result of recheck) {
         if (!("checkout" in result)) continue;
         const { cwd, checkout } = result;
-        if (!checkout || checkout === "unavailable") verified.delete(cwd);
-        else verified.set(cwd, checkout);
+        if (checkout === "unavailable") unavailablePaths.add(cwd);
+        else unavailablePaths.delete(cwd);
+        if (checkout && checkout !== "unavailable") verified.set(cwd, checkout);
+        else verified.delete(cwd);
       }
+      // A row newly admitted through the destination may have other linked
+      // clones. Verify those before assigning any attachment without paths.
+      const otherPaths = new Set<string>();
+      for (const row of unprovenAttachments) {
+        const paths = threadDirectories(row);
+        if (!paths.some((cwd) => rediscoveredClones.has(verified.get(cwd)?.commonDir ?? ""))) continue;
+        for (const cwd of paths) if (!verified.has(cwd)) otherPaths.add(cwd);
+      }
+      const verifyOtherPaths = new IterableMapper(otherPaths, async (cwd) => {
+        const candidates = await refreshed.possibleCommonDirs(cwd);
+        const checkout = candidates?.length === 0 && !refreshed.requiresGitDiscovery
+          ? undefined : await locateCheckout(cwd, inventoryDemand);
+        return { cwd, checkout };
+      }, STACK_CHECKOUT_SCAN_LIMITS);
+      for await (const { cwd, checkout } of verifyOtherPaths) {
+        if (checkout === "unavailable") unavailablePaths.add(cwd);
+        else {
+          unavailablePaths.delete(cwd);
+          if (checkout) verified.set(cwd, checkout);
+        }
+      }
+    }
+    // Scoped admission used the initial catalog. A change during discovery
+    // requires fresh admission before projection can assert settlement.
+    if (scopedClones.size && (await Promise.all(
+      [...scopedClones.keys()].map((commonDir) => observation.revalidateCatalog(commonDir)),
+    )).some(Boolean)) {
+      if (catalogRetried) return { stacks: [], catalogs: [{ status: "unavailable" }] };
+      return await this.readProjection(threads, knownPrs, directories, activity, new StackReadObservation(demand), true);
     }
     const checkouts = new Map(anchors.map((entry) => [entry.cwd, entry] as const));
     // Keep the existing path order regardless of which probes finish first.
@@ -645,7 +698,7 @@ export class StackReader {
         const entries = cloneThreads.get(commonDir) ?? [];
         const prs = row.prs?.filter((pr) => pr.linkedDirectoryPaths?.length
           ? pr.linkedDirectoryPaths.some((directory) => paths.includes(checkouts.get(directory)?.root ?? directory))
-          : pathsByClone.size === 1);
+          : pathsByClone.size === 1 && !threadDirectories(row).some((cwd) => unavailablePaths.has(cwd)));
         entries.push({ row: { ...row, prs }, paths });
         cloneThreads.set(commonDir, entries);
       }
