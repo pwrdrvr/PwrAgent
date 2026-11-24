@@ -21,6 +21,7 @@ import type { McpConnectionStatus } from "@pwragent/shared/contracts/mcp-connect
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { ReadDesktopMessagingSettingsResponse } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { appStyleRules } from "../../../styles/__tests__/css-style-rules";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import {
   CURRENT_CODEX_MODEL_LABELS,
@@ -972,6 +973,57 @@ describe("AutomationEditor", () => {
     expect(
       screen.queryByLabelText("Destination topic ID (optional)"),
     ).not.toBeInTheDocument();
+  });
+
+  it("gives the destination picker its own row for every provider", async () => {
+    // The results card is the narrow half of a two-card row. Sharing a row
+    // with the capped Provider column left the picker ~90px — "Orch…" for
+    // "Orchard Ops". jsdom does no layout, so the oracle is app.css itself:
+    // some top-level rule the picker's field matches must span the grid row.
+    // Telegram and Slack fill the destination list from different settings,
+    // so each provider's row is checked, not just the default one.
+    const spansRow = (element: Element) =>
+      appStyleRules.some(
+        (rule) =>
+          rule.atRules.length === 0
+          && /grid-column:\s*1\s*\/\s*-1/.test(rule.body)
+          && rule.selectors.some((selector) => element.matches(selector)),
+      );
+
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(
+          fakeSettings({
+            enabled: { slack: true, telegram: true },
+            telegramGroups: [{ displayName: "Orchard Ops", id: "-100" }],
+            slackChannels: [{ displayName: "orchard-ops", id: "C0001" }],
+          }),
+        )}
+        mode={{ kind: "create" }}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    chooseSelectOption(
+      screen.getByLabelText("Where should the result go?"),
+      "Send to a different conversation",
+    );
+    for (const provider of ["telegram", "slack"] as const) {
+      const label = INBOUND_PROVIDER_LABELS[provider] ?? provider;
+      chooseSelectOption(screen.getByLabelText("Destination provider"), label);
+      // Otherwise the Slack pass could re-measure Telegram's still-mounted row.
+      expect(screen.getByLabelText("Destination provider")).toHaveTextContent(
+        label,
+      );
+      const trigger = await screen.findByRole("button", {
+        name: /^Destination: /,
+      });
+      const field = trigger.closest(".automation-field--picker");
+      expect(field, provider).not.toBeNull();
+      expect(spansRow(field as Element), provider).toBe(true);
+    }
   });
 
   it("includes an MCP allowlist in the execution profile", async () => {

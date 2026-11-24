@@ -3185,7 +3185,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
 
                         {resultMode === "different" ? (
                           <div className="automation-field-group">
-                            <div className="automation-inline-fields">
+                            <div className="automation-inline-fields automation-inline-fields--stacked-picker">
                               <label className="automation-field">
                                 <span>Destination provider</span>
                                 <Select
