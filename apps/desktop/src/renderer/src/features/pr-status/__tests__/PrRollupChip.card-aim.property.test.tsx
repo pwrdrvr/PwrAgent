@@ -67,6 +67,10 @@ function move(from: Element, to: Element, point: Point): void {
  * - stop: toward the card, but it comes to rest on another row.
  * - sweep: straight up or down to another row.
  * - away: diagonally to another row, away from the card.
+ * - pass: toward the card across the rows below, coming to rest in the
+ *   list's footer, on no row.
+ * - return: into the card level with another row, then straight back
+ *   into that row.
  */
 const scenario = fc.oneof(
   fc.record({
@@ -80,7 +84,7 @@ const scenario = fc.oneof(
     pace: fc.integer({ min: 4, max: 10 }),
   }),
   fc.record({
-    kind: fc.constantFrom("stop" as const, "sweep" as const, "away" as const),
+    kind: fc.constantFrom("stop" as const, "sweep" as const, "away" as const, "pass" as const, "return" as const),
     other: fc.nat(),
     pace: fc.integer({ min: 4, max: 30 }),
   }),
@@ -89,8 +93,9 @@ const scenario = fc.oneof(
 describe("PR rollup card aim", () => {
   // Model: while the pointer heads for the open card, rows it crosses on the
   // way are not destinations, so the card it reaches is still the one it
-  // left. A row it stops on, or reaches moving up, down or away from the
-  // card, takes the card, as it always has.
+  // left, and one it crossed and then left never takes it. A row it stops
+  // on, or reaches moving up, down, away from the card or back from it,
+  // takes the card, as it always has.
   it("keeps the card a pointer is heading for, and swaps it for the row the pointer settles on", () => {
     vi.useFakeTimers();
     fc.assert(fc.property(
@@ -149,38 +154,53 @@ describe("PR rollup card aim", () => {
             return sidebar;
           };
 
-          const other = path.kind === "aim" ? from : (from + 1 + (path.other % (count - 1))) % count;
-          const end = path.kind === "aim"
-            ? { x: path.x, y: path.y }
+          const other = path.kind === "aim" || path.kind === "pass"
+            ? from
+            : (from + 1 + (path.other % (count - 1))) % count;
+          const legs: Point[] = path.kind === "aim"
+            ? [{ x: path.x, y: path.y }]
             : path.kind === "stop"
-              ? { x: LIST.right - 8, y: rowCenter(other) }
+              ? [{ x: LIST.right - 8, y: rowCenter(other) }]
               : path.kind === "sweep"
-                ? { x: CHIP_X, y: rowCenter(other) }
-                : { x: LIST.left + 30, y: rowCenter(other) };
+                ? [{ x: CHIP_X, y: rowCenter(other) }]
+                : path.kind === "away"
+                  ? [{ x: LIST.left + 30, y: rowCenter(other) }]
+                  : path.kind === "pass"
+                    ? [{ x: LIST.right - 8, y: ROWS_TOP + ROW_HEIGHT * count + 20 }]
+                    : [{ x: CARD.left + 20, y: rowCenter(other) }, { x: CHIP_X, y: rowCenter(other) }];
           let current: Element = startElement;
+          let position = start;
+          // What the card showed as the pointer entered `other` on the last leg.
           let swappedOnEntry: string | undefined;
-          for (const point of segment(start, end)) {
-            const under = hit(point);
-            if (under !== current) {
-              move(current, under, point);
-              current = under;
-              if (under.closest(".pr-rollup-popover__item") === items[other] && swappedOnEntry === undefined) {
-                swappedOnEntry = screen.getByRole("tooltip").textContent ?? "";
+          for (const [leg, waypoint] of legs.entries()) {
+            for (const point of segment(position, waypoint)) {
+              const under = hit(point);
+              if (under !== current) {
+                move(current, under, point);
+                current = under;
+                if (
+                  leg === legs.length - 1
+                  && under.closest(".pr-rollup-popover__item") === items[other]
+                  && swappedOnEntry === undefined
+                ) {
+                  swappedOnEntry = screen.getByRole("tooltip").textContent ?? "";
+                }
               }
+              fireEvent.mouseMove(under, { clientX: point.x, clientY: point.y });
+              act(() => vi.advanceTimersByTime(path.pace));
             }
-            fireEvent.mouseMove(under, { clientX: point.x, clientY: point.y });
-            act(() => vi.advanceTimersByTime(path.pace));
+            position = waypoint;
           }
 
           if (path.kind === "aim") {
             expect(current).toBe(card);
             expect(screen.getByRole("tooltip")).toHaveTextContent(`acme/orbit#${numberOf(from)}`);
-          } else if (path.kind === "sweep" || path.kind === "away") {
+          } else if (path.kind === "sweep" || path.kind === "away" || path.kind === "return") {
             // At once: the swap happened as the pointer entered the row.
             expect(swappedOnEntry).toContain(`acme/orbit#${numberOf(other)}`);
           }
           act(() => vi.advanceTimersByTime(1000));
-          const settled = path.kind === "aim" ? from : other;
+          const settled = path.kind === "aim" || path.kind === "pass" ? from : other;
           expect(screen.getByRole("tooltip")).toHaveTextContent(`acme/orbit#${numberOf(settled)}`);
         } finally {
           cleanup();

@@ -639,6 +639,10 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
             enterRow(pr, event.currentTarget, { x: event.clientX, y: event.clientY });
           }
         }}
+        onMouseLeave={(event) => {
+          // Only a row the pointer is still on can take the card.
+          if (crossedRowRef.current?.row === event.currentTarget) forgetCrossedRow();
+        }}
         onContextMenu={(event) => openRowContextMenu(event, pr)}
       >
         {member ? <StackNode pr={pr} /> : null}
@@ -812,8 +816,10 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
             onMouseEnter={cancelHoverDismiss}
             onMouseMove={(event) => trackPointer({ x: event.clientX, y: event.clientY })}
             onMouseLeave={() => {
-              // Out of the list, a crossed row is behind the pointer.
+              // Out of the list, a crossed row is behind the pointer, and
+              // where the pointer was says nothing about how it comes back.
               forgetCrossedRow();
+              pointerTrailRef.current = [];
               const card = getCardElement()?.getBoundingClientRect();
               const popover = popoverRef.current?.getBoundingClientRect();
               if (card?.width && card.height && popover && (
