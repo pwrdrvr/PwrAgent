@@ -7,6 +7,7 @@ import type {
 } from "@pwragent/shared/contracts/normalized-app-server";
 import { turnUsageEntryTurnId } from "@pwragent/shared/thread-usage-display";
 import { formatElapsedMs } from "../../lib/format-duration";
+import { isAutoReviewActivityEntry } from "./protocol-activity-entries";
 import { isRewindMarkerEntry } from "./rewind-marker-entries";
 
 export type TranscriptRenderItem =
@@ -271,6 +272,13 @@ function buildCompletedGroups(
   };
 
   for (const [index, entry] of entries.entries()) {
+    // The auto-review row stays in view after its turn: Codex keeps no record
+    // of the reviews, so this row is their only trace until the next turn.
+    // It neither joins the turn's work nor splits it, so it renders after the
+    // group it arrived among.
+    if (isAutoReviewActivityEntry(entry)) {
+      continue;
+    }
     const turnId = entry.turn?.id;
     const isReplyBetweenReviewCards =
       Boolean(turnId)
@@ -385,6 +393,10 @@ function collectInterimReplies(
   let workFollowsInTurn: string | undefined;
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
+    // A review notice is not work: an answer it follows is still the answer.
+    if (isAutoReviewActivityEntry(entry)) {
+      continue;
+    }
     const turnId = entry.turn?.id;
     if (entry.type === "message" && entry.role === "user") {
       workFollowsInTurn = undefined;
@@ -436,6 +448,9 @@ function buildCommentaryOnlyGroups(
   }
 
   for (const entry of entries) {
+    if (isAutoReviewActivityEntry(entry)) {
+      continue;
+    }
     if (
       !staysInView(entry, alwaysVisibleEntryIds)
       && isAssistantInterimMessage(entry)
