@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.5.0-prerelease.3 - 2026-11-24
+
+- Antigravity - Steer active turns, see weekly quota and priced token usage, and review grouped file edits with patches. Full Access is an explicit choice that auto-approves tools Antigravity runs. Native modes are preserved across session reloads when supported, and PwrAgent records Default Access when a start falls back. PwrAgent-managed MCP and forge calls use their existing approval rules without a duplicate Antigravity prompt.
+- Thread Starts - Show and choose the access mode on to-do cards. Apply the same model, effort, and ACP mode rules across the composer, to-do cards, queues, and messaging. Resolve federated worktree projects on the owning machine.
+- Reviews - Keep findings and token usage with the turn that produced them. Group Codex auto-review decisions into one transcript row and clear the Thinking indicator when inline review ends. Limit agent-requested reviews between operator turns and refuse repeat reviews of the same captured diff.
+- Research - Connect Open Math Harness directly to the hosted MathOS Platform from Settings → Experimental, choose a team, and browse swarms for import. Existing custom bridge configurations stay available. The hosted connection reads records and does not wake a sleeping VM.
+- Telegram Automations - Choose a Telegram bot independently for the trigger and destination. Each picker shows the selected bot's own paired conversations, and edits retain its routing identity.
+- Stacked Pull Requests and Resources - Show stack positions on PR chips, identify the PR blocking a held layer, and retry stack publishing when a parent's head changes. Resource waits link to Resources and explain what is ahead in the queue.
+- Responsiveness and Storage - Reuse navigation and Git metadata across refreshes, cut sidebar layout and tooltip work, and retry SQLite schema repair when another process writes during startup.
+
 ## v1.5.0-prerelease.2 - 2026-11-23
 
 - Stacked Pull Requests - Advance one layer at a time from the bottom of a stack. Repair, Auto-fix, CI waits, and review and merge offers show which lower layer is blocking progress. After a parent merges, update the immediate child before advancing farther up the stack.
