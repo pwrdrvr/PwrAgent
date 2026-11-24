@@ -56,7 +56,7 @@ import { buildCurrentTurnInputSourceTool, type CurrentTurnInputSourceHandler } f
 import { AgentToolRouter } from "./agent-tool-router.js";
 import { buildTokenMiserToolDefinitions } from "./token-miser-agent-tools.js";
 import type { TokenMiserStore } from "../token-miser/token-miser-store.js";
-import { buildMcpGatewayToolDefinitions } from "./pwragent-mcp-gateway-tools.js";
+import { buildMcpContextToolDefinition, buildMcpGatewayToolDefinitions } from "./pwragent-mcp-gateway-tools.js";
 import { buildResearchToolDefinitions, type ResearchAgentHandler } from "./pwragent-research-agent-tools";
 import type { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service.js";
 
@@ -95,6 +95,7 @@ export function resolveAgentToolCatalogs(params: {
 }, options?: {
   taskMonitorRole?: "parent" | "monitor" | "all";
   jobMonitorCreationEnabled?: boolean;
+  antigravityMcpContext?: boolean;
 }): ResolvedAgentToolCatalog[] {
   const automationRouter = buildAutomationInspectionToolRouter(
     params.automationInspectionHandler,
@@ -145,6 +146,7 @@ export function resolveAgentToolCatalogs(params: {
   const mcpConnectionRouter = new AgentToolRouter([
     ...buildPwrAgentMcpConnectionToolDefinitions(params.mcpConnectionHandler),
     ...buildMcpGatewayToolDefinitions(params.mcpGatewayTools, params.tokenMiserStore),
+    ...(options?.antigravityMcpContext && params.mcpGatewayTools ? [buildMcpContextToolDefinition(params.mcpGatewayTools)] : []),
   ]);
   const mcpConnectionDynamicTools = mcpConnectionRouter.buildDynamicToolSpecs();
   const tokenMiserRouter = new AgentToolRouter(

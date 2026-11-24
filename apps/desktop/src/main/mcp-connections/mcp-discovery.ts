@@ -4,9 +4,11 @@ import type { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { getMainLogger } from "../log";
 import { lazyModule } from "../lazy-module";
 import { isMcpError, isStreamableHttpError, mcpTypes } from "./mcp-sdk";
+import type { McpContextMethod } from "./mcp-gateway-context";
 
 const log = getMainLogger("pwragent:mcp-connections");
-export type McpDiscoveryPhase = "registration" | "initialize" | "tools/list" | "auth/refresh";
+
+export type McpDiscoveryPhase = "registration" | "initialize" | "tools/list" | "auth/refresh" | McpContextMethod;
 export const mcpDiscoveryContext = new AsyncLocalStorage<McpDiscovery>();
 export const mcpDiscoveryPhaseContext = new AsyncLocalStorage<{ phase: McpDiscoveryPhase; page?: number }>();
 export const mcpRequestSignalContext = new AsyncLocalStorage<AbortSignal>();
