@@ -503,6 +503,10 @@ function pendingRequestPrompt(
   const prompt =
     typeof request.params.prompt === "string" ? request.params.prompt.trim() : "";
   const reason = typeof request.params.reason === "string" ? request.params.reason.trim() : "";
+  if (request.params.acpMcpToolName) {
+    return [prompt || reason, markdownCodeBlock(request.params.acpMcpToolName, "")]
+      .filter(Boolean).join("\n\n");
+  }
   const command = approvalDisplayCommand(request.params);
   const commandBlock = command ? `Command:\n\n${markdownCodeBlock(command, "sh")}` : "";
   const contextBlock = approvalContextMarkdown(context);
@@ -1833,7 +1837,9 @@ export function TranscriptList(props: TranscriptListProps) {
                   Approval needed
                 </span>
                 <span className="transcript-message__time">
-                  {props.pendingRequest.method}
+                  {props.pendingRequest.params.acpMcpToolName
+                    ? "MCP tool approval"
+                    : props.pendingRequest.method}
                 </span>
               </div>
               <ThreadMarkdown

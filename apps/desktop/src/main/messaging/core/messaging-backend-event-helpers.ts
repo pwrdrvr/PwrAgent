@@ -16,7 +16,7 @@ import type { AutomationRunOutputDecision } from "@pwragent/shared/contracts/aut
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import type { MessagingRequestSource } from "./messaging-storage";
-import type { MessagingBindingRecord, MessagingActiveTurnSummary, MessagingDeliveryResult, MessagingInboundEvent, MessagingSurfaceRef } from "@pwragent/messaging-interface";
+import type { MessagingBindingRecord, MessagingActiveTurnSummary, MessagingDeliveryControl, MessagingDeliveryResult, MessagingInboundEvent, MessagingSurfaceRef } from "@pwragent/messaging-interface";
 import { planEntryFromUpdate } from "./messaging-artifact-renderer.js";
 import { normalizeReviewOutputRecord } from "../../../shared/review-command.js";
 import type { MessagingToolActivity } from "./messaging-tool-activity.js";
@@ -89,8 +89,7 @@ export type MessagingControllerLogger = {
   warn?(message: string, data?: Record<string, unknown>): void;
 };
 
-export type MessagingDeliveryGuard = {
-  isCancelled: () => boolean;
+export type MessagingDeliveryGuard = MessagingDeliveryControl & {
   onCancelledDelivery?: (result: MessagingDeliveryResult) => Promise<void>;
   whenCancelled?: Promise<void>;
 };
@@ -98,6 +97,25 @@ export type MessagingDeliveryGuard = {
 export type MessagingCancellationSignal = MessagingDeliveryGuard & {
   cancel: () => void;
 };
+
+/** A turn can cancel writes already waiting in a provider's request queue. */
+export function createMessagingTurnCancellation(
+  isTerminalPrivateResponse: () => boolean,
+): MessagingCancellationSignal {
+  const abort = new AbortController();
+  const cancelled = Promise.withResolvers<void>();
+  const cancel = () => {
+    abort.abort();
+    cancelled.resolve();
+  };
+  if (isTerminalPrivateResponse()) cancel();
+  return {
+    cancel,
+    isCancelled: () => abort.signal.aborted || isTerminalPrivateResponse(),
+    whenCancelled: cancelled.promise,
+    signal: abort.signal,
+  };
+}
 
 /**
  * Narrow an `AppServerNotification` to the `thread/executionMode/queued`

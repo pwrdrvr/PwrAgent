@@ -11951,6 +11951,158 @@ describe("SettingsScreen", () => {
     expect(desktopApi.readAppUpdateStatus).toHaveBeenCalledTimes(1);
   });
 
+  describe("GitHub Enterprise hosts", () => {
+    function setup(hosts: string[], options?: { error?: string; login?: string; discoveryMissing?: boolean; inactiveOnly?: boolean }) {
+      const settings = createSettingsState();
+      const snapshot = settings.snapshot!;
+      settings.snapshot = {
+        ...snapshot,
+        git: {
+          ...snapshot.git,
+          githubEnterpriseHosts: { value: hosts, source: "config", revision: "saved", error: options?.error },
+          githubEnterpriseAccounts: options?.login === undefined ? [] : [{ host: "ghe.example.com", login: options.login }],
+        },
+      };
+      const discoverGithubEnterpriseAccounts = vi.fn(async () => options?.discoveryMissing
+        ? { state: "missing" as const, servers: [] }
+        : {
+            state: "ready" as const,
+            servers: [options?.inactiveOnly
+              ? { host: "ghe.example.com", accounts: ["build-bot"] }
+              : { host: "ghe.example.com", accounts: ["alice", "build-bot"], activeLogin: "alice" }],
+          });
+      const screenElement = () => (
+        <SettingsScreen
+          initialSection="git"
+          desktopApi={{ discoverGithubEnterpriseAccounts }}
+          settings={settings}
+          onClose={() => undefined}
+        />
+      );
+      const { rerender } = render(screenElement());
+      return { settings, discoverGithubEnterpriseAccounts, refreshView: () => rerender(screenElement()) };
+    }
+
+    it("lists discovered hosts as opt-in and writes the exact switch without losing focus", async () => {
+      const { settings, discoverGithubEnterpriseAccounts } = setup(["ghe.internal.example", "*.example.com"]);
+      const list = screen.getByRole("list", { name: "GitHub Enterprise hosts" });
+      const control = await within(list).findByRole("switch", { name: "Allow Continue After on ghe.example.com" });
+      expect(control).not.toBeChecked();
+      expect(within(list).getByText(/uses a wildcard/)).toBeInTheDocument();
+      expect(within(list).getByText("gh auth login --hostname ghe.internal.example")).toBeInTheDocument();
+      act(() => control.focus());
+      fireEvent.click(control);
+      await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({
+        git: { githubEnterpriseHosts: { hosts: ["ghe.internal.example", "*.example.com", "ghe.example.com"], expectedRevision: "saved" } },
+      }, expect.any(Function)));
+      expect(control).toHaveFocus();
+      fireEvent.click(within(screen.getByRole("region", { name: "GitHub Enterprise hosts" })).getByRole("button", { name: /^Re-check$/ }));
+      await waitFor(() => expect(discoverGithubEnterpriseAccounts).toHaveBeenCalledTimes(2));
+    });
+
+    it("keeps saved hosts and the selected account visible when gh is missing", async () => {
+      setup(["ghe.example.com"], { login: "build-bot", discoveryMissing: true });
+      const section = screen.getByRole("region", { name: "GitHub Enterprise hosts" });
+      expect(await within(section).findByText(/GitHub CLI is unavailable/)).toBeInTheDocument();
+      expect(within(section).getByText("Unknown")).toBeInTheDocument();
+      expect(within(section).getByText(/Pinned account: build-bot/)).toBeInTheDocument();
+      expect(within(section).getByRole("switch")).toBeChecked();
+      expect(within(section).getByRole("button", { name: "Remove ghe.example.com" })).toBeInTheDocument();
+    });
+
+    it("keeps a newly discovered host off when 16 hosts are allowed", async () => {
+      const { settings } = setup(Array.from({ length: 16 }, (_, i) => `ghe${i}.example.com`));
+      const control = await screen.findByRole("switch", { name: "Allow Continue After on ghe.example.com" });
+      expect(control).not.toBeChecked();
+      expect(control).toHaveAttribute("aria-disabled", "true");
+      expect(control).toHaveAccessibleDescription("Turn another host off first");
+      fireEvent.click(control);
+      expect(settings.writeConfig).not.toHaveBeenCalled();
+    });
+
+    it("shows what a removed pin used and lets the operator use the active account", async () => {
+      const { settings } = setup(["ghe.example.com"], { login: "former-user" });
+      expect(await screen.findByText(/former-user is not signed in/)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Use active account (alice)" }));
+      await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({
+        git: { githubEnterpriseAccounts: [{ host: "ghe.example.com", login: "" }] },
+      }));
+    });
+
+    it("lets the operator pin a second account without changing the allowed list", async () => {
+      const { settings } = setup(["ghe.example.com"]);
+      const account = await screen.findByRole("combobox", { name: "GitHub account for ghe.example.com" });
+      expect(account).toHaveTextContent("Active gh account (alice)");
+      chooseSelectOption(account, "build-bot");
+      await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({
+        git: { githubEnterpriseAccounts: [{ host: "ghe.example.com", login: "build-bot" }] },
+      }));
+    });
+
+    it.each([undefined, "build-bot"])("offers the only stored account and the active choice with pin %s", async (login) => {
+      const { settings } = setup(["ghe.example.com"], { inactiveOnly: true, login });
+      const picker = await screen.findByRole("combobox", { name: "GitHub account for ghe.example.com" });
+      chooseSelectOption(picker, login ? "Active gh account" : "build-bot");
+      await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({
+        git: { githubEnterpriseAccounts: [{ host: "ghe.example.com", login: login ? "" : "build-bot" }] },
+      }));
+    });
+
+    it("uses an exact-host environment credential hint for a port-qualified host", async () => {
+      setup(["ghe.internal.example:8443"]);
+      expect(await screen.findByText("GH_HOST=ghe.internal.example:8443")).toBeInTheDocument();
+      expect(screen.getByText("GH_ENTERPRISE_TOKEN")).toBeInTheDocument();
+      expect(screen.queryByText("gh auth login --hostname ghe.internal.example:8443")).not.toBeInTheDocument();
+    });
+
+    it("restores focus when switching off a saved-only host removes its row", async () => {
+      const { settings, refreshView } = setup(["ghe.internal.example", "ghe.next.example"]);
+      vi.mocked(settings.writeConfig).mockImplementation(async (patch) => {
+        const snapshot = settings.snapshot!;
+        settings.snapshot = { ...snapshot, git: {
+          ...snapshot.git,
+          githubEnterpriseHosts: { ...snapshot.git.githubEnterpriseHosts!, value: patch.git!.githubEnterpriseHosts!.hosts },
+        } };
+        refreshView();
+        return true;
+      });
+      const control = await screen.findByRole("switch", { name: "Allow Continue After on ghe.internal.example" });
+      act(() => control.focus());
+      fireEvent.click(control);
+      await waitFor(() => expect(screen.getByRole("switch", { name: "Allow Continue After on ghe.next.example" })).toHaveFocus());
+    });
+
+    it("counts the effective sign-in when a pin is missing", async () => {
+      setup(["ghe.example.com"], { login: "former-user" });
+      expect(await screen.findByText(/former-user is not signed in/)).toBeInTheDocument();
+      expect(screen.getByText("0 servers signed in, 1 not signed in.")).toBeInTheDocument();
+    });
+
+    it("keeps authorization locked until malformed config is explicitly cleared", async () => {
+      const { settings } = setup([], { error: "Expected an array of strings." });
+      const control = await screen.findByRole("switch", { name: "Allow Continue After on ghe.example.com" });
+      expect(control).toHaveAttribute("aria-disabled", "true");
+      expect(screen.getByRole("alert")).toHaveTextContent(/so none are allowed/);
+      fireEvent.click(screen.getByRole("button", { name: "Clear saved hosts" }));
+      await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({
+        git: { githubEnterpriseHosts: { hosts: [], expectedRevision: "saved" } },
+      }, expect.any(Function)));
+    });
+
+    it("reloads on a refused revision and announces that the host must be switched on again", async () => {
+      const { settings } = setup([]);
+      vi.mocked(settings.writeConfig).mockImplementation(async (_patch, onError) => {
+        onError?.("GitHub Enterprise hosts changed while you were editing. Reload the current list before saving.");
+        return false;
+      });
+      const control = await screen.findByRole("switch", { name: "Allow Continue After on ghe.example.com" });
+      fireEvent.click(control);
+      expect(await screen.findByRole("alert")).toHaveTextContent(/Turn ghe.example.com on again/);
+      expect(settings.refresh).toHaveBeenCalledOnce();
+      expect(control).not.toBeChecked();
+    });
+  });
+
   it("configures GitHub Auto-fix PR and gates it on background PR status", async () => {
     const settings = createSettingsState();
     render(

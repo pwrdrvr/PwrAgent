@@ -1,3 +1,4 @@
+import { discoverGithubEnterpriseAccounts } from "../../pr-status/github-enterprise-auth";
 import { addAbortListener } from "node:events";
 import { join } from "node:path";
 import { codexAuthState } from "../../codex-auth-state";
@@ -123,6 +124,7 @@ import {
   SETTINGS_PICK_GLAB_COMMAND_CHANNEL,
   SETTINGS_PICK_GIT_COMMAND_CHANNEL,
   SETTINGS_REFRESH_GIT_DISCOVERY_CHANNEL,
+  SETTINGS_DISCOVER_GITHUB_ENTERPRISE_CHANNEL,
   SETTINGS_READ_CHANNEL,
   SETTINGS_READ_MANAGED_CODEX_TRACK_TAGS_CHANNEL,
   MANAGED_RUNTIME_PROGRESS_READ_CHANNEL,
@@ -143,6 +145,7 @@ import {
 import type { ManagedRuntimeProgress } from "../../../shared/managed-runtime-progress";
 import { readManagedRuntimeProgress } from "../../managed-runtime-progress";
 import type { DesktopSettingsService } from "../../settings/desktop-settings-service";
+import { E2E_ACP_DISCOVERY_ROOT_ENV } from "../../settings/desktop-settings-env";
 import { checkDecisionProvider, listDecisionModels } from "../../decision/decision-provider-check";
 import type { DecisionModelListing, DecisionProviderId } from "@pwragent/shared/decision-models";
 import {
@@ -877,6 +880,10 @@ async function listInstalledAndLocalAcpAgents(
           preferences[registryId] = { overridePath: override };
         }
       }
+      const fixtureRoot = app?.isPackaged === false && process.env.PWRAGENT_E2E === "1"
+        ? process.env[E2E_ACP_DISCOVERY_ROOT_ENV]
+        : undefined;
+      const fixtureBin = fixtureRoot ? join(fixtureRoot, ".local", "bin") : undefined;
       discovered = (await discoverLocalAcpAgentRecords({
         enabledRegistryIds: discoveryRegistryIds,
         useManagedAntigravity: true,
@@ -899,7 +906,14 @@ async function listInstalledAndLocalAcpAgents(
           requirePlatformSignature: app?.isPackaged === true,
         },
         ...(Object.keys(preferences).length > 0 ? { preferences } : {}),
-        ...(options?.env ? { env: options.env } : {}),
+        ...(fixtureBin
+          ? {
+              env: { ...process.env, PATH: fixtureBin },
+              pathProbeRootDir: fixtureBin,
+              fallbackRootDir: fixtureRoot,
+              bundledGrokCommand: null,
+            }
+          : options?.env ? { env: options.env } : {}),
       })).map((record) => {
         const configDependencyFingerprint = providerProjectionForRegistryId(
           providers,
@@ -1926,6 +1940,11 @@ export function registerSettingsIpcHandlers(
     await getService(service).readTokenMiserUsage(),
   );
 
+  ipcMain.removeHandler(SETTINGS_DISCOVER_GITHUB_ENTERPRISE_CHANNEL);
+  ipcMain.handle(SETTINGS_DISCOVER_GITHUB_ENTERPRISE_CHANNEL, async () =>
+    await discoverGithubEnterpriseAccounts(getService(service).resolveGhCommandPreference()),
+  );
+
   ipcMain.removeHandler(SETTINGS_READ_CHANNEL);
   ipcMain.handle(
     SETTINGS_READ_CHANNEL,
@@ -2732,6 +2751,7 @@ export function disposeSettingsIpcHandlers(): void {
   ipcMain.removeHandler(PROVIDER_CATALOG_REFRESH_READ_CHANNEL);
   ipcMain.removeHandler(ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL);
   ipcMain.removeHandler(TOKEN_MISER_READ_USAGE_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_DISCOVER_GITHUB_ENTERPRISE_CHANNEL);
   ipcMain.removeHandler(SETTINGS_READ_CHANNEL);
   ipcMain.removeHandler(SETTINGS_READ_BOOTSTRAP_CHANNEL);
   ipcMain.removeHandler(SETTINGS_READ_MESSAGING_CHANNEL);

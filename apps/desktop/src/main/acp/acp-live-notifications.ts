@@ -411,6 +411,9 @@ function tokenUsageNotificationBreakdown(
     ...(usage.inputTokens !== undefined
       ? { input_tokens: usage.inputTokens }
       : {}),
+    ...(usage.cacheWriteInputTokens !== undefined && usage.cacheWriteInputTokens > 0
+      ? { cache_write_input_tokens: usage.cacheWriteInputTokens }
+      : {}),
     ...(usage.cachedInputTokens !== undefined
       ? { cached_input_tokens: usage.cachedInputTokens }
       : {}),

@@ -177,7 +177,9 @@ export class AcpSessionRuntimeOptions {
       params.backend,
       params.threadId,
     );
-    await client.ensureSession?.(session);
+    const selectsAntigravityMode = params.backend === "acp:antigravity"
+      && params.source === "configOption" && params.optionId === "mode";
+    if (!selectsAntigravityMode) await client.ensureSession?.(session);
     const fromValue =
       options?.fromValue ?? this.readAcpRuntimeOptionValue(session.acpRuntime, params);
     const runtimeState = this.normalizeAcpRuntimeSelectionState(
@@ -187,6 +189,7 @@ export class AcpSessionRuntimeOptions {
         source: params.source,
         optionId: params.optionId,
         value: params.value,
+        ...(selectsAntigravityMode ? { antigravityModeSession: session } : {}),
         // Below, the requested value is recorded and broadcast as applied.
         // A thought level the client skipped was never sent, so it must fail
         // here instead, as the agent's own refusal did.

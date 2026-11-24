@@ -1408,6 +1408,10 @@ function formatUsageLineRuntimeLabel(
 
 function formatPricingProviderLabel(provider: string): string {
   switch (provider.toLocaleLowerCase()) {
+    case "anthropic":
+      return "Anthropic";
+    case "google":
+      return "Google";
     case "local":
       return "Local";
     case "openai":

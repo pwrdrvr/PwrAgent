@@ -4,7 +4,7 @@ import type {
   ThreadIdentifier,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import { evictStaleStreamAnchors, type MessagingBindingRecord, type MessagingDeliveryResult, type MessagingImagePart, type MessagingInboundEvent, type MessagingStreamUpdateIntent, type MessagingSurfaceIntent, type MessagingSurfaceRef } from "@pwragent/messaging-interface";
-import { assistantItemIdForBackendEvent, assistantStreamKey, messagingSurfaceKey, turnIdForBackendEvent, type AssistantMessageDeliveryIdentity, type AssistantStreamDelta, type MessagingCancellationSignal, type MessagingDeliveryGuard } from "./messaging-backend-event-helpers";
+import { createMessagingTurnCancellation, assistantItemIdForBackendEvent, assistantStreamKey, messagingSurfaceKey, turnIdForBackendEvent, type AssistantMessageDeliveryIdentity, type AssistantStreamDelta, type MessagingCancellationSignal, type MessagingDeliveryGuard } from "./messaging-backend-event-helpers";
 import { isSameMessagingSurface } from "./messaging-callback-helpers";
 import { coalesceBackoffMs } from "./messaging-coalesce-backoff.js";
 import { isVisibleAssistantStreamDelivery } from "./messaging-agent-tool-helpers";
@@ -428,6 +428,7 @@ export class MessagingAssistantStreams {
     const result = await this.context.host.deliver(intent, binding, undefined, {
       isCancelled: cancellation.isCancelled,
       whenCancelled: cancellation.whenCancelled,
+      signal: cancellation.signal,
       onCancelledDelivery: async (cancelledResult) => {
         if (
           cancelledResult.surface
@@ -479,35 +480,9 @@ export class MessagingAssistantStreams {
     if (existing) {
       return existing;
     }
-    let cancelled = this.context.host.isTerminalPrivateResponseTurn(
-      binding.backend,
-      binding.threadId,
-      turnId,
+    const cancellation = createMessagingTurnCancellation(() =>
+      this.context.host.isTerminalPrivateResponseTurn(binding.backend, binding.threadId, turnId),
     );
-    let resolveCancellation!: () => void;
-    const whenCancelled = new Promise<void>((resolve) => {
-      resolveCancellation = resolve;
-    });
-    const cancellation: MessagingCancellationSignal = {
-      cancel: () => {
-        if (cancelled) {
-          return;
-        }
-        cancelled = true;
-        resolveCancellation();
-      },
-      isCancelled: () =>
-        cancelled
-        || this.context.host.isTerminalPrivateResponseTurn(
-          binding.backend,
-          binding.threadId,
-          turnId,
-        ),
-      whenCancelled,
-    };
-    if (cancelled) {
-      resolveCancellation();
-    }
     this.assistantStreamCancellationSignals.set(key, cancellation);
     return cancellation;
   }
@@ -611,15 +586,15 @@ function finalReplyReceipt(
 
 /**
  * Whether a final stream edit leaves the reply to a new message. An edit
- * with no receipt behind it falls back whenever the message does not show
- * it. With one, only an edit proved not shown does: an ambiguous one was
- * flagged, and posting the reply again could show it twice.
+ * falls back only when the provider has not ruled out a replay. A kept
+ * receipt further requires evidence that the edit did not land.
  */
 function finalStreamNeedsMessage(
   result: MessagingDeliveryResult,
   receipt: MessagingReplyReceiptRequest | undefined,
 ): boolean {
   if (isVisibleAssistantStreamDelivery(result)) return false;
+  if (result.fallbackUnsafe) return false;
   if (!receipt?.kept) return true;
   return replyReceiptSettlement("stream_update", result).state === "owed";
 }

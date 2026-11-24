@@ -160,6 +160,13 @@ function approvalNoticeText(
         : {}),
     };
   }
+  const acpMcpToolName = wait.request?.params.acpMcpToolName;
+  if (acpMcpToolName) {
+    return {
+      message: wait.request?.params.prompt || "The agent wants to use an MCP tool.",
+      facts: [{ label: "MCP tool", value: acpMcpToolName }],
+    };
+  }
   const command = wait.request ? approvalDisplayCommand(wait.request.params) : "";
   if (command) {
     return {

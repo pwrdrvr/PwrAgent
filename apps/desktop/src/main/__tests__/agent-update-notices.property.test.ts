@@ -287,7 +287,9 @@ it("budgets a changed progress edit through the Telegram adapter and SQLite deli
   const transport = vi.fn(async (_request: TelegramSendMessageRequest) => ({ message_id: 101, chat: { id: -100777, type: "supergroup" } }));
   const adapter = new TelegramAdapter({ api: { sendMessage: transport, editMessageText: transport } as unknown as TelegramBotApi,
     config: { channel: "telegram", botToken: "12345:fake-token", authorizedActorIds: [{ id: "42", displayName: "" }],
-      authorizedSupergroupIds: [{ id: "-100777", displayName: "" }] }, now: Date.now, pollOnStart: false, store: harness.store });
+      authorizedSupergroupIds: [{ id: "-100777", displayName: "" }] }, now: Date.now,
+    waitForReplyDelay: async (ms) => { vi.setSystemTime(Date.now() + ms); },
+    pollOnStart: false, store: harness.store });
   const activity = new MessagingActivityLog(db);
   const audit = vi.spyOn(activity, "record");
   const controller = new MessagingController({ ...harness.controllerOptions, adapter, now: Date.now, appUpdateControls: () => controls,

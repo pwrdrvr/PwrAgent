@@ -2,7 +2,7 @@ export type MessagingRateLimitBucket = {
   id: string;
   intervalMs: number;
   limit: number;
-  minIntervalMs?: number;
+  minIntervalMs?: number | ((requestsInWindow: number) => number);
 };
 
 export type MessagingRateLimitAdmission =
@@ -44,9 +44,12 @@ export class MessagingRateLimitGate {
     const state = this.stateFor(bucket.id);
     this.prune(state, bucket, now);
     const lastTimestamp = state.timestamps.at(-1);
+    const minIntervalMs = typeof bucket.minIntervalMs === "function"
+      ? bucket.minIntervalMs(state.timestamps.length)
+      : bucket.minIntervalMs ?? 0;
     const intervalReadyAt = lastTimestamp === undefined
       ? now
-      : lastTimestamp + Math.max(0, bucket.minIntervalMs ?? 0);
+      : lastTimestamp + Math.max(0, minIntervalMs);
     const windowReadyAt = state.timestamps.length < bucket.limit
       ? now
       : (state.timestamps[0] ?? now) + bucket.intervalMs;
@@ -64,6 +67,10 @@ export class MessagingRateLimitGate {
       state.blockedUntil,
       this.now() + Math.max(0, retryAfterMs),
     );
+  }
+
+  isBlocked(bucketId: string): boolean {
+    return (this.states.get(bucketId)?.blockedUntil ?? 0) > this.now();
   }
 
   /** Every Retry-After block that has not yet expired. */

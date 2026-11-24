@@ -20,6 +20,7 @@ import type {
 } from "@pwragent/shared/contracts/backend";
 import {
   AcpSessionReplayNormalizer,
+  acpReplayPromptTextDigest,
   acpSessionReplayNormalizerOptions,
   isAcpUserBoilerplateMessage,
   readAcpContentText,
@@ -27,6 +28,7 @@ import {
   readAcpUpdateTimestamp,
   type AcpSessionReplayNormalizerOptions,
   type AcpSessionUpdate,
+  type AcpReplayPromptIdentity,
 } from "./acp-session-normalizer.js";
 import {
   acpRuntimeSupportsSessionLoad,
@@ -52,9 +54,12 @@ import {
 } from "./acp-rollout-store.js";
 import {
   foldAcpTurnUsage,
+  readAcpPromptResultUsage,
+  readAcpPromptResultUsageEnvelope,
   readAcpSelectedModel,
   readAcpUsageEnvelope,
   type AcpTokenUsage,
+  type AcpUsageEnvelope,
 } from "./acp-usage.js";
 import type { JsonRpcId } from "@pwrdrvr/agent-transport";
 import { getMainLogger } from "../log.js";
@@ -105,6 +110,25 @@ type AcpIdleClosedSession = {
   closed: Promise<void>;
   /** The session/load in flight, shared by every request that needs it. */
   reopening?: Promise<void>;
+  /** Load succeeded, but confirming its mode and closing the worker both failed. */
+  workerOpen?: boolean;
+};
+
+type AcpSessionLoadOptions = {
+  suppressTranscriptReplay?: boolean;
+  antigravityModeSelection?: string;
+};
+
+type AcpRuntimeOptionWrite = {
+  sessionId: string;
+  source: BackendAcpRuntimeOptionSource;
+  optionId: string;
+  value: string;
+  reasoningEffort?: string;
+  /** Refuse an explicit thought level the session does not offer. */
+  rejectUnofferedThoughtLevel?: boolean;
+  /** The owner supplied an explicit selection for Antigravity's mode option. */
+  antigravityModeSession?: AcpSessionMetadata;
 };
 
 // Host configurations keep record environments for process/Codex callers;
@@ -183,6 +207,12 @@ type AcpRolloutStoreLike = {
   }): AcpRolloutRecord[];
 };
 
+type AcpPromptSteerHandoff = {
+  nextGeneration: number;
+  accept: () => void;
+  reject: (error: unknown) => void;
+};
+
 type AcpActiveTurn = {
   assistantText: string;
   /** The agent compacted its history while this prompt ran. */
@@ -192,12 +222,16 @@ type AcpActiveTurn = {
   onTerminalUpdate?: () => void;
   terminalResponseGraceStarted?: boolean;
   turnId: string;
+  promptDispatched?: boolean;
+  promptGeneration: number;
+  pendingSteerHandoff?: AcpPromptSteerHandoff;
 };
 
 type AcpSessionLoadState = {
   lastTimestampedTranscriptAt?: number;
   replayedTranscript: boolean;
   suppressTranscriptReplay: boolean;
+  restoringAntigravityMode?: boolean;
 };
 
 type AcpSessionLoadReplay = {
@@ -217,6 +251,7 @@ type AcpSuppressedControlPrompt = {
 
 type AcpHydratedSessionHistory = {
   isComplete: boolean;
+  antigravityReplayPrompts?: AcpReplayPromptIdentity[];
 };
 
 export type AcpAgentClientOptions = {
@@ -243,6 +278,7 @@ export type AcpAgentClientOptions = {
     sessionId: string;
     turnId: string;
     error: unknown;
+    usage?: AcpUsageEnvelope;
   }) => Promise<void> | void;
   onRuntimeCapabilities?: (event: {
     fromSessionLoad?: boolean;
@@ -326,8 +362,8 @@ export class AcpAgentClient {
   /** Permission requests the agent is waiting on, by app session id. */
   private readonly pendingPermissionRequests = new Map<string, number>();
   /**
-   * Sessions released by `closeIdleSessions`. They keep their id routing and
-   * in-memory transcript; the next request for one reloads it first.
+   * Sessions that must load before the next request. An Antigravity worker
+   * can still be open here if mode confirmation and cleanup both failed.
    */
   private readonly idleClosedSessions = new Map<string, AcpIdleClosedSession>();
   /**
@@ -469,7 +505,7 @@ export class AcpAgentClient {
       const idleClosed = this.idleClosedSessions.get(sessionId);
       await idleClosed?.closed;
       // An idle close already released it, unless a request reloaded it.
-      if (!idleClosed || this.idleClosedSessions.get(sessionId) !== idleClosed) {
+      if (!idleClosed || idleClosed.workerOpen || this.idleClosedSessions.get(sessionId) !== idleClosed) {
         await this.options.transport.request("session/close", { sessionId: protocolSessionId });
       }
       this.loadedSessionCwds.delete(protocolSessionId);
@@ -544,9 +580,10 @@ export class AcpAgentClient {
 
   private sessionIsIdle(sessionId: string, idleMs: number): boolean {
     const protocolSessionId = this.agentSessionIdsByAppSessionId.get(sessionId) ?? sessionId;
+    const idleClosed = this.idleClosedSessions.get(sessionId);
     if (
       !this.loadedSessionCwds.has(protocolSessionId)
-      || this.idleClosedSessions.has(sessionId)
+      || (idleClosed && !idleClosed.workerOpen)
       || this.sessionsWithoutFaithfulReload.has(sessionId)
       || this.activeTurns.has(sessionId)
       || this.pendingPermissionRequests.has(sessionId)
@@ -568,6 +605,7 @@ export class AcpAgentClient {
   private async closeIdleSession(sessionId: string): Promise<boolean> {
     const protocolSessionId = this.protocolSessionIdFor(sessionId);
     const cwd = this.loadedSessionCwds.get(protocolSessionId);
+    const previouslyUnconfirmed = this.idleClosedSessions.get(sessionId);
     // Mark it closed before the request, so a request that starts meanwhile
     // waits for the close and then reloads the session.
     let settle!: () => void;
@@ -589,7 +627,8 @@ export class AcpAgentClient {
     } catch (error) {
       // The agent may still hold the session; keep treating it as loaded.
       if (this.idleClosedSessions.get(sessionId) === idleClosed) {
-        this.idleClosedSessions.delete(sessionId);
+        if (previouslyUnconfirmed) this.idleClosedSessions.set(sessionId, previouslyUnconfirmed);
+        else this.idleClosedSessions.delete(sessionId);
         this.loadedSessionCwds.set(protocolSessionId, cwd);
         this.touchSession(sessionId);
       }
@@ -611,18 +650,26 @@ export class AcpAgentClient {
    */
   private async reopenIdleClosedSession(
     sessionId: string,
-    options: {
-      metadata?: AcpSessionMetadata;
-      suppressTranscriptReplay?: boolean;
-    } = {},
+    options: AcpSessionLoadOptions & { metadata?: AcpSessionMetadata } = {},
   ): Promise<void> {
     const idleClosed = this.idleClosedSessions.get(sessionId);
     if (!idleClosed) return;
+    if (idleClosed.reopening && options.antigravityModeSelection !== undefined) {
+      // An ordinary reload might still be trying the mode being replaced.
+      await idleClosed.reopening.catch(() => undefined);
+      await this.reopenIdleClosedSession(sessionId, options);
+      return;
+    }
     if (!idleClosed.reopening) {
       const reopening = (async () => {
         await idleClosed.closed;
         // The close failed, or the session was archived meanwhile.
-        if (this.idleClosedSessions.get(sessionId) !== idleClosed) return;
+        if (this.idleClosedSessions.get(sessionId) !== idleClosed) {
+          if (options.antigravityModeSelection !== undefined) {
+            await this.reopenIdleClosedSession(sessionId, options);
+          }
+          return;
+        }
         const metadata =
           options.metadata
           ?? this.options.store.getSession(this.options.backendId, sessionId);
@@ -630,6 +677,7 @@ export class AcpAgentClient {
           throw new Error(`ACP session not found: ${sessionId}`);
         }
         await this.loadSessionFromAgent(metadata, {
+          antigravityModeSelection: options.antigravityModeSelection,
           suppressTranscriptReplay: options.suppressTranscriptReplay ?? true,
         });
         if (this.idleClosedSessions.get(sessionId) === idleClosed) {
@@ -638,7 +686,7 @@ export class AcpAgentClient {
         this.touchSession(sessionId);
       })();
       idleClosed.reopening = reopening;
-      // A failed load leaves the session closed; the next request retries.
+      // A failed load leaves the session unready; the next request retries.
       reopening.catch(() => {
         if (idleClosed.reopening === reopening) idleClosed.reopening = undefined;
       });
@@ -675,6 +723,9 @@ export class AcpAgentClient {
   }
 
   supportsTurnSteering(): boolean {
+    if (this.options.backendId === "acp:antigravity") {
+      return this.options.supportsTurnSteering !== false;
+    }
     return this.options.backendId === "acp:grok"
       && (this.options.supportsTurnSteering === true
         || isPwrAgentGrokBuildVersion(this.runtimeCapabilities?.agentInfo?.version));
@@ -827,11 +878,22 @@ export class AcpAgentClient {
   async steerSession(params: {
     sessionId: string;
     text: string;
+    prompt?: string;
+    parts?: AppServerThreadMessagePart[];
     content: AcpPromptContentBlock[];
     interjectionId: string;
   }): Promise<{ delivery: "currentTurn" | "nextTurn" }> {
     if (!this.supportsTurnSteering()) {
-      throw new Error("Installed Grok Build does not support turn steering over ACP");
+      throw new Error(
+        this.options.backendId === "acp:antigravity"
+          ? "Installed Antigravity CLI does not support turn steering over ACP"
+          : "Installed Grok Build does not support turn steering over ACP",
+      );
+    }
+    if (this.options.backendId === "acp:antigravity") {
+      return await this.withOperation(
+        async () => await this.steerAntigravitySession(params),
+      );
     }
     return await this.withOperation(async () => {
       const reload = this.reloadBeforeRequest(params.sessionId);
@@ -854,6 +916,131 @@ export class AcpAgentClient {
       }
       return { delivery };
     });
+  }
+
+  /**
+   * Antigravity (`agy acp`) steers a running turn by accepting a concurrent
+   * `session/prompt`: it immediately detaches the in-flight prompt with
+   * `{ stopReason: "end_turn" }` and transfers the active turn stream to the
+   * new prompt request. When steering is rejected (for example while waiting on
+   * a permission or question answer), the new prompt rejects and the original
+   * prompt keeps running undisturbed.
+   */
+  private async steerAntigravitySession(params: {
+    sessionId: string;
+    text: string;
+    prompt?: string;
+    parts?: AppServerThreadMessagePart[];
+    content: AcpPromptContentBlock[];
+    interjectionId: string;
+  }): Promise<{ delivery: "currentTurn" }> {
+    const activeTurn = this.activeTurns.get(params.sessionId);
+    if (!activeTurn || !activeTurn.promptDispatched) {
+      throw new Error("The Antigravity turn finished before steering was accepted");
+    }
+    if (activeTurn.pendingSteerHandoff) {
+      throw new Error("Another Antigravity steering request is already in flight");
+    }
+    const nextGeneration = activeTurn.promptGeneration + 1;
+    const messageId = `user:${activeTurn.turnId}:steer:${params.interjectionId}`;
+    const displayPrompt = params.prompt ?? params.text;
+    const handoff = Promise.withResolvers<void>();
+    let nextPromptSettled = false;
+
+    const adoptSteer = (): void => {
+      // This receipt describes provider acceptance. The history write can
+      // fail after ownership has already moved to the replacement prompt.
+      handoff.resolve();
+      const receivedAt = this.now();
+      const replay = this.normalizerFor(params.sessionId).recordSteeredUserPrompt({
+        sessionId: params.sessionId,
+        messageId,
+        prompt: displayPrompt,
+        parts: params.parts,
+        turnId: activeTurn.turnId,
+        receivedAt,
+      });
+      const update: Record<string, unknown> = {
+        kind: "pwragent_steered_user_prompt",
+        messageId,
+        prompt: displayPrompt,
+        ...(params.parts?.length ? { parts: params.parts } : {}),
+        turnId: activeTurn.turnId,
+        createdAt: receivedAt,
+      };
+      try {
+        this.appendHistoryUpdate(params.sessionId, receivedAt, update);
+        this.markSessionHasConversationHistory(params.sessionId, receivedAt);
+      } catch (error) {
+        acpClientLog.warn("Could not persist accepted Antigravity steering message", {
+          sessionId: params.sessionId,
+          turnId: activeTurn.turnId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      void this.notifySessionUpdate({
+        sessionId: params.sessionId,
+        replay,
+        turnId: activeTurn.turnId,
+        update,
+      });
+    };
+
+    activeTurn.pendingSteerHandoff = {
+      nextGeneration,
+      accept: adoptSteer,
+      reject: (error) => {
+        if (!nextPromptSettled && !this.disconnected) {
+          void this.cancelSessionOperation(params.sessionId).catch(() => undefined);
+        }
+        handoff.reject(error);
+      },
+    };
+
+    let nextPrompt: Promise<unknown>;
+    try {
+      const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
+      nextPrompt = this.options.transport.request(
+        "session/prompt",
+        {
+          sessionId: protocolSessionId,
+          prompt: params.content,
+        },
+        ACP_TURN_PROMPT_REQUEST_TIMEOUT_MS,
+      );
+    } catch (error) {
+      if (activeTurn.pendingSteerHandoff?.nextGeneration === nextGeneration) {
+        activeTurn.pendingSteerHandoff = undefined;
+      }
+      throw error;
+    }
+
+    void nextPrompt.then(
+      () => {
+        nextPromptSettled = true;
+      },
+      (error) => {
+        nextPromptSettled = true;
+        if (activeTurn.pendingSteerHandoff?.nextGeneration === nextGeneration) {
+          activeTurn.pendingSteerHandoff = undefined;
+          handoff.reject(error);
+        }
+      },
+    );
+    // A successful overlapping request alone does not show that it took
+    // over this turn. Observe its lifecycle only after the displaced prompt
+    // confirms that the replacement owns the turn.
+    void handoff.promise.then(() => {
+      this.observeActiveTurnPrompt({
+        sessionId: params.sessionId,
+        activeTurn,
+        generation: nextGeneration,
+        promptPromise: nextPrompt,
+      });
+    }, () => undefined);
+
+    await handoff.promise;
+    return { delivery: "currentTurn" };
   }
 
   async configureWorkflowBudget(params: {
@@ -1034,7 +1221,10 @@ export class AcpAgentClient {
         turnId,
       });
       result = await promptRequest;
-      this.assertPromptProducedResponse(params.sessionId, result);
+      const responseError = this.missingPromptResponseError(params.sessionId, result);
+      if (responseError) {
+        throw responseError;
+      }
     } catch (error) {
       this.finishTrackedTurn(params.sessionId, this.now());
       this.recordPromptFailure(params.sessionId, turnId, error);
@@ -1094,16 +1284,29 @@ export class AcpAgentClient {
     if (this.supportsSessionLoad()) {
       const protocolSessionId = this.protocolSessionIdFor(metadata.sessionId);
       this.sessionLoadReplays.delete(protocolSessionId);
-      // Give session/load a clean normalizer only when the fallback already
-      // holds a complete transcript. An incomplete fallback still contributes
-      // timestamps that providers such as Kimi do not send, so it must merge
-      // with the incoming replay instead.
-      if (localHistory.isComplete) {
+      const replayPrompts = localHistory.antigravityReplayPrompts;
+      // Antigravity's prompt identities annotate a clean provider transcript.
+      // Other incomplete fallbacks provide timestamps that agents such as
+      // Kimi omit, so those fallbacks merge with the incoming replay.
+      if (localHistory.isComplete || replayPrompts) {
         this.normalizers.delete(metadata.sessionId);
       }
-      await this.ensureSession(hydratedMetadata, {
-        suppressTranscriptReplay: false,
-      });
+      const providerNormalizer = replayPrompts && this.normalizerFor(metadata.sessionId);
+      if (replayPrompts) providerNormalizer?.beginProviderPromptReplay(replayPrompts);
+      try {
+        await this.ensureSession(hydratedMetadata, {
+          suppressTranscriptReplay: false,
+        });
+      } catch (error) {
+        if (providerNormalizer && fallbackNormalizer) {
+          this.normalizers.set(metadata.sessionId, fallbackNormalizer);
+        }
+        throw error;
+      } finally {
+        providerNormalizer?.endProviderPromptReplay(
+          this.sessionLoadReplays.get(protocolSessionId)?.lastTimestampedTranscriptAt,
+        );
+      }
       const sessionLoadReplay = this.sessionLoadReplays.get(protocolSessionId);
       if (
         sessionLoadReplay?.lastTimestampedTranscriptAt !== undefined ||
@@ -1141,7 +1344,7 @@ export class AcpAgentClient {
 
   private async ensureSessionOperation(
     metadata: AcpSessionMetadata,
-    options: { suppressTranscriptReplay?: boolean },
+    options: AcpSessionLoadOptions,
   ): Promise<void> {
     this.rememberSessionIds(metadata);
     // A turn usually follows; keep an idle close from racing it.
@@ -1160,8 +1363,8 @@ export class AcpAgentClient {
     if (this.idleClosedSessions.has(metadata.sessionId)) {
       this.options.store.upsertSession(metadata);
       await this.reopenIdleClosedSession(metadata.sessionId, {
+        ...options,
         metadata,
-        suppressTranscriptReplay: options.suppressTranscriptReplay,
       });
       return;
     }
@@ -1191,7 +1394,7 @@ export class AcpAgentClient {
     readAgentMemory?: () => Promise<string | undefined>;
   }): Promise<{ sessionId: string; turnId: string }> {
     const turnId = params.turnId ?? `pending:${params.sessionId}:${this.now()}`;
-    this.startTrackedTurn(params.sessionId, turnId);
+    const activeTurn = this.startTrackedTurn(params.sessionId, turnId);
     const acceptance = Promise.withResolvers<{ sessionId: string; turnId: string }>();
     let dispatched = false;
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
@@ -1221,70 +1424,135 @@ export class AcpAgentClient {
         });
         this.markSessionHasConversationHistory(params.sessionId, receivedAt);
         dispatched = true;
+        activeTurn.promptDispatched = true;
         acceptance.resolve({ sessionId: params.sessionId, turnId });
       },
     });
-    void promptRequest
+    this.observeActiveTurnPrompt({
+      sessionId: params.sessionId,
+      activeTurn,
+      generation: activeTurn.promptGeneration,
+      promptPromise: promptRequest,
+      isDispatched: () => dispatched,
+      rejectPreDispatch: (error) => {
+        acceptance.reject(error);
+      },
+    });
+    return acceptance.promise;
+  }
+
+  private observeActiveTurnPrompt(params: {
+    sessionId: string;
+    activeTurn: AcpActiveTurn;
+    generation: number;
+    promptPromise: Promise<unknown>;
+    isDispatched?: () => boolean;
+    rejectPreDispatch?: (error: unknown) => void;
+  }): void {
+    const { sessionId, activeTurn, generation, promptPromise } = params;
+    let failedPromptUsage: AcpUsageEnvelope | undefined;
+    void promptPromise
       .then((result) => {
-        if (!dispatched) {
+        if (params.isDispatched && !params.isDispatched()) {
           throw new Error("The ACP prompt was cancelled before it was sent.");
         }
-        this.assertPromptProducedResponse(params.sessionId, result);
+        if (
+          this.activeTurns.get(sessionId) !== activeTurn
+          || activeTurn.promptGeneration !== generation
+        ) {
+          return;
+        }
+        const cancelled = promptWasCancelled(result);
+        if (activeTurn.pendingSteerHandoff) {
+          const handoff = activeTurn.pendingSteerHandoff;
+          activeTurn.pendingSteerHandoff = undefined;
+          if (!activeTurn.terminalResponseGraceStarted && isAntigravityPromptDetach(result)) {
+            activeTurn.promptGeneration = handoff.nextGeneration;
+            handoff.accept();
+            return;
+          }
+          handoff.reject(
+            new Error(cancelled
+              ? "The active Antigravity turn was cancelled before steering was accepted"
+              : "The active Antigravity turn finished before steering was accepted"),
+          );
+        }
+        const responseError = this.missingPromptResponseError(sessionId, result);
+        if (responseError) {
+          failedPromptUsage = readAcpPromptResultUsageEnvelope(result, this.options.backendId);
+          throw responseError;
+        }
         const receivedAt = this.now();
         // A prompt that session/cancel stopped settles normally, with
         // stopReason cancelled. Carry that through, so the transcript and
         // the terminal event say the turn was interrupted, not completed.
-        const cancelled = promptWasCancelled(result);
+        const promptUsage = readAcpPromptResultUsage(
+          result,
+          this.options.backendId,
+        );
         const finished = this.finishTrackedTurn(
-          params.sessionId,
+          sessionId,
           receivedAt,
           cancelled ? "interrupted" : "completed",
         );
-        this.appendHistoryUpdate(params.sessionId, receivedAt, {
+        this.appendHistoryUpdate(sessionId, receivedAt, {
           kind: "turn_finished",
           ...(finished.turnId ? { turnId: finished.turnId } : {}),
           outputText: finished.assistantText,
           ...(cancelled ? { stopReason: "cancelled" } : {}),
+          ...(promptUsage ? { usage: promptUsage } : {}),
         });
         void this.notifySessionUpdate({
-          sessionId: params.sessionId,
+          sessionId,
           replay: finished.replay,
           turnId: finished.turnId,
           update: {
             kind: "turn_finished",
             outputText: finished.assistantText,
             ...(cancelled ? { stopReason: "cancelled" } : {}),
+            ...(promptUsage ? { usage: promptUsage } : {}),
           },
         });
       })
       .catch(async (error) => {
-        if (!dispatched) {
-          this.activeTurns.delete(params.sessionId);
-          this.touchSession(params.sessionId);
-          this.updateSessionStatus(params.sessionId, "idle");
-          acceptance.reject(error);
+        if (params.isDispatched && !params.isDispatched()) {
+          this.activeTurns.delete(sessionId);
+          this.touchSession(sessionId);
+          this.updateSessionStatus(sessionId, "idle");
+          params.rejectPreDispatch?.(error);
           return;
+        }
+        if (
+          this.activeTurns.get(sessionId) !== activeTurn
+          || activeTurn.promptGeneration !== generation
+        ) {
+          return;
+        }
+        if (activeTurn.pendingSteerHandoff) {
+          const handoff = activeTurn.pendingSteerHandoff;
+          activeTurn.pendingSteerHandoff = undefined;
+          handoff.reject(error);
         }
         if (promptMayStillBeRunning(error)) {
           // The agent never answered this prompt, so it may still be working
           // and asking for approvals. Cancel it while the turn is still
           // tracked: no new prompt can start until then, so the cancel
           // cannot reach the next turn.
-          await this.cancelSessionOperation(params.sessionId).catch(
+          await this.cancelSessionOperation(sessionId).catch(
             () => undefined,
           );
         }
-        this.finishTrackedTurn(params.sessionId, this.now());
-        this.recordPromptFailure(params.sessionId, turnId, error);
+        this.finishTrackedTurn(sessionId, this.now());
+        this.recordPromptFailure(sessionId, activeTurn.turnId, error);
         return Promise.resolve(
           this.options.onPromptError?.({
-            sessionId: params.sessionId,
-            turnId,
+            sessionId,
+            turnId: activeTurn.turnId,
             error,
+            ...(failedPromptUsage ? { usage: failedPromptUsage } : {}),
           }),
         ).catch(() => undefined);
       });
-    return acceptance.promise;
   }
 
   async cancelSession(sessionId: string): Promise<void> {
@@ -1341,7 +1609,7 @@ export class AcpAgentClient {
     };
     this.suppressedControlPromptSessions.set(protocolSessionId, suppression);
     try {
-      await this.options.transport.request(
+      const result = await this.options.transport.request(
         "session/prompt",
         {
           sessionId: protocolSessionId,
@@ -1349,6 +1617,17 @@ export class AcpAgentClient {
         },
         ACP_CONTROL_PROMPT_REQUEST_TIMEOUT_MS,
       );
+      const promptUsage = readAcpPromptResultUsageEnvelope(
+        result,
+        this.options.backendId,
+      );
+      if (promptUsage) {
+        suppression.tokenUsage = foldAcpTurnUsage(
+          suppression.tokenUsage,
+          promptUsage,
+        );
+        suppression.model = promptUsage.model ?? suppression.model;
+      }
       return {
         text:
           suppression.finalTextChunks.join("").trim() ||
@@ -1364,31 +1643,18 @@ export class AcpAgentClient {
     }
   }
 
-  async setRuntimeOption(params: {
-    sessionId: string;
-    source: BackendAcpRuntimeOptionSource;
-    optionId: string;
-    value: string;
-    reasoningEffort?: string;
-    /** Refuse, rather than skip, a `configOption` write of a thought level
-     *  the session's model does not offer. A skip resolves with the unchanged
-     *  state, which a caller recording an explicit choice would report as
-     *  applied. A replay of a remembered selection leaves this unset. */
-    rejectUnofferedThoughtLevel?: boolean;
-  }): Promise<BackendAcpSessionRuntimeState | undefined> {
+  async setRuntimeOption(params: AcpRuntimeOptionWrite): Promise<BackendAcpSessionRuntimeState | undefined> {
     return await this.withOperation(
       async () => await this.setRuntimeOptionOperation(params),
     );
   }
 
-  private async setRuntimeOptionOperation(params: {
-    sessionId: string;
-    source: BackendAcpRuntimeOptionSource;
-    optionId: string;
-    value: string;
-    reasoningEffort?: string;
-    rejectUnofferedThoughtLevel?: boolean;
-  }): Promise<BackendAcpSessionRuntimeState | undefined> {
+  private async setRuntimeOptionOperation(params: AcpRuntimeOptionWrite): Promise<BackendAcpSessionRuntimeState | undefined> {
+    if (params.antigravityModeSession) {
+      await this.ensureSessionOperation(params.antigravityModeSession, { antigravityModeSelection: params.value });
+      const current = this.options.store.getSession(this.options.backendId, params.sessionId)?.acpRuntime;
+      if (current?.configValues?.[params.optionId] === params.value) return current;
+    }
     const reload = this.reloadBeforeRequest(params.sessionId);
     if (reload) await reload;
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
@@ -1432,6 +1698,7 @@ export class AcpAgentClient {
       }
     }
     const result = write.result;
+    if (params.antigravityModeSession) this.assertAntigravityModeConfirmed(result, params.value, "apply");
     const reasoningEffort = write.unofferedThoughtLevel
       ? undefined
       : params.reasoningEffort;
@@ -1714,7 +1981,7 @@ export class AcpAgentClient {
           suppressedControlPrompt.fallbackOutputText = text;
         }
       }
-      const usage = readAcpUsageEnvelope(update);
+      const usage = readAcpUsageEnvelope(update, this.options.backendId);
       if (usage) {
         suppressedControlPrompt.tokenUsage = foldAcpTurnUsage(
           suppressedControlPrompt.tokenUsage,
@@ -1734,6 +2001,11 @@ export class AcpAgentClient {
     const fromSessionLoad = loadState !== undefined || isExplicitSessionReplay;
     const activeTurn = this.activeTurns.get(sessionId);
     const updateKind = readUpdateKind(update);
+    if (loadState?.restoringAntigravityMode
+      && (updateKind === "current_mode_update" || updateKind === "config_option_update")) {
+      // Publish the restored mode only after the restore reply confirms it.
+      return;
+    }
     if (!fromSessionLoad) this.observeNativeBackgroundWork(sessionId, updateKind, update);
     // Only a live update ends the turn. A prompt for an idle-closed session
     // reloads it while the turn is tracked, and session/load replays the
@@ -1948,7 +2220,18 @@ export class AcpAgentClient {
           : undefined;
     const requestId = id == null ? toolCallId ?? `acp:${this.now()}` : String(id);
     const activeTurn = this.activeTurns.get(sessionId);
-    const command = permissionCommand(title, toolCall);
+    // Antigravity reports MCP invocations as kind "other" with a flattened
+    // tool name. Preserve the name as reported for display only.
+    const acpMcpToolName = this.options.backendId === "acp:antigravity"
+      && toolCall.kind === "other"
+      && typeof toolCall.name === "string"
+      && /^mcp_[A-Za-z0-9_-]+$/u.test(toolCall.name)
+      ? toolCall.name
+      : undefined;
+    const prompt = acpMcpToolName
+      ? mcpPermissionPrompt(this.approvalRequesterName, acpMcpToolName, toolCall)
+      : permissionPrompt(this.approvalRequesterName, title, toolCall);
+    const command = acpMcpToolName ? undefined : permissionCommand(title, toolCall);
 
     return {
       method: "item/commandExecution/requestApproval",
@@ -1956,10 +2239,9 @@ export class AcpAgentClient {
         threadId: sessionId,
         ...(activeTurn?.turnId ? { turnId: activeTurn.turnId } : {}),
         requestId,
-        prompt: permissionPrompt(this.approvalRequesterName, title, toolCall),
-        reason: permissionPrompt(this.approvalRequesterName, title, toolCall),
-        command,
-        displayCommand: command,
+        prompt,
+        reason: prompt,
+        ...(acpMcpToolName ? { acpMcpToolName } : { command, displayCommand: command }),
         acpMethod: "session/request_permission",
         acpToolCallId: toolCallId,
         acpToolKind: typeof toolCall.kind === "string" ? toolCall.kind : undefined,
@@ -2007,6 +2289,7 @@ export class AcpAgentClient {
       this.normalizerOptionsFor(metadata.cwd),
     );
     let hasTranscriptHistory = false;
+    const antigravityReplayPrompts: AcpReplayPromptIdentity[] = [];
     const records = this.options.rolloutStore.readUpdates({
       backendId: this.options.backendId,
       sessionId: metadata.sessionId,
@@ -2014,6 +2297,10 @@ export class AcpAgentClient {
     for (const record of records) {
       if (isPwrAgentSyntheticAcpUpdate(record.update)) {
         continue;
+      }
+      if (this.options.backendId === "acp:antigravity") {
+        const identity = readAntigravityReplayPromptIdentity(record);
+        if (identity) antigravityReplayPrompts.push(identity);
       }
       if (isTranscriptReplayUpdate(record.update)) {
         hasTranscriptHistory = true;
@@ -2029,6 +2316,8 @@ export class AcpAgentClient {
     const hasReplay = replay.messages.length > 0 || replay.entries.length > 0;
     return {
       isComplete: (hasTranscriptHistory || hasReplay) && replay.threadStatus === "idle",
+      antigravityReplayPrompts: antigravityReplayPrompts.some((prompt) => prompt.steerMessageId)
+        ? antigravityReplayPrompts : undefined,
     };
   }
 
@@ -2144,7 +2433,7 @@ export class AcpAgentClient {
 
   private async loadSessionFromAgent(
     metadata: AcpSessionMetadata,
-    options: { suppressTranscriptReplay?: boolean } = {},
+    options: AcpSessionLoadOptions = {},
   ): Promise<unknown> {
     if (!this.supportsSessionLoad()) {
       return undefined;
@@ -2161,9 +2450,14 @@ export class AcpAgentClient {
     if (this.supportsJobMonitorControl(metadata.sessionId) && !mcpRegistration.readListedJobMonitorCreation) {
       throw new Error("Couldn't reconnect PwrAgent's Job Monitor tools. Try sending the prompt again.");
     }
+    const requestedMode = options.antigravityModeSelection;
+    const mode = this.options.backendId === "acp:antigravity"
+      ? requestedMode ?? metadata.acpRuntime?.currentModeId ?? metadata.acpRuntime?.configValues?.mode
+      : undefined;
     const loadState: AcpSessionLoadState = {
       replayedTranscript: false,
       suppressTranscriptReplay: options.suppressTranscriptReplay === true,
+      restoringAntigravityMode: Boolean(mode),
     };
     this.loadingSessions.set(protocolSessionId, loadState);
     let result: unknown;
@@ -2173,6 +2467,14 @@ export class AcpAgentClient {
         mcpServers: toAcpMcpServerWireConfigs(mcpRegistration.servers),
         sessionId: protocolSessionId,
       });
+      if (mode) {
+        try {
+          result = await this.confirmAntigravityModeAfterLoad(protocolSessionId, result, mode, requestedMode !== undefined);
+        } catch (error) {
+          await this.closeUnconfirmedAntigravityWorker(metadata.sessionId, protocolSessionId, cwd);
+          throw error;
+        }
+      }
     } finally {
       this.loadingSessions.delete(protocolSessionId);
     }
@@ -2218,6 +2520,70 @@ export class AcpAgentClient {
     this.rememberAgentToolCatalogKey(metadata.sessionId, agentToolCatalogKey);
     this.touchSession(metadata.sessionId);
     return result;
+  }
+
+  private async confirmAntigravityModeAfterLoad(
+    protocolSessionId: string,
+    loadResult: unknown,
+    selectedMode: string,
+    explicitSelection: boolean,
+  ): Promise<unknown> {
+    // Antigravity 1.5.15's new worker reports Default in session/load,
+    // even after the previous worker acknowledged a different mode.
+    const mode = normalizeAcpRuntimeCapabilities({
+      value: loadResult,
+      now: this.now(),
+      source: "session-load",
+    })?.configOptions?.find((option) => option.id === "mode" && option.category === "mode");
+    if (!mode?.values.some((option) => option.value === selectedMode)) {
+      if (explicitSelection) throw new Error(`Antigravity does not offer the "${selectedMode}" session mode.`);
+      return loadResult;
+    }
+    if (mode.currentValue === selectedMode) return loadResult;
+    const restored = await this.options.transport.request("session/set_config_option", {
+      sessionId: protocolSessionId,
+      configId: mode.id,
+      value: selectedMode,
+    });
+    this.assertAntigravityModeConfirmed(restored, selectedMode, explicitSelection ? "apply" : "restore");
+    const loaded = asRecord(loadResult);
+    const legacyModes = asRecord(loaded?.modes);
+    return {
+      ...loaded,
+      ...asRecord(restored),
+      ...(legacyModes ? { modes: { ...legacyModes, currentModeId: selectedMode } } : {}),
+    };
+  }
+
+  private assertAntigravityModeConfirmed(result: unknown, mode: string, action: "apply" | "restore"): void {
+    if (this.runtimeStateFromResponse(result, this.now())?.configValues?.mode !== mode) {
+      throw new Error(`Antigravity did not ${action} the "${mode}" session mode.`);
+    }
+  }
+
+  private async closeUnconfirmedAntigravityWorker(
+    sessionId: string,
+    protocolSessionId: string,
+    cwd: string,
+  ): Promise<void> {
+    const pending = this.idleClosedSessions.get(sessionId);
+    try {
+      if (!this.supportsSessionClose()) throw new Error("Agent does not advertise session/close");
+      await this.options.transport.request("session/close", { sessionId: protocolSessionId }, ACP_SESSION_CLOSE_REQUEST_TIMEOUT_MS);
+      this.loadedSessionCwds.delete(protocolSessionId);
+      if (pending) pending.workerOpen = false;
+    } catch (error) {
+      // Retain both facts: archive and idle cleanup still own a live worker,
+      // and the next request must confirm its mode before using it.
+      this.loadedSessionCwds.set(protocolSessionId, cwd);
+      if (pending) pending.workerOpen = true;
+      else this.idleClosedSessions.set(sessionId, { closed: Promise.resolve(), workerOpen: true });
+      this.touchSession(sessionId);
+      acpClientLog.warn("could not close ACP worker after unconfirmed Antigravity mode", {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private rememberAgentToolCatalogKey(sessionId: string, key: string | undefined): void {
@@ -2358,16 +2724,19 @@ export class AcpAgentClient {
       : registration ?? { servers: [] };
   }
 
-  private startTrackedTurn(sessionId: string, turnId: string): void {
+  private startTrackedTurn(sessionId: string, turnId: string): AcpActiveTurn {
     if (this.activeTurns.has(sessionId)) {
       throw new Error("A turn is already active for this ACP session.");
     }
-    this.activeTurns.set(sessionId, {
+    const activeTurn: AcpActiveTurn = {
       assistantText: "",
       turnId,
-    });
+      promptGeneration: 1,
+    };
+    this.activeTurns.set(sessionId, activeTurn);
     this.touchSession(sessionId);
     this.updateSessionStatus(sessionId, "active");
+    return activeTurn;
   }
 
   private requestPromptWithTerminalGuard(params: {
@@ -2486,10 +2855,10 @@ export class AcpAgentClient {
     };
   }
 
-  private assertPromptProducedResponse(
+  private missingPromptResponseError(
     sessionId: string,
     result: unknown,
-  ): void {
+  ): Error | undefined {
     if (promptWasCancelled(result)) {
       return;
     }
@@ -2501,13 +2870,13 @@ export class AcpAgentClient {
     const displayName = this.options.agentDisplayName?.trim() || "ACP agent";
     const version = this.runtimeCapabilities?.agentInfo?.version?.trim();
     if (this.options.backendId === "acp:kimi") {
-      throw new Error(
+      return new Error(
         `${displayName} ended the turn without a response.${
           version ? ` Kimi Code CLI ${version}` : " This Kimi Code CLI"
         } may be out of date or incompatible with the selected model. Update Kimi, refresh the model catalog, and try again.`,
       );
     }
-    throw new Error(
+    return new Error(
       `${displayName} ended the turn without a response. Refresh the provider model catalog and try again.`,
     );
   }
@@ -2593,7 +2962,17 @@ export class AcpAgentClient {
     // cannot prove that session/load returned usable transcript history, and
     // providers such as Kimi still need the local timestamps they omit.
     if (verifiedReplay?.lastTimestampedTranscriptAt !== undefined) {
-      return;
+      if (this.options.backendId !== "acp:antigravity") return;
+      const identity = readAntigravityReplayPromptIdentity({ type: "update", receivedAt, update });
+      if (!identity) return;
+      // The provider owns the transcript. Keep only the metadata required
+      // to recognize local prompt boundaries on its next replay.
+      update = {
+        kind: "pwragent_antigravity_prompt_identity",
+        turnId: identity.turnId,
+        messageId: identity.steerMessageId,
+        textDigest: identity.textDigest,
+      };
     }
     this.options.rolloutStore?.appendUpdate({
       backendId: this.options.backendId,
@@ -2728,6 +3107,7 @@ function isConversationHistoryUpdate(update: Record<string, unknown>): boolean {
   const kind = readUpdateKind(update);
   return (
     kind === "pwragent_user_prompt" ||
+    kind === "pwragent_steered_user_prompt" ||
     kind === "user_message_chunk" ||
     kind === "agent_message_chunk" ||
     kind === "agent_thought_chunk"
@@ -2917,6 +3297,22 @@ function isApprovalPromptText(text: string): boolean {
   return /^Requesting approval to Running:\s*/imu.test(text);
 }
 
+function mcpPermissionPrompt(
+  requesterName: string,
+  toolName: string,
+  toolCall: Record<string, unknown>,
+): string {
+  const title = readToolCallText(toolCall.title);
+  const content = readToolCallText(toolCall.content);
+  const details = [title, content].filter((text) =>
+    text && text !== toolName && text !== `Run ${toolName}`,
+  );
+  return [
+    `${requesterName} wants to use an MCP tool.`,
+    ...new Set(details),
+  ].join("\n\n");
+}
+
 function readToolCallText(value: unknown): string | undefined {
   return readAcpToolText(value);
 }
@@ -3034,6 +3430,29 @@ function promptWasCancelled(result: unknown): boolean {
   const resultRecord = asRecord(result);
   return resultRecord?.stopReason === "cancelled"
     || resultRecord?.stop_reason === "cancelled";
+}
+
+function isAntigravityPromptDetach(result: unknown): boolean {
+  const record = asRecord(result);
+  // The captured handoff is end_turn with no usage. A naturally completed
+  // Antigravity prompt returns usage even when a second prompt is in flight.
+  return record?.stopReason === "end_turn" && !Object.hasOwn(record, "usage");
+}
+
+function readAntigravityReplayPromptIdentity(record: AcpRolloutRecord): AcpReplayPromptIdentity | undefined {
+  const { update, receivedAt } = record;
+  const turnId = typeof update.turnId === "string" ? update.turnId : undefined;
+  if (!turnId) return undefined;
+  const kind = readUpdateKind(update);
+  const steerMessageId = typeof update.messageId === "string" ? update.messageId : undefined;
+  if (kind === "pwragent_antigravity_prompt_identity" && typeof update.textDigest === "string") {
+    return { turnId, receivedAt, steerMessageId, textDigest: update.textDigest };
+  }
+  if ((kind === "pwragent_user_prompt" || kind === "pwragent_steered_user_prompt")
+    && typeof update.prompt === "string") {
+    return { turnId, receivedAt, steerMessageId, textDigest: acpReplayPromptTextDigest(update.prompt) };
+  }
+  return undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

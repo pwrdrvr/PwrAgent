@@ -3922,7 +3922,11 @@ export class DesktopBackendRegistry {
     if ((!policy || policy.enabledBackends.includes("claude")) && (request.refreshModels === true || request.refreshModels === "claude")) {
       await this.claudeBackend.discover();
     }
-    const acpSummaries = !policy || policy.enabledBackends.some(isAcpBackendId) ? await this.acpBackend.describeInstalledBackends() : [];
+    const refreshAntigravityQuota = request.refreshRateLimits === true
+      && (!policy || policy.enabledBackends.includes("acp:antigravity"));
+    const acpSummaries = !policy || policy.enabledBackends.some(isAcpBackendId)
+      ? await this.acpBackend.describeInstalledBackends(refreshAntigravityQuota)
+      : [];
     const summaries = [codexSummary, this.claudeBackend.summary()];
     const enabled = [...summaries, ...acpSummaries].filter(backend => !policy || policy.enabledBackends.includes(backend.kind))
       .map(backend => !policy ? backend : { ...backend,
@@ -12367,6 +12371,12 @@ export class DesktopBackendRegistry {
       return event;
     }
     pending.messageId = notification.params.item.id;
+    // The provider can publish the accepted user item before the steer
+    // receipt binds the staged context. Keep its attachments before that
+    // item consumes the context.
+    if (notification.method === "item/completed" && notification.params.turnId && !pending.turnId) {
+      this.bindPendingThreadMessageContext(pending.id, notification.params.turnId);
+    }
     await this.persistThreadMessageOrigin({
       backend: event.backend,
       threadId: notification.params.threadId,
@@ -13567,6 +13577,12 @@ export class DesktopBackendRegistry {
             backend: acpBackend,
             content: promptPayload.promptContent,
             interjectionId: params.requestId,
+            ...(acpBackend === "acp:antigravity"
+              ? {
+                  prompt: promptPayload.prompt,
+                  ...(promptPayload.parts.length > 0 ? { parts: promptPayload.parts } : {}),
+                }
+              : {}),
             sessionId: params.threadId,
             text,
           });

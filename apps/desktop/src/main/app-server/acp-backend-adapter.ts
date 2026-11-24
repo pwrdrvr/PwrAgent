@@ -52,6 +52,7 @@ import {
   type AcpPromptContentBlock,
 } from "../acp/acp-client";
 import type { AcpProviderStatus } from "../acp/acp-provider-status";
+import { readAntigravityUsage } from "../acp/antigravity-usage.js";
 import { PlanLimitStore } from "./plan-limit-store";
 import {
   MAX_TURN_INPUT_ATTACHMENT_BYTES,
@@ -340,6 +341,7 @@ export type AcpBackendAdapterOptions = {
   createAcpClient?: AcpClientFactory;
   assertOwnerAdmission?: () => void;
   createAcpTransport?: AcpTransportFactory;
+  readAntigravityUsage?: typeof readAntigravityUsage;
   /**
    * Required so no caller can silently inherit machine-wide discovery.
    * Production passes `createLocalAcpAgentDiscovery(...)`; tests pass a stub.
@@ -397,6 +399,39 @@ function observedAcpSessionHistoryReplay(
   sessionId: string,
 ): boolean | undefined {
   return client.didSessionLoadReplayHistory?.(sessionId);
+}
+
+function acpSteeredUserMessageNotification(params: {
+  threadId: string;
+  turnId: string;
+  update: Record<string, unknown>;
+}): AppServerNotification {
+  const messageId =
+    typeof params.update.messageId === "string" && params.update.messageId.trim()
+      ? params.update.messageId
+      : `user:${params.turnId}:steer`;
+  const text = typeof params.update.prompt === "string" ? params.update.prompt : "";
+  const content = Array.isArray(params.update.parts)
+    ? (params.update.parts as AppServerThreadMessagePart[])
+    : undefined;
+  const createdAt =
+    typeof params.update.createdAt === "number" && Number.isFinite(params.update.createdAt)
+      ? params.update.createdAt
+      : undefined;
+  return {
+    method: "item/completed",
+    params: {
+      threadId: params.threadId,
+      turnId: params.turnId,
+      item: {
+        id: messageId,
+        type: "userMessage",
+        text,
+        ...(content?.length ? { content } : {}),
+        ...(createdAt !== undefined ? { createdAt } : {}),
+      },
+    },
+  };
 }
 
 export function readKimiYoloExecutionModeFromText(
@@ -654,19 +689,25 @@ function rewindPointShowsPrompt(
 function effectiveAcpAgentCapabilities(
   agent: AcpInstalledAgentRecord,
 ): AcpAgentCapabilities {
+  const catalog = acpAgentCapabilitiesForRegistryId(agent.registryId);
   const configured = {
-    ...acpAgentCapabilitiesForRegistryId(agent.registryId),
+    ...catalog,
     ...agent.capabilities,
   };
   return {
     ...configured,
-    // The extension is downstream-only. Ignore the unconditional steerTurn
-    // value persisted by older catalog/discovery records for vendor Grok.
-    steerTurn: agent.registryId === "grok"
-      && (isPwrAgentOwnedGrokRuntime(agent)
-        || isPwrAgentGrokBuildVersion(
-          agent.runtimeCapabilities?.agentInfo?.version ?? agent.version,
-        )),
+    // PwrAgent owns managed review. Older discovery records can have a stale value.
+    managedReview: catalog.managedReview,
+    // Grok's steering extension is downstream-only. Ignore the unconditional
+    // steerTurn value persisted by older catalog/discovery records for vendor
+    // Grok. Antigravity steers natively through overlapping session/prompt.
+    steerTurn:
+      agent.registryId === "antigravity"
+      || (agent.registryId === "grok"
+        && (isPwrAgentOwnedGrokRuntime(agent)
+          || isPwrAgentGrokBuildVersion(
+            agent.runtimeCapabilities?.agentInfo?.version ?? agent.version,
+          ))),
     liveWorkspaceHandoff:
       configured.liveWorkspaceHandoff ||
       agent.runtimeCapabilities?.agentCapabilities?.loadSession === true,
@@ -1269,6 +1310,8 @@ export class AcpBackendAdapter {
   private readonly unsubscribePlanLimits: () => void;
   private readonly providerStatusRefreshAttempts = new Map<AcpBackendId, number>();
   private readonly providerStatusRefreshes = new Map<AcpBackendId, Promise<void>>();
+  private antigravityUsageSelection?: { identity: string; cancellation: AbortController };
+  private readonly antigravityUsageProbes = new Set<Promise<AcpProviderStatus | undefined>>();
   private readonly grokUpdateChecker?: typeof checkGrokCliUpdate;
   private readonly grokUpdateRefreshes = new Map<AcpBackendId, Promise<void>>();
   private readonly runtimeCapabilityProbe?: AcpRuntimeCapabilityProbe;
@@ -1361,7 +1404,7 @@ export class AcpBackendAdapter {
     };
   }
 
-  async describeInstalledBackends(): Promise<BackendSummary[]> {
+  async describeInstalledBackends(refreshAntigravityQuota = false): Promise<BackendSummary[]> {
     const installedAgents = await this.listAvailableAgents();
     const enabledAgents = installedAgents
       .filter((agent) =>
@@ -1369,15 +1412,21 @@ export class AcpBackendAdapter {
           ? this.isAcpAgentEnabled(agent.registryId)
           : true,
       );
+    if (!enabledAgents.some((agent) => agent.registryId === "antigravity")) {
+      this.invalidateAntigravityQuota();
+    }
     return enabledAgents.map((agent) => {
       const summary = describeInstalledAcpBackend(agent);
-      if (agent.registryId !== "grok" || !summary.available) {
+      if (agent.registryId === "antigravity") {
+        this.updateAntigravityQuotaSelection(agent, summary.available, refreshAntigravityQuota);
+      } else if (agent.registryId === "grok" && summary.available) {
+        this.refreshGrokProviderStatusInBackground(agent.backendId);
+      } else {
         return summary;
       }
       // Backend discovery is also used by launchpad and messaging flows.
-      // Merge only cached decoration here; vendor billing must never delay it.
+      // Merge only cached decoration here; provider quota reads must never delay it.
       const providerStatus = this.providerStatuses.get(agent.backendId);
-      this.refreshProviderStatusInBackground(agent.backendId);
       return providerStatus
         ? {
             ...summary,
@@ -1470,11 +1519,75 @@ export class AcpBackendAdapter {
     this.grokUpdateRefreshes.set(agent.backendId, refresh);
   }
 
-  private refreshProviderStatusInBackground(backend: AcpBackendId): void {
-    const clientPromise = this.acpClients.get(backend)?.promise;
+  private refreshGrokProviderStatusInBackground(backend: AcpBackendId): void {
+    const owner = this.acpClients.get(backend);
+    if (!owner) return;
+    const isCurrent = () => this.acpClients.get(backend) === owner;
+    this.refreshProviderStatusInBackground(backend, async () => {
+      const client = await owner.promise;
+      if (this.closed || !isCurrent()) return undefined;
+      return await client.readProviderStatus?.();
+    }, isCurrent);
+  }
+
+  private updateAntigravityQuotaSelection(
+    agent: AcpInstalledAgentRecord,
+    available: boolean,
+    refresh: boolean,
+  ): void {
+    if (this.closed) return;
+    const selected = recoverLegacyAntigravitySelection(agent);
+    const launch = selected.launchDescriptor;
+    if (!available || !launch || !this.isRuntimeSelectionCurrent(agent)) {
+      this.invalidateAntigravityQuota();
+      return;
+    }
+    const identity = acpAgentLaunchIdentity(selected);
+    if (this.antigravityUsageSelection?.identity !== identity) {
+      this.invalidateAntigravityQuota();
+      this.antigravityUsageSelection = { identity, cancellation: new AbortController() };
+    }
+    if (!refresh) return;
+    const { signal } = this.antigravityUsageSelection.cancellation;
+    this.refreshProviderStatusInBackground(agent.backendId,
+      () => this.probeAntigravityQuota(launch, signal),
+      () => !signal.aborted);
+  }
+
+  private invalidateAntigravityQuota(): void {
+    if (!this.antigravityUsageSelection) return;
+    this.antigravityUsageSelection.cancellation.abort();
+    this.antigravityUsageSelection = undefined;
+    this.providerStatusRefreshAttempts.delete("acp:antigravity");
+    this.providerStatusRefreshes.delete("acp:antigravity");
+    this.providerStatuses.delete("acp:antigravity");
+    this.planLimits.forget("acp:antigravity");
+  }
+
+  private async probeAntigravityQuota(
+    launch: AcpLaunchDescriptor,
+    signal: AbortSignal,
+  ): Promise<AcpProviderStatus | undefined> {
+    const probe = Promise.resolve().then(() => {
+      if (signal.aborted) return undefined;
+      this.options.assertOwnerAdmission?.();
+      return (this.options.readAntigravityUsage ?? readAntigravityUsage)(launch, signal);
+    });
+    this.antigravityUsageProbes.add(probe);
+    try {
+      return await probe;
+    } finally {
+      this.antigravityUsageProbes.delete(probe);
+    }
+  }
+
+  private refreshProviderStatusInBackground(
+    backend: AcpBackendId,
+    read: () => Promise<AcpProviderStatus | undefined>,
+    isCurrent: () => boolean,
+  ): void {
     if (
       this.closed
-      || !clientPromise
       || this.providerStatusRefreshes.has(backend)
     ) {
       return;
@@ -1488,7 +1601,7 @@ export class AcpBackendAdapter {
       return;
     }
     this.providerStatusRefreshAttempts.set(backend, now);
-    const refreshPromise = this.refreshProviderStatus(backend, clientPromise);
+    const refreshPromise = this.refreshProviderStatus(backend, read, isCurrent);
     this.providerStatusRefreshes.set(backend, refreshPromise);
     void refreshPromise.finally(() => {
       if (this.providerStatusRefreshes.get(backend) === refreshPromise) {
@@ -1499,14 +1612,14 @@ export class AcpBackendAdapter {
 
   private async refreshProviderStatus(
     backend: AcpBackendId,
-    clientPromise: Promise<AcpRuntimeClient>,
+    read: () => Promise<AcpProviderStatus | undefined>,
+    isCurrent: () => boolean,
   ): Promise<void> {
     try {
-      const client = await clientPromise;
-      // Reads run one at a time, so each answer is newer than the last.
+      // Reads for the current selection run one at a time.
       let since = this.planLimits.mark(backend);
-      const providerStatus = await client.readProviderStatus?.();
-      if (!providerStatus || this.closed) {
+      const providerStatus = await read();
+      if (!providerStatus || this.closed || !isCurrent()) {
         return;
       }
       this.providerStatuses.set(backend, { account: providerStatus.account });
@@ -1565,6 +1678,7 @@ export class AcpBackendAdapter {
     for (const registryId of registryIds) {
       this.invalidatedProviderRegistryIds.add(registryId);
     }
+    if (registryIds.includes("antigravity")) this.invalidateAntigravityQuota();
   }
 
   async archiveCleanupBackendIds(): Promise<AcpBackendId[]> {
@@ -1986,10 +2100,12 @@ export class AcpBackendAdapter {
     backend: AcpBackendId;
     content: AcpPromptContentBlock[];
     interjectionId: string;
+    parts?: AppServerThreadMessagePart[];
+    prompt?: string;
     sessionId: string;
     text: string;
   }): Promise<{ delivery: "currentTurn" | "nextTurn" }> {
-    if (params.backend !== "acp:grok") {
+    if (params.backend !== "acp:grok" && params.backend !== "acp:antigravity") {
       throw new Error(`ACP backend ${params.backend} does not support turn steering`);
     }
     const session = this.getSession(params.backend, params.sessionId);
@@ -1997,18 +2113,25 @@ export class AcpBackendAdapter {
       throw new Error(`ACP session not found: ${params.sessionId}`);
     }
     if (session.status !== "active") {
-      throw new Error("The Grok turn finished before steering was accepted");
+      const label = params.backend === "acp:antigravity" ? "Antigravity" : "Grok";
+      throw new Error(`The ${label} turn finished before steering was accepted`);
     }
     const client = await this.getClientForSession(
       params.backend,
       params.sessionId,
     );
     if (!client.steerSession || client.supportsTurnSteering?.() !== true) {
-      throw new Error("Installed Grok Build does not support turn steering over ACP");
+      throw new Error(
+        params.backend === "acp:antigravity"
+          ? "Installed Antigravity CLI does not support turn steering over ACP"
+          : "Installed Grok Build does not support turn steering over ACP",
+      );
     }
     return await client.steerSession({
       sessionId: params.sessionId,
       text: params.text,
+      ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
+      ...(params.parts?.length ? { parts: params.parts } : {}),
       content: params.content,
       interjectionId: params.interjectionId,
     });
@@ -2559,12 +2682,7 @@ export class AcpBackendAdapter {
       throw new Error(`ACP backend is not installed: ${backend}`);
     }
     if (this.invalidatedProviderRegistryIds.has(agent.registryId)) {
-      const currentFingerprint =
-        this.resolveProviderDependencyFingerprint?.(agent.registryId);
-      if (
-        !currentFingerprint
-        || agent.configDependencyFingerprint !== currentFingerprint
-      ) {
+      if (!this.isRuntimeSelectionCurrent(agent)) {
         throw new Error(
           `ACP provider configuration changed for ${backend}. Refresh this provider in Settings before starting new work.`,
         );
@@ -2578,6 +2696,12 @@ export class AcpBackendAdapter {
       throw new Error(`ACP backend authentication required: ${backend}`);
     }
     return recoverLegacyAntigravitySelection(agent);
+  }
+
+  private isRuntimeSelectionCurrent(agent: AcpInstalledAgentRecord): boolean {
+    if (!this.invalidatedProviderRegistryIds.has(agent.registryId)) return true;
+    const fingerprint = this.resolveProviderDependencyFingerprint?.(agent.registryId);
+    return !!fingerprint && agent.configDependencyFingerprint === fingerprint;
   }
 
   /**
@@ -2947,6 +3071,8 @@ export class AcpBackendAdapter {
       return await this.closePromise;
     }
     this.closed = true;
+    const quotaProbes = [...this.antigravityUsageProbes];
+    this.invalidateAntigravityQuota();
     const acpClients = [...this.ownedAcpClients].map(
       ([entry, backend]): [AcpBackendId, AcpClientEntry] => [backend, entry],
     );
@@ -2967,12 +3093,13 @@ export class AcpBackendAdapter {
     this.liveTurnUsage.clear();
     this.liveContextWindows.clear();
     this.localAgentSnapshot = [];
-    this.closePromise = this.closeResources(acpClients);
+    this.closePromise = this.closeResources(acpClients, quotaProbes);
     return await this.closePromise;
   }
 
   private async closeResources(
     acpClients: Array<[AcpBackendId, AcpClientEntry]>,
+    quotaProbes: Array<Promise<AcpProviderStatus | undefined>>,
   ): Promise<void> {
     const resources = [
       ...acpClients.map(async ([backend, entry]) => {
@@ -2994,6 +3121,7 @@ export class AcpBackendAdapter {
         if (drained.status === "rejected") throw drained.reason;
         if (drained.value.error !== undefined) throw drained.value.error;
       }),
+      ...quotaProbes,
       Promise.resolve().then(() => this.agentToolMcpServer?.close()),
     ];
     const cleanup = Promise.allSettled(resources).then((results) => {
@@ -3005,7 +3133,8 @@ export class AcpBackendAdapter {
             resource:
               index < acpClients.length
                 ? acpClients[index]?.[0]
-                : index < resources.length - 1 ? "ephemeral" : "agent-tool-mcp",
+                : index < resources.length - quotaProbes.length - 1 ? "ephemeral"
+                  : index < resources.length - 1 ? "antigravity-quota" : "agent-tool-mcp",
             error:
               result.reason instanceof Error
                 ? result.reason.message
@@ -3189,9 +3318,9 @@ export class AcpBackendAdapter {
         update,
       }) => {
         const updateKind = readAcpUpdateKind(update);
-        const usageEnvelope = readAcpUsageEnvelope(update);
+        const usageEnvelope = readAcpUsageEnvelope(update, agent.backendId);
         let liveUsageNotification: AppServerNotification | undefined;
-        if (usageEnvelope && turnId) {
+        if (usageEnvelope && turnId && !fromSessionLoad) {
           const usageKey = [agent.backendId, sessionId, turnId].join(":");
           const previousUsage = this.liveTurnUsage.get(usageKey);
           const model =
@@ -3218,7 +3347,7 @@ export class AcpBackendAdapter {
           // That is the ACP convention; Codex sends a session-cumulative total
           // in the same field. See the note on `AcpUsageEnvelope` before
           // changing this payload's shape.
-          if (usageEnvelope.scope === "model-call" && !fromSessionLoad) {
+          if (usageEnvelope.scope === "model-call") {
             liveUsageNotification = acpUsageNotification({
               envelope: {
                 ...(model ? { model } : {}),
@@ -3233,6 +3362,7 @@ export class AcpBackendAdapter {
         }
         const promptSettledTurnFinished =
           updateKind === "turn_finished"
+          && !fromSessionLoad
           && replay.threadStatus !== "active";
         const completedUsage =
           promptSettledTurnFinished && turnId
@@ -3376,6 +3506,20 @@ export class AcpBackendAdapter {
           }
         }
         if (
+          updateKind === "pwragent_steered_user_prompt"
+          && turnId
+          && !fromSessionLoad
+        ) {
+          await this.emit({
+            backend: agent.backendId,
+            notification: acpSteeredUserMessageNotification({
+              threadId: sessionId,
+              turnId,
+              update,
+            }),
+          });
+        }
+        if (
           turnId &&
           (updateKind === "agent_message_chunk" ||
             (updateKind === "agent_thought_chunk" &&
@@ -3501,7 +3645,7 @@ export class AcpBackendAdapter {
         // that running turn. Live lifecycle is owned by turn/started and the
         // prompt-settled terminal events, not transcript replay snapshots.
       },
-      onPromptError: async ({ sessionId, turnId, error }) => {
+      onPromptError: async ({ sessionId, turnId, error, usage }) => {
         this.liveTurnUsage.delete(
           [agent.backendId, sessionId, turnId].join(":"),
         );
@@ -3515,6 +3659,24 @@ export class AcpBackendAdapter {
           threadId: sessionId,
           turnId,
         });
+        if (usage) {
+          const notification = acpUsageNotification({
+            envelope: usage,
+            model: selectedAcpModel(agent, this.getSession(agent.backendId, sessionId)),
+            threadId: sessionId,
+            totalTokenUsage: usage.tokenUsage,
+            turnId,
+          });
+          if (notification) {
+            await this.emit({ backend: agent.backendId, notification }).catch((usageError: unknown) => {
+              acpBackendAdapterLog.warn("acp_failed_prompt_usage_unreported", {
+                backend: agent.backendId,
+                turnId,
+                error: usageError instanceof Error ? usageError.message : String(usageError),
+              });
+            });
+          }
+        }
         await this.emit({
           backend: agent.backendId,
           notification: {

@@ -456,14 +456,13 @@ import { GitLabPrFetcher } from "../pr-status/gitlab-pr-fetcher";
 import { ForgePrFetcher, parseForgePrRefFromUrl as parsePrRefFromUrl, type ForgePrRef } from "../pr-status/forge-pr-fetcher";
 import {
   filterStoredDiscoveredPullRequests,
-  resolvePrLookupBranches,
+  resolveScheduledPrPrefetchRepos,
 } from "../pr-status/pr-detection";
 import {
   GithubGraphqlPrClient,
   branchRefKey,
 } from "../pr-status/github-graphql-client";
 import type { BranchRef } from "../pr-status/github-graphql-client";
-import { resolveGitHubReposForDirectory } from "../pr-status/git-remote";
 import { primaryCheckoutKey, readStoredPrimaryThreadRepository, resolvePrimaryThreadRepoKey, resolvePullRequestDirectoryPath } from "../pr-status/primary-thread-repository";
 import { PrPollingScheduler } from "../pr-status/pr-polling-scheduler";
 import { TranscriptPrSubscriptions } from "../pr-status/transcript-pr-subscriptions";
@@ -6402,12 +6401,10 @@ class DesktopAppServerService {
         if (wanted.has(dedupeKey)) {
           continue;
         }
-        const repos = await resolveGitHubReposForDirectory(cwd);
+        const repos = await resolveScheduledPrPrefetchRepos(cwd, branch);
         if (repos.length === 0) {
           continue;
         }
-        const lookupBranches = await resolvePrLookupBranches({ cwd, branch });
-        if (!lookupBranches.includes(branch)) continue;
         wanted.set(dedupeKey, {
           cwd,
           branch,
@@ -9100,7 +9097,7 @@ class DesktopAppServerService {
           raise: (card, placement) => getThreadTodoService().raiseForDependency({ ...card, ...placement }).todo,
           publish: (todo) => getThreadTodoService().publish(todo),
         },
-        readThread: (condition) => this.readDependencyThread(condition),
+        readThread: (condition, automaticMergeBuild) => this.readDependencyThread(condition, automaticMergeBuild),
         authorizeLocalFile: async ({ backend, threadId }, file) => authorizeLocalFile(
           await getDesktopBackendRegistry().resolveThreadWorkspaceCwd(backend, threadId), file),
         readLocalFile,
@@ -9315,7 +9312,7 @@ class DesktopAppServerService {
     const ref = parseCiRunUrl(url, this.ciRunUrlOptions());
     if (!ref || ref.repository.provider !== "github") throw new Error(`Not a GitHub Actions run PwrAgent may read: ${CI_RUN_URL_FORMS}.`);
     const client = this.getForgeCiClient();
-    return await readGithubRunGates(async (repository, path) => await client.requestGithub(repository, { path }), ref, Date.now());
+    return await readGithubRunGates(async (repository, path) => await client.requestGithub(repository, { path, enterpriseCi: true }), ref, Date.now());
   }
 
   /** Lets CI approval cards approve their gates on this owner's GitHub sign-in. */
@@ -9352,11 +9349,11 @@ class DesktopAppServerService {
       throw new CiDeploymentReviewRefusal("not_allowed", `${setting} in Settings → Git → Agent forge tools, so PwrAgent does not approve deployments. Review it on GitHub, or change the setting.`);
     }
     const client = this.getForgeCiClient();
-    const approved = await approveGithubCiDeployment({
-      request: async (repository, request) => await client.requestGithub(repository, request),
+    const approved = await client.withCiDeploymentCredential((request) => approveGithubCiDeployment({
+      request,
       reviewed,
       urls: this.ciRunUrlOptions(),
-    });
+    }));
     appServerLog.info("approved a GitHub deployment gate from a card", {
       repository: reviewed.repository, runId: reviewed.runId, attempt: reviewed.attempt, environments: approved.environments,
     });
@@ -9370,7 +9367,7 @@ class DesktopAppServerService {
     const client = this.getForgeCiClient();
     return await readCiRun(async (repository, path) => repository.provider === "gitlab"
       ? await client.readGitlab(repository, path)
-      : await client.requestGithub(repository, { path }), ref, Date.now());
+      : await client.requestGithub(repository, { path, enterpriseCi: true }), ref, Date.now());
   }
 
   private ciRunUrlOptions(): CiRunUrlOptions {
@@ -9466,7 +9463,10 @@ class DesktopAppServerService {
     return !response.replay.entries.some((entry) => entry.turn?.status === "in_progress");
   }
 
-  private async readDependencyThread(condition: Pick<ThreadDependencyCondition, "backend" | "threadId"> & Partial<ThreadDependencyCondition>): Promise<DependencyThreadSnapshot> {
+  private async readDependencyThread(
+    condition: Pick<ThreadDependencyCondition, "backend" | "threadId"> & Partial<ThreadDependencyCondition>,
+    automaticMergeBuild?: "recover" | "verified",
+  ): Promise<DependencyThreadSnapshot> {
     const registry = getDesktopBackendRegistry();
     const turns = new Map<string, AppServerThreadTurnMetadata>();
     // Use the provider protocol for validation and turn catch-up. PR event
@@ -9489,8 +9489,15 @@ class DesktopAppServerService {
       // A turn's latest metadata wins; its first position keeps the order.
       for (const turn of pages.flat()) turns.set(turn.id, turn);
     }
-    const prs = !condition.when || isPrDependencyCondition({ when: condition.when })
-      ? (await this.readPrimaryAttachedPrs(condition, false)).prs : [];
+    let prs: PrSummary[] = [];
+    if (automaticMergeBuild && condition.when === "merge_build" && condition.prUrl) {
+      // A watch already following a merged PR can outlive a checkout move.
+      // A legacy wait that never saw its merge still checks its stored attachment.
+      const overlay = await this.getOverlayStore().getThreadOverlayState(condition);
+      prs = await this.canonicalizeStoredPullRequests(overlay?.prs ?? [], undefined, automaticMergeBuild === "recover");
+    } else if (!condition.when || isPrDependencyCondition({ when: condition.when })) {
+      prs = (await this.readPrimaryAttachedPrs(condition, false)).prs;
+    }
     return {
       activeTurnId: registry.getActiveTurnForThread(condition)?.turnId,
       turns: [...turns.values()],
@@ -9926,5 +9933,6 @@ export async function startAppServerOwnerNavigation(): Promise<void> {
 
 /** A prerequisite that waits on a PR, so it needs background PR polling. */
 function isPrDependencyCondition(condition: Pick<ThreadDependencyCondition, "when">): boolean {
-  return condition.when === "pr_attached" || condition.when === "ci_passed" || condition.when === "pr_merged";
+  return condition.when === "pr_attached" || condition.when === "ci_passed"
+    || condition.when === "pr_merged" || condition.when === "merge_build";
 }

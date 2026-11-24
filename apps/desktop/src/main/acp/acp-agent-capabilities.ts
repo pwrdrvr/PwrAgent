@@ -14,6 +14,12 @@ const DEFAULT_ACP_AGENT_CAPABILITIES: AcpAgentCapabilities = {
 };
 
 const ACP_AGENT_CAPABILITY_CATALOG: Record<string, AcpAgentCapabilities> = {
+  antigravity: {
+    conversationRewind: false,
+    liveWorkspaceHandoff: false,
+    managedReview: true,
+    steerTurn: true,
+  },
   gemini: {
     conversationRewind: false,
     liveWorkspaceHandoff: false,

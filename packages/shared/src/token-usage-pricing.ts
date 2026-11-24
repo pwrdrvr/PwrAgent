@@ -6,7 +6,7 @@ import {
 
 export type TokenUsagePricingServiceTier = "standard" | "priority" | "ultrafast";
 
-export type TokenUsagePricingProvider = "anthropic" | "openai" | "openrouter" | "qwen" | "xai";
+export type TokenUsagePricingProvider = "anthropic" | "google" | "openai" | "openrouter" | "qwen" | "xai";
 
 export type TokenUsagePricingInputScope = "aggregate" | "request";
 
@@ -419,6 +419,18 @@ const XAI_GROK47_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 8, 21);
 const QWEN_PRICING_CATALOG_ID = "qwen-modelstudio-international";
 const QWEN_PRICING_CATALOG_VERSION = "2026-07-15";
 const QWEN37_PLUS_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 4, 26);
+// Google Gemini API Standard Tier list pricing:
+// https://ai.google.dev/gemini-api/docs/pricing
+// Gemini 4 models share a unified 1M-token context window with 95%-off implicit
+// caching and output rates that include thinking tokens.
+const GOOGLE_PRICING_CATALOG_ID = "google-gemini-api";
+const GOOGLE_GEMINI38_FLASH_EFFECTIVE_FROM = Date.UTC(2026, 8, 2);
+const GOOGLE_GEMINI38_FLASH_STANDARD_EFFECTIVE_FROM = Date.UTC(2027, 0, 1);
+const GOOGLE_GEMINI4_ARGON_EFFECTIVE_FROM = Date.UTC(2026, 8, 30);
+const GOOGLE_GEMINI4_CARBON_EFFECTIVE_FROM = Date.UTC(2026, 9, 28);
+const GOOGLE_GEMINI4_INTRO_END = Date.UTC(2026, 11, 1);
+const GOOGLE_GEMINI4_HYDROGEN_EFFECTIVE_FROM = Date.UTC(2026, 10, 12);
+const GOOGLE_GEMINI4_NEON_EFFECTIVE_FROM = Date.UTC(2026, 10, 18);
 
 function buildOpenAiBandedPricingEntries(params: {
   catalogVersion: string;
@@ -1056,6 +1068,46 @@ const QWEN_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
 // the default 5-minute TTL; provider-reported costs retain the actual TTL.
 const ANTHROPIC_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
   {
+    aliases: [
+      "claude-opus-5-5-low",
+      "claude-opus-5-5-medium",
+      "claude-opus-5-5-high",
+    ],
+    catalogId: "anthropic-api",
+    catalogVersion: "2026-09-22",
+    model: "claude-opus-5-5",
+    displayModel: "Claude Opus 5.5",
+    displayTier: "Standard",
+    effectiveFrom: Date.UTC(2026, 8, 22),
+    provider: "anthropic",
+    serviceTier: "standard",
+    cacheWriteInputUsdPerMillion: 5,
+    inputUsdPerMillion: 4,
+    cachedInputUsdPerMillion: 0.2,
+    outputUsdPerMillion: 20,
+    outputTokensIncludeReasoning: true,
+  },
+  {
+    aliases: [
+      "claude-sonnet-5-5-low",
+      "claude-sonnet-5-5-medium",
+      "claude-sonnet-5-5-high",
+    ],
+    catalogId: "anthropic-api",
+    catalogVersion: "2026-09-28",
+    model: "claude-sonnet-5-5",
+    displayModel: "Claude Sonnet 5.5",
+    displayTier: "Standard",
+    effectiveFrom: Date.UTC(2026, 8, 28),
+    provider: "anthropic",
+    serviceTier: "standard",
+    cacheWriteInputUsdPerMillion: 2.5,
+    inputUsdPerMillion: 2,
+    cachedInputUsdPerMillion: 0.1,
+    outputUsdPerMillion: 10,
+    outputTokensIncludeReasoning: true,
+  },
+  {
     catalogId: "anthropic-api",
     catalogVersion: "2026-10-07",
     model: "claude-haiku-5-5",
@@ -1092,8 +1144,173 @@ const ANTHROPIC_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
   },
 ];
 
+const GOOGLE_PRICING_CATALOG: readonly PricingCatalogEntry[] = ([
+  {
+    aliases: [
+      "gemini-4-neon-low",
+      "gemini-4-neon-medium",
+      "gemini-4-neon-high",
+      "gemini-4-neon-xhigh",
+    ],
+    catalogId: GOOGLE_PRICING_CATALOG_ID,
+    catalogVersion: "2026-11-18",
+    model: "gemini-4-neon",
+    displayModel: "Gemini 4 Neon",
+    displayTier: "Standard",
+    effectiveFrom: GOOGLE_GEMINI4_NEON_EFFECTIVE_FROM,
+    provider: "google",
+    serviceTier: "standard",
+    inputUsdPerMillion: 3,
+    cachedInputUsdPerMillion: 0.15,
+    outputUsdPerMillion: 15,
+    outputTokensIncludeReasoning: true,
+  },
+  {
+    aliases: [
+      "gemini-4-carbon-low",
+      "gemini-4-carbon-medium",
+      "gemini-4-carbon-high",
+    ],
+    catalogId: GOOGLE_PRICING_CATALOG_ID,
+    catalogVersion: "2026-12-01",
+    model: "gemini-4-carbon",
+    displayModel: "Gemini 4 Carbon",
+    displayTier: "Standard",
+    effectiveFrom: GOOGLE_GEMINI4_INTRO_END,
+    provider: "google",
+    serviceTier: "standard",
+    inputUsdPerMillion: 4,
+    cachedInputUsdPerMillion: 0.2,
+    outputUsdPerMillion: 20,
+    outputTokensIncludeReasoning: true,
+  },
+  {
+    aliases: [
+      "gemini-4-carbon-low",
+      "gemini-4-carbon-medium",
+      "gemini-4-carbon-high",
+    ],
+    catalogId: GOOGLE_PRICING_CATALOG_ID,
+    catalogVersion: "2026-10-28",
+    model: "gemini-4-carbon",
+    displayModel: "Gemini 4 Carbon",
+    displayTier: "Standard",
+    effectiveFrom: GOOGLE_GEMINI4_CARBON_EFFECTIVE_FROM,
+    effectiveTo: GOOGLE_GEMINI4_INTRO_END,
+    provider: "google",
+    serviceTier: "standard",
+    inputUsdPerMillion: 2,
+    cachedInputUsdPerMillion: 0.1,
+    outputUsdPerMillion: 10,
+    outputTokensIncludeReasoning: true,
+  },
+  {
+    aliases: [
+      "gemini-4-argon-low",
+      "gemini-4-argon-medium",
+      "gemini-4-argon-high",
+    ],
+    catalogId: GOOGLE_PRICING_CATALOG_ID,
+    catalogVersion: "2026-12-01",
+    model: "gemini-4-argon",
+    displayModel: "Gemini 4 Argon",
+    displayTier: "Standard",
+    effectiveFrom: GOOGLE_GEMINI4_INTRO_END,
+    provider: "google",
+    serviceTier: "standard",
+    inputUsdPerMillion: 4,
+    cachedInputUsdPerMillion: 0.2,
+    outputUsdPerMillion: 20,
+    outputTokensIncludeReasoning: true,
+  },
+  {
+    aliases: [
+      "gemini-4-argon-low",
+      "gemini-4-argon-medium",
+      "gemini-4-argon-high",
+    ],
+    catalogId: GOOGLE_PRICING_CATALOG_ID,
+    catalogVersion: "2026-09-30",
+    model: "gemini-4-argon",
+    displayModel: "Gemini 4 Argon",
+    displayTier: "Standard",
+    effectiveFrom: GOOGLE_GEMINI4_ARGON_EFFECTIVE_FROM,
+    effectiveTo: GOOGLE_GEMINI4_INTRO_END,
+    provider: "google",
+    serviceTier: "standard",
+    inputUsdPerMillion: 2,
+    cachedInputUsdPerMillion: 0.1,
+    outputUsdPerMillion: 10,
+    outputTokensIncludeReasoning: true,
+  },
+  {
+    aliases: [
+      "gemini-4-hydrogen-low",
+      "gemini-4-hydrogen-medium",
+      "gemini-4-hydrogen-high",
+      "gemini-4-hydrogen-xhigh",
+    ],
+    catalogId: GOOGLE_PRICING_CATALOG_ID,
+    catalogVersion: "2026-11-12",
+    model: "gemini-4-hydrogen",
+    displayModel: "Gemini 4 Hydrogen",
+    displayTier: "Standard",
+    effectiveFrom: GOOGLE_GEMINI4_HYDROGEN_EFFECTIVE_FROM,
+    provider: "google",
+    serviceTier: "standard",
+    inputUsdPerMillion: 1.5,
+    cachedInputUsdPerMillion: 0.075,
+    outputUsdPerMillion: 7.5,
+    outputTokensIncludeReasoning: true,
+  },
+  {
+    aliases: [
+      "gemini-3.8-flash-low",
+      "gemini-3.8-flash-medium",
+      "gemini-3.8-flash-high",
+    ],
+    catalogId: GOOGLE_PRICING_CATALOG_ID,
+    catalogVersion: "2027-01-01",
+    model: "gemini-3.8-flash",
+    displayModel: "Gemini 3.8 Flash",
+    displayTier: "Standard",
+    effectiveFrom: GOOGLE_GEMINI38_FLASH_STANDARD_EFFECTIVE_FROM,
+    provider: "google",
+    serviceTier: "standard",
+    inputUsdPerMillion: 1.5,
+    cachedInputUsdPerMillion: 0.15,
+    outputUsdPerMillion: 7.5,
+    outputTokensIncludeReasoning: true,
+  },
+  {
+    aliases: [
+      "gemini-3.8-flash-low",
+      "gemini-3.8-flash-medium",
+      "gemini-3.8-flash-high",
+    ],
+    catalogId: GOOGLE_PRICING_CATALOG_ID,
+    catalogVersion: "2026-09-02",
+    model: "gemini-3.8-flash",
+    displayModel: "Gemini 3.8 Flash",
+    displayTier: "Standard",
+    effectiveFrom: GOOGLE_GEMINI38_FLASH_EFFECTIVE_FROM,
+    effectiveTo: GOOGLE_GEMINI38_FLASH_STANDARD_EFFECTIVE_FROM,
+    provider: "google",
+    serviceTier: "standard",
+    inputUsdPerMillion: 0.75,
+    cachedInputUsdPerMillion: 0.075,
+    outputUsdPerMillion: 3.75,
+    outputTokensIncludeReasoning: true,
+  },
+] satisfies PricingCatalogEntry[]).map((entry) => ({
+  ...entry,
+  // Gemini implicit caching discounts cache hits. Cache creation is billed at the input rate.
+  cacheWriteInputUsdPerMillion: entry.inputUsdPerMillion,
+}));
+
 const TOKEN_USAGE_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
   ...ANTHROPIC_PRICING_CATALOG,
+  ...GOOGLE_PRICING_CATALOG,
   ...OPENAI_PRICING_CATALOG,
   ...XAI_PRICING_CATALOG,
   ...QWEN_PRICING_CATALOG,
@@ -1433,7 +1650,11 @@ function estimateTokenUsageCostFromCatalog(
   );
   const provider = matchingEntries[0]?.provider;
   const serviceTier =
-    provider === "xai" || provider === "qwen" || provider === "anthropic" || provider === "openrouter"
+    provider === "xai"
+    || provider === "qwen"
+    || provider === "anthropic"
+    || provider === "google"
+    || provider === "openrouter"
       ? resolveStandardOnlyPricingServiceTier(params.serviceTier)
       : resolveOpenAiPricingServiceTier({
           fastMode: params.fastMode,
@@ -1471,14 +1692,14 @@ function estimateTokenUsageCostFromCatalog(
         params.requestInputTokenCeiling,
       ),
   );
-  const uncachedInputCostMicros = calculateTokenCostMicros(
-    params.uncachedInputTokens - cacheWriteInputTokens,
-    entry.inputUsdPerMillion,
-  );
   const cacheWriteInputCostMicros = calculateTokenCostMicros(
     cacheWriteInputTokens,
     entry.cacheWriteInputUsdPerMillion ?? 0,
   );
+  // When both buckets share a rate, round their combined cost once.
+  const uncachedInputCostMicros = entry.cacheWriteInputUsdPerMillion === entry.inputUsdPerMillion
+    ? calculateTokenCostMicros(params.uncachedInputTokens, entry.inputUsdPerMillion) - cacheWriteInputCostMicros
+    : calculateTokenCostMicros(params.uncachedInputTokens - cacheWriteInputTokens, entry.inputUsdPerMillion);
   const cachedInputCostMicros = calculateTokenCostMicros(
     params.cachedInputTokens,
     entry.cachedInputUsdPerMillion,
@@ -1674,7 +1895,11 @@ export function resolveTokenUsagePriceUnavailableReason(params: {
   );
   const provider = matchingEntries[0]?.provider;
   const serviceTier =
-    provider === "xai" || provider === "qwen" || provider === "anthropic" || provider === "openrouter"
+    provider === "xai"
+    || provider === "qwen"
+    || provider === "anthropic"
+    || provider === "google"
+    || provider === "openrouter"
       ? resolveStandardOnlyPricingServiceTier(params.serviceTier)
       : resolveOpenAiPricingServiceTier({
           fastMode: params.fastMode,

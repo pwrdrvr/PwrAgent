@@ -979,6 +979,7 @@ export function unsequencedFederationEventPayload(event: AgentEvent): AgentEvent
   return {
     backend: event.backend,
     notification: event.notification,
+    ...(event.relatedReviewTurnId ? { relatedReviewTurnId: event.relatedReviewTurnId } : {}),
     ...(event.navigationDirectoryScope ? { navigationDirectoryScope: event.navigationDirectoryScope } : {}),
     ...(event.rendererImageParts ? { rendererImageParts: event.rendererImageParts } : {}),
     ...(event.errorNoticeContext
@@ -7485,6 +7486,7 @@ export class DesktopFederationRuntime {
         instanceId: sourceInstanceId,
       },
       notification: decoded.notification,
+      ...(decoded.relatedReviewTurnId ? { relatedReviewTurnId: decoded.relatedReviewTurnId } : {}),
       ...(decoded.navigationDirectoryScope ? { navigationDirectoryScope: decoded.navigationDirectoryScope } : {}),
       ...(decoded.errorNoticeContext
         ? { errorNoticeContext: decoded.errorNoticeContext }

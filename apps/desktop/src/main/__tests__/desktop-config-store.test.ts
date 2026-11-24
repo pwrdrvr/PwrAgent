@@ -85,6 +85,25 @@ describe("DesktopConfigStore", () => {
     }), { numRuns: 3 });
   });
 
+  it("hydrates schema-v1 enterprise host arrays when config.toml is unreadable", () => {
+    fc.assert(fc.property(fc.uniqueArray(fc.nat(), { maxLength: 4 }), (ids) => {
+      const value = ids.map((id) => `ghe${id}.example.com`);
+      const contents = `[git]\ngithub_enterprise_hosts = ${JSON.stringify(value)}\n`;
+      const fixture = createFixture(contents);
+      const original = fixture.createStore();
+      const expected = original.read("git").githubEnterpriseHosts;
+      original.dispose();
+      const durable = new DurableConfigSnapshotStore(fixture.db).readConfig()!;
+      const oldDomains = { ...durable.domains, git: { ...durable.domains.git, githubEnterpriseHosts: value } };
+      fixture.db.raw.prepare("UPDATE desktop_config_snapshots SET payload = ?").run(JSON.stringify(oldDomains));
+      fs.writeFileSync(fixture.configPath, "[invalid\n");
+      const restarted = fixture.createStore();
+      expect(restarted.fileStatus()).toMatchObject({ kind: "invalid", serving: "last-known-good" });
+      expect(restarted.read("git").githubEnterpriseHosts).toEqual(expected);
+      restarted.dispose();
+    }), { numRuns: 8 });
+  });
+
   it("serves immutable domain reads without filesystem or sqlite work", () => {
     const fixture = createFixture(`
 [general.appearance]

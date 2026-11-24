@@ -35,9 +35,12 @@ function expectedRetryAt(
 ): number {
   const inWindow = state.admitted.filter((at) => at > now - bucket.intervalMs);
   const last = state.admitted.at(-1);
+  const minIntervalMs = typeof bucket.minIntervalMs === "function"
+    ? bucket.minIntervalMs(inWindow.length)
+    : bucket.minIntervalMs ?? 0;
   const spacingReadyAt = last === undefined
     ? now
-    : last + Math.max(0, bucket.minIntervalMs ?? 0);
+    : last + Math.max(0, minIntervalMs);
   const windowReadyAt = inWindow.length < bucket.limit
     ? now
     : (inWindow[inWindow.length - bucket.limit] ?? now) + bucket.intervalMs;

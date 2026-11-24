@@ -106,6 +106,38 @@ Raw captures belong under the ignored
 `apps/desktop/.local/protocol-captures/job-monitor-refresh/`. Keep only
 contrived or sanitized evidence in version control.
 
+### Antigravity mode across session reload
+
+The November 23, 2026 probes used Antigravity 1.5.15 with
+`acp --process-per-session` and a disposable directory. The driver selected
+Auto with `session/set_config_option` (`configId: "mode", value: "auto"`),
+then selected Gemini 4 Neon and high reasoning. All three replies reported
+Auto in the mode config option. After `session/close`, `session/load`
+reported Default in both `modes.currentModeId` and the mode config option.
+
+| Mode at prompt dispatch | Result for `rg -l antigravity marker.txt` |
+| --- | --- |
+| Default after reload | Antigravity sent `session/request_permission`. |
+| Auto restored after reload | Antigravity completed the command without an approval request. |
+
+The restore reply carried `configOptions` but omitted the legacy `modes`
+object. PwrAgent uses the confirmed config value for both mode fields before
+publishing the loaded state. Antigravity still decides whether to send a
+permission request for a particular tool call.
+
+Raw captures are under the ignored
+`apps/desktop/.local/protocol-captures/antigravity-auto/`.
+
+### Antigravity ACP turn steering
+
+The November 23, 2026 macOS capture of Antigravity CLI `1.5.15` (`agy acp --process-per-session`) verified how Antigravity steers an active turn over ACP:
+
+- `initialize` does not advertise a custom steering extension or capability flag; Antigravity steers natively through a concurrent `session/prompt` request on the active session.
+- Sending a second `session/prompt` while the first prompt is actively streaming immediately settles the first `session/prompt` with `{ "stopReason": "end_turn" }` (with no `usage` payload, observed in 2–5 ms) and transfers ownership of the running turn to the second `session/prompt`.
+- Subsequent `session/update` chunks stream under the same turn until the second `session/prompt` resolves with `{ "stopReason": "end_turn", "usage": ... }`. A third overlapping `session/prompt` repeats the handoff by settling the second prompt immediately; `session/cancel` settles the latest in-flight prompt with `{ "stopReason": "cancelled", "usage": ... }`.
+- Antigravity does not emit a live `user_message_chunk` for the steered prompt during the active turn, but `session/load` replays both prompts as `user_message_chunk` notifications separated by the assistant output.
+- Sending a concurrent `session/prompt` while the active prompt is blocked on `session/request_permission` immediately rejects the second request with JSON-RPC `-32603` (`the running prompt is waiting for a permission or question answer; answer it or send session/cancel, then send this prompt again`) while leaving the first prompt running.
+
 ## Capturing Codex Account Protocol
 
 `scripts/capture-codex-usage-protocol.ts` records a complete Codex App Server

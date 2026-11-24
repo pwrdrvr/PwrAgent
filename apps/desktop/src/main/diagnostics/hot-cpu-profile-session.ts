@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { HotCpuProfileConfig } from "./hot-cpu-profile-config";
@@ -93,7 +93,14 @@ async function writeManifest(
   manifestPath: string,
   manifest: HotCpuProfileSessionManifest,
 ): Promise<void> {
-  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  const pendingPath = `${manifestPath}.${randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(pendingPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    await fs.rename(pendingPath, manifestPath);
+  } catch (error) {
+    await fs.rm(pendingPath, { force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 export async function createHotCpuProfileSession(options: {
@@ -111,7 +118,6 @@ export async function createHotCpuProfileSession(options: {
   const manifestPath = path.join(directoryPath, "session.json");
   const samplesPath = path.join(directoryPath, "samples.ndjson");
   const eventsPath = path.join(directoryPath, "events.ndjson");
-  const artifacts: string[] = [];
 
   const manifest: HotCpuProfileSessionManifest = {
     target,
@@ -119,7 +125,7 @@ export async function createHotCpuProfileSession(options: {
     directoryName,
     createdAt: createdAt.toISOString(),
     outputRoot: options.config.outputRoot,
-    artifacts,
+    artifacts: [],
     config: {
       startDelayMs: options.config.startDelayMs,
       triggerMode: options.config.triggerMode,
@@ -158,9 +164,16 @@ export async function createHotCpuProfileSession(options: {
     await fs.appendFile(targetPath, serializeNdjsonRecord(record), "utf8");
   }
 
-  async function registerArtifact(filename: string): Promise<void> {
-    artifacts.push(filename);
-    await writeManifest(manifestPath, manifest);
+  // CPU profiles and heap snapshots can register concurrently.
+  let manifestWrites = Promise.resolve();
+  function registerArtifact(filename: string): Promise<void> {
+    const write = manifestWrites.then(async () => {
+      const artifacts = [...manifest.artifacts, filename];
+      await writeManifest(manifestPath, { ...manifest, artifacts });
+      manifest.artifacts = artifacts;
+    });
+    manifestWrites = write.catch(() => {});
+    return write;
   }
 
   return {

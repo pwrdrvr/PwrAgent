@@ -4,9 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { detectPullRequestsForThread, filterStoredDiscoveredPullRequests } from "../pr-status/pr-detection";
+import { detectPullRequestsForThread, filterStoredDiscoveredPullRequests, resolveScheduledPrPrefetchRepos } from "../pr-status/pr-detection";
 import type { GithubPrFetcher } from "../pr-status/github-pr-fetcher";
 import * as gitExecutable from "../app-server/git-executable";
+import { GitSubprocessDiagnostics, gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 import { resolveForgeReposForDirectory } from "../pr-status/git-remote";
 import {
   clearForgeRepositoryNames,
@@ -24,6 +25,48 @@ afterEach(async () => {
 });
 
 describe("detectPullRequestsForThread", () => {
+  it("attributes concurrent Git starts to the PR paths that queued them", async () => {
+    const [prefetchRepo, liveRepo, storedRepo] = await Promise.all(Array.from({ length: 3 }, async () => {
+      const repo = await createRepoWithDefaultBranch("main");
+      await git(repo, "remote", "set-url", "origin", "https://github.com/ExampleOrg/catalog-service.git");
+      return repo;
+    }));
+    const diagnostics = new GitSubprocessDiagnostics(() => 0);
+    const recorder = vi.spyOn(gitSubprocessDiagnostics, "startGit")
+      .mockImplementation((cwd, args, purpose) => diagnostics.startGit(cwd, args, purpose));
+    const stored = {
+      number: 1, provider: "github.com", org: "ExampleOrg", repo: "catalog-service",
+      headRefName: "main", state: "pending" as const,
+      url: "https://github.com/ExampleOrg/catalog-service/pull/1", linkedDirectoryPaths: [storedRepo],
+    };
+    try {
+      await Promise.all([
+        resolveScheduledPrPrefetchRepos(prefetchRepo, "topic"),
+        detectPullRequestsForThread({
+          fetcher: { fetchAllPullRequestsForBranch: vi.fn(async () => []) },
+          branch: "topic",
+          directoryPaths: [liveRepo],
+        }),
+        filterStoredDiscoveredPullRequests([stored]),
+      ]);
+
+      const [bucket] = diagnostics.snapshot().buckets;
+      for (const [caller, cwd] of [
+        ["pr-scheduled-prefetch", prefetchRepo],
+        ["pr-live-branch-lookup", liveRepo],
+        ["pr-stored-attachment-validation", storedRepo],
+      ] as const) {
+        // The executor records each launch against its checkout, which here
+        // was assigned to exactly one caller. All its work should be attributed.
+        const starts = recorder.mock.calls.filter(([directory]) => directory === cwd).length;
+        expect(starts).toBeGreaterThan(0);
+        expect(bucket.startsByCaller[caller]).toBe(starts);
+      }
+    } finally {
+      recorder.mockRestore();
+    }
+  });
+
   it.each(["all", "default-refs"])("does not query main when cached remotes survive failed %s git probes", async (failure) => {
     const repo = await createRepoWithDefaultBranch("main");
     await resolveForgeReposForDirectory(repo);

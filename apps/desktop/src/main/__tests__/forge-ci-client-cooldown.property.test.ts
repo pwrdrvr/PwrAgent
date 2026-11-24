@@ -21,6 +21,41 @@ afterEach(() => vi.restoreAllMocks());
 const REPO: ForgeRepository = { provider: "github", host: "github.com", owner: "example", repo: "project" };
 const START = Date.parse("2026-11-11T12:00:00Z");
 
+const enterprise = vi.hoisted(() => ({ host: "", login: "" }));
+
+vi.mock("../settings/desktop-settings-singleton", () => ({
+  getDesktopSettingsService: () => ({
+    resolveGithubEnterpriseHosts: () => [enterprise.host],
+    resolveGithubEnterpriseAccount: () => enterprise.login,
+  }),
+}));
+
+it("binds enterprise approval preflight and write to one credential and refuses account changes", async () => {
+  await fc.assert(fc.asyncProperty(fc.nat(), fc.boolean(), async (id, changed) => {
+    enterprise.host = `ghe${id}.example.com`;
+    enterprise.login = "reviewer";
+    const githubToken = vi.fn(async () => `fixture-${enterprise.login}`);
+    const fetcher = vi.fn(async (_url: string, options: RequestInit) => {
+      expect(new Headers(options.headers).get("authorization")).toBe("Bearer fixture-reviewer");
+      return Response.json({});
+    });
+    const client = new ForgeCiClient({
+      fetch: fetcher as unknown as typeof fetch, githubToken, gitlab: { readApi: vi.fn() },
+      enabled: () => true, takeToken: () => true,
+    });
+    const repository = { ...REPO, host: enterprise.host };
+    const approval = client.withCiDeploymentCredential(async (request) => {
+      await request(repository, { path: "example/preflight" });
+      if (changed) enterprise.login = "new-reviewer";
+      return await request(repository, { path: "example/approve", method: "POST" });
+    });
+    if (changed) await expect(approval).rejects.toThrow("account changed during approval");
+    else await expect(approval).resolves.toEqual({});
+    expect(githubToken).toHaveBeenCalledExactlyOnceWith(enterprise.host);
+    expect(fetcher).toHaveBeenCalledTimes(changed ? 1 : 2);
+  }));
+});
+
 const response = fc.oneof(
   fc.constant({ kind: "ok" as const }),
   fc.constant({ kind: "not-found" as const }),

@@ -1455,6 +1455,12 @@ export type MessagingSurfaceIntent =
 
 export const MESSAGING_CALLBACK_HANDLE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
+/** Control for provider writes that can wait after the intent was admitted. */
+export type MessagingDeliveryControl = {
+  isCancelled: () => boolean;
+  signal?: AbortSignal;
+};
+
 export type MessagingDeliveryResult = {
   outcome: MessagingDeliveryOutcome;
   channel: MessagingChannelKind;
@@ -1471,6 +1477,10 @@ export type MessagingDeliveryResult = {
   errorMessage?: string;
   /** A failed delivery may identify a destination that no longer exists. */
   failureReason?: "target_not_found";
+  /** An accepted or unconfirmed write makes a new fallback message unsafe. */
+  fallbackUnsafe?: true;
+  /** The adapter stopped before any request for this intent reached the provider. */
+  adapterStoppedBeforeWrite?: true;
   /**
    * Structured provider rate-limit feedback for this delivery attempt.
    * When present, the desktop controller should feed it back through

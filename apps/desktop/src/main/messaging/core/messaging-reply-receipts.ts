@@ -91,7 +91,7 @@ export function isVisibleStreamOutcome(
 
 export type ReplyReceiptSettlement =
   | { state: "sent" }
-  | { state: "owed"; reason: "rate-limited" | "stream-declined" }
+  | { state: "owed"; reason: "adapter-stopped" | "rate-limited" | "stream-declined" }
   | { state: "unknown"; reason: "send-failed" };
 
 /**
@@ -105,12 +105,13 @@ export type ReplyReceiptSettlement =
  */
 export function replyReceiptSettlement(
   intentKind: string,
-  result: Pick<MessagingDeliveryResult, "outcome" | "rateLimit">,
+  result: Pick<MessagingDeliveryResult, "outcome" | "rateLimit" | "adapterStoppedBeforeWrite">,
 ): ReplyReceiptSettlement {
   const stream = intentKind === "stream_update";
   if (stream ? isVisibleStreamOutcome(result.outcome) : isAcceptedDeliveryOutcome(result.outcome)) {
     return { state: "sent" };
   }
+  if (result.adapterStoppedBeforeWrite) return { state: "owed", reason: "adapter-stopped" };
   if (result.rateLimit?.retryable === true) return { state: "owed", reason: "rate-limited" };
   if (stream && result.outcome !== "failed") return { state: "owed", reason: "stream-declined" };
   return { state: "unknown", reason: "send-failed" };
