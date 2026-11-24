@@ -55,11 +55,12 @@ Things to know when extending the audit:
   `AUDIT_DARK_THEMES` or `AUDIT_LIGHT_THEMES`.
 - **Share a launch when the surface survives theme changes.** Register the
   fixture with `registerSharedAudit` and call its `scan` callback while each
-  surface is settled. The callback waits for the applied appearance before
-  each scan, and the fixture still closes at the end of the test. Set
+  surface is settled. The callback disables CSS transitions on the audited
+  page and waits for the applied appearance before each scan. Set
   `PWRAGENT_E2E_A11Y_FRESH_FIXTURES=1` with the same selectors to audit
   each appearance in a fresh launch. The `axe:` attachments identify each
-  scenario, surface, and appearance and retain each rule's outcome and targets.
+  scenario, surface, and appearance and retain each rule's outcome and
+  ID-free structural targets.
 - **Work that reads no color runs once.** A color theme sets color tokens
   only. Tangerine dark and light run the full WCAG AA tag set; the other
   color themes run only `COLOR_RULES` (`color-contrast`,

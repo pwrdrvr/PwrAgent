@@ -419,7 +419,6 @@ async function runAxeScan(
   // everything we render anyway. See
   // https://github.com/dequelabs/axe-core-npm/blob/develop/packages/playwright/error-handling.md
   let builder = new AxeBuilder({ page: window }).setLegacyMode(true);
-  if (options?.comparisonKey) builder = builder.options({ xpath: true });
   if (options?.rules) {
     builder = builder.withRules(options.rules);
   } else {
@@ -438,13 +437,33 @@ async function runAxeScan(
   const results = await builder.analyze();
   if (options?.comparisonKey) {
     const outcomes = ["passes", "violations", "incomplete", "inapplicable"] as const;
+    // Resolve axe's selectors in the audited document, then identify each
+    // node by its element position from the root. Axe XPath also uses IDs.
+    const selectors = [...new Set(outcomes.flatMap((outcome) =>
+      results[outcome].flatMap(({ nodes }) => nodes.map(({ target }) => {
+        if (target.length !== 1 || typeof target[0] !== "string") {
+          throw new Error(`Expected a same-document audit target: ${JSON.stringify(target)}`);
+        }
+        return target[0];
+      })),
+    ))];
+    const paths = new Map(await window.evaluate((selectors) => selectors.map((selector) => {
+      const matches = document.querySelectorAll(selector);
+      if (matches.length !== 1) throw new Error(`Expected one audit target for ${selector}`);
+      const path: string[] = [];
+      for (let element: Element | null = matches[0]!; element; element = element.parentElement) {
+        const position = element.parentElement
+          ? Array.prototype.indexOf.call(element.parentElement.children, element) + 1
+          : 1;
+        path.unshift(`${element.localName}:nth-child(${position})`);
+      }
+      return [selector, path.join(" > ")] as const;
+    }), selectors));
     const matrix = Object.fromEntries(outcomes.map((outcome) => [
       outcome,
       results[outcome].map(({ id, nodes }) => ({
         id,
-        // React useId values and selector specificity depend on portal
-        // mount order. Compare the actual structural location of each node.
-        targets: nodes.map(({ target, xpath }) => JSON.stringify(xpath ?? target)).sort(),
+        targets: nodes.map(({ target }) => paths.get(target[0] as string)!).sort(),
       })).sort((left, right) => left.id.localeCompare(right.id)),
     ]));
     await test.info().attach(`axe: ${options.comparisonKey}`, {
@@ -550,6 +569,16 @@ function registerSharedAudit({
       let current = initial;
       try {
         await exercise(app, async (page, surface, options) => {
+          // Reduced motion does not disable every CSS transition. Install
+          // this before switching palettes, including on reloaded pages.
+          await page.evaluate(() => {
+            const id = "pwragent-axe-settled-colors";
+            if (document.getElementById(id)) return;
+            const style = document.createElement("style");
+            style.id = id;
+            style.textContent = "*, *::before, *::after { transition: none !important; }";
+            document.head.append(style);
+          });
           for (const appearance of appearances) {
             const label = appearanceLabel(appearance);
             await test.step(`${surface} (${label})`, async () => {
