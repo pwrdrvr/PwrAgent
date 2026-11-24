@@ -64,22 +64,35 @@ it("keeps each case's overlay when an earlier case finishes late", async () => {
 });
 
 async function withProvisioning(fault: Fault, check: (fixture: Awaited<ReturnType<typeof setupProvisioning>>) => Promise<void>) {
-  const root = await realpath(await mkdtemp(join(tmpdir(), "pwragent-stack-provision-")));
-  const db = openInMemoryStateDb();
-  const storage = new SqliteOverlayStore(db);
   const service = new StackOperationsService();
-  const work = caseOverlay.run(storage, () => setupProvisioning(fault, root, storage, service).then(check));
-  onTestFinished(async () => {
+  let root: string | undefined;
+  let db: ReturnType<typeof openInMemoryStateDb> | undefined;
+  let trace: ReturnType<typeof traceStackProvisioning> | undefined;
+  let finished = false;
+  onTestFinished(async ({ task }) => {
+    finished = true;
+    trace?.finish(task.result?.state === "fail");
     // Vitest can finish a timed-out test while its async body still owns the fixture.
     await Promise.allSettled([work]);
     await service.drainBackgroundRuns();
-    db.close();
-    await rm(root, { recursive: true, force: true });
+    db?.close();
+    if (root) await rm(root, { recursive: true, force: true });
   });
+  const work = (async () => {
+    root = await mkdtemp(join(tmpdir(), "pwragent-stack-provision-"));
+    const canonicalRoot = await realpath(root);
+    if (finished) return;
+    db = openInMemoryStateDb();
+    const storage = new SqliteOverlayStore(db);
+    const activeTrace = traceStackProvisioning(canonicalRoot, join(canonicalRoot, "repo", ".git"), fault);
+    trace = activeTrace;
+    await caseOverlay.run(storage, () => setupProvisioning(fault, canonicalRoot, storage, service, activeTrace).then(check));
+  })();
   await work;
 }
 
-async function setupProvisioning(fault: Fault, root: string, storage: SqliteOverlayStore, service: StackOperationsService) {
+async function setupProvisioning(fault: Fault, root: string, storage: SqliteOverlayStore, service: StackOperationsService,
+  trace: ReturnType<typeof traceStackProvisioning>) {
   const holdCheckout = fault === "lost acceptance" ? {
     reached: Promise.withResolvers<void>(), release: Promise.withResolvers<void>(),
   } : undefined;
@@ -118,7 +131,6 @@ async function setupProvisioning(fault: Fault, root: string, storage: SqliteOver
   await writeFile(join(commonDir, "gh-stack"), JSON.stringify({
     schemaVersion: 1, repository, stacks: [{ trunk: { branch: "main", head: tip }, branches: [{ branch: "parent", head: tip, base: tip }] }],
   }));
-  const trace = traceStackProvisioning(root, commonDir, fault);
   const directoryService = new GitDirectoryService({ resolveWorktreeStorage: () => "in-repo" });
   const workspaces = new Map<string, string>();
   const notices = new Map<string, string>();
