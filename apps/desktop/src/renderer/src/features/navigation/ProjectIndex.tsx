@@ -64,7 +64,7 @@ function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => v
   let sections: Element[] = [];
   let children = new Map<Element, { firstSection: number; blockSize?: number }>();
   let frame = 0;
-  let task: number | undefined;
+  let samplePending = false;
   let viewportHeight: number | undefined;
   let listBlockSize: number | undefined;
   const blocks: (ProjectBlockBox | undefined)[] = [];
@@ -102,15 +102,18 @@ function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => v
     }, scrollTop + height, scrollTop + topDockReserve(region)));
   };
   const schedule = (): void => {
-    if (frame !== 0 || task !== undefined) return;
+    if (frame !== 0 || samplePending) return;
     frame = window.requestAnimationFrame(() => {
       frame = 0;
-      // Animation frame callbacks precede layout. Read in the following
-      // task so this frame's commits and resize deliveries have settled.
-      task = window.setTimeout(() => {
-        task = undefined;
+      if (!resize) {
         measure();
-      }, 0);
+        return;
+      }
+      // A fresh observation requests a post-layout delivery even on a pure
+      // scroll. Read in the same callback that invalidates the cache, before
+      // another renderer task can lay out new boxes against the old ones.
+      samplePending = true;
+      resize.observe(region, { box: "border-box" });
     });
   };
 
@@ -120,7 +123,12 @@ function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => v
   const onResize: ResizeObserverCallback = (entries) => {
     let firstChanged = sections.length;
     let viewportChanged = false;
+    let sampleRequested = false;
     for (const entry of entries) {
+      if (entry.target === region) {
+        sampleRequested = true;
+        continue;
+      }
       if (entry.target === list) {
         const size = entry.contentBoxSize?.[0]?.blockSize;
         if (size === undefined || size !== listBlockSize) {
@@ -141,7 +149,17 @@ function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => v
     // The list is a zero-gap column. Inline size changes do not move its
     // project bounds unless a child also changes block size.
     if (firstChanged < sections.length) invalidateFrom(firstChanged);
-    if (viewportChanged || firstChanged < sections.length) schedule();
+    if (sampleRequested) {
+      resize?.unobserve(region);
+      samplePending = false;
+    }
+    if (sampleRequested || viewportChanged || firstChanged < sections.length) {
+      if (frame !== 0) {
+        window.cancelAnimationFrame(frame);
+        frame = 0;
+      }
+      measure();
+    }
   };
   const resize = typeof ResizeObserver === "function" ? new ResizeObserver(onResize) : null;
   const findList = () => region.querySelector<HTMLElement>(":scope > .directory-list");
@@ -191,6 +209,7 @@ function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => v
     blocks.length = 0;
     viewportHeight = undefined;
     listBlockSize = undefined;
+    samplePending = false;
     mutation.disconnect();
     mutation.observe(region, { childList: true });
     resize?.disconnect();
@@ -214,7 +233,6 @@ function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => v
   measure();
   return () => {
     window.cancelAnimationFrame(frame);
-    if (task !== undefined) window.clearTimeout(task);
     region.removeEventListener("scroll", onScroll, { capture: true });
     region.removeEventListener(TOP_DOCK_RESERVE_CHANGE_EVENT, schedule);
     mutation.disconnect();

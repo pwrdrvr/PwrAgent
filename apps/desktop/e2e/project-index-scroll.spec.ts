@@ -44,10 +44,15 @@ async function writeReplay(root: string): Promise<string> {
   return fixturePath;
 }
 
-async function expectIndexMatchesViewport(page: Page): Promise<void> {
-  await expect.poll(() => page.evaluate(() => {
+async function expectIndexMatchesViewport(page: Page, reactionPresent?: boolean): Promise<void> {
+  await expect.poll(() => page.evaluate((expectedReaction) => {
     const list = document.querySelector<HTMLElement>(".sidebar__scroll-region > .directory-list")!;
     const nav = document.querySelector<HTMLElement>("nav.project-index")!;
+    if (expectedReaction !== undefined) {
+      const row = list.querySelector('[data-thread-key="codex:project-index-0"]');
+      const reaction = row?.querySelector('[aria-label="Remove reaction 👀 from thread"]');
+      if (!row || Boolean(reaction) !== expectedReaction) return "waiting for rendered reaction";
+    }
     const top = list.getBoundingClientRect().top;
     const bottom = top + list.clientHeight;
     const region = list.parentElement!;
@@ -66,7 +71,7 @@ async function expectIndexMatchesViewport(page: Page): Promise<void> {
       return "matched";
     }
     return { expected, current, visible, reserve };
-  })).toBe("matched");
+  }, reactionPresent)).toBe("matched");
 }
 
 test("Project Index tracks live directory geometry during navigation and scroll", async () => {
@@ -97,14 +102,16 @@ test("Project Index tracks live directory geometry during navigation and scroll"
 
       // Reactions use the owner navigation update path while scroll crosses sections.
       for (const [step, offset] of [235, 476, 620, 289].entries()) {
+        const present = step % 2 === 0;
         await projects.evaluate(async (list, { offset, present }) => {
           const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
           list.scrollTop = offset;
           await api.setThreadReaction!({
             backend: "codex", threadId: "project-index-0", emoji: "👀", present,
           });
-        }, { offset, present: step % 2 === 0 });
-        await expectIndexMatchesViewport(page);
+        }, { offset, present });
+        // Owner acknowledgement can precede the renderer's reaction update.
+        await expectIndexMatchesViewport(page, present);
       }
 
       await expect(browser.locator(".sidebar__scroll-region")).toHaveClass(/has-selected-thread-dock-top/);

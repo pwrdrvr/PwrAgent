@@ -173,12 +173,11 @@ function mountIndex(projectRows: Row[], { gap = 8, height = 145, scrollTop = 0 }
   const view = render(tree());
   const list = () => target.current!.querySelector<HTMLElement>(".directory-list")!;
   const section = (key: string) => list().querySelector<HTMLElement>(`[data-directory-key="${key}"]`)!;
-  const paint = (settle = true): void => {
+  const animate = (): void => {
     act(() => {
       const pending = [...frames.values()];
       frames.clear();
       for (const callback of pending) callback(0);
-      if (settle) vi.advanceTimersByTime(0);
     });
   };
   const publishResize = (...elements: Element[]): void => {
@@ -186,9 +185,22 @@ function mountIndex(projectRows: Row[], { gap = 8, height = 145, scrollTop = 0 }
       for (const observer of observers) observer.publish(elements);
     });
   };
+  const deliverLayout = (...changed: Element[]): void => publishResize(target.current!, ...changed);
+  const settle = (): void => {
+    act(() => { vi.advanceTimersByTime(0); });
+  };
+  const paint = (settleTasks = true): void => {
+    animate();
+    deliverLayout();
+    if (settleTasks) settle();
+  };
   const scroll = (offset: number, source: Element = list()): void => {
     scrollTop = offset;
     fireEvent.scroll(source);
+  };
+  const commitHeight = (key: string, next: number): void => {
+    rows = rows.map((row) => row.key === key ? { ...row, height: next } : row);
+    layOut();
   };
   const matchOracle = (): string[] => {
     // Full scan of fixture data. No selectors or layout reads on the feature's list.
@@ -203,10 +215,9 @@ function mountIndex(projectRows: Row[], { gap = 8, height = 145, scrollTop = 0 }
 
   return {
     work, resetWork, frames, observers, list, section, paint, publishResize, scroll, matchOracle,
-    settle: () => act(() => vi.advanceTimersByTime(0)),
+    animate, deliverLayout, settle, commitHeight,
     updateHeight(key: string, next: number) {
-      rows = rows.map((row) => row.key === key ? { ...row, height: next } : row);
-      layOut();
+      commitHeight(key, next);
       publishResize(section(key));
     },
     resize(next: number) {
@@ -290,7 +301,7 @@ describe("Project Index scroll work", () => {
       }
       expect(fixture.work, JSON.stringify(fixture.work)).toMatchObject({
         queries: 0, listRects: 0, listHeights: 0, sectionRects: 0, scrollReads: 10,
-        resizePublications: 0, mutationPublications: 0,
+        resizePublications: 10, mutationPublications: 0,
         frames: 10, commits: 3,
       });
       fixture.scroll(304, fixture.section("project-3").lastElementChild!);
@@ -373,13 +384,13 @@ describe("Project Index scroll work", () => {
       expect(fixture.matchOracle()).toEqual(["project-2"]);
       fixture.resetWork();
       fixture.updateHeight("project-0", 160);
-      expect(fixture.frames.size).toBe(1);
+      expect(fixture.frames.size).toBe(0);
       fixture.paint();
       expect(fixture.matchOracle()).toEqual(["project-1", "project-2"]);
       fixture.updateHeight("project-4", 220);
       fixture.paint();
       expect(fixture.matchOracle()).toEqual(["project-1", "project-2"]);
-      expect(fixture.work).toMatchObject({ resizePublications: 2, mutationPublications: 0, frames: 2, commits: 1 });
+      expect(fixture.work).toMatchObject({ resizePublications: 2, mutationPublications: 0, frames: 0, commits: 1 });
       fixture.updateHeight("project-0", 100);
       fixture.resize(0);
       fixture.paint();
@@ -413,14 +424,39 @@ describe("Project Index scroll work", () => {
       fixture.resetWork();
 
       fixture.scroll(211);
-      fixture.paint(false);
+      fixture.animate();
       expect(fixture.work.scrollReads).toBe(0);
       // Chromium delivers the observer after animation frame callbacks.
-      fixture.updateHeight("project-0", 160);
+      fixture.commitHeight("project-0", 160);
+      fixture.deliverLayout(fixture.section("project-0"));
       expect(fixture.frames.size).toBe(0);
-      fixture.settle();
       expect(fixture.matchOracle()).toEqual(["project-1", "project-2"]);
       expect(fixture.work).toMatchObject({ scrollReads: 1, commits: 1 });
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("does not cache bounds from a commit between resize delivery and the next task", () => {
+    const rows = rowsOf(Array<number>(16).fill(100));
+    const fixture = mountIndex(rows, { gap: 0, height: 80 });
+    try {
+      fixture.resizeInline(400);
+      fixture.paint();
+      expect(fixture.matchOracle()).toEqual(["project-0"]);
+
+      // Project 4 appeared in the first binary search, but project 5 did not.
+      fixture.scroll(510);
+      fixture.paint(false);
+      // The update is undone before the next ResizeObserver delivery. No
+      // net size change should be needed to remove an intermediate box.
+      fixture.commitHeight("project-0", 300);
+      fixture.settle();
+      fixture.commitHeight("project-0", 100);
+      expect(fixture.matchOracle()).toEqual(["project-5"]);
+      fixture.scroll(511);
+      fixture.paint();
+      expect(fixture.matchOracle()).toEqual(["project-5"]);
     } finally {
       fixture.dispose();
     }
@@ -442,7 +478,7 @@ describe("Project Index scroll work", () => {
       });
       fixture.paint();
       expect(fixture.matchOracle()).toEqual(["project-1", "project-2"]);
-      expect(fixture.work).toMatchObject({ queries: 0, mutationPublications: 0, resizePublications: 1, frames: 1 });
+      expect(fixture.work).toMatchObject({ queries: 0, mutationPublications: 0, resizePublications: 1, frames: 0 });
       expect(children).not.toHaveBeenCalled();
     } finally {
       fixture.dispose();
@@ -528,7 +564,7 @@ describe("Project Index scroll work", () => {
       expect(fixture.matchOracle()).toEqual(["project-3"]);
       fixture.scroll(200);
       expect(fixture.frames.size).toBe(1);
-      fixture.paint(false);
+      fixture.animate();
       fixture.unmount();
       fixture.resetWork();
       fixture.settle();
