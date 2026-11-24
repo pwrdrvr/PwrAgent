@@ -610,11 +610,49 @@ it.skipIf(process.platform === "win32")("uses one current config read per branch
     const expected = (await oracle(cwd))(branch);
     starts.clear();
     await expectEligible(resolve, cwd, branch, expected);
-    // Each branch sees the current include target through one Git config read.
+    // Git config samples the URL, and Git lists the current names before eligibility.
     expect(starts.calls.map(([, args]) => args[0])).toEqual(expected.length
-      ? ["config", "symbolic-ref", "for-each-ref"]
+      ? ["config", "remote", "symbolic-ref", "for-each-ref"]
       : ["config"]);
   }
+});
+
+it.skipIf(process.platform === "win32")("rechecks a symlinked HTTPS include after sampling its remote names", async () => {
+  const cwd = await fixture();
+  const included = path.join(cwd, "included-config");
+  const before = path.join(cwd, "before-config");
+  const after = path.join(cwd, "after-config");
+  await writeFile(before, "[user]\n\tname = Fixture\n");
+  await readGit(cwd, "config", "--file", after, "remote.added.url", "https://github.com/fixture/added.git");
+  await readGit(cwd, "config", "--file", after, "remote.added.fetch", "+refs/heads/*:refs/remotes/added/*");
+  await symlink(before, included);
+  await readGit(cwd, "config", "--local", "include.path", included);
+  expect((await oracle(cwd))("release")).toHaveLength(2);
+
+  let changed = false;
+  const runner = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (directory, args, options) => {
+    const sample = await runGitCommand(directory, args, options);
+    if (!changed && directory === cwd && args[0] === "config" && args.includes("--show-origin")) {
+      changed = true;
+      await symlink(after, `${included}.next`);
+      await rename(`${included}.next`, included);
+      await readGit(cwd, "update-ref", "refs/remotes/added/release", "HEAD");
+      await remoteHead(cwd, "added", "release");
+    }
+    return sample;
+  });
+  onTestFinished(() => { runner.mockRestore(); });
+  const starts = recordPrefetchStarts();
+  const actual = await createScheduledPrPrefetchRepoResolver()(cwd, "release");
+  const metadataReads = starts.calls.filter(([, args]) => args[0] === "config" || args[0] === "remote")
+    .map(([, args]) => args[0]);
+
+  expect(changed).toBe(true);
+  const expected = (await oracle(cwd))("release");
+  expect(expected).toEqual([]);
+  expect(actual).toEqual(expected);
+  expect(metadataReads).toEqual(["config", "remote"]);
+  expect(readObservedGitOrigin(cwd)).toBeUndefined();
 });
 
 it.skipIf(process.platform === "win32").each(["symlinked include", "custom Git", "native URLs"])("filters a default branch added during %s SSH fallback", async (kind) => {
@@ -727,10 +765,10 @@ it.skipIf(process.platform === "win32").each([[2, 1], [3, 1], [3, 2]])("uses one
     await expectEligible((directory, head) => resolve(directory, head, count), cwd, branch, expected(branch));
   }
 
-  // Confirming the include graph cannot save a launch for this worktree in a small batch.
+  // The first branch checks names natively. Later branches watch the include before reading config.
   const headReads = Array.from({ length: remoteCount }, () => "symbolic-ref");
   expect(starts.calls.map(([, args]) => args[0])).toEqual(
-    Array.from({ length: count }, () => ["config", ...headReads, "for-each-ref"]).flat(),
+    Array.from({ length: count }, (_, index) => ["config", ...(index === 0 ? ["remote"] : []), ...headReads, "for-each-ref"]).flat(),
   );
   if (remoteCount === 2) {
     await readGit(cwd, "update-ref", "refs/remotes/upstream/release", "HEAD");
@@ -741,7 +779,7 @@ it.skipIf(process.platform === "win32").each([[2, 1], [3, 1], [3, 2]])("uses one
     await expectEligible(resolve, cwd, "topic-3", after("topic-3"));
     // Once the second HEAD exists, one confirmed observation serves both branches.
     expect(starts.calls.map(([, args]) => args[0])).toEqual([
-      "config", "rev-parse", "config", "for-each-ref", "for-each-ref",
+      "config", "rev-parse", "for-each-ref", "for-each-ref",
     ]);
   }
 });

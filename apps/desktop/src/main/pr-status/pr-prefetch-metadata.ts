@@ -24,6 +24,7 @@ export type ScheduledPrPrefetchMetadataScope = {
   branchCount: number;
   repositories: ReturnType<typeof createScheduledPrefetchRemoteReader>;
   configOutputTooLarge?: true;
+  includePaths?: string[];
 };
 
 function prefetchGitInputs(cwd: string) {
@@ -109,6 +110,12 @@ export async function observeScheduledPrPrefetchMetadata(
     if (!inputs) return undefined;
     const roots = await observePrCheckoutConfigFiles(cwd, inputs.paths);
     if (!roots) return undefined;
+    // Watch known includes before sampling the next branch's config. This
+    // remembers only the paths to watch, independent of any previous answer.
+    const knownIncludes = scope.includePaths;
+    const knownFiles = knownIncludes?.length
+      ? await observePrCheckoutConfigFiles(cwd, [...inputs.paths, ...knownIncludes])
+      : undefined;
     const readConfig = () => runPrMetadataGit(cwd, [
       "config", "--null", "--show-scope", "--show-origin", "--includes", "--get-regexp", `${REMOTE_CONFIG_KEYS}|^include\\.|^includeif\\.`,
     ], { purpose: "pr-remotes", env: inputs.env, maxBuffer: 64 * 1024, timeout: 2_000 }).then((output) => ({
@@ -140,26 +147,28 @@ export async function observeScheduledPrPrefetchMetadata(
     const singleRemote = remoteNames.length === 1;
     const canReuseConfig = Boolean(extra.length && sources?.localOrigins.has(path.join(roots.commonDir, "config")));
     const canConfirmCheckout = singleRemote && branchCount > (extra.length ? 3 : 2);
-    const files = extra.length ? await observePrCheckoutConfigFiles(cwd, [...inputs.paths, ...extra]) : roots;
+    const includesWatchedBeforeRead = knownFiles && isDeepStrictEqual(extra, knownIncludes);
+    const files = includesWatchedBeforeRead ? knownFiles
+      : extra.length ? await observePrCheckoutConfigFiles(cwd, [...inputs.paths, ...extra]) : roots;
     const originsWatched = !sources || [...sources.origins].every((file) => files?.paths.has(file));
+    scope.includePaths = files && originsWatched && extra.length ? extra : undefined;
     // With a warm identity and no config-only reuse path, only a remote HEAD
     // proof can pay for confirming the include graph.
     const verifyHeadsBeforeConfirming = extra.length > 0 && Boolean(files) && originsWatched
       && !canReuseConfig && !canConfirmCheckout && repositories.hasGitHubIdentityFor(configuration);
     const earlyHeadProof = verifyHeadsBeforeConfirming ? await observeProvenRemoteHeads(cwd, remoteNames) : undefined;
-    if (!files || !originsWatched || (verifyHeadsBeforeConfirming && !earlyHeadProof)) {
+    if (!files || !originsWatched || (verifyHeadsBeforeConfirming && !earlyHeadProof && !includesWatchedBeforeRead)) {
       // An unverified sample applies only to the current branch. It cannot
       // establish a reusable negative or warm the live cache.
-      const { repos, refreshRemoteNames } = await repositories.read(configuration, { configSampleOrder, validateNegative: async () => false });
+      const { repos } = await repositories.read(configuration, { configSampleOrder, validateNegative: async () => false });
       if (!await roots.unchanged() || !inputsUnchanged()) return undefined;
-      // An include may have changed while OpenSSH was evaluating aliases.
-      // Have Git list current names before using them for branch eligibility.
+      // Git must list the current names when we cannot verify the config sample.
       return {
-        repos, refreshedRemoteNames: remoteNames, refreshRemoteNames,
+        repos, refreshedRemoteNames: remoteNames, refreshRemoteNames: true,
         nativeHeadReads: verifyHeadsBeforeConfirming ? true : undefined,
       };
     }
-    if (extra.length) {
+    if (extra.length && !includesWatchedBeforeRead) {
       const confirmed = await readConfig();
       if (confirmed?.stderr !== "" || confirmed.stdout !== config?.stdout) return undefined;
       configSampleOrder = confirmed.sampleOrder;
@@ -168,12 +177,12 @@ export async function observeScheduledPrPrefetchMetadata(
       && (files === roots || await roots.unchanged()) && inputsUnchanged());
     // Resolve identities from the config Git already sampled. OpenSSH aliases
     // use one expansion per observation, bounded by the scheduled batch.
-    const { repos, sshIdentityUnchanged, refreshRemoteNames, publish } = await repositories.read(configuration, {
+    const { repos, sshIdentityUnchanged, publish } = await repositories.read(configuration, {
       configSampleOrder,
       validateNegative: async () => Boolean((!config || sources) && await configUnchanged()),
     });
     const sample = {
-      repos, refreshedRemoteNames: remoteNames, refreshRemoteNames: !sources && refreshRemoteNames,
+      repos, refreshedRemoteNames: remoteNames, refreshRemoteNames: !sources,
       publish: sources ? publish : undefined,
     };
     const currentSample = async () => await configUnchanged() ? sample : undefined;
@@ -184,7 +193,7 @@ export async function observeScheduledPrPrefetchMetadata(
     // A single remote still needs one native HEAD read per branch.
     if (singleRemote && !extra.length && !canConfirmCheckout) return await currentSample();
 
-    const proof = earlyHeadProof ?? await observeProvenRemoteHeads(cwd, remoteNames);
+    const proof = verifyHeadsBeforeConfirming ? earlyHeadProof : await observeProvenRemoteHeads(cwd, remoteNames);
     if (proof && (proof.gitDir !== files.gitDir || proof.commonDir !== files.commonDir)) return undefined;
     // Git's exact local config origin can establish config reuse without a
     // HEAD proof. Native HEAD and tracking reads still run for each branch.
