@@ -705,6 +705,31 @@ it.skipIf(process.platform === "win32").each(["matching", "nonmatching"])("keeps
   await expectEligible(resolve, cwd, "release", (await oracle(cwd))("release"));
 });
 
+it("observes conditional URLs natively before publishing a batch-only identity", async () => {
+  const cwd = await fixture();
+  const included = path.join(cwd, "branch-config");
+  const original = "https://github.com/fixture/origin.git";
+  const rewritten = "https://github.com/fixture/conditional.git";
+  await readGit(cwd, "config", "--file", included, `url.${rewritten}.insteadOf`, original);
+  await readGit(cwd, "config", "--global", "includeIf.onbranch:topic-1.path", included);
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  await expectEligible(resolve, cwd, "topic-0", (await oracle(cwd))("topic-0"));
+  expect(readObservedGitOrigin(cwd)).toBeUndefined();
+
+  await readGit(cwd, "switch", "topic-1");
+  expect(await readGit(cwd, "remote", "get-url", "--all", "origin")).toBe(rewritten);
+  const expected = await oracle(cwd);
+  const starts = recordPrefetchStarts();
+  await expectEligible(resolve, cwd, "topic-1", expected("topic-1"));
+  expect(starts.calls.filter(([, args]) => args[0] === "remote" && args[1] === "get-url")).toHaveLength(2);
+  await expect(resolveGitHubRepoForDirectory(cwd)).resolves.toEqual({ host: "github.com", owner: "fixture", repo: "conditional" });
+  expect(readObservedGitOrigin(cwd)?.repo?.repo).toBe("conditional");
+
+  starts.clear();
+  await expectEligible(resolve, cwd, "topic-2", expected("topic-2"));
+  expect(starts.calls.filter(([, args]) => args[0] === "remote").map(([, args]) => args)).toEqual([["remote"]]);
+});
+
 it.skipIf(process.platform === "win32").each(["symlinked include", "custom Git", "native URLs"])("filters a default branch added during %s SSH fallback", async (kind) => {
   const cwd = await fixture();
   await readGit(cwd, "remote", "set-url", "origin", "git@fixture-ssh:fixture/origin.git");

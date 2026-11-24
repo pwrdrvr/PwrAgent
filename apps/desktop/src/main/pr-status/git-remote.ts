@@ -416,11 +416,13 @@ async function loadParsedGitRemotes(
       ? { remotes: await options.readRemotes(cwd) }
       : await defaultReadRemotes(cwd, demand, Boolean(options.confirmEmpty || options.fresh), prefetch));
     const sampleOrder = prefetch?.configSampleOrder ?? raw.urlSampleOrder ?? nextRemoteSampleOrder();
-    const { names, remotes, unconfirmedEmpty, readWithGitRemote, hasConditionalIncludes } = raw;
+    const { names, remotes, unconfirmedEmpty, readWithGitRemote: listedWithGitRemote, hasConditionalIncludes } = raw;
+    const prior = prefetch?.previous;
+    // Listing names against a live identity does not verify that identity's URLs.
+    const readWithGitRemote = raw.urlSampleOrder !== undefined ? true : listedWithGitRemote && prior?.readWithGitRemote;
     // Unless Git's remote list was the last observation, unverified branch
     // planning needs a current native list after resolving identity.
-    const refreshRemoteNames = !readWithGitRemote || raw.urlSampleOrder !== undefined;
-    const prior = prefetch?.previous;
+    const refreshRemoteNames = !listedWithGitRemote || raw.urlSampleOrder !== undefined;
     if (prior && (remotes === prior.value || (isCurrentRemoteObservation(prior) && sameRemoteUrls(remotes, prior.value)))) {
       return {
         observation: { names, value: prior.value, unconfirmedEmpty, readWithGitRemote, hasConditionalIncludes,
@@ -523,11 +525,13 @@ async function defaultReadRemotes(
   // command to distinguish a checkout without an origin from an unavailable one.
   const { stdout } = await runPrMetadataGit(cwd, ["remote"], gitOptions, demand);
   const names = uniqueNonEmptyLines(stdout);
-  // Unusual or conditional config uses the ordinary remote-identity freshness
-  // window. Each branch still gets a current list and ref reads.
-  if (isCurrentRemoteObservation(previous) && useNativeList && previous.names?.length === names.length
+  // Name agreement is enough for an existing live entry or previously read
+  // native URLs. Batch-only config must get URLs before it can warm the cache.
+  if (isCurrentRemoteObservation(previous) && useNativeList
+    && (previous.readWithGitRemote || previous.value === remoteCache.get(cwd)?.value)
+    && previous.names?.length === names.length
     && names.every((name, index) => name === previous.names?.[index]) && hasAllRemoteUrls(previous)) {
-    return { names, remotes: previous.value, readWithGitRemote: true };
+    return { names, remotes: previous.value, readWithGitRemote: true, hasConditionalIncludes: previous.hasConditionalIncludes };
   }
   // A native URL read spans several commands. Order it from the remote list
   // so an overlapping owner sample can supersede this mixed observation.
