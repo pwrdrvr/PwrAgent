@@ -299,6 +299,45 @@ describe("pending protocol activity rows", () => {
     ]);
   });
 
+  it("shows a review's rationale as written, not as Markdown", () => {
+    const rationale = "Deletes *.log and *.tmp in `build_output`, then runs [cleanup] <fast>.";
+    const [entry] = replay([
+      {
+        method: "warning",
+        params: { message: `Automatic approval review denied (risk: high, authorization: low): ${rationale}` },
+      },
+    ]);
+    const markdown = entry?.details[0]?.markdown ?? "";
+    expect(markdown).toBe(
+      "**Denied (risk: high, authorization: low):** "
+        + "Deletes \\*.log and \\*.tmp in \\`build\\_output\\`, then runs \\[cleanup\\] \\<fast\\>.",
+    );
+    // Removing each escape gives back the rationale exactly.
+    expect(markdown.replace(/^\*\*[^*]*\*\* /, "").replace(/\\(.)/g, "$1")).toBe(rationale);
+    expect(entry?.summary).toBe("Auto reviews: 1 denied");
+  });
+
+  it("keeps the deferred rows of two failed turns whose turn is unknown", () => {
+    const retained = new Map<string, AppServerThreadActivityEntry>();
+    for (const [index, now] of [1_000, 9_000].entries()) {
+      const live = applyProtocolActivityNotice(
+        [],
+        {
+          method: "warning",
+          params: { message: `Automatic approval review denied (risk: high, authorization: low): Turn ${index}.` },
+        },
+        { threadId: "thread-1", now },
+      );
+      for (const entry of protocolActivityEntriesAtTurnEnd(live, "failed", undefined)) {
+        retained.set(entry.id, entry);
+      }
+    }
+    expect([...retained.values()].map((entry) => entry.details[0]?.label)).toEqual([
+      "Denied (risk: high, authorization: low): Turn 0.",
+      "Denied (risk: high, authorization: low): Turn 1.",
+    ]);
+  });
+
   it("keeps the denial-limit notice as a warning row of its own", () => {
     const message =
       "Automatic approval review rejected too many approval requests for this turn; interrupting the turn.";

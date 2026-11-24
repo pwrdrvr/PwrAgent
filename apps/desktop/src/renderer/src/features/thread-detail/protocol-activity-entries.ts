@@ -107,8 +107,9 @@ export function applyProtocolActivityNotice(
  * status is ambient session state.
  *
  * Deferred rows are retained by id, so MCP and warning rows, whose live ids
- * do not name a turn, take the turn's id. Otherwise the same warning or MCP
- * row in a later turn would replace this turn's row.
+ * do not name a turn, take the turn's id, or the time the row first arrived
+ * when the turn is unknown. Otherwise the same warning or MCP row in a later
+ * turn would replace this turn's row.
  */
 export function protocolActivityEntriesAtTurnEnd(
   entries: readonly AppServerThreadActivityEntry[],
@@ -120,7 +121,13 @@ export function protocolActivityEntriesAtTurnEnd(
     : entries.filter(
       (entry) => isModelRoutingActivityEntry(entry) || isWarningActivityEntry(entry),
     );
-  if (!turn) return [...kept];
+  if (!turn) {
+    return kept.map((entry) =>
+      isModelRoutingActivityEntry(entry)
+        ? entry
+        : { ...entry, id: `${entry.id}@${entry.createdAt ?? "unknown-turn"}` }
+    );
+  }
   return kept.map((entry) => ({
     ...entry,
     id: isModelRoutingActivityEntry(entry) ? entry.id : `${entry.id}@${turn.id}`,
@@ -268,10 +275,17 @@ function buildWarningActivityEntry(params: {
   };
 }
 
-function readAutoReviewDecision(detail: AppServerThreadActivityDetail): AutoReviewDecision {
-  const decision = detail.label.toLowerCase();
-  return AUTO_REVIEW_DECISION_ORDER.find((candidate) => decision.startsWith(candidate))
-    ?? "approved";
+/** Reads the decision from the review's own text, which its detail id keeps. */
+function readAutoReviewDecision(detail: AppServerThreadActivityDetail): AutoReviewDecision | undefined {
+  const message = detail.id.slice(AUTO_REVIEW_DETAIL_ID_PREFIX.length);
+  const decision = AUTO_REVIEW_WARNING.exec(message)?.[1]?.toLowerCase();
+  return AUTO_REVIEW_DECISION_ORDER.find((candidate) => candidate === decision);
+}
+
+// Escapes inline Markdown so the reviewer's rationale shows as written: a glob
+// such as `*.log` must not turn into emphasis.
+function escapeInlineMarkdown(text: string): string {
+  return text.replace(/[\\`*_[\]<>~|]/g, "\\$&");
 }
 
 function buildAutoReviewActivityDetail(rawMessage: string): AppServerThreadActivityDetail | undefined {
@@ -291,7 +305,9 @@ function buildAutoReviewActivityDetail(rawMessage: string): AppServerThreadActiv
     id: `${AUTO_REVIEW_DETAIL_ID_PREFIX}${message}`,
     kind: "command",
     label: rationale ? `${verdict}: ${rationale}` : verdict,
-    markdown: rationale ? `**${verdict}:** ${rationale}` : `**${verdict}**`,
+    markdown: rationale
+      ? `**${verdict}:** ${escapeInlineMarkdown(rationale)}`
+      : `**${verdict}**`,
   };
 }
 
@@ -302,7 +318,7 @@ function buildAutoReviewActivityEntry(
   const counts = new Map<AutoReviewDecision, number>();
   for (const detail of details) {
     const decision = readAutoReviewDecision(detail);
-    counts.set(decision, (counts.get(decision) ?? 0) + 1);
+    if (decision) counts.set(decision, (counts.get(decision) ?? 0) + 1);
   }
   const summary = AUTO_REVIEW_DECISION_ORDER
     .filter((decision) => counts.has(decision))
