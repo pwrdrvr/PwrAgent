@@ -36,7 +36,7 @@ export function parseMcpContextRequest(value: unknown): McpContextRequest {
   const params = value.params;
   const validString = (key: string) => typeof params[key] === "string" && params[key].length > 0;
   const hasOnly = (...keys: string[]) => Object.keys(params).every((key) => keys.includes(key));
-  const validCursor = () => !Object.hasOwn(params, "cursor") || validString("cursor");
+  const validCursor = () => !Object.hasOwn(params, "cursor") || typeof params.cursor === "string";
   switch (method) {
     case "resources/list":
     case "resources/templates/list":

@@ -2618,6 +2618,7 @@ export class McpConnectionGatewayService {
     contextRequest?: McpContextRequest;
     /** A list also reads the server's skills, and answers as a `McpGatewayCatalog`. */
     skills?: boolean;
+    contextOnToolListError?: boolean;
     signal: AbortSignal;
     deadlineAt?: number;
     /** Shows the upstream server's forms for a call to the thread's operator. */
@@ -2641,7 +2642,9 @@ export class McpConnectionGatewayService {
       const call = params.operation === "gateway/tools/call";
       return await rpc.request(
         params.operation,
-        call ? params.invocation : params.contextRequest ?? (params.skills ? { skills: true } : undefined),
+        call ? params.invocation : params.contextRequest ?? (params.skills ? {
+          skills: true, ...(params.contextOnToolListError ? { contextOnToolListError: true } : {}),
+        } : undefined),
         params.signal, discovery.deadlineAt, discovery.id,
         call ? MCP_CONNECTION_TOOL_TIMEOUT_MS : undefined,
         call ? params.elicit : undefined,
@@ -5141,7 +5144,7 @@ export class McpConnectionGatewayService {
     client: Client,
     discovery: McpDiscovery,
     /** A search asks for the server's skills. A call's revalidation does not. */
-    skills?: { signal: AbortSignal | undefined },
+    skills?: { signal: AbortSignal | undefined; contextOnToolListError: boolean },
   ): Promise<McpGatewayCatalog> {
     const connection = this.requireAvailableConnection(grant.connectionId);
     const generation = this.toolInventoryGenerations.get(connection.id) ?? 0;
@@ -5154,33 +5157,45 @@ export class McpConnectionGatewayService {
     let cursor: string | undefined;
     let bytes = 0;
     const capabilities = client.getServerCapabilities?.();
+    const contextMethods = mcpContextMethods(capabilities);
     const listsTools = serverListsTools(capabilities);
-    for (let page = 0; listsTools && page < MAX_TOOL_LIST_PAGES; page += 1) {
-      const result = await discovery.phase("tools/list", async () => await client.listTools(
-        cursor ? { cursor } : undefined, { signal: discovery.signal, timeout: discovery.remaining() },
-      ), page + 1);
-      for (const definition of result.tools) {
-        bytes += Buffer.byteLength(JSON.stringify(definition));
-        if (bytes > 2 * 1024 * 1024 || tools.length >= 2_000) {
-          throw new Error("The MCP catalog exceeds the discovery size limit.");
+    let toolListError: string | undefined;
+    try {
+      for (let page = 0; listsTools && page < MAX_TOOL_LIST_PAGES; page += 1) {
+        const result = await discovery.phase("tools/list", async () => await client.listTools(
+          cursor ? { cursor } : undefined, { signal: discovery.signal, timeout: discovery.remaining() },
+        ), page + 1);
+        for (const definition of result.tools) {
+          bytes += Buffer.byteLength(JSON.stringify(definition));
+          if (bytes > 2 * 1024 * 1024 || tools.length >= 2_000) {
+            throw new Error("The MCP catalog exceeds the discovery size limit.");
+          }
+          if (names.has(definition.name)) throw new Error("The MCP server returned duplicate tool names.");
+          names.add(definition.name);
+          tools.push({
+            connectionId: connection.id,
+            serverName: connection.displayName,
+            toolName: definition.name,
+            schemaRevision: gatewayToolRevision(JSON.stringify([token, this.sessionRevisionKey(token, connection.id, client)]), generation, definition),
+            consentRevision: gatewayToolRevision(JSON.stringify([this.consentEpoch, connection.id, consentEpoch]), generation, definition),
+            definition,
+          });
         }
-        if (names.has(definition.name)) throw new Error("The MCP server returned duplicate tool names.");
-        names.add(definition.name);
-        tools.push({
-          connectionId: connection.id,
-          serverName: connection.displayName,
-          toolName: definition.name,
-          schemaRevision: gatewayToolRevision(JSON.stringify([token, this.sessionRevisionKey(token, connection.id, client)]), generation, definition),
-          consentRevision: gatewayToolRevision(JSON.stringify([this.consentEpoch, connection.id, consentEpoch]), generation, definition),
-          definition,
-        });
+        cursor = result.nextCursor;
+        if (!cursor) break;
+        if (cursors.has(cursor) || page === MAX_TOOL_LIST_PAGES - 1) {
+          throw new Error("The MCP catalog could not be completely paged.");
+        }
+        cursors.add(cursor);
       }
-      cursor = result.nextCursor;
-      if (!cursor) break;
-      if (cursors.has(cursor) || page === MAX_TOOL_LIST_PAGES - 1) {
-        throw new Error("The MCP catalog could not be completely paged.");
+    } catch (error) {
+      if (!skills?.contextOnToolListError || scope.backend !== "acp:antigravity" || scope.delegation || !contextMethods.length) {
+        throw error;
       }
-      cursors.add(cursor);
+      skills.signal?.throwIfAborted();
+      this.recordDiscoveryFailure(connection.id, error);
+      toolListError = error instanceof Error ? error.message : String(error);
+      tools.length = 0;
     }
     // A gateway thread never sees a third-party server's instructions, so
     // the skills index they would have carried reaches it as data instead.
@@ -5189,21 +5204,24 @@ export class McpConnectionGatewayService {
     // read just failed is skipped for a while, so a stalled skills/list does
     // not hold up every search.
     const failedAt = this.skillsSearchFailures.get(client);
-    const serverSkills = skills && offersMcpSkills(capabilities) && capabilities?.resources
+    const serverSkills = toolListError === undefined && skills && offersMcpSkills(capabilities) && capabilities?.resources
       && (failedAt === undefined || Date.now() - failedAt >= MCP_SKILLS_SEARCH_RETRY_MS)
       ? listedMcpSkills(await this.listSkillsForIndex(grant, client, discovery, skills.signal, () => {
         this.skillsSearchFailures.set(client, Date.now());
       }))
       : undefined;
     await this.requireGatewaySelection(grant);
-    discovery.remaining();
+    // A list may have spent the discovery budget. The caller's RPC grace
+    // period can still carry capabilities already negotiated at initialize.
+    if (toolListError === undefined) discovery.remaining();
+    else skills?.signal?.throwIfAborted();
     this.requireAvailableConnection(grant.connectionId);
     if (this.grants.get(token) !== grant
       || generation !== (this.toolInventoryGenerations.get(connection.id) ?? 0)
       || !this.isCurrentUpstream(token, client)) {
       throw new Error("The MCP connection changed during discovery. Search again.");
     }
-    this.recordDiscoverySuccess(connection.id);
+    if (toolListError === undefined) this.recordDiscoverySuccess(connection.id);
     const serverIdentity = {
       serverInfo: client.getServerVersion?.(), metadata: this.initializations.get(client)?._meta,
     };
@@ -5224,7 +5242,8 @@ export class McpConnectionGatewayService {
       tools,
       serverName: connection.displayName,
       serverIdentity,
-      contextMethods: mcpContextMethods(capabilities),
+      contextMethods,
+      ...(toolListError !== undefined ? { toolListError } : {}),
       ...(serverSkills && serverSkills.skills.length > 0 ? { serverSkills } : {}),
     };
   }
@@ -5320,6 +5339,7 @@ export class McpConnectionGatewayService {
       });
       let releaseRoute: (() => void) | undefined;
       let releaseSession: (() => void) | undefined;
+      let readingContext = false;
       try {
         const contextRequest = operation === "gateway/context/read" ? parseMcpContextRequest(params) : undefined;
         if (contextRequest) {
@@ -5373,6 +5393,7 @@ export class McpConnectionGatewayService {
           ? params as Record<string, unknown>
           : {};
         if (contextRequest) {
+          readingContext = true;
           return await this.readGatewayContext(token, grant, client, contextRequest, discovery);
         }
         const { ErrorCode, McpError } = await mcpTypes.load();
@@ -5381,7 +5402,7 @@ export class McpConnectionGatewayService {
             // Only a caller that asked for skills knows the envelope.
             const catalog = await this.readGatewayCatalog(
               token, grant, client, discovery,
-              values.skills === true ? { signal } : undefined,
+              values.skills === true ? { signal, contextOnToolListError: values.contextOnToolListError === true } : undefined,
             );
             return values.skills === true ? catalog : catalog.tools;
           }
@@ -5483,7 +5504,9 @@ export class McpConnectionGatewayService {
             throw new Error("unsupported MCP operation");
         }
       } catch (error) {
-        this.recordDiscoveryFailure(grant.connectionId, error);
+        // Once initialization succeeds, individual context reads have
+        // their own errors and do not measure catalog health.
+        if (!readingContext) this.recordDiscoveryFailure(grant.connectionId, error);
         throw error;
       } finally {
         releaseRoute?.();
@@ -5514,7 +5537,9 @@ export class McpConnectionGatewayService {
       }
     };
     await checkAccess();
-    const result = await discovery.phase(method, () => this.readUpstreamMcpContext(client, method, params, discovery.signal));
+    const result = await discovery.phase(
+      method, () => this.readUpstreamMcpContext(client, method, params, discovery.signal), undefined, true,
+    );
     await checkAccess();
     if (Buffer.byteLength(JSON.stringify(result)) > MAX_MCP_CONTEXT_RESULT_BYTES) {
       throw new Error("The MCP context reply exceeds the 256 KiB size limit.");

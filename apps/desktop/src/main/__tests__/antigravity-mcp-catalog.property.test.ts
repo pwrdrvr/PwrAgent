@@ -5,6 +5,7 @@ import { agentToolSuccess, type AgentToolDefinition } from "../agent-tools/agent
 import { AgentToolMcpServer } from "../agent-tools/agent-tool-mcp-server";
 import { AgentToolRouter } from "../agent-tools/agent-tool-router";
 import { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
+import type { McpGatewayCatalog } from "../mcp-connections/mcp-gateway-catalog";
 
 const turn = { backend: "acp:antigravity", threadId: "thread", turnId: "turn" } as const;
 const directTools = ["agent_memory", "call_mcp_tool", "create_monitor_delegation",
@@ -100,6 +101,71 @@ it("offers context-only connections through the bounded catalog and checks the d
     selected = false;
     expect((await read()).code).toBe("mcp_gateway_error");
     expect(calls).toEqual([{ connectionId: "orchard", contextRequest, scopeKey: '["gateway","acp:antigravity","thread"]' }]);
+  } finally {
+    await server.close();
+  }
+});
+
+it("keeps exact schemas that fit before adding context routes", async () => {
+  // Context is optional metadata. With or without it, the same exact schemas
+  // and identity must fit, even at the last byte of the search budget.
+  const search = async (size: number, contextAllowed: boolean) => {
+    const catalog: McpGatewayCatalog = {
+      serverName: "Orchard",
+      serverIdentity: { serverInfo: { name: "Orchard", version: "1" } },
+      contextMethods: ["resources/list", "resources/read"],
+      tools: [{ connectionId: "orchard", serverName: "Orchard", toolName: "lookup", schemaRevision: "fixture",
+        definition: { name: "lookup", inputSchema: { type: "object", description: "a".repeat(size) } } }],
+    };
+    return await new McpGatewayToolService({
+      connections: { requestGatewayToolOperation: async () => catalog },
+      selectedConnections: async () => ["orchard"],
+      contextAllowed: () => contextAllowed,
+      approve: async () => false,
+    }).search({ query: "lookup", connectionId: "orchard" }, { ...turn, transport: "mcp" });
+  };
+  const budget = 24_000;
+  const room = budget - Buffer.byteLength(JSON.stringify(await search(0, false)));
+  await fc.assert(fc.asyncProperty(fc.oneof(fc.constant(0), fc.integer({ min: 1, max: 256 })), async (spare) => {
+    const baseline = await search(room - spare, false);
+    const result = await search(room - spare, true);
+    expect(baseline.tools).toHaveLength(1);
+    expect(result.tools).toEqual(baseline.tools);
+    expect(result.unavailable).toEqual(baseline.unavailable);
+    expect(result.servers?.[0]?.serverInfo).toEqual(baseline.servers?.[0]?.serverInfo);
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(budget);
+  }));
+});
+
+it("returns native media and the complete structured result through the deferred MCP tool", async () => {
+  const image = { type: "image", mimeType: "image/png", data: "aW1hZ2U=" } as const;
+  const audio = { type: "audio", mimeType: "audio/wav", data: "YXVkaW8=" } as const;
+  const uri = "orchard://media";
+  const upstream = {
+    "resources/read": { contents: [{ uri, mimeType: image.mimeType, blob: image.data }, { uri: "orchard://audio", mimeType: audio.mimeType, blob: audio.data }] },
+    "prompts/get": { messages: [{ role: "user", content: image }, { role: "assistant", content: audio }] },
+  };
+  const gateway = new McpGatewayToolService({
+    connections: { requestGatewayToolOperation: async ({ contextRequest }) => contextRequest?.method === "resources/read"
+      ? upstream["resources/read"] : upstream["prompts/get"] },
+    selectedConnections: async () => ["orchard"],
+    contextAllowed: () => true,
+    approve: async () => false,
+  });
+  const catalogs = resolveAgentToolCatalogs({ mcpGatewayTools: gateway }, { antigravityMcpContext: true });
+  const server = new AgentToolMcpServer({ resolveCatalogs: () => catalogs, resolveCallContext: () => turn });
+  try {
+    const client = await server.registerClient(turn);
+    for (const [method, params] of [["resources/read", { uri }], ["prompts/get", { name: "media" }]] as const) {
+      const { result } = await post(client, "tools/call", {
+        name: "call_pwragent_tool",
+        arguments: { toolName: "read_mcp_context", arguments: { connectionId: "orchard", method, params } },
+      });
+      expect(result.structuredContent).toEqual({ connectionId: "orchard", method, result: upstream[method] });
+      expect(result.content.slice(1)).toEqual([image, audio]);
+      expect(result.content[0].text).not.toContain(image.data);
+      expect(result.content[0].text).not.toContain(audio.data);
+    }
   } finally {
     await server.close();
   }

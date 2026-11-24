@@ -202,6 +202,7 @@ export class McpGatewayToolService {
               connectionId, scopeKey: this.scopeKey(context), operation: "gateway/tools/list", signal, deadlineAt,
               // A skill is a resource, so only a backend with a resource reader asks.
               ...(resourceTools || readsContext ? { skills: true } : {}),
+              ...(readsContext ? { contextOnToolListError: true } : {}),
             }) as McpGatewayTool[] | McpGatewayCatalog;
             await this.requireSelected(connectionId, context, signal);
             const bytes = Buffer.byteLength(JSON.stringify(listed));
@@ -214,6 +215,7 @@ export class McpGatewayToolService {
               if (listed.serverIdentity) identities.set(connectionId, listed.serverIdentity);
               if (listed.serverSkills) skills.set(connectionId, listed.serverSkills);
               if (readsContext && listed.contextMethods?.length) contextMethods.set(connectionId, listed.contextMethods);
+              if (listed.toolListError) unavailable.push({ connectionId, message: listed.toolListError.slice(0, 180) });
             }
             if (tools.length > 0) listsTools.add(connectionId);
             for (const { serverInstructions, serverIdentity, ...tool } of tools) {
@@ -269,9 +271,8 @@ export class McpGatewayToolService {
         const entry = { ...tool, invocation: { name: "call_mcp_tool" as const, codeModeName: "pwragent__call_mcp_tool" as const } };
         const identity = identities.get(tool.connectionId);
         const serverNameInAgent = this.options.serverNameInAgent?.(tool.connectionId, context);
-        const methods = contextMethods.get(tool.connectionId);
-        const servers = (identity || serverNameInAgent || methods) && !result.servers?.some((entry) => entry.connectionId === tool.connectionId)
-          ? [...(result.servers ?? []), serverEntry(tool.connectionId, tool.serverName, identity, serverNameInAgent, resourceTools, methods)]
+        const servers = (identity || serverNameInAgent) && !result.servers?.some((entry) => entry.connectionId === tool.connectionId)
+          ? [...(result.servers ?? []), serverEntry(tool.connectionId, tool.serverName, identity, serverNameInAgent, resourceTools)]
           : result.servers;
         const guidance = instructions.get(tool.connectionId);
         const serverInstructions = guidance && !result.serverInstructions?.some((entry) => entry.connectionId === tool.connectionId)
@@ -287,8 +288,17 @@ export class McpGatewayToolService {
         if (servers) result.servers = servers;
         if (serverInstructions) result.serverInstructions = serverInstructions;
       }
+      // Keep the complete tool admission pass independent from optional context
+      // metadata, including the space reserved for later tools and notices.
+      for (const server of result.servers ?? []) {
+        const methods = contextMethods.get(server.connectionId);
+        if (!methods) continue;
+        server.contextDiscovery = { toolName: READ_MCP_CONTEXT, methods };
+        if (Buffer.byteLength(JSON.stringify(result)) > MAX_SEARCH_RESULT_BYTES) delete server.contextDiscovery;
+      }
       // Context-only servers can match by name, ID or published skill.
       // A server whose every tool host policy hides stays hidden.
+      const toolMatches = new Set(result.tools.map((tool) => tool.connectionId));
       const contextServers = new Set([...skills.keys(), ...contextMethods.keys()]);
       for (const connectionId of [...contextServers].sort((left, right) => left.localeCompare(right))) {
         if (!current.has(connectionId) || result.servers?.some((entry) => entry.connectionId === connectionId)) continue;
@@ -298,7 +308,8 @@ export class McpGatewayToolService {
         const serverNameInAgent = this.options.serverNameInAgent?.(connectionId, context);
         const matchingSkill = skills.get(connectionId)?.skills.some((skill) => skillScore(skill) > 0)
           && (methods?.includes("resources/read") || (resourceTools && serverNameInAgent));
-        const matchingContext = methods && (args.connectionId === connectionId || scoreText(`${serverName} ${connectionId}`) > 0);
+        const matchingContext = methods && (toolMatches.has(connectionId)
+          || args.connectionId === connectionId || scoreText(`${serverName} ${connectionId}`) > 0);
         if (!matchingSkill && !matchingContext) continue;
         if (listsTools.has(connectionId) && !candidates.some((tool) => tool.connectionId === connectionId)) continue;
         const servers = [...(result.servers ?? []), serverEntry(connectionId, serverName, identities.get(connectionId), serverNameInAgent, resourceTools, methods)];

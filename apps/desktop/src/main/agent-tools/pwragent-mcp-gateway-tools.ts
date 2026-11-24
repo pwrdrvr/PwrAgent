@@ -1,9 +1,10 @@
+import type { GetPromptResult, ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import type { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
 import type { TokenMiserStore } from "../token-miser/token-miser-store";
-import { agentToolFailure, type AgentToolCallContentItems, type AgentToolDefinition } from "./agent-tool-definition";
+import { agentToolFailure, type AgentToolCallContentItems, type AgentToolDefinition, type AgentToolMcpContentItem } from "./agent-tool-definition";
 import { isMcpError } from "../mcp-connections/mcp-sdk";
-import { MCP_CONTEXT_METHODS, parseMcpContextRequest, READ_MCP_CONTEXT } from "../mcp-connections/mcp-gateway-context";
+import { MCP_CONTEXT_METHODS, parseMcpContextRequest, READ_MCP_CONTEXT, type McpContextMethod } from "../mcp-connections/mcp-gateway-context";
 
 export function buildMcpContextToolDefinition(service: McpGatewayToolService): AgentToolDefinition {
   return {
@@ -32,12 +33,48 @@ export function buildMcpContextToolDefinition(service: McpGatewayToolService): A
       try {
         const result = await service.readContext(connectionId, request, context);
         const data = { connectionId, method: request.method, result };
-        return { ok: true, data, contentItems: [{ type: "inputText", text: JSON.stringify(data) }] };
+        return { ok: true, data, mcpContentItems: contextContent(data) };
       } catch (error) {
         return gatewayFailure(error);
       }
     },
   };
+}
+
+function contextContent(data: { connectionId: string; method: McpContextMethod; result: unknown }): AgentToolMcpContentItem[] {
+  const media: AgentToolMcpContentItem[] = [];
+  const extractBlob = (resource: ReadResourceResult["contents"][number]) => {
+    if (!("blob" in resource) || !resource.mimeType) return resource;
+    const mimeType = resource.mimeType;
+    const normalizedMimeType = mimeType.toLowerCase();
+    const type = normalizedMimeType.startsWith("image/") ? "image" : normalizedMimeType.startsWith("audio/") ? "audio" : undefined;
+    if (!type) return resource;
+    media.push({ type, mimeType, data: resource.blob });
+    return { ...resource, blob: undefined };
+  };
+  let displayResult = data.result;
+  if (data.method === "resources/read") {
+    const result = data.result as ReadResourceResult;
+    displayResult = { ...result, contents: result.contents.map(extractBlob) };
+  } else if (data.method === "prompts/get") {
+    const result = data.result as GetPromptResult;
+    displayResult = {
+      ...result,
+      messages: result.messages.map((message) => {
+        const content = message.content;
+        if (content.type === "image" || content.type === "audio") {
+          media.push(content);
+          return { ...message, content: { ...content, data: undefined } };
+        }
+        if (content.type === "resource") {
+          return { ...message, content: { ...content, resource: extractBlob(content.resource) } };
+        }
+        return message;
+      }),
+    };
+  }
+  // The structured result keeps the original resource and prompt envelopes.
+  return [{ type: "text", text: JSON.stringify({ ...data, result: displayResult }) }, ...media];
 }
 
 export function buildMcpGatewayToolDefinitions(service?: McpGatewayToolService, store?: TokenMiserStore): AgentToolDefinition[] {

@@ -487,18 +487,22 @@ connection's name or ID to find servers that publish context without tools.
 Use `call_pwragent_tool` with `toolName: "read_mcp_context"` and
 `arguments: { connectionId, method, params }`. The deferred definition is
 available through `tool_search`. It adds no native MCP function.
+Search admits exact tool schemas before adding context routes. A failed tool
+listing reports its error and can still return negotiated context methods.
 
 Resource listings, resource template listings, skill listings and prompt
 listings take an optional opaque cursor from the preceding page. To read a
 skill, get its manifest with `skills/get`, then read the listed files through
 `resources/read`. The skills extension can also list its directories.
-`prompts/get` returns the server's messages as data. Each response is one MCP
-result, bounded to 256 KiB.
+`prompts/get` returns the server's messages as data. Image and audio payloads
+also reach the client as typed MCP content. Each upstream context reply is
+bounded to 256 KiB.
 
 The owner validates the requested method, the current upstream capabilities
 and connection access before sending the request. It rechecks selection and
-session ownership before releasing the result. Read requests leave upstream
-tool approval, elicitation and containment policy in force.
+session ownership before releasing the result. Individual context request
+errors leave the server's tool-catalog health unchanged. Read requests leave
+upstream tool approval, elicitation and containment policy in force.
 
 Existing Codex threads receive the two fixed tools at an idle/next-turn
 replacement boundary when their runtime advertises `dynamicToolsResumeField`.

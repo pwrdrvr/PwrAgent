@@ -1720,7 +1720,7 @@ select_for_new_threads = true
     operation.mockImplementation(async (params) => params.operation === "gateway/tools/list"
       ? names.map((name) => ({
           connectionId: "builtin:sandboxer", serverName: "Sandboxer", toolName: name, schemaRevision: name,
-          definition: { name, inputSchema: { type: "object" }, annotations: { readOnlyHint: name === "list_sandboxes", destructiveHint: ["exec", "write_file"].includes(name), openWorldHint: true } },
+          definition: { name, inputSchema: { type: "object" as const }, annotations: { readOnlyHint: name === "list_sandboxes", destructiveHint: ["exec", "write_file"].includes(name), openWorldHint: true } },
         }))
       : { content: [{ type: "text", text: "sandbox result" }] });
     await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: ["builtin:sandboxer"] });

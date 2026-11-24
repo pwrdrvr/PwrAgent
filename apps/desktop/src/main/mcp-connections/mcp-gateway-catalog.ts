@@ -39,6 +39,8 @@ export type McpGatewayCatalog = {
   serverName: string;
   serverIdentity?: McpGatewayIdentity;
   contextMethods?: McpContextMethod[];
+  /** A context-aware search can still return context capabilities after a failed tools/list. */
+  toolListError?: string;
   /**
    * The workflow skills the server publishes, cleaned by `listedMcpSkills`.
    * Present only when the server offers skills and resources.
