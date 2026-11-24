@@ -14,13 +14,13 @@ const MAX_CONFIG_INCLUDES = 16;
 type PrefetchMetadata = {
   repos: GitHubRepoRef[];
   refreshedRemoteNames: string[];
-  proof?: { heads: ReadonlyMap<string, string>; unchanged: () => Promise<boolean> };
+  proof?: { heads: ReadonlyMap<string, string>; unchanged: () => Promise<boolean>; complete: boolean };
 };
 
 function prefetchGitInputs(cwd: string) {
   const env = buildPwrAgentChildProcessEnv(process.env);
   if (process.platform === "win32" || !path.isAbsolute(cwd) || gitCommandPreference(env) || getSelectedManagedGit()
-    || Object.keys(env).some((key) => /^(GIT_(DIR|WORK_TREE|COMMON_DIR|IMPLICIT_WORK_TREE|NAMESPACE|CONFIG|CONFIG_COUNT|CONFIG_PARAMETERS|TEST_.*))$/i.test(key))) {
+    || Object.keys(env).some((key) => /^(GIT_(DIR|WORK_TREE|COMMON_DIR|IMPLICIT_WORK_TREE|OBJECT_DIRECTORY|NAMESPACE|CONFIG|CONFIG_COUNT|CONFIG_PARAMETERS|TEST_.*))$/i.test(key))) {
     return undefined;
   }
   const runtime = gitRuntimeEnvironment(env);
@@ -112,11 +112,12 @@ export async function observeScheduledPrPrefetchMetadata(cwd: string): Promise<P
 
     const proof = await observeProvenRemoteHeads(cwd, remoteNames);
     if (proof && (proof.gitDir !== files.gitDir || proof.commonDir !== files.commonDir)) return undefined;
-    if (!proof || proof.heads.size !== remoteNames.length) {
+    if (!proof) {
       return await files.unchanged() && inputsUnchanged() ? sample : undefined;
     }
     const unchanged = async () => Boolean(await files.unchanged() && await proof.unchanged() && inputsUnchanged());
-    return await unchanged() ? { ...sample, proof: { heads: proof.heads, unchanged } } : undefined;
+    const complete = proof.heads.size === remoteNames.length;
+    return await unchanged() ? { ...sample, proof: { heads: proof.heads, unchanged, complete } } : undefined;
   } catch {
     // Let the ordinary Git commands decide unsupported or unstable reads.
     return undefined;

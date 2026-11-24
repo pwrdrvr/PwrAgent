@@ -1,11 +1,11 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
 import { expect, it, onTestFinished, vi } from "vitest";
 import * as gitExecutable from "../app-server/git-executable";
 import { GitSubprocessDiagnostics, gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
-import { clearGitHubRemoteCache } from "../pr-status/git-remote";
+import { clearGitHubRemoteCache, resolveGitHubRepoForDirectory } from "../pr-status/git-remote";
 import { createScheduledPrPrefetchRepoResolver } from "../pr-status/pr-detection";
 import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
 
@@ -224,6 +224,51 @@ it("keeps fresh eligibility through the Git fallback on reftable", async () => {
   await expectEligible(resolve, cwd, "release", []);
   await readGit(cwd, "remote", "set-url", "origin", "https://github.com/fixture/renamed.git");
   await expectEligible(resolve, cwd, "topic-0", (await oracle(cwd))("topic-0"));
+});
+
+it("keeps a warm live identity after a scheduled fallback probe fails", async () => {
+  const cwd = await fixture("reftable");
+  const identity = await resolveGitHubRepoForDirectory(cwd);
+  expect(identity).toEqual({ host: "github.com", owner: "fixture", repo: "origin" });
+  const runner = vi.spyOn(gitExecutable, "runGitCommand").mockRejectedValue(new Error("git remote probe timed out"));
+  onTestFinished(() => { runner.mockRestore(); });
+
+  await expect(createScheduledPrPrefetchRepoResolver()(cwd, "topic-0")).resolves.toEqual([]);
+  expect(runner.mock.calls.some(([, , options]) => options?.purpose === "pr-remotes")).toBe(true);
+  runner.mockRestore();
+  await expect(resolveGitHubRepoForDirectory(cwd)).resolves.toEqual(identity);
+});
+
+it.skipIf(process.platform === "win32")("uses a partial HEAD proof once and observes the missing ref again on the next branch", async () => {
+  const cwd = await fixture();
+  await readGit(cwd, "remote", "add", "third", "https://github.com/fixture/third.git");
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  const before = await oracle(cwd);
+  const starts = recordPrefetchStarts();
+  await expectEligible(resolve, cwd, "topic-0", before("topic-0"));
+  const firstCommands = starts.calls.map(([, args]) => args[0]);
+  await remoteHead(cwd, "third", "release");
+  const after = await oracle(cwd);
+  expect(after("release")).toEqual([]);
+  await expectEligible(resolve, cwd, "release", after("release"));
+
+  expect(firstCommands).toEqual(["config", "rev-parse", "symbolic-ref", "for-each-ref"]);
+});
+
+it.skipIf(process.platform === "win32")("follows Git when an external object directory disappears between branches", async () => {
+  const cwd = await fixture();
+  const externalObjects = path.join(cwd, "external-objects");
+  const objects = path.join(cwd, ".git", "objects");
+  await rename(objects, externalObjects);
+  await mkdir(objects);
+  process.env.GIT_OBJECT_DIRECTORY = externalObjects;
+  const expected = await oracle(cwd);
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  await expectEligible(resolve, cwd, "topic-0", expected("topic-0"));
+
+  await rm(externalObjects, { recursive: true, force: true });
+  await expect(readGit(cwd, "remote")).rejects.toThrow("not a git repository");
+  await expectEligible(resolve, cwd, "topic-1", []);
 });
 
 it.skipIf(process.platform === "win32")("discards a remote HEAD observation that changes during checkout verification", async () => {

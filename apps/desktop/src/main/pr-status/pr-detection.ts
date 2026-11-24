@@ -2,7 +2,7 @@ import type { LinkedDirectorySummary } from "@pwragent/shared/contracts/normaliz
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { prGitSubprocessCaller } from "../diagnostics/git-subprocess-diagnostics";
-import { observeForgeRepositoriesForDirectory, type GitHubRepoRef } from "./git-remote";
+import { observeForgeRepositoriesForDirectory, readFreshGitHubReposForPrefetch, type GitHubRepoRef } from "./git-remote";
 import type { GithubPrFetcher } from "./github-pr-fetcher";
 import { runPrMetadataGit, SharedPrMetadataRead, type PrMetadataDemand } from "./pr-metadata-process";
 import { prMatchesSourceRepository } from "./pr-source-repository";
@@ -164,12 +164,14 @@ export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string, bat
     if (batch) {
       const cached = batch.get(cwd);
       let metadata = cached && await cached.unchanged() ? cached : undefined;
+      let reusable = Boolean(metadata);
       if (!metadata) {
         batch.delete(cwd);
         const observed = await observeScheduledPrPrefetchMetadata(cwd);
         if (observed?.proof) {
           const defaults = await readDefaultBranchInfo(cwd, undefined, observed.refreshedRemoteNames, observed.proof.heads);
           metadata = { repos: observed.repos, unchanged: observed.proof.unchanged, defaults };
+          reusable = observed.proof.complete;
         } else {
           sampled = observed;
         }
@@ -177,15 +179,16 @@ export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string, bat
       if (metadata) {
         const plan = await resolvePrLookupPlan({ cwd, branch, defaultBranchInfo: metadata.defaults });
         if (await metadata.unchanged()) {
-          batch.set(cwd, metadata);
+          if (reusable) batch.set(cwd, metadata);
           return plan.branches.includes(branch) ? metadata.repos : [];
         }
         batch.delete(cwd);
       }
     }
 
-    const { repos, refreshedRemoteNames } = sampled
-      ?? await observeForgeRepositoriesForDirectory(cwd, "github", { fresh: Boolean(batch) });
+    const { repos, refreshedRemoteNames } = sampled ?? (batch
+      ? await readFreshGitHubReposForPrefetch(cwd)
+      : await observeForgeRepositoriesForDirectory(cwd, "github"));
     if (repos.length === 0) return [];
     const plan = await resolvePrLookupPlan({ cwd, branch, remoteNames: batch ? refreshedRemoteNames : undefined });
     return plan.branches.includes(branch) ? repos : [];

@@ -220,6 +220,12 @@ export async function observeForgeRepositoriesForDirectory(
   };
 }
 
+/** A scheduled batch needs a fresh fallback sample without changing the shared live cache. */
+export async function readFreshGitHubReposForPrefetch(cwd: string) {
+  const observation = await loadParsedGitRemotes(cwd, { fresh: true }, {});
+  return { repos: collectForgeRepositories(observation.value, "github"), refreshedRemoteNames: observation.names };
+}
+
 /** The batch proof covers Git config. SSH aliases also depend on OpenSSH config. */
 export function gitHubReposFromHttpRemotes(remotes: GitRemote[]): GitHubRepoRef[] | undefined {
   if (remotes.some(({ url }) => !/^https?:\/\//i.test(url))) return undefined;
