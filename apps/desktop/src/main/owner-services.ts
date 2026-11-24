@@ -36,6 +36,7 @@ import { initializeDesktopConfigStore } from "./settings/config-store/desktop-co
 import { initializeDesktopSettingsService } from "./settings/desktop-settings-singleton";
 import { initializeDesktopBackendRegistry } from "./app-server/backend-registry";
 import { getDesktopAppServerService, initializeDesktopAppServerService, startAppServerOwnerNavigation } from "./app-server/desktop-app-server-service";
+import { setGithubThreadMergeObserver } from "./pr-status/github-pr-fetcher";
 import { initializeDesktopFederationRuntime } from "./federation/federation-runtime";
 import { initializeDesktopMessagingRuntime } from "./messaging/messaging-runtime";
 import { reconcileAppUpdateRestart, subscribeAgentUpdateNotices } from "./messaging/agent-update-notices";
@@ -959,6 +960,7 @@ export async function disposeAppServerOwnerServices(): Promise<void> {
   registry?.setThreadPullRequestDetachHandler(undefined);
   registry?.setThreadPrWatchesPeerHandler(undefined);
   registry?.setThreadPullRequestRefreshHandler(undefined);
+  setGithubThreadMergeObserver(undefined);
   registry?.setProjectForgeAutomationHandler(undefined);
   try {
     await appServerService?.close();
@@ -1149,6 +1151,7 @@ export function wireAppServerOwnerServices(): void {
     async (request) =>
       await appServerService.refreshOwnedThreadPullRequests(request),
   );
+  setGithubThreadMergeObserver((...args) => appServerService.runObservedThreadPullRequestMerge(...args));
   getDesktopBackendRegistry().setProjectForgeAutomationHandler({
     set: async (request) => await appServerService.setProjectForgeAutomation({
       directoryKey: request.directoryKey,

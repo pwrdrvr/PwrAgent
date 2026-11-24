@@ -17,6 +17,9 @@ import { mergeCausalMessagingContext } from "@pwragent/shared/messaging-causal-c
 
 export { THREAD_DEPENDENCY_SCHEMA } from "./state-schema";
 
+/** Candidate-specific admission failures, detected before any registration writes. */
+export class ThreadDependencyRegistrationRefusedError extends Error {}
+
 function key(backend: string, threadId: string): string {
   return JSON.stringify([backend, threadId]);
 }
@@ -225,7 +228,10 @@ export class ThreadDependencyStore {
     superseded: ThreadDependency[];
   } {
     return this.db.transaction(() => {
-      if (this.isConsumerArchived(candidate)) throw new Error("Cannot register a continuation for an archived thread.");
+      if (this.isConsumerArchived(candidate)) throw new ThreadDependencyRegistrationRefusedError("Cannot register a continuation for an archived thread.");
+      if (candidate.automatic && candidate.conditions.some(isThreadDependencyMergeBuildCondition) && this.isConsumerLocked(candidate)) {
+        throw new ThreadDependencyRegistrationRefusedError("Cannot register an automatic merge build watch for a locked thread.");
+      }
       if (candidate.conditions[0]?.resourceCheckout) {
         const existing = this.get(candidate.backend, candidate.threadId, candidate.id);
         if (existing) return { dependency: existing, superseded: [] };
@@ -248,7 +254,7 @@ export class ThreadDependencyStore {
       const unresolved = current.find((item) => item.backend === candidate.backend && item.threadId === candidate.threadId
         && item.status === "dispatching" && item.error);
       if ((candidate.deliver ?? "agent") === "agent" && unresolved) {
-        throw new Error(`Continuation delivery needs review (${unresolved.id}). List this thread's dependencies and ask the operator to inspect the delivery before creating another agent continuation. Dismiss only after operator review; dismissal does not cancel a turn.`);
+        throw new ThreadDependencyRegistrationRefusedError(`Continuation delivery needs review (${unresolved.id}). List this thread's dependencies and ask the operator to inspect the delivery before creating another agent continuation. Dismiss only after operator review; dismissal does not cancel a turn.`);
       }
       const duplicate = current.find((item) => signature(item) === signature(candidate));
       if (duplicate) {
@@ -267,7 +273,7 @@ export class ThreadDependencyStore {
       const retired = new Set(superseded.map((item) => item.id));
       const active = current.filter((item) => !retired.has(item.id));
       if (active.length >= 512) throw new Error("There are already 512 active dependencies. Cancel an existing dependency first.");
-      if (active.filter((item) => item.backend === candidate.backend && item.threadId === candidate.threadId).length >= 32) throw new Error("This thread already has 32 active dependencies. Cancel an existing dependency first.");
+      if (active.filter((item) => item.backend === candidate.backend && item.threadId === candidate.threadId).length >= 32) throw new ThreadDependencyRegistrationRefusedError("This thread already has 32 active dependencies. Cancel an existing dependency first.");
       const edges = new Map<string, Set<string>>();
       for (const item of [...active, candidate]) {
         const consumer = key(item.backend, item.threadId);
@@ -289,7 +295,7 @@ export class ThreadDependencyStore {
         const target = localThreadKey(condition, consumer);
         return target !== undefined && reachesConsumer(target, new Set());
       })) {
-        throw new Error("This dependency would create a thread dependency cycle.");
+        throw new ThreadDependencyRegistrationRefusedError("This dependency would create a thread dependency cycle.");
       }
       for (const item of superseded) {
         const previous = current.find((entry) => entry.id === item.id)!;
@@ -309,6 +315,13 @@ export class ThreadDependencyStore {
       FROM threads WHERE thread_id = ?`).get(buildLegacyEncodedThreadIdentityKey(target.backend, target.threadId)) as
       { archived: number } | undefined;
     return row?.archived === 1;
+  }
+
+  isConsumerLocked(target: Pick<ThreadDependency, "backend" | "threadId">): boolean {
+    const row = this.db.prepare(`SELECT 1 FROM threads
+      WHERE thread_id = ? AND json_type(payload, '$.lock') = 'object'`)
+      .get(buildLegacyEncodedThreadIdentityKey(target.backend, target.threadId));
+    return row !== undefined;
   }
 
   /** Archive revokes the consumer's subscriptions, including an unsubmitted claim. */

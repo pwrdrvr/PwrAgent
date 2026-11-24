@@ -11,6 +11,11 @@ import {
 } from "@pwragent/shared/contracts/thread-todos";
 import { parsePullRequestReferenceUrl } from "./forge-reference";
 
+export type ThreadPullRequestMergeResult = { summary: string } & (
+  | { mergedUrl: string; queued?: false; alreadyMerged?: true }
+  | { queued: true; mergedUrl?: never }
+);
+
 /**
  * Everything a PR card's merge touches outside this module. The desktop
  * wires them to the overlay, the project's merge-method store, the Continue
@@ -32,8 +37,8 @@ export type ThreadPullRequestMergeDeps = {
     pullRequest: string;
     method: ThreadTodoMergeMethod;
     assertCanMerge: (url: string) => void;
-  }) => Promise<{ summary: string; queued?: boolean }>;
-  /** Asks for the thread's PR status now, so the chip turns merged. */
+  }, thread: ThreadPullRequestMergeTarget) => Promise<ThreadPullRequestMergeResult>;
+  /** A queued PR still needs a provider observation for its queue status. */
   refresh: (thread: ThreadPullRequestMergeTarget) => Promise<unknown>;
   onRefreshFailed?: (error: unknown) => void;
 };
@@ -112,8 +117,8 @@ export async function mergeThreadPullRequest(
     pullRequest: attached,
     method,
     assertCanMerge: (target) => deps.assertNotHeld(thread, target),
-  });
-  void deps.refresh(thread).catch((error: unknown) => deps.onRefreshFailed?.(error));
+  }, thread);
+  if (merged.queued) void deps.refresh(thread).catch((error: unknown) => deps.onRefreshFailed?.(error));
   return {
     summary: merged.summary.includes("#") ? merged.summary : `${merged.summary} #${reference.number}`,
     ...(merged.queued ? { queued: true } : {}),
