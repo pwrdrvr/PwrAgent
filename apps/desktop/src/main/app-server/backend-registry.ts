@@ -10919,12 +10919,14 @@ export class DesktopBackendRegistry {
     } : undefined;
     const entry = this.threadTurnQueue.getAllQueuedEntries().find((candidate) => candidate.id === entryId);
     if (entry?.delivery === "queued-steer" && entry.manualReleaseRequired && this.getActiveTurnForThread(entry)) {
-      const backend = (await this.listBackends({ includeUnavailable: true })).backends
-        .find((candidate) => candidate.kind === entry.backend);
+      const supportsSteering = entry.backend === "acp:antigravity"
+        ? this.acpBackend.supportsActiveAntigravitySteering(entry.threadId)
+        : (await this.listBackends({ includeUnavailable: true })).backends
+          .find((candidate) => candidate.kind === entry.backend)?.capabilities.steerTurn;
       // The queue's live-owner check is optimistic. Confirm provider support
       // before Retry clears review holds, then recheck the live FIFO after IO.
       const head = this.threadTurnQueue.getQueuedEntries(entry).find((candidate) => !candidate.paused);
-      if (!backend?.capabilities.steerTurn && head?.id === entryId
+      if (!supportsSteering && head?.id === entryId
         && head.manualReleaseRequired && this.getActiveTurnForThread(head)) {
         return { queueEntryId: entryId, disposition: "busy" };
       }

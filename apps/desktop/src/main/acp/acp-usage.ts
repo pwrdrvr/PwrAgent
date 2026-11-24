@@ -85,6 +85,58 @@ export function readAcpPromptResultUsage(
   return readAntigravityPromptUsageEnvelope(usage) ? usage : undefined;
 }
 
+/**
+ * Sums disjoint per-prompt Antigravity usage payloads across a steered turn.
+ * When a running prompt detaches after one or more completed model calls, its
+ * `session/prompt` result carries the pre-steer usage and the replacement
+ * prompt reports only the post-steer usage.
+ */
+export function mergeAcpPromptResultUsage(
+  previous: Record<string, unknown> | undefined,
+  next: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!previous) {
+    return next;
+  }
+  if (!next) {
+    return previous;
+  }
+  const left = parseAntigravityPromptUsage(previous);
+  const right = parseAntigravityPromptUsage(next);
+  if (!left) {
+    return next;
+  }
+  if (!right) {
+    return previous;
+  }
+  const inputTokens = sumOptionalFinite(left.uncachedInputTokens, right.uncachedInputTokens);
+  const cachedReadTokens = sumOptionalFinite(left.cachedInputTokens, right.cachedInputTokens);
+  const cachedWriteTokens = sumOptionalFinite(
+    left.cacheWriteInputTokens,
+    right.cacheWriteInputTokens,
+  );
+  const outputTokens = sumOptionalFinite(left.outputTokens, right.outputTokens);
+  const thoughtTokens = sumOptionalFinite(
+    left.reasoningOutputTokens,
+    right.reasoningOutputTokens,
+  );
+  const hasExplicitTotal =
+    left.explicitTotalTokens !== undefined || right.explicitTotalTokens !== undefined;
+  const totalTokens = hasExplicitTotal
+    ? sumOptionalFinite(left.totalTokens, right.totalTokens)
+    : undefined;
+  const model = right.model ?? left.model;
+  return {
+    ...(model ? { model } : {}),
+    ...(inputTokens !== undefined ? { inputTokens } : {}),
+    ...(cachedReadTokens !== undefined ? { cachedReadTokens } : {}),
+    ...(cachedWriteTokens !== undefined ? { cachedWriteTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
+    ...(thoughtTokens !== undefined ? { thoughtTokens } : {}),
+    ...(totalTokens !== undefined ? { totalTokens } : {}),
+  };
+}
+
 export function readAcpPromptResultUsageEnvelope(
   result: unknown,
   backendId?: string,
@@ -229,20 +281,21 @@ function readGrokResponseUsageEnvelope(
   };
 }
 
-/**
- * Antigravity 1.5.14 reports per-turn token usage on the `session/prompt`
- * JSON-RPC result (`result.usage`) with exclusive uncached `inputTokens`:
- *
- *   totalTokens = inputTokens + cachedReadTokens + cachedWriteTokens + outputTokens
- *
- * `outputTokens` already includes `thoughtTokens`. Normalize `inputTokens` to
- * PwrAgent's inclusive total-input convention so downstream
- * `inputTokens - cachedInputTokens` recovers `uncached + cacheWrite` without
- * undercounting cached prompts.
- */
-function readAntigravityPromptUsageEnvelope(
+type ParsedAntigravityPromptUsage = {
+  model?: string;
+  uncachedInputTokens?: number;
+  cachedInputTokens?: number;
+  cacheWriteInputTokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  reasoningOutputTokens?: number;
+  explicitTotalTokens?: number;
+  totalTokens?: number;
+};
+
+function parseAntigravityPromptUsage(
   usage: Record<string, unknown> | undefined,
-): AcpUsageEnvelope | undefined {
+): ParsedAntigravityPromptUsage | undefined {
   if (!usage) {
     return undefined;
   }
@@ -292,18 +345,51 @@ function readAntigravityPromptUsageEnvelope(
     ?? (modelUsage ? Object.keys(modelUsage)[0] : undefined);
   return {
     ...(model ? { model } : {}),
+    ...(uncachedInputTokens !== undefined ? { uncachedInputTokens } : {}),
+    ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+    ...(cacheWriteInputTokens !== undefined ? { cacheWriteInputTokens } : {}),
+    ...(inputTokens !== undefined ? { inputTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
+    ...(reasoningOutputTokens !== undefined ? { reasoningOutputTokens } : {}),
+    ...(explicitTotalTokens !== undefined ? { explicitTotalTokens } : {}),
+    ...(totalTokens !== undefined ? { totalTokens } : {}),
+  };
+}
+
+/**
+ * Antigravity 1.5.14 reports per-turn token usage on the `session/prompt`
+ * JSON-RPC result (`result.usage`) with exclusive uncached `inputTokens`:
+ *
+ *   totalTokens = inputTokens + cachedReadTokens + cachedWriteTokens + outputTokens
+ *
+ * `outputTokens` already includes `thoughtTokens`. Normalize `inputTokens` to
+ * PwrAgent's inclusive total-input convention so downstream
+ * `inputTokens - cachedInputTokens` recovers `uncached + cacheWrite` without
+ * undercounting cached prompts.
+ */
+function readAntigravityPromptUsageEnvelope(
+  usage: Record<string, unknown> | undefined,
+): AcpUsageEnvelope | undefined {
+  const parsed = parseAntigravityPromptUsage(usage);
+  if (!parsed) {
+    return undefined;
+  }
+  return {
+    ...(parsed.model ? { model: parsed.model } : {}),
     scope: "turn",
     tokenUsage: {
-      ...(cacheWriteInputTokens !== undefined && cacheWriteInputTokens > 0
-        ? { cacheWriteInputTokens }
+      ...(parsed.cacheWriteInputTokens !== undefined && parsed.cacheWriteInputTokens > 0
+        ? { cacheWriteInputTokens: parsed.cacheWriteInputTokens }
         : {}),
-      ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
-      ...(inputTokens !== undefined ? { inputTokens } : {}),
-      ...(outputTokens !== undefined ? { outputTokens } : {}),
-      ...(reasoningOutputTokens !== undefined
-        ? { reasoningOutputTokens }
+      ...(parsed.cachedInputTokens !== undefined
+        ? { cachedInputTokens: parsed.cachedInputTokens }
         : {}),
-      ...(totalTokens !== undefined ? { totalTokens } : {}),
+      ...(parsed.inputTokens !== undefined ? { inputTokens: parsed.inputTokens } : {}),
+      ...(parsed.outputTokens !== undefined ? { outputTokens: parsed.outputTokens } : {}),
+      ...(parsed.reasoningOutputTokens !== undefined
+        ? { reasoningOutputTokens: parsed.reasoningOutputTokens }
+        : {}),
+      ...(parsed.totalTokens !== undefined ? { totalTokens: parsed.totalTokens } : {}),
     },
   };
 }
@@ -350,6 +436,16 @@ function sumPresentUsageField<K extends keyof AcpTokenUsage>(
   return {
     [key]: (previousValue ?? 0) + (nextValue ?? 0),
   } as Pick<AcpTokenUsage, K>;
+}
+
+function sumOptionalFinite(
+  left: number | undefined,
+  right: number | undefined,
+): number | undefined {
+  if (left === undefined && right === undefined) {
+    return undefined;
+  }
+  return (left ?? 0) + (right ?? 0);
 }
 
 function readAcpUpdateKind(update: Record<string, unknown>): string | undefined {

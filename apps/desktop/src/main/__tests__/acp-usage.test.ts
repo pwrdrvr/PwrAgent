@@ -1,9 +1,12 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
   foldAcpTurnUsage,
+  mergeAcpPromptResultUsage,
+  readAcpPromptResultUsageEnvelope,
   readAcpSelectedModel,
   readAcpUsageEnvelope,
   type AcpTokenUsage,
@@ -235,5 +238,74 @@ describe("ACP usage normalization", () => {
         },
       }),
     ).toBe("qwen3-coder-flash");
+  });
+
+  it("merges Antigravity per-prompt usage payloads additively with normalized turn envelopes", () => {
+    const usageArb = fc.record({
+      inputTokens: fc.integer({ min: 0, max: 100_000 }),
+      cachedReadTokens: fc.integer({ min: 0, max: 100_000 }),
+      cachedWriteTokens: fc.integer({ min: 0, max: 20_000 }),
+      thoughtTokens: fc.integer({ min: 0, max: 10_000 }),
+      visibleOutputTokens: fc.integer({ min: 0, max: 10_000 }),
+      includeExplicitTotal: fc.boolean(),
+    }).map(({
+      inputTokens,
+      cachedReadTokens,
+      cachedWriteTokens,
+      thoughtTokens,
+      visibleOutputTokens,
+      includeExplicitTotal,
+    }): Record<string, unknown> => {
+      const outputTokens = thoughtTokens + visibleOutputTokens;
+      return {
+        inputTokens,
+        cachedReadTokens,
+        cachedWriteTokens,
+        outputTokens,
+        thoughtTokens,
+        ...(includeExplicitTotal
+          ? { totalTokens: inputTokens + cachedReadTokens + cachedWriteTokens + outputTokens }
+          : {}),
+      };
+    });
+
+    fc.assert(fc.property(usageArb, usageArb, (first, second) => {
+      const merged = mergeAcpPromptResultUsage(first, second);
+      const mergedEnvelope = readAcpPromptResultUsageEnvelope({ usage: merged }, "acp:antigravity");
+      const firstEnvelope = readAcpPromptResultUsageEnvelope({ usage: first }, "acp:antigravity");
+      const secondEnvelope = readAcpPromptResultUsageEnvelope({ usage: second }, "acp:antigravity");
+      expect(mergedEnvelope).toBeDefined();
+      expect(firstEnvelope).toBeDefined();
+      expect(secondEnvelope).toBeDefined();
+      expect(mergedEnvelope!.tokenUsage).toEqual({
+        ...(
+          ((firstEnvelope!.tokenUsage.cacheWriteInputTokens ?? 0)
+            + (secondEnvelope!.tokenUsage.cacheWriteInputTokens ?? 0)) > 0
+            ? {
+                cacheWriteInputTokens:
+                  (firstEnvelope!.tokenUsage.cacheWriteInputTokens ?? 0)
+                  + (secondEnvelope!.tokenUsage.cacheWriteInputTokens ?? 0),
+              }
+            : {}
+        ),
+        cachedInputTokens:
+          (firstEnvelope!.tokenUsage.cachedInputTokens ?? 0)
+          + (secondEnvelope!.tokenUsage.cachedInputTokens ?? 0),
+        inputTokens:
+          (firstEnvelope!.tokenUsage.inputTokens ?? 0)
+          + (secondEnvelope!.tokenUsage.inputTokens ?? 0),
+        outputTokens:
+          (firstEnvelope!.tokenUsage.outputTokens ?? 0)
+          + (secondEnvelope!.tokenUsage.outputTokens ?? 0),
+        reasoningOutputTokens:
+          (firstEnvelope!.tokenUsage.reasoningOutputTokens ?? 0)
+          + (secondEnvelope!.tokenUsage.reasoningOutputTokens ?? 0),
+        totalTokens:
+          (firstEnvelope!.tokenUsage.totalTokens ?? 0)
+          + (secondEnvelope!.tokenUsage.totalTokens ?? 0),
+      });
+      expect(mergeAcpPromptResultUsage(undefined, first)).toBe(first);
+      expect(mergeAcpPromptResultUsage(first, undefined)).toBe(first);
+    }));
   });
 });
