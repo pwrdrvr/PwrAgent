@@ -39,6 +39,7 @@ export type ArchiveCleanupCheckpointStorage = Pick<ArchiveCleanupCheckpointStore
 export type ProjectHeldWakeupStorage = Pick<ProjectHeldWakeupStore, "save" | "update" | "remove" | "claimOrphaned">;
 export type RestartContinuationStorage = Pick<RestartContinuationStore, "saveAll" | "remove" | "claimOrphaned">;
 export type ThreadDependencyStorage = Pick<ThreadDependencyStore, keyof ThreadDependencyStore>;
+export { AutomaticMergeBuildThreadLockedError } from "@pwragent/sqlite-storage/thread-dependency-store";
 export type TaskMonitorWakeStorage = Pick<TaskMonitorWakeStore, keyof TaskMonitorWakeStore>;
 
 // Bind each store at its existing construction boundary, without caching a

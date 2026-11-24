@@ -13,7 +13,7 @@ import { isMergeQueueRepository, mentionsMergeQueue, noteMergeQueueRepository } 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { DesktopGhDiscoverySnapshot } from "@pwragent/shared/contracts/settings";
-import type { GhStatus, PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { GhStatus, PrSummary, ThreadPullRequestMergeTarget } from "@pwragent/shared/contracts/navigation";
 import type { ThreadTodoMergeMethod } from "@pwragent/shared/contracts/thread-todos";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getMainLogger } from "../log";
@@ -21,6 +21,7 @@ import { discoverGhCommands } from "../settings/gh-discovery";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { resolveGitHubReposForDirectory, type GitHubRepoRef } from "./git-remote";
 import { prMatchesSourceRepository } from "./pr-source-repository";
+import type { ThreadPullRequestMergeResult } from "./thread-pull-request-merge";
 import {
   branchRefKey,
   commitRefKey,
@@ -42,6 +43,27 @@ export {
 export type { GhCheckRunPayload, GhPrPayload } from "./pr-derivations";
 
 const execFileAsync = promisify(execFile);
+
+type GithubMergeOptions = {
+  cwd?: string;
+  pullRequest: string;
+  method: ThreadTodoMergeMethod;
+  thread?: ThreadPullRequestMergeTarget;
+  assertCanMerge?: (url: string) => void;
+  checkStackOrder?: boolean;
+};
+
+type GithubThreadMergeObserver = (
+  thread: ThreadPullRequestMergeTarget,
+  url: string,
+  run: () => Promise<ThreadPullRequestMergeResult>,
+) => Promise<ThreadPullRequestMergeResult>;
+
+let observeThreadMerge: GithubThreadMergeObserver | undefined;
+
+export function setGithubThreadMergeObserver(observer: GithubThreadMergeObserver | undefined): void {
+  observeThreadMerge = observer;
+}
 
 const MERGE_METHOD_RESULTS: Record<ThreadTodoMergeMethod, string> = {
   squash: "Squash-merged",
@@ -251,13 +273,7 @@ export class GithubPrFetcher {
    * the PR is added to the queue (or auto-merge waits for its checks), the
    * method does not apply, and the summary says it was queued.
    */
-  async mergePullRequest(params: {
-    cwd?: string;
-    pullRequest: string;
-    method: ThreadTodoMergeMethod;
-    assertCanMerge?: (url: string) => void;
-    checkStackOrder?: boolean;
-  }): Promise<{ summary: string; queued?: boolean }> {
+  async mergePullRequest(params: GithubMergeOptions): Promise<ThreadPullRequestMergeResult> {
     const command = await this.resolveGhCommand();
     const run = async (args: string[], timeout = 30_000) => await this.runGhCommand(command, args, {
       ...(params.cwd ? { cwd: params.cwd } : {}), timeout,
@@ -269,6 +285,16 @@ export class GithubPrFetcher {
       if (!reference) throw new Error("Could not identify the pull request before merging.");
     }
     params.assertCanMerge?.(reference.url);
+    const identified = reference;
+    const merge = () => this.mergeIdentifiedPullRequest(identified, params, run);
+    return params.thread && observeThreadMerge ? await observeThreadMerge(params.thread, identified.url, merge) : await merge();
+  }
+
+  private async mergeIdentifiedPullRequest(
+    reference: PullRequestReferenceIdentity,
+    params: GithubMergeOptions,
+    run: (args: string[], timeout?: number) => Promise<{ stdout: string; stderr?: string }>,
+  ): Promise<ThreadPullRequestMergeResult> {
     let checkedBase: string | undefined;
     let mergeTarget = params.pullRequest;
     if (params.checkStackOrder) {
@@ -310,12 +336,17 @@ export class GithubPrFetcher {
     }
     // `gh pr merge` adds a PR to a required queue itself, and says so rather
     // than merging: report that, not a merge.
-    if (mentionsMergeQueue(`${output.stdout}\n${output.stderr ?? ""}`)) {
+    const messages = `${output.stdout}\n${output.stderr ?? ""}`;
+    if (mentionsMergeQueue(messages)) {
       noteMergeQueueRepository(reference.provider, reference.org, reference.repo);
       return { queued: true, summary: `Sent ${label} to the merge queue: it merges once the queue's checks pass` };
     }
+    if (messages.split("\n").some((line) => line.trimEnd().endsWith(`${label} was already merged`))) {
+      return { summary: `Pull request ${label} was already merged`, mergedUrl: reference.url, alreadyMerged: true };
+    }
     const verb = MERGE_METHOD_RESULTS[params.method];
     return {
+      mergedUrl: reference.url,
       summary: /^\d+$/.test(params.pullRequest)
         ? `${verb} #${params.pullRequest}`
         : verb,

@@ -194,6 +194,12 @@ have:
   the forge. They act only for the one live thread that owns the PR. Read
   [PR review readiness](../../docs/pr-review-readiness.md) before changing
   `PrReviewOfferCoordinator`, its triggers, or its Git work.
+- A confirmed in-app merge updates the status registry and emits the merge
+  transition on the owning instance. Reads that still report the PR as open
+  cannot reopen it. A merge queue entry leaves the PR open until the forge
+  reports a merge. Only one eligible thread gets the automatic merge-build
+  watch. The thread that confirmed the merge gets first choice. Locked
+  threads are ineligible, including when the lock lands during registration.
 
 ### Stack settlement and publishing
 

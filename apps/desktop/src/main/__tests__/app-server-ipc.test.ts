@@ -8,6 +8,7 @@ import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
   ArchiveWorktreeRequest,
   ArchiveThreadRequest,
+  AppServerBackendKind,
   AppServerListThreadsRequest,
   AppServerReadThreadResponse,
   AppServerNotification,
@@ -94,6 +95,7 @@ const withThreadLifecycleMutation = vi.hoisted(() => vi.fn(
 /** Restore on open, which the owner runs only for its own threads. */
 const wakeHibernatedCheckoutOnOpen = vi.hoisted(() => vi.fn(async (_identity: unknown) => false));
 const overlayStoreFixture = vi.hoisted(() => ({ stable: undefined as unknown }));
+const watchMergeBuilds = vi.hoisted(() => ({ enabled: false }));
 const federationMock = vi.hoisted(() => {
   const remoteBackend = {
     setDirectoryPin: vi.fn(async (request: SetDirectoryPinRequest) => ({ directoryKey: request.directoryKey,
@@ -1137,6 +1139,7 @@ vi.mock("electron", () => ({
 }));
 
 vi.mock("../shell/window-channels", () => ({
+  federationTargetForChannelSubscriber: () => undefined,
   subscribersForChannel: vi.fn(() => [
     {
       isDestroyed: () => false,
@@ -1168,6 +1171,7 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
   getDesktopSettingsService: () => ({
     readSettings: prAutomationSettings.readSettings,
     isForgeEnabled: () => true,
+    resolveWatchMergeBuilds: () => watchMergeBuilds.enabled,
   }),
 }));
 
@@ -11408,7 +11412,7 @@ describe("app server ipc", () => {
       prStatusWatchCoordinator?: unknown;
       setThreadPrAttachment: (
         threadKey: string,
-        attachment: { backend: "codex"; primaryRepoKey?: string; workspace?: Pick<AppServerThreadSummary, "linkedDirectories" | "gitOriginUrl">; prs: PrSummary[] } | undefined,
+        attachment: { backend: AppServerBackendKind; primaryRepoKey?: string; workspace?: Pick<AppServerThreadSummary, "linkedDirectories" | "gitOriginUrl">; prs: PrSummary[] } | undefined,
       ) => void;
       resolveRenamedPrWatchRepositories: () => Promise<void>;
       syncPrStatusWatchKeys: () => Promise<void>;
@@ -11854,6 +11858,182 @@ describe("app server ipc", () => {
     });
   });
 
+  async function checkSharedPrMerge(input: {
+    count: number;
+    mergerIndex: number;
+    source: "poll" | "button" | "racing_poll";
+    lockedPrefix?: number;
+    lockDuringElection?: boolean;
+    measureWrites?: boolean;
+  }) {
+    const appState = await import("../state/app-state");
+    const { GithubPrFetcher } = await import("../pr-status/github-pr-fetcher");
+    const { MERGE_BUILD_WAITING_REASON } = await import("../app-server/thread-dependency-merge-builds");
+    const { ThreadDependencyStore } = await import("../state/thread-dependency-store");
+    const { measureSqliteWrites } = await import("../state/sqlite-write-metrics");
+    const { expectSqliteWriteBudget } = await import("./fixtures/sqlite-write-budget");
+    const { registerThreadPullRequestMergeIpcHandlers } = await import("../shell/ipc/thread-pull-request-merge-ipc");
+    const { THREAD_PULL_REQUEST_MERGE_CHANNEL } = await import("../../shared/ipc");
+    await withRenamedRepositoryStore("shared-pr-merge-", async ({ store, db }) => {
+      const { appServerService, service, restore } = await renamedRepositoryService();
+      const internal = service as unknown as {
+        rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrSummary[];
+        applyPolledPrStatuses: (prs: PrSummary[], fetchedAt: number) => Promise<string[]>;
+        writePrStatusesToCache: (prs: PrSummary[], fetchedAt: number) => Promise<void>;
+        nextPrObservationTimestamp: () => number;
+        electMergeBuildWatch: (...args: unknown[]) => Promise<void>;
+        prStatusRegistry: Map<string, unknown>;
+      };
+      const stateDb = vi.spyOn(appState, "getAppStateDb").mockReturnValue(db);
+      const mode = vi.spyOn(appState, "getAppStateMode").mockReturnValue("active-profile");
+      const refresh = vi.spyOn(appServerService, "refreshOwnedThreadPullRequests").mockRejectedValue(new Error("No forge read"));
+      const registry = backendRegistryLifecycle.get() as Record<string, unknown>;
+      registry.resolveThreadWorkspaceCwd = async () => "/fixture/project";
+      overlayStoreFixture.stable = store;
+      watchMergeBuilds.enabled = true;
+      const pr = githubPr({ org: "fixture", repo: "shared-merge", number: 41, state: "passing",
+        explicitlyAttached: true, title: "Change build output", url: "https://github.com/fixture/shared-merge/pull/41" });
+      const key = buildPullRequestStatusKey(pr);
+      const merged = { ...pr, lifecycleState: "merged" as const, mergedAt: Date.now() };
+      const threads = Array.from({ length: input.count }, (_, index) => ({
+        backend: index === 0 ? "acp:antigravity" as const : "codex" as const,
+        threadId: `shared-${index}`,
+      }));
+      const merger = threads[input.mergerIndex % threads.length]!;
+      const locked = threads.slice(0, input.lockedPrefix ?? 0);
+      const eligible = threads.filter((thread) => !locked.includes(thread) && (!input.lockDuringElection || thread !== merger));
+      const winner = input.source !== "poll" && eligible.includes(merger) ? merger : eligible[0];
+      const transitions = vi.fn();
+      const unsubscribe = appServerService.onPrStatusTransition(transitions);
+      const ghPort = GithubPrFetcher.prototype as unknown as {
+        resolveGhCommand: () => Promise<string>;
+        mergeIdentifiedPullRequest: () => Promise<import("../pr-status/thread-pull-request-merge").ThreadPullRequestMergeResult>;
+      };
+      const command = vi.spyOn(ghPort, "resolveGhCommand").mockResolvedValue("/fixture/gh");
+      const gh = vi.spyOn(ghPort, "mergeIdentifiedPullRequest").mockImplementation(async () => {
+        if (input.source === "racing_poll") {
+          await internal.applyPolledPrStatuses([merged], internal.nextPrObservationTimestamp());
+        }
+        return { summary: "Squash-merged", mergedUrl: pr.url };
+      });
+      const election = vi.spyOn(internal, "electMergeBuildWatch");
+      const readPort = internal as unknown as {
+        readDependencyThread: (condition: { threadId: string }, mode?: "recover" | "verified") => Promise<unknown>;
+      };
+      const readSnapshot = readPort.readDependencyThread.bind(readPort);
+      const read = vi.spyOn(readPort, "readDependencyThread");
+      let lockedWhileReading = false;
+      read.mockImplementation(async (...args) => {
+        const snapshot = await readSnapshot(...args);
+        if (input.lockDuringElection && !lockedWhileReading && args[0].threadId === merger.threadId) {
+          lockedWhileReading = true;
+          await store.setThreadLock({ ...merger, lock: { source: "operator", lockedAt: Date.now() } });
+        }
+        return snapshot;
+      });
+      const dependencies = new ThreadDependencyStore(db.raw);
+      try {
+        for (const thread of threads) {
+          await store.setThreadPullRequests({ ...thread, prs: [pr], fetchedAt: 1, refreshKey: thread.threadId });
+          if (locked.includes(thread)) await store.setThreadLock({
+            ...thread, lock: { source: "operator", lockedAt: Date.now() },
+          });
+          service.setThreadPrAttachment(`${thread.backend}:${thread.threadId}`, {
+            backend: thread.backend, primaryRepoKey: "github.com/fixture/shared-merge", prs: [pr],
+          });
+        }
+        getCachedThreadSummary.mockImplementation(({ threadId }) => ({
+          id: threadId, source: threads.find((thread) => thread.threadId === threadId)?.backend ?? "codex",
+          title: "Fixture thread", titleSource: "explicit",
+          gitOriginUrl: "https://github.com/fixture/shared-merge.git", linkedDirectories: [],
+        }));
+        internal.rememberPrStatuses([pr], internal.nextPrObservationTimestamp(), "seed");
+        const { writes } = await measureSqliteWrites(async () => {
+          if (input.source === "poll") {
+            internal.rememberPrStatuses([merged], internal.nextPrObservationTimestamp(), "background-poll");
+          } else {
+            wireAppServerOwnerServices();
+            registerThreadPullRequestMergeIpcHandlers();
+            await expect(handlers.get(THREAD_PULL_REQUEST_MERGE_CHANNEL)!({ sender: { id: 1 } }, {
+              ...merger, url: pr.url, method: "squash",
+            })).resolves.toEqual({ summary: "Squash-merged #41" });
+            expect(transitions).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+              prKey: key, changed: expect.objectContaining({ lifecycleState: { from: "open", to: "merged" } }),
+            }));
+            expect(publishLocalEvent).toHaveBeenCalledWith(expect.objectContaining({
+              notification: { method: "pullRequest/status/updated", params: { prKey: key,
+                pr: expect.objectContaining({ lifecycleState: "merged" }) } },
+            }));
+            expect(refresh).not.toHaveBeenCalled();
+            // A provider read that started after the mutation can still see
+            // old data. Neither the live registry nor its cache may reopen it.
+            const late = internal.nextPrObservationTimestamp();
+            expect(internal.rememberPrStatuses([pr], late, "thread-lookup:user")).toEqual([]);
+            await internal.writePrStatusesToCache([pr], late);
+            expect((await store.readPrStatusCache())[key]?.pr.lifecycleState).toBe("merged");
+          }
+          expect(election).toHaveBeenCalledTimes(1);
+          await Promise.all(election.mock.results.map(({ value }) => value));
+        });
+        if (input.measureWrites) expectSqliteWriteBudget({
+          scenario: "in-app-merge-build-election", writes,
+          note: "One confirmed merge shared by two threads persists one PR status and registers and evaluates one merge-build watch. At twenty merges per day, about 0.74 MB/day.",
+        });
+        const watched = dependencies.active().filter((item) => item.automatic && item.conditions[0]?.prUrl === pr.url);
+        // One automatic wake per PR. A direct merge from an unlocked thread
+        // owns it even when a poll saw the merge first. Locked threads are ineligible.
+        expect(watched.map((item) => item.threadId)).toEqual(winner ? [winner.threadId] : []);
+        if (winner) expect(watched[0]?.evidence[0]?.reason).toBe(MERGE_BUILD_WAITING_REASON);
+      } finally {
+        await Promise.allSettled(election.mock.results.map(({ value }) => value));
+        for (const thread of threads) service.setThreadPrAttachment(`${thread.backend}:${thread.threadId}`, undefined);
+        internal.prStatusRegistry.delete(key);
+        unsubscribe();
+        election.mockRestore();
+        read.mockRestore();
+        command.mockRestore();
+        gh.mockRestore();
+        refresh.mockRestore();
+        getCachedThreadSummary.mockReset();
+        delete registry.resolveThreadWorkspaceCwd;
+        overlayStoreFixture.stable = undefined;
+        watchMergeBuilds.enabled = false;
+        stateDb.mockRestore();
+        mode.mockRestore();
+        restore();
+      }
+    });
+  }
+
+  it("arms one automatic merge build watcher for a PR shared by two polling threads", async () => {
+    await checkSharedPrMerge({ count: 2, mergerIndex: 1, source: "poll" });
+  });
+
+  it("publishes a PR card merge immediately and watches from the thread that merged it", async () => {
+    await checkSharedPrMerge({ count: 2, mergerIndex: 1, source: "button", measureWrites: true });
+  });
+
+  it("skips a locked parent when the poll observes a shared PR merge before the child gets its merge response", async () => {
+    await checkSharedPrMerge({ count: 2, mergerIndex: 1, source: "racing_poll", lockedPrefix: 1 });
+  });
+
+  it("passes over a locked merge-build candidate when the poll is the only merge observation", async () => {
+    await checkSharedPrMerge({ count: 2, mergerIndex: 1, source: "poll", lockedPrefix: 1 });
+  });
+
+  it("passes over a preferred thread that locks during attachment verification", async () => {
+    await checkSharedPrMerge({ count: 2, mergerIndex: 1, source: "button", lockDuringElection: true });
+  });
+
+  it("elects one automatic merge build owner across shared attachments and merge observation orders", async () => {
+    await fc.assert(fc.asyncProperty(fc.record({
+      count: fc.integer({ min: 2, max: 6 }),
+      mergerIndex: fc.integer({ min: 0, max: 5 }),
+      source: fc.constantFrom("poll" as const, "button" as const, "racing_poll" as const),
+      lockedPrefix: fc.integer({ min: 0, max: 6 }),
+    }), checkSharedPrMerge), { numRuns: 24 });
+  });
+
   async function checkAutomaticMergeBuildWatch(input: {
     workspace: "missing" | "moved";
     conclusion: "success" | "failure";
@@ -11905,7 +12085,7 @@ describe("app server ipc", () => {
             backend: thread.backend, primaryRepoKey: "github.com/fixture/project", prs,
           });
           expect(appServerService.isPullRequestLocallyMonitored(key)).toBe(true);
-          expect(await coordinator.armMergeBuild(thread, merged)).toBe(true);
+          expect(await coordinator.armMergeBuild(thread, merged)).toBe("armed");
         }
         if (input.workspace === "missing") {
           getCachedThreadSummary.mockReturnValue(undefined);
@@ -12006,7 +12186,7 @@ describe("app server ipc", () => {
           try {
             // Inventory marks both PRs as candidates. Only Git can validate ownership.
             expect(appServerService.isPullRequestLocallyMonitored(buildPullRequestStatusKey(pr))).toBe(true);
-            expect(await coordinator.armMergeBuild(thread, pr)).toBe(belongsToCheckout);
+            expect(await coordinator.armMergeBuild(thread, pr)).toBe(belongsToCheckout ? "armed" : "ineligible");
             if (!belongsToCheckout) {
               expect(dependencies.list(thread.backend, thread.threadId)).toEqual([]);
               dependencies.register({ ...thread, id: "legacy-watch", conditions: [{ ...thread, when: "merge_build", prUrl: pr.url }],

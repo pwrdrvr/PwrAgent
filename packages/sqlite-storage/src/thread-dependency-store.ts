@@ -17,6 +17,12 @@ import { mergeCausalMessagingContext } from "@pwragent/shared/messaging-causal-c
 
 export { THREAD_DEPENDENCY_SCHEMA } from "./state-schema";
 
+export class AutomaticMergeBuildThreadLockedError extends Error {
+  constructor() {
+    super("Cannot register an automatic merge build watch for a locked thread.");
+  }
+}
+
 function key(backend: string, threadId: string): string {
   return JSON.stringify([backend, threadId]);
 }
@@ -226,6 +232,9 @@ export class ThreadDependencyStore {
   } {
     return this.db.transaction(() => {
       if (this.isConsumerArchived(candidate)) throw new Error("Cannot register a continuation for an archived thread.");
+      if (candidate.automatic && candidate.conditions.some(isThreadDependencyMergeBuildCondition) && this.isConsumerLocked(candidate)) {
+        throw new AutomaticMergeBuildThreadLockedError();
+      }
       if (candidate.conditions[0]?.resourceCheckout) {
         const existing = this.get(candidate.backend, candidate.threadId, candidate.id);
         if (existing) return { dependency: existing, superseded: [] };
@@ -309,6 +318,13 @@ export class ThreadDependencyStore {
       FROM threads WHERE thread_id = ?`).get(buildLegacyEncodedThreadIdentityKey(target.backend, target.threadId)) as
       { archived: number } | undefined;
     return row?.archived === 1;
+  }
+
+  isConsumerLocked(target: Pick<ThreadDependency, "backend" | "threadId">): boolean {
+    const row = this.db.prepare(`SELECT 1 FROM threads
+      WHERE thread_id = ? AND json_type(payload, '$.lock') = 'object'`)
+      .get(buildLegacyEncodedThreadIdentityKey(target.backend, target.threadId));
+    return row !== undefined;
   }
 
   /** Archive revokes the consumer's subscriptions, including an unsubmitted claim. */
