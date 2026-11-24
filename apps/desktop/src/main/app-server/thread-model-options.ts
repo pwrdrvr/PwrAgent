@@ -1,4 +1,4 @@
-import { acpRuntimeModeIsFullAccess, findAcpPermissionModeConfigOption } from "@pwragent/shared/acp-permission-mode";
+import { acpRuntimeModeIsFullAccess, findAcpMirroredModeConfigOption } from "@pwragent/shared/acp-permission-mode";
 import { CODEX_GOAL_METHODS } from "@pwragent/shared/contracts/thread-goal";
 import {
   type AppServerAvailableCommandSummary,
@@ -282,9 +282,7 @@ export function acpRuntimeModeDefaultsFromCapabilities(
         : [],
     ),
   );
-  const hasMirroredModeConfigOption = modeConfigOptions.some(
-    (option) => option.id !== findAcpPermissionModeConfigOption(runtimeCapabilities)?.id,
-  );
+  const hasMirroredModeConfigOption = Boolean(findAcpMirroredModeConfigOption(runtimeCapabilities));
   const state: BackendAcpSessionRuntimeState = {
     updatedAt: now,
     ...(Object.keys(configValues).length > 0 ? { configValues } : {}),

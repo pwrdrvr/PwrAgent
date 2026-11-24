@@ -6,6 +6,7 @@ import {
 } from "@pwragent/shared/contracts/navigation";
 import {
   acpRuntimeModeIsFullAccess,
+  findAcpMirroredModeConfigOption,
   findAcpPermissionModeConfigOption,
   formatAcpRuntimeModeLabel,
 } from "@pwragent/shared/acp-permission-mode";
@@ -458,8 +459,7 @@ export class AcpSessionRuntimeOptions {
     const capabilities = isAcpBackendId(backend)
       ? this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities
       : undefined;
-    return this.isAcpRuntimeModeConfigOption(backend, optionId)
-      && findAcpPermissionModeConfigOption(capabilities)?.id !== optionId;
+    return findAcpMirroredModeConfigOption(capabilities)?.id === optionId;
   }
 
   private isAcpRuntimeExecutionModeOption(

@@ -1,4 +1,4 @@
-import { findAcpPermissionModeConfigOption } from "@pwragent/shared/acp-permission-mode";
+import { findAcpMirroredModeConfigOption } from "@pwragent/shared/acp-permission-mode";
 import type {
   BackendAcpRuntimeCapabilities,
   BackendAcpSessionRuntimeState,
@@ -34,11 +34,11 @@ export async function applyAcpRuntimeSelection(params: {
   // insertion order earlier merges left, and a level measured against the
   // agent's default model is dropped by the session's own menu.
   const thoughtLevelOptionId = findAcpThoughtLevelConfigOption(capabilities)?.id;
-  const modeConfigOption = capabilities?.configOptions?.find(
-    (option) => option.category === "mode"
-      && option.id !== findAcpPermissionModeConfigOption(capabilities)?.id
-      && option.values.some((value) => value.value === runtime?.currentModeId),
-  );
+  // A mode the mirrored option does not list goes through session/set_mode.
+  const mirroredOption = findAcpMirroredModeConfigOption(capabilities);
+  const modeConfigOption = mirroredOption?.values.some((value) => value.value === runtime?.currentModeId)
+    ? mirroredOption
+    : undefined;
   // Legacy mode selectors mirror currentModeId. The independent permission
   // config owns its value in configValues; currentModeId remains planning.
   const configValues = Object.entries({

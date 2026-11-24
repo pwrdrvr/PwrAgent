@@ -17,6 +17,21 @@ export function findAcpPermissionModeConfigOption(
   );
 }
 
+/**
+ * The mode config option that mirrors the ACP session modes, so a write to it
+ * also sets `currentModeId`: Antigravity, Kimi and Qwen list one. Grok's
+ * `permission_mode` is independent of its planning mode and never mirrors.
+ */
+export function findAcpMirroredModeConfigOption(
+  runtime: BackendAcpRuntimeCapabilities | undefined,
+): BackendAcpRuntimeConfigOption | undefined {
+  return runtime?.configOptions?.find(
+    (option) => option.category === "mode"
+      && option.id !== ACP_PERMISSION_MODE_OPTION_ID
+      && option.values.length > 0,
+  );
+}
+
 /** One mode an agent's mode selector lists, as the agent names it. */
 export type AcpRuntimeModeChoice = {
   id: string;
