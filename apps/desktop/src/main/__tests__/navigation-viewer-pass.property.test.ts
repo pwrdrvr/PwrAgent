@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
 import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
@@ -6,9 +9,16 @@ import {
   type NavigationQueryRequest,
   type NavigationSnapshot,
   type NavigationThreadSummary,
+  type PrSummary,
 } from "@pwragent/shared/contracts/navigation";
+import type { AppServerListThreadsResponse } from "@pwragent/shared/contracts/normalized-app-server";
 import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import { type ProjectForgeAutomation } from "@pwragent/shared/project-forge-automation";
+import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
+import type { StackSummary } from "@pwragent/shared/stacks/stack-status";
+import * as gitExecutable from "../app-server/git-executable";
+import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
+import { isolateProcessGitEnvironment, runIsolatedGitSync } from "./helpers/isolated-git";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
@@ -18,6 +28,7 @@ import { NavigationWindowQueries } from "../../renderer/src/lib/navigation-windo
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import { NavigationIndexReadPool } from "../app-server/navigation-index-read-pool";
+import type { ForgeCiClient } from "../pr-status/forge-ci-client";
 import * as projection from "@pwragent/owner-core/navigation-query-projection";
 
 const current = vi.hoisted(() => ({
@@ -38,7 +49,7 @@ vi.mock("../messaging/messaging-bindings-snapshot", () => ({ buildNavigationInde
 vi.mock("../federation/federation-runtime", () => ({ getDesktopFederationRuntime: () => ({
   remoteThreadSummaries: () => current.cache, health: async () => ({ instanceId: "viewer" }),
 }) }));
-import { initializeDesktopAppServerService } from "../app-server/desktop-app-server-service";
+import { initializeDesktopAppServerService, resetAppServerServiceForTests } from "../app-server/desktop-app-server-service";
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
@@ -605,4 +616,212 @@ it.each([4, 8])("persists one changed owner pin once across a full refresh with 
     const saved = await f.store.readRemoteThreadPinNavigationRows();
     expect(saved.find((row) => row.id === "remote-0")).toMatchObject({ title: "Changed owner", threadStatus: "active" });
   } finally { f.close(); }
+});
+
+
+it.each(["changed catalog", "failed checkout lookup", "failed preflight lookup", "failed inferred checkout lookup"] as const)(
+  "keeps stack automation gated with a %s", async (change) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-hold-recheck-"));
+  const db = openInMemoryStateDb();
+  const restoreGitEnvironment = isolateProcessGitEnvironment();
+  const entered = Promise.withResolvers<void>();
+  const listing = Promise.withResolvers<AppServerListThreadsResponse>();
+  const finish = () => listing.resolve({ backend: "all", fetchedAt: 0, threads: [] });
+  const git = (...args: string[]) => runIsolatedGitSync(cwd, args).trim();
+  try {
+    git("init", "-b", "upper");
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "upper");
+    const head = git("rev-parse", "HEAD");
+    git("branch", "lower");
+    if (change === "failed checkout lookup") git("config", "include.path", "fixture-git-include");
+    const catalog = path.join(cwd, ".git", "gh-stack");
+    const layer = (branch: string, number: number) => ({ branch, head, base: head, pullRequest: { number } });
+    const write = (...branches: ReturnType<typeof layer>[]) => writeFile(catalog, JSON.stringify({
+      schemaVersion: 1, repository: "github.com:fixture/stack",
+      stacks: [{ trunk: { branch: "main", head }, branches }],
+    }));
+    const inferred = change === "failed inferred checkout lookup";
+    if (!inferred) {
+      await write(...(change === "changed catalog" ? [layer("upper", 2)] : [layer("lower", 1), layer("upper", 2)]));
+    }
+    current.store = new SqliteOverlayStore(db);
+    resetAppServerServiceForTests();
+    const service = initializeDesktopAppServerService();
+    vi.spyOn(service as unknown as { prStackDirectories: () => string[] }, "prStackDirectories").mockReturnValue([cwd]);
+    const list = vi.spyOn(service, "listThreads").mockImplementation(async () => {
+      entered.resolve();
+      return await listing.promise;
+    });
+    const pr: PrSummary = {
+      number: 2, provider: "github.com", org: "fixture", repo: "stack", state: "passing",
+      lifecycleState: "open", url: "https://github.com/fixture/stack/pull/2", headRefName: "upper",
+      ...(inferred && { baseRefName: "lower" }),
+    };
+    if (inferred) {
+      vi.spyOn(service as unknown as { knownStackPullRequests: () => PrSummary[] }, "knownStackPullRequests").mockReturnValue([{
+        ...pr, number: 1, url: "https://github.com/fixture/stack/pull/1", headRefName: "lower", baseRefName: "main",
+      }]);
+    }
+    const failCheckout = () => {
+      const runGitCommand = gitExecutable.runGitCommand;
+      vi.spyOn(gitExecutable, "runGitCommand").mockImplementation((directory, args, options) =>
+        directory === cwd && args[0] === "rev-parse"
+          ? Promise.reject(Object.assign(new Error("fixture checkout timeout"), { killed: true }))
+          : runGitCommand(directory, args, options));
+    };
+    if (change === "failed preflight lookup") {
+      finish();
+      expect(await service["prStackHoldEvidence"](pr)).toMatchObject({ reason: expect.stringContaining("Held by #1") });
+      failCheckout();
+      expect(await service["prStackHoldEvidence"](pr)).toEqual({ reason: "Held while stack settlement is unavailable" });
+      expect(list).toHaveBeenCalledOnce();
+      return;
+    }
+    const gate = change === "changed catalog"
+      ? service["readPrStacks"](pr).then((stacks) => stacks[0]?.layers[1])
+      : service["prStackHoldEvidence"](pr);
+    await entered.promise;
+    if (change === "changed catalog") await write(layer("lower", 1), layer("upper", 2));
+    else failCheckout();
+    finish();
+    if (change === "changed catalog") expect(await gate).toMatchObject({ branch: "upper", heldBy: { branch: "lower", number: 1 } });
+    else expect(await gate).toEqual({ reason: "Held while stack settlement is unavailable" });
+  } finally {
+    finish();
+    restoreGitEnvironment();
+    db.close();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+
+it.each(["absent", "unrelated"])("skips listing threads for a standalone PR with an %s catalog under installed Git", async (catalog) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-no-hold-"));
+  const restore = isolateProcessGitEnvironment();
+  const git = (...args: string[]) => runIsolatedGitSync(cwd, args).trim();
+  try {
+    git("init", "-b", "standalone");
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "standalone");
+    if (catalog === "unrelated") {
+      const head = git("rev-parse", "HEAD");
+      await writeFile(path.join(cwd, ".git", "gh-stack"), JSON.stringify({
+        schemaVersion: 1, repository: "github.com:fixture/stack",
+        stacks: [{ trunk: { branch: "main", head },
+          branches: [{ branch: "separate-layer", head, base: head, pullRequest: { number: 1 } }] }],
+      }));
+    }
+    process.env.PWRAGENT_GIT_PATH = await gitExecutable.resolveGitExecutable();
+    resetAppServerServiceForTests();
+    const service = initializeDesktopAppServerService();
+    vi.spyOn(service as unknown as { prStackDirectories: () => string[] }, "prStackDirectories").mockReturnValue([cwd]);
+    const list = vi.spyOn(service, "listThreads").mockRejectedValue(new Error("Thread listing is unavailable"));
+    const pr: PrSummary = {
+      number: 2, provider: "github.com", org: "fixture", repo: "stack", state: "passing",
+      lifecycleState: "open", url: "https://github.com/fixture/stack/pull/2", headRefName: "standalone",
+    };
+    expect(await service["prStackHoldEvidence"](pr)).toBeUndefined();
+    expect(list).not.toHaveBeenCalled();
+  } finally {
+    restore();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+it("reuses installed Git for repeated merge offers while reading the live guard and new catalogs", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-merge-offer-reuse-"));
+  const restore = isolateProcessGitEnvironment();
+  const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+  const git = (...args: string[]) => runIsolatedGitSync(cwd, args).trim();
+  try {
+    git("init", "-b", "upper");
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "upper");
+    const head = git("rev-parse", "HEAD");
+    process.env.PWRAGENT_GIT_PATH = await gitExecutable.resolveGitExecutable();
+    resetAppServerServiceForTests();
+    const service = initializeDesktopAppServerService();
+    vi.spyOn(service as unknown as { prReviewOfferDirectories: () => string[] }, "prReviewOfferDirectories").mockReturnValue([cwd]);
+    const requestGithub = vi.fn<ForgeCiClient["requestGithub"]>(async (_repo, request) => {
+      if (request.graphql) return { data: { repository: { pullRequest: {
+        baseRefName: "main", headRefOid: head, timelineItems: { pageInfo: { hasPreviousPage: false }, nodes: [] },
+      } } } };
+      if (request.path.endsWith("/pulls/2")) return {
+        created_at: "2026-01-01T00:00:00Z",
+        base: { ref: "main", repo: { default_branch: "main" } },
+        head: { ref: "upper", sha: head, repo: { full_name: "fixture/stack" } },
+      };
+      if (request.path.endsWith("/pulls/1")) return { merged: false };
+      throw new Error("Unexpected forge request");
+    });
+    vi.spyOn(service as unknown as { getForgeCiClient: () => Pick<ForgeCiClient, "requestGithub"> }, "getForgeCiClient")
+      .mockReturnValue({ requestGithub });
+    const pr: PrSummary = {
+      number: 2, provider: "github.com", org: "fixture", repo: "stack", state: "passing",
+      lifecycleState: "open", url: "https://github.com/fixture/stack/pull/2", headRefName: "upper", baseRefName: "main",
+    };
+    const offer = () => service["readStackMergeEvidence"]({ backend: "codex", threadId: "fixture" }, pr);
+    const checkoutStarts = () => start.mock.calls.filter(([directory, args]) => directory === cwd && args[0] === "rev-parse");
+    expect(await offer()).toMatchObject({ blocked: false });
+    expect(await offer()).toMatchObject({ blocked: false });
+    expect(requestGithub.mock.calls.filter(([, request]) => request.graphql)).toHaveLength(2);
+    expect(checkoutStarts()).toHaveLength(1);
+    await writeFile(path.join(cwd, ".git", "gh-stack"), JSON.stringify({
+      schemaVersion: 1, repository: "github.com:fixture/stack",
+      stacks: [{ trunk: { branch: "main", head }, branches: [
+        { branch: "lower", head, base: head, pullRequest: { number: 1 } },
+        { branch: "upper", head, base: head, pullRequest: { number: 2 } },
+      ] }],
+    }));
+    expect(await offer()).toMatchObject({ blocked: true, lowerKeys: ["github.com/fixture/stack#1"] });
+    expect(requestGithub.mock.calls.filter(([, request]) => request.path.endsWith("/pulls/2"))).toHaveLength(3);
+    expect(checkoutStarts()).toHaveLength(1);
+  } finally {
+    start.mockRestore();
+    restore();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+it("keeps watch and healthy PR status when a different PR's stack read fails", async () => {
+  const db = openInMemoryStateDb();
+  try {
+    const store = new SqliteOverlayStore(db);
+    current.store = store;
+    resetAppServerServiceForTests();
+    const service = initializeDesktopAppServerService();
+    const thread = { backend: "codex" as const, threadId: "fixture" };
+    const healthy: PrSummary = {
+      number: 2, provider: "github.com", org: "fixture", repo: "stack", state: "passing",
+      lifecycleState: "open", url: "https://github.com/fixture/stack/pull/2", headRefName: "healthy",
+    };
+    const unavailable = { ...healthy, number: 1, url: "https://github.com/fixture/stack/pull/1", headRefName: "unavailable" };
+    const watch: ThreadPullRequestWatchSummary = {
+      ...thread, watchId: "fixture-watch", prKey: "github.com/fixture/stack#2", prUrl: healthy.url, prNumber: 2,
+      headSha: "a".repeat(40), notifyOn: ["success"], createdAt: 1, failureHandledByAutoFix: false,
+    };
+    const stack: StackSummary = {
+      key: "fixture-stack", name: "healthy", repository: "github.com:fixture/stack", inferred: false, trunk: "main",
+      layers: [{ branch: "healthy", parent: "main", health: "in_sync", role: "unbound", pullRequest: { number: 2 } }],
+    };
+    vi.spyOn(store, "listActiveThreadPrStatusWatches").mockResolvedValue([watch]);
+    const internals = service as unknown as {
+      primaryAttachedPrsForThread: () => PrSummary[];
+      readPrReviewReadiness: () => Promise<[]>;
+      resolveThreadForgeProject: () => undefined;
+      readPrStacks: (pr: PrSummary) => Promise<StackSummary[]>;
+    };
+    vi.spyOn(internals, "primaryAttachedPrsForThread").mockReturnValue([unavailable, healthy]);
+    vi.spyOn(internals, "readPrReviewReadiness").mockResolvedValue([]);
+    vi.spyOn(internals, "resolveThreadForgeProject").mockReturnValue(undefined);
+    vi.spyOn(internals, "readPrStacks").mockImplementation(async ({ number }) => {
+      if (number === 1) throw new Error("fixture checkout timeout");
+      return [stack];
+    });
+    const status = await service.getThreadPullRequestAutomationStatus(thread);
+    expect(status.watches).toEqual([watch]);
+    expect(status.autoFixEnabled).toBe(false);
+    expect(status.guidance).toContain("#1 is held while stack settlement is unavailable.");
+    expect(status.guidance).toContain("#2 is layer 1 of 1");
+  } finally {
+    db.close();
+  }
 });
