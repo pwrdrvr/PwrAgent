@@ -30,7 +30,7 @@ import {
 } from "../../icons";
 import { OperatorWaitRow } from "../operator-requests/OperatorWaitRow";
 import { isBlockingWait, type OperatorWait } from "../operator-requests/operator-waits";
-import { ThreadTodoCard, formatTodoAge } from "./ThreadTodoCard";
+import { ThreadTodoCard, formatTodoAge, type ThreadTodoReviewSetup } from "./ThreadTodoCard";
 import { threadTodoCiApprovals, threadTodoCiApprovalTitle } from "./thread-todo-ci-approval";
 import type { ThreadTodoDoHereOptions, ThreadTodoResolveOptions, ThreadTodosView } from "./thread-todos-view";
 import { keepBusyThreadTodos } from "./busy-thread-todos";
@@ -112,6 +112,7 @@ export type ThreadTodosPanelProps = {
   /** Owner of the selected project; absent for this instance. */
   projectOwner?: FederationRemoteTarget;
   onStartReview: (todo: ThreadTodo, options?: ThreadTodoResolveOptions) => void;
+  reviewSetup?: ThreadTodoReviewSetup;
   onDoHere?: (
     todo: ThreadTodo,
     options?: ThreadTodoDoHereOptions,
@@ -533,6 +534,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                                   },
                                 } : {})}
                                 onStartReview={props.onStartReview}
+                                reviewSetup={props.reviewSetup}
                                 onShowReview={view.openReview}
                                 onDoHere={props.onDoHere}
                                 onSetItemChecked={(target, item, checked) => {

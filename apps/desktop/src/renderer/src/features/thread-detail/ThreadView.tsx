@@ -105,6 +105,7 @@ import {
   threadSummaryIdentityKey,
 } from "../../lib/federated-thread-events";
 import { ThreadTodoStack } from "../thread-todos/ThreadTodoStack";
+import type { ThreadTodoReviewSetup } from "../thread-todos/ThreadTodoCard";
 import type { ThreadTodoRevealRequest } from "../thread-todos/thread-todo-reveal";
 import type {
   ThreadTodoDoHereOptions,
@@ -2239,6 +2240,8 @@ export function ThreadView(props: ThreadViewProps) {
     handleAnswerAsyncQuestions,
     todoReviewRequest,
     startTodoReview,
+    todoReviewSetup,
+    handleReviewSetupTodoChange,
     handleReviewRequestHandled,
     handleReviewStarted,
     doTodoHere,
@@ -3170,6 +3173,7 @@ export function ThreadView(props: ThreadViewProps) {
           onReplySubmissionSettled: handleReplySubmissionSettled,
           reviewRequest: todoReviewRequest,
           onReviewRequestHandled: handleReviewRequestHandled,
+          onReviewSetupTodoChange: handleReviewSetupTodoChange,
           focusRequest: props.composerFocusRequest,
           onFocusRequestHandled: props.onComposerFocusRequestHandled,
           composerInsertRequest: props.composerInsertRequest,
@@ -3476,6 +3480,7 @@ export function ThreadView(props: ThreadViewProps) {
               view={threadTodos.view}
               threadRunning={Boolean(props.activeTurnId)}
               onStartReview={startTodoReview}
+              reviewSetup={todoReviewSetup}
               onDoHere={doTodoHere}
               findOpen={props.findOpen}
               revealRequest={props.threadTodoRevealRequest}
@@ -3708,6 +3713,7 @@ export function ThreadView(props: ThreadViewProps) {
             projectKey: threadTodos.projectKey,
             projectOwner: threadTodos.projectOwner,
             onStartReview: startTodoReview,
+            reviewSetup: todoReviewSetup,
             onDoHere: doTodoHere,
             // The card's own answer path: start, steer or queue.
             onAnswerQuestion: handleAnswerAsyncQuestions,
@@ -4887,8 +4893,28 @@ function useThreadQuestionReplies(
       backend: todo.backend,
       federationTarget: todo.federationTarget,
       todo: { id: todo.id, ...options },
+      todoTitle: todo.title,
+      ...(todo.action?.type === "start_review" && todo.action.pullRequest
+        ? { pullRequest: todo.action.pullRequest }
+        : {}),
     });
   });
+  // The card whose review the composer's panel is setting up. The card
+  // waits on the panel instead of offering a second Start review.
+  const [reviewSetupTodoId, setReviewSetupTodoId] = useState<string>();
+  const handleReviewSetupTodoChange = useEventCallback((todoId: string | undefined) => {
+    setReviewSetupTodoId(todoId);
+  });
+  // Show brings the panel back into view with the card's earlier answer
+  // about open steps, so it does not ask again.
+  const showTodoReviewSetup = useEventCallback((todo: ThreadTodo) => {
+    const pending = [...pendingReviewTodos.current.values()].find((entry) => entry.todo.id === todo.id);
+    startTodoReview(todo, pending?.options);
+  });
+  const todoReviewSetup = useMemo<ThreadTodoReviewSetup>(
+    () => ({ todoId: reviewSetupTodoId, onShow: showTodoReviewSetup }),
+    [reviewSetupTodoId, showTodoReviewSetup],
+  );
   const handleReviewRequestHandled = useEventCallback((requestId: number) => {
     setTodoReviewRequest((current) => (current?.id === requestId ? undefined : current));
   });
@@ -5010,6 +5036,8 @@ function useThreadQuestionReplies(
     handleAnswerAsyncQuestions,
     todoReviewRequest,
     startTodoReview,
+    todoReviewSetup,
+    handleReviewSetupTodoChange,
     handleReviewRequestHandled,
     handleReviewStarted,
     doTodoHere,

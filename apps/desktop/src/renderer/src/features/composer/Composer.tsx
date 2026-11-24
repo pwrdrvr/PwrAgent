@@ -43,6 +43,7 @@ import {
   EXPLICIT_REVIEW_PULL_REQUEST_URL,
   describeAttachedPullRequestLocalSync,
   findCheckedOutPullRequest,
+  normalizePullRequestUrl,
   orderPullRequestSet,
   PULL_REQUEST_SET_MAX,
   pullRequestRepositoryKey,
@@ -519,9 +520,21 @@ export type ComposerProps = {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     todo?: ScheduledThreadReviewPayload["todo"];
+    /** The card's title, shown on the panel so the two read as one task. */
+    todoTitle?: string;
+    /**
+     * The pull request the card is for. When the thread has it attached, the
+     * panel opens on it alone, whatever branch is checked out.
+     */
+    pullRequest?: string;
   };
   /** Clears a one-shot reviewRequest once the composer consumes or drops it. */
   onReviewRequestHandled?: (id: number) => void;
+  /**
+   * The to-do card whose review the open panel is setting up, or undefined
+   * once the panel closes or belongs to no card.
+   */
+  onReviewSetupTodoChange?: (todoId: string | undefined) => void;
   /** An immediately submitted review started. The owner settles scheduled reviews. */
   onReviewStarted?: (threadKey: string, requestId?: number) => void;
   /**
@@ -1058,6 +1071,8 @@ type ReviewConfigState = {
   /** One-shot to-do review request id that opened this panel, kept after the prop clears. */
   reviewRequestId?: number;
   reviewTodo?: ScheduledThreadReviewPayload["todo"];
+  /** The title of the card that opened this panel. */
+  reviewTodoTitle?: string;
   runMode: ReviewRunMode;
   runModeChosen?: boolean;
   /**
@@ -3633,6 +3648,22 @@ function useComposerController(props: ComposerProps) {
     isLaunchpad,
     launchpad,
   } = useComposerSessionState();
+  // Counts the times a card brought the review panel up, so each one
+  // replays the panel's arrival, including Show from a waiting card.
+  const [reviewPanelArrival, setReviewPanelArrival] = useState(0);
+  const reviewConfigRef = useRef<HTMLFieldSetElement>(null);
+  // A card's panel opens at the window's foot, often below the fold of a
+  // short window: bring it into view whenever a card brings it up.
+  useEffect(() => {
+    if (reviewPanelArrival === 0) return;
+    reviewConfigRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [reviewPanelArrival]);
+  const reviewSetupTodoId = reviewConfig?.reviewTodo?.id;
+  const onReviewSetupTodoChange = props.onReviewSetupTodoChange;
+  useEffect(() => {
+    onReviewSetupTodoChange?.(reviewSetupTodoId);
+  }, [onReviewSetupTodoChange, reviewSetupTodoId]);
+  useEffect(() => () => onReviewSetupTodoChange?.(undefined), [onReviewSetupTodoChange]);
 
   function useComposerSessionState() {
     const nativeVoiceApi = isNativeVoiceApi(props.desktopApi) ? props.desktopApi : undefined;
@@ -5098,7 +5129,10 @@ function useComposerController(props: ComposerProps) {
     appliedReviewRequestId.current = request.id;
     props.onReviewRequestHandled?.(request.id);
     if (reviewConfig) {
-      setReviewConfig((current) => current ? { ...current, reviewRequestId: request.id, reviewTodo: request.todo } : current);
+      setReviewConfig((current) => current
+        ? withRequestedReviewPullRequest({ ...current, ...reviewRequestFields(request) }, request.pullRequest)
+        : current);
+      if (request.todo) setReviewPanelArrival((current) => current + 1);
       inputRef.current?.focus();
       return;
     }
@@ -8225,6 +8259,31 @@ function useComposerController(props: ComposerProps) {
     }
   };
 
+  const reviewRequestFields = (
+    request: NonNullable<ComposerProps["reviewRequest"]>,
+  ): Pick<ReviewConfigState, "reviewRequestId" | "reviewTodo" | "reviewTodoTitle"> => ({
+    reviewRequestId: request.id,
+    reviewTodo: request.todo,
+    reviewTodoTitle: request.todo ? request.todoTitle : undefined,
+  });
+
+  // A card that names its PR gets that PR alone, in the project that owns
+  // it. The checkout does not decide: a PR target reviews the published
+  // head. A PR the thread no longer has leaves the panel's own choice.
+  const withRequestedReviewPullRequest = (
+    config: ReviewConfigState,
+    pullRequestUrl: string | undefined,
+  ): ReviewConfigState => {
+    if (!pullRequestUrl) return config;
+    const wanted = normalizePullRequestUrl(pullRequestUrl).toLowerCase();
+    const option = reviewPullRequestOptions.find((candidate) =>
+      normalizePullRequestUrl(candidate.pr.url).toLowerCase() === wanted
+    );
+    return option
+      ? selectReviewPullRequests({ ...config, target: "pullRequest" }, [option.pr.url])
+      : config;
+  };
+
   const enterReviewComposer = (request?: ComposerProps["reviewRequest"]): void => {
     const remaining = withoutReviewPlaceholder(latestDraftSnapshotRef.current.snapshot);
     if (hasComposerDraftContent(remaining)) {
@@ -8232,13 +8291,15 @@ function useComposerController(props: ComposerProps) {
     } else {
       clearComposerDraftSnapshot(composerScopeKey);
     }
-    setReviewConfig({
+    const config: ReviewConfigState = {
       ...createReviewConfig({
         directory: props.directory,
         thread: props.thread,
       }),
-      ...(request ? { reviewRequestId: request.id, reviewTodo: request.todo } : {}),
-    });
+      ...(request ? reviewRequestFields(request) : {}),
+    };
+    setReviewConfig(withRequestedReviewPullRequest(config, request?.pullRequest));
+    if (request?.todo) setReviewPanelArrival((current) => current + 1);
     void refreshReviewerRecents();
     updateVisibleDraft("/review");
     setDismissedAutocompleteKey(autocompleteKey);
@@ -14822,11 +14883,25 @@ function useComposerController(props: ComposerProps) {
   function renderComposerReviewConfig(): ReactNode {
     return (
       <fieldset
-        className="composer__review-config"
+        ref={reviewConfigRef}
+        className={[
+          "composer__review-config",
+          reviewConfig?.reviewTodo ? "composer__review-config--from-todo" : "",
+          // Two names for one animation, so each arrival restarts it.
+          reviewConfig?.reviewTodo && reviewPanelArrival > 0
+            ? `is-arriving-${reviewPanelArrival % 2 === 0 ? "even" : "odd"}`
+            : "",
+        ].filter(Boolean).join(" ")}
         aria-label="Review target"
         onKeyDown={handleReviewConfigKeyDown}
       >
         <legend>Review target</legend>
+        {reviewConfig?.reviewTodo && reviewConfig.reviewTodoTitle ? (
+          <p className="composer__review-origin">
+            <span className="composer__review-origin-label">From to-do</span>
+            <span className="composer__review-origin-title">{reviewConfig.reviewTodoTitle}</span>
+          </p>
+        ) : null}
         {reviewWorkspaceSelectionRequired ? (
           <label className="composer__review-field">
             <span>Project</span>
