@@ -13959,6 +13959,18 @@ button.stack-display__thread,
   }
 }
 
+/* The rise is motion the operator asked not to see, and while it fades the
+   card's text is partly transparent: a notice raised mid-scan read 3.88:1
+   in the a11y gate against text that clears 5.2:1 at rest. The to-do deck
+   settles its own copy beside its rule, which comes later in the file. */
+@media (prefers-reduced-motion: reduce) {
+  .codex-config-warning-banner,
+  .app-update-banner,
+  .app-notice-toast {
+    animation: none;
+  }
+}
+
 .thread-view {
   display: flex;
   flex: 1;
@@ -28718,6 +28730,13 @@ button.stack-display__thread,
   margin-bottom: 0;
   filter: drop-shadow(0 12px 24px var(--shadow-tint-soft));
   animation: app-update-banner-enter 160ms ease-out;
+}
+
+/* After the rule it settles, which a same-specificity override has to be. */
+@media (prefers-reduced-motion: reduce) {
+  .thread-todo-stack__deck {
+    animation: none;
+  }
 }
 
 .thread-todo-stack__deck[data-depth="1"] {

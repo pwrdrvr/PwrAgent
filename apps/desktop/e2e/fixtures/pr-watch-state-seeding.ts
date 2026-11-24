@@ -14,8 +14,9 @@
 //
 // Every name, number and SHA here is invented. The repository is never
 // fetched: the thread links no directory, so no branch lookup runs, and the
-// block launches without forge credentials, so the status poller's `gh` call
-// fails without changing anything.
+// block launches with the GitHub and GitLab integrations off, so the status
+// poller never runs `gh`. (Clearing the tokens was not enough: the poller
+// then asked the runner's `gh`, and its failure raised a notice mid-audit.)
 import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import { type ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
 import { SqliteOverlayStore } from "../../src/main/state/overlay-store-sqlite";
