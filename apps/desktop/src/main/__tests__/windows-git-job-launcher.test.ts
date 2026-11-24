@@ -1,6 +1,6 @@
 import * as childProcess from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,6 +35,16 @@ describe.skipIf(process.platform !== "win32")("compiled Windows stack Git launch
     root = path.join(sandbox, "fixture clone");
     childProcess.execFileSync(git, ["init", "-b", "main", root], { cwd: sandbox, windowsHide: true });
     runFixtureGit("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "base");
+    await writeFile(path.join(sandbox, "hold-checkout.cjs"), `
+      require('node:fs').writeFileSync(process.env.FIXTURE_PID, String(process.pid));
+      setInterval(() => {}, 1000);
+    `);
+    await writeFile(path.join(sandbox, "git-handoff.cjs"), `
+      const child = require('node:child_process').spawn(process.execPath, [require.resolve('./hold-checkout.cjs')], {
+        cwd: process.env.FIXTURE_WORKTREE, stdio: 'ignore', windowsHide: true,
+      });
+      child.once('spawn', () => child.unref());
+    `);
   }, 30_000);
 
   afterAll(async () => {
@@ -98,25 +108,24 @@ describe.skipIf(process.platform !== "win32")("compiled Windows stack Git launch
     const checkout = path.join(sandbox, `checkout ${stop}`);
     const pidFile = path.join(sandbox, `${stop}.pid`);
     runFixtureGit("worktree", "add", "--detach", checkout);
-    const holder = `require('node:fs').writeFileSync(process.env.FIXTURE_PID, String(process.pid)); setInterval(() => {}, 1000);`;
-    const driver = `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(holder)}], {
-      cwd: process.env.FIXTURE_WORKTREE, stdio: 'ignore', windowsHide: true
-    }).unref();`;
     const controller = new AbortController();
     const spawn = vi.mocked(childProcess.spawn);
     spawn.mockClear();
-    const read = runPrMetadataGit(checkout, ["-e", driver], {
+    const read = runPrMetadataGit(checkout, [path.join(sandbox, "git-handoff.cjs")], {
       timeout: stop === "timeout" ? 5_000 : 30_000,
       env: { ...process.env, PWRAGENT_GIT_PATH: process.execPath, FIXTURE_WORKTREE: checkout, FIXTURE_PID: pidFile },
       ownProcessTree: true, signal: controller.signal, purpose: "stack-checkout",
     }, { signal: controller.signal, priority: () => PR_METADATA_PRIORITY.selected });
     void read.catch(() => undefined);
     try {
-      const pid = await vi.waitFor(async () => {
-        const recorded = Number(await readFile(pidFile, "utf8"));
-        expect(recorded).toBeGreaterThan(0);
-        return recorded;
-      }, { timeout: 10_000 });
+      const pid = await Promise.race([
+        vi.waitFor(async () => {
+          const recorded = Number(await readFile(pidFile, "utf8"));
+          expect(recorded).toBeGreaterThan(0);
+          return recorded;
+        }, { timeout: 10_000 }),
+        read.then(({ stderr }) => { throw new Error(`The fixture exited before its descendant acquired the checkout: ${stderr}`); }),
+      ]);
       const launch = spawn.mock.calls.find(([command]) => command === fixture.launcher);
       const startupStatusFilePath = (launch?.[2] as childProcess.SpawnOptions | undefined)?.env?.PWRAGENT_JOB_WRAPPER_STARTUP_STATUS_FILE;
       expect(startupStatusFilePath).toBeTruthy();
