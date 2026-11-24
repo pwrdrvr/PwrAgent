@@ -3366,11 +3366,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       return lines;
     };
     const lines = read();
-    // A legacy price can change only when the line is currently repairable.
-    // For those rows, keep the ledger's retry barrier and re-read after repair.
-    if (lines.some((line) => line.turnUsageAttributed !== false && line.priceStatus !== "priced"
-      && repriceTokenUsageLine(line).priceStatus === "priced")) {
-      await this.repriceThreadUsageHistory(params);
+    const canRepair = (line: ThreadUsageLineRecord) => line.turnUsageAttributed !== false
+      && line.priceStatus !== "priced" && repriceTokenUsageLine(line).priceStatus === "priced";
+    if (lines.some(canRepair)) {
+      // The retry barrier includes newer ledger rows. Stop once the
+      // requested prices settle and let Pricing repair the older tail.
+      await this.repriceThreadUsageHistory(params, () =>
+        new Set(read().filter(canRepair).map((line) => line.usageLineId)));
       return read();
     }
     return lines;
@@ -4382,14 +4384,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
 
   /**
    * The full read's ten-row retry policy over sparse indexes of unpriced
-   * rows. A repairable history can still require every unpriced row. Page in
-   * ledger order and yield between groups, with one repair transaction per
-   * pass, exactly as materializeThreadPricing does.
+   * rows. Scoped accounting stops as soon as all requested repairs are
+   * staged. Page in ledger order and yield between groups, with one repair
+   * transaction per pass, exactly as materializeThreadPricing does.
    */
-  private async repriceThreadUsageHistory(params: {
-    backend: ThreadOverlayState["backend"];
-    threadId: string;
-  }): Promise<void> {
+  private async repriceThreadUsageHistory(
+    params: { backend: ThreadOverlayState["backend"]; threadId: string },
+    readRequestedRepairs?: () => Set<string>,
+  ): Promise<void> {
     const db = this.stateDb.raw;
     const versions = sqliteUsageLedgerVersions(db);
     const select = db.prepare(
@@ -4408,6 +4410,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     for (;;) {
       const version = versions?.get(params.threadId) ?? 0;
       const dataVersion = db.pragma("data_version", { simple: true });
+      const requested = readRequestedRepairs?.();
+      if (requested?.size === 0) return;
       const repairs: Array<{ existing: ThreadUsageLineRow; repaired: ThreadUsageLineRecord }> = [];
       let cursor = { created_at: Number.MAX_VALUE, usage_line_id: "" };
       let stale = false;
@@ -4422,9 +4426,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         const before = repairs.length;
         for (let index = 0; index < rows.length; index += 1) {
           const repaired = repriceTokenUsageLine(lines[index]!);
-          if (repaired.priceStatus === "priced") repairs.push({ existing: rows[index]!, repaired });
+          if (repaired.priceStatus === "priced") {
+            repairs.push({ existing: rows[index]!, repaired });
+            if (requested?.delete(repaired.usageLineId) && requested.size === 0) break;
+          }
         }
-        if (repairs.length === before || rows.length < THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE) break;
+        if (requested?.size === 0 || repairs.length === before
+          || rows.length < THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE) break;
         cursor = rows.at(-1)!;
         // Never yield a caller-owned transaction. Outside one, restart a
         // stale pass instead of persisting prices derived before a local or
@@ -4439,6 +4447,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       if (stale) continue;
       if (repairs.length === 0) return;
       this.persistThreadUsagePricingRepairsSync(repairs);
+      if (requested?.size === 0) return;
       // Repairs regroup the remaining unpriced rows. The old recursive full
       // read retries from the newest row too, until a pass makes no progress.
       if (!db.inTransaction && versions) await yieldToEventLoop();

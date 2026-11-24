@@ -236,3 +236,59 @@ it.each([9, 10])("matches the legacy repricing barrier with %i newer unpriceable
   expect(expected.price).toBe(count === 9 ? "priced" : "unpriced");
   expect(await read(false)).toEqual(expected);
 });
+
+async function checkRepricingTail(olderCount: number, secondTurnIndex?: number) {
+  const db = openInMemoryStateDb();
+  try {
+    const store = new SqliteOverlayStore(db);
+    const createdAt = Date.UTC(2026, 10, 1);
+    await store.upsertThreadUsageLines({ lines: [
+      usage(turn.id, { createdAt, startedAt: createdAt, completedAt: createdAt + 1_000 }),
+      ...Array.from({ length: olderCount }, (_, index) => usage(`old-${index}`, { createdAt: createdAt - index - 1 })),
+    ] });
+    db.raw.exec(`UPDATE thread_usage_lines SET price_status = 'unpriced', pricing_basis = NULL,
+      total_cost_micros = 0`);
+    const { registry } = makeRegistry(store);
+    const requestedTurns = secondTurnIndex === undefined ? [turn]
+      : [turn, { ...turn, id: `old-${secondTurnIndex}` }];
+    const prepare = db.raw.prepare.bind(db.raw);
+    const batches: number[] = [];
+    const spy = vi.spyOn(db.raw, "prepare").mockImplementation((sql) => {
+      const statement = prepare(sql);
+      if (!sql.includes("INDEXED BY idx_thread_usage_lines_unpriced_thread")) return statement;
+      const all = statement.all.bind(statement);
+      vi.spyOn(statement, "all").mockImplementation((...params: unknown[]) => {
+        const rows = all(...params);
+        batches.push(rows.length);
+        return rows;
+      });
+      return statement;
+    });
+    try {
+      const scoped = await registry.readThread({
+        ...request, display: { resource: "accounting", turns: requestedTurns },
+      });
+      expect(scoped.replay.entries.map((entry) => entry.turn?.id)).toEqual(requestedTurns.map(({ id }) => id));
+    } finally {
+      spy.mockRestore();
+    }
+    // Reads stop in the batch that settles the last requested row. Repairs
+    // stop at that row, regardless of how many older rows follow.
+    expect(batches).toEqual(secondTurnIndex === undefined ? [10] : [10, 10]);
+    const priced = db.raw.prepare("SELECT usage_line_id FROM thread_usage_lines WHERE price_status = 'priced'").pluck();
+    const repairs = secondTurnIndex === undefined ? [turn.id]
+      : [turn.id, ...Array.from({ length: secondTurnIndex + 1 }, (_, index) => `old-${index}`)];
+    expect(new Set(priced.all())).toEqual(new Set(repairs));
+    const full = await store.readThreadPricing(thread);
+    expect(full.lines.filter((line) => line.priceStatus === "priced")).toHaveLength(olderCount + 1);
+  } finally {
+    db.close();
+  }
+}
+
+it("repairs the selected turn and leaves 1,000 older repairs for Pricing", () => checkRepricingTail(1_000));
+
+it("stops repricing when the requested turn settles as the older tail grows", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 20, max: 100 }), fc.option(fc.integer({ min: 9, max: 18 }), { nil: undefined }),
+    checkRepricingTail), { numRuns: 12, examples: [[20, 10], [20, undefined]] });
+});
