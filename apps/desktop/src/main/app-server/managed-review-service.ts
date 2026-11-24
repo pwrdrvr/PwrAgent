@@ -199,6 +199,19 @@ export class ManagedReviewService {
         })?.record
       : undefined;
     delivery.managedReview = managedReview;
+    // The renderer can observe the interrupt start without the review start
+    // response. Carry the owner's correlation without rewriting the turn ID
+    // used by transcript, usage, and other protocol consumers.
+    if (managedReview?.mode === "native" && managedReview.backend === "codex"
+      && managedReview.reviewThreadId === managedReview.parentThreadId) {
+      const interruptTurnId = this.context.turnState.reviewInterrupt(
+        buildActiveTurnModeKey(managedReview.reviewThreadId, managedReview.turnId),
+      );
+      const relatedReviewTurnId = turnId === managedReview.turnId ? interruptTurnId : managedReview.turnId;
+      if (relatedReviewTurnId && relatedReviewTurnId !== turnId) {
+        delivery.event = { ...event, relatedReviewTurnId };
+      }
+    }
     if (turnId) {
       await this.completeReviewSubAgent({
         backend: event.backend,

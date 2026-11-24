@@ -979,6 +979,7 @@ export function unsequencedFederationEventPayload(event: AgentEvent): AgentEvent
   return {
     backend: event.backend,
     notification: event.notification,
+    ...(event.relatedReviewTurnId ? { relatedReviewTurnId: event.relatedReviewTurnId } : {}),
     ...(event.navigationDirectoryScope ? { navigationDirectoryScope: event.navigationDirectoryScope } : {}),
     ...(event.rendererImageParts ? { rendererImageParts: event.rendererImageParts } : {}),
     ...(event.errorNoticeContext

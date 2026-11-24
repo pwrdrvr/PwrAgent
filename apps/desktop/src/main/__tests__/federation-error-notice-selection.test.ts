@@ -35,6 +35,25 @@ describe("federation error notice selection", () => {
     }
   });
 
+  it("preserves a native review terminal's related turn ID across both transports", () => {
+    const event: AgentEvent = {
+      backend: "codex",
+      relatedReviewTurnId: "interrupt",
+      notification: { method: "turn/completed", params: {
+        threadId: "thread", turnId: "review", turn: { id: "review", status: "completed", output: [] },
+      } },
+    };
+    const federated = projectLocalEventForFederation(event, "owner");
+    const stream = new FederationAccountingStream();
+    const sequenced = stream.encode(federated, { epoch: "review", sequence: 1 });
+    for (const received of [stream.decode(sequenced), unsequencedFederationEventPayload(federated)]) {
+      expect(received).toMatchObject({
+        relatedReviewTurnId: "interrupt",
+        notification: { params: { turnId: "review" } },
+      });
+    }
+  });
+
   it("delivers a headless failure to subscribers of its visible owner thread", () => {
     const event: AgentEvent = {
       backend: "codex",
