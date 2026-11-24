@@ -25,6 +25,7 @@ function mountIndex(projectRows: Row[], { gap = 8, height = 145, scrollTop = 0 }
   const listTop = 52;
   let dock = 0;
   let dividerHeight = gap;
+  let inlineSize = 400;
   let rows = projectRows;
   let boxes = new Map<string, { top: number; bottom: number }>();
   const layOut = (): void => {
@@ -52,6 +53,7 @@ function mountIndex(projectRows: Row[], { gap = 8, height = 145, scrollTop = 0 }
   const onWidthChange = vi.fn();
   const frames = new Map<number, FrameRequestCallback>();
   let nextFrame = 0;
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
     work.frames += 1;
     frames.set(++nextFrame, callback);
@@ -75,7 +77,15 @@ function mountIndex(projectRows: Row[], { gap = 8, height = 145, scrollTop = 0 }
       this.targets.clear();
     }
     publish(elements: Element[]): void {
-      const entries = elements.filter((el) => this.targets.has(el)).map((el) => ({ target: el }) as ResizeObserverEntry);
+      const entries = elements.filter((el) => this.targets.has(el)).map((target) => {
+        const key = target.getAttribute("data-directory-key");
+        const blockSize = key !== null
+          ? rows.find((row) => row.key === key)!.height
+          : target.matches(".directories-pinned-divider") ? dividerHeight
+          : target.matches(".directory-list, .sidebar__scroll-region") ? height : 0;
+        const size = { inlineSize, blockSize };
+        return { target, contentBoxSize: [size], borderBoxSize: [size] } as unknown as ResizeObserverEntry;
+      });
       if (entries.length === 0) return;
       work.resizePublications += 1;
       this.receive(entries, this);
@@ -163,11 +173,12 @@ function mountIndex(projectRows: Row[], { gap = 8, height = 145, scrollTop = 0 }
   const view = render(tree());
   const list = () => target.current!.querySelector<HTMLElement>(".directory-list")!;
   const section = (key: string) => list().querySelector<HTMLElement>(`[data-directory-key="${key}"]`)!;
-  const paint = (): void => {
+  const paint = (settle = true): void => {
     act(() => {
       const pending = [...frames.values()];
       frames.clear();
       for (const callback of pending) callback(0);
+      if (settle) vi.advanceTimersByTime(0);
     });
   };
   const publishResize = (...elements: Element[]): void => {
@@ -192,6 +203,7 @@ function mountIndex(projectRows: Row[], { gap = 8, height = 145, scrollTop = 0 }
 
   return {
     work, resetWork, frames, observers, list, section, paint, publishResize, scroll, matchOracle,
+    settle: () => act(() => vi.advanceTimersByTime(0)),
     updateHeight(key: string, next: number) {
       rows = rows.map((row) => row.key === key ? { ...row, height: next } : row);
       layOut();
@@ -200,6 +212,10 @@ function mountIndex(projectRows: Row[], { gap = 8, height = 145, scrollTop = 0 }
     resize(next: number) {
       height = next;
       publishResize(list(), target.current!);
+    },
+    resizeInline(next: number) {
+      inlineSize = next;
+      publishResize(target.current!, list(), ...list().children);
     },
     resizeDivider(next: number) {
       dividerHeight = next;
@@ -241,6 +257,7 @@ function mountIndex(projectRows: Row[], { gap = 8, height = 145, scrollTop = 0 }
     unmount: view.unmount,
     dispose() {
       view.unmount();
+      vi.useRealTimers();
       vi.restoreAllMocks();
       vi.unstubAllGlobals();
     },
@@ -278,6 +295,39 @@ describe("Project Index scroll work", () => {
       });
       fixture.scroll(304, fixture.section("project-3").lastElementChild!);
       expect(fixture.frames.size).toBe(0);
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it.each([128, 256])("retains warm geometry through changes after the viewed projects in %i sections", async (count) => {
+    const rows = rowsOf(Array<number>(count).fill(100));
+    const fixture = mountIndex(rows, { gap: 0, height: 80 });
+    try {
+      fixture.resizeInline(400);
+      fixture.paint();
+      for (const offset of [100, 110, 120]) {
+        fixture.scroll(offset);
+        fixture.paint();
+        fixture.matchOracle();
+      }
+      fixture.resetWork();
+
+      fixture.resizeInline(380);
+      fixture.scroll(110);
+      fixture.paint();
+      fixture.matchOracle();
+
+      fixture.updateHeight(rows[count - 1]!.key, 140);
+      fixture.scroll(120);
+      fixture.paint();
+      fixture.matchOracle();
+
+      await act(async () => fixture.replaceRows([...rows.slice(0, -1), { key: "new-project", height: 100 }]));
+      fixture.scroll(110);
+      fixture.paint();
+      fixture.matchOracle();
+      expect(fixture.work).toMatchObject({ listRects: 0, listHeights: 0, sectionRects: 0 });
     } finally {
       fixture.dispose();
     }
@@ -347,6 +397,30 @@ describe("Project Index scroll work", () => {
       fixture.scroll(287);
       fixture.paint();
       expect(fixture.matchOracle()).toEqual(["project-3", "project-4"]);
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("uses a resize delivered after animation callbacks before sampling a scroll", () => {
+    const fixture = mountIndex(rowsOf([100, 100, 100, 100]), { gap: 0, height: 80 });
+    try {
+      fixture.resizeInline(400);
+      fixture.paint();
+      fixture.scroll(210);
+      fixture.paint();
+      expect(fixture.matchOracle()).toEqual(["project-2"]);
+      fixture.resetWork();
+
+      fixture.scroll(211);
+      fixture.paint(false);
+      expect(fixture.work.scrollReads).toBe(0);
+      // Chromium delivers the observer after animation frame callbacks.
+      fixture.updateHeight("project-0", 160);
+      expect(fixture.frames.size).toBe(0);
+      fixture.settle();
+      expect(fixture.matchOracle()).toEqual(["project-1", "project-2"]);
+      expect(fixture.work).toMatchObject({ scrollReads: 1, commits: 1 });
     } finally {
       fixture.dispose();
     }
@@ -454,7 +528,11 @@ describe("Project Index scroll work", () => {
       expect(fixture.matchOracle()).toEqual(["project-3"]);
       fixture.scroll(200);
       expect(fixture.frames.size).toBe(1);
+      fixture.paint(false);
       fixture.unmount();
+      fixture.resetWork();
+      fixture.settle();
+      expect(fixture.work.scrollReads).toBe(0);
       expect(fixture.frames.size).toBe(0);
       expect(fixture.observers.every(({ targets }) => targets.size === 0)).toBe(true);
     } finally {
