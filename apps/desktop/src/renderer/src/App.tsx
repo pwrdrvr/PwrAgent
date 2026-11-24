@@ -38,6 +38,7 @@ import {
 } from "react";
 import {
   buildThreadIdentityKey,
+  parseThreadIdentityKey,
   type MessagingThreadBindingSummary,
   type NavigationThreadSummary,
   type PrSummary,
@@ -239,6 +240,8 @@ import {
 } from "./features/thread-todos/useThreadTodos";
 import { newestResolvedFirst } from "./features/thread-todos/busy-thread-todos";
 import { StackRailContext } from "./features/stacks/stack-presentation";
+import { StackNavigationContext } from "./features/stacks/StackBody";
+import { stackThreadKey } from "./features/stacks/stack-pr-data";
 import { readReviewTranscriptEntryId } from "./features/thread-todos/review-tracking";
 import {
   ThreadTodoRevealContext,
@@ -2727,6 +2730,21 @@ function DesktopAppShell(props: {
     setContextRailPinnedPersisted(true);
     setActiveContextTabPersisted("prs");
   }, [selectThreadNavigation, setActiveContextTabPersisted, setContextRailPinnedPersisted, setMainView]);
+  const showStackThread = navigation.showThread;
+  const stackNavigation = useMemo(() => ({
+    findThread: (owner: NavigationThreadSummary, key: string) => navigation.threads.find((thread) =>
+      stackThreadKey(thread) === key && federationTargetsEqual(thread.federation?.ref.target, owner.federation?.ref.target)),
+    openThread: (owner: NavigationThreadSummary, key: string) => {
+      const target = parseThreadIdentityKey(key);
+      if (!target) return;
+      setMainView("thread");
+      void showStackThread({
+        backend: target.backend,
+        threadId: target.threadId,
+        federationTarget: owner.federation?.ref.target ?? readRendererFederationTarget(),
+      }).catch((error) => console.warn("Opening the stack thread failed.", error));
+    },
+  }), [navigation.threads, setMainView, showStackThread]);
   const revealThreadTodos = useCallback((thread: NavigationThreadSummary) => {
     const threadKey = threadSummaryIdentityKey(thread);
     setThreadTodoRevealRequest({ threadKey });
@@ -4580,6 +4598,7 @@ function DesktopAppShell(props: {
       <ThreadTodoCountsContext.Provider value={threadTodoController.openByThreadKey}>
       <ThreadTodoRevealContext.Provider value={threadTodosView ? revealThreadTodos : undefined}>
       <StackRailContext.Provider value={openStackRail}>
+      <StackNavigationContext.Provider value={stackNavigation}>
       <TodoDispatchProvider
         api={desktopApi}
         backends={backendSummaries.backends}
@@ -5360,6 +5379,7 @@ function DesktopAppShell(props: {
       </ThreadDependencyIndicatorsContext.Provider>
       </OperatorWaitsContext.Provider>
       </TodoDispatchProvider>
+      </StackNavigationContext.Provider>
       </StackRailContext.Provider>
       </ThreadTodoRevealContext.Provider>
       </ThreadTodoCountsContext.Provider>

@@ -46,6 +46,8 @@ it("keeps stack-membership rows bounded and their total wire size linear at the 
       expect(projection.entries[0]?.row).toMatchObject({
         stackMemberships: [{
           position: offset + 1, count, key: "fixture-stack", repository: catalog.repository, number: 41 + offset,
+          trunk: "main", hasOpenPr: true,
+          ...(offset ? { basePr: { number: 40 + offset, lifecycleState: "open" } } : {}),
           ...(offset ? { heldBy: { number: 41, reason: "CI running", branch: branches[0]!.branch.slice(0, 160) } } : {}),
         }],
       });

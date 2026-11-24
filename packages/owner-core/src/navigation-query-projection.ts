@@ -29,7 +29,7 @@ import type {
 } from "@pwragent/shared/contracts/navigation";
 import type { NavigationStarMapSignals } from "@pwragent/shared/navigation-star-map-filters";
 import { STACK_UNSETTLED_REASONS } from "@pwragent/shared/stacks/stack-automation";
-import { readCompactStackMemberships, type StackSummary } from "@pwragent/shared/stacks/stack-status";
+import { MAX_COMPACT_STACK_MEMBERSHIPS, readCompactStackMemberships, type StackSummary } from "@pwragent/shared/stacks/stack-status";
 import {
   buildThreadIdentityKey,
   isNavigationThreadRunning,
@@ -468,7 +468,7 @@ function limitRecords<T>(items: readonly T[] | undefined): {
   };
 }
 
-function previewPullRequests(prs: PrSummary[] | undefined): PrSummary[] | undefined {
+function previewPullRequests(prs: PrSummary[] | undefined, stackLeadPrKey?: string): PrSummary[] | undefined {
   if (!prs || prs.length <= MAX_ROW_NESTED_RECORDS) return prs;
   // The newest PR in stack order leads. Readiness ties use attachment order
   // for Minimal and stack order for the overflow after removing the lead.
@@ -497,6 +497,10 @@ function previewPullRequests(prs: PrSummary[] | undefined): PrSummary[] | undefi
   }
   // Fill the remaining slots with recent active work, then completed history.
   const retained = new Set([lead, representative, overflowRepresentative]);
+  if (stackLeadPrKey) {
+    const stackLead = prs.findIndex((pr) => buildPullRequestStatusKey(pr) === stackLeadPrKey);
+    if (stackLead >= 0) retained.add(stackLead);
+  }
   for (const index of [...active, ...finished]) {
     if (retained.size === MAX_ROW_NESTED_RECORDS) break;
     retained.add(index);
@@ -506,8 +510,8 @@ function previewPullRequests(prs: PrSummary[] | undefined): PrSummary[] | undefi
     .map((index) => prs[index]!);
 }
 
-export function projectNavigationPullRequests(prs?: PrSummary[]): Pick<NavigationRow, "prs" | "prsTruncated" | "prCount"> {
-  const preview = previewPullRequests(prs);
+export function projectNavigationPullRequests(prs?: PrSummary[], stackLeadPrKey?: string): Pick<NavigationRow, "prs" | "prsTruncated" | "prCount"> {
+  const preview = previewPullRequests(prs, stackLeadPrKey);
   return {
     ...(preview?.length ? { prs: preview } : {}),
     ...(prs && prs.length > MAX_ROW_NESTED_RECORDS ? { prsTruncated: true, prCount: prs.length } : {}),
@@ -515,10 +519,10 @@ export function projectNavigationPullRequests(prs?: PrSummary[]): Pick<Navigatio
 }
 
 function projectStackMemberships(thread: Pick<NavigationThreadSummary, "stacks" | "stackMemberships">): Pick<NavigationRow, "stackMemberships"> {
-  const stackMemberships = readCompactStackMemberships(thread).slice(0, 8).flatMap((entry) => {
+  const stackMemberships = readCompactStackMemberships(thread).slice(0, MAX_COMPACT_STACK_MEMBERSHIPS).flatMap((entry) => {
     if (typeof entry.key !== "string" || typeof entry.name !== "string" || !Number.isSafeInteger(entry.position)
       || !Number.isSafeInteger(entry.count) || entry.position < 1 || entry.position > entry.count) return [];
-    const heldBy = entry.heldBy;
+    const { heldBy, basePr } = entry;
     const positiveNumber = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
     return [{
       key: entry.key.length <= 512 ? entry.key : createHash("sha256").update(entry.key).digest("hex"),
@@ -528,6 +532,17 @@ function projectStackMemberships(thread: Pick<NavigationThreadSummary, "stacks" 
       count: entry.count,
       ...(typeof entry.repository === "string" && entry.repository.length <= 512 ? { repository: entry.repository } : {}),
       ...(positiveNumber(entry.number) ? { number: entry.number } : {}),
+      ...(typeof entry.trunk === "string" ? { trunk: entry.trunk.slice(0, 160) } : {}),
+      ...(typeof entry.hasOpenPr === "boolean" ? { hasOpenPr: entry.hasOpenPr } : {}),
+      ...(basePr && positiveNumber(basePr.number) ? {
+        basePr: {
+          number: basePr.number,
+          ...(typeof basePr.branch === "string" && basePr.branch.length <= 1024 ? { branch: basePr.branch } : {}),
+          ...(["open", "merged", "closed"].includes(basePr.lifecycleState ?? "") ? { lifecycleState: basePr.lifecycleState } : {}),
+          ...(["passing", "failing", "pending", "unknown"].includes(basePr.checkState ?? "") ? { checkState: basePr.checkState } : {}),
+          ...(basePr.mergeState === "conflicting" ? { mergeState: basePr.mergeState } : {}),
+        },
+      } : {}),
       ...(STACK_UNSETTLED_REASONS.includes(entry.unsettled!) ? { unsettled: entry.unsettled } : {}),
       ...(heldBy && typeof heldBy.branch === "string" && STACK_UNSETTLED_REASONS.includes(heldBy.reason) ? {
         heldBy: { branch: heldBy.branch.slice(0, 160), reason: heldBy.reason,
@@ -641,7 +656,8 @@ function projectNavigationRow(params: {
     ...(thread.lock ? { lock: thread.lock } : {}),
     ...(thread.checkoutHibernated ? { checkoutHibernated: true } : {}),
     ...(thread.keepCheckoutAwake ? { keepCheckoutAwake: true } : {}),
-    ...(!params.omitPullRequests ? projectNavigationPullRequests(thread.prs) : {}),
+    ...(!params.omitPullRequests ? projectNavigationPullRequests(thread.prs, thread.stackLeadPrKey) : {}),
+    ...(thread.stackLeadPrKey && thread.stackLeadPrKey.length <= 1024 ? { stackLeadPrKey: thread.stackLeadPrKey } : {}),
     ...projectStackMemberships(thread),
     ...(messagingBindings.items
       ? { messagingBindings: messagingBindings.items }

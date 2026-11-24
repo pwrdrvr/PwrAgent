@@ -1,7 +1,7 @@
 import { HOVER_TRANSITION_GRACE_MS } from "./useHoverTransitionGrace";
 
 /** A hover card the bridge can close. */
-export type BridgedHoverCard = { hide: () => void };
+export type BridgedHoverCard = { hide: () => void; isPinned?: () => boolean };
 
 type Timers = {
   set: (callback: () => void, ms: number) => number;
@@ -21,7 +21,8 @@ const windowTimers: Timers = {
  * - Leaving a chip or its card keeps the card for `graceMs`: the bridge
  *   between them. Reaching the card holds it there.
  * - Entering any chip while a card is visible closes that card at once and
- *   shows the new one without the hover delay.
+ *   shows the new one without the hover delay. A pinned card holds its place
+ *   until dismissed or another card is deliberately pinned.
  */
 export class HoverCardBridge {
   private visible: BridgedHoverCard | undefined;
@@ -38,7 +39,7 @@ export class HoverCardBridge {
    */
   enterTrigger(card: BridgedHoverCard): boolean {
     const current = this.visible;
-    if (!current) return false;
+    if (!current || (current !== card && current.isPinned?.())) return false;
     this.cancelGrace();
     if (current !== card) {
       this.visible = undefined;
@@ -47,10 +48,18 @@ export class HoverCardBridge {
     return true;
   }
 
+  hasPinnedCard(): boolean {
+    return this.visible?.isPinned?.() === true;
+  }
+
   /** `card` became visible; any other closes. */
   shown(card: BridgedHoverCard): void {
     const current = this.visible;
     if (current === card) return;
+    if (current?.isPinned?.() && !card.isPinned?.()) {
+      card.hide();
+      return;
+    }
     this.cancelGrace();
     this.visible = card;
     current?.hide();

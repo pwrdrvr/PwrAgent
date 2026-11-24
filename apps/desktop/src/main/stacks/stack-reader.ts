@@ -7,7 +7,7 @@ import { buildThreadIdentityKey, type NavigationThreadSummary, type PrSummary } 
 import { parseGhStackCatalog, type GhStack, type GhStackBranch, type GhStackCatalogRead } from "@pwragent/shared/stacks/catalog";
 import {
   inferPullRequestStacks, stackLayerBinding, stackLayerHealth,
-  type StackLayer, type StackSummary, type StackThread, type StackWorktree, type ThreadStackMembership,
+  type StackLayer, type StackLayerPullRequest, type StackSummary, type StackThread, type StackWorktree, type ThreadStackMembership,
 } from "@pwragent/shared/stacks/stack-status";
 import { resolveCheckState } from "@pwragent/shared/pull-request-rollup";
 import { stackAutomationGates } from "@pwragent/shared/stacks/stack-automation";
@@ -282,6 +282,14 @@ function threadDirectories(thread: StackThreadRow): string[] {
 
 type CloneThread = { row: StackThreadRow; paths: string[] };
 
+function stackPullRequest(pr: PrSummary): StackLayerPullRequest {
+  return {
+    number: pr.number, lifecycleState: pr.lifecycleState, url: pr.url, title: pr.title?.slice(0, 1024),
+    state: pr.state, checkState: resolveCheckState(pr), reviewState: pr.reviewState, mergeState: pr.mergeState,
+    checksStillRunning: pr.checksStillRunning, mergeQueue: pr.mergeQueue, mergedAt: pr.mergedAt,
+  };
+}
+
 async function projectCatalogLayers(input: {
   stack: GhStack;
   clone: Clone;
@@ -350,8 +358,8 @@ async function projectCatalogLayers(input: {
         parent: activeParent, pr, parentPr: retargeted ? undefined : parentPr, localHead, parentTip, remoteHead,
         baseIsAncestor, remoteIsAncestor, parentIntegrated, ambiguous: binding.role === "ambiguous",
       }),
-      ...(number !== undefined ? { pullRequest: {
-        number, lifecycleState: pr?.lifecycleState ?? (branch.pullRequest?.merged ? "merged" : undefined),
+      ...(pr ? { pullRequest: stackPullRequest(pr) } : number !== undefined ? { pullRequest: {
+        number, lifecycleState: branch.pullRequest?.merged ? "merged" : undefined,
       } } : {}),
       ...("thread" in binding ? { thread: { key: binding.thread.key, title: binding.thread.title } } : {}),
     };
@@ -421,7 +429,7 @@ async function projectClone(
             : pr.headSha && pr.baseSha && refs.get(`refs/heads/${branch}`)?.head === pr.headSha
               && (chain.find((parent) => parent.headRefName === pr.baseRefName)?.headSha ?? pr.baseSha) === pr.baseSha
               && await isAncestor(clone.cwd, pr.baseSha, pr.headSha, demand) ? "in_sync" : "unknown",
-          pullRequest: { number: pr.number, lifecycleState: pr.lifecycleState },
+          pullRequest: stackPullRequest(pr),
           ...("thread" in binding ? { thread: { key: binding.thread.key, title: binding.thread.title } } : {}),
         };
       }));

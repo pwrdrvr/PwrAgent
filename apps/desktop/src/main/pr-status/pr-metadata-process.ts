@@ -16,6 +16,7 @@ let timedOutFileProbes = 0;
 export const PR_METADATA_PRIORITY = { background: 0, page: 1, selected: 2 };
 
 export type PrMetadataDemand = {
+  allowForgeLookup?: false;
   signal?: AbortSignal;
   priority?: () => number;
 };

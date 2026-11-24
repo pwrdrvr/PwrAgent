@@ -6,7 +6,8 @@ import fc from "fast-check";
 import type { StackSummary } from "@pwragent/shared/stacks/stack-status";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { AppServerBackendScope } from "@pwragent/shared/contracts/normalized-app-server";
-import type { NavigationLaunchpadDraft, NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { NavigationLaunchpadDraft, NavigationQueryRequest, NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
+import { buildPullRequestStatusKey } from "@pwragent/shared/contracts/navigation";
 import { buildDirectorySummaries, canonicalizeNavigationPath } from "@pwragent/shared/directory-navigation";
 import { findPeerCounterpartDirectory } from "@pwragent/shared/federation-project-match";
 import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
@@ -14,7 +15,7 @@ import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import { appendViewerNavigationPins } from "../app-server/navigation-viewer-pins";
 import { buildPrependPinRank } from "@pwragent/shared/thread-pins";
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
-import type { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { getDesktopBackendRegistry, type DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import type { NavigationDirectoryGitStatus } from "@pwragent/shared/contracts/navigation";
 import budgets from "./fixtures/navigation-listing-budgets.json";
@@ -23,6 +24,7 @@ const mocks = vi.hoisted(() => {
   const findActiveBindings = vi.fn(async (): Promise<MessagingBindingRecord[]> => []);
   return {
     store: {
+      readNavigationPullRequests: vi.fn((): PrSummary[][] => []),
       readNavigationSourceVersion: vi.fn(() => "unchanged"),
       readNavigationQueryIndex: vi.fn((_params: { threads: NavigationThreadSummary[] }): NavigationQueryIndex => ({ threads: [], directories: [] })),
       readDirectoryGitStatusCache: vi.fn(async (): Promise<Record<string, { gitStatus: NavigationDirectoryGitStatus }>> => ({})),
@@ -42,7 +44,8 @@ vi.mock("../storage/desktop-overlay-store", () => ({ getDesktopOverlayStore: () 
 vi.mock("../messaging/desktop-messaging-store", () => ({ getDesktopMessagingStore: () => mocks.messaging }));
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: vi.fn() }));
 vi.mock("../app-server/scratch-projects", () => ({ resolveScratchProjectsRoots: () => [] }));
-import { loadLocalNavigationQueryIndex, projectBoundNavigationStacks, projectSelectedStackLayers } from "../app-server/navigation-query-source";
+import { loadLocalNavigationQueryIndex, projectBoundNavigationStacks, projectSelectedStackLayers, readNavigationStackLayers } from "../app-server/navigation-query-source";
+import { StackReader, StackReadObservation } from "../stacks/stack-reader";
 import { resolveNavigationWorktreeProjects } from "../app-server/navigation-worktree-projects";
 import { runGitCommand } from "../app-server/git-executable";
 import { resolveWorktreeRepositoryDirectory } from "../git-info/worktree-store";
@@ -107,6 +110,65 @@ it("stores only serviceable stacks and pages past the compact membership preview
     expect([...detail.page(0, 8), ...detail.page(8, selected)].map(({ stackKey }) => stackKey))
       .toEqual(inventory.slice(0, selected).map(({ key }) => key));
   }));
+});
+
+it("keeps the lead PR's position even when the thread holds more layers than the preview", () => {
+  fc.assert(fc.property(fc.integer({ min: 9, max: 36 }), fc.constantFrom("all", "above base", "top"), (height, held) => {
+    const prs = Array.from({ length: height }, (_, index) => ({
+      number: 1 + index, provider: "github.com", org: "fixture", repo: "project",
+      url: `https://github.com/fixture/project/pull/${index + 1}`, lifecycleState: "open" as const,
+      state: "passing" as const, createdAt: index + 1,
+    }));
+    const thread: NavigationThreadSummary = {
+      id: "selected", source: "codex", title: "Selected", titleSource: "derived",
+      linkedDirectories: [], inbox: { inInbox: false }, prs,
+    };
+    const stack: StackSummary = {
+      key: "fixture", name: "stack-1", repository: "github.com:fixture/project", inferred: false, trunk: "main",
+      layers: prs.map((pr, index) => ({
+        branch: `stack-${index + 1}`, parent: index ? `stack-${index}` : "main",
+        pullRequest: { number: pr.number, lifecycleState: "open" },
+        thread: { key: "codex:selected", title: "Selected" }, health: "in_sync", role: "holder",
+        ...(held === "all" || (held === "above base" && index > 0) || index === height - 1 ? { heldBy: { branch: "base", reason: "CI running" } } : {}),
+      })),
+    };
+    const row = projectBoundNavigationStacks([thread], [stack])!.threads[0]!;
+    const members = row.stackMemberships!;
+    const expectedLead = held === "all" ? height : held === "above base" ? 1 : height - 1;
+    expect(row.stackLeadPrKey).toBe(buildPullRequestStatusKey(prs[expectedLead - 1]!));
+    expect(members).toHaveLength(8);
+    expect(members).toContainEqual(expect.objectContaining({ position: expectedLead, number: expectedLead, trunk: "main" }));
+  }));
+});
+
+it("omits a stale automatic attachment from selected stack details and avoids a forge lookup", async () => {
+  const source = createSource();
+  const directory = os.tmpdir();
+  const thread: NavigationThreadSummary = {
+    source: "codex", id: "stale-stack", title: "Stale stack", titleSource: "derived", inbox: { inInbox: false },
+    gitBranch: "topic", linkedDirectories: [{ id: directory, path: directory, label: "Fixture", kind: "local" }],
+  };
+  const stalePr: PrSummary = {
+    number: 41, provider: "github.com", org: "old", repo: "remote", state: "passing",
+    url: "https://github.com/old/remote/pull/41", linkedDirectoryPaths: [directory],
+  };
+  const canonicalize = vi.fn(async (_prs: PrSummary[], _demand?: unknown, verify = true) => verify ? [] : [stalePr]);
+  // The checkout validator rejects the attachment. The layer reader must see
+  // that validated inventory even when the consumer just opened a popover.
+  const registry = { ...source.registry, canonicalizeNavigationPullRequests: canonicalize } as unknown as DesktopBackendRegistry;
+  vi.mocked(getDesktopBackendRegistry).mockReturnValue(registry);
+  mocks.store.readNavigationQueryIndex.mockReturnValueOnce({ directories: [], threads: [thread] });
+  mocks.store.readNavigationPullRequests.mockReturnValueOnce([[stalePr]]);
+  const read = vi.spyOn(StackReader.prototype, "read").mockResolvedValue({ stacks: [], catalogs: [] });
+  try {
+    source.finish();
+    await readNavigationStackLayers({ backend: thread.source, threadId: thread.id });
+    expect(canonicalize).toHaveBeenCalledWith([stalePr], expect.objectContaining({ allowForgeLookup: false }));
+    expect(read).toHaveBeenCalledWith([expect.objectContaining({ prs: [] })], [], undefined, expect.any(Function), expect.any(StackReadObservation));
+  } finally {
+    read.mockRestore();
+    vi.mocked(getDesktopBackendRegistry).mockReset();
+  }
 });
 
 it("publishes the repository once when a same-named worktree has a saved project registration", async () => {

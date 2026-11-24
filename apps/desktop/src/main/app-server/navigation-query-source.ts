@@ -2,7 +2,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import type { AppServerBackendScope, AppServerThreadSummary, LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type { NavigationDirectorySummary, NavigationIdentity, NavigationQueryRequest, PrSummary } from "@pwragent/shared/contracts/navigation";
-import { buildThreadIdentityKey, parseThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { buildPullRequestStatusKey, buildThreadIdentityKey, parseThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { navigationPathIdentity } from "@pwragent/shared/directory-navigation";
 import { isWorkspaceHandoffDirectory } from "@pwragent/shared/navigation-state";
 import {
@@ -29,7 +29,8 @@ import { getMainLogger } from "../log";
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
 import { PR_METADATA_PRIORITY } from "../pr-status/pr-metadata-process";
 import { StackReader, StackReadObservation } from "../stacks/stack-reader";
-import { compactStackMembership, type CompactStackMembership, type SelectedStackLayer, type StackSummary } from "@pwragent/shared/stacks/stack-status";
+import { compactStackMembership, MAX_COMPACT_STACK_MEMBERSHIPS, type CompactStackMembership, type SelectedStackLayer, type StackSummary } from "@pwragent/shared/stacks/stack-status";
+import { comparePullRequestStack } from "@pwragent/shared/pull-request-rollup";
 import { readNavigationCheckout } from "../git-info/directory-store";
 import { collectConcurrent } from "../../shared/concurrent-work";
 
@@ -352,7 +353,9 @@ async function projectNavigationStacks(
   const attachments = getDesktopOverlayStore().readNavigationPullRequests(
     candidates.map((thread) => ({ backend: thread.source, threadId: thread.id })),
   );
-  const demand = { signal, priority: () => PR_METADATA_PRIORITY.background };
+  // Navigation and detail reads share locally verified stack attachments.
+  // Opening a stack cannot initiate forge repository-name lookups.
+  const demand = { signal, priority: () => PR_METADATA_PRIORITY.background, allowForgeLookup: false as const };
   const rows = await Promise.all(candidates.map(async (thread, index) => ({
     ...thread,
     prs: attachments[index]?.length ? await registry.canonicalizeNavigationPullRequests(attachments[index]!, demand) : [],
@@ -367,11 +370,15 @@ async function projectNavigationStacks(
         || await registry.stackRepairActive?.(thread) === true) };
     }, new StackReadObservation(demand));
   signal.throwIfAborted();
-  return projectBoundNavigationStacks(threads, stacks);
+  return projectBoundNavigationStacks(threads, stacks, new Map(rows.map((row) => [
+    buildThreadIdentityKey(row.source, row.id), row.prs,
+  ])));
 }
 
 export function projectBoundNavigationStacks(
-  threads: NavigationQueryIndex["threads"], stacks: readonly StackSummary[],
+  threads: NavigationQueryIndex["threads"],
+  stacks: readonly StackSummary[],
+  prsByThread?: ReadonlyMap<string, readonly PrSummary[]>,
 ): Pick<NavigationQueryIndex, "threads" | "stacks"> | undefined {
   const localKeys = new Set(threads.filter((thread) => !thread.federation)
     .map((thread) => buildThreadIdentityKey(thread.source, thread.id)));
@@ -381,19 +388,39 @@ export function projectBoundNavigationStacks(
     if (!stack.layers.some((layer) => layer.thread && localKeys.has(layer.thread.key))) continue;
     boundStacks.push(stack);
     const detailRevision = stackRevision(stack);
+    const hasOpenPr = stack.layers.some((layer) => layer.pullRequest?.lifecycleState === "open");
     for (const [offset, layer] of stack.layers.entries()) {
       if (!layer.thread || !localKeys.has(layer.thread.key)) continue;
       const entries = memberships.get(layer.thread.key) ?? [];
-      if (entries.length >= 8) continue;
-      entries.push({ ...compactStackMembership(stack, offset + 1)!, detailRevision });
+      entries.push({ ...compactStackMembership(stack, offset + 1, hasOpenPr)!, detailRevision });
       memberships.set(layer.thread.key, entries);
     }
   }
   return memberships.size ? { stacks: boundStacks, threads: threads.map((thread) => {
     if (thread.federation) return thread;
-    const stackMemberships = memberships.get(buildThreadIdentityKey(thread.source, thread.id));
-    return stackMemberships ? { ...thread, stackMemberships } : thread;
+    const key = buildThreadIdentityKey(thread.source, thread.id);
+    const entries = memberships.get(key);
+    const preview = entries && previewStackMemberships(entries, prsByThread?.get(key) ?? thread.prs);
+    return preview ? { ...thread, ...preview } : thread;
   }) } : undefined;
+}
+
+function previewStackMemberships(members: CompactStackMembership[], prs?: readonly PrSummary[]) {
+  if (members.length <= MAX_COMPACT_STACK_MEMBERSHIPS) return { stackMemberships: members };
+  const byPr = new Map<string, CompactStackMembership>();
+  for (const member of members) {
+    const identity = `${member.repository}#${member.number}`;
+    if (!byPr.has(identity)) byPr.set(identity, member);
+  }
+  // Retain the membership of the lead PR even when its position is beyond
+  // the compact preview. The row prefers an unheld PR, if one is attached.
+  const ordered = prs?.toReversed().sort(comparePullRequestStack);
+  const membership = (pr: PrSummary) => byPr.get(`${pr.provider}:${pr.org}/${pr.repo}`.toLowerCase() + `#${pr.number}`);
+  const lead = ordered?.find((pr) => !membership(pr)?.heldBy) ?? ordered?.[0];
+  const keep = lead && membership(lead);
+  const preview = members.slice(0, MAX_COMPACT_STACK_MEMBERSHIPS);
+  if (keep && !preview.includes(keep)) preview[preview.length - 1] = keep;
+  return { stackMemberships: preview, stackLeadPrKey: lead && buildPullRequestStatusKey(lead) };
 }
 
 const stackRevisions = new WeakMap<StackSummary, string>();

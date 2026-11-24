@@ -1,5 +1,9 @@
+import { useContext } from "react";
+import type { CompactStackMembership } from "@pwragent/shared/stacks/stack-status";
+import { StackNavigationContext, StackNode } from "../stacks/StackBody";
+import { stackHoldLabel, stackRepository } from "../stacks/stack-pr-data";
 import { describeMergeQueueRemoval, mergeQueueNoun } from "@pwragent/shared/pr-merge-queue";
-import { type PrSummary } from "@pwragent/shared/contracts/navigation";
+import { type NavigationThreadSummary, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import { BranchIcon } from "../../icons";
 import { DiffStat } from "../../lib/DiffStat";
 import { formatRunningDurationMs } from "../../lib/format-duration";
@@ -50,6 +54,8 @@ export function PrStatusCard(props: {
   watchStopHint?: boolean;
   /** Injected by tests so age rows are deterministic. */
   now?: number;
+  stack?: CompactStackMembership;
+  stackThread?: NavigationThreadSummary;
 }) {
   const { pr } = props;
   const now = props.now ?? Date.now();
@@ -100,6 +106,9 @@ export function PrStatusCard(props: {
         />
         <span>{prStatusLabel(pr)}</span>
       </div>
+      {props.stack && props.stack.count > 1 ? (
+        <PrStackSection member={props.stack} pr={pr} thread={props.stackThread} />
+      ) : null}
       {queue ? (
         <div className="pr-status-card__section">
           <span className="pr-status-card__section-title">{queue.title}</span>
@@ -208,6 +217,55 @@ function resolveDotState(pr: PrSummary, withStatusPills: boolean): string {
     return "conflicting";
   }
   return chipState;
+}
+
+function PrStackSection({ member, pr, thread }: {
+  member: CompactStackMembership;
+  pr: PrSummary;
+  thread?: NavigationThreadSummary;
+}) {
+  const navigation = useContext(StackNavigationContext);
+  const baseBranch = pr.baseRefName;
+  const base = baseBranch && baseBranch !== member.trunk ? member.basePr : undefined;
+  const parent = thread && member.parentThreadKey ? navigation?.findThread(thread, member.parentThreadKey) : undefined;
+  const parentPr = [...(parent?.prs ?? []), ...(thread?.prs ?? [])].find((candidate) =>
+    baseBranch && baseBranch !== member.trunk && candidate.headRefName === baseBranch
+      && stackRepository(candidate) === member.repository
+      && (base ? candidate.number === base.number : member.hasOpenPr === undefined && member.position > 1));
+  const basePr = parentPr ?? (base && base.branch === baseBranch ? {
+    ...base, provider: pr.provider, org: pr.org, repo: pr.repo, url: "",
+    state: base.checkState ?? "unknown",
+  } : undefined);
+  const hold = member.heldBy && stackHoldLabel(member.heldBy);
+  return (
+    <div className="pr-status-card__section">
+      <span className="pr-status-card__section-title">Stack</span>
+      <div className="pr-status-card__row">
+        <span className="pr-status-card__row-label">Position</span>
+        <span className="pr-status-card__row-value">{member.position} of {member.count}</span>
+      </div>
+      {basePr ? (
+        <div className="pr-status-card__row">
+          <span className="pr-status-card__row-label">Based on</span>
+          <span className="pr-status-card__row-value pr-status-card__stack-base">
+            <StackNode pr={basePr} />#{basePr.number}
+          </span>
+        </div>
+      ) : null}
+      {member.trunk ? (
+        <div className="pr-status-card__row">
+          <span className="pr-status-card__row-label">Lands in</span>
+          <span className="pr-status-card__row-value">{member.trunk}</span>
+        </div>
+      ) : null}
+      {hold ? (
+        <div className="pr-status-card__row">
+          <span className="pr-status-card__row-label">Merge</span>
+          <span className="pr-status-card__row-value stack-display__warning">{hold}</span>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 type PrChanges = {
