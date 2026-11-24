@@ -266,6 +266,8 @@ import {
 import { turnFailureAcknowledgements, turnFailureNoticeId, turnFailureScopeKey } from "./features/notifications/turn-failure-acknowledgements";
 import { AppNoticeStack } from "./features/notifications/AppNoticeStack";
 import { useJobMonitorWakeNotices } from "./features/notifications/useJobMonitorWakeNotices";
+import { useAgentNotifications } from "./features/agent-notifications/useAgentNotifications";
+import { AgentNotificationsButton } from "./features/agent-notifications/AgentNotificationsButton";
 import { useClaudeSignIn } from "./features/notifications/useClaudeSignIn";
 import { buildModelVerificationNotice } from "./features/notifications/model-verification-notice";
 import {
@@ -2649,9 +2651,28 @@ function DesktopAppShell(props: {
     ...(submitServerRequest ? { respond: respondToOperatorWait } : {}),
   });
   const monitorWakeNotices = useJobMonitorWakeNotices(desktopApi, showAppNotice);
+  const agentNoticeThreadTitle = useCallback(
+    (backend: AppServerBackendKind, threadId: string) =>
+      localThreadTitles.get(buildThreadIdentityKey(backend, threadId)) ?? "Untitled thread",
+    [localThreadTitles],
+  );
+  const agentNotifications = useAgentNotifications(desktopApi, {
+    threadTitle: agentNoticeThreadTitle,
+    showThread: showThreadFromLink,
+    showNotice: showAppNotice,
+  });
+  const agentNotificationsControl = useMemo(
+    () => readRendererFederationTarget() ? undefined : (
+      <AgentNotificationsButton
+        controller={agentNotifications}
+        threadTitle={agentNoticeThreadTitle}
+      />
+    ),
+    [agentNoticeThreadTitle, agentNotifications],
+  );
   const durableNotices = useMemo(
-    () => [...approvalNotices, ...monitorWakeNotices, ...appNotices.durable],
-    [appNotices.durable, approvalNotices, monitorWakeNotices],
+    () => [...approvalNotices, ...agentNotifications.notices, ...monitorWakeNotices, ...appNotices.durable],
+    [agentNotifications.notices, appNotices.durable, approvalNotices, monitorWakeNotices],
   );
   const listThreadTodos = desktopApi?.listThreadTodos;
   const listThreadTodoProjects = desktopApi?.listThreadTodoProjects;
@@ -3974,6 +3995,7 @@ function DesktopAppShell(props: {
   })();
   const mastheadActions = {
     voiceControl: directorVoiceControl,
+    notificationsControl: agentNotificationsControl,
     addingProjectDirectory: navigation.pickingDirectory,
     automationsActive: mainView === "automations",
     automationsSchedulingStatus,
@@ -4695,6 +4717,7 @@ function DesktopAppShell(props: {
         >
           <Sidebar
             mastheadVoiceControl={directorVoiceControl}
+            mastheadNotificationsControl={agentNotificationsControl}
             inert={layerView !== undefined}
             directoryDisclosure={navigation.directoryDisclosure}
             pendingLaunchpadCreations={navigation.pendingLaunchpadCreations}
@@ -5287,7 +5310,8 @@ function DesktopAppShell(props: {
             desktopApi={desktopApi}
             durableNotices={durableNotices}
             onDismissDurable={(id) => {
-              const acknowledge = monitorWakeNotices.find((notice) => notice.id === id)?.onDismiss;
+              const acknowledge = monitorWakeNotices.find((notice) => notice.id === id)?.onDismiss
+                ?? agentNotifications.notices.find((notice) => notice.id === id)?.onDismiss;
               if (acknowledge) acknowledge();
               else dismissAppNotice(id);
             }}

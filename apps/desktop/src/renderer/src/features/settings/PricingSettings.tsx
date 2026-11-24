@@ -326,7 +326,7 @@ export function PricingSettings(props: {
   );
 }
 
-function AlertNumberField(props: {
+export function AlertNumberField(props: {
   decimals?: number;
   disabled?: boolean;
   label: string;

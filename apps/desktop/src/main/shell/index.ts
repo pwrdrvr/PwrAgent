@@ -32,6 +32,7 @@ import {
   disposeScheduledActionIpcHandlers,
   registerScheduledActionIpcHandlers,
 } from "./ipc/scheduled-actions-ipc";
+import { registerAgentNotificationIpcHandlers } from "./ipc/agent-notifications-ipc";
 import { registerThreadTodoIpcHandlers } from "./ipc/thread-todos-ipc";
 import { registerThreadPullRequestMergeIpcHandlers } from "./ipc/thread-pull-request-merge-ipc";
 import { registerCodexEnvironmentEditorIpcHandlers } from "./ipc/codex-environment-editor-ipc";
@@ -1419,6 +1420,7 @@ export function bootstrapApp(): void {
     registerAudioTranscriptionIpc(nativeVoiceBusy);
     registerAgentIpcHandlers();
     registerScheduledActionIpcHandlers();
+    registerAgentNotificationIpcHandlers();
     registerThreadTodoIpcHandlers(ownerServices.queues.events);
     registerThreadPullRequestMergeIpcHandlers();
     registerCodexEnvironmentEditorIpcHandlers();

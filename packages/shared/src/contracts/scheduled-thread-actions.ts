@@ -18,7 +18,11 @@ import type {
   NavigationLaunchpadImageAttachment,
 } from "./navigation";
 
-export type ScheduledThreadActionKind = "turn" | "review";
+/**
+ * `notification` is an agent's `notify_operator` notice. It starts no turn:
+ * the scheduler delivers it to the operator when it comes due.
+ */
+export type ScheduledThreadActionKind = "turn" | "review" | "notification";
 
 export type ScheduledThreadActionStatus =
   | "held"
@@ -95,6 +99,122 @@ export type ScheduleFollowUpToolResult = {
   notice?: string;
 };
 
+/** How loudly a notice asks for attention. `high` takes the warning tone. */
+export type AgentNotificationUrgency = "normal" | "high";
+
+/**
+ * What the notice's primary action opens besides its thread: an `http(s)`
+ * page, or a file inside one of the thread's own directories.
+ */
+export type AgentNotificationLink =
+  | { kind: "url"; url: string }
+  | { kind: "file"; path: string };
+
+export const AGENT_NOTIFICATION_TITLE_MAX_CHARS = 120;
+export const AGENT_NOTIFICATION_BODY_MAX_CHARS = 600;
+/** The furthest ahead a notice may be scheduled, as for follow-ups. */
+export const AGENT_NOTIFICATION_MAX_DELAY_MS = AGENT_FOLLOW_UP_MAX_DELAY_MS;
+
+export type ScheduledThreadNotificationPayload = {
+  title: string;
+  body: string;
+  urgency: AgentNotificationUrgency;
+  link?: AgentNotificationLink;
+};
+
+/**
+ * Operator bounds on `notify_operator`. Zero turns a bound off. The rolling
+ * windows count every notice an agent created, including cancelled ones, so
+ * cancelling and re-creating cannot spend more than the bound.
+ */
+export type AgentNotificationLimits = {
+  maxPerThreadPerDay: number;
+  maxPerProfilePerDay: number;
+  maxScheduledPerThread: number;
+};
+
+export const AGENT_NOTIFICATION_LIMITS_DEFAULT: AgentNotificationLimits = {
+  maxPerThreadPerDay: 12,
+  maxPerProfilePerDay: 60,
+  maxScheduledPerThread: 8,
+};
+export const AGENT_NOTIFICATION_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/** `notify_operator` input. The calling thread is never an argument. */
+export type NotifyOperatorToolArgs = {
+  action: "send" | "list" | "cancel";
+  /** Send: a short headline. */
+  title?: string;
+  /** Send: one or two sentences the operator can act on without the thread. */
+  body?: string;
+  urgency?: AgentNotificationUrgency;
+  /** Send: deliver this many minutes from now instead of now. */
+  delayMinutes?: number;
+  /** Send: deliver at this ISO 8601 time with an offset instead of now. */
+  at?: string;
+  /** Send: an `http(s)` URL the notice opens. */
+  url?: string;
+  /** Send: an absolute file path inside this thread's directories. */
+  filePath?: string;
+  /** Cancel: an id from send or list. */
+  notificationId?: string;
+};
+
+export type AgentNotificationSummary = {
+  notificationId: string;
+  status: ScheduledThreadActionStatus;
+  /** ISO 8601. When it was, or will be, delivered. */
+  scheduledFor: string;
+  title: string;
+  urgency: AgentNotificationUrgency;
+  cancellable: boolean;
+};
+
+export type NotifyOperatorToolResult = {
+  notification?: AgentNotificationSummary;
+  /** List: this thread's notices waiting or delivered in the last day. */
+  notifications?: AgentNotificationSummary[];
+  limits: AgentNotificationLimits;
+  sentInLastDay: number;
+};
+
+/** One agent notice, as the operator's windows show it. */
+export type AgentNotificationItem = {
+  id: string;
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  title: string;
+  body: string;
+  urgency: AgentNotificationUrgency;
+  link?: AgentNotificationLink;
+  status: ScheduledThreadActionStatus;
+  scheduledFor: number;
+  /** When it was delivered; absent while it waits. */
+  deliveredAt?: number;
+};
+
+/**
+ * The owner's notices for its windows. `unread` are delivered and not yet
+ * dismissed in this process; `scheduled` wait; `earlier` were delivered in
+ * the last day, read from the scheduler, so they survive a restart.
+ */
+export type AgentNotificationsSnapshot = {
+  unread: AgentNotificationItem[];
+  scheduled: AgentNotificationItem[];
+  earlier: AgentNotificationItem[];
+};
+
+/** What a window asks of its owner's notices. */
+export type ManageAgentNotificationsRequest =
+  | { action: "snapshot" }
+  | { action: "dismiss"; id: string }
+  | { action: "dismiss_all" }
+  | { action: "cancel"; id: string };
+
+export type ManageAgentNotificationsResponse =
+  | { ok: true; snapshot: AgentNotificationsSnapshot }
+  | { ok: false; error: { code: "unavailable" | "not_found" | "invalid_request"; message: string } };
+
 export type ScheduledThreadTurnPayload = {
   input: AppServerTurnInputItem[];
   executionMode?: ThreadExecutionMode;
@@ -143,6 +263,7 @@ export type ScheduledThreadAction = {
   fileAttachments?: NavigationLaunchpadFileAttachment[];
   turn?: ScheduledThreadTurnPayload;
   review?: ScheduledThreadReviewPayload;
+  notification?: ScheduledThreadNotificationPayload;
   queueEntryId?: string;
   turnId?: string;
   errorMessage?: string;

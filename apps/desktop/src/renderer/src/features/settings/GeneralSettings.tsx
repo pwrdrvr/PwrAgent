@@ -1,6 +1,8 @@
 import { useState } from "react";
 import {
   DESKTOP_CONTEXT_MOON_STYLE_DEFAULT,
+  MAX_AGENT_NOTIFICATION_BOUND,
+  type DesktopAgentNotificationPolicy,
   type DesktopColorTheme,
   type DesktopContextMoonStyle,
   type DesktopSettingsSnapshot,
@@ -25,6 +27,7 @@ import {
   ToggleField,
 } from "./SettingsLayout";
 import { DensityPicker } from "./DensityPicker";
+import { AlertNumberField } from "./PricingSettings";
 import { sourceBadge } from "./settings-fields";
 
 const CONTEXT_MOON_OPTIONS: Array<{
@@ -268,6 +271,7 @@ export function GeneralSettings(props: {
   onPdfAnalysisEnabledChange: (value: boolean) => Promise<void>;
   onPastedImageMaxPatchesChange: (value: number) => Promise<void>;
   onNotificationsEnabledChange: (value: boolean) => Promise<void>;
+  onAgentNotificationsChange?: (value: Partial<DesktopAgentNotificationPolicy>) => Promise<void>;
   onThemedDockIconChange: (value: boolean) => Promise<void>;
   onTerminalMinimumContrastChange: (value: boolean) => Promise<void>;
   onContextMoonChange: (value: DesktopContextMoonStyle) => Promise<void>;
@@ -302,6 +306,7 @@ export function GeneralSettings(props: {
     ?? { value: true, source: "default" as const };
   const pdfAnalysisEnabled = props.snapshot.general.pdfAnalysisEnabled;
   const notificationsEnabled = props.snapshot.general.notificationsEnabled;
+  const agentNotifications = props.snapshot.general.agentNotifications;
   const themedDockIcon = props.snapshot.general.appearance.themedDockIcon;
   const terminalMinimumContrast =
     props.snapshot.general.appearance.terminalMinimumContrast;
@@ -674,6 +679,52 @@ export function GeneralSettings(props: {
               return props.onNotificationsEnabledChange(next);
             }}
           />
+          {agentNotifications && props.onAgentNotificationsChange ? (
+            <>
+              <AlertNumberField
+                disabled={props.saving}
+                label="Agent notices per thread"
+                max={MAX_AGENT_NOTIFICATION_BOUND}
+                min={0}
+                source={sourceBadge(agentNotifications.maxPerThreadPerDay)}
+                step={1}
+                sub="Notices one thread's agent may send you in a rolling 24 hours. 0 means no limit."
+                suffix="a day"
+                value={agentNotifications.maxPerThreadPerDay.value}
+                onSave={(next) => {
+                  void props.onAgentNotificationsChange?.({ maxPerThreadPerDay: Math.floor(next) });
+                }}
+              />
+              <AlertNumberField
+                disabled={props.saving}
+                label="Agent notices per profile"
+                max={MAX_AGENT_NOTIFICATION_BOUND}
+                min={0}
+                source={sourceBadge(agentNotifications.maxPerProfilePerDay)}
+                step={1}
+                sub="Notices all agents on this profile may send you in a rolling 24 hours. 0 means no limit."
+                suffix="a day"
+                value={agentNotifications.maxPerProfilePerDay.value}
+                onSave={(next) => {
+                  void props.onAgentNotificationsChange?.({ maxPerProfilePerDay: Math.floor(next) });
+                }}
+              />
+              <AlertNumberField
+                disabled={props.saving}
+                label="Scheduled agent notices per thread"
+                max={MAX_AGENT_NOTIFICATION_BOUND}
+                min={0}
+                source={sourceBadge(agentNotifications.maxScheduledPerThread)}
+                step={1}
+                sub="Notices one thread may have waiting for a later time. 0 means no limit."
+                suffix="waiting"
+                value={agentNotifications.maxScheduledPerThread.value}
+                onSave={(next) => {
+                  void props.onAgentNotificationsChange?.({ maxScheduledPerThread: Math.floor(next) });
+                }}
+              />
+            </>
+          ) : null}
         </div>
       </SettingsSection>
 

@@ -10,6 +10,7 @@ export type ScheduledThreadActionPayload = Pick<
   | "holdCause"
   | "imageAttachments"
   | "manualReleaseRequired"
+  | "notification"
   | "review"
   | "turn"
 >;

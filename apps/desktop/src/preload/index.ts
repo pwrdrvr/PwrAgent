@@ -892,6 +892,7 @@ import {
   AGENT_MOVE_QUEUED_TURN_CHANNEL,
   AGENT_SET_QUEUED_TURN_PAUSED_CHANNEL,
   SCHEDULED_ACTIONS_CANCEL_CHANNEL,
+  AGENT_NOTIFICATIONS_MANAGE_CHANNEL,
   SCHEDULED_ACTIONS_CREATE_CHANNEL,
   SCHEDULED_ACTIONS_LIST_CHANNEL,
   SCHEDULED_ACTIONS_SEND_NOW_CHANNEL,
@@ -3013,6 +3014,10 @@ const desktopApi = Object.freeze({
     request: ScheduledThreadActionIdRequest,
   ): Promise<ScheduledThreadActionMutationResponse> =>
     await ipcRenderer.invoke(SCHEDULED_ACTIONS_SEND_NOW_CHANNEL, request),
+  manageAgentNotifications: async (
+    request: import("@pwragent/shared/contracts/scheduled-thread-actions").ManageAgentNotificationsRequest,
+  ): Promise<import("@pwragent/shared/contracts/scheduled-thread-actions").ManageAgentNotificationsResponse> =>
+    await ipcRenderer.invoke(AGENT_NOTIFICATIONS_MANAGE_CHANNEL, request),
   interruptTurn: async (
     request: InterruptTurnRequest
   ): Promise<InterruptTurnResponse> =>

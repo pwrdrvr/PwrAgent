@@ -1731,6 +1731,7 @@ export class DesktopBackendRegistry {
     | ((args: import("@pwragent/shared/contracts/thread-dependencies").ManageThreadDependenciesRequest, provenance?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">, actor?: string) => Promise<PwrAgentThreadInspectionResponse>)
     | undefined;
   private agentFollowUpToolHandler: import("./backend-registry-handlers").AgentFollowUpToolHandler | undefined;
+  private agentNotificationToolHandler: import("./backend-registry-handlers").AgentNotificationToolHandler | undefined;
   private directoryGitStatusWriter: DirectoryGitStatusWriter | undefined;
   private readonly pendingDirectoryGitStatusKeys = new Set<string>();
   private readonly pendingThreadGitWorkingStateByPath = new Map<
@@ -1998,6 +1999,7 @@ export class DesktopBackendRegistry {
     this.federatedThreadControlHandler = dependencies.handlers.federatedThreadControlHandler;
     this.threadDependencyToolHandler = dependencies.handlers.threadDependencyToolHandler;
     this.agentFollowUpToolHandler = dependencies.handlers.agentFollowUpToolHandler;
+    this.agentNotificationToolHandler = dependencies.handlers.agentNotificationToolHandler;
     this.directoryGitStatusWriter = dependencies.handlers.directoryGitStatusWriter;
     this.threadPrAutoDispatchHandler = dependencies.handlers.threadPrAutoDispatchHandler;
     this.threadDependenciesPeerHandler = dependencies.handlers.threadDependenciesPeerHandler;
@@ -2325,6 +2327,7 @@ export class DesktopBackendRegistry {
       taskMonitorForThread: (...args: Parameters<SubAgentMonitorService["taskMonitorForThread"]>) => this.subAgentMonitorService.taskMonitorForThread(...args),
       get threadDependencyToolHandler() { return current().threadDependencyToolHandler; },
       get agentFollowUpToolHandler() { return current().agentFollowUpToolHandler; },
+      get agentNotificationToolHandler() { return current().agentNotificationToolHandler; },
       isResearchWorker: (thread: { backend: AppServerBackendKind; threadId: string }) => current().researchWorkerCheck?.(thread) ?? false,
       get threadHandoffReservations() { return current().threadWorkspaceService.threadHandoffReservationRecords; },
       threadHasActiveCodexReviewTurn: (...args: Parameters<typeof this.threadHasActiveCodexReviewTurn>) => this.threadHasActiveCodexReviewTurn(...args),
@@ -3314,6 +3317,10 @@ export class DesktopBackendRegistry {
   }
 
   // The scheduled-action service needs the registry before it can supply this.
+  setAgentNotificationToolHandler(handler: import("./backend-registry-handlers").AgentNotificationToolHandler | undefined): void {
+    this.agentNotificationToolHandler = handler;
+  }
+
   setAgentFollowUpToolHandler(handler: import("./backend-registry-handlers").AgentFollowUpToolHandler | undefined): void {
     this.agentFollowUpToolHandler = handler;
   }
@@ -21212,6 +21219,14 @@ export class DesktopBackendRegistry {
    * the information store, so it happens at most once per thread per process
    * rather than once per notification.
    */
+  /** A thread's label as native notifications name it. */
+  async readNotificationThreadLabel(
+    backend: AppServerBackendKind,
+    threadId: string,
+  ): Promise<string | undefined> {
+    return await this.notificationThreadContextLabelForTerminal(backend, threadId);
+  }
+
   private async notificationThreadContextLabelForTerminal(
     backend: AppServerBackendKind,
     threadId: string,

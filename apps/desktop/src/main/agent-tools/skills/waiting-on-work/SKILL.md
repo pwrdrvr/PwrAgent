@@ -16,6 +16,7 @@ input schema for argument details and result semantics.
 | An existing local watcher writes a result or exit marker in this workspace | `manage_thread_dependencies` with one `local_file` condition. Keep the watcher running and end the turn. |
 | A GitHub Actions run or GitLab pipeline with no PR, such as a tag-push release: its approval gate, a failed job, or its finish | `manage_thread_dependencies` with a `ci_run` condition. |
 | A time: "check again in two hours", "look at this tomorrow at 9" | `schedule_follow_up`. Never a polling monitor, a sleep, or a backend `/loop`. |
+| The operator, at a time: "remind me in an hour" | `notify_operator` with `delayMinutes` or `at`. It reaches the operator outside this thread and does not wake it. |
 | A long job or repeatable check that no workflow above covers | `create_monitor_delegation`. |
 
 Use `create_monitor_delegation` if the operator specifically asks for a Job

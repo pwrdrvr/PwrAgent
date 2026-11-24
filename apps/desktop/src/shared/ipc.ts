@@ -223,6 +223,7 @@ export const SCHEDULED_ACTIONS_LIST_CHANNEL = "scheduled-actions:list";
 export const SCHEDULED_ACTIONS_CREATE_CHANNEL = "scheduled-actions:create";
 export const SCHEDULED_ACTIONS_UPDATE_CHANNEL = "scheduled-actions:update";
 export const SCHEDULED_ACTIONS_CANCEL_CHANNEL = "scheduled-actions:cancel";
+export const AGENT_NOTIFICATIONS_MANAGE_CHANNEL = "agent-notifications:manage";
 export const SCHEDULED_ACTIONS_SEND_NOW_CHANNEL = "scheduled-actions:send-now";
 export const THREAD_TODOS_LIST_CHANNEL = "thread-todos:list";
 export const THREAD_REVIEWS_LIST_CHANNEL = "thread-reviews:list";

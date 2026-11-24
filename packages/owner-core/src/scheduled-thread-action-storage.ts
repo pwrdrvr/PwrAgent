@@ -1,12 +1,14 @@
 import { isThreadLockRefusal } from "@pwragent/shared/thread-lock";
 import type {
   AgentFollowUpProtection,
+  AgentNotificationLimits,
   ListScheduledThreadActionsRequest,
   ListScheduledThreadActionsResponse,
   ScheduledThreadAction,
   ScheduledThreadActionHoldCause,
   ScheduledThreadActionKind,
   ScheduledThreadActionOrigin,
+  ScheduledThreadNotificationPayload,
   ScheduledThreadReviewPayload,
   ScheduledThreadTurnPayload,
 } from "@pwragent/shared/contracts/scheduled-thread-actions";
@@ -44,7 +46,21 @@ export type CreateScheduledThreadActionRecord = {
   manualReleaseRequired?: boolean;
   turn?: ScheduledThreadTurnPayload;
   review?: ScheduledThreadReviewPayload;
+  notification?: ScheduledThreadNotificationPayload;
   now: number;
+};
+
+/** Which operator bound refused an agent's notice. */
+export type AgentNotificationRefusal = "scheduled_limit" | "thread_limit" | "profile_limit";
+
+/** What the notice bounds count for one thread at one time. */
+export type AgentNotificationUsage = {
+  /** Notices agents on this thread created in the rolling window. */
+  threadInWindow: number;
+  /** Notices agents on every thread created in the rolling window. */
+  profileInWindow: number;
+  /** This thread's notices that have not been delivered or ended. */
+  scheduledOnThread: number;
 };
 
 export type UpdateScheduledThreadActionRecord = {
@@ -86,6 +102,24 @@ export interface ScheduledThreadActionStorage {
     maxActive: number,
   ): { action: ScheduledThreadAction } | { refused: "active_limit"; active: number };
   countActiveAgentFollowUps(thread: { backend: string; threadId: string }): number;
+  /**
+   * Stores an agent's notice unless an operator bound refuses it; a zero
+   * bound is off. The counts and the insert are one transaction.
+   */
+  createAgentNotification(
+    input: CreateScheduledThreadActionRecord,
+    limits: AgentNotificationLimits,
+  ): { action: ScheduledThreadAction } | { refused: AgentNotificationRefusal; count: number };
+  agentNotificationUsage(
+    thread: { backend: string; threadId: string },
+    now: number,
+  ): AgentNotificationUsage;
+  /** Waiting notices and those delivered since `deliveredSince`, newest first. */
+  listAgentNotifications(request: {
+    deliveredSince: number;
+    limit: number;
+    thread?: { backend: string; threadId: string };
+  }): ScheduledThreadAction[];
   agentFollowUpProtection(
     thread: { backend: string; threadId: string },
     now: number,

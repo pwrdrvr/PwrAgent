@@ -280,6 +280,8 @@ import { readThreadDependencyIndicator, useThreadDependencyIndicatorsContext } f
 type SidebarProps = {
   /** Director voice's mic, rendered first in the masthead; it subscribes to voice itself. */
   mastheadVoiceControl?: ReactNode;
+  /** The agent notices bell; it renders nothing while there is none. */
+  mastheadNotificationsControl?: ReactNode;
   directoryDisclosure?: NavigationDirectoryDisclosure;
   /** True while a full-window layer (Settings, Automations) covers it. */
   inert?: boolean;
@@ -3579,6 +3581,7 @@ function SidebarContent(props: SidebarProps) {
             >
               <SearchIcon size={16} aria-hidden />
             </MastheadActionButton>
+            {federationLabel ? null : props.mastheadNotificationsControl}
             {/* Automations and Settings are LOCAL surfaces. In a remote
                 federation window, showing them would open this machine's
                 screens inside a window branded as another instance — hide

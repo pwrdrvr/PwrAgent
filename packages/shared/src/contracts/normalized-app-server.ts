@@ -3213,6 +3213,14 @@ export type AppServerNotification =
       };
     }
   | {
+      /**
+       * The owner's agent notices changed: one was delivered, dismissed,
+       * scheduled or cancelled. Windows re-read the snapshot.
+       */
+      method: "agentNotifications/updated";
+      params: { threadId?: string };
+    }
+  | {
       method: "thread/reactions/updated";
       params: {
         threadId: string;

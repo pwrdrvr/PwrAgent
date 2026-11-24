@@ -225,6 +225,70 @@ orphaned holds on the heartbeat is a read; it writes only when it takes one.
 `agent-follow-up.property.test.ts` holds the lifecycle model and the guard
 property.
 
+## Agent notices
+
+An agent raises a notice for the operator with the `notify_operator` tool:
+send, list and cancel. A notice is a scheduled action of kind
+`notification` with origin `agent`, on the calling thread. A notice sent now
+is due at once, so the same service claims and delivers it before the tool
+returns; a scheduled one waits for the scheduler's clock like a follow-up,
+survives a restart, and is delivered at the next launch if its time passed
+while PwrAgent was closed. Title, body, urgency and the optional link live in
+the payload file, never in SQLite.
+
+- **No turn.** Dispatch hands the claimed notice to the owner's
+  `AgentNotificationCenter` and marks it `started` (delivered). It starts no
+  turn, so lock, archive and project pause do not hold it.
+- **Exactly once.** A notice found `dispatching` under a dead owner is marked
+  `failed`, as any dispatching claim is. It may have been shown; it is never
+  shown twice.
+- **Own thread only.** The thread comes from the call's trusted context. An
+  agent cancels only its own thread's waiting notices. A Research worker is
+  refused; its coordinator decides what reaches the operator. A messaging
+  contact's turn needs `thread.control.schedule`.
+- **Only the tool writes kind `notification`.** `create` refuses it from the
+  desktop, messaging and peer surfaces, and `update` refuses to edit one.
+- **Not a follow-up.** The follow-up guard counts and suspends `origin =
+  agent AND kind <> notification` only. A notice never spends a follow-up
+  slot and is delivered while the thread's follow-ups are suspended.
+
+### Bounds
+
+`[general.agent_notifications]` in the profile's `config.toml`; zero turns a
+bound off. The counts and the insert are one immediate transaction. A window
+counts every notice an agent created in it, cancelled ones too, so cancel
+and resend cannot spend more.
+
+| Key | Default |
+|---|---|
+| `max_per_thread_per_day` (rolling 24 hours) | 12 |
+| `max_per_profile_per_day` (rolling 24 hours) | 60 |
+| `max_scheduled_per_thread` (waiting) | 8 |
+
+### Surfaces
+
+- **Windows.** The center keeps the delivered notices the operator has not
+  dismissed, in process memory, and publishes `agentNotifications/updated`.
+  Each window shows them as durable cards in the notice stack and as a count
+  on the masthead bell, which also lists scheduled notices with Cancel and
+  the last day's delivered ones (read from the scheduler, so they survive a
+  restart). Dismissing writes nothing; a restart clears read state.
+- **Native.** `DesktopNotificationService.notifyAttention` with key
+  `agent-notification:<id>`: only when Desktop notifications are on and no
+  window is focused, deduplicated by key, cleared on dismiss.
+- **Messaging.** The backend event router posts a delivered notice once to
+  each conversation bound to the thread.
+- **Federation.** The owner stores, times and shows a notice. The update
+  event is not relayed, and a window showing a peer gets an empty snapshot.
+
+### Budgets
+
+`agent-notice-*` in `sqlite-write-budgets.json`: three commits per notice
+(create; claim; delivered), two for create and cancel. About 62 KB of WAL
+per notice: 3.7 MB/day at the default profile bound of 60, about 0.3 MB/day
+at five. `agent-notification.property.test.ts` holds the delivery model and
+the bound oracle.
+
 ## Surface contract
 
 Desktop IPC and the messaging backend bridge expose the same operations:

@@ -79,6 +79,7 @@ import type {
   DesktopProviderModelDefaults,
   DesktopProviderThreadModelMigration,
   DesktopSettingsConfigPatch,
+  DesktopAgentNotificationPolicy,
   DesktopSpendAlertPolicy,
   DesktopTextSize,
   DesktopToolOutputAlertPolicy,
@@ -189,6 +190,7 @@ export type DesktopSettingsConfig = {
     tokenMiserEnabled?: boolean;
     toolOutputAlerts?: Partial<DesktopToolOutputAlertPolicy>;
     spendAlerts?: Partial<DesktopSpendAlertPolicy>;
+    agentNotifications?: Partial<DesktopAgentNotificationPolicy>;
     appearance?: {
       theme?: DesktopAppearanceTheme;
       darkTheme?: DesktopDarkTheme;
@@ -1095,6 +1097,24 @@ export function desktopSettingsPatchToEdits(
     set(
       ["general", "spend_alerts", "thread_spend_threshold_usd"],
       patch.general.spendAlerts.threadSpendThresholdUsd,
+    );
+  }
+  if (patch.general?.agentNotifications?.maxPerThreadPerDay !== undefined) {
+    set(
+      ["general", "agent_notifications", "max_per_thread_per_day"],
+      patch.general.agentNotifications.maxPerThreadPerDay,
+    );
+  }
+  if (patch.general?.agentNotifications?.maxPerProfilePerDay !== undefined) {
+    set(
+      ["general", "agent_notifications", "max_per_profile_per_day"],
+      patch.general.agentNotifications.maxPerProfilePerDay,
+    );
+  }
+  if (patch.general?.agentNotifications?.maxScheduledPerThread !== undefined) {
+    set(
+      ["general", "agent_notifications", "max_scheduled_per_thread"],
+      patch.general.agentNotifications.maxScheduledPerThread,
     );
   }
 
@@ -2497,6 +2517,7 @@ function normalizeDesktopConfig(
   const generalMarkdown = tables["general.markdown"];
   const generalToolOutputAlerts = tables["general.tool_output_alerts"];
   const generalSpendAlerts = tables["general.spend_alerts"];
+  const generalAgentNotifications = tables["general.agent_notifications"];
   const generalMessagingAck = tables["general.messaging_acknowledgment"];
   const onboarding = tables["onboarding"];
   const experimental = tables["experimental"];
@@ -2611,6 +2632,17 @@ function normalizeDesktopConfig(
         ),
         threadSpendThresholdUsd: readNumber(
           generalSpendAlerts?.thread_spend_threshold_usd,
+        ),
+      },
+      agentNotifications: {
+        maxPerThreadPerDay: readNumber(
+          generalAgentNotifications?.max_per_thread_per_day,
+        ),
+        maxPerProfilePerDay: readNumber(
+          generalAgentNotifications?.max_per_profile_per_day,
+        ),
+        maxScheduledPerThread: readNumber(
+          generalAgentNotifications?.max_scheduled_per_thread,
         ),
       },
       appearance: {
@@ -3103,6 +3135,8 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     toolOutputAlerts && hasDefinedValue(toolOutputAlerts);
   const spendAlerts = config.general?.spendAlerts;
   const spendAlertsDefined = spendAlerts && hasDefinedValue(spendAlerts);
+  const agentNotifications = config.general?.agentNotifications;
+  const agentNotificationsDefined = agentNotifications && hasDefinedValue(agentNotifications);
   const appearance = config.general?.appearance;
   const appearanceDefined = appearance && hasDefinedValue(appearance);
   const markdown = config.general?.markdown;
@@ -3131,6 +3165,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     notificationsEnabled !== undefined ||
     toolOutputAlertsDefined ||
     spendAlertsDefined ||
+    agentNotificationsDefined ||
     appearanceDefined ||
     markdownDefined ||
     codexProfileModel !== undefined ||
@@ -3203,6 +3238,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (spendAlertsDefined) {
       pruned.general.spendAlerts = spendAlerts;
+    }
+    if (agentNotificationsDefined) {
+      pruned.general.agentNotifications = agentNotifications;
     }
     if (appearanceDefined) {
       pruned.general.appearance = appearance;

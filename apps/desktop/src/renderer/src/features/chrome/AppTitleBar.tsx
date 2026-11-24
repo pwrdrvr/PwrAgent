@@ -58,6 +58,8 @@ export function AppTitleBar(props: {
   actions?: {
     /** Director voice's mic, first in the actions. It subscribes to voice itself. */
     voiceControl?: ReactNode;
+    /** The agent notices bell; it renders nothing while there is none. */
+    notificationsControl?: ReactNode;
     addingProjectDirectory?: boolean;
     automationsActive: boolean;
     automationsSchedulingStatus?: AutomationSchedulingStatus;
@@ -113,6 +115,7 @@ export function AppTitleBar(props: {
                 <SearchIcon size={16} strokeWidth={1.5} aria-hidden="true" />
               </button>
             ) : null}
+            {isFederationWindow ? null : actions.notificationsControl}
             {isFederationWindow ? null : (
             <AutomationsButton
               active={actions.automationsActive}
