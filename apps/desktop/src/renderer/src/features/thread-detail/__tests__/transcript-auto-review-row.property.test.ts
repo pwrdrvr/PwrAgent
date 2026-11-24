@@ -142,6 +142,40 @@ describe("auto-review row after its turn", () => {
     );
   });
 
+  it("keeps the running turn's work in one Working-for group around the live row", () => {
+    fc.assert(
+      fc.property(
+        fc.array(fc.constantFrom<Step>("tool", "commentary"), { minLength: 1, maxLength: 6 }),
+        fc.nat(),
+        (steps, positionPick) => {
+          const running: AppServerThreadTurnMetadata = { id: "turn-0", status: "in_progress", startedAt: 0 };
+          const base = buildTurn(0, running, { steps, final: false });
+          // The pending row ThreadView shows mid-turn: no turn metadata yet.
+          const live = applyProtocolActivityNotice(
+            [],
+            {
+              method: "warning",
+              params: { message: "Automatic approval review approved (risk: low, authorization: high): Runs the tests." },
+            },
+            { threadId: "thread-1", now: 1_000 },
+          );
+          const row = live[0]!;
+          const insertAt = 1 + (positionPick % base.length);
+          const withRow = [...base.slice(0, insertAt), row, ...base.slice(insertAt)];
+          const render = (entries: AppServerThreadEntry[]) => buildTranscriptRenderItems({
+            entries,
+            activeTurnId: "turn-0",
+            activeTurnStartedAt: 0,
+            now: 120_000,
+          });
+          const withItems = render(withRow);
+          expect(shape(withItems).filter((label) => label !== `entry:${row.id}`)).toEqual(shape(render(base)));
+          expect(withItems.filter((item) => item.type === "entry" && item.entry.id === row.id)).toHaveLength(1);
+        },
+      ),
+    );
+  });
+
   it("keeps a turn's answer in view when the row sorts after it", () => {
     const turn = completedTurn("turn-0");
     const entries = buildTurn(0, turn, { steps: ["tool", "reply"], final: false });

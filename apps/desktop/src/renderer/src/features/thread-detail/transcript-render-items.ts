@@ -169,6 +169,11 @@ function buildActiveWorkGroups(
     ) {
       continue;
     }
+    // The live auto-review row carries no turn and sits at its first review's
+    // time. It stays in view without cutting off the work before it.
+    if (isAutoReviewActivityEntry(entry)) {
+      continue;
+    }
     if (
       staysInView(entry, alwaysVisibleEntryIds)
       || entry.turn?.id !== activeTurnId
