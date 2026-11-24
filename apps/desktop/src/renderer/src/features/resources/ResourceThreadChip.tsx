@@ -1,4 +1,4 @@
-import type { ReactElement } from "react";
+import { useMemo, type ReactElement } from "react";
 import type { ResourceThreadRef } from "@pwragent/shared/contracts/resource-checkouts";
 import { useThreadLinks, type ResolvedThreadLink } from "../../lib/thread-links";
 import { ThreadChip } from "../thread-detail/ThreadChip";
@@ -25,18 +25,23 @@ export function ResourceThreadChip(props: {
   const { thread, onOpen, onNavigate } = props;
   const threadLinks = useThreadLinks();
   const remote = thread.instanceId && thread.instanceId !== props.localInstanceId ? thread.instanceId : undefined;
-  const ref = { backend: thread.backend, threadId: thread.threadId, ...(remote ? { instanceId: remote } : {}) };
-  const link: ResolvedThreadLink = threadLinks?.resolve(ref) ?? {
-    ...ref,
-    title: thread.title,
-    ...(remote && thread.instanceLabel ? { instanceLabel: thread.instanceLabel } : {}),
-  };
+  const { backend, threadId, title, instanceLabel } = thread;
+  const link = useMemo((): ResolvedThreadLink => {
+    // Without thread links there is no remote viewer to open, so the link
+    // names no owner and the chip offers no pop-out; `onOpen` still sends the
+    // full reference, owner included, to main.
+    if (!threadLinks) return { backend, threadId, title };
+    const ref = { backend, threadId, ...(remote ? { instanceId: remote } : {}) };
+    const resolved = threadLinks.resolve(ref) ?? { ...ref, title: "" };
+    // A peer's thread that navigation has not loaded names its owner, not the owner's id.
+    return remote && !resolved.instanceLabel && instanceLabel ? { ...resolved, instanceLabel } : resolved;
+  }, [threadLinks, backend, threadId, title, remote, instanceLabel]);
   if (!onOpen && !threadLinks) {
-    return <span>{thread.title || thread.threadId}</span>;
+    return <span>{title || threadId}</span>;
   }
   return (
     <ThreadChip
-      fallbackLabel={thread.title}
+      fallbackLabel={title}
       link={link}
       onOpen={(opened) => {
         onNavigate?.();

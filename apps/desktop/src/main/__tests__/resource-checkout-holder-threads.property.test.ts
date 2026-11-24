@@ -5,7 +5,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import type { ResourceHolder, ResourceThreadRef } from "@pwragent/shared/contracts/resource-checkouts";
 import { openResourceCheckoutStore } from "@pwragent/sqlite-storage/resource-checkout-store";
-import { resourceThreadShowRequest } from "../resource-checkouts/checkout-projection";
+import { actorHolder, resourceThreadShowRequest } from "../resource-checkouts/checkout-projection";
 import { DesktopResourceCheckoutService } from "../resource-checkouts/resource-checkout-service";
 
 /**
@@ -132,6 +132,14 @@ describe("resource checkout holders", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  // Rule: only a stored key's leading array element names the owner.
+  it.each([JSON.stringify("abc"), JSON.stringify({ owner: "x" }), JSON.stringify([7, "codex", "t"]), "not json"])(
+    "names no owner for a key without one: %s", (key) => {
+      const holder = actorHolder({ key, manage: false, holder: { kind: "thread", thread: { backend: "codex", threadId: "t", title: "T" } } });
+      expect(holder).toEqual({ kind: "thread", thread: { backend: "codex", threadId: "t", title: "T" } });
+    },
+  );
 
   it.each([
     undefined, null, "thread", {}, { backend: "codex" }, { backend: "nope", threadId: "t" },

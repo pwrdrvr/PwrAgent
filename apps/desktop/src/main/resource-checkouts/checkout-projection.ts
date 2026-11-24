@@ -16,8 +16,9 @@ import type {
 export function actorHolder(actor: CheckoutActor): ResourceHolder {
   const { holder } = actor;
   if (holder.kind !== "thread" || holder.thread.instanceId) return holder;
-  let owner: unknown;
-  try { owner = (JSON.parse(actor.key) as unknown[])[0]; } catch { return holder; }
+  let key: unknown;
+  try { key = JSON.parse(actor.key); } catch { return holder; }
+  const owner: unknown = Array.isArray(key) ? key[0] : undefined;
   return typeof owner === "string" && owner ? { kind: "thread", thread: { ...holder.thread, instanceId: owner } } : holder;
 }
 
