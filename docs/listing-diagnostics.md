@@ -88,6 +88,23 @@ retain their sequence. Queue wait and API duration are separate milliseconds.
 Attempts correlate with main through `(origin, view, effect, logical, attempt)`;
 no new request fields are sent over IPC or Federation.
 
+A successful `settled` event times the API response. A separate `reply` event
+records the renderer's acceptance or discard, linked by the same opaque read
+and attempt. When several pages form a published range, acceptance points to
+the last contributing reply. Explicit response-budget rejections and the last
+unpublished reply of a discarded read are recorded as discards.
+Reply records carry coverage and range categories. An accepted reply also
+reports whether its baseline has an admitted dependency proof, and whether
+the page's aggregate or the same selection directory's unread count changed
+when comparable. Neither count is recorded.
+
+For mark-seen notices, `seen-decision` connects each affected resource to its
+invalidation batch. It gives the baseline's coverage, range, and proof
+availability, the matched dependency or conservative fallback, and whether
+the notice invalidated the baseline, was already covered, or waited for
+an in-flight membership read. Deferred notices also record the candidate
+proof decision when it excludes the notice or requires a replacement.
+
 While monitoring, capture listeners count `scroll`, `pointerdown` and `keydown`
 without inspecting event targets, key values or text. Adjacent same-kind input
 within 100 ms shares one slot with `count`, first `at` and `lastAt`, without a
@@ -157,8 +174,8 @@ Checked-in regression budgets:
 | --- | --- |
 | Eight concurrent consumers, 500 provider rows | 11 events; one provider scan and one RPC |
 | Three logical IPC reads; two overlap and the third reuses the index | 24 events; two owner loads and one index construction |
-| StrictMode sidebar mount plus unchanged rerender | At most 15 renderer events, including queue/settlement; two legitimate query dispatches |
-| One invalidation and refresh of Q loaded queries | At most 3 summary/input slots + 3Q queue/dispatch/settlement records; Q API calls |
+| StrictMode sidebar mount plus unchanged rerender | At most 17 renderer events, including queue, settlement, and acceptance; two legitimate query dispatches |
+| One ordinary invalidation and refresh of Q loaded queries | At most 3 summary/input slots + 4Q queue, dispatch, settlement, and reply records; Q API calls |
 
 A macOS local run on 2026-09-28 measured 100,000 populated appends in 38.05 ms
 (**0.38 µs/event**), 10,000 traced async operations in 14.16 ms

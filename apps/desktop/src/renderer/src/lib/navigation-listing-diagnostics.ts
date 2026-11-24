@@ -1,11 +1,33 @@
+import type { NavigationQueryPage } from "@pwragent/shared/contracts/navigation";
 import { safeNavigationDiagnosticTrigger, type NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
 
+const COVERAGE = ["missing", "checking", "degraded", "complete"] as const;
+const RANGES = ["missing", "full", "prefix", "offset-complete", "offset-partial"] as const;
+const SEEN_REASONS = ["parent-or-row", "thread-dependency", "selection-directory", "directory-scope",
+  "uncertain-membership", "partial-coverage", "partial-range", "missing-proof", "proof-excludes"] as const;
+const SEEN_DECISIONS = ["invalidate", "covered", "defer", "replace", "exclude"] as const;
+export type NavigationSeenReason = typeof SEEN_REASONS[number];
+export type NavigationSeenDecision = typeof SEEN_DECISIONS[number];
+
+export function navigationDiagnosticPageShape(page: NavigationQueryPage | undefined): {
+  coverage: typeof COVERAGE[number]; range: typeof RANGES[number];
+} {
+  return {
+    coverage: page?.coverage?.state ?? "missing",
+    range: !page ? "missing" : (page.rangeStart ?? 0) > 0
+      ? page.complete ? "offset-complete" : "offset-partial" : page.complete ? "full" : "prefix",
+  };
+}
+
 type Event = { at: number; view: number; effect: number;
-  phase: "effect" | "dispose" | "demand" | "refresh" | "queued" | "dispatch" | "settled" | "coalesced" | "invalidate" | "cancel" | "retry" | "interaction";
+  phase: "effect" | "dispose" | "demand" | "refresh" | "queued" | "dispatch" | "settled" | "reply" | "seen-decision" | "coalesced" | "invalidate" | "cancel" | "retry" | "interaction";
   logical?: number; attempt?: number; count?: number; cause?: NavigationDiagnosticCause; caller?: string; trigger?: string;
   batch?: number; refreshBatch?: number; read?: number; resource?: number; query?: string; source?: "local" | "remote";
   inventory?: "owner" | "viewer"; rows?: number; invalidations?: number; waitMs?: number; durationMs?: number;
   outcome?: "ok" | "error"; cursor?: boolean; invalidatedOnly?: boolean;
+  disposition?: "accepted" | "discarded"; coverage?: typeof COVERAGE[number]; range?: typeof RANGES[number];
+  proofAdmitted?: boolean; unreadChanged?: boolean; selectionUnreadChanged?: boolean;
+  seenReason?: NavigationSeenReason; seenDecision?: NavigationSeenDecision;
   interaction?: "scroll" | "pointerdown" | "keydown"; lastAt?: number;
   retry?: "page-budget" | "cursor-expired" | "anchor-missing" };
 let diagnosticOrigin: string | undefined;
@@ -13,7 +35,7 @@ export function navigationDiagnosticOrigin(): string { return diagnosticOrigin ?
 
 const CAPACITY = 1024;
 const RETENTION_MS = 120_000;
-const PHASES = new Set(["effect", "dispose", "demand", "refresh", "queued", "dispatch", "settled", "coalesced", "invalidate", "cancel", "retry", "interaction"]);
+const PHASES = new Set(["effect", "dispose", "demand", "refresh", "queued", "dispatch", "settled", "reply", "seen-decision", "coalesced", "invalidate", "cancel", "retry", "interaction"]);
 /** No transport on append. Read once through CDP when a CPU artifact is saved. */
 export class NavigationListingDiagnostics {
   private readonly events: Array<string | undefined> = new Array(CAPACITY);
@@ -23,6 +45,7 @@ export class NavigationListingDiagnostics {
   private next = 0;
   private interactionSlot: number | undefined;
   get recordingGeneration(): number { return this.generation; }
+  isRecording(generation = this.generation): boolean { return this.enabled && generation === this.generation; }
   setEnabled(enabled: boolean): void {
     if (this.enabled === enabled) return;
     this.enabled = enabled;
@@ -33,7 +56,7 @@ export class NavigationListingDiagnostics {
     this.interactionSlot = undefined;
   }
   record(event: Omit<Event, "at">, generation = this.generation): void {
-    if (!this.enabled || generation !== this.generation || !PHASES.has(event.phase)) return;
+    if (!this.isRecording(generation) || !PHASES.has(event.phase)) return;
     // Copy fixed scalars only: never stringify the caller or retain its objects.
     const entry: Event = { at: Date.now(), view: 0, effect: 0, phase: event.phase };
     for (const key of ["view", "effect", "logical", "attempt", "count", "batch", "refreshBatch", "read", "resource", "rows", "invalidations", "waitMs", "durationMs", "lastAt"] as const) {
@@ -47,10 +70,16 @@ export class NavigationListingDiagnostics {
     if (event.source === "local" || event.source === "remote") entry.source = event.source;
     if (event.inventory === "owner" || event.inventory === "viewer") entry.inventory = event.inventory;
     if (event.outcome === "ok" || event.outcome === "error") entry.outcome = event.outcome;
+    if (event.disposition === "accepted" || event.disposition === "discarded") entry.disposition = event.disposition;
+    if (event.coverage && COVERAGE.includes(event.coverage)) entry.coverage = event.coverage;
+    if (event.range && RANGES.includes(event.range)) entry.range = event.range;
+    if (event.seenReason && SEEN_REASONS.includes(event.seenReason)) entry.seenReason = event.seenReason;
+    if (event.seenDecision && SEEN_DECISIONS.includes(event.seenDecision)) entry.seenDecision = event.seenDecision;
     if (event.retry === "page-budget" || event.retry === "cursor-expired" || event.retry === "anchor-missing") entry.retry = event.retry;
     if (event.interaction === "scroll" || event.interaction === "pointerdown" || event.interaction === "keydown") entry.interaction = event.interaction;
-    if (typeof event.cursor === "boolean") entry.cursor = event.cursor;
-    if (typeof event.invalidatedOnly === "boolean") entry.invalidatedOnly = event.invalidatedOnly;
+    for (const key of ["cursor", "invalidatedOnly", "proofAdmitted", "unreadChanged", "selectionUnreadChanged"] as const) {
+      if (typeof event[key] === "boolean") entry[key] = event[key];
+    }
     this.events[this.next] = JSON.stringify(entry);
     this.next = (this.next + 1) % CAPACITY;
     this.recorded += 1;

@@ -1,5 +1,8 @@
 import { navigationDiagnosticCause, navigationDiagnosticTrigger, safeNavigationDiagnosticTrigger, type NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
-import { createNavigationDiagnosticView, navigationDiagnosticOrigin, navigationListingDiagnostics } from "./navigation-listing-diagnostics";
+import {
+  createNavigationDiagnosticView, navigationDiagnosticOrigin, navigationDiagnosticPageShape, navigationListingDiagnostics,
+  type NavigationSeenDecision, type NavigationSeenReason,
+} from "./navigation-listing-diagnostics";
 import {
   NAVIGATION_QUERY_MAX_PAGE_ROWS,
   NAVIGATION_QUERY_MAX_RESULT_BYTES,
@@ -88,6 +91,7 @@ type Resource = {
   /** Metadata notices observed after dispatch and awaiting the replacement baseline. */
   membershipRead?: {
     paths: Set<string>;
+    diagnosticGeneration: number;
     batch?: number;
     cause?: NavigationDiagnosticCause;
     trigger?: string;
@@ -121,6 +125,11 @@ type OwnerPageProof = {
   bytes: number;
 };
 type RetainableState = { state: NavigationPageState; ownerProof?: OwnerPageProof };
+type ReplyDiagnostic = ReturnType<typeof navigationDiagnosticPageShape> & {
+  generation: number;
+  logical: number;
+  attempt: number;
+};
 
 function loadedRows(page: NavigationQueryPage | undefined): number {
   return page?.modelGroups?.length || page?.directories?.length || page?.entries.length || 0;
@@ -553,7 +562,8 @@ export class NavigationWindowQueries {
     for (const resource of this.resources.values()) {
       if (id && resource.value.id !== id) continue;
       if (owners && !owners.some((owner) => federationTargetsEqual(owner, resource.value.state.request.federationTarget))) continue;
-      if (event && !this.eventAffectsResource(resource, event, directoryScope, gitRevisions)) continue;
+      const affected = event ? this.eventAffectsResource(resource, event, directoryScope, gitRevisions) : true;
+      if (!affected) continue;
       if (correlatedPinPublication) resource.pinPublicationPending = true;
       count++;
       if (workingState) {
@@ -573,8 +583,19 @@ export class NavigationWindowQueries {
           continue;
         }
       }
-      if (method === "navigation/thread/seen" && !resource.invalidated && event && typeof params?.threadId === "string"
-        && this.deferSeenDuringMembershipRead(resource, event, params.threadId, batch)) continue;
+      if (method === "navigation/thread/seen" && event) {
+        const deferred = !resource.invalidated && typeof params?.threadId === "string"
+          && this.deferSeenDuringMembershipRead(resource, event, params.threadId, batch);
+        if (navigationListingDiagnostics.isRecording()) {
+          const { page } = resource.value.state;
+          const reason = typeof affected === "string" ? affected : resource.membershipUncertain ? "uncertain-membership"
+            : page?.coverage.state !== "complete" ? "partial-coverage"
+            : !page.complete || (page.rangeStart ?? 0) > 0 ? "partial-range" : "missing-proof";
+          this.recordSeenDecision(resource, batch, reason, deferred ? "defer" : resource.invalidated ? "covered" : "invalidate",
+            page, this.hasAdmittedDependencies(page));
+        }
+        if (deferred) continue;
+      }
       const metadataRowChange = method === "navigation/remoteThreadPins/changed" && Array.isArray(params?.rowChanges);
       const childRowChange = resource.value.state.request.query.kind === "children"
         && (method === "thread/pin/added" || method === "thread/pin/removed"
@@ -648,6 +669,15 @@ export class NavigationWindowQueries {
     return true;
   }
 
+  private recordSeenDecision(resource: Resource, batch: number | undefined, seenReason: NavigationSeenReason,
+    seenDecision: NavigationSeenDecision, page: NavigationQueryPage | undefined, proofAdmitted: boolean): void {
+    const { request } = resource.value.state;
+    navigationListingDiagnostics.record({ ...this.diagnostic, phase: "seen-decision", resource: resource.diagnosticResource,
+      batch, query: request.query.kind, inventory: request.inventory ?? "owner",
+      source: request.federationTarget?.scope === "remote" ? "remote" : "local",
+      trigger: "navigation/thread/seen", seenReason, seenDecision, proofAdmitted, ...navigationDiagnosticPageShape(page) });
+  }
+
   private needsSeenReplacement(resource: Resource, candidate?: RetainableState): boolean {
     const read = resource.membershipRead;
     if (!read?.seen || resource.invalidated) return false;
@@ -656,12 +686,18 @@ export class NavigationWindowQueries {
     const dependencies = page?.coverage.state === "complete"
       ? candidate?.ownerProof?.dependencies ?? this.metadataDependencies(page) : undefined;
     const match = dependencies?.threadKeys.find((key) => batches.has(key));
+    const batch = match === undefined ? batches.values().next().value : batches.get(match);
+    if (navigationListingDiagnostics.isRecording(read.diagnosticGeneration)) {
+      const reason = match !== undefined ? "thread-dependency" : dependencies ? "proof-excludes"
+        : page && page.coverage.state !== "complete" ? "partial-coverage" : "missing-proof";
+      this.recordSeenDecision(resource, batch, reason, reason === "proof-excludes" ? "exclude" : "replace", page, Boolean(dependencies));
+    }
     if (dependencies && match === undefined) {
       // The proof covers off-page counts for this entire cursor generation.
       read.seen = undefined;
       return false;
     }
-    resource.diagnosticBatch = match === undefined ? batches.values().next().value : batches.get(match);
+    resource.diagnosticBatch = batch;
     resource.diagnosticCause = "metadata";
     resource.diagnosticTrigger = "navigation/thread/seen";
     this.fenceBaseline(resource);
@@ -741,13 +777,15 @@ export class NavigationWindowQueries {
     return true;
   }
 
-  private eventAffectsResource(resource: Resource, event: AgentEvent, directoryScope?: readonly string[], gitRevisions?: NavigationDirectoryGitRevisions): boolean {
+  private eventAffectsResource(resource: Resource, event: AgentEvent, directoryScope?: readonly string[],
+    gitRevisions?: NavigationDirectoryGitRevisions): boolean | NavigationSeenReason {
     const request = resource.value.state.request;
     const params = event.notification.params as { sourceMethod?: unknown; threadId?: unknown; worktreePath?: unknown; directoryKey?: unknown; instanceId?: string;
       rowChanges?: Array<{ backend: AgentEvent["backend"]; threadId: string; ownerInstanceId: string }> };
     const method = event.notification.method === "navigation/invalidated" ? params?.sourceMethod : event.notification.method;
     const page = resource.value.state.page;
     const workingState = method === "navigation/threadGitWorkingState/updated";
+    const seen = method === "navigation/thread/seen";
     // Working-state probes cannot change any directory descriptor or count.
     if (workingState && request.query.kind === "directory-index") return false;
     // A navigation gap needs a new direct owner baseline. Viewer membership
@@ -806,15 +844,18 @@ export class NavigationWindowQueries {
     }
     const scopedActivity = method === "turn/started" && directoryScope !== undefined && request.query.kind === "children"
       && federationTargetsEqual(request.federationTarget, event.federationTarget);
-    if ((method === "navigation/thread/seen" || scopedActivity) && !resource.membershipUncertain && page?.coverage.state === "complete"
+    if ((seen || scopedActivity) && !resource.membershipUncertain && page?.coverage.state === "complete"
       && typeof params?.threadId === "string") {
       const dependencies = this.ownerPageProofs.get(page)?.dependencies ?? this.metadataDependencies(page);
       // The peer builds its proof before row expansion stamps federated refs.
       const ref = { backend: event.backend, threadId: params.threadId,
         ownerInstanceId: request.federationTarget?.scope === "remote" ? undefined : sourceOwner };
-      if (dependencies) return dependencies.threadKeys.includes(navigationIdentityKey(ref))
-        || (request.query.kind === "children" && request.query.parent.backend === ref.backend
-          && request.query.parent.threadId === ref.threadId && request.query.parent.ownerInstanceId === sourceOwner);
+      if (dependencies) {
+        if (dependencies.threadKeys.includes(navigationIdentityKey(ref))) return seen ? "thread-dependency" : true;
+        const parent = request.query.kind === "children" && request.query.parent.backend === ref.backend
+          && request.query.parent.threadId === ref.threadId && request.query.parent.ownerInstanceId === sourceOwner;
+        return parent && (seen ? "parent-or-row" : true);
+      }
     }
     if (request.federationTarget?.scope === "remote" && federationTargetsEqual(request.federationTarget, event.federationTarget)) {
       if (!resource.membershipUncertain && page?.coverage.state === "complete" && workingState) {
@@ -825,8 +866,8 @@ export class NavigationWindowQueries {
       }
       // A descriptor's unread count includes siblings outside the exact
       // selection or tray. An older or partial page cannot exclude them.
-      if (method === "navigation/thread/seen" && page?.selectionDirectory
-        && (request.query.kind === "exact" || request.query.kind === "children")) return true;
+      if (seen && page?.selectionDirectory
+        && (request.query.kind === "exact" || request.query.kind === "children")) return "selection-directory";
     }
     if (request.inventory === "viewer" && request.federationTarget?.scope !== "remote" && !resource.membershipUncertain
       && page?.coverage.state === "complete" && request.query.kind !== "children") {
@@ -838,7 +879,7 @@ export class NavigationWindowQueries {
       if (dependencies && !navigationInvalidationMayChangeMembership(method) && typeof params.threadId === "string") {
         const ref = { backend: event.backend, threadId: params.threadId,
           ownerInstanceId: event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : undefined };
-        return dependencies.threadKeys.includes(navigationIdentityKey(ref));
+        return dependencies.threadKeys.includes(navigationIdentityKey(ref)) && (seen ? "thread-dependency" : true);
       }
     }
     if (request.query.kind === "directory" && directoryScope && !resource.membershipUncertain
@@ -852,7 +893,7 @@ export class NavigationWindowQueries {
       // membership-only v1 scopes from earlier peers do not cover.
       // Loaded roots and linked paths cannot supply a negative membership proof.
       // A pending membership read retains its broad fence until accepted.
-      return directoryScope.includes(request.query.directoryKey);
+      return directoryScope.includes(request.query.directoryKey) && (seen ? "directory-scope" : true);
     }
     if (workingState && typeof params?.worktreePath === "string" && !resource.membershipUncertain && page
       && federationTargetsEqual(request.federationTarget, event.federationTarget)
@@ -880,8 +921,9 @@ export class NavigationWindowQueries {
       }
       if (typeof params?.threadId === "string") {
         const ref = { backend: event.backend, threadId: params.threadId, ownerInstanceId };
-        return navigationIdentitiesEqual(request.query.parent, ref)
+        const matches = navigationIdentitiesEqual(request.query.parent, ref)
           || page.entries.some(({ row }) => navigationIdentitiesEqual(row.ref, ref));
+        return matches && (seen ? "parent-or-row" : true);
       }
       if (method === "navigation/threadGitWorkingState/updated" && typeof params?.worktreePath === "string") {
         return !this.excludesWorkingStatePaths(request, page, ownerInstanceId, params.worktreePath);
@@ -901,13 +943,23 @@ export class NavigationWindowQueries {
     const refs = [...request.query.identities, ...(page?.entries.map(({ row }) => row.ref) ?? [])];
     const ownerInstanceId = event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : undefined;
     if (typeof params?.threadId === "string") return refs.some((ref) => ref.backend === event.backend
-      && ref.threadId === params.threadId && (ref.ownerInstanceId ?? undefined) === ownerInstanceId);
+      && ref.threadId === params.threadId && (ref.ownerInstanceId ?? undefined) === ownerInstanceId) && (seen ? "parent-or-row" : true);
     return true;
   }
 
   private metadataDependencies(page: NavigationQueryPage): NavigationMetadataDependencies | undefined {
     if (!this.pageDependencies.has(page)) this.pageDependencies.set(page, readNavigationMetadataDependencies(page.metadataDependencies));
     return this.pageDependencies.get(page);
+  }
+
+  private hasAdmittedDependencies(page: NavigationQueryPage | undefined): boolean {
+    if (!page) return false;
+    try {
+      return Boolean(this.ownerPageProofs.get(page)?.dependencies ?? this.metadataDependencies(page));
+    } catch {
+      // An optional diagnostic must not reject a page with malformed inline proof.
+      return false;
+    }
   }
 
   setVisibleAnchor(id: string, anchor: NavigationQueryAnchor | undefined): void {
@@ -1036,6 +1088,35 @@ export class NavigationWindowQueries {
     if (publishLoading) this.publish();
     const promise = Promise.resolve().then(async () => {
       let acquired = false;
+      // A published range can fold several IPC pages together. Correlate its
+      // decision with the last contributing reply, without keeping a reply list.
+      let lastReply: ReplyDiagnostic | undefined;
+      const discardReply = () => {
+        if (!lastReply) return;
+        const { generation, ...reply } = lastReply;
+        navigationListingDiagnostics.record({ ...fields, ...reply, phase: "reply", disposition: "discarded", proofAdmitted: false }, generation);
+        lastReply = undefined;
+      };
+      const acceptReply = (next: RetainableState, reply: ReplyDiagnostic | undefined) => {
+        const before = resource.value.state.page;
+        this.acceptState(resource, next);
+        if (reply === lastReply) lastReply = undefined;
+        if (!reply || !navigationListingDiagnostics.isRecording(reply.generation)) return;
+        const page = resource.value.state.page;
+        const selectionBefore = before?.selectionDirectory;
+        const selection = page?.selectionDirectory;
+        const unreadBefore = before?.counts?.unread;
+        const unread = page?.counts?.unread;
+        const selectionUnreadBefore = selectionBefore?.counts?.unread;
+        const selectionUnread = selection?.counts?.unread;
+        navigationListingDiagnostics.record({ ...fields, logical: reply.logical, attempt: reply.attempt,
+          phase: "reply", disposition: "accepted", ...navigationDiagnosticPageShape(page),
+          proofAdmitted: this.hasAdmittedDependencies(page),
+          unreadChanged: unreadBefore !== undefined && unread !== undefined ? unreadBefore !== unread : undefined,
+          selectionUnreadChanged: selectionUnreadBefore !== undefined && selectionUnread !== undefined && selectionBefore?.key === selection?.key
+            ? selectionUnreadBefore !== selectionUnread : undefined,
+        }, reply.generation);
+      };
       try {
         acquired = await this.acquireReadSlot(resource);
         if (!acquired) return;
@@ -1056,7 +1137,9 @@ export class NavigationWindowQueries {
         }
         resource.invalidated = false;
         resource.refreshAfterPending = false;
-        if (started.request.consumer === "main-sidebar" && resource.membershipUncertain) resource.membershipRead = { paths: new Set() };
+        if (started.request.consumer === "main-sidebar" && resource.membershipUncertain) {
+          resource.membershipRead = { paths: new Set(), diagnosticGeneration: navigationListingDiagnostics.recordingGeneration };
+        }
         const diagnostic = { ...this.diagnostic, origin: navigationDiagnosticOrigin(), logical: ++this.nextLogical, attempt: 0,
           cause: continuation ? "continuation" as const : explicitAnchor || fromStart ? "rebaseline" as const : resource.diagnosticCause ?? reason ?? "refresh",
           invalidations: resource.diagnosticInvalidations ?? 0, trigger: resource.diagnosticTrigger, caller: resource.diagnosticCaller };
@@ -1110,7 +1193,11 @@ export class NavigationWindowQueries {
               navigationListingDiagnostics.record({ ...attemptFields, phase: "settled", outcome: "error", durationMs: Math.max(0, Date.now() - sentAt) }, generation);
               throw error;
             }
+            lastReply = navigationListingDiagnostics.isRecording(generation)
+              ? { generation, logical: diagnostic.logical, attempt: diagnostic.attempt, ...navigationDiagnosticPageShape(page) }
+              : undefined;
             if (this.pageBytes(page) <= NAVIGATION_QUERY_MAX_RESULT_BYTES) return page;
+            discardReply();
             // One row over the budget is the owner's own error to raise.
             if (rows <= 1) throw new Error("Navigation page exceeds the bounded response size.");
             navigationListingDiagnostics.record({ ...this.diagnostic, phase: "retry", logical: diagnostic.logical, attempt: diagnostic.attempt, retry: "page-budget" });
@@ -1197,6 +1284,7 @@ export class NavigationWindowQueries {
         if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
         const priorState = resource.value.state;
         let next = this.retainableState(applyNavigationPage({ state: priorState, sequence: started.pendingSequence, page, cursor: pageCursor }));
+        let nextReply = lastReply;
         // applyNavigationPage validated the retained query, epoch, revision
         // and range. Transfer only a proof still admitted for those rows.
         if (page.rangeUnchanged && priorState.page && !next.ownerProof?.directoryGitProof) {
@@ -1213,7 +1301,8 @@ export class NavigationWindowQueries {
           // Saved expansion must not withhold the ordinary first page, nor
           // replace a longer cached range with it.
           if (this.needsWorkingStateReplacement(resource, next)) return;
-          this.acceptState(resource, next);
+          acceptReply(next, nextReply);
+          nextReply = undefined;
           this.publish();
         }
         let extensions = 0;
@@ -1235,6 +1324,7 @@ export class NavigationWindowQueries {
             if (loadedRows(extended.state.page) <= before) throw new Error("Navigation range refresh did not advance.");
             assertRetained(extended.state);
             next = extended;
+            nextReply = lastReply;
           } catch (error) {
             if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
             if (error === RESUME_BUDGET_REACHED) break;
@@ -1243,13 +1333,13 @@ export class NavigationWindowQueries {
             // any growth delivered before the failure. Continuations also
             // retain their progress; both paths still report the error.
             if (!pageCursor && loadedRows(next.state.page) < restoring) throw error;
-            if (!this.needsSeenReplacement(resource, next) && !this.needsWorkingStateReplacement(resource, next)) this.acceptState(resource, next);
+            if (!this.needsSeenReplacement(resource, next) && !this.needsWorkingStateReplacement(resource, next)) acceptReply(next, nextReply);
             throw error;
           }
           extensions += 1;
         }
         if (this.needsSeenReplacement(resource, next) || this.needsWorkingStateReplacement(resource, next)) return;
-        this.acceptState(resource, next);
+        acceptReply(next, nextReply);
         resource.pinPublicationPending = false;
         resource.membershipUncertain = false;
         resource.prAttachmentsUncertain = false;
@@ -1258,6 +1348,7 @@ export class NavigationWindowQueries {
         if (this.isCurrent(resource) && !this.needsSeenReplacement(resource) && !this.needsWorkingStateReplacement(resource)) resource.value = { ...resource.value,
           state: failNavigationPageRead(resource.value.state, started.pendingSequence, error) };
       } finally {
+        discardReply();
         resource.membershipRead = undefined;
         // An invalidation can discard the opening page before it is accepted.
         // Its coalesced replacement still owes the saved depth. Carry the same

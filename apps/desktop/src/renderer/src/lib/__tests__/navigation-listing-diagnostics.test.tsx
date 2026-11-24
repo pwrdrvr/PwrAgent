@@ -37,8 +37,9 @@ it("records StrictMode effect replay but only the surviving effect dispatches", 
   expect(events.filter((event) => event.phase === "effect").map((event) => [event.view, event.effect]))
     .toEqual([[diagnostic.view, 1], [diagnostic.view, 2]]);
   expect(events.filter((event) => event.phase === "dispatch")).toHaveLength(2);
+  expect(events.filter((event) => event.phase === "reply" && event.disposition === "accepted")).toHaveLength(2);
   expect(events.some((event) => event.phase === "dispose" && event.effect === 1)).toBe(true);
-  expect(events.length).toBeLessThanOrEqual(15);
+  expect(events.length).toBeLessThanOrEqual(17);
   unmount();
 });
 
@@ -78,4 +79,99 @@ it("bounds renderer ring memory and age without per-event transport", () => {
     expect(diagnostics.snapshot().events).toEqual([]);
     expect(vi.getTimerCount()).toBe(0);
   } finally { vi.useRealTimers(); }
+});
+
+const parent = { backend: "codex", threadId: "PRIVATE PARENT" } as const;
+const peer = { scope: "remote", instanceId: "PRIVATE PEER" } as const;
+const childQuery = { kind: "children", parent, directoryKey: "PRIVATE DIRECTORY" } as const;
+const seenThreadId = "PRIVATE SEEN THREAD";
+const seenEvent = (threadId: string, federationTarget?: typeof peer): AgentEvent => ({
+  backend: "codex", federationTarget, notification: { method: "navigation/thread/seen", params: { threadId, seenUpdatedAt: 1 } },
+});
+const directory = { key: "PRIVATE DIRECTORY", kind: "directory", label: "PRIVATE TITLE",
+  counts: { ...page.counts, unread: 2 }, launchpadPresent: false, pinnedRootCount: 0, unpinnedRootCount: 0 } as const;
+const proof = { version: 1, prKeys: [], threadKeys: [JSON.stringify([null, "codex", seenThreadId])],
+  workingStatePaths: ["/PRIVATE CHECKOUT"] } satisfies NonNullable<NavigationQueryPage["metadataDependencies"]>;
+
+it.each([
+  { reason: "parent-or-row", coverage: "complete", range: "full", matchesParent: true },
+  { reason: "selection-directory", coverage: "complete", range: "prefix", remote: true },
+  { reason: "thread-dependency", coverage: "complete", range: "prefix", remote: true, dependencies: true },
+  { reason: "partial-coverage", coverage: "degraded", range: "offset-partial" },
+  { reason: "partial-range", coverage: "complete", range: "offset-complete" },
+  { reason: "missing-proof", coverage: "complete", range: "full", lens: true },
+] as const)("records the $reason seen branch and accepted unread change after a settled pin refresh", async (fixture) => {
+  const options = { remote: false, dependencies: false, matchesParent: false, lens: false, ...fixture };
+  let now = 1000;
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  const complete = options.range === "full" || options.range === "offset-complete";
+  const baseline: NavigationQueryPage = { ...page, coverage: { state: options.coverage }, complete,
+    rangeStart: options.range.startsWith("offset") ? 8 : 0, nextCursor: complete ? undefined : "PRIVATE CURSOR",
+    counts: { ...page.counts, unread: 3, providers: ["PRIVATE PROVIDER ACCOUNT"] },
+    selectionDirectory: options.remote ? directory : undefined,
+    metadataDependencies: options.dependencies ? proof : undefined };
+  let response = baseline;
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async () => response);
+  const controller = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  try {
+    const federationTarget = options.remote ? peer : undefined;
+    controller.setDemand(new Map([["PRIVATE RESOURCE", { ...request, inventory: options.remote ? "owner" : "viewer",
+      query: options.lens ? request.query : childQuery, federationTarget }]]));
+    await controller.refresh();
+    await controller.refresh(undefined, undefined, false, undefined, "action/remote-pin-add");
+    const pinSettled = navigationListingDiagnostics.snapshot().events.find((event) =>
+      event.phase === "settled" && event.caller === "action/remote-pin-add")!;
+    now += 5_001;
+    response = { ...baseline, counts: { ...baseline.counts, unread: options.remote ? 3 : 2 },
+      selectionDirectory: options.remote ? { ...directory, counts: { ...directory.counts, unread: 1 } } : undefined };
+    controller.invalidate(undefined, undefined, seenEvent(options.matchesParent ? parent.threadId : seenThreadId, federationTarget));
+    await controller.refresh(undefined, undefined, true);
+    const { events } = navigationListingDiagnostics.snapshot();
+    const decision = events.find((event) => event.phase === "seen-decision")!;
+    expect(decision).toMatchObject({ seenDecision: "invalidate", seenReason: options.reason,
+      coverage: options.coverage, range: options.range, proofAdmitted: options.dependencies });
+    expect(decision.at - pinSettled.at).toBe(5_001);
+    const dispatch = events.filter((event) => event.phase === "dispatch").at(-1)!;
+    expect(dispatch).toMatchObject({ batch: decision.batch, resource: decision.resource, trigger: "navigation/thread/seen" });
+    const replyIndex = events.findIndex((event) => event.phase === "reply" && event.read === dispatch.read);
+    expect(replyIndex).toBeGreaterThan(events.findIndex((event) => event.phase === "settled" && event.read === dispatch.read));
+    expect(events[replyIndex]).toMatchObject({ disposition: "accepted", logical: dispatch.logical, attempt: dispatch.attempt,
+      coverage: options.coverage, range: options.range, proofAdmitted: options.dependencies, unreadChanged: !options.remote });
+    expect(events[replyIndex]?.selectionUnreadChanged).toBe(options.remote ? true : undefined);
+    expect(JSON.stringify(events)).not.toContain("PRIVATE");
+  } finally { controller.dispose(); clock.mockRestore(); }
+});
+
+it.each([true, false])("reports the deciding candidate proof after a mark-seen notice is deferred (proof: %s)", async (returnsProof) => {
+  const baseline: NavigationQueryPage = { ...page, metadataDependencies: { version: 1, threadKeys: [], prKeys: [] } };
+  const pending = Promise.withResolvers<NavigationQueryPage>();
+  const entered = Promise.withResolvers<void>();
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async () => baseline);
+  const controller = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  try {
+    controller.setDemand(new Map([["child", { ...request, query: childQuery }]]));
+    await controller.refresh();
+    read.mockImplementationOnce(() => { entered.resolve(); return pending.promise; });
+    controller.invalidate(undefined, undefined, { backend: "codex", notification: {
+      method: "thread/parent/set", params: { threadId: seenThreadId, parentThreadId: parent.threadId },
+    } });
+    const refresh = controller.refresh(undefined, undefined, true);
+    await entered.promise;
+    controller.invalidate(undefined, undefined, seenEvent(seenThreadId));
+    pending.resolve(returnsProof ? baseline : page);
+    await refresh;
+    const events = navigationListingDiagnostics.snapshot().events;
+    const decisions = events.filter((event) => event.phase === "seen-decision");
+    expect(decisions).toMatchObject([
+      { seenDecision: "defer", seenReason: "uncertain-membership", proofAdmitted: true },
+      { seenDecision: returnsProof ? "exclude" : "replace", seenReason: returnsProof ? "proof-excludes" : "missing-proof",
+        batch: decisions[0]?.batch, resource: decisions[0]?.resource, proofAdmitted: returnsProof },
+    ]);
+    const dispatch = events.filter((event) => event.phase === "dispatch")[1]!;
+    expect(events.find((event) => event.phase === "settled" && event.read === dispatch.read)).toMatchObject({ outcome: "ok" });
+    const reply = events.find((event) => event.phase === "reply" && event.read === dispatch.read);
+    expect(reply).toMatchObject({ disposition: returnsProof ? "accepted" : "discarded", attempt: dispatch.attempt });
+    expect(reply?.unreadChanged).toBe(returnsProof ? false : undefined);
+    expect(read).toHaveBeenCalledTimes(returnsProof ? 2 : 3);
+  } finally { pending.resolve(baseline); controller.dispose(); }
 });

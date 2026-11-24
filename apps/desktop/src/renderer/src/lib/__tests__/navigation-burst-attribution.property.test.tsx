@@ -52,8 +52,8 @@ it("accounts for event fan-out independently of nearby scrolling and loaded quer
         expect(events.find((event) => event.phase === "settled" && event.logical === dispatch.logical))
           .toMatchObject({ attempt: dispatch.attempt, outcome: "ok" });
       }
-      // Three summary records at most, plus exactly three per page; no row events.
-      expect(events.length).toBeLessThanOrEqual(3 + queries * 3);
+      // Three summary records at most, plus four per page; no row events.
+      expect(events.length).toBeLessThanOrEqual(3 + queries * 4);
       expect(JSON.stringify(events)).not.toContain("PRIVATE");
     } finally { controller.dispose(); }
   }), { numRuns: 12 });
@@ -83,7 +83,7 @@ it("measures admission wait separately from the API duration", async () => {
   } finally { complete(); controller.dispose(); vi.restoreAllMocks(); }
 });
 
-it("records a settlement only in the interval that recorded its dispatch", async () => {
+it("records settlement and renderer disposition only in the interval that recorded dispatch", async () => {
   await fc.assert(fc.asyncProperty(fc.boolean(), fc.boolean(), fc.array(fc.boolean(), { maxLength: 6 }),
     async (initiallyEnabled, failed, controls) => {
       setNavigationListingDiagnosticsEnabled(false);
@@ -104,10 +104,13 @@ it("records a settlement only in the interval that recorded its dispatch", async
         else response.resolve(page);
         await refreshed;
 
-        const phases = ring.snapshot().events.filter((event) => event.phase === "dispatch" || event.phase === "settled");
+        const phases = ring.snapshot().events.filter((event) => ["dispatch", "settled", "reply"].includes(event.phase));
         if (initiallyEnabled && controls.every(Boolean)) {
-          expect(phases).toMatchObject([{ phase: "dispatch" }, { phase: "settled", outcome: failed ? "error" : "ok" }]);
-          expect(phases[1]?.read).toBe(phases[0]?.read);
+          expect(phases).toMatchObject([{ phase: "dispatch" }, { phase: "settled", outcome: failed ? "error" : "ok" },
+            ...failed ? [] : [{ phase: "reply", disposition: "accepted" }]]);
+          for (const event of phases.slice(1)) {
+            expect(event).toMatchObject({ read: phases[0]?.read, logical: phases[0]?.logical, attempt: phases[0]?.attempt });
+          }
         } else {
           expect(phases).toEqual([]);
         }
@@ -115,7 +118,7 @@ it("records a settlement only in the interval that recorded its dispatch", async
         response.resolve(page);
         controller.dispose();
       }
-    }), { examples: [[true, false, [false, true]], [true, true, [false, true]], [false, false, [true]]] });
+    }), { examples: [[true, false, []], [true, false, [false, true]], [true, true, [false, true]], [false, false, [true]]] });
 });
 
 it("does not charge prior API time as queue wait on a page-size retry", async () => {
@@ -135,5 +138,8 @@ it("does not charge prior API time as queue wait on a page-size retry", async ()
     const events = ring.snapshot().events;
     expect(events.filter((event) => event.phase === "dispatch").map((event) => event.waitMs)).toEqual([0, 0]);
     expect(events.filter((event) => event.phase === "settled").map((event) => event.durationMs)).toEqual([100, 75]);
+    expect(events.filter((event) => event.phase === "reply")).toMatchObject([
+      { attempt: 1, disposition: "discarded" }, { attempt: 2, disposition: "accepted" },
+    ]);
   } finally { controller.dispose(); vi.restoreAllMocks(); }
 });
