@@ -1013,7 +1013,7 @@ describe("AutomationEditor", () => {
     for (const provider of ["telegram", "slack"] as const) {
       chooseSelectOption(
         screen.getByLabelText("Destination provider"),
-        INBOUND_PROVIDER_LABELS[provider],
+        INBOUND_PROVIDER_LABELS[provider] ?? provider,
       );
       const trigger = await screen.findByRole("button", {
         name: /^Destination: /,
