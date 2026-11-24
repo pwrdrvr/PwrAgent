@@ -250,8 +250,8 @@ it("shares the physical owner scan with viewers while retaining separate invento
 it.each([8, 16])("budgets projection work and real SQLite commits for %i expanded collections", async (n) => {
   const create = projection.createNavigationQuerySnapshot;
   const work = { index: 0, children: 0 };
-  const prepared = vi.spyOn(projection, "createNavigationQuerySnapshot").mockImplementation((index) =>
-    create(index, (stage, rows) => { work[stage] += rows; }));
+  const prepared = vi.spyOn(projection, "createNavigationQuerySnapshot").mockImplementation((index, _onWork, owner, previous) =>
+    create(index, (stage, rows) => { work[stage] += rows; }, owner, previous));
   const f = await fixture(n);
   try {
     const { writes } = await measureSqliteWrites(async () => {
@@ -269,7 +269,9 @@ it.each([8, 16])("budgets projection work and real SQLite commits for %i expande
     prepared.mockClear(); work.index = 0; work.children = 0;
     await f.queries.refresh(); await until(f.idle);
     expect(prepared).not.toHaveBeenCalled();
-    expect(work).toEqual({ index: 0, children: 3 * n });
+    expect(work.index).toBe(0);
+    // Cursor-bearing collections can reuse their admitted projection.
+    expect(work.children).toBeLessThanOrEqual(3 * n);
     expect(f.read).toHaveBeenCalledTimes(1 + 2 * n);
     expect(f.provider).not.toHaveBeenCalled();
     expect(f.materialize).not.toHaveBeenCalled();

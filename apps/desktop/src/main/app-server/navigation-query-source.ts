@@ -1,7 +1,7 @@
 import path from "node:path";
 import { createHash } from "node:crypto";
 import type { AppServerBackendScope, AppServerThreadSummary, LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
-import type { NavigationDirectorySummary, NavigationIdentity, NavigationQueryRequest, PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { NavigationDirectorySummary, NavigationIdentity, NavigationQueryRequest, NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
 import { buildPullRequestStatusKey, buildThreadIdentityKey, parseThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { navigationPathIdentity } from "@pwragent/shared/directory-navigation";
 import { isWorkspaceHandoffDirectory } from "@pwragent/shared/navigation-state";
@@ -13,7 +13,7 @@ import { getDesktopBackendRegistry, type DesktopBackendRegistry } from "./backen
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import { hydrateMissingLinkedDirectoriesFromSiblingRepos } from "@pwragent/owner-core/codex-app-server/thread-directory-fallback";
-import { createNavigationQuerySnapshot } from "@pwragent/owner-core/navigation-query-projection";
+import { createNavigationQuerySnapshot, navigationQuerySnapshotSharedThreads } from "@pwragent/owner-core/navigation-query-projection";
 import type { NavigationPullRequestProjection } from "@pwragent/owner-core/navigation-query-store";
 import { resolveScratchProjectsRoots } from "./scratch-projects";
 import { buildNavigationIndexMessagingBindings } from "../messaging/messaging-bindings-snapshot";
@@ -27,14 +27,16 @@ import {
 } from "./navigation-directory-set-announcer";
 import { getMainLogger } from "../log";
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
-import { PR_METADATA_PRIORITY } from "../pr-status/pr-metadata-process";
+import { PR_METADATA_PRIORITY, SharedPrMetadataRead } from "../pr-status/pr-metadata-process";
 import { StackReader, StackReadObservation } from "../stacks/stack-reader";
 import { compactStackMembership, MAX_COMPACT_STACK_MEMBERSHIPS, type CompactStackMembership, type SelectedStackLayer, type StackSummary } from "@pwragent/shared/stacks/stack-status";
 import { comparePullRequestStack } from "@pwragent/shared/pull-request-rollup";
 import { readNavigationCheckout } from "../git-info/directory-store";
 import { collectConcurrent } from "../../shared/concurrent-work";
 
-const indexReads = new NavigationIndexReadPool(1_000);
+// Keep a bounded comparison candidate across nearby refreshes. The serving
+// window and the provider/filesystem validation on its expiry still apply.
+const indexReads = new NavigationIndexReadPool(1_000, 15_000);
 const actionIndexReads = new NavigationIndexReadPool();
 const stackReader = new StackReader();
 
@@ -154,7 +156,7 @@ export async function loadLocalNavigationQueryIndex(params: {
   // before the pool's (owner PR metadata) would join the stale index.
   const version = `${overlayStore.readNavigationSourceVersion?.() ?? ""}|${
     registry.getStartupProviderRefreshStatus?.()?.state ?? ""}`;
-  return reads.read(key, async (signal, checkpoint) => {
+  return reads.read(key, async (signal, checkpoint, previous) => {
     let navigationChanged = false;
     // An event during a scan stops later readers from joining it; they share
     // one follow-up scan. Each run owns its listener, because the pool can
@@ -178,15 +180,14 @@ export async function loadLocalNavigationQueryIndex(params: {
     if (params.includeStacks) {
       // Share the same membership and viewer projection with stack-free queries.
       const local = await loadLocalNavigationQueryIndex({ ...params, includeStacks: false, signal });
-      const projection = await projectNavigationStacks(local.threads, registry, signal);
-      return projection ? createNavigationQuerySnapshot({ ...local, ...projection }, undefined, local) : local;
+      return await projectNavigationIndexStacks(local, registry, version, signal, previous);
     }
     if (params.viewer) {
       const local = await loadLocalNavigationQueryIndex({ ...params, viewer: undefined, signal });
       checkpoint();
       const projected = await params.viewer.project(local);
       signal.throwIfAborted();
-      return createNavigationQuerySnapshot(projected, undefined, local);
+      return createNavigationQuerySnapshot(projected, undefined, local, previous());
     }
     // Taken before listing. The registry drops its cached and pending
     // listings for a boundary before it tells listeners, so this listing
@@ -213,7 +214,7 @@ export async function loadLocalNavigationQueryIndex(params: {
     if (publishesSidebar && !params.registry) {
       getNavigationDirectorySetAnnouncer().observe(index.directories);
     }
-    return createNavigationQuerySnapshot(index);
+    return createNavigationQuerySnapshot(index, undefined, undefined, previous());
   }, params.signal, version, params.viewer || params.includeStacks ? "projection" : "source");
 }
 
@@ -341,11 +342,71 @@ export function getNavigationDirectorySetAnnouncer(): NavigationDirectorySetAnno
   return directorySetAnnouncer;
 }
 
+type NavigationStackProjection = Pick<NavigationQueryIndex, "threads" | "stacks"> | undefined;
+const activeStackReads = new Map<string, SharedPrMetadataRead<NavigationStackProjection>>();
+
+async function projectNavigationIndexStacks(
+  local: NavigationQueryIndex,
+  registry: DesktopBackendRegistry,
+  version: string,
+  signal: AbortSignal,
+  previous: () => NavigationQueryIndex | undefined,
+): Promise<NavigationQueryIndex> {
+  const nativeRows = navigationQuerySnapshotSharedThreads(local);
+  const pins = nativeRows && local.threads !== nativeRows ? local.threads.slice(nativeRows.length) : [];
+  const observedAt = local.observedAt;
+  // A viewer observes the same native inventory even if saving its resolved
+  // pins advances the source version while projecting this read.
+  const share = nativeRows && observedAt !== undefined && pins.every((thread) => thread.federation);
+  const projection = share
+    ? await readActiveNavigationStacks(nativeRows, observedAt, registry, version, signal)
+    : await projectNavigationStacks(local.threads, registry, signal);
+  if (!projection) return local;
+  return createNavigationQuerySnapshot({
+    ...local,
+    ...projection,
+    threads: share && pins.length ? [...projection.threads, ...pins] : projection.threads,
+  }, undefined, local, previous());
+}
+
+async function readActiveNavigationStacks(
+  nativeRows: readonly NavigationThreadSummary[],
+  observedAt: number,
+  registry: DesktopBackendRegistry,
+  version: string,
+  signal: AbortSignal,
+): Promise<NavigationStackProjection> {
+  signal.throwIfAborted();
+  const key = JSON.stringify([sourceId(nativeRows), observedAt, version]);
+  const existing = activeStackReads.get(key);
+  if (existing && !existing.signal.aborted) return await existing.read({ signal });
+  // Only a running verification is shared. A later consumer must verify
+  // Git before starting a new lease, even on identical native membership.
+  const release = () => {
+    if (activeStackReads.get(key) === read) activeStackReads.delete(key);
+    unsubscribe?.();
+    unsubscribe = undefined;
+  };
+  const read = new SharedPrMetadataRead(async (demand) => {
+    try {
+      return await projectNavigationStacks(nativeRows, registry, demand.signal!);
+    } finally {
+      release();
+    }
+  });
+  let unsubscribe: (() => void) | undefined = registry.onEvent?.((event) => {
+    if (navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params)) release();
+  });
+  read.signal.addEventListener("abort", release, { once: true });
+  activeStackReads.set(key, read);
+  return await read.read({ signal });
+}
+
 async function projectNavigationStacks(
-  threads: NavigationQueryIndex["threads"],
+  threads: readonly NavigationThreadSummary[],
   registry: DesktopBackendRegistry,
   signal: AbortSignal,
-): Promise<Pick<NavigationQueryIndex, "threads" | "stacks"> | undefined> {
+): Promise<NavigationStackProjection> {
   const candidates = threads.filter((thread) => !thread.federation && (thread.linkedDirectories?.some((directory) =>
     directory.gitBranch || directory.worktreePath || directory.repositoryKey)
     || ((thread.observedGitBranch || thread.gitBranch) && thread.linkedDirectories?.length)));
@@ -376,7 +437,7 @@ async function projectNavigationStacks(
 }
 
 export function projectBoundNavigationStacks(
-  threads: NavigationQueryIndex["threads"],
+  threads: readonly NavigationThreadSummary[],
   stacks: readonly StackSummary[],
   prsByThread?: ReadonlyMap<string, readonly PrSummary[]>,
 ): Pick<NavigationQueryIndex, "threads" | "stacks"> | undefined {

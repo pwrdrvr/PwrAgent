@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rename, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -19,6 +19,7 @@ import { getDesktopBackendRegistry, type DesktopBackendRegistry } from "../app-s
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import type { NavigationDirectoryGitStatus } from "@pwragent/shared/contracts/navigation";
 import budgets from "./fixtures/navigation-listing-budgets.json";
+import { isolateProcessGitEnvironment, runIsolatedGit } from "./helpers/isolated-git";
 
 const mocks = vi.hoisted(() => {
   const findActiveBindings = vi.fn(async (): Promise<MessagingBindingRecord[]> => []);
@@ -1062,4 +1063,120 @@ it("reuses membership across a PR status burst while pages observe the current r
     project.mockImplementation(original);
     source.emit("thread/name/updated");
   }
+});
+
+async function withNavigationStackCheckout(run: (fixture: {
+  source: ReturnType<typeof createSource>;
+  read: (viewer?: { source: object; project: (index: NavigationQueryIndex) => Promise<NavigationQueryIndex> }) => Promise<NavigationQueryIndex>;
+  viewer: { source: object; project: (index: NavigationQueryIndex) => Promise<NavigationQueryIndex> };
+  retargetCatalog: () => Promise<void>;
+}) => Promise<void>) {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-nav-stack-work-")));
+  const restore = isolateProcessGitEnvironment(root);
+  const source = createSource();
+  source.registry.stackThreadHeld = () => true;
+  const original = mocks.store.readNavigationQueryIndex.getMockImplementation()!;
+  try {
+    const git = async (...args: string[]) => (await runIsolatedGit(root, args)).stdout.trim();
+    await git("init", "-b", "topic");
+    await git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "Fixture");
+    const head = await git("rev-parse", "HEAD");
+    await git("branch", "main");
+    const writeCatalog = (branch: string, commit: string) => writeFile(path.join(root, ".git", "gh-stack"), JSON.stringify({
+      schemaVersion: 1, repository: "github.com:fixture/stack",
+      stacks: [{ trunk: { branch: "main", head }, branches: [{ branch, head: commit, base: head }] }],
+    }));
+    await writeCatalog("topic", head);
+    source.listThreads.mockImplementation(async () => [{
+      id: "stacked", source: "codex", title: "Stacked", titleSource: "explicit",
+      gitBranch: "topic", linkedDirectories: [{ id: root, path: root, kind: "local", label: "Fixture" }],
+      inbox: { inInbox: false },
+    }]);
+    mocks.store.readNavigationQueryIndex.mockImplementation(({ threads }) => ({ threads, directories: [] }));
+    const pin: NavigationThreadSummary = {
+      id: "remote", source: "codex", title: "Viewer pin", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false }, federation: { instanceLabel: "Peer",
+        ref: buildFederatedThreadRef({ backend: "codex", threadId: "remote", instanceId: "peer" }) },
+    };
+    const viewer = { source: {}, project: async (index: NavigationQueryIndex) => appendViewerNavigationPins(index, [pin]) };
+    const read = (view?: typeof viewer) => loadLocalNavigationQueryIndex({
+      registry: source.registry, callerReason: "renderer-navigation-query", includeStacks: true, viewer: view,
+    });
+    await run({ source, read, viewer, retargetCatalog: async () => {
+      await git("branch", "other-topic");
+      const next = await git("rev-parse", "refs/heads/other-topic");
+      await writeCatalog("other-topic", next);
+    } });
+  } finally {
+    source.emit("thread/name/updated");
+    mocks.store.readNavigationQueryIndex.mockImplementation(original);
+    restore();
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+it("shares one live stack observation across concurrent owner and viewer inventory refreshes", async () => {
+  await withNavigationStackCheckout(async ({ source, read, viewer }) => {
+    const stackReads = vi.spyOn(StackReader.prototype, "read");
+    try {
+      for (const method of ["thread/name/updated", "pullRequest/status/updated", "turn/completed"]) {
+        source.emit(method);
+        const [owner, shown] = await Promise.all([read(), read(viewer)]);
+        expect(owner.threads).toHaveLength(1);
+        expect(shown.threads).toHaveLength(2);
+        expect(owner.stacks?.length).toBe(1);
+        expect(shown.stacks?.length).toBe(1);
+      }
+      expect(stackReads).toHaveBeenCalledTimes(3);
+    } finally {
+      stackReads.mockRestore();
+    }
+  });
+});
+
+it("keeps the viewer listing when publishing pins advances the durable navigation version", async () => {
+  await withNavigationStackCheckout(async ({ source, read, viewer }) => {
+    const version = mocks.store.readNavigationSourceVersion.getMockImplementation()!;
+    const before = mocks.store.readNavigationQueryIndex.mock.calls.length;
+    const stackReads = vi.spyOn(StackReader.prototype, "read");
+    try {
+      const shown = await read({
+        ...viewer,
+        project: async (index) => {
+          // Saving a newer peer pin advances the durable version even when
+          // the already-observed native listing is unaffected.
+          mocks.store.readNavigationSourceVersion.mockReturnValue("new peer pin snapshot");
+          return await viewer.project(index);
+        },
+      });
+      expect(shown.threads).toHaveLength(2);
+      expect(shown.stacks).toHaveLength(1);
+      expect(source.listThreads).toHaveBeenCalledTimes(1);
+      expect(mocks.store.readNavigationQueryIndex.mock.calls.length - before).toBe(1);
+      expect(stackReads).toHaveBeenCalledTimes(1);
+    } finally {
+      mocks.store.readNavigationSourceVersion.mockImplementation(version);
+      stackReads.mockRestore();
+    }
+  });
+});
+
+it("observes a retired Git stack before starting a new viewer lease", async () => {
+  await withNavigationStackCheckout(async ({ read, viewer, retargetCatalog }) => {
+    const started = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(started);
+    const layers = (index: NavigationQueryIndex) => projectSelectedStackLayers(index, { backend: "codex", threadId: "stacked" }).count;
+    try {
+      expect(layers(await read())).toBe(1);
+      clock.mockReturnValue(started + 600);
+      await retargetCatalog();
+      const shown = await read(viewer);
+      clock.mockReturnValue(started + 1_100);
+      expect(layers(await read())).toBe(0);
+      expect(layers(shown)).toBe(0);
+      expect(layers(await read(viewer))).toBe(0);
+    } finally {
+      clock.mockRestore();
+    }
+  });
 });
