@@ -1452,6 +1452,7 @@ function buildAdmissionThreadSummary(params: {
   overlay?: ThreadOverlayState;
   queuedExecutionMode?: {
     mode: NonNullable<NavigationThreadSummary["queuedExecutionMode"]>;
+    nativeMode?: string;
     queuedAt: number;
   };
   queuedTurns?: NavigationThreadSummary["queuedTurns"];
@@ -1479,6 +1480,7 @@ function buildAdmissionThreadSummary(params: {
     ...(params.queuedExecutionMode
       ? {
           queuedExecutionMode: params.queuedExecutionMode.mode,
+          queuedNativeMode: params.queuedExecutionMode.nativeMode,
           queuedExecutionModeAt: params.queuedExecutionMode.queuedAt,
         }
       : {}),

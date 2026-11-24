@@ -4229,9 +4229,10 @@ function DesktopAppShell(props: {
   });
   const handleSetExecutionMode = useEventCallback(async (
     executionMode: Parameters<NonNullable<ThreadViewProps["onSetExecutionMode"]>>[0],
+    acpMode?: Parameters<NonNullable<ThreadViewProps["onSetExecutionMode"]>>[1],
   ) => {
     const thread = navigation.selectedThread;
-    if (thread) await navigation.setThreadExecutionMode(thread, executionMode);
+    if (thread) await navigation.setThreadExecutionMode(thread, executionMode, acpMode);
   });
   const handleSetAcpRuntimeOption = useEventCallback(async (
     params: Parameters<NonNullable<ThreadViewProps["onSetAcpRuntimeOption"]>>[0],

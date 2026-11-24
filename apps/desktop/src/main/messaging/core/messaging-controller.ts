@@ -1598,6 +1598,8 @@ export class MessagingController {
       threadId: ThreadIdentifier;
       queuedExecutionMode: ThreadExecutionMode;
       queuedAt: number;
+      fromLabel?: string;
+      toLabel?: string;
     },
   ): Promise<void> {
     const bindings = this.filterBindingsForChannel(
@@ -1616,8 +1618,8 @@ export class MessagingController {
       threadId: params.threadId,
     });
     const thread = admissionState?.thread;
-    const fromExecutionMode = thread?.executionMode ?? "default";
-    const toExecutionMode = params.queuedExecutionMode;
+    const fromLabel = params.fromLabel ?? formatExecutionModeLabel(thread?.executionMode ?? "default");
+    const toLabel = params.toLabel ?? formatExecutionModeLabel(params.queuedExecutionMode);
 
     // The registry's queueCleared notification doesn't carry the queueId
     // back, so we generate the cancel-action id here from the bus event.
@@ -1634,7 +1636,7 @@ export class MessagingController {
       createdAt: this.now(),
       title: "⏳ Permissions queue",
       body: [
-        `${formatExecutionModeLabel(fromExecutionMode)} → ${formatExecutionModeLabel(toExecutionMode)}`,
+        `${fromLabel} → ${toLabel}`,
         "Will apply at end of current turn.",
       ].join("\n"),
       fallbackText: "Reply Cancel to drop the queued change.",
@@ -1653,8 +1655,8 @@ export class MessagingController {
       backend,
       threadId: params.threadId,
       queueId,
-      fromExecutionMode,
-      toExecutionMode,
+      fromLabel,
+      toLabel,
       queuedAt: params.queuedAt,
       surfaces: new Map(),
     };
@@ -1714,8 +1716,7 @@ export class MessagingController {
       return;
     }
 
-    const fromLabel = formatExecutionModeLabel(tracking.fromExecutionMode);
-    const toLabel = formatExecutionModeLabel(tracking.toExecutionMode);
+    const { fromLabel, toLabel } = tracking;
     const body =
       params.reason === "cancelled"
         ? `✕ Cancelled queued permissions change (${fromLabel} → ${toLabel})`

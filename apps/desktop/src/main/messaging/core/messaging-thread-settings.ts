@@ -23,13 +23,18 @@ import type {
 } from "@pwragent/messaging-interface";
 import type { MessagingAccessControl } from "./messaging-access-control";
 import { acpRuntimeModeIsFullAccess } from "@pwragent/shared/acp-permission-mode";
+import {
+  applyProviderAccessAcpOptionToRuntime,
+  resolveProviderAccessControl,
+} from "@pwragent/shared/provider-access-mode";
 import { acpBackendDeclaresExecutionMode, buildMessagingAcpRuntimeModeSummary } from "./messaging-acp-runtime.js";
 import type { MessagingBackendBridge } from "./messaging-adapter";
 import { federationTargetForBinding, type MessagingDeliveryGuard } from "./messaging-backend-event-helpers";
 import type { MessagingBindingService } from "./messaging-binding-service";
 import {
   ACP_RUNTIME_RISK_ACTION_PREFIX, findThreadForBinding, readAcpRuntimeOptionSource,
-  readMessagingToolUpdateModeValue, readThreadExecutionModeValue, type AcpRuntimeRiskWarningContext,
+  readMessagingToolUpdateModeValue, readPermissionsAcpModeValue, readThreadExecutionModeValue,
+  type AcpRuntimeRiskWarningContext,
 } from "./messaging-callback-helpers";
 import { readStringValue } from "./messaging-command-helpers";
 import { resolveExecutionModeForThread, type ExecutionModeResolution } from "./messaging-inbound-helpers";
@@ -189,7 +194,7 @@ export class MessagingThreadSettings {
         binding,
         choices: runtimeMode.choices,
         createdAt: this.context.now(),
-        prompt: summary.kind === "acp:antigravity" ? "Select Agent mode" : "Select Permissions",
+        prompt: "Select Permissions",
       }),
       binding,
       event,
@@ -206,11 +211,42 @@ export class MessagingThreadSettings {
       thread?.queuedExecutionMode ??
       executionModeForBinding(binding, navigation) ??
       "default";
+    const summary = binding.backend === "acp:antigravity"
+      ? await this.context.getBackendSummary(binding.backend, federationTargetForBinding(binding))
+      : undefined;
+    const antigravityControl = summary
+      ? resolveProviderAccessControl({
+          backend: summary,
+          state: {
+            executionMode: currentMode,
+            acpRuntime: thread?.acpRuntime ?? binding.preferences?.acpRuntime,
+          },
+        })
+      : undefined;
+    const choices = antigravityControl && antigravityControl.options.length > 0
+      ? antigravityControl.options.map((option) => ({
+          label: option.label,
+          mode: option.executionMode,
+          selected: option.value === (thread?.queuedExecutionMode === "default"
+            ? thread.queuedNativeMode ?? antigravityControl.value
+            : antigravityControl.value),
+          ...(option.acpOption && option.acpOption.source !== "model"
+            ? {
+                acpMode: {
+                  source: option.acpOption.source,
+                  optionId: option.acpOption.optionId,
+                  value: option.acpOption.value,
+                },
+              }
+            : {}),
+        }))
+      : undefined;
     await this.context.bindingService.deliverAndStoreStatusSubmode(
       buildStatusPermissionsPickerIntent({
         id: this.context.newIntentId("status-permissions-picker"),
         capabilityProfile: this.context.capabilityProfile,
         binding,
+        choices,
         createdAt: this.context.now(),
         currentMode,
       }),
@@ -509,6 +545,7 @@ export class MessagingThreadSettings {
     event: MessagingInboundCallbackEvent,
   ): Promise<void> {
     const executionMode = readThreadExecutionModeValue(event.value);
+    const acpMode = readPermissionsAcpModeValue(event.value);
     if (!executionMode) {
       await this.context.deliverInvalidStatusSelection(event);
       return;
@@ -519,7 +556,13 @@ export class MessagingThreadSettings {
       thread?.queuedExecutionMode ??
       executionModeForBinding(binding, navigation) ??
       "default";
-    if (executionMode === currentMode) {
+    const currentRuntime = thread?.acpRuntime ?? binding.preferences?.acpRuntime;
+    const currentAcpValue = acpMode
+      ? thread?.queuedNativeMode ?? (acpMode.source === "mode"
+          ? currentRuntime?.currentModeId
+          : currentRuntime?.configValues?.[acpMode.optionId] ?? currentRuntime?.currentModeId)
+      : undefined;
+    if (executionMode === currentMode && (!acpMode || currentAcpValue === acpMode.value)) {
       await this.context.bindingService.clearActiveBindingSubmodeIntent(event, binding);
       await this.context.bindingService.renderBindingStatus(binding, event, navigation);
       return;
@@ -552,9 +595,16 @@ export class MessagingThreadSettings {
         return;
       }
     }
+    const nextAcpRuntime = acpMode
+      ? {
+          ...applyProviderAccessAcpOptionToRuntime(currentRuntime, acpMode),
+          updatedAt: this.context.now(),
+        }
+      : undefined;
     await this.context.bindingService.updateBindingPreferences(binding, {
       executionMode,
       permissionsMode: executionMode,
+      ...(nextAcpRuntime ? { acpRuntime: nextAcpRuntime } : {}),
     });
     await this.context.bindingService.clearActiveBindingSubmodeIntent(event, binding);
     await this.context.backend.setThreadExecutionMode?.({
@@ -562,6 +612,7 @@ export class MessagingThreadSettings {
       federationTarget: federationTargetForBinding(binding),
       threadId: binding.threadId,
       executionMode,
+      ...(acpMode ? { acpMode } : {}),
     });
   }
 

@@ -1769,17 +1769,26 @@ export class AcpBackendAdapter {
     this.acpSessionStore?.upsertSession?.(session);
   }
 
-  async moveAntigravitySession(sessionId: string, executionMode: ThreadExecutionMode): Promise<void> {
+  async moveAntigravitySession(
+    sessionId: string,
+    executionMode: ThreadExecutionMode,
+    nativeMode?: string,
+  ): Promise<void> {
     const backend = "acp:antigravity";
     await this.environmentClientLocks.run(JSON.stringify([backend, sessionId]), async () => {
       const session = this.getSession(backend, sessionId);
       if (!session) throw new Error(`ACP session not found: ${sessionId}`);
       if (session.archivedAt) throw new Error("Restore the Antigravity thread before changing its access.");
-      const target = await this.getAntigravityClientForSessionLocked(session, executionMode);
+      const targetNativeMode = executionMode === "full-access" ? "default" : (nativeMode ?? "default");
+      const loadOptions = {
+        antigravityModeSelection: targetNativeMode,
+        antigravityModeExplicit: targetNativeMode !== "default",
+      };
+      const target = await this.getAntigravityClientForSessionLocked(session, executionMode, loadOptions);
       if (target.supportsSessionLoad?.() !== true) {
         throw new Error("This Antigravity runtime cannot load the session in another process.");
       }
-      await target.loadSession(this.getSession(backend, sessionId) ?? session);
+      await target.loadSession(this.getSession(backend, sessionId) ?? session, loadOptions);
       // Load can refresh native mode and model metadata. Apply access only
       // after the new process has opened the same session.
       this.upsertSession({
@@ -2276,6 +2285,7 @@ export class AcpBackendAdapter {
     sessionId: string,
     shellEnvironment?: Record<string, string>,
     executionMode?: ThreadExecutionMode,
+    loadOptions?: Parameters<AcpRuntimeClient["loadSession"]>[1],
   ): Promise<void> {
     if (this.closed) {
       throw new Error("ACP backend adapter is closed");
@@ -2343,7 +2353,14 @@ export class AcpBackendAdapter {
           throw new Error("This ACP provider cannot reload an existing session with a new environment.");
         }
         if (backend === "acp:antigravity") await this.claimAntigravitySession(sessionId, entry);
-        await client.ensureSession(this.getSession(backend, sessionId) ?? session);
+        // An environment-specific replacement opens the worker here. Confirm
+        // a transfer's selection on that first load, before it can be reused.
+        const metadata = this.getSession(backend, sessionId) ?? session;
+        if (loadOptions) {
+          await client.ensureSession(metadata, loadOptions);
+        } else {
+          await client.ensureSession(metadata);
+        }
         if (this.closed) throw new Error("ACP backend adapter is closed");
         return client;
       })();
@@ -2472,12 +2489,13 @@ export class AcpBackendAdapter {
   private async getAntigravityClientForSessionLocked(
     session: AcpSessionMetadata,
     executionMode = session.executionMode,
+    loadOptions?: Parameters<AcpRuntimeClient["loadSession"]>[1],
   ): Promise<AcpRuntimeClient> {
     const { backendId: backend, sessionId } = session;
     const key = JSON.stringify([backend, sessionId]);
     const environment = this.environmentClients.get(key);
     if (environment) {
-      await this.prepareSessionEnvironmentLocked(backend, sessionId, environment.shellEnvironment, executionMode);
+      await this.prepareSessionEnvironmentLocked(backend, sessionId, environment.shellEnvironment, executionMode, loadOptions);
       const entry = this.environmentClients.get(key)!.entry;
       await this.claimAntigravitySession(sessionId, entry);
       return await entry.promise;

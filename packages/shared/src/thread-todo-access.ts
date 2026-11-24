@@ -90,7 +90,9 @@ const MODE_WORDS: Record<ThreadExecutionMode, string> = {
  * approval policy lists no PwrAgent modes: the operator's pick of one of its
  * modes stands, and otherwise its highest mode at or below the wanted access
  * is used, so a provider switch never raises access.
- * Antigravity retains the chosen Agent mode alongside process access.
+ * Antigravity exposes one unified access list: Default Access, its non-default
+ * native modes on the Default process, and Full Access on the Full Access
+ * process (always starting in default native mode, never silently in Plan).
  */
 export function resolveThreadTodoStartAccess(input: {
   card: ThreadTodoAccessCard;
@@ -119,7 +121,7 @@ export function resolveThreadTodoStartAccess(input: {
     const offers = (mode: ThreadExecutionMode) =>
       options.some((option) => option.kind === "mode" && option.mode === mode);
     const antigravityModes = input.destinationBackend === "acp:antigravity" && offers("default")
-      ? acpNativeAccessOptions(runtime).filter((option) => option.executionMode !== "full-access")
+      ? acpNativeAccessOptions(runtime).filter((option) => option.executionMode !== "full-access" && option.id !== "full-access")
         .map((option) => ({ kind: "native" as const, ...option }))
       : [];
     options.splice(1, 0, ...antigravityModes.filter((option) => option.id !== "default"
@@ -128,10 +130,10 @@ export function resolveThreadTodoStartAccess(input: {
       ? antigravityModes.find((option) => option.id === card.nativeAccessMode?.id
         && (option.executionMode === undefined || threadExecutionModeRank(option.executionMode) <= threadExecutionModeRank(wanted)))
       : undefined;
-    if (wanted === "full-access" && offers(wanted) && savedMode) {
+    if (input.destinationBackend === "acp:antigravity" && wanted === "full-access" && offers(wanted)) {
       return {
         status: "ready", selected: { kind: "mode", mode: wanted }, source: named, wanted,
-        executionMode: wanted, acpRuntime: acpNativeAccessRuntime(runtime, savedMode.id), options,
+        executionMode: wanted, options,
       };
     }
     const defaultProcessMode = wanted !== "full-access"

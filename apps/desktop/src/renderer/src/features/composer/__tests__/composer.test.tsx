@@ -7389,19 +7389,7 @@ describe("Composer", () => {
         serviceTiers: ["standard", "priority"],
       }),
       label: "Grok CLI",
-      executionModes: [
-        {
-          mode: "default" as const,
-          label: "Default Access",
-          available: true,
-          isDefault: true,
-        },
-        {
-          mode: "full-access" as const,
-          label: "Full Access",
-          available: true,
-        },
-      ],
+      executionModes: [],
       acp: {
         registryId: "grok",
         distributionKinds: ["local"],
@@ -7560,7 +7548,7 @@ describe("Composer", () => {
       imageAttachments: undefined,
       prompt: "",
     });
-    expect(screen.getByLabelText(/^Access mode(?::|$)/)).toHaveValue("full-access");
+    expect(screen.queryByLabelText(/^Access mode(?::|$)/)).not.toBeInTheDocument();
     expect(screen.getByLabelText(/^Agent mode(?::|$)/)).toHaveValue("yolo");
     expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("grok-4.5-pro");
     expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("low");
@@ -29106,6 +29094,32 @@ describe("Composer", () => {
         expect(onCancel).toHaveBeenCalledTimes(1);
       });
     });
+
+    it.each([["plan", "Plan"], ["auto", "Auto"], ["accept-edits", "Accept Edits"]])(
+      "names the queued native %s mode and lets the operator cancel it",
+      async (queuedNativeMode, label) => {
+        const onCancel = vi.fn(async () => undefined);
+        const thread = {
+          ...baseQueuedThread({ executionMode: "default", queuedExecutionMode: "default" }),
+          source: "acp:antigravity" as const,
+          queuedNativeMode,
+        };
+        render(
+          <Composer
+            activeTurnId="turn-1"
+            backends={[backendSummary("acp:antigravity")]}
+            desktopApi={{ onAgentEvent: () => () => undefined }}
+            skills={[]}
+            thread={thread}
+            onCancelExecutionModeQueue={onCancel}
+          />,
+        );
+        const indicator = screen.getByLabelText("Queued permissions change");
+        expect(within(indicator).getByText(`Will switch to ${label} when the current turn ends`)).toBeInTheDocument();
+        fireEvent.click(within(indicator).getByRole("button", { name: "Cancel" }));
+        await waitFor(() => expect(onCancel).toHaveBeenCalledOnce());
+      },
+    );
 
     it("does not render the indicator when queuedExecutionMode is undefined", () => {
       render(

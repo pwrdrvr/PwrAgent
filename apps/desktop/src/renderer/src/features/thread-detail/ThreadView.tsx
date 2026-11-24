@@ -1001,7 +1001,14 @@ export type ThreadViewProps = {
     requestId: string,
     updater: (state: PendingMcpInteractionState) => PendingMcpInteractionState
   ) => void;
-  onSetExecutionMode?: (executionMode: ThreadExecutionMode) => Promise<void>;
+  onSetExecutionMode?: (
+    executionMode: ThreadExecutionMode,
+    acpMode?: {
+      source: "configOption" | "mode";
+      optionId: string;
+      value: string;
+    },
+  ) => Promise<void>;
   onSetAcpRuntimeOption?: (params: {
     source: "configOption" | "mode";
     optionId: string;
