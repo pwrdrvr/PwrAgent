@@ -474,6 +474,8 @@ function liveToolNotificationFingerprint(
   }
   const data = asPlainRecord(item.data);
   const output = readNonEmptyString(data, "output") ?? "";
+  const fileDiff = asPlainRecord(item.fileDiff);
+  const diff = typeof fileDiff?.diff === "string" ? fileDiff.diff : undefined;
   return JSON.stringify({
     method: notification.method,
     type: item.type,
@@ -483,6 +485,9 @@ function liveToolNotificationFingerprint(
     commandActions: item.commandActions,
     outputHash: hashString(output),
     outputLength: output.length,
+    title: item.title,
+    path: item.path,
+    fileDiff: fileDiff && { ...fileDiff, diff: diff && hashString(diff), diffLength: diff?.length },
   });
 }
 
@@ -3393,6 +3398,10 @@ export class AcpBackendAdapter {
             });
         const toolNotifications = resolvedToolUpdate
           ? acpToolUpdateNotifications({
+              backendId: agent.backendId,
+              cwd: agent.backendId === "acp:antigravity" && resolvedToolUpdate.kind === "edit"
+                ? this.getSession(agent.backendId, sessionId)?.cwd
+                : undefined,
               threadId: sessionId,
               turnId,
               update: resolvedToolUpdate,
@@ -3410,6 +3419,7 @@ export class AcpBackendAdapter {
                 })
                 .flatMap((deferredUpdate) =>
                   acpToolUpdateNotifications({
+                    backendId: agent.backendId,
                     threadId: sessionId,
                     turnId,
                     update: deferredUpdate,

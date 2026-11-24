@@ -756,6 +756,10 @@ export function buildLiveToolDetails(
     return report ? [buildSubAgentActivityDetail(report)] : [];
   }
 
+  if (itemType === "commandexecution" && item.acpFileEdit === true) {
+    return buildLiveFileEditDetails(item);
+  }
+
   if (
     itemType !== "dynamictoolcall" &&
     itemType !== "commandexecution" &&
@@ -951,6 +955,12 @@ function stripElapsedSuffix(label: string): string {
   return label.replace(/\s+\([\d.]+m?s\)$/, "").trim();
 }
 
+export function formatFileEditActivitySummary(details: AppServerThreadActivityDetail[]): string {
+  const count = new Set(details.map((detail) => detail.path)).size;
+  const summary = formatChangedFileCount({ count, prefix: "Edited" });
+  return details.length === count ? summary : `${summary} · ${details.length} edits`;
+}
+
 export function summarizeLiveActivity(details: AppServerThreadActivityDetail[]): string {
   // Worker reports summarize in the replay's words, not as tool names, so the
   // header reads the same before and after the turn is read back.
@@ -959,6 +969,9 @@ export function summarizeLiveActivity(details: AppServerThreadActivityDetail[]):
     (detail) => !detail.id.includes("-source-") && !isSubAgentActivityDetail(detail),
   );
   const directDetail = primaryDetails.length === 1 ? primaryDetails[0] : undefined;
+  if (details.length > 0 && details.every((detail) => detail.kind === "write" && detail.path)) {
+    return directDetail?.label ?? formatFileEditActivitySummary(details);
+  }
   // A search tool's call is expandable, but it summarizes as exploration,
   // as it does once its sources arrive: its label already names the query.
   if (
@@ -998,6 +1011,32 @@ export function summarizeLiveActivity(details: AppServerThreadActivityDetail[]):
   parts.push(...subAgentActivityParts);
 
   return parts.join(" · ") || "Activity";
+}
+
+export function hasTranscriptFileDiff(detail: AppServerThreadActivityDetail): boolean {
+  const diff = detail.fileDiff;
+  return Boolean(diff?.diff || diff?.diffRef || diff?.diffRefs?.length || diff?.omittedReason);
+}
+
+function buildLiveFileEditDetails(item: Record<string, unknown>): AppServerThreadActivityDetail[] {
+  const id = readString(item, "id");
+  const label = readString(item, "title");
+  const path = readString(item, "path");
+  if (!id || !label || !path) return [];
+  const fileDiff = item.fileDiff as AppServerThreadActivityDetail["fileDiff"];
+  const status = normalizeItemStatus(item.status);
+  const output = status === "failed"
+    ? readString(item.data as Record<string, unknown> | undefined, "output")
+    : undefined;
+  return [{
+    id,
+    kind: "write",
+    label,
+    path,
+    status,
+    ...(fileDiff ? { fileDiff } : {}),
+    ...(output ? { command: { displayCommand: label, source: "tool", output } } : {}),
+  }];
 }
 
 export function mergeCommandDetail(
@@ -1077,6 +1116,12 @@ export function mergeActivityDetails(
     const existingIndex = merged.findIndex((entry) => entry.id === detail.id);
     if (existingIndex >= 0) {
       const existing = merged[existingIndex];
+      // The path can arrive after a generic tool start. The edit now owns the
+      // detail, including its label and any failure output.
+      if (detail.kind === "write" && detail.path && existing?.kind !== "write") {
+        merged[existingIndex] = detail;
+        continue;
+      }
       const command = mergeCommandDetail(existing?.command, detail.command);
       merged[existingIndex] = {
         ...existing,

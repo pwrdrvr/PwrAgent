@@ -139,6 +139,65 @@ describe("TranscriptList", () => {
     vi.useRealTimers();
   });
 
+  it("opens the Antigravity edit group and shows each patch in the transcript", () => {
+    const entries: AppServerThreadActivityEntry[] = ["draft", "final"].map((text, index) => ({
+      type: "activity",
+      id: `edit-${index}`,
+      summary: "Edited rules.md",
+      status: "completed",
+      turn: { id: "turn-edits", status: "in_progress" },
+      details: [{
+        id: `edit-${index}:detail`,
+        kind: "write",
+        label: "Edited rules.md",
+        path: "/work/rules.md",
+        fileDiff: {
+          kind: "update", additions: 1, removals: 1,
+          diff: `--- a/rules.md\n+++ b/rules.md\n@@ -1,1 +1,1 @@\n-old rule\n+${text} rule`,
+        },
+      }],
+    }));
+
+    render(
+      <TranscriptList
+        entries={entries}
+        parentThreadBackend="acp:antigravity"
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Edited 1 file · 2 edits" }));
+    const patchToggles = screen.getAllByRole("button", { name: "Edited rules.md" });
+    expect(patchToggles).toHaveLength(2);
+    fireEvent.click(patchToggles[0]!);
+    fireEvent.click(patchToggles[1]!);
+    expect(screen.getByText(/draft rule/)).toBeInTheDocument();
+    expect(screen.getByText(/final rule/)).toBeInTheDocument();
+  });
+
+  it("does not offer an edit expansion that only repeats its heading", () => {
+    render(
+      <TranscriptList
+        entries={[{
+          type: "activity", id: "edit-without-patch", summary: "Edited rules.md",
+          status: "completed",
+          details: [{
+            id: "edit-without-patch:detail", kind: "write",
+            label: "Edited rules.md", path: "/work/rules.md",
+          }],
+        }]}
+        parentThreadBackend="acp:antigravity"
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />,
+    );
+    expect(screen.getByText("Edited rules.md")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edited rules.md" })).not.toBeInTheDocument();
+  });
+
   it.each([false, true])("copies the full error with history present: %s", async (hasHistory) => {
     const error = "Error invoking remote method 'app-server:read-thread':\ninvalid paginated history lineage for fixture-thread: missing source rollout";
     const copyText = vi.fn(async () => undefined);

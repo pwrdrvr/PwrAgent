@@ -86,6 +86,7 @@ import {
   parseFileChangeOutput,
   readRendererSequence,
   summarizeActivityStatus,
+  hasTranscriptFileDiff,
   summarizeLiveActivity,
   withRendererSequence,
 } from "../features/thread-detail/live-transcript-activity";
@@ -2516,8 +2517,13 @@ function carryForwardTranscriptEntryOrder(
       continue;
     }
 
+    const pendingSource = response.backend === "acp:antigravity" && source.id.startsWith("live-tools-")
+      ? retainUnreplayedAntigravityDetails(source, readDetailOwners)
+      : source;
+    if (!pendingSource) continue;
+
     changed = true;
-    entries = mergeTranscriptEntries(entries, [source]);
+    entries = mergeTranscriptEntries(entries, [pendingSource]);
   }
 
   const durableMonitorUsageSources = sources.filter(isDurableMonitorUsageActivity);
@@ -2566,6 +2572,31 @@ function latestTranscriptTurnId(entries: AppServerThreadEntry[]): string | undef
   }
 
   return undefined;
+}
+
+/** One live tool row can be acknowledged by several independent replay calls. */
+function retainUnreplayedAntigravityDetails(
+  source: AppServerThreadActivityEntry,
+  readDetailOwners: DetailOwners,
+): AppServerThreadActivityEntry | undefined {
+  const details = source.details.filter((detail) => {
+    for (const owner of readDetailOwners.get(detail.id) ?? []) {
+      if (owner.type === "activity" && owner.turn?.id === source.turn?.id
+        && owner.details.some((replayed) => replayed.id === detail.id
+          && (hasTranscriptFileDiff(detail) ? hasTranscriptFileDiff(replayed) : replayed.status === "completed"))) {
+        return false;
+      }
+    }
+    return true;
+  });
+  if (details.length === source.details.length) return source;
+  if (details.length === 0) return undefined;
+  return {
+    ...source,
+    details,
+    summary: summarizeLiveActivity(details),
+    status: summarizeActivityStatus(details),
+  };
 }
 
 function isDurableDiffActivity(

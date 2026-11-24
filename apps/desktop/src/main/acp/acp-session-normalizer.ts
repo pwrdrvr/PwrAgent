@@ -64,19 +64,8 @@ export function acpReplayPromptTextDigest(text: string): string {
   return createHash("sha256").update(text.trim()).digest("hex");
 }
 
-export type AcpSessionReplayNormalizerOptions = {
+export type AcpSessionReplayNormalizerOptions = ReadAcpFileEditOptions & {
   surfaceThoughtsAsMessages?: boolean;
-  /**
-   * The agent puts the whole file before and after an edit in ACP `diff`
-   * content, so a diff with no position can still be drawn at its real line
-   * numbers. See `acpDiffContentIsWholeFile`.
-   */
-  wholeFileDiffContent?: boolean;
-  /**
-   * The session's workspace. Edit diffs name a file inside it relative to it,
-   * as Claude's do; without it they name the absolute path.
-   */
-  cwd?: string;
 };
 
 export function shouldSurfaceAcpThoughtsAsMessages(backendId: string): boolean {
@@ -91,6 +80,7 @@ export function acpSessionReplayNormalizerOptions(
   return {
     surfaceThoughtsAsMessages: shouldSurfaceAcpThoughtsAsMessages(backendId),
     wholeFileDiffContent: acpDiffContentIsWholeFile(backendId),
+    antigravity: backendId === "acp:antigravity",
     ...(cwd ? { cwd } : {}),
   };
 }
@@ -344,6 +334,7 @@ export class AcpSessionReplayNormalizer {
   constructor(private readonly options: AcpSessionReplayNormalizerOptions = {}) {
     this.fileEditOptions = {
       wholeFileDiffContent: options.wholeFileDiffContent,
+      antigravity: options.antigravity,
       cwd: options.cwd,
     };
   }
@@ -986,7 +977,10 @@ export class AcpSessionReplayNormalizer {
     createdAt: number,
     toolCallId: string | undefined,
   ): void {
-    const declared = readAcpProviderTool(update.update);
+    const name = this.fileEditOptions.antigravity ? readString(update.update, "name") : undefined;
+    const declared = name === "write_file" || name === "edit_file"
+      ? { name, kind: "edit" }
+      : readAcpProviderTool(update.update);
     if (toolCallId && declared) {
       this.providerTools.set(toolCallId, {
         ...this.providerTools.get(toolCallId),
@@ -1803,6 +1797,9 @@ function toolActivity(
   const id =
     readAcpToolCallId(update.update) ??
     `${kind}:${update.sessionId}`;
+  // Antigravity's generic live tool starts and file-edit completions both
+  // use the call ID. Replay must use the same identity to acknowledge them.
+  const detailId = fileEditOptions?.antigravity ? id : `${id}:detail`;
   const webSearch = readAcpWebSearch(update.update);
   if (webSearch) {
     const status = normalizeToolActivityStatus(readString(update.update, "status"));
@@ -1820,7 +1817,7 @@ function toolActivity(
         webSearch.query || webSearch.sources.length
           ? [
               {
-                id: `${id}:detail`,
+                id: detailId,
                 kind: "read",
                 label: detailLabel,
                 status,
@@ -1864,7 +1861,7 @@ function toolActivity(
       status,
       details: [
         {
-          id: `${id}:detail`,
+          id: detailId,
           kind: "read",
           label: detailLabel,
           command: {
@@ -1877,7 +1874,7 @@ function toolActivity(
       ],
     };
   }
-  const fileEdit = readAcpFileEdit(update.update, fileEditOptions);
+  const fileEdit = readAcpFileEdit(update.update, fileEditOptions, providerTool);
   if (fileEdit) {
     const label = `${fileEdit.verb} ${fileBaseName(fileEdit.path)}`;
     const status = readToolActivityStatus(update.update);
@@ -1893,10 +1890,11 @@ function toolActivity(
       ...(status ? { status } : {}),
       details: [
         {
-          id: `${id}:detail`,
+          id: detailId,
           kind: "write",
           label,
           path: fileEdit.path,
+          ...(status ? { status } : {}),
           ...(fileEdit.fileDiff ? { fileDiff: fileEdit.fileDiff } : {}),
           ...(failure
             ? {
@@ -1958,7 +1956,7 @@ function toolActivity(
     status,
     details: [
       {
-        id: `${id}:detail`,
+        id: detailId,
         kind: detailKind,
         label,
         path,
@@ -2024,6 +2022,8 @@ function mergeActivity(
   isPlaceholderLabel: (label: string) => boolean = () => false,
 ): AppServerThreadActivityEntry {
   const status = incoming.status ?? existing.status;
+  const fileEditGainedPath = incoming.details[0]?.kind === "write"
+    && Boolean(incoming.details[0].path) && !existing.details[0]?.path;
   const details = mergeActivityEntryDetails(
     existing.details,
     incoming.details,
@@ -2032,12 +2032,15 @@ function mergeActivity(
     .map((detail) => ({
       ...detail,
       label: settledSearchLabel(detail.label, status),
+      ...(detail.kind === "write" && detail.path && status ? { status } : {}),
     }));
   return {
     ...existing,
     createdAt: existing.createdAt ?? incoming.createdAt,
     summary: settledSearchLabel(
-      preferSpecificLabel(existing.summary, incoming.summary, isPlaceholderLabel),
+      fileEditGainedPath
+        ? incoming.summary
+        : preferSpecificLabel(existing.summary, incoming.summary, isPlaceholderLabel),
       status,
     ),
     status,
@@ -2073,6 +2076,10 @@ function mergeActivityEntryDetails(
     }
     const existingDetail = merged[existingIndex];
     if (!existingDetail) {
+      continue;
+    }
+    if (incomingDetail.kind === "write" && incomingDetail.path && !existingDetail.path) {
+      merged[existingIndex] = incomingDetail;
       continue;
     }
     merged[existingIndex] = {

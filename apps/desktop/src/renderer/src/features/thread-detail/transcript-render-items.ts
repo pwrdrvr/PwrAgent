@@ -1,4 +1,5 @@
 import type {
+  AppServerBackendKind,
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
   AppServerThreadMessageEntry,
@@ -9,6 +10,7 @@ import { turnUsageEntryTurnId } from "@pwragent/shared/thread-usage-display";
 import { formatElapsedMs } from "../../lib/format-duration";
 import { isAutoReviewActivityEntry } from "./protocol-activity-entries";
 import { isRewindMarkerEntry } from "./rewind-marker-entries";
+import { formatFileEditActivitySummary, hasTranscriptFileDiff } from "./live-transcript-activity";
 
 export type TranscriptRenderItem =
   | {
@@ -32,21 +34,25 @@ export const ACTIVE_WORK_GROUP_THRESHOLD_MS = 60_000;
 
 export function buildTranscriptRenderItems(params: {
   entries: AppServerThreadEntry[];
+  backend?: AppServerBackendKind;
   activeTurnId?: string;
   activeTurnStartedAt?: number;
   activeMessageId?: string;
   alwaysVisibleEntryIds?: ReadonlySet<string>;
   now?: number;
 }): TranscriptRenderItem[] {
+  const entries = params.backend === "acp:antigravity"
+    ? groupAntigravityEdits(params.entries, params.alwaysVisibleEntryIds)
+    : params.entries;
   const activeTurnId =
     params.activeTurnId ??
-    params.entries.find((entry) => entry.id === params.activeMessageId)?.turn?.id;
+    entries.find((entry) => entry.id === params.activeMessageId)?.turn?.id;
 
   if (params.activeMessageId && !activeTurnId) {
-    return params.entries.map((entry) => ({ type: "entry", entry }));
+    return entries.map((entry) => ({ type: "entry", entry }));
   }
 
-  const reviewTurnIds = collectReviewTurnIds(params.entries);
+  const reviewTurnIds = collectReviewTurnIds(entries);
 
   if (activeTurnId) {
     // A running review folds its work between the cards as it goes, so the
@@ -55,7 +61,7 @@ export function buildTranscriptRenderItems(params: {
     const activeReview = reviewTurnIds.has(activeTurnId)
       ? {
           startedAt: activeTurnStartedAt(
-            params.entries,
+            entries,
             activeTurnId,
             params.activeTurnStartedAt,
           ),
@@ -63,7 +69,7 @@ export function buildTranscriptRenderItems(params: {
         }
       : undefined;
     const groups = buildCompletedGroups(
-      params.entries,
+      entries,
       activeReview ? undefined : activeTurnId,
       params.alwaysVisibleEntryIds,
       reviewTurnIds,
@@ -72,7 +78,7 @@ export function buildTranscriptRenderItems(params: {
     const activeGroups = activeReview
       ? []
       : buildActiveWorkGroups(
-          params.entries,
+          entries,
           activeTurnId,
           params.now,
           params.activeTurnStartedAt,
@@ -80,31 +86,77 @@ export function buildTranscriptRenderItems(params: {
         );
     groups.push(...activeGroups);
     if (groups.length > 0) {
-      return renderWithGroups(params.entries, groups);
+      return renderWithGroups(entries, groups);
     }
 
-    return params.entries.map((entry) => ({ type: "entry", entry }));
+    return entries.map((entry) => ({ type: "entry", entry }));
   }
 
   const completedGroups = buildCompletedGroups(
-    params.entries,
+    entries,
     undefined,
     params.alwaysVisibleEntryIds,
     reviewTurnIds,
   );
   if (completedGroups.length > 0) {
-    return renderWithGroups(params.entries, completedGroups);
+    return renderWithGroups(entries, completedGroups);
   }
 
   const fallbackGroups = buildCommentaryOnlyGroups(
-    params.entries,
+    entries,
     params.alwaysVisibleEntryIds,
   );
   if (fallbackGroups.length === 0) {
-    return params.entries.map((entry) => ({ type: "entry", entry }));
+    return entries.map((entry) => ({ type: "entry", entry }));
   }
 
-  return renderWithGroups(params.entries, fallbackGroups);
+  return renderWithGroups(entries, fallbackGroups);
+}
+
+/**
+ * Antigravity replays one tool row per edit. Fold neighboring successful or
+ * active edits like a batched tool activity, keeping each call's exact patch.
+ * The original replay entries still own ordering, ids, and diff references.
+ */
+function groupAntigravityEdits(
+  entries: AppServerThreadEntry[],
+  alwaysVisibleEntryIds: ReadonlySet<string> | undefined,
+): AppServerThreadEntry[] {
+  const result: AppServerThreadEntry[] = [];
+  let run: AppServerThreadActivityEntry[] = [];
+  const flush = () => {
+    const first = run[0];
+    if (!first) return;
+    if (run.length === 1) {
+      result.push(first);
+    } else {
+      const details = run.flatMap((entry) => entry.details);
+      result.push({
+        ...first,
+        summary: formatFileEditActivitySummary(details),
+        status: run.some((entry) => entry.status === "in_progress")
+          ? "in_progress"
+          : run.at(-1)?.status,
+        details,
+      });
+    }
+    run = [];
+  };
+  for (const entry of entries) {
+    if (entry.type !== "activity" || !entry.turn?.id || entry.tone || entry.detailsRef
+      || entry.status === "failed" || entry.status === "cancelled"
+      || entry.details.length === 0
+      || entry.details.some((detail) => detail.kind !== "write" || !detail.path)
+      || staysInView(entry, alwaysVisibleEntryIds)) {
+      flush();
+      result.push(entry);
+      continue;
+    }
+    if (run[0]?.turn?.id !== entry.turn.id) flush();
+    run.push(entry);
+  }
+  flush();
+  return result;
 }
 
 type RenderGroup = {
@@ -634,9 +686,7 @@ function isTerminalTurnFailureActivity(
 }
 
 function isFileDiffActivity(entry: AppServerThreadActivityEntry): boolean {
-  return entry.details.some((detail) =>
-    Boolean(detail.fileDiff?.diff || detail.fileDiff?.omittedReason)
-  );
+  return entry.details.some(hasTranscriptFileDiff);
 }
 
 function isTokenUsageActivity(entry: AppServerThreadActivityEntry): boolean {

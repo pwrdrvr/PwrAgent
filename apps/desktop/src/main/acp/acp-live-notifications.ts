@@ -18,6 +18,8 @@ import {
   readAcpWebSearch,
 } from "./acp-command-extraction.js";
 import { sanitizeAcpToolOutput } from "./acp-tool-output.js";
+import { readAcpFileEdit } from "./acp-file-edit.js";
+import { fileBaseName } from "./acp-file-read.js";
 import {
   foldAcpTurnUsage,
   readAcpUsageEnvelope,
@@ -246,6 +248,8 @@ export class AcpLiveToolUpdateResolver {
 }
 
 export function acpToolUpdateNotifications(params: {
+  backendId?: string;
+  cwd?: string;
   threadId: string;
   turnId?: string;
   update: Record<string, unknown>;
@@ -261,6 +265,18 @@ export function acpToolUpdateNotifications(params: {
   const item = liveItemForAcpToolUpdate(params.update);
   if (!item) {
     return [];
+  }
+  if (params.backendId === "acp:antigravity" && item.type === "commandExecution") {
+    const edit = readAcpFileEdit(params.update, {
+      wholeFileDiffContent: true, antigravity: true, cwd: params.cwd,
+    });
+    if (edit) {
+      // Keep commandExecution and its invocation metadata for tool accounting.
+      item.acpFileEdit = true;
+      item.title = `${edit.verb} ${fileBaseName(edit.path)}`;
+      item.path = edit.path;
+      item.fileDiff = edit.fileDiff;
+    }
   }
 
   const method = isTerminalToolStatus(item.status) ? "item/completed" : "item/started";

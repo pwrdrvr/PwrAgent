@@ -8224,6 +8224,64 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it.each([2, 4])("keeps each of %i live Antigravity patches once through partial and complete replay", async (count) => {
+    const backend = "acp:antigravity";
+    const threadId = "antigravity-edits";
+    const turn = { id: "edit-turn", status: "in_progress" as const };
+    const thread = { ...buildThread({ id: threadId, updatedAt: 1_000 }), source: backend } as const;
+    let listener: ((event: AgentEvent) => void) | undefined;
+    let snapshot: AppServerThreadEntry[] = [];
+    const readThread = vi.fn(async (): Promise<AppServerReadThreadResponse> => ({
+      backend, threadId, fetchedAt: Date.now(),
+      replay: {
+        entries: snapshot, messages: [],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (handler) => { listener = handler; return () => undefined; },
+      readThread,
+    };
+    const calls = Array.from({ length: count }, (_, index) => ({
+      id: `call-${index}`, title: "Edited rules.md", path: "/work/rules.md",
+      fileDiff: { kind: "update" as const, diff: `patch-${index}`, additions: 1, removals: 1 },
+    }));
+    const replay = calls.map((call, index): AppServerThreadActivityEntry => ({
+      type: "activity", id: call.id, summary: call.title, status: "completed",
+      createdAt: 2000 + index, turn,
+      details: [{
+        id: call.id, kind: "write", label: call.title, path: call.path,
+        fileDiff: call.fileDiff, status: "completed",
+      }],
+    }));
+    const { result, rerender } = renderHook(
+      ({ selected }) => useThreadSessionState({ desktopApi, thread: selected }),
+      { initialProps: { selected: thread } },
+    );
+    const visiblePatches = () => result.current.entries.flatMap((entry) =>
+      entry.type === "activity" ? entry.details.map((detail) => detail.fileDiff?.diff) : []);
+    const expected = calls.map((call) => call.fileDiff.diff);
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => {
+      for (const call of calls) {
+        listener?.({ backend, notification: { method: "item/completed", params: {
+          threadId, turnId: turn.id,
+          item: { ...call, type: "commandExecution", acpFileEdit: true, status: "completed" },
+        } } });
+      }
+    });
+    expect(visiblePatches()).toEqual(expected);
+
+    for (const [index, received] of [1, count].entries()) {
+      snapshot = replay.slice(0, received);
+      rerender({ selected: { ...thread, updatedAt: 3_000 + index } });
+      await waitFor(() => {
+        expect(result.current.entries.some((entry) => entry.id === replay[received - 1]?.id)).toBe(true);
+        expect(visiblePatches()).toEqual(expected);
+      });
+    }
+  });
+
   it("does not delete edited file diffs when a later hydration omits them", async () => {
     let now = 40_000;
     vi.spyOn(Date, "now").mockImplementation(() => now++);
