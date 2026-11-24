@@ -6,7 +6,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import * as gitExecutable from "../app-server/git-executable";
 import { bundledGitExecutable } from "../bundled-git";
 import { GitSubprocessDiagnostics, gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
-import { clearGitHubRemoteCache, resolveGitHubRepoForDirectory } from "../pr-status/git-remote";
+import { clearGitHubRemoteCache, readObservedGitOrigin, resolveGitHubRepoForDirectory } from "../pr-status/git-remote";
 import { createScheduledPrPrefetchRepoResolver } from "../pr-status/pr-detection";
 import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
 
@@ -148,7 +148,7 @@ it("uses the existing Git remote HEAD fallback with one configured remote", asyn
   ]);
 });
 
-it.each(["warm", "cold"])("avoids repeated URL probes in a %s single-branch clone", async (cache) => {
+async function singleBranchClone() {
   const source = await fixture();
   const cwd = path.join(source, "single-branch");
   await readGit(source, "clone", "--single-branch", "--branch", "main", "--", source, cwd);
@@ -156,6 +156,11 @@ it.each(["warm", "cold"])("avoids repeated URL probes in a %s single-branch clon
   await remoteHead(cwd, "origin", "main");
   const branches = topics.slice(0, 3);
   for (const branch of branches) await readGit(cwd, "branch", branch);
+  return { cwd, branches };
+}
+
+it.each(["warm", "cold"])("avoids repeated URL probes in a %s single-branch clone", async (cache) => {
+  const { cwd, branches } = await singleBranchClone();
   if (cache === "warm") await resolveGitHubRepoForDirectory(cwd);
   const expected = await oracle(cwd);
   const resolve = createScheduledPrPrefetchRepoResolver();
@@ -172,6 +177,66 @@ it.each(["warm", "cold"])("avoids repeated URL probes in a %s single-branch clon
   await readGit(cwd, "remote", "rename", "origin", "renamed");
   await readGit(cwd, "remote", "set-url", "renamed", "https://github.com/fixture/rename.git");
   await expectEligible(resolve, cwd, "topic-3", (await oracle(cwd))("topic-3"));
+});
+
+it("refreshes fallback URLs at the original live cache expiry", async () => {
+  const { cwd, branches: [first, second] } = await singleBranchClone();
+  let now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  onTestFinished(() => { clock.mockRestore(); });
+  await resolveGitHubRepoForDirectory(cwd);
+  const { retryAt } = readObservedGitOrigin(cwd)!;
+  now = retryAt - 1;
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  await expectEligible(resolve, cwd, first, (await oracle(cwd))(first));
+  await readGit(cwd, "remote", "set-url", "origin", "https://github.com/fixture/after-expiry.git");
+
+  now = retryAt;
+  const expected = (await oracle(cwd))(second);
+  const starts = recordPrefetchStarts();
+  await expectEligible(resolve, cwd, second, expected);
+  expect(starts.calls.filter(([, args]) => args[0] === "remote" && args[1] === "get-url")).toHaveLength(1);
+});
+
+it.each(["GitLab-only", "remote-less"])("keeps warm %s checkouts off the GitHub discovery path until expiry", async (kind) => {
+  const cwd = await fixture();
+  let now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  onTestFinished(() => { clock.mockRestore(); });
+  await readGit(cwd, "remote", "remove", "upstream");
+  if (kind === "remote-less") await readGit(cwd, "remote", "remove", "origin");
+  else await readGit(cwd, "remote", "set-url", "origin", "https://gitlab.com/fixture/origin.git");
+  await resolveGitHubRepoForDirectory(cwd);
+  const { retryAt } = readObservedGitOrigin(cwd)!;
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  const starts = recordPrefetchStarts();
+  for (const branch of topics.slice(0, 3)) await expectEligible(resolve, cwd, branch, []);
+  expect(starts.calls).toHaveLength(0);
+
+  if (kind === "remote-less") await readGit(cwd, "remote", "add", "origin", "https://github.com/fixture/new.git");
+  else await readGit(cwd, "remote", "set-url", "origin", "https://github.com/fixture/new.git");
+  await remoteHead(cwd, "origin", "main");
+  now = retryAt;
+  await expectEligible(resolve, cwd, "topic-3", (await oracle(cwd))("topic-3"));
+});
+
+it.skipIf(process.platform === "win32")("skips the second config probe when a remote has no HEAD", async () => {
+  const cwd = await fixture();
+  const included = path.join(cwd, "included-config");
+  await writeFile(included, "[user]\n\tname = Fixture\n");
+  await readGit(cwd, "config", "--global", "include.path", included);
+  await readGit(cwd, "symbolic-ref", "--delete", "refs/remotes/upstream/HEAD");
+  await resolveGitHubRepoForDirectory(cwd);
+  const expected = await oracle(cwd);
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  const starts = recordPrefetchStarts();
+  for (const branch of topics.slice(0, 3)) await expectEligible(resolve, cwd, branch, expected(branch));
+
+  const commands = starts.calls.map(([, args]) => args[0]);
+  expect(commands.filter((command) => command === "config")).toHaveLength(3);
+  expect(commands.filter((command) => command === "symbolic-ref")).toHaveLength(6);
+  expect(commands.filter((command) => command === "for-each-ref")).toHaveLength(3);
+  expect(commands).toHaveLength(12);
 });
 
 it.skipIf(process.platform === "win32")("keeps two warm single-remote lookups within the ordinary launch count with system config", async () => {

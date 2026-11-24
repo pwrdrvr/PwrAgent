@@ -224,22 +224,39 @@ export async function observeForgeRepositoriesForDirectory(
 
 /** Sample current Git config while reusing completed identity resolution for matching URLs. */
 export function createScheduledPrefetchRemoteReader(cwd: string) {
-  let previous: ParsedRemoteObservation | undefined;
+  let previous: RemoteCacheEntry | undefined;
   const observationForReuse = () => {
+    if (isCurrentRemoteObservation(previous)) return previous;
     const live = remoteCache.get(cwd);
-    const warm = live && Date.now() - live.fetchedAt < REMOTE_CACHE_TTL_MS ? live : undefined;
-    return previous ?? warm;
+    return isCurrentRemoteObservation(live) ? live : undefined;
   };
   const read = async (configuration?: GitRemoteConfiguration, useGitRemote = false) => {
+    const reused = observationForReuse();
     const observation = await loadParsedGitRemotes(cwd, { fresh: true }, {}, {
-      configuration, previous: observationForReuse(), useGitRemote,
+      configuration, previous: reused, useGitRemote,
     });
     const repos = collectForgeRepositories(observation.value, "github");
-    if (repos.length && hasAllRemoteUrls(observation)) previous = observation;
+    if (repos.length && hasAllRemoteUrls(observation)) {
+      // Matching names or URLs do not refresh the resolved identity's age.
+      const fetchedAt = reused && observation.value === reused.value ? reused.fetchedAt : Date.now();
+      previous = { ...observation, fetchedAt };
+    }
     // Scheduled probes never publish into the live cache, including on failure.
     return { repos, refreshedRemoteNames: observation.names };
   };
-  return { read, usesGitRemote: () => observationForReuse()?.readWithGitRemote === true };
+  return {
+    read,
+    usesGitRemote: () => observationForReuse()?.readWithGitRemote === true,
+    hasWarmNegative: () => {
+      const observation = observationForReuse();
+      return Boolean(observation && (observation.unconfirmedEmpty || hasAllRemoteUrls(observation))
+        && collectForgeRepositories(observation.value, "github").length === 0);
+    },
+  };
+}
+
+function isCurrentRemoteObservation(observation: RemoteCacheEntry | undefined): observation is RemoteCacheEntry {
+  return Boolean(observation && Date.now() - observation.fetchedAt < REMOTE_CACHE_TTL_MS);
 }
 
 function hasAllRemoteUrls(observation: ParsedRemoteObservation): boolean {
@@ -307,7 +324,7 @@ async function loadParsedGitRemotes(
   cwd: string,
   options: ResolveGitHubRepoOptions,
   demand: PrMetadataDemand,
-  prefetch?: { configuration?: GitRemoteConfiguration; previous?: ParsedRemoteObservation; useGitRemote?: boolean },
+  prefetch?: { configuration?: GitRemoteConfiguration; previous?: RemoteCacheEntry; useGitRemote?: boolean },
 ): Promise<ParsedRemoteObservation> {
   const resolveSshHostname =
     options.resolveSshHostname ?? defaultResolveSshHostname;
@@ -319,9 +336,11 @@ async function loadParsedGitRemotes(
       ? { remotes: await options.readRemotes(cwd) }
       : await defaultReadRemotes(cwd, demand, Boolean(options.confirmEmpty || options.fresh), prefetch));
     const { names, remotes, unconfirmedEmpty, readWithGitRemote } = raw;
-    const previous = prefetch?.previous?.value;
-    if (previous && previous.length === remotes.length && remotes.every(({ name, url }, index) =>
-      name === previous[index].name && url === previous[index].url)) {
+    const prior = prefetch?.previous;
+    const previous = prior?.value;
+    if (previous && (remotes === previous
+      || (isCurrentRemoteObservation(prior) && previous.length === remotes.length
+        && remotes.every(({ name, url }, index) => name === previous[index].name && url === previous[index].url)))) {
       return { names, value: previous, unconfirmedEmpty, readWithGitRemote };
     }
     const value = await Promise.all(
@@ -376,7 +395,7 @@ function resolveSshHostInFlight(host: string, resolve: SshResolver, demand: PrMe
 
 async function defaultReadRemotes(
   cwd: string, demand: PrMetadataDemand, confirmEmpty: boolean,
-  prefetch?: { previous?: ParsedRemoteObservation; useGitRemote?: boolean },
+  prefetch?: { previous?: RemoteCacheEntry; useGitRemote?: boolean },
 ): Promise<{ names?: string[]; remotes: GitRemote[]; unconfirmedEmpty?: true; readWithGitRemote?: true }> {
   const childEnv = buildPwrAgentChildProcessEnv(process.env);
   const gitOptions = {
@@ -412,7 +431,7 @@ async function defaultReadRemotes(
   const names = uniqueNonEmptyLines(stdout);
   // Unusual config uses the ordinary remote-identity freshness window.
   // Each branch still gets a current list and native ref reads.
-  if (previous?.readWithGitRemote && previous.names?.length === names.length
+  if (isCurrentRemoteObservation(previous) && previous.readWithGitRemote && previous.names?.length === names.length
     && names.every((name, index) => name === previous.names?.[index]) && hasAllRemoteUrls(previous)) {
     return { names, remotes: previous.value, readWithGitRemote: true };
   }

@@ -81,6 +81,7 @@ export async function observeScheduledPrPrefetchMetadata(
     try { return prefetchGitInputs(cwd); } catch { return undefined; }
   };
   try {
+    if (repositories.hasWarmNegative()) return { repos: [], refreshedRemoteNames: [] };
     if (repositories.usesGitRemote()) return undefined;
     const inputs = currentInputs();
     if (!inputs) return undefined;
@@ -116,10 +117,6 @@ export async function observeScheduledPrPrefetchMetadata(
     if (remoteNames.length === 1 && branchCount <= (extra.length ? 3 : 2)) return await currentSample();
     const files = extra.length ? await observePrCheckoutConfigFiles(cwd, [...inputs.paths, ...extra]) : roots;
     if (!files || [...sources.origins].some((file) => !files.paths.has(file))) return await currentSample();
-    if (extra.length) {
-      const confirmed = await readConfig();
-      if (confirmed.stderr !== "" || confirmed.stdout !== stdout || !await roots.unchanged()) return undefined;
-    }
 
     const proof = await observeProvenRemoteHeads(cwd, remoteNames);
     if (proof && (proof.gitDir !== files.gitDir || proof.commonDir !== files.commonDir)) return undefined;
@@ -127,6 +124,11 @@ export async function observeScheduledPrPrefetchMetadata(
     // checkout once so later branches can reuse just its remote configuration.
     if (!proof && (remoteNames.length !== 1 || !await confirmPrFilesCheckout(cwd, files, inputs.env))) {
       return await files.unchanged() && inputsUnchanged() ? sample : undefined;
+    }
+    // Re-read includes only when Git proved a checkout observation we can keep.
+    if (extra.length) {
+      const confirmed = await readConfig();
+      if (confirmed.stderr !== "" || confirmed.stdout !== stdout || !await roots.unchanged()) return undefined;
     }
     const unchanged = async () => Boolean(await files.unchanged() && (!proof || await proof.unchanged()) && inputsUnchanged());
     return await unchanged() ? { ...sample, proof: { heads: proof?.heads, unchanged } } : undefined;
