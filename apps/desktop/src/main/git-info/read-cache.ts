@@ -62,20 +62,23 @@ export class GitReadCache<T> {
     this.now = options.now ?? (() => performance.now());
   }
 
-  /** Read a published result without joining or starting a load. */
-  readCompleted(key: string): Promise<T> | undefined {
+  private readCompleted(key: string): Promise<T> | undefined {
     const cached = this.entries.get(key);
     if (!cached || cached.expiresAt <= this.now()) return undefined;
     return cached.failed ? Promise.reject(cached.error) : Promise.resolve(cached.value);
   }
 
-  /** Publish a result prepared in a batch without replacing a concurrent read. */
-  prime(key: string, value: T): void {
+  /** Join an existing read without admitting a new load. */
+  readExisting(key: string): Promise<T> | undefined {
+    return this.pending.get(key) ?? this.readCompleted(key);
+  }
+
+  /** Publish a prepared observation with its original lifetime. */
+  prime(key: string, value: T, observedAt: number): void {
     const now = this.now();
-    if (this.pending.has(key) || (this.entries.get(key)?.expiresAt ?? -Infinity) > now) return;
-    this.remember(key, {
-      failed: false, value, expiresAt: now + (this.options.ttlFor?.(value, key) ?? this.options.ttlMs),
-    });
+    const expiresAt = observedAt + (this.options.ttlFor?.(value, key) ?? this.options.ttlMs);
+    if (expiresAt <= now || this.pending.has(key) || (this.entries.get(key)?.expiresAt ?? -Infinity) > now) return;
+    this.remember(key, { failed: false, value, expiresAt });
   }
 
   read(

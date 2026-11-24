@@ -12,7 +12,7 @@ import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
 import { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
-import { createThreadDirectoryEnricher, readNavigationCheckout } from "../git-info/directory-store";
+import { createThreadDirectoryEnricher, readNavigationCheckout, readNavigationCheckouts } from "../git-info/directory-store";
 import { StackReader } from "../stacks/stack-reader";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { isolateProcessGitEnvironment, runIsolatedGitSync } from "./helpers/isolated-git";
@@ -294,8 +294,11 @@ it.each([
       return result;
     });
     try {
-      const result = await read(fresh);
+      const inventory = read(fresh);
+      const follower = fresh ? undefined : changed.promise.then(() => readNavigationCheckout(first));
+      const result = await inventory;
       expect(mutated).toBe(true);
+      if (follower) expect((await follower)?.directories).toBeUndefined();
       for (const [index, cwd] of [first, second].entries()) {
         expect((await readNavigationCheckout(cwd, true))?.directories).toBeUndefined();
         const row = result.threads.find(({ id }) => id === "thread-" + index);
@@ -308,6 +311,102 @@ it.each([
     }
   } finally {
     await client.close();
+    restoreGit();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it.each([false, true])("does not give an expired checkout a new TTL (late waiter: %s)", async (joinLate) => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-navigation-expiry-")));
+  const early = path.join(root, "early");
+  const slow = path.join(root, "slow");
+  const repo = path.join(root, "repo");
+  const primaryHead = path.join(repo, ".git", "HEAD");
+  const release = Promise.withResolvers<void>();
+  const sampled = Promise.withResolvers<void>();
+  const stat = vi.mocked(fs.stat).getMockImplementation()!;
+  const restoreGit = isolateProcessGitEnvironment();
+  let now = 0;
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+  let batch: ReturnType<typeof readNavigationCheckouts> | undefined;
+  try {
+    await Promise.all([mkdir(repo), mkdir(slow)]);
+    const git = (...args: string[]) => runIsolatedGitSync(repo, args);
+    git("init", "-b", "main");
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "base");
+    git("worktree", "add", "--detach", early);
+    vi.mocked(fs.stat).mockImplementation(async (...args) => {
+      if (args[0] === slow) await release.promise;
+      const result = await stat(...args);
+      if (args[0] === primaryHead) sampled.resolve();
+      return result;
+    });
+    batch = readNavigationCheckouts([early, slow], { fresh: false, verified: false, checkpoint: () => {} });
+    await sampled.promise;
+    // Drain the early checkout's continuations while the unrelated probe is held.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    now = 1_000;
+    git("worktree", "move", early, path.join(root, "moved"));
+    const late = joinLate ? readNavigationCheckout(early) : undefined;
+    release.resolve();
+    if (late) expect((await late)?.directories).toEqual([]);
+    await batch;
+    expect((await readNavigationCheckout(early, true))?.directories).toEqual([]);
+    expect((await readNavigationCheckout(early))?.directories).toEqual([]);
+  } finally {
+    release.resolve();
+    if (batch) await Promise.allSettled([batch]);
+    clock.mockRestore();
+    vi.mocked(fs.stat).mockImplementation(stat);
+    restoreGit();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it.each(["join", "owner cancelled", "verified"])("coordinates overlapping checkout inventory scopes: %s", async (mode) => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-navigation-pending-")));
+  const shared = path.join(root, "shared");
+  const slow = path.join(root, "slow");
+  const other = path.join(root, "other");
+  const release = Promise.withResolvers<void>();
+  const started = Promise.withResolvers<void>();
+  const controller = new AbortController();
+  const stat = vi.mocked(fs.stat).getMockImplementation()!;
+  const restoreGit = isolateProcessGitEnvironment();
+  const batches: Promise<unknown>[] = [];
+  let sharedLoads = 0;
+  try {
+    await Promise.all([mkdir(shared), mkdir(slow), mkdir(other)]);
+    vi.mocked(fs.stat).mockImplementation(async (...args) => {
+      if (args[0] === slow) await release.promise;
+      if (args[0] === shared && args[1] === undefined) {
+        sharedLoads++;
+        started.resolve();
+      }
+      return await stat(...args);
+    });
+    const first = readNavigationCheckouts([slow, shared], {
+      fresh: false, verified: false, checkpoint: () => controller.signal.throwIfAborted(),
+    });
+    batches.push(first.catch(() => undefined));
+    await started.promise;
+    const second = readNavigationCheckouts([shared, other], {
+      fresh: mode === "verified", verified: mode === "verified", checkpoint: () => {},
+    });
+    batches.push(second);
+    if (mode === "verified") await second;
+    if (mode === "owner cancelled") controller.abort(new Error("original inventory stopped"));
+    release.resolve();
+    if (mode === "owner cancelled") await expect(first).rejects.toThrow("original inventory stopped");
+    else await first;
+    expect((await second)[0]?.directories).toEqual([
+      expect.objectContaining({ path: normalize(shared) }),
+    ]);
+    expect(sharedLoads).toBe(mode === "join" ? 1 : 2);
+  } finally {
+    release.resolve();
+    await Promise.allSettled(batches);
+    vi.mocked(fs.stat).mockImplementation(stat);
     restoreGit();
     await rm(root, { recursive: true, force: true });
   }

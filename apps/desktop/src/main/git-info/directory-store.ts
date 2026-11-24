@@ -165,7 +165,11 @@ type NavigationCheckout = {
   provisional?: { root: string; directory: LinkedDirectorySummary };
   separateGit?: { commonDirectory: string; checkoutRoot: string; primary?: LinkedDirectorySummary };
 };
-const navigationCheckouts = new GitReadCache<NavigationCheckout | undefined>({ ttlMs: 1_000 });
+const NAVIGATION_CHECKOUT_TTL_MS = 1_000;
+const navigationCheckouts = new GitReadCache<NavigationCheckout | undefined>({ ttlMs: NAVIGATION_CHECKOUT_TTL_MS });
+type NavigationCheckoutSample = { checkout: NavigationCheckout | undefined; observedAt: number };
+type PendingNavigationCheckout = Promise<NavigationCheckoutSample | undefined>;
+const pendingNavigationCheckouts = new Map<string, PendingNavigationCheckout>();
 
 /**
  * Group raw provider folders for navigation using filesystem evidence alone.
@@ -176,7 +180,21 @@ const navigationCheckouts = new GitReadCache<NavigationCheckout | undefined>({ t
 export function readNavigationCheckout(cwd: string, fresh = false): Promise<NavigationCheckout | undefined> {
   if (hasGitDiscoveryOverrides()) return Promise.resolve(undefined);
   const key = path.resolve(cwd);
-  return fresh ? loadNavigationCheckout(key) : navigationCheckouts.read(key, () => loadNavigationCheckout(key));
+  return fresh ? loadNavigationCheckout(key) : readPendingNavigationCheckout(key, pendingNavigationCheckouts.get(key));
+}
+
+async function readPendingNavigationCheckout(
+  cwd: string, pending: PendingNavigationCheckout | undefined, requestedAt = performance.now(), checkpoint?: () => void,
+): Promise<NavigationCheckout | undefined> {
+  while (pending) {
+    const prepared = await pending;
+    checkpoint?.();
+    if (prepared && requestedAt < prepared.observedAt + NAVIGATION_CHECKOUT_TTL_MS) return prepared.checkout;
+    // A cancelled batch publishes nothing. A waiter that arrived after an
+    // observation expired also needs a replacement or a regular per-path read.
+    pending = pendingNavigationCheckouts.get(cwd);
+  }
+  return await navigationCheckouts.read(cwd, () => loadNavigationCheckout(cwd));
 }
 
 export async function readNavigationCheckouts(
@@ -185,26 +203,69 @@ export async function readNavigationCheckouts(
 ): Promise<Array<NavigationCheckout | undefined>> {
   const { fresh, verified, checkpoint } = options;
   if (hasGitDiscoveryOverrides()) return directories.map(() => undefined);
+  if (fresh || verified) {
+    const observations = await observeNavigationCheckouts(directories, verified, checkpoint);
+    return observations.map(({ checkout }) => checkout);
+  }
+
+  checkpoint();
+  const requestedAt = performance.now();
+  const claims = new Map<string, PromiseWithResolvers<NavigationCheckoutSample | undefined>>();
+  // Reserve before yielding to I/O. A batch validates its own observations
+  // before awaiting paths owned by other batches.
+  const readers = directories.map((cwd) => {
+    const pending = pendingNavigationCheckouts.get(cwd);
+    if (pending) return () => readPendingNavigationCheckout(cwd, pending, requestedAt, checkpoint);
+    const existing = navigationCheckouts.readExisting(cwd);
+    if (existing) return () => existing;
+    const claim = Promise.withResolvers<NavigationCheckoutSample | undefined>();
+    claims.set(cwd, claim);
+    pendingNavigationCheckouts.set(cwd, claim.promise);
+    return () => readPendingNavigationCheckout(cwd, claim.promise, requestedAt, checkpoint);
+  });
+
+  try {
+    if (claims.size) {
+      const observations = await observeNavigationCheckouts([...claims.keys()], false, checkpoint);
+      for (const { cwd, checkout, observedAt } of observations) {
+        navigationCheckouts.prime(cwd, checkout, observedAt);
+        claims.get(cwd)!.resolve({ checkout, observedAt });
+      }
+    }
+  } finally {
+    // Settle abandoned claims even if the batch exits at an owner checkpoint.
+    for (const [cwd, claim] of claims) {
+      pendingNavigationCheckouts.delete(cwd);
+      claim.resolve(undefined);
+    }
+  }
+  const results = await collectConcurrent(readers, 16, async (read) => {
+    checkpoint();
+    return await read();
+  });
+  checkpoint();
+  return results;
+}
+
+async function observeNavigationCheckouts(
+  directories: readonly string[], verified: boolean, checkpoint: () => void,
+): Promise<Array<NavigationCheckoutSample & { cwd: string }>> {
   const common = verified ? undefined : createGitDirectoryCommonFileObservation();
   const observations = await collectConcurrent(directories, 16, async (cwd) => {
     checkpoint();
-    const cached = fresh ? undefined : navigationCheckouts.readCompleted(cwd);
-    return { cwd, cached: Boolean(cached), checkout: cached ? await cached : await loadNavigationCheckout(cwd, common?.readFor(cwd)) };
+    const checkout = await loadNavigationCheckout(cwd, common?.readFor(cwd));
+    return { cwd, checkout, observedAt: performance.now() };
   });
   const changed = await common?.changedCheckouts(checkpoint);
   if (changed?.size) {
     await collectConcurrent(observations.filter(({ cwd }) => changed.has(cwd)), 16, async (entry) => {
       checkpoint();
       entry.checkout = await loadNavigationCheckout(entry.cwd);
+      entry.observedAt = performance.now();
     });
   }
   checkpoint();
-  if (!fresh) {
-    for (const { cwd, cached, checkout } of observations) {
-      if (!cached) navigationCheckouts.prime(cwd, checkout);
-    }
-  }
-  return observations.map(({ checkout }) => checkout);
+  return observations;
 }
 
 async function loadNavigationCheckout(
