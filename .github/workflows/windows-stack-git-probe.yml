@@ -1,0 +1,24 @@
+name: Windows stack Git probe
+
+on:
+  push:
+    branches: [investigate/windows-stack-git]
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f
+        with:
+          node-version: "^24.22.1"
+          working-directory: .
+      - name: Measure synthetic stack projections
+        shell: pwsh
+        run: |
+          $env:PWRAGENT_GIT_PATH = (Get-Command git.exe).Source
+          node scripts/probe-windows-stack-git.mjs
