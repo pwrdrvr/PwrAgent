@@ -3,6 +3,7 @@ import { ResearchHarnessService } from "@pwragent/owner-core/research-harness-se
 import { probeResearchModel, researchModelRequest } from "@pwragent/owner-core/research-model-adapter";
 import path from "node:path";
 import { getDesktopConfigStore } from "../settings/config-store/desktop-config-store-singleton";
+import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { readResearchHarnessConfig } from "../settings/config-store/research-runtime-config";
 import { openResearchHarnessProcess } from "./research-harness-process";
 import { createHarnessModelTransport, selectHarnessModel } from "./research-harness-model";
@@ -27,7 +28,8 @@ let harness: ResearchHarnessService | undefined;
  * What the window may know about the bridge. The credential is reported only as
  * a variable name and whether it is set; its value never leaves this process.
  */
-export function researchHarnessStatus(workspace?: string, env: NodeJS.ProcessEnv = process.env): ResearchHarnessStatus {
+export function researchHarnessStatus(workspace?: string, env: NodeJS.ProcessEnv = process.env,
+  platformKey: () => string | undefined = readPlatformApiKey): ResearchHarnessStatus {
   let config: ReturnType<typeof readResearchHarnessConfig>;
   try { config = readResearchHarnessConfig(getDesktopConfigStore()); }
   catch (error) { return { configured: false, configError: error instanceof Error ? error.message : "This profile's config.toml cannot be used", ...(workspace ? { workspace } : {}) }; }
@@ -41,8 +43,24 @@ export function researchHarnessStatus(workspace?: string, env: NodeJS.ProcessEnv
     catch (error) { status.endpointError = error instanceof Error ? error.message : "Invalid research model endpoint"; }
   } else if (config.endpoint || config.model) status.endpointError = "Set both research.harness.endpoint and research.harness.model to run a new swarm";
   if (config.apiKeyEnv) { status.credentialEnv = config.apiKeyEnv; status.credentialSet = Boolean(env[config.apiKeyEnv]); }
+  try { status.platformKeyStored = Boolean(platformKey()); }
+  catch { /* An unreadable store says nothing about whether a key is there. */ }
   return status;
 }
+function readPlatformApiKey(): string | undefined {
+  return getDesktopSettingsService().resolveMathosPlatformApiKeySync();
+}
+
+/**
+ * A bridge that copied its Platform key into a model request would hand it to
+ * the model endpoint and into model context. Refuse the call instead.
+ */
+export function assertModelRequestOmitsPlatformKey(messages: unknown, platformKey: string | undefined): void {
+  if (platformKey && JSON.stringify(messages ?? null).includes(platformKey)) {
+    throw new Error("Research model request refused: it contains the MathOS Platform key");
+  }
+}
+
 export function getResearchHarnessService(): ResearchHarnessService {
   if (!harness) throw new Error("Research Harness owner has not started");
   return harness;
@@ -58,15 +76,17 @@ export function initializeResearchRuntime(ports: ResearchPorts): ResearchService
       const config = readResearchHarnessConfig(getDesktopConfigStore());
       if (!config?.command) throw new Error("Configure research.harness in this profile's config.toml");
       const selectedModel = selectHarnessModel(config, mode);
+      const platformApiKey = readPlatformApiKey();
       let modelBusy = false;
       const connection = openResearchHarnessProcess(config, workspace, async (method, params, signal) => {
         const run = storage.header(id);
         const model = models.get(id);
         if (method !== "model_complete" || !model || modelBusy || ports.enabled?.() === false || run?.status !== "running" || run.harness?.state !== "running" || researchDeadlinePassed(run, Date.now())) throw new Error("Research model admission unavailable");
+        assertModelRequestOmitsPlatformKey(params.messages, platformApiKey);
         modelBusy = true;
         try { return await model.complete(researchModelRequest(model.model, params.messages), signal); }
         finally { modelBusy = false; }
-      }, ports.onError);
+      }, ports.onError, platformApiKey);
       if (selectedModel) models.set(id, selectedModel);
       return { ...(selectedModel ? { model: { model: selectedModel.model, endpointOrigin: selectedModel.endpointOrigin } } : {}),
         request: (method, params) => connection.request(method, params), close: () => { models.delete(id); return connection.close(); } };

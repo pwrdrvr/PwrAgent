@@ -10,6 +10,7 @@ import type {
   DesktopTaskMonitorModelChoice,
 } from "../helper-models";
 import type { DesktopDecisionModelSettings } from "../decision-models";
+import type { ResearchHarnessConfig } from "../research-harness";
 import type {
   CodexModelProviderSettings,
   DesktopCodexModelProvider,
@@ -827,7 +828,9 @@ export type DesktopSettingsSecretName =
   /** OpenAI project key dedicated to recorded audio transcription. */
   | "openaiTranscriptionApiKey"
   /** Codex model provider API keys, one JSON object keyed by provider id. */
-  | "codexModelProviderKeys";
+  | "codexModelProviderKeys"
+  /** MathOS Platform API key, given only to the configured Open Math Harness bridge process. */
+  | "mathosPlatformApiKey";
 
 /**
  * Predicate: does writing or clearing this secret affect the
@@ -877,6 +880,7 @@ export function isMessagingRuntimeSecret(
     case "openaiDecisionsApiKey":
     case "openaiTranscriptionApiKey":
     case "codexModelProviderKeys":
+    case "mathosPlatformApiKey":
       return false;
     default:
       return false;
@@ -1541,6 +1545,17 @@ export type DesktopSettingsSnapshot = {
   secretStorage: DesktopSettingsSecretStorageState;
   general: DesktopGeneralSettingsSnapshot;
   onboarding: DesktopOnboardingSnapshot;
+  /**
+   * Open Math Harness for Research runs. `harness` is the profile's
+   * `[research.harness]` table as read; the MathOS Platform key is presence
+   * only. Absent from snapshots built before this setting existed.
+   */
+  research?: {
+    harness?: ResearchHarnessConfig;
+    /** Whether the variable `harness.apiKeyEnv` names is set for PwrAgent. Never its value. */
+    modelKeyEnvSet?: boolean;
+    platformApiKey: DesktopSettingsSecretState;
+  };
   experimental: {
     chatReplyComposer: DesktopSettingsValue<DesktopChatReplyComposer>;
     fullAccessRiskWarningDismissed: DesktopSettingsValue<boolean>;
@@ -1961,6 +1976,10 @@ export type DesktopSettingsConfigPatch = {
   onboarding?: {
     completed?: boolean;
     completedSource?: DesktopOnboardingCompletedSource;
+  };
+  /** `null` removes the bridge: every `[research.harness]` key is deleted. */
+  research?: {
+    harness?: ResearchHarnessConfig | null;
   };
   experimental?: {
     fullAccessRiskWarningDismissed?: boolean;

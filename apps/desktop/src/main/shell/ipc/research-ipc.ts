@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain, shell } from "electron";
+import { BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
 import {
   type ResearchThread,
@@ -29,7 +29,7 @@ import type { ResearchProfileRunsPage, ResearchProfileRunsQuery } from "@pwragen
 import { RESEARCH_RUN_ATTENTION_ORDER } from "@pwragent/shared/research";
 import { RESEARCH_PROFILE_RUNS_CHANNEL, RESEARCH_OPEN_WINDOW_CHANNEL } from "../../../shared/ipc";
 import { researchWindowRunId, showResearchWindow } from "../research-window";
-import { RESEARCH_HARNESS_STATUS_CHANNEL, RESEARCH_HARNESS_START_CHANNEL, RESEARCH_HARNESS_CHECK_CHANNEL, RESEARCH_HARNESS_RECONCILE_CHANNEL, RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL } from "../../../shared/ipc";
+import { RESEARCH_HARNESS_STATUS_CHANNEL, RESEARCH_HARNESS_START_CHANNEL, RESEARCH_HARNESS_CHECK_CHANNEL, RESEARCH_HARNESS_RECONCILE_CHANNEL, RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL, RESEARCH_HARNESS_SETTINGS_CHECK_CHANNEL, RESEARCH_HARNESS_PICK_BRIDGE_CHANNEL } from "../../../shared/ipc";
 import { resolveDesktopConfigPath } from "../../settings/desktop-config";
 import { getResearchHarnessService, researchHarnessStatus } from "../../research/research-runtime";
 import { getDesktopSettingsService } from "../../settings/desktop-settings-singleton";
@@ -74,6 +74,19 @@ export function registerResearchIpcHandlers(): void {
     if (!isLocalResearchWebContents(event.sender)) throw new Error("Open research on its owning instance");
     requireResearchEnabled();
     showResearchWindow({ sourceWindow: BrowserWindow.fromWebContents(event.sender) ?? undefined }, { runId: researchWindowRunId(request?.runId) });
+  });
+  // Settings checks the saved bridge with no thread: a check binds no evidence, so it runs from the temporary directory.
+  ipcMain.handle(RESEARCH_HARNESS_SETTINGS_CHECK_CHANNEL, async (event) => {
+    if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Check the bridge on its owning instance");
+    return await getResearchHarnessService().check(await realpath(tmpdir()));
+  });
+  // The operator chooses the bridge program in the system file picker; Settings saves it like any other field.
+  ipcMain.handle(RESEARCH_HARNESS_PICK_BRIDGE_CHANNEL, async (event): Promise<{ path?: string }> => {
+    if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Choose the bridge on its owning instance");
+    const window = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+    const options: Electron.OpenDialogOptions = { title: "Choose the Harness bridge", properties: ["openFile"] };
+    const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
+    return result.canceled || !result.filePaths[0] ? {} : { path: result.filePaths[0] };
   });
   // Reveals this profile's own config file. The window supplies no path.
   ipcMain.handle(RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL, (event) => {
@@ -171,6 +184,8 @@ export function disposeResearchIpcHandlers(): void {
   ipcMain.removeHandler(RESEARCH_HARNESS_CHECK_CHANNEL);
   ipcMain.removeHandler(RESEARCH_HARNESS_RECONCILE_CHANNEL);
   ipcMain.removeHandler(RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL);
+  ipcMain.removeHandler(RESEARCH_HARNESS_SETTINGS_CHECK_CHANNEL);
+  ipcMain.removeHandler(RESEARCH_HARNESS_PICK_BRIDGE_CHANNEL);
   ipcMain.removeHandler(RESEARCH_PROFILE_RUNS_CHANNEL);
   ipcMain.removeHandler(RESEARCH_OPEN_WINDOW_CHANNEL);
   for (const channel of [RESEARCH_CHANGES_CHANNEL, RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL, RESEARCH_WITHDRAW_CHANNEL, RESEARCH_EVENTS_CHANNEL]) ipcMain.removeHandler(channel);

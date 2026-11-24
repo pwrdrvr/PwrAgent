@@ -48,7 +48,7 @@ import type { ResearchProfileRunsPage, ResearchProfileRunsQuery } from "@pwragen
 import type { DesktopTelegramPairingGrants, DesktopWorktreeFolderCheck } from "@pwragent/shared/contracts/settings";
 import type { SaveTelegramConnectionRequest, TelegramConnectionStatus } from "@pwragent/shared/contracts/settings";
 import { RESEARCH_PROFILE_RUNS_CHANNEL, RESEARCH_OPEN_WINDOW_CHANNEL, RESEARCH_WINDOW_SELECT_EVENT_CHANNEL } from "../shared/ipc";
-import { RESEARCH_HARNESS_STATUS_CHANNEL, RESEARCH_HARNESS_START_CHANNEL, RESEARCH_HARNESS_CHECK_CHANNEL, RESEARCH_HARNESS_RECONCILE_CHANNEL, RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL } from "../shared/ipc";
+import { RESEARCH_HARNESS_STATUS_CHANNEL, RESEARCH_HARNESS_START_CHANNEL, RESEARCH_HARNESS_CHECK_CHANNEL, RESEARCH_HARNESS_RECONCILE_CHANNEL, RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL, RESEARCH_HARNESS_SETTINGS_CHECK_CHANNEL, RESEARCH_HARNESS_PICK_BRIDGE_CHANNEL } from "../shared/ipc";
 import { RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_CHANGED_EVENT_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL, RESEARCH_WITHDRAW_CHANNEL, RESEARCH_EVENTS_CHANNEL, RESEARCH_CHANGES_CHANNEL } from "../shared/ipc";
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared/contracts/federation-services";
 import { FEDERATION_SERVICES_CHANNEL } from "../shared/ipc";
@@ -2203,6 +2203,10 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(RESEARCH_HARNESS_RECONCILE_CHANNEL, request),
   revealResearchHarnessConfig: async (): Promise<void> =>
     await ipcRenderer.invoke(RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL),
+  checkResearchHarnessBridge: async (): Promise<ResearchHarnessCheck> =>
+    await ipcRenderer.invoke(RESEARCH_HARNESS_SETTINGS_CHECK_CHANNEL),
+  pickResearchHarnessBridge: async (): Promise<{ path?: string }> =>
+    await ipcRenderer.invoke(RESEARCH_HARNESS_PICK_BRIDGE_CHANNEL),
   researchProfileRuns: async (request?: ResearchProfileRunsQuery): Promise<ResearchProfileRunsPage> =>
     await ipcRenderer.invoke(RESEARCH_PROFILE_RUNS_CHANNEL, request),
   openResearchWindow: async (request?: { runId?: string }): Promise<void> =>

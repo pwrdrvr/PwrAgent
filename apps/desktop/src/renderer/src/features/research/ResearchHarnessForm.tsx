@@ -40,14 +40,16 @@ function blocker(operation: Operation, status: ResearchHarnessStatus | undefined
   if (missing.length) return `This bridge does not support ${missing.map((need) => CAPABILITY_LABELS[need].toLowerCase()).join(" or ")}.`;
   if (operation === "execute") {
     if (status.endpointError) return status.endpointError;
-    if (!status.model || !status.endpointOrigin) return "Set an execution model and endpoint in config.toml.";
+    if (!status.model || !status.endpointOrigin) return "Set an execution model and endpoint in Settings › Experimental.";
     if (status.credentialEnv && !status.credentialSet) return `${status.credentialEnv} is not set in PwrAgent’s environment.`;
   }
   return undefined;
 }
 
-export function ResearchHarnessForm({ api, thread, onStarted, onCancel }: {
+export function ResearchHarnessForm({ api, thread, onStarted, onCancel, onOpenSettings }: {
   api: DesktopApi; thread: ResearchThread; onStarted: (runId: string) => void; onCancel?: () => void;
+  /** Settings › Experimental › Open Math Harness. Absent outside the main window. */
+  onOpenSettings?: () => void;
 }) {
   const id = useId();
   const [status, setStatus] = useState<ResearchHarnessStatus>();
@@ -115,7 +117,7 @@ export function ResearchHarnessForm({ api, thread, onStarted, onCancel }: {
       {status && !status.configured && !status.configError && <>
         <p className="research-text">No Harness bridge is configured in this profile. A bridge is a program you install; PwrAgent starts it and talks to it over stdio.</p>
         <pre className="research-snippet" aria-label="Example bridge configuration">{CONFIG_SNIPPET}</pre>
-        <p className="research-muted"><code className="research-code">api_key_env</code> names the variable that holds the <strong>model</strong> API key. Your MathOS Platform key is the bridge’s own setting.</p>
+        <p className="research-muted">Set it up in Settings › Experimental › Open Math Harness, or in this table. <code className="research-code">api_key_env</code> names the variable that holds the <strong>model</strong> API key, not your MathOS Platform key.</p>
       </>}
       {status?.configured && <dl className="research-dl">
         <dt>Process</dt><dd><code className="research-code">{status.bridge}</code>{" "}
@@ -125,10 +127,14 @@ export function ResearchHarnessForm({ api, thread, onStarted, onCancel }: {
         {(status.model || status.endpointOrigin) && <><dt>Model</dt><dd>{status.model ? <code className="research-code">{status.model}</code> : "No model"}{status.endpointOrigin && <> at <code className="research-code">{status.endpointOrigin}</code></>}</dd></>}
         {status.credentialEnv && <><dt>Model key</dt><dd><code className="research-code">{status.credentialEnv}</code>{" "}
           {status.credentialSet ? <span className="research-ok">· set</span> : <span className="research-bad">· not set</span>}</dd></>}
-        <dt>Platform sign-in</dt><dd>Held by the bridge. PwrAgent never reads it.</dd>
+        <dt>Platform key</dt><dd>{status.platformKeyStored ? "Stored in PwrAgent · given to the bridge" : "Not stored in PwrAgent"}</dd>
       </dl>}
-      {status && !status.configured && api.revealResearchHarnessConfig && <span className="research-actions">
-        <button type="button" className="research-button" onClick={() => { void api.revealResearchHarnessConfig?.().catch((failure: unknown) => setError(message(failure))); }}>Show config.toml</button>
+      {status && !status.configured && (onOpenSettings || api.revealResearchHarnessConfig) && <span className="research-actions">
+        {onOpenSettings && <button type="button" className="research-button research-button--primary" onClick={onOpenSettings}>Open Harness settings</button>}
+        {api.revealResearchHarnessConfig && <button type="button" className="research-button" onClick={() => { void api.revealResearchHarnessConfig?.().catch((failure: unknown) => setError(message(failure))); }}>Show config.toml</button>}
+      </span>}
+      {status?.configured && onOpenSettings && <span className="research-actions">
+        <button type="button" className="research-button research-button--ghost" onClick={onOpenSettings}>Harness settings</button>
       </span>}
     </section>
     {status?.configured && <>

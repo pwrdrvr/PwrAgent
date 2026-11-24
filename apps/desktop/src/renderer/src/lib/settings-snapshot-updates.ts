@@ -141,6 +141,8 @@ function secretSnapshotPath(
       return ["models", "openaiDecisions", "apiKey"];
     case "openaiTranscriptionApiKey":
       return ["models", "audioTranscriptionApiKey"];
+    case "mathosPlatformApiKey":
+      return ["research", "platformApiKey"];
     case "pwrsnapMcpCredential":
     case "pwrgitMcpCredential":
     case "mcpStdioConnectionSecrets":

@@ -1270,6 +1270,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   checkResearchHarness?: (request: ResearchThread) => Promise<ResearchHarnessCheck>;
   reconcileResearchHarness?: (request: ResearchHarnessReconcileRequest) => Promise<ResearchUpdateReceipt>;
   revealResearchHarnessConfig?: () => Promise<void>;
+  /** Settings: check the saved bridge with `hello` only. No thread, no model call, nothing written. */
+  checkResearchHarnessBridge?: () => Promise<ResearchHarnessCheck>;
+  /** Settings: the system file picker for the bridge program. Empty when cancelled. */
+  pickResearchHarnessBridge?: () => Promise<{ path?: string }>;
   researchProfileRuns?: (request?: ResearchProfileRunsQuery) => Promise<ResearchProfileRunsPage>;
   openResearchWindow?: (request?: { runId?: string }) => Promise<void>;
   onResearchWindowSelect?: (callback: (runId: string) => void) => () => void;

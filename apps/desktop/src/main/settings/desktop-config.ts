@@ -39,6 +39,7 @@ import {
   type CodexModelProviderSettings,
 } from "@pwragent/shared/codex-model-providers";
 import { validateLocalModelIds } from "@pwragent/shared/local-model-pricing";
+import { normalizeResearchHarnessConfig, type ResearchHarnessConfig } from "@pwragent/shared/research-harness";
 import { GITHUB_ENTERPRISE_HOSTS_CONFLICT, isGithubEnterpriseLogin, mergeGithubEnterpriseHosts, normalizeGithubEnterpriseHost, validateGithubEnterpriseHosts } from "@pwragent/shared/github-enterprise-hosts";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -1175,6 +1176,9 @@ export function desktopSettingsPatchToEdits(
   }
   if (patch.experimental?.researchEnabled !== undefined) {
     set(["experimental", "research_enabled"], patch.experimental.researchEnabled);
+  }
+  if (patch.research?.harness !== undefined) {
+    edits.push(...researchHarnessEdits(patch.research.harness));
   }
   if (patch.experimental?.codexDefaultModeRequestUserInput !== undefined) {
     set(
@@ -2537,7 +2541,7 @@ function normalizeDesktopConfig(
   const hibernate = tables["worktrees.hibernate"];
 
   return pruneEmptyConfig({
-    research: tables["research.harness"] ? { harness: readResearchHarnessConfig(tables["research.harness"]) } : undefined,
+    research: readResearchSettings(tables["research.harness"]),
     general: {
       confirmQuitWithInProgressThreads: readBoolean(
         general?.confirm_quit_with_in_progress_threads,
@@ -3058,6 +3062,51 @@ function normalizeDesktopConfig(
       baseDirectoryIncludesCodex: readBoolean(worktrees?.base_directory_includes_codex),
     },
   });
+}
+
+const RESEARCH_HARNESS_OPTIONAL_KEYS = [
+  ["endpoint", "endpoint"],
+  ["model", "model"],
+  ["apiKeyEnv", "api_key_env"],
+] as const;
+
+/**
+ * `[research.harness]` is additive and keeps its shape: Settings writes the
+ * same keys an operator types, one path at a time, so comments and keys it does
+ * not own stay. A blank optional value deletes its key; `null` deletes them all.
+ * The value is validated first, so a save can never leave a table the reader
+ * rejects.
+ */
+function researchHarnessEdits(harness: ResearchHarnessConfig | null): TomlEdit[] {
+  const table = ["research", "harness"];
+  if (harness === null) {
+    return RESEARCH_HARNESS_KEYS.map((key) => ({ op: "delete" as const, path: [...table, key] }));
+  }
+  const normalized = normalizeResearchHarnessConfig(harness);
+  if (!normalized.ok) throw new Error(normalized.error);
+  const value = normalized.value;
+  const edits: TomlEdit[] = [
+    { op: "set", path: [...table, "command"], value: value.command },
+    { op: "set", path: [...table, "args"], value: value.args },
+  ];
+  for (const [field, key] of RESEARCH_HARNESS_OPTIONAL_KEYS) {
+    const entry = value[field];
+    edits.push(entry === undefined ? { op: "delete", path: [...table, key] } : { op: "set", path: [...table, key], value: entry });
+  }
+  return edits;
+}
+
+const RESEARCH_HARNESS_KEYS = ["command", "args", ...RESEARCH_HARNESS_OPTIONAL_KEYS.map(([, key]) => key)];
+
+/**
+ * Removing the bridge in Settings deletes the keys it owns. The path-based
+ * editor cannot delete a table header and keeps keys it does not own, so a
+ * `[research.harness]` holding none of the bridge's keys reads as no bridge
+ * rather than as an invalid one. A table with any of them still needs a command.
+ */
+function readResearchSettings(table: Record<string, TomlScalar> | undefined): DesktopSettingsConfig["research"] {
+  if (!table || !RESEARCH_HARNESS_KEYS.some((key) => table[key] !== undefined)) return undefined;
+  return { harness: readResearchHarnessConfig(table) };
 }
 
 function readResearchHarnessConfig(table: Record<string, TomlScalar>): import("@pwragent/shared/research-harness").ResearchHarnessConfig {

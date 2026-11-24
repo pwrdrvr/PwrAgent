@@ -20,11 +20,43 @@ for source observations. Local acceptance/rejection remains available.
 PwrAgent workers or Open Math Harness. The Harness form starts with a **Bridge**
 block from the owner's status read: the bridge executable's file name, the
 execution model and endpoint origin, the model-credential variable's name and
-whether it is set, and a reminder that MathOS Platform sign-in belongs to the
-bridge. Credential values never reach the window. With no bridge configured it
-shows an example `[research.harness]` table and **Show config.toml**, which
-reveals the profile's own file; the window supplies no path. A config error is
-shown as text.
+whether it is set, and whether a MathOS Platform key is stored for the bridge.
+Credential values never reach the window. With no bridge configured it offers
+**Open Harness settings** and **Show config.toml**, which reveals the profile's
+own file; the window supplies no path. A config error is shown as text.
+
+## Settings
+
+**Settings › Experimental › Open Math Harness**, directly under the Research
+runs switch, is the one home for the bridge and the Platform key. It is not under
+AI Providers: a `@mathos/…` model provider imported from Codex keeps its own
+*model* key there, while the Platform key is a different credential (the probe
+below used it for platform metadata and the runtime's `whoami`, never against the
+model API). The Harness section names the model-key variable and says it is not
+the Platform key, so the two never appear as one MathOS credential.
+
+The bridge fields are an explicit-save form (`useSettingsDraft`,
+`useUnsavedSettingsChanges`) over `[research.harness]`: program (an absolute
+path, typed or chosen in the system file picker), arguments one per line, model
+endpoint, model, and the model key's variable name. Save validates with
+`normalizeResearchHarnessConfig`, the same rules execution applies, and writes
+only those keys through the path-based config writer; blank optional fields
+delete their key, comments and other keys stay. **Remove bridge** deletes the
+bridge's keys; a `[research.harness]` table holding none of them reads as no
+bridge. **Check bridge** reuses the owner check (`hello` only, from the temporary
+directory, nothing written). The section also states what the hosted platform
+offers today: importing swarm records works; running, stopping and discovery
+reads are not offered to a bridge (see the probe below).
+
+The **MathOS Platform API key** is stored in the profile's encrypted secret store
+as `mathosPlatformApiKey`, like the Boat key. Windows see presence only. It is
+never written to `config.toml` and never given to an agent or a model. The owner
+reads it when it starts the bridge and passes it to that process alone as
+`MATHOS_PLATFORM_API_KEY`, beside the minimal OS environment; it is the bridge's
+own sign-in, so this is the one credential the bridge receives. The model key
+stays with PwrAgent, which makes every model call itself. A `model_complete`
+callback whose messages contain the stored Platform key is refused, so a bridge
+cannot route it into a model request or model context.
 
 **Check bridge** is an explicit owner request: it starts the configured bridge,
 sends `hello`, closes it, and reports the advertised capabilities. It makes no
@@ -67,17 +99,20 @@ creates a PwrAgent review or formal-verification result.
 `research.harness` is an additive, optional profile configuration section. The
 internal configuration has `command` (absolute executable), literal `args`, and
 optional `endpoint`, `model`, `api_key_env` (an environment-variable name).
-No existing setting changes shape; no conversion or dual write is needed.
+No existing setting changes shape; no conversion or dual write is needed. The
+Settings form writes the same keys; the Platform key adds no TOML key.
 Configuration comes from the owner's watched config-store research domain and is
 captured per connection. Invalid profile edits block new adapter use, including
 when the store retains a last-known-good snapshot. A malformed argument list fails closed.
-Neither model text nor IPC selects an executable, endpoint, model or workspace.
+Neither model text nor a run request's IPC selects an executable, endpoint,
+model or workspace; only the operator's Settings form or file edit does.
 Execution requires the budget acknowledgement; imports and snapshots make no
 model call and do not ask for it.
 The form discloses the configured execution model and endpoint origin; the owner
 retains that selection before paid probing, separately from any source model name.
 Import never initializes or validates the model transport.
-The bridge receives a minimal OS environment and no model credential. Production
+The bridge receives a minimal OS environment, the stored Platform key, and no
+model credential. Production
 operator setup documentation belongs in `pwrdrvr/docs.pwragent.ai`.
 
 ## Wire contract
@@ -239,6 +274,13 @@ limit; gaps, conflicting duplicates, foreign origins, escaping paths and unnamed
 members are refused at every size. Before this rule it failed on its first run,
 shrunk to a nine-member import.
 
+`research-harness-settings.property.test.ts` drives random sequences of Settings
+saves and Remove bridge over hand-written files against a model of the last
+save, refuses invalid values before writing, round-trips the Platform key through
+the real settings service, and checks the bridge environment and the model-request
+refusal. Its first run found a removal that left a hand-written table unreadable
+and a settings snapshot that omitted the research section; both are fixed.
+
 The adapter follows the native incremental research contracts. Run summaries omit
 source state; the selected run receives it with its change pages, and source item
 provenance travels on the changed item. Admission, cancellation, model callbacks
@@ -284,7 +326,10 @@ slots, and a discovery snapshot one fewer, since it no longer declares an unused
 slot. A 64-member import is 5 commits and 394 rows; four of those an hour add
 `4 × 24 × 486,192 bytes ≈ 46.67 MB/day`. WAL bytes vary with payload/page layout and
 are recorded, not asserted; commit/statement/row budgets fail in either direction.
-Configuration reads add zero MB/day. One configuration edit/hour at the measured
+Configuration reads add zero MB/day. Saving the Harness settings form is one
+operator config write, already counted by the changed-configuration revision
+above; storing or removing the Platform key is one secret-store commit per
+operator action, with no per-turn, per-event or timer writes. One configuration edit/hour at the measured
 commit size adds approximately 0.10 MB/day through the existing config snapshot.
 Four explicit discovery imports/hour at the measured three-node fixture size add
 approximately 9.50 MB/day; there is no background discovery polling or per-node

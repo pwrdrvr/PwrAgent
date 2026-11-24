@@ -169,6 +169,8 @@ type ThreadContextPanelProps = {
   /** The profile's Settings, for the Decisions tab's provider setup. */
   decisionSettings?: DecisionSetupSettings;
   onOpenDecisionSettings?: (focus?: string) => void;
+  /** Settings › Experimental, where Open Math Harness is configured. */
+  onOpenResearchSettings?: () => void;
   onRefreshNavigation?: () => Promise<void>;
   onFocusWaitingHeading?: () => void;
   /** Backs Turn Off on the Pull requests tab's Auto-fix row. */
@@ -903,7 +905,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       case "pr-activity":
         return <PrActivityPanel desktopApi={props.desktopApi} thread={props.thread} />;
       case "research":
-        return <ResearchPanel key={`${props.thread?.source}:${props.thread?.id}`} desktopApi={props.desktopApi} thread={props.thread} />;
+        return <ResearchPanel key={`${props.thread?.source}:${props.thread?.id}`} desktopApi={props.desktopApi} thread={props.thread} onOpenSettings={props.onOpenResearchSettings} />;
       case "info":
         if (!props.thread) return null;
         return (
