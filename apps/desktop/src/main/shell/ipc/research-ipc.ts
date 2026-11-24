@@ -29,9 +29,9 @@ import type { ResearchProfileRunsPage, ResearchProfileRunsQuery } from "@pwragen
 import { RESEARCH_RUN_ATTENTION_ORDER } from "@pwragent/shared/research";
 import { RESEARCH_PROFILE_RUNS_CHANNEL, RESEARCH_OPEN_WINDOW_CHANNEL } from "../../../shared/ipc";
 import { researchWindowRunId, showResearchWindow } from "../research-window";
-import { RESEARCH_HARNESS_STATUS_CHANNEL, RESEARCH_HARNESS_START_CHANNEL, RESEARCH_HARNESS_CHECK_CHANNEL, RESEARCH_HARNESS_RECONCILE_CHANNEL, RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL, RESEARCH_HARNESS_SETTINGS_CHECK_CHANNEL, RESEARCH_HARNESS_PICK_BRIDGE_CHANNEL } from "../../../shared/ipc";
+import { RESEARCH_HARNESS_STATUS_CHANNEL, RESEARCH_HARNESS_START_CHANNEL, RESEARCH_HARNESS_CHECK_CHANNEL, RESEARCH_HARNESS_RECONCILE_CHANNEL, RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL, RESEARCH_HARNESS_SETTINGS_CHECK_CHANNEL, RESEARCH_HARNESS_PICK_BRIDGE_CHANNEL, RESEARCH_MATHOS_TEAMS_CHANNEL } from "../../../shared/ipc";
 import { resolveDesktopConfigPath } from "../../settings/desktop-config";
-import { getResearchHarnessService, researchHarnessPlatformKeyStored, researchHarnessStatus } from "../../research/research-runtime";
+import { getResearchHarnessService, listResearchMathosTeams, researchHarnessPlatformKeyStored, researchHarnessStatus } from "../../research/research-runtime";
 import { getDesktopSettingsService } from "../../settings/desktop-settings-singleton";
 
 /** Native research is local-owner only. A federation viewer cannot read or mutate this profile. */
@@ -87,6 +87,11 @@ export function registerResearchIpcHandlers(): void {
     const options: Electron.OpenDialogOptions = { title: "Choose the Harness bridge", properties: ["openFile"] };
     const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
     return result.canceled || !result.filePaths[0] ? {} : { path: result.filePaths[0] };
+  });
+  // Settings lists the teams the stored key can open, on the saved origin. The window supplies no address or key.
+  ipcMain.handle(RESEARCH_MATHOS_TEAMS_CHANNEL, async (event) => {
+    if (!isLocalMainWindowWebContents(event.sender)) throw new Error("List MathOS teams on the owning instance");
+    return await listResearchMathosTeams();
   });
   // Reveals this profile's own config file. The window supplies no path.
   ipcMain.handle(RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL, (event) => {
@@ -186,6 +191,7 @@ export function disposeResearchIpcHandlers(): void {
   ipcMain.removeHandler(RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL);
   ipcMain.removeHandler(RESEARCH_HARNESS_SETTINGS_CHECK_CHANNEL);
   ipcMain.removeHandler(RESEARCH_HARNESS_PICK_BRIDGE_CHANNEL);
+  ipcMain.removeHandler(RESEARCH_MATHOS_TEAMS_CHANNEL);
   ipcMain.removeHandler(RESEARCH_PROFILE_RUNS_CHANNEL);
   ipcMain.removeHandler(RESEARCH_OPEN_WINDOW_CHANNEL);
   for (const channel of [RESEARCH_CHANGES_CHANNEL, RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL, RESEARCH_WITHDRAW_CHANNEL, RESEARCH_EVENTS_CHANNEL]) ipcMain.removeHandler(channel);

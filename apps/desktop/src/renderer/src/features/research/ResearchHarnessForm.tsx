@@ -33,9 +33,18 @@ export function harnessRequestIdentity(previous: { signature: string; id: string
   return previous?.signature === signature ? previous : { signature, id: newId() };
 }
 
-/** Why an operation cannot run on this bridge, or undefined when it can. */
+/** Why an operation cannot run from this source, or undefined when it can. */
 function blocker(operation: Operation, status: ResearchHarnessStatus | undefined, check: ResearchHarnessCheck | undefined): string | undefined {
-  if (!status?.configured) return "No bridge is configured.";
+  if (!status?.configured) return status?.source === "mathos" ? "The MathOS Platform is not set up." : "No bridge is configured.";
+  if (status.source === "mathos") {
+    // PwrAgent's own client only reads. Discovery counts only once a check found the runtime offers it.
+    if (operation === "execute") return "The MathOS Platform does not offer running a swarm to PwrAgent.";
+    if (operation === "discovery" && !(check?.ok && check.capabilities.discovery)) {
+      return check?.ok ? "This team’s VM does not offer discovery reads to PwrAgent." : "Check connection to see whether this team’s VM offers discovery reads.";
+    }
+    if (check?.ok && !check.capabilities.import) return "This team’s VM does not offer swarm records to this key.";
+    return undefined;
+  }
   const missing = OPERATIONS.find((entry) => entry.id === operation)!.needs.filter((need) => check?.ok && !check.capabilities[need]);
   if (missing.length) return `This bridge does not support ${missing.map((need) => CAPABILITY_LABELS[need].toLowerCase()).join(" or ")}.`;
   if (operation === "execute") {
@@ -105,21 +114,33 @@ export function ResearchHarnessForm({ api, thread, onStarted, onCancel, onOpenSe
   }
 
   const caps = check?.ok ? check.capabilities : undefined;
+  const mathos = status?.source === "mathos";
   return <form className="research-form" aria-label="Harness research" onSubmit={(event) => { void submit(event); }}>
     <section className="research-bridge" aria-labelledby={`${id}-bridge`}>
       <div className="research-card__top">
-        <h4 id={`${id}-bridge`} className="research-group">Bridge</h4>
+        <h4 id={`${id}-bridge`} className="research-group">Source</h4>
         {status?.configured && api.checkResearchHarness && <button type="button" className="research-button" disabled={checking} onClick={() => { void runCheck(); }}>
-          {checking ? "Checking…" : check ? "Check again" : "Check bridge"}</button>}
+          {checking ? "Checking…" : check ? "Check again" : mathos ? "Check connection" : "Check bridge"}</button>}
       </div>
-      {!status && <p className="research-muted" role="status">Reading bridge settings…</p>}
+      {!status && <p className="research-muted" role="status">Reading Harness settings…</p>}
       {status?.configError && <p className="research-error" role="alert">{status.configError}</p>}
-      {status && !status.configured && !status.configError && <>
+      {status && mathos && !status.configured && !status.configError && <p className="research-text">
+        Import swarm records straight from the MathOS Platform. {status.platformKeyStored ? "Choose a team" : "Store your MathOS Platform API key and choose a team"} in Settings › Experimental › Open Math Harness.
+      </p>}
+      {status && !mathos && !status.configured && !status.configError && <>
         <p className="research-text">No Harness bridge is configured in this profile. A bridge is a program you install; PwrAgent starts it and talks to it over stdio.</p>
         <pre className="research-snippet" aria-label="Example bridge configuration">{CONFIG_SNIPPET}</pre>
         <p className="research-muted">Set it up in Settings › Experimental › Open Math Harness, or in this table. <code className="research-code">api_key_env</code> names the variable that holds the <strong>model</strong> API key, not your MathOS Platform key.</p>
       </>}
-      {status?.configured && <dl className="research-dl">
+      {status?.configured && mathos && <dl className="research-dl">
+        <dt>Platform</dt><dd>MathOS Platform{status.platformOrigin && <> at <code className="research-code">{status.platformOrigin.replace(/^https?:\/\//, "")}</code></>}{" "}
+          {check ? check.ok ? <span className="research-ok">· responding</span> : <span className="research-bad">· {check.error}</span> : <span className="research-muted">· not checked</span>}</dd>
+        {caps && <><dt>Supports</dt><dd><span className="research-caps">{(Object.keys(CAPABILITY_LABELS) as Capability[]).map((key) =>
+          <span key={key} className={`research-chip${caps[key] ? " research-chip--done" : " research-chip--off"}`}>{CAPABILITY_LABELS[key]}<span className="research-sr-only">{caps[key] ? " supported" : " not supported"}</span></span>)}</span></dd></>}
+        <dt>Team</dt><dd><code className="research-code">{status.platformTeam}</code></dd>
+        <dt>API key</dt><dd>{status.platformKeyStored === undefined ? "PwrAgent’s secret store could not be read" : "Stored in PwrAgent"}</dd>
+      </dl>}
+      {status?.configured && !mathos && <dl className="research-dl">
         <dt>Process</dt><dd><code className="research-code">{status.bridge}</code>{" "}
           {check ? check.ok ? <span className="research-ok">· responding</span> : <span className="research-bad">· {check.error}</span> : <span className="research-muted">· not checked</span>}</dd>
         {caps && <><dt>Supports</dt><dd><span className="research-caps">{(Object.keys(CAPABILITY_LABELS) as Capability[]).map((key) =>
@@ -127,13 +148,10 @@ export function ResearchHarnessForm({ api, thread, onStarted, onCancel, onOpenSe
         {(status.model || status.endpointOrigin) && <><dt>Model</dt><dd>{status.model ? <code className="research-code">{status.model}</code> : "No model"}{status.endpointOrigin && <> at <code className="research-code">{status.endpointOrigin}</code></>}</dd></>}
         {status.credentialEnv && <><dt>Model key</dt><dd><code className="research-code">{status.credentialEnv}</code>{" "}
           {status.credentialSet ? <span className="research-ok">· set</span> : <span className="research-bad">· not set</span>}</dd></>}
-        <dt>Platform key</dt><dd>{status.platformKeyStored === undefined
-          ? "PwrAgent’s secret store could not be read"
-          : status.platformKeyStored ? "Stored in PwrAgent · given to the bridge" : "Not stored in PwrAgent"}</dd>
       </dl>}
       {status && !status.configured && (onOpenSettings || api.revealResearchHarnessConfig) && <span className="research-actions">
         {onOpenSettings && <button type="button" className="research-button research-button--primary" onClick={onOpenSettings}>Open Harness settings</button>}
-        {api.revealResearchHarnessConfig && <button type="button" className="research-button" onClick={() => { void api.revealResearchHarnessConfig?.().catch((failure: unknown) => setError(message(failure))); }}>Show config.toml</button>}
+        {!mathos && api.revealResearchHarnessConfig && <button type="button" className="research-button" onClick={() => { void api.revealResearchHarnessConfig?.().catch((failure: unknown) => setError(message(failure))); }}>Show config.toml</button>}
       </span>}
       {status?.configured && onOpenSettings && <span className="research-actions">
         <button type="button" className="research-button research-button--ghost" onClick={onOpenSettings}>Harness settings</button>

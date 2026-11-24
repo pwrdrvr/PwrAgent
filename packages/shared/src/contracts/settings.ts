@@ -10,7 +10,7 @@ import type {
   DesktopTaskMonitorModelChoice,
 } from "../helper-models";
 import type { DesktopDecisionModelSettings } from "../decision-models";
-import type { ResearchHarnessConfig } from "../research-harness";
+import type { ResearchHarnessConfig, ResearchHarnessSource, ResearchMathosConfig } from "../research-harness";
 import type {
   CodexModelProviderSettings,
   DesktopCodexModelProvider,
@@ -829,7 +829,7 @@ export type DesktopSettingsSecretName =
   | "openaiTranscriptionApiKey"
   /** Codex model provider API keys, one JSON object keyed by provider id. */
   | "codexModelProviderKeys"
-  /** MathOS Platform API key, given only to the configured Open Math Harness bridge process. */
+  /** MathOS Platform API key. Only the owner's MathOS Platform client reads it, to sign in to the platform. */
   | "mathosPlatformApiKey";
 
 /**
@@ -1551,7 +1551,10 @@ export type DesktopSettingsSnapshot = {
    * only. Absent from snapshots built before this setting existed.
    */
   research?: {
+    /** The source in use, resolved as the owner resolves it. */
+    source: ResearchHarnessSource;
     harness?: ResearchHarnessConfig;
+    mathos?: ResearchMathosConfig;
     /** Whether the variable `harness.apiKeyEnv` names is set for PwrAgent. Never its value. */
     modelKeyEnvSet?: boolean;
     platformApiKey: DesktopSettingsSecretState;
@@ -1977,9 +1980,13 @@ export type DesktopSettingsConfigPatch = {
     completed?: boolean;
     completedSource?: DesktopOnboardingCompletedSource;
   };
-  /** `null` removes the bridge: every `[research.harness]` key is deleted. */
   research?: {
+    /** Written as `[research] harness_source`. */
+    source?: ResearchHarnessSource;
+    /** `null` removes the bridge: every `[research.harness]` key is deleted. */
     harness?: ResearchHarnessConfig | null;
+    /** `[research.mathos]`; `null` deletes a key. The default origin is not written. */
+    mathos?: { team?: string | null; origin?: string | null };
   };
   experimental?: {
     fullAccessRiskWarningDismissed?: boolean;

@@ -94,13 +94,18 @@ export type ResearchHarnessCapabilities = {
   discovery?: boolean;
 };
 /**
- * What the window may know about the configured bridge. Never a credential value,
+ * What the window may know about the configured source. Never a credential value,
  * the full command line, or anything the window could use to choose an executable.
  */
 export type ResearchHarnessStatus = {
   configured: boolean;
+  /** Where Harness records come from: PwrAgent's own MathOS Platform client, or an installed bridge. */
+  source?: ResearchHarnessSource;
   /** The bridge executable's file name. */
   bridge?: string;
+  /** MathOS Platform: the platform's origin and the chosen team's id. */
+  platformOrigin?: string;
+  platformTeam?: string;
   /** The profile's config.toml cannot be used; new adapter work is refused. */
   configError?: string;
   model?: string;
@@ -109,7 +114,7 @@ export type ResearchHarnessStatus = {
   /** Name of the environment variable that holds the model API key, and whether it is set. */
   credentialEnv?: string;
   credentialSet?: boolean;
-  /** Whether a MathOS Platform API key is stored for the bridge. Presence only, never the value. */
+  /** Whether a MathOS Platform API key is stored. Presence only, never the value; absent when the store cannot be read. */
   platformKeyStored?: boolean;
   /** The canonical workspace the owner would bind for this thread, when it has one. */
   workspace?: string;
@@ -128,10 +133,45 @@ export type ResearchHarnessConfig = {
 };
 
 /**
- * The variable the configured bridge, and only the bridge, receives the stored
- * MathOS Platform API key in. PwrAgent never sends that key to a model endpoint.
+ * Where a Research run's Harness records come from. `mathos` is PwrAgent's own
+ * read-only client for the hosted MathOS Platform; `bridge` launches an installed
+ * bridge program configured in `[research.harness]`.
  */
-export const MATHOS_PLATFORM_API_KEY_ENV = "MATHOS_PLATFORM_API_KEY";
+export type ResearchHarnessSource = "mathos" | "bridge";
+/** `[research.mathos]`: the team whose VM PwrAgent reads, and the platform's origin. The key is a secret, never here. */
+export type ResearchMathosConfig = { team?: string; origin?: string };
+export type MathosTeam = { id: string; name: string };
+export type MathosTeamsResult = { ok: true; teams: MathosTeam[] } | { ok: false; error: string };
+export const MATHOS_PLATFORM_DEFAULT_ORIGIN = "https://os.openmathmodel.org";
+/** A MathOS team id, as the platform's own client validates it. */
+export const MATHOS_TEAM_ID = /^o-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** What the platform's own client accepts as a compute API credential. */
+export const MATHOS_API_KEY = /^[\x21-\x7e]{1,512}$/;
+
+/**
+ * The source in use. An explicit `harness_source` wins; otherwise a profile that
+ * already configured a bridge program keeps it, and every other profile reads
+ * the MathOS Platform directly.
+ */
+export function resolveResearchHarnessSource(research: { source?: ResearchHarnessSource; harness?: ResearchHarnessConfig } | undefined): ResearchHarnessSource {
+  return research?.source ?? (research?.harness?.command ? "bridge" : "mathos");
+}
+
+/** The platform's plain origin: HTTPS, or HTTP to this machine for tests. Blank is the hosted platform. */
+export function normalizeMathosPlatformOrigin(value: string | undefined): { ok: true; origin: string } | { ok: false; error: string } {
+  const text = value?.trim();
+  if (!text) return { ok: true, origin: MATHOS_PLATFORM_DEFAULT_ORIGIN };
+  let url: ParsedUrl;
+  try { url = new URL(text); } catch { return { ok: false, error: "Enter the platform’s address, for example https://os.openmathmodel.org." }; }
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && LOOPBACK_HOSTS.includes(url.hostname))) {
+    return { ok: false, error: "Use HTTPS, or HTTP to this machine." };
+  }
+  if (url.username || url.password || url.search || url.hash || url.pathname !== "/") {
+    return { ok: false, error: "Enter only the platform’s address, without a path." };
+  }
+  return { ok: true, origin: url.origin };
+}
+
 export const RESEARCH_HARNESS_MAX_ARGS = 64;
 const MAX_ARGS_JSON = 16_000;
 const MAX_COMMAND = 4_096;
@@ -145,7 +185,7 @@ const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "[::1]"];
 // This package compiles without DOM or Node types. Every runtime it ships to
 // (Electron main, renderer, Node tests) has the WHATWG URL global.
-type ParsedUrl = { protocol: string; hostname: string; username: string; password: string; search: string; hash: string };
+type ParsedUrl = { protocol: string; hostname: string; username: string; password: string; search: string; hash: string; pathname: string; origin: string };
 declare const URL: new (input: string) => ParsedUrl;
 
 /** POSIX `/…`, Windows `C:\…` or `C:/…`, or a UNC `\\host\share` path. */
@@ -202,9 +242,6 @@ export function normalizeResearchHarnessConfig(input: {
   const apiKeyEnv = input.apiKeyEnv?.trim();
   if (apiKeyEnv) {
     if (!ENV_NAME.test(apiKeyEnv)) return { ok: false, field: "apiKeyEnv", error: "Use a variable name: letters, digits and underscores." };
-    if (apiKeyEnv === MATHOS_PLATFORM_API_KEY_ENV) {
-      return { ok: false, field: "apiKeyEnv", error: "That name is the Platform key’s. Name the model key’s variable." };
-    }
     value.apiKeyEnv = apiKeyEnv;
   }
   return { ok: true, value };

@@ -26,6 +26,7 @@ import { normalizeThreadArchivePolicy } from "@pwragent/shared/thread-archive-po
 import { bundledGitExecutable, bundledGitLfsExecutable } from "../bundled-git";
 import { gitRuntimeEnvironment } from "../git-runtime";
 import { createTokenMiserStorage } from "../storage/desktop-runtime-storage";
+import { resolveResearchHarnessSource } from "@pwragent/shared/research-harness";
 import {
   DESKTOP_MARKDOWN_RENDERING_DEFAULTS,
   DESKTOP_UI_LAYOUT_DEFAULTS,
@@ -1267,7 +1268,9 @@ export class DesktopSettingsService {
       },
       onboarding: this.resolveOnboarding(config.onboarding),
       research: {
+        source: resolveResearchHarnessSource(config.research),
         ...(config.research?.harness ? { harness: config.research.harness } : {}),
+        ...(config.research?.mathos ? { mathos: config.research.mathos } : {}),
         ...(config.research?.harness?.apiKeyEnv
           ? { modelKeyEnvSet: Boolean(readEnvString(this.env, config.research.harness.apiKeyEnv)) }
           : {}),

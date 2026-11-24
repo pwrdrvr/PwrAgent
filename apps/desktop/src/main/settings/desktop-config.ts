@@ -39,7 +39,13 @@ import {
   type CodexModelProviderSettings,
 } from "@pwragent/shared/codex-model-providers";
 import { validateLocalModelIds } from "@pwragent/shared/local-model-pricing";
-import { normalizeResearchHarnessConfig, type ResearchHarnessConfig } from "@pwragent/shared/research-harness";
+import {
+  MATHOS_PLATFORM_DEFAULT_ORIGIN,
+  MATHOS_TEAM_ID,
+  normalizeMathosPlatformOrigin,
+  normalizeResearchHarnessConfig,
+  type ResearchHarnessConfig,
+} from "@pwragent/shared/research-harness";
 import { GITHUB_ENTERPRISE_HOSTS_CONFLICT, isGithubEnterpriseLogin, mergeGithubEnterpriseHosts, normalizeGithubEnterpriseHost, validateGithubEnterpriseHosts } from "@pwragent/shared/github-enterprise-hosts";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -164,7 +170,11 @@ type StoredChatReplyComposer =
   | LegacyChatReplyComposer;
 
 export type DesktopSettingsConfig = {
-  research?: { harness?: import("@pwragent/shared/research-harness").ResearchHarnessConfig };
+  research?: {
+    source?: import("@pwragent/shared/research-harness").ResearchHarnessSource;
+    harness?: import("@pwragent/shared/research-harness").ResearchHarnessConfig;
+    mathos?: import("@pwragent/shared/research-harness").ResearchMathosConfig;
+  };
   general?: {
     confirmQuitWithInProgressThreads?: boolean;
     attentionPromoteOnTurnEnd?: boolean;
@@ -1179,6 +1189,13 @@ export function desktopSettingsPatchToEdits(
   }
   if (patch.research?.harness !== undefined) {
     edits.push(...researchHarnessEdits(patch.research.harness));
+  }
+  if (patch.research?.source !== undefined) {
+    if (patch.research.source !== "mathos" && patch.research.source !== "bridge") throw new Error("Choose MathOS Platform or a custom bridge.");
+    set(["research", "harness_source"], patch.research.source);
+  }
+  if (patch.research?.mathos !== undefined) {
+    edits.push(...researchMathosEdits(patch.research.mathos));
   }
   if (patch.experimental?.codexDefaultModeRequestUserInput !== undefined) {
     set(
@@ -2541,7 +2558,7 @@ function normalizeDesktopConfig(
   const hibernate = tables["worktrees.hibernate"];
 
   return pruneEmptyConfig({
-    research: readResearchSettings(tables["research.harness"]),
+    research: readResearchSettings(tables["research"], tables["research.harness"], tables["research.mathos"]),
     general: {
       confirmQuitWithInProgressThreads: readBoolean(
         general?.confirm_quit_with_in_progress_threads,
@@ -3064,6 +3081,30 @@ function normalizeDesktopConfig(
   });
 }
 
+/**
+ * `[research.mathos]` holds only identifiers; the Platform key is a secret. A
+ * team must be a MathOS team id and the origin a plain HTTPS origin. The hosted
+ * platform's origin is the default and is not written.
+ */
+function researchMathosEdits(mathos: { team?: string | null; origin?: string | null }): TomlEdit[] {
+  const table = ["research", "mathos"];
+  const edits: TomlEdit[] = [];
+  if (mathos.team !== undefined) {
+    const team = mathos.team?.trim();
+    if (!team) edits.push({ op: "delete", path: [...table, "team"] });
+    else if (!MATHOS_TEAM_ID.test(team)) throw new Error("Choose a MathOS team.");
+    else edits.push({ op: "set", path: [...table, "team"], value: team });
+  }
+  if (mathos.origin !== undefined) {
+    const normalized = normalizeMathosPlatformOrigin(mathos.origin ?? undefined);
+    if (!normalized.ok) throw new Error(normalized.error);
+    edits.push(normalized.origin === MATHOS_PLATFORM_DEFAULT_ORIGIN
+      ? { op: "delete", path: [...table, "origin"] }
+      : { op: "set", path: [...table, "origin"], value: normalized.origin });
+  }
+  return edits;
+}
+
 const RESEARCH_HARNESS_OPTIONAL_KEYS = [
   ["endpoint", "endpoint"],
   ["model", "model"],
@@ -3104,9 +3145,25 @@ const RESEARCH_HARNESS_KEYS = ["command", "args", ...RESEARCH_HARNESS_OPTIONAL_K
  * `[research.harness]` holding none of the bridge's keys reads as no bridge
  * rather than as an invalid one. A table with any of them still needs a command.
  */
-function readResearchSettings(table: Record<string, TomlScalar> | undefined): DesktopSettingsConfig["research"] {
-  if (!table || !RESEARCH_HARNESS_KEYS.some((key) => table[key] !== undefined)) return undefined;
-  return { harness: readResearchHarnessConfig(table) };
+function readResearchSettings(
+  research: Record<string, TomlScalar> | undefined,
+  harnessTable: Record<string, TomlScalar> | undefined,
+  mathosTable: Record<string, TomlScalar> | undefined,
+): DesktopSettingsConfig["research"] {
+  const harness = harnessTable && RESEARCH_HARNESS_KEYS.some((key) => harnessTable[key] !== undefined)
+    ? readResearchHarnessConfig(harnessTable)
+    : undefined;
+  // An unrecognized source or a non-string MathOS value is ignored, not fatal:
+  // the owner then resolves the default source and reports what is missing.
+  const sourceValue = research?.harness_source;
+  const source = sourceValue === "mathos" || sourceValue === "bridge" ? sourceValue : undefined;
+  const team = readString(mathosTable?.team);
+  const origin = readString(mathosTable?.origin);
+  const mathos = team !== undefined || origin !== undefined
+    ? { ...(team !== undefined ? { team } : {}), ...(origin !== undefined ? { origin } : {}) }
+    : undefined;
+  if (!harness && !source && !mathos) return undefined;
+  return { ...(source ? { source } : {}), ...(harness ? { harness } : {}), ...(mathos ? { mathos } : {}) };
 }
 
 function readResearchHarnessConfig(table: Record<string, TomlScalar>): import("@pwragent/shared/research-harness").ResearchHarnessConfig {

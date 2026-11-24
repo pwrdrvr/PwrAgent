@@ -5,29 +5,15 @@ import type { ResearchHarnessConfig } from "@pwragent/shared/research-harness";
 import type { ResearchHarnessConnection } from "@pwragent/owner-core/research-harness-service";
 import { object } from "@pwragent/owner-core/research-harness-records";
 import { terminateOwnedProcessTree } from "../process-tree";
-import { MATHOS_PLATFORM_API_KEY_ENV } from "@pwragent/shared/research-harness";
 
 const MAX_FRAME_BYTES = 512_000;
-const INHERITED_ENV = ["PATH", "SystemRoot", "WINDIR", "TMPDIR", "TMP", "TEMP"] as const;
-
-/**
- * The optional bridge is trusted installed code, but receives no provider keys
- * or ambient app settings: only the OS basics, plus the operator's stored
- * MathOS Platform key, which is the bridge's own sign-in. The model key stays
- * with PwrAgent, which makes every model call itself.
- */
-export function researchHarnessEnvironment(parent: NodeJS.ProcessEnv, platformApiKey?: string): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
-  for (const key of INHERITED_ENV) if (parent[key]) env[key] = parent[key];
-  if (platformApiKey) env[MATHOS_PLATFORM_API_KEY_ENV] = platformApiKey;
-  return env;
-}
 /** Protocol-only stdout; bounded requests and frames; diagnostics are drained without persisting secrets. */
 export function openResearchHarnessProcess(config: ResearchHarnessConfig, cwd: string,
-  call: (method: string, params: Record<string, unknown>, signal: AbortSignal) => Promise<unknown>, onError: (error: unknown) => void,
-  platformApiKey?: string): ResearchHarnessConnection {
+  call: (method: string, params: Record<string, unknown>, signal: AbortSignal) => Promise<unknown>, onError: (error: unknown) => void): ResearchHarnessConnection {
   if (!path.isAbsolute(config.command) || !Array.isArray(config.args) || config.args.some((arg) => typeof arg !== "string")) throw new Error("Configure an absolute Harness bridge executable and an argument array");
-  const env = researchHarnessEnvironment(process.env, platformApiKey);
+  // The optional bridge is trusted installed code, but receives no provider keys or ambient app settings.
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of ["PATH", "SystemRoot", "WINDIR", "TMPDIR", "TMP", "TEMP"]) if (process.env[key]) env[key] = process.env[key];
   const child = spawn(config.command, config.args, { cwd, env, shell: false, detached: process.platform !== "win32", windowsHide: true, stdio: "pipe" });
   const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   const inbound = new Set<string>();

@@ -17,51 +17,22 @@ for source observations. Local acceptance/rejection remains available.
 ## Research panel
 
 **New run** opens one form. When the adapter is available, a switch chooses
-PwrAgent workers or Open Math Harness. The Harness form starts with a **Bridge**
-block from the owner's status read: the bridge executable's file name, the
-execution model and endpoint origin, the model-credential variable's name and
-whether it is set, and whether a MathOS Platform key is stored for the bridge.
-Credential values never reach the window. With no bridge configured it offers
-**Open Harness settings** and **Show config.toml**, which reveals the profile's
-own file; the window supplies no path. A config error is shown as text.
+PwrAgent workers or Open Math Harness. The Harness form starts with a **Source**
+block from the owner's status read. For the MathOS Platform it shows the
+platform's address, the team id and whether the API key is stored; **Run a new
+swarm** says the platform does not offer it, and **Snapshot a discovery run**
+waits for a check that finds discovery reads. For a custom bridge it shows the
+bridge executable's file name, the execution model and endpoint origin, and the
+model-credential variable's name and whether it is set. Credential values never
+reach the window. With nothing set up it offers **Open Harness settings** (and,
+for a bridge, **Show config.toml**, which reveals the profile's own file; the
+window supplies no path). A config error is shown as text.
 
-## Settings
-
-**Settings › Experimental › Open Math Harness**, directly under the Research
-runs switch, is the one home for the bridge and the Platform key. It is not under
-AI Providers: a `@mathos/…` model provider imported from Codex keeps its own
-*model* key there, while the Platform key is a different credential (the probe
-below used it for platform metadata and the runtime's `whoami`, never against the
-model API). The Harness section names the model-key variable and says it is not
-the Platform key, so the two never appear as one MathOS credential.
-
-The bridge fields are an explicit-save form (`useSettingsDraft`,
-`useUnsavedSettingsChanges`) over `[research.harness]`: program (an absolute
-path, typed or chosen in the system file picker), arguments one per line, model
-endpoint, model, and the model key's variable name. Save validates with
-`normalizeResearchHarnessConfig`, the same rules execution applies, and writes
-only those keys through the path-based config writer; blank optional fields
-delete their key, comments and other keys stay. **Remove bridge** deletes the
-bridge's keys; a `[research.harness]` table holding none of them reads as no
-bridge. **Check bridge** reuses the owner check (`hello` only, from the temporary
-directory, nothing written). The section also states what the hosted platform
-offers today: importing swarm records works; running, stopping and discovery
-reads are not offered to a bridge (see the probe below).
-
-The **MathOS Platform API key** is stored in the profile's encrypted secret store
-as `mathosPlatformApiKey`, like the Boat key. Windows see presence only. It is
-never written to `config.toml` and never given to an agent or a model. The owner
-reads it when it starts the bridge and passes it to that process alone as
-`MATHOS_PLATFORM_API_KEY`, beside the minimal OS environment; it is the bridge's
-own sign-in, so this is the one credential the bridge receives. The model key
-stays with PwrAgent, which makes every model call itself. A `model_complete`
-callback whose messages contain the stored Platform key is refused, so a bridge
-cannot route it into a model request or model context.
-
-**Check bridge** is an explicit owner request: it starts the configured bridge,
-sends `hello`, closes it, and reports the advertised capabilities. It makes no
-model call, creates no run and writes nothing. A thread without a directory is
-checked from the temporary directory, because a check binds no evidence.
+**Check connection** (MathOS) or **Check bridge** is an explicit owner request:
+it opens the configured source, sends `hello`, closes it, and reports the
+capabilities. It makes no model call, creates no run and writes nothing. A
+thread without a directory is checked from the temporary directory, because a
+check binds no evidence.
 
 The operator picks one of three operations: **Import swarm records** and
 **Snapshot a discovery run** are read-only and need only source IDs and an
@@ -100,7 +71,10 @@ creates a PwrAgent review or formal-verification result.
 internal configuration has `command` (absolute executable), literal `args`, and
 optional `endpoint`, `model`, `api_key_env` (an environment-variable name).
 No existing setting changes shape; no conversion or dual write is needed. The
-Settings form writes the same keys; the Platform key adds no TOML key.
+Settings form writes the same keys. `[research] harness_source` and
+`[research.mathos]` are additive too; an unrecognized source or a non-string
+MathOS value is ignored rather than invalidating the file, and the Platform key
+adds no TOML key.
 Configuration comes from the owner's watched config-store research domain and is
 captured per connection. Invalid profile edits block new adapter use, including
 when the store retains a last-known-good snapshot. A malformed argument list fails closed.
@@ -111,9 +85,80 @@ model call and do not ask for it.
 The form discloses the configured execution model and endpoint origin; the owner
 retains that selection before paid probing, separately from any source model name.
 Import never initializes or validates the model transport.
-The bridge receives a minimal OS environment, the stored Platform key, and no
-model credential. Production
+The bridge receives a minimal OS environment and no credential. Production
 operator setup documentation belongs in `pwrdrvr/docs.pwragent.ai`.
+
+## Settings
+
+**Settings › Experimental › Open Math Harness**, directly under the Research
+runs switch, is the one home for the Harness source and the MathOS Platform API
+key. It is not under AI Providers: a `@mathos/…` model provider imported from
+Codex keeps its own *model* key there, while the Platform key is a different
+credential (the probe below used it for platform metadata and the runtime's
+`whoami`, never against the model API).
+
+One explicit-save form (`useSettingsDraft`, `useUnsavedSettingsChanges`) chooses
+**Connect with**: **MathOS Platform** or **Custom bridge**, written as
+`[research] harness_source`. Without that key, a profile that already configured
+a bridge program keeps it and every other profile reads the MathOS Platform.
+
+- **MathOS Platform** (the default): the API key, a **Team** found with **Find
+  teams** (the platform's `orgs` for the stored key, on the saved address; a single
+  team is chosen for you), and an optional **Platform address** that defaults to
+  the hosted platform. Save writes `[research.mathos] team` and, only when it is not
+  the hosted platform, `origin`. A team must be a MathOS team id; an address must be
+  a plain HTTPS origin (HTTP only to this machine).
+- **Custom bridge**: program (an absolute path, typed or chosen in the system file
+  picker), arguments one per line, model endpoint, model, and the model key's
+  variable name, written to `[research.harness]`. Save validates with
+  `normalizeResearchHarnessConfig`, the same rules execution applies, and writes
+  only those keys through the path-based config writer; blank optional fields
+  delete their key, comments and other keys stay, and arguments the box cannot
+  show are kept as stored until it is edited. **Remove bridge** deletes the
+  bridge's keys; a table holding none of them reads as no bridge.
+
+**Check connection** / **Check bridge** reuses the owner check (`hello` only,
+from the temporary directory, nothing written). In MathOS mode the section also
+states what the hosted platform offers today: importing swarm records works;
+running, stopping and discovery reads are not offered (see the probe below).
+
+The **MathOS Platform API key** is stored in the profile's encrypted secret store
+as `mathosPlatformApiKey`, like the Boat key. Windows see presence only, read
+without decrypting it. It is never written to `config.toml` and never given to an
+agent, a model or a child process. Only the owner's MathOS client reads it.
+
+## MathOS Platform client
+
+PwrAgent reads the hosted platform itself; no bridge process is involved
+(`apps/desktop/src/main/research/mathos-platform-connection.ts`). It speaks the
+shapes the platform's own web client uses:
+
+1. **Runtime version.** `open` names a runtime version, so the owner reads the
+   version the platform's web app pins (`/` → `/app/assets/index-*.js` →
+   `runtime` and `ipc`). Asking for the version the platform currently serves is
+   what keeps this client from requesting a runtime change on the team's VM.
+2. **Open.** HTTPS `POST /v1/open` with `Authorization: Bearer <key>` and
+   `{version, ipc_version, wake: false, ticket: true, team}`. An asleep VM is
+   reported, never woken; a preparing VM is polled for at most 30 seconds. A
+   ready answer must name a valid environment, the requested version and IPC
+   version, and a printable ticket.
+3. **Runtime socket.** WebSocket `/v1/runtime/<environment>?ticket=<ticket>` with
+   subprotocol `agent-vm-runtime-v1`. The first line is `{"nucleus_key": <key>}`;
+   then binary UTF-8 JSON lines `{id, op, …}` are answered `{id, ok}` or
+   `{id, error}`. Lines are bounded at 512,000 bytes, requests at 30 seconds and
+   sixteen outstanding.
+4. **Operations.** `hello` sends `whoami`: import needs a `swarm` handle with
+   `records`; discovery needs a `discovery` handle *and* a recognized read-only
+   `runs.list` (the deployed runtime held handles without `runs.*`). Execution,
+   cancellation and research functions are never offered, so the owner never asks
+   for them. `records` maps to `swarm.records` (at most fifty), `status` to
+   `swarm.status`, and discovery reads to `runs.*`, as the reference bridge maps
+   them. Every request is a read, so after the runtime closes the next request
+   opens the VM again with a fresh ticket.
+
+The key leaves the owner only in the `Authorization` header to the configured
+origin and the runtime's first line. Errors carry the platform's own words,
+bounded, never the key or a ticket.
 
 ## Wire contract
 
@@ -275,11 +320,23 @@ members are refused at every size. Before this rule it failed on its first run,
 shrunk to a nine-member import.
 
 `research-harness-settings.property.test.ts` drives random sequences of Settings
-saves and Remove bridge over hand-written files against a model of the last
-save, refuses invalid values before writing, round-trips the Platform key through
-the real settings service, and checks the bridge environment and the model-request
-refusal. Its first run found a removal that left a hand-written table unreadable
-and a settings snapshot that omitted the research section; both are fixed.
+saves, Remove bridge, source choices and MathOS team/address edits over
+hand-written files against a model, refuses invalid values before writing, and
+round-trips the Platform key through the real settings service. Its first run
+found a removal that left a hand-written table unreadable and a settings snapshot
+that omitted the research section; both are fixed.
+
+`mathos-platform-connection.oracle.test.ts` runs a fake platform with the web
+client's shapes. A property imports generated swarms of 1–6 members and up to 120
+findings through `ResearchHarnessService` over real SQLite while the runtime
+splits every reply at arbitrary byte boundaries, and checks that the key appears
+only in the Bearer header and the first line. Removing the client's partial-frame
+buffering fails it. Other cases cover `wake: false`, asleep, preparing, refused
+keys, runtime/version mismatches, invalid tickets, protocol mismatch, over-long
+lines, reconnect with a fresh ticket and the discovery rule.
+`research-harness-settings.spec.ts` drives the real app against a loopback fake
+platform: store the key, find the team, save, check, and import a swarm from the
+New run form.
 
 The adapter follows the native incremental research contracts. Run summaries omit
 source state; the selected run receives it with its change pages, and source item
@@ -402,6 +459,11 @@ The probe then established these narrower facts:
   swarms. Although a reported swarm handle included `stop`, the window dispatcher
   exposed no `swarm.stop` or `swarm.start`. A handle alone is insufficient evidence
   of a callable operation. No mutation was attempted to test that absence.
+
+PwrAgent's own MathOS client (above) implements the read path this probe
+established: `open` with a ticket, the runtime socket, `whoami` and
+`swarm.records`. Its tests use a fake platform with the web client's shapes; a
+live import from a hosted project with a started swarm has not yet been run.
 
 This is an authenticated compatibility result, not a successful live acceptance
 run. There were no source records to import in the new project, and no hosted

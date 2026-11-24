@@ -4,7 +4,10 @@ import path from "node:path";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  MATHOS_PLATFORM_API_KEY_ENV,
+  MATHOS_PLATFORM_DEFAULT_ORIGIN,
+  resolveResearchHarnessSource,
+  type ResearchHarnessSource,
+  type ResearchMathosConfig,
   normalizeResearchHarnessConfig,
   researchHarnessArgsFromLines,
   type ResearchHarnessConfig,
@@ -13,8 +16,6 @@ import { desktopSettingsPatchToEdits, parseDesktopSettingsToml } from "../settin
 import { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
 import { applyTomlEdits, parseTomlTables } from "../settings/toml-editor";
-import { researchHarnessEnvironment } from "../research/research-harness-process";
-import { assertModelRequestOmitsPlatformKey } from "../research/research-runtime";
 
 // `DesktopSettingsService` builds a real `CodexDiscoveryCoordinator` unless the
 // test injects one; keep its probe off this machine's Codex installs.
@@ -59,14 +60,34 @@ const harness: fc.Arbitrary<ResearchHarnessConfig> = fc.record({
     segment.map((part) => `https://${part.replace(/[^A-Za-z0-9]/g, "") || "host"}.example.test/v1`),
   ), { nil: undefined }),
   model: fc.option(printable.filter((value) => value.trim().length > 0), { nil: undefined }),
-  apiKeyEnv: fc.option(fc.stringMatching(/^[A-Z_][A-Z0-9_]{0,20}$/).filter((name) => name !== MATHOS_PLATFORM_API_KEY_ENV), { nil: undefined }),
+  apiKeyEnv: fc.option(fc.stringMatching(/^[A-Z_][A-Z0-9_]{0,20}$/), { nil: undefined }),
 }, { requiredKeys: ["command", "args"] });
 
-type Op = { kind: "save"; value: ResearchHarnessConfig } | { kind: "remove" };
+const teamId = fc.uuid({ version: 4 }).map((id) => `o-${id}`);
+const mathosOrigin = fc.constantFrom<string | null>(null, "", MATHOS_PLATFORM_DEFAULT_ORIGIN, "https://os-test.example.test", "http://127.0.0.1:8443");
+type Op =
+  | { kind: "save"; value: ResearchHarnessConfig }
+  | { kind: "remove" }
+  | { kind: "source"; value: ResearchHarnessSource }
+  | { kind: "mathos"; team?: string | null; origin?: string | null };
 const op: fc.Arbitrary<Op> = fc.oneof(
   { weight: 3, arbitrary: harness.map((value) => ({ kind: "save" as const, value })) },
   { weight: 1, arbitrary: fc.constant({ kind: "remove" as const }) },
+  { weight: 1, arbitrary: fc.constantFrom<ResearchHarnessSource>("mathos", "bridge").map((value) => ({ kind: "source" as const, value })) },
+  { weight: 2, arbitrary: fc.record({ team: fc.option(teamId, { nil: null }), origin: mathosOrigin }, { requiredKeys: [] })
+    .map((value) => ({ kind: "mathos" as const, ...value })) },
 );
+
+/** What `[research.mathos]` holds after a save: the team, and an origin only when it is not the hosted platform. */
+function applyMathos(model: ResearchMathosConfig | undefined, change: { team?: string | null; origin?: string | null }): ResearchMathosConfig | undefined {
+  const next: ResearchMathosConfig = { ...model };
+  if (change.team !== undefined) { if (change.team) next.team = change.team; else delete next.team; }
+  if (change.origin !== undefined) {
+    const origin = change.origin ? new URL(change.origin).origin : undefined;
+    if (origin && origin !== MATHOS_PLATFORM_DEFAULT_ORIGIN) next.origin = origin; else delete next.origin;
+  }
+  return Object.keys(next).length ? next : undefined;
+}
 
 function write(text: string, patch: Parameters<typeof desktopSettingsPatchToEdits>[0]): string {
   return applyTomlEdits(text, desktopSettingsPatchToEdits(patch, parseTomlTables(text, "config.toml")));
@@ -81,20 +102,33 @@ function expected(value: ResearchHarnessConfig): ResearchHarnessConfig {
 describe("[research.harness] written by Settings", () => {
   it("reads back exactly what was last saved, and nothing after Remove bridge, across any sequence", () => {
     fc.assert(fc.property(fc.constantFrom(...BASES), fc.array(op, { minLength: 1, maxLength: 6 }), (base, ops) => {
-      // The model: the last save, or nothing after a remove.
-      let model: ResearchHarnessConfig | undefined;
+      // The model: the last bridge save (nothing after a remove), the last chosen source and the MathOS fields.
+      let model = parseDesktopSettingsToml(base, "config.toml").research?.harness;
+      let source: ResearchHarnessSource | undefined;
+      let mathos: ResearchMathosConfig | undefined;
       let text = base;
       for (const next of ops) {
         if (next.kind === "save") {
           text = write(text, { research: { harness: next.value } });
           model = expected(next.value);
-        } else {
+        } else if (next.kind === "remove") {
           text = write(text, { research: { harness: null } });
           model = undefined;
+        } else if (next.kind === "source") {
+          text = write(text, { research: { source: next.value } });
+          source = next.value;
+        } else {
+          const { kind: _kind, ...change } = next;
+          text = write(text, { research: { mathos: change } });
+          mathos = applyMathos(mathos, change);
         }
         const parsed = parseDesktopSettingsToml(text, "config.toml");
         // Optional keys left blank are absent, never empty strings.
         expect(parsed.research?.harness).toEqual(model);
+        expect(parsed.research?.mathos).toEqual(mathos);
+        expect(parsed.research?.source).toBe(source);
+        // An explicit choice wins; otherwise a configured bridge keeps working and everyone else reads MathOS.
+        expect(resolveResearchHarnessSource(parsed.research)).toBe(source ?? (model ? "bridge" : "mathos"));
         // Unrelated settings and comments are untouched by any save or removal.
         if (base.includes("developer_mode")) expect(parsed.general?.developerMode).toBe(true);
         if (base.includes("research_enabled")) expect(parsed.experimental?.researchEnabled).toBe(true);
@@ -114,13 +148,17 @@ describe("[research.harness] written by Settings", () => {
       fc.constant<ResearchHarnessConfig>({ command: "/bin/bridge", args: [], endpoint: "http://models.example.test/v1" }),
       fc.constant<ResearchHarnessConfig>({ command: "/bin/bridge", args: [], endpoint: "https://user:pass@models.example.test/v1" }),
       fc.constant<ResearchHarnessConfig>({ command: "/bin/bridge", args: [], apiKeyEnv: "not a name" }),
-      fc.constant<ResearchHarnessConfig>({ command: "/bin/bridge", args: [], apiKeyEnv: MATHOS_PLATFORM_API_KEY_ENV }),
       fc.constant<ResearchHarnessConfig>({ command: "/bin/bridge", args: Array.from({ length: 65 }, () => "x") }),
     );
     fc.assert(fc.property(fc.constantFrom(...BASES), invalid, (base, value) => {
       expect(normalizeResearchHarnessConfig(value).ok).toBe(false);
       expect(() => desktopSettingsPatchToEdits({ research: { harness: value } }, parseTomlTables(base, "config.toml"))).toThrow();
     }));
+    // A team that is not a MathOS team id, or an origin with a path, credentials or plain HTTP, is never written.
+    for (const mathos of [{ team: "team-name" }, { origin: "https://os.example.test/app" }, { origin: "http://os.example.test" },
+      { origin: "https://user:pass@os.example.test" }, { origin: "not a url" }]) {
+      expect(() => desktopSettingsPatchToEdits({ research: { mathos } }, {})).toThrow();
+    }
   });
 
   it("reads a table without bridge keys as no bridge, and a table with keys but no command as invalid", () => {
@@ -161,7 +199,7 @@ describe("MathOS Platform API key", () => {
       // Presence only: the value is in neither the window's snapshot nor the file.
       expect(JSON.stringify(snapshot)).not.toContain(secret);
       expect(fs.readFileSync(configPath, "utf8")).not.toContain(secret);
-      // Only the owner's bridge launch reads it back.
+      // Only the owner's MathOS Platform client reads it back, to sign in.
       expect(service.resolveMathosPlatformApiKeySync()).toBe(secret);
       expect(await service.hasMathosPlatformApiKey()).toBe(true);
       const cleared = await service.clearSecret("mathosPlatformApiKey");
@@ -170,38 +208,5 @@ describe("MathOS Platform API key", () => {
       expect(await service.hasMathosPlatformApiKey()).toBe(false);
       expect((await service.readSettingsProjection()).research?.platformApiKey.configured).toBe(false);
     }), { numRuns: 15 });
-  });
-
-  it("reaches the bridge's environment and nothing else from the parent", () => {
-    const parentKey = fc.stringMatching(/^[A-Z_][A-Z0-9_]{0,12}$/);
-    fc.assert(fc.property(fc.dictionary(parentKey, fc.string({ minLength: 1, maxLength: 8 })), fc.option(key, { nil: undefined }), (parent, secret) => {
-      const env = researchHarnessEnvironment({ ...parent, OPENAI_API_KEY: "model-secret", MODEL_KEY: "model-secret" }, secret);
-      const allowed = new Set(["PATH", "SystemRoot", "WINDIR", "TMPDIR", "TMP", "TEMP", MATHOS_PLATFORM_API_KEY_ENV]);
-      for (const name of Object.keys(env)) expect(allowed.has(name)).toBe(true);
-      expect(Object.values(env)).not.toContain("model-secret");
-      expect(env[MATHOS_PLATFORM_API_KEY_ENV]).toBe(secret);
-    }));
-  });
-
-  it("refuses a model request that carries the Platform key verbatim, whatever JSON escapes in it", () => {
-    const awkward = fc.tuple(key, fc.constantFrom("\\", "\"", "\n", "\u2028")).map(([base, extra]) => `${base}${extra}tail`);
-    fc.assert(fc.property(awkward, fc.constantFrom("content", "nested"), (secret, shape) => {
-      const messages = shape === "content"
-        ? [{ role: "user", content: `before ${secret} after` }]
-        : [{ role: "user", content: [{ type: "text", text: secret }] }];
-      expect(() => assertModelRequestOmitsPlatformKey(messages, secret)).toThrow(/MathOS Platform key/);
-    }));
-  });
-
-  it("refuses a model request that carries the Platform key", () => {
-    fc.assert(fc.property(key, fc.array(fc.string({ maxLength: 40 }), { maxLength: 4 }), fc.boolean(), (secret, texts, leak) => {
-      const messages = texts.map((content) => ({ role: "user", content }));
-      if (leak) messages.push({ role: "user", content: `here: ${secret}` });
-      const leaked = JSON.stringify(messages).includes(secret);
-      if (leaked) expect(() => assertModelRequestOmitsPlatformKey(messages, secret)).toThrow(/MathOS Platform key/);
-      else expect(() => assertModelRequestOmitsPlatformKey(messages, secret)).not.toThrow();
-      // No stored key: nothing to compare.
-      expect(() => assertModelRequestOmitsPlatformKey(messages, undefined)).not.toThrow();
-    }));
   });
 });

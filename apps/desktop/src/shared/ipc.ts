@@ -242,6 +242,7 @@ export const RESEARCH_HARNESS_RECONCILE_CHANNEL = "research:harness-reconcile";
 export const RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL = "research:harness-reveal-config";
 export const RESEARCH_HARNESS_SETTINGS_CHECK_CHANNEL = "research:harness-settings-check";
 export const RESEARCH_HARNESS_PICK_BRIDGE_CHANNEL = "research:harness-pick-bridge";
+export const RESEARCH_MATHOS_TEAMS_CHANNEL = "research:mathos-teams";
 export const RESEARCH_PROFILE_RUNS_CHANNEL = "research:profile-runs";
 export const RESEARCH_OPEN_WINDOW_CHANNEL = "research:open-window";
 export const RESEARCH_WINDOW_SELECT_EVENT_CHANNEL = "research:window-select";

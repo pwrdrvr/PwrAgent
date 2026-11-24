@@ -13,6 +13,7 @@ import type {
   ResearchHarnessReconcileRequest,
   ResearchHarnessRequest,
   ResearchHarnessStatus,
+  MathosTeamsResult,
 } from "@pwragent/shared/research-harness";
 import type { ResearchProfileRunsPage, ResearchProfileRunsQuery } from "@pwragent/shared/research";
 import { expandNavigationRemoteOwner } from "@pwragent/shared/navigation-remote-owner";
@@ -1274,6 +1275,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   checkResearchHarnessBridge?: () => Promise<ResearchHarnessCheck>;
   /** Settings: the system file picker for the bridge program. Empty when cancelled. */
   pickResearchHarnessBridge?: () => Promise<{ path?: string }>;
+  /** Settings: the MathOS teams the stored Platform key can open, on the saved origin. */
+  listMathosTeams?: () => Promise<MathosTeamsResult>;
   researchProfileRuns?: (request?: ResearchProfileRunsQuery) => Promise<ResearchProfileRunsPage>;
   openResearchWindow?: (request?: { runId?: string }) => Promise<void>;
   onResearchWindowSelect?: (callback: (runId: string) => void) => () => void;
