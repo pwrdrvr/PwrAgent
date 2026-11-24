@@ -1233,7 +1233,9 @@ class DesktopAppServerService {
   >();
   private readonly prStatusRegistry = new Map<string, PrStatusRegistryEntry>();
   private readonly stackReader = new StackReader();
-  private readonly stackPublishAttempts = new Map<string, { signature: string; retryAfter?: number }>();
+  private readonly stackPublishAttempts = new Map<string,
+    { signature: string; retryAfter?: number } | { declinedHead: string }
+  >();
   private readonly stackPublishActive = new Map<string, AbortController>();
   private readonly stackPublishAwaitingObservation = new Map<string, string>();
   private readonly stackOperations = new StackOperationsService(undefined, async (cwd) =>
@@ -3886,11 +3888,14 @@ class DesktopAppServerService {
       if (!actor || !projectAllowsPrWatches(this.threadForgeAutomation(actor))) return;
       const registry = getDesktopBackendRegistry();
       if (registry.isRestartGateClosed?.() || registry.stackThreadActive(actor) || await registry.isThreadLocked(actor)) return;
-      const parent = stack.layers[stack.layers.indexOf(next) - 1]?.pullRequest;
-      const parentHead = parent && this.prStatusRegistry.get(getPrStatusKey({ ...pr, number: parent.number }))?.pr.headSha;
-      const signature = JSON.stringify([stack.key, next.unsettled, pr.headSha, pr.baseRefName, parent?.lifecycleState, parentHead]);
       const attempt = this.stackPublishAttempts.get(key);
-      if ((attempt?.signature === signature && (attempt.retryAfter ?? Infinity) > Date.now()) || this.stackPublishActive.has(key)) return;
+      if (this.stackPublishActive.has(key) || (attempt && "declinedHead" in attempt && attempt.declinedHead === pr.headSha)) return;
+      const parent = stack.layers[stack.layers.indexOf(next) - 1]?.pullRequest;
+      const parentHead = parent && this.prStatusRegistry.get(getPrStatusKey({
+        provider: pr.provider, org: pr.org, repo: pr.repo, number: parent.number,
+      }))?.pr.headSha;
+      const signature = JSON.stringify([stack.key, next.unsettled, pr.headSha, pr.baseRefName, parent?.lifecycleState, parentHead]);
+      if (attempt && "signature" in attempt && attempt.signature === signature && (attempt.retryAfter ?? Infinity) > Date.now()) return;
       const ref = parsePullRequestReferenceUrl(pr.url);
       if (ref?.kind !== "github") return;
       const controller = new AbortController();
@@ -3909,9 +3914,9 @@ class DesktopAppServerService {
           }
         }
       } catch (error) {
-        if (!(error instanceof ForgeReadError && error.code === "declined")) {
-          this.stackPublishAttempts.set(key, { signature, retryAfter: Date.now() + 30_000 });
-        }
+        this.stackPublishAttempts.set(key, error instanceof ForgeReadError && error.code === "declined"
+          ? { declinedHead: pr.headSha }
+          : { signature, retryAfter: Date.now() + 30_000 });
         this.prActivity.record({
           category: "repair", source: "Stack publishing", tone: "warning", prKeys: [key], threadKeys: [next.thread.key],
           message: error instanceof Error ? error.message : String(error),
