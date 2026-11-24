@@ -5,6 +5,15 @@ catalog. Both definitions stay registered while the external catalog changes.
 The existing PwrAgent tool search can reveal these deferred definitions in
 Codex. ACP receives them through the existing PwrAgent MCP server.
 
+Antigravity receives a small native PwrAgent catalog. Large catalogs can
+cause Antigravity to omit tools from the model even after a successful
+`tools/list`. Core operations such as `handoff_task` are directly callable.
+For the rest, `search_pwragent_tools` returns the exact schema and
+`call_pwragent_tool` invokes the selected operation under its existing
+permissions. Antigravity discovers and invokes tools from thread-selected
+connections through `search_mcp_tools` and `call_mcp_tool`, which read the
+current selection on every call.
+
 Search returns the original server display name, stable connection ID, tool
 name, exact MCP definition and opaque schema revision. Invoke through
 `pwragent.call_mcp_tool` (or `tools.pwragent__call_mcp_tool` in Code Mode) using
@@ -75,8 +84,9 @@ calls that need approval require human confirmation; PwrAgent does not use a mod
 consent or its persistence scope.
 Headless calls without Full Access or an automation MCP grant decline because
 they cannot obtain it.
-Native invocation remains available under the backend's own policy; inherited
-provider MCP servers are not exposed through this gateway.
+Backends that receive native connection catalogs can also invoke them under
+their own policy. Inherited provider MCP servers are not exposed through the
+gateway.
 
 Only the gateway's host-created invocation approval follows this policy.
 Upstream MCP forms, including empty forms, and URL flows remain interactive:

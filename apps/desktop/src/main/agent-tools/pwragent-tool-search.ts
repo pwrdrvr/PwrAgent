@@ -173,13 +173,28 @@ function describesRuntimeModelDiscovery(tool: { name: string; description: strin
 }
 
 export function searchPwrAgentTools(catalog: DynamicToolSpec[], query: string, limit = 3) {
-  const terms = [...new Set(words(query))];
-  const runtimeModelDiscovery = isRuntimeModelDiscoveryQuery(query);
   const tools = catalog.flatMap((spec) =>
     spec.type === "namespace" && spec.name === PWRAGENT_TOOL_NAMESPACE
       ? spec.tools.filter((tool) => tool.name !== "tool_search")
       : []
   );
+  return rankPwrAgentTools(tools, query, limit, (tool) => ({
+    namespace: PWRAGENT_TOOL_NAMESPACE,
+    name: tool.name,
+    codeModeName: `${PWRAGENT_TOOL_NAMESPACE}__${tool.name}`,
+    description: tool.description,
+    inputSchema: tool.inputSchema,
+  }));
+}
+
+export function rankPwrAgentTools<T extends { name: string; description: string }, Definition>(
+  tools: readonly T[],
+  query: string,
+  limit: number,
+  definitionFor: (tool: T) => Definition,
+): Definition[] {
+  const terms = [...new Set(words(query))];
+  const runtimeModelDiscovery = isRuntimeModelDiscoveryQuery(query);
   // A named tool is a request, not a ranking hint. The 2026-10-01 Voice
   // manager turn asked for four names with limit 2, got two, then spent six
   // more searches recovering the rest. The limit caps only ranked matches.
@@ -198,13 +213,6 @@ export function searchPwrAgentTools(catalog: DynamicToolSpec[], query: string, l
     .sort((a, b) => Number(b.preferred) - Number(a.preferred) || b.score - a.score || a.tool.name.localeCompare(b.tool.name))
     .map(({ tool }) => tool);
   const bounded = Math.min(5, Math.max(1, Number.isFinite(limit) ? Math.trunc(limit) : 3));
-  const definitionFor = (tool: typeof tools[number]) => ({
-    namespace: PWRAGENT_TOOL_NAMESPACE,
-    name: tool.name,
-    codeModeName: `${PWRAGENT_TOOL_NAMESPACE}__${tool.name}`,
-    description: tool.description,
-    inputSchema: tool.inputSchema,
-  });
   // Explicit names are requests, including their complete schemas. Only
   // ranked fill is budgeted, and its first result must remain callable even
   // when that one definition exceeds the budget by itself.

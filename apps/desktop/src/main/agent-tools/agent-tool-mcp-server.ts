@@ -19,7 +19,14 @@ import { getMainLogger } from "../log.js";
 import { lazyModule } from "../lazy-module.js";
 import { loadedMcpTypes, mcpServer as mcpServerSdk, mcpServerStreamableHttp, mcpTypes } from "../mcp-connections/mcp-sdk.js";
 import type { ResolvedAgentToolCatalog } from "./agent-tool-catalog-registry.js";
-import { agentToolFailure } from "./agent-tool-definition.js";
+import { agentToolFailure, agentToolSuccess } from "./agent-tool-definition.js";
+import {
+  ANTIGRAVITY_DIRECT_MCP_TOOLS,
+  ANTIGRAVITY_TOOL_DISCOVERY,
+  ANTIGRAVITY_TOOL_DISCOVERY_INSTRUCTIONS,
+  CALL_PWRAGENT_TOOL,
+  SEARCH_PWRAGENT_TOOLS,
+} from "./antigravity-mcp-catalog.js";
 import { agentToolPermissionDeniedMessage } from "./app-management-authorization.js";
 import {
   PWRAGENT_AGENT_TOOL_NAMESPACE_DESCRIPTION,
@@ -31,6 +38,7 @@ import {
   PWRAGENT_SKILLS_EXTENSION,
   PWRAGENT_WORKFLOW_SKILLS,
 } from "./pwragent-workflow-skills.js";
+import { rankPwrAgentTools } from "./pwragent-tool-search.js";
 
 // The SDK's built-in request union does not yet include the skills extension.
 // The SDK loads with the first request, not with the owner.
@@ -236,7 +244,11 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       } : {}),
       readTool: async (name) => {
         const current = this.contextsByToken.get(token);
-        return current ? await this.resolveMcpTool(current, name) : undefined;
+        if (!current) return undefined;
+        if (usesAntigravityCatalog(current) && !ANTIGRAVITY_DIRECT_MCP_TOOLS.has(name)) {
+          return ANTIGRAVITY_TOOL_DISCOVERY.find((tool) => tool.name === name);
+        }
+        return await this.resolveMcpTool(current, name);
       },
       bindThread: (threadId) => {
         const normalizedThreadId = threadId.trim();
@@ -441,6 +453,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     const toolCalls: Promise<unknown>[] = [];
     const clientGone = new AbortController();
     const toolNames = (await this.resolveMcpTools(params.clientContext)).map((tool) => tool.name);
+    const compactCatalog = usesAntigravityCatalog(params.clientContext);
     const hasToolGuide = toolNames.includes("read_tool_guide");
     // The PDF-only MCP surface shares this server but has no workflow tools.
     const skills = hasToolGuide ? PWRAGENT_WORKFLOW_SKILLS : [];
@@ -455,7 +468,8 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
           resources: {},
           extensions: { [PWRAGENT_SKILLS_EXTENSION]: {} },
         },
-        instructions: buildPwrAgentMcpInstructions(toolNames),
+        instructions: buildPwrAgentMcpInstructions(toolNames)
+          + (compactCatalog ? ` ${ANTIGRAVITY_TOOL_DISCOVERY_INSTRUCTIONS}` : ""),
       },
     );
     mcpServer.setRequestHandler(ListSkillsRequestSchema, async (request) => {
@@ -493,7 +507,10 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       return { contents: [content] };
     });
     mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
-      const tools = await this.resolveMcpTools(params.clientContext);
+      const catalog = await this.resolveMcpTools(params.clientContext);
+      const tools = compactCatalog
+        ? [...catalog.filter(({ name }) => ANTIGRAVITY_DIRECT_MCP_TOOLS.has(name)), ...ANTIGRAVITY_TOOL_DISCOVERY]
+        : catalog;
       if (observedListing && sessionNonce) {
         observedListing.enabled = tools.some(({ name }) => name === "create_monitor_delegation");
       }
@@ -608,38 +625,56 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     if (clientContext.memoryOnly && request.params.name !== "agent_memory") {
       return forbiddenMcpResponse("This client may call Agent memory only.");
     }
+    let { name, arguments: args } = request.params;
+    if (usesAntigravityCatalog(clientContext)) {
+      if (name === SEARCH_PWRAGENT_TOOLS) {
+        const query = args?.query;
+        if (typeof query !== "string" || !query.trim() || query.length > 500) {
+          return invalidMcpArguments("Provide a nonempty query of at most 500 characters.");
+        }
+        const catalog = await this.resolveMcpTools(clientContext);
+        const tools = rankPwrAgentTools(catalog, query, 3, (tool) => tool);
+        return toMcpToolResponse(agentToolSuccess({ tools }));
+      }
+      if (name === CALL_PWRAGENT_TOOL) {
+        const target = args?.toolName;
+        const targetArgs = args?.arguments;
+        if (typeof target !== "string" || !target.trim()
+          || !targetArgs || typeof targetArgs !== "object" || Array.isArray(targetArgs)) {
+          return invalidMcpArguments("Provide a toolName and an arguments object.");
+        }
+        if (!await this.resolveMcpTool(clientContext, target)) return unsupportedMcpTool();
+        name = target;
+        args = targetArgs as Record<string, unknown>;
+      }
+    }
     const catalog = this.options
       .resolveCatalogs(clientContext)
       .find((candidate) =>
         candidate.router.acceptsMcpToolCall({
-          tool: request.params.name,
+          tool: name,
         }),
       );
     if (!catalog) {
-      return toMcpToolResponse(
-        agentToolFailure({
-          code: "unsupported_operation",
-          message: "Unsupported PwrAgent MCP tool.",
-        }),
-      );
+      return unsupportedMcpTool();
     }
     const deniedPermission = await this.options.authorizeToolCall?.({
       backend: callContext.backend,
       catalogId: catalog.id,
       threadId: callContext.threadId,
-      tool: request.params.name,
+      tool: name,
       turnId: callContext.turnId,
-      arguments: request.params.arguments,
+      arguments: args,
     });
     if (deniedPermission) {
       return toMcpToolResponse(
         agentToolFailure({
           code: "forbidden",
-          message: agentToolPermissionDeniedMessage(request.params.name, deniedPermission),
+          message: agentToolPermissionDeniedMessage(name, deniedPermission),
         }),
       );
     }
-    if (!sessionNonce && MCP_TOOLS_REQUIRING_SESSION.has(request.params.name)) {
+    if (!sessionNonce && MCP_TOOLS_REQUIRING_SESSION.has(name)) {
       return forbiddenMcpResponse(
         "This tool requires an MCP session to prevent duplicate mutations. Initialize the connection and send the returned Mcp-Session-Id header.",
       );
@@ -653,8 +688,8 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       callId: sessionNonce
         ? createHash("sha256").update(JSON.stringify([sessionNonce, callContext.turnId, extra.requestId])).digest("base64url")
         : randomUUID(),
-      tool: request.params.name,
-      args: request.params.arguments,
+      tool: name,
+      args,
       signal: extra.signal,
       responseFlushed,
       ...(reportProgress ? { reportProgress } : {}),
@@ -688,7 +723,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     return timingSafeEqual(Buffer.from(signature), Buffer.from(this.signSession(nonce, token))) ? nonce : undefined;
   }
 
-  /** One tool as `resolveMcpTools` would list it, without checking the others. */
+  /** One tool in the full allowed catalog, without checking the others. */
   private async resolveMcpTool(context: AgentToolMcpClientContext, name: string): Promise<AgentMcpTool | undefined> {
     if (context.memoryOnly && name !== "agent_memory") return undefined;
     const matches = this.options.resolveCatalogs(context)
@@ -868,6 +903,21 @@ function forbiddenMcpResponse(message: string): AgentMcpToolCallResponse {
       message,
     }),
   );
+}
+
+function invalidMcpArguments(message: string): AgentMcpToolCallResponse {
+  return toMcpToolResponse(agentToolFailure({ code: "invalid_arguments", message }));
+}
+
+function unsupportedMcpTool(): AgentMcpToolCallResponse {
+  return toMcpToolResponse(agentToolFailure({
+    code: "unsupported_operation",
+    message: "Unsupported PwrAgent MCP tool.",
+  }));
+}
+
+function usesAntigravityCatalog(context: AgentToolMcpClientContext): boolean {
+  return context.backend === "acp:antigravity" && !context.memoryOnly;
 }
 
 function boundThreadKey(

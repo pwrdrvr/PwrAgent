@@ -3942,8 +3942,8 @@ export class AcpBackendAdapter {
         sessionId,
       }): Promise<AcpMcpServerRegistration> => {
         let baseRegistration: AcpMcpServerRegistration | undefined;
+        const http = acpRuntimeSupportsHttpMcp(runtimeCapabilities);
         if (this.agentToolMcpServer) {
-          const http = acpRuntimeSupportsHttpMcp(runtimeCapabilities);
           try {
             const registration = await this.agentToolMcpServer.registerClient({
               backend: backendId,
@@ -3971,6 +3971,12 @@ export class AcpBackendAdapter {
               sessionId: sessionId ?? null,
             });
           }
+        }
+        // A large connection catalog can crowd out even the small PwrAgent
+        // catalog in Antigravity. Its fixed gateway tools read the selected
+        // connections live and retain PwrAgent's per-tool approval policy.
+        if (backendId === "acp:antigravity" && http && baseRegistration) {
+          return baseRegistration;
         }
         const connectionRegistration =
           await this.resolveMcpConnectionServers?.({ backendId, sessionId });
