@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, render, within } from "@testing-library/react";
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import type {
@@ -31,7 +31,9 @@ const launchpad = {
   workMode: "local",
 } satisfies NavigationLaunchpadDraft;
 
-function Launchpad(props: { desktopApi: DesktopApi; sidebarHidden: boolean; contextRailPinned: boolean }) {
+type LayoutChange = { sidebarHidden: boolean; contextRailPinned: boolean };
+
+function Launchpad(props: { desktopApi: DesktopApi } & LayoutChange) {
   const terminals = useIntegratedTerminals(props.desktopApi);
   const view: ThreadViewProps = {
     ...props,
@@ -54,32 +56,63 @@ function Launchpad(props: { desktopApi: DesktopApi; sidebarHidden: boolean; cont
   return <ThreadView {...view} />;
 }
 
+const layoutChanges = fc.array(fc.record({ sidebarHidden: fc.boolean(), contextRailPinned: fc.boolean() }), {
+  minLength: 1, maxLength: 5, size: "max",
+});
+type ReadStatus = NonNullable<DesktopApi["readPwrSnapConnectionStatus"]>;
+const availableStatus = {
+  connectionId: "pwrsnap", displayName: "PwrSnap", availability: "running", configured: false,
+} satisfies Awaited<ReturnType<ReadStatus>>;
+
+function mockStatus(ready: ReturnType<ReadStatus> = Promise.resolve(availableStatus)) {
+  return { ready, read: vi.fn<ReadStatus>(() => ready) };
+}
+
+async function checkLayoutHistory(signal: AbortSignal, changes: LayoutChange[], status = mockStatus()) {
+  signal.throwIfAborted();
+  const desktopApi: DesktopApi = {
+    listMcpConnections: async () => ({ connections: [] }),
+    readPwrSnapConnectionStatus: status.read,
+  };
+  const view = render(<Launchpad desktopApi={desktopApi} sidebarHidden={false} contextRailPinned />);
+  try {
+    await act(async () => { await status.ready; });
+    signal.throwIfAborted();
+    const tileButton = () => within(view.container).getByRole("button", { name: "Update PwrSnap" });
+    const button = tileButton();
+    for (const change of changes) {
+      view.rerender(<Launchpad desktopApi={desktopApi} {...change} />);
+      expect(tileButton()).toBe(button);
+      expect(status.read).toHaveBeenCalledTimes(1);
+    }
+  } finally {
+    view.unmount();
+    view.container.remove();
+  }
+}
+
 // A parent update must keep the connection tiles mounted. A locally declared
 // React component would replace the DOM and reread status on every update.
-it("retains connection tile identity through window layout changes", async () => {
-  await fc.assert(fc.asyncProperty(
-    fc.array(fc.record({ sidebarHidden: fc.boolean(), contextRailPinned: fc.boolean() }), {
-      minLength: 1, maxLength: 5, size: "max",
-    }),
-    async (changes) => {
-      const readStatus = vi.fn<NonNullable<DesktopApi["readPwrSnapConnectionStatus"]>>().mockResolvedValue({
-        connectionId: "pwrsnap", displayName: "PwrSnap", availability: "running", configured: false,
-      });
-      const desktopApi: DesktopApi = {
-        listMcpConnections: async () => ({ connections: [] }),
-        readPwrSnapConnectionStatus: readStatus,
-      };
-      try {
-        const view = render(<Launchpad desktopApi={desktopApi} sidebarHidden={false} contextRailPinned />);
-        const button = await screen.findByRole("button", { name: "Update PwrSnap" });
-        for (const change of changes) {
-          view.rerender(<Launchpad desktopApi={desktopApi} {...change} />);
-          expect(screen.getByRole("button", { name: "Update PwrSnap" })).toBe(button);
-          expect(readStatus).toHaveBeenCalledTimes(1);
-        }
-      } finally {
-        cleanup();
-      }
-    },
-  ), { numRuns: 25 });
+it("retains connection tile identity through window layout changes", async ({ onTestFinished, signal }) => {
+  const work = fc.assert(fc.asyncProperty(layoutChanges, (changes) => checkLayoutHistory(signal, changes)), { numRuns: 25 });
+  // A Vitest timeout aborts the context and stops awaiting the property.
+  // Join the cancelled case before the runner destroys editors and jsdom.
+  onTestFinished(() => work.catch(() => undefined));
+  await work;
+});
+
+it("stops the layout history when the test ends during connection status loading", async () => {
+  const controller = new AbortController();
+  const reason = new Error("layout history ended before connection status was ready");
+  const pending = Promise.withResolvers<Awaited<ReturnType<ReadStatus>>>();
+  const status = mockStatus(pending.promise);
+  const changes = [{ sidebarHidden: true, contextRailPinned: false }];
+
+  const work = checkLayoutHistory(controller.signal, changes, status);
+  controller.abort(reason);
+  pending.resolve(availableStatus);
+
+  await expect(work).rejects.toBe(reason);
+  await expect(checkLayoutHistory(controller.signal, changes, status)).rejects.toBe(reason);
+  expect(status.read).toHaveBeenCalledTimes(1);
 });
