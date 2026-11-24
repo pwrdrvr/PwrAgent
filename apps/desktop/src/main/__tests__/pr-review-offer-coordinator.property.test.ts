@@ -439,6 +439,8 @@ function checkInvariants(harness: Harness): void {
   }
   if (card?.action?.type === "start_review") {
     expect(newest).toBeUndefined();
+    // The card names its PR, so the composer reviews that PR, not the checkout.
+    expect(card.action.pullRequest).toBe(PR_URL);
   }
   if (world.lifecycle !== "open" || world.ci !== "passing") return;
   const latest = [...world.reviews].map((entry) => entry.review).sort((a, b) => b.createdAt - a.createdAt)[0];
@@ -486,7 +488,7 @@ describe("PR review and merge offers", () => {
       harness.world.ci = "passing";
       await transition(harness, { checkState: { from: "pending", to: "passing" } });
       const [card] = openOfferCards(harness.todos);
-      expect(card?.action).toEqual({ type: "start_review" });
+      expect(card?.action).toEqual({ type: "start_review", pullRequest: PR_URL });
       harness.todos.resolve({ id: card!.id, status: "dismissed" });
       await push(harness, harness.world.changeOf.get(harness.world.head)!);
       harness.world.ci = "passing";
