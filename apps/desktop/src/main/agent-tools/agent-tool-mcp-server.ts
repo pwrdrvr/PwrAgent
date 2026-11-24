@@ -132,6 +132,8 @@ export type AgentToolMcpRegistration = {
   server: AgentToolHttpMcpServerConfig;
   bindThread: (threadId: string) => void;
   readListedJobMonitorCreation?: () => boolean | undefined;
+  /** The tool as this client's `tools/list` describes it now, if listed. */
+  readTool?: (name: string) => Promise<AgentMcpTool | undefined>;
 };
 
 type JobMonitorCatalogListing = { scope: string; enabled?: boolean };
@@ -232,6 +234,11 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       ...(listing ? {
         readListedJobMonitorCreation: () => this.jobMonitorListings.get(token) === listing ? listing.enabled : undefined,
       } : {}),
+      readTool: async (name) => {
+        const current = this.contextsByToken.get(token);
+        if (!current) return undefined;
+        return (await this.resolveMcpTools(current)).find((tool) => tool.name === name);
+      },
       bindThread: (threadId) => {
         const normalizedThreadId = threadId.trim();
         const current = this.contextsByToken.get(token);

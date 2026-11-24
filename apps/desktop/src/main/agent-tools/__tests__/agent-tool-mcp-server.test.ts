@@ -121,6 +121,41 @@ describe("AgentToolMcpServer", () => {
     }
   });
 
+  it("reads a tool exactly as the registration's tools/list describes it", async () => {
+    let allowed = true;
+    const tool = (name: string, readOnlyHint: boolean): AgentToolDefinition => ({
+      namespace: "pwragent", name, description: name, inputSchema: { type: "object" },
+      annotations: { readOnlyHint }, dispatch: async () => agentToolSuccess({}),
+    });
+    const parent = new AgentToolRouter([tool("list_fixture", true), tool("reset_fixture", false)]);
+    const worker = new AgentToolRouter([tool("inspect_fixture", true)]);
+    const server = new AgentToolMcpServer({
+      resolveCatalogs: (context) => [{ id: "mcp_connections", router: context.threadId === "worker" ? worker : parent }],
+      resolveCallContext: () => undefined,
+      isToolAdvertised: async (name) => allowed || name !== "reset_fixture",
+    });
+    openServers.push(server);
+    const registration = await server.registerClient({ backend: "acp:antigravity" });
+    const client = await connectClient(registration);
+    try {
+      // Differential: readTool and tools/list must agree after each change
+      // to the grant and to the bound thread.
+      for (const step of ["start", "revoke", "bind"] as const) {
+        if (step === "revoke") allowed = false;
+        if (step === "bind") registration.bindThread("worker");
+        const listed = (await client.listTools()).tools;
+        for (const name of ["list_fixture", "reset_fixture", "inspect_fixture", "unknown"]) {
+          const read = await registration.readTool!(name);
+          const expected = listed.find((entry) => entry.name === name);
+          expect(read?.annotations).toEqual(expected?.annotations);
+          expect(read === undefined).toBe(expected === undefined);
+        }
+      }
+    } finally {
+      await client.close();
+    }
+  });
+
   it("advertises production read-only classifications and a callable guide over HTTP", async () => {
     const store = new TestTokenMiserStore("catalog-annotation-test");
     const focused = new TokenMiserFocusedSummaries({

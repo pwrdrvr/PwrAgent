@@ -9,7 +9,8 @@ import {
 } from "@pwragent/shared/pending-request-response";
 import { deriveInboxState } from "@pwragent/shared/inbox";
 import type { AppServerPendingRequestNotification } from "@pwragent/shared/contracts/normalized-app-server";
-import { AcpAgentClient } from "../acp/acp-client";
+import { AcpAgentClient, resolveAntigravityMcpToolTarget } from "../acp/acp-client";
+import { pwragentToolSkipsAgentApproval } from "../app-server/acp-host-tool-approval";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import { AcpSessionStore } from "../storage/acp-session-store";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
@@ -1624,6 +1625,151 @@ describe("AcpAgentClient", () => {
         await checkRequest(`mcp_${name}`, "execute", false);
       },
     ));
+  });
+
+  it("resolves an Antigravity MCP name to one session server or none", () => {
+    const segment = fc.stringMatching(/^[a-z][a-z0-9]{0,5}$/);
+    const serverName = fc.array(segment, { minLength: 1, maxLength: 3 })
+      .chain((parts) => fc.constantFrom(parts.join("_"), parts.join("-")));
+    fc.assert(fc.property(
+      fc.array(serverName, { minLength: 1, maxLength: 5 }),
+      fc.nat(),
+      fc.array(segment, { minLength: 1, maxLength: 3 }),
+      (servers, pick, toolParts) => {
+        const reported = `mcp_${servers[pick % servers.length]}_${toolParts.join("_")}`;
+        const fold = (value: string) => value.replace(/-/gu, "_");
+        // Oracle: every server whose name, before or after Antigravity folds
+        // `-` to `_`, prefixes the reported name could have produced it.
+        const sources = [...new Set(servers)].filter((server) =>
+          fold(reported).startsWith(`mcp_${fold(server)}_`)
+          && fold(reported).length > `mcp_${fold(server)}_`.length);
+        const target = resolveAntigravityMcpToolTarget(reported, servers);
+        if (sources.length !== 1) {
+          expect(target).toBeUndefined();
+          return;
+        }
+        if (target) {
+          expect(target.serverName).toBe(sources[0]);
+          expect(`mcp_${target.serverName}_${target.toolName}`).toBe(reported);
+        } else {
+          expect(reported.startsWith(`mcp_${sources[0]}_`)).toBe(false);
+        }
+      },
+    ));
+  });
+
+  it("asks the operator about an Antigravity MCP call only when PwrAgent cannot decide it (model)", async () => {
+    // PwrAgent's own tools as its MCP server lists them.
+    const ownTools = [
+      { name: "list_ci_runs", annotations: { readOnlyHint: true } },
+      { name: "merge_pull_request", annotations: { readOnlyHint: false, destructiveHint: true } },
+      { name: "call_mcp_tool", annotations: { readOnlyHint: false } },
+      { name: "add_todo", annotations: { readOnlyHint: false } },
+      { name: "purge_cache", annotations: { readOnlyHint: true, destructiveHint: true } },
+    ];
+    // Model: the gateway and forge cards decide these calls, or they only read.
+    const decidedByPwrAgent = new Set(["list_ci_runs", "merge_pull_request", "call_mcp_tool"]);
+    const reportedNames = [
+      ...ownTools.map((tool) => `mcp_pwragent_${tool.name}`),
+      "mcp_pwragent_unlisted",
+      "mcp_linear_list_issues",
+    ];
+    type Choice = "accept" | "accept_for_session" | "decline";
+    await fc.assert(fc.asyncProperty(
+      // A connection named `pwragent_list` makes `mcp_pwragent_list_ci_runs`
+      // ambiguous: its `ci_runs` tool flattens to the same name.
+      fc.boolean(),
+      fc.array(fc.record({
+        name: fc.constantFrom(...reportedNames),
+        choice: fc.constantFrom<Choice>("accept", "accept_for_session", "decline"),
+      }), { minLength: 1, maxLength: 12 }),
+      async (withCollidingServer, calls) => {
+        const transport = new FakeAcpAgentTransport();
+        const asked: AppServerPendingRequestNotification[] = [];
+        let choice: Choice = "accept";
+        const onRequest = vi.fn((request: AppServerPendingRequestNotification) => {
+          asked.push(request);
+          const action = buildPendingRequestActions(request).find((entry) => entry.decision === choice)!;
+          return buildPendingRequestResponse(request, action);
+        });
+        const client = new AcpAgentClient({
+          backendId: "acp:antigravity",
+          store,
+          transport,
+          onRequest,
+          mcpServers: () => ({
+            servers: [
+              { name: "pwragent", type: "http", url: "http://127.0.0.1:1/mcp", headers: [] },
+              { name: "linear", type: "http", url: "http://127.0.0.1:2/mcp", headers: [] },
+              ...withCollidingServer
+                ? [{ name: "pwragent_list", type: "http" as const, url: "http://127.0.0.1:3/mcp", headers: [] }]
+                : [],
+            ],
+            hostApprovesToolCall: async (server, tool) => server === "pwragent"
+              && pwragentToolSkipsAgentApproval(ownTools.find((entry) => entry.name === tool)),
+          }),
+        });
+        await client.initialize();
+        const session = await client.startSession({ cwd: "/repo", executionMode: "default" });
+        const granted = new Set<string>();
+        for (const [index, call] of calls.entries()) {
+          choice = call.choice;
+          const askedBefore = asked.length;
+          const outcome = await transport.emitRequest("session/request_permission", {
+            sessionId: session.sessionId,
+            toolCall: { toolCallId: `tool-${index}`, kind: "other", name: call.name, status: "pending" },
+            options: [
+              { optionId: "allow", name: "Allow", kind: "allow_once" },
+              { optionId: "deny", name: "Deny", kind: "reject_once" },
+            ],
+          }, index + 1);
+          const ambiguous = withCollidingServer && call.name === "mcp_pwragent_list_ci_runs";
+          const ownTool = call.name.replace(/^mcp_pwragent_/u, "");
+          const answeredByPwrAgent = granted.has(call.name)
+            || (!ambiguous && call.name.startsWith("mcp_pwragent_") && decidedByPwrAgent.has(ownTool));
+          if (answeredByPwrAgent) {
+            expect(asked).toHaveLength(askedBefore);
+            expect(outcome).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+            continue;
+          }
+          expect(asked).toHaveLength(askedBefore + 1);
+          expect(buildPendingRequestActions(asked.at(-1)!).map((action) => action.label))
+            .toEqual(["Allow", "Allow for this thread", "Deny", "Cancel turn"]);
+          if (call.choice === "accept_for_session") granted.add(call.name);
+          // Antigravity hears only options it offered.
+          expect(outcome).toEqual({
+            outcome: { outcome: "selected", optionId: call.choice === "decline" ? "deny" : "allow" },
+          });
+        }
+      },
+    ), { numRuns: 60 });
+  });
+
+  it("keeps Antigravity's own allow-always choice instead of a thread grant", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const onRequest = vi.fn((request: AppServerPendingRequestNotification) => {
+      const always = buildPendingRequestActions(request).find((action) => action.decision === "accept_for_session")!;
+      return buildPendingRequestResponse(request, always);
+    });
+    const client = new AcpAgentClient({ backendId: "acp:antigravity", store, transport, onRequest });
+    await client.initialize();
+    const session = await client.startSession({ cwd: "/repo", executionMode: "default" });
+    const request = {
+      sessionId: session.sessionId,
+      toolCall: { toolCallId: "tool", kind: "other", name: "mcp_linear_list_issues", status: "pending" },
+      options: [
+        { optionId: "allow", name: "Allow", kind: "allow_once" },
+        { optionId: "always", name: "Always allow", kind: "allow_always" },
+        { optionId: "deny", name: "Deny", kind: "reject_once" },
+      ],
+    };
+    expect(await transport.emitRequest("session/request_permission", request, 1))
+      .toEqual({ outcome: { outcome: "selected", optionId: "always" } });
+    expect(buildPendingRequestActions(onRequest.mock.lastCall![0]).map((action) => action.label))
+      .toEqual(["Allow", "Always allow", "Deny", "Cancel turn"]);
+    // Antigravity remembers its own choice; PwrAgent does not answer for it.
+    await transport.emitRequest("session/request_permission", request, 2);
+    expect(onRequest).toHaveBeenCalledTimes(2);
   });
 
   it("maps generic session approvals to ACP allow-always options", async () => {

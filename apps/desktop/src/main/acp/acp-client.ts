@@ -139,6 +139,12 @@ export type AcpMcpServerRegistration = {
   servers: AcpMcpServerConfig[];
   bindThread?: (threadId: string) => Promise<void> | void;
   readListedJobMonitorCreation?: () => boolean | undefined;
+  /**
+   * Whether the agent's permission prompt for `toolName` on the named server
+   * can be answered without the operator: PwrAgent approves that call itself
+   * or the tool only reads. A registration answers only for its own servers.
+   */
+  hostApprovesToolCall?: (serverName: string, toolName: string) => Promise<boolean>;
 };
 
 export function mergeMcpServerRegistrations(
@@ -148,9 +154,19 @@ export function mergeMcpServerRegistrations(
     (registration): registration is AcpMcpServerRegistration =>
       registration !== undefined,
   );
+  const approvers = present.flatMap((registration) =>
+    registration.hostApprovesToolCall ? [registration.hostApprovesToolCall] : []);
   return {
     servers: present.flatMap((registration) => registration.servers),
     readListedJobMonitorCreation: present.find((entry) => entry.readListedJobMonitorCreation)?.readListedJobMonitorCreation,
+    ...(approvers.length ? {
+      hostApprovesToolCall: async (serverName: string, toolName: string) => {
+        for (const approves of approvers) {
+          if (await approves(serverName, toolName)) return true;
+        }
+        return false;
+      },
+    } : {}),
     bindThread: async (threadId) => {
       for (const registration of present) {
         await registration.bindThread?.(threadId);
@@ -188,6 +204,45 @@ function toAcpMcpServerWireConfigs(
     return { ...server, name };
   }));
 }
+
+/**
+ * Antigravity names an MCP call `mcp_<server>_<tool>`. Returns the session
+ * server and tool that name refers to, or undefined when no server, or more
+ * than one, could have produced it. Antigravity may fold `-` to `_`, so a
+ * server matching only after folding still counts as a possible source.
+ */
+export function resolveAntigravityMcpToolTarget(
+  reportedName: string,
+  serverNames: readonly string[],
+): { serverName: string; toolName: string } | undefined {
+  const fold = (value: string) => value.replace(/-/gu, "_");
+  const foldedName = fold(reportedName);
+  const sources = [...new Set(serverNames)].filter((serverName) => {
+    const prefix = `mcp_${fold(serverName)}_`;
+    return foldedName.length > prefix.length && foldedName.startsWith(prefix);
+  });
+  if (sources.length !== 1) return undefined;
+  const serverName = sources[0]!;
+  const prefix = `mcp_${serverName}_`;
+  if (!reportedName.startsWith(prefix)) return undefined;
+  return { serverName, toolName: reportedName.slice(prefix.length) };
+}
+
+/**
+ * The choice PwrAgent adds to an Antigravity MCP tool approval when the agent
+ * offers no `allow_always`. Antigravity accepts only the options it sent, so
+ * PwrAgent keeps the grant itself and answers each later call to the same
+ * tool in that thread with the agent's `allow_once`.
+ */
+export const ACP_THREAD_TOOL_GRANT_OPTION_ID = "pwragent_allow_tool_for_thread";
+
+type AcpSessionMcpServers = {
+  /** Names as the agent received them in `session/new` or `session/load`. */
+  agentNames: string[];
+  /** Names a registration can vouch for: those the wire did not rewrite. */
+  registeredNames: ReadonlySet<string>;
+  hostApprovesToolCall?: AcpMcpServerRegistration["hostApprovesToolCall"];
+};
 
 export type AcpPromptContentBlock =
   | { type: "text"; text: string }
@@ -374,6 +429,10 @@ export class AcpAgentClient {
   private readonly sessionsWithoutFaithfulReload = new Set<string>();
   /** The `agentToolCatalogKey` each session's MCP servers started under, by app session id. */
   private readonly sessionAgentToolCatalogKeys = new Map<string, string>();
+  /** The MCP servers each session's agent last received. */
+  private readonly sessionMcpServers = new Map<string, AcpSessionMcpServers>();
+  /** MCP tools the operator allowed for the rest of a thread. */
+  private readonly sessionMcpToolGrants = new Map<string, Set<string>>();
   private readonly now: () => number;
   private readonly approvalRequesterName: string;
   private unsubscribe?: () => void;
@@ -717,6 +776,8 @@ export class AcpAgentClient {
     this.pendingPermissionRequests.delete(sessionId);
     this.sessionsWithoutFaithfulReload.delete(sessionId);
     this.sessionAgentToolCatalogKeys.delete(sessionId);
+    this.sessionMcpServers.delete(sessionId);
+    this.sessionMcpToolGrants.delete(sessionId);
     this.jobMonitorCatalogs.delete(sessionId);
     this.grokBackgroundSessions.delete(sessionId);
     this.antigravityBackgroundCommands.delete(sessionId);
@@ -1117,9 +1178,10 @@ export class AcpAgentClient {
       defaultMcpRegistration,
       params.additionalMcpRegistration,
     );
+    const mcpServerWireConfigs = toAcpMcpServerWireConfigs(mcpRegistration.servers);
     const result = await this.options.transport.request("session/new", {
       cwd,
-      mcpServers: toAcpMcpServerWireConfigs(mcpRegistration.servers),
+      mcpServers: mcpServerWireConfigs,
       ...(params.sessionMeta ? { _meta: params.sessionMeta } : {}),
     }).catch(async (error: unknown) => {
       // A failed publication must never replace the provider's error.
@@ -1176,6 +1238,7 @@ export class AcpAgentClient {
       this.rememberJobMonitorCatalog(appSessionId, mcpRegistration, jobMonitorCreationEnabled, false);
     }
     this.rememberAgentToolCatalogKey(appSessionId, agentToolCatalogKey);
+    this.rememberSessionMcpServers(appSessionId, mcpRegistration, mcpServerWireConfigs);
     this.rememberSessionConfigOptions(sessionId, result);
     await Promise.resolve(mcpRegistration.bindThread?.(appSessionId));
     this.notifyRuntimeCapabilities({
@@ -2171,6 +2234,18 @@ export class AcpAgentClient {
       return cancelledPermissionOutcome();
     }
 
+    const permissionOptions = readPermissionOptions(params.options);
+    const allowedWithoutOperator = protocolSessionId
+      ? await this.permissionAnsweredWithoutOperator(
+        this.appSessionIdFor(protocolSessionId),
+        params,
+        permissionOptions,
+      )
+      : undefined;
+    if (allowedWithoutOperator) {
+      return { outcome: { outcome: "selected", optionId: allowedWithoutOperator } };
+    }
+
     const request = this.normalizePermissionRequest(params, id);
     if (!request || !this.options.onRequest) {
       return cancelledPermissionOutcome();
@@ -2185,10 +2260,15 @@ export class AcpAgentClient {
     this.touchSession(sessionId);
     try {
       const response = await this.options.onRequest(request);
-      return permissionOutcomeFromResponse(
-        response,
-        readPermissionOptions(params.options),
-      );
+      const toolName = request.params.acpMcpToolName;
+      const allowOnce = allowOncePermissionOptionId(permissionOptions);
+      if (toolName && allowOnce && isThreadToolGrantResponse(response, request)) {
+        const grants = this.sessionMcpToolGrants.get(sessionId) ?? new Set<string>();
+        grants.add(toolName);
+        this.sessionMcpToolGrants.set(sessionId, grants);
+        return { outcome: { outcome: "selected", optionId: allowOnce } };
+      }
+      return permissionOutcomeFromResponse(response, permissionOptions);
     } finally {
       const remaining = (this.pendingPermissionRequests.get(sessionId) ?? 1) - 1;
       if (remaining > 0) this.pendingPermissionRequests.set(sessionId, remaining);
@@ -2220,14 +2300,8 @@ export class AcpAgentClient {
           : undefined;
     const requestId = id == null ? toolCallId ?? `acp:${this.now()}` : String(id);
     const activeTurn = this.activeTurns.get(sessionId);
-    // Antigravity reports MCP invocations as kind "other" with a flattened
-    // tool name. Preserve the name as reported for display only.
-    const acpMcpToolName = this.options.backendId === "acp:antigravity"
-      && toolCall.kind === "other"
-      && typeof toolCall.name === "string"
-      && /^mcp_[A-Za-z0-9_-]+$/u.test(toolCall.name)
-      ? toolCall.name
-      : undefined;
+    const acpMcpToolName = this.antigravityMcpToolName(toolCall);
+    const permissionOptions = readPermissionOptions(params.options);
     const prompt = acpMcpToolName
       ? mcpPermissionPrompt(this.approvalRequesterName, acpMcpToolName, toolCall)
       : permissionPrompt(this.approvalRequesterName, title, toolCall);
@@ -2245,9 +2319,59 @@ export class AcpAgentClient {
         acpMethod: "session/request_permission",
         acpToolCallId: toolCallId,
         acpToolKind: typeof toolCall.kind === "string" ? toolCall.kind : undefined,
-        acpPermissionOptions: readPermissionOptions(params.options),
+        acpPermissionOptions: acpMcpToolName
+          ? withThreadToolGrantOption(permissionOptions)
+          : permissionOptions,
       },
     };
+  }
+
+  /**
+   * Antigravity reports MCP invocations as kind "other" with a flattened
+   * tool name. The name is as reported, so use it to display or to match a
+   * grant the operator made for that exact name, never to infer a server.
+   */
+  private antigravityMcpToolName(toolCall: Record<string, unknown>): string | undefined {
+    return this.options.backendId === "acp:antigravity"
+      && toolCall.kind === "other"
+      && typeof toolCall.name === "string"
+      && /^mcp_[A-Za-z0-9_-]+$/u.test(toolCall.name)
+      ? toolCall.name
+      : undefined;
+  }
+
+  /**
+   * The agent's `allow_once` option when the operator need not be asked: the
+   * operator already allowed this MCP tool for the thread, or the call is to
+   * one of PwrAgent's own tools that PwrAgent approves itself or that only
+   * reads. A name that more than one session server could have produced
+   * still asks.
+   */
+  private async permissionAnsweredWithoutOperator(
+    sessionId: string,
+    params: Record<string, unknown>,
+    options: AcpPermissionOption[],
+  ): Promise<string | undefined> {
+    const toolName = this.antigravityMcpToolName(asRecord(params.toolCall) ?? {});
+    const allowOnce = allowOncePermissionOptionId(options);
+    if (!toolName || !allowOnce) return undefined;
+    if (this.sessionMcpToolGrants.get(sessionId)?.has(toolName)) return allowOnce;
+    const servers = this.sessionMcpServers.get(sessionId);
+    if (!servers?.hostApprovesToolCall) return undefined;
+    const target = resolveAntigravityMcpToolTarget(toolName, servers.agentNames);
+    if (!target || !servers.registeredNames.has(target.serverName)) return undefined;
+    try {
+      return await servers.hostApprovesToolCall(target.serverName, target.toolName)
+        ? allowOnce
+        : undefined;
+    } catch (error) {
+      acpClientLog.warn("could not check ACP MCP tool approval; asking the operator", {
+        sessionId,
+        toolName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
   }
 
   /** The backend's normalizer options, with the session's workspace. */
@@ -2460,11 +2584,12 @@ export class AcpAgentClient {
       restoringAntigravityMode: Boolean(mode),
     };
     this.loadingSessions.set(protocolSessionId, loadState);
+    const mcpServerWireConfigs = toAcpMcpServerWireConfigs(mcpRegistration.servers);
     let result: unknown;
     try {
       result = await this.options.transport.request("session/load", {
         cwd,
-        mcpServers: toAcpMcpServerWireConfigs(mcpRegistration.servers),
+        mcpServers: mcpServerWireConfigs,
         sessionId: protocolSessionId,
       });
       if (mode) {
@@ -2493,6 +2618,7 @@ export class AcpAgentClient {
       result,
     });
     this.rememberSessionConfigOptions(protocolSessionId, result);
+    this.rememberSessionMcpServers(metadata.sessionId, mcpRegistration, mcpServerWireConfigs);
     await Promise.resolve(mcpRegistration.bindThread?.(metadata.sessionId));
     const runtimeState = this.runtimeStateFromResponse(result, this.now());
     if (runtimeState) {
@@ -2584,6 +2710,24 @@ export class AcpAgentClient {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  private rememberSessionMcpServers(
+    sessionId: string,
+    registration: AcpMcpServerRegistration,
+    wireConfigs: ReadonlyArray<{ name: string }>,
+  ): void {
+    const agentNames = wireConfigs.map((server) => server.name);
+    const sent = new Set(agentNames);
+    this.sessionMcpServers.set(sessionId, {
+      agentNames,
+      registeredNames: new Set(registration.servers
+        .map((server) => server.name)
+        .filter((name) => sent.has(name))),
+      ...(registration.hostApprovesToolCall
+        ? { hostApprovesToolCall: registration.hostApprovesToolCall }
+        : {}),
+    });
   }
 
   private rememberAgentToolCatalogKey(sessionId: string, key: string | undefined): void {
@@ -3339,6 +3483,41 @@ function permissionOutcomeFromResponse(
   return optionId
     ? { outcome: { outcome: "selected", optionId } }
     : cancelledPermissionOutcome();
+}
+
+function allowOncePermissionOptionId(options: AcpPermissionOption[]): string | undefined {
+  return options.find((option) => option.kind === "allow_once")?.optionId;
+}
+
+/** Offers "Allow for this thread" when the agent can allow once but never always. */
+function withThreadToolGrantOption(options: AcpPermissionOption[]): AcpPermissionOption[] {
+  if (!allowOncePermissionOptionId(options) || options.some((option) => option.kind === "allow_always")) {
+    return options;
+  }
+  const grant: AcpPermissionOption = {
+    optionId: ACP_THREAD_TOOL_GRANT_OPTION_ID,
+    name: "Allow for this thread",
+    kind: "allow_always",
+  };
+  const firstReject = options.findIndex((option) => option.kind?.startsWith("reject"));
+  return firstReject < 0
+    ? [...options, grant]
+    : [...options.slice(0, firstReject), grant, ...options.slice(firstReject)];
+}
+
+/** The operator chose the thread grant PwrAgent added to this request. */
+function isThreadToolGrantResponse(
+  response: unknown,
+  request: AppServerPendingRequestNotification,
+): boolean {
+  const offered = Array.isArray(request.params.acpPermissionOptions)
+    && request.params.acpPermissionOptions.some((option) =>
+      asRecord(option)?.optionId === ACP_THREAD_TOOL_GRANT_OPTION_ID);
+  if (!offered) return false;
+  const decision = asRecord(response)?.decision;
+  return typeof decision === "string"
+    && [ACP_THREAD_TOOL_GRANT_OPTION_ID, "accept_for_session", "allow_always"]
+      .includes(decision.toLowerCase());
 }
 
 function cancelledPermissionOutcome(): { outcome: { outcome: "cancelled" } } {

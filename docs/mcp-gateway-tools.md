@@ -36,7 +36,14 @@ whichever backend runs the thread. Codex does not review PwrAgent's dynamic
 tools. A Claude query pre-allows `mcp__pwragent__call_mcp_tool` through
 `allowedTools`, so Claude does not ask through `canUseTool` before the gateway
 does. The operator's own Claude `ask` and `deny` rules for the tool still
-apply. See [Claude provider](claude-provider.md).
+apply. See [Claude provider](claude-provider.md). Antigravity asks before every
+MCP call. PwrAgent answers its prompt with `allow_once` for `call_mcp_tool`,
+for forge tools (which have their own approval card), and for its own tools
+marked read-only. It still asks when another session server could have
+produced the same flattened `mcp_<server>_<tool>` name. When Antigravity
+offers no `allow_always`, the card adds **Allow for this thread**. PwrAgent
+keeps that grant per session and exact tool name, because Antigravity
+accepts only the options it sent.
 
 A Claude plan turn, the composer's Plan toggle, is read-only. Claude's `plan`
 mode asks for every `call_mcp_tool` call, so in a plan turn PwrAgent's
