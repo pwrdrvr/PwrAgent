@@ -2287,6 +2287,27 @@ describe("federation backend bridge", () => {
     });
   });
 
+  it("does not retry a remote messaging status probe as an unbounded transcript read", async () => {
+    const request = { backend: "claude" as const, threadId: "thread-1", includeTurns: false, limit: 0 };
+    const readThread = vi.fn(async () => ({
+      backend: "claude" as const, threadId: request.threadId, fetchedAt: 1_000, threadStatus: "idle" as const,
+      replay: { entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false } },
+    }));
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "owner_one", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({ peerId: "viewer_one", capabilities: ["thread_detail"], sendEnvelope: (reply) => replies.push(reply) });
+    registerFederationBackendHandlers({ router, backend: { readThread } as unknown as FederationBackendOperations });
+    await router.routeEnvelope({ sourcePeerId: "viewer_one", envelope: {
+      id: "status-request", kind: "request", method: FEDERATION_BACKEND_METHODS.readThread,
+      params: request, protocolVersion: 1, sourceInstanceId: "viewer_one", targetInstanceId: "owner_one", createdAt: 1_000,
+    } });
+    expect(readThread).toHaveBeenCalledExactlyOnceWith(request);
+    expect(replies).toHaveLength(1);
+    expect(replies[0]).toMatchObject({ kind: "response", result: { threadStatus: "idle", replay: { entries: [] } } });
+  });
+
   it("does not lose older history when an unpaginated backend honors limit", async () => {
     const allEntries: AppServerReadThreadResponse["replay"]["entries"] = [
       {

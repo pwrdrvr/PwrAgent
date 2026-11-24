@@ -111,7 +111,7 @@ type TranscriptListProps = {
    */
   rewind?: {
     disabledReason?: string;
-    messageIds: ReadonlySet<string>;
+    messageIds: Pick<ReadonlySet<string>, "has">;
     openMessageId?: string;
     confirmation?: ReactNode;
     onOpen: (message: AppServerThreadMessageEntry) => void;

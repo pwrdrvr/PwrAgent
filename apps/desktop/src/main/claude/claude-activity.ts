@@ -84,28 +84,50 @@ function isClaudeNotice(entry: AppServerThreadActivityEntry): boolean {
   return entry.id.startsWith("notice:");
 }
 
+function canGroup(previous: AppServerThreadEntry | undefined, entry: AppServerThreadEntry): boolean {
+  return entry.type === "activity" && previous?.type === "activity"
+    && !isClaudeNotice(entry) && !isClaudeNotice(previous)
+    && entry.details[0]?.command?.rawCommand !== "Code"
+    && previous.details[0]?.command?.rawCommand !== "Code"
+    && Boolean(entry.turn?.id) && previous.turn?.id === entry.turn?.id;
+}
+
+/** The raw rows on either side of a page boundary must not split a group. */
+export function continuesClaudeActivityGroup(left: AppServerThreadEntry, right: AppServerThreadEntry): boolean {
+  return left.type === "activity" && right.type === "activity"
+    && canGroup(normalizeSavedActivity(left), normalizeSavedActivity(right));
+}
+
+function isShellCommand(detail: AppServerThreadActivityEntry["details"][number]): boolean {
+  const command = detail.command;
+  return Boolean(command && command.source !== "tool");
+}
+
 /** Fold consecutive calls, retaining every detail and each conversation boundary. */
 export function groupClaudeActivities(entries: AppServerThreadEntry[]): AppServerThreadEntry[] {
   const grouped: AppServerThreadEntry[] = [];
   let callCount = 0;
+  let allCommands = false;
   for (const rawEntry of entries) {
     const entry = rawEntry.type === "activity" ? normalizeSavedActivity(rawEntry) : rawEntry;
     const previous = grouped.at(-1);
     // A notice, such as a compaction, is its own row, never a folded tool.
-    if (entry.type !== "activity" || previous?.type !== "activity" || isClaudeNotice(entry) || isClaudeNotice(previous)
-      || entry.details[0]?.command?.rawCommand === "Code" || previous.details[0]?.command?.rawCommand === "Code"
-      || !entry.turn?.id || previous.turn?.id !== entry.turn.id) {
+    if (entry.type !== "activity" || previous?.type !== "activity" || !canGroup(previous, entry)) {
       grouped.push(entry);
       callCount = entry.type === "activity" ? 1 : 0;
       continue;
     }
+    // Copy the first row's details only when the run becomes a group. Each
+    // later row extends that private array with just its own details.
+    const details = callCount === 1 ? [...previous.details] : previous.details;
+    if (callCount === 1) allCommands = previous.details.every(isShellCommand);
+    for (const detail of entry.details) details.push(detail);
+    allCommands &&= entry.details.every(isShellCommand);
     callCount += 1;
-    const details = [...previous.details, ...entry.details];
     const statuses = [previous.status, entry.status];
     const status = statuses.includes("failed") ? "failed"
       : statuses.includes("in_progress") ? "in_progress"
       : statuses.includes("cancelled") ? "cancelled" : entry.status;
-    const allCommands = details.every((detail) => detail.command && detail.command.source !== "tool");
     grouped[grouped.length - 1] = {
       ...previous, details, status,
       summary: allCommands ? `Ran ${callCount} commands` : `Used ${callCount} tools`,

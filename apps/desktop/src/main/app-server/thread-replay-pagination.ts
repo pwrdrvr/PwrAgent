@@ -27,9 +27,8 @@ export type { ThreadReplayCursorIdSpace } from "@pwragent/shared/thread-replay-p
  * is named with entry ids by construction.
  *
  * Codex resolves `before` by handing it straight to `thread/turns/list`, which
- * only ever accepts a cursor it issued. An ACP or Claude thread is read whole
- * and paged by `pageNormalizedReplay`, which resolves `before` by looking that
- * id up among the provider's own transcript entries.
+ * only ever accepts a cursor it issued. ACP and Claude use `before` to look
+ * up an entry ID among the provider's own transcript entries.
  *
  * A backend nobody has classified defaults to `provider-cursor`. Preserving a
  * cursor we cannot improve on costs a page of history; inventing one the

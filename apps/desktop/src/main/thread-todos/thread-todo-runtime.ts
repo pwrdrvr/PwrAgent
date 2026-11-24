@@ -286,10 +286,12 @@ export function installThreadTodoRuntime(params: {
     identity: ThreadReviewIdentity,
     entry: AppServerThreadReviewEntry,
     source: "live" | "replay" = "replay",
+    onFailure?: () => void,
   ): ThreadReview | undefined => {
     try {
       return reviews.importEntry(identity, entry, source);
     } catch (error) {
+      onFailure?.();
       threadTodoLog.warn("could not track a completed review", {
         error: error instanceof Error ? error.message : String(error),
       });
@@ -582,7 +584,9 @@ export function installThreadTodoRuntime(params: {
       },
     },
     importReviews: (identity, entries) => {
-      for (const entry of entries) importReview(identity, entry);
+      const failed: string[] = [];
+      for (const entry of entries) importReview(identity, entry, "replay", () => { failed.push(entry.id); });
+      return failed;
     },
     update: async (context, target, input) => {
       const current = todos.findForThread({ ...context, ...target });

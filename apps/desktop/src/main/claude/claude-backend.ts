@@ -27,6 +27,7 @@ import type {
   AppServerBackendWake,
   AppServerBackgroundTask,
   AppServerPendingRequestNotification,
+  AppServerReadThreadRequest,
   AppServerReviewContext,
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
@@ -49,6 +50,9 @@ import type {
   BackendSummary,
 } from "@pwragent/shared/contracts/backend";
 import type { UsageLimitObservation } from "@pwragent/shared/contracts/usage-activity";
+import { mintEntryCursorPagination, replayWithEntries } from "@pwragent/shared/thread-replay-paging";
+import { isOverlayOwnedTranscriptEntry } from "../app-server/overlay-transcript-entries";
+import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 import { getMainLogger } from "../log";
 import { resolveActiveProfilePath } from "../profile";
 import { toTranscriptImageProtocolUrl } from "../transcript-images";
@@ -1146,17 +1150,44 @@ export class ClaudeBackend {
     if (!live.turn) live.wake.wake();
   }
 
-  async readThread(threadId: string): Promise<AppServerThreadReplay> {
+  async readThread(threadId: string, options?: Pick<AppServerReadThreadRequest, "before" | "includeTurns" | "limit"> & {
+    importReviews?: (entries: AppServerThreadReviewEntry[]) => readonly string[] | void;
+  }): Promise<AppServerThreadReplay> {
     const session = await this.store.read(threadId);
-    const entries = new Map((await this.store.entries(threadId)).map((entry) => [entry.id, entry]));
+    // Status probes (including remote messaging admission) do not need to
+    // open the transcript, even on the first observation after a restart.
+    if (options?.includeTurns === false || (options?.limit === 0 && options.before === undefined)) {
+      const live = this.sessions.get(threadId);
+      return pageNormalizedReplay({
+        ...claudeReplay([], live?.turn ? "active" : "idle"),
+        contextWindow: live?.contextWindow ?? session.contextWindow,
+      }, options);
+    }
+    const history = await this.store.transcript(threadId);
+    if (options?.before === undefined && options?.importReviews) history.importReviews(options.importReviews);
+
     const live = this.sessions.get(threadId);
-    for (const entry of live?.turn?.entries.values() ?? []) entries.set(entry.id, entry);
+    const liveEntries = new Map(live?.turn?.entries);
     // A task row that outlived its turn changes after that turn was saved.
-    for (const { entry } of live?.toolRows.values() ?? []) entries.set(entry.id, entry);
-    return {
-      ...claudeReplay(groupClaudeActivities([...entries.values()]), live?.turn ? "active" : "idle"),
-      contextWindow: live?.contextWindow ?? session.contextWindow,
-    };
+    for (const { entry } of live?.toolRows.values() ?? []) liveEntries.set(entry.id, entry);
+    const status = live?.turn ? "active" : "idle";
+    const contextWindow = live?.contextWindow ?? session.contextWindow;
+    const page = history.page(options ?? {}, liveEntries);
+    if (!page || page.unresolvedCursor) {
+      const rows = page?.entries ?? history.entries();
+      const entries = new Map(rows.map((entry) => [entry.id, entry]));
+      if (!page) for (const entry of liveEntries.values()) entries.set(entry.id, entry);
+      return pageNormalizedReplay(
+        { ...claudeReplay(groupClaudeActivities([...entries.values()]), status), contextWindow },
+        { ...options, backend: "claude", threadId },
+      );
+    }
+    const entries = groupClaudeActivities(page.entries);
+    const replay = { ...claudeReplay(entries, status), contextWindow };
+    if (options?.limit === undefined && options?.before === undefined) return replay;
+    return replayWithEntries(replay, entries, mintEntryCursorPagination(
+      entries, page.hasOlderEntries, (entry) => !isOverlayOwnedTranscriptEntry(entry),
+    ));
   }
 
   /**
@@ -3252,10 +3283,10 @@ export class ClaudeBackend {
     const { threadId, turnId, turn, report } = params;
     const session = await this.store.read(threadId);
     if (isClaudeOutcomeReport(report)) {
-      const entries = [...(await this.store.entries(threadId)), ...turn.entries.values()];
-      const previous = entries.findLast((entry): entry is AppServerThreadReviewEntry =>
+      const previous = [...turn.entries.values()].findLast((entry): entry is AppServerThreadReviewEntry =>
         entry.type === "review" && entry.reviewer?.backend === "claude" && entry.output !== undefined
-        && entry.id !== params.toolUseId);
+        && entry.id !== params.toolUseId)
+        ?? (await this.store.transcript(threadId)).lastReview(params.toolUseId);
       // A re-report in the review's own turn repeats it; a later one must
       // also name one of its findings' locations.
       const outcomes = previous ? matchClaudeFindingOutcomes(reviewEntryFindings(previous), report, session.cwd, {
