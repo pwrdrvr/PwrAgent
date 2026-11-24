@@ -16,6 +16,9 @@ import { MAX_USAGE_POINTS, ResourceUsageRecorder } from "../resource-checkouts/c
  *   window is forgotten.
  * - Points are strictly ordered and adjacent points differ, so an idle
  *   resource costs one point however long it is watched.
+ * - When the latest reads went unanswered, `unobservedSince` is the first of
+ *   them, so a reader never draws a value no authority confirmed. The next
+ *   answered read clears it.
  *
  * The oracle replays the observation log.
  */
@@ -65,6 +68,8 @@ describe("ResourceUsageRecorder", () => {
       expect(history).toBeDefined();
       const { points, observedSince } = history!;
       expect(observedSince).toBe(answered[0].at);
+      const lastAnswered = log.lastIndexOf(answered[answered.length - 1]);
+      expect(history!.unobservedSince).toBe(log[lastAnswered + 1]?.at);
       for (let index = 1; index < points.length; index += 1) {
         expect(points[index].at).toBeGreaterThan(points[index - 1].at);
         expect([points[index].held, points[index].waiting]).not.toEqual([points[index - 1].held, points[index - 1].waiting]);

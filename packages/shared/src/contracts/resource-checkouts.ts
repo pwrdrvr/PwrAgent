@@ -205,13 +205,20 @@ export const RESOURCE_USAGE_WINDOW_MS = 30 * 60_000;
 
 /**
  * Held and waiting units as a step function: each point holds until the
- * next one, and the last holds until the snapshot's `observedAt`. Points are
+ * next one, and the last holds until `unobservedSince` or the snapshot's
+ * `observedAt`. Points are
  * oldest first. The first point may predate the window; it is the value in
  * force when the window began.
  */
 export type ResourceUsageHistory = {
   /** When this process first observed the resource; nothing is known before. */
   observedSince: number;
+  /**
+   * When reads stopped being answered (an unreachable or unresolved
+   * authority, or a last-known snapshot); nothing is known from then on.
+   * Absent while the latest read was answered.
+   */
+  unobservedSince?: number;
   points: ResourceUsagePoint[];
 };
 

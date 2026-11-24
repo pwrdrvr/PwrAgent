@@ -15,7 +15,7 @@ export const MAX_USAGE_POINTS = 1_024;
 /** No authority answered, so the resource's projection is not an observation. */
 const UNOBSERVED: ReadonlySet<ResourceCondition> = new Set(["unreachable", "ownership_unresolved"]);
 
-type Series = { observedSince: number; lastSeenAt: number; points: ResourceUsagePoint[] };
+type Series = { observedSince: number; unobservedSince?: number; lastSeenAt: number; points: ResourceUsagePoint[] };
 
 export function usageUnits(resource: ResourceDomain): Omit<ResourceUsagePoint, "at"> {
   let held = 0;
@@ -43,8 +43,14 @@ export class ResourceUsageRecorder {
       if (series) series.lastSeenAt = Math.max(series.lastSeenAt, now);
       if (!UNOBSERVED.has(resource.condition) && !resource.allocations.some(({ lastKnown }) => lastKnown)) {
         const units = usageUnits(resource);
-        if (series) record(series.points, now, units);
-        else this.series.set(resource.resourceId, { observedSince: now, lastSeenAt: now, points: [{ at: now, ...units }] });
+        if (series) {
+          delete series.unobservedSince;
+          record(series.points, now, units);
+        } else this.series.set(resource.resourceId, { observedSince: now, lastSeenAt: now, points: [{ at: now, ...units }] });
+      } else if (series && series.unobservedSince === undefined && now >= series.points[series.points.length - 1].at) {
+        // The condition change that brought this read publishes a revision,
+        // so readers learn where the observed history ends.
+        series.unobservedSince = now;
       }
       if (series) this.prune(series, now);
     }
@@ -55,7 +61,12 @@ export class ResourceUsageRecorder {
 
   history(resourceId: string): ResourceUsageHistory | undefined {
     const series = this.series.get(resourceId);
-    return series ? { observedSince: series.observedSince, points: series.points.slice() } : undefined;
+    if (!series) return undefined;
+    return {
+      observedSince: series.observedSince,
+      ...(series.unobservedSince === undefined ? {} : { unobservedSince: series.unobservedSince }),
+      points: series.points.slice(),
+    };
   }
 
   /** Keeps the one point in force at the window's start, and nothing older. */

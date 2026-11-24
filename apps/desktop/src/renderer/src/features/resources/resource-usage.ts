@@ -18,7 +18,10 @@ export type UsageBar = {
    */
   held: number;
   waiting: number;
-  /** False before this viewer's process first saw the resource. */
+  /**
+   * False before this viewer's process first saw the resource, and from
+   * when its reads stopped being answered.
+   */
   observed: boolean;
 };
 
@@ -28,6 +31,7 @@ export type UsageChart = {
   capacity: number;
   /** The y-axis top: capacity, or more when requests exceed it. */
   scaleMax: number;
+  /** The most held, and separately the most waiting, at any observed moment. */
   peakHeld: number;
   peakWaiting: number;
   /** When the first observed bar begins, if the window starts unobserved. */
@@ -55,28 +59,37 @@ export function usageChart(
   const end = (Math.floor(now / bucketMs) + 1) * bucketMs;
   const start = end - count * bucketMs;
   const { points, observedSince } = usage;
+  // Exclusive end of what was observed: now, or when reads stopped being
+  // answered.
+  const observedEnd = Math.min(now + 1, usage.unobservedSince ?? Infinity);
   const bars: UsageBar[] = [];
   let next = 0;
   // The value in force at the cursor; undefined before the first point.
   let current: ResourceUsagePoint | undefined;
+  // Peaks of each series on their own, over every observed value in the
+  // window; a bar's values are one moment and can miss either.
   let peakHeld = 0;
   let peakWaiting = 0;
+  const consider = (value: { held: number; waiting: number }) => {
+    peakHeld = Math.max(peakHeld, value.held);
+    peakWaiting = Math.max(peakWaiting, value.waiting);
+  };
   for (let index = 0; index < count; index += 1) {
     const startAt = start + index * bucketMs;
     const endAt = startAt + bucketMs;
     const from = Math.max(startAt, observedSince);
     while (next < points.length && points[next].at <= from) current = points[next++];
-    let best: { held: number; waiting: number } | undefined = from < Math.min(endAt, now + 1) ? current : undefined;
+    let best: { held: number; waiting: number } | undefined = from < Math.min(endAt, observedEnd) ? current : undefined;
+    if (best) consider(best);
     while (next < points.length && points[next].at < endAt) {
       current = points[next++];
-      if (current.at > now) continue;
+      if (current.at >= observedEnd) continue;
+      consider(current);
       if (!best || busier(current, best)) best = current;
     }
-    const observed = endAt > observedSince && startAt <= now;
+    const observed = endAt > observedSince && startAt < observedEnd;
     const held = observed && best ? best.held : 0;
     const waiting = observed && best ? best.waiting : 0;
-    peakHeld = Math.max(peakHeld, held);
-    peakWaiting = Math.max(peakWaiting, waiting);
     bars.push({ startAt, endAt, held, waiting, observed });
   }
   const capacity = resource.sharing.mode === "counted" ? resource.sharing.capacity : 1;

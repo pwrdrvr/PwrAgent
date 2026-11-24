@@ -119,14 +119,19 @@ resource counts one unit per allocation and per queue entry.
   the chart says when recording began.
 - **Unanswered reads are not observations.** An `unreachable` or
   `ownership_unresolved` resource, or one served from a last-known
-  snapshot, adds no point; its last observed value holds.
+  snapshot, adds no point. The first such read sets `unobservedSince`, and
+  the chart draws everything from then on as not recorded instead of
+  extending the last value. The condition change that brought that read
+  publishes a revision, so the renderer learns of it at once; the next
+  answered read clears it.
 - **Out of the fingerprint.** `ResourceDomain.usage` is attached in `read()`
   after the revision fingerprint, so time passing never publishes a
   revision. The last point holds until the next revision, and the renderer
   extends it to now. Peers never send `usage`.
 - **One moment per bar.** `usageChart` (`resource-usage.ts`) draws each
   bucket's busiest moment, by held plus waiting then by held, so a bar's
-  two segments come from the same instant.
+  two segments come from the same instant. The heading's peaks are each
+  series' own maximum over every observed moment, not the bars' maxima.
   `__tests__/resource-usage.property.test.ts` and
   `src/main/__tests__/resource-checkout-usage-history.property.test.ts`
   hold these rules.

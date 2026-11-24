@@ -24,6 +24,7 @@ export function ResourceUsageChart(props: { chart: UsageChart; now: number; unit
   const scale = (units: number) => (units / chart.scaleMax) * PLOT_HEIGHT;
   const capacityY = height - scale(chart.capacity);
   const firstObserved = chart.bars.findIndex((bar) => bar.observed);
+  const lastObserved = chart.bars.findLastIndex((bar) => bar.observed);
   const shown = chart.bars[pointed ?? count - 1];
   const onPointerMove = (event: PointerEvent<SVGSVGElement>) => {
     const box = event.currentTarget.getBoundingClientRect();
@@ -55,6 +56,16 @@ export function ResourceUsageChart(props: { chart: UsageChart; now: number; unit
             y2={height - 0.5}
           />
         ) : null}
+        {lastObserved >= 0 && lastObserved < count - 1 ? (
+          <line
+            className="resources-usage__unobserved"
+            vectorEffect="non-scaling-stroke"
+            x1={(lastObserved + 1) * BAR_PITCH}
+            x2={width}
+            y1={height - 0.5}
+            y2={height - 0.5}
+          />
+        ) : null}
         {chart.bars.map((bar, index) => (
           <UsageBarMark
             key={bar.startAt}
@@ -80,7 +91,7 @@ export function ResourceUsageChart(props: { chart: UsageChart; now: number; unit
       </div>
       <figcaption className="resources-usage__readout" data-testid="resources-usage-readout">
         <span className="resources-usage__when resources-mono">
-          {pointed === undefined || pointed === count - 1 ? "Now" : `${formatAge(shown.endAt, props.now)} ago`}
+          {pointed === undefined || pointed === count - 1 ? "Now" : ago(shown.endAt, props.now)}
         </span>
         {shown.observed ? (
           <>
@@ -103,11 +114,17 @@ export function ResourceUsageChart(props: { chart: UsageChart; now: number; unit
       </figcaption>
       {chart.observedSince === undefined ? null : (
         <p className="resources-note">
-          Recorded since PwrAgent started watching {formatAge(chart.observedSince, props.now)} ago.
+          Recording began {ago(chart.observedSince, props.now)}, when PwrAgent started watching.
         </p>
       )}
     </figure>
   );
+}
+
+/** "just now" under a minute, else "4m ago". */
+function ago(at: number, now: number): string {
+  const age = formatAge(at, now);
+  return age === "now" ? "just now" : `${age} ago`;
 }
 
 function UsageBarMark(props: {
