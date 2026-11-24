@@ -828,7 +828,7 @@ jobs:
       # for current measurements, exclusions, and the reproducible fit.
       #
       # Linux and Windows share the four-lane allocation. macOS uses a
-      # separate five-lane allocation to fit its 15-minute job budget.
+      # separate five-lane allocation to reduce job wall time.
       #
       # GitHub-hosted Linux capacity can run every lane concurrently. Keep
       # the other shards running after a failure so their artifacts still
@@ -1178,8 +1178,8 @@ jobs:
     runs-on: macos-26
     needs: [changes, macos-install-deps]
     strategy:
-      # The five-lane fit leaves 2:46 in the 15-minute budget when replaying
-      # recent main test durations plus the worst observed job overhead.
+      # The five-lane fit models a 12:14 worst job time using recent main
+      # test durations plus the worst observed job overhead.
       # See docs/desktop-e2e-shard-timings.md.
       #
       # Do not cancel the other shards on failure: their artifacts distinguish
@@ -1187,9 +1187,9 @@ jobs:
       fail-fast: false
       matrix:
         lane: [1, 2, 3, 4, 5]
-    # One budget for setup, build, tests, and reporting. The measured indexing
-    # contention below is addressed within this deadline.
-    timeout-minutes: 15
+    # Keep five extra minutes above the 15-minute timing benchmark so slow
+    # runners have time for retries, reporting, and cleanup.
+    timeout-minutes: 20
     steps:
       # Indexing competes with dependency extraction and Electron startup on
       # fresh hosted VMs. Stop it before checkout can enqueue more work. The

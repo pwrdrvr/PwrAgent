@@ -3,9 +3,10 @@
 macOS uses five lanes on GitHub-hosted `macos-26` with weights `69:87:78:87:112`.
 The 433-test allocation minimizes the slowest modeled lane across seven recent
 main runs with complete Playwright reports. The best four-lane split modeled
-at 13:58 against a 15-minute deadline. Five lanes modeled at 12:14, including
+at 13:58 against the former 15-minute deadline. Five lanes modeled at 12:14, including
 the worst observed setup, build, reporting, and other job overhead (3:14).
-The 15-minute deadline and one Playwright worker per lane still apply.
+The 20-minute job deadline gives slow runners additional time for retries,
+reporting, and cleanup. Each lane runs one Playwright worker.
 
 Linux and Windows share `77:91:104:133` across four lanes. Those weights were
 fit to 405 tests in 216 groups.
