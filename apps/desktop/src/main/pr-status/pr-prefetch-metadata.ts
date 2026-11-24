@@ -29,8 +29,9 @@ export type ScheduledPrPrefetchMetadataScope = {
 
 function prefetchGitInputs(cwd: string) {
   const env = buildPwrAgentChildProcessEnv(process.env);
-  if (process.platform === "win32" || !path.isAbsolute(cwd) || gitCommandPreference(env) || getSelectedManagedGit()
-    || Object.keys(env).some((key) => /^(GIT_(DIR|WORK_TREE|COMMON_DIR|IMPLICIT_WORK_TREE|OBJECT_DIRECTORY|NAMESPACE|CONFIG|CONFIG_COUNT|CONFIG_PARAMETERS|TEST_.*))$/i.test(key))) {
+  if (process.platform === "win32" || gitCommandPreference(env) || getSelectedManagedGit()) return "native-only" as const;
+  if (!path.isAbsolute(cwd) || Object.keys(env).some((key) =>
+    /^(GIT_(DIR|WORK_TREE|COMMON_DIR|IMPLICIT_WORK_TREE|OBJECT_DIRECTORY|NAMESPACE|CONFIG|CONFIG_COUNT|CONFIG_PARAMETERS|TEST_.*))$/i.test(key))) {
     return undefined;
   }
   const runtime = gitRuntimeEnvironment(env);
@@ -104,10 +105,15 @@ export async function observeScheduledPrPrefetchMetadata(
   const currentInputs = () => {
     try { return prefetchGitInputs(cwd); } catch { return undefined; }
   };
+  const readFallback = async (options: { useGitRemote?: true; preferCachedIdentity?: true }) => {
+    const observation = await repositories.read(undefined, options);
+    return { ...observation, refreshedRemoteNames: observation.refreshedRemoteNames ?? [] };
+  };
   try {
     if (repositories.shouldSkipLookup()) return { repos: [], refreshedRemoteNames: [] };
     if (scope.configOutputTooLarge || repositories.usesGitRemote()) return undefined;
     const inputs = currentInputs();
+    if (inputs === "native-only") return await readFallback({ preferCachedIdentity: true });
     if (!inputs) return undefined;
     const roots = await observePrCheckoutConfigFiles(cwd, inputs.paths);
     if (!roots) return undefined;
@@ -134,10 +140,7 @@ export async function observeScheduledPrPrefetchMetadata(
     if (config?.stderr) return undefined;
     const parsed = config ? parseConfigWithOrigins(roots.directory, config.stdout)
       : { configuration: { names: [], remotes: [] }, sources: undefined };
-    if (!parsed) {
-      const { repos, refreshedRemoteNames, refreshRemoteNames, publish } = await repositories.read(undefined, { useGitRemote: true });
-      return { repos, refreshedRemoteNames: refreshedRemoteNames ?? [], refreshRemoteNames, publish };
-    }
+    if (!parsed) return await readFallback({ useGitRemote: true });
     const { configuration, sources } = parsed;
     const remoteNames = configuration.names;
     const inputsUnchanged = () => isDeepStrictEqual(inputs, currentInputs());

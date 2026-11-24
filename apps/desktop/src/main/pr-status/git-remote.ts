@@ -247,12 +247,13 @@ export function createScheduledPrefetchRemoteReader(cwd: string) {
   };
   const read = async (
     configuration?: GitRemoteConfiguration,
-    options: { useGitRemote?: boolean; configSampleOrder?: number; validateNegative?: () => Promise<boolean> } = {},
+    options: { useGitRemote?: boolean; preferCachedIdentity?: boolean; configSampleOrder?: number; validateNegative?: () => Promise<boolean> } = {},
   ) => {
     const cacheGeneration = remoteCacheGeneration;
     const reused = observationForReuse();
     const { observation, refreshRemoteNames } = await loadParsedGitRemotes(cwd, {}, {}, {
-      configuration, configSampleOrder: options.configSampleOrder, previous: reused, useGitRemote: options.useGitRemote,
+      configuration, configSampleOrder: options.configSampleOrder, previous: reused,
+      useGitRemote: options.useGitRemote, preferCachedIdentity: options.preferCachedIdentity,
     });
     const repos = collectForgeRepositories(observation.value, "github");
     // Matching names or URLs do not refresh the resolved identity's age.
@@ -397,7 +398,10 @@ async function loadParsedGitRemotes(
   cwd: string,
   options: ResolveGitHubRepoOptions,
   demand: PrMetadataDemand,
-  prefetch?: { configuration?: GitRemoteConfiguration; configSampleOrder?: number; previous?: RemoteCacheEntry; useGitRemote?: boolean },
+  prefetch?: {
+    configuration?: GitRemoteConfiguration; configSampleOrder?: number; previous?: RemoteCacheEntry;
+    useGitRemote?: boolean; preferCachedIdentity?: boolean;
+  },
 ): Promise<{ observation: ParsedRemoteObservation; refreshRemoteNames: boolean }> {
   const resolveSshHostname =
     options.resolveSshHostname ?? defaultResolveSshHostname;
@@ -409,14 +413,16 @@ async function loadParsedGitRemotes(
       ? { remotes: await options.readRemotes(cwd) }
       : await defaultReadRemotes(cwd, demand, Boolean(options.confirmEmpty || options.fresh), prefetch));
     const sampleOrder = prefetch?.configSampleOrder ?? raw.urlSampleOrder ?? nextRemoteSampleOrder();
-    const readNativeUrls = raw.urlSampleOrder !== undefined;
     const { names, remotes, unconfirmedEmpty, readWithGitRemote, hasConditionalIncludes } = raw;
+    // Unless Git's remote list was the last observation, unverified branch
+    // planning needs a current native list after resolving identity.
+    const refreshRemoteNames = !readWithGitRemote || raw.urlSampleOrder !== undefined;
     const prior = prefetch?.previous;
     if (prior && (remotes === prior.value || (isCurrentRemoteObservation(prior) && sameRemoteUrls(remotes, prior.value)))) {
       return {
         observation: { names, value: prior.value, unconfirmedEmpty, readWithGitRemote, hasConditionalIncludes,
           sshResolutionFailed: prior.sshResolutionFailed, sampleOrder: prior.sampleOrder },
-        refreshRemoteNames: readNativeUrls,
+        refreshRemoteNames,
       };
     }
     let sshResolutionFailed: true | undefined;
@@ -444,8 +450,7 @@ async function loadParsedGitRemotes(
     );
     return {
       observation: { names, value, unconfirmedEmpty, readWithGitRemote, hasConditionalIncludes, sshResolutionFailed, sampleOrder },
-      // Native URL reads and SSH evaluation can both outlive the remote list.
-      refreshRemoteNames: readNativeUrls || localSshLookups.size > 0,
+      refreshRemoteNames,
     };
   } catch {
     demand.signal?.throwIfAborted();
@@ -477,7 +482,7 @@ function resolveSshHostInFlight(host: string, resolve: SshResolver, demand: PrMe
 
 async function defaultReadRemotes(
   cwd: string, demand: PrMetadataDemand, confirmEmpty: boolean,
-  prefetch?: { previous?: RemoteCacheEntry; useGitRemote?: boolean },
+  prefetch?: { previous?: RemoteCacheEntry; useGitRemote?: boolean; preferCachedIdentity?: boolean },
 ): Promise<{
   names?: string[]; remotes: GitRemote[]; unconfirmedEmpty?: true; readWithGitRemote?: true;
   hasConditionalIncludes?: true; urlSampleOrder?: number;
@@ -493,7 +498,8 @@ async function defaultReadRemotes(
   // hierarchy. Keep the original Git commands in this case and for unusual
   // configuration. `remote --verbose` prints only the first fetch URL.
   const previous = prefetch?.previous;
-  const useNativeList = usesNativeRemoteList(previous);
+  const useNativeList = usesNativeRemoteList(previous) || Boolean(prefetch?.preferCachedIdentity
+    && isCurrentRemoteObservation(previous) && hasAllRemoteUrls(previous));
   if (!prefetch?.useGitRemote && !useNativeList
     && !Object.keys(childEnv).some((key) => key.toUpperCase() === "GIT_CONFIG")) {
     try {
