@@ -271,7 +271,8 @@ export function createScheduledPrefetchRemoteReader(cwd: string) {
       && !live.readFailed && !live.sshResolutionFailed && hasAllRemoteUrls(live)) {
       return { repos: collectForgeRepositories(live.value, "github"), refreshedRemoteNames: live.names };
     }
-    const sshIdentityUnchanged = observation.value.some(({ url }) => readSshHost(url)) ? () => {
+    const hasSshRemotes = observation.value.some(({ url }) => readSshHost(url));
+    const sshIdentityUnchanged = hasSshRemotes ? () => {
       if (!isCurrentRemoteObservation(snapshot)) return false;
       const current = observationForReuse();
       // Git config freshness covers URL changes. For the same URLs, the
@@ -288,7 +289,11 @@ export function createScheduledPrefetchRemoteReader(cwd: string) {
           && !isCurrentRemoteObservation(remoteCache.get(cwd)) && !remoteLookups.has(cwd)) remoteCache.set(cwd, snapshot);
       }
       : undefined;
-    return { repos, refreshedRemoteNames: observation.names, sshIdentityUnchanged, publish };
+    return {
+      repos, refreshedRemoteNames: observation.names, sshIdentityUnchanged,
+      expandedSshIdentity: hasSshRemotes && observation.value !== reused?.value,
+      publish,
+    };
   };
   return {
     read,

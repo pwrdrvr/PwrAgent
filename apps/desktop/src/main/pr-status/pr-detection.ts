@@ -173,7 +173,7 @@ export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string, che
       if (!metadata) {
         checkout.verified = undefined;
         const observed = await observeScheduledPrPrefetchMetadata(cwd, checkout);
-        if (observed?.proof) {
+        if (observed?.proof && observed.refreshedRemoteNames) {
           const { heads, unchanged } = observed.proof;
           const remoteNames = observed.refreshedRemoteNames;
           const defaults = heads?.size === remoteNames.length ? await readDefaultBranchInfo(cwd, undefined, remoteNames, heads) : undefined;

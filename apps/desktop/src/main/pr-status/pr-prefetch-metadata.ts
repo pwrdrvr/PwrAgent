@@ -13,7 +13,7 @@ const MAX_CONFIG_INCLUDES = 16;
 
 type PrefetchMetadata = {
   repos: GitHubRepoRef[];
-  refreshedRemoteNames: string[];
+  refreshedRemoteNames?: string[];
   publish?: () => void;
   nativeHeadReads?: true;
   proof?: { heads?: ReadonlyMap<string, string>; unchanged: () => Promise<boolean> };
@@ -149,9 +149,14 @@ export async function observeScheduledPrPrefetchMetadata(
     if (!files || !originsWatched || (verifyHeadsBeforeConfirming && !earlyHeadProof)) {
       // An unverified sample applies only to the current branch. It cannot
       // establish a reusable negative or warm the live cache.
-      const { repos } = await repositories.read(configuration, { configSampleOrder, validateNegative: async () => false });
+      const { repos, expandedSshIdentity } = await repositories.read(configuration, { configSampleOrder, validateNegative: async () => false });
       if (!await roots.unchanged() || !inputsUnchanged()) return undefined;
-      return { repos, refreshedRemoteNames: remoteNames, nativeHeadReads: verifyHeadsBeforeConfirming ? true : undefined };
+      // An include may have changed while OpenSSH was evaluating aliases.
+      // Have Git list current names before using them for branch eligibility.
+      return {
+        repos, refreshedRemoteNames: expandedSshIdentity ? undefined : remoteNames,
+        nativeHeadReads: verifyHeadsBeforeConfirming && !expandedSshIdentity ? true : undefined,
+      };
     }
     if (extra.length) {
       const confirmed = await readConfig();
@@ -162,11 +167,14 @@ export async function observeScheduledPrPrefetchMetadata(
       && (files === roots || await roots.unchanged()) && inputsUnchanged());
     // Resolve identities from the config Git already sampled. OpenSSH aliases
     // use one expansion per observation, bounded by the scheduled batch.
-    const { repos, sshIdentityUnchanged, publish } = await repositories.read(configuration, {
+    const { repos, sshIdentityUnchanged, expandedSshIdentity, publish } = await repositories.read(configuration, {
       configSampleOrder,
       validateNegative: async () => Boolean((!config || sources) && await configUnchanged()),
     });
-    const sample = { repos, refreshedRemoteNames: remoteNames, publish: sources ? publish : undefined };
+    const sample = {
+      repos, refreshedRemoteNames: !sources && expandedSshIdentity ? undefined : remoteNames,
+      publish: sources ? publish : undefined,
+    };
     const currentSample = async () => await configUnchanged() ? sample : undefined;
     // Keep Git's current config answer for the ordinary branch path even
     // when it cannot support reuse of the checkout observation.

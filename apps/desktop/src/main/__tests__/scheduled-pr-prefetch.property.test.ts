@@ -264,8 +264,7 @@ it.each([0, 1])("follows an owner remote refresh %i ms into the batch", async (e
     .toEqual(["remote", "symbolic-ref", "for-each-ref"]);
 });
 
-it.skipIf(process.platform === "win32")("prefers the owner URL sampled during a delayed scheduled SSH read", async () => {
-  const { cwd, branches: [first, second] } = await singleBranchClone();
+async function holdSshResolution(cwd: string) {
   const bin = path.join(cwd, "bin");
   const release = path.join(cwd, "release-ssh");
   await mkdir(bin);
@@ -280,14 +279,21 @@ it.skipIf(process.platform === "win32")("prefers the owner URL sampled during a 
     if (args[0] === "ssh-config") startedSsh.resolve();
     return startDiagnostic(...args);
   });
+  onTestFinished(() => { vi.unstubAllEnvs(); diagnostic.mockRestore(); });
+  return { started: startedSsh.promise, release: () => writeFile(release, "") };
+}
+
+it.skipIf(process.platform === "win32")("prefers the owner URL sampled during a delayed scheduled SSH read", async () => {
+  const { cwd, branches: [first, second] } = await singleBranchClone();
+  const ssh = await holdSshResolution(cwd);
   let now = Date.now();
   const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-  onTestFinished(() => { vi.unstubAllEnvs(); diagnostic.mockRestore(); clock.mockRestore(); });
+  onTestFinished(() => { clock.mockRestore(); });
   await readGit(cwd, "remote", "set-url", "origin", "git@fixture-ssh:fixture/before-owner-read.git");
   const resolve = createScheduledPrPrefetchRepoResolver();
   const scheduled = resolve(cwd, first);
   try {
-    await Promise.race([startedSsh.promise, scheduled.then(() => { throw new Error("Scheduled lookup did not expand SSH"); })]);
+    await Promise.race([ssh.started, scheduled.then(() => { throw new Error("Scheduled lookup did not expand SSH"); })]);
     await readGit(cwd, "remote", "set-url", "origin", "https://github.com/fixture/owner-overlap.git");
     now++;
     await expect(resolveGitHubRepoForDirectory(cwd, { fresh: true })).resolves.toEqual({
@@ -295,7 +301,7 @@ it.skipIf(process.platform === "win32")("prefers the owner URL sampled during a 
     });
     now++;
   } finally {
-    await writeFile(release, "");
+    await ssh.release();
     await scheduled;
   }
 
@@ -608,6 +614,40 @@ it.skipIf(process.platform === "win32")("uses one current config read per branch
       ? ["config", "symbolic-ref", "for-each-ref"]
       : ["config"]);
   }
+});
+
+it.skipIf(process.platform === "win32")("filters a default branch added during SSH expansion of a symlinked include", async () => {
+  const cwd = await fixture();
+  await readGit(cwd, "remote", "set-url", "origin", "git@fixture-ssh:fixture/origin.git");
+  const included = path.join(cwd, "included-config");
+  const before = path.join(cwd, "before-config");
+  const after = path.join(cwd, "after-config");
+  await writeFile(before, "[user]\n\tname = Fixture\n");
+  await readGit(cwd, "config", "--file", after, "remote.added.url", "https://github.com/fixture/added.git");
+  await readGit(cwd, "config", "--file", after, "remote.added.fetch", "+refs/heads/*:refs/remotes/added/*");
+  await symlink(before, included);
+  await readGit(cwd, "config", "--local", "include.path", included);
+  expect((await oracle(cwd))("release")).toEqual(["https://github.com/fixture/upstream.git"]);
+
+  const ssh = await holdSshResolution(cwd);
+  const starts = recordPrefetchStarts();
+  const scheduled = createScheduledPrPrefetchRepoResolver()(cwd, "release");
+  try {
+    await Promise.race([ssh.started, scheduled.then(() => { throw new Error("Scheduled lookup did not expand SSH"); })]);
+    await symlink(after, `${included}.next`);
+    await rename(`${included}.next`, included);
+    await readGit(cwd, "update-ref", "refs/remotes/added/release", "HEAD");
+    await remoteHead(cwd, "added", "release");
+  } finally {
+    await ssh.release();
+    await scheduled;
+  }
+
+  const commands = starts.calls.map(([, args]) => args[0]);
+  const expected = (await oracle(cwd))("release");
+  expect(expected).toEqual([]);
+  await expect(scheduled).resolves.toEqual(expected);
+  expect(commands.filter((command) => command === "config" || command === "remote")).toEqual(["config", "remote"]);
 });
 
 it.skipIf(process.platform === "win32").each([[2, 1], [3, 1], [3, 2]])("uses one config read per branch for %i linked-worktree lookups with %i remotes", async (count, remoteCount) => {
