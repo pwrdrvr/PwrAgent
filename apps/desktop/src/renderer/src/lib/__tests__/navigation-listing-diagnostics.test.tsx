@@ -165,9 +165,10 @@ it.each([true, false])("reports the deciding candidate proof after a mark-seen n
     expect(decisions).toMatchObject([
       { seenDecision: "defer", seenReason: "uncertain-membership", proofAdmitted: true },
       { seenDecision: returnsProof ? "exclude" : "replace", seenReason: returnsProof ? "proof-excludes" : "missing-proof",
-        batch: decisions[0]?.batch, resource: decisions[0]?.resource, proofAdmitted: returnsProof },
+        logical: decisions[0]?.logical, resource: decisions[0]?.resource, proofAdmitted: returnsProof },
     ]);
     const dispatch = events.filter((event) => event.phase === "dispatch")[1]!;
+    expect(decisions[0]?.logical).toBe(dispatch.logical);
     expect(events.find((event) => event.phase === "settled" && event.read === dispatch.read)).toMatchObject({ outcome: "ok" });
     const reply = events.find((event) => event.phase === "reply" && event.read === dispatch.read);
     expect(reply).toMatchObject({ disposition: returnsProof ? "accepted" : "discarded", attempt: dispatch.attempt });

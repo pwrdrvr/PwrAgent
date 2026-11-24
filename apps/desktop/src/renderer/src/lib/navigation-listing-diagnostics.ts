@@ -4,7 +4,7 @@ import { safeNavigationDiagnosticTrigger, type NavigationDiagnosticCause } from 
 const COVERAGE = ["missing", "checking", "degraded", "complete"] as const;
 const RANGES = ["missing", "full", "prefix", "offset-complete", "offset-partial"] as const;
 const SEEN_REASONS = ["parent-or-row", "thread-dependency", "selection-directory", "directory-scope",
-  "uncertain-membership", "partial-coverage", "partial-range", "missing-proof", "proof-excludes"] as const;
+  "uncertain-membership", "partial-coverage", "partial-range", "missing-proof", "proof-excludes", "baseline-fenced"] as const;
 const SEEN_DECISIONS = ["invalidate", "covered", "defer", "replace", "exclude"] as const;
 export type NavigationSeenReason = typeof SEEN_REASONS[number];
 export type NavigationSeenDecision = typeof SEEN_DECISIONS[number];
@@ -26,7 +26,7 @@ type Event = { at: number; view: number; effect: number;
   inventory?: "owner" | "viewer"; rows?: number; invalidations?: number; waitMs?: number; durationMs?: number;
   outcome?: "ok" | "error"; cursor?: boolean; invalidatedOnly?: boolean;
   disposition?: "accepted" | "discarded"; coverage?: typeof COVERAGE[number]; range?: typeof RANGES[number];
-  proofAdmitted?: boolean; unreadChanged?: boolean; selectionUnreadChanged?: boolean;
+  proofPresent?: boolean; proofAdmitted?: boolean; unreadChanged?: boolean; selectionUnreadChanged?: boolean;
   seenReason?: NavigationSeenReason; seenDecision?: NavigationSeenDecision;
   interaction?: "scroll" | "pointerdown" | "keydown"; lastAt?: number;
   retry?: "page-budget" | "cursor-expired" | "anchor-missing" };
@@ -77,7 +77,7 @@ export class NavigationListingDiagnostics {
     if (event.seenDecision && SEEN_DECISIONS.includes(event.seenDecision)) entry.seenDecision = event.seenDecision;
     if (event.retry === "page-budget" || event.retry === "cursor-expired" || event.retry === "anchor-missing") entry.retry = event.retry;
     if (event.interaction === "scroll" || event.interaction === "pointerdown" || event.interaction === "keydown") entry.interaction = event.interaction;
-    for (const key of ["cursor", "invalidatedOnly", "proofAdmitted", "unreadChanged", "selectionUnreadChanged"] as const) {
+    for (const key of ["cursor", "invalidatedOnly", "proofPresent", "proofAdmitted", "unreadChanged", "selectionUnreadChanged"] as const) {
       if (typeof event[key] === "boolean") entry[key] = event[key];
     }
     this.events[this.next] = JSON.stringify(entry);

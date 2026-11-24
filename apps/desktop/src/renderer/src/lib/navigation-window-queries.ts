@@ -91,11 +91,10 @@ type Resource = {
   /** Metadata notices observed after dispatch and awaiting the replacement baseline. */
   membershipRead?: {
     paths: Set<string>;
-    diagnosticGeneration: number;
     batch?: number;
     cause?: NavigationDiagnosticCause;
     trigger?: string;
-    seen?: { batches: Map<string, number>; count: number };
+    seen?: { batches: Map<string, number>; count: number; diagnosticGeneration?: number };
   };
   /** A correlated viewer pin publication is waiting for this resource. */
   pinPublicationPending?: boolean;
@@ -129,6 +128,14 @@ type ReplyDiagnostic = ReturnType<typeof navigationDiagnosticPageShape> & {
   generation: number;
   logical: number;
   attempt: number;
+};
+type SeenDecisionDiagnostic = {
+  batch?: number;
+  logical?: number;
+  seenReason: NavigationSeenReason;
+  seenDecision: NavigationSeenDecision;
+  proofPresent?: boolean;
+  proofAdmitted?: boolean;
 };
 
 function loadedRows(page: NavigationQueryPage | undefined): number {
@@ -591,8 +598,10 @@ export class NavigationWindowQueries {
           const reason = typeof affected === "string" ? affected : resource.membershipUncertain ? "uncertain-membership"
             : page?.coverage.state !== "complete" ? "partial-coverage"
             : !page.complete || (page.rangeStart ?? 0) > 0 ? "partial-range" : "missing-proof";
-          this.recordSeenDecision(resource, batch, reason, deferred ? "defer" : resource.invalidated ? "covered" : "invalidate",
-            page, this.hasAdmittedDependencies(page));
+          this.recordSeenDecision(resource, page, { batch,
+            logical: deferred ? resource.diagnosticLogical : undefined,
+            seenReason: reason, seenDecision: deferred ? "defer" : resource.invalidated ? "covered" : "invalidate",
+            ...this.diagnosticProof(page) });
         }
         if (deferred) continue;
       }
@@ -630,6 +639,7 @@ export class NavigationWindowQueries {
     if (read?.seen) {
       // The replacement consumes these notices even when a different event
       // fences the read before its proof arrives.
+      this.finishDeferredSeenDiagnostic(resource, resource.value.state.page, "baseline-fenced", "covered");
       resource.diagnosticInvalidations = (resource.diagnosticInvalidations ?? 0) + read.seen.count;
       read.seen = undefined;
     }
@@ -660,22 +670,33 @@ export class NavigationWindowQueries {
     // An old baseline can only nominate an apparently offscreen notice for
     // verification. The replacement may add this child or count it through
     // the enclosing directory, even if the returned rows do not show it.
-    const seen = read.seen ??= { batches: new Map(), count: 0 };
+    const seen: NonNullable<typeof read.seen> = read.seen ??= { batches: new Map(), count: 0 };
     if (!seen.batches.has(key)) {
       if (seen.batches.size >= MAX_SEEN_THREADS_PER_READ) return false;
       seen.batches.set(key, batch);
     }
     seen.count += 1;
+    if (navigationListingDiagnostics.isRecording()) seen.diagnosticGeneration = navigationListingDiagnostics.recordingGeneration;
     return true;
   }
 
-  private recordSeenDecision(resource: Resource, batch: number | undefined, seenReason: NavigationSeenReason,
-    seenDecision: NavigationSeenDecision, page: NavigationQueryPage | undefined, proofAdmitted: boolean): void {
+  private recordSeenDecision(resource: Resource, page: NavigationQueryPage | undefined, decision: SeenDecisionDiagnostic): void {
     const { request } = resource.value.state;
     navigationListingDiagnostics.record({ ...this.diagnostic, phase: "seen-decision", resource: resource.diagnosticResource,
-      batch, query: request.query.kind, inventory: request.inventory ?? "owner",
+      query: request.query.kind, inventory: request.inventory ?? "owner",
       source: request.federationTarget?.scope === "remote" ? "remote" : "local",
-      trigger: "navigation/thread/seen", seenReason, seenDecision, proofAdmitted, ...navigationDiagnosticPageShape(page) });
+      trigger: "navigation/thread/seen", ...decision, ...navigationDiagnosticPageShape(page) });
+  }
+
+  private finishDeferredSeenDiagnostic(resource: Resource, page: NavigationQueryPage | undefined, seenReason: NavigationSeenReason,
+    seenDecision: NavigationSeenDecision, proofAdmitted?: boolean): void {
+    const seen = resource.membershipRead?.seen;
+    if (seen?.diagnosticGeneration === undefined || !navigationListingDiagnostics.isRecording(seen.diagnosticGeneration)) return;
+    // All batches currently deferred on this read share the outcome. The notice can
+    // belong to a newer capture interval than the original IPC dispatch.
+    this.recordSeenDecision(resource, page, { logical: resource.diagnosticLogical, seenReason, seenDecision,
+      ...(proofAdmitted === undefined ? this.diagnosticProof(page) : { proofAdmitted }) });
+    seen.diagnosticGeneration = undefined;
   }
 
   private needsSeenReplacement(resource: Resource, candidate?: RetainableState): boolean {
@@ -687,11 +708,9 @@ export class NavigationWindowQueries {
       ? candidate?.ownerProof?.dependencies ?? this.metadataDependencies(page) : undefined;
     const match = dependencies?.threadKeys.find((key) => batches.has(key));
     const batch = match === undefined ? batches.values().next().value : batches.get(match);
-    if (navigationListingDiagnostics.isRecording(read.diagnosticGeneration)) {
-      const reason = match !== undefined ? "thread-dependency" : dependencies ? "proof-excludes"
-        : page && page.coverage.state !== "complete" ? "partial-coverage" : "missing-proof";
-      this.recordSeenDecision(resource, batch, reason, reason === "proof-excludes" ? "exclude" : "replace", page, Boolean(dependencies));
-    }
+    const reason = match !== undefined ? "thread-dependency" : dependencies ? "proof-excludes"
+      : page && page.coverage.state !== "complete" ? "partial-coverage" : "missing-proof";
+    this.finishDeferredSeenDiagnostic(resource, page, reason, reason === "proof-excludes" ? "exclude" : "replace", Boolean(dependencies));
     if (dependencies && match === undefined) {
       // The proof covers off-page counts for this entire cursor generation.
       read.seen = undefined;
@@ -952,14 +971,13 @@ export class NavigationWindowQueries {
     return this.pageDependencies.get(page);
   }
 
-  private hasAdmittedDependencies(page: NavigationQueryPage | undefined): boolean {
-    if (!page) return false;
-    try {
-      return Boolean(this.ownerPageProofs.get(page)?.dependencies ?? this.metadataDependencies(page));
-    } catch {
-      // An optional diagnostic must not reject a page with malformed inline proof.
-      return false;
-    }
+  private diagnosticProof(page: NavigationQueryPage | undefined): { proofPresent: boolean; proofAdmitted?: boolean } {
+    if (!page) return { proofPresent: false, proofAdmitted: false };
+    const admitted = this.ownerPageProofs.get(page)?.dependencies ?? this.pageDependencies.get(page);
+    const proofPresent = Boolean(admitted) || page.metadataDependencies !== undefined;
+    // Inline proofs are validated only when product logic consults them.
+    const proofAdmitted = proofPresent && !admitted && !this.pageDependencies.has(page) ? undefined : Boolean(admitted);
+    return { proofPresent, proofAdmitted };
   }
 
   setVisibleAnchor(id: string, anchor: NavigationQueryAnchor | undefined): void {
@@ -1111,7 +1129,7 @@ export class NavigationWindowQueries {
         const selectionUnread = selection?.counts?.unread;
         navigationListingDiagnostics.record({ ...fields, logical: reply.logical, attempt: reply.attempt,
           phase: "reply", disposition: "accepted", ...navigationDiagnosticPageShape(page),
-          proofAdmitted: this.hasAdmittedDependencies(page),
+          ...this.diagnosticProof(page),
           unreadChanged: unreadBefore !== undefined && unread !== undefined ? unreadBefore !== unread : undefined,
           selectionUnreadChanged: selectionUnreadBefore !== undefined && selectionUnread !== undefined && selectionBefore?.key === selection?.key
             ? selectionUnreadBefore !== selectionUnread : undefined,
@@ -1138,7 +1156,7 @@ export class NavigationWindowQueries {
         resource.invalidated = false;
         resource.refreshAfterPending = false;
         if (started.request.consumer === "main-sidebar" && resource.membershipUncertain) {
-          resource.membershipRead = { paths: new Set(), diagnosticGeneration: navigationListingDiagnostics.recordingGeneration };
+          resource.membershipRead = { paths: new Set() };
         }
         const diagnostic = { ...this.diagnostic, origin: navigationDiagnosticOrigin(), logical: ++this.nextLogical, attempt: 0,
           cause: continuation ? "continuation" as const : explicitAnchor || fromStart ? "rebaseline" as const : resource.diagnosticCause ?? reason ?? "refresh",

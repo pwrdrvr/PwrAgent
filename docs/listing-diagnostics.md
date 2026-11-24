@@ -94,16 +94,22 @@ and attempt. When several pages form a published range, acceptance points to
 the last contributing reply. Explicit response-budget rejections and the last
 unpublished reply of a discarded read are recorded as discards.
 Reply records carry coverage and range categories. An accepted reply also
-reports whether its baseline has an admitted dependency proof, and whether
-the page's aggregate or the same selection directory's unread count changed
-when comparable. Neither count is recorded.
+reports proof presence and admission, and whether the page's aggregate or
+the same selection directory's unread count changed when comparable.
+`proofPresent: true` with an omitted `proofAdmitted` means the inline proof is
+still unvalidated. Diagnostics reuse existing validation results. Neither
+unread count is recorded.
 
 For mark-seen notices, `seen-decision` connects each affected resource to its
 invalidation batch. It gives the baseline's coverage, range, and proof
 availability, the matched dependency or conservative fallback, and whether
 the notice invalidated the baseline, was already covered, or waited for
-an in-flight membership read. Deferred notices also record the candidate
-proof decision when it excludes the notice or requires a replacement.
+an in-flight membership read. To follow a deferral, find the next outcome with
+the same `logical` ID in that view and effect. It records whether the candidate
+proof excluded the deferred notices or required a replacement, or whether a
+separate invalidation fenced the baseline first. The outcome belongs to the
+capture interval that recorded a deferral. If the read began in an earlier
+interval, its dispatch and settlement can be absent.
 
 While monitoring, capture listeners count `scroll`, `pointerdown` and `keydown`
 without inspecting event targets, key values or text. Adjacent same-kind input

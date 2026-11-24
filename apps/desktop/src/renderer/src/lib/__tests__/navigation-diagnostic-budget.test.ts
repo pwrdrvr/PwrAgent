@@ -12,7 +12,7 @@ it("bounds populated serialized records without request objects or extra transpo
     cause: "metadata" as const, trigger: "navigation/directoryGitStatus/updated", invalidations: 1,
     caller: "scheduled/thread-lifecycle", query: "children", source: "remote" as const,
     inventory: "owner" as const, cursor: false, waitMs: 10, coverage: "degraded" as const, range: "offset-partial" as const,
-    disposition: "accepted" as const, proofAdmitted: false, unreadChanged: true, selectionUnreadChanged: false };
+    disposition: "accepted" as const, proofPresent: true, proofAdmitted: false, unreadChanged: true, selectionUnreadChanged: false };
   const eventCount = 100_000;
   const start = performance.now();
   for (let i = 0; i < eventCount; i++) ring.record(event);
@@ -37,7 +37,7 @@ it("drops unknown decision values and payloads before serializing", () => {
   const ring = new NavigationListingDiagnostics();
   ring.setEnabled(true);
   const unsafe = { view: 1, effect: 1, phase: "seen-decision", coverage: "PRIVATE PROVIDER", range: ["PRIVATE RANGE"],
-    proofAdmitted: { path: "PRIVATE DIRECTORY" }, unreadChanged: 42, selectionUnreadChanged: "PRIVATE COUNT",
+    proofPresent: "PRIVATE PROOF", proofAdmitted: { path: "PRIVATE DIRECTORY" }, unreadChanged: 42, selectionUnreadChanged: "PRIVATE COUNT",
     seenDecision: "PRIVATE ACCOUNT", seenReason: "PRIVATE THREAD", disposition: "PRIVATE TITLE", page: { title: "PRIVATE PAGE" } };
   ring.record(unsafe as unknown as Parameters<typeof ring.record>[0]);
   expect(ring.snapshot().events).toEqual([{ at: expect.any(Number), view: 1, effect: 1, phase: "seen-decision" }]);
