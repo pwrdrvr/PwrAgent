@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { windowsGitJobLauncher } from "../src/main/windows-job-launcher-path";
 import {
@@ -74,7 +74,11 @@ describe("dev launch wrapper", () => {
     );
   });
 
-  it("finds the launcher built by Windows dev setup after Vite clears the main output", () => {
+  it.each([
+    "src/main/windows-job-launcher-path.ts",
+    "out/main/index.js",
+    "out/main/chunks/codex-environment-config.js",
+  ])("finds the Windows dev launcher from %s after Vite clears the main output", (module) => {
     const desktop = fileURLToPath(new URL("../", import.meta.url));
     const launcher = "pwragent-windows-job.exe";
     const files = new Set();
@@ -88,7 +92,8 @@ describe("dev launch wrapper", () => {
     files.delete(path.join(desktop, "out/main", launcher));
     vi.mocked(existsSync).mockImplementation((file) => files.has(file));
     try {
-      expect(windowsGitJobLauncher()).toBe(path.join(desktop, ".local/windows-job-launcher", launcher));
+      const moduleUrl = pathToFileURL(path.join(desktop, module)).href;
+      expect(windowsGitJobLauncher(moduleUrl)).toBe(path.join(desktop, ".local/windows-job-launcher", launcher));
     } finally {
       vi.mocked(existsSync).mockRestore();
     }
