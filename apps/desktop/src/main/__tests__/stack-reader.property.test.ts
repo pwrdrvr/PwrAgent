@@ -798,59 +798,74 @@ describe("stack checkout demand", () => {
     }
   });
 
-  it("reuses verified inventory checkouts until their physical relationship changes", async () => {
-    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-warm-inventory-"));
-    const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
-    try {
-      const primary = path.join(sandbox, "primary");
-      const sibling = path.join(sandbox, "sibling");
-      const other = path.join(sandbox, "other");
-      const alias = path.join(sandbox, "alias");
-      const home = path.join(sandbox, "home");
-      await Promise.all([mkdir(primary), mkdir(other), mkdir(home)]);
-      vi.stubEnv("HOME", home);
-      vi.stubEnv("USERPROFILE", home);
-      vi.stubEnv("XDG_CONFIG_HOME", home);
-      initialize(primary);
-      initialize(other);
-      git(primary, "worktree", "add", "-b", "sibling", sibling);
-      await Promise.all([writeCatalog(primary, "primary"), writeCatalog(other, "other")]);
-      await symlink(sibling, alias, "junction");
-      const reader = new StackReader();
-      const checkoutStarts = () => start.mock.calls.filter(([, args]) => args[0] === "rev-parse").map(([cwd]) => cwd);
-      const rows = [row(primary, "primary"), row(alias, "alias")];
-      await fc.assert(fc.asyncProperty(fc.uniqueArray(fc.nat({ max: 15 }), { minLength: 2, maxLength: 8 }), async (inventory) => {
-        const subdirectories = await Promise.all(inventory.map(async (index) => {
-          const cwd = path.join(sibling, "fixture-" + index);
-          await mkdir(cwd, { recursive: true });
-          return row(cwd, "fixture-" + index);
+  it("reuses verified inventory checkouts until their physical relationship changes", async ({ signal, onTestFinished }) => {
+    const fixture = (async () => {
+      const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-warm-inventory-"));
+      const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+      try {
+        const primary = path.join(sandbox, "primary");
+        const sibling = path.join(sandbox, "sibling");
+        const other = path.join(sandbox, "other");
+        const alias = path.join(sandbox, "alias");
+        const home = path.join(sandbox, "home");
+        await Promise.all([mkdir(primary), mkdir(other), mkdir(home)]);
+        vi.stubEnv("HOME", home);
+        vi.stubEnv("USERPROFILE", home);
+        vi.stubEnv("XDG_CONFIG_HOME", home);
+        initialize(primary);
+        initialize(other);
+        git(primary, "worktree", "add", "-b", "sibling", sibling);
+        await Promise.all([writeCatalog(primary, "primary"), writeCatalog(other, "other")]);
+        await symlink(sibling, alias, "junction");
+
+        const reader = new StackReader();
+        const aliasRow = row(alias, "alias");
+        const rows = [row(primary, "primary"), aliasRow];
+        const read = (inventory: ReturnType<typeof row>[], directories?: string[]) => {
+          signal.throwIfAborted();
+          return reader.read(inventory, [], directories);
+        };
+        const checkoutStartsSince = (offset: number) => start.mock.calls.slice(offset)
+          .filter(([, args]) => args[0] === "rev-parse").map(([cwd]) => cwd);
+        const nested = await Promise.all(["one", "two", "three"].map(async (name) => {
+          const cwd = path.join(sibling, name);
+          await mkdir(cwd);
+          return row(cwd, name);
         }));
-        const coldReader = new StackReader();
-        const cold = await coldReader.read([...rows, ...subdirectories], []);
-        start.mockClear();
-        expect(await coldReader.read([...rows, ...subdirectories], [])).toEqual(cold);
-        // Only the registered root needs a live roster seed in a wide scan.
-        // Previously verified subdirectories remain reusable.
-        expect(checkoutStarts()).toEqual(inventory.length >= 3 ? [alias] : []);
-      }), { numRuns: 6 });
-      const scoped = await reader.read([row(alias, "alias")], [], [alias]);
-      expect(scoped.stacks[0]?.repository).toBe("github.com:fixture/primary");
-      await reader.read(rows, []);
-      await rm(alias);
-      await symlink(other, alias, "junction");
-      start.mockClear();
-      const rebound = await reader.read(rows, []);
-      expect(checkoutStarts()).toEqual([alias]);
-      expect(rebound.stacks.find((stack) => stack.repository === "github.com:fixture/other")?.layers[0]?.thread?.key)
-        .toBe("codex:alias");
-      start.mockClear();
-      expect((await reader.read([row(alias, "alias")], [], [alias])).stacks[0]?.repository).toBe("github.com:fixture/other");
-      expect(checkoutStarts()).toEqual([alias]);
-    } finally {
-      vi.unstubAllEnvs();
-      start.mockRestore();
-      await rm(sandbox, { recursive: true, force: true });
-    }
+        // Exercise both sides of the five-checkout roster threshold against
+        // one real fixture. The wide scan does not cache its live roster seed,
+        // so warm the narrow inventory last before retargeting the alias.
+        for (const [count, expected] of [[3, [alias]], [2, []]] as const) {
+          const inventory = [...rows, ...nested.slice(0, count)];
+          const warmed = await read(inventory);
+          expect(warmed.stacks[0]?.repository).toBe("github.com:fixture/primary");
+          const offset = start.mock.calls.length;
+          expect(await read(inventory)).toEqual(warmed);
+          expect(checkoutStartsSince(offset)).toEqual(expected);
+        }
+        expect((await read([aliasRow], [alias])).stacks[0]?.repository).toBe("github.com:fixture/primary");
+
+        signal.throwIfAborted();
+        await rm(alias);
+        await symlink(other, alias, "junction");
+        const reboundOffset = start.mock.calls.length;
+        const rebound = await read(rows);
+        expect(checkoutStartsSince(reboundOffset)).toEqual([alias]);
+        expect(rebound.stacks.find((stack) => stack.repository === "github.com:fixture/other")?.layers[0]?.thread?.key)
+          .toBe("codex:alias");
+        const scopedOffset = start.mock.calls.length;
+        expect((await read([aliasRow], [alias])).stacks[0]?.repository).toBe("github.com:fixture/other");
+        expect(checkoutStartsSince(scopedOffset)).toEqual([alias]);
+      } finally {
+        vi.unstubAllEnvs();
+        start.mockRestore();
+        await rm(sandbox, { recursive: true, force: true });
+      }
+    })();
+    // A deadline may interrupt the test while Git is still running. Drain
+    // this fixture before the next test installs its own Git assertions.
+    onTestFinished(async () => { await Promise.allSettled([fixture]); });
+    await fixture;
   });
 
   it.each(["refs", "objects"])("follows Git discovery when a warmed nested repository loses %s", async (entry) => {
