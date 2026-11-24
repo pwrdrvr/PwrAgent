@@ -215,6 +215,7 @@ import {
 } from "../../icons";
 import { AppIcon } from "../../components/AppIcon";
 import { InstanceChip, InstanceGlyph } from "../federation/InstanceGlyph";
+import { AgentThreadChip } from "../navigation/AgentThreadChip";
 import { isOutdatedOwnerError } from "../workspace-recovery/MissingWorktreeCard";
 import { resolveLifecycleState } from "../pr-status/pr-chip-state";
 import { filterAtReferenceCandidates } from "../../lib/instance-references";
@@ -15514,9 +15515,11 @@ function useComposerController(props: ComposerProps) {
                           query={hashReferenceTrigger?.query.trim() ?? ""}
                         />
                       </span>
-                      <span className="composer__autocomplete-source">
-                        Thread
-                      </span>
+                      {thread.agent ? <AgentThreadChip /> : (
+                        <span className="composer__autocomplete-source">
+                          Thread
+                        </span>
+                      )}
                     </span>
                     <span className="composer__autocomplete-meta composer__autocomplete-meta--thread">
                       {thread.federation?.ref.target.scope === "remote" ? (
