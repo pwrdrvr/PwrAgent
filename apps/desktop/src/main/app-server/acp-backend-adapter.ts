@@ -52,6 +52,7 @@ import {
   type AcpPromptContentBlock,
 } from "../acp/acp-client";
 import type { AcpProviderStatus } from "../acp/acp-provider-status";
+import { readAntigravityUsage } from "../acp/antigravity-usage.js";
 import { PlanLimitStore } from "./plan-limit-store";
 import {
   MAX_TURN_INPUT_ATTACHMENT_BYTES,
@@ -340,6 +341,7 @@ export type AcpBackendAdapterOptions = {
   createAcpClient?: AcpClientFactory;
   assertOwnerAdmission?: () => void;
   createAcpTransport?: AcpTransportFactory;
+  readAntigravityUsage?: typeof readAntigravityUsage;
   /**
    * Required so no caller can silently inherit machine-wide discovery.
    * Production passes `createLocalAcpAgentDiscovery(...)`; tests pass a stub.
@@ -1267,6 +1269,8 @@ export class AcpBackendAdapter {
   private readonly unsubscribePlanLimits: () => void;
   private readonly providerStatusRefreshAttempts = new Map<AcpBackendId, number>();
   private readonly providerStatusRefreshes = new Map<AcpBackendId, Promise<void>>();
+  private antigravityUsageSelection?: { identity: string; cancellation: AbortController };
+  private readonly antigravityUsageProbes = new Set<Promise<AcpProviderStatus | undefined>>();
   private readonly grokUpdateChecker?: typeof checkGrokCliUpdate;
   private readonly grokUpdateRefreshes = new Map<AcpBackendId, Promise<void>>();
   private readonly runtimeCapabilityProbe?: AcpRuntimeCapabilityProbe;
@@ -1359,7 +1363,7 @@ export class AcpBackendAdapter {
     };
   }
 
-  async describeInstalledBackends(): Promise<BackendSummary[]> {
+  async describeInstalledBackends(refreshAntigravityQuota = false): Promise<BackendSummary[]> {
     const installedAgents = await this.listAvailableAgents();
     const enabledAgents = installedAgents
       .filter((agent) =>
@@ -1367,15 +1371,21 @@ export class AcpBackendAdapter {
           ? this.isAcpAgentEnabled(agent.registryId)
           : true,
       );
+    if (!enabledAgents.some((agent) => agent.registryId === "antigravity")) {
+      this.invalidateAntigravityQuota();
+    }
     return enabledAgents.map((agent) => {
       const summary = describeInstalledAcpBackend(agent);
-      if (agent.registryId !== "grok" || !summary.available) {
+      if (agent.registryId === "antigravity") {
+        this.updateAntigravityQuotaSelection(agent, summary.available, refreshAntigravityQuota);
+      } else if (agent.registryId === "grok" && summary.available) {
+        this.refreshGrokProviderStatusInBackground(agent.backendId);
+      } else {
         return summary;
       }
       // Backend discovery is also used by launchpad and messaging flows.
-      // Merge only cached decoration here; vendor billing must never delay it.
+      // Merge only cached decoration here; provider quota reads must never delay it.
       const providerStatus = this.providerStatuses.get(agent.backendId);
-      this.refreshProviderStatusInBackground(agent.backendId);
       return providerStatus
         ? {
             ...summary,
@@ -1468,11 +1478,75 @@ export class AcpBackendAdapter {
     this.grokUpdateRefreshes.set(agent.backendId, refresh);
   }
 
-  private refreshProviderStatusInBackground(backend: AcpBackendId): void {
-    const clientPromise = this.acpClients.get(backend)?.promise;
+  private refreshGrokProviderStatusInBackground(backend: AcpBackendId): void {
+    const owner = this.acpClients.get(backend);
+    if (!owner) return;
+    const isCurrent = () => this.acpClients.get(backend) === owner;
+    this.refreshProviderStatusInBackground(backend, async () => {
+      const client = await owner.promise;
+      if (this.closed || !isCurrent()) return undefined;
+      return await client.readProviderStatus?.();
+    }, isCurrent);
+  }
+
+  private updateAntigravityQuotaSelection(
+    agent: AcpInstalledAgentRecord,
+    available: boolean,
+    refresh: boolean,
+  ): void {
+    if (this.closed) return;
+    const selected = recoverLegacyAntigravitySelection(agent);
+    const launch = selected.launchDescriptor;
+    if (!available || !launch || !this.isRuntimeSelectionCurrent(agent)) {
+      this.invalidateAntigravityQuota();
+      return;
+    }
+    const identity = acpAgentLaunchIdentity(selected);
+    if (this.antigravityUsageSelection?.identity !== identity) {
+      this.invalidateAntigravityQuota();
+      this.antigravityUsageSelection = { identity, cancellation: new AbortController() };
+    }
+    if (!refresh) return;
+    const { signal } = this.antigravityUsageSelection.cancellation;
+    this.refreshProviderStatusInBackground(agent.backendId,
+      () => this.probeAntigravityQuota(launch, signal),
+      () => !signal.aborted);
+  }
+
+  private invalidateAntigravityQuota(): void {
+    if (!this.antigravityUsageSelection) return;
+    this.antigravityUsageSelection.cancellation.abort();
+    this.antigravityUsageSelection = undefined;
+    this.providerStatusRefreshAttempts.delete("acp:antigravity");
+    this.providerStatusRefreshes.delete("acp:antigravity");
+    this.providerStatuses.delete("acp:antigravity");
+    this.planLimits.forget("acp:antigravity");
+  }
+
+  private async probeAntigravityQuota(
+    launch: AcpLaunchDescriptor,
+    signal: AbortSignal,
+  ): Promise<AcpProviderStatus | undefined> {
+    const probe = Promise.resolve().then(() => {
+      if (signal.aborted) return undefined;
+      this.options.assertOwnerAdmission?.();
+      return (this.options.readAntigravityUsage ?? readAntigravityUsage)(launch, signal);
+    });
+    this.antigravityUsageProbes.add(probe);
+    try {
+      return await probe;
+    } finally {
+      this.antigravityUsageProbes.delete(probe);
+    }
+  }
+
+  private refreshProviderStatusInBackground(
+    backend: AcpBackendId,
+    read: () => Promise<AcpProviderStatus | undefined>,
+    isCurrent: () => boolean,
+  ): void {
     if (
       this.closed
-      || !clientPromise
       || this.providerStatusRefreshes.has(backend)
     ) {
       return;
@@ -1486,7 +1560,7 @@ export class AcpBackendAdapter {
       return;
     }
     this.providerStatusRefreshAttempts.set(backend, now);
-    const refreshPromise = this.refreshProviderStatus(backend, clientPromise);
+    const refreshPromise = this.refreshProviderStatus(backend, read, isCurrent);
     this.providerStatusRefreshes.set(backend, refreshPromise);
     void refreshPromise.finally(() => {
       if (this.providerStatusRefreshes.get(backend) === refreshPromise) {
@@ -1497,14 +1571,14 @@ export class AcpBackendAdapter {
 
   private async refreshProviderStatus(
     backend: AcpBackendId,
-    clientPromise: Promise<AcpRuntimeClient>,
+    read: () => Promise<AcpProviderStatus | undefined>,
+    isCurrent: () => boolean,
   ): Promise<void> {
     try {
-      const client = await clientPromise;
-      // Reads run one at a time, so each answer is newer than the last.
+      // Reads for the current selection run one at a time.
       let since = this.planLimits.mark(backend);
-      const providerStatus = await client.readProviderStatus?.();
-      if (!providerStatus || this.closed) {
+      const providerStatus = await read();
+      if (!providerStatus || this.closed || !isCurrent()) {
         return;
       }
       this.providerStatuses.set(backend, { account: providerStatus.account });
@@ -1563,6 +1637,7 @@ export class AcpBackendAdapter {
     for (const registryId of registryIds) {
       this.invalidatedProviderRegistryIds.add(registryId);
     }
+    if (registryIds.includes("antigravity")) this.invalidateAntigravityQuota();
   }
 
   async archiveCleanupBackendIds(): Promise<AcpBackendId[]> {
@@ -2557,12 +2632,7 @@ export class AcpBackendAdapter {
       throw new Error(`ACP backend is not installed: ${backend}`);
     }
     if (this.invalidatedProviderRegistryIds.has(agent.registryId)) {
-      const currentFingerprint =
-        this.resolveProviderDependencyFingerprint?.(agent.registryId);
-      if (
-        !currentFingerprint
-        || agent.configDependencyFingerprint !== currentFingerprint
-      ) {
+      if (!this.isRuntimeSelectionCurrent(agent)) {
         throw new Error(
           `ACP provider configuration changed for ${backend}. Refresh this provider in Settings before starting new work.`,
         );
@@ -2576,6 +2646,12 @@ export class AcpBackendAdapter {
       throw new Error(`ACP backend authentication required: ${backend}`);
     }
     return recoverLegacyAntigravitySelection(agent);
+  }
+
+  private isRuntimeSelectionCurrent(agent: AcpInstalledAgentRecord): boolean {
+    if (!this.invalidatedProviderRegistryIds.has(agent.registryId)) return true;
+    const fingerprint = this.resolveProviderDependencyFingerprint?.(agent.registryId);
+    return !!fingerprint && agent.configDependencyFingerprint === fingerprint;
   }
 
   /**
@@ -2945,6 +3021,8 @@ export class AcpBackendAdapter {
       return await this.closePromise;
     }
     this.closed = true;
+    const quotaProbes = [...this.antigravityUsageProbes];
+    this.invalidateAntigravityQuota();
     const acpClients = [...this.ownedAcpClients].map(
       ([entry, backend]): [AcpBackendId, AcpClientEntry] => [backend, entry],
     );
@@ -2965,12 +3043,13 @@ export class AcpBackendAdapter {
     this.liveTurnUsage.clear();
     this.liveContextWindows.clear();
     this.localAgentSnapshot = [];
-    this.closePromise = this.closeResources(acpClients);
+    this.closePromise = this.closeResources(acpClients, quotaProbes);
     return await this.closePromise;
   }
 
   private async closeResources(
     acpClients: Array<[AcpBackendId, AcpClientEntry]>,
+    quotaProbes: Array<Promise<AcpProviderStatus | undefined>>,
   ): Promise<void> {
     const resources = [
       ...acpClients.map(async ([backend, entry]) => {
@@ -2992,6 +3071,7 @@ export class AcpBackendAdapter {
         if (drained.status === "rejected") throw drained.reason;
         if (drained.value.error !== undefined) throw drained.value.error;
       }),
+      ...quotaProbes,
       Promise.resolve().then(() => this.agentToolMcpServer?.close()),
     ];
     const cleanup = Promise.allSettled(resources).then((results) => {
@@ -3003,7 +3083,8 @@ export class AcpBackendAdapter {
             resource:
               index < acpClients.length
                 ? acpClients[index]?.[0]
-                : index < resources.length - 1 ? "ephemeral" : "agent-tool-mcp",
+                : index < resources.length - quotaProbes.length - 1 ? "ephemeral"
+                  : index < resources.length - 1 ? "antigravity-quota" : "agent-tool-mcp",
             error:
               result.reason instanceof Error
                 ? result.reason.message
