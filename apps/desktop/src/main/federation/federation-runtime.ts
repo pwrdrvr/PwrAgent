@@ -7486,6 +7486,7 @@ export class DesktopFederationRuntime {
         instanceId: sourceInstanceId,
       },
       notification: decoded.notification,
+      ...(decoded.relatedReviewTurnId ? { relatedReviewTurnId: decoded.relatedReviewTurnId } : {}),
       ...(decoded.navigationDirectoryScope ? { navigationDirectoryScope: decoded.navigationDirectoryScope } : {}),
       ...(decoded.errorNoticeContext
         ? { errorNoticeContext: decoded.errorNoticeContext }

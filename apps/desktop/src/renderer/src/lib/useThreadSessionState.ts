@@ -6710,14 +6710,19 @@ export function useThreadSessionState(params: {
           transitionTransientMessagesAtBoundary(session, event.notification),
           event.notification,
         );
-        // Items from the related turn retain their own IDs. Drop its live
-        // placeholders so they cannot outlast the owner's terminal boundary.
+        // End the related turn's live placeholders while preserving the
+        // output already captured in its activity rows.
         const current = event.relatedReviewTurnId
           ? {
               ...transitioned,
-              optimisticEntries: transitioned.optimisticEntries.filter(
-                (entry) => entry.turn?.id !== event.relatedReviewTurnId || !isLiveOptimisticEntry(entry),
-              ),
+              optimisticEntries: transitioned.optimisticEntries.flatMap((entry) => {
+                const turn = entry.turn;
+                if (!turn || turn.id !== event.relatedReviewTurnId) return [entry];
+                if (entry.type === "activity" && entry.status === "in_progress") {
+                  return [settleTurnActivity(entry, { ...turn, status: "interrupted" })];
+                }
+                return isLiveOptimisticEntry(entry) ? [] : [entry];
+              }),
             }
           : transitioned;
         if (event.notification.method === "turn/safetyBuffering/updated") {

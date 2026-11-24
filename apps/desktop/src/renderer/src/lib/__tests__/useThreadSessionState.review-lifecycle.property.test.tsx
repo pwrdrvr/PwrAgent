@@ -54,10 +54,27 @@ async function checkReviewBoundary(
     expect(opened.result.current.thinkingThreadKeys[key]).toBe(true);
     if (selectDuringReview) expect(opened.result.current.pendingStatusText).toBe("Thinking");
     if (selectDuringReview && streamActivity) {
-      act(() => emit({ backend: "codex", notification: { method: "item/started", params: {
-        threadId: thread.id, turnId,
-        item: { id: "command", type: "commandExecution", command: "pwd", status: "inProgress" },
-      } } }));
+      act(() => {
+        emit({ backend: "codex", notification: { method: "item/started", params: {
+          threadId: thread.id, turnId,
+          item: { id: "finished-command", type: "commandExecution", command: "printf fixture", status: "inProgress" },
+        } } });
+        emit({ backend: "codex", notification: { method: "item/started", params: {
+          threadId: thread.id, turnId,
+          item: { id: "command", type: "commandExecution", command: "pwd", status: "inProgress" },
+        } } });
+        emit({ backend: "codex", notification: { method: "item/completed", params: {
+          threadId: thread.id, turnId,
+          item: { id: "finished-command", type: "commandExecution", command: "printf fixture", status: "completed", aggregatedOutput: "fixture output" },
+        } } });
+      });
+      expect(opened.result.current.entries).toContainEqual(expect.objectContaining({
+        status: "in_progress",
+        details: expect.arrayContaining([
+          expect.objectContaining({ id: "finished-command", status: "completed", command: expect.objectContaining({ output: "fixture output" }) }),
+          expect.objectContaining({ id: "command", status: "in_progress" }),
+        ]),
+      }));
     }
 
     // The owner's review boundary ends both IDs, including the ID a background
@@ -68,6 +85,15 @@ async function checkReviewBoundary(
     expect(opened.result.current.thinkingThreadKeys[key]).toBeUndefined();
     expect(opened.result.current.pendingStatusText).toBeUndefined();
     expect(opened.result.current.threadBusy).toBe(false);
+    if (selectDuringReview && streamActivity) {
+      expect(opened.result.current.entries).toContainEqual(expect.objectContaining({
+        turn: expect.objectContaining({ id: turnId }),
+        details: expect.arrayContaining([
+          expect.objectContaining({ id: "finished-command", status: "completed", command: expect.objectContaining({ output: "fixture output" }) }),
+          expect.objectContaining({ id: "command", status: "cancelled" }),
+        ]),
+      }));
+    }
 
     // A duplicate completion cannot settle the next unrelated turn.
     const nextTurnId = "next-turn";

@@ -7565,19 +7565,12 @@ function useComposerController(props: ComposerProps) {
           typeof event.notification.params.turnId === "string"
             ? event.notification.params.turnId
             : undefined;
-        if (terminalTurnId) {
-          terminalTurnKeysRef.current.add(`${composerScopeKey}:${terminalTurnId}`);
+        for (const turnId of [terminalTurnId, event.relatedReviewTurnId]) {
+          if (turnId) terminalTurnKeysRef.current.add(`${composerScopeKey}:${turnId}`);
         }
-        if (
-          activeTurnIdRef.current &&
-          terminalTurnId &&
-          terminalTurnId !== activeTurnIdRef.current
-        ) {
-          return;
-        }
-        const clearsReleasedQueuedTurn =
-          Boolean(activeTurnIdRef.current) &&
-          (!terminalTurnId || terminalTurnId === activeTurnIdRef.current);
+        const activeTurnId = activeTurnIdRef.current;
+        if (activeTurnId && terminalTurnId
+          && terminalTurnId !== activeTurnId && event.relatedReviewTurnId !== activeTurnId) return;
 
         if (
           activeOptimisticMessageId &&
@@ -7590,7 +7583,7 @@ function useComposerController(props: ComposerProps) {
         props.onPendingStatusChange?.(
           providerQueuedSteer ? "Queued" : undefined,
         );
-        if (clearsReleasedQueuedTurn) {
+        if (activeTurnId) {
           globalQueuedTurnReleaseScopeKeys.delete(composerScopeKey);
         }
         updateSending(false);

@@ -738,6 +738,8 @@ export class ManagedReviewService {
       throw error;
     }
 
+    const inlineNativeCodexReview = params.backend === "codex" && !managedMode
+      && (!result.reviewThreadId || result.reviewThreadId === result.threadId);
     if (params.backend === "codex") {
       try {
         const reviewThreadId = managedMode
@@ -748,9 +750,9 @@ export class ManagedReviewService {
         // same thread. Treat the returned review turn as active so queued
         // turns cannot release in parallel and so the matching terminal
         // review notification clears the active state.
-        const activeTurnMode = await this.host().resolveCodexThreadExecutionModeForActiveTurn(
-          reviewThreadId,
-        );
+        const activeTurnMode = inlineNativeCodexReview
+          ? undefined
+          : await this.host().resolveCodexThreadExecutionModeForActiveTurn(reviewThreadId);
         if (!managedMode) {
           const startedTurn = this.host().getActiveTurnForThread({
             backend: "codex",
@@ -773,10 +775,12 @@ export class ManagedReviewService {
         this.context.turnState.registerTurn(
           { backend: params.backend, threadId: reviewThreadId, turnId: result.turnId },
         );
-        this.context.turnState.acceptExecution(
-          { threadId: reviewThreadId, turnId: result.turnId },
-          activeTurnMode,
-        );
+        if (activeTurnMode !== undefined) {
+          this.context.turnState.acceptExecution(
+            { threadId: reviewThreadId, turnId: result.turnId },
+            activeTurnMode,
+          );
+        }
         this.context.turnState.markReview(
           { threadId: reviewThreadId, turnId: result.turnId },
         );
@@ -821,7 +825,23 @@ export class ManagedReviewService {
       this.clearNativeReviewActiveTurns(reviewSubAgentRecord);
       await this.releaseNativeReviewParent(reviewSubAgentRecord, earlyTerminal);
     } else {
-      await this.persistReviewSubAgent(reviewSubAgentRecord);
+      if (inlineNativeCodexReview) {
+        // Publish inline review ownership before the mode read can yield.
+        // A terminal received during the read can then retire both IDs, and
+        // a late mode result must not restore that retired registration.
+        const turn = { threadId: result.threadId, turnId: result.turnId };
+        const registration = this.context.turnState.registration(turn);
+        const mode = await this.host().resolveCodexThreadExecutionModeForActiveTurn(turn.threadId).catch((error) => {
+          backendRegistryLog.warn("could not refresh execution mode for accepted Codex review", {
+            threadId: turn.threadId, turnId: turn.turnId, error: String(error),
+          });
+          return overlay?.executionMode ?? "default";
+        });
+        if (registration !== undefined) this.context.turnState.resolveExecution(turn, registration, mode);
+      }
+      if (this.context.turnState.liveReviewRecords().get(reviewSubAgentKey) === reviewSubAgentRecord) {
+        await this.persistReviewSubAgent(reviewSubAgentRecord);
+      }
     }
     backendRegistryLog.info("code review started", {
       mode: reviewSubAgentRecord.mode,
