@@ -827,9 +827,8 @@ jobs:
       # all contiguous group allocations. See docs/desktop-e2e-shard-timings.md
       # for current measurements, exclusions, and the reproducible fit.
       #
-      # The Linux, macOS and Windows test steps set the same weights and all
-      # run four lanes, so a lane number names the same tests on every
-      # platform. Change all three together.
+      # Linux and Windows share the four-lane allocation. macOS uses a
+      # separate five-lane allocation to reduce job wall time.
       #
       # GitHub-hosted Linux capacity can run every lane concurrently. Keep
       # the other shards running after a failure so their artifacts still
@@ -1171,7 +1170,7 @@ jobs:
           retention-days: 7
 
   desktop-e2e-macos:
-    name: macOS Desktop E2E (lane ${{ matrix.lane }} of 4)
+    name: macOS Desktop E2E (lane ${{ matrix.lane }} of 5)
     # GitHub-hosted, fresh VM per job, so fork PRs run here too. Never move
     # this lane back to self-hosted machines: this is a public repository.
     # Pull requests run it only when `changes` sets `full_platforms`.
@@ -1179,19 +1178,18 @@ jobs:
     runs-on: macos-26
     needs: [changes, macos-install-deps]
     strategy:
-      # Four lanes keep each Playwright process to roughly half the Electron
-      # launches of a two-lane split, matching the Linux and Windows lanes.
-      # Hosted macOS concurrency is capped per account, so a lane with no free
-      # runner queues instead.
+      # The five-lane fit models a 12:14 worst job time using recent main
+      # test durations plus the worst observed job overhead.
+      # See docs/desktop-e2e-shard-timings.md.
       #
       # Do not cancel the other shards on failure: their artifacts distinguish
       # a product failure from runner trouble.
       fail-fast: false
       matrix:
-        lane: [1, 2, 3, 4]
-    # One budget for setup, build, tests, and reporting. The measured indexing
-    # contention below is addressed within this deadline.
-    timeout-minutes: 15
+        lane: [1, 2, 3, 4, 5]
+    # Keep five extra minutes above the 15-minute timing benchmark so slow
+    # runners have time for retries, reporting, and cleanup.
+    timeout-minutes: 20
     steps:
       # Indexing competes with dependency extraction and Electron startup on
       # fresh hosted VMs. Stop it before checkout can enqueue more work. The
@@ -1231,9 +1229,7 @@ jobs:
         env:
           PWRAGENT_E2E_DISABLE_GPU: "1"
           PWRAGENT_E2E_SHUTDOWN_CIRCUIT_BREAKER: "1"
-          # Same lane sizes as Linux and Windows; see the desktop-e2e
-          # strategy comment.
-          PWTEST_SHARD_WEIGHTS: "77:91:104:133"
+          PWTEST_SHARD_WEIGHTS: "69:87:78:87:112"
           PWRAGENT_CI_TEST_REPORT: ${{ github.workspace }}/.local/ci/retry/e2e-first.json
           PLAYWRIGHT_LAST_RUN_OUTPUT_FILE: ${{ github.workspace }}/.local/ci/retry/e2e-last.json
         # The wrapper keeps a cancelled step alive until Playwright has closed
@@ -1244,7 +1240,7 @@ jobs:
         run: >-
           exec bash ./scripts/ci/macos-e2e-run-lane.sh
           pnpm --filter @pwragent/desktop test:e2e
-          --shard=${{ matrix.lane }}/4
+          --shard=${{ matrix.lane }}/5
           --retries=0
 
       - name: Verify the E2E slice completed
@@ -1390,7 +1386,7 @@ jobs:
         # windows-latest provides an interactive desktop session, so unlike the
         # Linux lane this needs neither xvfb nor a window manager.
         #
-        # Sharding matches the Linux and macOS lanes exactly: the same
+        # Sharding matches the Linux lanes exactly: the same
         # grouping (file-level, except `a11y.spec.ts`, which runs in
         # `parallel` mode) and the same weights. A Windows-only failure is
         # then attributable to Windows and not to a different lane split.
