@@ -7406,9 +7406,12 @@ export function useThreadSessionState(params: {
               `${targetThreadKey}:${completedTurn.id}`
             );
           }
-          const completedUsageActivity = current.pendingUsageActivityEntry
-            && completedTurn && completedTurnOwnsPendingItems
-            ? { ...current.pendingUsageActivityEntry, turn: completedTurn }
+          // A review can take over activeTurnId before the parent turn ends.
+          // Finalize only the usage that was collected for this completion.
+          const pendingUsage = current.pendingUsageActivityEntry;
+          const completedUsageActivity = completedTurn && completedTurnOwnsPendingItems
+            && pendingUsage?.turn?.id === completedTurn.id
+            ? { ...pendingUsage, turn: completedTurn }
             : undefined;
           const settledLifecycle = completedTurnMatchesActive ? {
             activeTurnId: undefined,
@@ -7423,7 +7426,9 @@ export function useThreadSessionState(params: {
             pendingTurnUsage: undefined,
             ...(completedTurn ? {
               recentlyCompletedTurnUsage: {
-                accumulator: completedTurnOwnsPendingItems ? current.pendingTurnUsage : undefined,
+                accumulator: completedTurnOwnsPendingItems && current.pendingTurnUsage?.turnId === completedTurn.id
+                  ? current.pendingTurnUsage
+                  : undefined,
                 ...(!retainTranscript && completedUsageActivity ? { entry: completedUsageActivity } : {}),
                 turn: completedTurn,
               },
@@ -8943,9 +8948,9 @@ export function useThreadSessionState(params: {
     pendingStatusText,
     transientMessage: selectedSession?.transientMessage,
     transientMessages,
-    runningTurnUsageText: runningTurnUsageTextFromEntry(
-      selectedSession?.pendingUsageActivityEntry
-    ),
+    runningTurnUsageText: selectedSession?.activeTurnId === selectedSession?.pendingUsageActivityEntry?.turn?.id
+      ? runningTurnUsageTextFromEntry(selectedSession?.pendingUsageActivityEntry)
+      : undefined,
     approvalRequestThreadKeys,
     inputRequestThreadKeys,
     removeOptimisticMessage,
