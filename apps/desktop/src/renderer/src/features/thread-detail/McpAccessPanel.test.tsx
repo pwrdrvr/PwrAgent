@@ -530,6 +530,29 @@ describe("ThreadMcpAccessPanel", () => {
 });
 
 describe("thread verification", () => {
+  it.each(["ready", "not_started"] as const)("reports Antigravity gateway access with a %s connection", async (gateway) => {
+    render(
+      <ThreadMcpAccessPanel
+        backend="acp:antigravity"
+        threadId="fixture-thread"
+        desktopApi={{
+          listMcpConnections: async () => ({ connections: [READY] }),
+          readThreadMcpConnections: async () => ({ connectionIds: [READY.id], providerServersEnabled: true }),
+          describeThreadMcpConnections: async () => ({
+            backend: "acp:antigravity", threadId: "fixture-thread", providerServersEnabled: true,
+            appliesAt: "next_turn", managedConnectionsViaGateway: true, agentInventoryAvailable: false,
+            connections: [{ connectionId: READY.id, displayName: READY.displayName, configured: true, enabled: true,
+              state: "ready", sessions: { native: "not_started", gateway } }],
+          }),
+        }}
+        onDismiss={vi.fn()}
+      />,
+    );
+    expect(await screen.findByText(gateway === "ready" ? "Tool search connected" : "Available through tool search")).toBeTruthy();
+    expect(screen.getByText("Tool search uses this selection immediately.")).toBeTruthy();
+    expect(screen.queryByText(/not passed|session next loads|session loads/i)).toBeNull();
+  });
+
   it("shows an ended thread despite Settings readiness and reconnects only on an operator click", async () => {
     const local = connection({ id: "pwrdisk", displayName: "PwrDisk", kind: "stdio", authMode: "none" });
     const setThreadMcpConnections = vi.fn(async () => ({ connectionIds: [local.id], providerServersEnabled: true }));

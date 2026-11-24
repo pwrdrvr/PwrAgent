@@ -193,7 +193,7 @@ import { materializeTranscriptImageEventForRenderer, toTranscriptImageProtocolUr
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import { isGoalActivationEntry, ThreadGoalControl, type ThreadGoalGate } from "./thread-goal-control";
 import type { ThreadGoalRequest, ThreadGoalState } from "@pwragent/shared/contracts/thread-goal";
-import type { AcpMcpServerRegistration } from "../acp/acp-client";
+import type { AcpMcpRegistrationSource, AcpMcpServerRegistration } from "../acp/acp-client";
 import {
   buildManagedReviewContextInput,
 } from "./managed-review";
@@ -6175,7 +6175,7 @@ export class DesktopBackendRegistry {
     executionMode: ThreadExecutionMode;
     acpRuntime?: BackendAcpSessionRuntimeState;
     reasoningEffort?: string;
-    mcpRegistration?: AcpMcpServerRegistration;
+    mcpRegistration?: AcpMcpRegistrationSource;
     hidden?: boolean;
   }): Promise<{ threadId: string; executionMode: ThreadExecutionMode }> {
     if (params.executionMode === "auto") {
@@ -8834,7 +8834,8 @@ export class DesktopBackendRegistry {
       backend === "codex" && this.resolvePdfAnalysisEnabledFn()
         ? this.registerPdfMcpClient({})
         : Promise.resolve(undefined));
-    const connectionPreparation = resources.registerConnections(backend === "codex" || isAcpBackendId(backend)
+    const deferAcpConnections = backend === "acp:antigravity";
+    const connectionPreparation = resources.registerConnections(backend === "codex" || (isAcpBackendId(backend) && !deferAcpConnections)
       ? this.threadMcpConnections.registerMcpConnections(mcpConnectionIds, undefined, backend)
       : Promise.resolve([]));
     const isolateFromInherited = backend === "codex" && mcpProviderServersEnabled === false;
@@ -8850,7 +8851,7 @@ export class DesktopBackendRegistry {
     const dynamicTools = resolvedDynamicTools?.length
       ? resolvedDynamicTools
       : undefined;
-    const [pdfMcpRegistration, mcpConnectionRegistrations, inheritedCodexMcpServerNames] = await joinConcurrent([
+    const [pdfMcpRegistration, preparedMcpRegistrations, inheritedCodexMcpServerNames] = await joinConcurrent([
       pdfMcpPreparation, connectionPreparation, inventoryPreparation, runtimePreparation,
     ]);
     const pdfMcpConfig = pdfMcpRegistration
@@ -8860,7 +8861,7 @@ export class DesktopBackendRegistry {
       throw codexMcpIsolationUnavailableError();
     }
     const connectionMcpConfig = buildCodexConnectionMcpConfig(
-      mcpConnectionRegistrations,
+      preparedMcpRegistrations,
       inheritedCodexMcpServerNames,
       { isolateFromInherited },
     );
@@ -8881,16 +8882,25 @@ export class DesktopBackendRegistry {
       connectionMcpConfig,
       tokenMiserConfig,
     );
-    const acpMcpRegistration = mcpConnectionRegistrations.length > 0
-      ? {
-          servers: mcpConnectionRegistrations.map(({ server }) => server),
-          bindThread: async (threadId: string) => {
-            for (const registration of mcpConnectionRegistrations) {
-              registration.bindThread(threadId);
-            }
-          },
+    const toAcpMcpRegistration = (registrations: typeof preparedMcpRegistrations): AcpMcpServerRegistration | undefined =>
+      registrations.length > 0 ? {
+        servers: registrations.map(({ server }) => server),
+        bindThread: async (threadId: string) => {
+          for (const registration of registrations) {
+            registration.bindThread(threadId);
+          }
+        },
+      } : undefined;
+    let mcpConnectionRegistrations = preparedMcpRegistrations;
+    const acpMcpRegistration = deferAcpConnections
+      // A gateway session keeps the selection without opening native grants.
+      ? async () => {
+          mcpConnectionRegistrations = await resources.registerConnections(
+            this.threadMcpConnections.registerMcpConnections(mcpConnectionIds, undefined, backend),
+          );
+          return toAcpMcpRegistration(mcpConnectionRegistrations);
         }
-      : undefined;
+      : toAcpMcpRegistration(preparedMcpRegistrations);
     if (dynamicTools?.length) {
       backendRegistryLog.info("attaching agent tool catalogs", {
         backend,

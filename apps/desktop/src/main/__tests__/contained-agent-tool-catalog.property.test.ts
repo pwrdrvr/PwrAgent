@@ -61,6 +61,106 @@ const GROK_INITIALIZE = {
   },
 };
 
+it.each([
+  { role: "full", gatewayAvailable: true, useDefaults: true },
+  { role: "full", gatewayAvailable: true, useDefaults: false },
+  { role: "contained", gatewayAvailable: true, useDefaults: true },
+  { role: "full", gatewayAvailable: false, useDefaults: false },
+] as const)("routes Antigravity connections on a $role member with gateway=$gatewayAvailable and defaults=$useDefaults", async ({ role, gatewayAvailable, useDefaults }) => {
+  const backend = "acp:antigravity";
+  const agentStore = new AcpAgentStore(stateDb);
+  const sessionStore = new AcpSessionStore(stateDb);
+  const overlayStore = createOverlayStoreMock();
+  agentStore.upsertInstalledAgent({
+    backendId: backend, registryId: "antigravity", name: "Antigravity", version: "1.5.15",
+    distributionKind: "local", distributionSource: "antigravity",
+    installStatus: "installed", authStatus: "not-required", verificationStatus: "not-applicable",
+    allowlistRuleId: "fixture-antigravity", installedAt: 1, updatedAt: 1,
+    launchDescriptor: { backendId: backend, registryId: "antigravity", distributionKind: "local",
+      command: "/fixture/agy", args: ["acp"], env: {} },
+  });
+  setRole(role);
+  const transport = new ListingAgentTransport({ initialize: GROK_INITIALIZE });
+  const registerBridge = vi.fn(async (name: string) => ({
+    server: { name, command: "/fixture/mcp", args: [], env: {} },
+    bindThread: vi.fn(),
+    revoke: vi.fn(),
+  }));
+  const registry = createDesktopBackendRegistry({
+    codexClient: new MockBackendClient({}),
+    acpAgentStore: agentStore,
+    acpSessionStore: sessionStore,
+    createAcpTransport: () => transport,
+    overlayStore,
+    mcpConnectionService: {
+      registerBridge,
+      listConnections: async () => [{
+        id: "fixture-linear", displayName: "Fixture Linear", serverUrl: "https://linear.example.test/mcp",
+        kind: "remote", authMode: "oauth", enabled: true, configured: true, state: "ready",
+        selectForNewThreads: true, createdAt: 0, updatedAt: 0,
+      }],
+      ...(gatewayAvailable ? { requestGatewayToolOperation: async () => [] } : {}),
+    },
+    createScratchProjectDirectory: async () => "/tmp/pwragent-antigravity-mcp",
+    threadTitleGenerationService: null,
+  });
+  try {
+    const { threadId } = await registry.startThread({ backend, ...(!useDefaults ? { mcpConnectionIds: ["fixture-linear"] } : {}) });
+    const viaGateway = role === "full" && gatewayAvailable;
+    const expectedNative = viaGateway ? [] : ["fixture-linear"];
+    const expectedServers = ["pwragent", ...expectedNative];
+    const serverNames = () => transport.requests
+      .filter(({ method }) => method === "session/new" || method === "session/load")
+      .map(({ params }) => ((params?.mcpServers ?? []) as { name: string }[]).map(({ name }) => name));
+    expect(serverNames()).toEqual([expectedServers]);
+    expect(registerBridge.mock.calls.map(([name]) => name)).toEqual(expectedNative);
+    const selection = await overlayStore.getThreadOverlayState({ backend, threadId });
+    expect(selection?.mcpConnectionIds).toEqual(["fixture-linear"]);
+
+    const client = await registry.constructionPorts().acpBackend.getClient(backend);
+    await client.closeSessionForTransfer?.(threadId);
+    await client.loadSession(sessionStore.getSession(backend, threadId)!);
+    expect(serverNames()).toEqual([expectedServers, expectedServers]);
+    expect(registerBridge.mock.calls.map(([name]) => name)).toEqual([...expectedNative, ...expectedNative]);
+    const report = await registry.describeThreadMcpConnections({ backend, threadId });
+    expect(report.managedConnectionsViaGateway === true).toBe(viaGateway);
+
+    const listed = [...transport.sessions.values()].at(-1)!;
+    expect(listed.tools.includes("search_mcp_tools")).toBe(role === "full");
+    expect(listed.tools.includes("call_pwragent_tool")).toBe(role === "full");
+    if (role === "contained") {
+      registryModules(registry).turnState.registerTurn({ backend, threadId, turnId: "fixture-turn" });
+      await expect(listed.client.callTool({
+        name: "call_pwragent_tool", arguments: { toolName: ALLOWED, arguments: {} },
+      })).resolves.toMatchObject({ isError: true, structuredContent: { code: "forbidden" } });
+    }
+  } finally {
+    await transport.closeAll();
+    await registry.close();
+  }
+});
+
+it("refuses a cached Antigravity dispatcher once the owner contains the member", async () => {
+  const server = agentToolServer([]);
+  try {
+    setRole("full");
+    const { server: config } = await server.registerClient({ backend: "acp:antigravity", threadId: "fixture-thread" });
+    const agent = await connectAndList(config.url, Object.fromEntries(config.headers.map(({ name, value }) => [name, value])));
+    try {
+      expect(agent.tools).toContain("call_pwragent_tool");
+      setRole("contained");
+      const catalog = await agent.client.listTools();
+      expect(catalog.tools.map(({ name }) => name)).toEqual([ALLOWED, "tool_search"]);
+      await expect(agent.client.callTool({ name: "call_pwragent_tool", arguments: { toolName: ALLOWED, arguments: {} } }))
+        .resolves.toMatchObject({ isError: true, structuredContent: { code: "forbidden" } });
+    } finally {
+      await agent.client.close();
+    }
+  } finally {
+    await server.close();
+  }
+});
+
 it("uses the ACP owner's saved catalog and denies cached monitor calls through the shared dispatch gate", async () => {
   const backend = "acp:grok";
   const agentStore = new AcpAgentStore(stateDb);

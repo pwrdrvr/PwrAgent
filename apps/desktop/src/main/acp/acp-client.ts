@@ -71,6 +71,7 @@ import {
   type AcpUsageEnvelope,
 } from "./acp-usage.js";
 import type { JsonRpcId } from "@pwrdrvr/agent-transport";
+import { ANTIGRAVITY_CALL_PWRAGENT_TOOL, readPwrAgentCallTarget } from "../agent-tools/antigravity-mcp-catalog.js";
 import { getMainLogger } from "../log.js";
 
 const acpClientLog = getMainLogger("pwragent:acp-client");
@@ -159,6 +160,7 @@ export type { AcpMcpServerConfig, AcpMcpServerWireConfig } from "@pwrdrvr/agent-
 
 export type AcpMcpServerRegistration = {
   servers: AcpMcpServerConfig[];
+  managedConnectionsViaGateway?: true;
   bindThread?: (threadId: string) => Promise<void> | void;
   readListedJobMonitorCreation?: () => boolean | undefined;
   /**
@@ -166,8 +168,11 @@ export type AcpMcpServerRegistration = {
    * can be answered without the operator: PwrAgent approves that call itself
    * or the tool only reads. A registration answers only for its own servers.
    */
-  hostApprovesToolCall?: (serverName: string, toolName: string) => Promise<boolean>;
+  hostApprovesToolCall?: (serverName: string, toolName: string, args?: unknown) => Promise<boolean>;
 };
+
+export type AcpMcpRegistrationSource =
+  AcpMcpServerRegistration | (() => Promise<AcpMcpServerRegistration | undefined>);
 
 export function mergeMcpServerRegistrations(
   ...registrations: Array<AcpMcpServerRegistration | undefined>
@@ -180,11 +185,14 @@ export function mergeMcpServerRegistrations(
     registration.hostApprovesToolCall ? [registration.hostApprovesToolCall] : []);
   return {
     servers: present.flatMap((registration) => registration.servers),
+    ...(present.some((registration) => registration.managedConnectionsViaGateway)
+      ? { managedConnectionsViaGateway: true }
+      : {}),
     readListedJobMonitorCreation: present.find((entry) => entry.readListedJobMonitorCreation)?.readListedJobMonitorCreation,
     ...(approvers.length ? {
-      hostApprovesToolCall: async (serverName: string, toolName: string) => {
+      hostApprovesToolCall: async (serverName: string, toolName: string, args?: unknown) => {
         for (const approves of approvers) {
-          if (await approves(serverName, toolName)) return true;
+          if (await approves(serverName, toolName, args)) return true;
         }
         return false;
       },
@@ -265,6 +273,7 @@ type AcpSessionMcpServers = {
   /** Names a live registration can vouch for. Absent while awaiting reload. */
   registeredNames?: ReadonlySet<string>;
   hostApprovesToolCall?: AcpMcpServerRegistration["hostApprovesToolCall"];
+  managedConnectionsViaGateway?: true;
 };
 
 export type AcpPromptContentBlock =
@@ -1211,7 +1220,7 @@ export class AcpAgentClient {
     acpRuntime?: BackendAcpSessionRuntimeState;
     hidden?: boolean;
     mcpServers?: "default" | "none";
-    additionalMcpRegistration?: AcpMcpServerRegistration;
+    additionalMcpRegistration?: AcpMcpRegistrationSource;
     sessionMeta?: Record<string, unknown>;
   }): Promise<AcpSessionMetadata> {
     return await this.withOperation(
@@ -1232,17 +1241,20 @@ export class AcpAgentClient {
     const agentToolCatalogKey = this.options.agentToolCatalogKey?.();
     const jobMonitorCreationEnabled = this.jobMonitorCatalogRefreshSupported
       ? await this.options.readJobMonitorCreationPreference?.(params.sessionId) : undefined;
-    const defaultMcpRegistration =
+    const defaultMcpRegistration: AcpMcpServerRegistration =
       params.mcpServers === "none"
         ? { servers: [] }
         : await this.buildMcpServers({
             cwd,
             sessionId: params.sessionId,
           });
-    const mcpRegistration = mergeMcpServerRegistrations(
-      defaultMcpRegistration,
-      params.additionalMcpRegistration,
-    );
+    const additional = params.additionalMcpRegistration;
+    const mcpRegistration = defaultMcpRegistration.managedConnectionsViaGateway
+      ? defaultMcpRegistration
+      : mergeMcpServerRegistrations(
+          defaultMcpRegistration,
+          typeof additional === "function" ? await additional() : additional,
+        );
     const mcpServerWireConfigs = toAcpMcpServerWireConfigs(mcpRegistration.servers);
     const result = await this.options.transport.request("session/new", {
       cwd,
@@ -2390,7 +2402,13 @@ export class AcpAgentClient {
       return cancelledPermissionOutcome();
     }
 
-    const permissionOptions = readPermissionOptions(params.options);
+    const reportedTool = this.antigravityMcpToolName(asRecord(params.toolCall) ?? {});
+    let permissionOptions = readPermissionOptions(params.options);
+    if (reportedTool === ANTIGRAVITY_CALL_PWRAGENT_TOOL) {
+      // An approval that applies to the dispatcher name would cover unrelated
+      // targets. Leave persistent MCP approval to tools with a fixed identity.
+      permissionOptions = permissionOptions.filter((option) => option.kind !== "allow_always");
+    }
     const allowedWithoutOperator = protocolSessionId
       ? await this.permissionAnsweredWithoutOperator(
         this.appSessionIdFor(protocolSessionId),
@@ -2402,7 +2420,7 @@ export class AcpAgentClient {
       return { outcome: { outcome: "selected", optionId: allowedWithoutOperator } };
     }
 
-    const request = this.normalizePermissionRequest(params, id);
+    const request = this.normalizePermissionRequest(params, permissionOptions, id);
     if (!request || !this.options.onRequest) {
       return cancelledPermissionOutcome();
     }
@@ -2435,6 +2453,7 @@ export class AcpAgentClient {
 
   private normalizePermissionRequest(
     params: Record<string, unknown>,
+    permissionOptions: AcpPermissionOption[],
     id?: JsonRpcId,
   ): AppServerPendingRequestNotification | undefined {
     const protocolSessionId =
@@ -2457,7 +2476,6 @@ export class AcpAgentClient {
     const requestId = id == null ? toolCallId ?? `acp:${this.now()}` : String(id);
     const activeTurn = this.activeTurns.get(sessionId);
     const acpMcpToolName = this.antigravityMcpToolName(toolCall);
-    const permissionOptions = readPermissionOptions(params.options);
     const prompt = acpMcpToolName
       ? mcpPermissionPrompt(this.approvalRequesterName, acpMcpToolName, toolCall)
       : permissionPrompt(this.approvalRequesterName, title, toolCall);
@@ -2475,7 +2493,7 @@ export class AcpAgentClient {
         acpMethod: "session/request_permission",
         acpToolCallId: toolCallId,
         acpToolKind: typeof toolCall.kind === "string" ? toolCall.kind : undefined,
-        acpPermissionOptions: acpMcpToolName
+        acpPermissionOptions: acpMcpToolName && acpMcpToolName !== ANTIGRAVITY_CALL_PWRAGENT_TOOL
           ? withThreadToolGrantOption(permissionOptions)
           : permissionOptions,
       },
@@ -2508,7 +2526,8 @@ export class AcpAgentClient {
     params: Record<string, unknown>,
     options: AcpPermissionOption[],
   ): Promise<string | undefined> {
-    const toolName = this.antigravityMcpToolName(asRecord(params.toolCall) ?? {});
+    const toolCall = asRecord(params.toolCall) ?? {};
+    const toolName = this.antigravityMcpToolName(toolCall);
     const allowOnce = allowOncePermissionOptionId(options);
     if (!toolName || !allowOnce) return undefined;
     const servers = this.sessionMcpServers.get(sessionId);
@@ -2518,7 +2537,7 @@ export class AcpAgentClient {
     const target = resolveAntigravityMcpToolTarget(toolName, servers.agentNames);
     if (!target || !servers.registeredNames.has(target.serverName)) return undefined;
     try {
-      return await servers.hostApprovesToolCall(target.serverName, target.toolName)
+      return await servers.hostApprovesToolCall(target.serverName, target.toolName, toolCall.rawInput)
         ? allowOnce
         : undefined;
     } catch (error) {
@@ -2885,6 +2904,7 @@ export class AcpAgentClient {
     }
     this.sessionMcpServers.set(sessionId, {
       agentNames,
+      ...(registration.managedConnectionsViaGateway ? { managedConnectionsViaGateway: true } : {}),
       registeredNames: new Set(registration.servers
         .map((server) => server.name)
         .filter((name) => sent.has(name))),
@@ -2892,6 +2912,11 @@ export class AcpAgentClient {
         ? { hostApprovesToolCall: registration.hostApprovesToolCall }
         : {}),
     });
+  }
+
+  usesManagedMcpGateway(sessionId: string): boolean {
+    return !this.disconnected
+      && this.sessionMcpServers.get(sessionId)?.managedConnectionsViaGateway === true;
   }
 
   private rememberAgentToolCatalogKey(sessionId: string, key: string | undefined): void {
@@ -3623,13 +3648,18 @@ function mcpPermissionPrompt(
   toolName: string,
   toolCall: Record<string, unknown>,
 ): string {
+  const invocation = toolName === ANTIGRAVITY_CALL_PWRAGENT_TOOL
+    ? readPwrAgentCallTarget(toolCall.rawInput)
+    : undefined;
   const title = readToolCallText(toolCall.title);
   const content = readToolCallText(toolCall.content);
   const details = [title, content].filter((text) =>
     text && text !== toolName && text !== `Run ${toolName}`,
   );
   return [
-    `${requesterName} wants to use an MCP tool.`,
+    invocation
+      ? `${requesterName} wants to use the PwrAgent tool ${invocation.name}.`
+      : `${requesterName} wants to use an MCP tool.`,
     ...new Set(details),
   ].join("\n\n");
 }

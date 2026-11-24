@@ -4709,18 +4709,18 @@ describe("AcpBackendAdapter", () => {
   // server of its own that could carry PwrAgent tools past that gate. This
   // holds for a session started now (session/new) and for one stored before
   // the member became contained (session/load restarts its servers).
-  it("offers an ACP session only the agent-tool server and operator connections", async () => {
-    const backendId = "acp:grok" as AcpBackendId;
+  it.each(["grok", "antigravity"] as const)("offers only the permitted MCP servers to %s", async (registryId) => {
+    const backendId = `acp:${registryId}` as const;
     const agent: AcpInstalledAgentRecord = {
       ...buildInstalledAgent(),
       backendId,
-      registryId: "grok",
-      name: "Grok",
+      registryId,
+      name: registryId,
       launchDescriptor: {
         backendId,
-        registryId: "grok",
+        registryId,
         distributionKind: "local",
-        command: "grok",
+        command: registryId,
         args: [],
         env: {},
       },
@@ -4771,6 +4771,7 @@ describe("AcpBackendAdapter", () => {
       };
       const adapter = createTestAcpBackendAdapter({
         ...legacyStdioBridge,
+        managedMcpGatewayAvailable: true,
         acpAgentStore: {
           getInstalledAgent: () => agent,
           listInstalledAgents: () => [agent],
@@ -4835,9 +4836,12 @@ describe("AcpBackendAdapter", () => {
               request.params as { mcpServers?: Array<{ name: string }> } | undefined
             )?.mcpServers?.map((server) => server.name) ?? [],
           }));
+        const registeredHttp = agentToolServer === "registers" && http === true;
         const expected = [
-          ...(agentToolServer === "registers" && http === true ? ["pwragent"] : []),
-          ...(operatorConnection ? ["operator-connection"] : []),
+          ...(registeredHttp ? ["pwragent"] : []),
+          // A working Antigravity PwrAgent server provides the live gateway
+          // for selected connections without adding their native catalogs.
+          ...(operatorConnection && !(registryId === "antigravity" && registeredHttp) ? ["operator-connection"] : []),
         ];
         expect(
           offered,
