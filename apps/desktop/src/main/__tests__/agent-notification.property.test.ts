@@ -1,3 +1,4 @@
+import path from "node:path";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -393,8 +394,10 @@ describe("notify_operator arguments", () => {
   it("keeps an https link and an absolute file", () => {
     expect(readNotificationArgs({ ...base, url: "https://ci.example/runs/1" }, now))
       .toMatchObject({ notification: { link: { kind: "url", url: "https://ci.example/runs/1" } } });
-    expect(readNotificationArgs({ ...base, filePath: "/work/atlas/notes.md", urgency: "high" }, now))
-      .toMatchObject({ notification: { urgency: "high", link: { kind: "file", path: "/work/atlas/notes.md" } } });
+    // An absolute path on this platform, kept in its normal form.
+    const file = path.resolve("/work/atlas/notes.md");
+    expect(readNotificationArgs({ ...base, filePath: file, urgency: "high" }, now))
+      .toMatchObject({ notification: { urgency: "high", link: { kind: "file", path: path.normalize(file) } } });
   });
 });
 
