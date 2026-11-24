@@ -373,15 +373,31 @@ describe("app.css fade-in entrances under reduced motion", () => {
       .map((rule) => keyframeName(rule.atRules))
       .filter((name): name is string => name !== undefined),
   );
+  // A keyframe is a fade by design only if its motion lives under
+  // `no-preference` AND the frames left for reduced motion do not move.
+  const movesUnderReduce = new Set(
+    rules
+      .filter(
+        (rule) =>
+          !hasMotionQuery(rule.atRules, "no-preference")
+          && /(?:^|[;\s])(?:transform|translate|scale|rotate):/.test(rule.body),
+      )
+      .map((rule) => keyframeName(rule.atRules))
+      .filter((name): name is string => name !== undefined),
+  );
   const fadeOnlyByDesign = new Set(
     rules
       .filter((rule) => hasMotionQuery(rule.atRules, "no-preference"))
       .map((rule) => keyframeName(rule.atRules))
-      .filter((name): name is string => name !== undefined),
+      .filter((name): name is string => name !== undefined && !movesUnderReduce.has(name)),
   );
+  // Any rule that plays an entrance, including one nested in a width query or
+  // `@supports`. Only motion queries and keyframe frames are not entrances.
   const entranceRules = rules.filter(
     (rule) =>
-      rule.atRules.length === 0
+      !hasMotionQuery(rule.atRules, "reduce")
+      && !hasMotionQuery(rule.atRules, "no-preference")
+      && keyframeName(rule.atRules) === undefined
       && [...fadeInKeyframes].some((name) =>
         new RegExp(`(?:^|[;\\s])animation(?:-name)?:[^;]*\\b${name}\\b`).test(rule.body),
       ),
@@ -392,6 +408,10 @@ describe("app.css fade-in entrances under reduced motion", () => {
     expect(fadeInKeyframes).toContain("star-map-card-enter");
     expect(fadeOnlyByDesign).toContain("star-map-card-enter");
     expect(fadeOnlyByDesign).not.toContain("app-update-banner-enter");
+    // The exemption checks the reduced-motion frames, not just the
+    // `no-preference` copy's existence.
+    expect(movesUnderReduce).toContain("app-update-banner-enter");
+    expect(movesUnderReduce).not.toContain("star-map-card-enter");
     expect(entranceRules.flatMap((rule) => rule.selectors)).toContain(".app-notice-toast");
   });
 

@@ -91,9 +91,10 @@ Things to know when extending the audit:
   entrance that starts at `opacity: 0` to be settled by a `reduce` rule
   later in the file, unless its keyframes keep their motion frames under
   `no-preference`, which makes them a fade by design.
-- **Keep runner state out of the audit.** A fixture with PRs starts the
-  status poller, which reads a token from the runner's `gh` 15s after
-  launch. Launch it with the forges off (`NO_FORGE_ACCESS`), or give it a
+- **Keep runner state out of the audit.** A fixture with PRs reads a token
+  from the runner's `gh`: at once when its thread is selected, and on the
+  status poller's 15s ticks. Launch it with the forges off
+  (`NO_FORGE_ACCESS`), or give it a
   stand-in `gh` through `PWRAGENT_GH_COMMAND` when the notice is the
   surface, as the notice-toast block does.
 - **`setLegacyMode(true)` is required under Electron.** The default

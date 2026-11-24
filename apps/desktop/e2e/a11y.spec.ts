@@ -239,12 +239,13 @@ const NO_FORGE_CREDENTIALS = {
   GITLAB_TOKEN: undefined,
 };
 
-// No token alone is not quiet. With no token the poller asks the runner's `gh`
-// for one, 15s after launch. The failure raises the "GitHub PR status
-// unavailable" notice partway through the appearance loop, and whether it
-// fails depends on the runner's `gh` install and login. Turning the forges
-// off stops the poller before it reads a token. The seeded chips, watches,
-// and hover card render from sqlite, not from the forge.
+// No token alone is not quiet. With no token the app asks the runner's `gh`
+// for one: at once when a thread with PRs is selected (its on-demand PR
+// lookup), and on the status poller's ticks, every 15s. The failure raises
+// the "GitHub PR status unavailable" notice partway through the appearance
+// loop, and whether it fails depends on the runner's `gh` install and login.
+// Turning the forges off stops both before they read a token. The seeded
+// chips, watches, and hover card render from sqlite, not from the forge.
 const NO_FORGE_ACCESS = {
   ...NO_FORGE_CREDENTIALS,
   PWRAGENT_GH_ENABLED: "false",
@@ -957,14 +958,21 @@ registerSharedAudit({
       await settleSidebarPointer(app.window);
       await scan(app.window, "rail Pull requests watch history");
     });
+
+    // The forges are off, so nothing asked `gh` for a token. Selecting the
+    // thread ran its PR lookup well before this point, so a fixture that
+    // reached the runner's `gh` would show the notice here.
+    await expect(
+      app.window.locator(".app-notice-toast[data-notice-id='github-pr-authentication-failure']"),
+    ).toHaveCount(0);
   },
 });
 
-// A notice toast, with a detail line and the durable notices' "1 of 1"
-// position: the muted text that only reached this gate when a background
-// check failed mid-scan. The source is the notice that did it. The PR-watch
-// seed gives the status poller PRs to read, and a `gh` that is installed
-// but logged out fails the token read on the poller's first tick, 15s in.
+// A notice toast, with a detail line and the durable notices' position line:
+// the muted text that only reached this gate when a background check failed
+// mid-scan. The source is the notice that did it. The PR-watch seed gives the
+// thread PRs, and a `gh` that is installed but logged out fails the token
+// read that selecting the thread starts.
 registerSharedAudit({
   key: "notice-toast",
   title: "notice toast has no violations",
@@ -986,16 +994,24 @@ registerSharedAudit({
     });
   },
   exercise: async (app, scan) => {
+    // Selecting the thread runs its PR lookup, which reads the token now
+    // rather than on a poller tick whose cadence the seed's freshness sets.
+    const threadRow = app.window
+      .getByRole("button", { name: /PR watch audit thread/i })
+      .first();
+    await expect(threadRow).toBeVisible();
+    await threadRow.click();
     const notice = app.window.locator(
       ".app-notice-toast[data-notice-id='github-pr-authentication-failure']",
     );
-    // One poller tick plus slack. The notice is durable, so it stays up for
-    // every appearance once it arrives.
+    // The lookup, or failing that one poller tick, plus slack. The notice is
+    // durable, so it stays up for every appearance once it arrives.
     await expect(notice).toBeVisible({ timeout: 30_000 });
     await expect(notice.locator(".app-notice-toast__detail")).toHaveText(
       "GitHub CLI authentication status check failed",
     );
-    await expect(notice.locator(".app-notice-toast__position")).toHaveText("1 of 1");
+    // Another durable notice on the runner would make this "1 of 2".
+    await expect(notice.locator(".app-notice-toast__position")).toHaveText(/^\d+ of \d+$/);
     // At rest, not mid-rise: reduced motion settles the entrance, and a
     // regression there would put a partly transparent card in front of axe.
     await expect(notice).toHaveCSS("opacity", "1");
