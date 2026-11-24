@@ -395,6 +395,45 @@ function threadDirectories(thread: StackThreadRow): string[] {
   return (thread.linkedDirectories ?? []).map((directory) => directory.worktreePath ?? directory.path);
 }
 
+async function resolveAttachmentCheckouts(
+  rows: readonly StackThreadRow[], checkouts: ReadonlyMap<string, Checkout>, clones: ReadonlyMap<string, Checkout>,
+  observation: StackReadObservation,
+): Promise<Map<string, CheckoutLookup>> {
+  const { hints, inventoryDemand } = observation;
+  const resolved = new Map<string, CheckoutLookup>();
+  if (!clones.size) return resolved;
+  const aliases = new Set<string>();
+  for (const row of rows) {
+    if (!row.prs?.length || !threadDirectories(row).some((cwd) => {
+      const checkout = checkouts.get(cwd);
+      return checkout && clones.has(checkout.commonDir);
+    })) continue;
+    for (const pr of row.prs) {
+      for (const cwd of pr.linkedDirectoryPaths ?? []) {
+        if (!checkouts.has(cwd) && path.isAbsolute(cwd)) aliases.add(cwd);
+      }
+    }
+  }
+  const scan = new IterableMapper(aliases, async (cwd) => {
+    if (!hints.requiresGitDiscovery) {
+      const physical = await runPrMetadataFileProbe(() => realpath(cwd).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT" || error.code === "ENOTDIR") return null;
+        throw error;
+      }), inventoryDemand);
+      if (physical === null) return [cwd, undefined] as const;
+      // Reuse Git's result for the very directory it inspected. A worktree
+      // root alone can also be reported by a different clone's core.worktree.
+      const known = physical && checkouts.get(physical);
+      if (known && known.root === physical) return [cwd, known] as const;
+    }
+    // An unrecognized or inconclusive filesystem result needs Git. Keep the
+    // fallback local to this projection so a retarget is observed on retry.
+    return [cwd, await locateCheckout(cwd, inventoryDemand)] as const;
+  }, STACK_CHECKOUT_SCAN_LIMITS);
+  for await (const [cwd, checkout] of scan) resolved.set(cwd, checkout);
+  return resolved;
+}
+
 type CloneThread = { row: StackThreadRow; paths: string[] };
 
 function stackPullRequest(pr: PrSummary): StackLayerPullRequest {
@@ -839,14 +878,6 @@ export class StackReader {
         }
       }
     }
-    // Scoped admission used the initial catalog. A change during discovery
-    // requires fresh admission before projection can assert settlement.
-    if (scopedClones.size && (await Promise.all(
-      [...scopedClones.keys()].map((commonDir) => observation.revalidateCatalog(commonDir)),
-    )).some(Boolean)) {
-      if (retried) return { stacks: [], catalogs: [{ status: "unavailable" }] };
-      return await this.readProjection(threads, knownPrs, directories, activity, new StackReadObservation(demand), true, validateAttachments);
-    }
     const checkouts = new Map(anchors.map((entry) => [entry.cwd, entry] as const));
     // Keep the existing path order regardless of which probes finish first.
     for (const cwd of paths) {
@@ -865,23 +896,43 @@ export class StackReader {
       return { ...row, prs: await validateAttachments({ ...row, prs: row.prs }) };
     })) : local;
     demand.signal?.throwIfAborted();
+    const attachmentCheckouts = await resolveAttachmentCheckouts(rows, checkouts, cloneCheckouts, observation);
     if (validatedAny && !await observation.checkoutsStillMatch(checkouts.values())) {
+      if (retried) return { stacks: [], catalogs: [{ status: "unavailable" }] };
+      return await this.readProjection(threads, knownPrs, directories, activity, new StackReadObservation(demand), true, validateAttachments);
+    }
+    // Scoped admission used the initial catalog. A change during discovery
+    // requires fresh admission before projection can assert settlement.
+    if (scopedClones.size && (await Promise.all(
+      [...scopedClones.keys()].map((commonDir) => observation.revalidateCatalog(commonDir)),
+    )).some(Boolean)) {
       if (retried) return { stacks: [], catalogs: [{ status: "unavailable" }] };
       return await this.readProjection(threads, knownPrs, directories, activity, new StackReadObservation(demand), true, validateAttachments);
     }
     const cloneThreads = new Map<string, CloneThread[]>();
     for (const row of rows) {
       const pathsByClone = new Map<string, string[]>();
-      for (const cwd of threadDirectories(row)) {
+      const rowPaths = threadDirectories(row);
+      for (const cwd of rowPaths) {
         const checkout = checkouts.get(cwd);
         if (!checkout) continue;
         pathsByClone.set(checkout.commonDir, [...pathsByClone.get(checkout.commonDir) ?? [], checkout.root]);
       }
       for (const [commonDir, paths] of pathsByClone) {
         const entries = cloneThreads.get(commonDir) ?? [];
-        const prs = row.prs?.filter((pr) => pr.linkedDirectoryPaths?.length
-          ? pr.linkedDirectoryPaths.some((directory) => paths.includes(checkouts.get(directory)?.root ?? directory))
-          : pathsByClone.size === 1 && !threadDirectories(row).some((cwd) => unavailablePaths.has(cwd)));
+        const prs = row.prs?.filter((pr) => {
+          if (!pr.linkedDirectoryPaths?.length) {
+            return pathsByClone.size === 1 && !rowPaths.some((cwd) => unavailablePaths.has(cwd));
+          }
+          const provenance = pr.linkedDirectoryPaths.map((cwd) => checkouts.get(cwd) ?? attachmentCheckouts.get(cwd));
+          if (provenance.some((checkout) => checkout && checkout !== "unavailable"
+            && checkout.commonDir === commonDir && paths.includes(checkout.root))) return true;
+          // An unresolved attachment can hide a layer the scoped gate needs.
+          if (!unavailable.length && scopedClones.has(commonDir) && provenance.includes("unavailable")) {
+            unavailable.push({ status: "unavailable" });
+          }
+          return false;
+        });
         entries.push({ row: { ...row, prs }, paths });
         cloneThreads.set(commonDir, entries);
       }
