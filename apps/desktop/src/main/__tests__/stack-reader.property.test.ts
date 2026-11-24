@@ -43,18 +43,23 @@ async function writeCatalog(cwd: string, name: string) {
 }
 
 describe("stack checkout demand", () => {
-  it("reuses Git's registered worktree inventory for ordinary sibling checkouts", async () => {
+  it.each(["attached", "detached"])("reuses Git's registered inventory for %s sibling checkouts", async (kind) => {
     const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-worktree-inventory-")));
     const primary = path.join(sandbox, "primary");
     try {
-      await mkdir(primary);
+      const home = path.join(sandbox, "home");
+      await Promise.all([mkdir(primary), mkdir(home)]);
+      vi.stubEnv("HOME", home);
+      vi.stubEnv("USERPROFILE", home);
+      vi.stubEnv("XDG_CONFIG_HOME", home);
       initialize(primary);
       git(primary, "branch", "main");
       await writeCatalog(primary, "registered");
       const worktrees = await Promise.all(Array.from({ length: 7 }, async (_, index) => {
         const branch = `sibling-${index}`;
         const cwd = path.join(sandbox, branch);
-        git(primary, "worktree", "add", "-b", branch, cwd);
+        if (kind === "detached") git(primary, "worktree", "add", "--detach", cwd);
+        else git(primary, "worktree", "add", "-b", branch, cwd);
         const [root, common] = git(cwd, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir").split("\n");
         expect(await realpath(root!)).toBe(cwd);
         expect(await realpath(common!)).toBe(path.join(primary, ".git"));
@@ -85,7 +90,112 @@ describe("stack checkout demand", () => {
       expect(git(sibling, "symbolic-ref", "--short", "HEAD")).toBe("topic");
       expect(await read()).toBe("codex:sibling-0");
     } finally {
+      vi.unstubAllEnvs();
       await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("follows Git's current clone when an alias moves during deferred attachment validation", async () => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-validation-move-")));
+    const before = path.join(root, "before");
+    const after = path.join(root, "after");
+    const alias = path.join(root, "alias");
+    try {
+      await Promise.all([mkdir(before), mkdir(after)]);
+      initialize(before);
+      initialize(after);
+      await Promise.all([writeCatalog(before, "before"), writeCatalog(after, "after")]);
+      await symlink(before, alias, "junction");
+      const attached: PrSummary = {
+        number: 1, provider: "github.com", org: "fixture", repo: "before", state: "passing",
+        url: "https://github.com/fixture/before/pull/1", linkedDirectoryPaths: [alias],
+      };
+      let moved = false;
+      const result = await new StackReader().read([{ ...row(alias, "moving"), prs: [attached] }], [], undefined,
+        undefined, new StackReadObservation(), async () => {
+          if (!moved) {
+            await rm(alias);
+            await symlink(after, alias, "junction");
+            moved = true;
+          }
+          return [];
+        });
+      expect(moved).toBe(true);
+      expect(await realpath(git(alias, "rev-parse", "--path-format=absolute", "--git-common-dir"))).toBe(path.join(after, ".git"));
+      expect(result.stacks.map(({ repository }) => repository)).toEqual(["github.com:fixture/after"]);
+      expect(result.stacks[0]?.layers[0]?.thread?.key).toBe("codex:moving");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves each checkout to Git when a global conditional include can differ across siblings", async () => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-conditional-config-")));
+    const primary = path.join(root, "primary");
+    const bad = path.join(root, "bad");
+    const home = path.join(root, "home");
+    const xdg = path.join(root, "xdg");
+    const configStarted = Promise.withResolvers<void>();
+    onTestFinished(() => { configStarted.resolve(); });
+    try {
+      await Promise.all([mkdir(primary), mkdir(home), mkdir(xdg)]);
+      initialize(primary);
+      git(primary, "checkout", "-b", "main");
+      git(primary, "worktree", "add", bad, "topic");
+      await writeCatalog(bad, "conditional");
+      const rows = [row(bad, "broken"), ...Array.from({ length: 5 }, (_, index) => {
+        const branch = "healthy-" + index;
+        const cwd = path.join(root, branch);
+        git(primary, "worktree", "add", "-b", branch, cwd);
+        return row(cwd, branch);
+      })];
+      const admin = (await realpath(git(bad, "rev-parse", "--absolute-git-dir"))).replaceAll("\\", "/");
+      await writeFile(path.join(home, "invalid-config"), "[invalid config\n");
+      const global = path.join(home, ".gitconfig");
+      const condition = '[includeIf "gitdir/i:' + admin + '"]\n\tpath = invalid-config\n';
+      await writeFile(global, condition);
+      vi.stubEnv("HOME", home);
+      vi.stubEnv("USERPROFILE", home);
+      vi.stubEnv("XDG_CONFIG_HOME", xdg);
+      const runGitCommand = gitExecutable.runGitCommand;
+      const checkoutArgs = ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"];
+      await expect(runGitCommand(bad, checkoutArgs)).rejects.toThrow();
+      await expect(runGitCommand(primary, checkoutArgs)).resolves.toMatchObject({ stdout: expect.any(String) });
+
+      const observation = new StackReadObservation();
+      const checkoutIdentity = observation.hints.checkoutIdentity;
+      observation.hints.checkoutIdentity = async (cwd) => {
+        if (cwd === bad) await configStarted.promise;
+        return await checkoutIdentity(cwd);
+      };
+      const run = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (...args) => {
+        if (args[1][0] === "config") configStarted.resolve();
+        return await runGitCommand(...args);
+      });
+      try {
+        const reader = new StackReader();
+        const result = await reader.read(rows, [], undefined, undefined, observation);
+        expect(run.mock.calls.some(([cwd, args]) => cwd === bad && args[0] === "rev-parse")).toBe(true);
+        expect(result.stacks[0]?.layers[0]).toMatchObject({ branch: "topic", role: "unbound" });
+
+        const otherAdmin = path.join(root, "other", ".git", "worktrees").replaceAll("\\", "/");
+        await writeFile(path.join(home, "shared-config"), "[user]\n\tname = Fixture\n");
+        git(primary, "remote", "add", "origin", "https://example.invalid/fixture");
+        await writeFile(global, '[includeIf "gitdir/i:' + otherAdmin + '/"]\n\tpath = invalid-config\n'
+          + '[includeIf "hasconfig:remote.*.url:https://example.invalid/**"]\n\tpath = shared-config\n');
+        run.mockClear();
+        expect((await reader.read(rows, [])).stacks[0]?.layers[0]?.thread?.key).toBe("codex:broken");
+        expect(run.mock.calls.filter(([, args]) => args[0] === "rev-parse")).toHaveLength(1);
+        await writeFile(global, condition);
+        await expect(runGitCommand(bad, checkoutArgs)).rejects.toThrow();
+        expect((await reader.read(rows, [])).stacks[0]?.layers[0]).toMatchObject({ branch: "topic", role: "unbound" });
+      } finally {
+        configStarted.resolve();
+        run.mockRestore();
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(root, { recursive: true, force: true });
     }
   });
 
@@ -696,7 +806,11 @@ describe("stack checkout demand", () => {
       const sibling = path.join(sandbox, "sibling");
       const other = path.join(sandbox, "other");
       const alias = path.join(sandbox, "alias");
-      await Promise.all([mkdir(primary), mkdir(other)]);
+      const home = path.join(sandbox, "home");
+      await Promise.all([mkdir(primary), mkdir(other), mkdir(home)]);
+      vi.stubEnv("HOME", home);
+      vi.stubEnv("USERPROFILE", home);
+      vi.stubEnv("XDG_CONFIG_HOME", home);
       initialize(primary);
       initialize(other);
       git(primary, "worktree", "add", "-b", "sibling", sibling);
@@ -715,7 +829,9 @@ describe("stack checkout demand", () => {
         const cold = await coldReader.read([...rows, ...subdirectories], []);
         start.mockClear();
         expect(await coldReader.read([...rows, ...subdirectories], [])).toEqual(cold);
-        expect(checkoutStarts()).toEqual([]);
+        // Only the registered root needs a live roster seed in a wide scan.
+        // Previously verified subdirectories remain reusable.
+        expect(checkoutStarts()).toEqual(inventory.length >= 3 ? [alias] : []);
       }), { numRuns: 6 });
       const scoped = await reader.read([row(alias, "alias")], [], [alias]);
       expect(scoped.stacks[0]?.repository).toBe("github.com:fixture/primary");
@@ -731,6 +847,7 @@ describe("stack checkout demand", () => {
       expect((await reader.read([row(alias, "alias")], [], [alias])).stacks[0]?.repository).toBe("github.com:fixture/other");
       expect(checkoutStarts()).toEqual([alias]);
     } finally {
+      vi.unstubAllEnvs();
       start.mockRestore();
       await rm(sandbox, { recursive: true, force: true });
     }

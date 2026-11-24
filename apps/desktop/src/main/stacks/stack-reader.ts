@@ -76,6 +76,22 @@ type RegisteredWorktrees = {
   ready?: ReadonlySet<string>;
 };
 
+function configCanVaryAcrossWorktrees(keys: string, commonDir: string): boolean {
+  // Standard linked worktrees have canonical Git directories immediately
+  // below this path. Compare conservatively across both gitdir case modes.
+  const adminPrefix = path.join(commonDir, "worktrees").split(path.sep).join("/").toLowerCase() + "/";
+  return keys.split("\0").some((key) => {
+    if (key === "core.worktree" || key === "extensions.worktreeconfig") return true;
+    if (!key.startsWith("includeif.")) return false;
+    // Remote URLs are shared if all other includes and config scopes are shared.
+    if (key.startsWith("includeif.hasconfig:remote.*.url:") && key.endsWith(".path")) return false;
+    const pattern = /^includeif\.gitdir(?:\/i)?:((?:[A-Za-z]:)?\/[^*?\[\\\r\n]+)\.path$/.exec(key)?.[1]?.toLowerCase();
+    if (!pattern) return true;
+    // A trailing slash in a literal pattern includes its descendants.
+    return pattern.startsWith(adminPrefix) || (pattern.endsWith("/") && adminPrefix.startsWith(pattern));
+  });
+}
+
 async function stackJournalInFlight(commonDir: string): Promise<boolean> {
   const journals = ["gh-stack-rebase-state", "gh-stack-modify-state", "gh-stack-migration", "pwrgit-stack-op.json", "pwragent-stack-op.json"];
   const observed = await Promise.all(journals.map((name) => lstat(path.join(commonDir, name))
@@ -113,6 +129,7 @@ export class StackReadObservation {
   private readonly preflightCheckoutVersions = new Map<string, string | undefined>();
   private readonly catalogs = new Map<string, Promise<CatalogObservation>>();
   private readonly worktreeInventories = new Map<string, RegisteredWorktrees>();
+  private readonly checkoutWitnesses = new Map<string, string>();
 
   constructor(readonly demand: PrMetadataDemand = {}) {
     // A selected request can promote the explicit checkout without putting
@@ -136,6 +153,32 @@ export class StackReadObservation {
 
   hasCheckoutLookup(cwd: string): boolean {
     return this.checkouts.has(cwd);
+  }
+
+  recordCheckoutWitness(cwd: string, version: string): void {
+    this.checkoutWitnesses.set(cwd, version);
+  }
+
+  async checkoutsStillMatch(checkouts: Iterable<Checkout>): Promise<boolean> {
+    const hints = createStackCheckoutHints(this.inventoryDemand);
+    const matches = new IterableMapper(checkouts, async ({ cwd, root, commonDir }) => {
+      const before = this.checkoutWitnesses.get(cwd);
+      if (before && (await hints.checkoutIdentity(cwd))?.version === before) return true;
+      this.checkoutWitnesses.delete(cwd);
+      const current = await locateCheckout(cwd, this.inventoryDemand);
+      return Boolean(current && current !== "unavailable" && current.root === root && current.commonDir === commonDir);
+    }, STACK_CHECKOUT_SCAN_LIMITS);
+    let unchanged = true;
+    for await (const matchesCheckout of matches) unchanged &&= matchesCheckout;
+    this.demand.signal?.throwIfAborted();
+    return unchanged;
+  }
+
+  projectionCheckout(checkout: Checkout): Checkout {
+    // A corroborated physical root keeps subsequent bundled Git commands on
+    // this clone even if the provider's original alias moves again.
+    return !this.hints.requiresGitDiscovery && this.checkoutWitnesses.has(checkout.cwd)
+      ? { ...checkout, cwd: checkout.root } : checkout;
   }
 
   readyWorktreeInventory(commonDir: string): ReadonlySet<string> | undefined {
@@ -174,14 +217,14 @@ export class StackReadObservation {
     if (!checkout || checkout === "unavailable" || checkout.root !== before.root || checkout.commonDir !== before.commonDir) return undefined;
     let roots: ReadonlySet<string> | undefined;
     try {
-      // Worktree-specific configuration and includes can make a sibling's
-      // setup differ from the seed's. Check the confirmed root even if its
-      // original spelling was an alias.
-      const config = await git(checkout.root, ["config", "--local", "--no-includes", "--null", "--list"], demand, true);
-      const keys = config.split("\0").map((entry) => entry.split("\n", 1)[0]!);
-      if (!keys.some((key) => /^(?:include(?:if)?\.|core\.worktree$|extensions\.worktreeconfig$)/.test(key))) {
+      // Follow unconditional includes in all config scopes. Git reports
+      // conditional directives even when their target is disabled at the seed.
+      const keys = await git(checkout.root, ["config", "--includes", "--null", "--name-only", "--list"], demand, true);
+      if (!configCanVaryAcrossWorktrees(keys, before.commonDir)) {
         const output = await git(checkout.root, ["worktree", "list", "--porcelain", "-z"], demand, true);
-        roots = new Set(checkedOutWorktrees(output).map(({ path }) => path));
+        roots = new Set(worktreeRecords(output).filter(({ entries, branch }) =>
+          (branch || entries.includes("detached")) && !entries.some((entry) => /^prunable(?: |$)/.test(entry)))
+          .map(({ path }) => path));
       }
     } catch {
       demand.signal?.throwIfAborted();
@@ -301,13 +344,17 @@ export async function readLiveStackCatalogs(directories: readonly string[], dema
   return await new StackReadObservation({ priority: () => PR_METADATA_PRIORITY.selected, ...demand }).checkoutCatalogs(directories);
 }
 
-function checkedOutWorktrees(output: string): StackWorktree[] {
+function worktreeRecords(output: string) {
   return output.split("\0\0").flatMap((record) => {
     const entries = record.split("\0");
     const worktree = entries.find((entry) => entry.startsWith("worktree "))?.slice(9);
     const branch = entries.find((entry) => entry.startsWith("branch refs/heads/"))?.slice(18);
-    return worktree && branch ? [{ path: path.normalize(worktree), branch }] : [];
+    return worktree ? [{ path: path.normalize(worktree), branch, entries }] : [];
   });
+}
+
+function checkedOutWorktrees(output: string): StackWorktree[] {
+  return worktreeRecords(output).flatMap(({ path, branch }) => branch ? [{ path, branch }] : []);
 }
 
 type Refs = Map<string, { head?: string; upstream?: string }>;
@@ -587,26 +634,34 @@ export class StackReader {
     const ready = useWorktreeInventory ? observation.readyWorktreeInventory(candidates[0]!) : undefined;
     const identity = candidates.length ? await hints.checkoutIdentity(cwd) : undefined;
     const before = identity && candidates.includes(identity.commonDir) ? identity : undefined;
+    const checkRegistration = useWorktreeInventory && before?.registeredWorktree;
     const version = before?.version ?? (!candidates.length ? hints.installedGitVersion : undefined);
     const key = (!hints.requiresGitDiscovery ? before?.physicalDirectory : undefined) ?? cwd;
+    const recordWitness = (checkout: CheckoutLookup, corroborated: boolean) => {
+      if (before && checkout && checkout !== "unavailable" && corroborated) {
+        observation.recordCheckoutWitness(cwd, before.version);
+      }
+      return checkout;
+    };
     const cached = this.inventoryCheckouts.get(key);
-    if (version && cached?.version === version && cached.expiresAt > this.now()) {
-      return cached.checkout && { ...cached.checkout, cwd };
+    if (!checkRegistration && version && cached?.version === version && cached.expiresAt > this.now()) {
+      return recordWitness(cached.checkout && { ...cached.checkout, cwd }, true);
     }
     this.inventoryCheckouts.delete(key);
 
     const remember = (checkout: Checkout | undefined) => {
-      if (!version) return;
+      // Roster admission depends on effective config that can change between
+      // observations, including protected config outside this repository.
+      if (!version || checkRegistration) return;
       const expiresAt = hints.installedGitVersion ? this.now() + 30_000 : Infinity;
       this.inventoryCheckouts.set(key, { version, checkout, expiresAt });
       if (this.inventoryCheckouts.size > 2_048) this.inventoryCheckouts.delete(this.inventoryCheckouts.keys().next().value!);
     };
-    if (useWorktreeInventory && before) {
+    if (checkRegistration) {
       const checkout = await observation.registeredCheckout(cwd, before, ready);
       if (checkout) {
         inventoryDemand.signal?.throwIfAborted();
-        remember(checkout);
-        return checkout;
+        return recordWitness(checkout, true);
       }
     }
 
@@ -620,17 +675,18 @@ export class StackReader {
       return { cwd, checkout, corroborated };
     };
     if (!version || observation.hasCheckoutLookup(cwd)) {
-      return (await read(inventoryDemand, () => observation.checkoutLookup(cwd, inventoryDemand))).checkout;
+      const result = await read(inventoryDemand, () => observation.checkoutLookup(cwd, inventoryDemand));
+      return recordWitness(result.checkout, result.corroborated);
     }
     const result = await this.sharedInventoryCheckout(key, version, inventoryDemand,
       (demand) => read(demand, () => locateCheckout(cwd, demand), createStackCheckoutHints(demand)));
     const { checkout } = result;
-    if (result.cwd === cwd) return checkout;
+    if (result.cwd === cwd) return recordWitness(checkout, result.corroborated);
     // Another spelling can use only positive evidence for its verified
     // physical checkout. A moved or unreadable alias speaks for itself.
     if (before && result.corroborated && checkout && checkout !== "unavailable"
       && checkout.root === before.root && checkout.commonDir === before.commonDir
-      && (await hints.checkoutIdentity(cwd))?.version === version) return { ...checkout, cwd };
+      && (await hints.checkoutIdentity(cwd))?.version === version) return recordWitness({ ...checkout, cwd }, true);
     return await observation.checkoutLookup(cwd, inventoryDemand);
   }
 
@@ -643,7 +699,7 @@ export class StackReader {
 
   private async readProjection(threads: readonly StackThreadRow[], knownPrs: readonly PrSummary[],
     directories: readonly string[] | undefined, activity: ((threadKey: string) => Promise<{ held?: boolean; repair?: boolean }>) | undefined,
-    observation: StackReadObservation, catalogRetried: boolean, validateAttachments?: ValidateStackAttachments,
+    observation: StackReadObservation, retried: boolean, validateAttachments?: ValidateStackAttachments,
   ): Promise<{ stacks: StackSummary[]; catalogs: CatalogRead[] }> {
     const { demand, hints, inventoryDemand } = observation;
     demand.signal?.throwIfAborted();
@@ -788,7 +844,7 @@ export class StackReader {
     if (scopedClones.size && (await Promise.all(
       [...scopedClones.keys()].map((commonDir) => observation.revalidateCatalog(commonDir)),
     )).some(Boolean)) {
-      if (catalogRetried) return { stacks: [], catalogs: [{ status: "unavailable" }] };
+      if (retried) return { stacks: [], catalogs: [{ status: "unavailable" }] };
       return await this.readProjection(threads, knownPrs, directories, activity, new StackReadObservation(demand), true, validateAttachments);
     }
     const checkouts = new Map(anchors.map((entry) => [entry.cwd, entry] as const));
@@ -799,14 +855,20 @@ export class StackReader {
     }
     const cloneCheckouts = directories ? scopedClones : new Map([...checkouts.values()]
       .filter((checkout) => wanted.has(checkout.commonDir)).map((checkout) => [checkout.commonDir, checkout]));
+    let validatedAny = false;
     const rows = validateAttachments ? await Promise.all(local.map(async (row) => {
       if (!row.prs?.length || !threadDirectories(row).some((cwd) => {
         const checkout = checkouts.get(cwd);
         return checkout && cloneCheckouts.has(checkout.commonDir);
       })) return row;
+      validatedAny = true;
       return { ...row, prs: await validateAttachments({ ...row, prs: row.prs }) };
     })) : local;
     demand.signal?.throwIfAborted();
+    if (validatedAny && !await observation.checkoutsStillMatch(checkouts.values())) {
+      if (retried) return { stacks: [], catalogs: [{ status: "unavailable" }] };
+      return await this.readProjection(threads, knownPrs, directories, activity, new StackReadObservation(demand), true, validateAttachments);
+    }
     const cloneThreads = new Map<string, CloneThread[]>();
     for (const row of rows) {
       const pathsByClone = new Map<string, string[]>();
@@ -828,7 +890,8 @@ export class StackReader {
       const catalog = await observation.catalog(checkout.commonDir);
       return {
         catalog,
-        ...await projectClone({ ...checkout, catalog }, cloneThreads.get(checkout.commonDir) ?? [], knownPrs, demand),
+        ...await projectClone({ ...(validatedAny ? observation.projectionCheckout(checkout) : checkout), catalog },
+          cloneThreads.get(checkout.commonDir) ?? [], knownPrs, demand),
       };
     }));
     if (directories && unavailablePaths.size && !unavailable.length) {
