@@ -156,6 +156,14 @@ shapes the platform's own web client uses:
    them. Every request is a read, so after the runtime closes the next request
    opens the VM again with a fresh ticket.
 
+5. **Choosing a swarm.** The New run form lists the team's swarms instead of asking
+   for IDs: every session on the VM (`sessions.list`, else `conversation.list`, at
+   most 200), then each session's running or latest swarm from its read-only
+   `swarm.status`, eight at a time. Sessions that started none are skipped; a VM
+   with none says so, and a refusal is shown rather than an empty list. Choosing
+   one fills the project, session and swarm and titles the run with its task.
+   Older swarms of a session that started several are reachable by typing IDs.
+
 A run records its source at admission (`sourceKey`: the platform origin and team,
 or the bridge program). Reconcile refuses a connection from a different source,
 since another deployment or team can hold the same project, session and swarm
