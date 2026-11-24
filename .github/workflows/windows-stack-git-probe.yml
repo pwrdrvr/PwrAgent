@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 3
+          fetch-depth: 10
       - uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f
         with:
           node-version: "^24.22.1"
@@ -33,4 +33,7 @@ jobs:
         run: >-
           pnpm test apps/desktop/src/main/__tests__/windows-git-job-launcher.test.ts
           apps/desktop/src/main/__tests__/windows-job-wrapper.test.ts
-          apps/desktop/src/main/__tests__/pr-discovery-launch.property.test.ts
+          apps/desktop/src/main/__tests__/git-owned-readiness.test.ts
+          apps/desktop/src/main/__tests__/stack-reader.property.test.ts
+          apps/desktop/scripts/asar-entry-paths.test.mjs
+          apps/desktop/scripts/verify-asar-contents.test.mjs

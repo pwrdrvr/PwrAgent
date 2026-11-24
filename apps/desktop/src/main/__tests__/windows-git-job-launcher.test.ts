@@ -11,6 +11,10 @@ import { readWindowsJobStartupTelemetry, windowsJobCleanupVerified, wrapCommandI
 
 const fixture = vi.hoisted(() => ({ launcher: "" }));
 vi.mock("../windows-job-launcher-path", () => ({ windowsGitJobLauncher: () => fixture.launcher }));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, spawn: vi.fn(actual.spawn) };
+});
 
 describe.skipIf(process.platform !== "win32")("compiled Windows stack Git launcher", () => {
   let sandbox: string;
@@ -38,7 +42,8 @@ describe.skipIf(process.platform !== "win32")("compiled Windows stack Git launch
   });
 
   it("matches direct Git for each stack command and honors the selected executable and Git environment", async () => {
-    const spawn = vi.spyOn(childProcess, "spawn");
+    const spawn = vi.mocked(childProcess.spawn);
+    spawn.mockClear();
     try {
       const env = {
         ...process.env, PWRAGENT_GIT_PATH: git, GIT_CONFIG_COUNT: "1",
@@ -58,7 +63,7 @@ describe.skipIf(process.platform !== "win32")("compiled Windows stack Git launch
       }
       expect(spawn.mock.calls.map(([command]) => command)).toEqual(commands.map(() => fixture.launcher));
     } finally {
-      spawn.mockRestore();
+      spawn.mockClear();
     }
   }, 30_000);
 
@@ -98,7 +103,8 @@ describe.skipIf(process.platform !== "win32")("compiled Windows stack Git launch
       cwd: process.env.FIXTURE_WORKTREE, stdio: 'ignore', windowsHide: true
     }).unref();`;
     const controller = new AbortController();
-    const spawn = vi.spyOn(childProcess, "spawn");
+    const spawn = vi.mocked(childProcess.spawn);
+    spawn.mockClear();
     const read = runPrMetadataGit(checkout, ["-e", driver], {
       timeout: stop === "timeout" ? 5_000 : 30_000,
       env: { ...process.env, PWRAGENT_GIT_PATH: process.execPath, FIXTURE_WORKTREE: checkout, FIXTURE_PID: pidFile },
@@ -106,8 +112,11 @@ describe.skipIf(process.platform !== "win32")("compiled Windows stack Git launch
     }, { signal: controller.signal, priority: () => PR_METADATA_PRIORITY.selected });
     void read.catch(() => undefined);
     try {
-      const pid = await vi.waitFor(async () => Number(await readFile(pidFile, "utf8")), { timeout: 10_000 });
-      expect(pid).toBeGreaterThan(0);
+      const pid = await vi.waitFor(async () => {
+        const recorded = Number(await readFile(pidFile, "utf8"));
+        expect(recorded).toBeGreaterThan(0);
+        return recorded;
+      }, { timeout: 10_000 });
       const launch = spawn.mock.calls.find(([command]) => command === fixture.launcher);
       const startupStatusFilePath = (launch?.[2] as childProcess.SpawnOptions | undefined)?.env?.PWRAGENT_JOB_WRAPPER_STARTUP_STATUS_FILE;
       expect(startupStatusFilePath).toBeTruthy();
@@ -128,7 +137,7 @@ describe.skipIf(process.platform !== "win32")("compiled Windows stack Git launch
     } finally {
       controller.abort();
       await read.catch(() => undefined);
-      spawn.mockRestore();
+      spawn.mockClear();
     }
   }, 30_000);
 });

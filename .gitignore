@@ -33,7 +33,6 @@ apps/desktop/build/bundled-agents/grok/
 apps/desktop/build/bundled-tools/ripgrep/
 apps/desktop/build/native/
 apps/desktop/build/mcp-ipc-relay/
-apps/desktop/build/windows-job-launcher/
 
 # Release-time secrets — must never land in the repo
 .envrc.release

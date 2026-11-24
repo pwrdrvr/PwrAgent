@@ -33,6 +33,9 @@ asarUnpack:
   # Run Anthropic's original native CLI directly from the installed package.
   - "node_modules/@anthropic-ai/claude-agent-sdk-*/claude{,.exe}"
   - "**/*.node"
+  # Run the precompiled Windows Job launcher directly and let Windows signing
+  # cover it alongside the app's other unpacked executables.
+  - "out/main/pwragent-windows-job.exe"
   # @napi-rs/canvas loads its ICU data beside the Windows native binding.
   - "node_modules/@napi-rs/canvas-win32-x64-msvc/**/*"
 compression: normal
@@ -251,8 +254,6 @@ win:
   extraResources:
     - from: resources/embedded-git
       to: git
-    - from: build/windows-job-launcher/pwragent-windows-job.exe
-      to: windows-job-launcher/pwragent-windows-job.exe
   icon: build/icon.png
   # Windows .ico is generated from the 512x512 build/icon.png by electron-builder.
   artifactName: "${productName}-${version}-windows-${arch}.${ext}"

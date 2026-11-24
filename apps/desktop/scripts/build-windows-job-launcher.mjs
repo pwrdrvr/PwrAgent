@@ -7,7 +7,7 @@ import { WINDOWS_JOB_RUNNER_SOURCE } from "../src/main/windows-job-wrapper.ts";
 const scriptPath = fileURLToPath(import.meta.url);
 const desktop = path.resolve(path.dirname(scriptPath), "..");
 
-export function buildWindowsJobLauncher(directory = path.join(desktop, "build/windows-job-launcher")) {
+export function buildWindowsJobLauncher(directory = path.join(desktop, "out/main")) {
   if (process.platform !== "win32") return;
   const output = path.resolve(directory, "pwragent-windows-job.exe");
   const framework = process.arch === "ia32" ? "Framework" : "Framework64";
