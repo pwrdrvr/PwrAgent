@@ -124,12 +124,18 @@ function stripShellWrapper(command: string): string {
     .trim();
 }
 
-/** A command on one line, without its shell wrapper or outer quotes. */
+/**
+ * A command on one line, without its shell wrapper or the quotes that wrapper
+ * put around the script. A bare command keeps its own quotes: `echo "done"`
+ * is not `echo "done`.
+ */
 export function normalizeCommandText(command: string): string {
-  return stripShellWrapper(command)
-    .replace(/^['"]|['"]$/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  const trimmed = command.trim();
+  const unwrapped = stripShellWrapper(trimmed);
+  const script = unwrapped === trimmed
+    ? unwrapped
+    : unwrapped.replace(/^(['"])([\s\S]*)\1$/, "$2");
+  return script.replace(/\s+/g, " ").trim();
 }
 
 /**
