@@ -241,11 +241,17 @@ import {
 } from "../../lib/federated-thread-events";
 import { threadJobMonitorControl } from "../../lib/job-monitor-control";
 import {
-  acpRuntimeModeRequiresFullAccess,
   formatExecutionModeLabel,
   describeExecutionModeForBackend,
   getAcpRuntimeModeControl,
 } from "../../lib/execution-mode";
+import { acpRuntimeModeIsFullAccess } from "@pwragent/shared/acp-permission-mode";
+import {
+  backendDefaultModel as getDefaultModelOption,
+  backendDefaultReasoningEffort as getDefaultReasoningEffort,
+  backendReasoningEfforts as getReasoningEffortsForModel,
+  backendReasoningEffortValue as getReasoningEffortValue,
+} from "@pwragent/shared/model-defaults";
 import { isSameWorktreeSubthreadLaunchpad } from "../../lib/subthread-launchpads";
 import {
   buildDirectoryReferenceInsertText,
@@ -1053,7 +1059,6 @@ type ReviewWorkspaceOption = {
   path: string;
 };
 
-const DEFAULT_REASONING_EFFORT = "medium";
 
 /** Backends whose turns take Plan: Codex's collaboration mode, Claude's plan permission mode. */
 const PLAN_MODE_BACKENDS: ReadonlySet<string> = new Set(["codex", "claude"]);
@@ -1277,16 +1282,6 @@ function claudeCodeReviewCommands(params: {
   }
 }
 
-/** The model a launchpad without one starts on, as its Model pill shows it. */
-export function getDefaultModelOption(backend?: BackendSummary): ModelOption | undefined {
-  const models = backend?.launchpadOptions?.models ?? [];
-  return (
-    models.find((model) => model.current) ??
-    models.find((model) => model.supportsReasoning) ??
-    models[0]
-  );
-}
-
 /**
  * Resolve what the reviewer chips display. With no override the row mirrors
  * the thread's own settings; with one, every value resolves against the picked
@@ -1358,40 +1353,6 @@ function formatReviewerRecentLabel(
   ]
     .filter((part): part is string => Boolean(part))
     .join(" · ");
-}
-
-function getReasoningEffortsForModel(
-  backend: BackendSummary | undefined,
-  model: ModelOption | undefined,
-): string[] {
-  return model?.reasoningEfforts ?? backend?.launchpadOptions?.reasoningEfforts ?? [];
-}
-
-function getDefaultReasoningEffort(
-  backend: BackendSummary | undefined,
-  model: ModelOption | undefined,
-): string | undefined {
-  const reasoningEfforts = getReasoningEffortsForModel(backend, model);
-  if (
-    model?.defaultReasoningEffort &&
-    reasoningEfforts.includes(model.defaultReasoningEffort)
-  ) {
-    return model.defaultReasoningEffort;
-  }
-  return reasoningEfforts.includes(DEFAULT_REASONING_EFFORT)
-    ? DEFAULT_REASONING_EFFORT
-    : reasoningEfforts[0];
-}
-
-function getReasoningEffortValue(
-  backend: BackendSummary | undefined,
-  model: ModelOption | undefined,
-  currentValue: string | undefined,
-): string | undefined {
-  const reasoningEfforts = getReasoningEffortsForModel(backend, model);
-  return reasoningEfforts.includes(currentValue ?? "")
-    ? currentValue
-    : getDefaultReasoningEffort(backend, model);
 }
 
 function buildReviewBranchPickerOptions(params: {
@@ -7878,6 +7839,11 @@ function useComposerController(props: ComposerProps) {
                 : {}),
             }),
       });
+      // Claude publishes the /code-review user message when it accepts the
+      // turn. It has no review-start item to replace the temporary header.
+      if (claudeCodeReview && optimisticReviewId) {
+        props.removeOptimisticMessage?.(optimisticReviewId);
+      }
       if (pickedReviewer) {
         // Only an explicit pick is worth replaying; recording inherited
         // settings would push real picks off the list.
@@ -15776,7 +15742,7 @@ function useComposerController(props: ComposerProps) {
               options={acpRuntimeModeControl.options}
               onChange={(value) => {
                 if (props.launchpad) {
-                  const executionMode = acpRuntimeModeRequiresFullAccess(value)
+                  const executionMode = acpRuntimeModeIsFullAccess(value)
                     ? "full-access"
                     : "default";
                   handleLaunchpadPatch({

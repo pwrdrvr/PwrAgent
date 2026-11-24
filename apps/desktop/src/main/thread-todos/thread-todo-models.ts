@@ -1,4 +1,5 @@
 import type { BackendLaunchpadOptions, BackendModelOption } from "@pwragent/shared/contracts/backend";
+import { modelOptionFor, reasoningEffortsForModel } from "@pwragent/shared/model-defaults";
 
 export type ThreadTodoModelResolution =
   | { ok: true; model?: string; reasoningEffort?: string }
@@ -13,7 +14,8 @@ export type ThreadTodoModelResolution =
  * The model may be named by id or by the label the composer shows, in any
  * case; the card stores the id. An effort is checked against the model it
  * will run on: the card's model, else the raising thread's (`threadModel`,
- * which a handoff inherits), else the backend default.
+ * which a handoff inherits), else the model the owner starts the backend on
+ * (`modelOptionFor`, with `validation.backend` naming the backend).
  *
  * An empty catalog (discovery has not answered, or the agent lists none)
  * preserves legacy inheritance unless requireCatalog is set for an explicit
@@ -23,7 +25,7 @@ export function resolveThreadTodoModel(
   options: BackendLaunchpadOptions | undefined,
   requested: { model?: string; reasoningEffort?: string },
   threadModel?: string,
-  validation: { requireCatalog?: boolean } = {},
+  validation: { requireCatalog?: boolean; backend?: string } = {},
 ): ThreadTodoModelResolution {
   const models = options?.models ?? [];
   if (models.length === 0) {
@@ -46,17 +48,14 @@ export function resolveThreadTodoModel(
   if (!requested.reasoningEffort) {
     return { ok: true, ...(model ? { model } : {}) };
   }
-  const effective = selected
-    ?? models.find((entry) => entry.id === threadModel)
-    ?? models.find((entry) => entry.current)
-    ?? models[0]!;
+  const effective = selected ?? modelOptionFor(validation.backend, options, [threadModel])!;
   if (effective.supportsReasoning === false) {
     return {
       ok: false,
       message: `${describeModel(effective)} does not take a reasoning effort.`,
     };
   }
-  const efforts = effective.reasoningEfforts ?? options?.reasoningEfforts ?? [];
+  const efforts = reasoningEffortsForModel(options, effective);
   if (validation.requireCatalog && efforts.length === 0) {
     return { ok: false, message: `Cannot validate reasoning effort for ${describeModel(effective)}: no efforts were reported.` };
   }

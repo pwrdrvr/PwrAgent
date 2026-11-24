@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -1443,6 +1445,41 @@ describe("Claude SDK backend", () => {
     await f.waitForTurn();
     // An update naming every window is a reading of all of them.
     expect(f.backend.limitObservation()!.observedAt).toBeGreaterThanOrEqual(first + 60_000);
+  });
+
+  it("puts Claude Code's settings back when a gateway sign-in is cancelled, and keeps them once it finishes", async () => {
+    const f = await fixture();
+    const settingsFile = path.join(f.root, "claude-settings.json");
+    await writeFile(settingsFile, JSON.stringify({ model: "opus" }));
+    const children: Array<{ stdout: PassThrough }> = [];
+    const spawnGatewaySignIn = (() => {
+      const child = Object.assign(new EventEmitter(), {
+        stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
+        exitCode: null, signalCode: null, kill: () => true,
+      });
+      children.push(child);
+      return child;
+    }) as never;
+    const backend = f.openBackend({
+      ...f.backendOptions, spawnGatewaySignIn, claudeSettingsPath: () => settingsFile, openExternal: async () => {},
+    });
+    f.backendOptions.inspectInstallation.mockResolvedValue({
+      executable: "/fixture/claude", version: "2.1.330", gatewaySignIn: true, authStatus: "signed-in", authMethod: "claude-account",
+    } as never);
+    await backend.discover({ models: false });
+
+    const started = await backend.claudeGateway({ action: "start", url: "https://gateway.example.com/" });
+    expect(JSON.parse(await readFile(settingsFile, "utf8"))).toEqual({
+      model: "opus", forceLoginMethod: "gateway", forceLoginGatewayUrl: "https://gateway.example.com",
+    });
+    await backend.claudeGateway({ action: "cancel", id: started.progress!.id });
+    await vi.waitFor(async () => expect(JSON.parse(await readFile(settingsFile, "utf8"))).toEqual({ model: "opus" }));
+
+    const second = await backend.claudeGateway({ action: "start", url: "https://gateway.example.com" });
+    children.at(-1)!.stdout.write(`${JSON.stringify({ version: 1, state: "done" })}\n`);
+    await vi.waitFor(async () => expect((await backend.claudeGateway({ action: "wait", id: second.progress!.id, after: 0 })).progress?.step)
+      .toEqual({ state: "done" }));
+    expect(JSON.parse(await readFile(settingsFile, "utf8"))).toMatchObject({ forceLoginMethod: "gateway" });
   });
 
   it("clears remembered limits when Claude is signed out", async () => {

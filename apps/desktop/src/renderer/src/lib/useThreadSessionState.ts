@@ -16,7 +16,7 @@ import {
   transitionSafetyBuffering,
   type SafetyBufferingState,
 } from "./safety-buffering-session";
-import { useThreadUsageDisplay } from "./useThreadUsageDisplay";
+import { applyThreadUsageDisplay, readThreadUsageDisplay, useThreadUsageDisplay } from "./useThreadUsageDisplay";
 import { useSessionIndicatorKeys } from "./session-indicator-keys";
 import {
   anchorTurnUsageEntries,
@@ -96,8 +96,9 @@ import {
   isTurnAnswer,
   lateWorkBelongsAboveAnswer,
 } from "../features/thread-detail/turn-answer-placement";
-import { THREAD_HISTORY_PAGE_LIMIT } from "./thread-history-limits";
+import { DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT, THREAD_HISTORY_PAGE_LIMIT } from "./thread-history-limits";
 import {
+  appendTranscriptHistoryPage,
   combineTranscriptEntries,
   combineTranscriptMessages,
   combineTranscriptResponse,
@@ -108,11 +109,13 @@ import {
   type TranscriptHistoryIndex,
 } from "./segmented-transcript";
 import { normalizeTranscriptText } from "./transcript-review-presentation";
+import { hasMatchingReplayReview, isReviewStartEntry, reviewEntriesMatch, reviewEntryLabels } from "./transcript-review-matching";
 
 const MAX_VIEW_ONLY_THREADS = 10;
 const EMPTY_EXPANDED_TRANSCRIPT_ACTIVITY_IDS: string[] = [];
 const EMPTY_EXPANDED_TRANSCRIPT_WORK_PHASE_GROUP_IDS: string[] = [];
 const OWN_UPDATE_IDLE_GRACE_MS = 1_500;
+const WARM_TAIL_ROWS = 2 * DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT;
 const SUPPORTED_APPROVAL_REQUEST_METHODS = new Set([
   "turn/requestApproval",
   "review/requestApproval",
@@ -207,6 +210,7 @@ type ThreadSessionEntry = ThreadActiveTurnState & ThreadPendingInteractionState 
    * page that shares one of these turns continues the tail without a gap.
    */
   providerPageTurnIds?: ReadonlySet<string>;
+  providerPageAnchorTurnId?: string;
   needsHydrationAfterCompletion: boolean;
   nextLiveEntrySequence: number;
   // ThreadView's completed live aggregates live in a keyed ref store. State
@@ -482,15 +486,14 @@ function preserveReviewMetadata(
   ) {
     return replacementEntry;
   }
+  const context = replacementEntry.context ?? existingEntry.context;
+  const reviewer = replacementEntry.reviewer ?? existingEntry.reviewer;
+  if (context === replacementEntry.context && reviewer === replacementEntry.reviewer) return replacementEntry;
 
   return {
     ...replacementEntry,
-    ...(replacementEntry.context ?? existingEntry.context
-      ? { context: replacementEntry.context ?? existingEntry.context }
-      : {}),
-    ...(replacementEntry.reviewer ?? existingEntry.reviewer
-      ? { reviewer: replacementEntry.reviewer ?? existingEntry.reviewer }
-      : {}),
+    ...(context ? { context } : {}),
+    ...(reviewer ? { reviewer } : {}),
   };
 }
 
@@ -1193,6 +1196,38 @@ function preserveRetainedTranscriptTail(
   };
 }
 
+function retainSettledTranscriptPrefix(
+  response: AppServerReadThreadResponse,
+  history: LoadedTranscriptHistory | undefined,
+  index: TranscriptHistoryIndex,
+  usage: AppServerThreadActivityEntry[],
+) {
+  const { entries, messages } = response.replay;
+  if (entries.length <= 2 * WARM_TAIL_ROWS) return undefined;
+  // Leave a viewport's worth of recent rows and never split a turn. A large
+  // run may occupy the working tail until later turns supply a boundary.
+  const target = entries.length - WARM_TAIL_ROWS;
+  const recentTurns = new Set(entries.slice(target).map((row) => row.turn?.id).filter(Boolean));
+  const firstOpen = entries.findIndex((row, position) => position >= target
+    || (row.turn?.id && (recentTurns.has(row.turn.id) || row.turn.status === "in_progress"))
+    || isPendingEntryId(row.id));
+  if (firstOpen <= 0) return undefined;
+  const settled = entries.slice(0, firstOpen);
+  const tail = entries.slice(firstOpen);
+  return {
+    history: appendTranscriptHistoryPage({
+      history, index, tailEntries: tail,
+      page: { ...response, replay: { ...response.replay, entries: applyThreadUsageDisplay(settled, usage), messages } },
+    }),
+    response: {
+      ...response,
+      replay: { ...response.replay, entries: tail, messages: transcriptMessagesForEntries(tail, messages, []) },
+    },
+    settledIds: new Set(settled.map((entry) => entry.id)),
+    tailTurns: transcriptTurnIds(tail),
+  };
+}
+
 function reconcileRetainedTranscriptTail(
   freshEntries: AppServerThreadEntry[],
   retainedEntries: AppServerThreadEntry[],
@@ -1847,15 +1882,7 @@ function pruneOptimisticEntries(
     }
 
     if (entry.type === "review") {
-      return !response.replay.entries.some(
-        (candidate) =>
-          candidate.type === "review"
-          && reviewEntriesMatch(candidate, entry)
-          // Running snapshots can regress. Keep the live fallback until a
-          // terminal snapshot acknowledges it; presentation still deduplicates
-          // against whichever snapshot is currently visible.
-          && !(options.retainInProgressReviews && candidate.turn?.status === "in_progress")
-      );
+      return !hasMatchingReplayReview(response.replay.entries, entry, options.retainInProgressReviews);
     }
 
     if (entry.type === "activity") {
@@ -2622,66 +2649,6 @@ function isDurableDiffActivity(
     entry.type === "activity" &&
     entry.details.some((detail) => Boolean(detail.fileDiff?.diff))
   );
-}
-
-function reviewEntriesMatch(
-  candidate: AppServerThreadReviewEntry,
-  optimisticEntry: AppServerThreadReviewEntry
-): boolean {
-  const candidateIsStart = isReviewStartEntry(candidate);
-  const optimisticIsStart = isReviewStartEntry(optimisticEntry);
-  if (candidateIsStart !== optimisticIsStart) {
-    return false;
-  }
-
-  const candidateTurnId = candidate.turn?.id;
-  const optimisticTurnId = optimisticEntry.turn?.id;
-  if (candidateTurnId && optimisticTurnId) {
-    if (candidateTurnId !== optimisticTurnId) {
-      return false;
-    }
-    if (candidateIsStart) {
-      return true;
-    }
-  }
-
-  if (candidateIsStart && (candidateTurnId || optimisticTurnId)) {
-    const authoritativeEntry = candidateTurnId ? candidate : optimisticEntry;
-    if (authoritativeEntry.turn?.status !== "in_progress") {
-      return false;
-    }
-  }
-
-  const candidateLabels = reviewEntryLabels(candidate);
-  const optimisticLabels = reviewEntryLabels(optimisticEntry);
-  return optimisticLabels.some((label) => candidateLabels.includes(label));
-}
-
-function isReviewStartEntry(entry: AppServerThreadReviewEntry): boolean {
-  const displayText = entry.displayText?.trim();
-  if (!displayText || entry.output) {
-    return false;
-  }
-
-  if (entry.turn?.status === "in_progress") {
-    return true;
-  }
-
-  const normalizedDisplayText = normalizeReviewDisplayText(displayText).toLocaleLowerCase();
-  const normalizedReview = normalizeReviewDisplayText(entry.review).toLocaleLowerCase();
-  return (
-    normalizedDisplayText === normalizedReview ||
-    normalizedDisplayText === "code review started" ||
-    normalizedDisplayText.startsWith("review changes") ||
-    normalizedDisplayText.startsWith("review current") ||
-    normalizedDisplayText.startsWith("review commit")
-  );
-}
-
-function reviewEntryLabels(entry: AppServerThreadReviewEntry): string[] {
-  return [entry.displayText, entry.review]
-    .filter((value): value is string => Boolean(value?.trim()))
-    .map((value) => normalizeReviewDisplayText(value).toLocaleLowerCase());
 }
 
 function optimisticMessageEntries(
@@ -5504,6 +5471,9 @@ export function useThreadSessionState(params: {
   } | undefined>(undefined);
   const reconciledLaunchpadMessageIdsRef = useRef<Record<string, string>>({});
   const loadedHistoryIndexesRef = useRef<Record<string, TranscriptHistoryIndex>>({});
+  const tailUsageDisplayRef = useRef<{
+    threadKey: string; revision: string | undefined; entries: AppServerThreadActivityEntry[];
+  } | undefined>(undefined);
   // Avoid copying and rescanning every previously retained live aggregate on
   // each ThreadView callback. Map insertion order preserves same-id upserts.
   const retainedLiveEntriesRef = useRef<
@@ -5851,6 +5821,14 @@ export function useThreadSessionState(params: {
             || lifecycleChangedDuringRead || transcriptChangedDuringRead;
           const pageTurnIds = transcriptTurnIds(response.replay.entries);
           const previousPageTurnIds = current.providerPageTurnIds;
+          const recoveringStream = (current.hydratedStreamRecoveryVersion ?? 0) !== streamRecoveryVersion;
+          // Once the provider page has retired from the working tail, only
+          // its last owner-confirmed turn can still prove this bridge. The
+          // observed live tail alone cannot prove continuity.
+          const lostRetiredPageBridge = Boolean(current.loadedHistory)
+            && !previousPageTurnIds?.size
+            && Boolean(loadedHistoryIndexesRef.current[targetThreadKey]?.warmEntryIds.size)
+            && (current.providerPageAnchorTurnId === undefined || !pageTurnIds.has(current.providerPageAnchorTurnId));
           // A bridge assumes the page continues the provider rows above it.
           // A page cursor falls between turns, so that holds only when the page
           // shares a turn with them. Otherwise turns can lie between the two
@@ -5861,19 +5839,27 @@ export function useThreadSessionState(params: {
           const skipsProviderTurns = bridgesRetainedRows
             && response.replay.pagination.supportsPagination
             && response.replay.pagination.hasPreviousPage
-            && previousPageTurnIds !== undefined
-            && previousPageTurnIds.size > 0
-            && ![...previousPageTurnIds].some((turnId) => pageTurnIds.has(turnId));
+            && (lostRetiredPageBridge || (previousPageTurnIds && previousPageTurnIds.size > 0
+              && ![...previousPageTurnIds].some((turnId) => pageTurnIds.has(turnId))));
           if (skipsProviderTurns) {
             delete loadedHistoryIndexesRef.current[targetThreadKey];
           }
-          const responseWithRetainedTail = preserveRetainedTranscriptTail(
-            orderedResponse,
-            skipsProviderTurns && current.response && previousPageTurnIds
-              ? withoutTranscriptTurns(current.response, previousPageTurnIds)
-              : current.response,
-            bridgesRetainedRows,
-          );
+          let retainedResponse = current.response;
+          if (skipsProviderTurns && retainedResponse) {
+            if (lostRetiredPageBridge) {
+              const versions = liveItemVersionsRef.current.get(targetThreadKey);
+              const entries = retainedResponse.replay.entries.filter((entry) =>
+                (versions?.get(entry.id) ?? 0) > (liveTranscriptVersion ?? 0));
+              retainedResponse = {
+                ...retainedResponse, replay: {
+                  ...retainedResponse.replay, entries, messages: transcriptMessagesForEntries(entries, retainedResponse.replay.messages),
+                },
+              };
+            } else if (previousPageTurnIds) {
+              retainedResponse = withoutTranscriptTurns(retainedResponse, previousPageTurnIds);
+            }
+          }
+          const responseWithRetainedTail = preserveRetainedTranscriptTail(orderedResponse, retainedResponse, bridgesRetainedRows);
           const providerPageTurnIds =
             bridgesRetainedRows && !skipsProviderTurns && previousPageTurnIds
               ? new Set([...previousPageTurnIds, ...pageTurnIds])
@@ -6023,7 +6009,6 @@ export function useThreadSessionState(params: {
           // Recovery can use a revalidated page: an earlier read may have
           // cached the owner's newer reading while a racing event took
           // precedence on screen. Live readings still win during this read.
-          const recoveringStream = (current.hydratedStreamRecoveryVersion ?? 0) !== streamRecoveryVersion;
           const snapshotContextWindow =
             liveContextWindowVersion === liveContextWindowVersionsRef.current.get(targetThreadKey)
             && (!currentAfterStaleThinking.contextWindow
@@ -6068,6 +6053,7 @@ export function useThreadSessionState(params: {
                 }
               : {}),
             providerPageTurnIds,
+            providerPageAnchorTurnId: [...pageTurnIds].at(-1),
             loading: false,
             completionHydrationRetries,
             compactionOrderSources: undefined,
@@ -6751,6 +6737,8 @@ export function useThreadSessionState(params: {
         conditionalReadsRef.current.delete(targetThreadKey);
       }
 
+      let retainedPrefix: ReturnType<typeof retainSettledTranscriptPrefix>;
+      let retainedPrefixSource: ThreadSessionEntry | undefined;
       updateSession(targetThreadKey, (session) => {
         const transitioned = transitionSafetyBuffering(
           transitionTransientMessagesAtBoundary(session, event.notification),
@@ -7603,6 +7591,21 @@ export function useThreadSessionState(params: {
                   )
                 : entry
             );
+          if (completedTurnMatchesActive && nextResponse && current.hydratedFromOwner
+            && !current.loading && !current.loadingMore && nextResponse.replay.entries.length > 2 * WARM_TAIL_ROWS
+            && retainedPrefixSource !== session) {
+            retainedPrefixSource = session;
+            const index = loadedHistoryIndexesRef.current[targetThreadKey] ?? createTranscriptHistoryIndex();
+            const usage = tailUsageDisplayRef.current;
+            retainedPrefix = retainSettledTranscriptPrefix(
+              nextResponse, current.loadedHistory, index,
+              usage?.threadKey === targetThreadKey && usage.revision === nextResponse.display?.revision ? usage.entries : [],
+            );
+            if (retainedPrefix) loadedHistoryIndexesRef.current[targetThreadKey] = index;
+          }
+          const settledOptimisticEntries = retainedPrefix
+            ? remainingOptimisticEntries.filter((entry) => !retainedPrefix?.settledIds.has(entry.id))
+            : remainingOptimisticEntries;
           const retainedLiveEntryStore =
             retainedLiveEntriesRef.current[targetThreadKey];
           let didCompleteRetainedLiveEntry = false;
@@ -7664,11 +7667,16 @@ export function useThreadSessionState(params: {
             optimisticEntries:
               completedUsageActivity
                 ? mergeFinalizedUsageEntry(
-                    remainingOptimisticEntries,
+                    settledOptimisticEntries,
                     completedUsageActivity
                   )
-                : remainingOptimisticEntries,
-            response: nextResponse,
+                : settledOptimisticEntries,
+            ...(retainedPrefix ? {
+              loadedHistory: retainedPrefix.history,
+              providerPageTurnIds: current.providerPageTurnIds
+                && new Set([...current.providerPageTurnIds].filter((id) => retainedPrefix?.tailTurns.has(id))),
+            } : {}),
+            response: retainedPrefix?.response ?? nextResponse,
           };
         }
 
@@ -7786,6 +7794,7 @@ export function useThreadSessionState(params: {
             loading: false,
             loadingMore: false,
             providerPageTurnIds: undefined,
+            providerPageAnchorTurnId: undefined,
             pendingUsageByTurn: undefined,
             pendingStatusText: undefined,
             response: undefined,
@@ -8051,7 +8060,7 @@ export function useThreadSessionState(params: {
           && line.status !== "superseded"
           && line.turnUsageAttributed !== false,
       );
-      const reconciledOlderResponse = hasAuthoritativeTurnUsage
+      let reconciledOlderResponse = hasAuthoritativeTurnUsage
         ? {
             ...olderResponse,
             replay: {
@@ -8065,6 +8074,20 @@ export function useThreadSessionState(params: {
             },
           }
         : olderResponse;
+
+      // Closed pages carry their owner-prepared totals into the history
+      // segment. Streaming rows in the tail never reprocess those pages.
+      if (olderResponse.display && reconciledOlderResponse.replay.entries.length > 0) {
+        const base = reconciledOlderResponse.replay.entries;
+        const activities = await readThreadUsageDisplay({
+          readThread: desktopApi.readThread, thread, target: federationTarget, entries: base,
+          isCurrent: () => (hydrationsRef.current.get(threadKey)?.requestVersion ?? 0) === requestVersion,
+        }).catch(() => []);
+        reconciledOlderResponse = {
+          ...reconciledOlderResponse,
+          replay: { ...reconciledOlderResponse.replay, entries: applyThreadUsageDisplay(base, activities) },
+        };
+      }
 
       if ((hydrationsRef.current.get(threadKey)?.requestVersion ?? 0) !== requestVersion) {
         return;
@@ -8740,12 +8763,19 @@ export function useThreadSessionState(params: {
     ],
   );
 
+  const retainTailUsage = useCallback((entries: AppServerThreadActivityEntry[]) => {
+    if (threadKey) tailUsageDisplayRef.current = { threadKey, revision: selectedSession?.response?.display?.revision, entries };
+  }, [threadKey, selectedSession?.response?.display?.revision]);
+  const tailDisplayEntries = useThreadUsageDisplay({
+    desktopApi, thread, entries: reviewPresentation.tailEntries, response: selectedSession?.response, suspended,
+    onResolved: retainTailUsage,
+  });
   const entries = useMemo(
     () =>
       combineTranscriptEntries(
         selectedSession?.loadedHistory,
         selectedHistoryIndex,
-        reviewPresentation.tailEntries,
+        tailDisplayEntries,
         reviewPresentation,
         selectedRetainedLiveEntries,
       ),
@@ -8754,10 +8784,9 @@ export function useThreadSessionState(params: {
       selectedHistoryIndex,
       selectedSession?.loadedHistory,
       selectedRetainedLiveEntries,
+      tailDisplayEntries,
     ]
   );
-
-  const displayEntries = useThreadUsageDisplay({ desktopApi, thread, entries, response: selectedSession?.response, suspended });
 
   const messages = useMemo(
     () =>
@@ -8895,7 +8924,7 @@ export function useThreadSessionState(params: {
     addOptimisticReviewEntry,
     bindOptimisticUserMessageToTurn,
     clearPendingRequest,
-    entries: displayEntries,
+    entries,
     error: selectedSession?.error,
     initialLoadDurationMs: selectedSession?.initialLoadDurationMs,
     loading: selectedSession?.loading ?? false,

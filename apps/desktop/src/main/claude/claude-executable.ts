@@ -6,6 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { resolveBundledClaudeExecutable } from "./claude-bundled-executable";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
+import { claudeUserSettingsPath, readClaudeGatewayUrl, supportsClaudeGatewaySignIn } from "./claude-gateway";
 
 const runFile = promisify(execFile);
 
@@ -26,7 +27,11 @@ export type ClaudeInstallation = {
   version?: string;
   loginCommand?: string;
   authStatus: "signed-in" | "sign-in-required" | "unknown";
-  authMethod?: "api-key" | "claude-account" | "external";
+  authMethod?: "api-key" | "claude-account" | "gateway" | "external";
+  /** The gateway Claude Code's user settings name for sign-in. */
+  gatewayUrl?: string;
+  /** The selected Claude Code can run the gateway sign-in for PwrAgent. */
+  gatewaySignIn?: boolean;
   message?: string;
 };
 
@@ -156,6 +161,14 @@ export async function signInWithClaudeCode(executable: string, env: NodeJS.Proce
   }
 }
 
+export async function signOutOfClaudeCode(executable: string, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<void> {
+  try {
+    await runClaude(executable, ["auth", "logout"], env, signal, { timeout: 30_000, cwd: os.homedir() });
+  } catch {
+    throw new Error("Claude Code could not sign out. Run `claude auth logout` in your terminal.");
+  }
+}
+
 export async function selectClaudeExecutable(options: {
   system?: string;
   bundled?: string;
@@ -188,6 +201,7 @@ export async function inspectClaudeInstallation(options: {
   resolveBundledExecutable?: () => Promise<string | undefined>;
   readVersion?: (executable: string, env: NodeJS.ProcessEnv) => Promise<string>;
   readAuthStatus?: (executable: string, env: NodeJS.ProcessEnv) => Promise<string>;
+  readGatewayUrl?: (env: NodeJS.ProcessEnv) => Promise<string | undefined>;
 } = {}): Promise<ClaudeInstallation> {
   options.signal?.throwIfAborted();
   const env = claudeEnvironment(options.env ?? process.env);
@@ -203,7 +217,13 @@ export async function inspectClaudeInstallation(options: {
   const executable = selected.executable;
   if (!executable) return { authStatus: "unknown", message: CLAUDE_SETUP_INSTRUCTIONS };
   const loginCommand = selected.source === "bundled" ? claudeLoginCommand(executable) : "claude auth login";
-  const installation = { ...selected, loginCommand };
+  const gatewayUrl = await (options.readGatewayUrl ?? ((launchEnv) => readClaudeGatewayUrl(claudeUserSettingsPath(launchEnv))))(env)
+    .catch(() => undefined);
+  const installation = {
+    ...selected, loginCommand,
+    ...(gatewayUrl ? { gatewayUrl } : {}),
+    ...(supportsClaudeGatewaySignIn(selected.version) ? { gatewaySignIn: true } : {}),
+  };
   try {
     const readAuthStatus = options.readAuthStatus ?? (async (command, launchEnv) => {
       return await runClaude(command, ["auth", "status", "--json"], launchEnv, options.signal).catch((error: unknown) => {
@@ -223,10 +243,12 @@ export async function inspectClaudeInstallation(options: {
         ? "api-key" as const
         : "authMethod" in status && status.authMethod === "claude.ai"
           ? "claude-account" as const
-          : "apiProvider" in status && typeof status.apiProvider === "string"
-            && ["bedrock", "vertex", "foundry", "anthropicAws", "anthropicGoogleCloud", "mantle", "gateway"].includes(status.apiProvider)
-            ? "external" as const
-            : undefined;
+          : "apiProvider" in status && status.apiProvider === "gateway"
+            ? "gateway" as const
+            : "apiProvider" in status && typeof status.apiProvider === "string"
+              && ["bedrock", "vertex", "foundry", "anthropicAws", "anthropicGoogleCloud", "mantle"].includes(status.apiProvider)
+              ? "external" as const
+              : undefined;
       return { ...installation, authStatus: status.loggedIn ? "signed-in" : "sign-in-required",
         ...(status.loggedIn && authMethod ? { authMethod } : {}),
         ...(!status.loggedIn ? { message: CLAUDE_SIGN_IN_REQUIRED } : {}),

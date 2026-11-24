@@ -5120,13 +5120,15 @@ describe("SettingsScreen", () => {
     expect(screen.getByText(directory)).toBeInTheDocument();
 
     const open = screen.getByRole("button", { name: "Open folder" });
+    // The folder line's own status; other Experimental rows have theirs.
+    const folderLine = open.closest(".settings-folder-line") as HTMLElement;
     fireEvent.click(open);
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("No samples saved yet."));
+    await waitFor(() => expect(within(folderLine).getByRole("status")).toHaveTextContent("No samples saved yet."));
     expect(openPath).toHaveBeenCalledWith({ path: directory });
 
     fireEvent.click(open);
     await waitFor(() => expect(openPath).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.getByRole("status")).toBeEmptyDOMElement());
+    await waitFor(() => expect(within(folderLine).getByRole("status")).toBeEmptyDOMElement());
   });
 
   it("lets an available Token Miser experiment default threads on or off", async () => {

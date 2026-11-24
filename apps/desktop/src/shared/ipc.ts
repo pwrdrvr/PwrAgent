@@ -241,6 +241,10 @@ export const RESEARCH_HARNESS_START_CHANNEL = "research:harness-start";
 export const RESEARCH_HARNESS_CHECK_CHANNEL = "research:harness-check";
 export const RESEARCH_HARNESS_RECONCILE_CHANNEL = "research:harness-reconcile";
 export const RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL = "research:harness-reveal-config";
+export const RESEARCH_HARNESS_SETTINGS_CHECK_CHANNEL = "research:harness-settings-check";
+export const RESEARCH_HARNESS_PICK_BRIDGE_CHANNEL = "research:harness-pick-bridge";
+export const RESEARCH_MATHOS_TEAMS_CHANNEL = "research:mathos-teams";
+export const RESEARCH_MATHOS_SWARMS_CHANNEL = "research:mathos-swarms";
 export const RESEARCH_PROFILE_RUNS_CHANNEL = "research:profile-runs";
 export const RESEARCH_OPEN_WINDOW_CHANNEL = "research:open-window";
 export const RESEARCH_WINDOW_SELECT_EVENT_CHANNEL = "research:window-select";
@@ -317,6 +321,7 @@ export const AGENT_UNDO_THREAD_REWIND_CHANNEL = "agent:undo-thread-rewind";
 export const AGENT_CONTINUE_CLAUDE_THREAD_IN_NEW_SESSION_CHANNEL =
   "agent:continue-claude-thread-in-new-session";
 export const AGENT_SIGN_IN_CLAUDE_CHANNEL = "agent:sign-in-claude";
+export const AGENT_CLAUDE_GATEWAY_CHANNEL = "agent:claude-gateway";
 export const AGENT_CONFIGURE_GROK_WORKFLOW_BUDGET_CHANNEL =
   "agent:configure-grok-workflow-budget";
 export const AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL = "agent:set-thread-execution-mode";

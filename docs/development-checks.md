@@ -112,6 +112,42 @@ Read this before source edits, dependency installation, test execution, lint/too
 - Dependency-boundary checks run uncached so resolution configuration changes
   always rebuild the graph.
 
+### Typecheck projects
+
+`pnpm typecheck` builds the workspace package references and checks desktop
+production code outside the renderer. It uses separate compiler processes
+for desktop main tests, E2E and scripts, and for renderer code and tests.
+Use `pnpm --filter @pwragent/desktop typecheck`
+for desktop and its dependencies, or run an individual package's typecheck
+script. Add workspace projects to `tsconfig.typecheck.json` and declare their
+direct TypeScript references in the consuming configs.
+
+Workspace packages emit declarations and build state to their local
+`node_modules/.cache/pwragent-typecheck/` directories. Project references
+redirect TypeScript to these declarations while runtime bundlers resolve the
+existing source exports. The desktop test projects resolve implementation
+source because some tests and benchmark scripts exercise private members whose
+types declaration emit erases. The desktop editor and bundler use
+`apps/desktop/tsconfig.json`.
+When changing test root patterns, update the corresponding exclusions in
+`apps/desktop/tsconfig.production.json`.
+
+On hosts reporting less than 32 GiB of RAM, the main test, E2E, and script
+stage and desktop watch use two checkers and a `4608MiB` soft Go memory
+limit. On hosts with at least 32 GiB, they use four checkers and Go's default
+memory behavior. The other stages default to four checkers. Pass
+`--checkers` or set `GOMEMLIMIT` to override the defaults.
+
+Use `pnpm typecheck --clean` to clear the generated typecheck outputs and
+`pnpm typecheck --verbose` to see which projects are rebuilt.
+The build runner checks the installed pnpm graph, workspace manifests, and
+direct dependency targets at startup and invalidates cached checks when they
+change.
+
+`pnpm --filter @pwragent/desktop typecheck --watch` uses the full desktop
+config in one compiler process so that production, tests, E2E, and renderer
+files are all watched. The root workspace command requires a finite check.
+
 ### Main function bytecode budget
 
 - Run `pnpm check:main-bytecode` after main-process or reachable first-party

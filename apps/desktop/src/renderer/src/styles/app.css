@@ -22968,6 +22968,85 @@ button.stack-display__thread,
   margin-top: 16px;
 }
 
+.claude-gateway-dialog:focus {
+  outline: none;
+}
+
+.settings-confirm-dialog p.claude-gateway-dialog__eyebrow {
+  margin: 0 0 4px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.claude-gateway-dialog h2 {
+  overflow-wrap: anywhere;
+}
+
+.claude-gateway-dialog__shown {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-hover);
+}
+
+.claude-gateway-dialog__shown-label {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.claude-gateway-dialog__shown-value {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.claude-gateway-dialog__code {
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-align: center;
+  user-select: all;
+}
+
+.settings-confirm-dialog p.claude-gateway-dialog__waiting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.claude-gateway-dialog__error {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--danger-border);
+  border-radius: 6px;
+  background: var(--danger-soft);
+  color: var(--danger-text);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .settings-thread-migration-dialog {
   width: min(620px, calc(100vw - 48px));
 }

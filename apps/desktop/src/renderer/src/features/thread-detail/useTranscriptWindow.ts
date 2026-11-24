@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import type { AppServerThreadReplayPagination } from "@pwragent/shared/contracts/normalized-app-server";
+import { segmentedTranscriptDisplay } from "../../lib/segmented-transcript";
 import {
   DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT,
   THREAD_HISTORY_PAGE_LIMIT,
@@ -94,7 +95,11 @@ export function useTranscriptWindow<Entry>(params: {
   const entryWindow = useMemo(() => {
     const windowStart = Math.max(0, entries.length - limit);
     const newestEntries = entries.slice(windowStart);
-    const userMessage = newestUserMessageBeforeWindow(entries, windowStart);
+    const segments = segmentedTranscriptDisplay(entries);
+    const latestPrompt = segments?.latestPrompt() as Entry | undefined;
+    const userMessage = segments
+      ? latestPrompt && !newestEntries.includes(latestPrompt) ? latestPrompt : undefined
+      : newestUserMessageBeforeWindow(entries, windowStart);
 
     // A busy first turn can cross the render cap before its first response
     // finishes. Keep one context row outside the cap so the response never

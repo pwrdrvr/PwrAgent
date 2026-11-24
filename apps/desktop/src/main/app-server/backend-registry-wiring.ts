@@ -1039,6 +1039,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       ? inspectClaudeInstallation
       : async () => ({ authStatus: "unknown" }),
     resolveEnv: async () => await settingsService?.resolveTerminalSpawnEnvAsync() ?? process.env,
+    openExternal: async (url) => { await getOwnerHostServices().links.openExternal(url); },
     // A chunk's __dirname is its own folder; this module is bundled into
     // the main entry, beside the worker.
     openSessionReader: (env) => openClaudeSessionReader(env, {
@@ -1458,6 +1459,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         get completeThreadUsageTurns() { return overlayStore.completeThreadUsageTurns?.bind(overlayStore); },
         get readThreadUsageActivities() { return overlayStore.readThreadUsageActivities?.bind(overlayStore); },
         get readThreadUsageActivityForTurn() { return overlayStore.readThreadUsageActivityForTurn?.bind(overlayStore); },
+        get readThreadTurnUsageLines() { return overlayStore.readThreadTurnUsageLines?.bind(overlayStore); },
         get listThreadCompactions() { return overlayStore.listThreadCompactions?.bind(overlayStore); },
         get recordThreadCompaction() { return overlayStore.recordThreadCompaction?.bind(overlayStore); },
         get readLatestThreadUsageModel() { return overlayStore.readLatestThreadUsageModel?.bind(overlayStore); },

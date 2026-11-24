@@ -127,6 +127,10 @@ button.research-activity__text:hover { color: var(--accent); }
 .research-ok { color: var(--success-text); }
 .research-bad { color: var(--danger-text); }
 .research-bridge { display: flex; flex-direction: column; gap: 8px; }
+/* The MathOS swarm picker: the source's swarms, newest running first; "Enter IDs instead" stays to the left. */
+.research-swarms { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+.research-swarms > .research-button--ghost:last-child,
+.research-swarms__back { align-self: flex-start; }
 .research-bridge h4 { margin: 0; }
 .research-dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 10px; margin: 0; font-size: 11px; line-height: 1.5; }
 .research-dl dt { color: var(--text-muted); }

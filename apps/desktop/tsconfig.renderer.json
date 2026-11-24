@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "incremental": true,
+    "tsBuildInfoFile": "node_modules/.cache/pwragent-typecheck/renderer.tsbuildinfo"
+  },
+  "include": [
+    "src/**/*.d.ts",
+    "src/renderer/**/*.ts",
+    "src/renderer/**/*.tsx"
+  ]
+}

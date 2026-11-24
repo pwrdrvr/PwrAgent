@@ -1,0 +1,18 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./apps/desktop/tsconfig.production.json" },
+    { "path": "packages/agent-tools" },
+    { "path": "packages/federation" },
+    { "path": "packages/messaging/interface" },
+    { "path": "packages/messaging/providers/discord" },
+    { "path": "packages/messaging/providers/feishu" },
+    { "path": "packages/messaging/providers/line" },
+    { "path": "packages/messaging/providers/mattermost" },
+    { "path": "packages/messaging/providers/slack" },
+    { "path": "packages/messaging/providers/telegram" },
+    { "path": "packages/owner-core" },
+    { "path": "packages/shared" },
+    { "path": "packages/sqlite-storage" }
+  ]
+}

@@ -1,4 +1,5 @@
 import { snapshotCodexSkillProfile } from "@pwragent/shared/contracts/codex-skill-profiles";
+import type { ClaudeGatewayRequest, ClaudeGatewayResponse } from "@pwragent/shared/contracts/claude-gateway";
 import type { CheckoutToolHandler } from "../agent-tools/pwragent-resource-checkout-agent-tools";
 import type { ThreadModelSettings } from "./thread-model-settings";
 import type { AcpSessionRuntimeOptions } from "./acp-session-runtime-options";
@@ -66,6 +67,7 @@ import type { MaintenanceDiscoveryProgress } from "./unreferenced-worktrees";
 import { PlanLimitStore, planLimitKey } from "./plan-limit-store";
 import { buildPendingTurnId, isPendingTurnId } from "@pwragent/shared/turn-placeholder";
 import { findAcpPermissionModeConfigOption } from "@pwragent/shared/acp-permission-mode";
+import { defaultModelOption } from "@pwragent/shared/model-defaults";
 import { lowerThreadExecutionMode } from "@pwragent/shared/thread-execution-mode";
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import { TASK_MONITOR_TOOL_NAMESPACE, type TaskMonitorRequest, type TaskMonitorResponse } from "@pwragent/shared/contracts/task-monitor-tools";
@@ -150,6 +152,7 @@ import {
 import {
   projectThreadDisplay,
   readThreadSubAgentPanel,
+  threadDisplayAccountingTurns,
   type ThreadSubAgentPanel,
 } from "./thread-display";
 import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared/contracts/agent";
@@ -907,7 +910,6 @@ import {
   describeCodexRateLimit,
   getBackendFallbackModels,
   getCodexFastModeMismatchWarning,
-  getDefaultModelOption,
   isMeaningfulAccountSummary,
   isUnauthenticatedCodexProvider,
   mergeCommandSummaries,
@@ -7440,6 +7442,16 @@ export class DesktopBackendRegistry {
         replay: { entries: [{ ...entry, usageLine: undefined }], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } },
       };
     }
+    if (request.display.resource === "accounting") {
+      this.assertNotBootstrap("readThread");
+      const thread = { backend, threadId: request.threadId };
+      const turnIds = [...new Set(threadDisplayAccountingTurns(request.display).map(({ id }) => id))];
+      const pricing = await this.threadUsageLedger.readThreadTurnUsageWithLiveTokenMiser({ ...thread, turnIds });
+      return projectThreadDisplay({
+        ...thread, fetchedAt: Date.now(), pricing,
+        replay: { entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } },
+      }, request, { activeTurnId: this.getActiveTurnForThread(thread)?.turnId });
+    }
     const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId: request.threadId });
     if (request.display.resource === "transcript") {
       const data = await this.readThreadData(request);
@@ -7584,18 +7596,15 @@ export class DesktopBackendRegistry {
         );
         return { backend, threadId: request.threadId, fetchedAt: Date.now(), replay, threadStatus: replay.threadStatus };
       }
-      const storedReplay = await this.claudeBackend.readThread(request.threadId);
-      // Every review imports, not only the requested page's, so a review
-      // older than the newest page still reaches To-dos. An older-page read
-      // has nothing to add to the latest read's import.
-      if (request.before === undefined) {
-        this.threadTodoHandler?.importReviews?.({ backend, threadId: request.threadId },
-          storedReplay.entries.filter((entry): entry is AppServerThreadReviewEntry => entry.type === "review"));
-      }
-      // PwrAgent's Claude transcript is read whole, so cut the requested page
-      // here, as for ACP. Without a page the renderer has no older history to
-      // ask for when its copy of the thread is missing some.
-      const pagedReplay = pageNormalizedReplay(storedReplay, { ...request, backend });
+      const pagedReplay = await this.claudeBackend.readThread(request.threadId, {
+        before: request.before,
+        limit: request.limit,
+        includeTurns: request.includeTurns,
+        ...(this.threadTodoHandler?.importReviews ? {
+          // Import unseen durable reviews even when they predate the page.
+          importReviews: (entries) => this.threadTodoHandler?.importReviews?.({ backend, threadId: request.threadId }, entries),
+        } : {}),
+      });
       const messageIds = pagedReplay.messages.flatMap((message) =>
         message.role === "user" ? [message.id] : [],
       );
@@ -13367,6 +13376,12 @@ export class DesktopBackendRegistry {
     await this.claudeBackend.signIn();
   }
 
+  async claudeGateway(request: ClaudeGatewayRequest): Promise<ClaudeGatewayResponse> {
+    const policy = getOwnerHostServices().runtimePolicy;
+    if (policy && !policy.enabledBackends.includes("claude")) throw new Error("Claude is disabled on this instance.");
+    return await this.claudeBackend.claudeGateway(request);
+  }
+
   /** A Claude thread whose session Claude Code deleted continues in a new
    * one, primed with the thread's own record of the conversation. */
   async continueClaudeThreadInNewSession(request: { threadId: string }): Promise<{ threadId: string }> {
@@ -15986,7 +16001,7 @@ export class DesktopBackendRegistry {
     const customModels = (options?.models ?? []).filter((model) => model.providerId);
     const preferredModels = customModels.filter((model) => model.providerId && !unavailable.has(model.providerId));
     // A failed /models read still offers the operator's explicitly listed models.
-    const model = getDefaultModelOption("codex", { ...options, models: preferredModels.length ? preferredModels : customModels });
+    const model = defaultModelOption("codex", { ...options, models: preferredModels.length ? preferredModels : customModels });
     if (!model?.providerId) return { ...settings, model: undefined };
     const key = codexModelProviderPickerValue(model.providerId);
     const configured = this.resolveProviderModelDefaultsFn()[key];

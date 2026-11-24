@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import fc from "fast-check";
 import type {
   AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
@@ -10,6 +11,7 @@ import {
   createEditedFileGroupsCollector,
   type EditedFileGroupsInput,
 } from "../edited-file-groups";
+import { appendTranscriptHistoryPage, combineTranscriptEntries, createTranscriptHistoryIndex, type LoadedTranscriptHistory } from "../../../lib/segmented-transcript";
 
 /**
  * The incremental collector must be indistinguishable from a full recompute.
@@ -85,6 +87,44 @@ function expectIncrementalParity(params: {
 }
 
 describe("createEditedFileGroupsCollector", () => {
+  it("matches the full fold across batches of settled transcript pages and a changing working tail", () => {
+    fc.assert(fc.property(fc.array(
+      fc.record({ edit: fc.boolean(), additions: fc.nat(15), rows: fc.integer({ min: 1, max: 4 }) }),
+      { minLength: 2, maxLength: 45 },
+    ), (turns) => {
+      const index = createTranscriptHistoryIndex();
+      const collector = createEditedFileGroupsCollector();
+      let history: LoadedTranscriptHistory | undefined;
+      const entries: AppServerThreadEntry[] = [];
+      for (const [position, turn] of turns.entries()) {
+        const turnId = `turn-${position}`;
+        const settled = Array.from({ length: turn.rows }, (_, row): AppServerThreadEntry => turn.edit
+          ? activityEntry({
+              id: `live-file-change-${position}-${row}`, turnId, createdAt: position,
+              details: [fileDiffDetail({ path: `/repo/file-${row}.ts`, additions: turn.additions })],
+            })
+          : { type: "message", id: `reply-${position}-${row}`, text: "Reply", role: "assistant", turn: { id: turnId } });
+        history = appendTranscriptHistoryPage({
+          history, index, tailEntries: [],
+          page: {
+            backend: "claude", threadId: "fixture", fetchedAt: 1,
+            replay: { entries: settled, messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } },
+          },
+        });
+        entries.push(...settled);
+        if (position % 3 !== 0 && position !== turns.length - 1) continue;
+        const tail: AppServerThreadEntry[] = [{
+          type: "message", id: "stream", role: "assistant", text: `Streaming ${position}`, turn: { id: "live" },
+        }];
+        expect(collector.collect({ entries: combineTranscriptEntries(history, index, tail) }))
+          .toEqual(collectEditedFileGroups({ entries: [...entries, ...tail] }));
+        expect(collector.latestChangedFilesEntry())
+          .toBe(entries.findLast((entry) => entry.id.startsWith("live-file-change-")
+            && (entry.createdAt !== undefined && entry.id.endsWith("-0"))));
+      }
+    }));
+  });
+
   it("matches a full recompute while a transcript streams in", () => {
     const transcript = Array.from({ length: 60 }, (_, index) =>
       activityEntry({

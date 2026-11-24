@@ -9,7 +9,10 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
-import { findAcpPermissionModeConfigOption } from "@pwragent/shared/acp-permission-mode";
+import {
+  acpRuntimeModeSelector,
+  findAcpPermissionModeConfigOption,
+} from "@pwragent/shared/acp-permission-mode";
 import {
   type AcpBackendId,
   type AppServerBackendKind,
@@ -745,23 +748,16 @@ function resolveDefaultAcpRolloutRoot(): string {
 
 /**
  * Whether the agent advertises its OWN runtime mode selector that the renderer
- * will surface as a dropdown. Mirrors the renderer's `getAcpRuntimeModeControl`
- * gating EXACTLY so the two never disagree (which is what produced the #658
- * double-dropdown): a `configOptions` entry of category "mode" with ≥2 values,
- * or an ACP `SessionModeState` (`modes.availableModes`) with ≥2 modes. Kimi's
- * Default/Plan/Auto/Yolo arrive via the latter, so checking only configOptions
- * would miss it.
+ * will surface as a dropdown. Reads the same `acpRuntimeModeSelector` as the
+ * renderer's `getAcpRuntimeModeControl`, so the two never disagree (which is
+ * what produced the #658 double-dropdown): Grok's `permission_mode`, else a
+ * `configOptions` entry of category "mode", else an ACP `SessionModeState`
+ * (`modes.availableModes`), with ≥2 choices.
  */
 export function acpAdvertisesRuntimeModeSelector(
   runtimeCapabilities: BackendAcpRuntimeCapabilities | undefined,
 ): boolean {
-  const modeConfigOption = runtimeCapabilities?.configOptions?.find(
-    (option) => option.category === "mode" && option.values.length > 0,
-  );
-  if (modeConfigOption) {
-    return modeConfigOption.values.length >= 2;
-  }
-  return (runtimeCapabilities?.modes?.availableModes?.length ?? 0) >= 2;
+  return (acpRuntimeModeSelector(runtimeCapabilities)?.choices.length ?? 0) >= 2;
 }
 
 function buildAcpExecutionModes(
@@ -947,26 +943,6 @@ export function mergeAcpRuntimeState(
       ...(patch?.configValues ?? {}),
     },
   };
-}
-
-export function acpRuntimeValueLooksPrivileged(value: string | undefined): boolean {
-  // ACP agents such as Qwen implement Auto/Auto-Edit internally; only Yolo
-  // means the client should bypass every permission request.
-  return value === "yolo";
-}
-
-export function formatAcpRuntimeLabel(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return value;
-  }
-  if (trimmed.toLowerCase() === "yolo") {
-    return "Yolo";
-  }
-  return trimmed
-    .replace(/[_-]+/g, " ")
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
 export function acpSessionToThreadSummary(

@@ -1,5 +1,10 @@
+import {
+  acpRuntimeModeIsFullAccess,
+  acpRuntimeModeSelector,
+  acpRuntimeModeValue,
+  formatAcpRuntimeModeLabel,
+} from "@pwragent/shared/acp-permission-mode";
 import type {
-  BackendAcpRuntimeConfigOption,
   BackendAcpRuntimeOptionSource,
   BackendAcpSessionRuntimeState,
   BackendSummary,
@@ -35,57 +40,19 @@ export function buildMessagingAcpRuntimeModeSummary(params: {
     };
   }
 
-  const runtimeCapabilities = backend.acp?.runtime;
-  const modeConfigOptions =
-    runtimeCapabilities?.configOptions?.filter(isRuntimeModeConfigOption) ?? [];
-  const configChoices = modeConfigOptions.flatMap((option) => {
-    const currentModeValue =
-      params.runtime?.currentModeId &&
-      option.values.some((value) => value.value === params.runtime?.currentModeId)
-        ? params.runtime.currentModeId
-        : undefined;
-    const currentValue =
-      currentModeValue ??
-      params.runtime?.configValues?.[option.id] ??
-      option.currentValue ??
-      defaultConfigOptionValue(option);
-    return option.values.map((value) => ({
-      description: value.description,
-      label: formatMessagingAcpRuntimeModeLabel(value.label || value.value),
-      optionId: option.id,
-      privileged: messagingAcpRuntimeValueLooksPrivileged(value.value),
-      selected: value.value === currentValue,
-      source: "configOption" as const,
-      value: value.value,
-    }));
-  });
-  if (configChoices.length > 0) {
-    const selected = configChoices.find((choice) => choice.selected);
-    return {
-      choices: configChoices,
-      currentLabel: selected?.label ?? "Agent default",
-      currentValue: selected?.value,
-    };
-  }
-
-  const modeChoices =
-    runtimeCapabilities?.modes?.availableModes.map((mode) => ({
-      description: mode.description,
-      label: formatMessagingAcpRuntimeModeLabel(mode.label || mode.id),
-      optionId: "mode",
-      privileged: messagingAcpRuntimeValueLooksPrivileged(mode.id),
-      selected: false,
-      source: "mode" as const,
-      value: mode.id,
-    })) ?? [];
-  if (modeChoices.length > 0) {
-    const currentValue =
-      params.runtime?.currentModeId ??
-      runtimeCapabilities?.modes?.currentModeId ??
-      defaultRuntimeModeValue(modeChoices);
-    const choices = modeChoices.map((choice) => ({
-      ...choice,
-      selected: choice.value === currentValue,
+  // The selector the composer and a start card read, so messaging offers the
+  // same modes and reports the same current mode.
+  const selector = acpRuntimeModeSelector(backend.acp?.runtime);
+  if (selector && selector.choices.length > 0) {
+    const currentValue = acpRuntimeModeValue(selector, params.runtime);
+    const choices = selector.choices.map((choice) => ({
+      description: choice.description,
+      label: formatAcpRuntimeModeLabel(choice.label),
+      optionId: selector.optionId,
+      privileged: acpRuntimeModeIsFullAccess(choice.id),
+      selected: choice.id === currentValue,
+      source: selector.source,
+      value: choice.id,
     }));
     return {
       choices,
@@ -98,7 +65,7 @@ export function buildMessagingAcpRuntimeModeSummary(params: {
   return {
     choices: [],
     currentLabel: fallbackValue
-      ? formatMessagingAcpRuntimeModeLabel(fallbackValue)
+      ? formatAcpRuntimeModeLabel(fallbackValue)
       : "Agent default",
     currentValue: fallbackValue,
   };
@@ -147,49 +114,6 @@ export function resolveAcpRuntimeModeValue(
   );
 }
 
-export function formatMessagingAcpRuntimeModeLabel(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return value;
-  }
-  if (trimmed.toLowerCase() === "yolo") {
-    return "Yolo";
-  }
-  return trimmed
-    .replace(/[_-]+/g, " ")
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/\b\w/g, (match) => match.toUpperCase());
-}
-
-export function messagingAcpRuntimeValueLooksPrivileged(
-  value: string | undefined,
-): boolean {
-  // Auto/Auto-Edit are provider-managed ACP modes, not PwrAgent full access.
-  return value === "yolo";
-}
-
-function isRuntimeModeConfigOption(option: BackendAcpRuntimeConfigOption): boolean {
-  return option.category === "mode";
-}
-
-function defaultRuntimeModeValue(
-  choices: MessagingAcpRuntimeModeChoice[],
-): string | undefined {
-  return (
-    choices.find((choice) => choice.value === "default")?.value ??
-    choices[0]?.value
-  );
-}
-
-function defaultConfigOptionValue(
-  option: BackendAcpRuntimeConfigOption,
-): string | undefined {
-  return (
-    option.values.find((value) => value.value === "default")?.value ??
-    option.values[0]?.value
-  );
-}
-
 function labelForRuntimeValue(
   choices: MessagingAcpRuntimeModeChoice[],
   value: string | undefined,
@@ -199,7 +123,7 @@ function labelForRuntimeValue(
   }
   return (
     choices.find((choice) => choice.value === value)?.label ??
-    formatMessagingAcpRuntimeModeLabel(value)
+    formatAcpRuntimeModeLabel(value)
   );
 }
 

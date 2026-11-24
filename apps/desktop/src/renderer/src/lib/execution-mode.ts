@@ -7,7 +7,11 @@ import type {
   NavigationLaunchpadDraft,
   NavigationThreadSummary,
 } from "@pwragent/shared/contracts/navigation";
-import { findAcpPermissionModeConfigOption } from "@pwragent/shared/acp-permission-mode";
+import {
+  acpRuntimeModeSelector,
+  acpRuntimeModeValue,
+  formatAcpRuntimeModeLabel,
+} from "@pwragent/shared/acp-permission-mode";
 
 export function formatExecutionModeLabel(mode?: ThreadExecutionMode): string {
   return mode === "auto" ? "Auto" : mode === "full-access" ? "Full Access" : "Default Access";
@@ -44,11 +48,6 @@ export function describeExecutionModeForBackend(
     : describeCodexExecutionMode(mode);
 }
 
-export function acpRuntimeModeRequiresFullAccess(value: string): boolean {
-  // Auto/Auto-Edit are provider-managed ACP modes, not PwrAgent full access.
-  return value.trim().replace(/[-\s]+/g, "_").toLowerCase() === "yolo";
-}
-
 export type AcpRuntimeModeControl = {
   optionId: string;
   source: "configOption" | "mode";
@@ -60,59 +59,18 @@ export function getAcpRuntimeModeControl(
   backend: BackendSummary | undefined,
   settings: NavigationLaunchpadDraft | NavigationThreadSummary | undefined,
 ): AcpRuntimeModeControl | undefined {
-  const runtime = backend?.acp?.runtime;
-  if (!runtime) {
+  // The same selector a start card's Access menu lists the agent's modes from.
+  const selector = acpRuntimeModeSelector(backend?.acp?.runtime);
+  if (!selector || selector.choices.length < 2) {
     return undefined;
   }
-
-  const modeConfigOption = findAcpPermissionModeConfigOption(runtime) ?? runtime.configOptions?.find(
-    (option) => option.category === "mode" && option.values.length > 0,
-  );
-  if (modeConfigOption) {
-    if (modeConfigOption.values.length < 2) {
-      return undefined;
-    }
-    const currentModeValue =
-      modeConfigOption.id !== findAcpPermissionModeConfigOption(runtime)?.id &&
-      settings?.acpRuntime?.currentModeId &&
-      modeConfigOption.values.some(
-        (option) => option.value === settings.acpRuntime?.currentModeId,
-      )
-        ? settings.acpRuntime.currentModeId
-        : undefined;
-    const value =
-      currentModeValue ??
-      settings?.acpRuntime?.configValues?.[modeConfigOption.id] ??
-      modeConfigOption.currentValue ??
-      modeConfigOption.values[0]?.value ??
-      "";
-    return {
-      optionId: modeConfigOption.id,
-      source: "configOption",
-      value,
-      options: modeConfigOption.values.map((option) => ({
-        label: formatAcpRuntimeModeLabel(option.label ?? option.value),
-        value: option.value,
-      })),
-    };
-  }
-
-  const modeOptions = runtime.modes?.availableModes ?? [];
-  if (modeOptions.length < 2) {
-    return undefined;
-  }
-
   return {
-    optionId: "mode",
-    source: "mode",
-    value:
-      settings?.acpRuntime?.currentModeId ??
-      runtime.modes?.currentModeId ??
-      modeOptions[0]?.id ??
-      "",
-    options: modeOptions.map((mode) => ({
-      label: formatAcpRuntimeModeLabel(mode.label ?? mode.id),
-      value: mode.id,
+    optionId: selector.optionId,
+    source: selector.source,
+    value: acpRuntimeModeValue(selector, settings?.acpRuntime) ?? "",
+    options: selector.choices.map((choice) => ({
+      label: formatAcpRuntimeModeLabel(choice.label),
+      value: choice.id,
     })),
   };
 }
@@ -122,18 +80,4 @@ export function formatAccessModeLabel(
   _backend?: BackendSummary,
 ): string {
   return formatExecutionModeLabel(settings.executionMode);
-}
-
-export function formatAcpRuntimeModeLabel(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return value;
-  }
-  if (trimmed.toLowerCase() === "yolo") {
-    return "Yolo";
-  }
-  return trimmed
-    .replace(/[_-]+/g, " ")
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/\b\w/g, (match) => match.toUpperCase());
 }

@@ -28,6 +28,8 @@ import { armResearchDeadline } from "./research-deadline";
 
 export interface ResearchHarnessConnection {
   model?: { model: string; endpointOrigin: string };
+  /** Identifies where records come from, so a run is never continued from a different source. */
+  source?: string;
   request(method: string, params: Record<string, unknown>): Promise<unknown>;
   close(): void | Promise<void>;
 }
@@ -115,7 +117,8 @@ export class ResearchHarnessService {
       const capabilities = hello as unknown as ResearchHarnessCapabilities;
       if (request.source === "discovery" && capabilities.discovery !== true) throw new Error("Harness bridge does not support discovery observation");
       if (capabilities[request.mode] !== true) throw new Error(`Harness bridge does not support ${request.mode}`);
-      const state = { ...this.run(id).harness!, ...connection.model, cancelSupported: capabilities.cancel === true };
+      const state = { ...this.run(id).harness!, ...connection.model, ...(connection.source ? { sourceKey: connection.source } : {}),
+        cancelSupported: capabilities.cancel === true };
       if (request.mode === "execute") {
         if (hello.researchFunctions !== true) throw new Error("Bridge must dispatch the ordinary research_read/research_update functions to its scoped service");
         if (!state.cancelSupported) throw new Error("Execution requires a bridge that can request scoped cancellation");
@@ -291,6 +294,10 @@ export class ResearchHarnessService {
       this.append(id, [{ type: "harness", state: { ...origin, state: "reconciling", note: `Reading source records after #${from}, read-only. No execution or cancellation is sent.` } }]);
       connection = this.ports.open(origin.workspace, id, "import");
       this.reconciling.set(id, connection);
+      // Same project, session and swarm names can exist on another deployment; never mix them into this run.
+      if (origin.sourceKey && connection.source !== origin.sourceKey) {
+        throw new Error("This run came from a different Harness source. Choose that source in Settings › Experimental › Open Math Harness to reconcile it");
+      }
       const hello = object(await connection.request("hello", { version: 1, upstreamRevision: RESEARCH_HARNESS_REVISION }));
       if (hello.version !== 1 || hello.upstreamRevision !== RESEARCH_HARNESS_REVISION) throw new Error("Unsupported Harness bridge version/revision");
       if (hello.import !== true) throw new Error("Harness bridge does not support import");

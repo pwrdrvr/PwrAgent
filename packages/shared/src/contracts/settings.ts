@@ -10,6 +10,7 @@ import type {
   DesktopTaskMonitorModelChoice,
 } from "../helper-models";
 import type { DesktopDecisionModelSettings } from "../decision-models";
+import type { ResearchHarnessConfig, ResearchHarnessSource, ResearchMathosConfig } from "../research-harness";
 import type {
   CodexModelProviderSettings,
   DesktopCodexModelProvider,
@@ -837,7 +838,9 @@ export type DesktopSettingsSecretName =
   /** OpenAI project key dedicated to recorded audio transcription. */
   | "openaiTranscriptionApiKey"
   /** Codex model provider API keys, one JSON object keyed by provider id. */
-  | "codexModelProviderKeys";
+  | "codexModelProviderKeys"
+  /** MathOS Platform API key. Only the owner's MathOS Platform client reads it, to sign in to the platform. */
+  | "mathosPlatformApiKey";
 
 /**
  * Predicate: does writing or clearing this secret affect the
@@ -887,6 +890,7 @@ export function isMessagingRuntimeSecret(
     case "openaiDecisionsApiKey":
     case "openaiTranscriptionApiKey":
     case "codexModelProviderKeys":
+    case "mathosPlatformApiKey":
       return false;
     default:
       return false;
@@ -1560,6 +1564,20 @@ export type DesktopSettingsSnapshot = {
   secretStorage: DesktopSettingsSecretStorageState;
   general: DesktopGeneralSettingsSnapshot;
   onboarding: DesktopOnboardingSnapshot;
+  /**
+   * Open Math Harness for Research runs. `harness` is the profile's
+   * `[research.harness]` table as read; the MathOS Platform key is presence
+   * only. Absent from snapshots built before this setting existed.
+   */
+  research?: {
+    /** The source in use, resolved as the owner resolves it. */
+    source: ResearchHarnessSource;
+    harness?: ResearchHarnessConfig;
+    mathos?: ResearchMathosConfig;
+    /** Whether the variable `harness.apiKeyEnv` names is set for PwrAgent. Never its value. */
+    modelKeyEnvSet?: boolean;
+    platformApiKey: DesktopSettingsSecretState;
+  };
   experimental: {
     chatReplyComposer: DesktopSettingsValue<DesktopChatReplyComposer>;
     fullAccessRiskWarningDismissed: DesktopSettingsValue<boolean>;
@@ -1981,6 +1999,14 @@ export type DesktopSettingsConfigPatch = {
   onboarding?: {
     completed?: boolean;
     completedSource?: DesktopOnboardingCompletedSource;
+  };
+  research?: {
+    /** Written as `[research] harness_source`. */
+    source?: ResearchHarnessSource;
+    /** `null` removes the bridge: every `[research.harness]` key is deleted. */
+    harness?: ResearchHarnessConfig | null;
+    /** `[research.mathos]`; `null` deletes a key. The default origin is not written. */
+    mathos?: { team?: string | null; origin?: string | null };
   };
   experimental?: {
     fullAccessRiskWarningDismissed?: boolean;

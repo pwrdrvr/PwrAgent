@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "emitDeclarationOnly": true,
+    "noEmit": false,
+    "noEmitOnError": true,
+    "outDir": "${configDir}/node_modules/.cache/pwragent-typecheck",
+    "tsBuildInfoFile": "${configDir}/node_modules/.cache/pwragent-typecheck/tsconfig.tsbuildinfo"
+  }
+}

@@ -1,0 +1,75 @@
+/* Settings → Experimental → Open Math Harness (ResearchHarnessSettings.tsx).
+   Theme tokens only. */
+
+/* The path input takes the row; Choose… keeps its own width. */
+.settings-harness-path {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.settings-harness-path > .settings-input {
+  flex: 1 1 auto;
+}
+
+.settings-harness-path > .button {
+  flex: 0 0 auto;
+}
+
+.settings-harness-args.settings-input {
+  height: auto;
+  min-height: 64px;
+  padding: 8px 10px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+/* A short status line under or beside a control, at the help text's size. */
+.settings-harness-status {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.settings-harness-status.settings-field__value--warn {
+  color: var(--status-warning-text);
+}
+
+.settings-harness-capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.settings-harness-support {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.settings-harness-support li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.settings-harness-support strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.settings-harness-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

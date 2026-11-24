@@ -4,6 +4,7 @@ import type {
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
 import { AGENT_MEMORY_CHANNEL, AGENT_PRESETS_CHANNEL } from "../shared/ipc";
 import type { AgentPreset, ManageAgentPresetsRequest } from "@pwragent/shared/contracts/agent-presets";
+import type { ClaudeGatewayRequest, ClaudeGatewayResponse } from "@pwragent/shared/contracts/claude-gateway";
 import type {
   ResearchThread,
   ResearchUpdateRequest,
@@ -43,12 +44,14 @@ import type {
   ResearchHarnessReconcileRequest,
   ResearchHarnessRequest,
   ResearchHarnessStatus,
+  MathosTeamsResult,
+  MathosSwarmsResult,
 } from "@pwragent/shared/research-harness";
 import type { ResearchProfileRunsPage, ResearchProfileRunsQuery } from "@pwragent/shared/research";
 import type { DesktopTelegramPairingGrants, DesktopWorktreeFolderCheck } from "@pwragent/shared/contracts/settings";
 import type { SaveTelegramConnectionRequest, TelegramConnectionStatus } from "@pwragent/shared/contracts/settings";
 import { RESEARCH_PROFILE_RUNS_CHANNEL, RESEARCH_OPEN_WINDOW_CHANNEL, RESEARCH_WINDOW_SELECT_EVENT_CHANNEL } from "../shared/ipc";
-import { RESEARCH_HARNESS_STATUS_CHANNEL, RESEARCH_HARNESS_START_CHANNEL, RESEARCH_HARNESS_CHECK_CHANNEL, RESEARCH_HARNESS_RECONCILE_CHANNEL, RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL } from "../shared/ipc";
+import { RESEARCH_HARNESS_STATUS_CHANNEL, RESEARCH_HARNESS_START_CHANNEL, RESEARCH_HARNESS_CHECK_CHANNEL, RESEARCH_HARNESS_RECONCILE_CHANNEL, RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL, RESEARCH_HARNESS_SETTINGS_CHECK_CHANNEL, RESEARCH_HARNESS_PICK_BRIDGE_CHANNEL, RESEARCH_MATHOS_TEAMS_CHANNEL, RESEARCH_MATHOS_SWARMS_CHANNEL } from "../shared/ipc";
 import { RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_CHANGED_EVENT_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL, RESEARCH_WITHDRAW_CHANNEL, RESEARCH_EVENTS_CHANNEL, RESEARCH_CHANGES_CHANNEL } from "../shared/ipc";
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared/contracts/federation-services";
 import { FEDERATION_SERVICES_CHANNEL } from "../shared/ipc";
@@ -957,6 +960,7 @@ import {
   AGENT_UNDO_THREAD_REWIND_CHANNEL,
   AGENT_CONTINUE_CLAUDE_THREAD_IN_NEW_SESSION_CHANNEL,
   AGENT_SIGN_IN_CLAUDE_CHANNEL,
+  AGENT_CLAUDE_GATEWAY_CHANNEL,
   AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
@@ -2210,6 +2214,14 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(RESEARCH_HARNESS_RECONCILE_CHANNEL, request),
   revealResearchHarnessConfig: async (): Promise<void> =>
     await ipcRenderer.invoke(RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL),
+  checkResearchHarnessBridge: async (): Promise<ResearchHarnessCheck> =>
+    await ipcRenderer.invoke(RESEARCH_HARNESS_SETTINGS_CHECK_CHANNEL),
+  pickResearchHarnessBridge: async (): Promise<{ path?: string }> =>
+    await ipcRenderer.invoke(RESEARCH_HARNESS_PICK_BRIDGE_CHANNEL),
+  listMathosTeams: async (): Promise<MathosTeamsResult> =>
+    await ipcRenderer.invoke(RESEARCH_MATHOS_TEAMS_CHANNEL),
+  listMathosSwarms: async (): Promise<MathosSwarmsResult> =>
+    await ipcRenderer.invoke(RESEARCH_MATHOS_SWARMS_CHANNEL),
   researchProfileRuns: async (request?: ResearchProfileRunsQuery): Promise<ResearchProfileRunsPage> =>
     await ipcRenderer.invoke(RESEARCH_PROFILE_RUNS_CHANNEL, request),
   openResearchWindow: async (request?: { runId?: string }): Promise<void> =>
@@ -3067,6 +3079,8 @@ const desktopApi = Object.freeze({
   ): Promise<{ threadId: string }> =>
     await ipcRenderer.invoke(AGENT_CONTINUE_CLAUDE_THREAD_IN_NEW_SESSION_CHANNEL, request),
   signInClaude: async (): Promise<void> => await ipcRenderer.invoke(AGENT_SIGN_IN_CLAUDE_CHANNEL),
+  claudeGateway: async (request: ClaudeGatewayRequest): Promise<ClaudeGatewayResponse> =>
+    await ipcRenderer.invoke(AGENT_CLAUDE_GATEWAY_CHANNEL, request),
   configureGrokWorkflowBudget: async (
     request: ConfigureGrokWorkflowBudgetRequest,
   ): Promise<ConfigureGrokWorkflowBudgetResponse> =>

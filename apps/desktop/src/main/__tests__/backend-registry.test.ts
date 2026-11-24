@@ -991,7 +991,9 @@ describe("DesktopBackendRegistry", () => {
     expect(read.replay.messages.map((message) => message.text)).toEqual(["sub-agent prompt"]);
 
     await registry.readThread({ backend: "claude", threadId: "parent-thread" });
-    expect(thread).toHaveBeenCalledWith("parent-thread");
+    expect(thread).toHaveBeenCalledWith("parent-thread", expect.objectContaining({
+      before: undefined, limit: undefined, includeTurns: undefined,
+    }));
     expect(subAgent).toHaveBeenCalledTimes(1);
   });
 

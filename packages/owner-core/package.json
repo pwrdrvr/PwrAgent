@@ -14,6 +14,6 @@
     "@shutterstock/p-map-iterable": "^1.2.0"
   },
   "scripts": {
-    "typecheck": "node ../../node_modules/typescript-native/bin/tsc --noEmit -p tsconfig.json"
+    "typecheck": "node ../../scripts/typecheck.mjs --package"
   }
 }

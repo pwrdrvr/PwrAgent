@@ -7,7 +7,9 @@ import type {
 import {
   formatChangedFileCount,
   formatChangedFileSummary,
+  readRendererSequence,
 } from "./live-transcript-activity";
+import { segmentedTranscriptDisplay, type SegmentedTranscriptDisplay } from "../../lib/segmented-transcript";
 
 /**
  * Upper bound on accumulated turn-groups kept by `collectEditedFileGroups`.
@@ -301,7 +303,19 @@ export type EditedFileGroupsInput = {
  */
 export type EditedFileGroupsCollector = {
   collect(input: EditedFileGroupsInput): EditedFileGroup[];
+  latestChangedFilesEntry(): AppServerThreadActivityEntry | undefined;
 };
+
+function newestChangedFilesEntry(entry: AppServerThreadEntry, latest: AppServerThreadActivityEntry | undefined) {
+  if (entry.type !== "activity" || !entry.id.startsWith("live-file-change-")) return latest;
+  if (!latest) return entry;
+  const time = entry.createdAt ?? -Infinity;
+  const latestTime = latest.createdAt ?? -Infinity;
+  if (time !== latestTime) return time > latestTime ? entry : latest;
+  const sequence = readRendererSequence(entry);
+  const latestSequence = readRendererSequence(latest);
+  return sequence !== undefined && latestSequence !== undefined && sequence > latestSequence ? entry : latest;
+}
 
 /**
  * Incremental driver for `collectEditedFileGroups`.
@@ -336,6 +350,9 @@ export function createEditedFileGroupsCollector(): EditedFileGroupsCollector {
   let droppedThrough = -1;
   let pendingGroupCache = new Map<string, PendingGroupCacheEntry>();
   let lastGroups: EditedFileGroup[] = [];
+  let foldedHistory: SegmentedTranscriptDisplay | undefined;
+  let foldedChangedFilesEntry: AppServerThreadActivityEntry | undefined;
+  let latestChangedFilesEntry: AppServerThreadActivityEntry | undefined;
 
   const reset = (forkCreatedAt: number | undefined): void => {
     turnOrder = [];
@@ -346,6 +363,8 @@ export function createEditedFileGroupsCollector(): EditedFileGroupsCollector {
     pastForkBoundary = typeof forkCreatedAt !== "number";
     droppedThrough = -1;
     pendingGroupCache = new Map();
+    foldedHistory = undefined;
+    foldedChangedFilesEntry = undefined;
   };
 
   const ensureBucket = (
@@ -406,6 +425,7 @@ export function createEditedFileGroupsCollector(): EditedFileGroupsCollector {
     prefixAnchors.every((anchor) => entries[anchor.index] === anchor.entry);
 
   const foldEntry = (entry: AppServerThreadEntry): void => {
+    foldedChangedFilesEntry = newestChangedFilesEntry(entry, foldedChangedFilesEntry);
     if (typeof foldedForkCreatedAt === "number" && !pastForkBoundary) {
       // Forked Codex threads replay ancestor entries before their own turns.
       // Start the edit history at the fork thread's creation boundary.
@@ -565,8 +585,10 @@ export function createEditedFileGroupsCollector(): EditedFileGroupsCollector {
   };
 
   return {
+    latestChangedFilesEntry: () => latestChangedFilesEntry,
     collect(input) {
-      const entries = input.entries;
+      const segments = segmentedTranscriptDisplay(input.entries);
+      const entries = segments?.tail ?? input.entries;
 
       // The fold is only reusable while the array it was built from still
       // carries the same entry objects at every sampled position, so any
@@ -576,27 +598,48 @@ export function createEditedFileGroupsCollector(): EditedFileGroupsCollector {
       // produces; a surgical rewrite of a single unsampled entry older than
       // `REFOLDED_TAIL_ENTRIES` would still be missed, and needs an explicit
       // invalidation rather than a wider sample.
-      const reusable =
-        foldedForkCreatedAt === input.forkCreatedAt
-        && entries.length >= foldedCount
-        && anchorsHold(entries);
-      if (!reusable) {
-        reset(input.forkCreatedAt);
-      }
-
-      const commitThrough = Math.max(
-        foldedCount,
-        entries.length - REFOLDED_TAIL_ENTRIES,
-      );
-      for (let index = foldedCount; index < commitThrough; index += 1) {
-        foldEntry(entries[index]);
-      }
-      if (commitThrough > foldedCount) {
-        foldedCount = commitThrough;
-        captureAnchors(entries);
+      if (segments) {
+        const previous = foldedHistory;
+        const historyUnchanged = previous && foldedForkCreatedAt === input.forkCreatedAt
+          && previous.activityRevision === segments.activityRevision
+          && previous.historicalActivityOverlays.length === segments.historicalActivityOverlays.length
+          && previous.historicalActivityOverlays.every((entry, position) => entry === segments.historicalActivityOverlays[position]);
+        const appended: NonNullable<typeof segments.history.appendedPage>[] = [];
+        let bridge = segments.history;
+        while (historyUnchanged && (bridge.newestPage !== previous.history.newestPage
+          || bridge.oldestPage !== previous.history.oldestPage) && bridge.previous && bridge.appendedPage) {
+          appended.push(bridge.appendedPage);
+          bridge = bridge.previous;
+        }
+        if (!historyUnchanged || bridge.newestPage !== previous.history.newestPage || bridge.oldestPage !== previous.history.oldestPage) {
+          reset(input.forkCreatedAt);
+          let page = segments.history.oldestPage;
+          while (page) {
+            for (const entry of segments.entriesForPage(page)) foldEntry(entry);
+            if (page === segments.history.newestPage) break;
+            page = page.newerPage;
+          }
+        } else {
+          for (const page of appended.reverse()) {
+            for (const entry of segments.entriesForPage(page)) foldEntry(entry);
+          }
+        }
+        foldedHistory = segments;
         dropStaleBuckets();
+      } else {
+        const reusable = !foldedHistory
+          && foldedForkCreatedAt === input.forkCreatedAt && entries.length >= foldedCount && anchorsHold(entries);
+        if (!reusable) reset(input.forkCreatedAt);
+        const commitThrough = Math.max(foldedCount, entries.length - REFOLDED_TAIL_ENTRIES);
+        for (let offset = foldedCount; offset < commitThrough; offset++) foldEntry(entries[offset]!);
+        if (commitThrough > foldedCount) {
+          foldedCount = commitThrough;
+          captureAnchors(entries);
+          dropStaleBuckets();
+        }
       }
 
+      latestChangedFilesEntry = foldedChangedFilesEntry;
       // Re-folded tail: everything the fold has not committed, plus the live
       // cumulative diff overlay, held per pass so the fold stays untouched.
       const pendingByKey = new Map<string, PendingBucket>();
@@ -623,6 +666,7 @@ export function createEditedFileGroupsCollector(): EditedFileGroupsCollector {
 
       for (let index = foldedCount; index < entries.length; index += 1) {
         const entry = entries[index];
+        latestChangedFilesEntry = newestChangedFilesEntry(entry, latestChangedFilesEntry);
         if (typeof input.forkCreatedAt === "number" && !tailPastForkBoundary) {
           const entryCreatedAt = entryBoundaryTime(entry);
           if (

@@ -2,13 +2,19 @@ import { appendFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { cpus, loadavg, totalmem } from "node:os";
 import { resolve, join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { clearTypecheckCaches } from "../typecheck-cache.mjs";
 
 const [baselinePath, candidatePath, outputPath] = process.argv.slice(2).map((path) => resolve(path));
 if (!baselinePath || !candidatePath || !outputPath || process.platform !== "darwin") {
   throw new Error("Usage on macOS: node benchmark-dev-checks.mjs BASELINE CANDIDATE OUTPUT");
 }
 mkdirSync(outputPath, { recursive: true });
-const env = { ...process.env, NODE_OPTIONS: "--max-old-space-size=6144" };
+const env = {
+  ...process.env,
+  NODE_OPTIONS: "--max-old-space-size=6144",
+  GOMAXPROCS: process.env.GOMAXPROCS ?? "4",
+  PNPM_CONFIG_WORKSPACE_CONCURRENCY: "1",
+};
 const gitRevision = (cwd) => {
   const result = spawnSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" });
   if (result.status !== 0) throw new Error("Cannot identify benchmark revision");
@@ -24,7 +30,9 @@ const metadata = {
   baseline: gitRevision(baselinePath),
   candidate: gitRevision(candidatePath),
   nodeOptions: env.NODE_OPTIONS,
-  method: "Three alternating baseline/candidate samples on one runner; warm filesystem caches. Cold syntax lint deletes only ESLint's content cache. time -l peak RSS is not agent-session memory.",
+  goMaxProcs: env.GOMAXPROCS,
+  workspaceConcurrency: env.PNPM_CONFIG_WORKSPACE_CONCURRENCY,
+  method: "Three paired baseline and candidate samples on one runner with warm filesystem caches. Cold syntax lint clears ESLint's content cache. Cold typecheck clears declarations and build state. Each unchanged typecheck immediately follows its cold run. Peak RSS is measured by time -l.",
 };
 const samples = [];
 function measure(slice, variant, iteration, cwd, script) {
@@ -48,7 +56,6 @@ function measure(slice, variant, iteration, cwd, script) {
 for (const [slice, baselineScript, candidateScript] of [
   ["syntax-cold", "lint:eslint:cached", "lint:oxlint"],
   ["typed", "lint:eslint:typed", "lint:oxlint:typed"],
-  ["typecheck", "typecheck", "typecheck"],
 ]) {
   for (let iteration = 1; iteration <= 3; iteration += 1) {
     if (slice === "syntax-cold") rmSync(join(baselinePath, ".eslintcache-untyped"), { force: true });
@@ -59,8 +66,15 @@ for (const [slice, baselineScript, candidateScript] of [
     }
   }
 }
+for (let iteration = 1; iteration <= 3; iteration += 1) {
+  for (const [variant, cwd] of [["baseline", baselinePath], ["candidate", candidatePath]]) {
+    clearTypecheckCaches(cwd);
+    measure("typecheck-cold", variant, iteration, cwd, "typecheck");
+    measure("typecheck-unchanged", variant, iteration, cwd, "typecheck");
+  }
+}
 const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
-const comparisons = ["syntax-cold", "typed", "typecheck"].map((slice) => {
+const comparisons = ["syntax-cold", "typed", "typecheck-cold", "typecheck-unchanged"].map((slice) => {
   const rows = samples.filter((sample) => sample.slice === slice);
   const baseline = rows.filter((sample) => sample.variant === "baseline");
   const candidate = rows.filter((sample) => sample.variant === "candidate");

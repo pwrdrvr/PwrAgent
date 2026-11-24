@@ -135,7 +135,8 @@ import { useTranscriptWindow } from "./useTranscriptWindow";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { formatOwnerProviderLabel } from "../../lib/thread-provider-label";
 import { resolvePreferredEditor } from "../../lib/preferred-application";
-import { Composer, getDefaultModelOption, type ComposerProps } from "../composer/Composer";
+import { backendDefaultModel } from "@pwragent/shared/model-defaults";
+import { Composer, type ComposerProps } from "../composer/Composer";
 import { ComposerTerminalToggle } from "../composer/ComposerTerminalToggle";
 import type { EnvironmentSetupRowModel } from "../composer/EnvironmentSetupRow";
 import {
@@ -219,7 +220,7 @@ import {
 import type { PendingQuestionnaireState } from "./questionnaire";
 import type { PendingMcpInteractionState } from "./mcp-elicitation";
 import { usePendingRequestControls } from "./usePendingRequestControls";
-import { readRendererSequence } from "./live-transcript-activity";
+import { segmentedTranscriptDisplay } from "../../lib/segmented-transcript";
 import { ThreadLockCard } from "../thread-lock/ThreadLockCard";
 import {
   MissingWorktreeCard,
@@ -880,6 +881,8 @@ export type ThreadViewProps = {
   decisionSettings?: DecisionSetupSettings;
   /** Opens Settings → AI Providers, at a decision provider's screen when one is named. */
   onOpenDecisionSettings?: (focus?: string) => void;
+  /** Settings › Experimental, where Open Math Harness is configured. */
+  onOpenResearchSettings?: () => void;
   onRevealSelectedThreadInList?: () => void;
   /** Show the breadcrumb's project in the Directories lens. */
   onRevealSelectedProjectInList?: (directory: NavigationDirectorySummary) => void;
@@ -1592,6 +1595,7 @@ export function ThreadView(props: ThreadViewProps) {
     threadRewindSupport,
     rewindProviderLabel,
     rewindableMessageIds,
+    hasRewindableMessages,
     rewindDisabledReason,
     openRewindConfirm,
     executeRewind,
@@ -2418,65 +2422,6 @@ export function ThreadView(props: ThreadViewProps) {
     [props.activeTurnId]
   );
 
-  // The latest `item/fileChange/outputDelta` activity entry (after #493
-  // these live in optimisticEntries → props.transcriptEntries, not in
-  // a separate pending state slot). We find the most recently created
-  // one tagged by id prefix so the LiveWorkRail can display it as the
-  // current Changed Files section. Re-uses the persisted entry as-is
-  // for the pinned-after-turn case — file-change entries already stay
-  // in optimisticEntries after the turn ends.
-  const liveWorkRailChangedFilesEntry = useMemo(() => {
-    let latest: AppServerThreadActivityEntry | undefined;
-    for (const entry of props.transcriptEntries) {
-      if (
-        entry.type !== "activity" ||
-        !entry.id.startsWith("live-file-change-")
-      ) {
-        continue;
-      }
-      if (!latest) {
-        latest = entry;
-        continue;
-      }
-      // Pick by createdAt, tiebreak by rendererSequence — same order
-      // mergeTranscriptEntries uses so the rail's pick stays
-      // consistent with where the entry sits in the transcript when
-      // wall-clock timestamps collide under fast-CI batching (the
-      // PR #493 scenario).
-      const entryCreatedAt =
-        typeof entry.createdAt === "number" ? entry.createdAt : undefined;
-      const latestCreatedAt =
-        typeof latest.createdAt === "number" ? latest.createdAt : undefined;
-      if (
-        typeof entryCreatedAt === "number" &&
-        typeof latestCreatedAt === "number"
-      ) {
-        if (entryCreatedAt > latestCreatedAt) {
-          latest = entry;
-          continue;
-        }
-        if (entryCreatedAt < latestCreatedAt) {
-          continue;
-        }
-      } else if (typeof entryCreatedAt === "number") {
-        latest = entry;
-        continue;
-      } else if (typeof latestCreatedAt === "number") {
-        continue;
-      }
-      const entrySequence = readRendererSequence(entry);
-      const latestSequence = readRendererSequence(latest);
-      if (
-        typeof entrySequence === "number" &&
-        typeof latestSequence === "number" &&
-        entrySequence > latestSequence
-      ) {
-        latest = entry;
-      }
-    }
-    return latest;
-  }, [props.transcriptEntries]);
-
   const pendingTranscriptActivityEntry =
     pendingActivityEntry && !activityHasFileDiff(pendingActivityEntry)
       ? pendingActivityEntry
@@ -2501,16 +2446,18 @@ export function ThreadView(props: ThreadViewProps) {
   // entries grouped per turn, cleared past a committed turn once the
   // next turn starts. Rehydrates on thread load because the replay
   // already carries per-file diffs and command exit codes.
-  const editedFileGroups = useMemo(
-    () =>
-      editedFileGroupsCollector.collect({
+  const { editedFileGroups, liveWorkRailChangedFilesEntry } = useMemo(
+    () => {
+      const editedFileGroups = editedFileGroupsCollector.collect({
         entries: props.transcriptEntries,
         activeTurnId: props.activeTurnId,
         forkCreatedAt: selectedThread?.forkSourceThreadId
           ? selectedThread.createdAt
           : undefined,
         livePendingEntry: pendingRailActivityEntry,
-      }),
+      });
+      return { editedFileGroups, liveWorkRailChangedFilesEntry: editedFileGroupsCollector.latestChangedFilesEntry() };
+    },
     [
       editedFileGroupsCollector,
       props.transcriptEntries,
@@ -2723,12 +2670,12 @@ export function ThreadView(props: ThreadViewProps) {
       return;
     }
 
-    const persistedActivity = props.transcriptEntries.find(
-      (entry): entry is AppServerThreadActivityEntry =>
-        entry.type === "activity" && activityContainsDiff(entry, pendingActivityEntry)
-    );
-    if (persistedActivity) {
-      setPendingActivityEntry(undefined);
+    const segments = segmentedTranscriptDisplay(props.transcriptEntries);
+    for (const entry of segments?.entriesForTurn(pendingActivityEntry.turn?.id) ?? props.transcriptEntries) {
+      if (entry.type === "activity" && activityContainsDiff(entry, pendingActivityEntry)) {
+        setPendingActivityEntry(undefined);
+        break;
+      }
     }
   }, [pendingActivityEntry, props.transcriptEntries]);
 
@@ -2737,12 +2684,12 @@ export function ThreadView(props: ThreadViewProps) {
       return;
     }
 
-    const persistedPlan = props.transcriptEntries.find(
-      (entry): entry is AppServerThreadPlanEntry =>
-        entry.type === "plan" && arePlanEntriesEquivalent(entry, pendingPlanEntry)
-    );
-    if (persistedPlan) {
-      setPendingPlanEntry(undefined);
+    const segments = segmentedTranscriptDisplay(props.transcriptEntries);
+    for (const entry of segments?.entriesForTurn(pendingPlanEntry.turn?.id) ?? props.transcriptEntries) {
+      if (entry.type === "plan" && arePlanEntriesEquivalent(entry, pendingPlanEntry)) {
+        setPendingPlanEntry(undefined);
+        break;
+      }
     }
   }, [pendingPlanEntry, props.transcriptEntries]);
 
@@ -3409,7 +3356,7 @@ export function ThreadView(props: ThreadViewProps) {
     openWorkflowBudgetDialog,
     rewind: threadRewindSupport ? {
       disabledReason: rewindDisabledReason
-        ?? (rewindableMessageIds?.size ? undefined : "No prompts to rewind to yet"),
+        ?? (hasRewindableMessages ? undefined : "No prompts to rewind to yet"),
       onOpen: openLastPromptRewind,
     } : undefined,
   });
@@ -3869,6 +3816,7 @@ export function ThreadView(props: ThreadViewProps) {
               onOpenAutomations={props.onOpenAutomations}
               decisionSettings={props.decisionSettings}
               onOpenDecisionSettings={props.onOpenDecisionSettings}
+              onOpenResearchSettings={props.onOpenResearchSettings}
               onActiveTabChange={onActiveContextTabChange}
               onResizingChange={setContextRailResizing}
               onWidthChange={setContextRailWidth}
@@ -4308,7 +4256,7 @@ function renderThreadViewHeader({
   // the backend's default while the launchpad has chosen none.
   const launchpadHeaderModel = composerLaunchpad
     ? composerLaunchpad.model
-      ?? getDefaultModelOption(props.backends?.find((backend) => backend.kind === composerLaunchpad.backend))?.id
+      ?? backendDefaultModel(props.backends?.find((backend) => backend.kind === composerLaunchpad.backend))?.id
     : undefined;
   return props.pendingThreadStart ? (
     <ThreadPlaceholderHeader
@@ -4609,12 +4557,18 @@ function useThreadRewind(props: ThreadViewProps, rewindOwnerBackend: BackendSumm
     : undefined;
   const rewindProviderLabel = rewindOwnerBackend?.label ?? "The provider";
   const rewindThreadSource = selectedThread?.source;
-  const rewindableMessageIds = useMemo(
-    () => rewindThreadSource && threadRewindSupport
-      ? collectRewindableMessageIds(props.transcriptEntries, rewindThreadSource)
-      : undefined,
-    [props.transcriptEntries, rewindThreadSource, threadRewindSupport],
-  );
+  const rewindTargets = useMemo(() => {
+    if (!rewindThreadSource || !threadRewindSupport) return undefined;
+    const segments = segmentedTranscriptDisplay(props.transcriptEntries);
+    if (!segments) {
+      const ids = collectRewindableMessageIds(props.transcriptEntries, rewindThreadSource);
+      return { ids, hasAny: ids.size > 0 };
+    }
+    const ids = { has: (id: string) => segments.isFirstPrompt(id, rewindThreadSource !== "codex") };
+    return { ids, hasAny: segments.hasRewindablePrompt(rewindThreadSource !== "codex") };
+  }, [props.transcriptEntries, rewindThreadSource, threadRewindSupport]);
+  const rewindableMessageIds = rewindTargets?.ids;
+  const hasRewindableMessages = rewindTargets?.hasAny;
   const rewindDisabledReason = props.threadBusy
     ? "Wait for the active turn to finish before rewinding"
     : undefined;
@@ -4795,6 +4749,7 @@ function useThreadRewind(props: ThreadViewProps, rewindOwnerBackend: BackendSumm
     threadRewindSupport,
     rewindProviderLabel,
     rewindableMessageIds,
+    hasRewindableMessages,
     rewindDisabledReason,
     openRewindConfirm,
     executeRewind,
@@ -5068,24 +5023,14 @@ function useThreadImageGallery({
     index: number;
   }>();
   const expandedImage = expandedGallery?.images[expandedGallery.index];
-  const threadImageGallery = useMemo(
-    () =>
-      collectThreadImageGallery([
-        ...props.transcriptEntries,
-        pendingTranscriptActivityEntry,
-        ...pendingProtocolActivityEntries,
-        pendingUsageActivityEntry,
-        props.pendingAssistantMessage,
-      ]),
-    [
-      pendingProtocolActivityEntries,
+  const openImageGallery = useCallback((image: AppServerThreadImagePart) => {
+    const threadImageGallery = collectThreadImageGallery([
+      ...props.transcriptEntries,
       pendingTranscriptActivityEntry,
+      ...pendingProtocolActivityEntries,
       pendingUsageActivityEntry,
       props.pendingAssistantMessage,
-      props.transcriptEntries,
-    ],
-  );
-  const openImageGallery = useCallback((image: AppServerThreadImagePart) => {
+    ]);
     const index = threadImageGallery.findIndex((candidate) =>
       threadGalleryImageMatches(candidate, image)
     );
@@ -5095,7 +5040,10 @@ function useThreadImageGallery({
       images: index >= 0 ? threadImageGallery : [image],
       index: index >= 0 ? index : 0,
     });
-  }, [threadImageGallery]);
+  }, [
+    pendingProtocolActivityEntries, pendingTranscriptActivityEntry, pendingUsageActivityEntry,
+    props.pendingAssistantMessage, props.transcriptEntries,
+  ]);
 
   const imageLightbox = expandedImage && expandedGallery ? (
     <ImageLightbox

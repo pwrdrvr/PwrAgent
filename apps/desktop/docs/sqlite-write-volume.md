@@ -84,6 +84,27 @@ sqlite writes. A process that is alive but hung retains ownership while its
 profile marker remains fresh; this deliberately favors preventing dual owners
 over preempting a possibly healthy process.
 
+### Transcript accounting indexes
+
+The [usage flush budget](../src/main/__tests__/thread-usage-flush-write-budget.test.ts)
+measures 24 single-line storage flushes after seeding a 256-turn ledger.
+Each measured turn is inserted and then updated by three more observations.
+The control drops the three transcript accounting indexes. Both runs made
+24 commits per scenario.
+
+| Turn row | Control WAL bytes | Indexed WAL bytes | Indexed MB/day | Added MB/day |
+| --- | ---: | ---: | ---: | ---: |
+| Priced root | 1,446,120 | 1,433,760 | 215.06 | −1.85 |
+| Unpriced root | 1,454,360 | 1,557,360 | 233.60 | 15.45 |
+| Priced child | 1,536,760 | 1,635,640 | 245.35 | 14.83 |
+| Unpriced child | 1,516,160 | 1,911,680 | 286.75 | 59.33 |
+
+The projection assumes one continuously active thread flushing once per second
+for one hour per day. It multiplies measured bytes per flush by 3,600 and uses
+decimal MB. The priced root row is outside all three partial indexes. Its
+three-frame difference reflects SQLite page layout in this sample. An
+unpriced child turn row can enter all three indexes.
+
 ### Write budgets
 
 [`src/main/__tests__/fixtures/sqlite-write-budgets.json`](../src/main/__tests__/fixtures/sqlite-write-budgets.json)
