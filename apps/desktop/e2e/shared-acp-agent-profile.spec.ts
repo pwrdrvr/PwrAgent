@@ -25,16 +25,18 @@ const portable: AcpInstalledAgentRecord = {
 // refresh:false reads durable records only; this test never discovers or starts
 // an operator CLI and never fetches a registry or installer.
 test("desktop Settings consumes portable ACP registry and agent records and returns acknowledged updates to Node", async () => {
+  let writer: StateDb | undefined;
   const app = await launchElectronApp({
     fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json"),
     preLaunchHook(homeRoot) {
-      const db = StateDb.open(stateDbPathForHomeRoot(homeRoot));
-      try {
-        const store = new AcpAgentStore<AcpRegistrySnapshot, AcpInstalledAgentRecord>(db);
-        store.saveRegistrySnapshot({ fetchedAt: 1234, agents: [], raw: { inventedPolicy: { allowed: false } } });
-        store.upsertInstalledAgent(portable);
-      } finally { db.close(); }
+      writer = StateDb.open(stateDbPathForHomeRoot(homeRoot));
+      const store = new AcpAgentStore<AcpRegistrySnapshot, AcpInstalledAgentRecord>(writer);
+      store.saveRegistrySnapshot({ fetchedAt: 1234, agents: [], raw: { inventedPolicy: { allowed: false } } });
+      store.upsertInstalledAgent(portable);
     },
+  }).catch((error: unknown) => {
+    writer?.close();
+    throw error;
   });
   try {
     await app.window.getByRole("button", { name: /Replay smoke thread/i }).first().click();
@@ -61,15 +63,15 @@ test("desktop Settings consumes portable ACP registry and agent records and retu
       expect(persisted).toEqual({ ...portable, update: snoozed.update });
     } finally { raw.close(); }
 
-    // The next host commits a replacement while Electron remains open. Settings
-    // must observe it rather than overwriting it from a previous read.
-    const db = StateDb.open(stateDbPathForHomeRoot(app.homeRoot));
-    try {
-      const store = new AcpAgentStore<AcpRegistrySnapshot, AcpInstalledAgentRecord>(db);
-      store.saveRegistrySnapshot({ fetchedAt: 5678, agents: [], raw: { inventedPolicy: { allowed: false }, revision: 2 } });
-      store.upsertInstalledAgent({ ...portable, updatedAt: portable.updatedAt + 1,
-        update: { ...portable.update!, latestVersion: "3.0.0" } });
-    } finally { db.close(); }
+    // The Node writer commits while Electron is open. Reuse the connection
+    // from fixture setup so this write does not run schema setup again.
+    if (!writer) throw new Error("ACP fixture writer was not opened");
+    const store = new AcpAgentStore<AcpRegistrySnapshot, AcpInstalledAgentRecord>(writer);
+    store.saveRegistrySnapshot({ fetchedAt: 5678, agents: [], raw: { inventedPolicy: { allowed: false }, revision: 2 } });
+    store.upsertInstalledAgent({ ...portable, updatedAt: portable.updatedAt + 1,
+      update: { ...portable.update!, latestVersion: "3.0.0" } });
+    writer.close();
+    writer = undefined;
     const second = await read();
     expect(second.fetchedAt).toBe(5678);
     expect(second.entries.find(entry => entry.backendId === backend)?.update).toMatchObject({ latestVersion: "3.0.0" });
@@ -85,5 +87,7 @@ test("desktop Settings consumes portable ACP registry and agent records and retu
       expect(store.getInstalledAgent(backend)).toEqual({ ...portable, updatedAt: portable.updatedAt + 1, update: dismissed.update });
       expect(store.readRegistrySnapshot()).toEqual({ fetchedAt: 5678, agents: [], raw: { inventedPolicy: { allowed: false }, revision: 2 } });
     } finally { reopened.close(); }
-  } finally { await app.close(); }
+  } finally {
+    try { writer?.close(); } finally { await app.close(); }
+  }
 });

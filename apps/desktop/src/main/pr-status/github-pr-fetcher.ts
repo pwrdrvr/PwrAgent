@@ -19,7 +19,7 @@ import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getMainLogger } from "../log";
 import { discoverGhCommands } from "../settings/gh-discovery";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
-import { resolveGitHubReposForDirectory } from "./git-remote";
+import { resolveGitHubReposForDirectory, type GitHubRepoRef } from "./git-remote";
 import { prMatchesSourceRepository } from "./pr-source-repository";
 import {
   branchRefKey,
@@ -87,6 +87,10 @@ const DEFAULT_PRIMED_BRANCH_LOOKUP_TTL_MS = 30_000;
 
 function primedBranchLookupKey(cwd: string, branch: string): string {
   return `${cwd}\0${branch}`;
+}
+
+function repositorySetKey(repos: GitHubRepoRef[]): string {
+  return JSON.stringify([...new Set(repos.map(({ host, owner, repo }) => `${host}/${owner}/${repo}`.toLowerCase()))].sort());
 }
 
 /**
@@ -198,7 +202,7 @@ export class GithubPrFetcher {
   /** Batched in-process branch lookups waiting to be consumed. See `primeBranchLookup`. */
   private readonly primedBranchLookups = new Map<
     string,
-    { prs: PrSummary[]; expiresAt: number }
+    { prs: PrSummary[]; reposKey: string; expiresAt: number }
   >();
 
   constructor(options: GithubPrFetcherOptions = {}) {
@@ -492,8 +496,10 @@ export class GithubPrFetcher {
     const primed = this.takePrimedBranchLookup(params.cwd, params.branch);
     const repos = await this.resolveGitHubRepos(params.cwd);
     if (repos.length === 0) return [];
-    if (params.allowPrimed !== false && primed) {
-      return primed.filter((pr) => prMatchesSourceRepository(pr, repos));
+    // A batch may have observed a different set than this checkout's live
+    // lookup. Filtering such an answer cannot establish completeness.
+    if (params.allowPrimed !== false && primed?.reposKey === repositorySetKey(repos)) {
+      return primed.prs.filter((pr) => prMatchesSourceRepository(pr, repos));
     }
     if (!(await this.isGhAvailable())) {
       params.onProviderFailure?.();
@@ -683,13 +689,14 @@ export class GithubPrFetcher {
    * `[]` for a failed lookup would record a false "no PRs".
    */
   primeBranchLookup(
-    entries: { cwd: string; branch: string; prs: PrSummary[] }[],
+    entries: { cwd: string; branch: string; repos: GitHubRepoRef[]; prs: PrSummary[] }[],
     ttlMs = DEFAULT_PRIMED_BRANCH_LOOKUP_TTL_MS,
   ): void {
     const expiresAt = Date.now() + ttlMs;
     for (const entry of entries) {
       this.primedBranchLookups.set(primedBranchLookupKey(entry.cwd, entry.branch), {
         prs: entry.prs,
+        reposKey: repositorySetKey(entry.repos),
         expiresAt,
       });
     }
@@ -698,7 +705,7 @@ export class GithubPrFetcher {
   private takePrimedBranchLookup(
     cwd: string,
     branch: string,
-  ): PrSummary[] | undefined {
+  ) {
     const key = primedBranchLookupKey(cwd, branch);
     const entry = this.primedBranchLookups.get(key);
     if (!entry) {
@@ -708,7 +715,7 @@ export class GithubPrFetcher {
     if (Date.now() > entry.expiresAt) {
       return undefined;
     }
-    return entry.prs;
+    return entry;
   }
 
   /** Force the next `isGhAvailable` call to re-probe — used by Re-check. */
