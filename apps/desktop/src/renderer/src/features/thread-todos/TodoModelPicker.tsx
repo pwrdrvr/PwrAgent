@@ -5,7 +5,6 @@ import type { ModelSettingsRecent } from "@pwragent/shared/contracts/agent";
 import type { ThreadTodo, ThreadTodoModelSettings } from "@pwragent/shared/contracts/thread-todos";
 import {
   buildProviderPickerEntries,
-  describeCodexModelProviderEntry,
   providerPickerValue,
 } from "@pwragent/shared/provider-picker";
 import {
@@ -13,9 +12,9 @@ import {
   sameThreadTodoModelSettings,
 } from "@pwragent/shared/contracts/thread-todos";
 import { CheckIcon, ChevronDownIcon } from "../../icons";
-import { formatBackendLabel } from "../../lib/backend-label";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import { ComposerDropdown } from "../composer/ComposerDropdown";
+import { providerPickerDropdownOptions } from "../composer/provider-picker-options";
 import { ModelDropdown } from "../composer/ModelDropdown";
 import { useTodoDispatchBackends, useTodoDispatchContext } from "./TodoDispatchProvider";
 import { customTodoDispatchSettings, formatTodoDispatchSettings, todoDispatchRecentResolves } from "./todo-dispatch-model";
@@ -159,9 +158,7 @@ export function TodoModelPicker(props: MachinePickerProps) {
           <div className="composer-dropdown__group-label">Custom</div>
           <div className="todo-model-picker__custom" role="presentation">
             <ComposerDropdown ariaLabel="To-do provider" triggerRole="menuitem" menuPlacement="below"
-              options={providerEntries.map((entry) => entry.codexModelProviderId
-                ? { value: entry.value, label: entry.label ?? entry.codexModelProviderId, ...describeCodexModelProviderEntry(entry) }
-                : { value: entry.value, label: formatBackendLabel(entry.backend, backends) })}
+              {...providerPickerDropdownOptions(providerEntries, backends)}
               value={providerPickerValue(selection.settings.backend, selection.settings.model)} onChange={(value) => {
                 const entry = providerEntries.find((candidate) => candidate.value === value);
                 const next = providers.find((candidate) => candidate.kind === entry?.backend);

@@ -9,6 +9,7 @@ import {
   describeCodexModelProviderEntry,
   findCodexModelProviderLabel,
   parseProviderPickerValue,
+  partitionProviderPickerEntries,
   providerPickerValue,
   type ProviderPickerBackend,
 } from "../provider-picker";
@@ -152,6 +153,31 @@ describe("an offline provider", () => {
           expect(described.tooltip).toBeUndefined();
           expect(note).toContain(registered.error);
         }
+      }
+    }));
+  });
+});
+
+describe("the Unavailable submenu", () => {
+  /**
+   * The rule: the main list holds what can be used now. A Codex model
+   * provider whose last catalog read failed, or that offers no model, moves
+   * to the submenu. Every entry still appears exactly once, each side keeps
+   * the picker's order, and a backend never moves.
+   */
+  it("moves each unusable provider down one level, and nothing else", () => {
+    fc.assert(fc.property(owner, (input) => {
+      const entries = buildProviderPickerEntries(toBackends(input));
+      const { available, unavailable } = partitionProviderPickerEntries(entries);
+      expect([...available, ...unavailable].sort((a, b) => a.value.localeCompare(b.value)))
+        .toEqual([...entries].sort((a, b) => a.value.localeCompare(b.value)));
+      expect(available).toEqual(entries.filter((entry) => available.includes(entry)));
+      expect(unavailable).toEqual(entries.filter((entry) => unavailable.includes(entry)));
+      for (const entry of entries) {
+        const registered = input.providers.find((candidate) => candidate.id === entry.codexModelProviderId);
+        const unusable = Boolean(registered)
+          && ((registered!.reportsState && registered!.status === "unavailable") || entry.models.length === 0);
+        expect(unavailable.includes(entry)).toBe(unusable);
       }
     }));
   });

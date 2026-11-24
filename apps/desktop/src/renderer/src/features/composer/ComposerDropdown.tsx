@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
@@ -151,6 +151,7 @@ export function ComposerDropdown(props: {
   const onOpenChange = props.onOpenChange;
   const otherButtonRef = useRef<HTMLButtonElement>(null);
   const firstOtherOptionRef = useRef<HTMLButtonElement>(null);
+  const otherMenuRef = useRef<HTMLDivElement>(null);
   const otherOptions = props.otherOptions ?? [];
   const groups = (props.groups ?? []).filter((group) => group.options.length > 0);
   const groupOptions = groups.flatMap((group) => group.options);
@@ -214,6 +215,19 @@ export function ComposerDropdown(props: {
       firstOtherOptionRef.current?.focus();
     }
   }, [open, showingOther]);
+
+  // The flyout is first placed from an estimate of 40px rows, but a row
+  // with a description line is taller. Once it is laid out, line its real
+  // bottom up with the Other row's bottom, still inside the window.
+  useLayoutEffect(() => {
+    if (!open || !showingOther) return;
+    const row = otherButtonRef.current?.getBoundingClientRect();
+    const height = otherMenuRef.current?.getBoundingClientRect().height;
+    if (!row || !height) return;
+    const padding = 8;
+    const top = Math.max(padding, Math.min(row.bottom - height, window.innerHeight - height - padding));
+    setOtherMenuPosition((current) => (Math.abs(current.top - top) < 0.5 ? current : { ...current, top }));
+  }, [open, showingOther, otherOptions.length]);
 
   useEffect(() => {
     if (!open || !props.triggerRole) return;
@@ -524,6 +538,7 @@ export function ComposerDropdown(props: {
           aria-label={`${props.ariaLabel}: ${props.otherLabel ?? "Other"}`}
           className="composer-dropdown__menu composer-dropdown__menu--other"
           id={otherListboxId}
+          ref={otherMenuRef}
           role="listbox"
           style={otherMenuPosition}
         >

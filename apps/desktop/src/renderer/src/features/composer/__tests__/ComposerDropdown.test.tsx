@@ -252,4 +252,32 @@ describe("ComposerDropdown menu action", () => {
     const { action, listbox } = renderWithAction("below");
     expect(action.compareDocumentPosition(listbox) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
   });
+
+  it("lines a flyout of described rows up with the Other row, from its real height", () => {
+    vi.spyOn(window, "innerHeight", "get").mockReturnValue(800);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      // The Other row ends at y=600. The flyout holds three described rows,
+      // 60px each, taller than the 40px rows the first placement assumes.
+      if (this.matches(".composer-dropdown__menu--other")) return new DOMRect(0, 0, 260, 192);
+      if (this.getAttribute("aria-haspopup") === "listbox") return new DOMRect(0, 560, 260, 40);
+      return new DOMRect(0, 0, 0, 0);
+    });
+    render(
+      <ComposerDropdown
+        ariaLabel="Provider"
+        onChange={vi.fn()}
+        options={[{ value: "codex", label: "OpenAI" }]}
+        otherLabel="Unavailable"
+        otherOptions={["juniper", "slate", "acme"].map((value) => ({
+          value, label: value, description: "Runs on Codex · offline",
+        }))}
+        value="codex"
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Provider(?::|$)/ }));
+    fireEvent.click(screen.getByRole("option", { name: "Unavailable" }));
+    // 600 - 192: the flyout's bottom meets the row's bottom. The 40px
+    // estimate alone put its top at 600 - 132 = 468, 60px too low.
+    expect(screen.getByRole("listbox", { name: "Provider: Unavailable" })).toHaveStyle({ top: "408px" });
+  });
 });

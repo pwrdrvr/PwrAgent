@@ -114,6 +114,11 @@ function openDropdown(label: string): HTMLElement {
   return screen.getByRole("listbox", { name: label });
 }
 
+function openUnavailableProviders(list: HTMLElement): HTMLElement {
+  fireEvent.click(within(list).getByRole("option", { name: "Unavailable" }));
+  return screen.getByRole("listbox", { name: "Provider: Unavailable" });
+}
+
 function renderLaunchpad(
   backend: BackendSummary = codex,
   startingLaunchpad: NavigationLaunchpadDraft = initialLaunchpad,
@@ -144,15 +149,18 @@ describe("named Codex model providers in the composer", () => {
   it("lists each provider by its own name in the Provider picker, and says why one offers nothing", () => {
     renderLaunchpad();
     const list = openDropdown("Provider");
-    expect(composerDropdownOptionLabels(list)).toEqual(["OpenAI", "MathOS", "Refuseless", "Acme Lab", "Flint"]);
+    // The main list holds the providers that work now; the rest wait one level down.
+    expect(composerDropdownOptionLabels(list)).toEqual(["OpenAI", "MathOS", "Unavailable"]);
     expect(within(list).getByRole("option", { name: /MathOS/ })).toHaveTextContent("Runs on Codex · 301 models");
-    expect(within(list).getByRole("option", { name: /Refuseless/ }))
+    const unavailable = openUnavailableProviders(list);
+    expect(composerDropdownOptionLabels(unavailable)).toEqual(["Refuseless", "Acme Lab", "Flint"]);
+    expect(within(unavailable).getByRole("option", { name: /Refuseless/ }))
       .toHaveTextContent("Runs on Codex · 1 model · catalog unavailable");
-    const acme = within(list).getByRole("option", { name: /Acme Lab/ });
+    const acme = within(unavailable).getByRole("option", { name: /Acme Lab/ });
     expect(acme).toHaveTextContent("No models. Catalog unavailable: HTTP 401");
     expect(acme).toHaveAttribute("aria-disabled", "true");
     // A stopped local server is offline, not an error: the reason waits in the tooltip.
-    const flint = within(list).getByRole("option", { name: /Flint/ });
+    const flint = within(unavailable).getByRole("option", { name: /Flint/ });
     expect(flint).toHaveTextContent("Runs on Codex · offline");
     expect(flint).not.toHaveTextContent("fetch failed");
     expect(flint).toHaveAttribute("aria-disabled", "true");
@@ -285,7 +293,8 @@ describe("named Codex model providers in the composer", () => {
 
   it("keeps Refuseless's identical model id apart from MathOS's", async () => {
     const patches = renderLaunchpad();
-    fireEvent.click(within(openDropdown("Provider")).getByRole("option", { name: /Refuseless/ }));
+    fireEvent.click(within(openUnavailableProviders(openDropdown("Provider")))
+      .getByRole("option", { name: /Refuseless/ }));
     await waitFor(() => {
       expect(patches.at(-1)).toMatchObject({ backend: "codex", model: "@refuseless/gpt-oss-120b" });
     });

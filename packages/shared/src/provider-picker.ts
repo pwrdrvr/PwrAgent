@@ -163,6 +163,28 @@ export function buildProviderPickerEntries(
 }
 
 /**
+ * The picker's entries split into the main list and its Unavailable
+ * submenu. A Codex model provider goes to the submenu when its last catalog
+ * read failed (a local model server that is not started, or a wrong key) or
+ * when it offers no model. It stays reachable there, in registered order, so
+ * a stopped provider does not look deleted. Backends always stay in the
+ * main list.
+ */
+export function partitionProviderPickerEntries(entries: readonly ProviderPickerEntry[]): {
+  available: ProviderPickerEntry[];
+  unavailable: ProviderPickerEntry[];
+} {
+  const available: ProviderPickerEntry[] = [];
+  const unavailable: ProviderPickerEntry[] = [];
+  for (const entry of entries) {
+    const out = entry.codexModelProviderId
+      && (entry.catalog?.status === "unavailable" || entry.models.length === 0);
+    (out ? unavailable : available).push(entry);
+  }
+  return { available, unavailable };
+}
+
+/**
  * Each Codex model provider's display name in an owner's backend list, by
  * provider id. The owner's catalog state names it first, then a model's
  * `providerLabel`.
