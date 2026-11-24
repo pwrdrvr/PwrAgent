@@ -1,13 +1,18 @@
 import fc from "fast-check";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { AppServerReviewPullRequestSnapshot, AppServerReviewTarget } from "@pwragent/shared/contracts/normalized-app-server";
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { immutableReviewDiffHash } from "../app-server/agent-review-submission";
+import * as gitExecutable from "../app-server/git-executable";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
+import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import {
   callRegistryMcpTool,
@@ -172,22 +177,36 @@ describe("agent review submission", () => {
   });
 
   it("deduplicates a full commit when either request names the thread checkout explicitly", async () => {
-    const cwd = "/repo/review-parent";
-    await fc.assert(fc.asyncProperty(
-      fc.integer({ min: 1, max: 100 }), fc.boolean(),
-      async (value, explicitFirst) => await withReviewOwner(async (owner) => {
-        const first = await owner.start("automation");
-        expect(await owner.ask(first, commit(value), "first", explicitFirst ? cwd : undefined)).toBe(true);
-        await owner.complete(first);
-        await owner.complete("review-1");
-        const later = await owner.start("automation");
-        const duplicate = await owner.ask(later, commit(value), "duplicate", explicitFirst ? undefined : cwd);
-        await owner.complete(later);
-        if (duplicate) await owner.complete("review-2");
-        expect(duplicate).toBe(false);
-        expect(owner.providerStarts()).toBe(1);
-      }, { cwd }),
-    ), { numRuns: 12, examples: [[1, false], [1, true]] });
+    // Turn completion checks the branch. An existing empty directory lets the
+    // filesystem probe rule out a repository. A missing path falls back to
+    // launching Git, which uses a PowerShell Job wrapper on Windows.
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "pwragent-review-parent-"));
+    const restoreGitEnvironment = isolateProcessGitEnvironment();
+    const runGit = vi.spyOn(gitExecutable, "runGitCommand");
+    try {
+      await fc.assert(fc.asyncProperty(
+        fc.integer({ min: 1, max: 100 }), fc.boolean(),
+        async (value, explicitFirst) => {
+          await withReviewOwner(async (owner) => {
+            const first = await owner.start("automation");
+            expect(await owner.ask(first, commit(value), "first", explicitFirst ? cwd : undefined)).toBe(true);
+            await owner.complete(first);
+            await owner.complete("review-1");
+            const later = await owner.start("automation");
+            const duplicate = await owner.ask(later, commit(value), "duplicate", explicitFirst ? undefined : cwd);
+            await owner.complete(later);
+            if (duplicate) await owner.complete("review-2");
+            expect(duplicate).toBe(false);
+            expect(owner.providerStarts()).toBe(1);
+          }, { cwd });
+          expect(runGit).not.toHaveBeenCalled();
+        },
+      ), { numRuns: 12, examples: [[1, false], [1, true]] });
+    } finally {
+      runGit.mockRestore();
+      restoreGitEnvironment();
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 
   it("keeps the next independent review waiting when the invoking terminal is redelivered", async () => {
