@@ -14,7 +14,7 @@ import { isolateProcessGitEnvironment, runIsolatedGitSync } from "./helpers/isol
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const fs = await importOriginal<typeof import("node:fs/promises")>();
-  return { ...fs, lstat: vi.fn(fs.lstat), open: vi.fn(fs.open) };
+  return { ...fs, lstat: vi.fn(fs.lstat), open: vi.fn(fs.open), realpath: vi.fn(fs.realpath) };
 });
 
 beforeEach(() => onTestFinished(isolateProcessGitEnvironment()));
@@ -31,6 +31,19 @@ const git = (cwd: string, ...args: string[]) => runIsolatedGitSync(cwd, args).tr
 function initialize(cwd: string) {
   git(cwd, "init", "-b", "topic");
   git(cwd, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "topic");
+}
+
+async function gitCheckout(cwd: string) {
+  const dirs = git(cwd, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir").split(/\r?\n/);
+  const [root, commonDir] = await Promise.all(dirs.map((entry) => realpath(entry)));
+  return { root, commonDir };
+}
+
+function inferredPr(number: number, headRefName: string, baseRefName: string, cwd: string): PrSummary {
+  return {
+    number, provider: "github.com", org: "fixture", repo: "shared", lifecycleState: "open", state: "passing",
+    headRefName, baseRefName, url: `https://github.com/fixture/shared/pull/${number}`, linkedDirectoryPaths: [cwd],
+  };
 }
 
 async function writeCatalog(cwd: string, name: string) {
@@ -1001,16 +1014,11 @@ describe("stack checkout demand", () => {
       const [lower, upper, separate, primary] = await Promise.all([lowerPath, upperPath, other, clone].map((cwd) => realpath(cwd)));
       await symlink(lower, lowerAlias, "junction");
       await symlink(upper, upperAlias, "junction");
-      const checkout = async (cwd: string) => {
-        const dirs = git(cwd, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir").split(/\r?\n/);
-        const [root, commonDir] = await Promise.all(dirs.map((entry) => realpath(entry)));
-        return { root, commonDir };
-      };
-      const lowerCheckout = await checkout(lower);
-      const upperCheckout = await checkout(upper);
-      const separateCheckout = await checkout(separate);
-      expect(await checkout(lowerAlias)).toEqual(lowerCheckout);
-      expect(await checkout(upperAlias)).toEqual(upperCheckout);
+      const lowerCheckout = await gitCheckout(lower);
+      const upperCheckout = await gitCheckout(upper);
+      const separateCheckout = await gitCheckout(separate);
+      expect(await gitCheckout(lowerAlias)).toEqual(lowerCheckout);
+      expect(await gitCheckout(upperAlias)).toEqual(upperCheckout);
       expect(lowerCheckout.root).not.toBe(upperCheckout.root);
       expect(lowerCheckout.commonDir).toBe(upperCheckout.commonDir);
       expect(separateCheckout.commonDir).not.toBe(lowerCheckout.commonDir);
@@ -1018,10 +1026,7 @@ describe("stack checkout demand", () => {
       const stackRow = (name: string, root: string, number: number, base: string, alias: string) => ({
         ...row(root, name),
         linkedDirectories: [{ id: primary, path: primary, worktreePath: root, label: name, kind: "worktree" as const }],
-        prs: [{
-          number, provider: "github.com", org: "fixture", repo: "shared", lifecycleState: "open", state: "passing",
-          headRefName: name, baseRefName: base, url: `https://github.com/fixture/shared/pull/${number}`, linkedDirectoryPaths: [alias],
-        } satisfies PrSummary],
+        prs: [inferredPr(number, name, base, alias)],
       });
       const rows = [stackRow("lower", lower, 1, "main", lowerAlias), stackRow("upper", upper, 2, "lower", upperAlias)];
       const reader = new StackReader();
@@ -1044,13 +1049,87 @@ describe("stack checkout demand", () => {
       for (const target of [separate, upper, lower]) {
         await rm(lowerAlias);
         await symlink(target, lowerAlias, "junction");
-        const aliasedCheckout = await checkout(lowerAlias);
-        expect(aliasedCheckout).toEqual(await checkout(target));
+        const aliasedCheckout = await gitCheckout(lowerAlias);
+        expect(aliasedCheckout).toEqual(await gitCheckout(target));
         const sameCheckout = aliasedCheckout.root === lowerCheckout.root && aliasedCheckout.commonDir === lowerCheckout.commonDir;
         expect((await reader.read(rows, [], [lower])).stacks).toEqual(sameCheckout ? stacks : []);
       }
     } finally {
       start.mockRestore();
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("distinguishes the Git common directories of an alias and a checkout with the same worktree root", async () => {
+    const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-shared-root-")));
+    const physical = path.join(sandbox, "physical");
+    const other = path.join(sandbox, "other");
+    const upper = path.join(sandbox, "upper");
+    const alias = path.join(sandbox, "alias");
+    try {
+      await mkdir(physical);
+      initialize(physical);
+      git(sandbox, "clone", physical, other);
+      git(other, "worktree", "add", "-b", "upper", upper);
+      git(other, "config", "core.worktree", physical);
+      const owner = await gitCheckout(other);
+      expect(owner.root).toBe(physical);
+      expect((await gitCheckout(upper)).commonDir).toBe(owner.commonDir);
+      const rows = [
+        { ...row(other, "lower"), prs: [inferredPr(1, "topic", "main", alias)] },
+        { ...row(upper, "upper"), prs: [inferredPr(2, "upper", "topic", upper)] },
+      ];
+      const reader = new StackReader();
+      for (const target of [physical, other]) {
+        await symlink(target, alias, "junction");
+        const provenance = await gitCheckout(alias);
+        expect(provenance.root).toBe(owner.root);
+        expect(provenance.commonDir === owner.commonDir).toBe(target === other);
+        const result = await reader.read(rows, [], [other]);
+        expect(result.stacks.map(({ inferred }) => inferred)).toEqual(provenance.commonDir === owner.commonDir ? [true] : []);
+        expect(result.catalogs).toEqual([{ status: "missing" }]);
+        await rm(alias);
+      }
+      expect(await reader.read(rows, [], [other])).toEqual({ stacks: [], catalogs: [{ status: "missing" }] });
+    } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["available", "unavailable"])("keeps stack settlement conservative when alias probing fails and Git is %s", async (availability) => {
+    const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-alias-probe-")));
+    const lower = path.join(sandbox, "lower");
+    const upper = path.join(sandbox, "upper");
+    const alias = path.join(sandbox, "alias");
+    const real = vi.mocked(realpath).getMockImplementation()!;
+    const runGit = gitExecutable.runGitCommand;
+    const run = vi.spyOn(gitExecutable, "runGitCommand");
+    try {
+      await mkdir(lower);
+      initialize(lower);
+      git(lower, "worktree", "add", "-b", "upper", upper);
+      await symlink(lower, alias, "junction");
+      expect(await gitCheckout(alias)).toEqual(await gitCheckout(lower));
+      const rows = [
+        { ...row(lower, "lower"), prs: [inferredPr(1, "topic", "main", alias)] },
+        { ...row(upper, "upper"), prs: [inferredPr(2, "upper", "topic", upper)] },
+      ];
+      vi.mocked(realpath).mockImplementation((...args) => args[0] === alias
+        ? Promise.reject(Object.assign(new Error("Alias probe unavailable"), { code: "EIO" })) : real(...args));
+      run.mockImplementation((cwd, args, options) => cwd === alias && availability === "unavailable"
+        ? Promise.reject(new Error("Git lookup timed out")) : runGit(cwd, args, options));
+      const { catalogs, stacks } = await new StackReader().read(rows, [], [upper]);
+      expect(run.mock.calls.filter(([cwd, args]) => cwd === alias && args[0] === "rev-parse")).toHaveLength(1);
+      if (availability === "available") {
+        expect(stacks[0]?.layers[1]?.heldBy).toMatchObject({ number: 1 });
+        expect(catalogs).toEqual([{ status: "missing" }]);
+      } else {
+        // The gate must wait when neither the filesystem nor Git can resolve provenance.
+        expect(catalogs).toContainEqual({ status: "unavailable" });
+      }
+    } finally {
+      vi.mocked(realpath).mockImplementation(real);
+      run.mockRestore();
       await rm(sandbox, { recursive: true, force: true });
     }
   });
