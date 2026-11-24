@@ -246,7 +246,9 @@ import {
   getProviderAccessControl,
 } from "../../lib/execution-mode";
 import {
+  formatAntigravityAccessStateLabel,
   launchpadPatchForProviderAccessOption,
+  normalizeAntigravityAccessTarget,
   type ProviderAccessModeOption,
 } from "@pwragent/shared/provider-access-mode";
 import {
@@ -13840,6 +13842,7 @@ function useComposerController(props: ComposerProps) {
   // frames small and render after the controller has returned. Call helpers
   // directly so their identity never remounts the editor or its menus.
   function renderComposerBand(): ReactNode {
+    const queuedPermissionLabel = formatQueuedPermissionLabel(props.thread, backend);
     return (
       <div className="composer__band">
       {/* A send to another machine holds this thread; say so above all else,
@@ -13972,8 +13975,7 @@ function useComposerController(props: ComposerProps) {
         </div>
       ) : null}
 
-      {props.thread?.queuedExecutionMode &&
-      props.thread.queuedExecutionMode !== props.thread.executionMode ? (
+      {queuedPermissionLabel ? (
         <div
           className="composer__queued composer__queued--permissions"
           aria-label="Queued permissions change"
@@ -13982,7 +13984,7 @@ function useComposerController(props: ComposerProps) {
             <span className="composer__queued-label">Permissions queued</span>
             <span className="composer__queued-text">
               Will switch to{" "}
-              {formatExecutionModeLabel(props.thread.queuedExecutionMode)} when
+              {queuedPermissionLabel} when
               the current turn ends
             </span>
           </div>
@@ -17507,6 +17509,21 @@ function useComposerController(props: ComposerProps) {
 }
 
 /** Render after the controller returns, keeping it out of JSX stack captures. */
+function formatQueuedPermissionLabel(
+  thread: NavigationThreadSummary | undefined,
+  backend: BackendSummary | undefined,
+): string | undefined {
+  const queued = thread?.queuedExecutionMode;
+  if (!queued) return undefined;
+  if (thread.queuedNativeMode !== undefined) {
+    return formatAntigravityAccessStateLabel(
+      normalizeAntigravityAccessTarget({ executionMode: queued, nativeMode: thread.queuedNativeMode }),
+      backend?.acp?.runtime,
+    );
+  }
+  return queued !== thread.executionMode ? formatExecutionModeLabel(queued) : undefined;
+}
+
 function ComposerView({ render }: { render: () => ReactNode }) {
   return render();
 }

@@ -27113,6 +27113,36 @@ describe("MessagingController", () => {
         acpMode: planSelection.acpMode,
       });
       expect(harness.setAcpSessionRuntimeOption).not.toHaveBeenCalled();
+      navigation.threads[0] = {
+        ...navigation.threads[0]!,
+        queuedExecutionMode: "default",
+        queuedNativeMode: "plan",
+        queuedExecutionModeAt: 1500,
+      };
+      await harness.controller.handleBackendEvent({
+        backend,
+        notification: {
+          method: "thread/executionMode/queued",
+          params: {
+            threadId: "thread-1",
+            queuedExecutionMode: "default",
+            queuedNativeMode: "plan",
+            queuedAt: 1500,
+            fromLabel: permissions,
+            toLabel: "Plan",
+          },
+        },
+      });
+      expect(harness.delivered).toContainEqual(expect.objectContaining({
+        kind: "confirmation",
+        body: expect.stringContaining(`${permissions} → Plan`),
+        actions: expect.arrayContaining([expect.objectContaining({ label: "Cancel" })]),
+      }));
+      await harness.controller.handleInboundEvent(buildCommandEvent("/status"));
+      expect(harness.delivered.at(-1)).toMatchObject({
+        kind: "status",
+        text: expect.stringContaining(`Permissions: ${permissions} → Plan (queued)`),
+      });
     },
   );
 

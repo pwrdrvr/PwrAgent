@@ -1014,6 +1014,7 @@ function threadSummariesEqual(
       JSON.stringify(right.gitWorkingState ?? null) &&
     left.executionMode === right.executionMode &&
     left.queuedExecutionMode === right.queuedExecutionMode &&
+    left.queuedNativeMode === right.queuedNativeMode &&
     left.queuedExecutionModeAt === right.queuedExecutionModeAt &&
     JSON.stringify(left.queuedTurns ?? []) ===
       JSON.stringify(right.queuedTurns ?? []) &&
@@ -2458,6 +2459,7 @@ function applyThreadExecutionModeQueued(
     federationTarget?: FederationTarget;
     threadId: string;
     queuedExecutionMode: ThreadExecutionMode;
+    queuedNativeMode?: string;
     queuedAt: number;
   }
 ): NavigationLoadedRows | undefined {
@@ -2474,6 +2476,7 @@ function applyThreadExecutionModeQueued(
     }
     if (
       thread.queuedExecutionMode === params.queuedExecutionMode &&
+      thread.queuedNativeMode === params.queuedNativeMode &&
       thread.queuedExecutionModeAt === params.queuedAt
     ) {
       return thread;
@@ -2482,6 +2485,7 @@ function applyThreadExecutionModeQueued(
     return {
       ...thread,
       queuedExecutionMode: params.queuedExecutionMode,
+      queuedNativeMode: params.queuedNativeMode,
       queuedExecutionModeAt: params.queuedAt,
     };
   });
@@ -2515,6 +2519,7 @@ function applyThreadExecutionModeQueueCleared(
     }
     if (
       thread.queuedExecutionMode === undefined &&
+      thread.queuedNativeMode === undefined &&
       thread.queuedExecutionModeAt === undefined
     ) {
       return thread;
@@ -2523,6 +2528,7 @@ function applyThreadExecutionModeQueueCleared(
     return {
       ...thread,
       queuedExecutionMode: undefined,
+      queuedNativeMode: undefined,
       queuedExecutionModeAt: undefined,
     };
   });
@@ -5064,10 +5070,11 @@ export function useThreadNavigation(
       }
 
       if (method === "thread/executionMode/queued") {
-        const { threadId, queuedExecutionMode, queuedAt } = event.notification
+        const { threadId, queuedExecutionMode, queuedNativeMode, queuedAt } = event.notification
           .params as {
           threadId: string;
           queuedExecutionMode: ThreadExecutionMode;
+          queuedNativeMode?: string;
           queuedAt: number;
         };
         setState((current) => ({
@@ -5077,6 +5084,7 @@ export function useThreadNavigation(
             federationTarget: event.federationTarget,
             threadId,
             queuedExecutionMode,
+            queuedNativeMode,
             queuedAt,
           }),
         }));
@@ -5085,6 +5093,7 @@ export function useThreadNavigation(
             ? {
                 ...current,
                 queuedExecutionMode,
+                queuedNativeMode,
                 queuedExecutionModeAt: queuedAt,
               }
             : current
@@ -5113,6 +5122,7 @@ export function useThreadNavigation(
             ? {
                 ...current,
                 queuedExecutionMode: undefined,
+                queuedNativeMode: undefined,
                 queuedExecutionModeAt: undefined,
               }
             : current
@@ -10266,16 +10276,13 @@ export function useThreadNavigation(
       //
       // 2. Thread has an active turn → registry queues the change.
       //    The `thread/executionMode/queued` bus event arrives and
-      //    sets `queuedExecutionMode` on the snapshot, leaving
-      //    `executionMode` at its applied value. The Composer
-      //    queue-indicator block renders because
-      //    `queuedExecutionMode !== executionMode`.
+      //    carries the queued execution mode and any native mode target,
+      //    leaving the applied selection in place. The composer shows
+      //    the pending target separately.
       //
       // An optimistic flip of `executionMode` here would break case
-      // (2): the queue would arrive with `queuedExecutionMode` equal
-      // to the optimistic value (and equal to `executionMode`), so
-      // the indicator would never render — the user would see the
-      // chip flip and assume the change took effect immediately.
+      // (2): the user would see the chip flip and assume the change
+      // took effect immediately, even though the owner queued it.
       // The `setUpdatingThreadExecutionMode(executionMode)` indicator
       // above gives users a "click registered" signal during the
       // round-trip without lying about applied state.

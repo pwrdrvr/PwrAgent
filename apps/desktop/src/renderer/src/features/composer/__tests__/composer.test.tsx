@@ -29035,6 +29035,32 @@ describe("Composer", () => {
       });
     });
 
+    it.each([["plan", "Plan"], ["auto", "Auto"], ["accept-edits", "Accept Edits"]])(
+      "names the queued native %s mode and lets the operator cancel it",
+      async (queuedNativeMode, label) => {
+        const onCancel = vi.fn(async () => undefined);
+        const thread = {
+          ...baseQueuedThread({ executionMode: "default", queuedExecutionMode: "default" }),
+          source: "acp:antigravity" as const,
+          queuedNativeMode,
+        };
+        render(
+          <Composer
+            activeTurnId="turn-1"
+            backends={[backendSummary("acp:antigravity")]}
+            desktopApi={{ onAgentEvent: () => () => undefined }}
+            skills={[]}
+            thread={thread}
+            onCancelExecutionModeQueue={onCancel}
+          />,
+        );
+        const indicator = screen.getByLabelText("Queued permissions change");
+        expect(within(indicator).getByText(`Will switch to ${label} when the current turn ends`)).toBeInTheDocument();
+        fireEvent.click(within(indicator).getByRole("button", { name: "Cancel" }));
+        await waitFor(() => expect(onCancel).toHaveBeenCalledOnce());
+      },
+    );
+
     it("does not render the indicator when queuedExecutionMode is undefined", () => {
       render(
         <Composer

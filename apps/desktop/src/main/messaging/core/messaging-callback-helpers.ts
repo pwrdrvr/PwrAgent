@@ -173,8 +173,8 @@ export type PendingQueueAuditMessage = {
   threadId: ThreadIdentifier;
   /** ULID-shaped queueId from the registry, used for the cancel button action id. */
   queueId: string;
-  fromExecutionMode: ThreadExecutionMode;
-  toExecutionMode: ThreadExecutionMode;
+  fromLabel: string;
+  toLabel: string;
   queuedAt: number;
   /** Surface refs for every binding we successfully posted to. */
   surfaces: Map<string, MessagingSurfaceRef>;

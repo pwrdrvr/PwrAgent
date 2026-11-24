@@ -227,7 +227,9 @@ export class MessagingThreadSettings {
       ? antigravityControl.options.map((option) => ({
           label: option.label,
           mode: option.executionMode,
-          selected: option.value === antigravityControl.value,
+          selected: option.value === (thread?.queuedExecutionMode === "default"
+            ? thread.queuedNativeMode ?? antigravityControl.value
+            : antigravityControl.value),
           ...(option.acpOption && option.acpOption.source !== "model"
             ? {
                 acpMode: {
@@ -556,7 +558,7 @@ export class MessagingThreadSettings {
       "default";
     const currentRuntime = thread?.acpRuntime ?? binding.preferences?.acpRuntime;
     const currentAcpValue = acpMode
-      ? (acpMode.source === "mode"
+      ? thread?.queuedNativeMode ?? (acpMode.source === "mode"
           ? currentRuntime?.currentModeId
           : currentRuntime?.configValues?.[acpMode.optionId] ?? currentRuntime?.currentModeId)
       : undefined;

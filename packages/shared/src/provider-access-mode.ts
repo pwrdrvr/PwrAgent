@@ -327,9 +327,8 @@ export function launchpadPatchForProviderAccessOption(params: {
 /**
  * Explicit canonical state of a live Antigravity thread's access mode.
  *
- * Invariant: when `executionMode === "full-access"`, `nativeMode` is ALWAYS
- * `"default"` so a Full Access thread is never silently stuck in Plan or
- * another non-default native mode.
+ * Full Access targets always select native Default. A stored, applied state
+ * can retain a legacy mode until the owner confirms Default with the worker.
  */
 export type AntigravityAccessState = {
   executionMode: "default" | "full-access";
@@ -366,7 +365,10 @@ export function readAppliedAntigravityAccessState(params: {
   capabilities?: BackendAcpRuntimeCapabilities;
 }): AntigravityAccessState {
   if (params.executionMode === "full-access") {
-    return { executionMode: "full-access", nativeMode: "default" };
+    // Report the saved mode to the transition planner so a Full Access
+    // selection can reconcile a cold legacy session instead of no-oping.
+    const nativeMode = params.acpRuntime?.configValues?.mode ?? params.acpRuntime?.currentModeId ?? "default";
+    return { executionMode: "full-access", nativeMode };
   }
   const selector = acpRuntimeModeSelector(params.capabilities);
   const nativeMode = selector

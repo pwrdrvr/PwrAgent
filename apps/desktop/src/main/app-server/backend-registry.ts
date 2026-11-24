@@ -14058,7 +14058,10 @@ export class DesktopBackendRegistry {
           params: {
             threadId: params.threadId,
             queuedExecutionMode: action.target.executionMode,
+            queuedNativeMode: action.target.nativeMode,
             queuedAt,
+            fromLabel,
+            toLabel,
           },
         },
       });
@@ -14215,7 +14218,7 @@ export class DesktopBackendRegistry {
 
   getQueuedExecutionModeForThread(ref: { backend: AppServerBackendKind; threadId: string }) {
     const entry = this.queuedExecutionModes.get(buildThreadIdentityKey(ref.backend, ref.threadId));
-    return entry ? { mode: entry.mode, queuedAt: entry.queuedAt } : undefined;
+    return entry ? projectQueuedExecutionMode(entry) : undefined;
   }
 
   getQueuedTurnsSnapshot(): Record<string, ThreadQueuedTurnSummary[]> {
@@ -14244,17 +14247,14 @@ export class DesktopBackendRegistry {
 
   getQueuedExecutionModesSnapshot(): Record<
     string,
-    { mode: ThreadExecutionMode; queuedAt: number } | undefined
+    ReturnType<typeof projectQueuedExecutionMode> | undefined
   > {
     const snapshot: Record<
       string,
-      { mode: ThreadExecutionMode; queuedAt: number }
+      ReturnType<typeof projectQueuedExecutionMode>
     > = {};
     for (const [queueKey, entry] of this.queuedExecutionModes) {
-      snapshot[queueKey] = {
-        mode: entry.mode,
-        queuedAt: entry.queuedAt,
-      };
+      snapshot[queueKey] = projectQueuedExecutionMode(entry);
     }
     return snapshot;
   }
@@ -15236,7 +15236,9 @@ export class DesktopBackendRegistry {
       }
       // A downgrade holds the next prompt until it succeeds or the operator
       // cancels it. A failed transfer cannot authorize another privileged turn.
-      const downgrade = queue.backend === "acp:antigravity" && queue.mode === "default";
+      const downgrade = queue.backend === "acp:antigravity"
+        && queue.mode === "default"
+        && this.acpBackend.getSession(queue.backend, threadId)?.executionMode === "full-access";
       if (attempts >= MAX_QUEUE_FLUSH_ATTEMPTS && !downgrade) {
         backendRegistryLog.error(
           "auto-cancelling queued execution mode change after repeated failures",
@@ -15262,6 +15264,8 @@ export class DesktopBackendRegistry {
             id: randomUUID(),
             fromExecutionMode: currentApplied,
             toExecutionMode: queue.mode,
+            ...(queue.fromLabel ? { fromLabel: queue.fromLabel } : {}),
+            ...(queue.toLabel ? { toLabel: queue.toLabel } : {}),
             status: "cancelled",
             occurredAt: Date.now(),
             queueId: queue.queueId,
@@ -22964,6 +22968,18 @@ export class DesktopBackendRegistry {
 }
 
 let registry: DesktopBackendRegistry | null = null;
+
+function projectQueuedExecutionMode(entry: {
+  mode: ThreadExecutionMode;
+  queuedAt: number;
+  acpMode?: ProviderAccessAcpOption;
+}): { mode: ThreadExecutionMode; queuedAt: number; nativeMode?: string } {
+  return {
+    mode: entry.mode,
+    queuedAt: entry.queuedAt,
+    ...(entry.acpMode ? { nativeMode: entry.acpMode.value } : {}),
+  };
+}
 
 export function getExistingDesktopBackendRegistry(): DesktopBackendRegistry | null {
   return registry;

@@ -787,6 +787,7 @@ export class AcpAgentClient {
         }
         await this.loadSessionFromAgent(metadata, {
           antigravityModeSelection: options.antigravityModeSelection,
+          antigravityModeExplicit: options.antigravityModeExplicit,
           suppressTranscriptReplay: options.suppressTranscriptReplay ?? true,
         });
         if (this.idleClosedSessions.get(sessionId) === idleClosed) {
@@ -1477,7 +1478,7 @@ export class AcpAgentClient {
 
   async ensureSession(
     metadata: AcpSessionMetadata,
-    options: { suppressTranscriptReplay?: boolean } = {},
+    options: AcpSessionLoadOptions = {},
   ): Promise<void> {
     await this.withOperation(
       async () => await this.ensureSessionOperation(metadata, options),
@@ -2756,8 +2757,10 @@ export class AcpAgentClient {
       throw new Error("Couldn't reconnect PwrAgent's Job Monitor tools. Try sending the prompt again.");
     }
     const requestedMode = options.antigravityModeSelection;
+    const savedMode = metadata.acpRuntime?.configValues?.mode ?? metadata.acpRuntime?.currentModeId;
+    const fullAccessWorker = this.options.antigravityFullAccess === true;
     const mode = this.options.backendId === "acp:antigravity"
-      ? requestedMode ?? metadata.acpRuntime?.currentModeId ?? metadata.acpRuntime?.configValues?.mode
+      ? (fullAccessWorker ? "default" : requestedMode ?? savedMode)
       : undefined;
     const loadState: AcpSessionLoadState = {
       replayedTranscript: false,
@@ -2779,7 +2782,8 @@ export class AcpAgentClient {
             protocolSessionId,
             result,
             mode,
-            options.antigravityModeExplicit ?? (requestedMode !== undefined),
+            (fullAccessWorker && savedMode !== undefined && savedMode !== "default")
+              || (options.antigravityModeExplicit ?? (requestedMode !== undefined)),
           );
         } catch (error) {
           await this.closeUnconfirmedAntigravityWorker(metadata.sessionId, protocolSessionId, cwd);
@@ -2807,7 +2811,11 @@ export class AcpAgentClient {
     this.rememberSessionModeMenu(protocolSessionId, result);
     this.rememberSessionMcpServers(metadata.sessionId, mcpRegistration, mcpServerWireConfigs);
     await Promise.resolve(mcpRegistration.bindThread?.(metadata.sessionId));
-    const runtimeState = this.runtimeStateFromResponse(result, this.now());
+    const loadedRuntime = this.runtimeStateFromResponse(result, this.now());
+    const runtimeState = fullAccessWorker && loadedRuntime
+      && (loadedRuntime.configValues?.mode ?? loadedRuntime.currentModeId) === "default"
+      ? { ...loadedRuntime, currentModeId: "default", configValues: { ...loadedRuntime.configValues, mode: "default" } }
+      : loadedRuntime;
     if (runtimeState) {
       this.updateSessionRuntimeState(metadata.sessionId, runtimeState, {
         touchActivity: false,
@@ -2843,16 +2851,20 @@ export class AcpAgentClient {
   ): Promise<unknown> {
     // Antigravity 1.5.15's new worker reports Default in session/load,
     // even after the previous worker acknowledged a different mode.
-    const mode = normalizeAcpRuntimeCapabilities({
+    const capabilities = normalizeAcpRuntimeCapabilities({
       value: loadResult,
       now: this.now(),
       source: "session-load",
-    })?.configOptions?.find((option) => option.id === "mode" && option.category === "mode");
+    });
+    const mode = capabilities?.configOptions?.find((option) => option.id === "mode" && option.category === "mode");
+    const currentMode = mode?.currentValue ?? capabilities?.modes?.currentModeId;
+    if (currentMode === selectedMode) return loadResult;
     if (!mode?.values.some((option) => option.value === selectedMode)) {
-      if (explicitSelection) throw new Error(`Antigravity does not offer the "${selectedMode}" session mode.`);
+      if (explicitSelection || (selectedMode === "default" && currentMode !== undefined)) {
+        throw new Error(`Antigravity does not offer the "${selectedMode}" session mode.`);
+      }
       return loadResult;
     }
-    if (mode.currentValue === selectedMode) return loadResult;
     const restored = await this.options.transport.request("session/set_config_option", {
       sessionId: protocolSessionId,
       configId: mode.id,

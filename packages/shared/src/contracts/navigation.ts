@@ -239,6 +239,8 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
    * Lives in registry memory only — not persisted across app restart.
    */
   queuedExecutionMode?: ThreadExecutionMode;
+  /** Native target of a queued Antigravity access selection. */
+  queuedNativeMode?: string;
   /** Wall-clock ms when the queue entry was created. */
   queuedExecutionModeAt?: number;
   /**
@@ -2438,6 +2440,7 @@ export type NavigationRow = {
   queueCount: number;
   queueState: "unknown" | "ready";
   queuedExecutionMode?: ThreadExecutionMode;
+  queuedNativeMode?: string;
   prAutoDispatchEnabled?: boolean;
   /** The owner's active CI watches; absent from an owner that predates them. */
   prCiWatches?: import("./thread-pr-watches").ThreadPrCiWatchMark[];
@@ -2890,6 +2893,7 @@ export type NavigationQueueProjection = {
   complete: boolean;
   entries: ThreadQueuedTurnSummary[];
   queuedExecutionMode?: ThreadExecutionMode;
+  queuedNativeMode?: string;
   nextCursor?: string;
   unchanged?: boolean;
 };
@@ -3913,10 +3917,11 @@ export type ThreadOverlayState = {
   /**
    * Pending permission mode change waiting for the active turn to end.
    * Lives in registry memory only — the overlay store does NOT serialize
-   * these two fields across app restart. Surfaced on the navigation
+   * these fields across app restart. Surfaced on the navigation
    * snapshot so renderer + messaging can render the queued state.
    */
   queuedExecutionMode?: ThreadExecutionMode;
+  queuedNativeMode?: string;
   queuedExecutionModeAt?: number;
   /**
    * Per-thread permission-mode transition audit log. Persisted to the

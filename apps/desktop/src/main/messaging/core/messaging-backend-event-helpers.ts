@@ -126,7 +126,14 @@ export function createMessagingTurnCancellation(
 export function readExecutionModeQueuedParams(
   notification: AgentEvent["notification"],
 ):
-  | { threadId: ThreadIdentifier; queuedExecutionMode: ThreadExecutionMode; queuedAt: number }
+  | {
+      threadId: ThreadIdentifier;
+      queuedExecutionMode: ThreadExecutionMode;
+      queuedNativeMode?: string;
+      queuedAt: number;
+      fromLabel?: string;
+      toLabel?: string;
+    }
   | undefined {
   if (notification.method !== "thread/executionMode/queued") {
     return undefined;
@@ -134,7 +141,10 @@ export function readExecutionModeQueuedParams(
   const params = notification.params as {
     threadId?: unknown;
     queuedExecutionMode?: unknown;
+    queuedNativeMode?: unknown;
     queuedAt?: unknown;
+    fromLabel?: unknown;
+    toLabel?: unknown;
   };
   if (
     typeof params.threadId === "string" &&
@@ -144,7 +154,10 @@ export function readExecutionModeQueuedParams(
     return {
       threadId: params.threadId,
       queuedExecutionMode: params.queuedExecutionMode,
+      ...(typeof params.queuedNativeMode === "string" ? { queuedNativeMode: params.queuedNativeMode } : {}),
       queuedAt: params.queuedAt,
+      ...(typeof params.fromLabel === "string" ? { fromLabel: params.fromLabel } : {}),
+      ...(typeof params.toLabel === "string" ? { toLabel: params.toLabel } : {}),
     };
   }
   return undefined;

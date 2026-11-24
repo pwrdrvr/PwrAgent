@@ -1105,14 +1105,23 @@ export class MessagingNewThreadWorkflow {
     const directory = session.selectedProject
       ? directoryForProjectSelection(navigation, session.selectedProject)
       : undefined;
-    const currentMode =
-      session.preferences?.executionMode ??
-      directory?.launchpad?.executionMode ??
-      navigation.launchpadDefaults.executionMode;
-    const currentRuntime =
-      session.preferences?.acpRuntime ??
-      directory?.launchpad?.acpRuntime ??
-      navigation.launchpadDefaults.acpRuntime;
+    const backend = await this.resolveNewThreadBackendForSession({
+      launchpadBackend: navigation.launchpadDefaults.backend,
+      preferredBackend: session.backend,
+      session,
+    }, event);
+    if (!backend) return;
+    if (acpMode && backend.kind !== "acp:antigravity") {
+      await this.context.host().deliverInvalidBrowseSelection(event);
+      return;
+    }
+    const { executionMode: currentMode, acpRuntime: currentRuntime } = newThreadOptionsForSession(
+      session,
+      navigation,
+      directory,
+      this.context.streamingResponsesDefault,
+      backend,
+    );
     const currentAcpValue = acpMode
       ? (acpMode.source === "mode"
           ? currentRuntime?.currentModeId
@@ -1122,14 +1131,10 @@ export class MessagingNewThreadWorkflow {
       await this.presentNewThreadPromptGate(session, event, navigation);
       return;
     }
-    const backendKind = session.backend ?? navigation.launchpadDefaults.backend;
     if (
-      isAcpBackendId(backendKind)
+      isAcpBackendId(backend.kind)
       && executionMode !== "default"
-      && !acpBackendDeclaresExecutionMode(
-        await this.context.host().getBackendSummary(backendKind),
-        executionMode,
-      )
+      && !acpBackendDeclaresExecutionMode(backend, executionMode)
     ) {
       await this.context.host().deliverInvalidBrowseSelection(event);
       return;

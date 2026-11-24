@@ -1,6 +1,10 @@
 import { codexSpeedOptions, selectedCodexSpeed } from "@pwragent/shared/codex-speed";
 import { displayedReasoningEffort, reasoningEffortsForModel } from "@pwragent/shared/model-defaults";
-import { resolveProviderAccessControl } from "@pwragent/shared/provider-access-mode";
+import {
+  formatAntigravityAccessStateLabel,
+  normalizeAntigravityAccessTarget,
+  resolveProviderAccessControl,
+} from "@pwragent/shared/provider-access-mode";
 import { buildProjectPageIntent, projectPickerPageActions, FOOTER_ROW } from "./messaging-resume-browser";
 import { buildMessagingModelMenuActions } from "./messaging-model-menu";
 import type { MessagingBrowsePage } from "./messaging-browse-query-pool";
@@ -152,7 +156,7 @@ export function buildBindingStatusIntent(params: {
     "default";
   const queuedExecutionMode =
     params.threadState.queuedExecutionMode &&
-    params.threadState.queuedExecutionMode !== permissionsMode
+    (params.threadState.queuedExecutionMode !== permissionsMode || params.threadState.queuedNativeMode !== undefined)
       ? params.threadState.queuedExecutionMode
       : undefined;
   const activeTurn = params.threadState.activeTurn;
@@ -202,12 +206,19 @@ export function buildBindingStatusIntent(params: {
     antigravityAccessControl?.selectedOption?.label
     ?? acpRuntimeMode?.currentLabel;
   const acpRuntimeChoices = acpRuntimeMode?.choices ?? [];
-  const permissionsLineLabel = formatPermissionsLineDisplayLabel({
+  const queuedNativeMode = params.threadState.queuedNativeMode;
+  const antigravityQueueLabel = queuedExecutionMode && queuedNativeMode !== undefined
+    ? `${acpRuntimeLabel ?? formatExecutionModeLabel(permissionsMode)} → ${formatAntigravityAccessStateLabel(
+        normalizeAntigravityAccessTarget({ executionMode: queuedExecutionMode, nativeMode: queuedNativeMode }),
+        params.backendSummary?.acp?.runtime,
+      )} (queued)`
+    : undefined;
+  const permissionsLineLabel = antigravityQueueLabel ?? formatPermissionsLineDisplayLabel({
     acpRuntimeLabel,
     current: permissionsMode,
     queued: queuedExecutionMode,
   });
-  const permissionsActionLabel = formatPermissionsActionDisplayLabel({
+  const permissionsActionLabel = antigravityQueueLabel ?? formatPermissionsActionDisplayLabel({
     acpRuntimeLabel,
     current: permissionsMode,
     queued: queuedExecutionMode,

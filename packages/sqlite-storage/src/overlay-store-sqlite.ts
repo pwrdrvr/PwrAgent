@@ -1321,7 +1321,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
      */
     queuedExecutionModesByThreadKey?: Record<
       string,
-      { mode: ThreadExecutionMode; queuedAt: number } | undefined
+      { mode: ThreadExecutionMode; queuedAt: number; nativeMode?: string } | undefined
     >;
     /**
      * Read projection of the registry's in-memory turn FIFO. Attached to
@@ -1474,6 +1474,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
             ? {
                 ...overlay,
                 queuedExecutionMode: queue.mode,
+                queuedNativeMode: queue.nativeMode,
                 queuedExecutionModeAt: queue.queuedAt,
               }
             : {
@@ -1482,6 +1483,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
                 executionMode: thread.executionMode ?? "default",
                 extraLinkedDirectories: [],
                 queuedExecutionMode: queue.mode,
+                queuedNativeMode: queue.nativeMode,
                 queuedExecutionModeAt: queue.queuedAt,
               };
           return [threadKey, merged];
@@ -1589,7 +1591,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   async projectNavigationThreadDetail(params: {
     thread: AppServerThreadSummary;
     messagingBindingsByThreadKey?: Record<string, MessagingThreadBindingSummary[] | undefined>;
-    queuedExecutionMode?: { mode: ThreadExecutionMode; queuedAt: number };
+    queuedExecutionMode?: { mode: ThreadExecutionMode; queuedAt: number; nativeMode?: string };
     workspaceRoots?: string[];
   }): Promise<NavigationThreadSummary> {
     const thread = params.thread;
@@ -1604,7 +1606,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       overlayByThreadKey: { [threadKey]: queue ? {
         backend: thread.source, threadId: thread.id,
         executionMode: thread.executionMode ?? "default", extraLinkedDirectories: [],
-        ...overlay, queuedExecutionMode: queue.mode, queuedExecutionModeAt: queue.queuedAt,
+        ...overlay, queuedExecutionMode: queue.mode, queuedNativeMode: queue.nativeMode, queuedExecutionModeAt: queue.queuedAt,
       } : overlay },
       threads: [thread],
       workspaceRoots: params.workspaceRoots,
@@ -11296,6 +11298,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     // source of truth; never duplicate either category in overlay JSON.
     const {
       queuedExecutionMode: _queuedExecutionMode,
+      queuedNativeMode: _queuedNativeMode,
       queuedExecutionModeAt: _queuedExecutionModeAt,
       prAutoDispatchPending: _prAutoDispatchPending,
       // Cards and usage activities are rows in their own tables, never

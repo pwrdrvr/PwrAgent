@@ -2,6 +2,7 @@ import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
+import { MAX_QUEUE_FLUSH_ATTEMPTS } from "../app-server/backend-registry-runtime-helpers";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { StateDb } from "../state/state-db";
@@ -40,13 +41,20 @@ type Action =
   | { type: "overlay-failure" }
   | { type: "lower-access-prompt" }
   | { type: "finish-with-blocked-close" }
+  | { type: "reject-queued-native-mode"; turns: number }
   | { type: "retry-downgrade" }
   | { type: "inherit"; child: "review" | "monitor" };
 
 async function exercise(
   initial: Access,
   commands: Iterable<fc.AsyncCommand<Model, Real>>,
-  options?: { db?: StateDb; legacy?: boolean },
+  options?: {
+    db?: StateDb;
+    legacy?: boolean;
+    legacyFullAccess?: { mode: NativeMode; openWithPicker: boolean };
+    shellEnvironment?: Record<string, string>;
+    verifyQueuedProjection?: boolean;
+  },
 ) {
   const db = options?.db;
   const sessionId = "test-session";
@@ -90,6 +98,8 @@ async function exercise(
   let failNextLoad = false;
   let closeBlocked = false;
   let closeAttempts = 0;
+  let rejectNativeMode = false;
+  let rejectedModeAttempts = 0;
   let active: { reply: () => void; done: Promise<void> } | undefined;
   let expectTerminal: (() => void) | undefined;
   const start = (executionMode?: Access) => registry.startTurn({
@@ -113,11 +123,14 @@ async function exercise(
               expect(workers.size).toBe(0);
               workers.add(access);
               modes.set(access, "default");
+              if (method === "session/load" && options?.legacyFullAccess && access === "full-access") {
+                modes.set(access, options.legacyFullAccess.mode);
+              }
               if (method === "session/load" && failNextLoad) {
                 failNextLoad = false;
                 throw new Error("Lost the load reply after opening the worker");
               }
-              return { sessionId, configOptions: modeOptions("default") };
+              return { sessionId, configOptions: modeOptions(modes.get(access)!) };
             case "session/close":
               expect(active).toBeUndefined();
               closeAttempts += 1;
@@ -128,6 +141,10 @@ async function exercise(
               expect(workers.has(access)).toBe(true);
               const nextMode = String(params?.value ?? "default");
               expect(params).toMatchObject({ sessionId, configId: "mode", value: nextMode });
+              if (rejectNativeMode) {
+                rejectedModeAttempts += 1;
+                throw new Error("Worker rejected the native mode");
+              }
               modes.set(access, nextMode);
               return { configOptions: modeOptions(nextMode) };
             }
@@ -159,10 +176,14 @@ async function exercise(
     },
   });
   const accessUpdates: unknown[] = [];
+  const queuedNotifications: unknown[] = [];
   const unsubscribe = registry.onEvent((event) => {
     if (event.notification.method === "turn/completed") expectTerminal?.();
     if (event.notification.method === "thread/executionMode/updated") {
       accessUpdates.push(event.notification.params.executionMode);
+    }
+    if (event.notification.method === "thread/executionMode/queued") {
+      queuedNotifications.push(event.notification.params);
     }
   });
   try {
@@ -170,14 +191,26 @@ async function exercise(
       (entry) => entry.kind === backend,
     );
     expect(catalog?.executionModes.map((entry) => entry.mode)).toEqual(["default", "full-access"]);
-    if (options?.legacy) {
+    if (options?.legacy || options?.legacyFullAccess) {
+      const mode = options.legacyFullAccess?.mode;
       sessions.upsertSession({
         backendId: backend, sessionId, cwd: nonRepositoryCwd, title: "Legacy session",
         executionMode: "full-access", status: "idle", createdAt: 1, updatedAt: 1,
+        ...(mode ? {
+          antigravityFullAccessConfirmed: true,
+          acpRuntime: { currentModeId: mode, configValues: { mode }, updatedAt: 1 },
+        } : {}),
       });
-      await registry.readThread({ backend, threadId: sessionId });
+      if (options.legacyFullAccess?.openWithPicker) {
+        await registry.setThreadExecutionMode({ backend, threadId: sessionId, executionMode: "full-access" });
+      } else {
+        await registry.readThread({ backend, threadId: sessionId });
+      }
     } else {
       await registry.startThread({ backend, cwd: nonRepositoryCwd, executionMode: initial });
+    }
+    if (options?.shellEnvironment) {
+      await registry.constructionPorts().acpBackend.prepareSessionEnvironment(backend, sessionId, options.shellEnvironment);
     }
     if (db) {
       db.raw.pragma("wal_checkpoint(TRUNCATE)");
@@ -350,6 +383,19 @@ async function exercise(
             model.active = true;
             break;
           }
+          case "reject-queued-native-mode": {
+            rejectNativeMode = true;
+            for (let turn = 0; turn < action.turns; turn++) {
+              const previous = active!;
+              active = undefined;
+              previous.reply();
+              await previous.done;
+              await start();
+            }
+            expect(rejectedModeAttempts).toBe(MAX_QUEUE_FLUSH_ATTEMPTS);
+            model.pending = undefined;
+            break;
+          }
           case "finish": {
             const previous = active!;
             active = undefined;
@@ -378,9 +424,22 @@ async function exercise(
         }
         expect(sessions.getSession(backend, sessionId)?.executionMode).toBe(model.applied.executionMode);
         expect(Object.keys(registry.getQueuedExecutionModesSnapshot()).length).toBe(model.pending ? 1 : 0);
+        if (model.pending && options?.verifyQueuedProjection) {
+          const queue = registry.getQueuedExecutionModeForThread({ backend, threadId: sessionId });
+          expect(queuedNotifications.at(-1)).toMatchObject({
+            queuedExecutionMode: model.pending.executionMode,
+            queuedNativeMode: model.pending.nativeMode,
+          });
+          expect(queue).toMatchObject({ mode: model.pending.executionMode, nativeMode: model.pending.nativeMode });
+          expect(Object.values(registry.getQueuedExecutionModesSnapshot())).toEqual([queue]);
+        }
       },
     };
     expect([...workers]).toEqual([initial]);
+    expect(modes.get(initial)).toBe("default");
+    if (options?.legacyFullAccess) {
+      expect(sessions.getSession(backend, sessionId)?.acpRuntime?.configValues?.mode).toBe("default");
+    }
     const model: Model = {
       applied: { executionMode: initial, nativeMode: "default" },
       active: false,
@@ -400,7 +459,9 @@ function command(action: Action): fc.AsyncCommand<Model, Real> {
     check: (model) =>
       action.type === "select"
       || action.type === "legacy-runtime-mode"
-      || model.active === (action.type === "finish" || action.type === "finish-with-blocked-close"),
+      || model.active === (
+        action.type === "finish" || action.type === "finish-with-blocked-close" || action.type === "reject-queued-native-mode"
+      ),
     run: async (model, real) => await real.dispatch(model, action),
     toString: () =>
       action.type === "select"
@@ -429,7 +490,7 @@ describe("Antigravity session access", () => {
         fc.constant(command({ type: "failed-load" })),
         fc.constant(command({ type: "overlay-failure" })),
       ], { maxCommands: 20, size: "max" }),
-      (initial, commands) => exercise(initial, commands),
+      (initial, commands) => exercise(initial, commands, { verifyQueuedProjection: true }),
     ), { numRuns: 30 });
   });
 
@@ -445,6 +506,50 @@ describe("Antigravity session access", () => {
       command({ type: "start" }),
       command({ type: "finish" }),
     ]);
+  });
+
+  it("confirms the requested native mode when moving an environment-specific worker", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom<NativeMode>("plan", "auto", "accept-edits"),
+      (nativeMode) => exercise("default", [
+        command({ type: "select", access: "default", nativeMode }),
+        command({ type: "select", access: "full-access" }),
+        command({ type: "select", access: "default", nativeMode }),
+        command({ type: "start" }),
+        command({ type: "finish" }),
+      ], { shellEnvironment: { FIXTURE_TOOLCHAIN: "enabled" } }),
+    ), { numRuns: 6 });
+  });
+
+  it("publishes the same native queue target in events and owner reads", async () => {
+    await exercise("default", [
+      command({ type: "start" }),
+      command({ type: "select", access: "default", nativeMode: "plan" }),
+      command({ type: "finish" }),
+    ], { verifyQueuedProjection: true });
+  });
+
+  it("reconciles the worker and stored runtime on the first use of a legacy Full Access session", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom<NativeMode>("plan", "auto", "accept-edits"),
+      fc.boolean(),
+      (mode, openWithPicker) => exercise("full-access", [
+        command({ type: "start" }), command({ type: "finish" }),
+      ], { legacyFullAccess: { mode, openWithPicker } }),
+    ), { numRuns: 12 });
+  });
+
+  it("stops retrying rejected native-only selections at the queue attempt limit", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom<NativeMode>("plan", "auto", "accept-edits"),
+      fc.integer({ min: MAX_QUEUE_FLUSH_ATTEMPTS + 1, max: MAX_QUEUE_FLUSH_ATTEMPTS + 4 }),
+      (nativeMode, turns) => exercise("default", [
+        command({ type: "start" }),
+        command({ type: "select", access: "default", nativeMode }),
+        command({ type: "reject-queued-native-mode", turns }),
+        command({ type: "finish" }),
+      ]),
+    ), { numRuns: 8 });
   });
 
   it("refuses a lower-access prompt on a Full Access worker", async () => {
