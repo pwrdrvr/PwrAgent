@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 import { expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { ThreadSearchStore } from "../storage/thread-search-store";
+import { seedSearchThreads } from "./helpers/thread-search-fixture";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 it.each([1000, 2000, 4000, 8000])("opens one ranked MATCH cursor for %i visible matching threads", (n) => {
@@ -10,26 +11,12 @@ it.each([1000, 2000, 4000, 8000])("opens one ranked MATCH cursor for %i visible 
     const store = new ThreadSearchStore(db);
     const threads = Array.from({ length: n }, (_, i) => ({ id: `match-${i}`, source: "codex" as const,
       title: "Needle matching title", titleSource: "explicit" as const, updatedAt: i + 1, linkedDirectories: [] }));
-    const prepare = db.raw.prepare.bind(db.raw);
-    // Reuse identical statements while populating the corpus through the real
-    // write path. Restore preparation before installing the MATCH probe.
-    const fixtureStatements = new Map<string, ReturnType<typeof prepare>>();
-    const fixturePrepare = vi.spyOn(db.raw, "prepare").mockImplementation((sql) => {
-      const cached = fixtureStatements.get(sql);
-      if (cached) return cached;
-      const statement = prepare(sql);
-      fixtureStatements.set(sql, statement);
-      return statement;
-    });
-    try {
-      store.upsertThreads(threads);
-    } finally {
-      fixturePrepare.mockRestore();
-    }
+    seedSearchThreads(db, threads);
     let matchOpens = 0;
     // A value-preserving, non-deterministic RHS marks each FTS cursor opening.
     // Counting SQL preparations alone cannot see repeated native MATCH setup.
     db.raw.function("ranked_match_probe", (query: string) => { matchOpens++; return query; });
+    const prepare = db.raw.prepare.bind(db.raw);
     vi.spyOn(db.raw, "prepare").mockImplementation((sql) => prepare(sql.replace(
       "thread_search_fts MATCH @query", "thread_search_fts MATCH ranked_match_probe(@query)",
     )));
