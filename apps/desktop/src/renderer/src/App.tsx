@@ -294,18 +294,13 @@ import {
 import type { CodexMissingThreadsSignal } from "./features/notifications/codex-missing-threads-notice";
 import { buildPrAutoDispatchBudgetNotice } from "./features/notifications/pr-auto-dispatch-budget-notice";
 import { MessagingErrorNotices } from "./features/notifications/MessagingErrorNotices";
-import {
-  GROK_UPDATE_NOTICE_ID_PREFIXES,
-  GrokCliUpdateNotice,
-} from "./features/notifications/GrokCliUpdateNotice";
+import { GROK_UPDATE_NOTICE_ID_PREFIXES } from "./features/notifications/GrokCliUpdateNotice";
 import {
   CODEX_VERSION_NOTICE_ID_PREFIXES,
   CodexVersionNotice,
 } from "./features/notifications/CodexVersionNotice";
-import {
-  ANTIGRAVITY_UPDATE_NOTICE_ID_PREFIXES,
-  AntigravityUpdateNotice,
-} from "./features/notifications/AntigravityUpdateNotice";
+import { ANTIGRAVITY_UPDATE_NOTICE_ID_PREFIXES } from "./features/notifications/AntigravityUpdateNotice";
+import { AgentUpdateNotices } from "./features/notifications/AgentUpdateNotices";
 import {
   CODEX_RESTART_NOTICE_ID_PREFIXES,
   CodexRestartNotice,
@@ -753,13 +748,11 @@ function DesktopAppShell(props: {
     syncFederationShutdownNotice,
     syncCloudflareSignInNotice,
     syncMessagingErrorNotice,
-    syncGrokCliUpdateNotice,
-    syncAntigravityUpdateNotice,
+    agentUpdateNotices,
     syncCodexVersionNotice,
     syncRestartGateNotice,
     syncCodexRestartNotice,
     openCodexSettings,
-    openAntigravitySettings,
     syncCodexLaunchNotice,
     changeCodexManagedBuilds,
     checkCodexManagedBuildUpdates,
@@ -1732,13 +1725,16 @@ function DesktopAppShell(props: {
       syncFederationShutdownNotice,
       syncCloudflareSignInNotice,
       syncMessagingErrorNotice,
-      syncGrokCliUpdateNotice,
-      syncAntigravityUpdateNotice,
+      agentUpdateNotices: {
+        desktopApi,
+        onGrokNoticeChanged: syncGrokCliUpdateNotice,
+        onAntigravityNoticeChanged: syncAntigravityUpdateNotice,
+        onOpenAntigravitySettings: openAntigravitySettings,
+      },
       syncCodexVersionNotice,
       syncRestartGateNotice,
       syncCodexRestartNotice,
       openCodexSettings,
-      openAntigravitySettings,
       syncCodexLaunchNotice,
       changeCodexManagedBuilds,
       checkCodexManagedBuildUpdates,
@@ -5302,15 +5298,7 @@ function DesktopAppShell(props: {
             desktopApi={desktopApi}
             onNoticeChanged={syncMessagingErrorNotice}
           />
-          <GrokCliUpdateNotice
-            desktopApi={desktopApi}
-            onNoticeChanged={syncGrokCliUpdateNotice}
-          />
-          <AntigravityUpdateNotice
-            desktopApi={desktopApi}
-            onNoticeChanged={syncAntigravityUpdateNotice}
-            onOpenSettings={openAntigravitySettings}
-          />
+          <AgentUpdateNotices handlers={agentUpdateNotices} />
           <CodexVersionNotice
             desktopApi={desktopApi}
             snapshot={settings.snapshot}
