@@ -9,6 +9,21 @@ import type {
 } from "@pwragent/shared/contracts/settings";
 
 /**
+ * The configured connections, with the original bot's row carrying the
+ * original bot's real enabled state. That state lives in
+ * `[messaging.telegram] enabled`; the row copies it once at migration and is
+ * never updated, so its own flag goes stale unless the environment sets it.
+ * The runtime decides the same way when it starts the original bot.
+ */
+export function withOriginalTelegramEnabled(
+  connections: readonly DesktopTelegramConnection[] | undefined,
+  enabled: { value: boolean; source: string },
+): DesktopTelegramConnection[] | undefined {
+  return connections?.map((connection) =>
+    connection.legacy && enabled.source !== "env" ? { ...connection, enabled: enabled.value } : connection);
+}
+
+/**
  * The conversations one Telegram bot may watch or reply to, for the
  * Automations editor's pickers.
  *

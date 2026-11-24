@@ -561,7 +561,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const [profileToolAllowlist, setProfileToolAllowlist] = useState(
     (initialAutomation?.executionProfile?.toolAllowlist ?? []).join(", "),
   );
-  const [enabledProviders, setEnabledProviders] = useState<MessagingChannelKind[]>();
+  const [settingsProviders, setSettingsProviders] = useState<MessagingChannelKind[]>();
   const [providerGroups, setProviderGroups] = useState<ProviderGroups>({});
   const [discordServers, setDiscordServers] = useState<DiscordServer[]>();
   const [discordCatalog, setDiscordCatalog] = useState<DiscordChannelCatalog>();
@@ -588,7 +588,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
     const desktopApi = props.desktopApi;
     const readMessagingSettings = desktopApi?.readMessagingSettings;
     if (!readMessagingSettings) {
-      setEnabledProviders(DEFAULT_INBOUND_PROVIDERS);
+      setSettingsProviders(DEFAULT_INBOUND_PROVIDERS);
       return;
     }
     let cancelled = false;
@@ -596,11 +596,11 @@ export function AutomationEditor(props: AutomationEditorProps) {
       try {
         const response = await readMessagingSettings();
         if (cancelled) return;
-        setEnabledProviders(readEnabledProviders(response.snapshot));
+        setSettingsProviders(readEnabledProviders(response.snapshot));
         setProviderGroups(readProviderGroups(response.snapshot));
         setDiscordServers(readDiscordServers(response.snapshot));
       } catch {
-        if (!cancelled) setEnabledProviders(DEFAULT_INBOUND_PROVIDERS);
+        if (!cancelled) setSettingsProviders(DEFAULT_INBOUND_PROVIDERS);
       }
     })();
     return () => {
@@ -609,6 +609,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
   }, [props.desktopApi]);
 
   const {
+    enabledProviders,
     inboundConnectionId,
     setInboundConnectionId,
     destConnectionId,
@@ -622,7 +623,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
     sourceBotName,
   } = useAutomationTelegramBots(
     props.desktopApi,
-    { inboundProvider, destProvider, destinationShown: resultMode === "different", extraSources },
+    { inboundProvider, destProvider, destinationShown: resultMode === "different", extraSources, settingsProviders },
     initialConversation,
     initialTargetSnapshot,
   );
@@ -3933,7 +3934,8 @@ function listConversations(
   const catalog = telegramCatalogs[bot];
   const listed = readTelegramCatalog(catalog);
   if (bot !== ORIGINAL_TELEGRAM_BOT) return listed;
-  if (catalog?.status === "missing") return [];
+  // A removed or stopped original bot lists nothing, as a named one would.
+  if (catalog && catalog.status !== "available") return [];
   const seen = new Set<string>();
   return [...(catalogGroups.telegram ?? []), ...listed].filter((entry) => {
     if (seen.has(entry.id)) return false;

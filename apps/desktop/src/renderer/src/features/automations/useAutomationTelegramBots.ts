@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AutomationMessagingConversationSnapshot } from "@pwragent/shared/contracts/automations";
 import type {
   ListTelegramConnectionConversationsResponse,
@@ -14,6 +14,7 @@ import {
   telegramBotOptions,
   telegramBotValue,
   telegramConnectionId,
+  withNamedTelegramBots,
   type TelegramBotChoice,
 } from "./automation-telegram-bots";
 
@@ -29,6 +30,8 @@ export function useAutomationTelegramBots(
     /** The destination fields are in use, so its bot's list is wanted. */
     destinationShown: boolean;
     extraSources: readonly AutomationMessagingConversationSnapshot[];
+    /** Settings' enabled providers; undefined until Settings answers. */
+    settingsProviders: readonly MessagingChannelKind[] | undefined;
   },
   savedSource: AutomationMessagingConversationSnapshot | undefined,
   savedTarget: AutomationMessagingConversationSnapshot | undefined,
@@ -43,10 +46,14 @@ export function useAutomationTelegramBots(
   // Undefined until Settings answers, so a saved named bot is not called
   // removed before anyone has looked.
   const [telegramConnections, setTelegramConnections] = useState<TelegramConnectionStatus[]>();
+  // Settled once the list arrived or could not, so the provider list waits
+  // for it either way.
+  const [connectionsSettled, setConnectionsSettled] = useState(false);
   useEffect(() => {
     const list = desktopApi?.listTelegramConnections;
     if (!list) {
       setTelegramConnections([]);
+      setConnectionsSettled(true);
       return;
     }
     let cancelled = false;
@@ -56,6 +63,9 @@ export function useAutomationTelegramBots(
       })
       .catch(() => {
         // Without an answer every saved bot stays as saved, unjudged.
+      })
+      .finally(() => {
+        if (!cancelled) setConnectionsSettled(true);
       });
     return () => {
       cancelled = true;
@@ -78,7 +88,9 @@ export function useAutomationTelegramBots(
         const catalog = await list(connectionId === undefined ? {} : { connectionId });
         setTelegramCatalogs((current) => ({ ...current, [bot]: catalog }));
       } catch {
-        // The fields fall back to typing an ID, as with any unlisted catalog.
+        // The fields fall back to typing an ID, as with any unlisted catalog,
+        // and the next time this bot is wanted it is asked again.
+        requestedRef.current.delete(bot);
       }
     },
     [desktopApi],
@@ -132,7 +144,19 @@ export function useAutomationTelegramBots(
     }
   }, [catalogsWanted, loadTelegramCatalog]);
 
+  // Undefined until both Settings and the bot list answer: correcting a saved
+  // provider against a partial list would move a named-bot trigger off
+  // Telegram while the original bot is off.
+  const { settingsProviders } = fields;
+  const enabledProviders = useMemo(
+    () => settingsProviders === undefined || !connectionsSettled
+      ? undefined
+      : withNamedTelegramBots(settingsProviders, telegramConnections),
+    [connectionsSettled, settingsProviders, telegramConnections],
+  );
+
   return {
+    enabledProviders,
     inboundConnectionId,
     setInboundConnectionId,
     destConnectionId,

@@ -45,9 +45,9 @@ const catalogs: Record<string, ListTelegramConnectionConversationsResponse> = {
   },
 };
 
-function settings(): ReadDesktopMessagingSettingsResponse {
+function settings(originalOn = true): ReadDesktopMessagingSettingsResponse {
   const off = (kind: MessagingChannelKind) => ({
-    enabled: { value: kind === "telegram" },
+    enabled: { value: kind === "telegram" && originalOn },
     authorizedUserIds: { value: [] },
     authorizedConversations: { value: [] },
     authorizedChannels: { value: [] },
@@ -71,10 +71,10 @@ function settings(): ReadDesktopMessagingSettingsResponse {
   } as unknown as ReadDesktopMessagingSettingsResponse;
 }
 
-function botApi(connections: TelegramConnectionStatus[] = bots()) {
+function botApi(connections: TelegramConnectionStatus[] = bots(), originalOn = true) {
   const pairingListeners: Array<(event: { at: number; entry: MessagingPairingEntry }) => void> = [];
   const api = {
-    readMessagingSettings: vi.fn(async () => settings()),
+    readMessagingSettings: vi.fn(async () => settings(originalOn)),
     listTelegramConnections: vi.fn(async () => connections),
     listTelegramConnectionConversations: vi.fn(async (request: { connectionId?: string }) =>
       catalogs[request.connectionId ?? ""] ?? { status: "missing" as const, supergroups: [], users: [] }),
@@ -193,6 +193,34 @@ describe("AutomationEditor Telegram bots", () => {
     expect(submitted(onSubmit)).toEqual({ source: group(ORCHARD), target: group() });
     expect(api.listTelegramConnectionConversations).toHaveBeenCalledWith({ connectionId: ORCHARD });
     expect(api.listTelegramConnectionConversations).toHaveBeenCalledWith({});
+  });
+
+  it("offers Telegram on a named bot while the original bot is off", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    const { desktopApi } = botApi(
+      bots().map((row) => (row.legacy ? { ...row, enabled: false, verified: false } : row)),
+      false,
+    );
+    render(
+      <AutomationEditor
+        desktopApi={desktopApi}
+        mode={{ assignment: { backend: "codex", threadId: "thread-1" }, kind: "create" }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Orchard deploys" } });
+    fireEvent.change(screen.getByLabelText("Task prompt"), { target: { value: "Investigate the deploy." } });
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+
+    // The running named bot, never the stopped original one.
+    await waitFor(() => expect(screen.getByLabelText(/^Bot(?::|$)/)).toHaveTextContent("Orchard bot"));
+    await pickConversation("Conversation", /Orchard Ops/);
+    fireEvent.change(screen.getByLabelText("Value"), { target: { value: "deploy" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(submitted(onSubmit).source).toEqual(group(ORCHARD));
   });
 
   it("keeps an older definition on the original route without a connection ID", async () => {

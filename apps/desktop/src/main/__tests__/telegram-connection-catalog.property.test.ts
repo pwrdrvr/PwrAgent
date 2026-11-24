@@ -5,7 +5,10 @@ import type {
   DesktopTelegramConnection,
   DesktopTelegramPairingGrants,
 } from "@pwragent/shared/contracts/settings";
-import { resolveTelegramConnectionConversations } from "../messaging/telegram-connection-catalog";
+import {
+  resolveTelegramConnectionConversations,
+  withOriginalTelegramEnabled,
+} from "../messaging/telegram-connection-catalog";
 
 const ORIGINAL_ACCOUNT = "111111";
 const NAMED_ACCOUNT = "222222";
@@ -109,6 +112,31 @@ describe("resolveTelegramConnectionConversations", () => {
         ...new Set([...configured, ...granted].map((entry) => entry.id)),
       ]);
     }));
+  });
+
+  it("judges the original route by its setting, not the row copied at migration", () => {
+    fc.assert(fc.property(
+      fc.boolean(), fc.boolean(), fc.constantFrom("config", "default", "env"), fc.boolean(),
+      (rowEnabled, settingEnabled, source, namedEnabled) => {
+        const named = connection({ enabled: namedEnabled });
+        const connections = withOriginalTelegramEnabled(
+          [connection({ id: LEGACY_ID, legacy: true, enabled: rowEnabled }), named],
+          { value: settingEnabled, source },
+        );
+        // Oracle: the runtime starts the original bot from the setting, and
+        // from the row only when the environment sets it.
+        const runs = source === "env" ? rowEnabled : settingEnabled;
+        expect(connections?.find((row) => row.legacy)?.enabled).toBe(runs);
+        expect(connections?.find((row) => !row.legacy)).toEqual(named);
+        const result = resolveTelegramConnectionConversations({
+          connections,
+          original: { supergroups: [{ id: "-1001234567890", displayName: "Orchard Ops" }], users: [] },
+          readNamedGrants: () => grants(NAMED_ACCOUNT, [], []),
+        });
+        expect(result.status).toBe(runs ? "available" : "disabled");
+      },
+    ));
+    expect(withOriginalTelegramEnabled(undefined, { value: true, source: "config" })).toBeUndefined();
   });
 
   it("reports the original route missing when the profile has only named bots", () => {

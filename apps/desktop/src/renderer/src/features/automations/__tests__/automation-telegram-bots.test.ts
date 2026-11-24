@@ -7,6 +7,7 @@ import {
   showTelegramBotPicker,
   telegramBotChoices,
   telegramBotOptions,
+  withNamedTelegramBots,
 } from "../automation-telegram-bots";
 
 const IDS = [`mc_${"a".repeat(32)}`, `mc_${"b".repeat(32)}`, `mc_${"c".repeat(32)}`];
@@ -75,13 +76,31 @@ describe("telegramBotChoices", () => {
   it("starts new conversations on an available bot", () => {
     fc.assert(fc.property(connections, (rows) => {
       const bot = defaultTelegramBot(rows);
+      // Oracle: a running original bot wins; otherwise any enabled named bot
+      // beats a stopped original route.
+      const originalRuns = rows?.some((row) => row.legacy && row.enabled);
+      const namedRuns = rows?.some((row) => !row.legacy && row.enabled);
       if (bot === ORIGINAL_TELEGRAM_BOT) {
-        expect(
-          !rows?.length || rows.some((row) => row.legacy) || rows.every((row) => !row.enabled),
-        ).toBe(true);
+        expect(!rows?.length || originalRuns || !namedRuns).toBe(true);
       } else {
+        expect(originalRuns).toBe(false);
         expect(rows?.find((row) => row.id === bot)).toMatchObject({ enabled: true, legacy: false });
       }
+    }));
+  });
+
+  it("offers Telegram whenever any of its bots runs", () => {
+    const providers = fc.subarray(["telegram", "slack", "discord"] as const);
+    fc.assert(fc.property(providers, connections, (settings, rows) => {
+      const result = withNamedTelegramBots(settings, rows);
+      // Oracle: Settings' list, plus Telegram when an enabled named bot runs.
+      const expected = new Set<string>(settings);
+      if (rows?.some((row) => !row.legacy && row.enabled)) expected.add("telegram");
+      expect(new Set(result)).toEqual(expected);
+      expect(result).toHaveLength(expected.size);
+      expect(result.filter((provider) => provider !== "telegram")).toEqual(
+        settings.filter((provider) => provider !== "telegram"),
+      );
     }));
   });
 

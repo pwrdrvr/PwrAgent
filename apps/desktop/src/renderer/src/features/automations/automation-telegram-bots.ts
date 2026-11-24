@@ -1,3 +1,4 @@
+import type { MessagingChannelKind } from "@pwragent/shared/contracts/messaging";
 import type { TelegramConnectionStatus } from "@pwragent/shared/contracts/settings";
 import type { SelectOption } from "../../components/Select";
 
@@ -72,16 +73,29 @@ function choiceFor(value: string, connection: TelegramConnectionStatus): Telegra
 }
 
 /**
- * The bot a new conversation starts on: the original route when the profile
- * has one, else the first enabled named bot.
+ * The bot a new conversation starts on: the original bot while it runs, else
+ * the first enabled named bot, else the original route.
  */
 export function defaultTelegramBot(
   connections: readonly TelegramConnectionStatus[] | undefined,
 ): string {
-  if (!connections || connections.length === 0 || connections.some((connection) => connection.legacy)) {
+  if (!connections?.length || connections.some((connection) => connection.legacy && connection.enabled)) {
     return ORIGINAL_TELEGRAM_BOT;
   }
-  return connections.find((connection) => connection.enabled)?.id ?? ORIGINAL_TELEGRAM_BOT;
+  return connections.find((connection) => !connection.legacy && connection.enabled)?.id ?? ORIGINAL_TELEGRAM_BOT;
+}
+
+/**
+ * The providers an automation may use. Settings' Telegram switch is the
+ * original bot's; a named bot runs on its own switch, so an enabled one makes
+ * Telegram available even while the original bot is off.
+ */
+export function withNamedTelegramBots(
+  providers: readonly MessagingChannelKind[],
+  connections: readonly TelegramConnectionStatus[] | undefined,
+): MessagingChannelKind[] {
+  const named = connections?.some((connection) => !connection.legacy && connection.enabled);
+  return named && !providers.includes("telegram") ? ["telegram", ...providers] : [...providers];
 }
 
 /** A provider's starting bot: the default Telegram bot, or none elsewhere. */

@@ -57,7 +57,11 @@ import {
   isFederationPeerUnavailableError,
 } from "../../federation/federation-peer-unavailable-error";
 import { loadDesktopMessagingConfigFromSettings } from "../../messaging/messaging-config";
-import type { SaveTelegramConnectionRequest, TelegramConnectionStatus } from "@pwragent/shared/contracts/settings";
+import type {
+  DesktopTelegramConnection,
+  SaveTelegramConnectionRequest,
+  TelegramConnectionStatus,
+} from "@pwragent/shared/contracts/settings";
 import { getDesktopMessagingActivityLog } from "../../messaging/desktop-messaging-activity-log";
 import { getDesktopMessagingPairingStore } from "../../messaging/desktop-messaging-pairing-store";
 import { getMainLogger } from "../../log";
@@ -101,7 +105,10 @@ import {
   startInboundPreview,
   stopInboundPreview,
 } from "../../messaging/inbound-preview-bus";
-import { resolveTelegramConnectionConversations } from "../../messaging/telegram-connection-catalog";
+import {
+  resolveTelegramConnectionConversations,
+  withOriginalTelegramEnabled,
+} from "../../messaging/telegram-connection-catalog";
 import {
   clearDesktopMessagingDefaultAgent,
   listDesktopMessagingRoutes,
@@ -693,8 +700,16 @@ export function registerMessagingStatusIpcHandlers(): void {
     },
   );
 
+  const configuredTelegramConnections = (): DesktopTelegramConnection[] | undefined => {
+    const service = getDesktopSettingsService();
+    const connections = service.readConfiguredTelegramConnections();
+    // Settings are read only when there is an original bot's row to correct.
+    return connections?.some((connection) => connection.legacy)
+      ? withOriginalTelegramEnabled(connections, service.readMessagingSettings().telegram.enabled)
+      : connections;
+  };
   const telegramConnections = (): TelegramConnectionStatus[] =>
-    (getDesktopSettingsService().readConfiguredTelegramConnections() ?? []).map((connection) => {
+    (configuredTelegramConnections() ?? []).map((connection) => {
       const health = connection.legacy
         ? runtime.getPlatformStatuses().find((status) => status.platform === "telegram")
         : runtime.getTelegramConnectionHealth(connection.id);
@@ -900,7 +915,7 @@ export function registerMessagingStatusIpcHandlers(): void {
       const telegram = service.readMessagingSettings().telegram;
       return resolveTelegramConnectionConversations({
         connectionId: request?.connectionId,
-        connections: service.readConfiguredTelegramConnections(),
+        connections: configuredTelegramConnections(),
         original: {
           supergroups: telegram.authorizedSupergroups.value,
           users: telegram.authorizedUserIds.value,
