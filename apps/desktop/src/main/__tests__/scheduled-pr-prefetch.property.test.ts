@@ -616,26 +616,35 @@ it.skipIf(process.platform === "win32")("uses one current config read per branch
   }
 });
 
-it.skipIf(process.platform === "win32")("filters a default branch added during SSH expansion of a symlinked include", async () => {
+it.skipIf(process.platform === "win32").each(["symlinked include", "custom Git", "native URLs"])("filters a default branch added during %s SSH fallback", async (kind) => {
   const cwd = await fixture();
   await readGit(cwd, "remote", "set-url", "origin", "git@fixture-ssh:fixture/origin.git");
   const included = path.join(cwd, "included-config");
   const before = path.join(cwd, "before-config");
   const after = path.join(cwd, "after-config");
-  await writeFile(before, "[user]\n\tname = Fixture\n");
-  await readGit(cwd, "config", "--file", after, "remote.added.url", "https://github.com/fixture/added.git");
-  await readGit(cwd, "config", "--file", after, "remote.added.fetch", "+refs/heads/*:refs/remotes/added/*");
-  await symlink(before, included);
-  await readGit(cwd, "config", "--local", "include.path", included);
+  if (kind === "symlinked include") {
+    await writeFile(before, "[user]\n\tname = Fixture\n");
+    await readGit(cwd, "config", "--file", after, "remote.added.url", "https://github.com/fixture/added.git");
+    await readGit(cwd, "config", "--file", after, "remote.added.fetch", "+refs/heads/*:refs/remotes/added/*");
+    await symlink(before, included);
+    await readGit(cwd, "config", "--local", "include.path", included);
+  } else if (kind === "native URLs") {
+    await readGit(cwd, "config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main");
+  }
   expect((await oracle(cwd))("release")).toEqual(["https://github.com/fixture/upstream.git"]);
 
   const ssh = await holdSshResolution(cwd);
+  if (kind === "custom Git") vi.stubEnv("PWRAGENT_GIT_PATH", bundledGitExecutable());
   const starts = recordPrefetchStarts();
   const scheduled = createScheduledPrPrefetchRepoResolver()(cwd, "release");
   try {
     await Promise.race([ssh.started, scheduled.then(() => { throw new Error("Scheduled lookup did not expand SSH"); })]);
-    await symlink(after, `${included}.next`);
-    await rename(`${included}.next`, included);
+    if (kind === "symlinked include") {
+      await symlink(after, `${included}.next`);
+      await rename(`${included}.next`, included);
+    } else {
+      await readGit(cwd, "remote", "add", "added", "https://github.com/fixture/added.git");
+    }
     await readGit(cwd, "update-ref", "refs/remotes/added/release", "HEAD");
     await remoteHead(cwd, "added", "release");
   } finally {
@@ -643,11 +652,13 @@ it.skipIf(process.platform === "win32")("filters a default branch added during S
     await scheduled;
   }
 
-  const commands = starts.calls.map(([, args]) => args[0]);
+  const metadataReads = starts.calls.filter(([, args]) => args[0] === "config" || args[0] === "remote" && args.length === 1)
+    .map(([, args]) => args[0]);
   const expected = (await oracle(cwd))("release");
   expect(expected).toEqual([]);
   await expect(scheduled).resolves.toEqual(expected);
-  expect(commands.filter((command) => command === "config" || command === "remote")).toEqual(["config", "remote"]);
+  expect(metadataReads).toEqual(kind === "native URLs" ? ["config", "remote", "remote"] : ["config", "remote"]);
+  expect(readObservedGitOrigin(cwd)).toBeUndefined();
 });
 
 it.skipIf(process.platform === "win32").each([[2, 1], [3, 1], [3, 2]])("uses one config read per branch for %i linked-worktree lookups with %i remotes", async (count, remoteCount) => {
@@ -806,8 +817,10 @@ it.skipIf(process.platform === "win32").each(["warm", "cold"])("reuses %s fallba
 
   const commands = starts.calls.filter(([, , purpose]) => purpose === "pr-remotes" || purpose === "pr-discovery").map(([, args]) => args[0]);
   expect(ssh.mock.calls.filter(([command]) => command === "ssh-config")).toHaveLength(cache === "warm" ? 0 : 1);
-  // Each fallback samples config instead of listing remote names separately.
-  expect(commands.filter((command) => command === "config" || command === "remote")).toHaveLength(3);
+  // Only the cold sample waits for SSH and has to renew the remote list.
+  expect(commands.filter((command) => command === "config" || command === "remote")).toEqual(cache === "warm"
+    ? ["config", "config", "config"]
+    : ["config", "remote", "config", "config"]);
   expect(commands.filter((command) => command === "symbolic-ref")).toHaveLength(3);
   expect(commands.filter((command) => command === "for-each-ref")).toHaveLength(3);
   await readGit(cwd, "remote", "set-url", "origin", "git@fixture-ssh:fixture/renamed.git");

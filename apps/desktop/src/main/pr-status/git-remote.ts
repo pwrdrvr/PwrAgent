@@ -264,14 +264,15 @@ export function createScheduledPrefetchRemoteReader(cwd: string) {
       && (repos.length > 0 || !options.validateNegative || await options.validateNegative())) {
       previous = snapshot;
     }
+    const hasSshRemotes = observation.value.some(({ url }) => readSshHost(url));
+    const expandedSshIdentity = hasSshRemotes && observation.value !== reused?.value;
     // A native fallback has no config proof. If an owner read completed
     // during SSH expansion, use its later checkout sample for this branch too.
     const live = remoteCache.get(cwd);
     if (observation.readWithGitRemote && isCurrentRemoteObservation(live) && live.sampleOrder > snapshot.sampleOrder
       && !live.readFailed && !live.sshResolutionFailed && hasAllRemoteUrls(live)) {
-      return { repos: collectForgeRepositories(live.value, "github"), refreshedRemoteNames: live.names };
+      return { repos: collectForgeRepositories(live.value, "github"), refreshedRemoteNames: live.names, expandedSshIdentity };
     }
-    const hasSshRemotes = observation.value.some(({ url }) => readSshHost(url));
     const sshIdentityUnchanged = hasSshRemotes ? () => {
       if (!isCurrentRemoteObservation(snapshot)) return false;
       const current = observationForReuse();
@@ -290,9 +291,7 @@ export function createScheduledPrefetchRemoteReader(cwd: string) {
       }
       : undefined;
     return {
-      repos, refreshedRemoteNames: observation.names, sshIdentityUnchanged,
-      expandedSshIdentity: hasSshRemotes && observation.value !== reused?.value,
-      publish,
+      repos, refreshedRemoteNames: observation.names, sshIdentityUnchanged, expandedSshIdentity, publish,
     };
   };
   return {

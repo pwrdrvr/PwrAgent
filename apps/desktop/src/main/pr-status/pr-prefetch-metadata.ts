@@ -13,7 +13,8 @@ const MAX_CONFIG_INCLUDES = 16;
 
 type PrefetchMetadata = {
   repos: GitHubRepoRef[];
-  refreshedRemoteNames?: string[];
+  refreshedRemoteNames: string[];
+  refreshRemoteNames?: boolean;
   publish?: () => void;
   nativeHeadReads?: true;
   proof?: { heads?: ReadonlyMap<string, string>; unchanged: () => Promise<boolean> };
@@ -126,8 +127,8 @@ export async function observeScheduledPrPrefetchMetadata(
     const parsed = config ? parseConfigWithOrigins(roots.directory, config.stdout)
       : { configuration: { names: [], remotes: [] }, sources: undefined };
     if (!parsed) {
-      const { repos, refreshedRemoteNames, publish } = await repositories.read(undefined, { useGitRemote: true });
-      return { repos, refreshedRemoteNames: refreshedRemoteNames ?? [], publish };
+      const { repos, refreshedRemoteNames, expandedSshIdentity, publish } = await repositories.read(undefined, { useGitRemote: true });
+      return { repos, refreshedRemoteNames: refreshedRemoteNames ?? [], refreshRemoteNames: expandedSshIdentity, publish };
     }
     const { configuration, sources } = parsed;
     const remoteNames = configuration.names;
@@ -154,8 +155,8 @@ export async function observeScheduledPrPrefetchMetadata(
       // An include may have changed while OpenSSH was evaluating aliases.
       // Have Git list current names before using them for branch eligibility.
       return {
-        repos, refreshedRemoteNames: expandedSshIdentity ? undefined : remoteNames,
-        nativeHeadReads: verifyHeadsBeforeConfirming && !expandedSshIdentity ? true : undefined,
+        repos, refreshedRemoteNames: remoteNames, refreshRemoteNames: expandedSshIdentity,
+        nativeHeadReads: verifyHeadsBeforeConfirming ? true : undefined,
       };
     }
     if (extra.length) {
@@ -172,7 +173,7 @@ export async function observeScheduledPrPrefetchMetadata(
       validateNegative: async () => Boolean((!config || sources) && await configUnchanged()),
     });
     const sample = {
-      repos, refreshedRemoteNames: !sources && expandedSshIdentity ? undefined : remoteNames,
+      repos, refreshedRemoteNames: remoteNames, refreshRemoteNames: !sources && expandedSshIdentity,
       publish: sources ? publish : undefined,
     };
     const currentSample = async () => await configUnchanged() ? sample : undefined;

@@ -173,7 +173,7 @@ export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string, che
       if (!metadata) {
         checkout.verified = undefined;
         const observed = await observeScheduledPrPrefetchMetadata(cwd, checkout);
-        if (observed?.proof && observed.refreshedRemoteNames) {
+        if (observed?.proof) {
           const { heads, unchanged } = observed.proof;
           const remoteNames = observed.refreshedRemoteNames;
           const defaults = heads?.size === remoteNames.length ? await readDefaultBranchInfo(cwd, undefined, remoteNames, heads) : undefined;
@@ -200,11 +200,23 @@ export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string, che
       }
     }
 
-    const scheduledSample = sampled ?? await checkout?.repositories.read();
+    const fallback = sampled ? undefined : await checkout?.repositories.read();
+    const scheduledSample = sampled ?? fallback;
     const { repos, refreshedRemoteNames } = scheduledSample ?? await observeForgeRepositoriesForDirectory(cwd, "github");
     if (repos.length === 0) return [];
+    let remoteNames = checkout ? refreshedRemoteNames : undefined;
+    if (sampled?.refreshRemoteNames || fallback?.expandedSshIdentity) {
+      const stdout = await readGitLine(cwd, ["remote"]);
+      if (stdout === undefined) return [];
+      const currentNames = uniqueNonEmpty(stdout.split(/\r?\n/));
+      // A changed remote list also invalidates the identity sample for this
+      // branch. Let the next discovery read resolve the new repository set.
+      if (refreshedRemoteNames && (currentNames.length !== refreshedRemoteNames.length
+        || currentNames.some((name) => !refreshedRemoteNames.includes(name)))) return [];
+      remoteNames = currentNames;
+    }
     const plan = await resolvePrLookupPlan({
-      cwd, branch, remoteNames: checkout ? refreshedRemoteNames : undefined,
+      cwd, branch, remoteNames,
       nativeHeadReads: sampled?.nativeHeadReads,
     });
     scheduledSample?.publish?.();
