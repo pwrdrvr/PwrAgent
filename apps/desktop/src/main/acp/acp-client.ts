@@ -52,9 +52,12 @@ import {
 } from "./acp-rollout-store.js";
 import {
   foldAcpTurnUsage,
+  readAcpPromptResultUsage,
+  readAcpPromptResultUsageEnvelope,
   readAcpSelectedModel,
   readAcpUsageEnvelope,
   type AcpTokenUsage,
+  type AcpUsageEnvelope,
 } from "./acp-usage.js";
 import type { JsonRpcId } from "@pwrdrvr/agent-transport";
 import { getMainLogger } from "../log.js";
@@ -263,6 +266,7 @@ export type AcpAgentClientOptions = {
     sessionId: string;
     turnId: string;
     error: unknown;
+    usage?: AcpUsageEnvelope;
   }) => Promise<void> | void;
   onRuntimeCapabilities?: (event: {
     fromSessionLoad?: boolean;
@@ -1066,7 +1070,10 @@ export class AcpAgentClient {
         turnId,
       });
       result = await promptRequest;
-      this.assertPromptProducedResponse(params.sessionId, result);
+      const responseError = this.missingPromptResponseError(params.sessionId, result);
+      if (responseError) {
+        throw responseError;
+      }
     } catch (error) {
       this.finishTrackedTurn(params.sessionId, this.now());
       this.recordPromptFailure(params.sessionId, turnId, error);
@@ -1226,6 +1233,7 @@ export class AcpAgentClient {
     this.startTrackedTurn(params.sessionId, turnId);
     const acceptance = Promise.withResolvers<{ sessionId: string; turnId: string }>();
     let dispatched = false;
+    let failedPromptUsage: AcpUsageEnvelope | undefined;
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
     const promptRequest = this.requestPromptWithTerminalGuard({
       protocolSessionId,
@@ -1261,12 +1269,20 @@ export class AcpAgentClient {
         if (!dispatched) {
           throw new Error("The ACP prompt was cancelled before it was sent.");
         }
-        this.assertPromptProducedResponse(params.sessionId, result);
+        const responseError = this.missingPromptResponseError(params.sessionId, result);
+        if (responseError) {
+          failedPromptUsage = readAcpPromptResultUsageEnvelope(result, this.options.backendId);
+          throw responseError;
+        }
         const receivedAt = this.now();
         // A prompt that session/cancel stopped settles normally, with
         // stopReason cancelled. Carry that through, so the transcript and
         // the terminal event say the turn was interrupted, not completed.
         const cancelled = promptWasCancelled(result);
+        const promptUsage = readAcpPromptResultUsage(
+          result,
+          this.options.backendId,
+        );
         const finished = this.finishTrackedTurn(
           params.sessionId,
           receivedAt,
@@ -1277,6 +1293,7 @@ export class AcpAgentClient {
           ...(finished.turnId ? { turnId: finished.turnId } : {}),
           outputText: finished.assistantText,
           ...(cancelled ? { stopReason: "cancelled" } : {}),
+          ...(promptUsage ? { usage: promptUsage } : {}),
         });
         void this.notifySessionUpdate({
           sessionId: params.sessionId,
@@ -1286,6 +1303,7 @@ export class AcpAgentClient {
             kind: "turn_finished",
             outputText: finished.assistantText,
             ...(cancelled ? { stopReason: "cancelled" } : {}),
+            ...(promptUsage ? { usage: promptUsage } : {}),
           },
         });
       })
@@ -1313,6 +1331,7 @@ export class AcpAgentClient {
             sessionId: params.sessionId,
             turnId,
             error,
+            ...(failedPromptUsage ? { usage: failedPromptUsage } : {}),
           }),
         ).catch(() => undefined);
       });
@@ -1373,7 +1392,7 @@ export class AcpAgentClient {
     };
     this.suppressedControlPromptSessions.set(protocolSessionId, suppression);
     try {
-      await this.options.transport.request(
+      const result = await this.options.transport.request(
         "session/prompt",
         {
           sessionId: protocolSessionId,
@@ -1381,6 +1400,17 @@ export class AcpAgentClient {
         },
         ACP_CONTROL_PROMPT_REQUEST_TIMEOUT_MS,
       );
+      const promptUsage = readAcpPromptResultUsageEnvelope(
+        result,
+        this.options.backendId,
+      );
+      if (promptUsage) {
+        suppression.tokenUsage = foldAcpTurnUsage(
+          suppression.tokenUsage,
+          promptUsage,
+        );
+        suppression.model = promptUsage.model ?? suppression.model;
+      }
       return {
         text:
           suppression.finalTextChunks.join("").trim() ||
@@ -1734,7 +1764,7 @@ export class AcpAgentClient {
           suppressedControlPrompt.fallbackOutputText = text;
         }
       }
-      const usage = readAcpUsageEnvelope(update);
+      const usage = readAcpUsageEnvelope(update, this.options.backendId);
       if (usage) {
         suppressedControlPrompt.tokenUsage = foldAcpTurnUsage(
           suppressedControlPrompt.tokenUsage,
@@ -2598,10 +2628,10 @@ export class AcpAgentClient {
     };
   }
 
-  private assertPromptProducedResponse(
+  private missingPromptResponseError(
     sessionId: string,
     result: unknown,
-  ): void {
+  ): Error | undefined {
     if (promptWasCancelled(result)) {
       return;
     }
@@ -2613,13 +2643,13 @@ export class AcpAgentClient {
     const displayName = this.options.agentDisplayName?.trim() || "ACP agent";
     const version = this.runtimeCapabilities?.agentInfo?.version?.trim();
     if (this.options.backendId === "acp:kimi") {
-      throw new Error(
+      return new Error(
         `${displayName} ended the turn without a response.${
           version ? ` Kimi Code CLI ${version}` : " This Kimi Code CLI"
         } may be out of date or incompatible with the selected model. Update Kimi, refresh the model catalog, and try again.`,
       );
     }
-    throw new Error(
+    return new Error(
       `${displayName} ended the turn without a response. Refresh the provider model catalog and try again.`,
     );
   }

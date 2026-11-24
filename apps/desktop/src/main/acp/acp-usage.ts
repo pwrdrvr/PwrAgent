@@ -1,6 +1,7 @@
 import type { BackendAcpSessionRuntimeState } from "@pwragent/shared/contracts/backend";
 
 export type AcpTokenUsage = {
+  cacheWriteInputTokens?: number;
   cachedInputTokens?: number;
   inputTokens?: number;
   outputTokens?: number;
@@ -23,9 +24,17 @@ export type AcpUsageEnvelope = {
  * restarts at zero on every turn. That is the number it sends as
  * `total_token_usage` on `thread/tokenUsage/updated`.
  *
- * Every ACP agent known to report usage reports it per model call, which folds
- * to per turn: Grok on `response_completed`, Qwen on
- * `agent_message_chunk._meta.usage`. Kimi Code 0.31.1 reports none at all —
+ * Every ACP agent known to report usage reports it per turn or per model call,
+ * which folds to per turn: Grok on `response_completed` and `turn_completed`,
+ * Qwen on `agent_message_chunk._meta.usage`, and Antigravity 1.5.14 on the
+ * `session/prompt` result (`result.usage`). Antigravity's `result.usage` is a
+ * per-turn total across all model calls in the turn with exclusive
+ * `inputTokens` (uncached input), `cachedReadTokens`, `cachedWriteTokens`,
+ * `outputTokens` (already including `thoughtTokens`), and `totalTokens` equal
+ * to `inputTokens + cachedReadTokens + cachedWriteTokens + outputTokens`, with
+ * no cost field; `AcpAgentClient` attaches it to its synthetic `turn_finished`
+ * update so this layer normalizes it into PwrAgent's inclusive `inputTokens`
+ * convention. Kimi Code 0.31.1 reports none at all —
  * `kimi-code-0-31-cereal.json` is a full captured turn with no usage anywhere,
  * so a Kimi thread cannot be priced. Kimi Code 2.0.0 still cannot: a captured
  * turn returns only `stopReason` from `session/prompt`, and its new
@@ -65,12 +74,39 @@ export type AcpUsageEnvelope = {
  *    that works.
  */
 
+export function readAcpPromptResultUsage(
+  result: unknown,
+  backendId?: string,
+): Record<string, unknown> | undefined {
+  if (backendId !== "acp:antigravity") {
+    return undefined;
+  }
+  const usage = readRecord(readRecord(result)?.usage);
+  return readAntigravityPromptUsageEnvelope(usage) ? usage : undefined;
+}
+
+export function readAcpPromptResultUsageEnvelope(
+  result: unknown,
+  backendId?: string,
+): AcpUsageEnvelope | undefined {
+  if (backendId !== "acp:antigravity") {
+    return undefined;
+  }
+  return readAntigravityPromptUsageEnvelope(readRecord(readRecord(result)?.usage));
+}
+
 export function readAcpUsageEnvelope(
   update: Record<string, unknown>,
+  backendId?: string,
 ): AcpUsageEnvelope | undefined {
   const kind = readAcpUpdateKind(update);
   if (kind === "response_completed") {
     return readGrokResponseUsageEnvelope(readRecord(update.usage));
+  }
+  if (kind === "turn_finished") {
+    return backendId === "acp:antigravity"
+      ? readAntigravityPromptUsageEnvelope(readRecord(update.usage))
+      : undefined;
   }
   const usage =
     kind === "turn_completed"
@@ -193,6 +229,85 @@ function readGrokResponseUsageEnvelope(
   };
 }
 
+/**
+ * Antigravity 1.5.14 reports per-turn token usage on the `session/prompt`
+ * JSON-RPC result (`result.usage`) with exclusive uncached `inputTokens`:
+ *
+ *   totalTokens = inputTokens + cachedReadTokens + cachedWriteTokens + outputTokens
+ *
+ * `outputTokens` already includes `thoughtTokens`. Normalize `inputTokens` to
+ * PwrAgent's inclusive total-input convention so downstream
+ * `inputTokens - cachedInputTokens` recovers `uncached + cacheWrite` without
+ * undercounting cached prompts.
+ */
+function readAntigravityPromptUsageEnvelope(
+  usage: Record<string, unknown> | undefined,
+): AcpUsageEnvelope | undefined {
+  if (!usage) {
+    return undefined;
+  }
+  const uncachedInputTokens = readFiniteNumber(usage.inputTokens);
+  const cachedInputTokens =
+    readFiniteNumber(usage.cachedReadTokens)
+    ?? readFiniteNumber(usage.cachedInputTokens);
+  const cacheWriteInputTokens =
+    readFiniteNumber(usage.cachedWriteTokens)
+    ?? readFiniteNumber(usage.cacheWriteInputTokens)
+    ?? readFiniteNumber(usage.cacheCreationTokens);
+  const outputTokens = readFiniteNumber(usage.outputTokens);
+  const reasoningOutputTokens =
+    readFiniteNumber(usage.thoughtTokens)
+    ?? readFiniteNumber(usage.reasoningTokens)
+    ?? readFiniteNumber(usage.reasoningOutputTokens);
+  const explicitTotalTokens = readFiniteNumber(usage.totalTokens);
+  if (
+    uncachedInputTokens === undefined
+    && cachedInputTokens === undefined
+    && cacheWriteInputTokens === undefined
+    && outputTokens === undefined
+    && reasoningOutputTokens === undefined
+    && explicitTotalTokens === undefined
+  ) {
+    return undefined;
+  }
+
+  const inputTokens =
+    uncachedInputTokens !== undefined
+    || cachedInputTokens !== undefined
+    || cacheWriteInputTokens !== undefined
+      ? (uncachedInputTokens ?? 0)
+        + (cachedInputTokens ?? 0)
+        + (cacheWriteInputTokens ?? 0)
+      : undefined;
+  const totalTokens =
+    explicitTotalTokens
+    ?? (inputTokens !== undefined || outputTokens !== undefined
+      ? (inputTokens ?? 0) + (outputTokens ?? 0)
+      : undefined);
+  const modelUsage = readRecord(usage.modelUsage);
+  const model =
+    readNonEmptyString(usage.model)
+    ?? readNonEmptyString(usage.modelId)
+    ?? readNonEmptyString(usage.model_id)
+    ?? (modelUsage ? Object.keys(modelUsage)[0] : undefined);
+  return {
+    ...(model ? { model } : {}),
+    scope: "turn",
+    tokenUsage: {
+      ...(cacheWriteInputTokens !== undefined && cacheWriteInputTokens > 0
+        ? { cacheWriteInputTokens }
+        : {}),
+      ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+      ...(inputTokens !== undefined ? { inputTokens } : {}),
+      ...(outputTokens !== undefined ? { outputTokens } : {}),
+      ...(reasoningOutputTokens !== undefined
+        ? { reasoningOutputTokens }
+        : {}),
+      ...(totalTokens !== undefined ? { totalTokens } : {}),
+    },
+  };
+}
+
 export function foldAcpTurnUsage(
   previous: AcpTokenUsage | undefined,
   envelope: AcpUsageEnvelope,
@@ -204,6 +319,7 @@ export function foldAcpTurnUsage(
     return envelope.tokenUsage;
   }
   return {
+    ...sumPresentUsageField(previous, envelope.tokenUsage, "cacheWriteInputTokens"),
     ...sumPresentUsageField(previous, envelope.tokenUsage, "cachedInputTokens"),
     ...sumPresentUsageField(previous, envelope.tokenUsage, "inputTokens"),
     ...sumPresentUsageField(previous, envelope.tokenUsage, "outputTokens"),

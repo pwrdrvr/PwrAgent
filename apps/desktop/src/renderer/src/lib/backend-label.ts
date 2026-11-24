@@ -30,6 +30,9 @@ export function formatBackendLabel(
   if (backend === "claude") {
     return "Claude";
   }
+  if (backend === "acp:antigravity") {
+    return "Antigravity";
+  }
   if (backend === "acp:gemini") {
     return "Gemini";
   }

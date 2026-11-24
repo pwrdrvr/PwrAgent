@@ -20,6 +20,7 @@ import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared/thread-archive-p
 import { projectActiveThreadSubAgents } from "@pwragent/shared/subagent-visibility";
 import type { AutomationRunSourceMetadata } from "@pwragent/shared/contracts/automations";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { runGitCommand } from "../app-server/git-executable";
 import { CodexEnvironmentHydrationStore } from "../storage/codex-environment-hydration-store";
@@ -49,6 +50,7 @@ import {
 } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { messagingNewThreadHarness } from "./fixtures/messaging-new-thread-harness";
+import { createAcpAgentStoreMock, createAcpSessionStoreMock } from "./helpers/backend-registry-fixture";
 import { ComposerDraftRecoveryStore } from "../state/composer-draft-recovery-store";
 import { StateDb } from "../state/state-db";
 import { deleteAgentPreset, listAgentPresets, saveAgentPreset } from "@pwragent/sqlite-storage/agent-preset-store";
@@ -415,6 +417,87 @@ describe("sqlite write metrics", () => {
       expect(entry?.details.some((detail) => detail.id.endsWith("-input-cost") || detail.id.endsWith("-output-cost"))).toBe(false);
       expectSqliteWriteBudget({ scenario: "claude-result-usage", note: "100 context updates plus one result usage event and ledger flush; context does not write SQLite; 1 commit/turn, measured 65,920 bytes: ~6.6 MB/day at 100 turns/day, zero idle writes", writes });
     } finally { await registry.close(); }
+  });
+
+  it.each([
+    ["completed", true],
+    ["failed", true],
+    ["completed", false],
+  ] as const)("budgets Antigravity %s turn settlement with reported usage=%s", async (status, reportsUsage) => {
+    const backend = "acp:antigravity";
+    const model = "gemini-4-neon";
+    const now = Date.UTC(2026, 10, 23);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const promptResult = Promise.withResolvers<unknown>();
+    const transport = new FakeAcpAgentTransport({
+      "session/new": { sessionId: "antigravity-usage", models: { currentModelId: model, availableModels: [{ modelId: model }] } },
+      "session/prompt": promptResult.promise,
+    });
+    const registry = createDesktopBackendRegistry({
+      codexClient: createStubBackendClient(), overlayStore: store,
+      agentToolMcpServer: null, pdfToolMcpServer: null,
+      acpAgentStore: createAcpAgentStoreMock([{
+        backendId: backend, registryId: "antigravity", name: "Antigravity",
+        distributionKind: "local", distributionSource: "agy",
+        installStatus: "installed", authStatus: "not-required", verificationStatus: "not-applicable",
+        allowlistRuleId: "local-antigravity-cli", installedAt: now, updatedAt: now,
+        runtimeCapabilities: {
+          schemaVersion: 1, status: "discovered", checkedAt: now,
+          models: { currentModelId: model, availableModels: [{ id: model }] },
+        },
+        launchDescriptor: { backendId: backend, registryId: "antigravity", distributionKind: "local", command: "agy", args: [], env: {} },
+      }]),
+      // Isolate accounting from the session metadata writes that predate usage support.
+      acpSessionStore: createAcpSessionStoreMock([]),
+      acpRolloutStore: null,
+      createAcpTransport: () => transport,
+    });
+    const terminal = Promise.withResolvers<string>();
+    registry.onEvent(({ notification }) => {
+      if (notification.method === "turn/completed" || notification.method === "turn/failed") {
+        terminal.resolve(notification.method);
+      }
+    });
+    try {
+      const { threadId } = await registry.startThread({
+        backend, cwd: tempDir, executionMode: "default", acpRuntime: { currentModelId: model },
+      });
+      const { turnId } = await registry.startTurn({ backend, threadId, input: [{ type: "text", text: "Hello" }] });
+      const { writes } = await measureSqliteWrites(async () => {
+        if (status === "completed") {
+          transport.emitSessionUpdate(threadId, {
+            sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Hi" },
+          });
+        }
+        promptResult.resolve({
+          stopReason: status === "completed" ? "end_turn" : "max_tokens",
+          ...(reportsUsage ? {
+            usage: { inputTokens: 100, cachedReadTokens: 20, cachedWriteTokens: 10, outputTokens: 5, thoughtTokens: 4 },
+          } : {}),
+        });
+        expect(await terminal.promise).toBe(`turn/${status}`);
+      });
+      const pricing = await store.readThreadPricing({ backend, threadId });
+      const usageLines = pricing.lines.filter((line) => line.source === "live" && line.turnId === turnId);
+      expect(usageLines).toHaveLength(reportsUsage ? 1 : 0);
+      if (reportsUsage) {
+        expect(usageLines[0]).toMatchObject({
+          turnId, completedAt: now, model, provider: "google", priceStatus: "priced",
+          inputTokens: 130, cacheWriteInputTokens: 10, outputTokens: 5, totalCostMicros: 408,
+        });
+      }
+      expectSqliteWriteBudget({
+        scenario: `antigravity-${status}-${reportsUsage ? "with-usage" : "without-usage"}`,
+        note: reportsUsage
+          ? "One Antigravity prompt settlement with usage. Usage adds 2 commits and 148,320 WAL bytes over the completion baseline, or 14.8 MB/day at 100 turns/day."
+          : "One Antigravity prompt settlement without usage, the baseline for terminal accounting.",
+        writes,
+      });
+    } finally {
+      promptResult.resolve({ stopReason: "cancelled" });
+      clock.mockRestore();
+      await registry.close();
+    }
   });
 
   it("budgets a Claude turn's live usage reports at one commit each", async () => {

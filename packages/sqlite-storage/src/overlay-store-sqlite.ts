@@ -12469,7 +12469,12 @@ function repriceTokenUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineReco
   // Explicit rates, even incomplete ones, take precedence over reference
   // prices. Legacy rows without this decision can still be repaired below.
   if (line.pricingBasis === "configured-provider") return line;
-  const nativeProvider = line.provider === "openai" || line.provider === "qwen" || line.provider === "xai" || line.provider === "anthropic";
+  const nativeProvider =
+    line.provider === "openai"
+    || line.provider === "qwen"
+    || line.provider === "xai"
+    || line.provider === "anthropic"
+    || line.provider === "google";
   const reference = !nativeProvider && line.priceStatus !== "priced" ? estimateTokenUsageCost({
     model: line.model, uncachedInputTokens: line.uncachedInputTokens,
     cachedInputTokens: line.cachedInputTokens, outputTokens: line.outputTokens,
