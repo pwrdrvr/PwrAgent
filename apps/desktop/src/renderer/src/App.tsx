@@ -294,14 +294,13 @@ import {
 import type { CodexMissingThreadsSignal } from "./features/notifications/codex-missing-threads-notice";
 import { buildPrAutoDispatchBudgetNotice } from "./features/notifications/pr-auto-dispatch-budget-notice";
 import { MessagingErrorNotices } from "./features/notifications/MessagingErrorNotices";
-import {
-  GROK_UPDATE_NOTICE_ID_PREFIXES,
-  GrokCliUpdateNotice,
-} from "./features/notifications/GrokCliUpdateNotice";
+import { GROK_UPDATE_NOTICE_ID_PREFIXES } from "./features/notifications/GrokCliUpdateNotice";
 import {
   CODEX_VERSION_NOTICE_ID_PREFIXES,
   CodexVersionNotice,
 } from "./features/notifications/CodexVersionNotice";
+import { ANTIGRAVITY_UPDATE_NOTICE_ID_PREFIXES } from "./features/notifications/AntigravityUpdateNotice";
+import { AgentUpdateNotices } from "./features/notifications/AgentUpdateNotices";
 import {
   CODEX_RESTART_NOTICE_ID_PREFIXES,
   CodexRestartNotice,
@@ -749,7 +748,7 @@ function DesktopAppShell(props: {
     syncFederationShutdownNotice,
     syncCloudflareSignInNotice,
     syncMessagingErrorNotice,
-    syncGrokCliUpdateNotice,
+    agentUpdateNotices,
     syncCodexVersionNotice,
     syncRestartGateNotice,
     syncCodexRestartNotice,
@@ -965,6 +964,17 @@ function DesktopAppShell(props: {
       }
     }, [showAppNotice]);
 
+    const syncAntigravityUpdateNotice = useCallback((
+      notice: AppNoticeToastNotice | undefined,
+    ): void => {
+      for (const prefix of ANTIGRAVITY_UPDATE_NOTICE_ID_PREFIXES) {
+        dispatchAppNotice({ type: "dismiss-prefix", prefix });
+      }
+      if (notice) {
+        showAppNotice(notice);
+      }
+    }, [showAppNotice]);
+
     const syncCodexVersionNotice = useCallback((
       notice: AppNoticeToastNotice | undefined,
     ): void => {
@@ -997,6 +1007,9 @@ function DesktopAppShell(props: {
     }, [showAppNotice]);
     const openCodexSettings = useCallback(() => {
       openSettingsSection("models", "codex");
+    }, [openSettingsSection]);
+    const openAntigravitySettings = useCallback(() => {
+      openSettingsSection("models", "antigravity");
     }, [openSettingsSection]);
     const continueClaudeThreadInNewSession = useCallback((threadId: string, failureNoticeId: string) => {
       const noticeId = `claude-new-session:${threadId}`;
@@ -1712,7 +1725,12 @@ function DesktopAppShell(props: {
       syncFederationShutdownNotice,
       syncCloudflareSignInNotice,
       syncMessagingErrorNotice,
-      syncGrokCliUpdateNotice,
+      agentUpdateNotices: {
+        desktopApi,
+        onGrokNoticeChanged: syncGrokCliUpdateNotice,
+        onAntigravityNoticeChanged: syncAntigravityUpdateNotice,
+        onOpenAntigravitySettings: openAntigravitySettings,
+      },
       syncCodexVersionNotice,
       syncRestartGateNotice,
       syncCodexRestartNotice,
@@ -5280,10 +5298,7 @@ function DesktopAppShell(props: {
             desktopApi={desktopApi}
             onNoticeChanged={syncMessagingErrorNotice}
           />
-          <GrokCliUpdateNotice
-            desktopApi={desktopApi}
-            onNoticeChanged={syncGrokCliUpdateNotice}
-          />
+          <AgentUpdateNotices handlers={agentUpdateNotices} />
           <CodexVersionNotice
             desktopApi={desktopApi}
             snapshot={settings.snapshot}

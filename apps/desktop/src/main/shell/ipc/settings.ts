@@ -199,6 +199,7 @@ import { isBannedAcpRegistryId } from "../../acp/acp-agent-allowlist";
 import { discoverLocalAcpAgentRecords } from "../../acp/acp-instance-discovery";
 import { ACP_LOCAL_AGENT_STRATEGIES, ANTIGRAVITY_ACP_STRATEGY } from "../../acp/acp-local-strategies";
 import { registerAntigravitySetupIpc } from "./antigravity-setup";
+import { grokUpdateChecksDisabled } from "../../acp/grok-cli-update";
 import {
   ensureAcpRuntimeDiscoveryWorkspace,
   probeAcpRuntimeCapabilities,
@@ -1854,6 +1855,8 @@ export function registerSettingsIpcHandlers(
   disposeAntigravitySetup?.();
   disposeAntigravitySetup = registerAntigravitySetupIpc({
     refresh: (probeCapabilities) => refreshAntigravitySetup(getService(service), probeCapabilities),
+    // The same predicate that keeps the Grok vendor check out of E2E captures.
+    updateChecksDisabled: grokUpdateChecksDisabled({ isPackaged: app?.isPackaged === true }),
   });
   recentAcpRefreshes.clear();
   ipcMain.removeHandler(ACP_AGENTS_LIST_CHANNEL);

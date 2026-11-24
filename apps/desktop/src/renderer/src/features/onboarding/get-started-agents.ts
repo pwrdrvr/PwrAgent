@@ -101,6 +101,44 @@ export function codexAgentState(params: {
   }
 }
 
+/**
+ * Why Get started should offer PwrAgent's own Codex build, if it should.
+ *
+ * T3 Code and similar apps install Codex for the user instead of leaving them
+ * at a terminal. PwrAgent already ships a verified Codex build, so the three
+ * dead ends a new user can hit all lead to the same one-click install:
+ * - `missing`: no Codex at all;
+ * - `broken`: a Codex was found but does not start;
+ * - `outdated`: a working Codex too old for the newest models.
+ * An environment-forced path is the operator's decision, so it gets no offer.
+ */
+export type CodexInstallOffer =
+  | { reason: "missing" }
+  | { reason: "broken"; command: string }
+  | { reason: "outdated"; version: string; minimumVersion: string };
+
+export function codexInstallOffer(params: {
+  snapshot: DesktopSettingsSnapshot | undefined;
+  discovering: boolean;
+  /** The Codex discovery found but could not start, if any. */
+  launchFailure?: { command: string };
+}): CodexInstallOffer | undefined {
+  const codex = params.snapshot?.models?.codex;
+  if (!codex || codex.path?.source === "env") return undefined;
+  if (!selectedCodexCandidate(params.snapshot)) {
+    if (params.discovering) return undefined;
+    return params.launchFailure
+      ? { reason: "broken", command: params.launchFailure.command }
+      : { reason: "missing" };
+  }
+  const advisory = codex.versionAdvisory;
+  const managedOn = codex.managedBuildsRequiredBy !== undefined || codex.managedBuilds?.value === true;
+  if (advisory && advisory.installer !== "pwragent" && !managedOn) {
+    return { reason: "outdated", version: advisory.version, minimumVersion: advisory.minimumVersion };
+  }
+  return undefined;
+}
+
 /** An ACP agent's row, from its discovery entry and its enabled setting. */
 export function acpAgentState(params: {
   entry: AcpAgentSettingsEntry | undefined;

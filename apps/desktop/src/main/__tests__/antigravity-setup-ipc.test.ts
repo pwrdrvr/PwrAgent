@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { afterEach, expect, it, vi } from "vitest";
 import type { AntigravitySetupRequest, AntigravitySetupResult } from "../../shared/antigravity-setup";
-import { registerAntigravitySetupIpc } from "../shell/ipc/antigravity-setup";
+import { ANTIGRAVITY_RELEASE_CHECK_MAX_AGE_MS, registerAntigravitySetupIpc } from "../shell/ipc/antigravity-setup";
 
 type Sender = { sender: EventEmitter; senderFrame: { parent: null } };
 type Handler = (event: Sender, request: AntigravitySetupRequest) => Promise<AntigravitySetupResult>;
@@ -11,6 +11,7 @@ const mock = vi.hoisted(() => ({
   start: vi.fn(),
   install: vi.fn(),
   read: vi.fn(),
+  check: vi.fn(),
 }));
 vi.mock("electron", () => ({
   ipcMain: { handle: mock.handle, removeHandler: vi.fn() },
@@ -22,6 +23,7 @@ vi.mock("../acp/antigravity-sign-in", () => ({
   ANTIGRAVITY_SIGN_IN_TIMEOUT_MS: 300_000,
 }));
 vi.mock("../acp/antigravity-managed-runtime", () => ({
+  checkLatestAntigravityRelease: mock.check,
   installManagedAntigravityRuntime: mock.install,
   readManagedAntigravityStatus: mock.read,
 }));
@@ -74,5 +76,44 @@ it("only accepts a code from the window that started the attempt and refreshes m
     expect(initiator.sender.listenerCount("destroyed")).toBe(0);
   } finally {
     dispose();
+  }
+});
+
+it("checks Google's manifest only when asked, reusing a recent answer unless forced", async () => {
+  const dispose = registerAntigravitySetupIpc({ refresh: vi.fn(async () => launch) });
+  try {
+    const call = mock.handle.mock.calls[0]![1];
+    const runtime = { status: "installed", runtime: { command: launch.command, version: "1.5.15" } };
+    const release = { latestVersion: "1.5.16", checkedAt: 42 };
+    mock.read.mockResolvedValue(runtime);
+    mock.check.mockResolvedValue(release);
+    await call(owner(), { action: "read" });
+    expect(mock.check).not.toHaveBeenCalled();
+    await expect(call(owner(), { action: "check-update" })).resolves.toEqual({ ok: true, runtime, release });
+    expect(mock.check).toHaveBeenLastCalledWith(expect.objectContaining({ maxAgeMs: ANTIGRAVITY_RELEASE_CHECK_MAX_AGE_MS }));
+    await call(owner(), { action: "check-update", force: true });
+    expect(mock.check).toHaveBeenLastCalledWith(expect.objectContaining({ maxAgeMs: 0 }));
+    mock.check.mockRejectedValueOnce(new Error("offline"));
+    await expect(call(owner(), { action: "check-update" })).resolves.toMatchObject({ ok: false });
+  } finally {
+    dispose();
+  }
+});
+
+it("makes no release request when checks are off or the platform is unsupported", async () => {
+  for (const [disabled, status] of [[true, "installed"], [false, "unsupported"]] as const) {
+    mock.handle.mockClear();
+    const dispose = registerAntigravitySetupIpc({ refresh: vi.fn(async () => launch), updateChecksDisabled: disabled });
+    try {
+      const call = mock.handle.mock.calls[0]![1];
+      const runtime = status === "installed"
+        ? { status, runtime: { command: launch.command, version: "1.5.15" } }
+        : { status };
+      mock.read.mockResolvedValue(runtime);
+      await expect(call(owner(), { action: "check-update", force: true })).resolves.toEqual({ ok: true, runtime });
+      expect(mock.check).not.toHaveBeenCalled();
+    } finally {
+      dispose();
+    }
   }
 });
