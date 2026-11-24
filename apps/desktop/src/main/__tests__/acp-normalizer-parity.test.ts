@@ -126,6 +126,8 @@ describe("KTD-P3 normalizer parity", () => {
     "printf '%s\\n' 'Checking fixture configuration'",
     "printf '%s\\n' 'Checking fixture output'",
   ].join("\n");
+  // The one-line, 72-character heading both pipelines should give the script.
+  const scriptLabel = "printf '%s\\n' 'Checking fixture configuration' printf '%s\\n' 'Checkin...";
 
   it.each([
     {
@@ -136,30 +138,40 @@ describe("KTD-P3 normalizer parity", () => {
         rawInput: { CommandLine: script, toolSummary: "Check fixture output" },
       },
       command: script,
+      label: "Check fixture output",
     },
     {
       scenario: "Antigravity run_command titled with its script",
       fields: { name: "run_command", title: script, rawInput: { CommandLine: script } },
       command: script,
+      label: scriptLabel,
     },
     {
       scenario: "a long command with a generic Bash title",
       fields: { title: "Bash", command: `/bin/bash -lc "${script}"` },
       command: `/bin/bash -lc "${script}"`,
+      label: scriptLabel,
     },
-  ])("shell label parity for $scenario", ({ fields, command }) => {
+  ])("shell label parity for $scenario", ({ fields, command, label }) => {
     const call = { toolCallId: "fixture-command", kind: "execute", ...fields };
     const updates: Update[] = [
       { sessionUpdate: "tool_call", ...call, status: "in_progress" },
       { sessionUpdate: "tool_call_update", ...call, status: "completed" },
     ];
-    const replay = runKit(updates);
+    const kit = runKit(updates);
+    const inTree = runInTree(updates);
 
-    // Both pipelines should use the same heading and keep the full script in its details.
-    expect(canon(replay)).toEqual(canon(runInTree(updates)));
-    expect(replay.entries).toMatchObject([
-      { type: "activity", details: [{ command: { displayCommand: command, rawCommand: command } }] },
-    ]);
+    // Both pipelines use the same one-line heading and keep the full script in its details.
+    expect(canon(kit)).toEqual(canon(inTree));
+    for (const replay of [kit, inTree]) {
+      expect(replay.entries).toMatchObject([
+        {
+          type: "activity",
+          summary: label,
+          details: [{ label, command: { displayCommand: command, rawCommand: command } }],
+        },
+      ]);
+    }
   });
 
   it("plan then tool call", () => {
