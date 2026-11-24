@@ -3,8 +3,8 @@ import { codexSpeedOptions } from "@pwragent/shared/codex-speed";
 import {
   defaultModelOption,
   defaultReasoningEffort,
-  displayedReasoningEffort,
   modelOptionFor,
+  offeredReasoningEffort,
   reasoningEffortsForModel,
 } from "@pwragent/shared/model-defaults";
 import { isMessagingLaunchpadContext, type MessagingLaunchpadDirectory, type MessagingNewThreadNavigation } from "./messaging-launchpad-context";
@@ -620,7 +620,7 @@ export function normalizeReasoningEffortForModel(
   if (!candidates.some((candidate) => Boolean(candidate))) {
     return undefined;
   }
-  return displayedReasoningEffort(backend.launchpadOptions, model, candidates);
+  return offeredReasoningEffort(backend.launchpadOptions, model, candidates);
 }
 
 export type NewThreadOptionsSummary = {
@@ -694,7 +694,7 @@ export function newThreadOptionsForSession(
   const models = backend.launchpadOptions?.models ?? [];
   const modelOption = newThreadModelForSession(session, navigation, directory, backend);
   const reasoningEfforts = reasoningEffortsForModel(backend.launchpadOptions, modelOption);
-  const reasoningEffort = displayedReasoningEffort(backend.launchpadOptions, modelOption, [
+  const reasoningEffort = offeredReasoningEffort(backend.launchpadOptions, modelOption, [
     session.preferences?.reasoningEffort,
     directoryLaunchpad?.reasoningEffort,
     launchpadDefaults.reasoningEffort,
