@@ -337,11 +337,15 @@ export class GithubPrFetcher {
     // `gh pr merge` adds a PR to a required queue itself, and says so rather
     // than merging: report that, not a merge.
     const messages = `${output.stdout}\n${output.stderr ?? ""}`;
-    if (mentionsMergeQueue(messages)) {
+    const lines = messages.split("\n").map((line) => line.trimEnd());
+    const alreadyQueued = lines.some((line) => line.endsWith(`${label} is already queued to merge`));
+    if (alreadyQueued || mentionsMergeQueue(messages)) {
       noteMergeQueueRepository(reference.provider, reference.org, reference.repo);
-      return { queued: true, summary: `Sent ${label} to the merge queue: it merges once the queue's checks pass` };
+      return { queued: true, summary: alreadyQueued
+        ? `${label} is already in the merge queue`
+        : `Sent ${label} to the merge queue: it merges once the queue's checks pass` };
     }
-    if (messages.split("\n").some((line) => line.trimEnd().endsWith(`${label} was already merged`))) {
+    if (lines.some((line) => line.endsWith(`${label} was already merged`))) {
       return { summary: `Pull request ${label} was already merged`, mergedUrl: reference.url, alreadyMerged: true };
     }
     const verb = MERGE_METHOD_RESULTS[params.method];

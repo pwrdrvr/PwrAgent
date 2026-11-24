@@ -5481,7 +5481,7 @@ class DesktopAppServerService {
       if (!identity || registry.getThreadInfo(identity)?.archived === true) continue;
       if (!projectWatchesMergeBuilds(this.threadKeyForgeAutomation(threadKey), globalDefault)) continue;
       const result = await this.getThreadDependencyCoordinator().armMergeBuild(
-        identity, { url: transition.url, title: transition.title }, threadKey === preferredThreadKey);
+        identity, { url: transition.url, title: transition.title });
       if (result === "armed") appServerLog.info("merge build watch armed", { prKey: transition.prKey, threadId: identity.threadId });
       if (result !== "ineligible") return;
     }
@@ -5579,19 +5579,25 @@ class DesktopAppServerService {
     }
   }
 
+  /** Identical observations can advance freshness while a changed status is awaiting delivery. */
+  private matchingPrStatus(pr: PrSummary): PrStatusRegistryEntry | undefined {
+    const key = this.prRepositoryAliases.canonicalizeKey(getPrStatusKey(pr));
+    const current = this.prStatusRegistry.get(key);
+    return current && prSummariesEqual([current.pr], [stripPrLinkedDirectoryPaths(pr)]) ? current : undefined;
+  }
+
   private async writePrStatusesToCache(
     prs: PrSummary[],
     fetchedAt: number,
   ): Promise<void> {
-    const accepted = prs.filter((pr) => this.prStatusRegistry.get(getPrStatusKey(pr))?.fetchedAt === fetchedAt);
-    if (!accepted.length) return;
-    const entries: PrStatusCacheEntry[] = accepted.map(normalizePrSummary).map((pr) => ({
-      provider: normalizePullRequestProvider(pr.provider),
-      prKey: getPrStatusKey(pr),
-      fetchedAt,
-      pr,
-    }));
-    await this.getOverlayStore().writePrStatusCacheEntries(entries);
+    const entries: PrStatusCacheEntry[] = prs.flatMap((pr) => {
+      const current = this.matchingPrStatus(pr);
+      if (!current || current.fetchedAt < fetchedAt) return [];
+      // Keep this observation's timestamp. The cache's own ordering guard
+      // drops the write if an agreeing, fresher result is already durable.
+      return [{ provider: current.pr.provider, prKey: getPrStatusKey(current.pr), fetchedAt, pr: current.pr }];
+    });
+    if (entries.length) await this.getOverlayStore().writePrStatusCacheEntries(entries);
   }
 
   /**
@@ -5928,7 +5934,11 @@ class DesktopAppServerService {
     prs: PrSummary[];
   }): Promise<void> {
     await Promise.all(
-      params.prs.map(async (pr) => {
+      params.prs.map(async (observed) => {
+        // A newer observation can supersede this one while the caller
+        // awaits cache persistence or downstream automation.
+        const pr = this.matchingPrStatus(observed)?.pr;
+        if (!pr) return;
         const prKey = getPrStatusKey(pr);
         const aliases = this.prRepositoryAliases.equivalentStatusKeys(prKey);
         await getDesktopBackendRegistry().publishLocalEvent({

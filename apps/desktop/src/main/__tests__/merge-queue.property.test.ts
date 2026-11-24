@@ -658,6 +658,24 @@ describe("merge_pull_request and merge queues", () => {
     await expect(fetcher.mergePullRequest({ pullRequest: url, method: "squash" }))
       .resolves.toMatchObject({ alreadyMerged: true, mergedUrl: url });
   });
+
+  it("keeps an already-queued PR open when gh exits successfully before doing a merge", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), fc.integer({ min: 1, max: 10_000 }), async (knownQueue, number) => {
+      seenRepository(knownQueue);
+      const url = `https://github.com/fixture/project/pull/${number}`;
+      const fetcher = new GithubPrFetcher({
+        graphqlClient: { fetchPullRequests: vi.fn(), fetchPullRequestsForBranches: vi.fn() },
+        discoverGhCommands: async () => ({ selectedCommand: "/fixture/gh" }) as never,
+        runGhCommand: async (_command, args) => {
+          if (args[0] === "api") throw new Error("Queue lookup unavailable");
+          return { stdout: "", stderr: `! Pull request fixture/project#${number} is already queued to merge\n` };
+        },
+      });
+      const result = await fetcher.mergePullRequest({ pullRequest: url, method: "squash" });
+      expect(result.queued).toBe(true);
+      expect(result.mergedUrl).toBeUndefined();
+    }));
+  });
 });
 
 // ---------------------------------------------------------------------------

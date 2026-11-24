@@ -11092,6 +11092,7 @@ describe("app server ipc", () => {
         attachment: { backend: "codex"; primaryRepoKey: string; prs: PrSummary[] } | undefined,
       ) => void;
       fetchForgePullRequests: (refs: Array<Record<string, unknown>>) => Promise<PrSummary[]>;
+      rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrSummary[];
       publishPullRequestStatusUpdates: (params: { backend: "codex"; prs: PrSummary[] }) => Promise<void>;
     };
     const oldUrl = "https://gitlab.com/team/legacy/tools/api/-/merge_requests/41";
@@ -11123,7 +11124,8 @@ describe("app server ipc", () => {
       expect(service.prRepositoryAliases.canonicalizeUrl(oldUrl)).toBe(newUrl);
       expect(service.prRepositoryAliases.canonicalizeUrl(otherUrl)).toBe(otherUrl);
       expect(service.primaryPrThreadsByKey.has("gitlab.com/platform/api#41")).toBe(true);
-      await service.publishPullRequestStatusUpdates({ backend: "codex", prs });
+      const changed = service.rememberPrStatuses(prs, Date.now(), "background-poll");
+      await service.publishPullRequestStatusUpdates({ backend: "codex", prs: changed });
       expect(publishLocalEvent).toHaveBeenCalledWith({ backend: "codex",
         navigationPullRequestKeyAliases: ["gitlab.com/team/legacy/tools/api#41"],
         notification: { method: "pullRequest/status/updated", params: { prKey: "gitlab.com/platform/api#41", pr: expect.objectContaining({ url: newUrl }) } },
@@ -11858,12 +11860,85 @@ describe("app server ipc", () => {
     });
   });
 
+  async function checkOutstandingPrStatus(input: {
+    laterObservation: "in-app-merge" | "identical-poll";
+    headCheck: "pending" | "failing";
+  }) {
+    const { appServerService } = await import("../shell/ipc/app-server");
+    await withRenamedRepositoryStore("outstanding-pr-status-", async ({ store }) => {
+      const service = appServerService as unknown as {
+        rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrSummary[];
+        applyPolledPrStatuses: (prs: PrSummary[], fetchedAt: number) => Promise<string[]>;
+        nextPrObservationTimestamp: () => number;
+        handlePrAutoDispatchSnapshots: () => Promise<void>;
+        prStatusRegistry: Map<string, unknown>;
+      };
+      const open = githubPr({ org: "fixture", repo: "overlapping-polls", number: 1, state: "passing",
+        url: "https://github.com/fixture/overlapping-polls/pull/1" });
+      const key = buildPullRequestStatusKey(open);
+      const changed = { ...open, state: input.headCheck, checkState: input.headCheck };
+      const observed = input.laterObservation === "identical-poll" ? {
+        ...changed, lifecycleState: "merged" as const, mergedAt: Date.now(),
+      } : changed;
+      const suspended = Promise.withResolvers<void>();
+      const resume = Promise.withResolvers<void>();
+      const automation = vi.spyOn(service, "handlePrAutoDispatchSnapshots")
+        .mockImplementationOnce(async () => { suspended.resolve(); await resume.promise; })
+        .mockResolvedValue(undefined);
+      publishLocalEvent.mockClear();
+      const initial = service.nextPrObservationTimestamp();
+      await store.writePrStatusCacheEntries([{ provider: open.provider, prKey: key, pr: open, fetchedAt: initial }]);
+      service.rememberPrStatuses([open], initial, "seed");
+      const first = service.applyPolledPrStatuses([observed], service.nextPrObservationTimestamp());
+      try {
+        await suspended.promise;
+        if (input.laterObservation === "identical-poll") {
+          await expect(service.applyPolledPrStatuses([{ ...observed }], service.nextPrObservationTimestamp())).resolves.toEqual([]);
+        } else {
+          await appServerService.runObservedThreadPullRequestMerge({ backend: "codex", threadId: "merger" }, open.url,
+            async () => ({ summary: "Merged", mergedUrl: open.url }));
+        }
+        resume.resolve();
+        await first;
+        // Once merged, both clients and a restart must see the terminal lifecycle.
+        const lifecycles = publishLocalEvent.mock.calls.flatMap(([event]) => {
+          const notification = (event as AgentEvent).notification;
+          return notification.method === "pullRequest/status/updated" && notification.params.prKey === key
+            ? [(notification.params.pr as PrSummary).lifecycleState]
+            : [];
+        });
+        expect(lifecycles).toEqual(["merged"]);
+        expect((await store.readPrStatusCache())[key]?.pr.lifecycleState).toBe("merged");
+      } finally {
+        resume.resolve();
+        await first;
+        service.prStatusRegistry.delete(key);
+        automation.mockRestore();
+      }
+    });
+  }
+
+  it("does not publish a suspended open poll after an in-app merge", async () => {
+    await checkOutstandingPrStatus({ laterObservation: "in-app-merge", headCheck: "pending" });
+  });
+
+  it("persists a suspended merge observation when the next poll agrees", async () => {
+    await checkOutstandingPrStatus({ laterObservation: "identical-poll", headCheck: "pending" });
+  });
+
+  it("preserves terminal PR status across overlapped observations", async () => {
+    await fc.assert(fc.asyncProperty(fc.record({
+      laterObservation: fc.constantFrom("in-app-merge" as const, "identical-poll" as const),
+      headCheck: fc.constantFrom("pending" as const, "failing" as const),
+    }), checkOutstandingPrStatus), { numRuns: 24 });
+  });
+
   async function checkSharedPrMerge(input: {
     count: number;
     mergerIndex: number;
     source: "poll" | "button" | "racing_poll";
     lockedPrefix?: number;
-    lockDuringElection?: boolean;
+    mergerRestriction?: "lock" | "archive" | "secondary" | "capacity";
     measureWrites?: boolean;
   }) {
     const appState = await import("../state/app-state");
@@ -11901,7 +11976,7 @@ describe("app server ipc", () => {
       }));
       const merger = threads[input.mergerIndex % threads.length]!;
       const locked = threads.slice(0, input.lockedPrefix ?? 0);
-      const eligible = threads.filter((thread) => !locked.includes(thread) && (!input.lockDuringElection || thread !== merger));
+      const eligible = threads.filter((thread) => !locked.includes(thread) && (!input.mergerRestriction || thread !== merger));
       const winner = input.source !== "poll" && eligible.includes(merger) ? merger : eligible[0];
       const transitions = vi.fn();
       const unsubscribe = appServerService.onPrStatusTransition(transitions);
@@ -11922,12 +11997,16 @@ describe("app server ipc", () => {
       };
       const readSnapshot = readPort.readDependencyThread.bind(readPort);
       const read = vi.spyOn(readPort, "readDependencyThread");
-      let lockedWhileReading = false;
+      let changedWhileReading = false;
       read.mockImplementation(async (...args) => {
         const snapshot = await readSnapshot(...args);
-        if (input.lockDuringElection && !lockedWhileReading && args[0].threadId === merger.threadId) {
-          lockedWhileReading = true;
-          await store.setThreadLock({ ...merger, lock: { source: "operator", lockedAt: Date.now() } });
+        if (!changedWhileReading && args[0].threadId === merger.threadId) {
+          changedWhileReading = true;
+          if (input.mergerRestriction === "lock") {
+            await store.setThreadLock({ ...merger, lock: { source: "operator", lockedAt: Date.now() } });
+          } else if (input.mergerRestriction === "archive") {
+            await store.observeArchivedThreads([merger], Date.now());
+          }
         }
         return snapshot;
       });
@@ -11945,8 +12024,16 @@ describe("app server ipc", () => {
         getCachedThreadSummary.mockImplementation(({ threadId }) => ({
           id: threadId, source: threads.find((thread) => thread.threadId === threadId)?.backend ?? "codex",
           title: "Fixture thread", titleSource: "explicit",
-          gitOriginUrl: "https://github.com/fixture/shared-merge.git", linkedDirectories: [],
+          gitOriginUrl: input.mergerRestriction === "secondary" && threadId === merger.threadId
+            ? "https://github.com/fixture/different-primary.git" : "https://github.com/fixture/shared-merge.git",
+          linkedDirectories: [],
         }));
+        if (input.mergerRestriction === "capacity") {
+          for (let index = 0; index < 32; index++) dependencies.register({
+            ...merger, id: `occupied-${index}`, conditions: [{ ...merger, when: "marked_done", subject: `Prerequisite ${index}` }],
+            mode: "all", onFailure: "notify", status: "waiting", evidence: [], createdAt: 1, updatedAt: 1,
+          });
+        }
         internal.rememberPrStatuses([pr], internal.nextPrObservationTimestamp(), "seed");
         const { writes } = await measureSqliteWrites(async () => {
           if (input.source === "poll") {
@@ -12022,7 +12109,11 @@ describe("app server ipc", () => {
   });
 
   it("passes over a preferred thread that locks during attachment verification", async () => {
-    await checkSharedPrMerge({ count: 2, mergerIndex: 1, source: "button", lockDuringElection: true });
+    await checkSharedPrMerge({ count: 2, mergerIndex: 1, source: "button", mergerRestriction: "lock" });
+  });
+
+  it.each(["archive", "secondary", "capacity"] as const)("tries the next eligible thread when the preferred thread has restriction %s", async (mergerRestriction) => {
+    await checkSharedPrMerge({ count: 2, mergerIndex: 1, source: "button", mergerRestriction });
   });
 
   it("elects one automatic merge build owner across shared attachments and merge observation orders", async () => {
@@ -12031,6 +12122,7 @@ describe("app server ipc", () => {
       mergerIndex: fc.integer({ min: 0, max: 5 }),
       source: fc.constantFrom("poll" as const, "button" as const, "racing_poll" as const),
       lockedPrefix: fc.integer({ min: 0, max: 6 }),
+      mergerRestriction: fc.option(fc.constantFrom("lock" as const, "archive" as const, "secondary" as const, "capacity" as const), { nil: undefined }),
     }), checkSharedPrMerge), { numRuns: 24 });
   });
 
