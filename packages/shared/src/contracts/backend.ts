@@ -380,7 +380,11 @@ export type BackendSummary = {
     loginCommand?: string;
     /** Session expiry is observed by a turn and can outlast a positive local credential check. */
     authStatus: "signed-in" | "sign-in-required" | "session-expired" | "unknown";
-    authMethod?: "api-key" | "claude-account" | "external";
+    authMethod?: "api-key" | "claude-account" | "gateway" | "external";
+    /** The LLM gateway Claude Code's user settings name for sign-in. */
+    gatewayUrl?: string;
+    /** This Claude Code can run an interactive gateway sign-in for PwrAgent. */
+    gatewaySignIn?: boolean;
     message?: string;
   };
   acp?: BackendAcpSummary;

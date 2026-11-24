@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.5.0-prerelease.4 - 2026-11-24
+
+- Claude Code - Sign in interactively through a compatible LLM gateway from Settings → AI Providers → Claude. PwrAgent opens the gateway's device sign-in page and surfaces Claude Code's trust and account confirmations. Settings identifies gateway sessions and shows that usage is billed by the gateway.
+
 ## v1.5.0-prerelease.3 - 2026-11-24
 
 - Antigravity - Steer active turns, see weekly quota and priced token usage, and review grouped file edits with patches. Full Access is an explicit choice that auto-approves tools Antigravity runs. Native modes are preserved across session reloads when supported, and PwrAgent records Default Access when a start falls back. PwrAgent-managed MCP and forge calls use their existing approval rules without a duplicate Antigravity prompt.

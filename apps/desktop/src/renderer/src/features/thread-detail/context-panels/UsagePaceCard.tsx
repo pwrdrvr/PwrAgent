@@ -203,7 +203,9 @@ export function ClaudeUsageLimits({ backend }: { backend?: BackendSummary }) {
       provider="Claude"
       empty={backend?.claude?.authMethod === "api-key"
         ? "API-key usage has no Claude subscription limit."
-        : "Claude has not reported plan limits. They refresh when a turn starts and ends."}
+        : backend?.claude?.authMethod === "gateway" || backend?.claude?.authMethod === "external"
+          ? "Usage through another provider has no Claude subscription limit."
+          : "Claude has not reported plan limits. They refresh when a turn starts and ends."}
       footnote="Costs are provider estimates, not subscription charges."
     />
   );

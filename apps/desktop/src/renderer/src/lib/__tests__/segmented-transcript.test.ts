@@ -3,17 +3,21 @@ import type {
   AppServerThreadEntry,
   AppServerThreadMessageEntry,
 } from "@pwragent/shared/contracts/normalized-app-server";
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
+  appendTranscriptHistoryPage,
   combineTranscriptEntries,
   combineTranscriptMessages,
   combineTranscriptResponse,
   createTranscriptHistoryIndex,
   createTranscriptReviewPresentation,
   prependTranscriptHistoryPage,
+  segmentedTranscriptDisplay,
   type LoadedTranscriptHistory,
   type TranscriptHistoryPage,
 } from "../segmented-transcript";
+import { collectRewindableMessageIds } from "../../features/thread-detail/thread-rewind";
 
 function message(id: string, text = id): AppServerThreadMessageEntry {
   return {
@@ -65,6 +69,52 @@ function historyPages(
 }
 
 describe("segmented transcript history", () => {
+  it("finds the latest visible prompt and the first prompt per turn across page boundaries", () => {
+    fc.assert(fc.property(
+      fc.array(fc.oneof(fc.nat(7), fc.constant(undefined)), { minLength: 2, maxLength: 28 }),
+      fc.boolean(),
+      (turns, allowUnbound) => {
+        const entries = turns.map((turn, position): AppServerThreadMessageEntry => ({
+          id: String(position), type: "message", text: String(position), role: "user",
+          ...(turn === undefined ? {} : { turn: { id: String(turn) } }),
+        }));
+        const index = createTranscriptHistoryIndex();
+        const half = Math.floor(entries.length / 2);
+        const history = prependTranscriptHistoryPage({
+          history: undefined, index, page: response(entries.slice(0, half)), tailEntries: [],
+        });
+        const segments = segmentedTranscriptDisplay(combineTranscriptEntries(history, index, entries.slice(half)))!;
+        const reference = collectRewindableMessageIds(entries, allowUnbound ? "claude" : "codex");
+        expect(segments.hasRewindablePrompt(allowUnbound)).toBe(reference.size > 0);
+        for (const row of entries) expect(segments.isFirstPrompt(row.id, allowUnbound)).toBe(reference.has(row.id));
+        expect(segments.latestPrompt((row) => segments.isFirstPrompt(row.id, allowUnbound)))
+          .toBe(entries.findLast((row) => reference.has(row.id)));
+      },
+    ));
+  });
+
+  it("preserves retained slots and earlier views through successive warm revisions", () => {
+    fc.assert(fc.property(fc.array(fc.string(), { minLength: 2, maxLength: 20 }), (revisions) => {
+      const index = createTranscriptHistoryIndex();
+      let history = prependTranscriptHistoryPage({
+        history: undefined, index, page: response([message("older", "Original"), message("second")]), tailEntries: [],
+      });
+      const views = revisions.map((text, revision) => {
+        history = appendTranscriptHistoryPage({
+          history, index, page: response([message("older", text), message(`new-${revision}`)]), tailEntries: [],
+        });
+        return { entries: combineTranscriptEntries(history, index, []), messages: combineTranscriptMessages(history, index, []) };
+      });
+      views.forEach(({ entries, messages }, revision) => {
+        const expected = ["older", "second", ...Array.from({ length: revision + 1 }, (_, row) => `new-${row}`)];
+        expect(entries.map((entry) => entry.id)).toEqual(expected);
+        expect(messages.map((entry) => entry.id)).toEqual(expected);
+        expect(entries[0]).toMatchObject({ text: revisions[revision] });
+        expect(messages[0]).toMatchObject({ text: revisions[revision] });
+      });
+    }));
+  });
+
   it.each(["inline", "native"])("keeps suppressed %s prompts hidden when a refreshed tail overlaps history", (mode) => {
     const prompt: AppServerThreadMessageEntry = {
       type: "message", id: "internal", role: "user",

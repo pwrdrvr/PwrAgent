@@ -7,6 +7,7 @@ import { claudeEnvironment, inspectClaudeInstallation as inspectInstallation, re
 const inspectClaudeInstallation = (options: Parameters<typeof inspectInstallation>[0]) => inspectInstallation({
   resolveBundledExecutable: async () => undefined,
   readVersion: async () => "2.1.296 (Claude Code)",
+  readGatewayUrl: async () => undefined,
   ...options,
 });
 const roots: string[] = [];
@@ -102,6 +103,7 @@ describe("Claude executable discovery", () => {
     [{ authMethod: "api_key", apiProvider: "firstParty" }, "api-key"],
     [{ authMethod: "claude.ai", subscriptionType: "max" }, "claude-account"],
     [{ apiProvider: "bedrock" }, "external"],
+    [{ authMethod: "third_party", apiProvider: "gateway" }, "gateway"],
     [{ authMethod: "unexpected-private-value" }, undefined],
   ] as const)("reports only known CLI authentication categories (%j)", async (status, authMethod) => {
     const installation = await inspectClaudeInstallation({
@@ -113,6 +115,30 @@ describe("Claude executable discovery", () => {
     expect(installation).toMatchObject({ authStatus: "signed-in" });
     expect(installation.authMethod).toBe(authMethod);
     expect(JSON.stringify(installation)).not.toMatch(/secret-key|secret-token|private-email|unexpected-private-value/);
+  });
+
+  it("reports the gateway Claude Code's settings name, and whether this Claude Code can sign in to it", async () => {
+    const settingsRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-gateway-settings-"));
+    roots.push(settingsRoot);
+    await writeFile(path.join(settingsRoot, "settings.json"), JSON.stringify({
+      forceLoginMethod: "gateway", forceLoginGatewayUrl: "https://gateway.example.com",
+    }));
+    const installation = await inspectInstallation({
+      env: { CLAUDE_CONFIG_DIR: settingsRoot },
+      resolveExecutable: async () => "/fixture/claude",
+      resolveBundledExecutable: async () => undefined,
+      readVersion: async () => "2.1.330 (Claude Code)",
+      readAuthStatus: async () => JSON.stringify({ loggedIn: true, authMethod: "third_party", apiProvider: "gateway" }),
+    });
+    expect(installation).toMatchObject({
+      authStatus: "signed-in", authMethod: "gateway", gatewayUrl: "https://gateway.example.com", gatewaySignIn: true,
+    });
+    const older = await inspectClaudeInstallation({
+      resolveExecutable: async () => "/fixture/claude",
+      readAuthStatus: async () => JSON.stringify({ loggedIn: false }),
+    });
+    expect(older.gatewaySignIn).toBeUndefined();
+    expect(older.gatewayUrl).toBeUndefined();
   });
 
   it("does not pass application credentials to the CLI", () => {

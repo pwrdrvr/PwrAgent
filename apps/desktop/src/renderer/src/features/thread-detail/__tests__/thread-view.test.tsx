@@ -22,6 +22,7 @@ import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing
 import { SANDBOXER_MCP_CONNECTION_ID } from "@pwragent/shared/contracts/mcp-connections";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
+import { combineTranscriptEntries, createTranscriptHistoryIndex, prependTranscriptHistoryPage } from "../../../lib/segmented-transcript";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
 import type { PendingMcpInteractionState } from "../mcp-elicitation";
 import type { PendingQuestionnaireState } from "../questionnaire";
@@ -67,6 +68,8 @@ import {
   ThreadView as ThreadViewWithTerminals,
   type ThreadViewProps,
 } from "../ThreadView";
+
+
 
 /**
  * `terminals` is owned by App in production (it has to outlive ThreadView's
@@ -409,6 +412,40 @@ describe("ThreadView", () => {
       target: { value: "ws://gateway.example" },
     });
     expect(within(question).getByRole("button", { name: "Answer" })).toBeEnabled();
+  });
+
+  it("does not inspect a settled transcript page on mounted thread updates", () => {
+    const index = createTranscriptHistoryIndex();
+    let historicalVisits = 0;
+    const older: AppServerThreadEntry[] = Array.from({ length: 200 }, (_, row) => ({
+      id: `old-${row}`,
+      get type() { if (row < 100) historicalVisits++; return "message" as const; },
+      role: "user", text: `Historical prompt ${row}`, turn: { id: `old-turn-${row}`, status: "completed" },
+    }));
+    const history = prependTranscriptHistoryPage({
+      history: undefined, index, tailEntries: [],
+      page: { backend: "codex", threadId: "codex-thread", fetchedAt: 1, replay: {
+        entries: older, messages: [], pagination: { supportsPagination: true, hasPreviousPage: false },
+      } },
+    });
+    const prompt: AppServerThreadEntry = {
+      id: "prompt", type: "message", role: "user", text: "Newest prompt", turn: { id: "live" },
+    };
+    const props: Omit<ThreadViewProps, "terminals"> = {
+      addOptimisticUserMessage: () => "pending", backends: [rewindBackend("codex", "Codex")],
+      clearPendingRequest: () => undefined, composerDisabled: false, loading: false, loadingMore: false,
+      messageCount: older.length + 1, onLoadOlder: async () => undefined, removeOptimisticMessage: () => undefined,
+      selectedThread: rewindThread("codex"), skills: [], transcriptEntries: combineTranscriptEntries(history, index, [prompt]),
+    };
+    const view = render(<ThreadView {...props} />);
+    historicalVisits = 0;
+    for (let chunk = 0; chunk < 5; chunk++) {
+      const answer: AppServerThreadEntry = { id: "live-answer", type: "message", role: "assistant", text: `Streaming ${chunk}` };
+      view.rerender(<ThreadView {...props} transcriptEntries={combineTranscriptEntries(history, index, [prompt, answer])}
+        activeTurnId="live" />);
+    }
+    expect(screen.getByText("Streaming 4")).toBeInTheDocument();
+    expect(historicalVisits).toBe(0);
   });
 
   function rewindBackend(

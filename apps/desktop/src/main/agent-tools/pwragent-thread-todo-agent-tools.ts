@@ -83,7 +83,8 @@ type ThreadTodoToolContext = {
  */
 export type PwrAgentThreadTodoHandler = {
   reviews?: PwrAgentThreadReviewHandler;
-  importReviews?: (context: ThreadTodoToolContext, entries: AppServerThreadReviewEntry[]) => void;
+  /** Returns IDs whose import failed and may be retried with a later read. */
+  importReviews?: (context: ThreadTodoToolContext, entries: AppServerThreadReviewEntry[]) => readonly string[] | void;
   add: (
     context: ThreadTodoToolContext,
     input: AddThreadTodoInput,

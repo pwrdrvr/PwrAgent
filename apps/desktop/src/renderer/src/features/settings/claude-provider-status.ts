@@ -38,7 +38,11 @@ export function claudeProviderStatus(
     return { label: "Check failed", tone: "warn", dot: "warn", navChip: "check failed" };
   }
   return {
-    label: installation.authMethod === "api-key" ? "API key" : "Signed in",
+    label: installation.authMethod === "api-key"
+      ? "API key"
+      : installation.authMethod === "gateway"
+        ? "Gateway"
+        : installation.authMethod === "external" ? "External provider" : "Signed in",
     tone: "ok",
     dot: "ok",
   };
