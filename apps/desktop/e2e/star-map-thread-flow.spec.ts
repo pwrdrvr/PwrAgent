@@ -343,6 +343,16 @@ test("keeps the star map's top band from overlapping itself", async () => {
       starMap.getByRole("group", { name: "Thread filters" }),
     ).toBeVisible();
 
+    // The strip stays mounted even when collapsed. A numeric count signals
+    // that the facet feed has arrived, so the band can drop zero-count chips.
+    // Wait for that input and the font metrics before measuring either width.
+    await expect(
+      starMap.locator(".star-map__filter-strip .star-map__filter-count").first(),
+    ).toHaveText(/^\d+$/);
+    await mapWindow.evaluate(async () => {
+      await document.fonts.ready;
+    });
+
     await expectTopBandLaidOut(mapWindow, "at the default window width");
 
     // `minWidth` in star-map-window.ts. Below roughly 1100px the old
@@ -356,7 +366,7 @@ test("keeps the star map's top band from overlapping itself", async () => {
     const strip = starMap.getByRole("group", { name: "Thread filters" });
     const menu = starMap.getByRole("button", { name: /^Thread filters/ });
     if (await strip.isVisible()) {
-      await expect(strip.getByRole("button").first()).toBeVisible();
+      await strip.getByRole("button").first().click({ trial: true });
     } else {
       await expect(menu).toBeVisible();
       await menu.click();
