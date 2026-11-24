@@ -49,7 +49,7 @@ test.describe("main-process timing attachments", () => {
     expect(snapshot.listings.events).toContainEqual(expect.objectContaining({
       id: start.id, stage: "ipc", phase: "end", outcome: "ok",
     }));
-    expect(snapshot.git).toMatchObject({ schemaVersion: 1, retentionMs: 120_000 });
+    expect(snapshot.git).toMatchObject({ schemaVersion: 2, retentionMs: 120_000 });
     expect(Array.isArray(snapshot.git.buckets)).toBe(true);
     const app = await launchElectronApp({ fixturePath });
     await app.close();

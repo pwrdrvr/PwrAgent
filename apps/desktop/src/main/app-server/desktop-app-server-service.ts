@@ -456,14 +456,13 @@ import { GitLabPrFetcher } from "../pr-status/gitlab-pr-fetcher";
 import { ForgePrFetcher, parseForgePrRefFromUrl as parsePrRefFromUrl, type ForgePrRef } from "../pr-status/forge-pr-fetcher";
 import {
   filterStoredDiscoveredPullRequests,
-  resolvePrLookupBranches,
+  resolveScheduledPrPrefetchRepos,
 } from "../pr-status/pr-detection";
 import {
   GithubGraphqlPrClient,
   branchRefKey,
 } from "../pr-status/github-graphql-client";
 import type { BranchRef } from "../pr-status/github-graphql-client";
-import { resolveGitHubReposForDirectory } from "../pr-status/git-remote";
 import { primaryCheckoutKey, readStoredPrimaryThreadRepository, resolvePrimaryThreadRepoKey, resolvePullRequestDirectoryPath } from "../pr-status/primary-thread-repository";
 import { PrPollingScheduler } from "../pr-status/pr-polling-scheduler";
 import { TranscriptPrSubscriptions } from "../pr-status/transcript-pr-subscriptions";
@@ -6402,12 +6401,10 @@ class DesktopAppServerService {
         if (wanted.has(dedupeKey)) {
           continue;
         }
-        const repos = await resolveGitHubReposForDirectory(cwd);
+        const repos = await resolveScheduledPrPrefetchRepos(cwd, branch);
         if (repos.length === 0) {
           continue;
         }
-        const lookupBranches = await resolvePrLookupBranches({ cwd, branch });
-        if (!lookupBranches.includes(branch)) continue;
         wanted.set(dedupeKey, {
           cwd,
           branch,
