@@ -261,7 +261,7 @@ const routes: Array<{
     render: () => <AutomationRunWindow />,
   },
   {
-    match: (hash) => hash === "resources",
+    match: (hash) => hash === "resources" || hash.startsWith("resources/"),
     render: () => <ResourcesWindow />,
   },
   ...(ResourcesPreviewWindow

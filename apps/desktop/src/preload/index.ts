@@ -1,5 +1,5 @@
 import type {
-  ResourceCheckoutActionRequest, ResourceCheckoutActionResult, ResourceCheckoutsSnapshot, ResourceCheckoutsChangedEvent, ResourceThreadRef,
+  ResourceCheckoutActionRequest, ResourceCheckoutActionResult, ResourceCheckoutsSnapshot, ResourceCheckoutsChangedEvent, ResourceCheckoutsWindowFocus, ResourceThreadRef,
 } from "@pwragent/shared/contracts/resource-checkouts";
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
 import { AGENT_MEMORY_CHANNEL, AGENT_PRESETS_CHANNEL } from "../shared/ipc";
@@ -919,6 +919,7 @@ import {
   THREAD_TODOS_LIST_DISPATCH_ENVIRONMENTS_CHANNEL,
   OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL,
   RESOURCE_CHECKOUTS_CHANGED_CHANNEL,
+  RESOURCE_CHECKOUTS_FOCUS_CHANNEL,
   RESOURCE_CHECKOUTS_READ_CHANNEL,
   RESOURCE_CHECKOUTS_OPEN_THREAD_CHANNEL,
   RESOURCE_CHECKOUTS_WINDOW_OPEN_CHANNEL,
@@ -2965,7 +2966,8 @@ const desktopApi = Object.freeze({
     };
   },
   ...(process.argv.includes("--pwragent-resource-checkouts") ? {
-    openResourceCheckoutsWindow: (): Promise<void> => ipcRenderer.invoke(RESOURCE_CHECKOUTS_WINDOW_OPEN_CHANNEL),
+    openResourceCheckoutsWindow: (focus?: ResourceCheckoutsWindowFocus): Promise<void> =>
+      ipcRenderer.invoke(RESOURCE_CHECKOUTS_WINDOW_OPEN_CHANNEL, focus),
     openResourceCheckoutThread: (thread: ResourceThreadRef): Promise<void> => ipcRenderer.invoke(RESOURCE_CHECKOUTS_OPEN_THREAD_CHANNEL, thread),
     readResourceCheckouts: (): Promise<ResourceCheckoutsSnapshot> =>
       ipcRenderer.invoke(RESOURCE_CHECKOUTS_READ_CHANNEL),
@@ -2975,6 +2977,11 @@ const desktopApi = Object.freeze({
       const listener = (_event: Electron.IpcRendererEvent, payload: ResourceCheckoutsChangedEvent) => callback(payload);
       ipcRenderer.on(RESOURCE_CHECKOUTS_CHANGED_CHANNEL, listener);
       return () => { ipcRenderer.off(RESOURCE_CHECKOUTS_CHANGED_CHANNEL, listener); };
+    },
+    onResourceCheckoutsFocus: (callback: (focus: ResourceCheckoutsWindowFocus) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: ResourceCheckoutsWindowFocus) => callback(payload);
+      ipcRenderer.on(RESOURCE_CHECKOUTS_FOCUS_CHANNEL, listener);
+      return () => { ipcRenderer.off(RESOURCE_CHECKOUTS_FOCUS_CHANNEL, listener); };
     },
   } : {}),
   listOperatorRequests: async (request?: ListOperatorRequestsRequest): Promise<ListOperatorRequestsResponse> =>

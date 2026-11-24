@@ -3,6 +3,7 @@ import type {
   ResourceAllocation,
   ResourceAllocationState,
   ResourceHolder,
+  ResourceQueueEntry,
   ResourceReadinessState,
   ResourceRecoveryStatus,
   ResourceThreadRef,
@@ -25,6 +26,7 @@ import {
   type PresentedResource,
   type ResourceActionDescriptor,
 } from "./resource-view-model";
+import { allocationHoldTime, describeQueueEntryHold, holderAlsoQueued, queueEntryHold } from "./resource-wait";
 
 /** The header controls group recovery steps behind one Recover control. */
 export type ResourceInspectorIntent =
@@ -150,6 +152,7 @@ export function ResourceInspector(props: {
               <AllocationDetail
                 key={allocation.allocationId}
                 allocation={allocation}
+                alsoQueued={holderAlsoQueued(resource, allocation.holder)}
                 unitLabel={unitLabel}
                 now={props.now}
                 onOpenThread={props.onOpenThread}
@@ -180,6 +183,15 @@ export function ResourceInspector(props: {
                       {` · waiting ${formatAge(entry.requestedAt, props.now)}`}
                       {entry.eligibility.eligible ? "" : ` · ${entry.eligibility.reason}`}
                     </span>
+                    {(() => {
+                      const hold = queueEntryHold(resource, entry);
+                      return (
+                        <span className="resources-row__meta resources-queue__hold" data-testid="resources-queue-hold">
+                          {describeQueueEntryHold(hold, entry.position, unitLabel)}
+                          {hold.reason === "order" && hold.fitsNow ? <span className="resources-flag">Fits now</span> : null}
+                        </span>
+                      );
+                    })()}
                   </span>
                 </li>
               ))}
@@ -406,6 +418,8 @@ function StateCallout(props: {
 
 function AllocationDetail(props: {
   allocation: ResourceAllocation;
+  /** The holder's own request for more of the same resource. */
+  alsoQueued?: ResourceQueueEntry;
   unitLabel: string;
   now: number;
   onOpenThread: (thread: ResourceThreadRef) => void;
@@ -414,6 +428,7 @@ function AllocationDetail(props: {
   const inRecovery = allocation.state === "recovery_required";
   const at = LIFECYCLE.indexOf(allocation.state);
   const soon = allocation.deadlineAt - props.now < DEADLINE_SOON_MS;
+  const { heldMs, expectedMs } = allocationHoldTime(allocation, props.now);
   return (
     <div className="resources-allocation">
       <ol aria-label={`Checkout state: ${allocation.state.replace("_", " ")}`} className="resources-lifecycle">
@@ -439,6 +454,16 @@ function AllocationDetail(props: {
         <dd>{allocation.taskLabel}{allocation.units ? ` · ${allocation.units} ${props.unitLabel}${allocation.units === 1 ? "" : "s"} held` : ""}</dd>
         <dt>Runs on</dt>
         <dd>{allocation.executorLabel}</dd>
+        <dt>Held</dt>
+        <dd>
+          {`${formatDuration(heldMs)} of ${formatDuration(expectedMs)} expected · granted ${formatAge(allocation.grantedAt, props.now)} ago`}
+          {props.alsoQueued ? (
+            <span className="resources-row__meta resources-allocation__also-queued">
+              {`Also waits at #${props.alsoQueued.position} in the queue${props.alsoQueued.units !== undefined ? ` for ${props.alsoQueued.units} more` : ""}. What it holds stays reserved until it releases.`}
+              <span className="resources-flag">Holding and queued</span>
+            </span>
+          ) : null}
+        </dd>
         <dt>Deadline</dt>
         <dd className={`resources-mono${soon ? " resources-deadline-soon" : ""}`}>
           {formatDeadline(allocation.deadlineAt, props.now)} · renewals {allocation.renewalsUsed}/{allocation.renewalsAllowed}

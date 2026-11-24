@@ -398,3 +398,61 @@ describe("createDesktopResourceCheckoutsSource", () => {
     expect(source?.origin).toBe("live");
   });
 });
+
+describe("ResourcesScreen focus", () => {
+  it("selects a focused resource, clearing a search that hid it, and again on each new request", async () => {
+    const { source } = liveSource(buildPreviewSnapshot(NOW));
+    const view = render(<ResourcesScreen source={source} onOpenThread={() => undefined} />);
+    await act(async () => {});
+    fireEvent.change(screen.getByRole("searchbox", { name: "Filter by name, kind or identity" }), { target: { value: "serial" } });
+    expect(screen.queryByText("gpu-bench-02", { selector: ".resources-row__title" })).not.toBeInTheDocument();
+
+    view.rerender(<ResourcesScreen source={source} focus={{ resourceId: "res-gpu", nonce: 1 }} onOpenThread={() => undefined} />);
+    await act(async () => {});
+    expect(screen.getByRole("searchbox", { name: "Filter by name, kind or identity" })).toHaveValue("");
+    expect(within(inspector()).getByRole("heading", { name: "gpu-bench-02" })).toBeInTheDocument();
+
+    // The operator moves on; the same request does not pull them back.
+    selectRow("bench serial rig");
+    view.rerender(<ResourcesScreen source={source} focus={{ resourceId: "res-gpu", nonce: 1 }} onOpenThread={() => undefined} />);
+    await act(async () => {});
+    expect(within(inspector()).getByRole("heading", { name: "bench serial rig" })).toBeInTheDocument();
+
+    // Asking again from a thread does.
+    view.rerender(<ResourcesScreen source={source} focus={{ resourceId: "res-gpu", nonce: 2 }} onOpenThread={() => undefined} />);
+    await act(async () => {});
+    expect(within(inspector()).getByRole("heading", { name: "gpu-bench-02" })).toBeInTheDocument();
+  });
+
+  it("explains why each queued request has not started", async () => {
+    const base = buildPreviewSnapshot(NOW);
+    const snapshot: ResourceCheckoutsSnapshot = {
+      ...base,
+      resources: base.resources.map((resource) => resource.resourceId !== "res-compute" ? resource : {
+        ...resource,
+        queue: [...resource.queue, {
+          queueEntryId: "q-small", position: 2, requester: { kind: "operator", label: "You" }, purpose: "Lint",
+          requestedAt: NOW - 60_000, units: 1, eligibility: { eligible: true }, viewerOwns: true,
+        }],
+      }),
+    };
+    await renderScreen(liveSource(snapshot).source);
+    selectRow("studio-m4 compute");
+    const holds = within(inspector()).getAllByTestId("resources-queue-hold").map((node) => node.textContent);
+    expect(holds).toEqual([
+      "Needs 2 CPU slots, 1 free. Starts when 1 more frees up.",
+      "Would fit now (1 of 1 free), but waits for #1: first in, first out.Fits now",
+    ]);
+  });
+});
+
+describe("readResourcesHashFocus", () => {
+  it("reads the resource from the window hash and nothing else", async () => {
+    const { readResourcesHashFocus } = await import("../ResourcesWindow");
+    expect(readResourcesHashFocus("#resources")).toBeUndefined();
+    expect(readResourcesHashFocus("#resources-preview")).toBeUndefined();
+    expect(readResourcesHashFocus(`#resources/${encodeURIComponent("machine:mach_1:cpu")}`)).toEqual({ resourceId: "machine:mach_1:cpu", nonce: 0 });
+    expect(readResourcesHashFocus("#resources/%E0%A4%A")).toBeUndefined();
+    expect(readResourcesHashFocus(`#resources/${"x".repeat(513)}`)).toBeUndefined();
+  });
+});

@@ -58,6 +58,8 @@ import {
 import { showAppLogWindow } from "./app-log-window";
 import { showChangelogWindow } from "./changelog-window";
 import { showUsageActivityWindow } from "./usage-activity-window";
+import { showResourcesWindow } from "./resources-window";
+import { getResourceCheckoutService } from "../resource-checkouts/checkout-runtime";
 import {
   showLicenseWindow,
   showThirdPartyNoticesWindow,
@@ -834,6 +836,8 @@ function installDevelopmentDockIcon(): void {
 
 let lastFocusedWindow: BrowserWindow | undefined;
 let applicationMenu: Electron.Menu | undefined;
+/** Whether the installed menu was built with View → Resources. */
+let applicationMenuOffersResources = false;
 // Windows that are on screen, even if covered. On macOS "hide" also fires
 // when another window covers one, while isVisible() still reports true.
 const shownWindows = new WeakSet<BrowserWindow>();
@@ -928,6 +932,7 @@ function refreshProfileMenus(): void {
 }
 
 function installApplicationMenu(): void {
+  const resourceCheckouts = getResourceCheckoutService();
   const developerMode =
     getDesktopConfigStore().read("general").settings.developerMode
     ?? !app.isPackaged;
@@ -1056,11 +1061,17 @@ function installApplicationMenu(): void {
       showUsageActivityWindow: () => {
         showUsageActivityWindow({ sourceWindow: BrowserWindow.getFocusedWindow() ?? undefined });
       },
+      ...(resourceCheckouts ? {
+        showResourcesWindow: () => {
+          showResourcesWindow({ sourceWindow: BrowserWindow.getFocusedWindow() ?? undefined });
+        },
+      } : {}),
     },
   });
 
   applicationMenu = Menu.buildFromTemplate(template);
   Menu.setApplicationMenu(applicationMenu);
+  applicationMenuOffersResources = Boolean(resourceCheckouts);
   reapplyAuxiliaryWindowMenuBars();
 }
 
@@ -1426,6 +1437,8 @@ export function bootstrapApp(): void {
     registerCodexEnvironmentEditorIpcHandlers();
     registerOperatorRequestIpcHandlers(ownerServices.queues);
     registerResourceCheckoutIpcHandlers(ownerServices.resourceCheckouts);
+    // A menu built before the owner services started lacks View → Resources.
+    if (ownerServices.resourceCheckouts && !applicationMenuOffersResources) installApplicationMenu();
     registerApplicationIpcHandlers();
     registerAutomationIpcHandlers();
     registerAppMetadataIpcHandlers();

@@ -90,6 +90,12 @@ function useNow(intervalMs: number): number {
 }
 
 /**
+ * A request to show one resource. `nonce` changes on every request, so asking
+ * for the same resource again re-selects it after the operator moved away.
+ */
+export type ResourceFocusRequest = { resourceId: string; nonce: number };
+
+/**
  * The Resources screen: one row per capacity domain, an inspector for the
  * selected one, and the operator's checkout actions. It reads and acts only
  * through `source`; see apps/desktop/docs/resource-checkouts-ui.md.
@@ -102,6 +108,8 @@ export function ResourcesScreen(props: {
   hasWindowTitleBar?: boolean;
   /** Extra controls for the preview banner. */
   previewControls?: ReactNode;
+  /** Select this resource, clearing filters that would hide it. */
+  focus?: ResourceFocusRequest;
 }): ReactElement {
   const { view, pending, settled, perform, refresh, dismissSettled } = useResourceCheckouts(props.source);
   const now = useNow(30_000);
@@ -111,6 +119,11 @@ export function ResourcesScreen(props: {
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
   const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [dialog, setDialog] = useState<DialogState | null>(null);
+  const focus = props.focus;
+  // A focus request selects its resource once it is in a snapshot, and only
+  // once, so the operator can move away from it afterwards.
+  const [appliedFocus, setAppliedFocus] = useState<ResourceFocusRequest>();
+  const listPaneRef = useRef<HTMLDivElement>(null);
 
   const snapshot = view.status === "loading" ? undefined : view.snapshot;
   const presented = useMemo(() => (snapshot ? presentResources(snapshot) : []), [snapshot]);
@@ -141,6 +154,24 @@ export function ResourcesScreen(props: {
     },
   ];
   const ordered = groups.flatMap((group) => group.items);
+  // Compared by value: a parent may pass an equal request as a new object.
+  const focusPending = Boolean(focus
+    && (focus.nonce !== appliedFocus?.nonce || focus.resourceId !== appliedFocus.resourceId)
+    && presented.some((item) => item.resource.resourceId === focus.resourceId));
+  useEffect(() => {
+    if (!focus || !focusPending) return;
+    setAppliedFocus(focus);
+    setFilter("all");
+    setScope("all");
+    setQuery("");
+    setSelectedId(focus.resourceId);
+  }, [focus, focusPending]);
+  useEffect(() => {
+    if (!appliedFocus) return;
+    const row = [...listPaneRef.current?.querySelectorAll<HTMLElement>("[data-resource-id]") ?? []]
+      .find((element) => element.dataset.resourceId === appliedFocus.resourceId);
+    row?.scrollIntoView?.({ block: "nearest" });
+  }, [appliedFocus]);
   // Only a visible row can be inspected: once a filter, scope or search hides
   // the selection, the inspector follows the first row still shown.
   const selected = ordered.find((item) => item.resource.resourceId === selectedId)
@@ -285,7 +316,7 @@ export function ResourcesScreen(props: {
 
         {snapshot ? (
           <div className="resources-body">
-            <div className="resources-list-pane">
+            <div ref={listPaneRef} className="resources-list-pane">
               <div className="resources-toolbar">
                 <h2>Resources</h2>
                 <label className="resources-search">

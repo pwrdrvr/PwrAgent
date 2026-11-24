@@ -155,6 +155,15 @@ const HELP_SHARED = [
 ];
 
 describe("buildApplicationMenuTemplate", () => {
+  it.each([true, false])("lists Resources under View only while checkouts are served (macOS: %s)", (isMac) => {
+    expect(allItems(buildTemplate(false, { isMac })).some((item) => item.label === "Resources")).toBe(false);
+    const showResourcesWindow = vi.fn();
+    const template = buildTemplate(false, { isMac, actions: { showResourcesWindow } });
+    expect(flatten(submenuItems(template, "View")).slice(0, 4)).toEqual(["Search Threads", "Automations", "Resources", "---"]);
+    click(allItems(template), "Resources");
+    expect(showResourcesWindow).toHaveBeenCalledOnce();
+  });
+
   it.each([true, false])("offers one literal paste command on CmdOrCtrl+Shift+V (macOS: %s)", (isMac) => {
     const pasteWithoutFormatting = vi.fn();
     const items = allItems(buildTemplate(false, { isMac, actions: { pasteWithoutFormatting } }));

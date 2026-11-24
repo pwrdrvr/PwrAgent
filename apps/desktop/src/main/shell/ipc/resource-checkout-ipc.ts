@@ -1,6 +1,6 @@
 import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from "electron";
 import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
-import type { ResourceThreadRef } from "@pwragent/shared/contracts/resource-checkouts";
+import { readResourceCheckoutsWindowFocus, type ResourceThreadRef } from "@pwragent/shared/contracts/resource-checkouts";
 import { RESOURCE_CHECKOUTS_CHANGED_CHANNEL, RESOURCE_CHECKOUTS_OPEN_THREAD_CHANNEL, RESOURCE_CHECKOUTS_PERFORM_CHANNEL, RESOURCE_CHECKOUTS_READ_CHANNEL, RESOURCE_CHECKOUTS_WINDOW_OPEN_CHANNEL } from "../../../shared/ipc";
 import type { DesktopResourceCheckoutService } from "../../resource-checkouts/resource-checkout-service";
 import { requestShowThreadInPrimaryMainWindow } from "../primary-main-window";
@@ -23,10 +23,13 @@ export function registerResourceCheckoutIpcHandlers(service?: DesktopResourceChe
   ipcMain.removeHandler(RESOURCE_CHECKOUTS_WINDOW_OPEN_CHANNEL);
   ipcMain.removeHandler(RESOURCE_CHECKOUTS_OPEN_THREAD_CHANNEL);
   if (!service) return;
-  ipcMain.handle(RESOURCE_CHECKOUTS_WINDOW_OPEN_CHANNEL, (event) => {
+  ipcMain.handle(RESOURCE_CHECKOUTS_WINDOW_OPEN_CHANNEL, (event, focus?: unknown) => {
     checkLocalWindow(event);
     if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open Resources from the local main window.");
-    showResourcesWindow({ sourceWindow: BrowserWindow.fromWebContents(event.sender) ?? undefined });
+    showResourcesWindow(
+      { sourceWindow: BrowserWindow.fromWebContents(event.sender) ?? undefined },
+      readResourceCheckoutsWindowFocus(focus),
+    );
   });
   ipcMain.handle(RESOURCE_CHECKOUTS_OPEN_THREAD_CHANNEL, (event, thread?: ResourceThreadRef) => {
     checkLocalWindow(event);

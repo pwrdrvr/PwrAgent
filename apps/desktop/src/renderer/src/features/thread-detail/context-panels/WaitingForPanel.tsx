@@ -34,7 +34,16 @@ import {
   RadarIcon,
   TerminalIcon,
 } from "../../../icons";
+import type { ResourceCheckoutsSnapshot } from "@pwragent/shared/contracts/resource-checkouts";
 import { describeCiOutcomes } from "../../pr-status/PrStatusCard";
+import {
+  ResourceWaitCard,
+  resourceWaitNoun,
+  useResourceCheckoutsSnapshot,
+  type ResourceCheckoutsRead,
+  type ResourceSnapshotState,
+} from "../../resources/ResourceWaitCard";
+import { ContinuationText } from "../../thread-dependencies/ContinuationText";
 import { formatWatchTime } from "../../pr-watches/PullRequestWatchList";
 import { isCiWatch, readWatchRunAttempt } from "../../pr-watches/useThreadPrWatchIndicators";
 import { readFollowUpsSuspended, type ThreadPendingWakesController } from "../../thread-pending-wakes/useThreadPendingWakes";
@@ -58,6 +67,10 @@ type WaitingForPanelProps = {
   onShowTab?: (tab: ContextTabId) => void;
   /** Opens Continue After for this thread. */
   onOpenContinueAfter?: () => void;
+  /** Reads this profile's checkouts, for resource waits. Absent for a peer's thread. */
+  readResourceCheckouts?: ResourceCheckoutsRead;
+  /** Opens the Resources window on one resource. */
+  onOpenResource?: (resourceId: string) => void;
   /** Injected by tests so times are deterministic. */
   now?: number;
 };
@@ -102,6 +115,9 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
     onFocusHeading();
   }, [onFocusHeading]);
   const heading = <h3 ref={headingRef} tabIndex={-1}>Waiting for</h3>;
+  const hasResourceWait = state.status === "ready" && state.wakes.some(isResourceWait);
+  const resources = useResourceCheckoutsSnapshot(props.readResourceCheckouts, hasResourceWait);
+  const resourceSnapshot = resources.status === "ready" ? resources.snapshot : undefined;
 
   if (state.status !== "ready") {
     return (
@@ -309,9 +325,9 @@ export const WaitingForPanel = memo(function WaitingForPanel(props: WaitingForPa
               {group.aside ? <span className="waiting-for-panel__eyebrow-aside">{group.aside}</span> : null}
             </p>
             {group.wakes.map((wake) => {
-              const view = describeWake(wake, props.thread, now, props.ownerLabel, canSendHeld(wake));
+              const view = describeWake(wake, props.thread, now, props.ownerLabel, canSendHeld(wake), resourceSnapshot);
               const open = openKey === wake.key;
-              const detail = open ? renderDetail(wake, props, now) : null;
+              const detail = open ? renderDetail(wake, props, now, resources) : null;
               return (
                 <div
                   className={`pr-watch-list__row waiting-for-panel__row${open ? " is-open" : ""}${
@@ -554,6 +570,7 @@ function describeWake(
   now: number,
   ownerLabel: string | undefined,
   canSendHeld = false,
+  resourceSnapshot?: ResourceCheckoutsSnapshot,
 ): WakeView {
   const rowHold = describeRowHold(wake, canSendHeld);
   const transient = (
@@ -643,7 +660,7 @@ function describeWake(
       };
     }
     case "dependency": {
-      const plainTitle = describeDependencyTitle(wake, thread);
+      const plainTitle = describeDependencyTitle(wake, thread, resourceSnapshot);
       const ready = wake.dependency.status === "ready";
       return {
         icon: <ContinueAfterIcon size={12} />,
@@ -721,12 +738,20 @@ function lowerFirst(text: string): string {
   return text.charAt(0).toLowerCase() + text.slice(1);
 }
 
+/** A wait registered by the resource checkout tools. */
+function isResourceWait(wake: ThreadPendingWake): boolean {
+  return wake.kind === "dependency" && wake.dependency.conditions.some((condition) => condition.resourceCheckout);
+}
+
 function describeDependencyTitle(
   wake: Extract<ThreadPendingWake, { kind: "dependency" }>,
   thread: NavigationThreadSummary,
+  resourceSnapshot?: ResourceCheckoutsSnapshot,
 ): string {
   const { conditions, deliver } = wake.dependency;
   const lead = deliver === "operator" ? "Remind you after" : "Continue after";
+  const checkout = conditions.length === 1 ? conditions[0]!.resourceCheckout : undefined;
+  if (checkout) return `${lead} ${resourceWaitNoun(resourceSnapshot, checkout.resourceId)} is granted`;
   if (conditions.length !== 1) {
     // "Something else" is not a thread.
     const threads = conditions.every(isThreadDependencyThreadCondition);
@@ -741,7 +766,12 @@ function describeDependencyTitle(
   return `${lead} ${name} ${threadDependencyConditionPhrase(condition)}`;
 }
 
-function renderDetail(wake: ThreadPendingWake, props: WaitingForPanelProps, now: number): ReactNode {
+function renderDetail(
+  wake: ThreadPendingWake,
+  props: WaitingForPanelProps,
+  now: number,
+  resources: ResourceSnapshotState,
+): ReactNode {
   const showTab = (tab: ContextTabId, label: string): ReactNode => props.onShowTab ? (
     <button type="button" className="waiting-for-panel__link" onClick={() => props.onShowTab!(tab)}>{label}</button>
   ) : null;
@@ -762,6 +792,18 @@ function renderDetail(wake: ThreadPendingWake, props: WaitingForPanelProps, now:
             // A waiting CI run carries its owner's latest check, in memory.
             const run = evidence?.state === "waiting" ? evidence.ciRun : undefined;
             const build = evidence?.state === "waiting" ? evidence.mergeBuild : undefined;
+            if (condition.resourceCheckout) {
+              return (
+                <ResourceWaitCard
+                  key={`${condition.resourceCheckout.resourceId}:${index}`}
+                  resourceId={condition.resourceCheckout.resourceId}
+                  waiter={{ backend: props.thread.source, threadId: props.thread.id }}
+                  state={resources}
+                  now={now}
+                  onOpenResource={props.onOpenResource}
+                />
+              );
+            }
             return (
               <span className={`waiting-for-panel__cond${met ? " is-met" : ""}${failed ? " is-failed" : ""}`} key={`${condition.threadId}:${condition.when}:${index}`}>
                 <span className="waiting-for-panel__cond-dot" aria-hidden="true" />
@@ -774,9 +816,10 @@ function renderDetail(wake: ThreadPendingWake, props: WaitingForPanelProps, now:
             );
           })}
           {dependency.continuation ? (
-            <span className="waiting-for-panel__prompt">
-              {`${dependency.deliver === "operator" ? "Then you are reminded" : "Then the agent is told"}: “${dependency.continuation}”`}
-            </span>
+            <ContinuationText
+              label={dependency.deliver === "operator" ? "Then you are reminded:" : "Then the agent is told:"}
+              text={dependency.continuation}
+            />
           ) : null}
           {props.onOpenContinueAfter ? (
             <button type="button" className="waiting-for-panel__link" onClick={props.onOpenContinueAfter}>Open in Continue After…</button>

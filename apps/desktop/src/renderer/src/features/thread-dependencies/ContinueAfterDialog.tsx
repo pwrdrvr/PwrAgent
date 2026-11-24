@@ -47,6 +47,8 @@ import {
   type WaitingThread,
 } from "./dependency-condition";
 import { markDoneWaitsOnThread, type MarkDoneWait } from "./useThreadDependencyList";
+import { ResourceWaitCard, useResourceCheckoutsSnapshot, type ResourceSnapshotState } from "../resources/ResourceWaitCard";
+import { ContinuationText } from "./ContinuationText";
 
 type When = ThreadDependencyCondition["when"];
 
@@ -68,7 +70,7 @@ const DEPENDENT_PHRASES: Record<When, string> = {
   // A CI run and a file marker name no prerequisite thread.
   ci_run: "until its run reaches its milestone",
   local_file: "until its watcher writes a result",
-  resource_checkout: "until its resource checkout is promoted",
+  resource_checkout: "until its resource checkout is granted",
   merge_build: "until its merge build finishes",
 };
 const MAX_CONDITIONS = 16;
@@ -232,6 +234,15 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
   // Uncertain deliveries are reviewed together, above the ordinary waits.
   const reviewGroups = useMemo(() => groupDeliveryReviews(dependencies), [dependencies]);
   const waits = active.filter((dependency) => !needsDeliveryReview(dependency));
+  // A peer's checkout queue lives on the peer; this window reads its own.
+  const resourceWaitsShown = !ownerId && waits.some((dependency) => dependency.conditions.some((condition) => condition.resourceCheckout));
+  const resources = useResourceCheckoutsSnapshot(ownerId ? undefined : desktopApi?.readResourceCheckouts, resourceWaitsShown);
+  const openResources = ownerId ? undefined : desktopApi?.openResourceCheckoutsWindow;
+  const resourceWait = {
+    state: resources,
+    waiter: { backend: thread.source, threadId: thread.id },
+    onOpenResource: openResources ? (resourceId: string) => { void openResources({ resourceId }); } : undefined,
+  };
   const history = dependencies.filter((dependency) => !ACTIVE_DEPENDENCY_STATUSES.has(dependency.status));
   const hasRegistrations = dependencies.length > 0 || dependents.length > 0 || peerDependents.length > 0;
   const waitsOnCi = rows.some((row) => row.when === "ci_passed");
@@ -636,6 +647,7 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
                     onAction={(action) => void submit(action, dependency.id)}
                     onMarkDone={(index) => ownMarkDone(dependency, index)}
                     onNavigate={onClose}
+                    resourceWait={resourceWait}
                   />
                 ))}
               </ul>
@@ -870,6 +882,12 @@ function DependencyCard(props: {
   /** Absent in history, where nothing can be marked done. */
   onMarkDone?: (conditionIndex: number) => void;
   onNavigate: () => void;
+  /** Where a resource checkout condition reads its queue. Absent in history. */
+  resourceWait?: {
+    state: ResourceSnapshotState;
+    waiter: { backend: string; threadId: string };
+    onOpenResource?: (resourceId: string) => void;
+  };
 }) {
   const { dependency } = props;
   const status = describeStatus(dependency);
@@ -900,6 +918,30 @@ function DependencyCard(props: {
           const run = state === "waiting" ? evidence?.ciRun : undefined;
           const build = state === "waiting" ? evidence?.mergeBuild : undefined;
           const markable = props.onMarkDone && threadDependencyMarkDoneIndex(dependency, index) !== undefined;
+          if (condition.resourceCheckout) {
+            return (
+              <li className="thread-dependencies__condition thread-dependencies__condition--resource" key={index}>
+                <span
+                  aria-label={state === "satisfied" ? "Met" : state === "failed" ? "Failed" : "Waiting"}
+                  className={`thread-dependencies__mark thread-dependencies__mark--${state}`}
+                  role="img"
+                />
+                <span className="thread-dependencies__condition-head">
+                  <span className="thread-dependencies__thread">Resource checkout</span>
+                  <span className="thread-dependencies__when">{threadDependencyConditionPhrase(condition)}</span>
+                </span>
+                {props.resourceWait && (dependency.status === "waiting" || dependency.status === "ready") ? (
+                  <ResourceWaitCard
+                    resourceId={condition.resourceCheckout.resourceId}
+                    waiter={props.resourceWait.waiter}
+                    state={props.resourceWait.state}
+                    now={Date.now()}
+                    onOpenResource={props.resourceWait.onOpenResource}
+                  />
+                ) : reason ? <span className="thread-dependencies__reason">{reason}</span> : null}
+              </li>
+            );
+          }
           return (
             <li className="thread-dependencies__condition" key={index}>
               <span
@@ -961,7 +1003,9 @@ function DependencyCard(props: {
         <ol className="thread-dependencies__steps">
           {dependency.steps.map((step, index) => <li key={index}>{step}</li>)}
         </ol>
-      ) : dependency.continuation ? <p className="thread-dependencies__continuation">{dependency.continuation}</p> : null}
+      ) : dependency.continuation ? (
+        <ContinuationText label={reminds ? "Then you are reminded:" : "Then the agent is told:"} text={dependency.continuation} />
+      ) : null}
       {dependency.holdMerge && (dependency.status === "waiting" || dependency.status === "ready") ? <p className="rail-card__meta">Merge held</p> : null}
       {policy ? <p className="rail-card__meta">{policy}</p> : null}
       {dependency.supersededBy ? <p className="rail-card__meta">Replaced by a newer wait for the same plan on later turns.</p> : null}
