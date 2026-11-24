@@ -3059,7 +3059,7 @@ function repairMisclassifiedHandoffSubAgents(
 }
 
 function ensureCurrentSchema(db: BetterSqlite3.Database): void {
-  db.transaction(() => {
+  const converge = db.transaction(() => {
     db.exec(SCHEMA_V4);
     db.exec(DIRECTORY_GIT_STATUS_SCHEMA);
     db.exec(THREAD_GIT_WORKING_STATE_SCHEMA);
@@ -3143,15 +3143,30 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }
-  })();
 
-  if (!tableColumnExists(db, "app_runtime_instances", "cwd_hash")) {
-    db.exec("ALTER TABLE app_runtime_instances ADD COLUMN cwd_hash TEXT");
-  }
-  db.exec(`
+    if (!tableColumnExists(db, "app_runtime_instances", "cwd_hash")) {
+      db.exec("ALTER TABLE app_runtime_instances ADD COLUMN cwd_hash TEXT");
+    }
+    db.exec(`
 CREATE INDEX IF NOT EXISTS idx_app_runtime_instances_profile_cwd_hash
   ON app_runtime_instances(profile_name, cwd_hash, heartbeat_at DESC);
 `);
+  });
+
+  try {
+    converge();
+  } catch (error) {
+    if (db.inTransaction || !(error instanceof Database.SqliteError)
+      || (error.code !== "SQLITE_BUSY_SNAPSHOT" && error.code !== "SQLITE_BUSY")) {
+      throw error;
+    }
+
+    // Current profiles can converge while a peer holds the WAL writer lock.
+    // When repair needs a write, a deferred read snapshot may fail to upgrade
+    // if another writer got there first. The failed transaction has rolled
+    // back, so take the writer lock before checking the schema again.
+    converge.immediate();
+  }
 }
 
 /**
@@ -4598,28 +4613,35 @@ function ensurePullRequestProviderColumns(db: BetterSqlite3.Database): void {
       "ALTER TABLE pr_status_cache ADD COLUMN provider TEXT NOT NULL DEFAULT 'github.com'",
     );
   }
-  db.exec(`
+  // Even an UPDATE that matches no rows needs the WAL writer lock. Check for
+  // legacy rows before issuing either UPDATE so current profiles can just read.
+  if (db.prepare(`SELECT 1 FROM pr_status_cache
+    WHERE provider IS NULL OR provider = ''
+      OR pr_key IS NOT (provider || '/' || lower(org) || '/' || lower(repo) || '#' || number)
+    LIMIT 1`).get()) {
+    db.exec(`
 UPDATE pr_status_cache
 SET
   provider = COALESCE(NULLIF(provider, ''), 'github.com'),
   pr_key = COALESCE(NULLIF(provider, ''), 'github.com')
-    || '/'
-    || lower(org)
-    || '/'
-    || lower(repo)
-    || '#'
-    || number
+    || '/' || lower(org) || '/' || lower(repo) || '#' || number
+WHERE provider IS NULL OR provider = ''
+  OR pr_key IS NOT (provider || '/' || lower(org) || '/' || lower(repo) || '#' || number)
 `);
+  }
 
   if (!tableColumnExists(db, "pr_lookup_cache", "provider")) {
     db.exec(
       "ALTER TABLE pr_lookup_cache ADD COLUMN provider TEXT NOT NULL DEFAULT 'github.com'",
     );
   }
-  db.exec(`
+  if (db.prepare(`SELECT 1 FROM pr_lookup_cache WHERE provider IS NULL OR provider = '' LIMIT 1`).get()) {
+    db.exec(`
 UPDATE pr_lookup_cache
-SET provider = COALESCE(NULLIF(provider, ''), 'github.com')
+SET provider = 'github.com'
+WHERE provider IS NULL OR provider = ''
 `);
+  }
 }
 
 function repairReenrolledFederationPeerRevocations(
