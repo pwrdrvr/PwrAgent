@@ -250,6 +250,21 @@ requested access level, or keeps the session's mode (`acpSessionStartMode`).
 Raw captures are under the ignored
 `apps/desktop/.local/protocol-captures/antigravity-unoffered-mode/`.
 
+### Antigravity read-only git inspection by mode
+
+The November 24, 2026 macOS captures of Antigravity (`agy acp --process-per-session`) against a disposable two-commit Git repository checked `available_commands_update` and `git log` / `git diff` permission requests across native modes (with `--dangerously-skip-permissions` omitted). `available_commands_update` listed no built-in `/review` or `/code-review` command.
+
+| Mode (`session/set_config_option` `mode`) | Read-only `git log` + `git diff` |
+| --- | --- |
+| `default` | Sent `session/request_permission` (`kind: "execute"`, `run_command`). |
+| `plan` | Sent `session/request_permission` (`kind: "execute"`, `run_command`). |
+| `auto` | Completed both commands with 0 permission requests. |
+
+Managed Antigravity review children therefore request Antigravity's native `auto` mode on the normal (non-Full-Access) process, falling back through `acpSessionStartMode` when a session does not list `auto`.
+
+Raw captures are under the ignored
+`apps/desktop/.local/protocol-captures/antigravity-review-probe/`.
+
 ### Antigravity ACP turn steering
 
 The November 23–24, 2026 macOS captures of Antigravity CLI `1.5.15` (`agy acp --process-per-session`) verified how Antigravity steers an active turn over ACP:

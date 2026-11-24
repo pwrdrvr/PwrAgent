@@ -73,7 +73,7 @@ import { buildCodexTokenMiserDynamicToolSpecs } from "./codex-thread-config";
 import type { delegatedTurnAttribution } from "./delegated-turn-attribution";
 import { executionModeSettings } from "./execution-mode-settings";
 import { normalizeLinkedDirectoryIdentityPath } from "./linked-directory-identity";
-import { buildManagedReviewPrompt } from "./managed-review";
+import { buildManagedReviewPrompt, managedReviewAcpRuntime } from "./managed-review";
 import { prepareClaudeCodeReview, validateClaudeCodeReview } from "./claude-code-review-start";
 import { resolvePullRequestReview, resolvePullRequestSetReview } from "./pull-request-review";
 import type { RegistryContext, RegistryHost } from "./registry-context";
@@ -922,7 +922,12 @@ export class ManagedReviewService {
       const parentSession = inheritsParentSession
         ? this.context.providers.acp.getSession(params.backend, params.parentThreadId)
         : undefined;
-      const acpRuntime = parentSession?.acpRuntime;
+      const acpRuntime = managedReviewAcpRuntime({
+        backend: params.backend,
+        parentRuntime: parentSession?.acpRuntime,
+        runtimeCapabilities: this.context.providers.acp.getInstalledAgent(params.backend)
+          ?.runtimeCapabilities,
+      });
       const executionMode =
         (inheritsParentSession && params.backend !== "acp:antigravity" ? params.overlay?.executionMode : undefined)
         ?? parentSession?.executionMode
