@@ -2,6 +2,7 @@ import type { AppServerReviewOutput } from "@pwragent/shared/contracts/normalize
 import { describe, expect, it } from "vitest";
 import {
   formatReviewOutputText,
+  REVIEW_OUTPUT_INSTRUCTIONS,
   reviewEntryFindings,
   reviewFindingTag,
   withoutRedundantPriorityTag,
@@ -128,5 +129,19 @@ describe("reviewEntryFindings", () => {
     const [kept] = reviewEntryFindings({ output: legacy(body), review: "", reviewer: { backend: "codex" } });
     expect(kept.body).toBe(body);
     expect(kept.category).toBeUndefined();
+  });
+});
+
+describe("REVIEW_OUTPUT_INSTRUCTIONS", () => {
+  it("defines the strict JSON output contract and P0-P3 calibration rubric", () => {
+    expect(REVIEW_OUTPUT_INSTRUCTIONS).toContain("Return only one JSON object");
+    expect(REVIEW_OUTPUT_INSTRUCTIONS).toContain('"patch is correct"');
+    expect(REVIEW_OUTPUT_INSTRUCTIONS).toContain('"patch is incorrect"');
+    expect(REVIEW_OUTPUT_INSTRUCTIONS).toContain("Do not wrap the JSON in Markdown fences");
+    expect(REVIEW_OUTPUT_INSTRUCTIONS).toMatch(/0 \(P0\):/);
+    expect(REVIEW_OUTPUT_INSTRUCTIONS).toMatch(/1 \(P1\):/);
+    expect(REVIEW_OUTPUT_INSTRUCTIONS).toMatch(/2 \(P2\):/);
+    expect(REVIEW_OUTPUT_INSTRUCTIONS).toMatch(/3 \(P3\):/);
+    expect(REVIEW_OUTPUT_INSTRUCTIONS).toContain("Put the numeric priority in the priority field");
   });
 });

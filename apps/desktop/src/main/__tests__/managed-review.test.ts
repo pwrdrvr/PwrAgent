@@ -36,12 +36,59 @@ describe("managed review", () => {
       { type: "custom" as const, instructions: "Review the retry contract." },
       "Review the retry contract.",
     ],
-  ])("preserves the %s review target", (target, expected) => {
+    [
+      {
+        type: "pullRequest" as const,
+        url: "https://github.com/pwrdrvr/PwrAgent/pull/4329",
+        snapshot: {
+          pullRequest: {
+            provider: "github.com",
+            org: "pwrdrvr",
+            repo: "PwrAgent",
+            number: 4329,
+            url: "https://github.com/pwrdrvr/PwrAgent/pull/4329",
+            baseRefName: "main",
+            headRefName: "fix/isolate-chromium-trace-filter",
+          },
+          baseCommit: "f9b74eadf751c9985a0cb0f9b7f7a211699d2fad",
+          headCommit: "8de68c9ff70dbd9597f549eddd3f90d59a7ced8a",
+          mergeBaseCommit: "f9b74eadf751c9985a0cb0f9b7f7a211699d2fad",
+          capturedAt: 1795541744000,
+        },
+      },
+      "git diff --no-ext-diff f9b74eadf751c9985a0cb0f9b7f7a211699d2fad 8de68c9ff70dbd9597f549eddd3f90d59a7ced8a --",
+    ],
+  ])("preserves the %s review target and core review contract", (target, expected) => {
     const prompt = buildManagedReviewPrompt(target);
 
     expect(prompt).toContain(expected);
     expect(prompt).toContain("Return only one JSON object");
     expect(prompt).toContain("Do not modify files");
+    expect(prompt).not.toContain("Focus on concrete correctness regressions");
+    // Static-first, bounded single-agent review posture without CI detours,
+    // runtime probe scripts, web rabbit holes, or multi-agent fan-out.
+    expect(prompt).toMatch(/static,\s+adversarial/i);
+    expect(prompt).toMatch(/do not run lint, typecheck, build, or test suites/i);
+    expect(prompt).toMatch(/do not launch ad-hoc reproduction or runtime probe scripts/i);
+    expect(prompt).toMatch(/do not search the web/i);
+    expect(prompt).not.toMatch(/spawn.*sub-?agent/i);
+    // Covers new contracts/telemetry, falsifiable regression tests, and repo rules.
+    expect(prompt).toMatch(/new APIs, fields, logs, and telemetry\/metrics/i);
+    expect(prompt).toMatch(/if the core fix were reverted to the broken behavior/i);
+    expect(prompt).toMatch(/merely invoking the new code path/i);
+    expect(prompt).toMatch(/AGENTS\.md/);
+    // Noise suppression and clean-patch allowance.
+    expect(prompt).toMatch(/do not report style or formatting nitpicks/i);
+    expect(prompt).toMatch(/zero findings is valid/i);
+  });
+
+  it("calibrates P0-P3 priorities in the managed review prompt", () => {
+    const prompt = buildManagedReviewPrompt({ type: "baseBranch", branch: "main" });
+
+    expect(prompt).toMatch(/0 \(P0\):.*critical|release-blocking/i);
+    expect(prompt).toMatch(/1 \(P1\):.*urgent|high-impact/i);
+    expect(prompt).toMatch(/2 \(P2\):.*moderate-impact.*non-falsifying/i);
+    expect(prompt).toMatch(/3 \(P3\):.*low-impact.*telemetry\/metric/i);
   });
 
   it("parses the structured review artifact shape", () => {
