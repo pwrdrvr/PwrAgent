@@ -775,8 +775,9 @@ export function createThreadTodoRunners(params: {
         ? (await registry.listBackends({ includeUnavailable: true })).backends
           .find((backend) => backend.kind === chosen.backend)
         : undefined;
-      // An agent whose own selector owns approval policy (Antigravity, Kimi,
-      // Grok) lists no execution modes; its native mode carries the access.
+      // Every ACP agent except legacy Kimi and Grok lists no execution modes
+      // (Antigravity, current Kimi, Grok with permission_mode, Gemini, Qwen);
+      // its own native mode, when it has one, carries the access.
       const native = !sameBackend && destination?.executionModes.length === 0
         ? acpNativeAccessMode(destination.acp?.runtime, executionMode)
         : undefined;

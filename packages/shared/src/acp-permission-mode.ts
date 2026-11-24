@@ -14,8 +14,9 @@ export function findAcpPermissionModeConfigOption(
   );
 }
 
-/** The ids Kimi's and Antigravity's session modes and Grok's
- * `permission_mode` use for PwrAgent's access levels, lowest first. */
+/** The native ids for PwrAgent's access levels, lowest first, as ACP session
+ * modes and Grok's `permission_mode` name them. An agent lists only some:
+ * Antigravity offers `default` and `auto` but no `yolo`. */
 const ACP_NATIVE_ACCESS_MODE_IDS: ReadonlyArray<readonly [ThreadExecutionMode, string]> = [
   ["default", "default"],
   ["auto", "auto"],
