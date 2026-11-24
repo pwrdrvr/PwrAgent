@@ -3777,7 +3777,8 @@ export class SubAgentMonitorService {
         reasoningEffort,
         hidden: true,
       });
-      this.bindTaskMonitorMcpThread(params.monitorId, thread.threadId, executionMode);
+      // Less than asked when the new session lacked the parent's native Yolo.
+      this.bindTaskMonitorMcpThread(params.monitorId, thread.threadId, thread.executionMode);
       const startingOrigin = this.host().beginStartingTurnOrigin({ backend: params.context.backend,
         threadId: thread.threadId, origin: buildTaskMonitorPromptOrigin(params.causalContext) });
       let turn: { threadId: string; turnId: string };
@@ -3796,7 +3797,7 @@ export class SubAgentMonitorService {
       }
       return {
         cwd,
-        executionMode,
+        executionMode: thread.executionMode,
         threadId: turn.threadId,
         turnId: turn.turnId,
       };
