@@ -92,6 +92,32 @@ describe("opt-in rendering capture", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("preserves the full observation time after a slow renderer attachment", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    let finishAttachment!: () => void;
+    const attachment = new Promise<void>((resolve) => { finishAttachment = resolve; });
+    electron.debuggerApi.sendCommand.mockImplementation(async (method: string) => {
+      if (method === "Target.attachToTarget") await attachment;
+      return commands(method);
+    });
+
+    const pending = captureRenderingDiagnostics(root, 1);
+    try {
+      await vi.waitFor(() => expect(electron.debuggerApi.sendCommand)
+        .toHaveBeenCalledWith("Target.attachToTarget", expect.anything()));
+      await vi.advanceTimersByTimeAsync(4400);
+      expect(electron.debuggerApi.sendCommand).not.toHaveBeenCalledWith("Tracing.end");
+      finishAttachment();
+      await vi.advanceTimersByTimeAsync(999);
+      expect(electron.debuggerApi.sendCommand).not.toHaveBeenCalledWith("Tracing.end");
+      await vi.advanceTimersByTimeAsync(2);
+      expect(JSON.parse(await readFile((await pending).summaryPath, "utf8")).reason).toBe("duration");
+    } finally {
+      finishAttachment();
+      await stopRenderingDiagnostics();
+    }
+  });
+
   // Node schedules a timer from the event loop's cached clock, which can trail
   // performance.now() by however long synchronous work ran in that loop turn
   // (creating the hidden session window). The capture reads its start from
@@ -100,15 +126,15 @@ describe("opt-in rendering capture", () => {
   it("never stops a timed capture before its full length, however far the loop clock lags", async () => {
     for (const [seconds, lagMs] of [[1, 0.2], [10, 0.6], [10, 0.999], [30, 0.5], [3, 0]] as const) {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-      // The fake clock stands in for both; only the start read runs ahead.
+      // During setup, the performance clock stays ahead of the cached loop
+      // clock until the loop advances. It must not go backwards between reads.
       const loopNow = () => Date.now();
-      let lagging = false;
+      let laggingAt: number | undefined;
       // The session is created, then attached, then the start is read.
-      electron.debuggerApi.attach.mockImplementationOnce(() => { lagging = true; });
+      electron.debuggerApi.attach.mockImplementationOnce(() => { laggingAt = loopNow(); });
       const now = vi.spyOn(performance, "now").mockImplementation(() => {
-        const value = loopNow() + (lagging ? lagMs : 0);
-        lagging = false;
-        return value;
+        const loopTime = loopNow();
+        return loopTime + (loopTime === laggingAt ? lagMs : 0);
       });
       let signalStarted!: () => void;
       const captureStarted = new Promise<void>((resolve) => { signalStarted = resolve; });

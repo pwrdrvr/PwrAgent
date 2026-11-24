@@ -59,7 +59,8 @@ describe("token usage pricing", () => {
     expect(estimateTokenUsageCost({ ...params, serviceTier: "priority" })).toBeUndefined();
     expect(resolveTokenUsagePriceUnavailableReason({ ...params, serviceTier: "priority" })).toBe("unsupported-service-tier");
     expect(estimateOpenAiTokenUsageCost(params)).toBeUndefined();
-    expect(listTokenUsagePricingRates().filter((rate) => rate.provider === "anthropic")).toHaveLength(2);
+    expect(listTokenUsagePricingRates().filter((rate) => rate.model === "claude-haiku-5-5")).toHaveLength(2);
+    expect(listTokenUsagePricingRates().filter((rate) => rate.provider === "anthropic")).toHaveLength(4);
   });
 
   it("prices standard usage with persisted micro-unit cost components", () => {

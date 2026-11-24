@@ -3187,9 +3187,9 @@ export class AcpBackendAdapter {
         update,
       }) => {
         const updateKind = readAcpUpdateKind(update);
-        const usageEnvelope = readAcpUsageEnvelope(update);
+        const usageEnvelope = readAcpUsageEnvelope(update, agent.backendId);
         let liveUsageNotification: AppServerNotification | undefined;
-        if (usageEnvelope && turnId) {
+        if (usageEnvelope && turnId && !fromSessionLoad) {
           const usageKey = [agent.backendId, sessionId, turnId].join(":");
           const previousUsage = this.liveTurnUsage.get(usageKey);
           const model =
@@ -3216,7 +3216,7 @@ export class AcpBackendAdapter {
           // That is the ACP convention; Codex sends a session-cumulative total
           // in the same field. See the note on `AcpUsageEnvelope` before
           // changing this payload's shape.
-          if (usageEnvelope.scope === "model-call" && !fromSessionLoad) {
+          if (usageEnvelope.scope === "model-call") {
             liveUsageNotification = acpUsageNotification({
               envelope: {
                 ...(model ? { model } : {}),
@@ -3231,6 +3231,7 @@ export class AcpBackendAdapter {
         }
         const promptSettledTurnFinished =
           updateKind === "turn_finished"
+          && !fromSessionLoad
           && replay.threadStatus !== "active";
         const completedUsage =
           promptSettledTurnFinished && turnId
@@ -3494,7 +3495,7 @@ export class AcpBackendAdapter {
         // that running turn. Live lifecycle is owned by turn/started and the
         // prompt-settled terminal events, not transcript replay snapshots.
       },
-      onPromptError: async ({ sessionId, turnId, error }) => {
+      onPromptError: async ({ sessionId, turnId, error, usage }) => {
         this.liveTurnUsage.delete(
           [agent.backendId, sessionId, turnId].join(":"),
         );
@@ -3508,6 +3509,24 @@ export class AcpBackendAdapter {
           threadId: sessionId,
           turnId,
         });
+        if (usage) {
+          const notification = acpUsageNotification({
+            envelope: usage,
+            model: selectedAcpModel(agent, this.getSession(agent.backendId, sessionId)),
+            threadId: sessionId,
+            totalTokenUsage: usage.tokenUsage,
+            turnId,
+          });
+          if (notification) {
+            await this.emit({ backend: agent.backendId, notification }).catch((usageError: unknown) => {
+              acpBackendAdapterLog.warn("acp_failed_prompt_usage_unreported", {
+                backend: agent.backendId,
+                turnId,
+                error: usageError instanceof Error ? usageError.message : String(usageError),
+              });
+            });
+          }
+        }
         await this.emit({
           backend: agent.backendId,
           notification: {

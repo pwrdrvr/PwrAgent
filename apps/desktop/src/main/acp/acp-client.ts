@@ -52,9 +52,12 @@ import {
 } from "./acp-rollout-store.js";
 import {
   foldAcpTurnUsage,
+  readAcpPromptResultUsage,
+  readAcpPromptResultUsageEnvelope,
   readAcpSelectedModel,
   readAcpUsageEnvelope,
   type AcpTokenUsage,
+  type AcpUsageEnvelope,
 } from "./acp-usage.js";
 import type { JsonRpcId } from "@pwrdrvr/agent-transport";
 import { getMainLogger } from "../log.js";
@@ -105,6 +108,25 @@ type AcpIdleClosedSession = {
   closed: Promise<void>;
   /** The session/load in flight, shared by every request that needs it. */
   reopening?: Promise<void>;
+  /** Load succeeded, but confirming its mode and closing the worker both failed. */
+  workerOpen?: boolean;
+};
+
+type AcpSessionLoadOptions = {
+  suppressTranscriptReplay?: boolean;
+  antigravityModeSelection?: string;
+};
+
+type AcpRuntimeOptionWrite = {
+  sessionId: string;
+  source: BackendAcpRuntimeOptionSource;
+  optionId: string;
+  value: string;
+  reasoningEffort?: string;
+  /** Refuse an explicit thought level the session does not offer. */
+  rejectUnofferedThoughtLevel?: boolean;
+  /** The owner supplied an explicit selection for Antigravity's mode option. */
+  antigravityModeSession?: AcpSessionMetadata;
 };
 
 // Host configurations keep record environments for process/Codex callers;
@@ -198,6 +220,7 @@ type AcpSessionLoadState = {
   lastTimestampedTranscriptAt?: number;
   replayedTranscript: boolean;
   suppressTranscriptReplay: boolean;
+  restoringAntigravityMode?: boolean;
 };
 
 type AcpSessionLoadReplay = {
@@ -243,6 +266,7 @@ export type AcpAgentClientOptions = {
     sessionId: string;
     turnId: string;
     error: unknown;
+    usage?: AcpUsageEnvelope;
   }) => Promise<void> | void;
   onRuntimeCapabilities?: (event: {
     fromSessionLoad?: boolean;
@@ -326,8 +350,8 @@ export class AcpAgentClient {
   /** Permission requests the agent is waiting on, by app session id. */
   private readonly pendingPermissionRequests = new Map<string, number>();
   /**
-   * Sessions released by `closeIdleSessions`. They keep their id routing and
-   * in-memory transcript; the next request for one reloads it first.
+   * Sessions that must load before the next request. An Antigravity worker
+   * can still be open here if mode confirmation and cleanup both failed.
    */
   private readonly idleClosedSessions = new Map<string, AcpIdleClosedSession>();
   /**
@@ -469,7 +493,7 @@ export class AcpAgentClient {
       const idleClosed = this.idleClosedSessions.get(sessionId);
       await idleClosed?.closed;
       // An idle close already released it, unless a request reloaded it.
-      if (!idleClosed || this.idleClosedSessions.get(sessionId) !== idleClosed) {
+      if (!idleClosed || idleClosed.workerOpen || this.idleClosedSessions.get(sessionId) !== idleClosed) {
         await this.options.transport.request("session/close", { sessionId: protocolSessionId });
       }
       this.loadedSessionCwds.delete(protocolSessionId);
@@ -544,9 +568,10 @@ export class AcpAgentClient {
 
   private sessionIsIdle(sessionId: string, idleMs: number): boolean {
     const protocolSessionId = this.agentSessionIdsByAppSessionId.get(sessionId) ?? sessionId;
+    const idleClosed = this.idleClosedSessions.get(sessionId);
     if (
       !this.loadedSessionCwds.has(protocolSessionId)
-      || this.idleClosedSessions.has(sessionId)
+      || (idleClosed && !idleClosed.workerOpen)
       || this.sessionsWithoutFaithfulReload.has(sessionId)
       || this.activeTurns.has(sessionId)
       || this.pendingPermissionRequests.has(sessionId)
@@ -568,6 +593,7 @@ export class AcpAgentClient {
   private async closeIdleSession(sessionId: string): Promise<boolean> {
     const protocolSessionId = this.protocolSessionIdFor(sessionId);
     const cwd = this.loadedSessionCwds.get(protocolSessionId);
+    const previouslyUnconfirmed = this.idleClosedSessions.get(sessionId);
     // Mark it closed before the request, so a request that starts meanwhile
     // waits for the close and then reloads the session.
     let settle!: () => void;
@@ -589,7 +615,8 @@ export class AcpAgentClient {
     } catch (error) {
       // The agent may still hold the session; keep treating it as loaded.
       if (this.idleClosedSessions.get(sessionId) === idleClosed) {
-        this.idleClosedSessions.delete(sessionId);
+        if (previouslyUnconfirmed) this.idleClosedSessions.set(sessionId, previouslyUnconfirmed);
+        else this.idleClosedSessions.delete(sessionId);
         this.loadedSessionCwds.set(protocolSessionId, cwd);
         this.touchSession(sessionId);
       }
@@ -611,18 +638,26 @@ export class AcpAgentClient {
    */
   private async reopenIdleClosedSession(
     sessionId: string,
-    options: {
-      metadata?: AcpSessionMetadata;
-      suppressTranscriptReplay?: boolean;
-    } = {},
+    options: AcpSessionLoadOptions & { metadata?: AcpSessionMetadata } = {},
   ): Promise<void> {
     const idleClosed = this.idleClosedSessions.get(sessionId);
     if (!idleClosed) return;
+    if (idleClosed.reopening && options.antigravityModeSelection !== undefined) {
+      // An ordinary reload might still be trying the mode being replaced.
+      await idleClosed.reopening.catch(() => undefined);
+      await this.reopenIdleClosedSession(sessionId, options);
+      return;
+    }
     if (!idleClosed.reopening) {
       const reopening = (async () => {
         await idleClosed.closed;
         // The close failed, or the session was archived meanwhile.
-        if (this.idleClosedSessions.get(sessionId) !== idleClosed) return;
+        if (this.idleClosedSessions.get(sessionId) !== idleClosed) {
+          if (options.antigravityModeSelection !== undefined) {
+            await this.reopenIdleClosedSession(sessionId, options);
+          }
+          return;
+        }
         const metadata =
           options.metadata
           ?? this.options.store.getSession(this.options.backendId, sessionId);
@@ -630,6 +665,7 @@ export class AcpAgentClient {
           throw new Error(`ACP session not found: ${sessionId}`);
         }
         await this.loadSessionFromAgent(metadata, {
+          antigravityModeSelection: options.antigravityModeSelection,
           suppressTranscriptReplay: options.suppressTranscriptReplay ?? true,
         });
         if (this.idleClosedSessions.get(sessionId) === idleClosed) {
@@ -638,7 +674,7 @@ export class AcpAgentClient {
         this.touchSession(sessionId);
       })();
       idleClosed.reopening = reopening;
-      // A failed load leaves the session closed; the next request retries.
+      // A failed load leaves the session unready; the next request retries.
       reopening.catch(() => {
         if (idleClosed.reopening === reopening) idleClosed.reopening = undefined;
       });
@@ -1034,7 +1070,10 @@ export class AcpAgentClient {
         turnId,
       });
       result = await promptRequest;
-      this.assertPromptProducedResponse(params.sessionId, result);
+      const responseError = this.missingPromptResponseError(params.sessionId, result);
+      if (responseError) {
+        throw responseError;
+      }
     } catch (error) {
       this.finishTrackedTurn(params.sessionId, this.now());
       this.recordPromptFailure(params.sessionId, turnId, error);
@@ -1141,7 +1180,7 @@ export class AcpAgentClient {
 
   private async ensureSessionOperation(
     metadata: AcpSessionMetadata,
-    options: { suppressTranscriptReplay?: boolean },
+    options: AcpSessionLoadOptions,
   ): Promise<void> {
     this.rememberSessionIds(metadata);
     // A turn usually follows; keep an idle close from racing it.
@@ -1160,8 +1199,8 @@ export class AcpAgentClient {
     if (this.idleClosedSessions.has(metadata.sessionId)) {
       this.options.store.upsertSession(metadata);
       await this.reopenIdleClosedSession(metadata.sessionId, {
+        ...options,
         metadata,
-        suppressTranscriptReplay: options.suppressTranscriptReplay,
       });
       return;
     }
@@ -1194,6 +1233,7 @@ export class AcpAgentClient {
     this.startTrackedTurn(params.sessionId, turnId);
     const acceptance = Promise.withResolvers<{ sessionId: string; turnId: string }>();
     let dispatched = false;
+    let failedPromptUsage: AcpUsageEnvelope | undefined;
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
     const promptRequest = this.requestPromptWithTerminalGuard({
       protocolSessionId,
@@ -1229,12 +1269,20 @@ export class AcpAgentClient {
         if (!dispatched) {
           throw new Error("The ACP prompt was cancelled before it was sent.");
         }
-        this.assertPromptProducedResponse(params.sessionId, result);
+        const responseError = this.missingPromptResponseError(params.sessionId, result);
+        if (responseError) {
+          failedPromptUsage = readAcpPromptResultUsageEnvelope(result, this.options.backendId);
+          throw responseError;
+        }
         const receivedAt = this.now();
         // A prompt that session/cancel stopped settles normally, with
         // stopReason cancelled. Carry that through, so the transcript and
         // the terminal event say the turn was interrupted, not completed.
         const cancelled = promptWasCancelled(result);
+        const promptUsage = readAcpPromptResultUsage(
+          result,
+          this.options.backendId,
+        );
         const finished = this.finishTrackedTurn(
           params.sessionId,
           receivedAt,
@@ -1245,6 +1293,7 @@ export class AcpAgentClient {
           ...(finished.turnId ? { turnId: finished.turnId } : {}),
           outputText: finished.assistantText,
           ...(cancelled ? { stopReason: "cancelled" } : {}),
+          ...(promptUsage ? { usage: promptUsage } : {}),
         });
         void this.notifySessionUpdate({
           sessionId: params.sessionId,
@@ -1254,6 +1303,7 @@ export class AcpAgentClient {
             kind: "turn_finished",
             outputText: finished.assistantText,
             ...(cancelled ? { stopReason: "cancelled" } : {}),
+            ...(promptUsage ? { usage: promptUsage } : {}),
           },
         });
       })
@@ -1281,6 +1331,7 @@ export class AcpAgentClient {
             sessionId: params.sessionId,
             turnId,
             error,
+            ...(failedPromptUsage ? { usage: failedPromptUsage } : {}),
           }),
         ).catch(() => undefined);
       });
@@ -1341,7 +1392,7 @@ export class AcpAgentClient {
     };
     this.suppressedControlPromptSessions.set(protocolSessionId, suppression);
     try {
-      await this.options.transport.request(
+      const result = await this.options.transport.request(
         "session/prompt",
         {
           sessionId: protocolSessionId,
@@ -1349,6 +1400,17 @@ export class AcpAgentClient {
         },
         ACP_CONTROL_PROMPT_REQUEST_TIMEOUT_MS,
       );
+      const promptUsage = readAcpPromptResultUsageEnvelope(
+        result,
+        this.options.backendId,
+      );
+      if (promptUsage) {
+        suppression.tokenUsage = foldAcpTurnUsage(
+          suppression.tokenUsage,
+          promptUsage,
+        );
+        suppression.model = promptUsage.model ?? suppression.model;
+      }
       return {
         text:
           suppression.finalTextChunks.join("").trim() ||
@@ -1364,31 +1426,18 @@ export class AcpAgentClient {
     }
   }
 
-  async setRuntimeOption(params: {
-    sessionId: string;
-    source: BackendAcpRuntimeOptionSource;
-    optionId: string;
-    value: string;
-    reasoningEffort?: string;
-    /** Refuse, rather than skip, a `configOption` write of a thought level
-     *  the session's model does not offer. A skip resolves with the unchanged
-     *  state, which a caller recording an explicit choice would report as
-     *  applied. A replay of a remembered selection leaves this unset. */
-    rejectUnofferedThoughtLevel?: boolean;
-  }): Promise<BackendAcpSessionRuntimeState | undefined> {
+  async setRuntimeOption(params: AcpRuntimeOptionWrite): Promise<BackendAcpSessionRuntimeState | undefined> {
     return await this.withOperation(
       async () => await this.setRuntimeOptionOperation(params),
     );
   }
 
-  private async setRuntimeOptionOperation(params: {
-    sessionId: string;
-    source: BackendAcpRuntimeOptionSource;
-    optionId: string;
-    value: string;
-    reasoningEffort?: string;
-    rejectUnofferedThoughtLevel?: boolean;
-  }): Promise<BackendAcpSessionRuntimeState | undefined> {
+  private async setRuntimeOptionOperation(params: AcpRuntimeOptionWrite): Promise<BackendAcpSessionRuntimeState | undefined> {
+    if (params.antigravityModeSession) {
+      await this.ensureSessionOperation(params.antigravityModeSession, { antigravityModeSelection: params.value });
+      const current = this.options.store.getSession(this.options.backendId, params.sessionId)?.acpRuntime;
+      if (current?.configValues?.[params.optionId] === params.value) return current;
+    }
     const reload = this.reloadBeforeRequest(params.sessionId);
     if (reload) await reload;
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
@@ -1432,6 +1481,7 @@ export class AcpAgentClient {
       }
     }
     const result = write.result;
+    if (params.antigravityModeSession) this.assertAntigravityModeConfirmed(result, params.value, "apply");
     const reasoningEffort = write.unofferedThoughtLevel
       ? undefined
       : params.reasoningEffort;
@@ -1714,7 +1764,7 @@ export class AcpAgentClient {
           suppressedControlPrompt.fallbackOutputText = text;
         }
       }
-      const usage = readAcpUsageEnvelope(update);
+      const usage = readAcpUsageEnvelope(update, this.options.backendId);
       if (usage) {
         suppressedControlPrompt.tokenUsage = foldAcpTurnUsage(
           suppressedControlPrompt.tokenUsage,
@@ -1734,6 +1784,11 @@ export class AcpAgentClient {
     const fromSessionLoad = loadState !== undefined || isExplicitSessionReplay;
     const activeTurn = this.activeTurns.get(sessionId);
     const updateKind = readUpdateKind(update);
+    if (loadState?.restoringAntigravityMode
+      && (updateKind === "current_mode_update" || updateKind === "config_option_update")) {
+      // Publish the restored mode only after the restore reply confirms it.
+      return;
+    }
     if (!fromSessionLoad) this.observeNativeBackgroundWork(sessionId, updateKind, update);
     // Only a live update ends the turn. A prompt for an idle-closed session
     // reloads it while the turn is tracked, and session/load replays the
@@ -2154,7 +2209,7 @@ export class AcpAgentClient {
 
   private async loadSessionFromAgent(
     metadata: AcpSessionMetadata,
-    options: { suppressTranscriptReplay?: boolean } = {},
+    options: AcpSessionLoadOptions = {},
   ): Promise<unknown> {
     if (!this.supportsSessionLoad()) {
       return undefined;
@@ -2171,9 +2226,14 @@ export class AcpAgentClient {
     if (this.supportsJobMonitorControl(metadata.sessionId) && !mcpRegistration.readListedJobMonitorCreation) {
       throw new Error("Couldn't reconnect PwrAgent's Job Monitor tools. Try sending the prompt again.");
     }
+    const requestedMode = options.antigravityModeSelection;
+    const mode = this.options.backendId === "acp:antigravity"
+      ? requestedMode ?? metadata.acpRuntime?.currentModeId ?? metadata.acpRuntime?.configValues?.mode
+      : undefined;
     const loadState: AcpSessionLoadState = {
       replayedTranscript: false,
       suppressTranscriptReplay: options.suppressTranscriptReplay === true,
+      restoringAntigravityMode: Boolean(mode),
     };
     this.loadingSessions.set(protocolSessionId, loadState);
     let result: unknown;
@@ -2183,6 +2243,14 @@ export class AcpAgentClient {
         mcpServers: toAcpMcpServerWireConfigs(mcpRegistration.servers),
         sessionId: protocolSessionId,
       });
+      if (mode) {
+        try {
+          result = await this.confirmAntigravityModeAfterLoad(protocolSessionId, result, mode, requestedMode !== undefined);
+        } catch (error) {
+          await this.closeUnconfirmedAntigravityWorker(metadata.sessionId, protocolSessionId, cwd);
+          throw error;
+        }
+      }
     } finally {
       this.loadingSessions.delete(protocolSessionId);
     }
@@ -2228,6 +2296,70 @@ export class AcpAgentClient {
     this.rememberAgentToolCatalogKey(metadata.sessionId, agentToolCatalogKey);
     this.touchSession(metadata.sessionId);
     return result;
+  }
+
+  private async confirmAntigravityModeAfterLoad(
+    protocolSessionId: string,
+    loadResult: unknown,
+    selectedMode: string,
+    explicitSelection: boolean,
+  ): Promise<unknown> {
+    // Antigravity 1.5.15's new worker reports Default in session/load,
+    // even after the previous worker acknowledged a different mode.
+    const mode = normalizeAcpRuntimeCapabilities({
+      value: loadResult,
+      now: this.now(),
+      source: "session-load",
+    })?.configOptions?.find((option) => option.id === "mode" && option.category === "mode");
+    if (!mode?.values.some((option) => option.value === selectedMode)) {
+      if (explicitSelection) throw new Error(`Antigravity does not offer the "${selectedMode}" session mode.`);
+      return loadResult;
+    }
+    if (mode.currentValue === selectedMode) return loadResult;
+    const restored = await this.options.transport.request("session/set_config_option", {
+      sessionId: protocolSessionId,
+      configId: mode.id,
+      value: selectedMode,
+    });
+    this.assertAntigravityModeConfirmed(restored, selectedMode, explicitSelection ? "apply" : "restore");
+    const loaded = asRecord(loadResult);
+    const legacyModes = asRecord(loaded?.modes);
+    return {
+      ...loaded,
+      ...asRecord(restored),
+      ...(legacyModes ? { modes: { ...legacyModes, currentModeId: selectedMode } } : {}),
+    };
+  }
+
+  private assertAntigravityModeConfirmed(result: unknown, mode: string, action: "apply" | "restore"): void {
+    if (this.runtimeStateFromResponse(result, this.now())?.configValues?.mode !== mode) {
+      throw new Error(`Antigravity did not ${action} the "${mode}" session mode.`);
+    }
+  }
+
+  private async closeUnconfirmedAntigravityWorker(
+    sessionId: string,
+    protocolSessionId: string,
+    cwd: string,
+  ): Promise<void> {
+    const pending = this.idleClosedSessions.get(sessionId);
+    try {
+      if (!this.supportsSessionClose()) throw new Error("Agent does not advertise session/close");
+      await this.options.transport.request("session/close", { sessionId: protocolSessionId }, ACP_SESSION_CLOSE_REQUEST_TIMEOUT_MS);
+      this.loadedSessionCwds.delete(protocolSessionId);
+      if (pending) pending.workerOpen = false;
+    } catch (error) {
+      // Retain both facts: archive and idle cleanup still own a live worker,
+      // and the next request must confirm its mode before using it.
+      this.loadedSessionCwds.set(protocolSessionId, cwd);
+      if (pending) pending.workerOpen = true;
+      else this.idleClosedSessions.set(sessionId, { closed: Promise.resolve(), workerOpen: true });
+      this.touchSession(sessionId);
+      acpClientLog.warn("could not close ACP worker after unconfirmed Antigravity mode", {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private rememberAgentToolCatalogKey(sessionId: string, key: string | undefined): void {
@@ -2496,10 +2628,10 @@ export class AcpAgentClient {
     };
   }
 
-  private assertPromptProducedResponse(
+  private missingPromptResponseError(
     sessionId: string,
     result: unknown,
-  ): void {
+  ): Error | undefined {
     if (promptWasCancelled(result)) {
       return;
     }
@@ -2511,13 +2643,13 @@ export class AcpAgentClient {
     const displayName = this.options.agentDisplayName?.trim() || "ACP agent";
     const version = this.runtimeCapabilities?.agentInfo?.version?.trim();
     if (this.options.backendId === "acp:kimi") {
-      throw new Error(
+      return new Error(
         `${displayName} ended the turn without a response.${
           version ? ` Kimi Code CLI ${version}` : " This Kimi Code CLI"
         } may be out of date or incompatible with the selected model. Update Kimi, refresh the model catalog, and try again.`,
       );
     }
-    throw new Error(
+    return new Error(
       `${displayName} ended the turn without a response. Refresh the provider model catalog and try again.`,
     );
   }

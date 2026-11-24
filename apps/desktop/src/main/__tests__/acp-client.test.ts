@@ -886,6 +886,59 @@ describe("AcpAgentClient", () => {
     expect(client.readReplay(session.sessionId).messages).toEqual([]);
   });
 
+  it("normalizes Antigravity session/prompt result usage on suppressed control prompts", async () => {
+    const promptResponse = createDeferred<unknown>();
+    const transport = new FakeAcpAgentTransport({
+      "session/prompt": promptResponse.promise,
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:antigravity",
+      store,
+      transport,
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+      acpRuntime: {
+        currentModelId: "gemini-4-neon",
+      },
+    });
+    const controlPrompt = client.sendControlPrompt({
+      sessionId: session.sessionId,
+      prompt: "name this thread",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "OK" },
+    });
+    promptResponse.resolve({
+      stopReason: "end_turn",
+      usage: {
+        inputTokens: 2_161,
+        outputTokens: 25,
+        cachedReadTokens: 12_358,
+        cachedWriteTokens: 0,
+        thoughtTokens: 23,
+        totalTokens: 14_544,
+      },
+    });
+
+    await expect(controlPrompt).resolves.toEqual({
+      text: "OK",
+      model: "gemini-4-neon",
+      tokenUsage: {
+        cachedInputTokens: 12_358,
+        inputTokens: 14_519,
+        outputTokens: 25,
+        reasoningOutputTokens: 23,
+        totalTokens: 14_544,
+      },
+    });
+  });
+
   it("preserves split JSON control prompt chunks without inserted newlines", async () => {
     const promptResponse = createDeferred<unknown>();
     const transport = new FakeAcpAgentTransport({
