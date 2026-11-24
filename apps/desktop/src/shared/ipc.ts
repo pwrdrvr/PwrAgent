@@ -282,6 +282,8 @@ export const RESOURCE_CHECKOUTS_WINDOW_OPEN_CHANNEL = "resource-checkouts:open-w
 export const RESOURCE_CHECKOUTS_OPEN_THREAD_CHANNEL = "resource-checkouts:open-thread";
 export const RESOURCE_CHECKOUTS_PERFORM_CHANNEL = "resource-checkouts:perform";
 export const RESOURCE_CHECKOUTS_CHANGED_CHANNEL = "resource-checkouts:changed";
+/** Main → Resources window: select this resource. */
+export const RESOURCE_CHECKOUTS_FOCUS_CHANNEL = "resource-checkouts:focus";
 
 export const OPERATOR_REQUESTS_LIST_CHANNEL = "operator-requests:list";
 export const OPERATOR_QUESTIONS_LIST_DISMISSED_CHANNEL = "operator-requests:list-dismissed-questions";

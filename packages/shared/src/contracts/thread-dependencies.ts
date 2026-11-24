@@ -220,7 +220,7 @@ export const THREAD_DEPENDENCY_CONDITION_PHRASES: Readonly<Record<(typeof THREAD
   compaction_completed: "finishes compaction",
   ci_run: "reaches an approval gate, has a failed job, or finishes",
   local_file: "writes its result marker",
-  resource_checkout: "is promoted",
+  resource_checkout: "is granted",
   merge_build: "merges and its merge build finishes",
 };
 

@@ -18,7 +18,8 @@ import {
   onTestFinished,
   vi,
 } from "vitest";
-import { applyNavigationLaunchpadDefaultsPatch } from "@pwragent/shared/contracts/navigation";
+import { applyNavigationLaunchpadDefaultsPatch, buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { claimAgentReviewBudget, rearmAgentReviewBudget, type AgentReviewAdmission, type AgentReviewBudget, type OperatorReviewInput } from "@pwragent/owner-core/agent-review-admission";
 import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import { buildNavigationSnapshot } from "@pwragent/shared/navigation-state";
 import { buildAppendPinRank, buildPrependPinRank } from "@pwragent/shared/thread-pins";
@@ -527,6 +528,7 @@ export function createOverlayStoreMock(params?: {
   remotePinnedRanks?: string[];
   toolAccounting?: ThreadToolAccounting;
 }) {
+  const reviewBudgets = new Map<string, AgentReviewBudget>();
   const toolAccounting: ThreadToolAccounting = params?.toolAccounting ?? {
     alerts: [],
     invocations: [],
@@ -570,6 +572,20 @@ export function createOverlayStoreMock(params?: {
   }
 
   return {
+    readAgentReviewBudget: ({ backend, threadId }: Pick<AgentReviewAdmission, "backend" | "threadId">) =>
+      reviewBudgets.get(buildThreadIdentityKey(backend, threadId)),
+    claimAgentReview: (request: AgentReviewAdmission) => {
+      const key = buildThreadIdentityKey(request.backend, request.threadId);
+      const next = claimAgentReviewBudget(reviewBudgets.get(key), request);
+      if (typeof next === "string") return next;
+      reviewBudgets.set(key, next);
+      return undefined;
+    },
+    rearmAgentReviews: ({ backend, threadId }: Pick<AgentReviewAdmission, "backend" | "threadId">, input: OperatorReviewInput) => {
+      const key = buildThreadIdentityKey(backend, threadId);
+      const next = rearmAgentReviewBudget(reviewBudgets.get(key), input);
+      if (next) reviewBudgets.set(key, next);
+    },
     listAllActivePrStatusWatches: async (): Promise<ThreadPullRequestWatchSummary[]> => [],
     listActiveThreadPrStatusWatches: async (_params: {
       backend: string;

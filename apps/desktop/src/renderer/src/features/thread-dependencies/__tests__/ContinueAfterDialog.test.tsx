@@ -13,6 +13,7 @@ import type {
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import { ContinueAfterDialog } from "../ContinueAfterDialog";
+import { buildPreviewSnapshot } from "../../resources/preview/resource-checkouts-preview";
 
 afterEach(cleanup);
 const thread: NavigationThreadSummary = {
@@ -631,5 +632,51 @@ describe("Continue After dialog", () => {
     resolve({ dependencies: [dependency] });
     await waitFor(() => expect(manage).toHaveBeenCalledWith({ action: "list", backend: "codex", threadId: "foundation" }));
     expect(screen.queryByText("Waiting")).not.toBeInTheDocument();
+  });
+});
+
+describe("ContinueAfterDialog resource waits", () => {
+  const resourceWait: ThreadDependency = {
+    id: "cpu", backend: "codex", threadId: "waiting", status: "waiting", mode: "all", onFailure: "notify", evidence: [],
+    createdAt: 1, updatedAt: 1, continuation: `Run the focused tests ${"in the worktree ".repeat(12)}and release the checkout.`,
+    conditions: [{ backend: "codex", threadId: "waiting", when: "resource_checkout", resourceCheckout: { resourceId: "res-compute", requestKey: "rk" } }],
+  };
+
+  it("shows the resource and its queue, not a thread chip, and opens Resources on it", async () => {
+    const openResourceCheckoutsWindow = vi.fn(async () => undefined);
+    const api = {
+      manageThreadDependencies: vi.fn(async () => ({ dependencies: [resourceWait] })),
+      readResourceCheckouts: vi.fn(async () => buildPreviewSnapshot(Date.now())),
+      openResourceCheckoutsWindow,
+    } as unknown as DesktopApi;
+    renderDialog(api);
+
+    const card = await screen.findByTestId("resource-wait-card");
+    await within(card).findByText("studio-m4 compute");
+    expect(screen.getByText("Resource checkout")).toBeInTheDocument();
+    expect(screen.getByText("is granted")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /#/ })).not.toBeInTheDocument();
+    expect(screen.getByText("Then the agent is told:")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show all" })).toBeInTheDocument();
+
+    fireEvent.click(within(card).getByRole("button", { name: "Open in Resources…" }));
+    expect(openResourceCheckoutsWindow).toHaveBeenCalledWith({ resourceId: "res-compute" });
+  });
+
+  it("does not read this window's checkouts for a peer's thread", async () => {
+    const readResourceCheckouts = vi.fn(async () => buildPreviewSnapshot(Date.now()));
+    const api = {
+      manageThreadDependencies: vi.fn(async () => ({ dependencies: [resourceWait] })),
+      readResourceCheckouts,
+      openResourceCheckoutsWindow: vi.fn(),
+    } as unknown as DesktopApi;
+    const peerThread: NavigationThreadSummary = {
+      ...thread,
+      federation: { ref: { target: { scope: "remote", instanceId: "peer" } }, instanceLabel: "Peer" },
+    } as unknown as NavigationThreadSummary;
+    renderDialog(api, peerThread);
+    await screen.findByText("Resource checkout");
+    expect(readResourceCheckouts).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Open in Resources…" })).not.toBeInTheDocument();
   });
 });

@@ -475,6 +475,10 @@ export function turnUsageEntryTurnId(
   return entry.turn?.id ?? entry.usageLine?.turnId;
 }
 
+export function hasMismatchedTurnUsageId(entryId: string, turnId: string | undefined): boolean {
+  return turnId !== undefined && entryId.startsWith("live-turn-usage-") && entryId !== `live-turn-usage-${turnId}`;
+}
+
 /**
  * Moves each turn total ("Turn usage:") to just after the last other entry
  * of its own turn.
@@ -488,9 +492,11 @@ export function turnUsageEntryTurnId(
  * path that produces transcript entries ends with this pass, so a total's
  * position never depends on `createdAt` or on arrival order.
  *
- * Only totals move; every other entry keeps its order. A total whose turn has
- * no other entry in the list stays put, because nothing here says where that
- * turn is. Monitor usage and per-request usage are ordinary entries here: a
+ * Only totals move; every other entry keeps its order. Older renderers could
+ * save a turn total with another turn's metadata. Omit these rows, since they
+ * misattribute usage and can collide with the real total's entry id. A total
+ * whose turn has no other entry in the list stays put, because nothing here
+ * says where that turn is. Monitor usage and per-request usage are ordinary entries: a
  * row of the same turn that already follows them keeps following them.
  *
  * `rowsToInsert` adds rows, by turn id, that a caller could not place by time
@@ -506,11 +512,16 @@ export function anchorTurnUsageEntries(
 ): AppServerThreadEntry[] {
   const lastEntryIndexByTurnId = new Map<string, number>();
   const totals: Array<{ index: number; turnId: string }> = [];
+  const skippedIndexes = new Set<number>();
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index]!;
     const usageTurnId = turnUsageEntryTurnId(entry);
     if (usageTurnId !== undefined) {
-      totals.push({ index, turnId: usageTurnId });
+      if (hasMismatchedTurnUsageId(entry.id, usageTurnId)) {
+        skippedIndexes.add(index);
+      } else {
+        totals.push({ index, turnId: usageTurnId });
+      }
       continue;
     }
     const turnId = entry.turn?.id;
@@ -518,7 +529,7 @@ export function anchorTurnUsageEntries(
       lastEntryIndexByTurnId.set(turnId, index);
     }
   }
-  if (totals.length === 0 && !rowsToInsert?.size) {
+  if (totals.length === 0 && !rowsToInsert?.size && skippedIndexes.size === 0) {
     return entries;
   }
 
@@ -544,26 +555,26 @@ export function anchorTurnUsageEntries(
       insertAfter(anchorIndex, rows);
     }
   }
-  const movedIndexes = new Set<number>();
+  const omittedInvalidUsage = skippedIndexes.size > 0;
   for (const { index, turnId } of totals) {
     const anchorIndex = lastEntryIndexByTurnId.get(turnId);
     if (anchorIndex !== undefined) {
       insertAfter(anchorIndex, [entries[index]!]);
-      movedIndexes.add(index);
+      skippedIndexes.add(index);
     }
   }
-  if (insertionsAfterIndex.size === 0 && unplacedRows.length === 0) {
+  if (insertionsAfterIndex.size === 0 && unplacedRows.length === 0 && !omittedInvalidUsage) {
     return entries;
   }
 
   const anchoredEntries: AppServerThreadEntry[] = [];
-  let changed = unplacedRows.length > 0;
+  let changed = omittedInvalidUsage || unplacedRows.length > 0;
   const push = (entry: AppServerThreadEntry): void => {
     changed ||= entry !== entries[anchoredEntries.length];
     anchoredEntries.push(entry);
   };
   for (let index = 0; index < entries.length; index += 1) {
-    if (!movedIndexes.has(index)) {
+    if (!skippedIndexes.has(index)) {
       push(entries[index]!);
     }
     for (const row of insertionsAfterIndex.get(index) ?? []) {
@@ -630,7 +641,9 @@ export function reconcileCompletedTurnUsageEntries(params: {
       entry.type === "activity"
       && tokenUsageActivityScope(entry) === "turn"
     ) {
-      existingTurnUsageByTurnId.set(turnId, entry);
+      if (!hasMismatchedTurnUsageId(entry.id, turnId)) {
+        existingTurnUsageByTurnId.set(turnId, entry);
+      }
       continue;
     }
     if (

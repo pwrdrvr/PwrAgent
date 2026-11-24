@@ -11,6 +11,8 @@ import type {
   ThreadPendingWakesController,
   ThreadPendingWakesState,
 } from "../../../thread-pending-wakes/useThreadPendingWakes";
+import type { ResourceCheckoutsSnapshot } from "@pwragent/shared/contracts/resource-checkouts";
+import { buildPreviewSnapshot } from "../../../resources/preview/resource-checkouts-preview";
 import { WaitingForPanel } from "../WaitingForPanel";
 
 afterEach(() => {
@@ -345,7 +347,10 @@ describe("WaitingForPanel", () => {
     expect(title).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText(/Sandbox lease cleanup finishes its turn · 2:31 PM/)).toHaveClass("is-met");
     expect(screen.getByText("Remote MCP access passes CI")).not.toHaveClass("is-met");
-    expect(screen.getByText(/Then the agent is told: “Pick up the lease changes/)).toBeInTheDocument();
+    expect(screen.getByText("Then the agent is told:")).toBeInTheDocument();
+    expect(screen.getByText("Pick up the lease changes, rebase, and confirm the tests pass.")).toBeInTheDocument();
+    // A short continuation is shown whole, with nothing to expand.
+    expect(screen.queryByRole("button", { name: "Show all" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Open in Continue After…" }));
     expect(openContinueAfter).toHaveBeenCalledTimes(1);
   });
@@ -590,5 +595,122 @@ describe("WaitingForPanel", () => {
       expect(screen.getByText("1")).toHaveClass("waiting-for-panel__count");
       expect(screen.getAllByRole("group").map((group) => group.getAttribute("aria-label"))).toEqual(["Running"]);
     });
+  });
+});
+
+describe("WaitingForPanel resource waits", () => {
+  const CPU = "res-compute";
+  const LONG = "CPU checkout granted. In /work/tree: run `pnpm exec vitest run --project desktop-main apps/desktop/src/main/__tests__/one.test.ts apps/desktop/src/main/__tests__/two.test.ts`, then lint, then release the checkout and push if green.";
+  const resourceWake: ThreadPendingWake = {
+    kind: "dependency", key: "dependency:cpu", durable: true, stop: "cancel", createdAt: at(15, 35), createdBy: "agent",
+    dependency: {
+      id: "cpu", mode: "all", onFailure: "notify", status: "waiting", continuation: LONG,
+      conditions: [{ backend: "claude", threadId: "waiting", when: "resource_checkout", resourceCheckout: { resourceId: CPU, requestKey: "rk-1" } }],
+      evidence: [],
+    },
+  };
+
+  /** The preview's compute pool: 4 slots, 3 held, a 2-slot head, then this thread asking for 1. */
+  function snapshot(): ResourceCheckoutsSnapshot {
+    const base = buildPreviewSnapshot(NOW);
+    return {
+      ...base,
+      resources: base.resources.map((resource) => resource.resourceId !== CPU ? resource : {
+        ...resource,
+        queue: [
+          ...resource.queue,
+          {
+            queueEntryId: "q-mine", position: resource.queue.length + 1,
+            requester: { kind: "thread", thread: { backend: "claude", threadId: "waiting", title: thread.title } },
+            purpose: "Focused tests", requestedAt: NOW - 5 * 60_000, units: 1, eligibility: { eligible: true }, viewerOwns: false,
+          },
+        ],
+      }),
+    };
+  }
+
+  it("names the resource, the thread's place, why it waits, and links to Resources", async () => {
+    const openResource = vi.fn();
+    const read = vi.fn(async () => snapshot());
+    render(
+      <WaitingForPanel
+        thread={thread}
+        controller={controller(ready([resourceWake]))}
+        now={NOW}
+        readResourceCheckouts={read}
+        onOpenResource={openResource}
+      />,
+    );
+
+    const title = await screen.findByRole("button", { name: "Continue after a machine compute checkout is granted" });
+    fireEvent.click(title);
+    const card = screen.getByTestId("resource-wait-card");
+    expect(within(card).getByText("studio-m4 compute")).toBeInTheDocument();
+    expect(within(card).getByText("#2 of 2 in line, 1 ahead")).toBeInTheDocument();
+    // One slot is free and this request needs one: only first in, first out holds it.
+    expect(within(card).getByText(/Would fit now \(1 of 1 free\), but waits for #1:/)).toHaveClass("is-warning");
+    expect(within(card).getByText(/Held 26m of 1h expected · 34m left/)).toBeInTheDocument();
+    expect(within(card).getByText("Partly enforced")).toBeInTheDocument();
+    expect(within(card).getByText("Every profile on this machine")).toBeInTheDocument();
+
+    fireEvent.click(within(card).getByRole("button", { name: "Open in Resources…" }));
+    expect(openResource).toHaveBeenCalledWith(CPU);
+  });
+
+  it("shows a thread that holds slots and queues for more as waiting, with what it holds", async () => {
+    const holdsOne = (): ResourceCheckoutsSnapshot => {
+      const base = snapshot();
+      return {
+        ...base,
+        resources: base.resources.map((resource) => resource.resourceId !== CPU ? resource : {
+          ...resource,
+          allocations: [...resource.allocations, {
+            ...resource.allocations[0]!,
+            allocationId: "alloc-mine",
+            holder: { kind: "thread", thread: { backend: "claude", threadId: "waiting", title: thread.title } },
+            units: 1,
+          }],
+        }),
+      };
+    };
+    render(
+      <WaitingForPanel
+        thread={thread}
+        controller={controller(ready([resourceWake]))}
+        now={NOW}
+        readResourceCheckouts={async () => holdsOne()}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Continue after a machine compute checkout is granted" }));
+    const card = screen.getByTestId("resource-wait-card");
+    expect(await within(card).findByText("#2 of 2 in line, 1 ahead")).toBeInTheDocument();
+    expect(within(card).queryByText("Granted. This thread holds it now.")).not.toBeInTheDocument();
+    expect(within(card).getByTestId("resource-wait-also-holds")).toHaveTextContent("This thread already holds 1 CPU slot.");
+  });
+
+  it("starts a long continuation at three lines and opens it on request", () => {
+    render(<WaitingForPanel thread={thread} controller={controller(ready([resourceWake]))} now={NOW} />);
+    fireEvent.click(screen.getByRole("button", { name: "Continue after a resource checkout is granted" }));
+
+    const body = screen.getByText(LONG);
+    expect(body).toHaveClass("is-clamped");
+    const toggle = screen.getByRole("button", { name: "Show all" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    expect(body).not.toHaveClass("is-clamped");
+    expect(screen.getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("does not read checkouts when no resource wait is listed", () => {
+    const read = vi.fn(async () => snapshot());
+    render(<WaitingForPanel thread={thread} controller={controller(ready())} now={NOW} readResourceCheckouts={read} />);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("says where the queue is when this window cannot read it", () => {
+    render(<WaitingForPanel thread={thread} controller={controller(ready([resourceWake]))} now={NOW} />);
+    fireEvent.click(screen.getByRole("button", { name: "Continue after a resource checkout is granted" }));
+    expect(screen.getByText("The resource queue is on the thread's owner.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open in Resources…" })).not.toBeInTheDocument();
   });
 });

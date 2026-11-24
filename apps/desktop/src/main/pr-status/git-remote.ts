@@ -4,12 +4,12 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
-import { parseGitRemoteConfiguration, type GitRemote } from "./git-remote-config";
+import { parseGitRemoteConfiguration, type GitRemote, type GitRemoteConfiguration } from "./git-remote-config";
 import { runPrMetadataGit, runPrMetadataProcess, SharedPrMetadataRead, type PrMetadataDemand } from "./pr-metadata-process";
 
 const execFileAsync = promisify(execFile);
 const GIT_REMOTE_TIMEOUT_MS = 2_000;
-const REMOTE_CONFIG_KEYS = "^remote\\.|^url\\..*\\.(push)?insteadof$|^branch\\..*\\.(remote|pushremote|merge)$";
+export const REMOTE_CONFIG_KEYS = "^remote\\.|^url\\..*\\.(push)?insteadof$|^branch\\..*\\.(remote|pushremote|merge)$|^includeif\\.";
 /** Remotes change infrequently; re-probing on every PR refresh is wasted work. */
 const REMOTE_CACHE_TTL_MS = 5 * 60_000;
 
@@ -105,17 +105,31 @@ type RemoteCacheEntry = {
   value: ParsedGitRemote[];
   names?: string[];
   unconfirmedEmpty?: true;
+  readWithGitRemote?: true;
+  hasConditionalIncludes?: true;
+  sshResolutionFailed?: true;
+  readFailed?: true;
+  sampleOrder: number;
   fetchedAt: number;
 };
+type ParsedRemoteObservation = Omit<RemoteCacheEntry, "fetchedAt">;
 
 const remoteCache = new Map<string, RemoteCacheEntry>();
 const remoteLookups = new Map<string, SharedPrMetadataRead<RemoteCacheEntry>>();
+let remoteCacheGeneration = 0;
+let remoteSampleOrder = 0;
+
+function nextRemoteSampleOrder(): number {
+  return ++remoteSampleOrder;
+}
+
 type SshResolver = (host: string, demand?: PrMetadataDemand) => Promise<string | undefined>;
 // Share only running OpenSSH evaluations. A completed evaluation belongs to
 // its directory's existing TTL; a new probe must evaluate Include/Match again.
 let sshLookups = new WeakMap<SshResolver, Map<string, SharedPrMetadataRead<string | undefined>>>();
 
 export function clearGitHubRemoteCache(): void {
+  remoteCacheGeneration++;
   remoteCache.clear();
   // Existing callers may finish, but cannot publish into the new cache.
   remoteLookups.clear();
@@ -212,8 +226,129 @@ export async function observeForgeRepositoriesForDirectory(
 ): Promise<{ repos: GitHubRepoRef[]; refreshedRemoteNames?: string[] }> {
   const previous = remoteCache.get(cwd);
   const observation = await readParsedGitRemotes(cwd, options);
+  // Default-branch reads can reuse names sampled by this lookup, while an
+  // older identity cache hit must not extend their separate freshness window.
+  return {
+    repos: collectForgeRepositories(observation.value, kind),
+    refreshedRemoteNames: observation === previous ? undefined : observation.names,
+  };
+}
+
+/** Sample current Git config while reusing completed identity resolution for matching URLs. */
+export function createScheduledPrefetchRemoteReader(cwd: string) {
+  let previous: RemoteCacheEntry | undefined;
+  const observationForReuse = () => {
+    const live = remoteCache.get(cwd);
+    if (!isCurrentRemoteObservation(previous)) return isCurrentRemoteObservation(live) ? live : undefined;
+    if (!isCurrentRemoteObservation(live)) return previous;
+    if (previous.readFailed !== live.readFailed) return previous.readFailed ? live : previous;
+    // An older Git sample can finish later while waiting for SSH expansion.
+    return live.sampleOrder >= previous.sampleOrder ? live : previous;
+  };
+  const read = async (
+    configuration?: GitRemoteConfiguration,
+    options: {
+      useGitRemote?: boolean; preferLiveIdentity?: boolean; configSampleOrder?: number;
+      validateNegative?: () => Promise<boolean>; verifyPublication?: () => Promise<boolean>;
+    } = {},
+  ) => {
+    const cacheGeneration = remoteCacheGeneration;
+    const reused = observationForReuse();
+    // Only an established live cache entry can opt into the ordinary TTL.
+    // A batch-local config sample alone says nothing about later URL edits.
+    const preferCachedIdentity = options.preferLiveIdentity && reused !== undefined && reused.value === remoteCache.get(cwd)?.value;
+    const { observation, refreshRemoteNames } = await loadParsedGitRemotes(cwd, {}, {}, {
+      configuration, configSampleOrder: options.configSampleOrder, previous: reused,
+      useGitRemote: options.useGitRemote, preferCachedIdentity,
+    });
+    const repos = collectForgeRepositories(observation.value, "github");
+    // Matching names or URLs do not refresh the resolved identity's age.
+    const fetchedAt = reused && observation.value === reused.value ? reused.fetchedAt : Date.now();
+    const snapshot = { ...observation, fetchedAt };
+    const complete = hasAllRemoteUrls(observation);
+    const keepUsableIdentity = observation.readFailed && isCurrentRemoteObservation(reused)
+      && collectForgeRepositories(reused.value, "github").length > 0;
+    if (!keepUsableIdentity && (observation.readFailed || observation.unconfirmedEmpty || complete)
+      && (repos.length > 0 || !options.validateNegative || await options.validateNegative())) {
+      previous = snapshot;
+    }
+    const hasSshRemotes = observation.value.some(({ url }) => readSshHost(url));
+    // A native fallback has no config proof. If an owner read completed
+    // during URL or SSH resolution, use its later sample for this branch too.
+    const live = remoteCache.get(cwd);
+    if (observation.readWithGitRemote && isCurrentRemoteObservation(live) && live.sampleOrder > snapshot.sampleOrder
+      && !live.readFailed && !live.sshResolutionFailed && hasAllRemoteUrls(live)) {
+      return { repos: collectForgeRepositories(live.value, "github"), refreshedRemoteNames: live.names, refreshRemoteNames };
+    }
+    const sshIdentityUnchanged = hasSshRemotes ? () => {
+      if (!isCurrentRemoteObservation(snapshot)) return false;
+      const current = observationForReuse();
+      // Git config freshness covers URL changes. For the same URLs, the
+      // owner can observe a different SSH hostname without touching Git files.
+      return !current || current.value === snapshot.value || !sameRemoteUrls(current.value, snapshot.value)
+        || current.value.every(({ repo }, index) => repo?.host === snapshot.value[index]?.repo?.host);
+    } : undefined;
+    // The live phase can reuse successful SSH or native URL discovery once
+    // the caller accepts this sample. Leave current live reads alone.
+    const publish = repos.length && complete && !observation.sshResolutionFailed
+      && (options.verifyPublication || (!observation.readWithGitRemote && sshIdentityUnchanged))
+      ? async () => {
+        if (options.verifyPublication && !await options.verifyPublication()) return;
+        if (remoteCacheGeneration === cacheGeneration && isCurrentRemoteObservation(snapshot)
+          && !isCurrentRemoteObservation(remoteCache.get(cwd)) && !remoteLookups.has(cwd)) remoteCache.set(cwd, snapshot);
+      }
+      : undefined;
+    return {
+      repos, refreshedRemoteNames: observation.names, sshIdentityUnchanged, refreshRemoteNames, publish,
+    };
+  };
+  return {
+    read,
+    nextSampleOrder: nextRemoteSampleOrder,
+    hasLiveIdentity: () => isCurrentRemoteObservation(remoteCache.get(cwd)),
+    hasGitHubIdentityFor: (configuration: GitRemoteConfiguration) => {
+      const observation = observationForReuse();
+      return Boolean(observation && sameRemoteUrls(configuration.remotes, observation.value)
+        && collectForgeRepositories(observation.value, "github").length > 0);
+    },
+    usesGitRemote: () => usesNativeRemoteList(observationForReuse()),
+    shouldSkipLookup: () => {
+      const observation = observationForReuse();
+      // Unavailable checkouts retry on the same schedule as ordinary reads.
+      // Their failure has no remote names and establishes no absence.
+      return Boolean(observation && (observation.readFailed || observation.unconfirmedEmpty || hasAllRemoteUrls(observation))
+        && collectForgeRepositories(observation.value, "github").length === 0);
+    },
+  };
+}
+
+export function isGitConfigNoMatch(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const result = error as { code?: number; stdout?: string; stderr?: string };
+  return result.code === 1 && result.stdout === "" && result.stderr === "";
+}
+
+function isCurrentRemoteObservation(observation: RemoteCacheEntry | undefined): observation is RemoteCacheEntry {
+  return Boolean(observation && Date.now() - observation.fetchedAt < REMOTE_CACHE_TTL_MS);
+}
+
+function usesNativeRemoteList(observation: RemoteCacheEntry | undefined): boolean {
+  return Boolean(observation?.readWithGitRemote || observation?.hasConditionalIncludes);
+}
+
+function hasAllRemoteUrls(observation: ParsedRemoteObservation): boolean {
+  const namesWithUrls = new Set(observation.value.map(({ name }) => name));
+  return observation.names?.every((name) => namesWithUrls.has(name)) ?? false;
+}
+
+function sameRemoteUrls(left: GitRemote[], right: GitRemote[]): boolean {
+  return left.length === right.length && left.every(({ name, url }, index) =>
+    name === right[index].name && url === right[index].url);
+}
+
+function collectForgeRepositories(remotes: ParsedGitRemote[], kind?: ForgeKind): GitHubRepoRef[] {
   const repos = new Map<string, GitHubRepoRef>();
-  for (const { repo } of observation.value) {
+  for (const { repo } of remotes) {
     if (!repo) continue;
     const matched = forgeKindForRemoteHost(repo.host);
     if (!matched || (kind !== undefined && matched !== kind)) continue;
@@ -221,9 +356,7 @@ export async function observeForgeRepositoriesForDirectory(
     const key = `${repo.host}/${repo.owner}/${repo.repo}`.toLowerCase();
     if (!repos.has(key)) repos.set(key, repo);
   }
-  // Default-branch reads can reuse names sampled by this lookup, while an
-  // older identity cache hit must not extend their separate freshness window.
-  return { repos: [...repos.values()], refreshedRemoteNames: observation === previous ? undefined : observation.names };
+  return [...repos.values()];
 }
 
 /** Unclassified hosts require explicit product evidence from the caller. */
@@ -256,7 +389,7 @@ async function readParsedGitRemotes(
 
   const pending = new SharedPrMetadataRead(async (demand) => {
     try {
-      const loaded = await loadParsedGitRemotes(cwd, options, demand);
+      const { observation: loaded } = await loadParsedGitRemotes(cwd, options, demand);
       demand.signal?.throwIfAborted();
       const observation = { ...loaded, fetchedAt: now() };
       if (remoteLookups.get(cwd) === pending) remoteCache.set(cwd, observation);
@@ -273,16 +406,36 @@ async function loadParsedGitRemotes(
   cwd: string,
   options: ResolveGitHubRepoOptions,
   demand: PrMetadataDemand,
-): Promise<Omit<RemoteCacheEntry, "fetchedAt">> {
+  prefetch?: {
+    configuration?: GitRemoteConfiguration; configSampleOrder?: number; previous?: RemoteCacheEntry;
+    useGitRemote?: boolean; preferCachedIdentity?: boolean;
+  },
+): Promise<{ observation: ParsedRemoteObservation; refreshRemoteNames: boolean }> {
   const resolveSshHostname =
     options.resolveSshHostname ?? defaultResolveSshHostname;
   // Also retain resolved values within this probe, including negative answers.
   const localSshLookups = new Map<string, Promise<string | undefined>>();
   try {
     demand.signal?.throwIfAborted();
-    const { names, remotes, unconfirmedEmpty } = options.readRemotes
+    const raw: Awaited<ReturnType<typeof defaultReadRemotes>> = prefetch?.configuration ?? (options.readRemotes
       ? { remotes: await options.readRemotes(cwd) }
-      : await defaultReadRemotes(cwd, demand, Boolean(options.confirmEmpty || options.fresh));
+      : await defaultReadRemotes(cwd, demand, Boolean(options.confirmEmpty || options.fresh), prefetch));
+    const sampleOrder = prefetch?.configSampleOrder ?? raw.urlSampleOrder ?? nextRemoteSampleOrder();
+    const { names, remotes, unconfirmedEmpty, readWithGitRemote: listedWithGitRemote, hasConditionalIncludes } = raw;
+    const prior = prefetch?.previous;
+    // Listing names against a live identity does not verify that identity's URLs.
+    const readWithGitRemote = raw.urlSampleOrder !== undefined ? true : listedWithGitRemote && prior?.readWithGitRemote;
+    // Unless Git's remote list was the last observation, unverified branch
+    // planning needs a current native list after resolving identity.
+    const refreshRemoteNames = !listedWithGitRemote || raw.urlSampleOrder !== undefined;
+    if (prior && (remotes === prior.value || (isCurrentRemoteObservation(prior) && sameRemoteUrls(remotes, prior.value)))) {
+      return {
+        observation: { names, value: prior.value, unconfirmedEmpty, readWithGitRemote, hasConditionalIncludes,
+          sshResolutionFailed: prior.sshResolutionFailed, sampleOrder: prior.sampleOrder },
+        refreshRemoteNames,
+      };
+    }
+    let sshResolutionFailed: true | undefined;
     const value = await Promise.all(
       remotes.map(async (remote) => {
         const repo = parseForgeRemote(remote.url);
@@ -296,6 +449,7 @@ async function loadParsedGitRemotes(
           }
         }
         const resolvedHost = await hostname;
+        if (sshHost && !resolvedHost) sshResolutionFailed = true;
         return {
           ...remote,
           repo: repo && resolvedHost
@@ -304,11 +458,14 @@ async function loadParsedGitRemotes(
         };
       }),
     );
-    return { names, value, unconfirmedEmpty };
+    return {
+      observation: { names, value, unconfirmedEmpty, readWithGitRemote, hasConditionalIncludes, sshResolutionFailed, sampleOrder },
+      refreshRemoteNames,
+    };
   } catch {
     demand.signal?.throwIfAborted();
     // Preserve the bounded negative cache, including non-git directories.
-    return { value: [] };
+    return { observation: { value: [], readFailed: true, sampleOrder: nextRemoteSampleOrder() }, refreshRemoteNames: false };
   }
 }
 
@@ -335,7 +492,11 @@ function resolveSshHostInFlight(host: string, resolve: SshResolver, demand: PrMe
 
 async function defaultReadRemotes(
   cwd: string, demand: PrMetadataDemand, confirmEmpty: boolean,
-): Promise<{ names?: string[]; remotes: GitRemote[]; unconfirmedEmpty?: true }> {
+  prefetch?: { previous?: RemoteCacheEntry; useGitRemote?: boolean; preferCachedIdentity?: boolean },
+): Promise<{
+  names?: string[]; remotes: GitRemote[]; unconfirmedEmpty?: true; readWithGitRemote?: true;
+  hasConditionalIncludes?: true; urlSampleOrder?: number;
+}> {
   const childEnv = buildPwrAgentChildProcessEnv(process.env);
   const gitOptions = {
     purpose: "pr-remotes" as const,
@@ -346,7 +507,11 @@ async function defaultReadRemotes(
   // GIT_CONFIG affects the config subcommand, while remote reads the standard
   // hierarchy. Keep the original Git commands in this case and for unusual
   // configuration. `remote --verbose` prints only the first fetch URL.
-  if (!Object.keys(childEnv).some((key) => key.toUpperCase() === "GIT_CONFIG")) {
+  const previous = prefetch?.previous;
+  const useNativeList = usesNativeRemoteList(previous) || Boolean(prefetch?.preferCachedIdentity
+    && isCurrentRemoteObservation(previous) && hasAllRemoteUrls(previous));
+  if (!prefetch?.useGitRemote && !useNativeList
+    && !Object.keys(childEnv).some((key) => key.toUpperCase() === "GIT_CONFIG")) {
     try {
       const { stdout } = await runPrMetadataGit(cwd,
         ["config", "--null", "--show-scope", "--includes", "--get-regexp", REMOTE_CONFIG_KEYS], gitOptions, demand);
@@ -355,8 +520,7 @@ async function defaultReadRemotes(
       if (configuration && !confirmEmpty) return { remotes: [], unconfirmedEmpty: true };
     } catch (error) {
       demand.signal?.throwIfAborted();
-      const result = error as { code?: number; stdout?: string; stderr?: string };
-      if (!confirmEmpty && result.code === 1 && result.stdout === "" && result.stderr === "") {
+      if (!confirmEmpty && isGitConfigNoMatch(error)) {
         return { remotes: [], unconfirmedEmpty: true };
       }
     }
@@ -366,6 +530,17 @@ async function defaultReadRemotes(
   // command to distinguish a checkout without an origin from an unavailable one.
   const { stdout } = await runPrMetadataGit(cwd, ["remote"], gitOptions, demand);
   const names = uniqueNonEmptyLines(stdout);
+  // Name agreement is enough for an existing live entry or previously read
+  // native URLs. Batch-only config must get URLs before it can warm the cache.
+  if (isCurrentRemoteObservation(previous) && useNativeList
+    && ((previous.readWithGitRemote && !previous.hasConditionalIncludes) || previous.value === remoteCache.get(cwd)?.value)
+    && previous.names?.length === names.length
+    && names.every((name, index) => name === previous.names?.[index]) && hasAllRemoteUrls(previous)) {
+    return { names, remotes: previous.value, readWithGitRemote: true, hasConditionalIncludes: previous.hasConditionalIncludes };
+  }
+  // A native URL read spans several commands. Order it from the remote list
+  // so an overlapping owner sample can supersede this mixed observation.
+  const urlSampleOrder = nextRemoteSampleOrder();
   const entries = await Promise.all(
     names.map(async (name): Promise<GitRemote[]> => {
       try {
@@ -380,7 +555,7 @@ async function defaultReadRemotes(
       }
     }),
   );
-  return { names, remotes: entries.flat() };
+  return { names, remotes: entries.flat(), readWithGitRemote: true, hasConditionalIncludes: previous?.hasConditionalIncludes, urlSampleOrder };
 }
 
 function uniqueNonEmptyLines(value: string): string[] {

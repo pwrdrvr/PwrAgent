@@ -1,12 +1,48 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
+import type { AppServerThreadActivityEntry, AppServerThreadReplay } from "@pwragent/shared/contracts/normalized-app-server";
 import { estimateCodexCreditsForLine } from "@pwragent/shared/thread-pricing-display";
 import type { LiveThreadRequestUsage } from "../app-server/backend-registry-types";
-import { buildLiveThreadUsageLine, foldLiveThreadRequestUsage } from "../app-server/thread-usage-math";
+import { buildLiveThreadUsageLine, foldLiveThreadRequestUsage, mergeTurnAnchoredUsageActivities } from "../app-server/thread-usage-math";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 const cutover = Date.parse("2027-03-01T00:00:00-08:00");
+
+it("drops legacy totals with conflicting turn IDs without suppressing the affected turn's request rows", () => {
+  fc.assert(fc.property(
+    fc.array(fc.integer({ min: 1, max: 1000 }), { minLength: 1, maxLength: 6 }),
+    fc.boolean(),
+    (requestTokens, keepParentTotal) => {
+      const parentTurn = { id: "parent", status: "completed" as const };
+      const reviewTurn = { id: "review", status: "completed" as const };
+      const requestRows: AppServerThreadActivityEntry[] = requestTokens.map((tokens, index) => ({
+        type: "activity", id: `request-${index}`, turn: reviewTurn, status: "completed",
+        summary: `Latest request usage: ${tokens} uncached in`, details: [],
+      }));
+      const parentTotal: AppServerThreadActivityEntry = {
+        type: "activity", id: "live-turn-usage-parent", turn: parentTurn, status: "completed",
+        summary: "Turn usage: 400 uncached in", details: [],
+      };
+      const parentPrompt = { type: "message" as const, id: "prompt", role: "user" as const, text: "Review a patch", turn: parentTurn };
+      const replay: AppServerThreadReplay = {
+        entries: [parentPrompt, ...requestRows],
+        messages: [],
+        pagination: { supportsPagination: true, hasPreviousPage: false },
+      };
+
+      const merged = mergeTurnAnchoredUsageActivities({
+        replay,
+        activities: [
+          ...(keepParentTotal ? [parentTotal] : []),
+          { ...parentTotal, turn: reviewTurn },
+        ],
+      });
+
+      expect(merged.entries).toEqual([parentPrompt, ...(keepParentTotal ? [parentTotal] : []), ...requestRows]);
+    },
+  ));
+});
 
 function priceTurn(before: number, after: number, beforeOutput: number, afterOutput: number) {
   let current: LiveThreadRequestUsage | undefined;

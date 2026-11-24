@@ -1,0 +1,41 @@
+import { createHash } from "node:crypto";
+import type { TurnInputSource } from "@pwragent/owner-core/turn-input-source";
+import type { StartReviewRequest } from "@pwragent/shared/contracts/agent";
+import type { AppServerReviewPullRequestSnapshot } from "@pwragent/shared/contracts/normalized-app-server";
+import { normalizeWorkspacePath } from "./review-workspace-guard";
+
+export function isOperatorReviewInput(source?: TurnInputSource): boolean {
+  return source === "desktop" || source === "federation" || source === "messaging";
+}
+
+function pullRequestDiff(snapshot: AppServerReviewPullRequestSnapshot): string {
+  const { pullRequest, headCommit, mergeBaseCommit } = snapshot;
+  return JSON.stringify([
+    pullRequest.provider.toLowerCase(), pullRequest.org.toLowerCase(), pullRequest.repo.toLowerCase(),
+    pullRequest.number, mergeBaseCommit, headCommit,
+  ]);
+}
+
+/** Only owner-resolved, immutable diffs can be compared across turns. */
+function immutableReviewDiff({ target, cwd }: StartReviewRequest): string | undefined {
+  const workspace = cwd ? normalizeWorkspacePath(cwd) : undefined;
+  if (target.type === "commit" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(target.sha)) {
+    return JSON.stringify([workspace, target.type, target.sha.toLowerCase()]);
+  }
+  if (target.type === "pullRequest" && target.snapshot) {
+    return JSON.stringify([workspace, "pullRequests", [pullRequestDiff(target.snapshot)]]);
+  }
+  if (target.type === "pullRequests") {
+    const diffs = target.pullRequests.flatMap(({ snapshot }) => snapshot ? [pullRequestDiff(snapshot)] : []);
+    if (diffs.length === target.pullRequests.length) {
+      return JSON.stringify([workspace, target.type, diffs.sort()]);
+    }
+  }
+  return undefined;
+}
+
+/** A persisted receipt identifies the diff without retaining prompt or path text. */
+export function immutableReviewDiffHash(request: StartReviewRequest): string | undefined {
+  const diff = immutableReviewDiff(request);
+  return diff && createHash("sha256").update(diff).digest("hex");
+}

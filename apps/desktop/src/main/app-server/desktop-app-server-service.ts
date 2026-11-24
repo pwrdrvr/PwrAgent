@@ -35,7 +35,7 @@ import type { ForgePrToolPreflightResult } from "../agent-tools/pwragent-forge-p
 import { GitlabPrToolClient } from "../pr-status/gitlab-pr-tool-client";
 import type { ForgePrToolArgs, ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
 import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation, type ForgeRepository } from "../pr-status/forge-tool-contract";
-import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
+import { readForgeRepositoryRemotes, type GitHubRepoRef } from "../pr-status/git-remote";
 import { StackReader, StackReadObservation, stackMemberships } from "../stacks/stack-reader";
 import { StackOperationsService } from "../stacks/stack-operations-service";
 import { StackOperationError } from "@pwragent/owner-core/stacks/stack-coordinator";
@@ -455,6 +455,7 @@ import { getDesktopAutomationService } from "../automations/desktop-automation-s
 import { GitLabPrFetcher } from "../pr-status/gitlab-pr-fetcher";
 import { ForgePrFetcher, parseForgePrRefFromUrl as parsePrRefFromUrl, type ForgePrRef } from "../pr-status/forge-pr-fetcher";
 import {
+  createScheduledPrPrefetchRepoResolver,
   filterStoredDiscoveredPullRequests,
   resolveScheduledPrPrefetchRepos,
 } from "../pr-status/pr-detection";
@@ -6419,10 +6420,9 @@ class DesktopAppServerService {
     contexts: ThreadPrRefreshContext[],
   ): Promise<void> {
     if (!this.getPrFetcher().isProviderEnabled("github")) return;
-    const wanted = new Map<
-      string,
-      { cwd: string; branch: string; refs: BranchRef[] }
-    >();
+    const resolvePrefetchRepos = createScheduledPrPrefetchRepoResolver();
+    const candidates: { cwd: string; branch: string }[] = [];
+    const branchesByCheckout = new Map<string, Set<string>>();
     for (const context of contexts) {
       const branch = context.branch.trim();
       // "HEAD" contexts are not branch lookups, and the detection path skips
@@ -6431,31 +6431,32 @@ class DesktopAppServerService {
         continue;
       }
       for (const cwd of context.directoryPaths) {
-        const dedupeKey = `${cwd} ${branch}`;
-        if (wanted.has(dedupeKey)) {
-          continue;
-        }
-        const repos = await resolveScheduledPrPrefetchRepos(cwd, branch);
-        if (repos.length === 0) {
-          continue;
-        }
-        wanted.set(dedupeKey, {
-          cwd,
-          branch,
-          refs: repos.map((repo) => ({
-            owner: repo.owner,
-            repo: repo.repo,
-            branch,
-          })),
-        });
+        const branches = branchesByCheckout.get(cwd) ?? new Set<string>();
+        if (branches.has(branch)) continue;
+        branches.add(branch);
+        branchesByCheckout.set(cwd, branches);
+        candidates.push({ cwd, branch });
       }
     }
 
-    if (wanted.size === 0) {
+    const entries: { cwd: string; branch: string; repos: GitHubRepoRef[]; refs: BranchRef[] }[] = [];
+    for (const { cwd, branch } of candidates) {
+      const branchCount = branchesByCheckout.get(cwd)!.size;
+      const repos = branchCount > 1
+        ? await resolvePrefetchRepos(cwd, branch, branchCount)
+        : await resolveScheduledPrPrefetchRepos(cwd, branch);
+      if (repos.length === 0) continue;
+      entries.push({
+        cwd,
+        branch,
+        repos,
+        refs: repos.map(({ owner, repo }) => ({ owner, repo, branch })),
+      });
+    }
+    if (entries.length === 0) {
       return;
     }
 
-    const entries = [...wanted.values()];
     const refs = entries.flatMap((entry) => entry.refs);
     const byRefKey = await this.getPrGraphqlClient().fetchPullRequestsForBranches(
       refs,
@@ -6466,13 +6467,14 @@ class DesktopAppServerService {
         return {
           cwd: entry.cwd,
           branch: entry.branch,
+          repos: entry.repos,
           prs: answers.some((answer) => answer === undefined)
             ? undefined
             : dedupePrsByStatusKey(answers.flatMap((answer) => answer ?? [])),
         };
       })
       .filter(
-        (entry): entry is { cwd: string; branch: string; prs: PrSummary[] } =>
+        (entry): entry is { cwd: string; branch: string; repos: GitHubRepoRef[]; prs: PrSummary[] } =>
           entry.prs !== undefined,
       );
     if (primed.length === 0) {

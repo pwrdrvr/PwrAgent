@@ -59,6 +59,10 @@ const CONFIG = (flag("config") ?? "").split(",").filter(Boolean).map((pair) => {
   const index = pair.indexOf("=");
   return { configId: pair.slice(0, index), value: pair.slice(index + 1) };
 });
+// `session/set_mode` writes before the prompt, after the config writes, as
+// comma-separated mode ids, in order. A refusal is recorded, not fatal, so a
+// capture can show what the agent says to a mode the session does not list.
+const MODES = (flag("mode") ?? "").split(",").filter(Boolean);
 // After the prompt, call each of these methods with `{ sessionId }` (for
 // example `session/close,_x.ai/session/delete`), then `session/list` for the
 // capture cwd, to see what a helper session leaves behind.
@@ -241,6 +245,9 @@ try {
   const sessionId = session?.sessionId ?? session?.session_id;
   for (const option of CONFIG) {
     await send("session/set_config_option", { sessionId, ...option });
+  }
+  for (const modeId of MODES) {
+    await send("session/set_mode", { sessionId, modeId }).catch(() => undefined);
   }
   await send("session/prompt", {
     sessionId,

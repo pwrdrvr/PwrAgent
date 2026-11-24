@@ -80,6 +80,7 @@ import type {
   AppServerThreadSummary,
   AppServerTurnInputItem,
   CodexThreadEnvironmentRuntime,
+  ThreadExecutionMode,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
@@ -4732,13 +4733,11 @@ describe("DesktopBackendRegistry", () => {
       source: "configOption",
       optionId: "mode",
       value: "auto",
+      sessionStartMode: true,
     });
-    expect(acpClient.setRuntimeOption).not.toHaveBeenCalledWith({
-      sessionId: "qwen-session-1",
-      source: "mode",
-      optionId: "mode",
-      value: "default",
-    });
+    expect(acpClient.setRuntimeOption).not.toHaveBeenCalledWith(
+      expect.objectContaining({ source: "mode", value: "default" }),
+    );
     expect(sessions[0]).toMatchObject({
       executionMode: "default",
       acpRuntime: expect.objectContaining({
@@ -4979,14 +4978,14 @@ describe("DesktopBackendRegistry", () => {
     const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore, threadTitleGenerationService: null });
     const internal = registry as unknown as {
       claudeBackend: { startThread: () => Promise<{ threadId: string }> };
-      startAcpSession: () => Promise<{ threadId: string }>;
+      startAcpSession: () => Promise<{ threadId: string; executionMode: ThreadExecutionMode }>;
       emit: (event: AgentEvent) => Promise<void>;
       pendingStartedThreads: Map<string, AppServerThreadSummary>;
     };
     const submit = backend === "claude"
       ? vi.spyOn(internal.claudeBackend, "startThread").mockResolvedValue({ threadId: "same:thread" })
       : backend.startsWith("acp:")
-      ? vi.spyOn(internal, "startAcpSession").mockResolvedValue({ threadId: "same:thread" })
+      ? vi.spyOn(internal, "startAcpSession").mockResolvedValue({ threadId: "same:thread", executionMode: "default" })
       : vi.spyOn(client, "startThread");
     const parent = vi.spyOn(overlayStore, "setThreadParent");
     const agent = vi.spyOn(overlayStore, "setThreadAgent");
@@ -5048,11 +5047,11 @@ describe("DesktopBackendRegistry", () => {
       overlayStore, threadTitleGenerationService: null });
     const internal = registry as unknown as {
       claudeBackend: { startThread: () => Promise<{ threadId: string }> };
-      startAcpSession: () => Promise<{ threadId: string }>;
+      startAcpSession: () => Promise<{ threadId: string; executionMode: ThreadExecutionMode }>;
       emit: (event: AgentEvent) => Promise<void>;
     };
     if (backend === "claude") vi.spyOn(internal.claudeBackend, "startThread").mockResolvedValue({ threadId });
-    if (backend.startsWith("acp:")) vi.spyOn(internal, "startAcpSession").mockResolvedValue({ threadId });
+    if (backend.startsWith("acp:")) vi.spyOn(internal, "startAcpSession").mockResolvedValue({ threadId, executionMode: "default" });
     registry.rememberCompleteNavigationSnapshot(buildNavigationSnapshot({ backend: "all", fetchedAt: 1000, firstSnapshot: false,
       directoryOverlayByKey: { [directoryKey]: { directoryKey, directoryThreadsCollapsed: true } },
       overlayByThreadKey: { [buildThreadIdentityKey(parentBackend, parentId)]: (await overlayStore.getThreadOverlayState({ backend: parentBackend, threadId: parentId }))! },
@@ -6597,6 +6596,7 @@ describe("DesktopBackendRegistry", () => {
       source: "mode",
       optionId: "mode",
       value: "default",
+      sessionStartMode: true,
     });
     expect(setRuntimeOption).not.toHaveBeenCalledWith(
       expect.objectContaining({ value: "yolo" }),

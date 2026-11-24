@@ -40385,6 +40385,12 @@ div.composer-error-row__toggle {
   color: var(--text-secondary);
 }
 
+/* A resource wait's queue card sits under its condition's name. */
+.thread-dependencies__condition--resource .resource-wait-card {
+  grid-column: 2;
+  margin-top: 4px;
+}
+
 .thread-dependencies__reason {
   grid-column: 2;
   color: var(--text-muted);
@@ -40402,16 +40408,6 @@ div.composer-error-row__toggle {
    for the composer, so this needs both classes to win. */
 .composer__checkbox.thread-dependencies__handoff {
   font-size: 12px;
-}
-
-/* The plan the resumed turn starts from, as the registering author wrote it. */
-.thread-dependencies__continuation {
-  margin: 0;
-  color: var(--text-primary);
-  font-size: 12px;
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
 }
 
 .thread-dependencies__history-toggle {

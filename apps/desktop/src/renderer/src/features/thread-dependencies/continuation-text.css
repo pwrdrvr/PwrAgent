@@ -1,0 +1,49 @@
+/* A waiting thread's continuation, in the Waiting for tab and Continue After. */
+.continuation-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  align-self: stretch;
+  min-width: 0;
+  padding: 2px 8px;
+  border-left: 2px solid var(--border-strong);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.continuation-text__label {
+  color: var(--text-muted);
+}
+
+.continuation-text__body {
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.continuation-text__body.is-clamped {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.continuation-text__toggle {
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--accent-bright);
+  font: inherit;
+  cursor: pointer;
+}
+
+.continuation-text__toggle:hover {
+  text-decoration: underline;
+}
+
+.continuation-text__toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}

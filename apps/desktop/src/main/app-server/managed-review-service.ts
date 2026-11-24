@@ -30,6 +30,13 @@ import {
 import type {
   ThreadTurnQueue,
 } from "@pwragent/owner-core/thread-turn-queue";
+import type { TurnInputSource } from "@pwragent/owner-core/turn-input-source";
+import {
+  AGENT_REVIEW_LIMIT,
+  canClaimAgentReview,
+  type AgentReviewRefusal,
+  type OperatorReviewInput,
+} from "@pwragent/owner-core/agent-review-admission";
 import type {
   DynamicToolSpec as CodexDynamicToolSpec,
   ThreadStartParams as CodexThreadStartParams,
@@ -70,6 +77,7 @@ import { buildManagedReviewPrompt } from "./managed-review";
 import { prepareClaudeCodeReview, validateClaudeCodeReview } from "./claude-code-review-start";
 import { resolvePullRequestReview, resolvePullRequestSetReview } from "./pull-request-review";
 import type { RegistryContext, RegistryHost } from "./registry-context";
+import { immutableReviewDiffHash, isOperatorReviewInput } from "./agent-review-submission";
 import { refreshReviewBaseBranch } from "./review-base-branch";
 import { resolveReviewProvenance } from "./review-provenance";
 import { assertReviewWorkspaceMatchesAttachedPullRequest, normalizeWorkspacePath } from "./review-workspace-guard";
@@ -122,6 +130,7 @@ export interface ManagedReviewServiceHost extends Pick<RegistryHostPorts,
   | "withArchiveWorkspaceWrite" | "withCodexThreadClient"
   | "prepareTokenMiserRuntime"
 > {
+  currentTurnInputSource(context: { backend: AppServerBackendKind; threadId: string; turnId: string }): TurnInputSource;
   readonly registrySessionId: string;
   readonly reservedAcpStartThreadKeys: Set<string>;
   readonly runtimeInstanceId: string;
@@ -168,6 +177,8 @@ export interface ManagedReviewServiceHost extends Pick<RegistryHostPorts,
 export class ManagedReviewService {
   private readonly context: RegistryContext;
   private readonly host: RegistryHost<ManagedReviewServiceHost>;
+  private readonly operatorReviewInputs = new Map<string, OperatorReviewInput>();
+  private readonly drainingReviewTerminals = new Set<string>();
 
   constructor(
     context: RegistryContext,
@@ -175,6 +186,23 @@ export class ManagedReviewService {
   ) {
     this.context = context;
     this.host = host;
+  }
+
+  observeOperatorReviewInput(turn: { backend: AppServerBackendKind; threadId: string; turnId: string }, source?: TurnInputSource): void {
+    if (!isOperatorReviewInput(source)) return;
+    const key = buildThreadIdentityKey(turn.backend, turn.threadId);
+    if (this.operatorReviewInputs.get(key)?.turnId === turn.turnId) return;
+    const input = { turnId: turn.turnId, observedAt: Date.now() };
+    try {
+      this.context.stores.reviews.rearmAgentReviews(turn, input);
+      this.operatorReviewInputs.set(key, input);
+    } catch (error) {
+      // The provider already accepted the operator turn. A bookkeeping
+      // failure cannot turn that successful send into a reported failure.
+      backendRegistryLog.warn("could not persist operator review budget reset", {
+        backend: turn.backend, threadId: turn.threadId, error: String(error),
+      });
+    }
   }
 
   turnEventObservers(): Record<"forwarding" | "output" | "terminal" | "boundary" | "metadata", TurnEventObserver> {
@@ -1225,6 +1253,7 @@ export class ManagedReviewService {
   }
 
   private scheduleReviewStart(params: {
+    agentRequestKey?: string;
     turnAttribution?: ReturnType<typeof delegatedTurnAttribution>;
     invokingTurnId: string;
     request: StartReviewRequest;
@@ -1256,6 +1285,7 @@ export class ManagedReviewService {
 
     const now = Date.now();
     const pending: PendingReviewStartRecord = {
+      ...(params.agentRequestKey ? { agentRequestKey: params.agentRequestKey } : {}),
       ...(params.turnAttribution ? { turnAttribution: params.turnAttribution } : {}),
       pendingReviewId: `pending-review:${randomUUID()}`,
       backend: params.request.backend,
@@ -1303,6 +1333,24 @@ export class ManagedReviewService {
     if (!params.turnId) {
       return;
     }
+    const key = JSON.stringify([params.backend, params.threadId, params.turnId]);
+    // The first terminal owns the whole waiting list through provider admission
+    // and rebind. Claiming just one review lets a replay start the next one.
+    if (this.drainingReviewTerminals.has(key)) return;
+    this.drainingReviewTerminals.add(key);
+    try {
+      await this.drainReviewStarts({ ...params, turnId: params.turnId });
+    } finally {
+      this.drainingReviewTerminals.delete(key);
+    }
+  }
+
+  private async drainReviewStarts(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+    method: "turn/completed" | "turn/failed" | "turn/cancelled";
+  }): Promise<void> {
     const pending = [...this.context.turnState.reviewAdmissions()].filter(
       (candidate) =>
         candidate.backend === params.backend &&
@@ -1312,11 +1360,13 @@ export class ManagedReviewService {
     );
     const failures: Array<{ error: string; target: AppServerReviewTarget }> = [];
     for (const candidate of pending) {
+      const current = this.context.turnState.reviewAdmission(candidate.pendingReviewId);
+      if (current?.status !== "scheduled" || current.invokingTurnId !== params.turnId) continue;
       if (params.method !== "turn/completed") {
         const error =
           "The active turn did not complete successfully, so the queued review was cancelled.";
         this.context.turnState.setReviewAdmission({
-          ...candidate,
+          ...current,
           status: "cancelled",
           error,
           updatedAt: Date.now(),
@@ -1335,56 +1385,15 @@ export class ManagedReviewService {
         });
         continue;
       }
-      const current = this.context.turnState.reviewAdmission(candidate.pendingReviewId);
-      if (!current || current.status !== "scheduled") continue;
       const starting: PendingReviewStartRecord = {
         ...current,
         status: "starting",
         updatedAt: Date.now(),
       };
       this.context.turnState.setReviewAdmission(starting);
+      let response: StartReviewResponse;
       try {
-        const response = await this.startReview(starting.request, true, starting.turnAttribution);
-        this.context.turnState.setReviewAdmission({
-          ...starting,
-          status: "started",
-          reviewThreadId: response.reviewThreadId,
-          reviewTurnId: response.turnId,
-          updatedAt: Date.now(),
-        });
-        this.reviewStartFailureNotices.delete(
-          buildThreadIdentityKey(candidate.backend, candidate.threadId),
-        );
-        await this.context.emit({
-          backend: candidate.backend,
-          notification: {
-            method: "thread/reviewStart/updated",
-            params: {
-              threadId: candidate.threadId,
-              pendingReviewId: candidate.pendingReviewId,
-              status: "started",
-              reviewThreadId: response.reviewThreadId,
-              reviewTurnId: response.turnId,
-            },
-          },
-        });
-        for (const waiting of pending) {
-          if (waiting.pendingReviewId === candidate.pendingReviewId) {
-            continue;
-          }
-          const currentWaiting = this.context.turnState.reviewAdmission(
-            waiting.pendingReviewId,
-          );
-          if (!currentWaiting || currentWaiting.status !== "scheduled") continue;
-          this.context.turnState.setReviewAdmission({
-            ...currentWaiting,
-            invokingTurnId: response.turnId,
-            updatedAt: Date.now(),
-          });
-        }
-        // An inline review is now the active turn. Remaining reviews wait for
-        // its terminal lifecycle instead of starting concurrently.
-        break;
+        response = await this.startReview(starting.request, true, starting.turnAttribution);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         this.context.turnState.setReviewAdmission({
@@ -1414,7 +1423,39 @@ export class ManagedReviewService {
         // Messaging already receives the failure event. A separate agent
         // retry prompt would run outside the contact's turn.
         if (!candidate.request.messagingSource) failures.push({ error: message, target: candidate.request.target });
+        continue;
       }
+      this.context.turnState.setReviewAdmission({
+        ...starting,
+        status: "started",
+        reviewThreadId: response.reviewThreadId,
+        reviewTurnId: response.turnId,
+        updatedAt: Date.now(),
+      });
+      this.reviewStartFailureNotices.delete(
+        buildThreadIdentityKey(candidate.backend, candidate.threadId),
+      );
+      // Publish only after rebinding, so a review terminal that arrives during
+      // event delivery sees all requests that now wait on it.
+      this.rebindPendingReviewStartsForStartedTurn({
+        backend: candidate.backend, threadId: candidate.threadId,
+        pendingTurnId: params.turnId, turnId: response.turnId,
+      });
+      await this.context.emit({
+        backend: candidate.backend,
+        notification: {
+          method: "thread/reviewStart/updated",
+          params: {
+            threadId: candidate.threadId,
+            pendingReviewId: candidate.pendingReviewId,
+            status: "started",
+            reviewThreadId: response.reviewThreadId,
+            reviewTurnId: response.turnId,
+          },
+        },
+      });
+      // The remaining reviews wait for this review to finish.
+      break;
     }
     if (failures.length > 0) {
       await this.sendReviewStartFailureNotice({
@@ -2056,6 +2097,14 @@ export class ManagedReviewService {
       : undefined;
   }
 
+  private async resolveAgentReviewDiff(request: StartReviewRequest): Promise<string | undefined> {
+    if (request.target.type !== "commit" || request.cwd) return immutableReviewDiffHash(request);
+    const { backend, threadId } = request;
+    const overlay = await this.context.stores.threads.getThreadOverlayState({ backend, threadId });
+    const cwd = await this.host().resolveThreadEnvironmentCwd(backend, threadId, overlay);
+    return immutableReviewDiffHash({ ...request, cwd });
+  }
+
   async startReviewFromAgentTool(
     request: PwrAgentThreadOrchestrationRequest<"start_review">,
   ): Promise<PwrAgentThreadOrchestrationResponse> {
@@ -2084,6 +2133,33 @@ export class ManagedReviewService {
     try {
       const { backend, threadId } = request.context;
       const { target, cwd, runMode: requestedRunMode } = request.args;
+      const turn = { backend, threadId, turnId: invokingTurnId };
+      const threadKey = buildThreadIdentityKey(backend, threadId);
+      const idempotencyKey = JSON.stringify(["agent-review", invokingTurnId]);
+      const requestKey = JSON.stringify([target, cwd, requestedRunMode]);
+      const checkAdmission = (): PwrAgentThreadOrchestrationResponse | undefined => {
+        if (!this.host().isLiveDynamicToolCall(backend, turn)) {
+          return threadOrchestrationFailure("forbidden", "The requesting turn has ended. No review was scheduled.");
+        }
+        this.observeOperatorReviewInput(turn, this.host().currentTurnInputSource(turn));
+        const previous = this.context.turnState.reviewAdmissions().find(
+          (item) => item.backend === backend && item.threadId === threadId && item.idempotencyKey === idempotencyKey,
+        );
+        if (previous) {
+          if (previous.agentRequestKey === requestKey && previous.status === "scheduled") {
+            return this.scheduledAgentReviewResult(previous);
+          }
+          return this.agentReviewRefused("duplicate_turn");
+        }
+        return undefined;
+      };
+      const existing = checkAdmission();
+      if (existing) return existing;
+      const refusal = canClaimAgentReview(this.context.stores.reviews.readAgentReviewBudget(turn), {
+        ...turn, operatorInput: this.operatorReviewInputs.get(threadKey),
+      });
+      if (refusal) return this.agentReviewRefused(refusal);
+
       const combined = target.type === "pullRequests";
       if (combined && requestedRunMode === "codex-sub-agent") {
         return threadOrchestrationFailure("invalid_arguments", "A combined review requires PwrAgent Sub Agent or Claude Code.");
@@ -2128,11 +2204,8 @@ export class ManagedReviewService {
       if (origin?.causalMessagingAmbiguous || ((origin?.kind === "messaging" || origin?.messaging) && !origin.causalMessagingSource)) {
         return threadOrchestrationFailure("forbidden", "Claude Code review could not preserve the requesting contact's permissions.");
       }
-      const pending = this.scheduleReviewStart({
-        invokingTurnId,
-        turnAttribution: await this.host().readDelegatedTurnAncestry(request.context),
-        idempotencyKey: request.context.callId,
-        request: await this.prepareReviewRequest({
+      const [prepared, ancestry] = await Promise.all([
+        this.prepareReviewRequest({
           backend,
           threadId,
           target,
@@ -2142,29 +2215,69 @@ export class ManagedReviewService {
           ...(reviewBackendDiffers ? { reviewBackend } : {}),
           ...(cwd ? { cwd } : {}),
         }),
+        this.host().readDelegatedTurnAncestry(request.context),
+      ]);
+      const diff = await this.resolveAgentReviewDiff(prepared);
+      // Resolution yields to other calls and terminal events. Check and claim
+      // together, before any new request can consume the same admission.
+      const concurrent = checkAdmission();
+      if (concurrent) return concurrent;
+      this.host().assertThreadOwnership();
+      const claimRefusal = this.context.stores.reviews.claimAgentReview({
+        ...turn, operatorInput: this.operatorReviewInputs.get(threadKey), diff,
       });
-      return {
-        ok: true,
-        data: {
-          backend: pending.backend,
-          threadId: pending.threadId,
-          pendingReviewId: pending.pendingReviewId,
-          status: "scheduled",
-          target: pending.request.target,
-          ...(pending.request.cwd ? { cwd: pending.request.cwd } : {}),
-          invokingTurnId: pending.invokingTurnId,
-          createdAt: pending.createdAt,
-          message: reviewBackendDiffers
-            ? `Review scheduled to run on ${isAcpBackendId(reviewBackend) ? reviewBackend : BACKEND_LABELS[reviewBackend]}, because ${request.context.backend} cannot run reviews. Stop work and let this turn complete; PwrAgent will start the review automatically.`
-            : "Review scheduled. Stop work and let this turn complete; PwrAgent will start the review automatically.",
-        } satisfies StartReviewToolResult,
-      };
+      if (claimRefusal) return this.agentReviewRefused(claimRefusal);
+      const pending = this.scheduleReviewStart({
+        agentRequestKey: requestKey,
+        invokingTurnId,
+        turnAttribution: ancestry,
+        idempotencyKey,
+        request: prepared,
+      });
+      return this.scheduledAgentReviewResult(pending);
     } catch (error) {
       return threadOrchestrationFailure(
         "internal_error",
         error instanceof Error ? error.message : String(error),
       );
     }
+  }
+
+  private agentReviewRefused(reason: AgentReviewRefusal): PwrAgentThreadOrchestrationResponse {
+    switch (reason) {
+      case "duplicate_turn":
+        return threadOrchestrationFailure("forbidden", "A review was already requested in this turn. Do not submit another.");
+      case "duplicate_diff":
+        return threadOrchestrationFailure(
+          "forbidden",
+          "A review of this exact change was already requested. Use the existing review and report its status.",
+        );
+      case "limit":
+        return threadOrchestrationFailure(
+          "forbidden",
+          `PwrAgent stopped after ${AGENT_REVIEW_LIMIT} agent-requested reviews on this thread. Report the current review and CI status, then wait for the operator. Do not retry or schedule another review.`,
+        );
+    }
+  }
+
+  private scheduledAgentReviewResult(pending: PendingReviewStartRecord): PwrAgentThreadOrchestrationResponse {
+    const { reviewBackend, cwd, target } = pending.request;
+    return {
+      ok: true,
+      data: {
+        backend: pending.backend,
+        threadId: pending.threadId,
+        pendingReviewId: pending.pendingReviewId,
+        status: "scheduled",
+        target,
+        ...(cwd ? { cwd } : {}),
+        invokingTurnId: pending.invokingTurnId,
+        createdAt: pending.createdAt,
+        message: reviewBackend && reviewBackend !== pending.backend
+          ? `Review scheduled to run on ${isAcpBackendId(reviewBackend) ? reviewBackend : BACKEND_LABELS[reviewBackend]}, because ${pending.backend} cannot run reviews. Stop work and let this turn complete; PwrAgent will start the review automatically.`
+          : "Review scheduled. Stop work and let this turn complete; PwrAgent will start the review automatically.",
+      } satisfies StartReviewToolResult,
+    };
   }
 
   /**

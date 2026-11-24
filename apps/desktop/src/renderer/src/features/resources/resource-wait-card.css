@@ -1,0 +1,96 @@
+/* A resource wait, in the Waiting for tab and in Continue After. */
+.resource-wait-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  align-self: stretch;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  font-size: 11px;
+  line-height: 15px;
+}
+
+.resource-wait-card__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 6px;
+}
+
+.resource-wait-card__name {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.resource-wait-card__kind,
+.resource-wait-card__note {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.resource-wait-card__condition {
+  padding: 0 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.resource-wait-card__facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 10px;
+  width: 100%;
+  margin: 0;
+}
+
+.resource-wait-card__facts dt {
+  color: var(--text-muted);
+}
+
+.resource-wait-card__facts dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.resource-wait-card__holder,
+.resource-wait-card__sub {
+  display: block;
+}
+
+.resource-wait-card__holder + .resource-wait-card__holder {
+  margin-top: 3px;
+}
+
+.resource-wait-card__sub {
+  color: var(--text-muted);
+}
+
+.resource-wait-card__sub.is-warning {
+  color: var(--status-warning-text);
+}
+
+.resource-wait-card__open {
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--accent-bright);
+  font: inherit;
+  cursor: pointer;
+}
+
+.resource-wait-card__open:hover {
+  text-decoration: underline;
+}
+
+.resource-wait-card__open:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}

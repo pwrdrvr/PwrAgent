@@ -64,6 +64,8 @@ export type ApplicationMenuActions = {
   showLogsWindow: () => void;
   showThirdPartyNoticesWindow: () => void;
   showUsageActivityWindow: () => void;
+  /** Present only while this profile serves resource checkouts. */
+  showResourcesWindow?: () => void;
 };
 
 export type ApplicationMenuWindow = {
@@ -258,6 +260,11 @@ function buildViewMenu(options: ApplicationMenuOptions): MenuItemConstructorOpti
         label: "Automations",
         click: options.actions.openAutomations,
       },
+      // Checkouts and their queues. Otherwise it is only in the sidebar's
+      // profile menu, where an operator looking at a waiting thread won't look.
+      ...(options.actions.showResourcesWindow
+        ? [{ label: "Resources", click: options.actions.showResourcesWindow }]
+        : []),
       { type: "separator" },
       // Recovery must remain reachable when the renderer cannot draw controls.
       { label: "Reload Window", role: "reload" },

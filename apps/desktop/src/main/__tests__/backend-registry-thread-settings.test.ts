@@ -944,13 +944,71 @@ describe("DesktopBackendRegistry", () => {
       source: "configOption",
       optionId: "permission_mode",
       value: "auto",
+      sessionStartMode: true,
     }], [{
       sessionId: "kimi-session-1",
       source: "mode",
       optionId: "mode",
       value: planningMode,
+      sessionStartMode: true,
     }]]);
     expect(sendControlPrompt).not.toHaveBeenCalled();
+    await registry.close();
+  });
+
+  // A native mode below Full Access records the thread at Default Access
+  // (thread-todo-access's recordedNativeMode). The start can lower the native
+  // mode when the new session does not list Yolo.
+  it.each([
+    { sessionPermission: "auto", recorded: "default" },
+    { sessionPermission: "yolo", recorded: "full-access" },
+  ] as const)("records $recorded when a Grok Full Access start applies $sessionPermission", async ({ sessionPermission, recorded }) => {
+    const backend = "acp:grok" as AcpBackendId;
+    const runtimeCapabilities: BackendAcpRuntimeCapabilities = {
+      schemaVersion: 1,
+      status: "discovered",
+      configOptions: [{
+        id: "permission_mode",
+        label: "Permissions",
+        category: "mode",
+        type: "select",
+        currentValue: "default",
+        values: [
+          { value: "default", label: "Default Access" },
+          { value: "auto", label: "Auto" },
+          { value: "yolo", label: "Full Access" },
+        ],
+      }],
+    };
+    const sessions: AcpSessionMetadata[] = [];
+    const { registry, acpClient } = createKimiAcpRegistry({
+      acpBackendId: backend,
+      sessions,
+      installedAgent: {
+        ...createKimiAgentRecord(backend, runtimeCapabilities),
+        registryId: "grok",
+        name: "Grok",
+      },
+    });
+    // The client records the permission the session applied: `auto` when
+    // the new session's own reply lists no `yolo`.
+    acpClient.setRuntimeOption.mockImplementation(async (params: { sessionId: string }) => {
+      const session = sessions.find((candidate) => candidate.sessionId === params.sessionId)!;
+      session.acpRuntime = {
+        ...session.acpRuntime,
+        configValues: { ...session.acpRuntime?.configValues, permission_mode: sessionPermission },
+        updatedAt: 1001,
+      };
+      return session.acpRuntime;
+    });
+    const response = await registry.startThread({
+      backend,
+      cwd: "/repo/project",
+      executionMode: "full-access",
+      acpRuntime: { configValues: { permission_mode: "yolo" }, updatedAt: 1000 },
+    });
+    expect(response.executionMode).toBe(recorded);
+    expect(sessions[0]?.executionMode).toBe(recorded);
     await registry.close();
   });
 
@@ -1833,6 +1891,7 @@ describe("DesktopBackendRegistry", () => {
       source: "mode",
       optionId: "mode",
       value: "autoEdit",
+      sessionStartMode: true,
     });
     expect(setRuntimeOption).not.toHaveBeenCalledWith(
       expect.objectContaining({ value: "default" }),

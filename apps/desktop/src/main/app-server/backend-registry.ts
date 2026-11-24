@@ -46,7 +46,7 @@ import { ThreadOwnerUnavailableError, type ThreadOwnerAdmission } from "@pwragen
 import { NavigationDirectoryScope } from "@pwragent/owner-core/navigation-directory-scope";
 import { delegatedTurnAttribution, withoutTurnAttribution } from "./delegated-turn-attribution";
 import { resolveTurnInputSource, type TurnInputSource } from "@pwragent/owner-core/turn-input-source";
-import { GET_CURRENT_TURN_INPUT_SOURCE, type CurrentTurnInputSourceHandler } from "../agent-tools/current-turn-input-source-tool";
+import { GET_CURRENT_TURN_INPUT_SOURCE } from "../agent-tools/current-turn-input-source-tool";
 import { SELF_STARTED_TURN_ENTRY_PREFIX } from "./thread-pending-wakes";
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared/contracts/agent";
 import type { ThreadTodoMessageTarget } from "@pwragent/shared/contracts/thread-todos";
@@ -485,6 +485,7 @@ import {
   type AcpRuntimeClient,
   type AcpSessionMetadata,
 } from "./acp-backend-adapter";
+import { acpStartedExecutionMode, applyAcpRuntimeSelection } from "./acp-runtime-selection";
 import {
   CodexThreadBusyBeforeStartError,
   extractRateLimitSummaries,
@@ -1493,7 +1494,9 @@ export class DesktopBackendRegistry {
     return unbound;
   }
 
-  private readonly currentTurnInputSource: CurrentTurnInputSourceHandler = (context) => {
+  private readonly currentTurnInputSource = (context: {
+    backend: AppServerBackendKind; threadId: string; turnId?: string;
+  }): TurnInputSource => {
     if (!context.turnId) return "unknown";
     const turn = { ...context, turnId: context.turnId };
     const exact = this.context.turnState.readTurnInputSource(turn);
@@ -1539,6 +1542,7 @@ export class DesktopBackendRegistry {
     if (!entry) return;
     this.context.turnState.bindStartingOrigin(entry, turn);
     const identity = { ...turn, backend: entry.backend };
+    this.managedReviewService.observeOperatorReviewInput(identity, entry.turnInputSource);
     if (entry.turnInputSource !== undefined && !terminalObserved
       && (entry.backend === "codex" || this.context.turnState.hasRegisteredTurn(identity))) {
       this.context.turnState.rememberTurnInputSource(identity, entry.turnInputSource, entry.admittedCodexTurnSequence);
@@ -6178,7 +6182,7 @@ export class DesktopBackendRegistry {
     reasoningEffort?: string;
     mcpRegistration?: AcpMcpServerRegistration;
     hidden?: boolean;
-  }): Promise<{ threadId: string }> {
+  }): Promise<{ threadId: string; executionMode: ThreadExecutionMode }> {
     if (params.executionMode === "auto") {
       throw new Error("Auto access is supported only by Codex.");
     }
@@ -6212,7 +6216,43 @@ export class DesktopBackendRegistry {
       params.acpRuntime,
       params.reasoningEffort,
     );
-    return { threadId: session.sessionId };
+    return {
+      threadId: session.sessionId,
+      executionMode: this.recordStartedAcpExecutionMode(
+        params.backend,
+        session.sessionId,
+        params.executionMode,
+      ),
+    };
+  }
+
+  /**
+   * Records the access a new ACP session holds after its start writes. A
+   * native Yolo the session does not list fell back below Full Access.
+   */
+  private recordStartedAcpExecutionMode(
+    backend: AcpBackendId,
+    sessionId: string,
+    requested: ThreadExecutionMode,
+  ): ThreadExecutionMode {
+    // A slash command, not the native mode, set this session's access, and
+    // Antigravity's access is the process its client runs, as permission
+    // requests also treat it.
+    if (backend === "acp:antigravity" || this.usesSlashControlledAcpExecutionModes(backend)) {
+      return requested;
+    }
+    const session = this.acpBackend.getSession(backend, sessionId);
+    const agent = this.acpBackend.getInstalledAgent(backend);
+    const executionMode = acpStartedExecutionMode({
+      executionMode: requested,
+      registryId: agent?.registryId,
+      runtime: session?.acpRuntime,
+      runtimeCapabilities: agent?.runtimeCapabilities,
+    });
+    if (session && session.executionMode !== executionMode) {
+      this.acpBackend.upsertSession({ ...session, executionMode });
+    }
+    return executionMode;
   }
 
   private async startAcpTurn(
@@ -6389,9 +6429,6 @@ export class DesktopBackendRegistry {
     }
   }
 
-  // `reasoningEffort` is sent with `runtime.currentModelId`, so it must be a
-  // level of that model. On Kimi the model decides which levels exist, and a
-  // level chosen for another model is refused with -32602.
   private async applyAcpRuntimeSelection(
     backend: AcpBackendId,
     client: AcpRuntimeClient,
@@ -6399,54 +6436,13 @@ export class DesktopBackendRegistry {
     runtime: BackendAcpSessionRuntimeState | undefined,
     reasoningEffort?: string,
   ): Promise<void> {
-    // A thought level is only valid for the model the session holds, so the
-    // model's option has to be written first. `configValues` carries whatever
-    // insertion order earlier merges left, and a level measured against the
-    // agent's default model is dropped by the session's own menu.
-    const capabilities = this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities;
-    const thoughtLevelOptionId = findAcpThoughtLevelConfigOption(capabilities)?.id;
-    const modeConfigOption = capabilities?.configOptions?.find(
-      (option) => option.category === "mode"
-        && option.id !== findAcpPermissionModeConfigOption(capabilities)?.id
-        && option.values.some((value) => value.value === runtime?.currentModeId),
-    );
-    // Legacy mode selectors mirror currentModeId. The independent permission
-    // config owns its value in configValues; currentModeId remains planning.
-    const configValues = Object.entries({
-      ...runtime?.configValues,
-      ...(modeConfigOption && runtime?.currentModeId
-        ? { [modeConfigOption.id]: runtime.currentModeId }
-        : {}),
-    }).sort(
-      ([left], [right]) =>
-        Number(left === thoughtLevelOptionId)
-        - Number(right === thoughtLevelOptionId),
-    );
-    for (const [optionId, value] of configValues) {
-      await client.setRuntimeOption?.({
-        sessionId,
-        source: "configOption",
-        optionId,
-        value,
-      });
-    }
-    if (runtime?.currentModeId && !modeConfigOption) {
-      await client.setRuntimeOption?.({
-        sessionId,
-        source: "mode",
-        optionId: "mode",
-        value: runtime.currentModeId,
-      });
-    }
-    if (runtime?.currentModelId) {
-      await client.setRuntimeOption?.({
-        sessionId,
-        source: "model",
-        optionId: "model",
-        value: runtime.currentModelId,
-        reasoningEffort,
-      });
-    }
+    await applyAcpRuntimeSelection({
+      capabilities: this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities,
+      client,
+      sessionId,
+      runtime,
+      reasoningEffort,
+    });
   }
 
   setAcpSessionRuntimeOption(
@@ -8935,14 +8931,19 @@ export class DesktopBackendRegistry {
     }, host: {
       providers: {
         claude: async () => await this.claudeBackend.startThread({ cwd: cwd!, executionMode: effectiveExecutionMode, model: modelSettings.model, linkedDirectories: resolvedLinkedDirectories }),
-        acp: async () => await this.startAcpSession({
-          backend: backend as AcpBackendId,
-          cwd,
-          executionMode: effectiveExecutionMode,
-          acpRuntime,
-          reasoningEffort: modelSettings.reasoningEffort,
-          mcpRegistration: acpMcpRegistration,
-        }),
+        acp: async () => {
+          const started = await this.startAcpSession({
+            backend: backend as AcpBackendId,
+            cwd,
+            executionMode: effectiveExecutionMode,
+            acpRuntime,
+            reasoningEffort: modelSettings.reasoningEffort,
+            mcpRegistration: acpMcpRegistration,
+          });
+          // Less than asked when the session lacked the native Yolo.
+          metadata.executionMode = started.executionMode;
+          return started;
+        },
         codex: async () => await (
             client ?? this.getClient(backend, effectiveExecutionMode)
           ).startThread({
@@ -8992,9 +8993,13 @@ export class DesktopBackendRegistry {
             projectKey: cwd,
             createdAt: startedAt,
             updatedAt: startedAt,
-            executionMode: effectiveExecutionMode,
+            executionMode: metadata.executionMode,
             ...modelSettings,
-            acpRuntime,
+            // What the session applied: a start falls back from a mode the
+            // new session does not list.
+            acpRuntime: isAcpBackendId(backend)
+              ? this.acpBackend.getSession(backend, threadId)?.acpRuntime ?? acpRuntime
+              : acpRuntime,
             codexEnvironmentRuntime,
             linkedDirectories: dedupeLinkedDirectoriesByNormalizedIdentity(
               (
