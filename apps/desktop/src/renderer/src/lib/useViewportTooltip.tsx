@@ -120,6 +120,13 @@ export function portalViewportTop(): number {
  * unrelated tooltip.
  */
 let activePlainTooltip: { current: () => void } | null = null;
+let latestPlainTooltipRequest = 0;
+
+/** Record the triggering event when a plain tooltip must mount before it can show. */
+export function reservePlainTooltipRequest(): number {
+  latestPlainTooltipRequest += 1;
+  return latestPlainTooltipRequest;
+}
 
 export type TooltipPoint = { x: number; y: number };
 
@@ -373,6 +380,8 @@ export function tooltipHandlers(
 export function useViewportTooltip(options: {
   /** CSS class applied to the rendered tooltip element. */
   className: string;
+  /** Release an owner that mounts this controller only for an active anchor. */
+  onDismiss?: (target: HTMLElement) => void;
   /** Beside the anchor, level with the target: right, left, below, above. */
   placement?: "above-below" | "beside";
   /**
@@ -418,7 +427,8 @@ export function useViewportTooltip(options: {
    * naming an absent element is a dangling reference.
    */
   tooltipId: string;
-  show: (target: HTMLElement, content: ReactNode) => void;
+  /** A deferred plain tooltip passes the request it reserved at the trigger. */
+  show: (target: HTMLElement, content: ReactNode, reservedRequest?: number) => void;
   /**
    * Show beside the pointer instead of above or below `target`, for a target
    * too large for its edge to say what the tooltip is about. `target` is
@@ -457,7 +467,7 @@ export function useViewportTooltip(options: {
   visible: boolean;
   tooltipNode: ReactNode;
 } {
-  const { className, getHorizontalBounds, placement, getAnchorRect, interactive } = options;
+  const { className, getHorizontalBounds, placement, getAnchorRect, interactive, onDismiss } = options;
   const interactiveRef = useRef(interactive);
   interactiveRef.current = interactive;
   const tooltipRef = useRef<HTMLDivElement>(null);
@@ -504,6 +514,7 @@ export function useViewportTooltip(options: {
 
   const hide = useCallback((): void => {
     recordRendererUpdate(RendererUpdateEvent.tooltipHide, tooltipId);
+    const target = targetRef.current;
     if (activePlainTooltip === hideRef) {
       activePlainTooltip = null;
     }
@@ -519,14 +530,16 @@ export function useViewportTooltip(options: {
       pointerFrameRef.current = null;
     }
     setState(undefined);
-  }, [clearHoverDelay, tooltipId]);
+    if (target) onDismiss?.(target);
+  }, [clearHoverDelay, onDismiss, tooltipId]);
   hideRef.current = hide;
 
   /** Take the window's one plain-tooltip slot, hiding whoever held it. */
-  const claimPlainTooltipSlot = useCallback((): void => {
+  const claimPlainTooltipSlot = useCallback((reservedRequest: number | undefined): void => {
     if (interactiveRef.current) {
       return;
     }
+    if (reservedRequest === undefined) reservePlainTooltipRequest();
     const previous = activePlainTooltip;
     activePlainTooltip = hideRef;
     if (previous && previous !== hideRef) {
@@ -707,8 +720,12 @@ export function useViewportTooltip(options: {
     bridge.style.height = `${rect.height}px`;
   }, [state, placement]);
 
-  const show = useCallback((target: HTMLElement, content: ReactNode): void => {
+  const show = useCallback((target: HTMLElement, content: ReactNode, reservedRequest?: number): void => {
     recordRendererUpdate(RendererUpdateEvent.tooltipShow, tooltipId);
+    if (reservedRequest !== undefined && reservedRequest !== latestPlainTooltipRequest) {
+      onDismiss?.(target);
+      return;
+    }
     clearHoverDelay();
     setDelayPending(false);
     if (isNativeDragInteractionActive()) {
@@ -716,14 +733,16 @@ export function useViewportTooltip(options: {
       targetRectRef.current = null;
       anchorSettlingRef.current = false;
       setState(undefined);
+      onDismiss?.(target);
       return;
     }
     const rect = rememberTarget(target);
     if (!rect) {
       setState(undefined);
+      onDismiss?.(target);
       return;
     }
-    claimPlainTooltipSlot();
+    claimPlainTooltipSlot(reservedRequest);
     const horizontalBounds = getHorizontalBounds?.(target);
     pointerRef.current = null;
     pointerBoundsRef.current = horizontalBounds;
@@ -735,7 +754,7 @@ export function useViewportTooltip(options: {
       targetLeft: rect.left,
       targetRight: rect.left + rect.width,
     });
-  }, [claimPlainTooltipSlot, clearHoverDelay, getHorizontalBounds, rememberTarget, tooltipId]);
+  }, [claimPlainTooltipSlot, clearHoverDelay, getHorizontalBounds, onDismiss, rememberTarget, tooltipId]);
 
   const showAtPointer = useCallback(
     (target: HTMLElement, point: TooltipPoint, content: ReactNode): void => {

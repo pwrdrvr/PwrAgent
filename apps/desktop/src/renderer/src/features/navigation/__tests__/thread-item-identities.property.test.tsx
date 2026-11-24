@@ -16,7 +16,7 @@ import { ThreadTodoCountsContext, useThreadTodos } from "../../thread-todos/useT
 import { ThreadTodoRevealContext } from "../../thread-todos/thread-todo-reveal";
 import { ThreadDependencyIndicatorsContext, threadDependencyIndicatorKey, useThreadDependencyIndicators,
   useThreadDependencyIndicatorsValue } from "../../thread-dependencies/useThreadDependencyIndicators";
-import * as tooltips from "../../../lib/useViewportTooltip";
+import * as providerChips from "../provider-chip-visibility";
 import * as identity from "../../../lib/federated-thread-events";
 import { TOOLTIP_HOVER_DELAY_MS } from "../../../lib/useViewportTooltip";
 import { ThreadMetaChips } from "../ThreadMetaChips";
@@ -83,7 +83,7 @@ async function fixture(n: number) {
   await waitFor(() => expect(todos.openTodos).toHaveLength(n));
   await waitFor(() => expect(indicators.size).toBe(n));
   vi.useFakeTimers();
-  const tooltip = vi.spyOn(tooltips, "useViewportTooltip");
+  const contentRenders = vi.spyOn(providerChips, "useProviderChipNeeded");
   const projections = vi.spyOn(identity, "threadSummaryIdentityKey");
   api.listOperatorRequests.mockClear(); api.snapshotThreadTodos.mockClear(); api.manageThreadDependencies.mockClear();
   let revision = 0;
@@ -91,7 +91,7 @@ async function fixture(n: number) {
     for (const listener of listeners) listener({ backend: "codex", notification: { method: "thread/dependencies/updated", params: { threadId, dependencyId } } });
     await vi.advanceTimersByTimeAsync(150);
   }); };
-  return { view, keys, threads, api, tooltip, projections, show, openWait, reveal,
+  return { view, keys, threads, api, contentRenders, projections, show, openWait, reveal,
     current: () => ({ requests, todos, indicators, context }),
     async renameThreadTitle(title: string) {
       response = { ...response, questions: response.questions.map((question, i) => i === 0 ? { ...question, threadTitle: title } : question) };
@@ -136,7 +136,7 @@ it.each(["wait", "todo", "dependency"] as const)("unrelated %s updates retain ev
         }
         expect(f.current().context.open).toBe(action);
         expect(f.view.container.innerHTML).toBe(html);
-        expect(f.tooltip).not.toHaveBeenCalled();
+        expect(f.contentRenders).not.toHaveBeenCalled();
       }
     } finally { f.view.unmount(); vi.restoreAllMocks(); vi.useRealTimers(); }
   }), { numRuns: 15 });
@@ -153,7 +153,7 @@ it.each([20, 40])("budgets 20 offscreen changes per producer at %i rows", async 
         await f.step(scenario, i);
         for (const [key, value] of f.groups(scenario)) if (before.get(key) !== value) publishedGroups++;
       }
-      expect({ projections: f.projections.mock.calls.length, tooltipHooks: f.tooltip.mock.calls.length, publishedGroups }).toEqual(budget);
+      expect({ projections: f.projections.mock.calls.length, contentRenders: f.contentRenders.mock.calls.length, publishedGroups }).toEqual(budget);
       expect(f.api.listOperatorRequests.mock.calls.length).toBe(scenario === "wait" ? 20 : 0);
       expect(f.api.snapshotThreadTodos).not.toHaveBeenCalled();
       expect(f.api.manageThreadDependencies.mock.calls.length).toBe(scenario === "dependency" ? 20 : 0);
@@ -182,7 +182,7 @@ it.each(["wait", "todo", "dependency"] as const)("keeps current %s tooltips and 
     fireEvent.click(chip);
     expect(f.show).toHaveBeenLastCalledWith({ thread: f.threads[0] });
   }
-  expect(f.tooltip.mock.calls.length).toBeGreaterThan(0);
+  expect(f.contentRenders.mock.calls.length).toBeGreaterThan(0);
 });
 
 it("publishes a renamed wait's latest action payload without replacing its remote namesake", async () => {
