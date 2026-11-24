@@ -31,11 +31,15 @@ import {
 } from "@pwragent/shared/contracts/thread-todos";
 import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared/contracts/navigation";
 import { defaultModelOption } from "@pwragent/shared/model-defaults";
+import { normalizePullRequestUrl } from "@pwragent/shared/pull-request-review";
 import { resolveThreadTodoStartAccess } from "@pwragent/shared/thread-todo-access";
 import { threadReviewTodo } from "@pwragent/shared/contracts/thread-reviews";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools.js";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getMainLogger } from "../log.js";
+import { buildPullRequestReferenceUrl } from "../pr-status/forge-reference";
+import { resolveGitHubRepoForDirectory } from "../pr-status/git-remote";
+import { parsePrRefFromUrl } from "../pr-status/github-graphql-client";
 import { GithubPrFetcher } from "../pr-status/github-pr-fetcher.js";
 import { createThreadTodoStorage } from "../storage/desktop-runtime-storage.js";
 import {
@@ -95,6 +99,35 @@ let mergeOfferGate: MergeOfferGate | undefined;
 
 export function setThreadTodoMergeOfferGate(gate: MergeOfferGate | undefined): void {
   mergeOfferGate = gate;
+}
+
+async function resolveReviewPullRequestNumber(
+  thread: Pick<ThreadTodo, "backend" | "threadId">,
+  cwd: string | undefined,
+  number: number,
+): Promise<string> {
+  const attached = new Map<string, string>();
+  for (const url of getDesktopOverlayStore().readThreadPullRequestUrls(thread)) {
+    if (parsePrRefFromUrl(url)?.number === number) {
+      const normalized = normalizePullRequestUrl(url);
+      attached.set(normalized.toLowerCase(), normalized);
+    }
+  }
+  if (attached.size > 1) {
+    throw new ThreadTodoError("invalid_arguments", `PR #${number} matches multiple attached PRs. Pass its full github.com URL.`);
+  }
+  const attachedUrl = attached.values().next().value;
+  if (attachedUrl) return attachedUrl;
+
+  if (cwd && Number.isSafeInteger(number)) {
+    const repo = await resolveGitHubRepoForDirectory(cwd);
+    if (repo?.host === "github.com") {
+      const url = buildPullRequestReferenceUrl({ provider: repo.host, org: repo.owner, repo: repo.repo, number });
+      const pr = await new GithubPrFetcher().fetchPullRequestByUrl({ cwd, url });
+      if (pr) return pr.url;
+    }
+  }
+  throw new ThreadTodoError("invalid_arguments", `Could not resolve PR #${number} from this thread's attachments or repository. Pass its full github.com URL.`);
 }
 
 export function getThreadTodoService(): ThreadTodoService {
@@ -629,7 +662,7 @@ export function installThreadTodoRuntime(params: {
       });
     },
     add: async (context, rawInput) => {
-      const input = await settleAddInput(context, rawInput);
+      let input = await settleAddInput(context, rawInput);
       if (input.action?.type === "merge_pull_request" && mergeOfferGate) {
         // A gate that cannot read the PR does not block the card.
         const refusal = await mergeOfferGate(
@@ -645,6 +678,11 @@ export function installThreadTodoRuntime(params: {
           .catch(() => undefined),
         listProjectsForTodo(),
       ]);
+      const action = input.action;
+      if (action?.type === "start_review" && action.pullRequest && /^[1-9]\d*$/.test(action.pullRequest)) {
+        const pullRequest = await resolveReviewPullRequestNumber(context, cwd, Number(action.pullRequest));
+        input = { ...input, action: { ...action, pullRequest } };
+      }
       const targetProject = input.project
         ? matchProject(input.project, projects)
         : undefined;

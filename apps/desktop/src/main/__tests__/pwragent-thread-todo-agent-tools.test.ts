@@ -1,4 +1,6 @@
+import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import {
   THREAD_TODO_ITEM_TEXT_MAX_LENGTH,
@@ -13,7 +15,13 @@ import {
   normalizeUpdateTodoArgs,
   type PwrAgentThreadTodoHandler,
 } from "../agent-tools/pwragent-thread-todo-agent-tools";
+import type { DesktopBackendRegistry } from "../app-server/backend-registry";
+import * as gitRemote from "../pr-status/git-remote";
+import { GithubPrFetcher } from "../pr-status/github-pr-fetcher";
+import * as appState from "../state/app-state";
+import { SqliteOverlayStore } from "../storage/overlay-store-sqlite";
 import { ThreadTodoError, ThreadTodoService } from "../thread-todos/thread-todo-service";
+import { installThreadTodoRuntime, resetThreadTodoServiceForTests } from "../thread-todos/thread-todo-runtime";
 import { ThreadTodoStore } from "../storage/thread-todo-store";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
@@ -103,6 +111,22 @@ describe("normalizeAddTodoArgs", () => {
         action: { type: "merge_pull_request", pullRequest: "12" },
       },
     });
+  });
+
+  it("retains the PR identity for every valid review URL", () => {
+    fc.assert(fc.property(fc.nat({ max: 1_000_000 }), fc.boolean(), (index, trailingSlash) => {
+      const pullRequest = `https://github.com/acme/widgets/pull/${index + 1}`;
+      expect(normalizeAddTodoArgs({
+        title: "Review the PR",
+        action: { type: "start_review", pullRequest: trailingSlash ? `${pullRequest}/` : pullRequest },
+      })).toMatchObject({ ok: true, value: { action: { type: "start_review", pullRequest } } });
+    }));
+  });
+
+  it("still allows a review card with no PR specified", () => {
+    const action = { type: "start_review" };
+    expect(normalizeAddTodoArgs({ title: "Review the patch", action }))
+      .toMatchObject({ ok: true, value: { action } });
   });
 
   it("keeps a handoff's optional fields and drops blank ones", () => {
@@ -266,6 +290,69 @@ describe("normalizeUpdateTodoArgs", () => {
 });
 
 describe("thread to-do tool dispatch", () => {
+  it.each([
+    { name: "an unattached PR's explicit URL", reference: "https://github.com/acme/widgets/pull/41/", storedNumber: 41 },
+    { name: "an attached PR number", reference: 42, storedNumber: 42 },
+    { name: "a PR number in the checkout's repository", reference: "#43", storedNumber: 43 },
+    { name: "a missing PR number", reference: 44, error: "Could not resolve PR #44" },
+    { name: "an ambiguous PR number", reference: 45, error: "PR #45 matches multiple attached PRs" },
+    { name: "a branch name", reference: "main", error: "must be a PR number or a github.com pull request URL" },
+    { name: "an unsafe PR number", reference: 1e21, error: "must be a PR number or a github.com pull request URL" },
+  ])("resolves or refuses $name before storing a review card", async ({ reference, storedNumber, error }) => {
+    const db = openInMemoryStateDb();
+    const overlay = new SqliteOverlayStore(db);
+    vi.spyOn(appState, "getAppStateDb").mockReturnValue(db);
+    vi.spyOn(appState, "getAppOverlayStore").mockReturnValue(overlay);
+    const cwd = "/repo/worktree";
+    const resolveRepo = vi.spyOn(gitRemote, "resolveGitHubRepoForDirectory")
+      .mockResolvedValue({ host: "github.com", owner: "acme", repo: "widgets" });
+    const pr = (number: number, repo = "widgets"): PrSummary => ({
+      provider: "github.com", org: "acme", repo, number, state: "passing",
+      url: `https://github.com/acme/${repo}/pull/${number}`,
+    });
+    const fetchPr = vi.spyOn(GithubPrFetcher.prototype, "fetchPullRequestByUrl")
+      .mockImplementation(async ({ url }) => url === pr(43).url ? pr(43) : undefined);
+    let handler: PwrAgentThreadTodoHandler | undefined;
+    const registry = {
+      onEvent: () => () => {},
+      setPwrAgentThreadTodoHandler: (value: PwrAgentThreadTodoHandler) => { handler = value; },
+      resolveThreadWorkspaceCwd: async () => cwd,
+      resolveThreadPrimaryDirectory: async () => undefined,
+    };
+    try {
+      await overlay.setThreadPullRequests({ ...CONTEXT, prs: [pr(42), pr(45), pr(45, "other")] });
+      installThreadTodoRuntime({
+        registry: registry as unknown as DesktopBackendRegistry,
+        broadcast: () => {}, listProjects: async () => [], readDefaultMergeMethod: () => "squash",
+        feed: { loadOwners: async () => [], managedThreadKeys: () => new Set(), onDelta: () => {} },
+      });
+      const result = await tool("add_todo", handler).dispatch({
+        title: "Review the PR", action: { type: "start_review", pullRequest: reference },
+      }, CONTEXT);
+      const stored = new ThreadTodoStore(db).list({ ...CONTEXT, status: "open" });
+
+      if (storedNumber !== undefined) {
+        const action = { type: "start_review", pullRequest: pr(storedNumber).url };
+        expect(result).toMatchObject({ ok: true, data: { todo: { action } } });
+        expect(stored.map((todo) => todo.action)).toEqual([action]);
+      } else {
+        expect(result).toMatchObject({ ok: false, code: "invalid_arguments", message: expect.stringContaining(error!) });
+        expect(stored).toEqual([]);
+      }
+      if (reference === "#43" || reference === 44) {
+        expect(resolveRepo).toHaveBeenCalledWith(cwd);
+        expect(fetchPr).toHaveBeenCalledWith({ cwd, url: pr(storedNumber ?? 44).url });
+      } else {
+        expect(resolveRepo).not.toHaveBeenCalled();
+        expect(fetchPr).not.toHaveBeenCalled();
+      }
+    } finally {
+      resetThreadTodoServiceForTests();
+      vi.restoreAllMocks();
+      db.close();
+    }
+  });
+
   it("updates one of the calling thread's cards", async () => {
     const handler = createHandler();
     const result = await tool("update_todo", handler).dispatch(
