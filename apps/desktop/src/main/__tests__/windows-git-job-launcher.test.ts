@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { runGitCommand } from "../app-server/git-executable";
 import { PR_METADATA_PRIORITY, runPrMetadataGit } from "../pr-status/pr-metadata-process";
 import { readWindowsJobStartupTelemetry, windowsJobCleanupVerified, wrapCommandInWindowsJob } from "../windows-job-wrapper";
+import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
 
 const fixture = vi.hoisted(() => ({ launcher: "" }));
 vi.mock("../windows-job-launcher-path", () => ({ windowsGitJobLauncher: () => fixture.launcher }));
@@ -19,10 +20,11 @@ vi.mock("node:child_process", async (importOriginal) => {
 describe.skipIf(process.platform !== "win32")("compiled Windows stack Git launcher", () => {
   let sandbox: string;
   let git: string;
+  let gitEnv: NodeJS.ProcessEnv;
   let root: string;
 
   function runFixtureGit(...args: string[]): string {
-    return childProcess.execFileSync(git, ["-C", root, ...args], { encoding: "utf8", windowsHide: true });
+    return childProcess.execFileSync(git, ["-C", root, ...args], { env: gitEnv, encoding: "utf8", windowsHide: true });
   }
 
   beforeAll(async () => {
@@ -32,8 +34,20 @@ describe.skipIf(process.platform !== "win32")("compiled Windows stack Git launch
     fixture.launcher = path.join(sandbox, "pwragent-windows-job.exe");
     expect(existsSync(fixture.launcher)).toBe(true);
     git = childProcess.execFileSync("where.exe", ["git.exe"], { encoding: "utf8", windowsHide: true }).split(/\r?\n/)[0]!;
+    // A signing-enabled global config would break the fixture's first commit.
+    const operatorConfig = path.join(sandbox, "operator-gitconfig");
+    const missingSigner = JSON.stringify(path.join(sandbox, "missing-fixture-signer.exe"));
+    await writeFile(operatorConfig, `[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = ${missingSigner}\n`);
+    vi.stubEnv("GIT_CONFIG_GLOBAL", operatorConfig);
+    const restoreGitEnv = isolateProcessGitEnvironment(sandbox);
+    try {
+      gitEnv = { ...process.env };
+    } finally {
+      restoreGitEnv();
+      vi.unstubAllEnvs();
+    }
     root = path.join(sandbox, "fixture clone");
-    childProcess.execFileSync(git, ["init", "-b", "main", root], { cwd: sandbox, windowsHide: true });
+    childProcess.execFileSync(git, ["init", "-b", "main", root], { cwd: sandbox, env: gitEnv, windowsHide: true });
     runFixtureGit("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "base");
     await writeFile(path.join(sandbox, "hold-checkout.cjs"), `
       require('node:fs').writeFileSync(process.env.FIXTURE_PID, String(process.pid));
@@ -57,7 +71,7 @@ describe.skipIf(process.platform !== "win32")("compiled Windows stack Git launch
     spawn.mockClear();
     try {
       const env = {
-        ...process.env, PWRAGENT_GIT_PATH: git, GIT_CONFIG_COUNT: "1",
+        ...gitEnv, PWRAGENT_GIT_PATH: git, GIT_CONFIG_COUNT: "1",
         GIT_CONFIG_KEY_0: "fixture.marker", GIT_CONFIG_VALUE_0: 'a quote " and a backslash \\',
       };
       const commands = [
@@ -114,7 +128,7 @@ describe.skipIf(process.platform !== "win32")("compiled Windows stack Git launch
     spawn.mockClear();
     const read = runPrMetadataGit(checkout, [path.join(sandbox, "git-handoff.cjs")], {
       timeout: stop === "timeout" ? 5_000 : 30_000,
-      env: { ...process.env, PWRAGENT_GIT_PATH: process.execPath, FIXTURE_WORKTREE: checkout, FIXTURE_PID: pidFile },
+      env: { ...gitEnv, PWRAGENT_GIT_PATH: process.execPath, FIXTURE_WORKTREE: checkout, FIXTURE_PID: pidFile },
       ownProcessTree: true, signal: controller.signal, purpose: "stack-checkout",
     }, { signal: controller.signal, priority: () => PR_METADATA_PRIORITY.selected });
     void read.catch(() => undefined);

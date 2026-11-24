@@ -1,5 +1,9 @@
 import { EventEmitter } from "node:events";
-import { describe, expect, it } from "vitest";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it, vi } from "vitest";
+import { windowsGitJobLauncher } from "../src/main/windows-job-launcher-path";
 import {
   DEV_SETUP_SCRIPTS,
   ELECTRON_DEV_ENV_KEYS,
@@ -7,6 +11,14 @@ import {
   runLongLived,
   sanitizeDevEnv
 } from "./dev.mjs";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, existsSync: vi.fn(actual.existsSync) };
+});
+vi.mock("../src/main/runtime-resources", () => ({
+  isDevelopmentRuntime: () => true, runtimeResourcesPath: () => undefined,
+}));
 
 function createFakeProcess() {
   const listeners = new Map();
@@ -50,7 +62,7 @@ describe("dev launch wrapper", () => {
     const status = runDevSetup("node", env, (command, args, childEnv) => {
       calls.push([command, args, childEnv]);
       return 0;
-    });
+    }, "darwin");
 
     expect(status).toBe(0);
     expect(calls).toEqual(
@@ -60,6 +72,26 @@ describe("dev launch wrapper", () => {
         env,
       ])
     );
+  });
+
+  it("finds the launcher built by Windows dev setup after Vite clears the main output", () => {
+    const desktop = fileURLToPath(new URL("../", import.meta.url));
+    const launcher = "pwragent-windows-job.exe";
+    const files = new Set();
+    const status = runDevSetup("node", {}, (_node, [script, directory]) => {
+      if (script === "./scripts/build-windows-job-launcher.mjs") {
+        files.add(path.resolve(desktop, directory, launcher));
+      }
+      return 0;
+    }, "win32");
+    expect(status).toBe(0);
+    files.delete(path.join(desktop, "out/main", launcher));
+    vi.mocked(existsSync).mockImplementation((file) => files.has(file));
+    try {
+      expect(windowsGitJobLauncher()).toBe(path.join(desktop, ".local/windows-job-launcher", launcher));
+    } finally {
+      vi.mocked(existsSync).mockRestore();
+    }
   });
 
   it("checks sandbox permissions after preparing the runtime", () => {
@@ -78,7 +110,7 @@ describe("dev launch wrapper", () => {
     const status = runDevSetup("node", {}, (_command, args) => {
       calls.push(args);
       return statuses.shift();
-    });
+    }, "darwin");
 
     expect(status).toBe(1);
     expect(calls).toEqual(
