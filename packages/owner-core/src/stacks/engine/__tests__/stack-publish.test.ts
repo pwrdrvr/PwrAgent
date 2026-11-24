@@ -102,11 +102,11 @@ test("publishes when the second ref is already at its intended tip", async () =>
       .toBe(`${nextBottom} refs/heads/bottom\n${nextTop} refs/heads/top`);
   }));
 
-test("publishes only changed layers and preserves a collaborator's divergent tip", async () =>
+test("publishes an ahead layer and preserves a collaborator's divergent tip", async () =>
   withPublishRepos(async ({ local, remote, bottom, nextBottom, top, nextTop }) => {
     await git(remote, "update-ref", "refs/heads/top", nextBottom, top);
     await pushStackLayers(local, remote, [
-      { branch: "bottom", previous: bottom, expected: bottom, next: nextBottom },
+      { branch: "bottom", previous: nextBottom, expected: bottom, next: nextBottom },
       { branch: "top", previous: nextTop, expected: nextTop, next: nextTop },
     ]);
     expect(await git(remote, "show-ref", "--heads"))
