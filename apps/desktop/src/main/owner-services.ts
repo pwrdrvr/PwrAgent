@@ -456,6 +456,7 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
   const resourceCheckouts = bootMode === "active-profile"
     ? await initializeResourceCheckouts(federationRuntime, options.approvedLabCheckouts, host.application.isPackaged)
     : undefined;
+  const resourceCheckoutsEnabled = () => getDesktopSettingsService().resolveResourceCheckoutsEnabled?.() === true;
   if (resourceCheckouts) registry.setResourceCheckoutHandler(
     createResourceCheckoutToolHandler(
       resourceCheckouts,
@@ -465,6 +466,7 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
       }, prompt, bind),
     ),
     (entry, id) => service.prepareResourceCheckoutWakeup(entry, id),
+    resourceCheckoutsEnabled,
   );
   getDesktopBackendRegistry().setPwrAgentAppManagementHandler(
     createPwrAgentAppManagementHandler({

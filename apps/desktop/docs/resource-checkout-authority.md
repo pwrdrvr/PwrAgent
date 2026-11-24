@@ -1,7 +1,10 @@
 # Resource checkout authority
 
 [Resources](resource-checkouts-ui.md) uses the same owner service as the
-`pwragent` agent tools. The owner derives a local operator from its main
+`pwragent` agent tools. Agent discovery and invocation of the
+`resource_checkout_*` tools are gated behind **Settings → Experimental →
+Federation resources** (`[experimental] resource_checkouts_enabled = true`,
+disabled by default). The owner derives a local operator from its main
 window and an agent from its authenticated thread. Request keys are scoped
 to the actor. The profile mints a Federation instance ID once if it has
 none, giving operator and agent receipts a stable owner across restarts.
