@@ -215,6 +215,7 @@ import {
 } from "../../icons";
 import { AppIcon } from "../../components/AppIcon";
 import { InstanceChip, InstanceGlyph } from "../federation/InstanceGlyph";
+import { AgentThreadChip } from "../navigation/AgentThreadChip";
 import { isOutdatedOwnerError } from "../workspace-recovery/MissingWorktreeCard";
 import { resolveLifecycleState } from "../pr-status/pr-chip-state";
 import { filterAtReferenceCandidates } from "../../lib/instance-references";
@@ -15472,9 +15473,6 @@ function useComposerController(props: ComposerProps) {
                     className={`composer__autocomplete-option${index === activeHashReferenceIndex ? " is-active" : ""}`}
                     role="option"
                     tabIndex={index === activeHashReferenceIndex ? 0 : -1}
-                    // The visible label is one clamped line; hovering the
-                    // row still gives the operator the whole title.
-                    title={threadTitle}
                     type="button"
                     onMouseDown={(event) => {
                       event.preventDefault();
@@ -15500,16 +15498,18 @@ function useComposerController(props: ComposerProps) {
                   >
                     <span className="composer__autocomplete-title">
                       <ThreadIcon size={13} aria-hidden="true" />
-                      <span className="composer__autocomplete-label">
+                      <span className="composer__autocomplete-label tooltip-target" data-tooltip={threadTitle}>
                         <HighlightedAutocompleteLabel
                           label={`#${threadLabel.replace(/^#/, "")}`}
                           matchAnywhere
                           query={hashReferenceTrigger?.query.trim() ?? ""}
                         />
                       </span>
-                      <span className="composer__autocomplete-source">
-                        Thread
-                      </span>
+                      {thread.agent ? <AgentThreadChip /> : (
+                        <span className="composer__autocomplete-source">
+                          Thread
+                        </span>
+                      )}
                     </span>
                     <span className="composer__autocomplete-meta composer__autocomplete-meta--thread">
                       {thread.federation?.ref.target.scope === "remote" ? (

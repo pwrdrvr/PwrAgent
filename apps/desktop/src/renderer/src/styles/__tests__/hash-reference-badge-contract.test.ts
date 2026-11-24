@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { cssRuleBody } from "./css-rule-body";
 
 /**
- * Pins the `#` picker's THREAD / PR kind badge to the row's right edge.
+ * Pins the `#` picker's Agent, Thread, and PR badges to the row's right edge.
  *
  * The badge follows the title label inside one flex row, and the label is
  * `flex: 0 1 auto` so it can shrink to an ellipsis. That made the badge's
@@ -20,9 +20,9 @@ import { cssRuleBody } from "./css-rule-body";
  * fixture thread whose title is too short to clamp.
  */
 describe("hash reference badge contract", () => {
-  it("pushes the kind badge to the end of the title row", () => {
+  it("pushes every kind badge to the end of the title row", () => {
     const badge = cssRuleBody(
-      ".composer__autocomplete--hash-references .composer__autocomplete-source",
+      ".composer__autocomplete--hash-references :is(.composer__autocomplete-source, .chip--agent)",
     );
     expect(badge).toMatch(/margin-left:\s*auto\s*;/);
     // The badge is the row's only classifier, so the label still absorbs
@@ -37,5 +37,12 @@ describe("hash reference badge contract", () => {
     expect(title).toMatch(/display:\s*inline-flex\s*;/);
     const label = cssRuleBody(".composer__autocomplete-label");
     expect(label).toMatch(/flex:\s*0 1 auto\s*;/);
+  });
+
+  it("uses a neutral treatment for the Agent badge in hash search", () => {
+    const badge = cssRuleBody(".composer__autocomplete--hash-references .chip--agent");
+    expect(badge).toContain("border-color: var(--border-strong);");
+    expect(badge).toContain("background: transparent;");
+    expect(badge).toContain("color: var(--text-primary);");
   });
 });

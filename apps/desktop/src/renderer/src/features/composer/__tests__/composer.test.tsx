@@ -5299,9 +5299,9 @@ describe("Composer", () => {
       "#Apparently we don't allow cross-provider parent/child relationships? We…",
     );
     expect(label?.textContent).not.toContain("refuse to render it");
-    // The untruncated title stays reachable on the row itself.
-    expect(options[0]).toHaveAttribute(
-      "title",
+    // The title label exposes the full title independently of the row's badges.
+    expect(label).toHaveAttribute(
+      "data-tooltip",
       promptTitle.replace(/\s+/g, " "),
     );
 
@@ -5967,7 +5967,86 @@ describe("Composer", () => {
     });
   });
 
-  it("appends Cmd+K federation results and inserts a remote thread link", async () => {
+  it.each(["local", "remote"] as const)(
+    "uses Agent metadata to label %s hash search results",
+    async (scope) => {
+      const currentThread: NavigationThreadSummary = {
+        id: "thread-current",
+        title: "Current thread",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+      };
+      const results = [false, true].map((isAgent): NavigationThreadSummary => {
+        const id = isAgent ? "thread-triage" : "thread-notes";
+        return {
+          ...currentThread,
+          id,
+          title: isAgent ? "Weekly triage" : "Weekly notes",
+          ...(isAgent ? {
+            agent: {
+              name: "Weekly triage",
+              instructionLineCount: 0,
+              instructionsTooLong: false,
+              updatedAt: 1,
+            },
+          } : {}),
+          ...(scope === "remote" ? {
+            federation: {
+              ref: buildFederatedThreadRef({
+                backend: "codex",
+                instanceId: "peer-laptop",
+                threadId: id,
+              }),
+              instanceLabel: "Laptop",
+              peerStatus: "connected",
+              capabilities: [],
+            },
+          } : {}),
+        };
+      });
+      render(
+        <Composer
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            ...(scope === "remote" ? {
+              jumpSearchRemoteThreads: async () => ({ results }),
+            } : {}),
+          }}
+          skills={[]}
+          thread={currentThread}
+          threads={scope === "local" ? [currentThread, ...results] : [currentThread]}
+        />,
+      );
+
+      fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), {
+        target: { value: "Ask #Weekly" },
+      });
+      const listbox = await screen.findByRole("listbox", {
+        name: "Threads and pull requests",
+      });
+
+      // For either owner, the badge follows the result's Agent metadata.
+      for (const result of results) {
+        const option = await within(listbox).findByRole("option", {
+          name: new RegExp(`#${result.title}`),
+        });
+        const row = within(option);
+        if (result.agent) {
+          const badge = row.getByLabelText("Agent thread");
+          expect(badge).toHaveTextContent(/^Agent$/);
+          expect(badge.closest("[title], [data-tooltip]")).toBeNull();
+          expect(row.queryByText("Thread", { exact: true })).not.toBeInTheDocument();
+        } else {
+          expect(row.getByText("Thread", { exact: true })).toBeInTheDocument();
+          expect(row.queryByText("Agent", { exact: true })).not.toBeInTheDocument();
+        }
+      }
+    },
+  );
+
+  it("appends Cmd+K federation results and inserts a remote Agent thread link", async () => {
     const currentThread: NavigationThreadSummary = {
       id: "thread-current",
       title: "Current thread",
@@ -5983,6 +6062,12 @@ describe("Composer", () => {
       source: "codex",
       linkedDirectories: [],
       inbox: { inInbox: false },
+      agent: {
+        name: "Remote fix",
+        instructionLineCount: 0,
+        instructionsTooLong: false,
+        updatedAt: 1,
+      },
       federation: {
         ref: buildFederatedThreadRef({
           backend: "codex",
@@ -6036,6 +6121,8 @@ describe("Composer", () => {
       expect.any(Function),
     );
     expect(within(listbox).getByText("Other instances")).toBeInTheDocument();
+    expect(within(remoteOption).getByText("Agent", { exact: true }))
+      .toBeInTheDocument();
     expect(within(remoteOption).getByLabelText("Runs on Laptop"))
       .toBeInTheDocument();
     fireEvent.click(remoteOption);

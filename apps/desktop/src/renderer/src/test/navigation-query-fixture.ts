@@ -208,6 +208,12 @@ export function navigationQueryFixture(
         prsTruncated: thread.prsTruncated, prCount: thread.prCount,
         gitWorkingState: thread.gitWorkingState, gitWorkingStateFetchedAt: thread.gitWorkingStateFetchedAt,
         federation: thread.federation, pinnedRank: thread.pinnedRank, parentThreadId: thread.parentThreadId,
+        ...(thread.agent ? { agent: {
+          name: thread.agent.name,
+          instructionLineCount: thread.agent.instructionLineCount,
+          instructionsTooLong: thread.agent.instructionsTooLong,
+          updatedAt: thread.agent.updatedAt,
+        } } : {}),
         parentThreadBackend: thread.parentThreadBackend, parentThreadInstanceId: thread.parentThreadInstanceId,
         subthreadsCollapsed: thread.subthreadsCollapsed, reactions: thread.reactions, model: thread.model,
         executionMode: thread.executionMode, serviceTier: thread.serviceTier, reasoningEffort: thread.reasoningEffort,
