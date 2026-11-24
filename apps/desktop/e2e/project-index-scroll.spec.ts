@@ -44,14 +44,22 @@ async function writeReplay(root: string): Promise<string> {
   return fixturePath;
 }
 
-async function expectIndexMatchesViewport(page: Page, reactionPresent?: boolean): Promise<void> {
+async function expectIndexMatchesViewport(
+  page: Page,
+  reactionChange?: { present: boolean; previousHeight: number },
+): Promise<void> {
   await expect.poll(() => page.evaluate((expectedReaction) => {
     const list = document.querySelector<HTMLElement>(".sidebar__scroll-region > .directory-list")!;
     const nav = document.querySelector<HTMLElement>("nav.project-index")!;
     if (expectedReaction !== undefined) {
       const row = list.querySelector('[data-thread-key="codex:project-index-0"]');
       const reaction = row?.querySelector('[aria-label="Remove reaction 👀 from thread"]');
-      if (!row || Boolean(reaction) !== expectedReaction) return "waiting for rendered reaction";
+      if (!row || Boolean(reaction) !== expectedReaction.present) return "waiting for rendered reaction";
+      const height = row.closest("section.directory-row")!.getBoundingClientRect().height;
+      const resized = expectedReaction.present
+        ? height > expectedReaction.previousHeight
+        : height < expectedReaction.previousHeight;
+      if (!resized) return { reason: "waiting for project section height to change", height, ...expectedReaction };
     }
     const top = list.getBoundingClientRect().top;
     const bottom = top + list.clientHeight;
@@ -71,7 +79,7 @@ async function expectIndexMatchesViewport(page: Page, reactionPresent?: boolean)
       return "matched";
     }
     return { expected, current, visible, reserve };
-  }, reactionPresent)).toBe("matched");
+  }, reactionChange)).toBe("matched");
 }
 
 test("Project Index tracks live directory geometry during navigation and scroll", async () => {
@@ -79,6 +87,7 @@ test("Project Index tracks live directory geometry during navigation and scroll"
   try {
     const app = await launchElectronApp({
       fixturePath: await writeReplay(root),
+      appearance: { density: "compact" },
       windowSize: { width: 1280, height: 720 },
     });
     try {
@@ -92,8 +101,10 @@ test("Project Index tracks live directory geometry during navigation and scroll"
       await expect(index.getByRole("button", { name: /^Jump to Project / })).toHaveCount(projectCount);
       await expectIndexMatchesViewport(page);
 
-      const startupProject = projects.getByRole("button", { name: projectName(0), exact: true });
-      await expect(startupProject).toHaveAttribute("aria-expanded", "true");
+      const startupProject = page.getByRole("button", { name: projectName(0), exact: true });
+      const startupSection = projects.locator("section.directory-row").filter({ has: startupProject });
+      await expect(startupSection.getByRole("button", { name: projectName(0), exact: true }))
+        .toHaveAttribute("aria-expanded", "true");
       // An owner pin moves a late project above the currently open section and adds a divider.
       await projects.getByRole("button", { name: projectName(4), exact: true }).click({ button: "right" });
       await page.getByRole("menuitem", { name: "Pin Directory", exact: true }).click();
@@ -103,6 +114,7 @@ test("Project Index tracks live directory geometry during navigation and scroll"
       // Reactions use the owner navigation update path while scroll crosses sections.
       for (const [step, offset] of [235, 476, 620, 289].entries()) {
         const present = step % 2 === 0;
+        const previousHeight = await startupSection.evaluate((section) => section.getBoundingClientRect().height);
         await projects.evaluate(async (list, { offset, present }) => {
           const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
           list.scrollTop = offset;
@@ -110,8 +122,8 @@ test("Project Index tracks live directory geometry during navigation and scroll"
             backend: "codex", threadId: "project-index-0", emoji: "👀", present,
           });
         }, { offset, present });
-        // Owner acknowledgement can precede the renderer's reaction update.
-        await expectIndexMatchesViewport(page, present);
+        // Wait for the owner update to render and add or remove the chip row.
+        await expectIndexMatchesViewport(page, { present, previousHeight });
       }
 
       await expect(browser.locator(".sidebar__scroll-region")).toHaveClass(/has-selected-thread-dock-top/);
