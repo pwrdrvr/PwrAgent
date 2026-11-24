@@ -1530,6 +1530,9 @@ export function TranscriptList(props: TranscriptListProps) {
     return <p className="transcript-empty">No thread history yet.</p>;
   }
 
+  // A replay can repeat an entry id. React can strand the earlier row's DOM
+  // when it reconciles duplicate keys, including across a thread switch.
+  const rowOccurrences = new Map<string, number>();
   const content = (
     <div
       className="transcript-list"
@@ -1605,6 +1608,8 @@ export function TranscriptList(props: TranscriptListProps) {
           {transcriptRenderItems.map((item) => {
             const entryKey =
               item.type === "workPhaseGroup" ? item.id : item.entry.id;
+            const occurrence = rowOccurrences.get(entryKey) ?? 0;
+            rowOccurrences.set(entryKey, occurrence + 1);
             // Anchor each item to its turn so external surfaces (the edited-file
             // group timestamps) can scroll the transcript to a turn's position —
             // by turn id, with the turn's end/start time as a fallback for turns
@@ -1715,7 +1720,7 @@ export function TranscriptList(props: TranscriptListProps) {
               );
             return (
               <div
-                key={entryKey}
+                key={JSON.stringify([props.threadId, entryKey, occurrence])}
                 className="transcript-list__item"
                 role="listitem"
                 data-entry-id={

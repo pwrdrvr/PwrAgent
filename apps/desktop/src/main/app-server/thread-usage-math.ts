@@ -5,7 +5,7 @@ import {
   isUsageActivityEntry,
   usageActivityScope,
 } from "./overlay-transcript-entries";
-import { anchorTurnUsageEntries } from "@pwragent/shared/thread-usage-display";
+import { anchorTurnUsageEntries, hasMismatchedTurnUsageId } from "@pwragent/shared/thread-usage-display";
 import {
   estimateOpenAiCodexCreditUsage,
   estimateTokenUsageCost,
@@ -1939,7 +1939,8 @@ export function mergeTurnAnchoredUsageActivities(params: {
 }): AppServerThreadReplay {
   const usageActivities = params.activities?.filter((activity) => {
     const scope = usageActivityScope(activity);
-    return scope === "turn" || scope === "monitor";
+    return (scope === "turn" || scope === "monitor")
+      && !hasMismatchedTurnUsageId(activity.id, activity.turn?.id ?? activity.usageLine?.turnId);
   });
   if (!usageActivities?.length) {
     return params.replay;
