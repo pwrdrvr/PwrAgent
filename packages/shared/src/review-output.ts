@@ -29,14 +29,19 @@ export function reviewEntryFailure(
 export const REVIEW_OUTPUT_INSTRUCTIONS = [
   "Return only one JSON object with this exact top-level shape:",
   '{"findings":[],"overall_correctness":"patch is correct","overall_explanation":"...","overall_confidence_score":0.85}',
-  'overall_correctness must be exactly "patch is correct" or "patch is incorrect" — no other wording.',
+  'overall_correctness must be exactly "patch is correct" or "patch is incorrect" — no other wording. Use "patch is incorrect" when you report any concrete defect that should be fixed (including P0-P2 issues), and "patch is correct" when no actionable defects remain.',
   // The field had no stated meaning for most of its life, so the number the
   // card printed was whatever each model decided it meant. The example value
   // is part of the definition: a schema showing 0.0 is a value weaker models
   // copy through, and a literal zero renders as "0% confidence" beside a
   // correct verdict.
   "overall_confidence_score is how confident you are, from 0 to 1, that overall_correctness is the right verdict. It is not a quality score for the patch and not a merge recommendation. Omit the field entirely if you cannot distinguish.",
-  "Each finding must contain title, body, confidence_score, optional priority (0-3), and code_location with absolute_file_path plus line_range.start/end.",
+  "Each finding must contain title, body, confidence_score (0 to 1, reflecting certainty that the issue is real and verified in the code), priority (integer 0-3), and code_location with absolute_file_path plus line_range.start/end. Put the numeric priority in the priority field rather than repeating [P0]-[P3] in title.",
+  "Calibrate priority by impact:",
+  "- 0 (P0): Critical or release-blocking defect (severe breakage, crash, data loss/corruption, or security vulnerability). Must fix before merge.",
+  "- 1 (P1): Urgent, high-impact bug, broken contract, or major regression likely hit in normal usage. Should fix before merge.",
+  "- 2 (P2): Moderate-impact issue worth fixing (edge-case or lifecycle bug, violated repository rule, or a non-falsifying/missing regression test that leaves the core fix unprotected).",
+  "- 3 (P3): Low-impact, narrow-scope defect with a specific worthwhile fix (for example, inaccurate telemetry/metric semantics, misleading diagnostics, or minor contract roughness).",
   "Do not wrap the JSON in Markdown fences and do not include prose outside it.",
 ].join("\n");
 
