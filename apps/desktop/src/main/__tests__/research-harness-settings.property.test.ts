@@ -47,9 +47,13 @@ const command = fc.oneof(
 const printable = fc.string({ unit: fc.oneof(fc.constantFrom("\"", "\\", "#", "=", "[", "]", "'", " ", "é", "∑"), fc.string({ unit: "grapheme", minLength: 1, maxLength: 1 })), maxLength: 24 })
   // eslint-disable-next-line no-control-regex -- control characters are tested separately.
   .filter((value) => !/[\u0000-\u001f\u007f]/.test(value));
+// What a hand-edited file may hold and the TOML writer escapes: tab, newline, carriage return.
+const escapable = fc.string({ unit: fc.oneof(fc.constantFrom("\t", "\n", "\r"), fc.string({ unit: "grapheme", minLength: 1, maxLength: 1 })), maxLength: 24 })
+  // eslint-disable-next-line no-control-regex -- only the characters the writer cannot escape are excluded.
+  .filter((value) => !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value));
 const harness: fc.Arbitrary<ResearchHarnessConfig> = fc.record({
   command,
-  args: fc.array(printable, { maxLength: 6 }),
+  args: fc.array(fc.oneof(printable, escapable), { maxLength: 6 }),
   endpoint: fc.option(fc.oneof(
     fc.constantFrom("https://models.example.test/v1/chat/completions", "http://127.0.0.1:8080/v1/chat/completions", "http://localhost/v1"),
     segment.map((part) => `https://${part.replace(/[^A-Za-z0-9]/g, "") || "host"}.example.test/v1`),
@@ -105,6 +109,8 @@ describe("[research.harness] written by Settings", () => {
     const invalid = fc.oneof(
       fc.constant<ResearchHarnessConfig>({ command: "relative/bridge", args: [] }),
       fc.constant<ResearchHarnessConfig>({ command: "/bin/bridge", args: ["bad\u0001arg"] }),
+      fc.constant<ResearchHarnessConfig>({ command: "/bin/bridge", args: ["bad\u000barg"] }),
+      fc.constant<ResearchHarnessConfig>({ command: "/bin/bridge", args: [], model: "bad\u007fmodel" }),
       fc.constant<ResearchHarnessConfig>({ command: "/bin/bridge", args: [], endpoint: "http://models.example.test/v1" }),
       fc.constant<ResearchHarnessConfig>({ command: "/bin/bridge", args: [], endpoint: "https://user:pass@models.example.test/v1" }),
       fc.constant<ResearchHarnessConfig>({ command: "/bin/bridge", args: [], apiKeyEnv: "not a name" }),
@@ -157,9 +163,11 @@ describe("MathOS Platform API key", () => {
       expect(fs.readFileSync(configPath, "utf8")).not.toContain(secret);
       // Only the owner's bridge launch reads it back.
       expect(service.resolveMathosPlatformApiKeySync()).toBe(secret);
+      expect(await service.hasMathosPlatformApiKey()).toBe(true);
       const cleared = await service.clearSecret("mathosPlatformApiKey");
       expect(cleared.configured).toBe(false);
       expect(service.resolveMathosPlatformApiKeySync()).toBeUndefined();
+      expect(await service.hasMathosPlatformApiKey()).toBe(false);
       expect((await service.readSettingsProjection()).research?.platformApiKey.configured).toBe(false);
     }), { numRuns: 15 });
   });
@@ -172,6 +180,16 @@ describe("MathOS Platform API key", () => {
       for (const name of Object.keys(env)) expect(allowed.has(name)).toBe(true);
       expect(Object.values(env)).not.toContain("model-secret");
       expect(env[MATHOS_PLATFORM_API_KEY_ENV]).toBe(secret);
+    }));
+  });
+
+  it("refuses a model request that carries the Platform key verbatim, whatever JSON escapes in it", () => {
+    const awkward = fc.tuple(key, fc.constantFrom("\\", "\"", "\n", "\u2028")).map(([base, extra]) => `${base}${extra}tail`);
+    fc.assert(fc.property(awkward, fc.constantFrom("content", "nested"), (secret, shape) => {
+      const messages = shape === "content"
+        ? [{ role: "user", content: `before ${secret} after` }]
+        : [{ role: "user", content: [{ type: "text", text: secret }] }];
+      expect(() => assertModelRequestOmitsPlatformKey(messages, secret)).toThrow(/MathOS Platform key/);
     }));
   });
 

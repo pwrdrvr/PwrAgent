@@ -29,7 +29,7 @@ let harness: ResearchHarnessService | undefined;
  * a variable name and whether it is set; its value never leaves this process.
  */
 export function researchHarnessStatus(workspace?: string, env: NodeJS.ProcessEnv = process.env,
-  platformKey: () => string | undefined = readPlatformApiKey): ResearchHarnessStatus {
+  platformKeyStored?: boolean): ResearchHarnessStatus {
   let config: ReturnType<typeof readResearchHarnessConfig>;
   try { config = readResearchHarnessConfig(getDesktopConfigStore()); }
   catch (error) { return { configured: false, configError: error instanceof Error ? error.message : "This profile's config.toml cannot be used", ...(workspace ? { workspace } : {}) }; }
@@ -43,21 +43,35 @@ export function researchHarnessStatus(workspace?: string, env: NodeJS.ProcessEnv
     catch (error) { status.endpointError = error instanceof Error ? error.message : "Invalid research model endpoint"; }
   } else if (config.endpoint || config.model) status.endpointError = "Set both research.harness.endpoint and research.harness.model to run a new swarm";
   if (config.apiKeyEnv) { status.credentialEnv = config.apiKeyEnv; status.credentialSet = Boolean(env[config.apiKeyEnv]); }
-  try { status.platformKeyStored = Boolean(platformKey()); }
-  catch { /* An unreadable store says nothing about whether a key is there. */ }
+  // Presence only, read by the caller without decrypting. Undefined: the store could not be read.
+  if (platformKeyStored !== undefined) status.platformKeyStored = platformKeyStored;
   return status;
 }
 function readPlatformApiKey(): string | undefined {
   return getDesktopSettingsService().resolveMathosPlatformApiKeySync();
 }
 
+/** Whether a Platform key is stored, without decrypting it. Undefined when the store cannot be read. */
+export async function researchHarnessPlatformKeyStored(): Promise<boolean | undefined> {
+  try { return await getDesktopSettingsService().hasMathosPlatformApiKey(); }
+  catch { return undefined; }
+}
+
 /**
  * A bridge that copied its Platform key into a model request would hand it to
- * the model endpoint and into model context. Refuse the call instead.
+ * the model endpoint and into model context. Refuse the call instead. Every
+ * string and key is compared as it is, so JSON escaping cannot hide the key.
  */
 export function assertModelRequestOmitsPlatformKey(messages: unknown, platformKey: string | undefined): void {
-  if (platformKey && JSON.stringify(messages ?? null).includes(platformKey)) {
-    throw new Error("Research model request refused: it contains the MathOS Platform key");
+  if (!platformKey) return;
+  const pending: unknown[] = [messages];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (typeof value === "string") {
+      if (value.includes(platformKey)) throw new Error("Research model request refused: it contains the MathOS Platform key");
+    } else if (value && typeof value === "object") {
+      for (const [key, entry] of Object.entries(value)) { pending.push(key, entry); }
+    }
   }
 }
 
@@ -76,7 +90,12 @@ export function initializeResearchRuntime(ports: ResearchPorts): ResearchService
       const config = readResearchHarnessConfig(getDesktopConfigStore());
       if (!config?.command) throw new Error("Configure research.harness in this profile's config.toml");
       const selectedModel = selectHarnessModel(config, mode);
-      const platformApiKey = readPlatformApiKey();
+      // An unreadable store must not block imports, checks or reconcile, which
+      // need no Platform key with every bridge. A bridge that needs it fails its
+      // own sign-in visibly.
+      let platformApiKey: string | undefined;
+      try { platformApiKey = readPlatformApiKey(); }
+      catch { ports.onError(new Error("The stored MathOS Platform key could not be read; the Harness bridge starts without it")); }
       let modelBusy = false;
       const connection = openResearchHarnessProcess(config, workspace, async (method, params, signal) => {
         const run = storage.header(id);

@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DesktopSettingsSnapshot } from "@pwragent/shared/contracts/settings";
+import type { DesktopSettingsConfigPatch, DesktopSettingsSnapshot } from "@pwragent/shared/contracts/settings";
 import type { ResearchHarnessConfig } from "@pwragent/shared/research-harness";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ResearchHarnessSettings } from "../ResearchHarnessSettings";
@@ -18,7 +18,7 @@ function snapshot(harness?: ResearchHarnessConfig, keyStored = false): DesktopSe
 }
 
 function renderForm(options: { harness?: ResearchHarnessConfig; keyStored?: boolean; api?: Partial<DesktopApi> } = {}) {
-  const onWriteConfig = vi.fn(async () => true);
+  const onWriteConfig = vi.fn(async (_patch: DesktopSettingsConfigPatch, _onError?: (message: string) => void) => true);
   const onReplaceSecret = vi.fn(async () => true);
   const onClearSecret = vi.fn(async () => true);
   render(
@@ -44,6 +44,18 @@ describe("ResearchHarnessSettings", () => {
     await waitFor(() => expect(onWriteConfig).toHaveBeenCalledTimes(1));
     expect(onWriteConfig.mock.calls[0]?.[0]).toEqual({
       research: { harness: { command: "/opt/example/harness-bridge", args: ["--profile", "contrived"], model: "example-model" } },
+    });
+  });
+
+  it("keeps hand-written arguments exactly when only another field changes", async () => {
+    // Shapes the one-per-line textarea cannot represent: blank, padded, tab, embedded newline.
+    const args = ["--name", "", " padded ", "a\tb", "two\nlines"];
+    const { onWriteConfig } = renderForm({ harness: { command: "/opt/example/harness-bridge", args } });
+    fireEvent.change(screen.getByLabelText("Model"), { target: { value: "example-model" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save bridge" }));
+    await waitFor(() => expect(onWriteConfig).toHaveBeenCalledTimes(1));
+    expect(onWriteConfig.mock.calls[0]?.[0]).toEqual({
+      research: { harness: { command: "/opt/example/harness-bridge", args, model: "example-model" } },
     });
   });
 

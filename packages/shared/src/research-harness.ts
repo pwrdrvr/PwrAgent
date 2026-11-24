@@ -138,8 +138,10 @@ const MAX_COMMAND = 4_096;
 const MAX_MODEL = 200;
 const MAX_ENDPOINT = 2_048;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+// Control characters the config writer cannot escape. Tab, newline and carriage
+// return round-trip, so a hand-written value holding one stays saveable.
 // eslint-disable-next-line no-control-regex -- the point is to find them.
-const CONTROL = /[\u0000-\u001f\u007f]/;
+const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "[::1]"];
 // This package compiles without DOM or Node types. Every runtime it ships to
 // (Electron main, renderer, Node tests) has the WHATWG URL global.

@@ -31,7 +31,7 @@ import { RESEARCH_PROFILE_RUNS_CHANNEL, RESEARCH_OPEN_WINDOW_CHANNEL } from "../
 import { researchWindowRunId, showResearchWindow } from "../research-window";
 import { RESEARCH_HARNESS_STATUS_CHANNEL, RESEARCH_HARNESS_START_CHANNEL, RESEARCH_HARNESS_CHECK_CHANNEL, RESEARCH_HARNESS_RECONCILE_CHANNEL, RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL, RESEARCH_HARNESS_SETTINGS_CHECK_CHANNEL, RESEARCH_HARNESS_PICK_BRIDGE_CHANNEL } from "../../../shared/ipc";
 import { resolveDesktopConfigPath } from "../../settings/desktop-config";
-import { getResearchHarnessService, researchHarnessStatus } from "../../research/research-runtime";
+import { getResearchHarnessService, researchHarnessPlatformKeyStored, researchHarnessStatus } from "../../research/research-runtime";
 import { getDesktopSettingsService } from "../../settings/desktop-settings-singleton";
 
 /** Native research is local-owner only. A federation viewer cannot read or mutate this profile. */
@@ -40,7 +40,7 @@ export function registerResearchIpcHandlers(): void {
   ipcMain.handle(RESEARCH_HARNESS_STATUS_CHANNEL, async (event, request: ResearchThread) => {
     if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");
     validateThread(request);
-    return researchHarnessStatus(await harnessWorkspace(request));
+    return researchHarnessStatus(await harnessWorkspace(request), process.env, await researchHarnessPlatformKeyStored());
   });
   ipcMain.handle(RESEARCH_HARNESS_CHECK_CHANNEL, async (event, request: ResearchThread) => {
     if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");

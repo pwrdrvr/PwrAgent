@@ -2958,6 +2958,11 @@ export class DesktopSettingsService {
    * environment only. Read when the owner starts the bridge; never projected
    * into a snapshot, IPC reply, agent tool or model request.
    */
+  /** Presence of the MathOS Platform key, without decrypting it. */
+  async hasMathosPlatformApiKey(): Promise<boolean> {
+    return await this.options.secretStore.hasSecret("mathosPlatformApiKey");
+  }
+
   resolveMathosPlatformApiKeySync(): string | undefined {
     // A store that cannot be read throws, so the bridge never starts silently signed out.
     return this.options.secretStore.getSecretSync?.("mathosPlatformApiKey") || undefined;

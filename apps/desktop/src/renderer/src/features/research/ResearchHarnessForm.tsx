@@ -127,7 +127,9 @@ export function ResearchHarnessForm({ api, thread, onStarted, onCancel, onOpenSe
         {(status.model || status.endpointOrigin) && <><dt>Model</dt><dd>{status.model ? <code className="research-code">{status.model}</code> : "No model"}{status.endpointOrigin && <> at <code className="research-code">{status.endpointOrigin}</code></>}</dd></>}
         {status.credentialEnv && <><dt>Model key</dt><dd><code className="research-code">{status.credentialEnv}</code>{" "}
           {status.credentialSet ? <span className="research-ok">· set</span> : <span className="research-bad">· not set</span>}</dd></>}
-        <dt>Platform key</dt><dd>{status.platformKeyStored ? "Stored in PwrAgent · given to the bridge" : "Not stored in PwrAgent"}</dd>
+        <dt>Platform key</dt><dd>{status.platformKeyStored === undefined
+          ? "PwrAgent’s secret store could not be read"
+          : status.platformKeyStored ? "Stored in PwrAgent · given to the bridge" : "Not stored in PwrAgent"}</dd>
       </dl>}
       {status && !status.configured && (onOpenSettings || api.revealResearchHarnessConfig) && <span className="research-actions">
         {onOpenSettings && <button type="button" className="research-button research-button--primary" onClick={onOpenSettings}>Open Harness settings</button>}

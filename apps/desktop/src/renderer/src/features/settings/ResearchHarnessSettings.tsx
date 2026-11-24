@@ -60,9 +60,10 @@ export function ResearchHarnessSettings(props: {
 }) {
   const research = props.snapshot.research;
   const saved = research?.harness;
+  const savedArgsText = (saved?.args ?? []).join("\n");
   const draft = useSettingsDraft({
     command: saved?.command ?? "",
-    args: (saved?.args ?? []).join("\n"),
+    args: savedArgsText,
     endpoint: saved?.endpoint ?? "",
     model: saved?.model ?? "",
     apiKeyEnv: saved?.apiKeyEnv ?? "",
@@ -77,7 +78,9 @@ export function ResearchHarnessSettings(props: {
   const save = async (): Promise<boolean> => {
     const normalized = normalizeResearchHarnessConfig({
       command: values.command,
-      args: researchHarnessArgsFromLines(values.args),
+      // The textarea cannot show a blank, padded or multi-line argument. Until
+      // it is edited, save the arguments exactly as stored.
+      args: saved && values.args === savedArgsText ? saved.args : researchHarnessArgsFromLines(values.args),
       endpoint: values.endpoint,
       model: values.model,
       apiKeyEnv: values.apiKeyEnv,
