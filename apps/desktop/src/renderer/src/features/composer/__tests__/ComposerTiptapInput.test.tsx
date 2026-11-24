@@ -1707,6 +1707,48 @@ describe("ComposerTiptapInput", () => {
     });
   });
 
+  // These inputs are synthetic ClipboardEvents. The desktop Paste Without
+  // Formatting and transcript-copy tests cover the native clipboard path.
+  it.each([
+    { name: "prose", htmlCode: "", textCode: "", codeBlocks: 0 },
+    {
+      name: "prose and an HTML code block",
+      htmlCode: '<pre><code class="language-ts">return 1;</code></pre>',
+      textCode: "\n```ts\nreturn 1;\n```",
+      codeBlocks: 1,
+    },
+    { name: "prose and a plain-text-only fence", htmlCode: "", textCode: "\n\n```ts\nreturn 1;\n```", codeBlocks: 1 },
+  ])("preserves paragraph separators when pasting $name", async ({
+    htmlCode, textCode, codeBlocks,
+  }) => {
+    const { onChange } = renderTiptapInput();
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+    const paragraphs = ["Intro paragraph.", "Body paragraph.", "Final paragraph."];
+    // Flattened text/plain paragraphs are common in rich clipboard sources.
+    // When the fence exists in text/plain only, it also supplies the breaks.
+    const text = paragraphs.join(htmlCode || !textCode ? "\n" : "\n\n") + textCode;
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        files: [],
+        items: [],
+        types: ["text/plain", "text/html"],
+        getData: (type: string) => {
+          if (type === "text/plain") return text;
+          if (type === "text/html") return paragraphs.map((line) => `<p>${line}</p>`).join("") + htmlCode;
+          return "";
+        },
+      },
+    });
+
+    await waitFor(() => {
+      const expected = paragraphs.join("\n\n") + (textCode ? `\n\n${textCode.trim()}` : "");
+      expect(onChange.mock.lastCall?.[0]).toBe(expected);
+      expect([...textbox.querySelectorAll(":scope > p")].filter((p) => p.textContent)
+        .map((p) => p.textContent)).toEqual(paragraphs);
+      expect(textbox.querySelectorAll(":scope > pre")).toHaveLength(codeBlocks);
+    });
+  });
+
   it("renders multi-paragraph markdown without phantom empty paragraphs", async () => {
     const original =
       "Hi Mom! New Thread Launchpad\n\n`abc123` is probably the best ID I can come up with";
