@@ -1011,9 +1011,11 @@ describe("AutomationEditor", () => {
       "Send to a different conversation",
     );
     for (const provider of ["telegram", "slack"] as const) {
-      chooseSelectOption(
-        screen.getByLabelText("Destination provider"),
-        INBOUND_PROVIDER_LABELS[provider] ?? provider,
+      const label = INBOUND_PROVIDER_LABELS[provider] ?? provider;
+      chooseSelectOption(screen.getByLabelText("Destination provider"), label);
+      // Otherwise the Slack pass could re-measure Telegram's still-mounted row.
+      expect(screen.getByLabelText("Destination provider")).toHaveTextContent(
+        label,
       );
       const trigger = await screen.findByRole("button", {
         name: /^Destination: /,
