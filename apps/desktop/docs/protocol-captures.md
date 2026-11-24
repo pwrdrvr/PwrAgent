@@ -160,6 +160,35 @@ selected native mode atomically.
 Raw captures are under the ignored
 `apps/desktop/.local/protocol-captures/antigravity-full-access/`.
 
+### Antigravity primary workspace on reload
+
+The November 24, 2026 macOS probe used Antigravity 1.5.16 with
+`acp --process-per-session` and two disposable directories. After one
+message in the source, `session/load` accepted the destination `cwd` and
+replayed the same session history. A bare `pwd -P` returned the source,
+including after `session/close` and a front-process restart, in both
+Default and Full Access. `session/resume` also kept the source.
+`session/list` reported the source as the primary `cwd` even with a
+destination filter. Removing the source directory still allowed
+`session/load` to replay history. Relative commands then failed because
+the original directory was gone. The runtime returned method not found
+for `session/fork`. ACP treated `/fork` as a regular message, and
+`agy --print` rejected it as interactive-only.
+
+In both access modes, a fresh `session/new` at the destination ran bare
+`pwd -P` there. The same prompt recalled a marker from the source
+conversation supplied as an embedded ACP resource. On destination
+reload, Antigravity replayed the resource separately from the user text.
+
+PwrAgent retains the old transcript in its ACP rollout, binds the same
+thread to the destination provider session, and sends recent source
+messages as context on the first destination turn. The provider keeps
+the original conversation, including its native tool state, in its
+source session.
+
+Raw captures are under the ignored
+`apps/desktop/.local/protocol-captures/antigravity-workspace.*/`.
+
 ### Antigravity MCP permission requests in Default
 
 Antigravity 1.5.15 ran in native Default with `agy acp --process-per-session`

@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { realpath } from "node:fs/promises";
+import path from "node:path";
 import { normalizeAcpMcpServerConfigs, type AcpMcpServerConfig } from "@pwrdrvr/agent-acp/mcp-server-config";
 import {
   ACP_PERMISSION_MODE_OPTION_ID,
@@ -73,6 +75,12 @@ import {
 import type { JsonRpcId } from "@pwrdrvr/agent-transport";
 import { ANTIGRAVITY_CALL_PWRAGENT_TOOL, readPwrAgentCallTarget } from "../agent-tools/antigravity-mcp-catalog.js";
 import { getMainLogger } from "../log.js";
+import {
+  ACP_WORKSPACE_HANDOFF_RECORD,
+  ACP_WORKSPACE_HISTORY_URI,
+  acpWorkspaceContinuationText,
+  acpWorkspaceHistory,
+} from "./acp-workspace-history.js";
 
 const acpClientLog = getMainLogger("pwragent:acp-client");
 
@@ -280,7 +288,8 @@ type AcpSessionMcpServers = {
 
 export type AcpPromptContentBlock =
   | { type: "text"; text: string }
-  | { type: "image"; mimeType: string; data: string };
+  | { type: "image"; mimeType: string; data: string }
+  | { type: "resource"; resource: { uri: string; mimeType: "text/plain"; text: string } };
 
 type AcpSessionStoreLike = Pick<
   AcpSessionStorage,
@@ -307,6 +316,7 @@ type AcpActiveTurn = {
   /** The agent compacted its history while this prompt ran. */
   compacted?: boolean;
   sentAgentMemory?: boolean;
+  sentWorkspaceContext?: boolean;
   cancelBeforePrompt?: () => void;
   onTerminalUpdate?: () => void;
   terminalResponseGraceStarted?: boolean;
@@ -418,6 +428,7 @@ export class AcpAgentClient {
   private readonly antigravityBackgroundCommands = new Map<string, Set<string>>();
   private readonly activeTurns = new Map<string, AcpActiveTurn>();
   private readonly loadedSessionCwds = new Map<string, string | undefined>();
+  private readonly antigravityPrimaryCwds = new Map<string, string>();
   // The option menus each session's own latest reply reported, by protocol
   // session id. On Kimi the model decides which thought levels exist and the
   // agent refuses any other, so a level is checked against its session's menu,
@@ -480,6 +491,7 @@ export class AcpAgentClient {
   private unsubscribeRequest?: () => void;
   private runtimeCapabilities?: BackendAcpRuntimeCapabilities;
   private archiveRestoreSupported = false;
+  private antigravitySessionListSupported = false;
   private jobMonitorCatalogRefreshSupported = false;
   private readonly normalizerOptions: AcpSessionReplayNormalizerOptions;
   private activeOperations = 0;
@@ -557,6 +569,9 @@ export class AcpAgentClient {
     const advertised = normalizeAcpRuntimeCapabilities({
       value: result, now: this.now(), source: "initialize",
     })?.agentCapabilities;
+    const rawCapabilities = asRecord(advertised?.raw);
+    const sessionCapabilities = asRecord(rawCapabilities?.sessionCapabilities ?? rawCapabilities?.session_capabilities);
+    this.antigravitySessionListSupported = Boolean(asRecord(sessionCapabilities?.list));
     this.archiveRestoreSupported = advertised?.loadSession === true;
     this.jobMonitorCatalogRefreshSupported = advertised?.loadSession === true
       && advertised.session?.close === true && advertised.mcp?.http === true;
@@ -882,6 +897,7 @@ export class AcpAgentClient {
     this.appSessionIdsByAgentSessionId.clear();
     this.retainableSessionIds.clear();
     this.loadedSessionCwds.clear();
+    this.antigravityPrimaryCwds.clear();
     this.sessionConfigOptions.clear();
     this.sessionModeMenus.clear();
     this.sessionLastActivityAt.clear();
@@ -1225,6 +1241,12 @@ export class AcpAgentClient {
     mcpServers?: "default" | "none";
     additionalMcpRegistration?: AcpMcpRegistrationSource;
     sessionMeta?: Record<string, unknown>;
+    workspaceHandoff?: {
+      replay: AppServerThreadReplay;
+      previousAgentSessionId?: string;
+      mode?: string;
+      titleSource?: AcpSessionMetadata["titleSource"];
+    };
   }): Promise<AcpSessionMetadata> {
     return await this.withOperation(
       async () => await this.startSessionOperation(params),
@@ -1239,6 +1261,9 @@ export class AcpAgentClient {
       && this.options.antigravityFullAccess !== (params.executionMode === "full-access")) {
       throw new Error("The Antigravity process does not match the new thread's access.");
     }
+    const handoff = params.workspaceHandoff;
+    const rolloutStore = this.options.rolloutStore;
+    if (handoff && !rolloutStore) throw new Error("The ACP rollout store is unavailable for workspace handoff.");
     const cwd = params.cwd ?? process.cwd();
     // Read before the servers are built, so a change meanwhile reads as stale.
     const agentToolCatalogKey = this.options.agentToolCatalogKey?.();
@@ -1259,7 +1284,7 @@ export class AcpAgentClient {
           typeof additional === "function" ? await additional() : additional,
         );
     const mcpServerWireConfigs = toAcpMcpServerWireConfigs(mcpRegistration.servers);
-    const result = await this.options.transport.request("session/new", {
+    let result = await this.options.transport.request("session/new", {
       cwd,
       mcpServers: mcpServerWireConfigs,
       ...(params.sessionMeta ? { _meta: params.sessionMeta } : {}),
@@ -1270,15 +1295,6 @@ export class AcpAgentClient {
     });
     const now = this.now();
     const record = asRecord(result);
-    const runtimeCapabilities = this.captureRuntimeCapabilities({
-      source: "session-new",
-      result,
-    });
-    const runtimeState = this.runtimeStateFromResponse(result, now);
-    const combinedRuntimeState =
-      params.acpRuntime || runtimeState
-        ? mergeAcpRuntimeState(params.acpRuntime, runtimeState ?? {})
-        : undefined;
     const sessionId =
       typeof record?.sessionId === "string"
         ? record.sessionId
@@ -1289,12 +1305,48 @@ export class AcpAgentClient {
       throw new Error("ACP session/new did not return a session id");
     }
     const appSessionId = params.sessionId ?? sessionId;
+    if (handoff && rolloutStore) {
+      try {
+        const fullAccessWorker = this.options.antigravityFullAccess === true;
+        const mode = fullAccessWorker ? "default" : handoff.mode;
+        if (mode) {
+          result = await this.confirmAntigravityMode(
+            sessionId,
+            result,
+            mode,
+            !fullAccessWorker || (handoff.mode !== undefined && handoff.mode !== "default"),
+          );
+        }
+        rolloutStore.appendUpdate({
+          backendId: this.options.backendId,
+          sessionId: appSessionId,
+          receivedAt: now,
+          update: {
+            kind: ACP_WORKSPACE_HANDOFF_RECORD, agentSessionId: sessionId,
+            previousAgentSessionId: handoff.previousAgentSessionId,
+            replay: handoff.replay,
+          },
+        });
+      } catch (error) {
+        await this.options.transport.request("session/close", { sessionId }, ACP_SESSION_CLOSE_REQUEST_TIMEOUT_MS)
+          .catch((closeError: unknown) => acpClientLog.warn("Could not close an unbound Antigravity workspace session", {
+            sessionId, error: closeError instanceof Error ? closeError.message : String(closeError),
+          }));
+        throw error;
+      }
+    }
+    const runtimeCapabilities = this.captureRuntimeCapabilities({ source: "session-new", result });
+    const runtimeState = this.runtimeStateFromResponse(result, now);
+    const combinedRuntimeState =
+      params.acpRuntime || runtimeState
+        ? mergeAcpRuntimeState(params.acpRuntime, runtimeState ?? {})
+        : undefined;
     const metadata: AcpSessionMetadata = {
       backendId: this.options.backendId,
       sessionId: appSessionId,
       ...(sessionId === appSessionId ? {} : { agentSessionId: sessionId }),
       title: params.title ?? "ACP session",
-      titleSource: params.title ? "explicit" : "fallback",
+      titleSource: handoff?.titleSource ?? (params.title ? "explicit" : "fallback"),
       cwd,
       createdAt: params.createdAt ?? now,
       updatedAt: now,
@@ -1303,6 +1355,8 @@ export class AcpAgentClient {
       ...(params.approvalPolicy ? { approvalPolicy: params.approvalPolicy } : {}),
       acpRuntime: combinedRuntimeState,
       ...(params.hidden ? { hidden: true } : {}),
+      ...(this.options.backendId === "acp:antigravity" ? { antigravityPrimaryCwd: cwd } : {}),
+      ...(handoff ? { antigravityWorkspaceRebound: true } : {}),
       status: "idle",
     };
     this.options.store.upsertSession(metadata);
@@ -1488,6 +1542,71 @@ export class AcpAgentClient {
     await this.withOperation(async () => await this.ensureSession(metadata));
   }
 
+  async antigravityWorkspaceMatches(metadata: AcpSessionMetadata): Promise<boolean> {
+    this.options.assertSessionOwner?.(metadata.sessionId);
+    const cwd = metadata.cwd;
+    const protocolSessionId = protocolSessionIdForMetadata(metadata);
+    const primaryCwd = metadata.antigravityPrimaryCwd ?? this.antigravityPrimaryCwds.get(protocolSessionId)
+      ?? (cwd && await this.withOperation(async () => await this.readAntigravityPrimaryCwd(protocolSessionId, cwd)));
+    if (!cwd || !primaryCwd) {
+      throw new Error("Couldn't verify Antigravity's primary workspace. Try sending the prompt again.");
+    }
+    this.antigravityPrimaryCwds.set(protocolSessionId, primaryCwd);
+    if (primaryCwd === cwd) return true;
+    const [actual, expected] = await Promise.all([
+      realpath(primaryCwd).catch(() => path.resolve(primaryCwd)),
+      realpath(cwd).catch(() => path.resolve(cwd)),
+    ]);
+    return actual === expected;
+  }
+
+  async rebindAntigravityWorkspace(metadata: AcpSessionMetadata): Promise<AcpSessionMetadata> {
+    if (!this.options.rolloutStore || !metadata.cwd || !this.supportsSessionClose()) {
+      throw new Error("Antigravity can't resume this thread in the destination workspace.");
+    }
+    const current = await this.loadSession(metadata);
+    const { previous } = this.workspaceHistory(metadata);
+    if (!previous && current.entries.length === 0 && current.messages.length === 0) {
+      throw new Error("Couldn't recover Antigravity's conversation before switching workspaces.");
+    }
+    const saved = this.options.store.getSession(this.options.backendId, metadata.sessionId) ?? metadata;
+    await this.closeSessionForTransfer(metadata.sessionId);
+    return await this.startSession({
+      sessionId: metadata.sessionId,
+      cwd: metadata.cwd,
+      title: saved.title,
+      createdAt: saved.createdAt,
+      executionMode: saved.executionMode,
+      approvalPolicy: saved.approvalPolicy,
+      hidden: saved.hidden,
+      workspaceHandoff: {
+        replay: current,
+        previousAgentSessionId: protocolSessionIdForMetadata(metadata),
+        mode: saved.acpRuntime?.configValues?.mode ?? saved.acpRuntime?.currentModeId,
+        titleSource: saved.titleSource,
+      },
+    });
+  }
+
+  private async readAntigravityPrimaryCwd(protocolSessionId: string, cwd: string): Promise<string | undefined> {
+    if (!this.antigravitySessionListSupported) return undefined;
+    // Antigravity 1.5.16 returns the source session even with the destination
+    // filter. Compare its reported primary cwd, ignoring additional roots.
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    while (true) {
+      const result = asRecord(await this.options.transport.request("session/list", {
+        cwd, ...(cursor ? { cursor } : {}),
+      }));
+      const sessions = Array.isArray(result?.sessions) ? result.sessions : [];
+      const session = sessions.map(asRecord).find((item) => item?.sessionId === protocolSessionId);
+      if (typeof session?.cwd === "string" && path.isAbsolute(session.cwd)) return session.cwd;
+      cursor = typeof result?.nextCursor === "string" ? result.nextCursor : undefined;
+      if (!cursor || seenCursors.has(cursor)) return undefined;
+      seenCursors.add(cursor);
+    }
+  }
+
   async ensureSession(
     metadata: AcpSessionMetadata,
     options: AcpSessionLoadOptions = {},
@@ -1516,6 +1635,9 @@ export class AcpAgentClient {
       ...captured,
       ...(this.options.antigravityFullAccess !== undefined && stored
         ? { executionMode: acpSessionExecutionMode(stored), antigravityFullAccessConfirmed: stored.antigravityFullAccessConfirmed }
+        : {}),
+      ...(stored?.antigravityWorkspaceContextDelivered && protocolSessionIdForMetadata(stored) === protocolSessionIdForMetadata(metadata)
+        ? { antigravityWorkspaceContextDelivered: true }
         : {}),
       ...(storedDigest ? { agentInstructionsDigest: storedDigest } : {}),
     };
@@ -1553,14 +1675,26 @@ export class AcpAgentClient {
     readAgentMemory?: () => Promise<string | undefined>;
   }): Promise<{ sessionId: string; turnId: string }> {
     this.assertPromptAccess(params.sessionId);
+    const session = this.options.store.getSession(this.options.backendId, params.sessionId);
+    const needsWorkspaceContext = session?.antigravityWorkspaceRebound && !session.antigravityWorkspaceContextDelivered;
+    const prompt = params.promptContent ? [...params.promptContent] : textPrompt(params.prompt);
+    if (needsWorkspaceContext) {
+      const priorWorkspace = this.workspaceHistory(session).previous;
+      if (!priorWorkspace) throw new Error("Couldn't recover this thread's previous workspace history.");
+      prompt.push({
+        type: "resource",
+        resource: { uri: ACP_WORKSPACE_HISTORY_URI, mimeType: "text/plain", text: acpWorkspaceContinuationText(priorWorkspace) },
+      });
+    }
     const turnId = params.turnId ?? `pending:${params.sessionId}:${this.now()}`;
     const activeTurn = this.startTrackedTurn(params.sessionId, turnId);
+    activeTurn.sentWorkspaceContext = needsWorkspaceContext;
     const acceptance = Promise.withResolvers<{ sessionId: string; turnId: string }>();
     let dispatched = false;
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
     const promptRequest = this.requestPromptWithTerminalGuard({
       protocolSessionId,
-      prompt: params.promptContent ?? textPrompt(params.prompt),
+      prompt,
       sessionId: params.sessionId,
       turnId,
       agentInstructions: params.agentInstructions?.trim(),
@@ -1582,7 +1716,7 @@ export class AcpAgentClient {
           turnId,
           waitingForAgent: true,
         });
-        this.markSessionHasConversationHistory(params.sessionId, receivedAt);
+        if (!needsWorkspaceContext) this.markSessionHasConversationHistory(params.sessionId, receivedAt);
         dispatched = true;
         activeTurn.promptDispatched = true;
         acceptance.resolve({ sessionId: params.sessionId, turnId });
@@ -1654,6 +1788,7 @@ export class AcpAgentClient {
           sessionId,
           receivedAt,
           cancelled ? "interrupted" : "completed",
+          !cancelled && activeTurn.sentWorkspaceContext,
         );
         this.appendHistoryUpdate(sessionId, receivedAt, {
           kind: "turn_finished",
@@ -2355,7 +2490,8 @@ export class AcpAgentClient {
       activityAt,
       { touchActivity: !fromSessionLoad },
     );
-    if (isConversationHistoryUpdate(update)) {
+    if (isConversationHistoryUpdate(update)
+      && !(updateKind === "user_message_chunk" && isAcpUserBoilerplateMessage(readUpdateText(update)))) {
       this.markSessionHasConversationHistory(sessionId, activityAt, {
         touchActivity: !fromSessionLoad,
       });
@@ -2575,9 +2711,12 @@ export class AcpAgentClient {
     }
   }
 
-  /** The backend's normalizer options, with the session's workspace. */
-  private normalizerOptionsFor(cwd?: string): AcpSessionReplayNormalizerOptions {
-    return cwd ? { ...this.normalizerOptions, cwd } : this.normalizerOptions;
+  private normalizerOptionsFor(metadata?: AcpSessionMetadata): AcpSessionReplayNormalizerOptions {
+    return {
+      ...this.normalizerOptions,
+      cwd: metadata?.cwd,
+      workspaceSessionId: metadata?.antigravityWorkspaceRebound ? protocolSessionIdForMetadata(metadata) : undefined,
+    };
   }
 
   private normalizerFor(sessionId: string): AcpSessionReplayNormalizer {
@@ -2585,7 +2724,7 @@ export class AcpAgentClient {
     if (!normalizer) {
       normalizer = new AcpSessionReplayNormalizer(
         this.normalizerOptionsFor(
-          this.options.store.getSession(this.options.backendId, sessionId)?.cwd,
+          this.options.store.getSession(this.options.backendId, sessionId),
         ),
       );
       this.normalizers.set(sessionId, normalizer);
@@ -2611,14 +2750,11 @@ export class AcpAgentClient {
       return { isComplete: false };
     }
     const normalizer = new AcpSessionReplayNormalizer(
-      this.normalizerOptionsFor(metadata.cwd),
+      this.normalizerOptionsFor(metadata),
     );
     let hasTranscriptHistory = false;
     const antigravityReplayPrompts: AcpReplayPromptIdentity[] = [];
-    const records = this.options.rolloutStore.readUpdates({
-      backendId: this.options.backendId,
-      sessionId: metadata.sessionId,
-    });
+    const { current: records } = this.workspaceHistory(metadata);
     for (const record of records) {
       if (isPwrAgentSyntheticAcpUpdate(record.update)) {
         continue;
@@ -2641,9 +2777,17 @@ export class AcpAgentClient {
     const hasReplay = replay.messages.length > 0 || replay.entries.length > 0;
     return {
       isComplete: (hasTranscriptHistory || hasReplay) && replay.threadStatus === "idle",
-      antigravityReplayPrompts: antigravityReplayPrompts.some((prompt) => prompt.steerMessageId)
+      antigravityReplayPrompts: ((metadata.antigravityWorkspaceRebound && antigravityReplayPrompts.length > 0)
+        || antigravityReplayPrompts.some((prompt) => prompt.steerMessageId))
         ? antigravityReplayPrompts : undefined,
     };
+  }
+
+  private workspaceHistory(metadata: AcpSessionMetadata) {
+    return acpWorkspaceHistory(this.options.rolloutStore?.readUpdates({
+      backendId: this.options.backendId,
+      sessionId: metadata.sessionId,
+    }) ?? [], metadata.antigravityWorkspaceRebound ? protocolSessionIdForMetadata(metadata) : undefined);
   }
 
   private markSessionHasConversationHistory(
@@ -2797,7 +2941,7 @@ export class AcpAgentClient {
       });
       if (mode) {
         try {
-          result = await this.confirmAntigravityModeAfterLoad(
+          result = await this.confirmAntigravityMode(
             protocolSessionId,
             result,
             mode,
@@ -2862,7 +3006,7 @@ export class AcpAgentClient {
     return result;
   }
 
-  private async confirmAntigravityModeAfterLoad(
+  private async confirmAntigravityMode(
     protocolSessionId: string,
     loadResult: unknown,
     selectedMode: string,
@@ -3208,6 +3352,7 @@ export class AcpAgentClient {
     sessionId: string,
     completedAt: number,
     status: "completed" | "interrupted" = "completed",
+    workspaceContextDelivered?: boolean,
   ): {
     assistantText: string;
     replay: AppServerThreadReplay;
@@ -3222,7 +3367,9 @@ export class AcpAgentClient {
       completedAt,
       status,
     );
-    this.updateSessionStatus(sessionId, "idle");
+    // Use the existing idle write so remembering one accepted context block
+    // does not introduce another per-turn commit.
+    this.updateSessionStatus(sessionId, "idle", this.now(), { workspaceContextDelivered });
     return {
       assistantText: activeTurn?.assistantText ?? "",
       replay,
@@ -3361,7 +3508,7 @@ export class AcpAgentClient {
     sessionId: string,
     status: AcpSessionMetadata["status"],
     receivedAt = this.now(),
-    options: AcpSessionMetadataUpdateOptions = {},
+    options: AcpSessionMetadataUpdateOptions & { workspaceContextDelivered?: boolean } = {},
   ): void {
     const metadata = this.options.store.getSession(this.options.backendId, sessionId);
     if (!metadata) {
@@ -3370,6 +3517,7 @@ export class AcpAgentClient {
     this.options.store.upsertSession({
       ...metadata,
       status,
+      ...(options.workspaceContextDelivered ? { antigravityWorkspaceContextDelivered: true } : {}),
       updatedAt:
         options.touchActivity === false
           ? metadata.updatedAt

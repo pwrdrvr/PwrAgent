@@ -7,7 +7,7 @@ export const ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR =
 export function acpSessionHasConversationHistory(
   session: AcpSessionMetadata,
 ): boolean {
-  return session.hasConversationHistory === true;
+  return session.hasConversationHistory === true || session.antigravityWorkspaceRebound === true;
 }
 
 export function projectAcpSessionThread(
