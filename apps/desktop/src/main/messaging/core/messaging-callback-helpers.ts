@@ -1021,6 +1021,25 @@ export function readThreadExecutionModeValue(
     : undefined;
 }
 
+export function readPermissionsAcpModeValue(
+  value: MessagingJsonValue | undefined,
+): { source: "configOption" | "mode"; optionId: string; value: string } | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const acpMode = value.acpMode;
+  if (!acpMode || typeof acpMode !== "object" || Array.isArray(acpMode)) {
+    return undefined;
+  }
+  const source = readStringValue(acpMode, "source");
+  const optionId = readStringValue(acpMode, "optionId");
+  const modeValue = readStringValue(acpMode, "value");
+  if ((source !== "configOption" && source !== "mode") || !optionId || !modeValue) {
+    return undefined;
+  }
+  return { source, optionId, value: modeValue };
+}
+
 export function readAcpRuntimeOptionSource(
   value: MessagingJsonValue | undefined,
 ): BackendAcpRuntimeOptionSource | undefined {

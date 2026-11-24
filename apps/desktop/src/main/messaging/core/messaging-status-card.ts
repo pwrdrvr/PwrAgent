@@ -1,5 +1,6 @@
 import { codexSpeedOptions, selectedCodexSpeed } from "@pwragent/shared/codex-speed";
 import { displayedReasoningEffort, reasoningEffortsForModel } from "@pwragent/shared/model-defaults";
+import { resolveProviderAccessControl } from "@pwragent/shared/provider-access-mode";
 import { buildProjectPageIntent, projectPickerPageActions, FOOTER_ROW } from "./messaging-resume-browser";
 import { buildMessagingModelMenuActions } from "./messaging-model-menu";
 import type { MessagingBrowsePage } from "./messaging-browse-query-pool";
@@ -180,17 +181,27 @@ export function buildBindingStatusIntent(params: {
     params.capabilityProfile?.conversationInput?.reportsBotMention === true;
   const acpExecutionModePermissions = isAcpBackendId(params.binding.backend)
     && acpBackendUsesExecutionModePermissions(params.backendSummary);
-  const separateAgentMode = params.binding.backend === "acp:antigravity" && acpExecutionModePermissions;
+  const antigravityAccessControl = params.binding.backend === "acp:antigravity"
+    && acpExecutionModePermissions
+    ? resolveProviderAccessControl({
+        backend: params.backendSummary,
+        state: {
+          executionMode: permissionsMode,
+          acpRuntime: params.threadState.acpRuntime ?? preferences?.acpRuntime,
+        },
+      })
+    : undefined;
   const acpRuntimeMode = isAcpBackendId(params.binding.backend)
-    && (!acpExecutionModePermissions || separateAgentMode)
+    && !acpExecutionModePermissions
     ? buildMessagingAcpRuntimeModeSummary({
         backend: params.backendSummary,
         runtime: params.threadState.acpRuntime,
       })
     : undefined;
-  const acpRuntimeLabel = separateAgentMode ? undefined : acpRuntimeMode?.currentLabel;
+  const acpRuntimeLabel =
+    antigravityAccessControl?.selectedOption?.label
+    ?? acpRuntimeMode?.currentLabel;
   const acpRuntimeChoices = acpRuntimeMode?.choices ?? [];
-  const agentModeLabel = separateAgentMode && acpRuntimeChoices.length ? acpRuntimeMode?.currentLabel : undefined;
   const permissionsLineLabel = formatPermissionsLineDisplayLabel({
     acpRuntimeLabel,
     current: permissionsMode,
@@ -232,7 +243,6 @@ export function buildBindingStatusIntent(params: {
         : supportsFastMode ? `Fast mode: ${fastMode ? "on" : "off"}` : undefined,
       planDeliveryLine(params.capabilityProfile),
       `Permissions: ${permissionsLineLabel}`,
-      agentModeLabel ? `Agent mode: ${agentModeLabel}` : undefined,
       showResponseModeControl
         ? `Responses: ${formatMessagingResponseModeLabel(responseMode)} (${
             params.binding.preferences?.responseMode
@@ -270,8 +280,8 @@ export function buildBindingStatusIntent(params: {
       handoff: params.handoff,
       permissionsMode,
       permissionsActionLabel,
-      permissionsChoices: separateAgentMode ? undefined : acpRuntimeChoices,
-      agentModeLabel,
+      permissionsChoices: acpRuntimeChoices,
+      hasMultiplePermissionsChoices: (antigravityAccessControl?.options.length ?? 0) > 1,
       supportsLegacyPermissionsAction:
         !isAcpBackendId(params.binding.backend) ||
         acpExecutionModePermissions ||
@@ -576,8 +586,8 @@ function buildStatusActions(params: {
   handoff?: MessagingWorkspaceHandoffContext;
   permissionsMode: string;
   permissionsActionLabel: string;
-  agentModeLabel?: string;
   permissionsChoices?: MessagingAcpRuntimeModeChoice[];
+  hasMultiplePermissionsChoices?: boolean;
   supportsLegacyPermissionsAction?: boolean;
   queuedExecutionMode?: ThreadExecutionMode;
   reasoning?: string;
@@ -601,6 +611,7 @@ function buildStatusActions(params: {
     | MessagingSurfaceAction
     | undefined =
     params.permissionsChoices?.length ||
+    params.hasMultiplePermissionsChoices ||
     (params.supportsLegacyPermissionsAction !== false &&
       (params.permissionsMode === "full-access" ||
         params.allowFullAccessEscalation !== false))
@@ -643,13 +654,6 @@ function buildStatusActions(params: {
         ]
       : []),
     ...(permissionsAction ? [permissionsAction] : []),
-    ...(params.agentModeLabel ? [{
-      id: "status:runtime-mode",
-      label: `Agent mode: ${params.agentModeLabel}`,
-      style: "secondary" as const,
-      fallbackText: "agent mode",
-      priority: 7,
-    }] : []),
     ...(params.handoff
       ? [
           {
@@ -1595,14 +1599,26 @@ export function buildStatusAcpRuntimeModePickerIntent(params: {
   };
 }
 
+export type MessagingPermissionsChoice = {
+  label: string;
+  mode: ThreadExecutionMode;
+  selected?: boolean;
+  acpMode?: {
+    source: "configOption" | "mode";
+    optionId: string;
+    value: string;
+  };
+};
+
 export function buildStatusPermissionsPickerIntent(params: {
   binding: MessagingBindingRecord;
   capabilityProfile?: MessagingCapabilityProfile;
+  choices?: MessagingPermissionsChoice[];
   createdAt: number;
   currentMode: ThreadExecutionMode;
   id: string;
 }): MessagingSingleSelectIntent {
-  const choices: Array<{ label: string; mode: ThreadExecutionMode }> = [
+  const choices: MessagingPermissionsChoice[] = params.choices ?? [
     { label: "Default", mode: "default" },
     { label: "Full Access", mode: "full-access" },
   ];
@@ -1622,12 +1638,13 @@ export function buildStatusPermissionsPickerIntent(params: {
       [
         ...choices.map((choice, index) => ({
           id: "status:set-permissions",
-          label: `${choice.label}${choice.mode === params.currentMode ? " (current)" : ""}`,
+          label: `${choice.label}${(choice.selected ?? (choice.mode === params.currentMode)) ? " (current)" : ""}`,
           fallbackText: String(index + 1),
           style: "secondary" as const,
           priority: 10 + index,
           value: {
             executionMode: choice.mode,
+            ...(choice.acpMode ? { acpMode: choice.acpMode } : {}),
           },
         })),
         {

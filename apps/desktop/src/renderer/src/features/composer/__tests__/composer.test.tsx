@@ -7389,19 +7389,7 @@ describe("Composer", () => {
         serviceTiers: ["standard", "priority"],
       }),
       label: "Grok CLI",
-      executionModes: [
-        {
-          mode: "default" as const,
-          label: "Default Access",
-          available: true,
-          isDefault: true,
-        },
-        {
-          mode: "full-access" as const,
-          label: "Full Access",
-          available: true,
-        },
-      ],
+      executionModes: [],
       acp: {
         registryId: "grok",
         distributionKinds: ["local"],
@@ -7560,7 +7548,7 @@ describe("Composer", () => {
       imageAttachments: undefined,
       prompt: "",
     });
-    expect(screen.getByLabelText(/^Access mode(?::|$)/)).toHaveValue("full-access");
+    expect(screen.queryByLabelText(/^Access mode(?::|$)/)).not.toBeInTheDocument();
     expect(screen.getByLabelText(/^Agent mode(?::|$)/)).toHaveValue("yolo");
     expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("grok-4.5-pro");
     expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("low");

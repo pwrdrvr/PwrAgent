@@ -6,6 +6,16 @@ import type { AcpSessionRuntimeOptions } from "./acp-session-runtime-options";
 import type { HeadlessAutomationTurns } from "./headless-automation-turns";
 import type { TurnEventDelivery, TurnEventObservers } from "./turn-event-observer";
 import { codexModelProviderPickerValue, providerPickerValue } from "@pwragent/shared/provider-picker";
+import { acpRuntimeModeSelector } from "@pwragent/shared/acp-permission-mode";
+import {
+  applyProviderAccessAcpOptionToRuntime,
+  formatAntigravityAccessStateLabel,
+  normalizeAntigravityAccessTarget,
+  planAntigravityAccessTransition,
+  readAppliedAntigravityAccessState,
+  type AntigravityAccessState,
+  type ProviderAccessAcpOption,
+} from "@pwragent/shared/provider-access-mode";
 import type { CodexRuntimeSupervisor } from "./codex-runtime-supervisor";
 import type { RegistryContext } from "./registry-context";
 import type { CodexStartDeliveryReceipt } from "./registry-turn-state";
@@ -1772,6 +1782,9 @@ export class DesktopBackendRegistry {
     {
       backend: AppServerBackendKind;
       mode: ThreadExecutionMode;
+      acpMode?: ProviderAccessAcpOption;
+      fromLabel?: string;
+      toLabel?: string;
       queuedAt: number;
       queueId: string;
       flushAttempts: number;
@@ -6186,10 +6199,14 @@ export class DesktopBackendRegistry {
     )
       ? "default"
       : params.executionMode;
+    const effectiveAcpRuntime =
+      params.backend === "acp:antigravity" && params.executionMode === "full-access"
+        ? this.normalizeAntigravityFullAccessRuntime(params.acpRuntime)
+        : params.acpRuntime;
     const session = await this.withArchiveWorkspaceWrite(params.cwd ? [params.cwd] : [], async () => await client.startSession({
       cwd: params.cwd,
       executionMode: initialExecutionMode,
-      acpRuntime: params.acpRuntime,
+      acpRuntime: effectiveAcpRuntime,
       additionalMcpRegistration: params.mcpRegistration,
       ...(params.hidden ? { hidden: true } : {}),
     }));
@@ -6207,7 +6224,7 @@ export class DesktopBackendRegistry {
       params.backend,
       client,
       session.sessionId,
-      params.acpRuntime,
+      effectiveAcpRuntime,
       params.reasoningEffort,
     );
     return {
@@ -6439,10 +6456,56 @@ export class DesktopBackendRegistry {
     });
   }
 
-  setAcpSessionRuntimeOption(
+  private normalizeAntigravityFullAccessRuntime(
+    runtime: BackendAcpSessionRuntimeState | undefined,
+  ): BackendAcpSessionRuntimeState | undefined {
+    if (!runtime) {
+      return undefined;
+    }
+    const capabilities = this.acpBackend.getInstalledAgent("acp:antigravity")?.runtimeCapabilities;
+    const selector = acpRuntimeModeSelector(capabilities);
+    if (selector && selector.choices.some((choice) => choice.id === "default")) {
+      return applyProviderAccessAcpOptionToRuntime(runtime, {
+        source: selector.source,
+        optionId: selector.optionId,
+        value: "default",
+      });
+    }
+    const nextConfig = runtime.configValues
+      ? Object.fromEntries(Object.entries(runtime.configValues).filter(([key]) => key !== "mode"))
+      : undefined;
+    return {
+      ...runtime,
+      ...(nextConfig ? { configValues: nextConfig } : {}),
+      currentModeId: undefined,
+    };
+  }
+
+  async setAcpSessionRuntimeOption(
     params: SetAcpSessionRuntimeOptionRequest,
   ): Promise<SetAcpSessionRuntimeOptionResponse> {
-    return this.acpSessionRuntimeOptions.setAcpSessionRuntimeOption(params);
+    if (
+      params.backend === "acp:antigravity"
+      && (params.source === "mode" || (params.source === "configOption" && params.optionId === "mode"))
+    ) {
+      await this.setThreadExecutionMode({
+        backend: "acp:antigravity",
+        threadId: params.threadId,
+        executionMode: "default",
+        acpMode: {
+          source: params.source,
+          optionId: params.optionId,
+          value: params.value,
+        },
+      });
+      const session = this.acpBackend.getSession(params.backend, params.threadId);
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        runtimeState: session?.acpRuntime,
+      };
+    }
+    return await this.acpSessionRuntimeOptions.setAcpSessionRuntimeOption(params);
   }
 
   private async resolveAcpSessionForTurn(
@@ -13842,6 +13905,9 @@ export class DesktopBackendRegistry {
   private async setQueuedAcpExecutionMode(
     params: SetThreadExecutionModeRequest & { backend: AcpBackendId },
   ): Promise<SetThreadExecutionModeResponse> {
+    if (params.backend === "acp:antigravity") {
+      return await this.setAntigravityAccessMode(params);
+    }
     const currentApplied = await this.readAppliedExecutionMode(
       params.backend,
       params.threadId,
@@ -13880,6 +13946,233 @@ export class DesktopBackendRegistry {
     }
 
     return await this.applyThreadExecutionMode(params);
+  }
+
+  private resolveAntigravityAcpModeOption(
+    nativeMode: string,
+    explicit?: ProviderAccessAcpOption,
+  ): ProviderAccessAcpOption {
+    if (explicit) {
+      return { ...explicit, value: nativeMode };
+    }
+    const capabilities = this.acpBackend.getInstalledAgent("acp:antigravity")?.runtimeCapabilities;
+    const selector = acpRuntimeModeSelector(capabilities);
+    if (selector) {
+      return {
+        source: selector.source,
+        optionId: selector.optionId,
+        value: nativeMode,
+      };
+    }
+    return {
+      source: "configOption",
+      optionId: "mode",
+      value: nativeMode,
+    };
+  }
+
+  private async setAntigravityAccessMode(
+    params: SetThreadExecutionModeRequest & { backend: AcpBackendId },
+  ): Promise<SetThreadExecutionModeResponse> {
+    const session = this.acpBackend.getSession(params.backend, params.threadId);
+    if (!session) {
+      throw new Error(`ACP session not found: ${params.threadId}`);
+    }
+    const capabilities = this.acpBackend.getInstalledAgent(params.backend)?.runtimeCapabilities;
+    const applied = readAppliedAntigravityAccessState({
+      executionMode: session.executionMode,
+      acpRuntime: session.acpRuntime,
+      capabilities,
+    });
+    const queueKey = executionModeQueueKey(params.backend, params.threadId);
+    const existingQueue = this.queuedExecutionModes.get(queueKey);
+    const queued = existingQueue
+      ? normalizeAntigravityAccessTarget({
+          executionMode: existingQueue.mode,
+          nativeMode: existingQueue.acpMode?.value,
+        })
+      : undefined;
+    const turnActive = this.threadHasActiveTurn(params.threadId, params.backend);
+    const action = planAntigravityAccessTransition({
+      applied,
+      queued,
+      turnActive,
+      requested: {
+        executionMode: params.executionMode,
+        nativeMode: params.acpMode?.value,
+      },
+    });
+
+    if (action.type === "noop") {
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: applied.executionMode,
+      };
+    }
+    if (action.type === "cancel_queue") {
+      await this.cancelThreadExecutionModeQueue({
+        backend: params.backend,
+        threadId: params.threadId,
+      });
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: applied.executionMode,
+      };
+    }
+    const acpMode = this.resolveAntigravityAcpModeOption(action.target.nativeMode, params.acpMode);
+    const fromLabel = formatAntigravityAccessStateLabel(applied, capabilities);
+    const toLabel = formatAntigravityAccessStateLabel(action.target, capabilities);
+    if (action.type === "queue") {
+      const queuedAt = Date.now();
+      const queueId = randomUUID();
+      this.queuedExecutionModes.set(queueKey, {
+        backend: params.backend,
+        mode: action.target.executionMode,
+        acpMode,
+        fromLabel,
+        toLabel,
+        queuedAt,
+        queueId,
+        flushAttempts: 0,
+      });
+      await this.appendPermissionTransition({
+        backend: params.backend,
+        threadId: params.threadId,
+        transition: {
+          id: randomUUID(),
+          fromExecutionMode: applied.executionMode,
+          toExecutionMode: action.target.executionMode,
+          fromLabel,
+          toLabel,
+          status: "queued",
+          occurredAt: queuedAt,
+          queueId,
+        },
+      });
+      await this.emit({
+        backend: params.backend,
+        notification: {
+          method: "thread/executionMode/queued",
+          params: {
+            threadId: params.threadId,
+            queuedExecutionMode: action.target.executionMode,
+            queuedAt,
+          },
+        },
+      });
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: action.target.executionMode,
+      };
+    }
+
+    const result = await this.applyAntigravityAccessTransition({
+      threadId: params.threadId,
+      applied,
+      target: action.target,
+      acpMode,
+      fromLabel,
+      toLabel,
+    });
+    if (existingQueue) {
+      this.queuedExecutionModes.delete(queueKey);
+      await this.emit({
+        backend: params.backend,
+        notification: {
+          method: "thread/executionMode/queueCleared",
+          params: {
+            threadId: params.threadId,
+            reason: "applied",
+          },
+        },
+      });
+    }
+    return result;
+  }
+
+  private async applyAntigravityAccessTransition(params: {
+    threadId: string;
+    applied: AntigravityAccessState;
+    target: AntigravityAccessState;
+    acpMode: ProviderAccessAcpOption;
+    fromLabel: string;
+    toLabel: string;
+    fromQueue?: boolean;
+    queueId?: string;
+  }): Promise<SetThreadExecutionModeResponse> {
+    const backend: AcpBackendId = "acp:antigravity";
+    if (params.target.executionMode !== params.applied.executionMode) {
+      await this.acpBackend.moveAntigravitySession(
+        params.threadId,
+        params.target.executionMode,
+        params.target.nativeMode,
+      );
+      const updatedSession = this.acpBackend.getSession(backend, params.threadId);
+      if (updatedSession?.acpRuntime) {
+        await this.emit({
+          backend,
+          notification: {
+            method: "thread/acpRuntime/updated",
+            params: {
+              threadId: params.threadId,
+              acpRuntime: updatedSession.acpRuntime,
+            },
+          },
+        });
+      }
+      return await this.publishAcpThreadExecutionMode(
+        {
+          backend,
+          threadId: params.threadId,
+          executionMode: params.target.executionMode,
+          acpMode: params.acpMode,
+        },
+        params.applied.executionMode,
+        {
+          fromQueue: params.fromQueue,
+          queueId: params.queueId,
+          fromLabel: params.fromLabel,
+          toLabel: params.toLabel,
+        },
+      );
+    }
+
+    await this.acpSessionRuntimeOptions.applyAcpSessionRuntimeOptionNow(
+      {
+        backend,
+        threadId: params.threadId,
+        source: params.acpMode.source,
+        optionId: params.acpMode.optionId,
+        value: params.target.nativeMode,
+      },
+      {
+        fromQueue: params.fromQueue,
+        queueId: params.queueId,
+        fromValue: params.applied.nativeMode,
+        fromLabel: params.fromLabel,
+        toLabel: params.toLabel,
+      },
+    );
+    if (params.fromQueue) {
+      await this.emit({
+        backend,
+        notification: {
+          method: "thread/executionMode/queueCleared",
+          params: {
+            threadId: params.threadId,
+            reason: "applied",
+          },
+        },
+      });
+    }
+    return {
+      backend,
+      threadId: params.threadId,
+      executionMode: params.target.executionMode,
+    };
   }
 
   /**
@@ -14169,6 +14462,8 @@ export class DesktopBackendRegistry {
         id: randomUUID(),
         fromExecutionMode: currentApplied,
         toExecutionMode: queue.mode,
+        ...(queue.fromLabel ? { fromLabel: queue.fromLabel } : {}),
+        ...(queue.toLabel ? { toLabel: queue.toLabel } : {}),
         status: "cancelled",
         occurredAt: Date.now(),
         queueId: queue.queueId,
@@ -14209,7 +14504,13 @@ export class DesktopBackendRegistry {
    */
   private async applyThreadExecutionMode(
     params: SetThreadExecutionModeRequest,
-    options?: { fromQueue?: boolean; queueId?: string; activeTurnId?: string },
+    options?: {
+      fromQueue?: boolean;
+      queueId?: string;
+      activeTurnId?: string;
+      fromLabel?: string;
+      toLabel?: string;
+    },
   ): Promise<SetThreadExecutionModeResponse> {
     if (params.backend !== "codex") {
       if (params.executionMode === "auto") {
@@ -14351,7 +14652,7 @@ export class DesktopBackendRegistry {
 
   private async applyAcpThreadExecutionMode(
     params: SetThreadExecutionModeRequest & { backend: AcpBackendId },
-    options?: { fromQueue?: boolean; queueId?: string },
+    options?: { fromQueue?: boolean; queueId?: string; fromLabel?: string; toLabel?: string },
   ): Promise<SetThreadExecutionModeResponse> {
     const session = this.acpBackend.getSession(params.backend, params.threadId);
     if (!session) {
@@ -14359,7 +14660,26 @@ export class DesktopBackendRegistry {
     }
     const previousApplied = session.executionMode ?? "default";
     if (params.backend === "acp:antigravity") {
-      await this.acpBackend.moveAntigravitySession(params.threadId, params.executionMode);
+      const capabilities = this.acpBackend.getInstalledAgent(params.backend)?.runtimeCapabilities;
+      const applied = readAppliedAntigravityAccessState({
+        executionMode: session.executionMode,
+        acpRuntime: session.acpRuntime,
+        capabilities,
+      });
+      const target = normalizeAntigravityAccessTarget({
+        executionMode: params.executionMode,
+        nativeMode: params.acpMode?.value,
+      });
+      return await this.applyAntigravityAccessTransition({
+        threadId: params.threadId,
+        applied,
+        target,
+        acpMode: this.resolveAntigravityAcpModeOption(target.nativeMode, params.acpMode),
+        fromLabel: options?.fromLabel ?? formatAntigravityAccessStateLabel(applied, capabilities),
+        toLabel: options?.toLabel ?? formatAntigravityAccessStateLabel(target, capabilities),
+        fromQueue: options?.fromQueue,
+        queueId: options?.queueId,
+      });
     } else {
       await this.applyAcpAccessControlPrompt(params, previousApplied);
       const updatedAt = Date.now();
@@ -14412,7 +14732,7 @@ export class DesktopBackendRegistry {
   private async publishAcpThreadExecutionMode(
     params: SetThreadExecutionModeRequest & { backend: AcpBackendId },
     previousApplied: ThreadExecutionMode,
-    options?: { fromQueue?: boolean; queueId?: string },
+    options?: { fromQueue?: boolean; queueId?: string; fromLabel?: string; toLabel?: string },
   ): Promise<SetThreadExecutionModeResponse> {
     const updatedAt = Date.now();
     const handleProjectionError = (error: unknown) => {
@@ -14438,6 +14758,8 @@ export class DesktopBackendRegistry {
         id: randomUUID(),
         fromExecutionMode: previousApplied,
         toExecutionMode: params.executionMode,
+        ...(options?.fromLabel ? { fromLabel: options.fromLabel } : {}),
+        ...(options?.toLabel ? { toLabel: options.toLabel } : {}),
         status: "applied",
         occurredAt: updatedAt,
         queueId: options?.queueId,
@@ -14880,6 +15202,9 @@ export class DesktopBackendRegistry {
     queue: {
       backend: AppServerBackendKind;
       mode: ThreadExecutionMode;
+      acpMode?: ProviderAccessAcpOption;
+      fromLabel?: string;
+      toLabel?: string;
       queuedAt: number;
       queueId: string;
       flushAttempts: number;
@@ -14891,8 +15216,14 @@ export class DesktopBackendRegistry {
           backend: queue.backend,
           threadId,
           executionMode: queue.mode,
+          ...(queue.acpMode ? { acpMode: queue.acpMode } : {}),
         },
-        { fromQueue: true, queueId: queue.queueId },
+        {
+          fromQueue: true,
+          queueId: queue.queueId,
+          fromLabel: queue.fromLabel,
+          toLabel: queue.toLabel,
+        },
       );
     } catch (error) {
       const attempts = queue.flushAttempts + 1;

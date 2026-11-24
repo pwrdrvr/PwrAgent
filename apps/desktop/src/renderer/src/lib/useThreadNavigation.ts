@@ -3268,7 +3268,12 @@ export function useThreadNavigation(
   selectedThreadKey?: string;
   setThreadExecutionMode: (
     thread: NavigationThreadSummary,
-    executionMode: ThreadExecutionMode
+    executionMode: ThreadExecutionMode,
+    acpMode?: {
+      source: "configOption" | "mode";
+      optionId: string;
+      value: string;
+    },
   ) => Promise<void>;
   setThreadExecutionModeError?: string;
   cancelThreadExecutionModeQueue: (
@@ -10236,7 +10241,12 @@ export function useThreadNavigation(
   const updateThreadExecutionMode = useCallback(
     async (
       thread: NavigationThreadSummary,
-      executionMode: ThreadExecutionMode
+      executionMode: ThreadExecutionMode,
+      acpMode?: {
+        source: "configOption" | "mode";
+        optionId: string;
+        value: string;
+      },
     ): Promise<void> => {
       if (!setThreadExecutionMode) {
         setSetThreadExecutionModeError(
@@ -10278,6 +10288,7 @@ export function useThreadNavigation(
             readRendererFederationTarget(),
           threadId: thread.id,
           executionMode,
+          ...(acpMode ? { acpMode } : {}),
         });
         await refresh(threadSummaryIdentityKey(thread));
       } catch (error) {

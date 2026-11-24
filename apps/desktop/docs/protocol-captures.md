@@ -149,10 +149,13 @@ same ID to the other process. Full Access replayed both original user and
 assistant turns. Default then replayed all five turns and all three tool
 calls after the return trip. Both ACP front processes stayed up.
 
-PwrAgent's Access mode chooses the process. Antigravity's Agent mode keeps
-its own selection across a move, including Plan. Plan still instructs
-Antigravity to plan. Full Access auto-approves the tools the agent does run,
-including any tools available in Plan.
+PwrAgent exposes one unified Access mode selector for Antigravity: Default
+Access, its non-default native modes (Accept Edits, Auto, Plan) on the Default
+process, and Full Access on the `--dangerously-skip-permissions` process.
+Moving to Full Access resets the native mode to Default so a Full Access thread
+is never silently left in Plan, and moving from Full Access to a native mode
+closes the Full Access session, loads on the Default process, and confirms the
+selected native mode atomically.
 
 Raw captures are under the ignored
 `apps/desktop/.local/protocol-captures/antigravity-full-access/`.

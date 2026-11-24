@@ -1764,7 +1764,11 @@ export class AcpBackendAdapter {
     this.acpSessionStore?.upsertSession?.(session);
   }
 
-  async moveAntigravitySession(sessionId: string, executionMode: ThreadExecutionMode): Promise<void> {
+  async moveAntigravitySession(
+    sessionId: string,
+    executionMode: ThreadExecutionMode,
+    nativeMode?: string,
+  ): Promise<void> {
     const backend = "acp:antigravity";
     await this.environmentClientLocks.run(JSON.stringify([backend, sessionId]), async () => {
       const session = this.getSession(backend, sessionId);
@@ -1774,7 +1778,11 @@ export class AcpBackendAdapter {
       if (target.supportsSessionLoad?.() !== true) {
         throw new Error("This Antigravity runtime cannot load the session in another process.");
       }
-      await target.loadSession(this.getSession(backend, sessionId) ?? session);
+      const targetNativeMode = executionMode === "full-access" ? "default" : (nativeMode ?? "default");
+      await target.loadSession(this.getSession(backend, sessionId) ?? session, {
+        antigravityModeSelection: targetNativeMode,
+        antigravityModeExplicit: executionMode !== "full-access" && targetNativeMode !== "default",
+      });
       // Load can refresh native mode and model metadata. Apply access only
       // after the new process has opened the same session.
       this.upsertSession({

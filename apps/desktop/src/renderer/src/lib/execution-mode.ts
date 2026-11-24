@@ -12,6 +12,10 @@ import {
   acpRuntimeModeValue,
   formatAcpRuntimeModeLabel,
 } from "@pwragent/shared/acp-permission-mode";
+import {
+  resolveProviderAccessControl,
+  type ProviderAccessControl,
+} from "@pwragent/shared/provider-access-mode";
 
 export function formatExecutionModeLabel(mode?: ThreadExecutionMode): string {
   return mode === "auto" ? "Auto" : mode === "full-access" ? "Full Access" : "Default Access";
@@ -73,6 +77,23 @@ export function getAcpRuntimeModeControl(
       value: choice.id,
     })),
   };
+}
+
+export function getProviderAccessControl(
+  backend: BackendSummary | undefined,
+  settings: NavigationLaunchpadDraft | NavigationThreadSummary | undefined,
+  options?: { includeUnavailableAuto?: boolean },
+): ProviderAccessControl | undefined {
+  return resolveProviderAccessControl({
+    backend,
+    state: settings
+      ? {
+          executionMode: settings.executionMode,
+          acpRuntime: settings.acpRuntime,
+        }
+      : undefined,
+    includeUnavailableAuto: options?.includeUnavailableAuto,
+  });
 }
 
 export function formatAccessModeLabel(

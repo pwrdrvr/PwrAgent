@@ -19,10 +19,14 @@ import { buildConfirmationIntent, buildErrorIntent } from "./messaging-renderer.
 import { isNewAgentThreadLaunchAction, isNewThreadLaunchAction, selectProjectFromValue } from "./messaging-resume-browser.js";
 import { buildNewThreadEnvironmentPickerIntent, buildBranchPickerPage, formatMessagingToolUpdateModeLabel, formatPermissionsActionDisplayLabel, formatPermissionsLineDisplayLabel, messagingToolUpdateModeChoices, shouldShowStreamingControl } from "./messaging-status-card.js";
 import { acpRuntimeModeIsFullAccess } from "@pwragent/shared/acp-permission-mode";
+import {
+  applyProviderAccessAcpOptionToRuntime,
+  resolveProviderAccessControl,
+} from "@pwragent/shared/provider-access-mode";
 import { acpBackendDeclaresExecutionMode, acpBackendUsesExecutionModePermissions, buildMessagingAcpRuntimeModeSummary } from "./messaging-acp-runtime.js";
 import { DEFAULT_MESSAGING_AGENT_NAME } from "./messaging-inbound-helpers";
 import type { MessagingNewThreadContext } from "./messaging-new-thread-context";
-import { readNullableStringValue, readThreadExecutionModeValue, readAcpRuntimeOptionSource } from "./messaging-callback-helpers";
+import { readNullableStringValue, readPermissionsAcpModeValue, readThreadExecutionModeValue, readAcpRuntimeOptionSource } from "./messaging-callback-helpers";
 import { listMessagingAgentPresets, resolveMessagingAgentPreset } from "./messaging-agent-presets";
 
 const NEW_THREAD_PROMPT_CAPTURE_TTL_MS = MESSAGING_CALLBACK_HANDLE_TTL_MS;
@@ -37,16 +41,25 @@ function newThreadPromptGateBody(
 ): string {
   const acpExecutionModePermissions =
     acpBackendUsesExecutionModePermissions(backend);
-  const separateAgentMode = backend.kind === "acp:antigravity" && acpExecutionModePermissions;
+  const antigravityAccessControl = backend.kind === "acp:antigravity"
+    && acpExecutionModePermissions
+    ? resolveProviderAccessControl({
+        backend,
+        state: {
+          executionMode: options.executionMode,
+          acpRuntime: options.acpRuntime,
+        },
+      })
+    : undefined;
   const acpRuntimeMode = isAcpBackendId(options.backend)
-    && (!acpExecutionModePermissions || separateAgentMode)
+    && !acpExecutionModePermissions
     ? buildMessagingAcpRuntimeModeSummary({
         backend,
         runtime: options.acpRuntime,
       })
     : undefined;
   const permissionsLabel = formatPermissionsLineDisplayLabel({
-    acpRuntimeLabel: separateAgentMode ? undefined : acpRuntimeMode?.currentLabel,
+    acpRuntimeLabel: antigravityAccessControl?.selectedOption?.label ?? acpRuntimeMode?.currentLabel,
     current: options.executionMode,
   });
   return [
@@ -67,7 +80,6 @@ function newThreadPromptGateBody(
       || options.executionMode === "full-access"
       ? `Permissions: ${permissionsLabel}`
       : undefined,
-    separateAgentMode && acpRuntimeMode?.choices.length ? `Agent mode: ${acpRuntimeMode.currentLabel}` : undefined,
     options.codexEnvironmentOptions.length > 0 || options.codexEnvironmentId
       ? `Environment: ${formatNewThreadEnvironmentLabel(options)}`
       : undefined,
@@ -458,20 +470,29 @@ export class MessagingNewThreadWorkflow {
       );
     const acpExecutionModePermissions =
       acpBackendUsesExecutionModePermissions(selectedBackend);
-    const separateAgentMode = selectedBackend.kind === "acp:antigravity" && acpExecutionModePermissions;
+    const antigravityAccessControl = selectedBackend.kind === "acp:antigravity"
+      && acpExecutionModePermissions
+      ? resolveProviderAccessControl({
+          backend: selectedBackend,
+          state: {
+            executionMode: options.executionMode,
+            acpRuntime: options.acpRuntime,
+          },
+        })
+      : undefined;
     const supportsPermissionsControls =
       !isAcpBackendId(selectedBackend.kind) ||
       acpExecutionModePermissions ||
       options.executionMode === "full-access";
     const acpRuntimeMode = isAcpBackendId(selectedBackend.kind)
-      && (!acpExecutionModePermissions || separateAgentMode)
+      && !acpExecutionModePermissions
       ? buildMessagingAcpRuntimeModeSummary({
           backend: selectedBackend,
           runtime: options.acpRuntime,
         })
       : undefined;
     const permissionsLabel = formatPermissionsActionDisplayLabel({
-      acpRuntimeLabel: separateAgentMode ? undefined : acpRuntimeMode?.currentLabel,
+      acpRuntimeLabel: antigravityAccessControl?.selectedOption?.label ?? acpRuntimeMode?.currentLabel,
       current: options.executionMode,
     });
     const environmentLabel = formatNewThreadEnvironmentLabel(options);
@@ -548,8 +569,9 @@ export class MessagingNewThreadWorkflow {
           : []),
         ...(((supportsPermissionsControls &&
           (options.executionMode === "full-access" ||
-            fullAccessControls.allowEscalation)) ||
-          (!separateAgentMode && acpRuntimeMode && acpRuntimeMode.choices.length > 0))
+            fullAccessControls.allowEscalation ||
+            (antigravityAccessControl?.options.length ?? 0) > 1)) ||
+          (acpRuntimeMode && acpRuntimeMode.choices.length > 0))
           ? [
               {
                 id: "browse:new:permissions",
@@ -558,14 +580,6 @@ export class MessagingNewThreadWorkflow {
                 fallbackText: "permissions",
               },
             ]
-          : []),
-        ...(separateAgentMode && acpRuntimeMode?.choices.length
-          ? [{
-              id: "browse:new:runtime-mode",
-              label: `Agent mode: ${acpRuntimeMode.currentLabel}`,
-              style: "secondary" as const,
-              fallbackText: "agent mode",
-            }]
           : []),
         ...(supportsEnvironment
           ? [
@@ -933,13 +947,9 @@ export class MessagingNewThreadWorkflow {
       delivery: session.surface
         ? { mode: "update", replaceMarkup: true }
         : undefined,
-      title: summary.kind === "acp:antigravity" ? "Select Agent mode" : "Select permissions",
-      body: summary.kind === "acp:antigravity"
-        ? "Choose the Agent mode for the new thread."
-        : "Choose the permissions mode for the new thread.",
-      fallbackText: summary.kind === "acp:antigravity"
-        ? "Choose an Agent mode, or reply back."
-        : "Choose a permissions option, or reply back.",
+      title: "Select permissions",
+      body: "Choose the permissions mode for the new thread.",
+      fallbackText: "Choose a permissions option, or reply back.",
       targetSurface: session.surface,
       actions: [
         ...runtimeMode.choices.map((choice, index) => ({
@@ -992,19 +1002,49 @@ export class MessagingNewThreadWorkflow {
       },
       event,
     );
-    const currentMode = backend
+    const currentOptions = backend
       ? newThreadOptionsForSession(
           session,
           navigation,
           directory,
           this.context.streamingResponsesDefault,
           backend,
-        ).executionMode
-      : session.preferences?.executionMode ?? "default";
-    const choices: Array<{ label: string; mode: ThreadExecutionMode }> = [
-      { label: "Default", mode: "default" },
-      { label: "Full Access", mode: "full-access" },
-    ];
+        )
+      : undefined;
+    const currentMode = currentOptions?.executionMode ?? session.preferences?.executionMode ?? "default";
+    const antigravityControl = backend?.kind === "acp:antigravity"
+      ? resolveProviderAccessControl({
+          backend,
+          state: {
+            executionMode: currentMode,
+            acpRuntime: currentOptions?.acpRuntime ?? session.preferences?.acpRuntime,
+          },
+        })
+      : undefined;
+    const choices: Array<{
+      label: string;
+      mode: ThreadExecutionMode;
+      selected: boolean;
+      acpMode?: { source: "configOption" | "mode"; optionId: string; value: string };
+    }> = antigravityControl && antigravityControl.options.length > 0
+      ? antigravityControl.options.map((option) => ({
+          label: option.label,
+          mode: option.executionMode,
+          selected: option.value === antigravityControl.value,
+          ...(option.acpOption && option.acpOption.source !== "model"
+            ? {
+                acpMode: {
+                  source: option.acpOption.source,
+                  optionId: option.acpOption.optionId,
+                  value: option.acpOption.value,
+                },
+              }
+            : {}),
+        }))
+      : [
+          { label: "Default", mode: "default", selected: currentMode === "default" },
+          { label: "Full Access", mode: "full-access", selected: currentMode === "full-access" },
+        ];
     const intent = buildConfirmationIntent({
       id: this.context.host().newIntentId("new-thread-permissions"),
       capabilityProfile: this.context.capabilityProfile,
@@ -1020,11 +1060,14 @@ export class MessagingNewThreadWorkflow {
       actions: [
         ...choices.map((choice, index) => ({
           id: "browse:new:set-permissions",
-          label: `${choice.label}${choice.mode === currentMode ? " (current)" : ""}`,
+          label: `${choice.label}${choice.selected ? " (current)" : ""}`,
           style: "secondary" as const,
           fallbackText: String(index + 1),
           priority: 10 + index,
-          value: { executionMode: choice.mode },
+          value: {
+            executionMode: choice.mode,
+            ...(choice.acpMode ? { acpMode: choice.acpMode } : {}),
+          },
         })),
         {
           id: session.workMode === "worktree"
@@ -1054,6 +1097,7 @@ export class MessagingNewThreadWorkflow {
     navigation: MessagingNewThreadNavigation,
   ): Promise<void> {
     const executionMode = readThreadExecutionModeValue(event.value);
+    const acpMode = readPermissionsAcpModeValue(event.value);
     if (!executionMode) {
       await this.context.host().deliverInvalidBrowseSelection(event);
       return;
@@ -1065,7 +1109,16 @@ export class MessagingNewThreadWorkflow {
       session.preferences?.executionMode ??
       directory?.launchpad?.executionMode ??
       navigation.launchpadDefaults.executionMode;
-    if (executionMode === currentMode) {
+    const currentRuntime =
+      session.preferences?.acpRuntime ??
+      directory?.launchpad?.acpRuntime ??
+      navigation.launchpadDefaults.acpRuntime;
+    const currentAcpValue = acpMode
+      ? (acpMode.source === "mode"
+          ? currentRuntime?.currentModeId
+          : currentRuntime?.configValues?.[acpMode.optionId] ?? currentRuntime?.currentModeId)
+      : undefined;
+    if (executionMode === currentMode && (!acpMode || currentAcpValue === acpMode.value)) {
       await this.presentNewThreadPromptGate(session, event, navigation);
       return;
     }
@@ -1090,8 +1143,15 @@ export class MessagingNewThreadWorkflow {
         return;
       }
     }
+    const nextAcpRuntime = acpMode
+      ? {
+          ...applyProviderAccessAcpOptionToRuntime(currentRuntime, acpMode),
+          updatedAt: this.context.now(),
+        }
+      : undefined;
     await this.updateNewThreadStickySettings(session, {
       executionMode,
+      ...(nextAcpRuntime ? { acpRuntime: nextAcpRuntime } : {}),
     });
     await this.presentNewThreadPromptGate(
       {
@@ -1100,6 +1160,7 @@ export class MessagingNewThreadWorkflow {
           ...session.preferences,
           executionMode,
           permissionsMode: executionMode,
+          ...(nextAcpRuntime ? { acpRuntime: nextAcpRuntime } : {}),
           updatedAt: this.context.now(),
         },
       },
@@ -1305,12 +1366,10 @@ export class MessagingNewThreadWorkflow {
         : currentRuntime?.currentModeId,
       updatedAt: this.context.now(),
     };
-    const executionMode = backend === "acp:antigravity"
-      ? undefined
-      : acpRuntimeModeIsFullAccess(selection.value) ? "full-access" : "default";
+    const executionMode = acpRuntimeModeIsFullAccess(selection.value) ? "full-access" : "default";
     await this.updateNewThreadStickySettings(session, {
       acpRuntime,
-      ...(executionMode ? { executionMode } : {}),
+      executionMode,
     });
     await this.presentNewThreadPromptGate(
       {
@@ -1318,7 +1377,8 @@ export class MessagingNewThreadWorkflow {
         preferences: {
           ...session.preferences,
           acpRuntime,
-          ...(executionMode ? { executionMode, permissionsMode: executionMode } : {}),
+          executionMode,
+          permissionsMode: executionMode,
           updatedAt: this.context.now(),
         },
       },

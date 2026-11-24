@@ -27034,7 +27034,7 @@ describe("MessagingController", () => {
   });
 
   it.each(["default", "full-access"] as const)(
-    "keeps Antigravity Agent mode separate from %s access in messaging",
+    "shows one unified Permissions control for Antigravity starting from %s access in messaging",
     async (executionMode) => {
       const backend = "acp:antigravity";
       const navigation = buildNavigationSnapshot();
@@ -27047,34 +27047,42 @@ describe("MessagingController", () => {
       ] });
       summary.acp!.registryId = "antigravity";
       summary.acp!.runtime!.modes!.availableModes = [
-        { id: "default", label: "Default" }, { id: "plan", label: "Plan" },
+        { id: "default", label: "Default" }, { id: "accept-edits", label: "Accept Edits" }, { id: "plan", label: "Plan" },
       ];
       const harness = await createHarness({
         navigation, listBackends: async () => ({ fetchedAt: 1000, backends: [summary] }),
       });
-      const selection = { optionId: "mode", source: "mode", value: "plan" };
+      const planSelection = {
+        executionMode: "default",
+        acpMode: { optionId: "mode", source: "mode", value: "plan" },
+      };
 
       await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
       await harness.controller.handleInboundEvent(buildCallbackEvent({
         actionId: "browse:select-project",
         value: { directoryKey: "directory:pwragent", label: "PwrAgent", path: "/repo/pwragent" },
       }));
+      const newGate = harness.delivered.at(-1) as { body?: string; actions?: Array<{ id: string }> };
+      expect(newGate.body).not.toContain("Agent mode:");
+      expect(newGate.actions?.some((action) => action.id === "browse:new:permissions")).toBe(true);
+      expect(newGate.actions?.some((action) => action.id === "browse:new:runtime-mode")).toBe(false);
+
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "browse:new:permissions" }));
       expect(harness.delivered.at(-1)).toMatchObject({
-        body: expect.stringContaining("Agent mode: Default"),
+        title: "Select permissions",
         actions: expect.arrayContaining([
-          expect.objectContaining({ id: "browse:new:permissions" }),
-          expect.objectContaining({ id: "browse:new:runtime-mode" }),
+          expect.objectContaining({ id: "browse:new:set-permissions", value: planSelection }),
+          expect.objectContaining({ id: "browse:new:set-permissions", value: expect.objectContaining({ executionMode: "full-access" }) }),
         ]),
       });
-      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "browse:new:runtime-mode" }));
-      expect(harness.delivered.at(-1)).toMatchObject({
-        title: "Select Agent mode",
-        actions: expect.arrayContaining([expect.objectContaining({ id: "browse:new:set-runtime-mode", value: selection })]),
-      });
-      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "browse:new:set-runtime-mode", value: selection }));
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "browse:new:set-permissions", value: planSelection }));
       await harness.controller.handleInboundEvent(buildTextEvent("Make a plan"));
       expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
-        launchpad: expect.objectContaining({ backend, executionMode, acpRuntime: expect.objectContaining({ currentModeId: "plan" }) }),
+        launchpad: expect.objectContaining({
+          backend,
+          executionMode: "default",
+          acpRuntime: expect.objectContaining({ currentModeId: "plan" }),
+        }),
       }), expectMaterializeOptions());
 
       await harness.store.upsertBinding({
@@ -27083,24 +27091,28 @@ describe("MessagingController", () => {
       });
       await harness.controller.handleInboundEvent(buildCommandEvent("/status"));
       const permissions = executionMode === "full-access" ? "Full Access" : "Default Access";
+      const statusIntent = harness.delivered.at(-1) as { text?: string; actions?: Array<{ id: string }> };
+      expect(statusIntent.text).toContain(`Permissions: ${permissions}`);
+      expect(statusIntent.text).not.toContain("Agent mode:");
+      expect(statusIntent.actions?.some((action) => action.id === "status:permissions")).toBe(true);
+      expect(statusIntent.actions?.some((action) => action.id === "status:runtime-mode")).toBe(false);
+
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:permissions" }));
       expect(harness.delivered.at(-1)).toMatchObject({
-        text: expect.stringContaining(`Permissions: ${permissions}\nAgent mode: Default`),
-        actions: expect.arrayContaining([
-          expect.objectContaining({ id: "status:permissions" }),
-          expect.objectContaining({ id: "status:runtime-mode" }),
+        prompt: "Select Permissions",
+        choices: expect.arrayContaining([
+          expect.objectContaining({ id: "status:set-permissions", value: planSelection }),
+          expect.objectContaining({ id: "status:set-permissions", value: expect.objectContaining({ executionMode: "full-access" }) }),
         ]),
       });
-      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:runtime-mode" }));
-      expect(harness.delivered.at(-1)).toMatchObject({
-        prompt: "Select Agent mode",
-        choices: expect.arrayContaining([expect.objectContaining({ id: "status:set-runtime-mode", value: selection })]),
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:set-permissions", value: planSelection }));
+      expect(harness.setThreadExecutionMode).toHaveBeenCalledWith({
+        backend,
+        threadId: "thread-1",
+        executionMode: "default",
+        acpMode: planSelection.acpMode,
       });
-      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:set-runtime-mode", value: selection }));
-      expect(harness.setAcpSessionRuntimeOption).toHaveBeenCalledWith({ backend, threadId: "thread-1", ...selection });
-      expect(harness.setThreadExecutionMode).not.toHaveBeenCalled();
-      expect(harness.delivered.at(-1)).toMatchObject({
-        text: expect.stringContaining(`Permissions: ${permissions}\nAgent mode: Plan`),
-      });
+      expect(harness.setAcpSessionRuntimeOption).not.toHaveBeenCalled();
     },
   );
 

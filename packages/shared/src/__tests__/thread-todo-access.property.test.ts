@@ -196,7 +196,7 @@ describe("resolveThreadTodoStartAccess", () => {
     }));
   });
 
-  it("starts Antigravity in the saved Agent mode at the card's process access", () => {
+  it("starts Antigravity in the saved native mode on Default process and resets Full Access to default native mode", () => {
     fc.assert(fc.property(
       fc.constantFrom("default", "full-access"),
       fc.constantFrom("default", "plan", "accept-edits"),
@@ -221,9 +221,21 @@ describe("resolveThreadTodoStartAccess", () => {
           card: { executionMode, nativeAccessMode: { backend, id } },
           sourceBackend: backend, sourceExecutionMode: "default", destination, destinationBackend: backend,
         });
-        expect(access).toMatchObject({ status: "ready", executionMode, acpRuntime: { currentModeId: id } });
         if (executionMode === "full-access") {
-          expect(access).toMatchObject({ selected: { kind: "mode", mode: "full-access" } });
+          expect(access).toMatchObject({
+            status: "ready",
+            executionMode: "full-access",
+            selected: { kind: "mode", mode: "full-access" },
+          });
+          if (access.status === "ready") {
+            expect(access.acpRuntime).toBeUndefined();
+          }
+        } else {
+          expect(access).toMatchObject({
+            status: "ready",
+            executionMode: "default",
+            acpRuntime: { currentModeId: id },
+          });
         }
       },
     ));

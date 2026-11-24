@@ -17,13 +17,30 @@ import {
   nonRepositoryCwd,
 } from "./helpers/backend-registry-fixture";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
+import {
+  normalizeAntigravityAccessTarget,
+  sameAntigravityAccessState,
+  type AntigravityAccessState,
+} from "@pwragent/shared/provider-access-mode";
 
 const backend = "acp:antigravity";
 type Access = "default" | "full-access";
-type Model = { access: Access; active: boolean; mode: "default" | "plan"; pending?: Access };
-type Action = { type: "select"; access: Access } | { type: "start" } | { type: "finish" }
-  | { type: "failed-load" } | { type: "plan" } | { type: "overlay-failure" }
-  | { type: "lower-access-prompt" } | { type: "finish-with-blocked-close" } | { type: "retry-downgrade" }
+type NativeMode = "default" | "accept-edits" | "auto" | "plan";
+type Model = {
+  applied: AntigravityAccessState;
+  active: boolean;
+  pending?: AntigravityAccessState;
+};
+type Action =
+  | { type: "select"; access: Access; nativeMode?: NativeMode }
+  | { type: "legacy-runtime-mode"; nativeMode: NativeMode }
+  | { type: "start" }
+  | { type: "finish" }
+  | { type: "failed-load" }
+  | { type: "overlay-failure" }
+  | { type: "lower-access-prompt" }
+  | { type: "finish-with-blocked-close" }
+  | { type: "retry-downgrade" }
   | { type: "inherit"; child: "review" | "monitor" };
 
 async function exercise(
@@ -35,19 +52,41 @@ async function exercise(
   const sessionId = "test-session";
   const sessions = db ? new AcpSessionStore(db) : createAcpSessionStoreMock([]);
   const base = createKimiAgentRecord(backend);
+  const modeValues = [
+    { value: "default", name: "Default" },
+    { value: "accept-edits", name: "Accept Edits" },
+    { value: "auto", name: "Auto" },
+    { value: "plan", name: "Plan" },
+  ];
   const record = {
     ...base, registryId: "antigravity", name: "Antigravity", version: "1.5.15",
     launchDescriptor: { ...base.launchDescriptor!, registryId: "antigravity", command: "agy", args: ["acp", "--process-per-session"] },
+    runtimeCapabilities: {
+      schemaVersion: 1 as const,
+      status: "discovered" as const,
+      configOptions: [{
+        id: "mode",
+        label: "Mode",
+        type: "select" as const,
+        category: "mode" as const,
+        currentValue: "default",
+        values: modeValues.map((entry) => ({ value: entry.value, label: entry.name })),
+      }],
+      modes: {
+        availableModes: modeValues.map((entry) => ({ id: entry.value, label: entry.name })),
+        currentModeId: "default",
+      },
+    },
   };
   const agents = db ? new AcpAgentStore(db) : createAcpAgentStoreMock([]);
   agents.upsertInstalledAgent(record);
   const workers = new Set<Access>();
-  const modes = new Map<Access, Model["mode"]>();
-  const modeOptions = (currentValue: Model["mode"]) => [{
+  const modes = new Map<Access, string>();
+  const modeOptions = (currentValue: string) => [{
     type: "select", id: "mode", category: "mode", name: "Mode", currentValue,
-    options: [{ value: "default", name: "Default" }, { value: "plan", name: "Plan" }],
+    options: modeValues,
   }];
-  const prompts: Access[] = [];
+  const prompts: Array<{ access: Access; mode: string }> = [];
   let failNextLoad = false;
   let closeBlocked = false;
   let closeAttempts = 0;
@@ -85,15 +124,17 @@ async function exercise(
               if (closeBlocked) throw new Error("A background command is still running");
               expect(workers.delete(access)).toBe(true);
               return {};
-            case "session/set_config_option":
+            case "session/set_config_option": {
               expect(workers.has(access)).toBe(true);
-              expect(params).toMatchObject({ sessionId, configId: "mode", value: "plan" });
-              modes.set(access, "plan");
-              return { configOptions: modeOptions("plan") };
+              const nextMode = String(params?.value ?? "default");
+              expect(params).toMatchObject({ sessionId, configId: "mode", value: nextMode });
+              modes.set(access, nextMode);
+              return { configOptions: modeOptions(nextMode) };
+            }
             case "session/prompt": {
               expect([...workers]).toEqual([access]);
               expect(access).toBe(sessions.getSession(backend, sessionId)?.executionMode);
-              prompts.push(access);
+              prompts.push({ access, mode: modes.get(access) ?? "default" });
               const reply = Promise.withResolvers<void>();
               const done = Promise.withResolvers<void>();
               expectTerminal = done.resolve;
@@ -153,40 +194,76 @@ async function exercise(
     const real: Real = {
       dispatch: async (model, action) => {
         switch (action.type) {
-          case "select":
-            await registry.setThreadExecutionMode({ backend, threadId: sessionId, executionMode: action.access });
-            if (model.active) {
-              model.pending = action.access !== model.access ? action.access : undefined;
+          case "select": {
+            const target = normalizeAntigravityAccessTarget({
+              executionMode: action.access,
+              nativeMode: action.nativeMode,
+            });
+            await registry.setThreadExecutionMode({
+              backend,
+              threadId: sessionId,
+              executionMode: action.access,
+              ...(action.nativeMode
+                ? { acpMode: { source: "configOption", optionId: "mode", value: action.nativeMode } }
+                : {}),
+            });
+            if (sameAntigravityAccessState(target, model.applied)) {
+              model.pending = undefined;
+            } else if (model.active) {
+              model.pending = target;
             } else {
-              model.access = action.access;
+              model.applied = target;
+              model.pending = undefined;
             }
             break;
+          }
+          case "legacy-runtime-mode": {
+            const target = normalizeAntigravityAccessTarget({
+              executionMode: "default",
+              nativeMode: action.nativeMode,
+            });
+            await registry.setAcpSessionRuntimeOption({
+              backend,
+              threadId: sessionId,
+              source: "configOption",
+              optionId: "mode",
+              value: action.nativeMode,
+            });
+            if (sameAntigravityAccessState(target, model.applied)) {
+              model.pending = undefined;
+            } else if (model.active) {
+              model.pending = target;
+            } else {
+              model.applied = target;
+              model.pending = undefined;
+            }
+            break;
+          }
           case "failed-load": {
-            const target = model.access === "default" ? "full-access" : "default";
+            const target = model.applied.executionMode === "default" ? "full-access" : "default";
             failNextLoad = true;
             await expect(registry.setThreadExecutionMode({ backend, threadId: sessionId, executionMode: target }))
               .rejects.toThrow("Lost the load reply");
-            expect(sessions.getSession(backend, sessionId)?.executionMode).toBe(model.access);
+            expect(sessions.getSession(backend, sessionId)?.executionMode).toBe(model.applied.executionMode);
             // Reading after a failed move must release the possibly-open
             // target before reloading the session through the applied process.
             await registry.readThread({ backend, threadId: sessionId });
             break;
           }
-          case "plan":
-            await registry.setAcpSessionRuntimeOption({
-              backend, threadId: sessionId, source: "configOption", optionId: "mode", value: "plan",
-            });
-            model.mode = "plan";
-            break;
           case "overlay-failure": {
-            const target = model.access === "default" ? "full-access" : "default";
-            await overlayStore.setThreadExecutionMode({ backend, threadId: sessionId, executionMode: model.access });
+            const targetAccess: Access = model.applied.executionMode === "default" ? "full-access" : "default";
+            const target = normalizeAntigravityAccessTarget({ executionMode: targetAccess });
+            await overlayStore.setThreadExecutionMode({
+              backend,
+              threadId: sessionId,
+              executionMode: model.applied.executionMode,
+            });
             const project = vi.spyOn(overlayStore, "setThreadExecutionMode")
               .mockRejectedValueOnce(new Error("Cannot write the permission overlay"));
             try {
-              await registry.setThreadExecutionMode({ backend, threadId: sessionId, executionMode: target });
-              expect(accessUpdates.at(-1)).toBe(target);
-              model.access = target;
+              await registry.setThreadExecutionMode({ backend, threadId: sessionId, executionMode: targetAccess });
+              expect(accessUpdates.at(-1)).toBe(targetAccess);
+              model.applied = target;
             } finally {
               project.mockRestore();
             }
@@ -194,7 +271,7 @@ async function exercise(
           }
           case "inherit": {
             const overlay = await overlayStore.getThreadOverlayState({ backend, threadId: sessionId });
-            expect(overlay?.executionMode).toBe(model.access === "default" ? "full-access" : "default");
+            expect(overlay?.executionMode).toBe(model.applied.executionMode === "default" ? "full-access" : "default");
             const modules = registryModules(registry);
             const stop = new Error("Child access observed");
             const startChild = vi.spyOn(registry as unknown as {
@@ -212,7 +289,10 @@ async function exercise(
                     preferredModel: "default", preferredReasoningEffort: "provider-default", prompt: "Monitor the job",
                   });
               await expect(child).rejects.toBe(stop);
-              expect(startChild).toHaveBeenCalledWith(expect.objectContaining({ backend, executionMode: model.access }));
+              expect(startChild).toHaveBeenCalledWith(expect.objectContaining({
+                backend,
+                executionMode: model.applied.executionMode,
+              }));
             } finally {
               startChild.mockRestore();
             }
@@ -220,17 +300,23 @@ async function exercise(
           }
           case "start":
             await start();
-            expect(prompts.at(-1)).toBe(model.access);
+            expect(prompts.at(-1)).toEqual({
+              access: model.applied.executionMode,
+              mode: model.applied.nativeMode,
+            });
             model.active = true;
             break;
           case "lower-access-prompt": {
             const previousPrompts = prompts.length;
-            if (model.access === "full-access") {
+            if (model.applied.executionMode === "full-access") {
               await expect(start("default")).rejects.toThrow("lower access mode");
               expect(prompts).toHaveLength(previousPrompts);
             } else {
               await start("default");
-              expect(prompts.slice(previousPrompts)).toEqual(["default"]);
+              expect(prompts.slice(previousPrompts)).toEqual([{
+                access: "default",
+                mode: model.applied.nativeMode,
+              }]);
               model.active = true;
             }
             break;
@@ -246,6 +332,7 @@ async function exercise(
           }
           case "retry-downgrade": {
             const previousPrompts = prompts.length;
+            const target = model.pending ?? { executionMode: "default" as const, nativeMode: "default" };
             for (let attempt = 0; attempt < 4; attempt++) {
               await expect(start()).rejects.toThrow("switching to Default Access");
               expect(prompts).toHaveLength(previousPrompts);
@@ -254,8 +341,11 @@ async function exercise(
             closeBlocked = false;
             await start();
             expect(closeAttempts).toBe(attempts + 1);
-            expect(prompts.slice(previousPrompts)).toEqual(["default"]);
-            model.access = "default";
+            expect(prompts.slice(previousPrompts)).toEqual([{
+              access: target.executionMode,
+              mode: target.nativeMode,
+            }]);
+            model.applied = target;
             model.pending = undefined;
             model.active = true;
             break;
@@ -276,19 +366,25 @@ async function exercise(
               stopWatching();
             }
             model.active = false;
-            model.access = model.pending ?? model.access;
+            model.applied = model.pending ?? model.applied;
             model.pending = undefined;
             break;
           }
         }
-        expect([...workers]).toEqual([model.access]);
-        expect(modes.get(model.access)).toBe(model.mode);
-        expect(sessions.getSession(backend, sessionId)?.executionMode).toBe(model.access);
+        expect([...workers]).toEqual([model.applied.executionMode]);
+        expect(modes.get(model.applied.executionMode)).toBe(model.applied.nativeMode);
+        if (model.applied.executionMode === "full-access") {
+          expect(model.applied.nativeMode).toBe("default");
+        }
+        expect(sessions.getSession(backend, sessionId)?.executionMode).toBe(model.applied.executionMode);
         expect(Object.keys(registry.getQueuedExecutionModesSnapshot()).length).toBe(model.pending ? 1 : 0);
       },
     };
     expect([...workers]).toEqual([initial]);
-    const model: Model = { access: initial, active: false, mode: "default" };
+    const model: Model = {
+      applied: { executionMode: initial, nativeMode: "default" },
+      active: false,
+    };
     await fc.asyncModelRun(() => ({ model, real }), commands);
   } finally {
     unsubscribe();
@@ -301,39 +397,67 @@ type Real = { dispatch: (model: Model, action: Action) => Promise<void> };
 
 function command(action: Action): fc.AsyncCommand<Model, Real> {
   return {
-    check: (model) => action.type === "select"
+    check: (model) =>
+      action.type === "select"
+      || action.type === "legacy-runtime-mode"
       || model.active === (action.type === "finish" || action.type === "finish-with-blocked-close"),
     run: async (model, real) => await real.dispatch(model, action),
-    toString: () => action.type === "select" ? "select " + action.access : action.type,
+    toString: () =>
+      action.type === "select"
+        ? `select ${action.access}:${action.nativeMode ?? "default"}`
+        : action.type === "legacy-runtime-mode"
+          ? `legacy-runtime-mode ${action.nativeMode}`
+          : action.type,
   };
 }
 
 describe("Antigravity session access", () => {
-  it("moves the only worker at turn boundaries and uses the applied access for every prompt", async () => {
+  it("moves the only worker at turn boundaries and uses the applied access and native mode for every prompt", async () => {
     await fc.assert(fc.asyncProperty(
       fc.constantFrom<Access>("default", "full-access"),
       fc.commands([
-        fc.constant(command({ type: "select", access: "default" })),
-        fc.constant(command({ type: "select", access: "full-access" })),
+        fc.constant(command({ type: "select", access: "default", nativeMode: "default" })),
+        fc.constant(command({ type: "select", access: "default", nativeMode: "accept-edits" })),
+        fc.constant(command({ type: "select", access: "default", nativeMode: "auto" })),
+        fc.constant(command({ type: "select", access: "default", nativeMode: "plan" })),
+        fc.constant(command({ type: "select", access: "full-access", nativeMode: "default" })),
+        fc.constant(command({ type: "legacy-runtime-mode", nativeMode: "plan" })),
+        fc.constant(command({ type: "legacy-runtime-mode", nativeMode: "accept-edits" })),
         fc.constant(command({ type: "start" })),
         fc.constant(command({ type: "lower-access-prompt" })),
         fc.constant(command({ type: "finish" })),
         fc.constant(command({ type: "failed-load" })),
-        fc.constant(command({ type: "plan" })),
         fc.constant(command({ type: "overlay-failure" })),
       ], { maxCommands: 20, size: "max" }),
       (initial, commands) => exercise(initial, commands),
     ), { numRuns: 30 });
   });
 
+  it("resets Plan back to Default when escalating to Full Access and restores native modes when leaving Full Access", async () => {
+    await exercise("default", [
+      command({ type: "select", access: "default", nativeMode: "plan" }),
+      command({ type: "start" }),
+      command({ type: "select", access: "full-access", nativeMode: "default" }),
+      command({ type: "finish" }),
+      command({ type: "start" }),
+      command({ type: "select", access: "default", nativeMode: "accept-edits" }),
+      command({ type: "finish" }),
+      command({ type: "start" }),
+      command({ type: "finish" }),
+    ]);
+  });
+
   it("refuses a lower-access prompt on a Full Access worker", async () => {
     await exercise("full-access", [command({ type: "lower-access-prompt" })]);
   });
 
-  it("blocks prompts while a queued downgrade cannot close the worker and retries before starting", async () => {
+  it("blocks prompts while a queued downgrade to Accept Edits cannot close the worker and retries before starting", async () => {
     await exercise("full-access", [
-      command({ type: "start" }), command({ type: "select", access: "default" }),
-      command({ type: "finish-with-blocked-close" }), command({ type: "retry-downgrade" }), command({ type: "finish" }),
+      command({ type: "start" }),
+      command({ type: "select", access: "default", nativeMode: "accept-edits" }),
+      command({ type: "finish-with-blocked-close" }),
+      command({ type: "retry-downgrade" }),
+      command({ type: "finish" }),
     ]);
   });
 

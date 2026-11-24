@@ -126,6 +126,8 @@ type AcpIdleClosedSession = {
 type AcpSessionLoadOptions = {
   suppressTranscriptReplay?: boolean;
   antigravityModeSelection?: string;
+  /** When false, tolerate sessions that do not advertise the mode option (e.g. resetting to default). */
+  antigravityModeExplicit?: boolean;
 };
 
 type AcpRuntimeOptionWrite = {
@@ -1376,14 +1378,18 @@ export class AcpAgentClient {
     };
   }
 
-  async loadSession(metadata: AcpSessionMetadata): Promise<AppServerThreadReplay> {
+  async loadSession(
+    metadata: AcpSessionMetadata,
+    options?: Pick<AcpSessionLoadOptions, "antigravityModeSelection" | "antigravityModeExplicit">,
+  ): Promise<AppServerThreadReplay> {
     return await this.withOperation(
-      async () => await this.loadSessionOperation(metadata),
+      async () => await this.loadSessionOperation(metadata, options),
     );
   }
 
   private async loadSessionOperation(
     metadata: AcpSessionMetadata,
+    options?: Pick<AcpSessionLoadOptions, "antigravityModeSelection" | "antigravityModeExplicit">,
   ): Promise<AppServerThreadReplay> {
     const storedMetadata =
       this.options.store.getSession(this.options.backendId, metadata.sessionId) ??
@@ -1426,6 +1432,12 @@ export class AcpAgentClient {
       try {
         await this.ensureSession(hydratedMetadata, {
           suppressTranscriptReplay: false,
+          ...(options?.antigravityModeSelection !== undefined
+            ? { antigravityModeSelection: options.antigravityModeSelection }
+            : {}),
+          ...(options?.antigravityModeExplicit !== undefined
+            ? { antigravityModeExplicit: options.antigravityModeExplicit }
+            : {}),
         });
       } catch (error) {
         if (providerNormalizer && fallbackNormalizer) {
@@ -1991,7 +2003,19 @@ export class AcpAgentClient {
   }
 
   private runtimeStateFromResponse(result: unknown, now: number) {
-    return acpSessionRuntimeStateFromResponse(result, now, this.options.backendId === "acp:antigravity");
+    const state = acpSessionRuntimeStateFromResponse(result, now, this.options.backendId === "acp:antigravity");
+    if (
+      state
+      && this.options.backendId === "acp:antigravity"
+      && state.currentModeId === undefined
+      && state.configValues?.mode
+    ) {
+      return {
+        ...state,
+        currentModeId: state.configValues.mode,
+      };
+    }
+    return state;
   }
 
   private async setRuntimeOptionOnTransport(params: {
@@ -2751,7 +2775,12 @@ export class AcpAgentClient {
       });
       if (mode) {
         try {
-          result = await this.confirmAntigravityModeAfterLoad(protocolSessionId, result, mode, requestedMode !== undefined);
+          result = await this.confirmAntigravityModeAfterLoad(
+            protocolSessionId,
+            result,
+            mode,
+            options.antigravityModeExplicit ?? (requestedMode !== undefined),
+          );
         } catch (error) {
           await this.closeUnconfirmedAntigravityWorker(metadata.sessionId, protocolSessionId, cwd);
           throw error;
