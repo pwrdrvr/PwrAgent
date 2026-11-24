@@ -30,6 +30,7 @@ import {
   threadTodoPlacementParent,
 } from "@pwragent/shared/contracts/thread-todos";
 import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared/contracts/navigation";
+import { defaultModelOption } from "@pwragent/shared/model-defaults";
 import { resolveThreadTodoStartAccess } from "@pwragent/shared/thread-todo-access";
 import { threadReviewTodo } from "@pwragent/shared/contracts/thread-reviews";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools.js";
@@ -487,9 +488,9 @@ export function installThreadTodoRuntime(params: {
         threadId: thread.threadId,
       }).catch(() => undefined))?.model;
     const model = requested.model ?? (backend !== thread.backend
-      ? options?.models?.find((model) => model.current)?.id ?? options?.models?.[0]?.id
+      ? defaultModelOption(backend, options)?.id
       : undefined);
-    const resolved = resolveThreadTodoModel(options, { ...requested, model }, threadModel, { requireCatalog: requested.backend !== undefined });
+    const resolved = resolveThreadTodoModel(options, { ...requested, model }, threadModel, { requireCatalog: requested.backend !== undefined, backend });
     if (!resolved.ok) {
       throw new ThreadTodoError("invalid_arguments", resolved.message);
     }
@@ -765,7 +766,7 @@ export function createThreadTodoRunners(params: {
       const catalog = action.backend
         ? await readThreadTodoDestinationCatalog(registry, selected.backend)
         : await registry.readBackendModelOptions(selected.backend);
-      const validated = resolveThreadTodoModel(catalog, selected, undefined, { requireCatalog: action.backend !== undefined });
+      const validated = resolveThreadTodoModel(catalog, selected, undefined, { requireCatalog: action.backend !== undefined, backend: selected.backend });
       if (!validated.ok) throw new ThreadTodoError("invalid_arguments", validated.message);
       const chosen = { backend: selected.backend, model: validated.model, reasoningEffort: validated.reasoningEffort };
       const sameBackend = chosen.backend === sourceBackend;
@@ -785,7 +786,7 @@ export function createThreadTodoRunners(params: {
       const speedSettings = resolveThreadTodoStartSpeed({
         ...(destination ? { destination } : {}),
         ...(catalog ? { catalog } : {}),
-        ...optional("model", chosen.model ?? catalog?.models?.find((entry) => entry.current)?.id),
+        ...optional("model", chosen.model ?? defaultModelOption(chosen.backend, catalog)?.id),
         ...optional("requested", speed),
         ...optional("inherited", inheritedSpeed),
       });

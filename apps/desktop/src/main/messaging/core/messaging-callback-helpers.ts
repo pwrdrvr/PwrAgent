@@ -1,5 +1,12 @@
 import { type MonitorCommandAction, readStringValue } from "./messaging-command-helpers";
 import { codexSpeedOptions } from "@pwragent/shared/codex-speed";
+import {
+  defaultModelOption,
+  defaultReasoningEffort,
+  modelOptionFor,
+  offeredReasoningEffort,
+  reasoningEffortsForModel,
+} from "@pwragent/shared/model-defaults";
 import { isMessagingLaunchpadContext, type MessagingLaunchpadDirectory, type MessagingNewThreadNavigation } from "./messaging-launchpad-context";
 
 import {
@@ -511,7 +518,7 @@ export function normalizeNewThreadSessionForBackend(
     if (models.length === 0) {
       delete preferences.model;
     } else if (!modelIsValid) {
-      preferences.model = defaultBackendModel(models)?.id;
+      preferences.model = defaultModelOption(backend.kind, backend.launchpadOptions)?.id;
     }
   }
 
@@ -524,17 +531,14 @@ export function normalizeNewThreadSessionForBackend(
     directory,
     backend,
   );
-  const reasoningEfforts = reasoningEffortsForModel(backend, selectedModel);
+  const reasoningEfforts = reasoningEffortsForModel(backend.launchpadOptions, selectedModel);
   if (preferences.reasoningEffort !== undefined) {
     if (reasoningEfforts.length === 0) {
       delete preferences.reasoningEffort;
     } else if (!reasoningEfforts.includes(preferences.reasoningEffort)) {
-      const defaultReasoningEffort = defaultReasoningEffortForModel(
-        backend,
-        selectedModel,
-      );
-      if (defaultReasoningEffort) {
-        preferences.reasoningEffort = defaultReasoningEffort;
+      const fallback = defaultReasoningEffort(backend.launchpadOptions, selectedModel);
+      if (fallback) {
+        preferences.reasoningEffort = fallback;
       } else {
         delete preferences.reasoningEffort;
       }
@@ -608,48 +612,6 @@ export function clearNewThreadProviderPreferences(
   };
 }
 
-export function defaultBackendModel(
-  models: NonNullable<BackendSummary["launchpadOptions"]>["models"] = [],
-) {
-  return models.find((model) => model.current) ?? models[0];
-}
-
-export function reasoningEffortsForModel(
-  backend: BackendSummary | undefined,
-  model: BackendModelOption | undefined,
-): string[] {
-  return model?.reasoningEfforts ?? backend?.launchpadOptions?.reasoningEfforts ?? [];
-}
-
-export function defaultReasoningEffortForModel(
-  backend: BackendSummary | undefined,
-  model: BackendModelOption | undefined,
-): string | undefined {
-  const efforts = reasoningEffortsForModel(backend, model);
-  if (
-    model?.defaultReasoningEffort &&
-    efforts.includes(model.defaultReasoningEffort)
-  ) {
-    return model.defaultReasoningEffort;
-  }
-  return efforts[0];
-}
-
-export function resolveReasoningEffortForModel(
-  backend: BackendSummary | undefined,
-  model: BackendModelOption | undefined,
-  candidates: Array<string | undefined>,
-): string | undefined {
-  if (!backend && !model) {
-    return candidates.find((candidate): candidate is string => Boolean(candidate));
-  }
-  const efforts = reasoningEffortsForModel(backend, model);
-  const selected = candidates.find((candidate) =>
-    candidate ? efforts.includes(candidate) : false,
-  );
-  return selected ?? defaultReasoningEffortForModel(backend, model);
-}
-
 export function normalizeReasoningEffortForModel(
   backend: BackendSummary,
   model: BackendModelOption | undefined,
@@ -658,7 +620,7 @@ export function normalizeReasoningEffortForModel(
   if (!candidates.some((candidate) => Boolean(candidate))) {
     return undefined;
   }
-  return resolveReasoningEffortForModel(backend, model, candidates);
+  return offeredReasoningEffort(backend.launchpadOptions, model, candidates);
 }
 
 export type NewThreadOptionsSummary = {
@@ -697,11 +659,11 @@ export function newThreadModelForSession(
   const directoryLaunchpad = directory?.launchpad
     ? applyNavigationLaunchpadProviderSettingsPatch(directory.launchpad, { backend: backend.kind })
     : undefined;
-  const models = backend.launchpadOptions?.models ?? [];
-  return models.find((model) => model.id === session.preferences?.model)
-    ?? models.find((model) => model.id === directoryLaunchpad?.model)
-    ?? models.find((model) => model.id === launchpadDefaults.model)
-    ?? defaultBackendModel(models);
+  return modelOptionFor(backend.kind, backend.launchpadOptions, [
+    session.preferences?.model,
+    directoryLaunchpad?.model,
+    launchpadDefaults.model,
+  ]);
 }
 
 export function newThreadOptionsForSession(
@@ -731,8 +693,8 @@ export function newThreadOptionsForSession(
   const streamingMode = session.preferences?.streamingResponses ?? "inherit";
   const models = backend.launchpadOptions?.models ?? [];
   const modelOption = newThreadModelForSession(session, navigation, directory, backend);
-  const reasoningEfforts = reasoningEffortsForModel(backend, modelOption);
-  const reasoningEffort = resolveReasoningEffortForModel(backend, modelOption, [
+  const reasoningEfforts = reasoningEffortsForModel(backend.launchpadOptions, modelOption);
+  const reasoningEffort = offeredReasoningEffort(backend.launchpadOptions, modelOption, [
     session.preferences?.reasoningEffort,
     directoryLaunchpad?.reasoningEffort,
     launchpadDefaults.reasoningEffort,

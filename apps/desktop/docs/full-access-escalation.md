@@ -28,7 +28,10 @@ says when to read this document. Relative links were updated for this location.
   `resolveThreadTodoStartAccess` (`packages/shared/src/thread-todo-access.ts`),
   the same function the owner's start runs, and offers only the destination's
   modes: PwrAgent modes, or an agent's own modes (Antigravity's Default /
-  Accept Edits / Auto / Plan, Kimi's Yolo). A pick is stored on the card
+  Accept Edits / Auto / Plan, Kimi's Yolo). The agent's own modes come from
+  `acpRuntimeModeSelector` (`packages/shared/src/acp-permission-mode.ts`),
+  the selector the composer's mode picker also reads, and the start writes the
+  pick through it. A pick is stored on the card
   through `setThreadTodoAccess`, never held only in the window. A native pick
   stores its level as the card's mode, so Yolo is stored at Full Access and
   the start passes this gate; `seenNativeAccessMode` makes the owner refuse a

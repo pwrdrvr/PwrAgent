@@ -1,5 +1,11 @@
 import { codexSpeedOptions, codexSpeedSettings, nextCodexSpeed } from "@pwragent/shared/codex-speed";
 import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
+import {
+  defaultModelOption,
+  displayedReasoningEffort,
+  modelOptionFor,
+  reasoningEffortsForModel,
+} from "@pwragent/shared/model-defaults";
 import type {
   AppServerBackendKind,
   ThreadExecutionMode,
@@ -16,14 +22,14 @@ import type {
   MessagingInboundCallbackEvent, MessagingInboundEvent, MessagingPendingIntentRecord, MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import type { MessagingAccessControl } from "./messaging-access-control";
-import { acpBackendDeclaresExecutionMode, buildMessagingAcpRuntimeModeSummary, messagingAcpRuntimeValueLooksPrivileged } from "./messaging-acp-runtime.js";
+import { acpRuntimeModeIsFullAccess } from "@pwragent/shared/acp-permission-mode";
+import { acpBackendDeclaresExecutionMode, buildMessagingAcpRuntimeModeSummary } from "./messaging-acp-runtime.js";
 import type { MessagingBackendBridge } from "./messaging-adapter";
 import { federationTargetForBinding, type MessagingDeliveryGuard } from "./messaging-backend-event-helpers";
 import type { MessagingBindingService } from "./messaging-binding-service";
 import {
-  ACP_RUNTIME_RISK_ACTION_PREFIX, defaultBackendModel, findThreadForBinding, readAcpRuntimeOptionSource,
-  readMessagingToolUpdateModeValue, readThreadExecutionModeValue, reasoningEffortsForModel,
-  resolveReasoningEffortForModel, type AcpRuntimeRiskWarningContext,
+  ACP_RUNTIME_RISK_ACTION_PREFIX, findThreadForBinding, readAcpRuntimeOptionSource,
+  readMessagingToolUpdateModeValue, readThreadExecutionModeValue, type AcpRuntimeRiskWarningContext,
 } from "./messaging-callback-helpers";
 import { readStringValue } from "./messaging-command-helpers";
 import { resolveExecutionModeForThread, type ExecutionModeResolution } from "./messaging-inbound-helpers";
@@ -88,7 +94,7 @@ export class MessagingThreadSettings {
       thread?.model ??
       binding.preferences?.model ??
       navigation.defaults.model ??
-      models.find((model) => model.current)?.id;
+      defaultModelOption(summary?.kind, summary?.launchpadOptions)?.id;
 
     await this.context.deliver(
       buildStatusModelPickerIntent({
@@ -115,20 +121,19 @@ export class MessagingThreadSettings {
     );
     const navigation = await this.context.readBoundThreadConfiguration(binding);
     const thread = findThreadForBinding(navigation, binding);
-    const models = summary?.launchpadOptions?.models ?? [];
-    const modelOption =
-      models.find((model) => model.id === thread?.model) ??
-      models.find((model) => model.id === binding.preferences?.model) ??
-      models.find((model) => model.id === navigation.defaults.model) ??
-      defaultBackendModel(models);
-    const efforts = reasoningEffortsForModel(summary, modelOption);
+    const modelOption = modelOptionFor(summary?.kind, summary?.launchpadOptions, [
+      thread?.model,
+      binding.preferences?.model,
+      navigation.defaults.model,
+    ]);
+    const efforts = reasoningEffortsForModel(summary?.launchpadOptions, modelOption);
     if (summary && efforts.length === 0) {
       await this.context.bindingService.renderBindingStatus(binding, event);
       return;
     }
     const fallbackEfforts = efforts.length > 0 ? efforts : ["low", "medium", "high"];
     const currentReasoningEffort =
-      resolveReasoningEffortForModel(summary, modelOption, [
+      displayedReasoningEffort(summary?.launchpadOptions, modelOption, [
         thread?.reasoningEffort,
         binding.preferences?.reasoningEffort,
         navigation.defaults.reasoningEffort,
@@ -314,13 +319,12 @@ export class MessagingThreadSettings {
     );
     const navigation = await this.context.readBoundThreadConfiguration(binding);
     const thread = findThreadForBinding(navigation, binding);
-    const models = summary?.launchpadOptions?.models ?? [];
-    const modelOption =
-      models.find((model) => model.id === thread?.model) ??
-      models.find((model) => model.id === binding.preferences?.model) ??
-      models.find((model) => model.id === navigation.defaults.model) ??
-      defaultBackendModel(models);
-    const efforts = reasoningEffortsForModel(summary, modelOption);
+    const modelOption = modelOptionFor(summary?.kind, summary?.launchpadOptions, [
+      thread?.model,
+      binding.preferences?.model,
+      navigation.defaults.model,
+    ]);
+    const efforts = reasoningEffortsForModel(summary?.launchpadOptions, modelOption);
     if (summary && !efforts.includes(reasoningEffort)) {
       await this.context.bindingService.renderBindingStatus(binding, event);
       return;
@@ -395,7 +399,7 @@ export class MessagingThreadSettings {
     };
     if (
       choice.privileged &&
-      !messagingAcpRuntimeValueLooksPrivileged(runtimeMode.currentValue)
+      !acpRuntimeModeIsFullAccess(runtimeMode.currentValue)
     ) {
       const allowed = await this.ensureAcpRuntimeModeAllowed(
         riskContext,
@@ -478,9 +482,7 @@ export class MessagingThreadSettings {
         ? thread.serviceTier
         : thread?.serviceTier ?? binding.preferences?.serviceTier,
     };
-    const models = summary?.launchpadOptions?.models ?? [];
-    const model = models.find((option) => option.id === currentSettings.model)
-      ?? defaultBackendModel(models);
+    const model = modelOptionFor(summary?.kind, summary?.launchpadOptions, [currentSettings.model]);
     const speeds = codexSpeedOptions(
       model, summary?.codexFastAllowed !== false, summary?.launchpadOptions?.supportsFastMode ?? true,
     );

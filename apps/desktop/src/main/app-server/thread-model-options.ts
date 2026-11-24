@@ -1,4 +1,4 @@
-import { findAcpPermissionModeConfigOption } from "@pwragent/shared/acp-permission-mode";
+import { acpRuntimeModeIsFullAccess, findAcpMirroredModeConfigOption } from "@pwragent/shared/acp-permission-mode";
 import { CODEX_GOAL_METHODS } from "@pwragent/shared/contracts/thread-goal";
 import {
   type AppServerAvailableCommandSummary,
@@ -22,11 +22,14 @@ import {
   navigationLaunchpadProviderKey,
 } from "@pwragent/shared/contracts/navigation";
 import { modelMenuEntryProviderId } from "@pwragent/shared/model-menu";
-import { parseProviderPickerValue } from "@pwragent/shared/provider-picker";
 import {
-  acpRuntimeValueLooksPrivileged,
-  type AcpRuntimeClient,
-} from "./acp-backend-adapter";
+  DEFAULT_REASONING_EFFORT,
+  defaultModelOption,
+  offeredReasoningEffort,
+  preferredModelId,
+} from "@pwragent/shared/model-defaults";
+import { parseProviderPickerValue } from "@pwragent/shared/provider-picker";
+import type { AcpRuntimeClient } from "./acp-backend-adapter";
 import { formatRateLimitWindowName } from "../codex-app-server/desktop-client";
 import { resolveCodexProtocolCompatibility } from "../codex-app-server/protocol-compatibility";
 import { managedCodexTagForCommand } from "../codex-build-channel";
@@ -79,7 +82,6 @@ export const OPENAI_GPT56_ULTRA_REASONING_EFFORTS = [
   ...OPENAI_GPT56_REASONING_EFFORTS,
   "ultra",
 ];
-export const DEFAULT_REASONING_EFFORT = "medium";
 
 export const OPENAI_FALLBACK_MODELS: BackendModelOption[] = [
   {
@@ -242,7 +244,7 @@ export function acpRuntimeStateRequiresFullAccess(params: {
   if (!runtime) {
     return false;
   }
-  if (acpRuntimeValueLooksPrivileged(runtime.currentModeId)) {
+  if (acpRuntimeModeIsFullAccess(runtime.currentModeId)) {
     return true;
   }
 
@@ -257,7 +259,7 @@ export function acpRuntimeStateRequiresFullAccess(params: {
   }
 
   for (const optionId of modeOptionIds) {
-    if (acpRuntimeValueLooksPrivileged(configValues[optionId])) {
+    if (acpRuntimeModeIsFullAccess(configValues[optionId])) {
       return true;
     }
   }
@@ -280,9 +282,7 @@ export function acpRuntimeModeDefaultsFromCapabilities(
         : [],
     ),
   );
-  const hasMirroredModeConfigOption = modeConfigOptions.some(
-    (option) => option.id !== findAcpPermissionModeConfigOption(runtimeCapabilities)?.id,
-  );
+  const hasMirroredModeConfigOption = Boolean(findAcpMirroredModeConfigOption(runtimeCapabilities));
   const state: BackendAcpSessionRuntimeState = {
     updatedAt: now,
     ...(Object.keys(configValues).length > 0 ? { configValues } : {}),
@@ -503,25 +503,6 @@ export function getBackendFallbackModels(backend: AppServerBackendKind): Backend
   return backend === "codex" ? OPENAI_FALLBACK_MODELS : [];
 }
 
-export function getPreferredModelId(
-  backend: AppServerBackendKind,
-  models?: BackendModelOption[],
-): string {
-  if (backend !== "codex") {
-    return models?.find((model) => model.current)?.id ?? models?.[0]?.id ?? "";
-  }
-
-  // A new install should start on a current coding model. Registered Codex
-  // model providers cannot nominate OpenAI's default through their flags.
-  const ownModels = models?.filter((model) => !modelMenuEntryProviderId(model));
-  for (const id of ["gpt-6.1-terra", "gpt-6.1-sol"]) {
-    if (ownModels?.some((model) => model.id === id)) return id;
-  }
-  return ownModels?.find((model) => model.current)?.id
-    ?? ownModels?.[0]?.id
-    ?? "gpt-6.1-terra";
-}
-
 export function mergeStringOptions(
   left?: readonly string[],
   right?: readonly string[],
@@ -592,11 +573,11 @@ export function dedupeModelOptions(
   }
 
   const deduped = [...byId.values()];
-  const preferredModelId = getPreferredModelId(backend, deduped);
-  if (deduped.some((model) => model.id === preferredModelId)) {
+  const preferred = preferredModelId(backend, deduped);
+  if (deduped.some((model) => model.id === preferred)) {
     return deduped.map((model) => ({
       ...model,
-      current: model.id === preferredModelId,
+      current: model.id === preferred,
     }));
   }
 
@@ -606,7 +587,7 @@ export function dedupeModelOptions(
 
   return deduped.map((model) => ({
     ...model,
-    current: model.id === preferredModelId,
+    current: model.id === preferred,
   }));
 }
 
@@ -708,48 +689,6 @@ export function hasExplicitModelSettings(settings: ModelSettings): boolean {
     settings.serviceTier !== undefined ||
     settings.fastMode !== undefined
   );
-}
-
-export function getDefaultModelOption(
-  backend: AppServerBackendKind,
-  options?: BackendLaunchpadOptions,
-): BackendModelOption | undefined {
-  const models = options?.models ?? [];
-  if (models.length === 0) {
-    return undefined;
-  }
-
-  const preferredModelId = getPreferredModelId(backend, models);
-  return (
-    models.find((model) => model.current) ??
-    models.find((model) => model.id === preferredModelId) ??
-    models.find((model) => model.supportsReasoning) ??
-    models[0]
-  );
-}
-
-export function getReasoningEffortsForModel(
-  options: BackendLaunchpadOptions | undefined,
-  model: BackendModelOption | undefined,
-): string[] {
-  return model?.reasoningEfforts ?? options?.reasoningEfforts ?? [];
-}
-
-export function getDefaultReasoningEffort(
-  options: BackendLaunchpadOptions | undefined,
-  model: BackendModelOption | undefined,
-): string | undefined {
-  const reasoningEfforts = getReasoningEffortsForModel(options, model);
-  if (
-    model?.defaultReasoningEffort &&
-    reasoningEfforts.includes(model.defaultReasoningEffort)
-  ) {
-    return model.defaultReasoningEffort;
-  }
-  if (reasoningEfforts.includes(DEFAULT_REASONING_EFFORT)) {
-    return DEFAULT_REASONING_EFFORT;
-  }
-  return reasoningEfforts[0];
 }
 
 export const MONITOR_REASONING_EFFORT_ORDER = [
@@ -860,9 +799,8 @@ export function resolveModelSettingsFromOptions(
   }
   const selectedModel =
     models.find((model) => model.id === settings.model) ??
-    getDefaultModelOption(backend, { ...options, models });
+    defaultModelOption(backend, { ...options, models });
   const supportsReasoning = Boolean(selectedModel?.supportsReasoning);
-  const reasoningEfforts = getReasoningEffortsForModel(options, selectedModel);
   const rememberedReasoningEffort = selectedModel
     ? settings.reasoningEffortsByModel?.[selectedModel.id] ??
       settings.providerSettings?.[providerKey]?.reasoningEffortsByModel?.[
@@ -870,12 +808,11 @@ export function resolveModelSettingsFromOptions(
       ]
     : undefined;
   const reasoningEffort = supportsReasoning
-    ? [
+    ? offeredReasoningEffort(options, selectedModel, [
         settings.reasoningEffort,
         rememberedReasoningEffort,
         ...(settings.fallbackReasoningEfforts ?? []),
-      ].find((effort) => effort !== undefined && reasoningEfforts.includes(effort))
-      ?? getDefaultReasoningEffort(options, selectedModel)
+      ])
     : undefined;
   const supportsFast = backend === "codex" && Boolean(selectedModel?.supportsFast);
   const shouldClearCodexFastTier =

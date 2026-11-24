@@ -23,7 +23,8 @@ import {
   type ThreadTodoAccessOption,
   type ThreadTodoStartAccess,
 } from "@pwragent/shared/thread-todo-access";
-import { formatAcpRuntimeModeLabel, formatExecutionModeLabel } from "../../lib/execution-mode";
+import { formatAcpRuntimeModeLabel } from "@pwragent/shared/acp-permission-mode";
+import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import {
   ChevronDownIcon,
   ChevronUpIcon,

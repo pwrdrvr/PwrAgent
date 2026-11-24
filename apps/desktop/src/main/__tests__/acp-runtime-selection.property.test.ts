@@ -172,9 +172,14 @@ function recordedMode(
   selector: Selector,
   runtime: BackendAcpSessionRuntimeState | undefined,
 ): string | undefined {
+  // A start card writes a pick through the selector that lists it, so a
+  // mirrored `mode` option carries it in configValues; the session records
+  // both fields once the agent confirms.
   return selector === "permission"
     ? runtime?.configValues?.[OPTION_ID[selector]]
-    : runtime?.currentModeId;
+    : selector === "modeOption"
+      ? runtime?.configValues?.[OPTION_ID[selector]] ?? runtime?.currentModeId
+      : runtime?.currentModeId;
 }
 
 async function startSession(scenario: Scenario) {

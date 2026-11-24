@@ -3,7 +3,7 @@ import { normalizeAcpMcpServerConfigs, type AcpMcpServerConfig } from "@pwrdrvr/
 import {
   ACP_PERMISSION_MODE_OPTION_ID,
   acpSessionStartMode,
-  findAcpPermissionModeConfigOption,
+  findAcpMirroredModeConfigOption,
 } from "@pwragent/shared/acp-permission-mode";
 import { stripAgentMemoryChunk } from "@pwragent/shared/contracts/agent-memory";
 import { buildAcpAgentInstructionBlock } from "../../shared/agent-instruction-delivery.js";
@@ -1979,10 +1979,7 @@ export class AcpAgentClient {
   }
 
   private isRuntimeModeConfigOption(optionId: string): boolean {
-    return (
-      this.runtimeConfigOption("mode")?.id === optionId
-      && findAcpPermissionModeConfigOption(this.runtimeCapabilities)?.id !== optionId
-    );
+    return findAcpMirroredModeConfigOption(this.runtimeCapabilities)?.id === optionId;
   }
 
   private runtimeConfigOption(

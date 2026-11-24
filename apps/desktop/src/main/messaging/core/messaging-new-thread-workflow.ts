@@ -1,4 +1,5 @@
-import { directoryForProjectSelection, resolveNewThreadWorkMode, canCreateNewThreadWorktree, resolveNewThreadBaseBranch, sanitizeBranchLabel, newThreadOptionsForSession, type NewThreadOptionsSummary, defaultBackendModel, reasoningEffortsForModel, resolveNewThreadCodexEnvironmentId, normalizeNewThreadSessionForBackend, type AcpRuntimeRiskWarningContext } from "./messaging-callback-helpers";
+import { modelOptionFor, reasoningEffortsForModel } from "@pwragent/shared/model-defaults";
+import { directoryForProjectSelection, resolveNewThreadWorkMode, canCreateNewThreadWorktree, resolveNewThreadBaseBranch, sanitizeBranchLabel, newThreadOptionsForSession, type NewThreadOptionsSummary, resolveNewThreadCodexEnvironmentId, normalizeNewThreadSessionForBackend, type AcpRuntimeRiskWarningContext } from "./messaging-callback-helpers";
 import { readStringValue } from "./messaging-command-helpers";
 import { selectedCodexSpeed } from "@pwragent/shared/codex-speed";
 import { buildMessagingModelMenuActions } from "./messaging-model-menu";
@@ -17,7 +18,8 @@ import { capabilityProfilePageSize, MESSAGING_CALLBACK_HANDLE_TTL_MS } from "@pw
 import { buildConfirmationIntent, buildErrorIntent } from "./messaging-renderer.js";
 import { isNewAgentThreadLaunchAction, isNewThreadLaunchAction, selectProjectFromValue } from "./messaging-resume-browser.js";
 import { buildNewThreadEnvironmentPickerIntent, buildBranchPickerPage, formatMessagingToolUpdateModeLabel, formatPermissionsActionDisplayLabel, formatPermissionsLineDisplayLabel, messagingToolUpdateModeChoices, shouldShowStreamingControl } from "./messaging-status-card.js";
-import { acpBackendDeclaresExecutionMode, acpBackendUsesExecutionModePermissions, buildMessagingAcpRuntimeModeSummary, messagingAcpRuntimeValueLooksPrivileged } from "./messaging-acp-runtime.js";
+import { acpRuntimeModeIsFullAccess } from "@pwragent/shared/acp-permission-mode";
+import { acpBackendDeclaresExecutionMode, acpBackendUsesExecutionModePermissions, buildMessagingAcpRuntimeModeSummary } from "./messaging-acp-runtime.js";
 import { DEFAULT_MESSAGING_AGENT_NAME } from "./messaging-inbound-helpers";
 import type { MessagingNewThreadContext } from "./messaging-new-thread-context";
 import { readNullableStringValue, readThreadExecutionModeValue, readAcpRuntimeOptionSource } from "./messaging-callback-helpers";
@@ -1255,7 +1257,7 @@ export class MessagingNewThreadWorkflow {
     };
     if (
       choice.privileged &&
-      !messagingAcpRuntimeValueLooksPrivileged(currentRuntimeMode.currentValue)
+      !acpRuntimeModeIsFullAccess(currentRuntimeMode.currentValue)
     ) {
       const allowed = await this.context.host().ensureAcpRuntimeModeAllowed(
         riskContext,
@@ -1305,7 +1307,7 @@ export class MessagingNewThreadWorkflow {
     };
     const executionMode = backend === "acp:antigravity"
       ? undefined
-      : messagingAcpRuntimeValueLooksPrivileged(selection.value) ? "full-access" : "default";
+      : acpRuntimeModeIsFullAccess(selection.value) ? "full-access" : "default";
     await this.updateNewThreadStickySettings(session, {
       acpRuntime,
       ...(executionMode ? { executionMode } : {}),
@@ -1331,11 +1333,8 @@ export class MessagingNewThreadWorkflow {
     backend: AppServerBackendKind,
   ): Promise<void> {
     const summary = await this.context.host().getBackendSummary(backend);
-    const models = summary?.launchpadOptions?.models ?? [];
-    const modelOption =
-      models.find((model) => model.id === session.preferences?.model) ??
-      defaultBackendModel(models);
-    const efforts = reasoningEffortsForModel(summary, modelOption);
+    const modelOption = modelOptionFor(summary?.kind, summary?.launchpadOptions, [session.preferences?.model]);
+    const efforts = reasoningEffortsForModel(summary?.launchpadOptions, modelOption);
     const fallbackEfforts = efforts.length > 0 ? efforts : ["low", "medium", "high"];
     const intent = buildConfirmationIntent({
       id: this.context.host().newIntentId("new-thread-reasoning"),

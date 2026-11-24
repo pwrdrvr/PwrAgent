@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { acpRuntimeModeIsFullAccess } from "@pwragent/shared/acp-permission-mode";
 import {
-  acpRuntimeModeRequiresFullAccess,
   formatAccessModeLabel,
   formatExecutionModeLabel,
   getAcpRuntimeModeControl,
@@ -96,15 +96,15 @@ describe("ACP execution mode labels", () => {
   });
 
   it("identifies ACP runtime modes that need the privileged execution envelope", () => {
-    expect(acpRuntimeModeRequiresFullAccess("yolo")).toBe(true);
-    expect(acpRuntimeModeRequiresFullAccess("YOLO")).toBe(true);
-    expect(acpRuntimeModeRequiresFullAccess("auto")).toBe(false);
-    expect(acpRuntimeModeRequiresFullAccess("autoEdit")).toBe(false);
-    expect(acpRuntimeModeRequiresFullAccess("auto_edit")).toBe(false);
-    expect(acpRuntimeModeRequiresFullAccess("auto-edit")).toBe(false);
-    expect(acpRuntimeModeRequiresFullAccess("auto edit")).toBe(false);
-    expect(acpRuntimeModeRequiresFullAccess("default")).toBe(false);
-    expect(acpRuntimeModeRequiresFullAccess("plan")).toBe(false);
+    expect(acpRuntimeModeIsFullAccess("yolo")).toBe(true);
+    expect(acpRuntimeModeIsFullAccess("YOLO")).toBe(true);
+    expect(acpRuntimeModeIsFullAccess("auto")).toBe(false);
+    expect(acpRuntimeModeIsFullAccess("autoEdit")).toBe(false);
+    expect(acpRuntimeModeIsFullAccess("auto_edit")).toBe(false);
+    expect(acpRuntimeModeIsFullAccess("auto-edit")).toBe(false);
+    expect(acpRuntimeModeIsFullAccess("auto edit")).toBe(false);
+    expect(acpRuntimeModeIsFullAccess("default")).toBe(false);
+    expect(acpRuntimeModeIsFullAccess("plan")).toBe(false);
   });
 
   it("uses ACP current mode when a mode config option is stale", () => {

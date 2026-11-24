@@ -66,6 +66,7 @@ import type { MaintenanceDiscoveryProgress } from "./unreferenced-worktrees";
 import { PlanLimitStore, planLimitKey } from "./plan-limit-store";
 import { buildPendingTurnId, isPendingTurnId } from "@pwragent/shared/turn-placeholder";
 import { findAcpPermissionModeConfigOption } from "@pwragent/shared/acp-permission-mode";
+import { defaultModelOption } from "@pwragent/shared/model-defaults";
 import { lowerThreadExecutionMode } from "@pwragent/shared/thread-execution-mode";
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import { TASK_MONITOR_TOOL_NAMESPACE, type TaskMonitorRequest, type TaskMonitorResponse } from "@pwragent/shared/contracts/task-monitor-tools";
@@ -907,7 +908,6 @@ import {
   describeCodexRateLimit,
   getBackendFallbackModels,
   getCodexFastModeMismatchWarning,
-  getDefaultModelOption,
   isMeaningfulAccountSummary,
   isUnauthenticatedCodexProvider,
   mergeCommandSummaries,
@@ -15979,7 +15979,7 @@ export class DesktopBackendRegistry {
     const customModels = (options?.models ?? []).filter((model) => model.providerId);
     const preferredModels = customModels.filter((model) => model.providerId && !unavailable.has(model.providerId));
     // A failed /models read still offers the operator's explicitly listed models.
-    const model = getDefaultModelOption("codex", { ...options, models: preferredModels.length ? preferredModels : customModels });
+    const model = defaultModelOption("codex", { ...options, models: preferredModels.length ? preferredModels : customModels });
     if (!model?.providerId) return { ...settings, model: undefined };
     const key = codexModelProviderPickerValue(model.providerId);
     const configured = this.resolveProviderModelDefaultsFn()[key];
