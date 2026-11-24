@@ -193,9 +193,8 @@ export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string, che
         });
         if (await metadata.unchanged()) {
           checkout.verified = metadata;
-          if (!plan.branches.includes(branch)) return [];
           metadata.publish?.();
-          return metadata.repos;
+          return plan.branches.includes(branch) ? metadata.repos : [];
         }
         checkout.verified = undefined;
       }
@@ -208,9 +207,8 @@ export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string, che
       cwd, branch, remoteNames: checkout ? refreshedRemoteNames : undefined,
       nativeHeadReads: sampled?.nativeHeadReads,
     });
-    if (!plan.branches.includes(branch)) return [];
     scheduledSample?.publish?.();
-    return repos;
+    return plan.branches.includes(branch) ? repos : [];
   });
 }
 

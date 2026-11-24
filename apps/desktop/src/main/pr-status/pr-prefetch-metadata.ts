@@ -110,7 +110,9 @@ export async function observeScheduledPrPrefetchMetadata(
     if (!roots) return undefined;
     const readConfig = () => runPrMetadataGit(cwd, [
       "config", "--null", "--show-scope", "--show-origin", "--includes", "--get-regexp", `${REMOTE_CONFIG_KEYS}|^include\\.|^includeif\\.`,
-    ], { purpose: "pr-remotes", env: inputs.env, maxBuffer: 64 * 1024, timeout: 2_000 }).catch((error: unknown) => {
+    ], { purpose: "pr-remotes", env: inputs.env, maxBuffer: 64 * 1024, timeout: 2_000 }).then((output) => ({
+      ...output, sampleOrder: repositories.nextSampleOrder(),
+    })).catch((error: unknown) => {
       if (isGitConfigNoMatch(error)) return undefined;
       if (error && typeof error === "object" && "code" in error && error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
         // Keep reading current config through the ordinary path for this batch.
@@ -119,6 +121,7 @@ export async function observeScheduledPrPrefetchMetadata(
       throw error;
     });
     const config = await readConfig();
+    let configSampleOrder = config?.sampleOrder ?? repositories.nextSampleOrder();
     if (config?.stderr) return undefined;
     const parsed = config ? parseConfigWithOrigins(roots.directory, config.stdout)
       : { configuration: { names: [], remotes: [] }, sources: undefined };
@@ -132,23 +135,32 @@ export async function observeScheduledPrPrefetchMetadata(
     // file. Confirm the first answer with the complete graph watched before
     // retaining either a positive or a negative result.
     const extra = sources ? [...sources.includes].filter((file) => !roots.paths.has(file)) : [];
-    const files = extra.length ? await observePrCheckoutConfigFiles(cwd, [...inputs.paths, ...extra]) : roots;
-    if (!files || (sources && [...sources.origins].some((file) => !files.paths.has(file)))) {
-      // Git can read includes we cannot watch, such as symlinks. Use its
-      // answer for this branch without retaining a negative or publishing it.
-      const { repos } = await repositories.read(configuration, { validateNegative: async () => false });
+    const singleRemote = configuration.names.length === 1;
+    const canReuseConfig = Boolean(extra.length && sources?.localOrigins.has(path.join(roots.commonDir, "config")));
+    const canConfirmCheckout = singleRemote && branchCount > (extra.length ? 3 : 2);
+    // A small single-remote batch with a warm identity cannot recover the
+    // cost of confirming the include graph without a common config origin.
+    const useCurrentSample = extra.length && singleRemote && !canReuseConfig && !canConfirmCheckout
+      && repositories.hasGitHubIdentityFor(configuration);
+    const files = extra.length && !useCurrentSample ? await observePrCheckoutConfigFiles(cwd, [...inputs.paths, ...extra]) : roots;
+    if (useCurrentSample || !files || (sources && [...sources.origins].some((file) => !files.paths.has(file)))) {
+      // An unverified sample applies only to the current branch. It cannot
+      // establish a reusable negative or warm the live cache.
+      const { repos } = await repositories.read(configuration, { configSampleOrder, validateNegative: async () => false });
       if (!await roots.unchanged() || !inputsUnchanged()) return undefined;
       return { repos, refreshedRemoteNames: configuration.names };
     }
     if (extra.length) {
       const confirmed = await readConfig();
       if (confirmed?.stderr !== "" || confirmed.stdout !== config?.stdout) return undefined;
+      configSampleOrder = confirmed.sampleOrder;
     }
     const configUnchanged = async () => Boolean(await files.unchanged()
       && (files === roots || await roots.unchanged()) && inputsUnchanged());
     // Resolve identities from the config Git already sampled. OpenSSH aliases
     // use one expansion per observation, bounded by the scheduled batch.
     const { repos, sshIdentityUnchanged, publish } = await repositories.read(configuration, {
+      configSampleOrder,
       validateNegative: async () => Boolean((!config || sources) && await configUnchanged()),
     });
     const remoteNames = configuration.names;
@@ -159,14 +171,13 @@ export async function observeScheduledPrPrefetchMetadata(
     if (!sources || !repos.length) return await currentSample();
 
     // A single remote still needs one native HEAD read per branch.
-    if (remoteNames.length === 1 && !extra.length && branchCount <= 2) return await currentSample();
+    if (singleRemote && !extra.length && !canConfirmCheckout) return await currentSample();
 
     const proof = await observeProvenRemoteHeads(cwd, remoteNames);
     if (proof && (proof.gitDir !== files.gitDir || proof.commonDir !== files.commonDir)) return undefined;
     // Git's exact local config origin can establish config reuse without a
     // HEAD proof. Native HEAD and tracking reads still run for each branch.
-    const configOnly = !proof && (Boolean(extra.length && sources.localOrigins.has(path.join(files.commonDir, "config")))
-      || (remoteNames.length === 1 && branchCount > (extra.length ? 3 : 2) && await confirmPrFilesCheckout(cwd, files, inputs.env)));
+    const configOnly = !proof && (canReuseConfig || (canConfirmCheckout && await confirmPrFilesCheckout(cwd, files, inputs.env)));
     const unchanged = async () => Boolean((!proof || await proof.unchanged()) && await configUnchanged()
       && (!sshIdentityUnchanged || sshIdentityUnchanged()));
     if (!await unchanged()) return undefined;

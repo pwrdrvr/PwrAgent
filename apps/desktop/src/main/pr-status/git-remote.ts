@@ -108,6 +108,7 @@ type RemoteCacheEntry = {
   readWithGitRemote?: true;
   sshResolutionFailed?: true;
   readFailed?: true;
+  sampleOrder: number;
   fetchedAt: number;
 };
 type ParsedRemoteObservation = Omit<RemoteCacheEntry, "fetchedAt">;
@@ -115,6 +116,12 @@ type ParsedRemoteObservation = Omit<RemoteCacheEntry, "fetchedAt">;
 const remoteCache = new Map<string, RemoteCacheEntry>();
 const remoteLookups = new Map<string, SharedPrMetadataRead<RemoteCacheEntry>>();
 let remoteCacheGeneration = 0;
+let remoteSampleOrder = 0;
+
+function nextRemoteSampleOrder(): number {
+  return ++remoteSampleOrder;
+}
+
 type SshResolver = (host: string, demand?: PrMetadataDemand) => Promise<string | undefined>;
 // Share only running OpenSSH evaluations. A completed evaluation belongs to
 // its directory's existing TTL; a new probe must evaluate Include/Match again.
@@ -234,17 +241,17 @@ export function createScheduledPrefetchRemoteReader(cwd: string) {
     if (!isCurrentRemoteObservation(previous)) return isCurrentRemoteObservation(live) ? live : undefined;
     if (!isCurrentRemoteObservation(live)) return previous;
     if (previous.readFailed !== live.readFailed) return previous.readFailed ? live : previous;
-    // The owner may refresh a URL without changing the native remote names.
-    return live.fetchedAt >= previous.fetchedAt ? live : previous;
+    // An older Git sample can finish later while waiting for SSH expansion.
+    return live.sampleOrder >= previous.sampleOrder ? live : previous;
   };
   const read = async (
     configuration?: GitRemoteConfiguration,
-    options: { useGitRemote?: boolean; validateNegative?: () => Promise<boolean> } = {},
+    options: { useGitRemote?: boolean; configSampleOrder?: number; validateNegative?: () => Promise<boolean> } = {},
   ) => {
     const cacheGeneration = remoteCacheGeneration;
     const reused = observationForReuse();
     const observation = await loadParsedGitRemotes(cwd, {}, {}, {
-      configuration, previous: reused, useGitRemote: options.useGitRemote,
+      configuration, configSampleOrder: options.configSampleOrder, previous: reused, useGitRemote: options.useGitRemote,
     });
     const repos = collectForgeRepositories(observation.value, "github");
     // Matching names or URLs do not refresh the resolved identity's age.
@@ -256,6 +263,13 @@ export function createScheduledPrefetchRemoteReader(cwd: string) {
     if (!keepUsableIdentity && (observation.readFailed || observation.unconfirmedEmpty || complete)
       && (repos.length > 0 || !options.validateNegative || await options.validateNegative())) {
       previous = snapshot;
+    }
+    // A native fallback has no config proof. If an owner read completed
+    // during SSH expansion, use its later checkout sample for this branch too.
+    const live = remoteCache.get(cwd);
+    if (observation.readWithGitRemote && isCurrentRemoteObservation(live) && live.sampleOrder > snapshot.sampleOrder
+      && !live.readFailed && !live.sshResolutionFailed && hasAllRemoteUrls(live)) {
+      return { repos: collectForgeRepositories(live.value, "github"), refreshedRemoteNames: live.names };
     }
     const sshIdentityUnchanged = observation.value.some(({ url }) => readSshHost(url)) ? () => {
       if (!isCurrentRemoteObservation(snapshot)) return false;
@@ -278,6 +292,12 @@ export function createScheduledPrefetchRemoteReader(cwd: string) {
   };
   return {
     read,
+    nextSampleOrder: nextRemoteSampleOrder,
+    hasGitHubIdentityFor: (configuration: GitRemoteConfiguration) => {
+      const observation = observationForReuse();
+      return Boolean(observation && sameRemoteUrls(configuration.remotes, observation.value)
+        && collectForgeRepositories(observation.value, "github").length > 0);
+    },
     usesGitRemote: () => observationForReuse()?.readWithGitRemote === true,
     shouldSkipLookup: () => {
       const observation = observationForReuse();
@@ -369,7 +389,7 @@ async function loadParsedGitRemotes(
   cwd: string,
   options: ResolveGitHubRepoOptions,
   demand: PrMetadataDemand,
-  prefetch?: { configuration?: GitRemoteConfiguration; previous?: RemoteCacheEntry; useGitRemote?: boolean },
+  prefetch?: { configuration?: GitRemoteConfiguration; configSampleOrder?: number; previous?: RemoteCacheEntry; useGitRemote?: boolean },
 ): Promise<ParsedRemoteObservation> {
   const resolveSshHostname =
     options.resolveSshHostname ?? defaultResolveSshHostname;
@@ -380,11 +400,12 @@ async function loadParsedGitRemotes(
     const raw: Awaited<ReturnType<typeof defaultReadRemotes>> = prefetch?.configuration ?? (options.readRemotes
       ? { remotes: await options.readRemotes(cwd) }
       : await defaultReadRemotes(cwd, demand, Boolean(options.confirmEmpty || options.fresh), prefetch));
+    const sampleOrder = prefetch?.configSampleOrder ?? nextRemoteSampleOrder();
     const { names, remotes, unconfirmedEmpty, readWithGitRemote } = raw;
     const prior = prefetch?.previous;
-    const previous = prior?.value;
-    if (previous && (remotes === previous || (isCurrentRemoteObservation(prior) && sameRemoteUrls(remotes, previous)))) {
-      return { names, value: previous, unconfirmedEmpty, readWithGitRemote, sshResolutionFailed: prior?.sshResolutionFailed };
+    if (prior && (remotes === prior.value || (isCurrentRemoteObservation(prior) && sameRemoteUrls(remotes, prior.value)))) {
+      return { names, value: prior.value, unconfirmedEmpty, readWithGitRemote,
+        sshResolutionFailed: prior.sshResolutionFailed, sampleOrder: prior.sampleOrder };
     }
     let sshResolutionFailed: true | undefined;
     const value = await Promise.all(
@@ -409,11 +430,11 @@ async function loadParsedGitRemotes(
         };
       }),
     );
-    return { names, value, unconfirmedEmpty, readWithGitRemote, sshResolutionFailed };
+    return { names, value, unconfirmedEmpty, readWithGitRemote, sshResolutionFailed, sampleOrder };
   } catch {
     demand.signal?.throwIfAborted();
     // Preserve the bounded negative cache, including non-git directories.
-    return { value: [], readFailed: true };
+    return { value: [], readFailed: true, sampleOrder: nextRemoteSampleOrder() };
   }
 }
 

@@ -264,6 +264,49 @@ it.each([0, 1])("follows an owner remote refresh %i ms into the batch", async (e
     .toEqual(["remote", "symbolic-ref", "for-each-ref"]);
 });
 
+it.skipIf(process.platform === "win32")("prefers the owner URL sampled during a delayed scheduled SSH read", async () => {
+  const { cwd, branches: [first, second] } = await singleBranchClone();
+  const bin = path.join(cwd, "bin");
+  const release = path.join(cwd, "release-ssh");
+  await mkdir(bin);
+  await writeFile(path.join(bin, "ssh"),
+    '#!/bin/sh\nwhile [ ! -f "$PWRAGENT_TEST_PREFETCH_SSH_RELEASE" ]; do sleep 0.01; done\nprintf "hostname github.com\\n"\n',
+    { mode: 0o755 });
+  vi.stubEnv("PATH", `${bin}${path.delimiter}${process.env.PATH}`);
+  vi.stubEnv("PWRAGENT_TEST_PREFETCH_SSH_RELEASE", release);
+  const startedSsh = Promise.withResolvers<void>();
+  const startDiagnostic = gitSubprocessDiagnostics.start.bind(gitSubprocessDiagnostics);
+  const diagnostic = vi.spyOn(gitSubprocessDiagnostics, "start").mockImplementation((...args) => {
+    if (args[0] === "ssh-config") startedSsh.resolve();
+    return startDiagnostic(...args);
+  });
+  let now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  onTestFinished(() => { vi.unstubAllEnvs(); diagnostic.mockRestore(); clock.mockRestore(); });
+  await readGit(cwd, "remote", "set-url", "origin", "git@fixture-ssh:fixture/before-owner-read.git");
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  const scheduled = resolve(cwd, first);
+  try {
+    await Promise.race([startedSsh.promise, scheduled.then(() => { throw new Error("Scheduled lookup did not expand SSH"); })]);
+    await readGit(cwd, "remote", "set-url", "origin", "https://github.com/fixture/owner-overlap.git");
+    now++;
+    await expect(resolveGitHubRepoForDirectory(cwd, { fresh: true })).resolves.toEqual({
+      host: "github.com", owner: "fixture", repo: "owner-overlap",
+    });
+    now++;
+  } finally {
+    await writeFile(release, "");
+    await scheduled;
+  }
+
+  const expected = (await oracle(cwd))(second);
+  const completed = await scheduled;
+  expect(completed.map(({ host, owner, repo }) => `https://${host}/${owner}/${repo}.git`)).toEqual(expected);
+  const starts = recordPrefetchStarts();
+  await expectEligible(resolve, cwd, second, expected);
+  expect(starts.calls.filter(([, args]) => args[0] === "remote" && args[1] === "get-url")).toHaveLength(0);
+});
+
 it.each(["GitLab-only", "remote-less"].flatMap((kind) => ["warm", "cold"].map((cache) => ({ kind, cache }))))(
   "keeps $cache $kind checkouts off the GitHub discovery path until expiry", async ({ kind, cache }) => {
     const cwd = await fixture();
@@ -403,6 +446,35 @@ it.skipIf(process.platform === "win32")("resolves a cold SSH identity once acros
   expect(starts.calls.filter(([, args]) => args[0] === "config")).toHaveLength(2);
 });
 
+it.skipIf(process.platform === "win32").each(["SSH", "native URLs"])("shares %s with live lookup when only the upstream branch is eligible", async (kind) => {
+  const cwd = await fixture();
+  if (kind === "SSH") {
+    const bin = path.join(cwd, "bin");
+    await mkdir(bin);
+    await writeFile(path.join(bin, "ssh"), "#!/bin/sh\nprintf 'hostname github.com\\n'\n", { mode: 0o755 });
+    vi.stubEnv("PATH", `${bin}${path.delimiter}${process.env.PATH}`);
+    onTestFinished(() => { vi.unstubAllEnvs(); });
+    await readGit(cwd, "remote", "set-url", "origin", "git@fixture-ssh:fixture/origin.git");
+  } else {
+    await readGit(cwd, "config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main");
+  }
+  await readGit(cwd, "branch", "--set-upstream-to=upstream/other", "topic-0");
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  const starts = recordPrefetchStarts();
+  const ssh = vi.spyOn(gitSubprocessDiagnostics, "start");
+  onTestFinished(() => { ssh.mockRestore(); });
+  const branches = ["tracks-other", "topic-0"];
+  for (const branch of branches) await expectEligible(resolve, cwd, branch, []);
+  const fetchAllPullRequestsForBranch = vi.fn(async () => []);
+  for (const branch of branches) {
+    await detectPullRequestsForThread({ branch, directoryPaths: [cwd], fetcher: { fetchAllPullRequestsForBranch } });
+  }
+
+  expect(fetchAllPullRequestsForBranch.mock.calls).toEqual(branches.map(() => [{ cwd, branch: "other" }]));
+  expect(ssh.mock.calls.filter(([command]) => command === "ssh-config")).toHaveLength(kind === "SSH" ? 1 : 0);
+  expect(starts.calls.filter(([, args]) => args[0] === "remote" && args[1] === "get-url")).toHaveLength(kind === "SSH" ? 0 : 2);
+});
+
 it.skipIf(process.platform === "win32")("leaves a failed SSH resolution out of the live cache", async () => {
   const cwd = await fixture();
   const bin = path.join(cwd, "bin");
@@ -503,6 +575,34 @@ it.skipIf(process.platform === "win32")("uses one current config read per branch
       ? ["config", "symbolic-ref", "for-each-ref"]
       : ["config"]);
   }
+});
+
+it.skipIf(process.platform === "win32").each([2, 3])("uses one config read for each of %i small linked-worktree lookups", async (count) => {
+  const source = await fixture();
+  await readGit(source, "remote", "remove", "origin");
+  await readGit(source, "remote", "remove", "upstream");
+  await readGit(source, "config", "extensions.worktreeConfig", "true");
+  const cwd = path.join(source, "linked");
+  await readGit(source, "worktree", "add", "--detach", cwd);
+  await readGit(cwd, "config", "--worktree", "remote.origin.url", "https://github.com/fixture/worktree.git");
+  await readGit(cwd, "config", "--worktree", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*");
+  await readGit(cwd, "update-ref", "refs/remotes/origin/main", "HEAD");
+  await remoteHead(cwd, "origin", "main");
+  const included = path.join(source, "included-config");
+  await writeFile(included, "[user]\n\tname = Fixture\n");
+  await readGit(cwd, "config", "--global", "include.path", included);
+  await resolveGitHubRepoForDirectory(cwd);
+  const expected = await oracle(cwd);
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  const starts = recordPrefetchStarts();
+  for (const branch of topics.slice(0, count)) {
+    await expectEligible((directory, head) => resolve(directory, head, count), cwd, branch, expected(branch));
+  }
+
+  // Confirming the include graph cannot save a launch for this worktree in a small batch.
+  expect(starts.calls.map(([, args]) => args[0])).toEqual(
+    Array.from({ length: count }, () => ["config", "symbolic-ref", "for-each-ref"]).flat(),
+  );
 });
 
 it.skipIf(process.platform === "win32")("tries oversized config provenance once per checkout in a batch", async () => {
