@@ -1,4 +1,4 @@
-import { buildResourceCheckoutToolDefinitions, type CheckoutToolHandler } from "./pwragent-resource-checkout-agent-tools";
+import { buildResourceCheckoutToolDefinitions, type CheckoutToolHandler, type CheckoutToolMode } from "./pwragent-resource-checkout-agent-tools";
 import type { ForgeReadHandler } from "./pwragent-forge-agent-tools";
 import { buildForgeToolDefinitions, type ForgePrToolHandler } from "./pwragent-forge-pr-agent-tools";
 import type { TokenMiserFocusedSummaries } from "../token-miser/token-miser-focused";
@@ -91,6 +91,7 @@ export function resolveAgentToolCatalogs(params: {
   openAIDecisionsHandler?: PwrAgentOpenAIDecisionsHandler;
   researchHandler?: ResearchAgentHandler;
   checkoutHandler?: CheckoutToolHandler;
+  checkoutMode?: CheckoutToolMode;
 }, options?: {
   taskMonitorRole?: "parent" | "monitor" | "all";
   jobMonitorCreationEnabled?: boolean;
@@ -123,7 +124,10 @@ export function resolveAgentToolCatalogs(params: {
       ...buildPwrAgentThreadOrchestrationToolDefinitions(
         params.threadOrchestrationHandler,
       ),
-      ...buildResourceCheckoutToolDefinitions(options?.taskMonitorRole === "monitor" ? undefined : params.checkoutHandler),
+      ...buildResourceCheckoutToolDefinitions(
+        options?.taskMonitorRole === "monitor" ? undefined : params.checkoutHandler,
+        params.checkoutMode,
+      ),
       ...buildResearchToolDefinitions(options?.taskMonitorRole === "monitor" ? undefined : params.researchHandler),
       ...buildPwrAgentTaskMonitorToolDefinitions(
         params.taskMonitorHandler,

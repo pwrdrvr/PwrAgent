@@ -1846,6 +1846,8 @@ export type DescribeThreadMcpConnectionsResponse = {
   connections: ThreadMcpConnectionReport[];
   providerServersEnabled: boolean;
   appliesAt: McpSelectionApplyTiming;
+  /** This ACP session received live tool search for managed connections. */
+  managedConnectionsViaGateway?: true;
   /**
    * When PwrAgent last handed this selection to the agent, in epoch ms.
    *

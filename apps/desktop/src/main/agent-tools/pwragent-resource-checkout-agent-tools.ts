@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { MIN_CHECKOUT_CONTINUATION_HOLD_MS } from "@pwragent/owner-core/resource-checkout-authority";
+import { createHash, randomUUID } from "node:crypto";
+import { MIN_CHECKOUT_CONTINUATION_HOLD_MS, type CheckoutStatus } from "@pwragent/owner-core/resource-checkout-authority";
 import type { ResourceCheckoutActionRequest } from "@pwragent/shared/contracts/resource-checkouts";
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import type { DesktopResourceCheckoutService } from "../resource-checkouts/resource-checkout-service";
@@ -9,6 +9,8 @@ import { agentToolFailure, agentToolSuccess, type AgentToolCallContext, type Age
 export type CheckoutToolHandler = (
   op: CheckoutToolName, args: Record<string, unknown>, context: AgentToolCallContext,
 ) => Promise<unknown>;
+
+export type CheckoutToolMode = "enabled" | "cleanup" | "hidden";
 
 type CheckoutHandoff = Extract<ResourceCheckoutActionRequest, { kind: "delegate_execution" }>;
 type SendHandoff = (context: AgentToolCallContext, executor: CheckoutHandoff["executor"], prompt: string, bind: () => Promise<void>) => Promise<unknown>;
@@ -38,9 +40,11 @@ const descriptions: Record<CheckoutToolName, string> = {
   resource_checkout_status: "Read the authority's durable receipt and the latest checkout or queue status for a prior action from this thread. Use the same resourceId and idempotencyKey as the original request. Read it once, for example to verify a grant before use. Do not call it repeatedly to wait for a grant; use resource_checkout_wait with a continuation.",
 };
 
-function derivedCheckoutKey(base: string, suffix: string): string {
-  const full = `${base}:${suffix}`;
-  return full.length <= 160 ? full : `${base.slice(0, 159 - suffix.length)}:${suffix}`;
+function derivedCheckoutKey(
+  resourceId: string, requestKey: string, operation: "release" | "cancel", targetId: string, generation?: number,
+): string {
+  const hash = createHash("sha256").update(JSON.stringify([resourceId, requestKey, operation, targetId, generation])).digest("hex");
+  return `rco-${operation}-${hash}`;
 }
 
 async function waitUntilNextCheck(
@@ -92,7 +96,7 @@ function buildGrantedAcquireResult(params: {
       resourceId: params.resourceId,
       allocationId: params.allocationId,
       generation: params.generation,
-      idempotencyKey: derivedCheckoutKey(params.idempotencyKey, "release"),
+      idempotencyKey: derivedCheckoutKey(params.resourceId, params.idempotencyKey, "release", params.allocationId, params.generation),
     },
   };
 }
@@ -102,30 +106,106 @@ async function cleanupInterruptedAcquire(
   actor: ReturnType<DesktopResourceCheckoutService["threadActor"]>,
   resourceId: string,
   idempotencyKey: string,
-  queueEntryId: string,
-  suffix: "cancel" | "timeout",
-): Promise<"cancelled" | "released" | "ended"> {
-  const latest = await service.status(actor, resourceId, idempotencyKey);
-  if (latest?.state === "queued") {
-    await service.perform({
+  snapshot?: CheckoutStatus,
+): Promise<boolean> {
+  const read = () => service.status(actor, resourceId, idempotencyKey);
+  let latest = snapshot ?? await read();
+  if (latest?.state === "queued" && latest.receipt.outcome === "queued") {
+    const { queueEntryId } = latest.receipt;
+    const result = await service.perform({
       kind: "cancel_request",
       resourceId,
       queueEntryId,
-      idempotencyKey: derivedCheckoutKey(idempotencyKey, suffix),
+      idempotencyKey: derivedCheckoutKey(resourceId, idempotencyKey, "cancel", queueEntryId),
     }, actor);
-    return "cancelled";
+    if (result.outcome === "accepted") return true;
+    // Reconciliation inside the cancel transaction can promote this waiter.
+    latest = await read();
   }
-  if (latest && latest.state && latest.state !== "ended" && "allocationId" in latest) {
+  if (latest && "allocationId" in latest) {
+    const { allocationId, generation } = latest;
     await service.perform({
       kind: "release",
       resourceId,
-      allocationId: latest.allocationId,
-      generation: latest.generation,
-      idempotencyKey: derivedCheckoutKey(idempotencyKey, `${suffix}-release`),
+      allocationId,
+      generation,
+      idempotencyKey: derivedCheckoutKey(resourceId, idempotencyKey, "release", allocationId, generation),
     }, actor);
-    return "released";
+    latest = await read();
   }
-  return "ended";
+  return latest?.state === "ended";
+}
+
+async function acquireCheckout(
+  service: DesktopResourceCheckoutService,
+  actor: ReturnType<DesktopResourceCheckoutService["threadActor"]>,
+  args: Record<string, unknown>,
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted();
+  const resourceId = args.resourceId === undefined ? service.localMachineResourceId() : text(args.resourceId, "resource ID");
+  const purpose = text(args.purpose, "purpose", 1_000);
+  const expectedDurationMs = positiveInt(args.expectedDurationMs, "duration");
+  const units = args.units === undefined ? undefined : positiveInt(args.units, "units", 1_000);
+  if (units === undefined && service.isCountedResource(resourceId)) {
+    throw new Error("Specify units (CPU slots) when acquiring a counted resource so you do not reserve the entire pool.");
+  }
+  const idempotencyKey = args.idempotencyKey === undefined ? `rco-${randomUUID()}` : text(args.idempotencyKey, "idempotency key");
+  const waitTimeoutMs = args.waitTimeoutMs === undefined
+    ? DEFAULT_ACQUIRE_WAIT_MS
+    : positiveInt(args.waitTimeoutMs, "wait timeout", MAX_ACQUIRE_WAIT_MS);
+  const deadline = performance.now() + waitTimeoutMs;
+  const interrupted = () => signal?.aborted || performance.now() >= deadline;
+  const request = await service.perform({
+    kind: "request", resourceId, idempotencyKey, purpose, expectedDurationMs,
+    ...(units === undefined ? {} : { units }),
+  }, actor);
+
+  if (request.outcome !== "granted" && request.outcome !== "queued" && request.outcome !== "unknown") return request;
+  let status: CheckoutStatus | undefined;
+  if (!interrupted() && request.outcome !== "unknown") {
+    const read = () => service.status(actor, resourceId, idempotencyKey).catch(() => undefined);
+    const subscribe = service.subscribe.bind(service);
+    status = await read();
+    while (status?.state === "queued" && !interrupted()) {
+      try {
+        await waitUntilNextCheck(subscribe, Math.min(WAIT_POLL_MS, deadline - performance.now()), signal);
+      } catch {
+        break; // An abort interrupts the wait, but cleanup still runs below.
+      }
+      if (!interrupted()) status = await read();
+    }
+  }
+
+  if (interrupted()) {
+    const cancelled = await cleanupInterruptedAcquire(service, actor, resourceId, idempotencyKey, status).catch(() => false);
+    if (signal?.aborted) {
+      if (!cancelled) {
+        throw new Error(`Checkout interrupted and cleanup could not be confirmed. Check status for ${resourceId} with key ${idempotencyKey}.`,
+          { cause: signal.reason });
+      }
+      signal.throwIfAborted();
+    }
+    return {
+      outcome: "timed_out" as const, resourceId, idempotencyKey, cancelled,
+      message: cancelled
+        ? "Timed out waiting for the checkout. The request or grant has been cleared."
+        : "Timed out waiting for the checkout. Check status with the same key to verify cleanup.",
+    };
+  }
+  if (request.outcome === "unknown") return { ...request, resourceId, idempotencyKey };
+  if (status?.state === "granted") return buildGrantedAcquireResult({ ...status, resourceId, idempotencyKey, units });
+  if (status?.state === "ended") return {
+    outcome: "ended" as const, resourceId, idempotencyKey, message: "The checkout has ended.",
+  };
+  if (status?.state) return {
+    outcome: "rejected" as const, reason: "conflict" as const, resourceId, idempotencyKey,
+    message: "The checkout is already bound to managed work or awaiting cleanup.",
+  };
+  return {
+    outcome: "unknown" as const, resourceId, idempotencyKey,
+    message: "The authority did not confirm a usable grant. Check status or retry with the same key.",
+  };
 }
 
 /** What a thread does next when its request is still queued. */
@@ -141,10 +221,26 @@ function withQueuedNextStep<T>(result: T, resourceId: string, idempotencyKey: st
   return queued ? { ...result, next: queuedCheckoutNextStep(resourceId, idempotencyKey) } : result;
 }
 
-export function buildResourceCheckoutToolDefinitions(handler?: CheckoutToolHandler): AgentToolDefinition[] {
+export function isResourceCheckoutCleanupCall(op: CheckoutToolName, args: Record<string, unknown>): boolean {
+  if (op === "resource_checkout_status") return true;
+  const action = args.action;
+  return op === "resource_checkout_action" && typeof action === "object" && action !== null
+    && "kind" in action && (action.kind === "release" || action.kind === "cancel_request");
+}
+
+export function buildResourceCheckoutToolDefinitions(
+  handler?: CheckoutToolHandler,
+  mode: CheckoutToolMode = "enabled",
+): AgentToolDefinition[] {
   if (!handler) return [];
-  return toolNames.map((name) => ({
-    namespace: PWRAGENT_TOOL_NAMESPACE, name, description: descriptions[name], deferLoading: true,
+  const names = mode === "enabled" ? toolNames : ["resource_checkout_action", "resource_checkout_status"] as const;
+  // Codex's search bootstrap defers these tools when enabled. Otherwise they
+  // must load eagerly, including on providers that cannot search for tools.
+  return names.map((name) => ({
+    namespace: PWRAGENT_TOOL_NAMESPACE, name, advertise: mode !== "hidden",
+    description: name === "resource_checkout_action" && mode !== "enabled"
+      ? "Release a checkout owned by this thread (kind=release, resourceId, allocationId, generation) or cancel its queued request (kind=cancel_request, resourceId, queueEntryId). Include idempotencyKey and reuse it after an unknown result."
+      : descriptions[name],
     annotations: { readOnlyHint: name === "resource_checkout_discover" || name === "resource_checkout_status" },
     inputSchema: {
       type: "object", additionalProperties: false,
@@ -216,89 +312,7 @@ export function createResourceCheckoutToolHandler(
         });
     }
     if (op === "resource_checkout_discover") return await service.discover(actor);
-    if (op === "resource_checkout_acquire") {
-      context.signal?.throwIfAborted();
-      const resourceId = args.resourceId === undefined
-        ? service.localMachineResourceId()
-        : text(args.resourceId, "resource ID");
-      const purpose = text(args.purpose, "purpose", 1_000);
-      const expectedDurationMs = positiveInt(args.expectedDurationMs, "duration");
-      const units = args.units === undefined ? undefined : positiveInt(args.units, "units", 1_000);
-      if (units === undefined && service.isCountedResource(resourceId)) {
-        throw new Error("Specify units (CPU slots) when acquiring a counted resource so you do not reserve the entire pool.");
-      }
-      const idempotencyKey = args.idempotencyKey === undefined
-        ? `rco-${randomUUID()}`
-        : text(args.idempotencyKey, "idempotency key");
-      const waitTimeoutMs = args.waitTimeoutMs === undefined
-        ? DEFAULT_ACQUIRE_WAIT_MS
-        : positiveInt(args.waitTimeoutMs, "wait timeout", MAX_ACQUIRE_WAIT_MS);
-      const requestResult = await service.perform({
-        kind: "request",
-        resourceId,
-        idempotencyKey,
-        purpose,
-        expectedDurationMs,
-        ...(units === undefined ? {} : { units }),
-      }, actor);
-      if (requestResult.outcome === "granted") {
-        const snapshot = await service.status(actor, resourceId, idempotencyKey);
-        return buildGrantedAcquireResult({
-          resourceId,
-          idempotencyKey,
-          allocationId: requestResult.allocationId,
-          generation: requestResult.generation,
-          authorityEpoch: snapshot && "authorityEpoch" in snapshot ? snapshot.authorityEpoch : undefined,
-          deadlineAt: snapshot && "deadlineAt" in snapshot ? snapshot.deadlineAt : undefined,
-          units,
-        });
-      }
-      if (requestResult.outcome !== "queued") return requestResult;
-      const subscribe = typeof service.subscribe === "function" ? service.subscribe.bind(service) : undefined;
-      const deadline = performance.now() + waitTimeoutMs;
-      let status = await service.status(actor, resourceId, idempotencyKey);
-      try {
-        while (status?.state === "queued" && performance.now() < deadline) {
-          await waitUntilNextCheck(
-            subscribe,
-            Math.min(WAIT_POLL_MS, Math.max(1, deadline - performance.now())),
-            context.signal,
-          );
-          status = await service.status(actor, resourceId, idempotencyKey);
-        }
-      } catch (error) {
-        await cleanupInterruptedAcquire(service, actor, resourceId, idempotencyKey, requestResult.queueEntryId, "cancel")
-          .catch(() => undefined);
-        throw error;
-      }
-      if (status && status.state && status.state !== "queued" && status.state !== "ended" && "allocationId" in status) {
-        return buildGrantedAcquireResult({
-          resourceId,
-          idempotencyKey,
-          allocationId: status.allocationId,
-          generation: status.generation,
-          authorityEpoch: status.authorityEpoch,
-          deadlineAt: status.deadlineAt,
-          units,
-        });
-      }
-      if (status?.state === "queued") {
-        const cleaned = await cleanupInterruptedAcquire(service, actor, resourceId, idempotencyKey, requestResult.queueEntryId, "timeout");
-        return {
-          outcome: "timed_out" as const,
-          resourceId,
-          idempotencyKey,
-          cancelled: cleaned === "cancelled" || cleaned === "released",
-          message: "Timed out waiting for the checkout; the queued request was cancelled.",
-        };
-      }
-      return {
-        outcome: "ended" as const,
-        resourceId,
-        idempotencyKey,
-        message: "The queued checkout ended before it could be granted.",
-      };
-    }
+    if (op === "resource_checkout_acquire") return await acquireCheckout(service, actor, args, context.signal);
     if (op === "resource_checkout_status" || op === "resource_checkout_wait") {
       const resourceId = text(args.resourceId, "resource ID");
       const key = text(args.idempotencyKey, "idempotency key");

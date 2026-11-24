@@ -1313,6 +1313,9 @@ function SettingsSectionBody(props: {
         onResearchEnabledChange={async (enabled: boolean) => {
           await props.settings.writeConfig({ experimental: { researchEnabled: enabled } });
         }}
+        onResourceCheckoutsEnabledChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({ experimental: { resourceCheckoutsEnabled: enabled } });
+        }}
         onWriteConfig={props.settings.writeConfig}
         onClearSecret={props.settings.clearSecret}
         onReplaceSecret={props.settings.replaceSecret}

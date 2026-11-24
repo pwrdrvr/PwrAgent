@@ -354,14 +354,17 @@ describe("ResourcesScreen", () => {
     expect(dialog.queryByRole("button", { name: "Fence old workload" })).toBeNull();
   });
 
-  it.each([1, 2, 5])("sends the selected number of counted units (%i) and predicts the queue", async (units) => {
+  it.each([1, 2, 5])("sends the selected number of counted units (%i) with a waiter present", async (units) => {
     const resource = buildPreviewSnapshot(NOW).resources[0];
     const submit = vi.fn(async (_request: ResourceCheckoutActionRequest): Promise<ResourceCheckoutActionResult> => ({ outcome: "accepted" }));
-    render(<RequestCheckoutDialog resource={{ ...resource, queue: [], sharing: { mode: "counted", capacity: 5, inUse: 3, unitLabel: "slots" } }}
+    const queue = buildPreviewSnapshot(NOW).resources.flatMap((entry) => entry.queue).slice(0, 1);
+    expect(queue).toHaveLength(1);
+    render(<RequestCheckoutDialog resource={{ ...resource, queue, sharing: { mode: "counted", capacity: 5, inUse: 3, unitLabel: "slots" } }}
       action={{ kind: "request", label: "Request checkout", gate: { allowed: true }, emphasis: "primary" }} now={NOW} submit={submit} onClose={() => undefined} />);
     fireEvent.click(screen.getByRole("radio", { name: "Choose slots" }));
     fireEvent.change(screen.getByRole("spinbutton", { name: "CPU slots" }), { target: { value: String(units) } });
     fireEvent.change(screen.getByPlaceholderText("What the checkout is for"), { target: { value: "Partial grant" } });
+    expect(screen.getByText("1 currently waiting.", { exact: false })).toBeInTheDocument();
     await act(async () => fireEvent.click(screen.getByRole("button", { name: units > 2 ? "Join queue" : "Request checkout" })));
     expect(submit.mock.calls[0][0]).toMatchObject({ kind: "request", units });
   });

@@ -11,7 +11,7 @@ import type {
 import {
   RESOURCE_CHECKOUTS_CONTRACT_VERSION, type ResourceAuthority, type ResourceCheckoutActionResult,
   type ResourceCheckoutsSnapshot, type ResourceViewer, type ResourceDomain, type ResourceAdvertisement, type ResourceCheckoutActionRequest,
-  type ResourceOwnershipConflict, type ResourceThreadRef,
+  type ResourceHolder, type ResourceOwnershipConflict, type ResourceThreadRef,
 } from "@pwragent/shared/contracts/resource-checkouts";
 import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
@@ -72,6 +72,7 @@ export class DesktopResourceCheckoutService {
   private readonly operator: CheckoutActor;
   private readonly listeners = new Set<(revision: number) => void>();
   private readonly remoteViews = new Map<string, ExternalView>();
+  private readonly threadsWithCheckouts = new Set<string>();
   private readonly timer: NodeJS.Timeout;
   private readonly shutdown = new AbortController();
   private readonly providerWorkInFlight = new Map<string, string>();
@@ -306,6 +307,18 @@ export class DesktopResourceCheckoutService {
     const fingerprint = JSON.stringify([authorities, resources, registerGate]);
     if (fingerprint !== this.fingerprint) {
       this.fingerprint = fingerprint;
+      this.threadsWithCheckouts.clear();
+      const rememberThread = (holder: ResourceHolder) => {
+        if (holder.kind !== "thread") return;
+        const { backend, threadId, instanceId } = holder.thread;
+        if (instanceId === undefined || instanceId === this.options.viewer.instanceId) {
+          this.threadsWithCheckouts.add(JSON.stringify([backend, threadId]));
+        }
+      };
+      for (const resource of resources) {
+        for (const { holder } of resource.allocations) rememberThread(holder);
+        for (const { requester } of resource.queue) rememberThread(requester);
+      }
       const revision = ++this.revision;
       for (const listener of this.listeners) listener(revision);
     }
@@ -313,6 +326,11 @@ export class DesktopResourceCheckoutService {
       contractVersion: RESOURCE_CHECKOUTS_CONTRACT_VERSION, revision: this.revision, observedAt: this.now(),
       viewer: this.options.viewer, authorities, resources, registerGate,
     };
+  }
+
+  /** Discovery hint from the last owner poll. Mutations still check ownership at the authority. */
+  hasAgentCheckoutToCleanUp(backend: AppServerBackendKind, threadId: string): boolean {
+    return this.threadsWithCheckouts.has(JSON.stringify([backend, threadId]));
   }
 
   subscribe(listener: (revision: number) => void): () => void {

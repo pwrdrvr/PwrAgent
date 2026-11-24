@@ -51265,6 +51265,85 @@ button.composer__subthread-source-parent:hover {
   text-transform: uppercase;
 }
 
+/* A panel a to-do card opened carries the accent edge for as long as it
+   belongs to that card, so it reads as the task the card is waiting on. */
+.composer__review-config--from-todo {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 1px var(--accent-border);
+}
+
+.composer__review-origin {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0 2px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.composer__review-origin-label {
+  flex: none;
+  color: var(--accent-bright);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.composer__review-origin-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Each arrival alternates between two names for one animation, so a
+     second Show restarts it. */
+  .composer__review-config--from-todo.is-arriving-odd {
+    animation:
+      composer-review-arrive-odd 220ms ease-out,
+      composer-review-glow-odd 900ms ease-out;
+  }
+
+  .composer__review-config--from-todo.is-arriving-even {
+    animation:
+      composer-review-arrive-even 220ms ease-out,
+      composer-review-glow-even 900ms ease-out;
+  }
+}
+
+@keyframes composer-review-arrive-odd {
+  from {
+    opacity: 0.6;
+    transform: translateY(10px);
+  }
+}
+
+@keyframes composer-review-arrive-even {
+  from {
+    opacity: 0.6;
+    transform: translateY(10px);
+  }
+}
+
+@keyframes composer-review-glow-odd {
+  from {
+    box-shadow: 0 0 0 4px var(--accent-soft), 0 0 0 1px var(--accent);
+  }
+}
+
+@keyframes composer-review-glow-even {
+  from {
+    box-shadow: 0 0 0 4px var(--accent-soft), 0 0 0 1px var(--accent);
+  }
+}
+
 .composer__review-options {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -58489,6 +58568,33 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.5;
+}
+
+/* A review card whose setup is open in the composer waits on it: the same
+   accent edge as the panel, and a status in place of Start review. */
+.thread-todo-card[data-review-setup] {
+  border-color: var(--accent-border);
+}
+
+.thread-todo-card__waiting {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  margin-right: auto;
+  color: var(--accent-bright);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 17px;
+}
+
+.thread-todo-card__waiting-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 /* A held merge card says why in place of its merge button, at the card's

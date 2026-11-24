@@ -313,6 +313,7 @@ export function materializeNavigationThreads(params: {
       retainedBranchDriftPairs: overlay?.retainedBranchDriftPairs,
       executionMode: resolveNavigationExecutionMode({ overlay, thread }),
       queuedExecutionMode: overlay?.queuedExecutionMode,
+      queuedNativeMode: overlay?.queuedNativeMode,
       queuedExecutionModeAt: overlay?.queuedExecutionModeAt,
       permissionTransitionLog: overlay?.permissionTransitionLog,
       messagingBindingTransitionLog: overlay?.messagingBindingTransitionLog,
@@ -494,6 +495,7 @@ export function serializeNavigationSnapshotForHash(params: {
       })),
       executionMode: thread.executionMode ?? "default",
       queuedExecutionMode: thread.queuedExecutionMode ?? null,
+      ...(thread.queuedNativeMode !== undefined ? { queuedNativeMode: thread.queuedNativeMode } : {}),
       queuedExecutionModeAt: thread.queuedExecutionModeAt ?? null,
       permissionTransitionLog: (thread.permissionTransitionLog ?? []).map(
         (entry) => ({

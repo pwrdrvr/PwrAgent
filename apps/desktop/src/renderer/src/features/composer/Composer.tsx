@@ -43,6 +43,7 @@ import {
   EXPLICIT_REVIEW_PULL_REQUEST_URL,
   describeAttachedPullRequestLocalSync,
   findCheckedOutPullRequest,
+  normalizePullRequestUrl,
   orderPullRequestSet,
   PULL_REQUEST_SET_MAX,
   pullRequestRepositoryKey,
@@ -169,7 +170,7 @@ import { projectWatchesMergeBuilds } from "@pwragent/shared/project-forge-automa
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import { ComposerPrMenu } from "./ComposerPrMenu";
 import { mergeBuildPullRequestUrl } from "../pr-watches/merge-build-watches";
-import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
+import type { ScheduledThreadAction, ScheduledThreadReviewPayload } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import {
   HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE,
 } from "@pwragent/shared/contracts/normalized-app-server";
@@ -243,9 +244,14 @@ import { threadJobMonitorControl } from "../../lib/job-monitor-control";
 import {
   formatExecutionModeLabel,
   describeExecutionModeForBackend,
-  getAcpRuntimeModeControl,
+  getProviderAccessControl,
 } from "../../lib/execution-mode";
-import { acpRuntimeModeIsFullAccess } from "@pwragent/shared/acp-permission-mode";
+import {
+  formatAntigravityAccessStateLabel,
+  launchpadPatchForProviderAccessOption,
+  normalizeAntigravityAccessTarget,
+  type ProviderAccessModeOption,
+} from "@pwragent/shared/provider-access-mode";
 import {
   backendDefaultModel as getDefaultModelOption,
   backendDefaultReasoningEffort as getDefaultReasoningEffort,
@@ -513,8 +519,23 @@ export type ComposerProps = {
     threadId: string;
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
+    todo?: ScheduledThreadReviewPayload["todo"];
+    /** The card's title, shown on the panel so the two read as one task. */
+    todoTitle?: string;
+    /**
+     * The pull request the card is for. When the thread has it attached, the
+     * panel opens on it alone, whatever branch is checked out.
+     */
+    pullRequest?: string;
   };
-  /** A review this composer submitted was accepted by the backend. */
+  /** Clears a one-shot reviewRequest once the composer consumes or drops it. */
+  onReviewRequestHandled?: (id: number) => void;
+  /**
+   * The to-do card whose review the open panel is setting up, or undefined
+   * once the panel closes or belongs to no card.
+   */
+  onReviewSetupTodoChange?: (todoId: string | undefined) => void;
+  /** An immediately submitted review started. The owner settles scheduled reviews. */
   onReviewStarted?: (threadKey: string, requestId?: number) => void;
   /**
    * Puts a prompt back in the composer, as a rewind does with the prompt it
@@ -742,7 +763,14 @@ export type ComposerProps = {
   /** Selected-thread Thinking state from useThreadSessionState. Do not rebuild it here. */
   threadBusy?: boolean;
   updatingExecutionMode?: ThreadExecutionMode;
-  onSetExecutionMode?: (executionMode: ThreadExecutionMode) => Promise<void>;
+  onSetExecutionMode?: (
+    executionMode: ThreadExecutionMode,
+    acpMode?: {
+      source: "configOption" | "mode";
+      optionId: string;
+      value: string;
+    },
+  ) => Promise<void>;
   onSetAcpRuntimeOption?: (params: {
     source: "configOption" | "mode";
     optionId: string;
@@ -1040,6 +1068,11 @@ type ReviewConfigState = {
    * applies to one review, never to the thread.
    */
   reviewer?: ModelSettingsRecent;
+  /** One-shot to-do review request id that opened this panel, kept after the prop clears. */
+  reviewRequestId?: number;
+  reviewTodo?: ScheduledThreadReviewPayload["todo"];
+  /** The title of the card that opened this panel. */
+  reviewTodoTitle?: string;
   runMode: ReviewRunMode;
   runModeChosen?: boolean;
   /**
@@ -3615,6 +3648,22 @@ function useComposerController(props: ComposerProps) {
     isLaunchpad,
     launchpad,
   } = useComposerSessionState();
+  // Counts the times a card brought the review panel up, so each one
+  // replays the panel's arrival, including Show from a waiting card.
+  const [reviewPanelArrival, setReviewPanelArrival] = useState(0);
+  const reviewConfigRef = useRef<HTMLFieldSetElement>(null);
+  // A card's panel opens at the window's foot, often below the fold of a
+  // short window: bring it into view whenever a card brings it up.
+  useEffect(() => {
+    if (reviewPanelArrival === 0) return;
+    reviewConfigRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [reviewPanelArrival]);
+  const reviewSetupTodoId = reviewConfig?.reviewTodo?.id;
+  const onReviewSetupTodoChange = props.onReviewSetupTodoChange;
+  useEffect(() => {
+    onReviewSetupTodoChange?.(reviewSetupTodoId);
+  }, [onReviewSetupTodoChange, reviewSetupTodoId]);
+  useEffect(() => () => onReviewSetupTodoChange?.(undefined), [onReviewSetupTodoChange]);
 
   function useComposerSessionState() {
     const nativeVoiceApi = isNativeVoiceApi(props.desktopApi) ? props.desktopApi : undefined;
@@ -5073,11 +5122,17 @@ function useComposerController(props: ComposerProps) {
       || requestOwner(request.federationTarget ?? readRendererFederationTarget()) !== composerRequestOwner
     ) {
       appliedReviewRequestId.current = request.id;
+      props.onReviewRequestHandled?.(request.id);
       return;
     }
     if (props.disabled) return;
     appliedReviewRequestId.current = request.id;
+    props.onReviewRequestHandled?.(request.id);
     if (reviewConfig) {
+      setReviewConfig((current) => current
+        ? withRequestedReviewPullRequest({ ...current, ...reviewRequestFields(request) }, request.pullRequest)
+        : current);
+      if (request.todo) setReviewPanelArrival((current) => current + 1);
       inputRef.current?.focus();
       return;
     }
@@ -5090,11 +5145,11 @@ function useComposerController(props: ComposerProps) {
       staleDraft: draft,
       staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
     };
-    enterReviewComposer();
+    enterReviewComposer(request);
     requestAnimationFrame(() => inputRef.current?.focus());
     // The helpers are recreated each render; the id guard opens once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.reviewRequest, props.disabled, props.thread?.id, props.thread?.source, composerRequestOwner]);
+  }, [props.reviewRequest, props.onReviewRequestHandled, props.disabled, props.thread?.id, props.thread?.source, composerRequestOwner]);
   const appliedDraftRestoreId = useRef<number | undefined>(undefined);
   const composerHasContent = draft.trim().length > 0 || imageAttachments.length > 0;
   useEffect(() => {
@@ -5311,11 +5366,20 @@ function useComposerController(props: ComposerProps) {
     applyRecoveredComposerDraft(snapshot);
     return true;
   };
+  const composerMountedRef = useRef(false);
+  useLayoutEffect(() => {
+    composerMountedRef.current = true;
+    return () => { composerMountedRef.current = false; };
+  }, []);
+  const isLiveComposerScope = (scopeKey: string): boolean =>
+    composerMountedRef.current
+    && activeComposerScopeKeyRef.current === scopeKey
+    && latestDraftSnapshotRef.current.scopeKey === scopeKey;
   const restoreSubmittedComposerDraftInScope = (
     scopeKey: string,
     snapshot: ComposerDraftSnapshot,
   ): boolean => {
-    if (activeComposerScopeKeyRef.current === scopeKey) {
+    if (isLiveComposerScope(scopeKey)) {
       return recoverSubmittedComposerDraft(snapshot);
     }
 
@@ -6050,6 +6114,31 @@ function useComposerController(props: ComposerProps) {
     saveComposerDraftSnapshot(scopeKey, snapshot);
     persistLaunchpadDraftSnapshot(scopeKey, snapshot);
   };
+  const withoutReviewPlaceholder = (snapshot: ComposerDraftSnapshot): ComposerDraftSnapshot => ({
+    ...snapshot,
+    draft: "",
+    editorDocument: undefined,
+  });
+  const discardReviewPlaceholder = (scopeKey: string, snapshot: ComposerDraftSnapshot): ComposerDraftSnapshot => {
+    const remaining = withoutReviewPlaceholder(snapshot);
+    if (hasComposerDraftContent(remaining)) {
+      flushComposerDraftSnapshot(scopeKey, remaining);
+    } else {
+      clearComposerDraftSnapshot(scopeKey);
+      persistLaunchpadDraftSnapshot(scopeKey, remaining);
+    }
+    return remaining;
+  };
+  const restoreRejectedReviewDraft = (scopeKey: string, snapshot: ComposerDraftSnapshot): boolean => {
+    const live = isLiveComposerScope(scopeKey);
+    // The bare command stands in for panel state, which only exists in the
+    // live composer. Keep its attachments if the panel cannot be restored.
+    const recoverable = !live && snapshot.draft.trim() === "/review"
+      ? withoutReviewPlaceholder(snapshot) : snapshot;
+    return hasComposerDraftContent(recoverable)
+      && restoreSubmittedComposerDraftInScope(scopeKey, recoverable)
+      && live;
+  };
   const updateActiveTurnId = (
     nextTurnId?: string,
     options?: { review?: boolean },
@@ -6652,6 +6741,9 @@ function useComposerController(props: ComposerProps) {
   const isReviewComposerOpen = Boolean(
     supportsReview && reviewConfig && parsedReviewCommand
   );
+  const hasReviewPlaceholder = Boolean(reviewConfig && (parsedReviewCommand ?? parseReviewCommand(draft)));
+  const hasReviewPlaceholderRef = useRef(hasReviewPlaceholder);
+  hasReviewPlaceholderRef.current = hasReviewPlaceholder;
   // Dictation is the viewer's: this machine's microphone and key fill a local
   // draft, so a thread owned by a remote instance dictates the same way.
   const dictationApi = props.dictationAvailable && !props.composerCovered && !isReviewComposerOpen
@@ -6793,6 +6885,10 @@ function useComposerController(props: ComposerProps) {
   useEffect(() => {
     return () => {
       const latest = latestDraftSnapshotRef.current;
+      if (hasReviewPlaceholderRef.current) {
+        discardReviewPlaceholder(latest.scopeKey, latest.snapshot);
+        return;
+      }
       flushComposerDraftSnapshot(latest.scopeKey, latest.snapshot);
     };
   }, []);
@@ -6859,6 +6955,8 @@ function useComposerController(props: ComposerProps) {
       }
       saveComposerDraftSnapshot(composerScopeKey, previousSnapshot);
       persistLaunchpadDraftSnapshot(composerScopeKey, previousSnapshot);
+    } else if (hasReviewPlaceholder) {
+      discardReviewPlaceholder(previousScopeKey, previousSnapshot);
     } else {
       flushComposerDraftSnapshot(previousScopeKey, previousSnapshot);
     }
@@ -7774,7 +7872,10 @@ function useComposerController(props: ComposerProps) {
       reviewCommand.displayText
     );
     setActiveOptimisticMessageId(optimisticReviewId);
+    const submittedScopeKey = composerScopeKey;
     const submittedSnapshot = latestDraftSnapshotRef.current.snapshot;
+    const submittedReviewRequestId = reviewConfig?.reviewRequestId ?? props.reviewRequest?.id;
+    const submittedReviewConfig = reviewConfig;
     // A released queued review carries its own reviewer: the panel is long
     // closed by then, so reviewConfig is empty and would silently downgrade the
     // review to the thread's provider. Otherwise take the live panel state,
@@ -7800,7 +7901,7 @@ function useComposerController(props: ComposerProps) {
       ? reviewCommand.reviewer.reasoningEffort
       : reviewerSelection.reasoningEffort;
     if (!options?.queued) {
-      resetComposerDraftAndState(composerScopeKey);
+      resetComposerDraftAndState(submittedScopeKey);
       setReviewConfig(undefined);
     }
     try {
@@ -7865,7 +7966,7 @@ function useComposerController(props: ComposerProps) {
         })?.catch(() => undefined);
       }
       inFlightReviewSubmissionKeyRef.current = undefined;
-      props.onReviewStarted?.(threadSummaryIdentityKey(props.thread), props.reviewRequest?.id);
+      props.onReviewStarted?.(threadSummaryIdentityKey(props.thread), submittedReviewRequestId);
       if (updateActiveTurnId(response.turnId, { review: true })) {
         props.onActiveTurnIdChange?.(response.turnId);
       }
@@ -7873,9 +7974,9 @@ function useComposerController(props: ComposerProps) {
         if (!options.queueClaimed) {
           removeQueuedTurn(options.queued);
         }
-      } else {
+      } else if (submittedSnapshot.draft.trim() !== "/review") {
         recordComposerDraftHistory(
-          composerScopeKey,
+          submittedScopeKey,
           submittedSnapshot,
           "sent",
         );
@@ -7886,8 +7987,8 @@ function useComposerController(props: ComposerProps) {
       }
       inFlightReviewSubmissionKeyRef.current = undefined;
       if (!options?.queued) {
-        if (recoverSubmittedComposerDraft(submittedSnapshot)) {
-          setReviewConfig(reviewConfig ?? createReviewConfig({
+        if (restoreRejectedReviewDraft(submittedScopeKey, submittedSnapshot)) {
+          setReviewConfig(submittedReviewConfig ?? createReviewConfig({
             directory: props.directory,
             reviewCommand,
             thread: props.thread,
@@ -8158,13 +8259,47 @@ function useComposerController(props: ComposerProps) {
     }
   };
 
-  const enterReviewComposer = (): void => {
-    setReviewConfig(
-      createReviewConfig({
+  const reviewRequestFields = (
+    request: NonNullable<ComposerProps["reviewRequest"]>,
+  ): Pick<ReviewConfigState, "reviewRequestId" | "reviewTodo" | "reviewTodoTitle"> => ({
+    reviewRequestId: request.id,
+    reviewTodo: request.todo,
+    reviewTodoTitle: request.todo ? request.todoTitle : undefined,
+  });
+
+  // A card that names its PR gets that PR alone, in the project that owns
+  // it. The checkout does not decide: a PR target reviews the published
+  // head. A PR the thread no longer has leaves the panel's own choice.
+  const withRequestedReviewPullRequest = (
+    config: ReviewConfigState,
+    pullRequestUrl: string | undefined,
+  ): ReviewConfigState => {
+    if (!pullRequestUrl) return config;
+    const wanted = normalizePullRequestUrl(pullRequestUrl).toLowerCase();
+    const option = reviewPullRequestOptions.find((candidate) =>
+      normalizePullRequestUrl(candidate.pr.url).toLowerCase() === wanted
+    );
+    return option
+      ? selectReviewPullRequests({ ...config, target: "pullRequest" }, [option.pr.url])
+      : config;
+  };
+
+  const enterReviewComposer = (request?: ComposerProps["reviewRequest"]): void => {
+    const remaining = withoutReviewPlaceholder(latestDraftSnapshotRef.current.snapshot);
+    if (hasComposerDraftContent(remaining)) {
+      saveComposerDraftSnapshot(composerScopeKey, remaining);
+    } else {
+      clearComposerDraftSnapshot(composerScopeKey);
+    }
+    const config: ReviewConfigState = {
+      ...createReviewConfig({
         directory: props.directory,
         thread: props.thread,
-      })
-    );
+      }),
+      ...(request ? reviewRequestFields(request) : {}),
+    };
+    setReviewConfig(withRequestedReviewPullRequest(config, request?.pullRequest));
+    if (request?.todo) setReviewPanelArrival((current) => current + 1);
     void refreshReviewerRecents();
     updateVisibleDraft("/review");
     setDismissedAutocompleteKey(autocompleteKey);
@@ -8177,7 +8312,9 @@ function useComposerController(props: ComposerProps) {
     setReviewConfig(undefined);
     setScheduledDraftSendAt(undefined);
     setScheduleArmed(true);
-    clearComposerDraft();
+    const remaining = discardReviewPlaceholder(composerScopeKey, latestDraftSnapshotRef.current.snapshot);
+    latestDraftSnapshotRef.current = { scopeKey: composerScopeKey, snapshot: remaining };
+    updateVisibleDraft(remaining.draft, remaining.skillTokens);
     setSendError(undefined);
     requestAnimationFrame(() => inputRef.current?.focus());
   };
@@ -8261,6 +8398,7 @@ function useComposerController(props: ComposerProps) {
       // One review per pull request, in list order. The owner's queue starts
       // the first when the thread is free and runs each of the rest after the
       // one before it; each is pinned to its own published head when queued.
+      // The first request owns the review draft for the whole batch.
       const orderedUrls = pullRequestUrls;
       for (const [index, url] of orderedUrls.entries()) {
         const queued = await queueReviewCommand(
@@ -8269,9 +8407,7 @@ function useComposerController(props: ComposerProps) {
             target: { type: "pullRequest", url },
             displayText: `Review ${url}`,
           },
-          futureScheduledDraftSendAt
-            ? { scheduledSendAt: futureScheduledDraftSendAt }
-            : undefined,
+          { scheduledSendAt: futureScheduledDraftSendAt, batchContinuation: index > 0 },
         );
         if (typeof queued === "string") {
           // The panel closed when the first review queued, so name the
@@ -8280,7 +8416,9 @@ function useComposerController(props: ComposerProps) {
             const pr = reviewPullRequestOptions.find((option) => option.pr.url === unqueuedUrl)?.pr;
             return pr ? `#${pr.number}` : unqueuedUrl;
           });
-          setSendError(`${queued} Not queued: ${unqueued.join(", ")}.`);
+          if (isLiveComposerScope(composerScopeKey)) {
+            setSendError(`${queued} Not queued: ${unqueued.join(", ")}.`);
+          }
           return;
         }
       }
@@ -9192,7 +9330,7 @@ function useComposerController(props: ComposerProps) {
       target: AppServerReviewTarget;
       reviewer?: ModelSettingsRecent;
     },
-    options?: { scheduledSendAt?: number },
+    options?: { scheduledSendAt?: number; batchContinuation?: boolean },
   ): Promise<true | string> | undefined => {
     // Setup has no thread id yet. Keep the review in the starting composer's
     // FIFO; handoffLaunchpadComposer moves it to the thread before selection.
@@ -9214,11 +9352,13 @@ function useComposerController(props: ComposerProps) {
         reviewCommand: { ...reviewCommand, ...(reviewer ? { reviewer } : {}) },
         ...(options?.scheduledSendAt ? { scheduledSendAt: options.scheduledSendAt } : {}),
       });
-      recordComposerDraftHistory(
-        composerScopeKey,
-        latestDraftSnapshotRef.current.snapshot,
-        "unsent",
-      );
+      if (latestDraftSnapshotRef.current.snapshot.draft.trim() !== "/review") {
+        recordComposerDraftHistory(
+          composerScopeKey,
+          latestDraftSnapshotRef.current.snapshot,
+          "unsent",
+        );
+      }
       resetComposerDraftAndState(composerScopeKey);
       setScheduledDraftSendAt(undefined);
       setScheduleArmed(true);
@@ -9227,6 +9367,21 @@ function useComposerController(props: ComposerProps) {
       return;
     }
     const claudeCodeReview = reviewCommand.runMode === "claude-code-review";
+    const submittedScopeKey = composerScopeKey;
+    const draftToSubmit = options?.batchContinuation ? undefined : latestDraftSnapshotRef.current.snapshot;
+    const submittedThread = props.thread;
+    const submittedReviewConfig = reviewConfig;
+    const submittedSnapshot = draftToSubmit && (reviewConfig || parseReviewCommand(draftToSubmit.draft))
+      ? draftToSubmit : undefined;
+    const submittedSendAt = options?.scheduledSendAt ?? scheduledDraftSendAt;
+    const submittedScheduleArmed = options?.scheduledSendAt !== undefined || scheduleArmed;
+    if (submittedSnapshot) {
+      resetComposerDraftAndState(submittedScopeKey);
+      setScheduledDraftSendAt(undefined);
+      setScheduleArmed(true);
+      setReviewConfig(undefined);
+      setSendError(undefined);
+    }
     const enqueue = async (): Promise<void> => {
       // A queued Claude Code review reads as the command it will send.
       const text = claudeCodeReview
@@ -9238,20 +9393,21 @@ function useComposerController(props: ComposerProps) {
             fix: reviewCommand.afterReview === "auto-fix",
           }).commands[0] ?? formatReviewCommand(reviewCommand.target)
         : formatReviewCommand(reviewCommand.target);
-      if (!props.thread || !props.desktopApi?.createScheduledThreadAction) {
+      if (!submittedThread || !props.desktopApi?.createScheduledThreadAction) {
         throw new Error("Backend-owned review queuing is unavailable.");
       }
       const response = await props.desktopApi.createScheduledThreadAction({
-        backend: props.thread.source,
-        federationTarget: props.thread.federation?.ref.target
+        backend: submittedThread.source,
+        federationTarget: submittedThread.federation?.ref.target
           ?? rendererFederationTarget,
-        threadId: props.thread.id,
+        threadId: submittedThread.id,
         kind: "review",
         origin: "desktop",
         scheduledFor: options?.scheduledSendAt ?? Date.now(),
         displayText: reviewCommand.displayText,
         review: {
           target: reviewCommand.target,
+          ...(submittedReviewConfig?.reviewTodo ? { todo: submittedReviewConfig.reviewTodo } : {}),
           draftText: text,
           delivery: "inline",
           ...(reviewCommand.runMode ? { runMode: reviewCommand.runMode } : {}),
@@ -9262,7 +9418,7 @@ function useComposerController(props: ComposerProps) {
           // Code reviews its own thread at the chosen effort.
           ...(claudeCodeReview
             ? reviewCommand.codeReviewLevel ? { reasoningEffort: reviewCommand.codeReviewLevel } : {}
-            : (reviewConfig?.reviewer || reviewerSelection.fallback)
+            : (submittedReviewConfig?.reviewer || reviewerSelection.fallback)
             && reviewerSelection.backend
             ? {
                 reviewBackend: reviewerSelection.backend,
@@ -9270,13 +9426,13 @@ function useComposerController(props: ComposerProps) {
                 reasoningEffort: reviewerSelection.reasoningEffort,
               }
             : {
-                model: props.thread.model,
-                reasoningEffort: props.thread.reasoningEffort,
+                model: submittedThread.model,
+                reasoningEffort: submittedThread.reasoningEffort,
               }),
-          serviceTier: props.thread.serviceTier,
+          serviceTier: submittedThread.serviceTier,
           fastMode:
-            props.thread.source === "codex"
-              ? props.thread.fastMode
+            submittedThread.source === "codex"
+              ? submittedThread.fastMode
               : undefined,
         },
       });
@@ -9287,7 +9443,7 @@ function useComposerController(props: ComposerProps) {
         || response.action.status === "dispatching"
         || response.action.status === "queued"
       ) {
-        upsertScheduledProjectionInScope(composerScopeKey, {
+        upsertScheduledProjectionInScope(submittedScopeKey, {
           id: `scheduled-projection:${response.action.id}`,
           scheduledActionId: response.action.id,
           text,
@@ -9308,24 +9464,28 @@ function useComposerController(props: ComposerProps) {
     };
     const queued = enqueue().then(
       () => {
-        recordComposerDraftHistory(
-          composerScopeKey,
-          latestDraftSnapshotRef.current.snapshot,
-          "unsent",
-        );
-        clearComposerDraftSnapshot(composerScopeKey);
-        clearComposerDraft();
-        setImageAttachments([]);
-        setFileAttachments([]);
-        setScheduledDraftSendAt(undefined);
-        setScheduleArmed(true);
-        setReviewConfig(undefined);
-        setSendError(undefined);
+        if (submittedSnapshot && submittedSnapshot.draft.trim() !== "/review") {
+          recordComposerDraftHistory(
+            submittedScopeKey,
+            submittedSnapshot,
+            "unsent",
+          );
+        }
         return true as const;
       },
       (error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
-        setSendError(message);
+        if (
+          submittedSnapshot
+          && restoreRejectedReviewDraft(submittedScopeKey, submittedSnapshot)
+        ) {
+          setReviewConfig(submittedReviewConfig);
+          setScheduledDraftSendAt(submittedSendAt);
+          setScheduleArmed(submittedScheduleArmed);
+        }
+        if (isLiveComposerScope(submittedScopeKey)) {
+          setSendError(message);
+        }
         return message;
       },
     );
@@ -12016,11 +12176,26 @@ function useComposerController(props: ComposerProps) {
     }
   };
 
+  const pendingAccessOptionRef = useRef<ProviderAccessModeOption | undefined>(undefined);
+
   const applyExecutionModeSelection = (
     executionMode: ThreadExecutionMode,
   ): void => {
+    const pendingOption = pendingAccessOptionRef.current;
+    pendingAccessOptionRef.current = undefined;
+    const acpOption =
+      pendingOption && pendingOption.executionMode === executionMode
+        ? pendingOption.acpOption
+        : undefined;
     if (props.launchpad) {
-      if (props.launchpad.executionMode !== executionMode) {
+      if (pendingOption && pendingOption.executionMode === executionMode) {
+        handleLaunchpadPatch(
+          launchpadPatchForProviderAccessOption({
+            option: pendingOption,
+            currentAcpRuntime: props.launchpad.acpRuntime,
+          }),
+        );
+      } else if (props.launchpad.executionMode !== executionMode) {
         handleLaunchpadPatch({ executionMode });
       }
       return;
@@ -12028,11 +12203,19 @@ function useComposerController(props: ComposerProps) {
 
     if (
       props.thread &&
-      props.thread.executionMode !== executionMode &&
-      !props.updatingExecutionMode
+      !props.updatingExecutionMode &&
+      (props.thread.executionMode !== executionMode || acpOption)
     ) {
       setSendError(undefined);
-      void props.onSetExecutionMode?.(executionMode);
+      if (acpOption && acpOption.source !== "model") {
+        void props.onSetExecutionMode?.(executionMode, {
+          source: acpOption.source,
+          optionId: acpOption.optionId,
+          value: acpOption.value,
+        });
+      } else {
+        void props.onSetExecutionMode?.(executionMode);
+      }
     }
   };
 
@@ -12088,7 +12271,7 @@ function useComposerController(props: ComposerProps) {
     speedOptions,
     selectedSpeed,
     selectedServiceTier,
-    acpRuntimeModeControl,
+    providerAccessControl,
     providerOptions,
     providerPickerEntries,
     launchpadModelScope,
@@ -12109,7 +12292,6 @@ function useComposerController(props: ComposerProps) {
     resolvableReviewerRecents,
     activeReviewerRecentIndex,
     patchReviewer,
-    executionModeOptions,
     workspaceLabel,
     supportsPlanMode,
     supportsSteering,
@@ -12315,7 +12497,9 @@ function useComposerController(props: ComposerProps) {
     const selectedSpeed = selectedCodexSpeed(currentSettings ?? {});
     const selectedServiceTier =
       currentSettings?.serviceTier ?? backend?.launchpadOptions?.serviceTiers?.[0];
-    const acpRuntimeModeControl = getAcpRuntimeModeControl(backend, currentSettings);
+    const providerAccessControl = getProviderAccessControl(backend, currentSettings, {
+      includeUnavailableAuto: true,
+    });
     const providerOptions = useMemo(
       () => props.backends?.filter(
         (candidate) => candidate.available && candidate.capabilities.createThread
@@ -12473,10 +12657,6 @@ function useComposerController(props: ComposerProps) {
       });
       setSendError(undefined);
     };
-    const executionModeOptions =
-      backend?.executionModes.filter((mode) =>
-        mode.available || (backend.available && mode.mode === "auto"),
-      ) ?? [];
     const workspaceLabel = formatThreadWorkspaceLabel(props.thread);
     // Claude maps Plan to its own read-only plan permission mode.
     const supportsPlanMode = PLAN_MODE_BACKENDS.has(props.launchpad?.backend ?? props.thread?.source ?? "");
@@ -13693,7 +13873,7 @@ function useComposerController(props: ComposerProps) {
       speedOptions,
       selectedSpeed,
       selectedServiceTier,
-      acpRuntimeModeControl,
+      providerAccessControl,
       providerOptions,
       providerPickerEntries,
       launchpadModelScope,
@@ -13714,7 +13894,6 @@ function useComposerController(props: ComposerProps) {
       resolvableReviewerRecents,
       activeReviewerRecentIndex,
       patchReviewer,
-      executionModeOptions,
       workspaceLabel,
       supportsPlanMode,
       supportsSteering,
@@ -13811,6 +13990,7 @@ function useComposerController(props: ComposerProps) {
   // frames small and render after the controller has returned. Call helpers
   // directly so their identity never remounts the editor or its menus.
   function renderComposerBand(): ReactNode {
+    const queuedPermissionLabel = formatQueuedPermissionLabel(props.thread, backend);
     return (
       <div className="composer__band">
       {/* A send to another machine holds this thread; say so above all else,
@@ -13943,8 +14123,7 @@ function useComposerController(props: ComposerProps) {
         </div>
       ) : null}
 
-      {props.thread?.queuedExecutionMode &&
-      props.thread.queuedExecutionMode !== props.thread.executionMode ? (
+      {queuedPermissionLabel ? (
         <div
           className="composer__queued composer__queued--permissions"
           aria-label="Queued permissions change"
@@ -13953,7 +14132,7 @@ function useComposerController(props: ComposerProps) {
             <span className="composer__queued-label">Permissions queued</span>
             <span className="composer__queued-text">
               Will switch to{" "}
-              {formatExecutionModeLabel(props.thread.queuedExecutionMode)} when
+              {queuedPermissionLabel} when
               the current turn ends
             </span>
           </div>
@@ -14704,11 +14883,25 @@ function useComposerController(props: ComposerProps) {
   function renderComposerReviewConfig(): ReactNode {
     return (
       <fieldset
-        className="composer__review-config"
+        ref={reviewConfigRef}
+        className={[
+          "composer__review-config",
+          reviewConfig?.reviewTodo ? "composer__review-config--from-todo" : "",
+          // Two names for one animation, so each arrival restarts it.
+          reviewConfig?.reviewTodo && reviewPanelArrival > 0
+            ? `is-arriving-${reviewPanelArrival % 2 === 0 ? "even" : "odd"}`
+            : "",
+        ].filter(Boolean).join(" ")}
         aria-label="Review target"
         onKeyDown={handleReviewConfigKeyDown}
       >
         <legend>Review target</legend>
+        {reviewConfig?.reviewTodo && reviewConfig.reviewTodoTitle ? (
+          <p className="composer__review-origin">
+            <span className="composer__review-origin-label">From to-do</span>
+            <span className="composer__review-origin-title">{reviewConfig.reviewTodoTitle}</span>
+          </p>
+        ) : null}
         {reviewWorkspaceSelectionRequired ? (
           <label className="composer__review-field">
             <span>Project</span>
@@ -15696,81 +15889,66 @@ function useComposerController(props: ComposerProps) {
             </span>
           ) : null}
 
-          {executionModeOptions.length > 0 &&
-          (props.launchpad || (props.thread && props.onSetExecutionMode)) ? (
+          {providerAccessControl &&
+          (props.launchpad
+            || (props.thread
+              && (providerAccessControl.kind === "acp"
+                ? Boolean(props.onSetAcpRuntimeOption)
+                : Boolean(props.onSetExecutionMode)))) ? (
             <ComposerDropdown
-              ariaLabel="Access mode"
+              ariaLabel={providerAccessControl.ariaLabel}
               compact
-              tone={
-                (props.launchpad?.executionMode ??
-                  props.thread?.executionMode ??
-                  "default") === "full-access"
-                  ? "danger"
-                  : undefined
+              tone={providerAccessControl.selectedOption?.tone}
+              disabled={
+                launchpadSubmitting
+                || Boolean(props.updatingExecutionMode)
+                || (!props.launchpad
+                  && (providerAccessControl.kind === "acp"
+                    ? !props.onSetAcpRuntimeOption
+                    : !props.onSetExecutionMode))
               }
-              disabled={launchpadSubmitting || Boolean(props.updatingExecutionMode)}
-              value={
-                props.launchpad?.executionMode ??
-                props.thread?.executionMode ??
-                "default"
-              }
-              options={executionModeOptions.map((mode) => ({
-                label: formatExecutionModeLabel(mode.mode),
-                value: mode.mode,
-                disabled: !mode.available,
-                tooltip: mode.unavailableReason
-                  ?? (backend?.kind === "codex" || backend?.kind === "claude"
-                    ? describeExecutionModeForBackend(backend.kind, mode.mode)
-                    : undefined),
+              value={providerAccessControl.value}
+              options={providerAccessControl.options.map((option) => ({
+                label: option.label,
+                value: option.value,
+                disabled: !option.available,
+                tooltip:
+                  option.kind === "execution"
+                    ? option.unavailableReason
+                      ?? (backend?.kind === "codex" || backend?.kind === "claude"
+                        ? describeExecutionModeForBackend(backend.kind, option.executionMode)
+                        : undefined)
+                    : undefined,
               }))}
               onChange={(value) => {
-                const executionMode = value as ThreadExecutionMode;
-                requestExecutionModeSelection(executionMode);
-              }}
-            />
-          ) : null}
-
-          {acpRuntimeModeControl ? (
-            <ComposerDropdown
-              ariaLabel="Agent mode"
-              compact
-              disabled={
-                launchpadSubmitting ||
-                (!props.launchpad && !props.onSetAcpRuntimeOption)
-              }
-              value={acpRuntimeModeControl.value}
-              options={acpRuntimeModeControl.options}
-              onChange={(value) => {
+                const option = providerAccessControl.options.find(
+                  (candidate) => candidate.value === value,
+                );
+                if (!option) return;
+                if (option.requiresFullAccessConfirmation) {
+                  pendingAccessOptionRef.current = option;
+                  requestExecutionModeSelection(option.executionMode);
+                  return;
+                }
                 if (props.launchpad) {
-                  const executionMode = acpRuntimeModeIsFullAccess(value)
-                    ? "full-access"
-                    : "default";
-                  handleLaunchpadPatch({
-                    ...(backend?.kind !== "acp:antigravity" ? { executionMode } : {}),
-                    acpRuntime: {
-                      ...props.launchpad.acpRuntime,
-                      configValues:
-                        acpRuntimeModeControl.source === "configOption"
-                          ? {
-                              ...(props.launchpad.acpRuntime?.configValues ?? {}),
-                              [acpRuntimeModeControl.optionId]: value,
-                            }
-                          : props.launchpad.acpRuntime?.configValues,
-                      currentModeId:
-                        acpRuntimeModeControl.source === "mode"
-                          ? value
-                          : acpRuntimeModeControl.optionId === "permission_mode"
-                            ? props.launchpad.acpRuntime?.currentModeId
-                            : undefined,
-                    },
+                  handleLaunchpadPatch(
+                    launchpadPatchForProviderAccessOption({
+                      option,
+                      currentAcpRuntime: props.launchpad.acpRuntime,
+                    }),
+                  );
+                  return;
+                }
+                if (providerAccessControl.kind === "acp" && option.kind === "acp" && option.acpOption.source !== "model") {
+                  void props.onSetAcpRuntimeOption?.({
+                    source: option.acpOption.source,
+                    optionId: option.acpOption.optionId,
+                    value: option.acpOption.value,
                   });
                   return;
                 }
-                void props.onSetAcpRuntimeOption?.({
-                  source: acpRuntimeModeControl.source,
-                  optionId: acpRuntimeModeControl.optionId,
-                  value,
-                });
+                pendingAccessOptionRef.current = option;
+                applyExecutionModeSelection(option.executionMode);
               }}
             />
           ) : null}
@@ -17493,6 +17671,21 @@ function useComposerController(props: ComposerProps) {
 }
 
 /** Render after the controller returns, keeping it out of JSX stack captures. */
+function formatQueuedPermissionLabel(
+  thread: NavigationThreadSummary | undefined,
+  backend: BackendSummary | undefined,
+): string | undefined {
+  const queued = thread?.queuedExecutionMode;
+  if (!queued) return undefined;
+  if (thread.queuedNativeMode !== undefined) {
+    return formatAntigravityAccessStateLabel(
+      normalizeAntigravityAccessTarget({ executionMode: queued, nativeMode: thread.queuedNativeMode }),
+      backend?.acp?.runtime,
+    );
+  }
+  return queued !== thread.executionMode ? formatExecutionModeLabel(queued) : undefined;
+}
+
 function ComposerView({ render }: { render: () => ReactNode }) {
   return render();
 }

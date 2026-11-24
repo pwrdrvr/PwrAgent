@@ -20,6 +20,14 @@ import { lazyModule } from "../lazy-module.js";
 import { loadedMcpTypes, mcpServer as mcpServerSdk, mcpServerStreamableHttp, mcpTypes } from "../mcp-connections/mcp-sdk.js";
 import type { ResolvedAgentToolCatalog } from "./agent-tool-catalog-registry.js";
 import { agentToolFailure } from "./agent-tool-definition.js";
+import {
+  ANTIGRAVITY_DIRECT_MCP_TOOLS,
+  ANTIGRAVITY_MCP_CONNECTION_INSTRUCTIONS,
+  ANTIGRAVITY_TOOL_DISCOVERY,
+  ANTIGRAVITY_TOOL_DISCOVERY_INSTRUCTIONS,
+  CALL_PWRAGENT_TOOL,
+  readPwrAgentCallTarget,
+} from "./antigravity-mcp-catalog.js";
 import { agentToolPermissionDeniedMessage } from "./app-management-authorization.js";
 import {
   PWRAGENT_AGENT_TOOL_NAMESPACE_DESCRIPTION,
@@ -31,6 +39,7 @@ import {
   PWRAGENT_SKILLS_EXTENSION,
   PWRAGENT_WORKFLOW_SKILLS,
 } from "./pwragent-workflow-skills.js";
+import { PWRAGENT_TOOL_SEARCH, searchPwrAgentMcpTools } from "./pwragent-tool-search.js";
 
 // The SDK's built-in request union does not yet include the skills extension.
 // The SDK loads with the first request, not with the owner.
@@ -132,8 +141,8 @@ export type AgentToolMcpRegistration = {
   server: AgentToolHttpMcpServerConfig;
   bindThread: (threadId: string) => void;
   readListedJobMonitorCreation?: () => boolean | undefined;
-  /** The tool as this client's `tools/list` describes it now, if listed. */
-  readTool?: (name: string) => Promise<AgentMcpTool | undefined>;
+  /** The live tool description. Use catalog scope for a deferred invocation's target. */
+  readTool?: (name: string, scope?: "listed" | "catalog") => Promise<AgentMcpTool | undefined>;
 };
 
 type JobMonitorCatalogListing = { scope: string; enabled?: boolean };
@@ -234,9 +243,15 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       ...(listing ? {
         readListedJobMonitorCreation: () => this.jobMonitorListings.get(token) === listing ? listing.enabled : undefined,
       } : {}),
-      readTool: async (name) => {
+      readTool: async (name, scope = "listed") => {
         const current = this.contextsByToken.get(token);
-        return current ? await this.resolveMcpTool(current, name) : undefined;
+        if (!current) return undefined;
+        if (scope === "listed" && usesAntigravityCatalog(current) && !ANTIGRAVITY_DIRECT_MCP_TOOLS.has(name)) {
+          const wrapper = ANTIGRAVITY_TOOL_DISCOVERY.find((tool) => tool.name === name);
+          if (wrapper) return await this.isToolAdvertised(name, current) ? wrapper : undefined;
+          if (canDeferAntigravityTools(await this.resolveAntigravityDiscoveryTools(current))) return undefined;
+        }
+        return await this.resolveMcpTool(current, name);
       },
       bindThread: (threadId) => {
         const normalizedThreadId = threadId.trim();
@@ -440,7 +455,11 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     });
     const toolCalls: Promise<unknown>[] = [];
     const clientGone = new AbortController();
+    const disconnectSignal = AbortSignal.any([clientGone.signal, params.request.signal]);
     const toolNames = (await this.resolveMcpTools(params.clientContext)).map((tool) => tool.name);
+    const isAntigravity = usesAntigravityCatalog(params.clientContext);
+    const discoveryTools = isAntigravity ? await this.resolveAntigravityDiscoveryTools(params.clientContext) : [];
+    const deferTools = canDeferAntigravityTools(discoveryTools);
     const hasToolGuide = toolNames.includes("read_tool_guide");
     // The PDF-only MCP surface shares this server but has no workflow tools.
     const skills = hasToolGuide ? PWRAGENT_WORKFLOW_SKILLS : [];
@@ -455,7 +474,11 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
           resources: {},
           extensions: { [PWRAGENT_SKILLS_EXTENSION]: {} },
         },
-        instructions: buildPwrAgentMcpInstructions(toolNames),
+        instructions: buildPwrAgentMcpInstructions(toolNames)
+          + (deferTools
+            ? ` ${ANTIGRAVITY_TOOL_DISCOVERY_INSTRUCTIONS}` : "")
+          + (isAntigravity && toolNames.includes("search_mcp_tools") && toolNames.includes("call_mcp_tool")
+            ? ` ${ANTIGRAVITY_MCP_CONNECTION_INSTRUCTIONS}` : ""),
       },
     );
     mcpServer.setRequestHandler(ListSkillsRequestSchema, async (request) => {
@@ -493,7 +516,11 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       return { contents: [content] };
     });
     mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
-      const tools = await this.resolveMcpTools(params.clientContext);
+      const catalog = await this.resolveMcpTools(params.clientContext);
+      // Only defer tools if the agent may invoke them through the dispatcher.
+      const tools = deferTools
+        ? [...catalog.filter(({ name }) => ANTIGRAVITY_DIRECT_MCP_TOOLS.has(name)), ...discoveryTools]
+        : [...catalog, ...discoveryTools];
       if (observedListing && sessionNonce) {
         observedListing.enabled = tools.some(({ name }) => name === "create_monitor_delegation");
       }
@@ -534,7 +561,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
               message = line;
               if (Date.now() - lastSentAt >= AGENT_TOOL_MCP_REPORTED_PROGRESS_MIN_GAP_MS) sendProgress();
             };
-        const call = this.callTool(request, extra, sessionNonce, params.responseFlushed, reportProgress);
+        const call = this.callTool(request, extra, disconnectSignal, sessionNonce, params.responseFlushed, reportProgress);
         toolCalls.push(call.catch(() => undefined));
         try {
           return await call;
@@ -578,6 +605,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
   private async callTool(
     request: CallToolRequest,
     extra: CallToolExtra,
+    disconnectSignal: AbortSignal,
     sessionNonce: string | undefined,
     responseFlushed?: Promise<void>,
     reportProgress?: (message: string) => void,
@@ -608,38 +636,39 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     if (clientContext.memoryOnly && request.params.name !== "agent_memory") {
       return forbiddenMcpResponse("This client may call Agent memory only.");
     }
+    let { name, arguments: args } = request.params;
+    if (usesAntigravityCatalog(clientContext) && (name === PWRAGENT_TOOL_SEARCH || name === CALL_PWRAGENT_TOOL)) {
+      const denial = await this.toolPermissionDenial(callContext, name, args);
+      if (denial) return denial;
+      if (!await this.isToolAdvertised(name, clientContext)) {
+        return forbiddenMcpResponse("This client may not call the requested PwrAgent discovery tool.");
+      }
+      if (name === PWRAGENT_TOOL_SEARCH) {
+        const catalog = await this.resolveMcpTools(clientContext);
+        return toMcpToolResponse(searchPwrAgentMcpTools(catalog, args ?? {}));
+      }
+      if (name === CALL_PWRAGENT_TOOL) {
+        const target = readPwrAgentCallTarget(args);
+        if (!target) {
+          return invalidMcpArguments("Provide a toolName and an arguments object.");
+        }
+        if (!await this.resolveMcpTool(clientContext, target.name)) return unsupportedMcpTool();
+        ({ name, args } = target);
+      }
+    }
     const catalog = this.options
       .resolveCatalogs(clientContext)
       .find((candidate) =>
         candidate.router.acceptsMcpToolCall({
-          tool: request.params.name,
+          tool: name,
         }),
       );
     if (!catalog) {
-      return toMcpToolResponse(
-        agentToolFailure({
-          code: "unsupported_operation",
-          message: "Unsupported PwrAgent MCP tool.",
-        }),
-      );
+      return unsupportedMcpTool();
     }
-    const deniedPermission = await this.options.authorizeToolCall?.({
-      backend: callContext.backend,
-      catalogId: catalog.id,
-      threadId: callContext.threadId,
-      tool: request.params.name,
-      turnId: callContext.turnId,
-      arguments: request.params.arguments,
-    });
-    if (deniedPermission) {
-      return toMcpToolResponse(
-        agentToolFailure({
-          code: "forbidden",
-          message: agentToolPermissionDeniedMessage(request.params.name, deniedPermission),
-        }),
-      );
-    }
-    if (!sessionNonce && MCP_TOOLS_REQUIRING_SESSION.has(request.params.name)) {
+    const denial = await this.toolPermissionDenial(callContext, name, args, catalog.id);
+    if (denial) return denial;
+    if (!sessionNonce && MCP_TOOLS_REQUIRING_SESSION.has(name)) {
       return forbiddenMcpResponse(
         "This tool requires an MCP session to prevent duplicate mutations. Initialize the connection and send the returned Mcp-Session-Id header.",
       );
@@ -653,9 +682,11 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       callId: sessionNonce
         ? createHash("sha256").update(JSON.stringify([sessionNonce, callContext.turnId, extra.requestId])).digest("base64url")
         : randomUUID(),
-      tool: request.params.name,
-      args: request.params.arguments,
-      signal: extra.signal,
+      tool: name,
+      args,
+      signal: name === "resource_checkout_acquire"
+        ? AbortSignal.any([extra.signal, disconnectSignal])
+        : extra.signal,
       responseFlushed,
       ...(reportProgress ? { reportProgress } : {}),
     });
@@ -688,14 +719,36 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     return timingSafeEqual(Buffer.from(signature), Buffer.from(this.signSession(nonce, token))) ? nonce : undefined;
   }
 
-  /** One tool as `resolveMcpTools` would list it, without checking the others. */
+  private async toolPermissionDenial(
+    context: ResolvedAgentToolMcpCallContext,
+    name: string,
+    args: unknown,
+    catalogId?: AgentToolMcpAuthorization["catalogId"],
+  ): Promise<AgentMcpToolCallResponse | undefined> {
+    const denied = await this.options.authorizeToolCall?.({ ...context, catalogId, tool: name, arguments: args });
+    return denied ? forbiddenMcpResponse(agentToolPermissionDeniedMessage(name, denied)) : undefined;
+  }
+
+  private async isToolAdvertised(name: string, context: AgentToolMcpClientContext): Promise<boolean> {
+    return (await this.options.isToolAdvertised?.(name, context)) ?? true;
+  }
+
+  private async resolveAntigravityDiscoveryTools(context: AgentToolMcpClientContext): Promise<AgentMcpTool[]> {
+    const tools: AgentMcpTool[] = [];
+    for (const tool of ANTIGRAVITY_TOOL_DISCOVERY) {
+      if (await this.isToolAdvertised(tool.name, context)) tools.push(tool);
+    }
+    return tools;
+  }
+
+  /** One tool in the full allowed catalog, without checking the others. */
   private async resolveMcpTool(context: AgentToolMcpClientContext, name: string): Promise<AgentMcpTool | undefined> {
     if (context.memoryOnly && name !== "agent_memory") return undefined;
     const matches = this.options.resolveCatalogs(context)
       .flatMap((catalog) => catalog.router.buildMcpTools())
       .filter((tool) => tool.name === name);
     if (matches.length !== 1) return undefined;
-    if (this.options.isToolAdvertised && !await this.options.isToolAdvertised(name, context)) return undefined;
+    if (!await this.isToolAdvertised(name, context)) return undefined;
     return matches[0];
   }
 
@@ -704,7 +757,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     for (const catalog of this.options.resolveCatalogs(context)) {
       for (const tool of catalog.router.buildMcpTools()) {
         if (context.memoryOnly && tool.name !== "agent_memory") continue;
-        if (this.options.isToolAdvertised && !await this.options.isToolAdvertised(tool.name, context)) continue;
+        if (!await this.isToolAdvertised(tool.name, context)) continue;
         if (toolsByName.has(tool.name)) {
           throw new Error(`Duplicate PwrAgent MCP tool name: ${tool.name}`);
         }
@@ -842,6 +895,7 @@ function closeWhenDone(
         controller.enqueue(value);
       } catch (error) {
         controller.error(error);
+        onCancel();
         closeOnce();
       }
     },
@@ -868,6 +922,26 @@ function forbiddenMcpResponse(message: string): AgentMcpToolCallResponse {
       message,
     }),
   );
+}
+
+function invalidMcpArguments(message: string): AgentMcpToolCallResponse {
+  return toMcpToolResponse(agentToolFailure({ code: "invalid_arguments", message }));
+}
+
+function unsupportedMcpTool(): AgentMcpToolCallResponse {
+  return toMcpToolResponse(agentToolFailure({
+    code: "unsupported_operation",
+    message: "Unsupported PwrAgent MCP tool.",
+  }));
+}
+
+function usesAntigravityCatalog(context: AgentToolMcpClientContext): boolean {
+  return context.backend === "acp:antigravity" && !context.memoryOnly;
+}
+
+function canDeferAntigravityTools(discoveryTools: readonly AgentMcpTool[]): boolean {
+  return discoveryTools.some(({ name }) => name === PWRAGENT_TOOL_SEARCH)
+    && discoveryTools.some(({ name }) => name === CALL_PWRAGENT_TOOL);
 }
 
 function boundThreadKey(

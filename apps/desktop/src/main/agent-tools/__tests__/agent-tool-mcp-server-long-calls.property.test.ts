@@ -24,10 +24,10 @@ function deferred(): Deferred {
   return { promise, resolve };
 }
 
-function buildCatalog(dispatch: (args: unknown, context: AgentToolCallContext) => unknown): ResolvedAgentToolCatalog {
+function buildCatalog(dispatch: (args: unknown, context: AgentToolCallContext) => unknown, name: string): ResolvedAgentToolCatalog {
   const router = new AgentToolRouter([{
     namespace: "pwragent",
-    name: "wait_for_operator",
+    name,
     annotations: { readOnlyHint: false },
     description: "Waits like a confirmation card.",
     inputSchema: { type: "object", additionalProperties: false },
@@ -41,7 +41,12 @@ function buildCatalog(dispatch: (args: unknown, context: AgentToolCallContext) =
   };
 }
 
-function callRequest(registration: AgentToolMcpRegistration, signal?: AbortSignal): Promise<Response> {
+function callRequest(
+  registration: AgentToolMcpRegistration,
+  signal?: AbortSignal,
+  name = "wait_for_operator",
+  args = {},
+): Promise<Response> {
   return fetch(registration.server.url, {
     method: "POST",
     headers: {
@@ -51,7 +56,7 @@ function callRequest(registration: AgentToolMcpRegistration, signal?: AbortSigna
     },
     body: JSON.stringify({
       jsonrpc: "2.0", id: 7, method: "tools/call",
-      params: { name: "wait_for_operator", arguments: {}, _meta: { progressToken: "call-7" } },
+      params: { name, arguments: args, _meta: { progressToken: "call-7" } },
     }),
     ...(signal ? { signal } : {}),
   });
@@ -86,8 +91,12 @@ describe("AgentToolMcpServer long tool calls", () => {
     await Promise.all(openServers.splice(0).map(async (server) => server.close()));
   });
 
-  async function setup(dispatch: (args: unknown, context: AgentToolCallContext) => unknown) {
-    const catalog = buildCatalog(dispatch);
+  async function setup(
+    dispatch: (args: unknown, context: AgentToolCallContext) => unknown,
+    name = "wait_for_operator",
+    backend: AgentToolCallContext["backend"] = "claude",
+  ) {
+    const catalog = buildCatalog(dispatch, name);
     const server = new AgentToolMcpServer({
       resolveCallContext: (context) => context.threadId
         ? { backend: context.backend, threadId: context.threadId, turnId: "turn-1" } : undefined,
@@ -95,7 +104,7 @@ describe("AgentToolMcpServer long tool calls", () => {
       progressIntervalMs: PROGRESS_INTERVAL_MS,
     });
     openServers.push(server);
-    const registration = await server.registerClient({ backend: "claude", threadId: "thread-1" });
+    const registration = await server.registerClient({ backend, threadId: "thread-1" });
     return { registration };
   }
 
@@ -165,6 +174,29 @@ describe("AgentToolMcpServer long tool calls", () => {
     expect(progressSent()).toBe(afterDisconnect);
     release.resolve();
     await expect.poll(() => abortedBeforeFinishing).toBe(false);
+  });
+
+  it.each(["abort request", "cancel response", "wrapped tool"])("cancels a checkout when the MCP client disconnects (%s)", async (disconnect) => {
+    const tool = "resource_checkout_acquire";
+    const finish = deferred();
+    const admitted = Promise.withResolvers<AbortSignal | undefined>();
+    const { registration } = await setup(async (_args, context) => {
+      admitted.resolve(context.signal);
+      await finish.promise;
+      return agentToolSuccess({});
+    }, tool, disconnect === "wrapped tool" ? "acp:antigravity" : "claude");
+    try {
+      const client = new AbortController();
+      const response = disconnect === "wrapped tool"
+        ? await callRequest(registration, client.signal, "call_pwragent_tool", { toolName: tool, arguments: {} })
+        : await callRequest(registration, client.signal, tool);
+      const signal = await admitted.promise;
+      if (disconnect === "cancel response") await response.body?.cancel();
+      else client.abort();
+      await expect.poll(() => signal?.aborted).toBe(true);
+    } finally {
+      finish.resolve();
+    }
   });
 
   // MCP requires each progress value to exceed the last. A tool's own lines

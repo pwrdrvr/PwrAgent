@@ -472,7 +472,7 @@ export function createPreviewResourceCheckoutsSource(options: {
     switch (request.kind) {
       case "request": {
         // The same rule that labels the button Request checkout or Join queue.
-        if (!requestWouldWait(resource, resource.condition)) {
+        if (!resource.queue.length && !requestWouldWait(resource, resource.condition)) {
           generation += 1;
           const allocationId = `alloc-${generation}`;
           update(resource.resourceId, (current) => ({

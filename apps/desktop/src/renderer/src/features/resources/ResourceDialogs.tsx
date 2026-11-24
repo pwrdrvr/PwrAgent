@@ -173,15 +173,13 @@ export function RequestCheckoutDialog(props: {
   const units = slotMode === "all" ? counted!.capacity : Number(unitCount);
   const validUnits = !counted || (Number.isSafeInteger(units) && units > 0 && units <= counted.capacity);
   const holder = resource.allocations[0];
-  const waits = props.action.waits === true || resource.queue.length > 0
+  const waits = props.action.waits === true
     || (!!counted && units > counted.capacity - counted.inUse);
   const actionLabel = waits ? "Join queue" : "Request checkout";
   return (
     <ResourceDialog
       busy={busy}
-      lede={waits
-        ? "You'll be added to the end of the queue and woken when it's your turn."
-        : "The authority grants it now if capacity is still free, or queues you."}
+      lede="The authority grants the request if capacity and scheduling allow. Otherwise it joins the queue."
       problem={problem}
       title={`${actionLabel}: ${resource.displayName}`}
       titleId="resources-request-title"
@@ -251,9 +249,9 @@ export function RequestCheckoutDialog(props: {
         />
       </div>
       <PolicySummary resource={resource} />
-      {waits ? (
+      {waits || resource.queue.length > 0 ? (
         <p className="resources-note">
-          {resource.queue.length} ahead of you.
+          {resource.queue.length} currently waiting.
           {holder ? ` Current holder: ${holderLabel(holder.holder)}, ${formatDeadline(holder.deadlineAt, props.now)}.` : ""}
         </p>
       ) : null}

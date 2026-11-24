@@ -10,6 +10,7 @@ import { researchToolsOffered } from "./agent-tools/pwragent-research-agent-tool
 import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
 import { initializeDesktopAutomationService, prepareDesktopAutomationShutdown, disposeDesktopAutomationService } from "./automations/desktop-automation-service";
 import { initializeScheduledThreadActionService } from "./scheduled-actions/scheduled-thread-action-service";
+import { getThreadTodoService } from "./thread-todos/thread-todo-runtime";
 import { setManagedGrokSignatureRejectionReporter } from "./acp/grok-managed-runtime";
 import { subscribeManagedRuntimeProgress } from "./managed-runtime-progress";
 import { setInboundPreviewSink } from "./messaging/inbound-preview-bus";
@@ -35,6 +36,7 @@ import { initializeDesktopConfigStore } from "./settings/config-store/desktop-co
 import { initializeDesktopSettingsService } from "./settings/desktop-settings-singleton";
 import { initializeDesktopBackendRegistry } from "./app-server/backend-registry";
 import { getDesktopAppServerService, initializeDesktopAppServerService, startAppServerOwnerNavigation } from "./app-server/desktop-app-server-service";
+import { setGithubThreadMergeObserver } from "./pr-status/github-pr-fetcher";
 import { initializeDesktopFederationRuntime } from "./federation/federation-runtime";
 import { initializeDesktopMessagingRuntime } from "./messaging/messaging-runtime";
 import { reconcileAppUpdateRestart, subscribeAgentUpdateNotices } from "./messaging/agent-update-notices";
@@ -441,7 +443,9 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
   ownerSubscriptions.add(installGithubMergeStackTransport({
     requestGithub: (...args) => service.getForgeCiClient().requestGithub(...args),
   }));
-  const scheduledActions = initializeScheduledThreadActionService(registry);
+  const scheduledActions = initializeScheduledThreadActionService(registry, (todo) =>
+    getThreadTodoService().resolveStartedReview(todo),
+  );
   const automations = initializeDesktopAutomationService(registry);
   if (bootMode === "active-profile") {
     registry.onEvent(async (event) => {
@@ -459,6 +463,7 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
       ({ backend, threadId }) => getExistingDesktopBackendRegistry()?.getThreadInfo({ backend, threadId })?.title,
     )
     : undefined;
+  const resourceCheckoutsEnabled = () => getDesktopSettingsService().resolveResourceCheckoutsEnabled?.() === true;
   if (resourceCheckouts) registry.setResourceCheckoutHandler(
     createResourceCheckoutToolHandler(
       resourceCheckouts,
@@ -468,6 +473,8 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
       }, prompt, bind),
     ),
     (entry, id) => service.prepareResourceCheckoutWakeup(entry, id),
+    resourceCheckoutsEnabled,
+    (backend, threadId) => resourceCheckouts.hasAgentCheckoutToCleanUp(backend, threadId),
   );
   getDesktopBackendRegistry().setPwrAgentAppManagementHandler(
     createPwrAgentAppManagementHandler({
@@ -953,6 +960,7 @@ export async function disposeAppServerOwnerServices(): Promise<void> {
   registry?.setThreadPullRequestDetachHandler(undefined);
   registry?.setThreadPrWatchesPeerHandler(undefined);
   registry?.setThreadPullRequestRefreshHandler(undefined);
+  setGithubThreadMergeObserver(undefined);
   registry?.setProjectForgeAutomationHandler(undefined);
   try {
     await appServerService?.close();
@@ -1143,6 +1151,7 @@ export function wireAppServerOwnerServices(): void {
     async (request) =>
       await appServerService.refreshOwnedThreadPullRequests(request),
   );
+  setGithubThreadMergeObserver((...args) => appServerService.runObservedThreadPullRequestMerge(...args));
   getDesktopBackendRegistry().setProjectForgeAutomationHandler({
     set: async (request) => await appServerService.setProjectForgeAutomation({
       directoryKey: request.directoryKey,

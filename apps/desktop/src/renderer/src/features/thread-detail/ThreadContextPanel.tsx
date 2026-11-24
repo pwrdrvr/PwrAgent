@@ -57,6 +57,7 @@ import { resolveThreadWorkingStatePath } from "../../lib/thread-working-state-pa
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { ThreadAutomationsPanel } from "../automations/ThreadAutomationsPanel";
 import { ThreadTodosPanel } from "../thread-todos/ThreadTodosPanel";
+import type { ThreadTodoReviewSetup } from "../thread-todos/ThreadTodoCard";
 import { ResearchPanel } from "../research/ResearchPanel";
 import type { ThreadTodoRevealRequest } from "../thread-todos/thread-todo-reveal";
 import type {
@@ -150,6 +151,7 @@ type ThreadContextPanelProps = {
     projectKey?: string;
     projectOwner?: FederationRemoteTarget;
     onStartReview: (todo: ThreadTodo, options?: ThreadTodoResolveOptions) => void;
+    reviewSetup?: ThreadTodoReviewSetup;
     onDoHere?: (todo: ThreadTodo, options?: ThreadTodoDoHereOptions) => void;
     /** Answers a question in this thread through its composer. */
     onAnswerQuestion?: (text: string) => Promise<boolean>;
@@ -933,6 +935,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             projectKey={props.todos.projectKey}
             projectOwner={props.todos.projectOwner}
             onStartReview={props.todos.onStartReview}
+            reviewSetup={props.todos.reviewSetup}
             onDoHere={props.todos.onDoHere}
             onAnswerQuestion={props.todos.onAnswerQuestion}
             sentQuestionAnswers={props.todos.sentQuestionAnswers}

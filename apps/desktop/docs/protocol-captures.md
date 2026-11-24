@@ -149,13 +149,45 @@ same ID to the other process. Full Access replayed both original user and
 assistant turns. Default then replayed all five turns and all three tool
 calls after the return trip. Both ACP front processes stayed up.
 
-PwrAgent's Access mode chooses the process. Antigravity's Agent mode keeps
-its own selection across a move, including Plan. Plan still instructs
-Antigravity to plan. Full Access auto-approves the tools the agent does run,
-including any tools available in Plan.
+PwrAgent exposes one unified Access mode selector for Antigravity: Default
+Access, its non-default native modes (Accept Edits, Auto, Plan) on the Default
+process, and Full Access on the `--dangerously-skip-permissions` process.
+Moving to Full Access resets the native mode to Default so a Full Access thread
+is never silently left in Plan, and moving from Full Access to a native mode
+closes the Full Access session, loads on the Default process, and confirms the
+selected native mode atomically.
 
 Raw captures are under the ignored
 `apps/desktop/.local/protocol-captures/antigravity-full-access/`.
+
+### Antigravity primary workspace on reload
+
+The November 24, 2026 macOS probe used Antigravity 1.5.16 with
+`acp --process-per-session` and two disposable directories. After one
+message in the source, `session/load` accepted the destination `cwd` and
+replayed the same session history. A bare `pwd -P` returned the source,
+including after `session/close` and a front-process restart, in both
+Default and Full Access. `session/resume` also kept the source.
+`session/list` reported the source as the primary `cwd` even with a
+destination filter. Removing the source directory still allowed
+`session/load` to replay history. Relative commands then failed because
+the original directory was gone. The runtime returned method not found
+for `session/fork`. ACP treated `/fork` as a regular message, and
+`agy --print` rejected it as interactive-only.
+
+In both access modes, a fresh `session/new` at the destination ran bare
+`pwd -P` there. The same prompt recalled a marker from the source
+conversation supplied as an embedded ACP resource. On destination
+reload, Antigravity replayed the resource separately from the user text.
+
+PwrAgent retains the old transcript in its ACP rollout, binds the same
+thread to the destination provider session, and sends recent source
+messages as context on the first destination turn. The provider keeps
+the original conversation, including its native tool state, in its
+source session.
+
+Raw captures are under the ignored
+`apps/desktop/.local/protocol-captures/antigravity-workspace.*/`.
 
 ### Antigravity MCP permission requests in Default
 
@@ -196,10 +228,11 @@ Raw captures are under the ignored
 
 ### Antigravity ACP turn steering
 
-The November 23, 2026 macOS capture of Antigravity CLI `1.5.15` (`agy acp --process-per-session`) verified how Antigravity steers an active turn over ACP:
+The November 23–24, 2026 macOS captures of Antigravity CLI `1.5.15` (`agy acp --process-per-session`) verified how Antigravity steers an active turn over ACP:
 
-- `initialize` does not advertise a custom steering extension or capability flag; Antigravity steers natively through a concurrent `session/prompt` request on the active session.
-- Sending a second `session/prompt` while the first prompt is actively streaming immediately settles the first `session/prompt` with `{ "stopReason": "end_turn" }` (with no `usage` payload, observed in 2–5 ms) and transfers ownership of the running turn to the second `session/prompt`.
+- `initialize` does not advertise a custom steering extension or capability flag; Antigravity `1.5.0+` steers natively through a concurrent `session/prompt` request on the active session (older `1.4.x` releases queue concurrent prompts instead, so PwrAgent gates Antigravity steering on `>= 1.5.0`).
+- Sending a second `session/prompt` while the first prompt is actively streaming immediately settles the first `session/prompt` with `{ "stopReason": "end_turn" }` (observed in 2–5 ms) and transfers ownership of the running turn to the second `session/prompt`.
+- When steering arrives before any model call in the first prompt has completed, the detached `session/prompt` omits `usage`. Once at least one model call has completed (for example after a tool round), the detached `session/prompt` includes the pre-steer segment's `usage` (November 24, 2026 capture under ignored `apps/desktop/.local/protocol-captures/antigravity-steering-tool-round/`: detached first prompt returned `{ "stopReason": "end_turn", "usage": { "inputTokens": 16937, "outputTokens": 208, "cachedReadTokens": 12614, "cachedWriteTokens": 0, "thoughtTokens": 116, "totalTokens": 29759 } }` 2 ms after the concurrent prompt, and the replacement prompt returned only the post-steer segment's usage `{ "inputTokens": 2443, "outputTokens": 41, "cachedReadTokens": 12831, "cachedWriteTokens": 0, "thoughtTokens": 38, "totalTokens": 15315 }`). Natural completion can also return `end_turn` with usage. PwrAgent confirms the handoff once the replacement produces live turn output or returns successfully, then sums usage across the prompt segments.
 - Subsequent `session/update` chunks stream under the same turn until the second `session/prompt` resolves with `{ "stopReason": "end_turn", "usage": ... }`. A third overlapping `session/prompt` repeats the handoff by settling the second prompt immediately; `session/cancel` settles the latest in-flight prompt with `{ "stopReason": "cancelled", "usage": ... }`.
 - Antigravity does not emit a live `user_message_chunk` for the steered prompt during the active turn, but `session/load` replays both prompts as `user_message_chunk` notifications separated by the assistant output.
 - Sending a concurrent `session/prompt` while the active prompt is blocked on `session/request_permission` immediately rejects the second request with JSON-RPC `-32603` (`the running prompt is waiting for a permission or question answer; answer it or send session/cancel, then send this prompt again`) while leaving the first prompt running.

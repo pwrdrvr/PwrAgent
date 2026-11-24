@@ -999,6 +999,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
               openAIDecisionsHandler: ports.openAIDecisionsHandler,
               researchHandler: ports.mcpResearchHandler,
               checkoutHandler: ports.checkoutHandler,
+              checkoutMode: ports.resourceCheckoutToolMode(context),
             }, { taskMonitorRole: "all" }),
           authorizeToolCall: (params) =>
             ports.authorizeAgentToolMcpCall(params),
@@ -1087,6 +1088,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     agentToolMcpServer,
     readJobMonitorCreationPreference: (backend, threadId) => ports.isJobMonitorCreationEnabled({ backend, threadId }),
     captureStores: captureStores,
+    managedMcpGatewayAvailable: mcpGatewayTools !== undefined,
     createAcpClient: options?.createAcpClient,
     createAcpTransport: options?.createAcpTransport,
     discoverLocalAcpAgents:
@@ -1344,9 +1346,11 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     prepareSteer: async (entry) => {
       const active = ports.getActiveTurnForThread(entry);
       if (!active) return undefined;
-      const backend = (await ports.listBackends({ includeUnavailable: true })).backends
-        .find((candidate) => candidate.kind === entry.backend);
-      if (!backend?.capabilities.steerTurn) return undefined;
+      const supportsSteering = entry.backend === "acp:antigravity"
+        ? acpBackend.supportsActiveAntigravitySteering(entry.threadId)
+        : (await ports.listBackends({ includeUnavailable: true })).backends
+          .find((candidate) => candidate.kind === entry.backend)?.capabilities.steerTurn;
+      if (!supportsSteering) return undefined;
       // Review ownership can change while backend discovery is pending.
       if (ports.findReviewForParentTurn({
         backend: entry.backend,

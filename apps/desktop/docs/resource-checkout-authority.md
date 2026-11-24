@@ -1,8 +1,15 @@
 # Resource checkout authority
 
 [Resources](resource-checkouts-ui.md) uses the same owner service as the
-`pwragent` agent tools. The owner derives a local operator from its main
-window and an agent from its authenticated thread. Request keys are scoped
+`pwragent` agent tools. Agent discovery and invocation of the
+`resource_checkout_*` tools are gated behind **Settings → Experimental →
+Federation resources** (`[experimental] resource_checkouts_enabled = true`,
+disabled by default). With the setting off, threads with outstanding checkouts
+retain tools to read their receipts, release their holds, and cancel their
+queued requests. The same cleanup calls work from a previously loaded catalog.
+With the setting on, Codex loads the checkout tools eagerly when Codex Tool
+Discovery is off. The owner derives a local operator from its main window and
+an agent from its authenticated thread. Request keys are scoped
 to the actor. The profile mints a Federation instance ID once if it has
 none, giving operator and agent receipts a stable owner across restarts.
 A retry returns the recorded result. Status combines that
@@ -33,7 +40,10 @@ abort. When a large request at the head of the queue waits for slots to clear,
 the authority uses EASY backfilling: later requests that fit in the free slots
 without delaying the head's guaranteed shadow start time (either finishing
 before the head can start or fitting in spare slots at that time) start right
-away, while requests that could delay the head wait in FIFO order. Thread
+away, while requests that could delay the head wait in FIFO order. Backfilled
+holds are advisory and cannot start managed jobs. Managed holds release
+capacity only after verified cleanup, so the scheduler does not count their
+deadlines as capacity returning. Thread
 holders and waiters display their resolved thread titles in Resources.
 
 Codex environment setup, detached environment actions, and local automation

@@ -91,7 +91,7 @@ function wake(record: CheckoutDomainRecord, now: number): void {
   // within spare slots at `shadowTime`). Renewals are refused while any waiter
   // is queued, so backfilled grants cannot extend past `shadowTime`.
   if (!definition.counted || queue.length <= 1 || available <= 0) return;
-  const reservation = headReservationWindow(grants, available, queue[0].units);
+  const reservation = headReservationWindow(grants.filter((grant) => !grant.job), available, queue[0].units);
   if (!reservation) return;
   const { shadowTime } = reservation;
   let extraAtShadow = reservation.extraAtShadow;
@@ -106,7 +106,7 @@ function wake(record: CheckoutDomainRecord, now: number): void {
       if (!finishesBeforeHead) extraAtShadow -= candidate.units;
       grants.push({
         ...candidate, generation: ++record.generation, grantedAt: now, renewals: 0,
-        deadlineAt: now + candidate.durationMs, state: "granted",
+        deadlineAt: now + candidate.durationMs, state: "granted", backfilled: true,
       });
     } else {
       index++;
@@ -370,7 +370,8 @@ export class ResourceCheckoutAuthority {
       if (!record || record.definition.publication !== "published") return undefined;
       const now = this.now();
       const changed = reconcile(record, now);
-      const candidates = record.grants.filter((entry) => executionOwner(entry).key === actor.key && entry.state === "granted" && !entry.job);
+      const candidates = record.grants.filter((entry) => executionOwner(entry).key === actor.key
+        && entry.state === "granted" && !entry.job && !entry.backfilled);
       if (candidates.length > 1) {
         throw new Error("Multiple idle machine reservations belong to this thread. Release the extra reservations before launching a managed job.");
       }
@@ -451,7 +452,7 @@ export class ResourceCheckoutAuthority {
   /** Persist ownership before the adapter can launch any effect. */
   bindJob(actor: CheckoutActor, token: CheckoutToken, job: NonNullable<CheckoutGrant["job"]>): boolean {
     return this.changeJob(token, (record, grant) => {
-      if (executionOwner(grant).key !== actor.key || grant.state !== "granted" || grant.job
+      if (executionOwner(grant).key !== actor.key || grant.state !== "granted" || grant.job || grant.backfilled
         || (job.provider && job.provider.deadlineAt !== grant.deadlineAt)) return false;
       grant.job = job;
       grant.state = "preparing";

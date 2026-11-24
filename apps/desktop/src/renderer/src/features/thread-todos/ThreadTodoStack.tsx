@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import type { ThreadTodo, ThreadTodoCiApproval, ThreadTodoResolution } from "@pwragent/shared/contracts/thread-todos";
 import { threadTodoItemProgress, threadTodoStartActionForRun } from "@pwragent/shared/contracts/thread-todos";
 import { TodoIcon } from "../../icons";
-import { ThreadTodoCard } from "./ThreadTodoCard";
+import { ThreadTodoCard, type ThreadTodoReviewSetup } from "./ThreadTodoCard";
 import { consumeThreadTodoReveal, type ThreadTodoRevealRequest } from "./thread-todo-reveal";
 import {
   dismissThreadTodoLaunch,
@@ -62,6 +62,7 @@ export type ThreadTodoStackProps = {
   view: ThreadTodosView;
   threadRunning?: boolean;
   onStartReview: (todo: ThreadTodo, options?: ThreadTodoResolveOptions) => void;
+  reviewSetup?: ThreadTodoReviewSetup;
   /**
    * Sends a handoff's prompt, or the given one, to this thread as a reply.
    * Resolves false when the composer would not take it.
@@ -410,6 +411,7 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
               onRun={run}
               {...(reviewCiDeployment ? { onReviewCiDeployment: reviewCiDeployment } : {})}
               onStartReview={props.onStartReview}
+              reviewSetup={props.reviewSetup}
               onShowReview={view.openReview}
               onDoHere={doHere}
               onSetItemChecked={(target, item, checked) => {

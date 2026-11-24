@@ -11,7 +11,6 @@ import type {
   ThreadIncomingWorkSummary,
   AppServerBackendKind,
   AppServerThreadMessageOrigin,
-  ThreadExecutionMode,
   ThreadIdentifier,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type { AutomationRunOutputDecision } from "@pwragent/shared/contracts/automations";
@@ -27,7 +26,7 @@ import { type MessagingArtifact } from "./messaging-artifact-renderer.js";
 import { type MessagingNavigationContext, type MessagingThreadContext } from "./messaging-thread-state.js";
 import { MessagingToolUpdatePolicy, type MessagingToolUpdatePolicyDelivery } from "./messaging-tool-update-policy.js";
 import { type MessagingQueuedTurnEntry } from "./messaging-queue-recoveries";
-import type { MessagingTaskMonitorLifecycle, turnQueueUpdateForBackendEvent, AssistantStreamDelta, MessagingDeliveryGuard, MessagingCancellationSignal, AssistantMessageDeliveryIdentity, ActiveAgentMessagingOrigin, MessagingControllerLogger } from "./messaging-backend-event-helpers";
+import type { MessagingTaskMonitorLifecycle, readExecutionModeQueuedParams, turnQueueUpdateForBackendEvent, AssistantStreamDelta, MessagingDeliveryGuard, MessagingCancellationSignal, AssistantMessageDeliveryIdentity, ActiveAgentMessagingOrigin, MessagingControllerLogger } from "./messaging-backend-event-helpers";
 
 export interface MessagingBackendEventHost {
   readonly refreshStatusSurfacesForBackend: (backend: AppServerBackendKind, reason: string, federationTarget?: FederationTarget) => Promise<void>;
@@ -39,7 +38,7 @@ export interface MessagingBackendEventHost {
   readonly reconcileQueuedAgentMessagingOrigin: (params: { backend: AppServerBackendKind; threadId: ThreadIdentifier; update: NonNullable<ReturnType<typeof turnQueueUpdateForBackendEvent>>; }) => Promise<void>;
   readonly rememberContextUsageSummary: (event: AgentEvent) => void;
   readonly handleBackendRequestResolved: (event: AgentEvent) => Promise<void>;
-  readonly handleExecutionModeQueued: (backend: AppServerBackendKind, params: { threadId: ThreadIdentifier; queuedExecutionMode: ThreadExecutionMode; queuedAt: number; }) => Promise<void>;
+  readonly handleExecutionModeQueued: (backend: AppServerBackendKind, params: NonNullable<ReturnType<typeof readExecutionModeQueuedParams>>) => Promise<void>;
   readonly refreshStatusSurfacesForThread: (backend: AppServerBackendKind, threadId: ThreadIdentifier, reason: string, federationTarget?: FederationTarget) => Promise<void>;
   readonly handleExecutionModeQueueCleared: (backend: AppServerBackendKind, params: { threadId: ThreadIdentifier; reason: "applied" | "cancelled"; }) => Promise<void>;
   readonly bindingsForAgentTurn: (backend: AppServerBackendKind, threadId: ThreadIdentifier, turnId: string | undefined, persistentBindings: MessagingBindingRecord[]) => MessagingBindingRecord[];

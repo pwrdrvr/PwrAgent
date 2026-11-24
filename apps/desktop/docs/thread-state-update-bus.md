@@ -49,18 +49,18 @@ notifications beyond `thread/executionMode/updated`:
 
 - `thread/executionMode/queued` — fired when the registry queues a
   pending mode change instead of applying it immediately. Params:
-  `{ threadId, queuedExecutionMode, queuedAt }`. Renderer patches
-  `NavigationThreadSummary.queuedExecutionMode` and shows the queue
-  indicator in the composer; messaging posts an audit message in every
-  bound conversation with a Cancel button.
+  `{ threadId, queuedExecutionMode, queuedAt }`. Antigravity also supplies
+  `queuedNativeMode` and the transition labels. The event and navigation
+  snapshot carry the native target even when the execution mode stays the
+  same. The composer shows the target with a Cancel button. Messaging posts
+  an audit message with the same target and a Cancel button.
 - `thread/executionMode/queueCleared` — fired on either `cancelled`
   (user clicked Cancel) or `applied` (turn ended and the queue
   flushed). Params: `{ threadId, reason: "applied" | "cancelled" }`.
   Renderer clears the queue indicator; messaging edits the previously
   posted audit message in place (or falls back to a fresh message if
-  edit fails). On `applied`, this fires AFTER `thread/executionMode/updated`
-  — clients should see the apply before the queue-clear so the UI
-  transitions cleanly through "queued → applying → applied".
+  edit fails). On `applied`, this follows the execution-mode or ACP runtime
+  update so clients see the new applied state before the queue clears.
 
 When an Antigravity switch to Default Access cannot close the Full Access
 session at turn end, the next prompt retries the switch. PwrAgent refuses

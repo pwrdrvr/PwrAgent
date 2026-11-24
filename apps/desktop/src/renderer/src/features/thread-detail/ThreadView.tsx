@@ -43,7 +43,6 @@ import type {
   RecreateThreadWorktreeRequest,
   RecreateThreadWorktreeResponse,
   AppServerAvailableCommandSummary,
-  AppServerBackendKind,
   AppServerPendingRequestNotification,
   AppServerReviewTarget,
   AppServerThreadActivityEntry,
@@ -106,6 +105,7 @@ import {
   threadSummaryIdentityKey,
 } from "../../lib/federated-thread-events";
 import { ThreadTodoStack } from "../thread-todos/ThreadTodoStack";
+import type { ThreadTodoReviewSetup } from "../thread-todos/ThreadTodoCard";
 import type { ThreadTodoRevealRequest } from "../thread-todos/thread-todo-reveal";
 import type {
   ThreadTodoDoHereOptions,
@@ -1002,7 +1002,14 @@ export type ThreadViewProps = {
     requestId: string,
     updater: (state: PendingMcpInteractionState) => PendingMcpInteractionState
   ) => void;
-  onSetExecutionMode?: (executionMode: ThreadExecutionMode) => Promise<void>;
+  onSetExecutionMode?: (
+    executionMode: ThreadExecutionMode,
+    acpMode?: {
+      source: "configOption" | "mode";
+      optionId: string;
+      value: string;
+    },
+  ) => Promise<void>;
   onSetAcpRuntimeOption?: (params: {
     source: "configOption" | "mode";
     optionId: string;
@@ -2233,6 +2240,9 @@ export function ThreadView(props: ThreadViewProps) {
     handleAnswerAsyncQuestions,
     todoReviewRequest,
     startTodoReview,
+    todoReviewSetup,
+    handleReviewSetupTodoChange,
+    handleReviewRequestHandled,
     handleReviewStarted,
     doTodoHere,
     handleReplySubmissionSettled,
@@ -3162,6 +3172,8 @@ export function ThreadView(props: ThreadViewProps) {
           onDraftRestoreHandled: handleDraftRestoreHandled,
           onReplySubmissionSettled: handleReplySubmissionSettled,
           reviewRequest: todoReviewRequest,
+          onReviewRequestHandled: handleReviewRequestHandled,
+          onReviewSetupTodoChange: handleReviewSetupTodoChange,
           focusRequest: props.composerFocusRequest,
           onFocusRequestHandled: props.onComposerFocusRequestHandled,
           composerInsertRequest: props.composerInsertRequest,
@@ -3468,6 +3480,7 @@ export function ThreadView(props: ThreadViewProps) {
               view={threadTodos.view}
               threadRunning={Boolean(props.activeTurnId)}
               onStartReview={startTodoReview}
+              reviewSetup={todoReviewSetup}
               onDoHere={doTodoHere}
               findOpen={props.findOpen}
               revealRequest={props.threadTodoRevealRequest}
@@ -3700,6 +3713,7 @@ export function ThreadView(props: ThreadViewProps) {
             projectKey: threadTodos.projectKey,
             projectOwner: threadTodos.projectOwner,
             onStartReview: startTodoReview,
+            reviewSetup: todoReviewSetup,
             onDoHere: doTodoHere,
             // The card's own answer path: start, steer or queue.
             onAnswerQuestion: handleAnswerAsyncQuestions,
@@ -4859,12 +4873,7 @@ function useThreadQuestionReplies(
   });
   // A review card's Start review opens the composer's `/review` panel, and
   // the card resolves only once a review actually starts from it.
-  const [todoReviewRequest, setTodoReviewRequest] = useState<{
-    id: number;
-    threadId: string;
-    backend: AppServerBackendKind;
-    federationTarget?: FederationRemoteTarget;
-  }>();
+  const [todoReviewRequest, setTodoReviewRequest] = useState<ComposerProps["reviewRequest"]>();
   // The card's answer about open steps rides along, so the resolve once the
   // review starts sends the override only if the operator confirmed it.
   const pendingReviewTodos = useRef(new Map<number, { todo: ThreadTodo; options?: ThreadTodoResolveOptions }>());
@@ -4883,10 +4892,35 @@ function useThreadQuestionReplies(
       threadId: todo.threadId,
       backend: todo.backend,
       federationTarget: todo.federationTarget,
+      todo: { id: todo.id, ...options },
+      todoTitle: todo.title,
+      ...(todo.action?.type === "start_review" && todo.action.pullRequest
+        ? { pullRequest: todo.action.pullRequest }
+        : {}),
     });
+  });
+  // The card whose review the composer's panel is setting up. The card
+  // waits on the panel instead of offering a second Start review.
+  const [reviewSetupTodoId, setReviewSetupTodoId] = useState<string>();
+  const handleReviewSetupTodoChange = useEventCallback((todoId: string | undefined) => {
+    setReviewSetupTodoId(todoId);
+  });
+  // Show brings the panel back into view with the card's earlier answer
+  // about open steps, so it does not ask again.
+  const showTodoReviewSetup = useEventCallback((todo: ThreadTodo) => {
+    const pending = [...pendingReviewTodos.current.values()].find((entry) => entry.todo.id === todo.id);
+    startTodoReview(todo, pending?.options);
+  });
+  const todoReviewSetup = useMemo<ThreadTodoReviewSetup>(
+    () => ({ todoId: reviewSetupTodoId, onShow: showTodoReviewSetup }),
+    [reviewSetupTodoId, showTodoReviewSetup],
+  );
+  const handleReviewRequestHandled = useEventCallback((requestId: number) => {
+    setTodoReviewRequest((current) => (current?.id === requestId ? undefined : current));
   });
   const handleReviewStarted = useEventCallback((threadKey: string, requestId?: number) => {
     if (requestId === undefined) return;
+    setTodoReviewRequest((current) => (current?.id === requestId ? undefined : current));
     const pending = pendingReviewTodos.current.get(requestId);
     if (!pending || threadTodoThreadKey(pending.todo) !== threadKey) return;
     pendingReviewTodos.current.delete(requestId);
@@ -5002,6 +5036,9 @@ function useThreadQuestionReplies(
     handleAnswerAsyncQuestions,
     todoReviewRequest,
     startTodoReview,
+    todoReviewSetup,
+    handleReviewSetupTodoChange,
+    handleReviewRequestHandled,
     handleReviewStarted,
     doTodoHere,
     handleReplySubmissionSettled,

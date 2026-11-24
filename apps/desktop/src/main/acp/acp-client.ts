@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { realpath } from "node:fs/promises";
+import path from "node:path";
 import { normalizeAcpMcpServerConfigs, type AcpMcpServerConfig } from "@pwrdrvr/agent-acp/mcp-server-config";
 import {
   ACP_PERMISSION_MODE_OPTION_ID,
@@ -41,7 +43,10 @@ import {
   acpSessionRuntimeStateFromUpdate,
   normalizeAcpRuntimeCapabilities,
 } from "./acp-runtime-capabilities.js";
-import { isPwrAgentGrokBuildVersion } from "./acp-agent-capabilities.js";
+import {
+  isAntigravitySteerableVersion,
+  isPwrAgentGrokBuildVersion,
+} from "./acp-agent-capabilities.js";
 import {
   normalizeGrokBillingStatus,
   type AcpProviderStatus,
@@ -63,6 +68,7 @@ import {
 } from "./acp-rollout-store.js";
 import {
   foldAcpTurnUsage,
+  mergeAcpPromptResultUsage,
   readAcpPromptResultUsage,
   readAcpPromptResultUsageEnvelope,
   readAcpSelectedModel,
@@ -71,7 +77,14 @@ import {
   type AcpUsageEnvelope,
 } from "./acp-usage.js";
 import type { JsonRpcId } from "@pwrdrvr/agent-transport";
+import { ANTIGRAVITY_CALL_PWRAGENT_TOOL, readPwrAgentCallTarget } from "../agent-tools/antigravity-mcp-catalog.js";
 import { getMainLogger } from "../log.js";
+import {
+  ACP_WORKSPACE_HANDOFF_RECORD,
+  ACP_WORKSPACE_HISTORY_URI,
+  acpWorkspaceContinuationText,
+  acpWorkspaceHistory,
+} from "./acp-workspace-history.js";
 
 const acpClientLog = getMainLogger("pwragent:acp-client");
 
@@ -126,6 +139,8 @@ type AcpIdleClosedSession = {
 type AcpSessionLoadOptions = {
   suppressTranscriptReplay?: boolean;
   antigravityModeSelection?: string;
+  /** When false, tolerate sessions that do not advertise the mode option (e.g. resetting to default). */
+  antigravityModeExplicit?: boolean;
 };
 
 type AcpRuntimeOptionWrite = {
@@ -159,6 +174,7 @@ export type { AcpMcpServerConfig, AcpMcpServerWireConfig } from "@pwrdrvr/agent-
 
 export type AcpMcpServerRegistration = {
   servers: AcpMcpServerConfig[];
+  managedConnectionsViaGateway?: true;
   bindThread?: (threadId: string) => Promise<void> | void;
   readListedJobMonitorCreation?: () => boolean | undefined;
   /**
@@ -166,8 +182,11 @@ export type AcpMcpServerRegistration = {
    * can be answered without the operator: PwrAgent approves that call itself
    * or the tool only reads. A registration answers only for its own servers.
    */
-  hostApprovesToolCall?: (serverName: string, toolName: string) => Promise<boolean>;
+  hostApprovesToolCall?: (serverName: string, toolName: string, args?: unknown) => Promise<boolean>;
 };
+
+export type AcpMcpRegistrationSource =
+  AcpMcpServerRegistration | (() => Promise<AcpMcpServerRegistration | undefined>);
 
 export function mergeMcpServerRegistrations(
   ...registrations: Array<AcpMcpServerRegistration | undefined>
@@ -180,11 +199,14 @@ export function mergeMcpServerRegistrations(
     registration.hostApprovesToolCall ? [registration.hostApprovesToolCall] : []);
   return {
     servers: present.flatMap((registration) => registration.servers),
+    ...(present.some((registration) => registration.managedConnectionsViaGateway)
+      ? { managedConnectionsViaGateway: true }
+      : {}),
     readListedJobMonitorCreation: present.find((entry) => entry.readListedJobMonitorCreation)?.readListedJobMonitorCreation,
     ...(approvers.length ? {
-      hostApprovesToolCall: async (serverName: string, toolName: string) => {
+      hostApprovesToolCall: async (serverName: string, toolName: string, args?: unknown) => {
         for (const approves of approvers) {
-          if (await approves(serverName, toolName)) return true;
+          if (await approves(serverName, toolName, args)) return true;
         }
         return false;
       },
@@ -265,11 +287,13 @@ type AcpSessionMcpServers = {
   /** Names a live registration can vouch for. Absent while awaiting reload. */
   registeredNames?: ReadonlySet<string>;
   hostApprovesToolCall?: AcpMcpServerRegistration["hostApprovesToolCall"];
+  managedConnectionsViaGateway?: true;
 };
 
 export type AcpPromptContentBlock =
   | { type: "text"; text: string }
-  | { type: "image"; mimeType: string; data: string };
+  | { type: "image"; mimeType: string; data: string }
+  | { type: "resource"; resource: { uri: string; mimeType: "text/plain"; text: string } };
 
 type AcpSessionStoreLike = Pick<
   AcpSessionStorage,
@@ -287,6 +311,8 @@ type AcpRolloutStoreLike = {
 
 type AcpPromptSteerHandoff = {
   nextGeneration: number;
+  replacementReady: Promise<boolean>;
+  confirm?: () => void;
   accept: () => void;
   reject: (error: unknown) => void;
 };
@@ -296,6 +322,7 @@ type AcpActiveTurn = {
   /** The agent compacted its history while this prompt ran. */
   compacted?: boolean;
   sentAgentMemory?: boolean;
+  sentWorkspaceContext?: boolean;
   cancelBeforePrompt?: () => void;
   onTerminalUpdate?: () => void;
   terminalResponseGraceStarted?: boolean;
@@ -303,6 +330,7 @@ type AcpActiveTurn = {
   promptDispatched?: boolean;
   promptGeneration: number;
   pendingSteerHandoff?: AcpPromptSteerHandoff;
+  accumulatedPromptUsage?: Record<string, unknown>;
 };
 
 type AcpSessionLoadState = {
@@ -407,6 +435,7 @@ export class AcpAgentClient {
   private readonly antigravityBackgroundCommands = new Map<string, Set<string>>();
   private readonly activeTurns = new Map<string, AcpActiveTurn>();
   private readonly loadedSessionCwds = new Map<string, string | undefined>();
+  private readonly antigravityPrimaryCwds = new Map<string, string>();
   // The option menus each session's own latest reply reported, by protocol
   // session id. On Kimi the model decides which thought levels exist and the
   // agent refuses any other, so a level is checked against its session's menu,
@@ -469,6 +498,7 @@ export class AcpAgentClient {
   private unsubscribeRequest?: () => void;
   private runtimeCapabilities?: BackendAcpRuntimeCapabilities;
   private archiveRestoreSupported = false;
+  private antigravitySessionListSupported = false;
   private jobMonitorCatalogRefreshSupported = false;
   private readonly normalizerOptions: AcpSessionReplayNormalizerOptions;
   private activeOperations = 0;
@@ -546,6 +576,9 @@ export class AcpAgentClient {
     const advertised = normalizeAcpRuntimeCapabilities({
       value: result, now: this.now(), source: "initialize",
     })?.agentCapabilities;
+    const rawCapabilities = asRecord(advertised?.raw);
+    const sessionCapabilities = asRecord(rawCapabilities?.sessionCapabilities ?? rawCapabilities?.session_capabilities);
+    this.antigravitySessionListSupported = Boolean(asRecord(sessionCapabilities?.list));
     this.archiveRestoreSupported = advertised?.loadSession === true;
     this.jobMonitorCatalogRefreshSupported = advertised?.loadSession === true
       && advertised.session?.close === true && advertised.mcp?.http === true;
@@ -785,6 +818,7 @@ export class AcpAgentClient {
         }
         await this.loadSessionFromAgent(metadata, {
           antigravityModeSelection: options.antigravityModeSelection,
+          antigravityModeExplicit: options.antigravityModeExplicit,
           suppressTranscriptReplay: options.suppressTranscriptReplay ?? true,
         });
         if (this.idleClosedSessions.get(sessionId) === idleClosed) {
@@ -841,7 +875,11 @@ export class AcpAgentClient {
 
   supportsTurnSteering(): boolean {
     if (this.options.backendId === "acp:antigravity") {
-      return this.options.supportsTurnSteering !== false;
+      const runtimeVersion = this.runtimeCapabilities?.agentInfo?.version;
+      if (runtimeVersion !== undefined) {
+        return isAntigravitySteerableVersion(runtimeVersion);
+      }
+      return this.options.supportsTurnSteering === true;
     }
     return this.options.backendId === "acp:grok"
       && (this.options.supportsTurnSteering === true
@@ -870,6 +908,7 @@ export class AcpAgentClient {
     this.appSessionIdsByAgentSessionId.clear();
     this.retainableSessionIds.clear();
     this.loadedSessionCwds.clear();
+    this.antigravityPrimaryCwds.clear();
     this.sessionConfigOptions.clear();
     this.sessionModeMenus.clear();
     this.sessionLastActivityAt.clear();
@@ -1041,9 +1080,10 @@ export class AcpAgentClient {
   /**
    * Antigravity (`agy acp`) steers a running turn by accepting a concurrent
    * `session/prompt`: it immediately detaches the in-flight prompt with
-   * `{ stopReason: "end_turn" }` and transfers the active turn stream to the
-   * new prompt request. When steering is rejected (for example while waiting on
-   * a permission or question answer), the new prompt rejects and the original
+   * `{ stopReason: "end_turn" }` (including pre-steer `usage` once any model
+   * call has finished) and transfers the active turn stream to the new prompt
+   * request. When steering is rejected (for example while waiting on a
+   * permission or question answer), the new prompt rejects and the original
    * prompt keeps running undisturbed.
    */
   private async steerAntigravitySession(params: {
@@ -1065,6 +1105,7 @@ export class AcpAgentClient {
     const messageId = `user:${activeTurn.turnId}:steer:${params.interjectionId}`;
     const displayPrompt = params.prompt ?? params.text;
     const handoff = Promise.withResolvers<void>();
+    const replacementReady = Promise.withResolvers<boolean>();
     let nextPromptSettled = false;
 
     const adoptSteer = (): void => {
@@ -1108,7 +1149,11 @@ export class AcpAgentClient {
 
     activeTurn.pendingSteerHandoff = {
       nextGeneration,
-      accept: adoptSteer,
+      replacementReady: replacementReady.promise,
+      accept: () => {
+        replacementReady.resolve(true);
+        adoptSteer();
+      },
       reject: (error) => {
         if (!nextPromptSettled && !this.disconnected) {
           void this.cancelSessionOperation(params.sessionId).catch(() => undefined);
@@ -1139,18 +1184,19 @@ export class AcpAgentClient {
     void nextPrompt.then(
       () => {
         nextPromptSettled = true;
+        replacementReady.resolve(true);
       },
       (error) => {
         nextPromptSettled = true;
+        replacementReady.resolve(false);
         if (activeTurn.pendingSteerHandoff?.nextGeneration === nextGeneration) {
           activeTurn.pendingSteerHandoff = undefined;
           handoff.reject(error);
         }
       },
     );
-    // A successful overlapping request alone does not show that it took
-    // over this turn. Observe its lifecycle only after the displaced prompt
-    // confirms that the replacement owns the turn.
+    // Observe the replacement's lifecycle only after the previous prompt
+    // ends and the replacement provides evidence that it took ownership.
     void handoff.promise.then(() => {
       this.observeActiveTurnPrompt({
         sessionId: params.sessionId,
@@ -1211,8 +1257,14 @@ export class AcpAgentClient {
     acpRuntime?: BackendAcpSessionRuntimeState;
     hidden?: boolean;
     mcpServers?: "default" | "none";
-    additionalMcpRegistration?: AcpMcpServerRegistration;
+    additionalMcpRegistration?: AcpMcpRegistrationSource;
     sessionMeta?: Record<string, unknown>;
+    workspaceHandoff?: {
+      replay: AppServerThreadReplay;
+      previousAgentSessionId?: string;
+      mode?: string;
+      titleSource?: AcpSessionMetadata["titleSource"];
+    };
   }): Promise<AcpSessionMetadata> {
     return await this.withOperation(
       async () => await this.startSessionOperation(params),
@@ -1227,24 +1279,30 @@ export class AcpAgentClient {
       && this.options.antigravityFullAccess !== (params.executionMode === "full-access")) {
       throw new Error("The Antigravity process does not match the new thread's access.");
     }
+    const handoff = params.workspaceHandoff;
+    const rolloutStore = this.options.rolloutStore;
+    if (handoff && !rolloutStore) throw new Error("The ACP rollout store is unavailable for workspace handoff.");
     const cwd = params.cwd ?? process.cwd();
     // Read before the servers are built, so a change meanwhile reads as stale.
     const agentToolCatalogKey = this.options.agentToolCatalogKey?.();
     const jobMonitorCreationEnabled = this.jobMonitorCatalogRefreshSupported
       ? await this.options.readJobMonitorCreationPreference?.(params.sessionId) : undefined;
-    const defaultMcpRegistration =
+    const defaultMcpRegistration: AcpMcpServerRegistration =
       params.mcpServers === "none"
         ? { servers: [] }
         : await this.buildMcpServers({
             cwd,
             sessionId: params.sessionId,
           });
-    const mcpRegistration = mergeMcpServerRegistrations(
-      defaultMcpRegistration,
-      params.additionalMcpRegistration,
-    );
+    const additional = params.additionalMcpRegistration;
+    const mcpRegistration = defaultMcpRegistration.managedConnectionsViaGateway
+      ? defaultMcpRegistration
+      : mergeMcpServerRegistrations(
+          defaultMcpRegistration,
+          typeof additional === "function" ? await additional() : additional,
+        );
     const mcpServerWireConfigs = toAcpMcpServerWireConfigs(mcpRegistration.servers);
-    const result = await this.options.transport.request("session/new", {
+    let result = await this.options.transport.request("session/new", {
       cwd,
       mcpServers: mcpServerWireConfigs,
       ...(params.sessionMeta ? { _meta: params.sessionMeta } : {}),
@@ -1255,15 +1313,6 @@ export class AcpAgentClient {
     });
     const now = this.now();
     const record = asRecord(result);
-    const runtimeCapabilities = this.captureRuntimeCapabilities({
-      source: "session-new",
-      result,
-    });
-    const runtimeState = this.runtimeStateFromResponse(result, now);
-    const combinedRuntimeState =
-      params.acpRuntime || runtimeState
-        ? mergeAcpRuntimeState(params.acpRuntime, runtimeState ?? {})
-        : undefined;
     const sessionId =
       typeof record?.sessionId === "string"
         ? record.sessionId
@@ -1274,12 +1323,48 @@ export class AcpAgentClient {
       throw new Error("ACP session/new did not return a session id");
     }
     const appSessionId = params.sessionId ?? sessionId;
+    if (handoff && rolloutStore) {
+      try {
+        const fullAccessWorker = this.options.antigravityFullAccess === true;
+        const mode = fullAccessWorker ? "default" : handoff.mode;
+        if (mode) {
+          result = await this.confirmAntigravityMode(
+            sessionId,
+            result,
+            mode,
+            !fullAccessWorker || (handoff.mode !== undefined && handoff.mode !== "default"),
+          );
+        }
+        rolloutStore.appendUpdate({
+          backendId: this.options.backendId,
+          sessionId: appSessionId,
+          receivedAt: now,
+          update: {
+            kind: ACP_WORKSPACE_HANDOFF_RECORD, agentSessionId: sessionId,
+            previousAgentSessionId: handoff.previousAgentSessionId,
+            replay: handoff.replay,
+          },
+        });
+      } catch (error) {
+        await this.options.transport.request("session/close", { sessionId }, ACP_SESSION_CLOSE_REQUEST_TIMEOUT_MS)
+          .catch((closeError: unknown) => acpClientLog.warn("Could not close an unbound Antigravity workspace session", {
+            sessionId, error: closeError instanceof Error ? closeError.message : String(closeError),
+          }));
+        throw error;
+      }
+    }
+    const runtimeCapabilities = this.captureRuntimeCapabilities({ source: "session-new", result });
+    const runtimeState = this.runtimeStateFromResponse(result, now);
+    const combinedRuntimeState =
+      params.acpRuntime || runtimeState
+        ? mergeAcpRuntimeState(params.acpRuntime, runtimeState ?? {})
+        : undefined;
     const metadata: AcpSessionMetadata = {
       backendId: this.options.backendId,
       sessionId: appSessionId,
       ...(sessionId === appSessionId ? {} : { agentSessionId: sessionId }),
       title: params.title ?? "ACP session",
-      titleSource: params.title ? "explicit" : "fallback",
+      titleSource: handoff?.titleSource ?? (params.title ? "explicit" : "fallback"),
       cwd,
       createdAt: params.createdAt ?? now,
       updatedAt: now,
@@ -1288,6 +1373,8 @@ export class AcpAgentClient {
       ...(params.approvalPolicy ? { approvalPolicy: params.approvalPolicy } : {}),
       acpRuntime: combinedRuntimeState,
       ...(params.hidden ? { hidden: true } : {}),
+      ...(this.options.backendId === "acp:antigravity" ? { antigravityPrimaryCwd: cwd } : {}),
+      ...(handoff ? { antigravityWorkspaceRebound: true } : {}),
       status: "idle",
     };
     this.options.store.upsertSession(metadata);
@@ -1376,14 +1463,18 @@ export class AcpAgentClient {
     };
   }
 
-  async loadSession(metadata: AcpSessionMetadata): Promise<AppServerThreadReplay> {
+  async loadSession(
+    metadata: AcpSessionMetadata,
+    options?: Pick<AcpSessionLoadOptions, "antigravityModeSelection" | "antigravityModeExplicit">,
+  ): Promise<AppServerThreadReplay> {
     return await this.withOperation(
-      async () => await this.loadSessionOperation(metadata),
+      async () => await this.loadSessionOperation(metadata, options),
     );
   }
 
   private async loadSessionOperation(
     metadata: AcpSessionMetadata,
+    options?: Pick<AcpSessionLoadOptions, "antigravityModeSelection" | "antigravityModeExplicit">,
   ): Promise<AppServerThreadReplay> {
     const storedMetadata =
       this.options.store.getSession(this.options.backendId, metadata.sessionId) ??
@@ -1426,6 +1517,12 @@ export class AcpAgentClient {
       try {
         await this.ensureSession(hydratedMetadata, {
           suppressTranscriptReplay: false,
+          ...(options?.antigravityModeSelection !== undefined
+            ? { antigravityModeSelection: options.antigravityModeSelection }
+            : {}),
+          ...(options?.antigravityModeExplicit !== undefined
+            ? { antigravityModeExplicit: options.antigravityModeExplicit }
+            : {}),
         });
       } catch (error) {
         if (providerNormalizer && fallbackNormalizer) {
@@ -1463,9 +1560,74 @@ export class AcpAgentClient {
     await this.withOperation(async () => await this.ensureSession(metadata));
   }
 
+  async antigravityWorkspaceMatches(metadata: AcpSessionMetadata): Promise<boolean> {
+    this.options.assertSessionOwner?.(metadata.sessionId);
+    const cwd = metadata.cwd;
+    const protocolSessionId = protocolSessionIdForMetadata(metadata);
+    const primaryCwd = metadata.antigravityPrimaryCwd ?? this.antigravityPrimaryCwds.get(protocolSessionId)
+      ?? (cwd && await this.withOperation(async () => await this.readAntigravityPrimaryCwd(protocolSessionId, cwd)));
+    if (!cwd || !primaryCwd) {
+      throw new Error("Couldn't verify Antigravity's primary workspace. Try sending the prompt again.");
+    }
+    this.antigravityPrimaryCwds.set(protocolSessionId, primaryCwd);
+    if (primaryCwd === cwd) return true;
+    const [actual, expected] = await Promise.all([
+      realpath(primaryCwd).catch(() => path.resolve(primaryCwd)),
+      realpath(cwd).catch(() => path.resolve(cwd)),
+    ]);
+    return actual === expected;
+  }
+
+  async rebindAntigravityWorkspace(metadata: AcpSessionMetadata): Promise<AcpSessionMetadata> {
+    if (!this.options.rolloutStore || !metadata.cwd || !this.supportsSessionClose()) {
+      throw new Error("Antigravity can't resume this thread in the destination workspace.");
+    }
+    const current = await this.loadSession(metadata);
+    const { previous } = this.workspaceHistory(metadata);
+    if (!previous && current.entries.length === 0 && current.messages.length === 0) {
+      throw new Error("Couldn't recover Antigravity's conversation before switching workspaces.");
+    }
+    const saved = this.options.store.getSession(this.options.backendId, metadata.sessionId) ?? metadata;
+    await this.closeSessionForTransfer(metadata.sessionId);
+    return await this.startSession({
+      sessionId: metadata.sessionId,
+      cwd: metadata.cwd,
+      title: saved.title,
+      createdAt: saved.createdAt,
+      executionMode: saved.executionMode,
+      approvalPolicy: saved.approvalPolicy,
+      hidden: saved.hidden,
+      workspaceHandoff: {
+        replay: current,
+        previousAgentSessionId: protocolSessionIdForMetadata(metadata),
+        mode: saved.acpRuntime?.configValues?.mode ?? saved.acpRuntime?.currentModeId,
+        titleSource: saved.titleSource,
+      },
+    });
+  }
+
+  private async readAntigravityPrimaryCwd(protocolSessionId: string, cwd: string): Promise<string | undefined> {
+    if (!this.antigravitySessionListSupported) return undefined;
+    // Antigravity 1.5.16 returns the source session even with the destination
+    // filter. Compare its reported primary cwd, ignoring additional roots.
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    while (true) {
+      const result = asRecord(await this.options.transport.request("session/list", {
+        cwd, ...(cursor ? { cursor } : {}),
+      }));
+      const sessions = Array.isArray(result?.sessions) ? result.sessions : [];
+      const session = sessions.map(asRecord).find((item) => item?.sessionId === protocolSessionId);
+      if (typeof session?.cwd === "string" && path.isAbsolute(session.cwd)) return session.cwd;
+      cursor = typeof result?.nextCursor === "string" ? result.nextCursor : undefined;
+      if (!cursor || seenCursors.has(cursor)) return undefined;
+      seenCursors.add(cursor);
+    }
+  }
+
   async ensureSession(
     metadata: AcpSessionMetadata,
-    options: { suppressTranscriptReplay?: boolean } = {},
+    options: AcpSessionLoadOptions = {},
   ): Promise<void> {
     await this.withOperation(
       async () => await this.ensureSessionOperation(metadata, options),
@@ -1491,6 +1653,9 @@ export class AcpAgentClient {
       ...captured,
       ...(this.options.antigravityFullAccess !== undefined && stored
         ? { executionMode: acpSessionExecutionMode(stored), antigravityFullAccessConfirmed: stored.antigravityFullAccessConfirmed }
+        : {}),
+      ...(stored?.antigravityWorkspaceContextDelivered && protocolSessionIdForMetadata(stored) === protocolSessionIdForMetadata(metadata)
+        ? { antigravityWorkspaceContextDelivered: true }
         : {}),
       ...(storedDigest ? { agentInstructionsDigest: storedDigest } : {}),
     };
@@ -1528,14 +1693,26 @@ export class AcpAgentClient {
     readAgentMemory?: () => Promise<string | undefined>;
   }): Promise<{ sessionId: string; turnId: string }> {
     this.assertPromptAccess(params.sessionId);
+    const session = this.options.store.getSession(this.options.backendId, params.sessionId);
+    const needsWorkspaceContext = session?.antigravityWorkspaceRebound && !session.antigravityWorkspaceContextDelivered;
+    const prompt = params.promptContent ? [...params.promptContent] : textPrompt(params.prompt);
+    if (needsWorkspaceContext) {
+      const priorWorkspace = this.workspaceHistory(session).previous;
+      if (!priorWorkspace) throw new Error("Couldn't recover this thread's previous workspace history.");
+      prompt.push({
+        type: "resource",
+        resource: { uri: ACP_WORKSPACE_HISTORY_URI, mimeType: "text/plain", text: acpWorkspaceContinuationText(priorWorkspace) },
+      });
+    }
     const turnId = params.turnId ?? `pending:${params.sessionId}:${this.now()}`;
     const activeTurn = this.startTrackedTurn(params.sessionId, turnId);
+    activeTurn.sentWorkspaceContext = needsWorkspaceContext;
     const acceptance = Promise.withResolvers<{ sessionId: string; turnId: string }>();
     let dispatched = false;
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
     const promptRequest = this.requestPromptWithTerminalGuard({
       protocolSessionId,
-      prompt: params.promptContent ?? textPrompt(params.prompt),
+      prompt,
       sessionId: params.sessionId,
       turnId,
       agentInstructions: params.agentInstructions?.trim(),
@@ -1557,7 +1734,7 @@ export class AcpAgentClient {
           turnId,
           waitingForAgent: true,
         });
-        this.markSessionHasConversationHistory(params.sessionId, receivedAt);
+        if (!needsWorkspaceContext) this.markSessionHasConversationHistory(params.sessionId, receivedAt);
         dispatched = true;
         activeTurn.promptDispatched = true;
         acceptance.resolve({ sessionId: params.sessionId, turnId });
@@ -1587,7 +1764,7 @@ export class AcpAgentClient {
     const { sessionId, activeTurn, generation, promptPromise } = params;
     let failedPromptUsage: AcpUsageEnvelope | undefined;
     void promptPromise
-      .then((result) => {
+      .then(async (result) => {
         if (params.isDispatched && !params.isDispatched()) {
           throw new Error("The ACP prompt was cancelled before it was sent.");
         }
@@ -1600,35 +1777,51 @@ export class AcpAgentClient {
         const cancelled = promptWasCancelled(result);
         if (activeTurn.pendingSteerHandoff) {
           const handoff = activeTurn.pendingSteerHandoff;
-          activeTurn.pendingSteerHandoff = undefined;
-          if (!activeTurn.terminalResponseGraceStarted && isAntigravityPromptDetach(result)) {
-            activeTurn.promptGeneration = handoff.nextGeneration;
-            handoff.accept();
-            return;
+          if (!activeTurn.terminalResponseGraceStarted && isAntigravityPromptEndTurn(result)) {
+            // Natural completion and a handoff can have the same response.
+            // Adopt synchronously before applying the replacement's first update.
+            handoff.confirm = () => {
+              activeTurn.pendingSteerHandoff = undefined;
+              activeTurn.accumulatedPromptUsage = mergeAcpPromptResultUsage(
+                activeTurn.accumulatedPromptUsage,
+                readAcpPromptResultUsage(result, this.options.backendId),
+              );
+              activeTurn.promptGeneration = handoff.nextGeneration;
+              handoff.accept();
+            };
+            if (await handoff.replacementReady) {
+              if (activeTurn.pendingSteerHandoff === handoff) handoff.confirm();
+              return;
+            }
+          } else {
+            activeTurn.pendingSteerHandoff = undefined;
+            handoff.reject(
+              new Error(cancelled
+                ? "The active Antigravity turn was cancelled before steering was accepted"
+                : "The active Antigravity turn finished before steering was accepted"),
+            );
           }
-          handoff.reject(
-            new Error(cancelled
-              ? "The active Antigravity turn was cancelled before steering was accepted"
-              : "The active Antigravity turn finished before steering was accepted"),
-          );
         }
+        const promptUsage = mergeAcpPromptResultUsage(
+          activeTurn.accumulatedPromptUsage,
+          readAcpPromptResultUsage(result, this.options.backendId),
+        );
         const responseError = this.missingPromptResponseError(sessionId, result);
         if (responseError) {
-          failedPromptUsage = readAcpPromptResultUsageEnvelope(result, this.options.backendId);
+          failedPromptUsage = promptUsage
+            ? readAcpPromptResultUsageEnvelope({ usage: promptUsage }, this.options.backendId)
+            : undefined;
           throw responseError;
         }
         const receivedAt = this.now();
         // A prompt that session/cancel stopped settles normally, with
         // stopReason cancelled. Carry that through, so the transcript and
         // the terminal event say the turn was interrupted, not completed.
-        const promptUsage = readAcpPromptResultUsage(
-          result,
-          this.options.backendId,
-        );
         const finished = this.finishTrackedTurn(
           sessionId,
           receivedAt,
           cancelled ? "interrupted" : "completed",
+          !cancelled && activeTurn.sentWorkspaceContext,
         );
         this.appendHistoryUpdate(sessionId, receivedAt, {
           kind: "turn_finished",
@@ -1679,12 +1872,20 @@ export class AcpAgentClient {
         }
         this.finishTrackedTurn(sessionId, this.now());
         this.recordPromptFailure(sessionId, activeTurn.turnId, error);
+        const errorUsage = failedPromptUsage ?? (
+          activeTurn.accumulatedPromptUsage
+            ? readAcpPromptResultUsageEnvelope(
+                { usage: activeTurn.accumulatedPromptUsage },
+                this.options.backendId,
+              )
+            : undefined
+        );
         return Promise.resolve(
           this.options.onPromptError?.({
             sessionId,
             turnId: activeTurn.turnId,
             error,
-            ...(failedPromptUsage ? { usage: failedPromptUsage } : {}),
+            ...(errorUsage ? { usage: errorUsage } : {}),
           }),
         ).catch(() => undefined);
       });
@@ -1991,7 +2192,19 @@ export class AcpAgentClient {
   }
 
   private runtimeStateFromResponse(result: unknown, now: number) {
-    return acpSessionRuntimeStateFromResponse(result, now, this.options.backendId === "acp:antigravity");
+    const state = acpSessionRuntimeStateFromResponse(result, now, this.options.backendId === "acp:antigravity");
+    if (
+      state
+      && this.options.backendId === "acp:antigravity"
+      && state.currentModeId === undefined
+      && state.configValues?.mode
+    ) {
+      return {
+        ...state,
+        currentModeId: state.configValues.mode,
+      };
+    }
+    return state;
   }
 
   private async setRuntimeOptionOnTransport(params: {
@@ -2220,6 +2433,13 @@ export class AcpAgentClient {
     const fromSessionLoad = loadState !== undefined || isExplicitSessionReplay;
     const activeTurn = this.activeTurns.get(sessionId);
     const updateKind = readUpdateKind(update);
+    if (!fromSessionLoad && (
+      updateKind === "agent_message_chunk"
+      || updateKind === "agent_thought_chunk"
+      || updateKind === "tool_call"
+    )) {
+      activeTurn?.pendingSteerHandoff?.confirm?.();
+    }
     if (loadState?.restoringAntigravityMode
       && (updateKind === "current_mode_update" || updateKind === "config_option_update")) {
       // Publish the restored mode only after the restore reply confirms it.
@@ -2318,7 +2538,8 @@ export class AcpAgentClient {
       activityAt,
       { touchActivity: !fromSessionLoad },
     );
-    if (isConversationHistoryUpdate(update)) {
+    if (isConversationHistoryUpdate(update)
+      && !(updateKind === "user_message_chunk" && isAcpUserBoilerplateMessage(readUpdateText(update)))) {
       this.markSessionHasConversationHistory(sessionId, activityAt, {
         touchActivity: !fromSessionLoad,
       });
@@ -2390,7 +2611,13 @@ export class AcpAgentClient {
       return cancelledPermissionOutcome();
     }
 
-    const permissionOptions = readPermissionOptions(params.options);
+    const reportedTool = this.antigravityMcpToolName(asRecord(params.toolCall) ?? {});
+    let permissionOptions = readPermissionOptions(params.options);
+    if (reportedTool === ANTIGRAVITY_CALL_PWRAGENT_TOOL) {
+      // An approval that applies to the dispatcher name would cover unrelated
+      // targets. Leave persistent MCP approval to tools with a fixed identity.
+      permissionOptions = permissionOptions.filter((option) => option.kind !== "allow_always");
+    }
     const allowedWithoutOperator = protocolSessionId
       ? await this.permissionAnsweredWithoutOperator(
         this.appSessionIdFor(protocolSessionId),
@@ -2402,7 +2629,7 @@ export class AcpAgentClient {
       return { outcome: { outcome: "selected", optionId: allowedWithoutOperator } };
     }
 
-    const request = this.normalizePermissionRequest(params, id);
+    const request = this.normalizePermissionRequest(params, permissionOptions, id);
     if (!request || !this.options.onRequest) {
       return cancelledPermissionOutcome();
     }
@@ -2435,6 +2662,7 @@ export class AcpAgentClient {
 
   private normalizePermissionRequest(
     params: Record<string, unknown>,
+    permissionOptions: AcpPermissionOption[],
     id?: JsonRpcId,
   ): AppServerPendingRequestNotification | undefined {
     const protocolSessionId =
@@ -2457,7 +2685,6 @@ export class AcpAgentClient {
     const requestId = id == null ? toolCallId ?? `acp:${this.now()}` : String(id);
     const activeTurn = this.activeTurns.get(sessionId);
     const acpMcpToolName = this.antigravityMcpToolName(toolCall);
-    const permissionOptions = readPermissionOptions(params.options);
     const prompt = acpMcpToolName
       ? mcpPermissionPrompt(this.approvalRequesterName, acpMcpToolName, toolCall)
       : permissionPrompt(this.approvalRequesterName, title, toolCall);
@@ -2475,7 +2702,7 @@ export class AcpAgentClient {
         acpMethod: "session/request_permission",
         acpToolCallId: toolCallId,
         acpToolKind: typeof toolCall.kind === "string" ? toolCall.kind : undefined,
-        acpPermissionOptions: acpMcpToolName
+        acpPermissionOptions: acpMcpToolName && acpMcpToolName !== ANTIGRAVITY_CALL_PWRAGENT_TOOL
           ? withThreadToolGrantOption(permissionOptions)
           : permissionOptions,
       },
@@ -2508,7 +2735,8 @@ export class AcpAgentClient {
     params: Record<string, unknown>,
     options: AcpPermissionOption[],
   ): Promise<string | undefined> {
-    const toolName = this.antigravityMcpToolName(asRecord(params.toolCall) ?? {});
+    const toolCall = asRecord(params.toolCall) ?? {};
+    const toolName = this.antigravityMcpToolName(toolCall);
     const allowOnce = allowOncePermissionOptionId(options);
     if (!toolName || !allowOnce) return undefined;
     const servers = this.sessionMcpServers.get(sessionId);
@@ -2518,7 +2746,7 @@ export class AcpAgentClient {
     const target = resolveAntigravityMcpToolTarget(toolName, servers.agentNames);
     if (!target || !servers.registeredNames.has(target.serverName)) return undefined;
     try {
-      return await servers.hostApprovesToolCall(target.serverName, target.toolName)
+      return await servers.hostApprovesToolCall(target.serverName, target.toolName, toolCall.rawInput)
         ? allowOnce
         : undefined;
     } catch (error) {
@@ -2531,9 +2759,12 @@ export class AcpAgentClient {
     }
   }
 
-  /** The backend's normalizer options, with the session's workspace. */
-  private normalizerOptionsFor(cwd?: string): AcpSessionReplayNormalizerOptions {
-    return cwd ? { ...this.normalizerOptions, cwd } : this.normalizerOptions;
+  private normalizerOptionsFor(metadata?: AcpSessionMetadata): AcpSessionReplayNormalizerOptions {
+    return {
+      ...this.normalizerOptions,
+      cwd: metadata?.cwd,
+      workspaceSessionId: metadata?.antigravityWorkspaceRebound ? protocolSessionIdForMetadata(metadata) : undefined,
+    };
   }
 
   private normalizerFor(sessionId: string): AcpSessionReplayNormalizer {
@@ -2541,7 +2772,7 @@ export class AcpAgentClient {
     if (!normalizer) {
       normalizer = new AcpSessionReplayNormalizer(
         this.normalizerOptionsFor(
-          this.options.store.getSession(this.options.backendId, sessionId)?.cwd,
+          this.options.store.getSession(this.options.backendId, sessionId),
         ),
       );
       this.normalizers.set(sessionId, normalizer);
@@ -2567,14 +2798,11 @@ export class AcpAgentClient {
       return { isComplete: false };
     }
     const normalizer = new AcpSessionReplayNormalizer(
-      this.normalizerOptionsFor(metadata.cwd),
+      this.normalizerOptionsFor(metadata),
     );
     let hasTranscriptHistory = false;
     const antigravityReplayPrompts: AcpReplayPromptIdentity[] = [];
-    const records = this.options.rolloutStore.readUpdates({
-      backendId: this.options.backendId,
-      sessionId: metadata.sessionId,
-    });
+    const { current: records } = this.workspaceHistory(metadata);
     for (const record of records) {
       if (isPwrAgentSyntheticAcpUpdate(record.update)) {
         continue;
@@ -2597,9 +2825,17 @@ export class AcpAgentClient {
     const hasReplay = replay.messages.length > 0 || replay.entries.length > 0;
     return {
       isComplete: (hasTranscriptHistory || hasReplay) && replay.threadStatus === "idle",
-      antigravityReplayPrompts: antigravityReplayPrompts.some((prompt) => prompt.steerMessageId)
+      antigravityReplayPrompts: ((metadata.antigravityWorkspaceRebound && antigravityReplayPrompts.length > 0)
+        || antigravityReplayPrompts.some((prompt) => prompt.steerMessageId))
         ? antigravityReplayPrompts : undefined,
     };
+  }
+
+  private workspaceHistory(metadata: AcpSessionMetadata) {
+    return acpWorkspaceHistory(this.options.rolloutStore?.readUpdates({
+      backendId: this.options.backendId,
+      sessionId: metadata.sessionId,
+    }) ?? [], metadata.antigravityWorkspaceRebound ? protocolSessionIdForMetadata(metadata) : undefined);
   }
 
   private markSessionHasConversationHistory(
@@ -2732,8 +2968,10 @@ export class AcpAgentClient {
       throw new Error("Couldn't reconnect PwrAgent's Job Monitor tools. Try sending the prompt again.");
     }
     const requestedMode = options.antigravityModeSelection;
+    const savedMode = metadata.acpRuntime?.configValues?.mode ?? metadata.acpRuntime?.currentModeId;
+    const fullAccessWorker = this.options.antigravityFullAccess === true;
     const mode = this.options.backendId === "acp:antigravity"
-      ? requestedMode ?? metadata.acpRuntime?.currentModeId ?? metadata.acpRuntime?.configValues?.mode
+      ? (fullAccessWorker ? "default" : requestedMode ?? savedMode)
       : undefined;
     const loadState: AcpSessionLoadState = {
       replayedTranscript: false,
@@ -2751,7 +2989,13 @@ export class AcpAgentClient {
       });
       if (mode) {
         try {
-          result = await this.confirmAntigravityModeAfterLoad(protocolSessionId, result, mode, requestedMode !== undefined);
+          result = await this.confirmAntigravityMode(
+            protocolSessionId,
+            result,
+            mode,
+            (fullAccessWorker && savedMode !== undefined && savedMode !== "default")
+              || (options.antigravityModeExplicit ?? (requestedMode !== undefined)),
+          );
         } catch (error) {
           await this.closeUnconfirmedAntigravityWorker(metadata.sessionId, protocolSessionId, cwd);
           throw error;
@@ -2778,7 +3022,11 @@ export class AcpAgentClient {
     this.rememberSessionModeMenu(protocolSessionId, result);
     this.rememberSessionMcpServers(metadata.sessionId, mcpRegistration, mcpServerWireConfigs);
     await Promise.resolve(mcpRegistration.bindThread?.(metadata.sessionId));
-    const runtimeState = this.runtimeStateFromResponse(result, this.now());
+    const loadedRuntime = this.runtimeStateFromResponse(result, this.now());
+    const runtimeState = fullAccessWorker && loadedRuntime
+      && (loadedRuntime.configValues?.mode ?? loadedRuntime.currentModeId) === "default"
+      ? { ...loadedRuntime, currentModeId: "default", configValues: { ...loadedRuntime.configValues, mode: "default" } }
+      : loadedRuntime;
     if (runtimeState) {
       this.updateSessionRuntimeState(metadata.sessionId, runtimeState, {
         touchActivity: false,
@@ -2806,7 +3054,7 @@ export class AcpAgentClient {
     return result;
   }
 
-  private async confirmAntigravityModeAfterLoad(
+  private async confirmAntigravityMode(
     protocolSessionId: string,
     loadResult: unknown,
     selectedMode: string,
@@ -2814,16 +3062,20 @@ export class AcpAgentClient {
   ): Promise<unknown> {
     // Antigravity 1.5.15's new worker reports Default in session/load,
     // even after the previous worker acknowledged a different mode.
-    const mode = normalizeAcpRuntimeCapabilities({
+    const capabilities = normalizeAcpRuntimeCapabilities({
       value: loadResult,
       now: this.now(),
       source: "session-load",
-    })?.configOptions?.find((option) => option.id === "mode" && option.category === "mode");
+    });
+    const mode = capabilities?.configOptions?.find((option) => option.id === "mode" && option.category === "mode");
+    const currentMode = mode?.currentValue ?? capabilities?.modes?.currentModeId;
+    if (currentMode === selectedMode) return loadResult;
     if (!mode?.values.some((option) => option.value === selectedMode)) {
-      if (explicitSelection) throw new Error(`Antigravity does not offer the "${selectedMode}" session mode.`);
+      if (explicitSelection || (selectedMode === "default" && currentMode !== undefined)) {
+        throw new Error(`Antigravity does not offer the "${selectedMode}" session mode.`);
+      }
       return loadResult;
     }
-    if (mode.currentValue === selectedMode) return loadResult;
     const restored = await this.options.transport.request("session/set_config_option", {
       sessionId: protocolSessionId,
       configId: mode.id,
@@ -2885,6 +3137,7 @@ export class AcpAgentClient {
     }
     this.sessionMcpServers.set(sessionId, {
       agentNames,
+      ...(registration.managedConnectionsViaGateway ? { managedConnectionsViaGateway: true } : {}),
       registeredNames: new Set(registration.servers
         .map((server) => server.name)
         .filter((name) => sent.has(name))),
@@ -2892,6 +3145,11 @@ export class AcpAgentClient {
         ? { hostApprovesToolCall: registration.hostApprovesToolCall }
         : {}),
     });
+  }
+
+  usesManagedMcpGateway(sessionId: string): boolean {
+    return !this.disconnected
+      && this.sessionMcpServers.get(sessionId)?.managedConnectionsViaGateway === true;
   }
 
   private rememberAgentToolCatalogKey(sessionId: string, key: string | undefined): void {
@@ -3142,6 +3400,7 @@ export class AcpAgentClient {
     sessionId: string,
     completedAt: number,
     status: "completed" | "interrupted" = "completed",
+    workspaceContextDelivered?: boolean,
   ): {
     assistantText: string;
     replay: AppServerThreadReplay;
@@ -3156,7 +3415,9 @@ export class AcpAgentClient {
       completedAt,
       status,
     );
-    this.updateSessionStatus(sessionId, "idle");
+    // Use the existing idle write so remembering one accepted context block
+    // does not introduce another per-turn commit.
+    this.updateSessionStatus(sessionId, "idle", this.now(), { workspaceContextDelivered });
     return {
       assistantText: activeTurn?.assistantText ?? "",
       replay,
@@ -3295,7 +3556,7 @@ export class AcpAgentClient {
     sessionId: string,
     status: AcpSessionMetadata["status"],
     receivedAt = this.now(),
-    options: AcpSessionMetadataUpdateOptions = {},
+    options: AcpSessionMetadataUpdateOptions & { workspaceContextDelivered?: boolean } = {},
   ): void {
     const metadata = this.options.store.getSession(this.options.backendId, sessionId);
     if (!metadata) {
@@ -3304,6 +3565,7 @@ export class AcpAgentClient {
     this.options.store.upsertSession({
       ...metadata,
       status,
+      ...(options.workspaceContextDelivered ? { antigravityWorkspaceContextDelivered: true } : {}),
       updatedAt:
         options.touchActivity === false
           ? metadata.updatedAt
@@ -3623,13 +3885,18 @@ function mcpPermissionPrompt(
   toolName: string,
   toolCall: Record<string, unknown>,
 ): string {
+  const invocation = toolName === ANTIGRAVITY_CALL_PWRAGENT_TOOL
+    ? readPwrAgentCallTarget(toolCall.rawInput)
+    : undefined;
   const title = readToolCallText(toolCall.title);
   const content = readToolCallText(toolCall.content);
   const details = [title, content].filter((text) =>
     text && text !== toolName && text !== `Run ${toolName}`,
   );
   return [
-    `${requesterName} wants to use an MCP tool.`,
+    invocation
+      ? `${requesterName} wants to use the PwrAgent tool ${invocation.name}.`
+      : `${requesterName} wants to use an MCP tool.`,
     ...new Set(details),
   ].join("\n\n");
 }
@@ -3795,11 +4062,10 @@ function promptWasCancelled(result: unknown): boolean {
     || resultRecord?.stop_reason === "cancelled";
 }
 
-function isAntigravityPromptDetach(result: unknown): boolean {
+function isAntigravityPromptEndTurn(result: unknown): boolean {
   const record = asRecord(result);
-  // The captured handoff is end_turn with no usage. A naturally completed
-  // Antigravity prompt returns usage even when a second prompt is in flight.
-  return record?.stopReason === "end_turn" && !Object.hasOwn(record, "usage");
+  return record?.stopReason === "end_turn"
+    || record?.stop_reason === "end_turn";
 }
 
 function readAntigravityReplayPromptIdentity(record: AcpRolloutRecord): AcpReplayPromptIdentity | undefined {

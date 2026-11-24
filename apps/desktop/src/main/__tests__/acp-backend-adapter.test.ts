@@ -534,6 +534,24 @@ describe("describeInstalledAcpBackend", () => {
     }));
   });
 
+  it.each([undefined, "1.4.9"])("does not advertise ACP steering for Antigravity %s", (version) => {
+    const antigravity = describeInstalledAcpBackend({
+      ...buildInstalledAgent(),
+      backendId: "acp:antigravity",
+      registryId: "antigravity",
+      name: "Antigravity",
+      version,
+      capabilities: {
+        conversationRewind: false,
+        liveWorkspaceHandoff: false,
+        managedReview: true,
+        steerTurn: true,
+      },
+    });
+
+    expect(antigravity.capabilities.steerTurn).toBe(false);
+  });
+
   it.each([undefined, "1.0.50"])("does not advertise ACP steering for vendor Grok %s", (version) => {
     const grok = describeInstalledAcpBackend({
       ...buildInstalledAgent(),
@@ -1366,6 +1384,11 @@ describe("AcpBackendAdapter", () => {
       });
       await vi.waitFor(() => expect(prompts).toHaveLength(2));
       prompts[0]!.resolve({ stopReason: "end_turn" });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      transport.emitSessionUpdate("agy-session-1", {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "PINEAPPLE" },
+      });
 
       await expect(steerPromise).resolves.toEqual({ delivery: "currentTurn" });
       await vi.waitFor(() => {
@@ -1389,10 +1412,6 @@ describe("AcpBackendAdapter", () => {
         },
       });
 
-      transport.emitSessionUpdate("agy-session-1", {
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: "PINEAPPLE" },
-      });
       prompts[1]!.resolve({ stopReason: "end_turn" });
       await vi.waitFor(() => {
         expect(events.filter((event) => event.notification.method === "turn/completed")).toHaveLength(1);
@@ -4709,18 +4728,18 @@ describe("AcpBackendAdapter", () => {
   // server of its own that could carry PwrAgent tools past that gate. This
   // holds for a session started now (session/new) and for one stored before
   // the member became contained (session/load restarts its servers).
-  it("offers an ACP session only the agent-tool server and operator connections", async () => {
-    const backendId = "acp:grok" as AcpBackendId;
+  it.each(["grok", "antigravity"] as const)("offers only the permitted MCP servers to %s", async (registryId) => {
+    const backendId = `acp:${registryId}` as const;
     const agent: AcpInstalledAgentRecord = {
       ...buildInstalledAgent(),
       backendId,
-      registryId: "grok",
-      name: "Grok",
+      registryId,
+      name: registryId,
       launchDescriptor: {
         backendId,
-        registryId: "grok",
+        registryId,
         distributionKind: "local",
-        command: "grok",
+        command: registryId,
         args: [],
         env: {},
       },
@@ -4771,6 +4790,7 @@ describe("AcpBackendAdapter", () => {
       };
       const adapter = createTestAcpBackendAdapter({
         ...legacyStdioBridge,
+        managedMcpGatewayAvailable: true,
         acpAgentStore: {
           getInstalledAgent: () => agent,
           listInstalledAgents: () => [agent],
@@ -4835,9 +4855,12 @@ describe("AcpBackendAdapter", () => {
               request.params as { mcpServers?: Array<{ name: string }> } | undefined
             )?.mcpServers?.map((server) => server.name) ?? [],
           }));
+        const registeredHttp = agentToolServer === "registers" && http === true;
         const expected = [
-          ...(agentToolServer === "registers" && http === true ? ["pwragent"] : []),
-          ...(operatorConnection ? ["operator-connection"] : []),
+          ...(registeredHttp ? ["pwragent"] : []),
+          // A working Antigravity PwrAgent server provides the live gateway
+          // for selected connections without adding their native catalogs.
+          ...(operatorConnection && !(registryId === "antigravity" && registeredHttp) ? ["operator-connection"] : []),
         ];
         expect(
           offered,

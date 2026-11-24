@@ -5,6 +5,22 @@ catalog. Both definitions stay registered while the external catalog changes.
 The existing PwrAgent tool search can reveal these deferred definitions in
 Codex. ACP receives them through the existing PwrAgent MCP server.
 
+Antigravity receives a small native PwrAgent catalog. Large catalogs can
+cause Antigravity to omit tools from the model even after a successful
+`tools/list`. Core operations such as `handoff_task` are directly callable.
+For the rest, PwrAgent's `tool_search` returns exact schemas and
+`call_pwragent_tool` invokes the selected operation under its existing
+permissions. Antigravity can re-list after `notifications/tools/list_changed`
+while its current turn still rejects the newly listed tool as unknown.
+The fixed invocation tool lets the agent use the search result in that turn.
+Antigravity discovers and invokes tools from thread-selected
+connections through `search_mcp_tools` and `call_mcp_tool`, which read the
+current selection on every call. PwrAgent uses this route at session creation
+and reload when both tools are available. Sessions without gateway access,
+including those on contained members, keep their selected native connections.
+The MCP Access panel reports when a session uses tool search and when the
+gateway has connected to each selected server.
+
 Search returns the original server display name, stable connection ID, tool
 name, exact MCP definition and opaque schema revision. Invoke through
 `pwragent.call_mcp_tool` (or `tools.pwragent__call_mcp_tool` in Code Mode) using
@@ -75,8 +91,9 @@ calls that need approval require human confirmation; PwrAgent does not use a mod
 consent or its persistence scope.
 Headless calls without Full Access or an automation MCP grant decline because
 they cannot obtain it.
-Native invocation remains available under the backend's own policy; inherited
-provider MCP servers are not exposed through this gateway.
+Backends that receive native connection catalogs can also invoke them under
+their own policy. Inherited provider MCP servers are not exposed through the
+gateway.
 
 Only the gateway's host-created invocation approval follows this policy.
 Upstream MCP forms, including empty forms, and URL flows remain interactive:

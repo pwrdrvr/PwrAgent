@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ResourceCheckoutAuthority, type CheckoutToken } from "@pwragent/owner-core/resource-checkout-authority";
 import { executeResourceCheckout, type CheckoutProviderAdapter } from "@pwragent/owner-core/resource-checkout-executor";
 import type { CheckoutActor, CheckoutDefinition, CheckoutGrant } from "@pwragent/owner-core/resource-checkout-storage";
@@ -57,6 +57,29 @@ function granted(authority: ResourceCheckoutAuthority, key: string): CheckoutTok
 }
 
 describe("the persisted resource checkout authority", () => {
+  it("never lets managed work consume a backfilled lease", () => {
+    fc.assert(fc.property(fc.integer({ min: 3, max: 12 }), fc.boolean(), (capacity, local) => {
+      const harness = createHarness(capacity);
+      try {
+        const { authority } = harness.open();
+        authority.perform(actor, request("holder", { units: 1, expectedDurationMs: 100 }));
+        expect(authority.perform(actor, request("head", { units: capacity }))).toMatchObject({ outcome: "queued" });
+        const backfill = authority.perform(other, request("backfill", { units: 1, expectedDurationMs: 50 }));
+        if (backfill.outcome !== "granted") throw new Error("Expected a backfill.");
+        const job = { id: "managed", executor: "fixture" };
+        if (local) {
+          expect(authority.admitLocalJob(resourceId, other, "Managed job", job)).toBeUndefined();
+        } else {
+          expect(authority.bindJob(other, { resourceId, epoch: definition.epoch, ...backfill }, job)).toBe(false);
+        }
+        harness.advance(100);
+        expect(authority.status(actor, "head", resourceId)).toMatchObject({ state: "granted" });
+      } finally {
+        harness.close();
+      }
+    }), { numRuns: 16, examples: [[4, false], [4, true]] });
+  });
+
   it("uses the durable machine capacity even when another profile detects a different CPU count", async () => {
     await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 64 }), fc.integer({ min: 0, max: 64 }), async (capacity, detected) => {
       fc.pre(capacity !== detected);
@@ -887,12 +910,13 @@ describe("resource_checkout_acquire (blocking Code Mode checkout)", () => {
   const caller = { backend: "claude" as const, threadId: "t1", turnId: "turn-1", callId: "call-1", transport: "mcp" as const };
   const holder = { backend: "codex" as const, threadId: "t-holder", turnId: "turn-2", callId: "call-2", transport: "mcp" as const };
 
-  function openRealService(capacity = 8) {
+  function openRealService(capacity = 8, now?: () => number) {
     const root = mkdtempSync(path.join(os.tmpdir(), "pwragent-acquire-tool-"));
     const service = new DesktopResourceCheckoutService({
       viewer: { instanceId: "default", instanceLabel: "default", profile: "default", machineId: "host" },
       machineStore: openResourceCheckoutStore(path.join(root, "machine.db"), "host"),
       machineCpuCount: capacity,
+      now,
       bindings: [],
       requestPeer: async () => { throw new Error("Offline"); },
       warn: () => {},
@@ -905,6 +929,168 @@ describe("resource_checkout_acquire (blocking Code Mode checkout)", () => {
       },
     };
   }
+
+  const acquireArgs = { purpose: "Fixture work", expectedDurationMs: 1_000, units: 1 };
+
+  it("replays a grant only while its lease is usable", async () => {
+    await fc.assert(fc.asyncProperty(fc.uuid(), fc.boolean(), async (key, expires) => {
+      let now = 1;
+      const { service, close } = openRealService(4, () => now);
+      try {
+        const handle = createResourceCheckoutToolHandler(service);
+        const args = { ...acquireArgs, idempotencyKey: key };
+        const first = await handle("resource_checkout_acquire", args, caller) as { releaseAction: unknown };
+        expect(await handle("resource_checkout_acquire", args, caller)).toEqual(first);
+        if (expires) now += acquireArgs.expectedDurationMs;
+        else await handle("resource_checkout_action", { action: first.releaseAction }, caller);
+        expect(await handle("resource_checkout_acquire", args, caller)).toMatchObject({ outcome: "ended" });
+      } finally {
+        await close();
+      }
+    }), { numRuns: 16 });
+  });
+
+  it("preserves the generated identity after an uncertain request", async () => {
+    const { service, close } = openRealService();
+    try {
+      await fc.assert(fc.asyncProperty(fc.boolean(), async (explicit) => {
+        const uncertain = { outcome: "unknown", message: "The network lost the response." } as const;
+        const perform = vi.spyOn(service, "perform").mockResolvedValueOnce(uncertain);
+        try {
+          const result = await createResourceCheckoutToolHandler(service)("resource_checkout_acquire", {
+            ...acquireArgs, ...(explicit ? { idempotencyKey: "explicit" } : {}),
+          }, caller);
+          expect(result).toMatchObject({ ...uncertain,
+            resourceId: service.localMachineResourceId(),
+            idempotencyKey: explicit ? "explicit" : expect.stringMatching(/^rco-/),
+          });
+          expect(perform.mock.calls[0][0]).toMatchObject({ idempotencyKey: (result as { idempotencyKey: string }).idempotencyKey });
+        } finally {
+          perform.mockRestore();
+        }
+      }), { numRuns: 10, examples: [[false]] });
+    } finally {
+      await close();
+    }
+  });
+
+  it("derives usable release actions for acquire keys that differ near the length limit", async () => {
+    const { service, close } = openRealService();
+    const handle = createResourceCheckoutToolHandler(service);
+    try {
+      await fc.assert(fc.asyncProperty(fc.uuid(), async (token) => {
+        const keys = [`${token.padEnd(159, "x")}a`, `${token.padEnd(159, "x")}b`];
+        const results = await Promise.all(keys.map(async (idempotencyKey) =>
+          await handle("resource_checkout_acquire", { ...acquireArgs, idempotencyKey }, caller) as { releaseAction: unknown }));
+        for (const { releaseAction } of results) {
+          expect(await handle("resource_checkout_action", { action: releaseAction }, caller)).toMatchObject({ outcome: "accepted" });
+        }
+        expect(service.read().resources[0].allocations).toHaveLength(0);
+      }), { numRuns: 15 });
+    } finally {
+      await close();
+    }
+  });
+
+  async function abortQueuedAcquire(promoteOnCancel: boolean, key: string) {
+    let now = 1;
+    const { service, close } = openRealService(4, () => now);
+    const controller = new AbortController();
+    const handle = createResourceCheckoutToolHandler(service);
+    try {
+      await handle("resource_checkout_acquire", { ...acquireArgs, units: 4 }, holder);
+      const perform = service.perform.bind(service);
+      const admitted = Promise.withResolvers<void>();
+      vi.spyOn(service, "perform").mockImplementation(async (value, ...rest) => {
+        if (promoteOnCancel && (value as ResourceCheckoutActionRequest).kind === "cancel_request") now += 1_000;
+        const result = await perform(value, ...rest);
+        if (result.outcome === "queued") admitted.resolve();
+        return result;
+      });
+      const pending = handle("resource_checkout_acquire", { ...acquireArgs, idempotencyKey: key },
+        { ...caller, signal: controller.signal });
+      await admitted.promise;
+      const { writes } = await measureSqliteWrites(async () => {
+        controller.abort(new Error("Caller stopped"));
+        await expect(pending).rejects.toThrow("Caller stopped");
+      });
+      expect(await service.status(service.threadActor(caller.backend, caller.threadId), service.localMachineResourceId(), key))
+        .toMatchObject({ state: "ended" });
+      return writes;
+    } finally {
+      await close();
+    }
+  }
+
+  it("clears an interrupted checkout across both cancellation/promotion orderings", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), fc.uuid(), async (promoteOnCancel, key) => {
+      await abortQueuedAcquire(promoteOnCancel, key);
+    }), { numRuns: 16, examples: [[true, "race"], [false, "cancel"]] });
+  });
+
+  it("budgets cleanup when abort races promotion", async () => {
+    const previousMetrics = process.env[SQLITE_WRITE_METRICS_ENV];
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    try {
+      expectSqliteWriteBudget({
+        scenario: "resource-checkout-blocking-abort-race",
+        note: "Interrupted acquire cleanup after enqueue. The cancel reconciles expiry and promotes the waiter, then cleanup releases the grant.",
+        writes: await abortQueuedAcquire(true, "write budget"),
+      });
+    } finally {
+      if (previousMetrics === undefined) delete process.env[SQLITE_WRITE_METRICS_ENV];
+      else process.env[SQLITE_WRITE_METRICS_ENV] = previousMetrics;
+    }
+  });
+
+  it("cleans up a grant returned by status after abort or timeout", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), fc.boolean(), async (abort, queued) => {
+      const { service, close } = openRealService();
+      const handle = createResourceCheckoutToolHandler(service);
+      const controller = new AbortController();
+      const waiting = Promise.withResolvers<void>();
+      const resume = Promise.withResolvers<void>();
+      const subscribed = Promise.withResolvers<void>();
+      const subscribe = service.subscribe.bind(service);
+      vi.spyOn(service, "subscribe").mockImplementation((listener) => {
+        const unsubscribe = subscribe(listener);
+        subscribed.resolve();
+        return unsubscribe;
+      });
+      const first = queued
+        ? await handle("resource_checkout_acquire", { ...acquireArgs, units: 8 }, holder) as { releaseAction: unknown }
+        : undefined;
+      const status = service.status.bind(service);
+      vi.spyOn(service, "status").mockImplementation(async (...args) => {
+        const result = await status(...args);
+        if (result?.state === "granted") {
+          waiting.resolve();
+          await resume.promise;
+        }
+        return result;
+      });
+      vi.useFakeTimers({ toFake: ["performance"] });
+      try {
+        const pending = handle("resource_checkout_acquire", {
+          ...acquireArgs, idempotencyKey: "late status", waitTimeoutMs: 100,
+        }, { ...caller, signal: controller.signal });
+        if (first) {
+          await subscribed.promise;
+          await handle("resource_checkout_action", { action: first.releaseAction }, holder);
+        }
+        await waiting.promise;
+        if (abort) controller.abort(new Error("Caller stopped"));
+        else vi.advanceTimersByTime(100);
+        resume.resolve();
+        if (abort) await expect(pending).rejects.toThrow("Caller stopped");
+        else expect(await pending).toMatchObject({ outcome: "timed_out", cancelled: true });
+        expect(service.read().resources[0].allocations).toHaveLength(0);
+      } finally {
+        vi.useRealTimers();
+        await close();
+      }
+    }), { numRuns: 10, examples: [[true, false], [false, false], [true, true], [false, true]] });
+  });
 
   it("requires explicit units on counted resources and returns releaseAction for immediate try/finally release", async () => {
     const { service, close } = openRealService(8);
@@ -965,6 +1151,8 @@ describe("resource_checkout_acquire (blocking Code Mode checkout)", () => {
   });
 
   it("automatically cancels its queued entry on timeout or abort so no phantom waiters remain", async () => {
+    const previousMetrics = process.env[SQLITE_WRITE_METRICS_ENV];
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
     const { service, close } = openRealService(8);
     try {
       const handler = createResourceCheckoutToolHandler(service);
@@ -974,14 +1162,19 @@ describe("resource_checkout_acquire (blocking Code Mode checkout)", () => {
         units: 8,
       }, holder) as { releaseAction: Record<string, unknown> };
 
-      const timedOut = await handler("resource_checkout_acquire", {
+      const { result: timedOut, writes } = await measureSqliteWrites(() => handler("resource_checkout_acquire", {
         purpose: "Short wait",
         expectedDurationMs: 60_000,
         units: 4,
         waitTimeoutMs: 40,
-      }, caller);
+      }, caller));
       expect(timedOut).toMatchObject({ outcome: "timed_out", cancelled: true });
       expect(service.read().resources[0].queue).toHaveLength(0);
+      expectSqliteWriteBudget({
+        scenario: "resource-checkout-blocking-timeout",
+        note: "One queued blocking acquire and automatic cancellation, excluding the existing holder.",
+        writes,
+      });
 
       const controller = new AbortController();
       const aborting = handler("resource_checkout_acquire", {
@@ -999,6 +1192,8 @@ describe("resource_checkout_acquire (blocking Code Mode checkout)", () => {
       await handler("resource_checkout_action", { action: first.releaseAction }, holder);
     } finally {
       await close();
+      if (previousMetrics === undefined) delete process.env[SQLITE_WRITE_METRICS_ENV];
+      else process.env[SQLITE_WRITE_METRICS_ENV] = previousMetrics;
     }
   });
 });
