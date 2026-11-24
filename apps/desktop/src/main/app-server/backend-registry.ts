@@ -485,7 +485,7 @@ import {
   type AcpRuntimeClient,
   type AcpSessionMetadata,
 } from "./acp-backend-adapter";
-import { applyAcpRuntimeSelection } from "./acp-runtime-selection";
+import { acpStartedExecutionMode, applyAcpRuntimeSelection } from "./acp-runtime-selection";
 import {
   CodexThreadBusyBeforeStartError,
   extractRateLimitSummaries,
@@ -6172,7 +6172,7 @@ export class DesktopBackendRegistry {
     reasoningEffort?: string;
     mcpRegistration?: AcpMcpServerRegistration;
     hidden?: boolean;
-  }): Promise<{ threadId: string }> {
+  }): Promise<{ threadId: string; executionMode: ThreadExecutionMode }> {
     if (params.executionMode === "auto") {
       throw new Error("Auto access is supported only by Codex.");
     }
@@ -6206,7 +6206,39 @@ export class DesktopBackendRegistry {
       params.acpRuntime,
       params.reasoningEffort,
     );
-    return { threadId: session.sessionId };
+    return {
+      threadId: session.sessionId,
+      executionMode: this.recordStartedAcpExecutionMode(
+        params.backend,
+        session.sessionId,
+        params.executionMode,
+      ),
+    };
+  }
+
+  /**
+   * Records the access a new ACP session holds after its start writes. A
+   * native Yolo the session does not list fell back below Full Access.
+   */
+  private recordStartedAcpExecutionMode(
+    backend: AcpBackendId,
+    sessionId: string,
+    requested: ThreadExecutionMode,
+  ): ThreadExecutionMode {
+    // A slash command, not the native mode, set this session's access.
+    if (this.usesSlashControlledAcpExecutionModes(backend)) return requested;
+    const session = this.acpBackend.getSession(backend, sessionId);
+    const agent = this.acpBackend.getInstalledAgent(backend);
+    const executionMode = acpStartedExecutionMode({
+      executionMode: requested,
+      registryId: agent?.registryId,
+      runtime: session?.acpRuntime,
+      runtimeCapabilities: agent?.runtimeCapabilities,
+    });
+    if (session && session.executionMode !== executionMode) {
+      this.acpBackend.upsertSession({ ...session, executionMode });
+    }
+    return executionMode;
   }
 
   private async startAcpTurn(
@@ -8885,14 +8917,19 @@ export class DesktopBackendRegistry {
     }, host: {
       providers: {
         claude: async () => await this.claudeBackend.startThread({ cwd: cwd!, executionMode: effectiveExecutionMode, model: modelSettings.model, linkedDirectories: resolvedLinkedDirectories }),
-        acp: async () => await this.startAcpSession({
-          backend: backend as AcpBackendId,
-          cwd,
-          executionMode: effectiveExecutionMode,
-          acpRuntime,
-          reasoningEffort: modelSettings.reasoningEffort,
-          mcpRegistration: acpMcpRegistration,
-        }),
+        acp: async () => {
+          const started = await this.startAcpSession({
+            backend: backend as AcpBackendId,
+            cwd,
+            executionMode: effectiveExecutionMode,
+            acpRuntime,
+            reasoningEffort: modelSettings.reasoningEffort,
+            mcpRegistration: acpMcpRegistration,
+          });
+          // Less than asked when the session lacked the native Yolo.
+          metadata.executionMode = started.executionMode;
+          return started;
+        },
         codex: async () => await (
             client ?? this.getClient(backend, effectiveExecutionMode)
           ).startThread({
@@ -8942,7 +8979,7 @@ export class DesktopBackendRegistry {
             projectKey: cwd,
             createdAt: startedAt,
             updatedAt: startedAt,
-            executionMode: effectiveExecutionMode,
+            executionMode: metadata.executionMode,
             ...modelSettings,
             // What the session applied: a start falls back from a mode the
             // new session does not list.
