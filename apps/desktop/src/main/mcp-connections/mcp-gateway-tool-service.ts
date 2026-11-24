@@ -12,7 +12,7 @@ import {
 import type { McpSkillSummary } from "./mcp-skills-relay";
 
 export type McpGatewayCallArgs = Omit<McpGatewayInvocation, "serverName">;
-export type McpGatewaySearch = { query: string; connectionId?: string; limit?: number };
+export type McpGatewaySearch = { query: string; connectionId?: string; limit?: number; includeLargeSchema?: boolean };
 export type McpGatewayApproval = boolean | {
   /** Record conversation consent only after the owner's validation and call succeed. */
   onInvoked: () => Promise<void>;
@@ -66,6 +66,9 @@ export type McpGatewayToolServiceOptions = {
 
 /** Exact schemas are indivisible, so a result that would pass this drops a tool instead. */
 const MAX_SEARCH_RESULT_BYTES = 24_000;
+const MAX_INVOCATION_BYTES = 16_000;
+// Leave ample room for the MCP HTTP and broker RPC envelopes (1 MiB each).
+const MAX_ANTIGRAVITY_PAYLOAD_BYTES = 64_000;
 
 /**
  * The connections that fail during a search take at most this much of the
@@ -89,19 +92,24 @@ const MAX_SEARCH_LIMIT = 5;
 type McpGatewayUnavailable = McpGatewaySearchResult["unavailable"][number];
 
 /** What a search says about a tool whose exact schema the result has no room for. */
-function schemaBudgetNotice(tool: McpGatewaySource): McpGatewayUnavailable {
+function schemaBudgetNotice(tool: McpGatewaySource, antigravity: boolean, includeLargeSchema: boolean): McpGatewayUnavailable {
   // Counted in code points, so a cut never leaves half a surrogate pair.
   const characters = Array.from(tool.toolName);
-  if (characters.length <= MAX_NOTICE_TOOL_NAME_CHARS) {
+  const longName = characters.length > MAX_NOTICE_TOOL_NAME_CHARS;
+  const name = longName ? `${characters.slice(0, MAX_NOTICE_TOOL_NAME_CHARS - 1).join("")}…` : tool.toolName;
+  if (antigravity) {
+    const guidance = includeLargeSchema
+      ? "The exact schema cannot be delivered through this gateway."
+      : "Search with this connectionId, the exact tool name as query, and includeLargeSchema: true.";
     return {
       connectionId: tool.connectionId,
-      message: `The exact schema for ${tool.toolName} exceeds this result's size budget. Search its exact name alone or use native MCP invocation.`,
+      message: `The exact schema for ${name} exceeds this result's size budget. ${guidance}`,
     };
   }
-  const name = `${characters.slice(0, MAX_NOTICE_TOOL_NAME_CHARS - 1).join("")}…`;
+  const query = longName ? "Search part of its name with this connectionId alone" : "Search its exact name alone";
   return {
     connectionId: tool.connectionId,
-    message: `The exact schema for ${name} exceeds this result's size budget. Search part of its name with this connectionId alone, or use native MCP invocation.`,
+    message: `The exact schema for ${name} exceeds this result's size budget. ${query} or use native MCP invocation.`,
   };
 }
 
@@ -165,6 +173,12 @@ export class McpGatewayToolService {
   }
 
   async search(args: McpGatewaySearch, context: AgentToolCallContext): Promise<McpGatewaySearchResult> {
+    const antigravity = context.backend === "acp:antigravity";
+    const includeLargeSchema = args.includeLargeSchema === true;
+    if (includeLargeSchema && (!antigravity || !args.connectionId)) {
+      throw new Error("includeLargeSchema requires Antigravity and a connectionId. Set query to the exact tool name.");
+    }
+    const resultBudget = includeLargeSchema ? MAX_ANTIGRAVITY_PAYLOAD_BYTES : MAX_SEARCH_RESULT_BYTES;
     return await this.run(context, MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS, async (signal, deadlineAt) => {
       const selected = await this.options.selectedConnections(context);
       if (args.connectionId && !selected.includes(args.connectionId)) throw new Error("This connection is not selected for the calling thread.");
@@ -231,7 +245,8 @@ export class McpGatewayToolService {
         return terms.reduce((sum, term) => sum + (lower.includes(term) ? 1 : 0), 0);
       };
       const skillScore = (skill: McpSkillSummary): number => scoreText(`${skill.name} ${skill.description ?? ""}`);
-      const ranked = candidates.filter((tool) => current.has(tool.connectionId)).map((tool) => {
+      const ranked = candidates.filter((tool) => current.has(tool.connectionId)
+        && (!includeLargeSchema || tool.toolName === args.query)).map((tool) => {
         const name = tool.toolName.toLowerCase();
         const text = `${tool.serverName} ${name} ${tool.definition.description ?? ""}`.toLowerCase();
         const score = name === args.query.toLowerCase() ? 10_000
@@ -246,12 +261,13 @@ export class McpGatewayToolService {
       const selectionOrder = new Map(ids.map((id, index) => [id, index]));
       unavailable.sort((left, right) => selectionOrder.get(left.connectionId)! - selectionOrder.get(right.connectionId)!);
       const result: McpGatewaySearchResult = { tools: [], unavailable: fitConnectionErrors(unavailable, MAX_CONNECTION_ERROR_BYTES) };
-      const picked = ranked.slice(0, Math.min(args.limit ?? 3, MAX_SEARCH_LIMIT));
+      const picked = ranked.slice(0, includeLargeSchema ? 1 : Math.min(args.limit ?? 3, MAX_SEARCH_LIMIT));
       // A tool turned away adds its notice to `unavailable` after the tools
       // before it were measured, so each admission keeps room for the notice
       // of every candidate still to come, and for the comma before each one
       // that will not be the list's first entry.
-      const noticeBytes = picked.map(({ tool }) => Buffer.byteLength(JSON.stringify(schemaBudgetNotice(tool))));
+      const notices = picked.map(({ tool }) => schemaBudgetNotice(tool, antigravity, includeLargeSchema));
+      const noticeBytes = notices.map((notice) => Buffer.byteLength(JSON.stringify(notice)));
       let laterNoticeBytes = noticeBytes.reduce((sum, bytes) => sum + bytes, 0);
       for (const [index, { tool }] of picked.entries()) {
         laterNoticeBytes -= noticeBytes[index];
@@ -270,8 +286,8 @@ export class McpGatewayToolService {
           : result.serverInstructions;
         // Exact schemas are indivisible. Never return truncated valid-looking JSON.
         const bytes = Buffer.byteLength(JSON.stringify({ ...result, tools: [...result.tools, entry], serverInstructions, servers }));
-        if (bytes + reserved > MAX_SEARCH_RESULT_BYTES) {
-          result.unavailable.push(schemaBudgetNotice(tool));
+        if (bytes + reserved > resultBudget) {
+          result.unavailable.push(notices[index]);
           continue;
         }
         result.tools.push(entry);
@@ -328,7 +344,13 @@ export class McpGatewayToolService {
   }
 
   async call(args: McpGatewayCallArgs, context: AgentToolCallContext): Promise<{ source: McpGatewaySource; result: CallToolResult }> {
-    if (Buffer.byteLength(JSON.stringify(args)) > 16_000) throw new Error("The MCP invocation exceeds the approval size limit. Use native MCP invocation for larger arguments.");
+    const antigravity = context.backend === "acp:antigravity";
+    const limit = antigravity ? MAX_ANTIGRAVITY_PAYLOAD_BYTES : MAX_INVOCATION_BYTES;
+    if (Buffer.byteLength(JSON.stringify(args)) > limit) {
+      throw new Error(antigravity
+        ? `The MCP invocation exceeds the ${limit}-byte gateway size limit. No tool was invoked.`
+        : "The MCP invocation exceeds the approval size limit. Use native MCP invocation for larger arguments.");
+    }
     // The call's own cap starts after approval, which can take up to one
     // idle timeout, so the outer cap allows for it.
     return await this.run(context, MCP_CONNECTION_TOOL_TIMEOUT_MS, async (signal, _deadlineAt, extend) => {

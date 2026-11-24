@@ -16,18 +16,23 @@ export function buildMcpGatewayToolDefinitions(service?: McpGatewayToolService, 
         query: { type: "string", minLength: 1, maxLength: 500 },
         connectionId: { type: "string", minLength: 1 },
         limit: { type: "integer", minimum: 1, maximum: 5 },
+        includeLargeSchema: { type: "boolean", description: "Antigravity only. With connectionId and the exact tool name as query, return one schema in a response of up to 64,000 bytes." },
       },
     },
     dispatch: async (args, context) => {
       if (typeof args.query !== "string" || !args.query.trim() || args.query.length > 500
         || (args.connectionId !== undefined && (typeof args.connectionId !== "string" || !args.connectionId))
         || (args.limit !== undefined && (!Number.isInteger(args.limit) || Number(args.limit) < 1 || Number(args.limit) > 5))
-        || Object.keys(args).some((key) => !["query", "connectionId", "limit"].includes(key))) {
-        return agentToolFailure({ code: "invalid_arguments", message: "Provide query, optional connectionId and a limit from 1 to 5." });
+        || (args.includeLargeSchema !== undefined && typeof args.includeLargeSchema !== "boolean")
+        || Object.keys(args).some((key) => !["query", "connectionId", "limit", "includeLargeSchema"].includes(key))) {
+        return agentToolFailure({ code: "invalid_arguments", message: "Provide query, optional connectionId, a limit from 1 to 5 and an optional boolean includeLargeSchema." });
       }
       if (!service) return agentToolFailure({ code: "unavailable", message: "MCP gateway discovery is unavailable." });
       try {
-        const result = await service.search({ query: args.query.trim(), connectionId: args.connectionId as string | undefined, limit: args.limit as number | undefined }, context);
+        const result = await service.search({
+          query: args.query.trim(), connectionId: args.connectionId as string | undefined,
+          limit: args.limit as number | undefined, includeLargeSchema: args.includeLargeSchema as boolean | undefined,
+        }, context);
         const visibleText = JSON.stringify(result);
         const protect = store && context.backend === "codex" && context.turnId;
         const delivery = protect
