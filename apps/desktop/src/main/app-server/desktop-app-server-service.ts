@@ -3885,7 +3885,9 @@ class DesktopAppServerService {
       const registry = getDesktopBackendRegistry();
       if (registry.isRestartGateClosed?.() || registry.stackThreadActive(actor) || await registry.isThreadLocked(actor)) return;
       const parent = stack.layers[stack.layers.indexOf(next) - 1]?.pullRequest;
-      const parentHead = parent && this.prStatusRegistry.get(getPrStatusKey({ ...pr, number: parent.number }))?.pr.headSha;
+      const parentHead = parent && this.prStatusRegistry.get(getPrStatusKey({
+        provider: pr.provider, org: pr.org, repo: pr.repo, number: parent.number,
+      }))?.pr.headSha;
       const signature = JSON.stringify([stack.key, next.unsettled, pr.headSha, pr.baseRefName, parent?.lifecycleState, parentHead]);
       const attempt = this.stackPublishAttempts.get(key);
       if ((attempt?.signature === signature && (attempt.retryAfter ?? Infinity) > Date.now()) || this.stackPublishActive.has(key)) return;
