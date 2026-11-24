@@ -3849,7 +3849,9 @@ class DesktopAppServerService {
         const block = layer && stackDispatchBlock(layer);
         if (block) return {
           reason: describeStackAutomationBlock(block),
-          ...(layer?.heldBy?.number !== undefined && { lowerKey: getPrStatusKey({ ...pr, number: layer.heldBy.number }) }),
+          ...(layer?.heldBy?.number !== undefined && {
+            lowerKey: getPrStatusKey({ provider: pr.provider, org: pr.org, repo: pr.repo, number: layer.heldBy.number }),
+          }),
         };
       }
     } catch (error) {

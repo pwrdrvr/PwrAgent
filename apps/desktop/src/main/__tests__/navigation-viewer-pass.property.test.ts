@@ -671,7 +671,9 @@ it.each(["changed catalog", "failed checkout lookup", "failed preflight lookup",
     };
     if (change === "failed preflight lookup") {
       finish();
-      expect(await service["prStackHoldEvidence"](pr)).toMatchObject({ reason: expect.stringContaining("Held by #1") });
+      expect(await service["prStackHoldEvidence"](pr)).toMatchObject({
+        reason: expect.stringContaining("Held by #1:"), lowerKey: "github.com/fixture/stack#1",
+      });
       failCheckout();
       expect(await service["prStackHoldEvidence"](pr)).toEqual({ reason: "Held while stack settlement is unavailable" });
       expect(list).toHaveBeenCalledOnce();
@@ -694,6 +696,45 @@ it.each(["changed catalog", "failed checkout lookup", "failed preflight lookup",
   }
 });
 
+it("keys stack automation hold evidence to the blocking PR in the catalog", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-hold-key-"));
+  const db = openInMemoryStateDb();
+  const restore = isolateProcessGitEnvironment();
+  const git = (...args: string[]) => runIsolatedGitSync(cwd, args).trim();
+  try {
+    git("init", "-b", "upper");
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "upper");
+    const head = git("rev-parse", "HEAD");
+    git("branch", "lower");
+    current.store = new SqliteOverlayStore(db);
+    resetAppServerServiceForTests();
+    const service = initializeDesktopAppServerService();
+    vi.spyOn(service as unknown as { prStackDirectories: () => string[] }, "prStackDirectories").mockReturnValue([cwd]);
+    vi.spyOn(service, "listThreads").mockResolvedValue({ backend: "all", fetchedAt: 0, threads: [] });
+
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 10_000 }), fc.integer({ min: 1, max: 100 }), async (lower, gap) => {
+      const upper = lower + gap;
+      await writeFile(path.join(cwd, ".git", "gh-stack"), JSON.stringify({
+        schemaVersion: 1, repository: "github.com:fixture/stack",
+        stacks: [{ trunk: { branch: "main", head }, branches: [
+          { branch: "lower", head, base: head, pullRequest: { number: lower } },
+          { branch: "upper", head, base: head, pullRequest: { number: upper } },
+        ] }],
+      }));
+      const pr: PrSummary = {
+        number: upper, provider: "github.com", org: "fixture", repo: "stack", state: "passing",
+        lifecycleState: "open", url: `https://github.com/fixture/stack/pull/${upper}`, headRefName: "upper",
+      };
+      expect(await service["prStackHoldEvidence"](pr)).toMatchObject({
+        reason: expect.stringContaining(`Held by #${lower}:`), lowerKey: `github.com/fixture/stack#${lower}`,
+      });
+    }), { numRuns: 25 });
+  } finally {
+    restore();
+    db.close();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
 
 it.each(["absent", "unrelated"])("skips listing threads for a standalone PR with an %s catalog under installed Git", async (catalog) => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-no-hold-"));
