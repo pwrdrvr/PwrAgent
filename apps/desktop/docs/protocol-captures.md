@@ -260,7 +260,11 @@ The November 24, 2026 macOS captures of Antigravity (`agy acp --process-per-sess
 | `plan` | Sent `session/request_permission` (`kind: "execute"`, `run_command`). |
 | `auto` | Completed both commands with 0 permission requests. |
 
-Managed Antigravity review children therefore request Antigravity's native `auto` mode on the normal (non-Full-Access) process, falling back through `acpSessionStartMode` when a session does not list `auto`.
+Operator-requested managed reviews select native `auto` on the normal process
+and fall back through `acpSessionStartMode` if a session does not list it.
+Agent-requested reviews must confirm the caller's mode before sending a prompt.
+An Antigravity reviewer for another provider's agent starts in Default.
+The hidden session's applied mode stays local to that session.
 
 Raw captures are under the ignored
 `apps/desktop/.local/protocol-captures/antigravity-review-probe/`.

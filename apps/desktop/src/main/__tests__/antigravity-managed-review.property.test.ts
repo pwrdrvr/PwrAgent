@@ -1,14 +1,24 @@
 import fc from "fast-check";
-import { describe, expect, it } from "vitest";
+import { rmSync } from "node:fs";
+import { describe, expect, it, vi } from "vitest";
 import type {
   BackendAcpRuntimeCapabilities,
   BackendAcpSessionRuntimeState,
 } from "@pwragent/shared/contracts/backend";
 import type { ThreadExecutionMode } from "@pwragent/shared/contracts/normalized-app-server";
+import { AcpAgentStore } from "@pwragent/sqlite-storage/acp-agent-store";
+import { AcpSessionStore } from "@pwragent/sqlite-storage/acp-session-store";
+import type { AcpInstalledAgentRecord, AcpRegistrySnapshot } from "../acp/acp-registry-types";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { buildManagedReviewPrompt } from "../app-server/managed-review";
+import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
+import { StateDb } from "../state/state-db";
+import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
+import { createTempStateDb } from "./sqlite-test-utils";
 import {
+  callRegistryMcpTool,
   createAcpAgentStoreMock,
   createAcpSessionStoreMock,
   createKimiAgentRecord,
@@ -27,6 +37,10 @@ type ProbeOptions = {
   parentMode?: AntigravityMode;
   cachedMenu?: readonly AntigravityMode[];
   sessionMenu: readonly AntigravityMode[];
+  agentRequested?: boolean;
+  changeParentModeBeforeDispatch?: AntigravityMode;
+  startUnrelatedThread?: boolean;
+  stateDb?: StateDb;
 };
 
 function buildModeConfigOption(
@@ -94,28 +108,26 @@ async function runAntigravityManagedReview(options: ProbeOptions) {
         }
       : undefined;
 
-  const sessions = createAcpSessionStoreMock(
-    options.parentBackend === ANTIGRAVITY_BACKEND
-      ? [{
-          backendId: ANTIGRAVITY_BACKEND,
-          sessionId: parentThreadId,
-          title: "Antigravity parent",
-          cwd: nonRepositoryCwd,
-          createdAt: 1_000,
-          updatedAt: 1_000,
-          executionMode: options.parentExecutionMode === "full-access"
-            ? "full-access"
-            : "default",
-          ...(options.parentExecutionMode === "full-access"
-            ? { antigravityFullAccessConfirmed: true }
-            : {}),
-          ...(parentAcpRuntime ? { acpRuntime: parentAcpRuntime } : {}),
-          status: "idle",
-        }]
-      : [],
-  );
-  const agents = createAcpAgentStoreMock([installedAgent]);
-  const overlayStore = createOverlayStoreMock({
+  const sessions = options.stateDb ? new AcpSessionStore(options.stateDb) : createAcpSessionStoreMock([]);
+  if (options.parentBackend === ANTIGRAVITY_BACKEND) {
+    sessions.upsertSession({
+      backendId: ANTIGRAVITY_BACKEND,
+      sessionId: parentThreadId,
+      title: "Antigravity parent",
+      cwd: nonRepositoryCwd,
+      createdAt: 1_000,
+      updatedAt: 1_000,
+      executionMode: options.parentExecutionMode === "full-access" ? "full-access" : "default",
+      ...(options.parentExecutionMode === "full-access" ? { antigravityFullAccessConfirmed: true } : {}),
+      ...(parentAcpRuntime ? { acpRuntime: parentAcpRuntime } : {}),
+      status: "idle",
+    });
+  }
+  const agents = options.stateDb
+    ? new AcpAgentStore<AcpRegistrySnapshot, AcpInstalledAgentRecord>(options.stateDb)
+    : createAcpAgentStoreMock([]);
+  agents.upsertInstalledAgent(installedAgent);
+  const overlayStore = options.stateDb ? new SqliteOverlayStore(options.stateDb) : createOverlayStoreMock({
     overlays: {
       [`${options.parentBackend}:${parentThreadId}`]: {
         backend: options.parentBackend,
@@ -129,6 +141,10 @@ async function runAntigravityManagedReview(options: ProbeOptions) {
   const spawnedFullAccess: boolean[] = [];
   const promptModes: string[] = [];
   const promptTexts: string[] = [];
+  const agentReviewStatuses: string[] = [];
+  const closedChildSessions: string[] = [];
+  const modeAtPrompt = Promise.withResolvers<void>();
+  const finishPrompt = Promise.withResolvers<void>();
   let sessionCount = 0;
 
   const registry = createDesktopBackendRegistry({
@@ -206,8 +222,14 @@ async function runAntigravityManagedReview(options: ProbeOptions) {
             });
             return {};
           }
-          if (method === "session/prompt") {
+          const isReviewChild = String(params?.sessionId).startsWith(childSessionId);
+          if (method === "session/close" && isReviewChild) {
+            closedChildSessions.push(String(params?.sessionId));
+          }
+          if (method === "session/prompt" && isReviewChild) {
             promptModes.push(this.mode);
+            modeAtPrompt.resolve();
+            if (options.stateDb) await finishPrompt.promise;
             const promptBlocks = Array.isArray(params?.prompt)
               ? params.prompt as Array<{ text?: string }>
               : [];
@@ -232,19 +254,64 @@ async function runAntigravityManagedReview(options: ProbeOptions) {
       return transport;
     },
   });
+  registry.onEvent(({ notification }) => {
+    if (notification.method === "thread/reviewStart/updated"
+      && typeof notification.params.status === "string") {
+      agentReviewStatuses.push(notification.params.status);
+    }
+  });
 
   try {
-    await registry.startReview({
+    const review = {
       backend: options.parentBackend,
       threadId: parentThreadId,
       reviewBackend: ANTIGRAVITY_BACKEND,
-      runMode: "pwragent-sub-agent",
-      delivery: "inline",
+      runMode: "pwragent-sub-agent" as const,
+      delivery: "inline" as const,
       cwd: nonRepositoryCwd,
-      target: { type: "uncommittedChanges" },
-    });
-    return { spawnedFullAccess, promptModes, promptTexts };
+      target: { type: "uncommittedChanges" as const },
+    };
+    let writes;
+    if (options.agentRequested) {
+      const { backend, threadId } = review;
+      const turnId = "requesting-turn";
+      await registry.publishLocalEvent({ backend, notification: {
+        method: "turn/started", params: { threadId, turnId, turn: { id: turnId } },
+      } });
+      const result = await callRegistryMcpTool({ registry, backend, threadId, turnId, tool: "start_review",
+        args: { target: review.target, runMode: review.runMode },
+      });
+      expect(result?.structuredContent?.status).toBe("scheduled");
+      const nextMode = options.changeParentModeBeforeDispatch;
+      if (nextMode) {
+        const parent = sessions.getSession(ANTIGRAVITY_BACKEND, threadId)!;
+        sessions.upsertSession({ ...parent, acpRuntime: {
+          currentModeId: nextMode, configValues: { mode: nextMode }, updatedAt: 2_000,
+        } });
+      }
+      await registry.publishLocalEvent({ backend, notification: {
+        method: "turn/completed", params: { threadId, turnId, turn: { id: turnId, status: "completed", output: [] } },
+      } });
+    } else if (options.stateDb) {
+      ({ writes } = await measureSqliteWrites(async () => {
+        await registry.startReview(review);
+        await modeAtPrompt.promise;
+      }));
+    } else {
+      await registry.startReview(review);
+    }
+    const cachedMode = agents.getInstalledAgent(ANTIGRAVITY_BACKEND)?.runtimeCapabilities?.configOptions
+      ?.find((option) => option.id === "mode")?.currentValue;
+    const unrelatedThreadId = options.startUnrelatedThread
+      ? (await registry.startThread({ backend: ANTIGRAVITY_BACKEND, cwd: nonRepositoryCwd, workMode: "local" })).threadId
+      : undefined;
+    return { spawnedFullAccess, promptModes, promptTexts, cachedMode, writes, agentReviewStatuses, closedChildSessions,
+      unrelatedMode: typeof unrelatedThreadId === "string"
+        ? sessions.getSession(ANTIGRAVITY_BACKEND, unrelatedThreadId)?.acpRuntime?.currentModeId
+        : undefined,
+    };
   } finally {
+    finishPrompt.resolve();
     await registry.close();
   }
 }
@@ -319,6 +386,72 @@ describe("Antigravity managed review mode and access", () => {
       });
       expect(result.spawnedFullAccess).toEqual([false]);
       expect(result.promptModes).toEqual(["auto"]);
+    }
+  });
+
+  it.each(["default", "plan", "accept-edits", "auto"] as const)("keeps an agent-requested review in its caller's %s mode", async (parentMode) => {
+    // An agent's tool call carries its existing access to the child.
+    const result = await runAntigravityManagedReview({
+      parentBackend: ANTIGRAVITY_BACKEND, parentExecutionMode: "default", parentMode,
+      agentRequested: true, cachedMenu: ALL_MODES, sessionMenu: ALL_MODES,
+    });
+    expect(result.spawnedFullAccess).toEqual([false]);
+    expect(result.promptModes).toEqual([parentMode]);
+  });
+
+  it("keeps the requesting turn's access when its parent switches to Auto before dispatch", async () => {
+    const result = await runAntigravityManagedReview({
+      parentBackend: ANTIGRAVITY_BACKEND, parentExecutionMode: "default", parentMode: "plan",
+      agentRequested: true, changeParentModeBeforeDispatch: "auto", cachedMenu: ALL_MODES, sessionMenu: ALL_MODES,
+    });
+    expect(result.promptModes).toEqual(["plan"]);
+  });
+
+  it("refuses to prompt when the agent review child cannot confirm the caller's mode", async () => {
+    const result = await runAntigravityManagedReview({
+      parentBackend: ANTIGRAVITY_BACKEND, parentExecutionMode: "default", parentMode: "plan",
+      agentRequested: true, cachedMenu: ALL_MODES, sessionMenu: ["auto", "default"],
+    });
+    expect(result.agentReviewStatuses).toEqual(["failed"]);
+    expect(result.promptModes).toEqual([]);
+    expect(result.closedChildSessions).toEqual(["antigravity-review-child-1"]);
+  });
+
+  it("keeps an Auto review's mode out of subsequent threads' defaults", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom<"codex" | typeof ANTIGRAVITY_BACKEND>("codex", ANTIGRAVITY_BACKEND),
+      fc.constantFrom("default", "plan", "accept-edits"),
+      async (parentBackend, currentMode) => {
+        const modes = [currentMode, ...ALL_MODES.filter((mode) => mode !== currentMode)];
+        const result = await runAntigravityManagedReview({
+          parentBackend, parentExecutionMode: "default", cachedMenu: modes,
+          sessionMenu: modes, startUnrelatedThread: true,
+        });
+        expect(result.promptModes).toEqual(["auto"]);
+        expect(result.cachedMode).toBe(currentMode);
+        expect(result.unrelatedMode).toBe(currentMode);
+      },
+    ), { numRuns: 10 });
+  });
+
+  it("budgets SQLite writes from a cross-provider Antigravity Auto review start", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const { tempDir, dbPath } = createTempStateDb("pwragent-antigravity-review-budget-");
+    const stateDb = StateDb.open(dbPath);
+    try {
+      const result = await runAntigravityManagedReview({
+        parentBackend: "codex", parentExecutionMode: "default", cachedMenu: ALL_MODES,
+        sessionMenu: ALL_MODES, stateDb,
+      });
+      expect(result.promptModes).toEqual(["auto"]);
+      expectSqliteWriteBudget({ scenario: "antigravity-auto-review-start",
+        note: "Cross-provider review through the first hidden Antigravity prompt with real SQLite stores. About 1.61 MB/day at 10 review starts/day.",
+        writes: result.writes!,
+      });
+    } finally {
+      stateDb.close();
+      rmSync(tempDir, { recursive: true, force: true });
+      vi.unstubAllEnvs();
     }
   });
 

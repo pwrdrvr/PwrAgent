@@ -6210,6 +6210,7 @@ export class DesktopBackendRegistry {
     reasoningEffort?: string;
     mcpRegistration?: AcpMcpRegistrationSource;
     hidden?: boolean;
+    requiredAntigravityMode?: string;
   }): Promise<{ threadId: string; executionMode: ThreadExecutionMode }> {
     if (params.executionMode === "auto") {
       throw new Error("Auto access is supported only by Codex.");
@@ -6221,7 +6222,7 @@ export class DesktopBackendRegistry {
       ? "default"
       : params.executionMode;
     const effectiveAcpRuntime =
-      params.backend === "acp:antigravity" && params.executionMode === "full-access"
+      params.backend === "acp:antigravity" && params.executionMode === "full-access" && !params.requiredAntigravityMode
         ? this.normalizeAntigravityFullAccessRuntime(params.acpRuntime)
         : params.acpRuntime;
     const session = await this.withArchiveWorkspaceWrite(params.cwd ? [params.cwd] : [], async () => await client.startSession({
@@ -6230,6 +6231,7 @@ export class DesktopBackendRegistry {
       acpRuntime: effectiveAcpRuntime,
       additionalMcpRegistration: params.mcpRegistration,
       ...(params.hidden ? { hidden: true } : {}),
+      requiredAntigravityMode: params.requiredAntigravityMode,
     }));
     if (
       this.usesSlashControlledAcpExecutionModes(params.backend) &&
@@ -6318,6 +6320,7 @@ export class DesktopBackendRegistry {
     input: AppServerTurnInputItem[];
     model?: string;
     reasoningEffort?: string;
+    requiredAntigravityMode?: string;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     const promptPayload = await inputToAcpPrompt(params.input, {
       owner: { backend: params.backend, threadId: params.threadId },
@@ -6416,6 +6419,13 @@ export class DesktopBackendRegistry {
         value: params.model,
         reasoningEffort: params.reasoningEffort,
       });
+    }
+    if (params.requiredAntigravityMode) {
+      const runtime = this.acpBackend.getSession(params.backend, params.threadId)?.acpRuntime;
+      if ((runtime?.configValues?.mode ?? runtime?.currentModeId) !== params.requiredAntigravityMode
+        || (runtime?.currentModeId && runtime.currentModeId !== params.requiredAntigravityMode)) {
+        throw new Error("The Antigravity reviewer could not preserve the caller's session mode.");
+      }
     }
     const syntheticStartedTurnId = `pending:${params.threadId}:${Date.now()}`;
     await this.emit({

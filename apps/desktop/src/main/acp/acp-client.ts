@@ -1256,6 +1256,8 @@ export class AcpAgentClient {
     createdAt?: number;
     acpRuntime?: BackendAcpSessionRuntimeState;
     hidden?: boolean;
+    /** An agent-requested review cannot prompt until the caller's mode is confirmed. */
+    requiredAntigravityMode?: string;
     mcpServers?: "default" | "none";
     additionalMcpRegistration?: AcpMcpRegistrationSource;
     sessionMeta?: Record<string, unknown>;
@@ -1323,19 +1325,20 @@ export class AcpAgentClient {
       throw new Error("ACP session/new did not return a session id");
     }
     const appSessionId = params.sessionId ?? sessionId;
-    if (handoff && rolloutStore) {
+    if (handoff || params.requiredAntigravityMode) {
       try {
         const fullAccessWorker = this.options.antigravityFullAccess === true;
-        const mode = fullAccessWorker ? "default" : handoff.mode;
+        const mode = params.requiredAntigravityMode ?? (fullAccessWorker ? "default" : handoff?.mode);
         if (mode) {
           result = await this.confirmAntigravityMode(
             sessionId,
             result,
             mode,
-            !fullAccessWorker || (handoff.mode !== undefined && handoff.mode !== "default"),
+            params.requiredAntigravityMode !== undefined
+              || !fullAccessWorker || (handoff?.mode !== undefined && handoff.mode !== "default"),
           );
         }
-        rolloutStore.appendUpdate({
+        if (handoff && rolloutStore) rolloutStore.appendUpdate({
           backendId: this.options.backendId,
           sessionId: appSessionId,
           receivedAt: now,
@@ -1347,13 +1350,15 @@ export class AcpAgentClient {
         });
       } catch (error) {
         await this.options.transport.request("session/close", { sessionId }, ACP_SESSION_CLOSE_REQUEST_TIMEOUT_MS)
-          .catch((closeError: unknown) => acpClientLog.warn("Could not close an unbound Antigravity workspace session", {
+          .catch((closeError: unknown) => acpClientLog.warn("Could not close an unbound Antigravity session", {
             sessionId, error: closeError instanceof Error ? closeError.message : String(closeError),
           }));
         throw error;
       }
     }
-    const runtimeCapabilities = this.captureRuntimeCapabilities({ source: "session-new", result });
+    const runtimeCapabilities = this.captureRuntimeCapabilities({
+      source: "session-new", result, privateMode: params.hidden && this.options.backendId === "acp:antigravity",
+    });
     const runtimeState = this.runtimeStateFromResponse(result, now);
     const combinedRuntimeState =
       params.acpRuntime || runtimeState
@@ -2049,6 +2054,7 @@ export class AcpAgentClient {
     const runtimeCapabilities = this.captureRuntimeCapabilities({
       source: "session-load",
       result,
+      privateMode: this.isHiddenAntigravitySession(params.sessionId),
     });
     const responseRuntimeState = this.runtimeStateFromResponse(result, now);
     const modelConfigOption = this.runtimeConfigOption("model");
@@ -2883,6 +2889,7 @@ export class AcpAgentClient {
   private captureRuntimeCapabilities(params: {
     source: BackendAcpRuntimeCapabilities["source"];
     result: unknown;
+    privateMode?: boolean;
   }): BackendAcpRuntimeCapabilities | undefined {
     const runtimeCapabilities = normalizeAcpRuntimeCapabilities({
       value: params.result,
@@ -2891,9 +2898,26 @@ export class AcpAgentClient {
       initialize: this.runtimeCapabilities,
     });
     if (runtimeCapabilities) {
-      this.runtimeCapabilities = runtimeCapabilities;
+      const previous = this.runtimeCapabilities;
+      // Keep the menu for model and option writes, but never carry a private
+      // session's selected mode into another session's sparse reply.
+      this.runtimeCapabilities = params.privateMode ? {
+        ...runtimeCapabilities,
+        modes: runtimeCapabilities.modes && {
+          ...runtimeCapabilities.modes,
+          currentModeId: previous?.modes?.currentModeId,
+        },
+        configOptions: runtimeCapabilities.configOptions?.map((option) => option.category === "mode"
+          ? { ...option, currentValue: previous?.configOptions?.find((prior) => prior.id === option.id)?.currentValue }
+          : option),
+      } : runtimeCapabilities;
     }
-    return runtimeCapabilities;
+    return this.runtimeCapabilities;
+  }
+
+  private isHiddenAntigravitySession(sessionId: string): boolean {
+    return this.options.backendId === "acp:antigravity"
+      && this.options.store.getSession(this.options.backendId, sessionId)?.hidden === true;
   }
 
   private notifyRuntimeCapabilities(event: {
@@ -2902,7 +2926,10 @@ export class AcpAgentClient {
     runtimeCapabilities?: BackendAcpRuntimeCapabilities;
     runtimeState?: BackendAcpSessionRuntimeState;
   }): void {
-    if (!event.runtimeCapabilities) {
+    const privateSession = event.sessionId && this.isHiddenAntigravitySession(event.sessionId);
+    // Publish the private session's mode-neutral catalog once. Mode and
+    // model replies afterward only apply to this session's own metadata.
+    if (!event.runtimeCapabilities || (privateSession && event.runtimeCapabilities.source !== "session-new")) {
       return;
     }
     void Promise.resolve(
@@ -2910,7 +2937,7 @@ export class AcpAgentClient {
         ...(event.fromSessionLoad ? { fromSessionLoad: true } : {}),
         sessionId: event.sessionId,
         runtimeCapabilities: event.runtimeCapabilities,
-        runtimeState: event.runtimeState,
+        runtimeState: privateSession ? undefined : event.runtimeState,
       }),
     ).catch(() => undefined);
   }
@@ -3017,6 +3044,7 @@ export class AcpAgentClient {
     const runtimeCapabilities = this.captureRuntimeCapabilities({
       source: "session-load",
       result,
+      privateMode: metadata.hidden && this.options.backendId === "acp:antigravity",
     });
     this.rememberSessionConfigOptions(protocolSessionId, result);
     this.rememberSessionModeMenu(protocolSessionId, result);

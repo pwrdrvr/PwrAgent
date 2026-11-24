@@ -857,8 +857,11 @@ export type ReviewTerminal = {
   turnId: string;
 };
 
+export type AgentAntigravityReviewAccess = { mode: string; fullAccess: boolean };
+
 export type PendingReviewStartRecord = {
   agentRequestKey?: string;
+  agentAntigravityAccess?: AgentAntigravityReviewAccess;
   turnAttribution?: ReturnType<typeof delegatedTurnAttribution>;
   pendingReviewId: string;
   backend: AppServerBackendKind;

@@ -48,16 +48,16 @@ export function buildManagedReviewPrompt(
  *
  * Antigravity has no built-in code review command, and its `default` and
  * `plan` modes ask for approval on every terminal command including read-only
- * `git log` and `git diff` inspection. Starting the review child in
- * Antigravity's native `auto` mode lets safe inspection commands run without
- * prompting while keeping `--dangerously-skip-permissions` off; if the new
- * session does not list `auto`, `applyAcpRuntimeSelection` falls back to its
- * highest offered level at or below `auto` via `sessionStartMode`.
+ * `git log` and `git diff` inspection. Operator-requested reviews select
+ * native `auto`, with the usual session start fallback if it is unavailable.
+ * Agent-requested reviews confirm the caller's mode during session creation,
+ * before replaying the remaining runtime options here.
  */
 export function managedReviewAcpRuntime(params: {
   backend: AcpBackendId;
   parentRuntime?: BackendAcpSessionRuntimeState;
   runtimeCapabilities?: BackendAcpRuntimeCapabilities;
+  requireCallerMode?: boolean;
   now?: number;
 }): BackendAcpSessionRuntimeState | undefined {
   if (params.backend !== "acp:antigravity") {
@@ -79,7 +79,7 @@ export function managedReviewAcpRuntime(params: {
   const mirroredModeOption = findAcpMirroredModeConfigOption(
     params.runtimeCapabilities,
   );
-  const modeConfigOption = mirroredModeOption?.values.some(
+  const modeConfigOption = !params.requireCallerMode && mirroredModeOption?.values.some(
     (value) => value.value === "auto",
   )
     ? mirroredModeOption
@@ -97,7 +97,7 @@ export function managedReviewAcpRuntime(params: {
   return {
     ...rest,
     ...(configValues ? { configValues } : {}),
-    currentModeId: "auto",
+    ...(!params.requireCallerMode ? { currentModeId: "auto" } : {}),
     updatedAt: params.now ?? Date.now(),
   };
 }
