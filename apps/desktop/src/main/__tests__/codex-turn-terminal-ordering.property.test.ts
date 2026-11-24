@@ -1,4 +1,5 @@
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import type {
@@ -210,7 +211,7 @@ async function exerciseTerminalBeforeStartRegistration(method: TerminalMethod, t
   }
 }
 
-async function exerciseNativeReviewPendingInnerDelivery(method: TerminalMethod, separateThread: boolean) {
+async function exerciseNativeReviewPendingInnerDelivery(method: TerminalMethod, separateThread: boolean, terminalId = "turn") {
   const f = fixture();
   const entered = deferred(), release = deferred();
   const reviewThreadId = separateThread ? "review-thread" : "thread";
@@ -233,15 +234,28 @@ async function exerciseNativeReviewPendingInnerDelivery(method: TerminalMethod, 
     return { threadId: "thread", reviewThreadId, turnId: "turn" };
   });
   const review = f.registry.startReview({ ...identity, target: { type: "uncommittedChanges" } });
+  const deliveredTerminals: AgentEvent[] = [];
+  f.registry.onEvent((event) => {
+    if (event.notification.method === method && event.notification.params.threadId === reviewThreadId) {
+      deliveredTerminals.push(event);
+    }
+  });
   try {
     await review;
     expect(f.state.threadHasActiveTurn("thread")).toBe(true);
-    await f.notify(terminal(method, reviewThreadId));
+    await f.notify(terminal(method, reviewThreadId, terminalId));
     release.resolve();
     await inner;
     f.assertEnded();
     f.assertEnded(reviewThreadId);
     expect(f.activity.codex(reviewThreadId).deliveries).toEqual([]);
+    // The owner retires both IDs for an inline review. The listener must see
+    // the same boundary, with the original provider identity still intact.
+    expect(deliveredTerminals).toHaveLength(1);
+    expect(deliveredTerminals[0]?.notification.params).toMatchObject({ turnId: terminalId });
+    expect(deliveredTerminals[0]?.relatedReviewTurnId).toBe(
+      separateThread ? undefined : terminalId === "turn" ? "inner" : "turn",
+    );
   } finally {
     release.resolve();
     await review;
@@ -258,8 +272,12 @@ describe("Codex turn terminal ownership", () => {
   it("native review terminal owns a pending inner start delivery", async () => {
     await fc.assert(fc.asyncProperty(
       fc.constantFrom("turn/completed", "turn/failed", "turn/cancelled"), fc.boolean(),
-      exerciseNativeReviewPendingInnerDelivery,
+      async (method, separateThread) => await exerciseNativeReviewPendingInnerDelivery(method, separateThread),
     ), { numRuns: 12 });
+  });
+
+  it("forwards the outer review ID when the inline review ends under the inner ID", async () => {
+    await exerciseNativeReviewPendingInnerDelivery("turn/completed", false, "inner");
   });
 
   it("captures start ownership before the first listener await", async () => {
@@ -301,35 +319,54 @@ describe("Codex turn terminal ownership", () => {
     await fc.assert(fc.asyncProperty(
       fc.constantFrom("turn/completed", "turn/failed", "turn/cancelled"),
       fc.boolean(),
-      async (method, separateThread) => {
+      fc.boolean(),
+      async (method, separateThread, terminalUsesInnerId) => {
         const f = fixture();
         const reviewThreadId = separateThread ? "review-thread" : "thread";
+        const terminalId = terminalUsesInnerId && !separateThread ? "inner" : "turn";
         const entered = deferred(), release = deferred();
         const initializeResult = { userAgent: "fixture", methods: ["turn/start", "review/start"] };
         vi.spyOn(f.client, "getInitializeResult").mockResolvedValue(initializeResult);
         vi.spyOn(f.client, "startReview").mockResolvedValue({ threadId: "thread", reviewThreadId, turnId: "turn" });
         const resolveMode = f.state.resolveCodexThreadExecutionModeForActiveTurn.bind(f.state);
+        let lookupWaiting = false;
         vi.spyOn(f.state, "resolveCodexThreadExecutionModeForActiveTurn").mockImplementation(async (threadId) => {
           const mode = await resolveMode(threadId);
-          entered.resolve();
-          await release.promise;
+          if (!lookupWaiting) {
+            lookupWaiting = true;
+            entered.resolve();
+            await release.promise;
+          }
           return mode;
         });
+        const received: AgentEvent[] = [];
+        f.registry.onEvent((event) => { received.push(event); });
         const review = f.registry.startReview({ ...identity, target: { type: "uncommittedChanges" } });
         try {
           await entered.promise;
-          await f.notify(terminal(method, reviewThreadId));
+          await f.notify({ method: "turn/started", params: {
+            threadId: reviewThreadId, turnId: "inner", turn: { id: "inner", status: "in_progress" },
+          } });
+          await f.notify(terminal(method, reviewThreadId, terminalId));
           release.resolve();
           await review;
           f.assertEnded();
           f.assertEnded(reviewThreadId);
+          expect(received.find((event) => event.notification.method === "turn/started")).toBeDefined();
+          const terminalEvents = received.filter((event) => event.notification.method === method
+            && event.notification.params.threadId === reviewThreadId);
+          expect(terminalEvents).toHaveLength(1);
+          expect(terminalEvents[0]?.notification.params).toMatchObject({ turnId: terminalId });
+          expect(terminalEvents[0]?.relatedReviewTurnId).toBe(
+            separateThread ? undefined : terminalId === "turn" ? "inner" : "turn",
+          );
         } finally {
           release.resolve();
           await review;
           await f.close();
         }
       },
-    ), { numRuns: 25 });
+    ), { numRuns: 25, examples: [["turn/completed", false, false], ["turn/completed", false, true]] });
   });
 
   it("retires a native review's inner key before its delayed mode read returns", async () => {

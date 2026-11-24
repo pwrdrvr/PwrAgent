@@ -1563,6 +1563,8 @@ export type AgentEvent = {
   backend: AppServerBackendKind;
   federationTarget?: FederationTarget;
   notification: AppServerNotification;
+  /** Other turn ID retired by this inline Codex review terminal. */
+  relatedReviewTurnId?: string;
   /**
    * Complete all-provider owner-local directory dependencies for this row-only event,
    * including off-page descendants. Absence (or an unknown version) grants

@@ -305,7 +305,7 @@ function applyEventSubscription(params: {
 }
 
 describe("DesktopFederationRuntime", () => {
-  it("delivers distinct navigation and detail representations of one owner update with the same identity", () => {
+  it.each([true, false])("delivers owner identity and review correlation to the viewer (sequenced=%s)", (sequenced) => {
     const viewer = new DesktopFederationRuntime() as unknown as RuntimeHarness;
     const owner = new DesktopFederationRuntime() as unknown as RuntimeHarness;
     viewer.localInstanceId = "viewer_one";
@@ -318,9 +318,16 @@ describe("DesktopFederationRuntime", () => {
     viewer.setAgentEventPublisher(published);
     viewer.remoteThreadSummaryCache = { invalidate: invalidated };
     viewer.router.registerConnection(createConnection({ peerId: "owner_one", capabilities,
-      sendEnvelope: (envelope) => { owner.applyEventSubscription(envelope, "viewer_one"); } }));
+      sendEnvelope: (envelope) => {
+        owner.applyEventSubscription(!sequenced && envelope.kind === "notification" ? {
+          ...envelope, params: { ...(envelope.params as FederationEventSubscription), eventStream: undefined },
+        } : envelope, "viewer_one");
+      } }));
+    const forwarded = vi.fn((envelope: FederationProtocolEnvelope) => {
+      viewer.publishRemoteBackendEvent(envelope, "owner_one");
+    });
     owner.router.registerConnection(createConnection({ peerId: "viewer_one", capabilities,
-      sendEnvelope: (envelope) => { viewer.publishRemoteBackendEvent(envelope, "owner_one"); } }));
+      sendEnvelope: forwarded }));
     viewer.setRendererEventSubscriptions(7, "thread-view", [{ sourceInstanceId: "owner_one",
       eventClasses: ["navigation", "transcript"], threadSelection: { kind: "threads", threads: [{ backend: "codex", threadId: "same" }] } }]);
     published.mockClear(); invalidated.mockClear();
@@ -333,6 +340,25 @@ describe("DesktopFederationRuntime", () => {
     expect(published.mock.calls.every(([event]) => event.backend === "codex"
       && event.federationTarget?.instanceId === "owner_one")).toBe(true);
     expect(invalidated).toHaveBeenCalledTimes(2);
+
+    fc.assert(fc.property(fc.uniqueArray(fc.uuid(), { minLength: 2, maxLength: 2 }), ([reviewId, interruptId]) => {
+      const terminal: AgentEvent = {
+        backend: "codex",
+        relatedReviewTurnId: interruptId,
+        notification: { method: "turn/completed", params: {
+          threadId: "same", turnId: reviewId, turn: { id: reviewId, status: "completed", output: [] },
+        } },
+      };
+      published.mockClear();
+      forwarded.mockClear();
+      owner.forwardLocalBackendEvent(terminal);
+      const envelope = forwarded.mock.lastCall?.[0];
+      const wireEvent = envelope?.kind === "notification" ? envelope.params as { stream?: unknown } : undefined;
+      expect(Boolean(wireEvent?.stream)).toBe(sequenced);
+      const received = published.mock.calls.map(([event]) => event)
+        .find((event) => event.notification.method === "turn/completed");
+      expect(received).toEqual({ ...terminal, federationTarget: { scope: "remote", instanceId: "owner_one" } });
+    }));
   });
 
   it("identifies local and disconnected navigation owners and falls back to the exact peer ID", () => {

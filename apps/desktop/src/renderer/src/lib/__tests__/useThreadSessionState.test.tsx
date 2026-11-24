@@ -17173,7 +17173,7 @@ describe("useThreadSessionState", () => {
     expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
   });
 
-  it("logs and clears stale thinking when a selected thread read proves the thread is idle", async () => {
+  it.each(["idle", "notLoaded"] as const)("logs and clears stale thinking when a selected thread read reports %s", async (threadStatus) => {
     const logRendererDiagnostic = vi.fn(async () => undefined);
     const readThread = vi
       .fn()
@@ -17194,7 +17194,7 @@ describe("useThreadSessionState", () => {
         backend: backend ?? "codex",
         fetchedAt: Date.now(),
         threadId,
-        threadStatus: "idle",
+        threadStatus,
         replay: {
           entries: [],
           messages: [],
@@ -17247,13 +17247,15 @@ describe("useThreadSessionState", () => {
     expect(logRendererDiagnostic).toHaveBeenCalledWith({
       details: expect.objectContaining({
         threadKey: "codex:thread-1",
-        threadStatus: "idle",
+        threadStatus,
         reasons: expect.arrayContaining([
           expect.objectContaining({ kind: "pendingStatus" }),
         ]),
       }),
       level: "warn",
-      message: "stale thinking state cleared after idle thread read",
+      message: threadStatus === "idle"
+        ? "stale thinking state cleared after idle thread read"
+        : "stale thinking state cleared after unloaded thread read",
     });
   });
 
