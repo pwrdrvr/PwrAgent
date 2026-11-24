@@ -11501,9 +11501,8 @@ export class CodexAppServerClient {
   }
 
   /**
-   * Restore a PwrAgent-owned director's persisted catalog on stock Codex.
-   * This does not acknowledge or replace it with the current tool catalog.
-   * The registry restricts this path to the remembered Voice manager.
+   * Resume realtime with persisted dynamic tools or a thread's scoped MCP
+   * config. The registry admits only threads whose catalog it can account for.
    */
   async resumeNativeVoiceThread(params: Omit<Parameters<CodexAppServerClient["refreshThreadTools"]>[0], "dynamicTools">): Promise<void> {
     await this.prepareIdleNativeVoiceThread({ ...params, dynamicTools: undefined });
@@ -11788,6 +11787,8 @@ export class CodexAppServerClient {
     config?: CodexThreadResumeParams["config"];
     defaultModeRequestUserInput?: boolean;
     dynamicTools?: CodexDynamicToolSpec[];
+    /** Await successful admission of the thread's required MCP configuration on resume. */
+    requireThreadResume?: boolean;
     pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation | null;
   }): Promise<{
     threadId: string;
@@ -11892,7 +11893,8 @@ export class CodexAppServerClient {
       });
       // Environment overrides are applied by resume; continuing after a
       // failure would silently run the turn with the previous toolchain.
-      resumeResult = params.dynamicTools !== undefined
+      resumeResult = params.requireThreadResume
+        || params.dynamicTools !== undefined
         || params.codexEnvironmentRuntime?.shellEnvironment !== undefined
         || shellEnvironmentChanged
         ? await resume
@@ -12431,6 +12433,7 @@ export class CodexAppServerClient {
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     config?: CodexThreadStartParams["config"];
     dynamicTools?: CodexDynamicToolSpec[];
+    requireThreadResume?: boolean;
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
     params = this.withAgentEnvironmentPolicy(params);
     await this.ensureInitialized();
@@ -12466,7 +12469,7 @@ export class CodexAppServerClient {
         ),
         timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       });
-      if (params.dynamicTools !== undefined) {
+      if (params.requireThreadResume || params.dynamicTools !== undefined) {
         await resume;
       } else {
         await resume.catch(() => undefined);

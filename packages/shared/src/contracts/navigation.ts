@@ -3835,6 +3835,8 @@ export type ThreadOverlayState = {
   /** Clone-qualified stack roots for which this thread is the lead. */
   stackLead?: string[];
   codexSkillProfile?: CodexThreadSkillProfile;
+  /** Tool transport selected when this Codex thread was created. */
+  codexAgentToolsMcp?: true;
   /** Absent follows the profile default. */
   monitorJobSuggestionsEnabled?: boolean;
   jobMonitorCreationEnabled?: boolean;

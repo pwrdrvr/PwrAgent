@@ -1310,6 +1310,11 @@ function SettingsSectionBody(props: {
             experimental: { codexToolDiscovery: enabled },
           });
         }}
+        onCodexAgentToolsMcpChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            experimental: { codexAgentToolsMcp: enabled },
+          });
+        }}
         onResearchEnabledChange={async (enabled: boolean) => {
           await props.settings.writeConfig({ experimental: { researchEnabled: enabled } });
         }}

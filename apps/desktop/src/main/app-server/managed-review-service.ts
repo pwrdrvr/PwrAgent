@@ -72,7 +72,11 @@ import type {
   ReviewSubAgentRecord,
   ReviewTerminal,
 } from "./backend-registry-types";
-import { buildCodexTokenMiserDynamicToolSpecs, mergeCodexDynamicToolSpecs } from "./codex-thread-config";
+import {
+  buildCodexTokenMiserDynamicToolSpecs,
+  mergeCodexDynamicToolSpecs,
+  mergeCodexThreadConfigs,
+} from "./codex-thread-config";
 import type { delegatedTurnAttribution } from "./delegated-turn-attribution";
 import { executionModeSettings } from "./execution-mode-settings";
 import { normalizeLinkedDirectoryIdentityPath } from "./linked-directory-identity";
@@ -152,10 +156,12 @@ export interface ManagedReviewServiceHost extends Pick<RegistryHostPorts,
   readonly threadTurnQueue: ThreadTurnQueue;
   readonly tokenMiserService: TokenMiserService | undefined;
   readonly tokenMiserStore: TokenMiserStore | undefined;
+  buildCodexAgentToolsMcpConfigForThread(threadId: string, tokenMiserEnabled: boolean): Promise<CodexThreadStartParams["config"]>;
   buildSupportedCodexDynamicToolsRefresh(params: {
     client: BackendClient;
     threadId: string;
     tokenMiserEnabled: boolean;
+    codexAgentToolsMcp?: true;
   }): Promise<CodexDynamicToolSpec[] | undefined>;
   buildSupportedCodexTokenMiserConfig(params: {
     client: BackendClient;
@@ -853,7 +859,12 @@ export class ManagedReviewService {
             client,
             threadId: params.threadId,
             tokenMiserEnabled,
+            codexAgentToolsMcp: overlay?.codexAgentToolsMcp,
           });
+        const agentToolsMcpConfig = overlay?.codexAgentToolsMcp
+          ? await this.host().buildCodexAgentToolsMcpConfigForThread(params.threadId, tokenMiserEnabled)
+          : undefined;
+        const config = mergeCodexThreadConfigs(tokenMiserConfig, agentToolsMcpConfig);
         return await client.startReview({
           threadId: params.threadId,
           target: params.target,
@@ -863,7 +874,8 @@ export class ManagedReviewService {
           ...(codexEnvironmentRuntime
             ? { codexEnvironmentRuntime }
             : {}),
-          ...(tokenMiserConfig ? { config: tokenMiserConfig } : {}),
+          ...(config ? { config } : {}),
+          ...(agentToolsMcpConfig ? { requireThreadResume: true } : {}),
           ...(dynamicTools !== undefined ? { dynamicTools } : {}),
         });
       };
