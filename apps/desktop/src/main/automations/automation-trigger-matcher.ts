@@ -231,10 +231,14 @@ export function buildReplayRunSourceMetadata(params: {
 }): AutomationRunSourceMetadata {
   const { message, trigger } = params;
   const bounded = boundSourceText(message.text);
+  // The trigger names the bot. A replayed message can arrive without its
+  // connection (history rows, an older window), and a reply routed by the
+  // message alone would leave through whichever bot owns the unscoped route.
+  const connectionId = trigger.conversation.connectionId;
   return {
     kind: "messaging",
     eventId: message.id,
-    sourceEventKey: scopeMessagingRoutingKey(message.connectionId, `replay:${message.id}:${params.now ?? Date.now()}`),
+    sourceEventKey: scopeMessagingRoutingKey(connectionId, `replay:${message.id}:${params.now ?? Date.now()}`),
     receivedAt: message.receivedAt,
     matchedTriggerId: trigger.id,
     matchedTriggerName: trigger.name,
@@ -247,7 +251,7 @@ export function buildReplayRunSourceMetadata(params: {
     },
     conversation: {
       channel: message.provider,
-      ...(message.connectionId === undefined ? {} : { connectionId: message.connectionId }),
+      ...(connectionId === undefined ? {} : { connectionId }),
       conversationId: message.conversationId,
       conversationKind: message.conversationKind,
       isDirectMessage: message.isDirectMessage,

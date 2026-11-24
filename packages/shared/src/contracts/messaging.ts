@@ -631,6 +631,8 @@ export type MessagingSenderSuggestion = {
 
 export type SearchMessagingSendersRequest = {
   provider: MessagingChannelKind;
+  /** The named connection to search. Absent searches the original route only. */
+  connectionId?: string;
   conversationId?: string;
   /** Restrict past-run suggestions to one automation's history. */
   automationId?: string;
@@ -678,6 +680,8 @@ export type StopInboundPreviewRequest = {
  */
 export type ListInboundTopicsRequest = {
   provider: MessagingChannelKind;
+  /** The named connection whose topics to list. Absent lists the original route's. */
+  connectionId?: string;
   groupId: string;
 };
 
@@ -688,4 +692,29 @@ export type InboundTopicOption = {
 
 export type ListInboundTopicsResponse = {
   topics: InboundTopicOption[];
+};
+
+/**
+ * The conversations one Telegram bot may watch or reply to, for the
+ * Automations editor. Absent `connectionId` reads the original bot's route; a
+ * named connection never borrows the original bot's audience.
+ */
+export type ListTelegramConnectionConversationsRequest = {
+  connectionId?: string;
+};
+
+export type TelegramConnectionConversation = {
+  id: string;
+  displayName?: string;
+};
+
+export type ListTelegramConnectionConversationsResponse = {
+  /**
+   * `missing`: the connection was removed (or, for the original route, the
+   * profile has no original bot). `disabled`: it is turned off. `offline`: it
+   * is enabled but not running in this PwrAgent instance.
+   */
+  status: "available" | "missing" | "disabled" | "offline";
+  supergroups: TelegramConnectionConversation[];
+  users: TelegramConnectionConversation[];
 };

@@ -1492,6 +1492,13 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       : this.requireNamedConnection(connectionId).pairingStore();
   }
 
+  /** Bindings and managed topics for one route; a named one only while it runs. */
+  getConnectionBindingStore(connectionId: string | undefined): MessagingStoreLike {
+    return connectionId === undefined
+      ? this.bindingStore()
+      : this.requireNamedConnection(connectionId).bindingStore();
+  }
+
   getTelegramConnectionHealth(id: string): MessagingPlatformStatus | undefined {
     const runtime = this.namedConnections.get(id);
     return runtime?.options.connection?.isRegistered() ? runtime.platformStatuses.get("telegram") : undefined;

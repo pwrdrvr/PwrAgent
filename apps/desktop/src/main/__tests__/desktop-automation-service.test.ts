@@ -2225,6 +2225,134 @@ describe("multi-source inbound automations", () => {
     expect(store.listRunsForAutomation(automation.id)).toEqual([]);
   });
 
+  describe("two Telegram bots in one group", () => {
+    const NAMED = `mc_${"c".repeat(32)}`;
+    // The same group and the same people, reached through two bots.
+    const group = (connectionId?: string) => ({
+      channel: "telegram" as const,
+      ...(connectionId === undefined ? {} : { connectionId }),
+      conversationId: "-1001234567890",
+      conversationKind: "channel" as const,
+      title: "Orchard Ops",
+    });
+    const telegramMessage = (id: string, actorId: string, name: string, connectionId?: string) => ({
+      id,
+      provider: "telegram" as const,
+      ...(connectionId === undefined ? {} : { connectionId }),
+      conversationId: "-1001234567890",
+      conversationKind: "channel" as const,
+      receivedAt: 5_000,
+      actor: { platformUserId: actorId, displayName: name },
+      text: "deploy failed",
+    });
+
+    async function createTwoBotAutomation(service: DesktopAutomationService) {
+      const created = await service.create({
+        backend: "codex",
+        threadId: "thread-1",
+        name: "Orchard on two bots",
+        taskPrompt: "Investigate.",
+        triggers: [
+          { id: "original", kind: "inbound_message", conversation: group() },
+          { id: "named", kind: "inbound_message", conversation: group(NAMED) },
+        ],
+        outputActions: [{ id: "agent-context", kind: "agent_context" }],
+      });
+      return created.automation;
+    }
+
+    it("replays through the listed trigger's bot when the message carries none", async () => {
+      const service = new DesktopAutomationService({ registry, store });
+      const automation = await createTwoBotAutomation(service);
+
+      await service.replayInbound({
+        automationId: automation.id,
+        message: telegramMessage("t1", "42", "Dana"),
+        triggerId: "named",
+      });
+
+      const [run] = store.listRunsForAutomation(automation.id, 1);
+      expect(run?.source?.matchedTriggerId).toBe("named");
+      expect(run?.source?.conversation.connectionId).toBe(NAMED);
+    });
+
+    it("resolves an unlisted message by its own bot, never the other one", async () => {
+      const service = new DesktopAutomationService({ registry, store });
+      const automation = await createTwoBotAutomation(service);
+
+      await service.replayInbound({
+        automationId: automation.id,
+        message: telegramMessage("t2", "42", "Dana", NAMED),
+      });
+      await service.replayInbound({
+        automationId: automation.id,
+        message: telegramMessage("t3", "42", "Dana"),
+      });
+
+      const runs = store.listRunsForAutomation(automation.id);
+      expect(runs.map((run) => [run.source?.eventId, run.source?.matchedTriggerId, run.source?.conversation.connectionId]))
+        .toEqual(expect.arrayContaining([["t2", "named", NAMED], ["t3", "original", undefined]]));
+    });
+
+    it("refuses a message another bot delivered", async () => {
+      const service = new DesktopAutomationService({ registry, store });
+      const automation = await createTwoBotAutomation(service);
+
+      await expect(service.replayInbound({
+        automationId: automation.id,
+        message: telegramMessage("t4", "42", "Dana", NAMED),
+        triggerId: "original",
+      })).rejects.toThrow(/different bot/);
+      expect(store.listRunsForAutomation(automation.id)).toEqual([]);
+    });
+
+    it("never reads a named bot's history through the original adapter", async () => {
+      const service = new DesktopAutomationService({ registry, store });
+      const automation = await createTwoBotAutomation(service);
+      const fetchRecent = vi.fn(async () => []);
+
+      const response = await service.listReplayCandidates(
+        { automationId: automation.id },
+        { fetchRecent, supportsHistory: () => true },
+      );
+
+      expect(response.sources.map((source) => [source.triggerId, source.unsupportedReason]))
+        .toEqual([["original", undefined], ["named", "provider"]]);
+      expect(fetchRecent).toHaveBeenCalledTimes(1);
+    });
+
+    it("suggests each bot's own past senders and skips the original directory for a named bot", async () => {
+      const service = new DesktopAutomationService({ registry, store });
+      const automation = await createTwoBotAutomation(service);
+      await service.replayInbound({
+        automationId: automation.id,
+        message: telegramMessage("t5", "42", "Dana on Orchard bot"),
+        triggerId: "named",
+      });
+      await service.replayInbound({
+        automationId: automation.id,
+        message: telegramMessage("t6", "77", "Avery on original bot"),
+        triggerId: "original",
+      });
+      const searchDirectory = vi.fn(async () => ({ actors: [], supported: true }));
+
+      const named = await service.searchSenders(
+        { provider: "telegram", connectionId: NAMED, automationId: automation.id, query: "" },
+        { searchDirectory },
+      );
+      expect(named.suggestions.map((suggestion) => suggestion.platformUserId)).toEqual(["42"]);
+      expect(named.directorySupported).toBe(false);
+      expect(searchDirectory).not.toHaveBeenCalled();
+
+      const original = await service.searchSenders(
+        { provider: "telegram", automationId: automation.id, query: "" },
+        { searchDirectory },
+      );
+      expect(original.suggestions.map((suggestion) => suggestion.platformUserId)).toEqual(["77"]);
+      expect(searchDirectory).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("splits the replay page across sources without going below the per-source floor", () => {
     expect(replayCandidateLimitPerSource(1)).toBe(15);
     expect(replayCandidateLimitPerSource(2)).toBe(8);
