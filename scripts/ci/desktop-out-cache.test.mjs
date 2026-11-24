@@ -70,10 +70,12 @@ beforeEach(() => {
   git("config", "user.email", "ci@example.invalid");
   git("config", "user.name", "CI");
   git("config", "commit.gpgsign", "false");
+  const gitInfo = path.join(repoRoot, ".git", "info");
+  mkdirSync(gitInfo, { recursive: true });
+  writeFileSync(path.join(gitInfo, "attributes"), "/.gitignore text eol=lf\n");
   // Mirror the repository: out/ and .local/ are ignored build products.
   writeFileSync(path.join(repoRoot, ".gitignore"), "out/\n.local/\n");
-  // Keep the fixture LF and let Git reject any irreversible conversion.
-  git("-c", "core.autocrlf=false", "-c", "core.safecrlf=true", "add", ".gitignore");
+  git("-c", "core.safecrlf=true", "add", ".gitignore");
   commit("v1");
 });
 
@@ -82,6 +84,13 @@ afterEach(() => {
 });
 
 describe("desktop out/ cache", () => {
+  it("keeps the fixture .gitignore LF when global attributes specify CRLF", () => {
+    const globalAttributes = path.join(scratch, "global-attributes");
+    writeFileSync(globalAttributes, ".gitignore text eol=crlf\n");
+    expect(git("-c", `core.attributesFile=${globalAttributes}`, "check-attr", "eol", "--", ".gitignore"))
+      .toBe(".gitignore: eol: lf");
+  });
+
   it("builds on a miss, then serves the same tree from the cache", () => {
     expect(run()).toBe("build");
     expect(builds).toBe(1);

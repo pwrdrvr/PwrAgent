@@ -253,15 +253,20 @@ describe("listAgentInstructionFiles", () => {
       const git = (...args) =>
         execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
       git("init", "-q");
+      const gitInfo = join(repo, ".git", "info");
+      mkdirSync(gitInfo, { recursive: true });
+      writeFileSync(join(gitInfo, "attributes"), "AGENTS.md text eol=lf\n");
       const write = (path) => {
         mkdirSync(dirname(join(repo, path)), { recursive: true });
         writeFileSync(join(repo, path), "rules\n");
       };
-      write("AGENTS.md");
-      write("a/AGENTS.md");
-      write("b/AGENTS.md");
-      // Keep the fixtures LF and let Git reject any irreversible conversion.
-      git("-c", "core.autocrlf=false", "-c", "core.safecrlf=true", "add", ".");
+      const instructionFiles = ["AGENTS.md", "a/AGENTS.md", "b/AGENTS.md"];
+      for (const file of instructionFiles) write(file);
+      const globalAttributes = join(gitInfo, "fixture-global-attributes");
+      writeFileSync(globalAttributes, "*.md text eol=crlf\n");
+      const attributes = git("-c", `core.attributesFile=${globalAttributes}`, "check-attr", "eol", "--", ...instructionFiles);
+      expect(attributes.trim().split(/\r?\n/)).toEqual(instructionFiles.map((file) => `${file}: eol: lf`));
+      git("-c", "core.safecrlf=true", "add", ".");
       git(
         "-c",
         "user.name=test",
