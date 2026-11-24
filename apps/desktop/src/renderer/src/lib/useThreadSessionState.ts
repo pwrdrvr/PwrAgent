@@ -2800,7 +2800,7 @@ function readResponseThreadStatus(
   return response.threadStatus ?? response.replay.threadStatus;
 }
 
-function isInactiveThreadStatus(status: string | undefined): boolean {
+function isInactiveThreadStatus(status: unknown): boolean {
   return status === "idle" || status === "notLoaded";
 }
 

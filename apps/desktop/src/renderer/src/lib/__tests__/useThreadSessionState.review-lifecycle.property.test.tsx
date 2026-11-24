@@ -38,15 +38,15 @@ async function checkReviewBoundary(
   const start: AgentEvent = { backend: "codex", notification: { method: "turn/started", params: {
     threadId: thread.id, turn: { id: turnId, status: "in_progress" },
   } } };
-  const terminal: AgentEvent = {
-    backend: "codex",
-    relatedReviewTurnId: turnId,
-    notification: terminalMethod === "turn/completed"
-      ? { method: terminalMethod, params: {
-        threadId: thread.id, turnId: terminalId, turn: { id: terminalId, status: "completed", output: [] },
-      } }
-      : { method: terminalMethod, params: { threadId: thread.id, turnId: terminalId } },
-  };
+  const params = { threadId: thread.id, turnId: terminalId };
+  const notification: AgentEvent["notification"] = terminalMethod === "turn/failed"
+    ? { method: terminalMethod, params: { ...params, turn: {
+      id: terminalId, status: "failed", error: { message: "Review failed" },
+    } } }
+    : terminalMethod === "turn/cancelled"
+      ? { method: terminalMethod, params: { ...params, turn: { id: terminalId, status: "cancelled" } } }
+      : { method: terminalMethod, params: { ...params, turn: { id: terminalId, status: "completed", output: [] } } };
+  const terminal: AgentEvent = { backend: "codex", relatedReviewTurnId: turnId, notification };
 
   try {
     act(() => emit(start));
