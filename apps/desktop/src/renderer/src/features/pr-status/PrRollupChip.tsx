@@ -17,6 +17,12 @@ import { CloseIcon, EyeIcon } from "../../icons";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import { useHoverTransitionGrace } from "../../lib/useHoverTransitionGrace";
 import { TOOLTIP_HOVER_DELAY_MS, useViewportTooltip } from "../../lib/useViewportTooltip";
+import {
+  type AimPoint,
+  POINTER_AIM_SETTLE_MS,
+  POINTER_AIM_TRAIL,
+  pointerAimsAtRect,
+} from "../../lib/pointer-aim";
 import { statusPulseRef } from "../../lib/status-pulse";
 import { useThreadPullRequestAttachments, type PullRequestAttachmentThread } from "../../lib/useThreadPullRequestAttachments";
 import {
@@ -207,6 +213,19 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
     releaseCard();
     if (openMode === "hover") dismissAfterGrace();
   };
+  // Where the pointer has been in the list, and a row it crossed while
+  // heading for the open card: that row takes the card only once the
+  // pointer stops or turns away.
+  const pointerTrailRef = useRef<AimPoint[]>([]);
+  const crossedRowRef = useRef<{ pr: PrSummary; row: HTMLElement } | undefined>(undefined);
+  const aimTimerRef = useRef<number | null>(null);
+  const forgetCrossedRow = useCallback((): void => {
+    if (aimTimerRef.current !== null) {
+      window.clearTimeout(aimTimerRef.current);
+      aimTimerRef.current = null;
+    }
+    crossedRowRef.current = undefined;
+  }, []);
   const {
     show: showCard,
     showAfterDelay: showCardAfterDelay,
@@ -224,6 +243,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
     interactive: {
       bridge: true,
       onPointerEnter: () => {
+        forgetCrossedRow();
         holdCard();
         cancelHoverDismiss();
       },
@@ -286,6 +306,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
   };
   // The first hover waits; moving between visible cards and focus show at once.
   const showRowCard = (pr: PrSummary, row: HTMLElement, immediate: boolean): void => {
+    forgetCrossedRow();
     holdCard();
     setCardUrl(pr.url);
     const content = renderCard(pr);
@@ -298,16 +319,53 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
   };
   const close = useCallback((): void => {
     holdCard();
+    forgetCrossedRow();
+    pointerTrailRef.current = [];
     focusedRow.current = undefined;
     setOpenMode(null);
     setPosition(undefined);
     setMenuTargetUrl(undefined);
     hideRowCard();
-  }, [hideRowCard, holdCard]);
+  }, [forgetCrossedRow, hideRowCard, holdCard]);
 
   useEffect(() => () => {
     clearHoverTimer();
-  }, []);
+    forgetCrossedRow();
+  }, [forgetCrossedRow]);
+
+  // Measured from the oldest recent sample, so one jittery move does not
+  // decide it.
+  const aimsAtCard = (point: AimPoint): boolean => {
+    const from = pointerTrailRef.current[0];
+    const card = getCardElement()?.getBoundingClientRect();
+    return Boolean(from && card && card.width > 0 && pointerAimsAtRect(from, point, card));
+  };
+  const settleCrossedRow = (): void => {
+    const crossed = crossedRowRef.current;
+    forgetCrossedRow();
+    if (crossed?.row.isConnected) showRowCard(crossed.pr, crossed.row, true);
+  };
+  const waitForPointerToSettle = (): void => {
+    if (aimTimerRef.current !== null) window.clearTimeout(aimTimerRef.current);
+    aimTimerRef.current = window.setTimeout(settleCrossedRow, POINTER_AIM_SETTLE_MS);
+  };
+  const enterRow = (pr: PrSummary, row: HTMLElement, point: AimPoint): void => {
+    if (cardVisible && cardUrl !== pr.url && aimsAtCard(point)) {
+      crossedRowRef.current = { pr, row };
+      waitForPointerToSettle();
+      return;
+    }
+    showRowCard(pr, row, false);
+  };
+  const trackPointer = (point: AimPoint): void => {
+    if (crossedRowRef.current) {
+      if (aimsAtCard(point)) waitForPointerToSettle();
+      else settleCrossedRow();
+    }
+    const trail = pointerTrailRef.current;
+    trail.push(point);
+    if (trail.length > POINTER_AIM_TRAIL) trail.shift();
+  };
 
   useDismissableLayer({
     open,
@@ -439,6 +497,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
   // the detached one's place, or to the new last row.
   const detachRow = (pr: PrSummary, index: number, refocus: boolean): void => {
     if (!props.onDetach) return;
+    forgetCrossedRow();
     hideRowCard();
     props.onDetach(pr);
     if (refocus) {
@@ -511,6 +570,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
     if (!onOpenContextMenu) return;
     clearHoverTimer();
     cancelHoverDismiss();
+    forgetCrossedRow();
     hideRowCard();
     setOpenMode("pinned");
     setMenuTargetUrl(pr.url);
@@ -575,7 +635,13 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
         data-position={member?.position}
         data-stale={member && staleStackSpine(member.health) || undefined}
         onMouseEnter={(event) => {
-          if (!menuTargetUrl) showRowCard(pr, event.currentTarget, false);
+          if (!menuTargetUrl) {
+            enterRow(pr, event.currentTarget, { x: event.clientX, y: event.clientY });
+          }
+        }}
+        onMouseLeave={(event) => {
+          // Only a row the pointer is still on can take the card.
+          if (crossedRowRef.current?.row === event.currentTarget) forgetCrossedRow();
         }}
         onContextMenu={(event) => openRowContextMenu(event, pr)}
       >
@@ -616,7 +682,9 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
         {/* The chip as Mission Control draws it, ✕ included. It is
             a pointer shortcut beside the row's button, not a second
             control: its number opens the PR as the row does, and
-            Delete on the row is the keyboard's detach. */}
+            Delete on the row is the keyboard's detach. Its ✕ lies on
+            the way to the card, so it keeps the card, as the
+            standalone chip's ✕ does. */}
         <span
           aria-hidden="true"
           className={[
@@ -640,7 +708,6 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
             <span
               className="pr-chip__detach"
               title={`Detach ${pr.org}/${pr.repo}#${pr.number} from thread`}
-              onMouseEnter={hideRowCard}
               onClick={(event) => {
                 event.stopPropagation();
                 detachRow(pr, index, false);
@@ -747,7 +814,12 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
               ? { top: position.top, left: position.left, maxHeight: position.maxHeight }
               : { top: 0, left: 0, visibility: "hidden" }}
             onMouseEnter={cancelHoverDismiss}
+            onMouseMove={(event) => trackPointer({ x: event.clientX, y: event.clientY })}
             onMouseLeave={() => {
+              // Out of the list, a crossed row is behind the pointer, and
+              // where the pointer was says nothing about how it comes back.
+              forgetCrossedRow();
+              pointerTrailRef.current = [];
               const card = getCardElement()?.getBoundingClientRect();
               const popover = popoverRef.current?.getBoundingClientRect();
               if (card?.width && card.height && popover && (
@@ -780,7 +852,13 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
               <span className="pr-rollup-popover__summary" role={incomplete ? "status" : undefined}>{summaryText}</span>
             </div>
             {/* A scrolled list moves the row out from under its card. */}
-            <ul className="pr-rollup-popover__list" onScroll={hideRowCard}>
+            <ul
+              className="pr-rollup-popover__list"
+              onScroll={() => {
+                forgetCrossedRow();
+                hideRowCard();
+              }}
+            >
               {entries.map((entry) => "stack" in entry ? (
                 <li key={entry.stack.key} className="pr-rollup-popover__stack">
                   <StackHeading count={entry.stack.count} trunk={entry.trunk} inferred={entry.stack.inferred} grouped />
@@ -796,7 +874,9 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                 <button
                   type="button"
                   className="pr-rollup-popover__detach-all"
-                  onMouseEnter={hideRowCard}
+                  // A diagonal move down to the card's footer crosses it:
+                  // the card lasts the grace, and reaching it holds it.
+                  onMouseEnter={releaseCard}
                   onKeyDown={(event) => {
                     if (event.key !== "Tab") return;
                     if (event.shiftKey) {
