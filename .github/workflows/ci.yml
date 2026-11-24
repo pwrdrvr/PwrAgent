@@ -42,6 +42,7 @@ jobs:
     outputs:
       code_impacting: ${{ steps.classify.outputs.code_impacting }}
       docs_only: ${{ steps.classify.outputs.docs_only }}
+      blacksmith_trial: ${{ steps.classify.outputs.blacksmith_trial }}
       # `true` runs the macOS unit tests, macOS Desktop E2E and Windows
       # Desktop E2E. Pull requests leave them to `main` unless the `ci:full`
       # label is present or a platform-specific path changed, because on PRs
@@ -106,6 +107,10 @@ jobs:
               fullCi(`label lookup failed (${error.message})`);
               return;
             }
+            core.setOutput("blacksmith_trial", String(
+              context.payload.pull_request.head.repo?.full_name === `${context.repo.owner}/${context.repo.repo}`
+              && labels.some((label) => label.name === "ci:blacksmith"),
+            ));
             if (labels.some((label) => label.name === "ci:full")) {
               fullCi("the ci:full label is present");
               return;
@@ -229,7 +234,7 @@ jobs:
 
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.changes.outputs.blacksmith_trial == 'true' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     timeout-minutes: 15
     needs: [changes, install-deps]
     # Branch protection counts a skipped required check as satisfied. When
@@ -542,7 +547,7 @@ jobs:
 
   windows-verify:
     name: Windows verify
-    runs-on: windows-latest
+    runs-on: ${{ needs.changes.outputs.blacksmith_trial == 'true' && 'blacksmith-8vcpu-windows-2025' || 'windows-latest' }}
     needs: [changes, windows-install-deps]
     if: needs.changes.outputs.code_impacting == 'true'
     timeout-minutes: 30
@@ -569,7 +574,7 @@ jobs:
 
   windows-desktop-main:
     name: Windows desktop-main (lane ${{ matrix.lane }} of 4)
-    runs-on: windows-latest
+    runs-on: ${{ needs.changes.outputs.blacksmith_trial == 'true' && 'blacksmith-8vcpu-windows-2025' || 'windows-latest' }}
     needs: [changes, windows-install-deps, pr-test-impact-plan]
     # As on Linux, a pull request's test plan can narrow these lanes. A plan
     # that selects no desktop-main file leaves the lane list empty.
