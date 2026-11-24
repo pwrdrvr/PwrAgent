@@ -1773,6 +1773,47 @@ describe("AcpAgentClient", () => {
     expect(onRequest).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    { reloadServers: ["Case-Probe"], retained: true },
+    { reloadServers: ["Case-Probe", "Another-Server"], retained: false },
+  ])("rechecks tool grants when a transferred Antigravity session reloads with $reloadServers", async ({ reloadServers, retained }) => {
+    let serverNames = ["Case-Probe"];
+    const transport = new FakeAcpAgentTransport({
+      initialize: { protocolVersion: 1, agentCapabilities: { loadSession: true, sessionCapabilities: { close: {} } } },
+    });
+    const onRequest = vi.fn()
+      .mockImplementationOnce(() => ({ decision: "accept_for_session" }))
+      .mockImplementation(() => ({ decision: "decline" }));
+    const client = new AcpAgentClient({
+      backendId: "acp:antigravity", store, transport, onRequest,
+      mcpServers: () => ({ servers: serverNames.map((name) => ({
+        name, type: "http", url: "http://127.0.0.1:1/mcp", headers: [],
+      })) }),
+    });
+    await client.initialize();
+    const session = await client.startSession({ cwd: "/repo", executionMode: "default" });
+    const request = {
+      sessionId: session.sessionId,
+      toolCall: { toolCallId: "tool", kind: "other", name: "mcp_Case-Probe_list_probe", status: "pending" },
+      options: [
+        { optionId: "allow", name: "Allow", kind: "allow_once" },
+        { optionId: "deny", name: "Deny", kind: "reject_once" },
+      ],
+    };
+    try {
+      expect(await transport.emitRequest("session/request_permission", request, 1))
+        .toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+      await client.closeSessionForTransfer(session.sessionId);
+      serverNames = reloadServers;
+      await client.loadSession(session);
+      expect(await transport.emitRequest("session/request_permission", request, 2))
+        .toEqual({ outcome: { outcome: "selected", optionId: retained ? "allow" : "deny" } });
+      expect(onRequest).toHaveBeenCalledTimes(retained ? 1 : 2);
+    } finally {
+      await client.dispose();
+    }
+  });
+
   it("maps generic session approvals to ACP allow-always options", async () => {
     const transport = new FakeAcpAgentTransport();
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];

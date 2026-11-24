@@ -155,6 +155,20 @@ including any tools available in Plan.
 Raw captures are under the ignored
 `apps/desktop/.local/protocol-captures/antigravity-full-access/`.
 
+### Antigravity MCP permission requests in Default
+
+Antigravity 1.5.15 ran in native Default with `agy acp --process-per-session`
+and two disposable loopback MCP servers. `session/request_permission`
+reported `toolCall.kind: "other"` for both `mcp_pwragent_list_ci_runs` and
+`mcp_Case-Probe_list_probe`. The second name preserved the server's case
+and hyphen. The offered kinds were `allow_once` and `reject_once`, with
+option IDs `allow` and `deny`. Calling `list_probe` again after selecting
+`allow` produced a fresh request with the same choices. None of the three
+requests offered `allow_always`.
+
+Raw captures are under the ignored `apps/desktop/.local/protocol-captures/`
+in a directory named `antigravity-default-mcp.*`.
+
 ### Antigravity ACP turn steering
 
 The November 23, 2026 macOS capture of Antigravity CLI `1.5.15` (`agy acp --process-per-session`) verified how Antigravity steers an active turn over ACP:

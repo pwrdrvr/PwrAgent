@@ -1448,6 +1448,73 @@ select_for_new_threads = true
     expect(internals.pendingServerRequests.size).toBe(0);
   });
 
+  it.each(["default", "full-access"] as const)("uses Antigravity's %s process access for gateway and Auto forge writes in native Default", async (executionMode) => {
+    const backend = "acp:antigravity";
+    const threadId = "agy-thread";
+    const turnId = "agy-turn";
+    const forgeArgs = { number: 9, body: "Contrived issue comment." };
+    const writeArgs = { ...args, toolName: "write_record" };
+    const forgeWrite = vi.fn(async () => ({ ok: true }));
+    registry.setForgePrToolHandler(forgeWrite);
+    registry.setForgeToolPolicyResolver(() => ({
+      ...DEFAULT_FORGE_AGENT_TOOL_POLICY,
+      access: { ...DEFAULT_FORGE_AGENT_TOOL_POLICY.access, comments: "auto" },
+    }));
+    await store.setThreadMcpConnectionIds({ backend, threadId, connectionIds: ["one"] });
+    operation.mockImplementation(async (params) => params.operation === "gateway/tools/list"
+      ? [{ connectionId: "one", serverName: "Fixture", toolName: writeArgs.toolName, schemaRevision: "r1", definition: {
+          name: writeArgs.toolName, inputSchema: { type: "object", properties: { id: { type: "string" } } },
+          annotations: { readOnlyHint: false },
+        } }]
+      : { content: [{ type: "text", text: "Fixture record written." }] });
+    vi.spyOn(internals.acpBackend, "getSession").mockReturnValue({
+      backendId: backend, sessionId: threadId, title: "Fixture", cwd: directory,
+      createdAt: 1, updatedAt: 1, status: "active", executionMode,
+      acpRuntime: { currentModeId: "default", updatedAt: 1 },
+    });
+    vi.spyOn(internals.acpBackend, "getInstalledAgent").mockReturnValue({
+      backendId: backend, registryId: "antigravity", name: "Antigravity", version: "1.5.15",
+      distributionKind: "local", distributionSource: "agy", installStatus: "installed",
+      authStatus: "not-required", verificationStatus: "not-applicable",
+      allowlistRuleId: "local-antigravity-cli", installedAt: 1, updatedAt: 1,
+    });
+    const cards: AppServerMcpElicitationRequestNotification[] = [];
+    const stop = registry.onEvent(async (event) => {
+      if (event.backend !== backend || event.notification.method !== "mcpServer/elicitation/request") return;
+      const notification = event.notification as AppServerMcpElicitationRequestNotification;
+      cards.push(notification);
+      await registry.submitServerRequest({
+        backend, threadId, turnId, requestId: String(notification.params.requestId),
+        response: { action: "decline", content: null, _meta: null },
+      });
+    });
+    const client = new Client({ name: "antigravity-write-fixture", version: "1" });
+    try {
+      await registry.publishLocalEvent({ backend, notification: { method: "turn/started", params: {
+        threadId, turnId, turn: { id: turnId, status: "in_progress" },
+      } } });
+      const registration = await internals.claudeAgentToolMcpServer.registerClient({ backend, threadId });
+      await client.connect(new StreamableHTTPClientTransport(new URL(registration.server.url), {
+        requestInit: { headers: Object.fromEntries(registration.server.headers.map(({ name, value }) => [name, value])) },
+      }));
+      const gateway = await client.callTool({ name: "call_mcp_tool", arguments: writeArgs });
+      const forge = await client.callTool({ name: "add_issue_comment", arguments: forgeArgs });
+      const fullAccess = executionMode === "full-access";
+      expect(gateway.isError === true).toBe(!fullAccess);
+      expect(forge.isError === true).toBe(!fullAccess);
+      expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(fullAccess ? 1 : 0);
+      expect(forgeWrite).toHaveBeenCalledTimes(fullAccess ? 1 : 0);
+      expect(cards).toHaveLength(fullAccess ? 0 : 2);
+      expect(internals.pendingServerRequests.size).toBe(0);
+    } finally {
+      stop();
+      await client.close();
+      await registry.publishLocalEvent({ backend, notification: { method: "turn/completed", params: {
+        threadId, turnId, turn: { id: turnId, status: "completed", output: [] },
+      } } });
+    }
+  });
+
   describe("in a Claude thread", () => {
     type ClaudeModes = {
       liveExecutionMode(threadId: string): ThreadExecutionMode | undefined;

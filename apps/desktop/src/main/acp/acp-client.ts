@@ -240,8 +240,8 @@ export const ACP_THREAD_TOOL_GRANT_OPTION_ID = "pwragent_allow_tool_for_thread";
 type AcpSessionMcpServers = {
   /** Names as the agent received them in `session/new` or `session/load`. */
   agentNames: string[];
-  /** Names a registration can vouch for: those the wire did not rewrite. */
-  registeredNames: ReadonlySet<string>;
+  /** Names a live registration can vouch for. Absent while awaiting reload. */
+  registeredNames?: ReadonlySet<string>;
   hostApprovesToolCall?: AcpMcpServerRegistration["hostApprovesToolCall"];
 };
 
@@ -568,13 +568,13 @@ export class AcpAgentClient {
     if (this.activeTurns.has(sessionId) || this.hasActiveOperations() || this.hasNativeBackgroundWork(sessionId)) {
       throw new Error("Wait for Antigravity's active work to finish before moving the session.");
     }
-    if (!await this.closeOwnedSession(sessionId)) {
+    if (!await this.closeOwnedSession(sessionId, true)) {
       throw new Error("This Antigravity runtime cannot close the session for transfer.");
     }
     this.normalizers.delete(sessionId);
   }
 
-  private async closeOwnedSession(sessionId: string): Promise<boolean> {
+  private async closeOwnedSession(sessionId: string, retainMcpGrants = false): Promise<boolean> {
     const protocolSessionId = this.agentSessionIdsByAppSessionId.get(sessionId);
     if (!protocolSessionId) return true;
     if (!this.supportsSessionClose()) return false;
@@ -591,7 +591,7 @@ export class AcpAgentClient {
       this.agentSessionIdsByAppSessionId.delete(sessionId);
       this.appSessionIdsByAgentSessionId.delete(protocolSessionId);
       this.retainableSessionIds.delete(sessionId);
-      this.forgetSessionActivity(sessionId);
+      this.forgetSessionActivity(sessionId, retainMcpGrants);
       return true;
     });
   }
@@ -790,15 +790,22 @@ export class AcpAgentClient {
     this.sessionLastActivityAt.set(sessionId, this.now());
   }
 
-  private forgetSessionActivity(sessionId: string): void {
+  private forgetSessionActivity(sessionId: string, retainMcpGrants: boolean): void {
     this.sessionLastActivityAt.delete(sessionId);
     this.sessionContextFill.delete(sessionId);
     this.idleClosedSessions.delete(sessionId);
     this.pendingPermissionRequests.delete(sessionId);
     this.sessionsWithoutFaithfulReload.delete(sessionId);
     this.sessionAgentToolCatalogKeys.delete(sessionId);
-    this.sessionMcpServers.delete(sessionId);
-    this.sessionMcpToolGrants.delete(sessionId);
+    const previousMcpServers = this.sessionMcpServers.get(sessionId);
+    if (retainMcpGrants && previousMcpServers && this.sessionMcpToolGrants.has(sessionId)) {
+      // Keep the names for reload validation, without the closed worker's
+      // live tool registration.
+      this.sessionMcpServers.set(sessionId, { agentNames: previousMcpServers.agentNames });
+    } else {
+      this.sessionMcpServers.delete(sessionId);
+      this.sessionMcpToolGrants.delete(sessionId);
+    }
     this.jobMonitorCatalogs.delete(sessionId);
     this.grokBackgroundSessions.delete(sessionId);
     this.antigravityBackgroundCommands.delete(sessionId);
@@ -845,6 +852,8 @@ export class AcpAgentClient {
     this.grokBackgroundSessions.clear();
     this.antigravityBackgroundCommands.clear();
     this.sessionAgentToolCatalogKeys.clear();
+    this.sessionMcpServers.clear();
+    this.sessionMcpToolGrants.clear();
     await this.options.transport.close?.();
   }
 
@@ -2386,9 +2395,10 @@ export class AcpAgentClient {
     const toolName = this.antigravityMcpToolName(asRecord(params.toolCall) ?? {});
     const allowOnce = allowOncePermissionOptionId(options);
     if (!toolName || !allowOnce) return undefined;
-    if (this.sessionMcpToolGrants.get(sessionId)?.has(toolName)) return allowOnce;
     const servers = this.sessionMcpServers.get(sessionId);
-    if (!servers?.hostApprovesToolCall) return undefined;
+    if (!servers?.registeredNames) return undefined;
+    if (this.sessionMcpToolGrants.get(sessionId)?.has(toolName)) return allowOnce;
+    if (!servers.hostApprovesToolCall) return undefined;
     const target = resolveAntigravityMcpToolTarget(toolName, servers.agentNames);
     if (!target || !servers.registeredNames.has(target.serverName)) return undefined;
     try {
