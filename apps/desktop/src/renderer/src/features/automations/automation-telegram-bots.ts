@@ -84,6 +84,14 @@ export function defaultTelegramBot(
   return connections.find((connection) => connection.enabled)?.id ?? ORIGINAL_TELEGRAM_BOT;
 }
 
+/** A provider's starting bot: the default Telegram bot, or none elsewhere. */
+export function defaultTelegramConnectionFor(
+  provider: string,
+  connections: readonly TelegramConnectionStatus[] | undefined,
+): string | undefined {
+  return provider === "telegram" ? telegramConnectionId(defaultTelegramBot(connections)) : undefined;
+}
+
 /** The picker shows only when there is a choice to make or a problem to see. */
 export function showTelegramBotPicker(choices: readonly TelegramBotChoice[]): boolean {
   return choices.some((choice) => choice.value !== ORIGINAL_TELEGRAM_BOT || choice.unavailable);

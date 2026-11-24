@@ -22,7 +22,6 @@ import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type {
   DesktopMessagingSettingsProjection,
   ListDiscordThreadPermissionChannelsResponse,
-  TelegramConnectionStatus,
 } from "@pwragent/shared/contracts/settings";
 import type {
   InboundPreviewMessage,
@@ -71,15 +70,12 @@ import { ModelDropdown } from "../composer/ModelDropdown";
 import { AutomationFlow, AutomationStage } from "./AutomationFunnel";
 import {
   ORIGINAL_TELEGRAM_BOT,
-  defaultTelegramBot,
-  showTelegramBotPicker,
-  telegramBotChoices,
-  telegramBotLabel,
-  telegramBotOptions,
+  defaultTelegramConnectionFor,
   telegramBotValue,
   telegramConnectionId,
   type TelegramBotChoice,
 } from "./automation-telegram-bots";
+import { useAutomationTelegramBots } from "./useAutomationTelegramBots";
 
 type AutomationEditorMode =
   | {
@@ -391,11 +387,6 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const [inboundTopicId, setInboundTopicId] = useState(
     initialIsTopic ? initialConversation?.conversationId ?? "" : "",
   );
-  // The exact bot the fields' conversation arrives through. Undefined is the
-  // original route, which saves without a connection ID.
-  const [inboundConnectionId, setInboundConnectionId] = useState<string | undefined>(
-    initialConversation?.connectionId,
-  );
   // The sources NOT open in the conversation fields, in list order, and where
   // the one that is open sits among them. The fields edit one source at a
   // time; picking a listed source swaps it in, so every source stays editable.
@@ -534,13 +525,6 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const [destTopicId, setDestTopicId] = useState(
     initialTargetIsTopic ? initialTargetSnapshot?.conversationId ?? "" : "",
   );
-  // Without a saved destination it starts where its provider does: on the
-  // saved trigger's provider and bot.
-  const [destConnectionId, setDestConnectionId] = useState<string | undefined>(
-    initialTargetSnapshot
-      ? initialTargetSnapshot.connectionId
-      : initialConversation?.connectionId,
-  );
   const [profileCwd, setProfileCwd] = useState(
     initialAutomation?.executionProfile?.cwd ?? "",
   );
@@ -624,48 +608,23 @@ export function AutomationEditor(props: AutomationEditorProps) {
     };
   }, [props.desktopApi]);
 
-  // The profile's saved Telegram bots. Undefined until Settings answers, so a
-  // saved named bot is not called removed before anyone has looked.
-  const [telegramConnections, setTelegramConnections] = useState<TelegramConnectionStatus[]>();
-  useEffect(() => {
-    const list = props.desktopApi?.listTelegramConnections;
-    if (!list) {
-      setTelegramConnections([]);
-      return;
-    }
-    let cancelled = false;
-    void list()
-      .then((connections) => {
-        if (!cancelled) setTelegramConnections(connections);
-      })
-      .catch(() => {
-        // Without an answer every saved bot stays as saved, unjudged.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [props.desktopApi]);
-
-  // Each bot's own audience, keyed by its picker value. A named bot lists
-  // only what it was authorized for; it never borrows the original bot's list.
-  const [telegramCatalogs, setTelegramCatalogs] = useState<
-    Record<string, ListTelegramConnectionConversationsResponse>
-  >({});
-  const requestedTelegramCatalogsRef = useRef(new Set<string>());
-  const loadTelegramCatalog = useCallback(
-    async (bot: string): Promise<void> => {
-      const list = props.desktopApi?.listTelegramConnectionConversations;
-      if (!list) return;
-      requestedTelegramCatalogsRef.current.add(bot);
-      try {
-        const connectionId = telegramConnectionId(bot);
-        const catalog = await list(connectionId === undefined ? {} : { connectionId });
-        setTelegramCatalogs((current) => ({ ...current, [bot]: catalog }));
-      } catch {
-        // The fields fall back to typing an ID, as with any unlisted catalog.
-      }
-    },
-    [props.desktopApi],
+  const {
+    inboundConnectionId,
+    setInboundConnectionId,
+    destConnectionId,
+    setDestConnectionId,
+    telegramConnections,
+    telegramCatalogs,
+    loadTelegramCatalog,
+    telegramBotOptions,
+    inboundBotChoice,
+    destBotChoice,
+    sourceBotName,
+  } = useAutomationTelegramBots(
+    props.desktopApi,
+    { inboundProvider, destProvider, destinationShown: resultMode === "different", extraSources },
+    initialConversation,
+    initialTargetSnapshot,
   );
   const availableProviders =
     enabledProviders === undefined || enabledProviders.length === 0
@@ -691,13 +650,9 @@ export function AutomationEditor(props: AutomationEditorProps) {
     ) {
       setInboundProvider(availableProviders[0]);
       // A bot belongs to its provider; another provider's source has none.
-      setInboundConnectionId(
-        availableProviders[0] === "telegram"
-          ? telegramConnectionId(defaultTelegramBot(telegramConnections))
-          : undefined,
-      );
+      setInboundConnectionId(defaultTelegramConnectionFor(availableProviders[0], telegramConnections));
     }
-  }, [availableProviders, enabledProviders, inboundProvider, telegramConnections]);
+  }, [availableProviders, enabledProviders, inboundProvider, setInboundConnectionId, telegramConnections]);
 
   // The destination needs the same correction, and never had it. Its default
   // ("telegram", or the trigger's platform) may not be enabled, and a
@@ -717,11 +672,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
       ? inboundProvider
       : availableProviders[0];
     setDestProvider(provider);
-    setDestConnectionId(
-      provider === "telegram"
-        ? telegramConnectionId(defaultTelegramBot(telegramConnections))
-        : undefined,
-    );
+    setDestConnectionId(defaultTelegramConnectionFor(provider, telegramConnections));
     setDestGroupSelection("");
     setDestGroupId("");
     setDestTopicId("");
@@ -731,6 +682,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
     enabledProviders,
     inboundProvider,
     initialTargetSnapshot,
+    setDestConnectionId,
     telegramConnections,
   ]);
 
@@ -787,27 +739,8 @@ export function AutomationEditor(props: AutomationEditorProps) {
     [discordCatalog, providerGroups],
   );
 
-  const conversationsFor = useCallback(
-    (provider: MessagingChannelKind, connectionId: string | undefined): ProviderConversation[] => {
-      if (provider !== "telegram") return catalogGroups[provider] ?? [];
-      const bot = telegramBotValue(connectionId);
-      const catalog = telegramCatalogs[bot];
-      const listed = readTelegramCatalog(catalog);
-      if (bot !== ORIGINAL_TELEGRAM_BOT) return listed;
-      if (catalog?.status === "missing") return [];
-      const seen = new Set<string>();
-      return [...(catalogGroups.telegram ?? []), ...listed].filter((entry) => {
-        if (seen.has(entry.id)) return false;
-        seen.add(entry.id);
-        return true;
-      });
-    },
-    [catalogGroups, telegramCatalogs],
-  );
-
-  const telegramGroups = useMemo(
-    () => conversationsFor(inboundProvider, inboundConnectionId),
-    [conversationsFor, inboundConnectionId, inboundProvider],
+  const telegramGroups = listConversations(
+    catalogGroups, telegramCatalogs, inboundProvider, inboundConnectionId,
   );
   const selectedGroup = telegramGroups.find(
     (group) => group.id === groupSelection,
@@ -873,8 +806,8 @@ export function AutomationEditor(props: AutomationEditorProps) {
       ? fieldOrigin?.title
       : undefined;
   const destGroups = useMemo(
-    () => conversationsFor(destProvider, destConnectionId),
-    [conversationsFor, destConnectionId, destProvider],
+    () => listConversations(catalogGroups, telegramCatalogs, destProvider, destConnectionId),
+    [catalogGroups, destConnectionId, destProvider, telegramCatalogs],
   );
   const selectedDestGroup = destGroups.find(
     (group) => group.id === destGroupSelection,
@@ -913,63 +846,6 @@ export function AutomationEditor(props: AutomationEditorProps) {
     initialTargetSnapshot,
   ]);
 
-  // Every bot the two pickers may show: the saved bots, plus any bot a saved
-  // source or destination still names after it was removed.
-  const savedTelegramConnectionIds = [
-    ...(inboundProvider === "telegram" ? [inboundConnectionId] : []),
-    ...extraSources
-      .filter((source) => source.channel === "telegram")
-      .map((source) => source.connectionId),
-    ...(destProvider === "telegram" ? [destConnectionId] : []),
-  ];
-  const telegramChoices = telegramBotChoices(
-    telegramConnections,
-    savedTelegramConnectionIds,
-  );
-  const telegramBotPickerShown = showTelegramBotPicker(telegramChoices);
-  const telegramChoiceFor = (connectionId: string | undefined): TelegramBotChoice | undefined =>
-    telegramChoices.find((choice) => choice.value === telegramBotValue(connectionId));
-  const inboundBotChoice =
-    inboundProvider === "telegram" ? telegramChoiceFor(inboundConnectionId) : undefined;
-  const destBotChoice =
-    destProvider === "telegram" ? telegramChoiceFor(destConnectionId) : undefined;
-  // The same group can be watched through two bots, so a listed source names
-  // its bot whenever the profile has more than one.
-  const sourceBotName = (
-    source: AutomationMessagingConversationSnapshot,
-  ): string | undefined => {
-    if (!telegramBotPickerShown || source.channel !== "telegram") return undefined;
-    const choice = telegramChoiceFor(source.connectionId);
-    return choice ? telegramBotLabel(choice) : undefined;
-  };
-
-  // A new automation starts on the profile's original bot. When the profile
-  // has only named bots, it starts on the first enabled one instead of a
-  // route no bot answers. A saved source or destination is never moved.
-  const telegramDefaultAppliedRef = useRef(false);
-  useEffect(() => {
-    if (telegramDefaultAppliedRef.current || telegramConnections === undefined) return;
-    telegramDefaultAppliedRef.current = true;
-    const bot = telegramConnectionId(defaultTelegramBot(telegramConnections));
-    if (bot === undefined) return;
-    if (!initialConversation && inboundProvider === "telegram") setInboundConnectionId(bot);
-    if (!initialTargetSnapshot && !initialConversation && destProvider === "telegram") {
-      setDestConnectionId(bot);
-    }
-  }, [destProvider, inboundProvider, initialConversation, initialTargetSnapshot, telegramConnections]);
-
-  // A string, so the effect reruns only when the set of bots changes.
-  const telegramCatalogsWanted = JSON.stringify([
-    ...(inboundProvider === "telegram" ? [telegramBotValue(inboundConnectionId)] : []),
-    ...(destProvider === "telegram" && resultMode === "different"
-      ? [telegramBotValue(destConnectionId)]
-      : []),
-  ]);
-  useEffect(() => {
-    for (const bot of JSON.parse(telegramCatalogsWanted) as string[]) {
-      if (!requestedTelegramCatalogsRef.current.has(bot)) void loadTelegramCatalog(bot);
-    }
-  }, [loadTelegramCatalog, telegramCatalogsWanted]);
 
   const [topicOptions, setTopicOptions] = useState<InboundTopicOption[]>([]);
   const [topicSelection, setTopicSelection] = useState<string>(
@@ -1007,10 +883,10 @@ export function AutomationEditor(props: AutomationEditorProps) {
     };
   }, [props.desktopApi, inboundConnectionId, inboundProvider, telegramScope, inboundGroupId]);
 
-  const [captureEntryId, setCaptureEntryId] = useState<string>();
-  // The bot the code was issued by. Its request lives in that bot's store, so
-  // approving, rejecting and matching the reply all name the same bot.
-  const [captureConnectionId, setCaptureConnectionId] = useState<string>();
+  // The pending code's request, and the bot that issued it. The request lives
+  // in that bot's store, so approving, rejecting and matching the reply all
+  // name the same bot.
+  const [captureEntry, setCaptureEntry] = useState<{ id: string; connectionId?: string }>();
   const [captureMessage, setCaptureMessage] = useState<string>();
   const [captureStatus, setCaptureStatus] = useState<
     "idle" | "waiting" | "captured" | "error"
@@ -1057,7 +933,8 @@ export function AutomationEditor(props: AutomationEditorProps) {
   };
 
   useEffect(() => {
-    if (!captureEntryId) return;
+    if (!captureEntry) return;
+    const { id: captureEntryId, connectionId: captureConnectionId } = captureEntry;
     const subscribe = props.desktopApi?.onMessagingPairingChanged;
     const approve = props.desktopApi?.approveMessagingPairing;
     const readMessagingSettings = props.desktopApi?.readMessagingSettings;
@@ -1079,7 +956,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
         setCaptureError(
           "For a DM trigger, choose an authorized contact above. Add new contacts in Settings > Messaging.",
         );
-        setCaptureEntryId(undefined);
+        setCaptureEntry(undefined);
         return;
       }
       applyObservedChat(chat);
@@ -1105,9 +982,9 @@ export function AutomationEditor(props: AutomationEditorProps) {
           // Capture still succeeded; authorization can be completed in Settings.
         }
       })();
-      setCaptureEntryId(undefined);
+      setCaptureEntry(undefined);
     });
-  }, [captureConnectionId, captureEntryId, loadTelegramCatalog, props.desktopApi]);
+  }, [captureEntry, loadTelegramCatalog, props.desktopApi, setInboundConnectionId]);
 
   const startCaptureByCode = async (): Promise<void> => {
     const generate = props.desktopApi?.generateMessagingPairingToken;
@@ -1123,8 +1000,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
         scope: "bucket",
       });
       setCaptureMessage(result.message);
-      setCaptureConnectionId(connectionId);
-      setCaptureEntryId(result.entry.id);
+      setCaptureEntry({ id: result.entry.id, connectionId });
     } catch (caught) {
       setCaptureStatus("error");
       setCaptureError(caught instanceof Error ? caught.message : String(caught));
@@ -1132,16 +1008,16 @@ export function AutomationEditor(props: AutomationEditorProps) {
   };
 
   const cancelCaptureByCode = (): void => {
-    const entryId = captureEntryId;
-    if (entryId) {
+    if (captureEntry) {
+      const { id: entryId, connectionId } = captureEntry;
       void props.desktopApi
         ?.rejectMessagingPairing?.({
           entryId,
-          ...(captureConnectionId === undefined ? {} : { connectionId: captureConnectionId }),
+          ...(connectionId === undefined ? {} : { connectionId }),
         })
         .catch(() => {});
     }
-    setCaptureEntryId(undefined);
+    setCaptureEntry(undefined);
     setCaptureMessage(undefined);
     setCaptureStatus("idle");
     setCaptureError(undefined);
@@ -1220,7 +1096,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
     // By name when the catalog lists it, else as a manual ID — the same two
     // states an automation opened for editing starts in.
     setGroupSelection(
-      conversationsFor(conversation.channel, conversation.connectionId).some(
+      listConversations(catalogGroups, telegramCatalogs, conversation.channel, conversation.connectionId).some(
         (group) => group.id === values.groupId,
       )
         ? values.groupId
@@ -2179,13 +2055,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                             ) : null}
                           </div>
                         ) : null}
-                        <div
-                          className={`automation-inline-fields${
-                            inboundProvider === "telegram" && telegramBotPickerShown
-                              ? " automation-inline-fields--bot"
-                              : ""
-                          }`}
-                        >
+                        <div className={inlineFieldsClassName(inboundBotChoice)}>
                           <label className="automation-field">
                             <span>Provider</span>
                             <Select
@@ -2195,9 +2065,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                               onChange={(provider) => {
                                 setInboundProvider(provider);
                                 setInboundConnectionId(
-                                  provider === "telegram"
-                                    ? telegramConnectionId(defaultTelegramBot(telegramConnections))
-                                    : undefined,
+                                  defaultTelegramConnectionFor(provider, telegramConnections),
                                 );
                                 setGroupSelection("");
                                 setInboundGroupId("");
@@ -2207,26 +2075,22 @@ export function AutomationEditor(props: AutomationEditorProps) {
                               }}
                             />
                           </label>
-                          {inboundProvider === "telegram" && telegramBotPickerShown ? (
-                            <label className="automation-field">
-                              <span>Bot</span>
-                              <Select
-                                value={telegramBotValue(inboundConnectionId)}
-                                options={telegramBotOptions(telegramChoices)}
-                                onChange={(bot) => {
-                                  // A code issued by the previous bot cannot
-                                  // register a conversation for this one.
-                                  if (captureStatus === "waiting") cancelCaptureByCode();
-                                  setInboundConnectionId(telegramConnectionId(bot));
-                                  setGroupSelection("");
-                                  setInboundGroupId("");
-                                  setTopicSelection("");
-                                  setInboundTopicId("");
-                                  setValidationError(undefined);
-                                }}
-                              />
-                            </label>
-                          ) : null}
+                          <TelegramBotSelect
+                            choice={inboundBotChoice}
+                            label="Bot"
+                            options={telegramBotOptions}
+                            onChange={(connectionId) => {
+                              // A code issued by the previous bot cannot
+                              // register a conversation for this one.
+                              if (captureStatus === "waiting") cancelCaptureByCode();
+                              setInboundConnectionId(connectionId);
+                              setGroupSelection("");
+                              setInboundGroupId("");
+                              setTopicSelection("");
+                              setInboundTopicId("");
+                              setValidationError(undefined);
+                            }}
+                          />
                           {telegramGroups.length > 0 ? (
                             <div className="automation-field automation-field--picker">
                               {/* Not the provider's noun: this list holds DMs as well
@@ -2255,7 +2119,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                         </div>
 
                         <TelegramBotNotice
-                          catalog={inboundBotChoice ? telegramCatalogs[inboundBotChoice.value] : undefined}
+                          catalogs={telegramCatalogs}
                           choice={inboundBotChoice}
                           role="trigger"
                         />
@@ -3428,11 +3292,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                         {resultMode === "different" ? (
                           <div className="automation-field-group">
                             <div
-                              className={`automation-inline-fields automation-inline-fields--stacked-picker${
-                                destProvider === "telegram" && telegramBotPickerShown
-                                  ? " automation-inline-fields--bot"
-                                  : ""
-                              }`}
+                              className={`${inlineFieldsClassName(destBotChoice)} automation-inline-fields--stacked-picker`}
                             >
                               <label className="automation-field">
                                 <span>Destination provider</span>
@@ -3442,9 +3302,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                                   onChange={(provider) => {
                                     setDestProvider(provider);
                                     setDestConnectionId(
-                                      provider === "telegram"
-                                        ? telegramConnectionId(defaultTelegramBot(telegramConnections))
-                                        : undefined,
+                                      defaultTelegramConnectionFor(provider, telegramConnections),
                                     );
                                     setDestGroupSelection("");
                                     setDestGroupId("");
@@ -3453,22 +3311,18 @@ export function AutomationEditor(props: AutomationEditorProps) {
                                   }}
                                 />
                               </label>
-                              {destProvider === "telegram" && telegramBotPickerShown ? (
-                                <label className="automation-field">
-                                  <span>Destination bot</span>
-                                  <Select
-                                    value={telegramBotValue(destConnectionId)}
-                                    options={telegramBotOptions(telegramChoices)}
-                                    onChange={(bot) => {
-                                      setDestConnectionId(telegramConnectionId(bot));
-                                      setDestGroupSelection("");
-                                      setDestGroupId("");
-                                      setDestTopicId("");
-                                      setValidationError(undefined);
-                                    }}
-                                  />
-                                </label>
-                              ) : null}
+                              <TelegramBotSelect
+                                choice={destBotChoice}
+                                label="Destination bot"
+                                options={telegramBotOptions}
+                                onChange={(connectionId) => {
+                                  setDestConnectionId(connectionId);
+                                  setDestGroupSelection("");
+                                  setDestGroupId("");
+                                  setDestTopicId("");
+                                  setValidationError(undefined);
+                                }}
+                              />
                               {destGroups.length > 0 ? (
                                 <div className="automation-field automation-field--picker">
                                   <span>Destination</span>
@@ -3570,7 +3424,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                               </label>
                             ) : null}
                             <TelegramBotNotice
-                              catalog={destBotChoice ? telegramCatalogs[destBotChoice.value] : undefined}
+                              catalogs={telegramCatalogs}
                               choice={destBotChoice}
                               role="destination"
                             />
@@ -4036,18 +3890,71 @@ function buildTriggerConfig(params: {
   };
 }
 
+/** The Bot picker beside a Telegram provider, when the profile has a choice. */
+function TelegramBotSelect(props: {
+  /** Undefined when the side is not Telegram or the profile has one bot. */
+  choice?: TelegramBotChoice;
+  label: string;
+  options: readonly SelectOption<string>[];
+  onChange: (connectionId: string | undefined) => void;
+}) {
+  if (!props.choice) return null;
+  return (
+    <label className="automation-field">
+      <span>{props.label}</span>
+      <Select
+        value={props.choice.value}
+        options={props.options}
+        onChange={(bot) => props.onChange(telegramConnectionId(bot))}
+      />
+    </label>
+  );
+}
+
+/** Provider and Bot share a row when the Bot picker shows. */
+function inlineFieldsClassName(choice: TelegramBotChoice | undefined): string {
+  return choice
+    ? "automation-inline-fields automation-inline-fields--bot"
+    : "automation-inline-fields";
+}
+
+/**
+ * A provider's conversations. A Telegram bot lists its own audience; the
+ * original bot adds the settings allowlists, and a named bot never does.
+ */
+function listConversations(
+  catalogGroups: ProviderGroups,
+  telegramCatalogs: Record<string, ListTelegramConnectionConversationsResponse>,
+  provider: MessagingChannelKind,
+  connectionId: string | undefined,
+): ProviderConversation[] {
+  if (provider !== "telegram") return catalogGroups[provider] ?? [];
+  const bot = telegramBotValue(connectionId);
+  const catalog = telegramCatalogs[bot];
+  const listed = readTelegramCatalog(catalog);
+  if (bot !== ORIGINAL_TELEGRAM_BOT) return listed;
+  if (catalog?.status === "missing") return [];
+  const seen = new Set<string>();
+  return [...(catalogGroups.telegram ?? []), ...listed].filter((entry) => {
+    if (seen.has(entry.id)) return false;
+    seen.add(entry.id);
+    return true;
+  });
+}
+
 /**
  * Why the selected bot cannot carry this conversation, said where the bot is
  * chosen. A saved bot that was removed or turned off stays selected: the
  * automation keeps its route, and nothing is sent through another bot.
  */
 function TelegramBotNotice(props: {
-  catalog?: ListTelegramConnectionConversationsResponse;
+  catalogs: Record<string, ListTelegramConnectionConversationsResponse>;
   choice?: TelegramBotChoice;
   role: "trigger" | "destination";
 }) {
   const { choice } = props;
   if (!choice) return null;
+  const catalog = props.catalogs[choice.value];
   const effect = props.role === "trigger"
     ? "this conversation can't start the automation"
     : "results can't be sent here";
@@ -4066,7 +3973,7 @@ function TelegramBotNotice(props: {
       </p>
     );
   }
-  if (props.catalog?.status === "offline") {
+  if (catalog?.status === "offline") {
     return (
       <p className="automation-field__hint">
         {choice.name} isn't running in this PwrAgent, so its conversations can't be listed.
