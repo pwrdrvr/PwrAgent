@@ -342,12 +342,12 @@ function clonePrs(threads: readonly CloneThread[], knownPrs: readonly PrSummary[
 
 async function projectClone(
   clone: Clone, threads: readonly CloneThread[], knownPrs: readonly PrSummary[], demand?: PrMetadataDemand,
-) {
+): Promise<{ stacks: StackSummary[]; worktrees: StackWorktree[] }> {
   const catalog = clone.catalog.status === "ok" ? clone.catalog.catalog : undefined;
   const repositories = new Set(threads.flatMap(({ row }) => (row.prs ?? []).map(prRepository)));
   if (catalog?.stacks.length) repositories.add(catalog.repository.toLowerCase());
   const stacks: StackSummary[] = [];
-  if (!repositories.size) return stacks;
+  if (!repositories.size) return { stacks, worktrees: [] };
   const plans = [...repositories].sort().flatMap((repository) => {
     const catalogStacks = catalog?.repository.toLowerCase() === repository ? catalog.stacks : [];
     const prs = clonePrs(threads, knownPrs, repository);
@@ -364,7 +364,7 @@ async function projectClone(
     const inferred = inferPullRequestStacks(prs.filter((pr) => attached.has(pr.number) && sameRepositoryHead(pr)), catalogBranches);
     return catalogStacks.length || inferred.length ? [{ repository, catalogStacks, prs, bindings, inferred }] : [];
   });
-  if (!plans.length) return stacks;
+  if (!plans.length) return { stacks, worktrees: [] };
   const [worktreeOutput, refOutput] = await Promise.all([
     git(clone.cwd, ["worktree", "list", "--porcelain", "-z"], demand).catch(() => ""),
     git(clone.cwd, ["for-each-ref", "--format=%(refname)%00%(objectname)%00%(upstream)", "refs/heads/", "refs/remotes/"], demand).catch(() => ""),
@@ -405,7 +405,7 @@ async function projectClone(
       stacks.push({ key: `${prefix}:inferred:${chain[0]!.number}`, name, repository, inferred: true, trunk: chain[0]!.baseRefName!, layers });
     }
   }
-  return stacks;
+  return { stacks, worktrees };
 }
 
 function prIdentity(pr: PrSummary): string {
@@ -617,19 +617,6 @@ export class StackReader {
         else verified.set(cwd, checkout);
       }
     }
-    if (directories && unavailablePaths.size && !unavailable.length) {
-      const inScope = (cwd: string) => possible.get(cwd)?.some((commonDir) => scopedClones.has(commonDir));
-      const scopedRepositories = new Set(inferredRows.filter((row) => threadDirectories(row).some(inScope))
-        .flatMap((row) => (row.prs ?? []).filter((pr) => eligible.has(prIdentity(pr))).map(prRepository)));
-      const missingSibling = inferredRows.some((row) => {
-        const sharesRepository = row.prs?.some((pr) =>
-          eligible.has(prIdentity(pr)) && scopedRepositories.has(prRepository(pr)));
-        return sharesRepository && threadDirectories(row).some((cwd) =>
-          unavailablePaths.has(cwd) && !possible.get(cwd)?.length);
-      });
-      // A catalog can bind a thread by its worktree without any attached PR.
-      if ([...unavailablePaths].some(inScope) || missingSibling) unavailable.push({ status: "unavailable" });
-    }
     const checkouts = new Map(anchors.map((entry) => [entry.cwd, entry] as const));
     // Keep the existing path order regardless of which probes finish first.
     for (const cwd of paths) {
@@ -659,9 +646,48 @@ export class StackReader {
       const catalog = await observation.catalog(checkout.commonDir);
       return {
         catalog,
-        stacks: await projectClone({ ...checkout, catalog }, cloneThreads.get(checkout.commonDir) ?? [], knownPrs, demand),
+        ...await projectClone({ ...checkout, catalog }, cloneThreads.get(checkout.commonDir) ?? [], knownPrs, demand),
       };
     }));
+    if (directories && unavailablePaths.size && !unavailable.length) {
+      const inScope = (cwd: string) => possible.get(cwd)?.some((commonDir) => scopedClones.has(commonDir));
+      const scopedRepositories = new Set(inferredRows.filter((row) => threadDirectories(row).some(inScope))
+        .flatMap((row) => (row.prs ?? []).filter((pr) => eligible.has(prIdentity(pr))).map(prRepository)));
+      const missingSibling = inferredRows.some((row) => {
+        const sharesRepository = row.prs?.some((pr) =>
+          eligible.has(prIdentity(pr)) && scopedRepositories.has(prRepository(pr)));
+        return sharesRepository && threadDirectories(row).some((cwd) =>
+          unavailablePaths.has(cwd) && !possible.get(cwd)?.length);
+      });
+      if ([...unavailablePaths].some(inScope) || missingSibling) {
+        unavailable.push({ status: "unavailable" });
+      } else {
+        // Git's own inventory can identify a catalog-bound thread even when
+        // filesystem discovery hints were disabled or inconclusive.
+        const trackedWorktrees = results.flatMap(({ stacks, worktrees }) => {
+          const branches = new Set(stacks.filter((stack) => !stack.inferred).flatMap((stack) => stack.layers.map(({ branch }) => branch)));
+          return worktrees.filter(({ branch }) => branches.has(branch)).map(({ path }) => path);
+        });
+        const inTrackedWorktree = (cwd: string) => trackedWorktrees.some((root) => {
+          const relative = path.relative(root, cwd);
+          return !path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(".." + path.sep);
+        });
+        if (trackedWorktrees.length) {
+          const unknown = [...unavailablePaths].filter((cwd) => !possible.get(cwd)?.length);
+          const matches = new IterableMapper(unknown, async (cwd) => {
+            if (inTrackedWorktree(cwd)) return true;
+            const resolved = await runPrMetadataFileProbe(() => realpath(cwd), inventoryDemand);
+            return Boolean(resolved && inTrackedWorktree(resolved));
+          }, STACK_CHECKOUT_SCAN_LIMITS);
+          for await (const match of matches) {
+            if (match) {
+              unavailable.push({ status: "unavailable" });
+              break;
+            }
+          }
+        }
+      }
+    }
     demand.signal?.throwIfAborted();
     const observed = new Map([...threads.flatMap((row) => row.prs ?? []), ...knownPrs].map((pr) => [prIdentity(pr), pr]));
     const stacks = results.flatMap((result) => result.stacks);

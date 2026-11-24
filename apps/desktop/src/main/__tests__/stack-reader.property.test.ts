@@ -44,8 +44,9 @@ async function writeCatalog(cwd: string, name: string) {
 
 describe("stack checkout demand", () => {
   it.each([
-    ["bundled", "inferred"], ["installed", "inferred"], ["bundled", "tracked"],
-  ])("keeps %s Git scoped %s evidence inconclusive when a sibling checkout times out", async (runtime, kind) => {
+    ["bundled", "inferred", false], ["installed", "inferred", false],
+    ["bundled", "tracked", false], ["bundled", "tracked", true],
+  ] as const)("keeps %s Git scoped %s evidence inconclusive when a sibling checkout times out (override: %s)", async (runtime, kind, override) => {
     const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-inferred-sibling-"));
     const primary = path.join(sandbox, "primary");
     const sibling = path.join(sandbox, "sibling");
@@ -55,6 +56,14 @@ describe("stack checkout demand", () => {
       git(primary, "config", "include.path", "fixture-git-include");
       git(primary, "worktree", "add", "-b", "lower", sibling);
       if (runtime === "installed") process.env.PWRAGENT_GIT_PATH = await gitExecutable.resolveGitExecutable();
+      let lowerPath = sibling;
+      if (override) {
+        process.env.GIT_CEILING_DIRECTORIES = sandbox;
+        const nested = path.join(sibling, "nested");
+        await mkdir(nested);
+        lowerPath = path.join(sandbox, "lower-alias");
+        await symlink(nested, lowerPath, "junction");
+      }
       const head = git(primary, "rev-parse", "HEAD");
       const upper: PrSummary = {
         number: 2, provider: "github.com", org: "fixture", repo: "stack", state: "passing", lifecycleState: "open",
@@ -73,7 +82,7 @@ describe("stack checkout demand", () => {
       }
       const rows = [
         { ...row(primary, "upper"), prs: [upper] },
-        { ...row(sibling, "lower"), prs: kind === "tracked" ? [] : [lower] },
+        { ...row(lowerPath, "lower"), prs: kind === "tracked" ? [] : [lower] },
       ];
       const reader = new StackReader();
       const read = () => reader.read(rows, [], [primary], async (key) => ({ repair: key === "codex:lower" }));
@@ -84,7 +93,7 @@ describe("stack checkout demand", () => {
       }
       const runGitCommand = gitExecutable.runGitCommand;
       const run = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation((cwd, args, options) =>
-        cwd === sibling && args[0] === "rev-parse"
+        cwd === lowerPath && args[0] === "rev-parse"
           ? Promise.reject(Object.assign(new Error("fixture sibling checkout timeout"), { killed: true }))
           : runGitCommand(cwd, args, options));
       try {
@@ -94,6 +103,32 @@ describe("stack checkout demand", () => {
       } finally {
         run.mockRestore();
       }
+    } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("revalidates Git discovery after an inline core.worktree symlink is retargeted", async () => {
+    const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-inline-worktree-")));
+    const repo = path.join(sandbox, "repo");
+    const moved = path.join(sandbox, "moved");
+    const alias = path.join(sandbox, "checkout");
+    try {
+      await Promise.all([mkdir(repo), mkdir(moved)]);
+      initialize(repo);
+      await writeCatalog(repo, "inline");
+      await symlink(repo, alias, "junction");
+      const config = path.join(repo, ".git", "config");
+      await writeFile(config, (await readFile(config, "utf8")) + "\n[core] worktree = " + JSON.stringify(alias) + "\n");
+      const discover = () => git(repo, "rev-parse", "--show-toplevel");
+      const observation = new StackReadObservation();
+      expect(discover()).toBe(repo);
+      expect(await observation.preflightCatalogs([repo])).toMatchObject([{ status: "ok" }]);
+      await rm(alias);
+      await symlink(moved, alias, "junction");
+      expect(discover()).toBe(moved);
+      await observation.revalidateAfterListing();
+      expect(await observation.checkoutsByClone([repo])).toMatchObject([{ root: moved }]);
     } finally {
       await rm(sandbox, { recursive: true, force: true });
     }

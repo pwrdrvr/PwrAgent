@@ -194,8 +194,10 @@ export function createGitDirectoryObserver(options: { navigation?: boolean; requ
       if (!objects?.directory || worktreeConfig
         || configText.split(/\r?\n/).some((line) => {
           const entry = line.trim();
-          return /^\[\s*include|^worktree\b/i.test(entry)
-            || (/^bare\b/i.test(entry) && !/^bare\s*=\s*false$/i.test(entry));
+          // Git permits a setting directly after its section header.
+          const setting = entry.replace(/^\[\s*core\s*\]\s*/i, "");
+          return /^\[\s*include/i.test(entry) || /^worktree\b/i.test(setting)
+            || (/^bare\b/i.test(setting) && !/^bare\s*=\s*false$/i.test(setting));
         })) return undefined;
     }
     // Reftable's HEAD is a static compatibility file. Ref updates atomically
