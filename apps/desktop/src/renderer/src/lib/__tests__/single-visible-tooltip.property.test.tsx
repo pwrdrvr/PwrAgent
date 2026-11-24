@@ -112,10 +112,16 @@ it("never shows more than one plain tooltip, and it is the one shown last", () =
   fc.assert(
     fc.property(fc.array(command, { minLength: 1, maxLength: 24 }), (commands) => {
       const view = render(<Window />);
-      const dataTarget = trigger("Changes tab");
       let active: PlainId | null = null;
       let card = false;
       try {
+        // The fixture's buttons stay mounted throughout the command sequence.
+        const dataTarget = view.getByText("Changes tab");
+        const targets = {
+          a: view.getByText("Trigger a"),
+          b: view.getByText("Trigger b"),
+          card: view.getByText("Trigger card"),
+        };
         for (const step of commands) {
           act(() => {
             switch (step.kind) {
@@ -128,7 +134,7 @@ it("never shows more than one plain tooltip, and it is the one shown last", () =
                 if (active === "data") active = null;
                 break;
               case "show":
-                tooltips[step.id]!.show(trigger(`Trigger ${step.id}`), `Tooltip ${step.id}`);
+                tooltips[step.id]!.show(targets[step.id], `Tooltip ${step.id}`);
                 active = step.id;
                 break;
               case "hide":
@@ -136,7 +142,7 @@ it("never shows more than one plain tooltip, and it is the one shown last", () =
                 if (active === step.id) active = null;
                 break;
               case "show-card":
-                tooltips.card!.show(trigger("Trigger card"), "PR #1");
+                tooltips.card!.show(targets.card, "PR #1");
                 card = true;
                 break;
               case "hide-card":
