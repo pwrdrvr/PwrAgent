@@ -61,6 +61,7 @@ import {
   seedResourcesAuditState,
   type ResourcesAuditSeed,
 } from "./fixtures/resource-checkout-seeding";
+import { writeLoggedOutGh } from "./fixtures/stand-in-gh";
 import { openStarMapWindow } from "./fixtures/star-map-window";
 import { buildAuditSubAgents } from "./fixtures/sub-agent-state-seeding";
 import {
@@ -228,14 +229,26 @@ const PR_WATCHES_FIXTURE = path.resolve(
   "fixtures/a11y-pr-watches/replay.fixture.json",
 );
 
-// The block's PRs are invented, so a real forge call can only fail. Without a
-// token the status poller's `gh` call fails before it reaches the network.
+// The block's PRs are invented, so a real forge call can only fail. No token
+// keeps the status poller off the network.
 const NO_FORGE_CREDENTIALS = {
   GH_TOKEN: undefined,
   GITHUB_TOKEN: undefined,
   GH_ENTERPRISE_TOKEN: undefined,
   GITHUB_ENTERPRISE_TOKEN: undefined,
   GITLAB_TOKEN: undefined,
+};
+
+// No token alone is not quiet. With no token the poller asks the runner's `gh`
+// for one, 15s after launch. The failure raises the "GitHub PR status
+// unavailable" notice partway through the appearance loop, and whether it
+// fails depends on the runner's `gh` install and login. Turning the forges
+// off stops the poller before it reads a token. The seeded chips, watches,
+// and hover card render from sqlite, not from the forge.
+const NO_FORGE_ACCESS = {
+  ...NO_FORGE_CREDENTIALS,
+  PWRAGENT_GH_ENABLED: "false",
+  PWRAGENT_GLAB_ENABLED: "false",
 };
 
 // Fourteen threads on one directory and one on a second, so the audited row
@@ -818,7 +831,7 @@ registerSharedAudit({
   launch: (appearance) => launchAuditApp({
     ...appearance,
     fixturePath: PR_WATCHES_FIXTURE,
-    env: NO_FORGE_CREDENTIALS,
+    env: NO_FORGE_ACCESS,
     preLaunchHook: async (homeRoot) => {
       await seedPrWatchAuditState(homeRoot);
     },
@@ -944,6 +957,50 @@ registerSharedAudit({
       await settleSidebarPointer(app.window);
       await scan(app.window, "rail Pull requests watch history");
     });
+  },
+});
+
+// A notice toast, with a detail line and the durable notices' "1 of 1"
+// position: the muted text that only reached this gate when a background
+// check failed mid-scan. The source is the notice that did it. The PR-watch
+// seed gives the status poller PRs to read, and a `gh` that is installed
+// but logged out fails the token read on the poller's first tick, 15s in.
+registerSharedAudit({
+  key: "notice-toast",
+  title: "notice toast has no violations",
+  skipOnWindows: "The stand-in gh is a shell script, which Windows cannot run as PWRAGENT_GH_COMMAND.",
+  launch: async (appearance) => {
+    const ghPath = await writeLoggedOutGh(test.info().outputPath("notice-toast-gh"));
+    return launchAuditApp({
+      ...appearance,
+      fixturePath: PR_WATCHES_FIXTURE,
+      env: {
+        ...NO_FORGE_CREDENTIALS,
+        PWRAGENT_GH_ENABLED: "true",
+        PWRAGENT_GH_COMMAND: ghPath,
+        PWRAGENT_GLAB_ENABLED: "false",
+      },
+      preLaunchHook: async (homeRoot) => {
+        await seedPrWatchAuditState(homeRoot);
+      },
+    });
+  },
+  exercise: async (app, scan) => {
+    const notice = app.window.locator(
+      ".app-notice-toast[data-notice-id='github-pr-authentication-failure']",
+    );
+    // One poller tick plus slack. The notice is durable, so it stays up for
+    // every appearance once it arrives.
+    await expect(notice).toBeVisible({ timeout: 30_000 });
+    await expect(notice.locator(".app-notice-toast__detail")).toHaveText(
+      "GitHub CLI authentication status check failed",
+    );
+    await expect(notice.locator(".app-notice-toast__position")).toHaveText("1 of 1");
+    // At rest, not mid-rise: reduced motion settles the entrance, and a
+    // regression there would put a partly transparent card in front of axe.
+    await expect(notice).toHaveCSS("opacity", "1");
+    await settleSidebarPointer(app.window);
+    await scan(app.window, "notice toast with detail and position");
   },
 });
 
