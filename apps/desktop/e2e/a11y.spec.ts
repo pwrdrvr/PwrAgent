@@ -1256,7 +1256,8 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
 
         await test.step("inspector: counted pool held by an agent with a queue", async () => {
           const inspector = await select(RESOURCES_AUDIT_POOL.displayName);
-          await expect(inspector.getByRole("button", { name: "Agent thread", exact: true }).first()).toBeVisible();
+          // The seed names no title, so the holder's thread chip keeps the fallback.
+          await expect(inspector.getByRole("button", { name: "Open thread Agent thread", exact: true }).first()).toBeVisible();
           await expect(inspector.locator(".resources-queue > li")).toHaveCount(1);
           await expect(inspector.getByText("Render jobs only. Free slots before ending the turn.", { exact: true }))
             .toBeVisible();

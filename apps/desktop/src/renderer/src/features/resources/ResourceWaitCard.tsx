@@ -8,6 +8,7 @@ import {
   summarizeResourceWait,
   type ResourceWaiter,
 } from "./resource-wait";
+import { ResourceThreadChip } from "./ResourceThreadChip";
 import "./resource-wait-card.css";
 
 /** The main window gets no change events for checkouts, so it re-reads. */
@@ -73,6 +74,8 @@ export function ResourceWaitCard(props: {
   now: number;
   /** Opens Resources on this resource; absent where no Resources window opens. */
   onOpenResource?: (resourceId: string) => void;
+  /** Runs before a holder's thread opens, so a dialog showing this card closes. */
+  onNavigate?: () => void;
 }): ReactElement {
   const snapshot = props.state.status === "ready" ? props.state.snapshot : undefined;
   const summary = snapshot ? summarizeResourceWait(snapshot, props.resourceId, props.waiter) : undefined;
@@ -127,8 +130,16 @@ export function ResourceWaitCard(props: {
         <dt>Held by</dt>
         <dd>
           {summary.holders.length === 0 ? "Nobody else" : summary.holders.map((holder, index) => (
-            <span className="resource-wait-card__holder" key={index}>
-              {holder.label}
+            <span className="resource-wait-card__holder" data-testid="resource-wait-holder" key={index}>
+              {holder.thread
+                ? (
+                  <ResourceThreadChip
+                    thread={holder.thread}
+                    {...(snapshot ? { localInstanceId: snapshot.viewer.instanceId } : {})}
+                    {...(props.onNavigate ? { onNavigate: props.onNavigate } : {})}
+                  />
+                )
+                : holder.label}
               {holder.units !== undefined ? ` · ${holder.units} ${summary.unit}${holder.units === 1 ? "" : "s"}` : ""}
               <span className="resource-wait-card__sub">
                 {`Held ${formatDuration(Math.max(0, props.now - holder.grantedAt))} of ${formatDuration(Math.max(0, holder.deadlineAt - holder.grantedAt))} expected · ${formatDeadline(holder.deadlineAt, props.now)}`}

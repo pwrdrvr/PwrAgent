@@ -739,26 +739,14 @@
   line-height: 1.5;
 }
 
-.resources-link {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--text-primary);
-  font: inherit;
-  text-align: left;
-  text-decoration: underline;
-  text-decoration-color: var(--border-strong);
-  text-underline-offset: 2px;
-  cursor: pointer;
-}
-
-.resources-link:hover {
-  text-decoration-color: var(--accent);
-}
-
-.resources-link:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
+/* A holder's thread chip, then the instance it runs on. */
+.resources-holder-name {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 /* State callout */

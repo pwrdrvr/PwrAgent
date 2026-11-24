@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ManageThreadDependenciesRequest,
@@ -10,7 +11,9 @@ import type {
   NavigationQueryRequest,
   NavigationThreadSummary,
 } from "@pwragent/shared/contracts/navigation";
+import type { ResourceAllocation, ResourceThreadRef } from "@pwragent/shared/contracts/resource-checkouts";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import { ContinueAfterDialog } from "../ContinueAfterDialog";
 import { buildPreviewSnapshot } from "../../resources/preview/resource-checkouts-preview";
@@ -661,6 +664,71 @@ describe("ContinueAfterDialog resource waits", () => {
 
     fireEvent.click(within(card).getByRole("button", { name: "Open in Resources…" }));
     expect(openResourceCheckoutsWindow).toHaveBeenCalledWith({ resourceId: "res-compute" });
+  });
+
+  /**
+   * Rule: every other thread holding the resource is a thread chip with its
+   * own title, and clicking it shows exactly that thread and closes the
+   * dialog, which would otherwise cover the thread it opened. Before the fix
+   * holders were plain text, so nothing could be opened from here.
+   */
+  it("opens each holder's own thread from its chip and closes the dialog", async () => {
+    const holdersArb = fc.uniqueArray(
+      fc.record({
+        // Accessible names collapse runs of whitespace; titles keep single spaces.
+        title: fc.stringMatching(/^[A-Za-z0-9]{1,8}( [A-Za-z0-9]{1,8}){0,2}$/),
+        backend: fc.constantFrom("codex" as const, "claude" as const),
+      }),
+      { minLength: 1, maxLength: 4, selector: ({ title }) => title.toLowerCase() },
+    );
+    await fc.assert(fc.asyncProperty(holdersArb, async (holders) => {
+      const refs: ResourceThreadRef[] = holders.map(({ title, backend }, index) => ({ backend, threadId: `holder-${index}`, title }));
+      const snapshot = buildPreviewSnapshot(Date.now());
+      const compute = snapshot.resources.find((resource) => resource.resourceId === "res-compute")!;
+      const template = compute.allocations[0]!;
+      compute.allocations = refs.map((ref, index): ResourceAllocation => ({
+        ...template, allocationId: `alloc-${index}`, holder: { kind: "thread", thread: ref },
+      }));
+      const api = {
+        manageThreadDependencies: vi.fn(async () => ({ dependencies: [resourceWait] })),
+        readResourceCheckouts: vi.fn(async () => snapshot),
+      } as unknown as DesktopApi;
+      const onClose = vi.fn();
+      const onShowThread = vi.fn();
+      render(
+        <ThreadLinkProvider threads={[]} onShowThread={onShowThread}>
+          <ContinueAfterDialog thread={thread} desktopApi={api} onClose={onClose} />
+        </ThreadLinkProvider>,
+      );
+      try {
+        const card = await screen.findByTestId("resource-wait-card");
+        await within(card).findAllByTestId("resource-wait-holder");
+        for (const [index, ref] of refs.entries()) {
+          fireEvent.click(within(card).getByRole("button", { name: `Open thread ${ref.title}` }));
+          expect(onClose).toHaveBeenCalledTimes(index + 1);
+          expect(onShowThread).toHaveBeenLastCalledWith({ backend: ref.backend, threadId: ref.threadId });
+        }
+      } finally {
+        cleanup();
+      }
+    }), { numRuns: 12 });
+  });
+
+  it("closes when another window shows a thread, such as a holder clicked in Resources", async () => {
+    let show: (() => void) | undefined;
+    const unsubscribe = vi.fn();
+    const api = {
+      manageThreadDependencies: vi.fn(async () => ({ dependencies: [resourceWait] })),
+      readResourceCheckouts: vi.fn(async () => buildPreviewSnapshot(Date.now())),
+      onShowThreadRequested: vi.fn((listener: () => void) => { show = listener; return unsubscribe; }),
+    } as unknown as DesktopApi;
+    const { onClose, unmount } = renderDialog(api);
+    await screen.findByTestId("resource-wait-card");
+    expect(onClose).not.toHaveBeenCalled();
+    act(() => show?.());
+    expect(onClose).toHaveBeenCalledTimes(1);
+    unmount();
+    expect(unsubscribe).toHaveBeenCalled();
   });
 
   it("does not read this window's checkouts for a peer's thread", async () => {

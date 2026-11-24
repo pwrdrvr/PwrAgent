@@ -1,8 +1,72 @@
 import { MAX_CHECKOUT_RENEWALS } from "@pwragent/owner-core/resource-checkout-authority";
 import type { CheckoutActor, CheckoutDomainRecord, CheckoutGrant } from "@pwragent/owner-core/resource-checkout-storage";
+import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
+import type { WindowShowThreadRequest } from "../../shared/window-show-thread";
 import type {
-  ResourceActionGates, ResourceAuthority, ResourceDomain, ResourceOwnershipConflict, ResourceRecoveryStatus,
+  ResourceActionGates, ResourceAuthority, ResourceDomain, ResourceHolder, ResourceOwnershipConflict, ResourceRecoveryStatus,
+  ResourceThreadRef,
 } from "@pwragent/shared/contracts/resource-checkouts";
+
+/**
+ * The holder an actor names, with the owning instance its key records. Grants
+ * stored before holders carried `instanceId` still name their owner in the
+ * key, `[instanceId, backend, threadId]`, so a click can reach the right
+ * PwrAgent instead of guessing this one.
+ */
+export function actorHolder(actor: CheckoutActor): ResourceHolder {
+  const { holder } = actor;
+  if (holder.kind !== "thread" || holder.thread.instanceId) return holder;
+  let key: unknown;
+  try { key = JSON.parse(actor.key); } catch { return holder; }
+  const owner: unknown = Array.isArray(key) ? key[0] : undefined;
+  return typeof owner === "string" && owner ? { kind: "thread", thread: { ...holder.thread, instanceId: owner } } : holder;
+}
+
+/**
+ * Where clicking a holder in Resources shows its thread: a thread owned by
+ * another instance opens through Federation, this instance's own in place.
+ * A malformed reference from the renderer shows nothing.
+ */
+export function resourceThreadShowRequest(thread: unknown, localInstanceId: string): WindowShowThreadRequest | undefined {
+  if (!thread || typeof thread !== "object") return undefined;
+  const { backend, threadId, instanceId } = thread as Partial<Record<keyof ResourceThreadRef, unknown>>;
+  if (typeof backend !== "string" || !isAppServerBackendKind(backend) || typeof threadId !== "string" || !threadId.trim()
+    || (instanceId !== undefined && typeof instanceId !== "string")) return undefined;
+  return {
+    backend, threadId,
+    ...(instanceId && instanceId !== localInstanceId ? { federationTarget: { scope: "remote", instanceId } } : {}),
+  };
+}
+
+function delegatedExecutor(grant: CheckoutGrant): { delegatedExecutor?: ResourceThreadRef } {
+  const executor = grant.executor && actorHolder(grant.executor);
+  return executor?.kind === "thread" ? { delegatedExecutor: executor.thread } : {};
+}
+
+/**
+ * Applies `label` to every thread a resource names: holders, delegated
+ * executors and queued requesters. A delegated executor's label follows its
+ * thread's title.
+ */
+export function labelResourceThreads(
+  resource: ResourceDomain,
+  label: (thread: ResourceThreadRef) => ResourceThreadRef,
+): ResourceDomain {
+  const holder = (value: ResourceHolder): ResourceHolder => value.kind === "thread" ? { kind: "thread", thread: label(value.thread) } : value;
+  return {
+    ...resource,
+    allocations: resource.allocations.map((allocation) => {
+      if (!allocation.delegatedExecutor) return { ...allocation, holder: holder(allocation.holder) };
+      const delegatedExecutor = label(allocation.delegatedExecutor);
+      const delegatedLabel = `Delegated to ${allocation.delegatedExecutor.title}`;
+      return {
+        ...allocation, holder: holder(allocation.holder), delegatedExecutor,
+        executorLabel: allocation.executorLabel === delegatedLabel ? `Delegated to ${delegatedExecutor.title}` : allocation.executorLabel,
+      };
+    }),
+    queue: resource.queue.map((entry) => ({ ...entry, requester: holder(entry.requester) })),
+  };
+}
 
 function projectRecovery(grant: CheckoutGrant, machine: boolean, canRecover: boolean): ResourceRecoveryStatus {
   const hasProcessGroup = grant.job?.processGroupId !== undefined;
@@ -86,17 +150,17 @@ export function projectCheckoutDomain(
       gaps: ["Provider credentials and independently launched work are outside checkout enforcement."],
     },
     allocations: grants.map((grant) => ({
-      allocationId: grant.id, state: grant.state, holder: grant.actor.holder, taskLabel: grant.purpose,
+      allocationId: grant.id, state: grant.state, holder: actorHolder(grant.actor), taskLabel: grant.purpose,
       executorLabel: grant.job?.executor ?? (grant.executor?.holder.kind === "thread"
-        ? `Delegated to ${grant.executor.holder.thread.threadId}` : "No managed job"),
-      ...(grant.executor?.holder.kind === "thread" ? { delegatedExecutor: grant.executor.holder.thread } : {}),
+        ? `Delegated to ${grant.executor.holder.thread.title}` : "No managed job"),
+      ...delegatedExecutor(grant),
       grantedAt: grant.grantedAt, deadlineAt: grant.deadlineAt,
       renewalsUsed: grant.renewals, renewalsAllowed: MAX_CHECKOUT_RENEWALS, authorityEpoch: definition.epoch,
       generation: grant.generation, ...(definition.counted ? { units: grant.units } : {}),
       lastKnown: unavailable, viewerOwns: grant.actor.key === actor.key,
     })),
     queue: queue.map((entry, index) => ({
-      queueEntryId: entry.id, position: index + 1, requester: entry.actor.holder, purpose: entry.purpose,
+      queueEntryId: entry.id, position: index + 1, requester: actorHolder(entry.actor), purpose: entry.purpose,
       requestedAt: entry.requestedAt, expectedDurationMs: entry.durationMs,
       ...(definition.counted ? { units: entry.units } : {}),
       eligibility: { eligible: true }, viewerOwns: entry.actor.key === actor.key,
