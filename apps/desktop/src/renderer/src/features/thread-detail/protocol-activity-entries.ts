@@ -1,6 +1,7 @@
 import type {
   AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
+  AppServerThreadEntry,
   AppServerThreadTurnMetadata,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import { mergeActivityDetails, summarizeActivityStatus } from "./live-transcript-activity";
@@ -133,6 +134,16 @@ export function protocolActivityEntriesAtTurnEnd(
     id: isModelRoutingActivityEntry(entry) ? entry.id : `${entry.id}@${turn.id}`,
     turn,
   }));
+}
+
+/**
+ * The grouped auto-review row, live or deferred into the transcript. It lives
+ * only in memory: Codex's thread/read has no record of the reviews, so the row
+ * stays in view after its turn until the next turn's replay prunes it.
+ */
+export function isAutoReviewActivityEntry(entry: AppServerThreadEntry): boolean {
+  return entry.type === "activity"
+    && (entry.id === AUTO_REVIEW_ENTRY_ID || entry.id.startsWith(`${AUTO_REVIEW_ENTRY_ID}@`));
 }
 
 function isWarningActivityEntry(entry: AppServerThreadActivityEntry): boolean {
