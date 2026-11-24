@@ -778,7 +778,11 @@ export function createThreadTodoRunners(params: {
       if (!sameBackend && action.executionMode === undefined) {
         if (destination && !destination.executionModes.some((mode) => mode.mode === executionMode && mode.available)) {
           // An inherited mode must never raise access to make a provider fit.
-          if (!destination.executionModes.some((mode) => mode.mode === "default" && mode.available)) {
+          // A provider that lists no modes (Antigravity) governs its own
+          // permissions, so the inherited mode has nothing to map onto and
+          // the thread records Default Access.
+          if (destination.executionModes.length > 0
+            && !destination.executionModes.some((mode) => mode.mode === "default" && mode.available)) {
             throw new ThreadTodoError("invalid_arguments", `${destination.label} cannot use the inherited access mode or Default Access.`);
           }
           executionMode = "default";

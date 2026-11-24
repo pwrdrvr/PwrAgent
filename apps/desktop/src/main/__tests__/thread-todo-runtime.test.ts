@@ -1,11 +1,13 @@
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import type { HandoffSourceSettings } from "../app-server/backend-registry-types";
 import type {
   AppServerBackendKind,
   AppServerThreadMessageOrigin,
+  ThreadExecutionMode,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   CreateInstanceThreadResult,
@@ -503,6 +505,43 @@ describe("dispatch access mode compatibility", () => {
       todo: CARD,
       action: { type: "start_thread", prompt: "Build it" }, modelSettings: { backend: "acp:kimi" } })).rejects.toThrow("Default Access");
     expect(registry.startThread).not.toHaveBeenCalled();
+  });
+
+  it("starts any inherited access on a provider that lists no access modes, without raising it", async () => {
+    const order: ThreadExecutionMode[] = ["default", "auto", "full-access"];
+    const modeEntry = fc.record({
+      mode: fc.constantFrom(...order),
+      available: fc.boolean(),
+    });
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom(...order),
+      fc.uniqueArray(modeEntry, { selector: (entry) => entry.mode, maxLength: 3 }),
+      async (inherited, destinationModes) => {
+        const { registry, runners } = fakeRegistry({ ...FULL_ACCESS_SOL, executionMode: inherited });
+        registry.listBackends.mockResolvedValue({ fetchedAt: 0, backends: [
+          { kind: "acp:kimi", label: "Kimi", executionModes: destinationModes },
+        ] });
+        const listed = (mode: ThreadExecutionMode) =>
+          destinationModes.some((entry) => entry.mode === mode && entry.available);
+        // Oracle: keep a listed inherited mode, else Default when the provider
+        // lists none or offers Default, else refuse.
+        const expected = listed(inherited)
+          ? inherited
+          : destinationModes.length === 0 || listed("default") ? "default" : undefined;
+        const start = runners.startThread({ sourceBackend: "codex", sourceThreadId: "source", crossProject: false,
+          todo: CARD,
+          action: { type: "start_thread", prompt: "Build it" }, modelSettings: { backend: "acp:kimi" } });
+        if (expected === undefined) {
+          await expect(start).rejects.toThrow("Default Access");
+          expect(registry.startThread).not.toHaveBeenCalled();
+          return;
+        }
+        await start;
+        const started = registry.startThread.mock.calls[0]?.[0] as unknown as { executionMode: ThreadExecutionMode };
+        expect(started.executionMode).toBe(expected);
+        expect(order.indexOf(started.executionMode)).toBeLessThanOrEqual(order.indexOf(inherited));
+      },
+    ), { numRuns: 50 });
   });
 
   it("preserves explicit card access and same-backend inheritance", async () => {
