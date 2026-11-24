@@ -53,6 +53,7 @@ import {
 } from "../acp/acp-client";
 import type { AcpProviderStatus } from "../acp/acp-provider-status";
 import { readAntigravityUsage } from "../acp/antigravity-usage.js";
+import { pwragentToolSkipsAgentApproval } from "./acp-host-tool-approval";
 import { PlanLimitStore } from "./plan-limit-store";
 import {
   MAX_TURN_INPUT_ATTACHMENT_BYTES,
@@ -3814,9 +3815,15 @@ export class AcpBackendAdapter {
               ...(!http ? { memoryOnly: true } : {}),
               ...(http && observeJobMonitorCatalog ? { observeJobMonitorCatalog: true } : {}),
             });
+            const readTool = registration.readTool;
             baseRegistration = {
               servers: [http ? registration.server : buildAgentMemoryStdioServer(registration.server)],
               bindThread: registration.bindThread,
+              ...(readTool ? {
+                hostApprovesToolCall: async (serverName: string, toolName: string) =>
+                  serverName === registration.server.name
+                  && pwragentToolSkipsAgentApproval(await readTool(toolName)),
+              } : {}),
               ...(http && observeJobMonitorCatalog ? {
                 readListedJobMonitorCreation: registration.readListedJobMonitorCreation,
               } : {}),

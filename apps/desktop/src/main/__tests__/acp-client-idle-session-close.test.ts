@@ -145,6 +145,52 @@ it("reloads exactly when a verified session's advertised Job Monitor preference 
   }), { numRuns: 12, examples: [[[false, true, true, false]]] });
 });
 
+it("keeps an Antigravity thread grant across a reload only while the session's MCP server names are unchanged", async () => {
+  const serverSets = [["pwragent", "tracker"], ["tracker", "pwragent"], ["pwragent", "tracker", "tracker_list"], ["pwragent", "other"]];
+  await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom(...serverSets), { minLength: 1, maxLength: 4 }), async (reloads) => {
+    let names = serverSets[0]!;
+    let choice: "accept_for_session" | "accept" = "accept_for_session";
+    const asked: string[] = [];
+    const transport = new GrokLikeTransport({ initialize: GROK_INITIALIZE, "session/new": { sessionId: "agy" } });
+    const client = new AcpAgentClient({
+      backendId: "acp:antigravity", store, transport, now: () => clock,
+      mcpServers: () => ({ servers: names.map((name) => ({ type: "http" as const, name, url: `http://127.0.0.1/${name}`, headers: [] })) }),
+      onRequest: (request) => {
+        asked.push(String(request.params.acpMcpToolName));
+        const options = request.params.acpPermissionOptions as Array<{ optionId: string; kind: string }>;
+        const option = options.find((entry) => entry.kind === (choice === "accept" ? "allow_once" : "allow_always"))!;
+        return { decision: option.optionId };
+      },
+    });
+    const callTool = async (id: number) => await transport.emitRequest("session/request_permission", {
+      sessionId: "agy",
+      toolCall: { toolCallId: `call-${id}`, kind: "other", name: "mcp_tracker_list_issues", status: "pending" },
+      options: [{ optionId: "allow", kind: "allow_once" }, { optionId: "deny", kind: "reject_once" }],
+    }, id);
+    try {
+      await client.initialize();
+      await client.startSession({ cwd: "/repo", executionMode: "default" });
+      await callTool(1);
+      expect(asked).toHaveLength(1);
+      choice = "accept";
+      // Model: the grant holds while every reload keeps the same server names.
+      let granted = true;
+      for (const [index, next] of reloads.entries()) {
+        clock += IDLE_MS + 1;
+        expect(await client.closeIdleSessions({ idleMs: IDLE_MS })).toEqual(["agy"]);
+        granted &&= [...next].sort().join() === [...names].sort().join();
+        names = next;
+        await finishPrompt(client, "agy", `prompt ${index}`);
+        const before = asked.length;
+        expect(await callTool(index + 2)).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+        expect(asked.length - before).toBe(granted ? 0 : 1);
+      }
+    } finally {
+      await client.dispose();
+    }
+  }), { numRuns: 12, examples: [[[serverSets[1]!, serverSets[3]!, serverSets[0]!]]] });
+});
+
 function jobMonitorRefreshFixture(
   initialize: unknown = GROK_INITIALIZE,
   backendId: "acp:grok" | "acp:antigravity" = "acp:grok",
