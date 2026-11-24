@@ -284,6 +284,7 @@ function buildLiveCommandDetail(
   }
 
   const output = readCommandOutputText(item);
+  const toolName = source === "tool" ? readString(item, "commandToolName") : undefined;
   const exitCode = readExitCode(item);
   const cwd = readString(item, "cwd") ??
     readString(item, "workingDirectory") ??
@@ -291,8 +292,8 @@ function buildLiveCommandDetail(
   return {
     displayCommand,
     ...(source === "tool"
-      ? { source: "tool" as const }
-      : { rawCommand: command }),
+      ? { source: "tool" as const, ...(toolName ? { rawCommand: toolName } : {}) }
+      : { rawCommand: command.trim() }),
     ...(cwd ? { cwd } : {}),
     ...(output ? { output } : {}),
     ...(typeof exitCode === "number" ? { exitCode } : {}),
@@ -774,9 +775,10 @@ export function buildLiveToolDetails(
     return true;
   });
   const elapsedMs = readElapsedMs(item);
+  const executionCommand = item.command;
   const command =
     itemType === "commandexecution"
-      ? readString(item, "command")
+      ? typeof executionCommand === "string" && executionCommand.trim() ? executionCommand : undefined
       : itemType === "functioncall" && toolName === "exec_command"
         ? readToolArgument(item, "cmd") ??
           readToolArgument(item, "command") ??

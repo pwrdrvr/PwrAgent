@@ -493,6 +493,7 @@ function liveItemForAcpToolUpdate(
     status,
     command,
     commandSource: rawCommand ? "shell" : "tool",
+    ...(!rawCommand && mcpToolName ? { commandToolName: mcpToolName } : {}),
     ...(commandActions.length ? { commandActions } : {}),
     ...(output ? { data: { output } } : {}),
   };
@@ -643,7 +644,7 @@ function mergeAcpLiveToolUpdates(
           ? isGenericAcpToolKind(updateValue)
           : isGenericAcpToolMetadata(updateValue)))
     ) {
-      merged[key] = previousValue;
+      merged[key] = previous[key];
     }
   }
   for (const key of ["_meta", "rawInput", "rawOutput"] as const) {

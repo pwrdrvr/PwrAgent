@@ -32,7 +32,27 @@ describe("TranscriptActivity", () => {
     expect(screen.getByText("3 lines")).toBeInTheDocument();
   });
 
-  it("recognizes a live ACP thread tool from its invocation when it has no raw command", () => {
+  it.each(["read_thread", "send_message_to_thread", "watch_thread_pull_request"])(
+    "keeps a script starting with ./%s in a collapsed command row",
+    (tool) => {
+      const command = `./${tool}\necho done`;
+      const entry = buildLiveActivityEntry({
+        id: "script",
+        details: buildLiveToolDetails({
+          id: "script", type: "commandExecution", status: "completed", command,
+          commandSource: "tool", data: { output: '{"error":{"message":"sample"}}' },
+        }),
+      });
+
+      render(<TranscriptActivity entry={entry} />);
+
+      expect(screen.queryByLabelText("Invocation")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { expanded: false }));
+      expect(screen.getByLabelText("Invocation").textContent).toBe(command);
+    },
+  );
+
+  it("recognizes a live ACP thread tool from its explicit identity", () => {
     const entry = buildLiveActivityEntry({
       id: "read-thread",
       details: buildLiveToolDetails({
@@ -40,6 +60,7 @@ describe("TranscriptActivity", () => {
         type: "commandExecution",
         status: "completed",
         command: 'pwragent/read_thread\n{\n  "threadId": "sample-thread"\n}',
+        commandToolName: "pwragent/read_thread",
         commandActions: [{ type: "unknown", name: "pwragent/read_thread" }],
         commandSource: "tool",
       }),

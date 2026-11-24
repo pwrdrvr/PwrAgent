@@ -26,6 +26,7 @@ export function readAcpToolDescription(
 
 export function readAcpToolInvocation(
   record: Record<string, unknown>,
+  followsTitleScript = false,
 ): string | undefined {
   const mcpToolName = readAcpMcpToolName(record);
   if (mcpToolName) {
@@ -50,8 +51,10 @@ export function readAcpToolInvocation(
     return codeSearch.invocation;
   }
   // Some ACP executors supply the script only as the title.
-  const title = readString(record, "title");
-  return title && /[\r\n]/.test(title) && isShellLikeAcpTool(record)
+  const title = record.title;
+  return typeof title === "string"
+    && /[\r\n]/.test(title.trim())
+    && (isShellLikeAcpTool(record) || (followsTitleScript && !readString(record, "kind")))
     ? title
     : undefined;
 }
