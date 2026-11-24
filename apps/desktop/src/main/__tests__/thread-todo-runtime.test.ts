@@ -14,7 +14,13 @@ import type {
   CreateInstanceThreadResult,
   ListInstanceProjectsResult,
 } from "@pwragent/shared/contracts/federation-tools";
-import type { ThreadTodo, ThreadTodoProject } from "@pwragent/shared/contracts/thread-todos";
+import type {
+  ThreadTodo,
+  ThreadTodoAction,
+  ThreadTodoActionType,
+  ThreadTodoProject,
+} from "@pwragent/shared/contracts/thread-todos";
+import { THREAD_TODO_ACTION_TYPES, threadTodoKindForAction } from "@pwragent/shared/contracts/thread-todos";
 import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared/contracts/navigation";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools";
 import {
@@ -399,9 +405,9 @@ describe("thread to-do Start thread on project pagination", () => {
 
 describe("thread to-do project menu", () => {
   const SNAP: ThreadTodoProject = { key: "directory:/src/pwrsnap", label: "PwrSnap", path: "/src/pwrsnap" };
-  const card = { id: "todo-1" } as ThreadTodo;
-  const deps = () => ({
-    todos: { update: vi.fn(() => card) },
+  const card = { id: "todo-1", kind: "handoff", action: { type: "start_thread", prompt: "Build it" } } as ThreadTodo;
+  const deps = (current: ThreadTodo = card) => ({
+    todos: { get: vi.fn(() => current), update: vi.fn(() => current) },
     listProjects: vi.fn(async () => [SNAP]),
   });
 
@@ -423,6 +429,46 @@ describe("thread to-do project menu", () => {
     await expect(setThreadTodoProject({ id: "todo-1", projectKey: "directory:/gone" }, fake))
       .rejects.toThrow("That project is no longer in the sidebar.");
     expect(fake.todos.update).not.toHaveBeenCalled();
+  });
+
+  it("never moves a merge or review card, and moves every other card", async () => {
+    // Oracle: a merge runs gh pr merge in the card's project and a review
+    // starts on the card's own thread, so a pick must not change where either
+    // runs. Every other action, and a reminder with none, takes the pick.
+    const runsInOwnProject = (type: ThreadTodoActionType | undefined) =>
+      type === "merge_pull_request" || type === "start_review";
+    const actionFor = (type: ThreadTodoActionType): ThreadTodoAction => {
+      switch (type) {
+        case "merge_pull_request": return { type, pullRequest: "42" };
+        case "start_review": return { type };
+        case "start_thread": return { type, prompt: "Build it" };
+        case "send_message": return { type, prompt: "Ship it", target: { backend: "codex", threadId: "other" } };
+      }
+    };
+    await fc.assert(fc.asyncProperty(
+      fc.option(fc.constantFrom(...THREAD_TODO_ACTION_TYPES), { nil: undefined }),
+      fc.constantFrom<string | null>(SNAP.key, null),
+      async (type, projectKey) => {
+        const action = type ? actionFor(type) : undefined;
+        const current = {
+          id: "todo-1",
+          kind: threadTodoKindForAction(action),
+          ...(action ? { action } : {}),
+        } as ThreadTodo;
+        const fake = deps(current);
+        const picked = setThreadTodoProject({ id: "todo-1", projectKey }, fake);
+        if (runsInOwnProject(type)) {
+          await expect(picked).rejects.toThrow("A review or merge card runs in its own thread's project.");
+          expect(fake.todos.update).not.toHaveBeenCalled();
+        } else {
+          await picked;
+          expect(fake.todos.update).toHaveBeenCalledWith({
+            id: "todo-1",
+            targetProject: projectKey === null ? null : SNAP,
+          });
+        }
+      },
+    ));
   });
 
   it("lets a failed listing reject rather than read as a missing project", async () => {
