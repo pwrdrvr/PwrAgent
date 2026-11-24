@@ -1,5 +1,6 @@
 import { BrowserWindow } from "electron";
-import { APPEARANCE_CHANGED_EVENT_CHANNEL, RESOURCE_CHECKOUTS_CHANGED_CHANNEL } from "../../shared/ipc";
+import type { ResourceCheckoutsWindowFocus } from "@pwragent/shared/contracts/resource-checkouts";
+import { APPEARANCE_CHANGED_EVENT_CHANNEL, RESOURCE_CHECKOUTS_CHANGED_CHANNEL, RESOURCE_CHECKOUTS_FOCUS_CHANNEL } from "../../shared/ipc";
 import { readBootstrapAppearance, themedWindowAdditionalArguments } from "../settings/appearance-bootstrap";
 import {
   auxiliaryWindowChromeOptions,
@@ -15,10 +16,21 @@ import { placementForSourceDisplay, positionWindowForSourceDisplay, type WindowP
 
 let resourcesWindow: BrowserWindow | undefined;
 
-export function showResourcesWindow(source: WindowPlacementSource): void {
+/** The hash `main.tsx` routes to the Resources window, with the resource to select. */
+export function resourcesWindowHash(focus?: ResourceCheckoutsWindowFocus): string {
+  return focus ? `resources/${encodeURIComponent(focus.resourceId)}` : "resources";
+}
+
+/**
+ * Opens the Resources window, or brings it forward. With `focus`, the window
+ * selects that resource: a new window reads it from its hash, an open one
+ * from the focus channel.
+ */
+export function showResourcesWindow(source: WindowPlacementSource, focus?: ResourceCheckoutsWindowFocus): void {
   if (resourcesWindow && !resourcesWindow.isDestroyed()) {
     positionWindowForSourceDisplay(resourcesWindow, source);
     showAndFocusAuxiliaryWindow(resourcesWindow);
+    if (focus) resourcesWindow.webContents.send(RESOURCE_CHECKOUTS_FOCUS_CHANNEL, focus);
     return;
   }
 
@@ -52,13 +64,14 @@ export function showResourcesWindow(source: WindowPlacementSource): void {
   registerWindowChannels(window, WINDOW_KIND_RESOURCES, [
     APPEARANCE_CHANGED_EVENT_CHANNEL,
     RESOURCE_CHECKOUTS_CHANGED_CHANNEL,
+    RESOURCE_CHECKOUTS_FOCUS_CHANNEL,
   ]);
 
   const entry = getRendererEntry();
   if (entry.kind === "url") {
-    void window.loadURL(`${entry.value}#resources`);
+    void window.loadURL(`${entry.value}#${resourcesWindowHash(focus)}`);
   } else {
-    void window.loadFile(entry.value, { hash: "resources" });
+    void window.loadFile(entry.value, { hash: resourcesWindowHash(focus) });
   }
   showAuxiliaryWindowWhenReady(window);
 }

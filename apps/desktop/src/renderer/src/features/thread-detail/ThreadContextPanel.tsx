@@ -1060,6 +1060,9 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         const turnOffAutoFix = props.onSetThreadPrAutoDispatch;
         const openContinueAfter = dependencyContext?.open;
         const setJobMonitorCreation = threadJobMonitorControl(props.desktopApi, thread, federationTarget);
+        // A peer's checkout queue lives on the peer; this window reads its own.
+        const readResourceCheckouts = federationTarget ? undefined : props.desktopApi?.readResourceCheckouts;
+        const openResources = federationTarget ? undefined : props.desktopApi?.openResourceCheckoutsWindow;
         return (
           <WaitingForPanel
             key={JSON.stringify([thread.source, thread.id, federationTarget])}
@@ -1091,6 +1094,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             onUnlockThread={props.onUnlockThread}
             onShowTab={selectTab}
             onOpenContinueAfter={openContinueAfter ? () => openContinueAfter(thread) : undefined}
+            readResourceCheckouts={readResourceCheckouts}
+            onOpenResource={openResources ? (resourceId) => { void openResources({ resourceId }); } : undefined}
           />
         );
       }

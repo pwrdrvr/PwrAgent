@@ -58,6 +58,8 @@ import {
 import { showAppLogWindow } from "./app-log-window";
 import { showChangelogWindow } from "./changelog-window";
 import { showUsageActivityWindow } from "./usage-activity-window";
+import { showResourcesWindow } from "./resources-window";
+import { getResourceCheckoutService } from "../resource-checkouts/checkout-runtime";
 import {
   showLicenseWindow,
   showThirdPartyNoticesWindow,
@@ -1056,6 +1058,11 @@ function installApplicationMenu(): void {
       showUsageActivityWindow: () => {
         showUsageActivityWindow({ sourceWindow: BrowserWindow.getFocusedWindow() ?? undefined });
       },
+      ...(getResourceCheckoutService() ? {
+        showResourcesWindow: () => {
+          showResourcesWindow({ sourceWindow: BrowserWindow.getFocusedWindow() ?? undefined });
+        },
+      } : {}),
     },
   });
 
@@ -1426,6 +1433,8 @@ export function bootstrapApp(): void {
     registerCodexEnvironmentEditorIpcHandlers();
     registerOperatorRequestIpcHandlers(ownerServices.queues);
     registerResourceCheckoutIpcHandlers(ownerServices.resourceCheckouts);
+    // The menu went up before the owner services; View gains Resources now.
+    if (ownerServices.resourceCheckouts) installApplicationMenu();
     registerApplicationIpcHandlers();
     registerAutomationIpcHandlers();
     registerAppMetadataIpcHandlers();

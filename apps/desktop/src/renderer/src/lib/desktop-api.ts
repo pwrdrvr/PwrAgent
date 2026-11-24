@@ -99,6 +99,7 @@ import type {
   ResourceCheckoutActionRequest,
   ResourceCheckoutActionResult,
   ResourceCheckoutsChangedEvent,
+  ResourceCheckoutsWindowFocus,
   ResourceCheckoutsSnapshot,
   ResourceThreadRef,
 } from "@pwragent/shared/contracts/resource-checkouts";
@@ -1501,13 +1502,16 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
    * points stay hidden until all three exist. See
    * apps/desktop/docs/resource-checkouts-ui.md for the contract.
    */
-  openResourceCheckoutsWindow?: () => Promise<void>;
+  /** Opens or raises Resources; `focus` selects one resource there. */
+  openResourceCheckoutsWindow?: (focus?: ResourceCheckoutsWindowFocus) => Promise<void>;
   openResourceCheckoutThread?: (thread: ResourceThreadRef) => Promise<void>;
   readResourceCheckouts?: () => Promise<ResourceCheckoutsSnapshot>;
   /** Marker event; re-read with `readResourceCheckouts`. */
   onResourceCheckoutsChanged?: (
     callback: (event: ResourceCheckoutsChangedEvent) => void,
   ) => () => void;
+  /** The Resources window only: the operator asked to see this resource. */
+  onResourceCheckoutsFocus?: (callback: (focus: ResourceCheckoutsWindowFocus) => void) => () => void;
   performResourceCheckoutAction?: (
     request: ResourceCheckoutActionRequest,
   ) => Promise<ResourceCheckoutActionResult>;

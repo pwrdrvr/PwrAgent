@@ -493,3 +493,23 @@ export type ResourceCheckoutActionResult =
 export type ResourceCheckoutsChangedEvent = {
   revision: number;
 };
+
+/**
+ * Which resource the Resources window selects when it opens or comes
+ * forward, e.g. from a thread waiting on that resource's queue.
+ */
+export type ResourceCheckoutsWindowFocus = {
+  resourceId: string;
+};
+
+/** Bounds a focus request crossing IPC; resource ids are short opaque keys. */
+export const RESOURCE_CHECKOUTS_FOCUS_ID_MAX_LENGTH = 512;
+
+/** A well-formed focus request, or `undefined` for anything else. */
+export function readResourceCheckoutsWindowFocus(value: unknown): ResourceCheckoutsWindowFocus | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const resourceId = (value as { resourceId?: unknown }).resourceId;
+  if (typeof resourceId !== "string") return undefined;
+  const trimmed = resourceId.trim();
+  return trimmed && trimmed.length <= RESOURCE_CHECKOUTS_FOCUS_ID_MAX_LENGTH ? { resourceId: trimmed } : undefined;
+}

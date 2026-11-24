@@ -1048,3 +1048,12 @@
   height: 100vh;
   min-height: 0;
 }
+
+/* Why a request waits, or that a holder also queues: sentences, so they wrap. */
+.resources-queue__hold.resources-row__meta,
+.resources-allocation__also-queued.resources-row__meta {
+  display: block;
+  margin-top: 2px;
+  overflow: visible;
+  white-space: normal;
+}
