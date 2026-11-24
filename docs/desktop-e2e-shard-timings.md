@@ -1,10 +1,18 @@
 # Desktop E2E shard allocation
 
-The current allocation is `77:91:104:133` for 405 tests in 216 groups.
+macOS uses five lanes on GitHub-hosted `macos-26` with weights `69:87:78:87:112`.
+The 433-test allocation minimizes the slowest modeled lane across seven recent
+main runs with complete Playwright reports. The best four-lane split modeled
+at 13:58 against a 15-minute deadline. Five lanes modeled at 12:14, including
+the worst observed setup, build, reporting, and other job overhead (3:14).
+The 15-minute deadline and one Playwright worker per lane still apply.
+
+Linux and Windows share `77:91:104:133` across four lanes. Those weights were
+fit to 405 tests in 216 groups.
 See the [2026-11-18 timing refresh](desktop-e2e-shard-timing-refresh-2026-11-18.md)
 for native measurements, phase comparisons, source identities and coverage checks.
-The current [fitter input](desktop-e2e-shard-durations.json) includes every test ID
-and platform skip. Four lanes, one worker and existing job deadlines are unchanged.
+The [November 18 fitter input](desktop-e2e-shard-durations.json) includes every test ID
+and platform skip from that refresh.
 
 ## November 4 allocation
 

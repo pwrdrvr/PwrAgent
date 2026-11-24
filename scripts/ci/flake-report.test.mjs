@@ -32,11 +32,11 @@ test("E2E identifies first unexpected outcomes and matches retry results by ID",
 
 test("aggregation preserves missing slices, attempts, and distinct diagnostic samples", () => {
   const expected = expectedSlices(3);
-  assert.equal(expected.length, 34);
+  assert.equal(expected.length, 35);
   const slice = createSlice({ kind: "e2e", platform: "windows", lane: 1, sample: 2, first: null, retries: [] });
   const report = aggregateSlices({ slices: [slice], samples: 3, runId: "123", attempt: "2" });
   assert.equal(report.slices.length, 1);
-  assert.equal(report.missingSlices.length, 33);
+  assert.equal(report.missingSlices.length, 34);
   assert.equal(report.slices.find((s) => s.key === slice.key).first.available, false);
   assert.equal(report.attempt, 2);
   assert.throws(() => aggregateSlices({ slices: [slice, slice], samples: 3 }), /duplicate/i);
@@ -94,6 +94,12 @@ test("retry inventory, PR unit plans, and full test shards match their workflow 
     // A job that a pull request's test plan can narrow names its full lanes as the default.
     const lanes = section.match(/lane: (?:\$\{\{ fromJSON\(.+ \|\| ')?\[([\d, ]+)\]/)?.[1].split(",").map(Number);
     assert.ok(lanes, `missing matrix in ${job}`);
+    if (job === "desktop-e2e-macos") {
+      assert.equal(lanes.length, 5, "macOS Desktop E2E needs five lanes for deadline headroom");
+      assert.ok(section.includes(`--shard=\${{ matrix.lane }}/${lanes.length}`));
+      const weights = section.match(/PWTEST_SHARD_WEIGHTS: "([\d:]+)"/)?.[1].split(":");
+      assert.equal(weights?.length, lanes.length, "macOS E2E weights must cover the full matrix");
+    }
     assert.deepEqual(expectedSlices().filter((s) => s.kind === kind && s.platform === platform).map((s) => s.lane), lanes,
       `retry inventory for ${job}`);
     if (kind === "unit" && Object.hasOwn(unitGroups, platform)) {
@@ -129,8 +135,8 @@ test("the CLI produces a consolidated report including incomplete and absent sli
       const aggregate = spawnSync(process.execPath, [script, "aggregate"], { cwd, env: { ...env, FLAKE_SAMPLES: "1", GITHUB_RUN_ATTEMPT: "1" }, encoding: "utf8" });
       assert.equal(aggregate.status, 0, aggregate.stderr);
       const result = JSON.parse(readFileSync(join(cwd, ".local/ci/flake-report/flake-report.json")));
-      assert.equal(result.expectedSlices, 26);
-      assert.equal(result.missingSlices.length, 25);
+      assert.equal(result.expectedSlices, 27);
+      assert.equal(result.missingSlices.length, 26);
       const skipped = spawnSync(process.execPath, [script, "aggregate"], { cwd, env: { ...env, FLAKE_SAMPLES: "1", GITHUB_RUN_ATTEMPT: "1", FLAKE_NOT_RUN: "unit-macos,e2e-macos,e2e-windows" }, encoding: "utf8" });
       assert.equal(skipped.status, 0, skipped.stderr);
       assert.match(skipped.stdout, /Not run in this workflow run: unit-macos, e2e-macos, e2e-windows\./);

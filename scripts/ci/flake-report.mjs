@@ -14,7 +14,7 @@ export function expectedSlices(samples = 1) {
   add("unit", "windows-main", 4);
   add("unit", "windows-renderer", 2);
   add("e2e", "linux", 4);
-  add("e2e", "macos", 4);
+  add("e2e", "macos", 5);
   add("e2e", "windows", 4, samples);
   return slices.map((slice) => ({ ...slice, key: keyOf(slice) }));
 }
