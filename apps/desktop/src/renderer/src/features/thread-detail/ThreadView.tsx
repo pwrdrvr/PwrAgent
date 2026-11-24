@@ -2233,6 +2233,7 @@ export function ThreadView(props: ThreadViewProps) {
     handleAnswerAsyncQuestions,
     todoReviewRequest,
     startTodoReview,
+    handleReviewRequestHandled,
     handleReviewStarted,
     doTodoHere,
     handleReplySubmissionSettled,
@@ -3162,6 +3163,7 @@ export function ThreadView(props: ThreadViewProps) {
           onDraftRestoreHandled: handleDraftRestoreHandled,
           onReplySubmissionSettled: handleReplySubmissionSettled,
           reviewRequest: todoReviewRequest,
+          onReviewRequestHandled: handleReviewRequestHandled,
           focusRequest: props.composerFocusRequest,
           onFocusRequestHandled: props.onComposerFocusRequestHandled,
           composerInsertRequest: props.composerInsertRequest,
@@ -4885,8 +4887,12 @@ function useThreadQuestionReplies(
       federationTarget: todo.federationTarget,
     });
   });
+  const handleReviewRequestHandled = useEventCallback((requestId: number) => {
+    setTodoReviewRequest((current) => (current?.id === requestId ? undefined : current));
+  });
   const handleReviewStarted = useEventCallback((threadKey: string, requestId?: number) => {
     if (requestId === undefined) return;
+    setTodoReviewRequest((current) => (current?.id === requestId ? undefined : current));
     const pending = pendingReviewTodos.current.get(requestId);
     if (!pending || threadTodoThreadKey(pending.todo) !== threadKey) return;
     pendingReviewTodos.current.delete(requestId);
@@ -5002,6 +5008,7 @@ function useThreadQuestionReplies(
     handleAnswerAsyncQuestions,
     todoReviewRequest,
     startTodoReview,
+    handleReviewRequestHandled,
     handleReviewStarted,
     doTodoHere,
     handleReplySubmissionSettled,
