@@ -37,11 +37,12 @@ describe.skipIf(process.platform !== "win32")("compiled Windows stack Git launch
     runFixtureGit("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "base");
     await writeFile(path.join(sandbox, "hold-checkout.cjs"), `
       require('node:fs').writeFileSync(process.env.FIXTURE_PID, String(process.pid));
-      setInterval(() => {}, 1000);
+      setTimeout(() => process.exit(98), 20_000);
     `);
     await writeFile(path.join(sandbox, "git-handoff.cjs"), `
       const child = require('node:child_process').spawn(process.execPath, [require.resolve('./hold-checkout.cjs')], {
-        cwd: process.env.FIXTURE_WORKTREE, stdio: 'ignore', windowsHide: true,
+        // Skip the driver's own libuv Job so its exit leaves the worker in the PwrAgent Job.
+        cwd: process.env.FIXTURE_WORKTREE, detached: true, stdio: 'ignore', windowsHide: true,
       });
       child.once('spawn', () => child.unref());
     `);
