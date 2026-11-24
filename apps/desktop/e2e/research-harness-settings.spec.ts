@@ -68,7 +68,9 @@ async function startFakePlatform(): Promise<{ origin: string; observed: Observed
       response.writeHead(status, { "content-type": type });
       response.end(typeof body === "string" ? body : JSON.stringify(body));
     };
-    if (request.method === "GET" && request.url === "/") { send(200, `<script type="module" src="/app/assets/index-Fake1.js"></script>`, "text/html"); return; }
+    // As the hosted platform does: the web app lives at /app/, and / redirects there.
+    if (request.method === "GET" && request.url === "/") { response.writeHead(302, { location: "/app/" }); response.end(); return; }
+    if (request.method === "GET" && request.url === "/app/") { send(200, `<script type="module" src="/app/assets/index-Fake1.js"></script>`, "text/html"); return; }
     if (request.method === "GET" && request.url === "/app/assets/index-Fake1.js") { send(200, "const pin={web:!0,runtime:`0.61.0`,ipc:6};", "text/javascript"); return; }
     let text = "";
     request.on("data", (chunk) => { text += String(chunk); });

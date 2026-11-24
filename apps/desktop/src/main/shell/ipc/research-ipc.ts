@@ -1,4 +1,5 @@
 import { BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { getMainLogger } from "../../log";
 import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
 import {
   type ResearchThread,
@@ -33,6 +34,8 @@ import { RESEARCH_HARNESS_STATUS_CHANNEL, RESEARCH_HARNESS_START_CHANNEL, RESEAR
 import { resolveDesktopConfigPath } from "../../settings/desktop-config";
 import { getResearchHarnessService, listResearchMathosTeams, researchHarnessPlatformKeyStored, researchHarnessStatus } from "../../research/research-runtime";
 import { getDesktopSettingsService } from "../../settings/desktop-settings-singleton";
+
+const researchIpcLog = getMainLogger("pwragent:research");
 
 /** Native research is local-owner only. A federation viewer cannot read or mutate this profile. */
 export function registerResearchIpcHandlers(): void {
@@ -78,7 +81,10 @@ export function registerResearchIpcHandlers(): void {
   // Settings checks the saved bridge with no thread: a check binds no evidence, so it runs from the temporary directory.
   ipcMain.handle(RESEARCH_HARNESS_SETTINGS_CHECK_CHANNEL, async (event) => {
     if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Check the bridge on its owning instance");
-    return await getResearchHarnessService().check(await realpath(tmpdir()));
+    const result = await getResearchHarnessService().check(await realpath(tmpdir()));
+    // The window shows the reason; the log keeps it for a later look. Neither carries a credential.
+    if (!result.ok) researchIpcLog.warn("Harness connection check failed", { error: result.error });
+    return result;
   });
   // The operator chooses the bridge program in the system file picker; Settings saves it like any other field.
   ipcMain.handle(RESEARCH_HARNESS_PICK_BRIDGE_CHANNEL, async (event): Promise<{ path?: string }> => {

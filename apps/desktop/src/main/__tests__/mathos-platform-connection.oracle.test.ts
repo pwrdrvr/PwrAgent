@@ -97,7 +97,9 @@ function platform(options: {
     const body = typeof init.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
     calls.push({ url: input, method: init.method ?? "GET", ...(headers.get("authorization") ? { authorization: headers.get("authorization")! } : {}), ...(body ? { body } : {}) });
     expect(init.redirect).toBe("error");
-    if (input === `${ORIGIN}/`) return new Response(`<script type="module" src="/app/assets/index-Ab_9.js"></script>`, { status: 200 });
+    // As the hosted platform does: / redirects to /app/, and a fetch that refuses redirects fails on it.
+    if (input === `${ORIGIN}/`) throw new TypeError("fetch failed: redirect mode is set to error");
+    if (input === `${ORIGIN}/app/`) return new Response(`<script type="module" src="/app/assets/index-Ab_9.js"></script>`, { status: 200 });
     if (input === `${ORIGIN}/app/assets/index-Ab_9.js`) return new Response("const config={web:!0,runtime:`0.61.0`,ipc:6};", { status: 200 });
     if (input === `${ORIGIN}/v1/orgs`) {
       return body?.after === undefined
@@ -316,6 +318,16 @@ describe("PwrAgent's MathOS Platform client", () => {
     expect(refused.harness!.cursor).toBe(before.cursor);
     expect(refused.harness!.note).toMatch(/different Harness source/);
     expect(other.frames.filter((line) => line.includes("swarm.records"))).toHaveLength(0);
+  });
+
+  it("says which step failed when the web app's runtime version cannot be read", async () => {
+    const missing = platform();
+    const deps = { ...missing.deps, fetch: async (input: string, init: RequestInit) =>
+      (input.endsWith("/app/") ? new Response("<html></html>", { status: 200 }) : missing.deps.fetch(input, init)) };
+    const connection = openMathosPlatformConnection({ origin: ORIGIN, team: TEAM, apiKey: KEY }, deps);
+    await expect(connection.request("hello", {})).rejects.toThrow(/runtime version from its web app \(no entry script\)/);
+    // Nothing was opened without a runtime version.
+    expect(missing.opens()).toBe(0);
   });
 
   it("lists the key's teams across pages and drops anything that is not a team", async () => {

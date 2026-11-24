@@ -94,6 +94,8 @@ export function ResearchHarnessSettings(props: {
   const platformKey = research?.platformApiKey ?? UNSET_SECRET;
   const savedTeam = research?.mathos?.team;
   const configured = savedSource === "mathos" ? Boolean(savedTeam && platformKey.configured) : Boolean(saved?.command);
+  // The owner refuses every Harness request while Research runs are off; say so instead of asking.
+  const researchOn = props.snapshot.experimental?.researchEnabled?.value === true;
 
   const save = async (): Promise<boolean> => {
     let patch: DesktopSettingsConfigPatch;
@@ -406,7 +408,7 @@ export function ResearchHarnessSettings(props: {
               <button
                 type="button"
                 className="button button--secondary"
-                disabled={!configured || checking || !props.desktopApi?.checkResearchHarnessBridge}
+                disabled={!configured || !researchOn || checking || !props.desktopApi?.checkResearchHarnessBridge}
                 onClick={() => void runCheck()}
               >
                 {checking ? "Checking…" : check ? "Check again" : savedSource === "mathos" ? "Check connection" : "Check bridge"}
@@ -414,6 +416,8 @@ export function ResearchHarnessSettings(props: {
               <span className="settings-harness-status" role="status">
                 {!configured
                   ? savedSource === "mathos" ? "Store the API key and save a team first." : "Save a bridge first."
+                  : !researchOn
+                    ? "Turn on Research runs to check."
                   : check
                     ? check.ok ? `${checkTarget} · responding` : check.error
                     : `${checkTarget} · not checked`}

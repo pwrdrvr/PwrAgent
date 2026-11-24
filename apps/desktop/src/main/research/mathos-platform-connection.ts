@@ -21,6 +21,8 @@ import type { ResearchHarnessConnection } from "@pwragent/owner-core/research-ha
  */
 
 export const MATHOS_RUNTIME_SUBPROTOCOL = "agent-vm-runtime-v1";
+/** Where the platform serves its web app. */
+export const MATHOS_WEB_APP_PATH = "/app/";
 const HTTP_TIMEOUT_MS = 15_000;
 const CONNECT_TIMEOUT_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -125,14 +127,22 @@ function refused(status: number, value: unknown, action: string): MathosPlatform
  * keeps this client from requesting a runtime change on the team's VM.
  */
 export async function readMathosRuntimeVersion(deps: MathosPlatformDeps, origin: string): Promise<MathosRuntimeVersion> {
-  const unreadable = new MathosPlatformError("Could not read the MathOS Platform’s runtime version from its web app.", "runtime_version");
-  const page = await platformFetch(deps, new URL("/", origin).href, { method: "GET" });
-  const entry = page.status === 200 ? ENTRY_SCRIPT.exec(page.text)?.[0] : undefined;
-  if (!entry) throw unreadable;
-  const script = await platformFetch(deps, new URL(entry, origin).href, { method: "GET" });
-  const pin = script.status === 200 ? RUNTIME_PIN.exec(script.text) : null;
+  const unreadable = (detail: string) =>
+    new MathosPlatformError(`Could not read the MathOS Platform’s runtime version from its web app (${detail}).`, "runtime_version");
+  // The web app lives at /app/; the platform answers / with a redirect there, and no request here follows redirects.
+  const page = await platformFetch(deps, new URL(MATHOS_WEB_APP_PATH, origin).href, { method: "GET" }).catch(() => {
+    throw unreadable(`${MATHOS_WEB_APP_PATH} did not load`);
+  });
+  if (page.status !== 200) throw unreadable(`${MATHOS_WEB_APP_PATH} answered HTTP ${page.status}`);
+  const entry = ENTRY_SCRIPT.exec(page.text)?.[0];
+  if (!entry) throw unreadable("no entry script");
+  const script = await platformFetch(deps, new URL(entry, origin).href, { method: "GET" }).catch(() => {
+    throw unreadable("the entry script did not load");
+  });
+  const pin = RUNTIME_PIN.exec(script.text);
   const ipc = pin ? Number(pin[2]) : NaN;
-  if (!pin || !Number.isSafeInteger(ipc) || ipc <= 0 || ipc > 4_294_967_295) throw unreadable;
+  if (script.status !== 200) throw unreadable(`the entry script answered HTTP ${script.status}`);
+  if (!pin || !Number.isSafeInteger(ipc) || ipc <= 0 || ipc > 4_294_967_295) throw unreadable("no runtime version in the entry script");
   return { version: pin[1]!, ipc };
 }
 

@@ -17,10 +17,11 @@ afterEach(cleanup);
 const TEAM = "o-12345678-1234-4123-8123-123456789abc";
 const OTHER_TEAM = "o-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 
-type Saved = { harness?: ResearchHarnessConfig; mathos?: ResearchMathosConfig; source?: ResearchHarnessSource; keyStored?: boolean };
+type Saved = { harness?: ResearchHarnessConfig; mathos?: ResearchMathosConfig; source?: ResearchHarnessSource; keyStored?: boolean; researchOff?: boolean };
 
 function snapshot(saved: Saved): DesktopSettingsSnapshot {
   return {
+    experimental: { researchEnabled: { value: saved.researchOff !== true, source: "config" } },
     research: {
       source: resolveResearchHarnessSource(saved),
       ...(saved.harness ? { harness: saved.harness } : {}),
@@ -120,6 +121,14 @@ describe("ResearchHarnessSettings — MathOS Platform", () => {
     const supports = screen.getByLabelText("Source supports");
     expect(within(supports).getByText("Import")).toHaveTextContent("Import supported");
     expect(within(supports).getByText("Execute")).toHaveTextContent("Execute not supported");
+  });
+
+  it("asks for Research runs to be on instead of checking while they are off", () => {
+    const checkResearchHarnessBridge = vi.fn();
+    renderForm({ keyStored: true, mathos: { team: TEAM }, researchOff: true, api: { checkResearchHarnessBridge } });
+    expect(screen.getByRole("button", { name: "Check connection" })).toBeDisabled();
+    expect(screen.getByText("Turn on Research runs to check.")).toBeInTheDocument();
+    expect(checkResearchHarnessBridge).not.toHaveBeenCalled();
   });
 
   it("says what the hosted platform supports today", () => {
