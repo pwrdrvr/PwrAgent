@@ -47,6 +47,12 @@ export function AgentNotificationsButton(props: {
     return () => window.removeEventListener("resize", place);
   }, [open]);
 
+  // The list is a portal at the end of <body>, so Tab from the bell would
+  // skip it. Opening moves focus into it; Escape returns focus to the bell.
+  useEffect(() => {
+    if (open) surfaceRef.current?.focus();
+  }, [open]);
+
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: PointerEvent) => {
@@ -152,6 +158,7 @@ export function AgentNotificationsButton(props: {
           className="agent-notifications__popover"
           data-testid="agent-notifications-popover"
           style={position}
+          tabIndex={-1}
         >
           <div className="agent-notifications__head">
             <h2 id={headingId}>Notifications</h2>

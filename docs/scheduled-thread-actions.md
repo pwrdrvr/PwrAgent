@@ -251,6 +251,12 @@ the payload file, never in SQLite.
 - **Not a follow-up.** The follow-up guard counts and suspends `origin =
   agent AND kind <> notification` only. A notice never spends a follow-up
   slot and is delivered while the thread's follow-ups are suspended.
+  `schedule_follow_up` lists a notice but cannot cancel it, and neither the
+  composer queue nor messaging `/scheduled` shows one as a message.
+- **Mixed builds.** A build from before notices that shares the profile
+  treats any agent-origin scheduled row as a follow-up. If it claims a
+  notice first, it marks the notice failed (no turn payload) and spends a
+  follow-up slot. It cannot show the notice twice.
 
 ### Bounds
 

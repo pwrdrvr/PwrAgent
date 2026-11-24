@@ -300,6 +300,9 @@ export class ScheduledThreadActionService {
     if (!current || current.backend !== thread.backend || current.threadId !== thread.threadId) {
       throw new AgentFollowUpRefusal("not_found", "No follow-up with that id waits on this thread. Use action list.");
     }
+    if (current.kind === "notification") {
+      throw new AgentFollowUpRefusal("forbidden", "That is a notice for the operator, not a follow-up. Cancel it with notify_operator.");
+    }
     if (current.origin !== "agent") {
       throw new AgentFollowUpRefusal("forbidden", current.origin === "messaging"
         ? "A messaging contact scheduled that action. The contact or the operator cancels it."

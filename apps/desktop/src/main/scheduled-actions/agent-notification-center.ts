@@ -66,7 +66,10 @@ export class AgentNotificationCenter {
         void this.dismiss(item.id);
       },
     });
-    await this.deps.publishChanged({ backend: item.backend, threadId: item.threadId });
+    // Shown already: a failed refresh must not make the scheduler record a
+    // delivered notice as failed. Windows re-read on the delivered event.
+    await Promise.resolve(this.deps.publishChanged({ backend: item.backend, threadId: item.threadId }))
+      .catch(() => undefined);
   }
 
   /** Marks a notice read in every window of this owner. */

@@ -358,6 +358,30 @@ describe("agent notices", () => {
     });
   });
 
+  it("keeps notices out of schedule_follow_up's cancel", async () => {
+    await withWorld(async (world) => {
+      const created = await world.send(THREADS[0]!, 30);
+      if (!("id" in created)) throw new Error(created.refused);
+      await expect(world.service.cancelAgentFollowUp(THREADS[0]!, created.id)).rejects.toThrow("notify_operator");
+      expect(world.store.get(created.id)?.status).toBe("scheduled");
+    });
+  });
+
+  it("lists waiting notices before delivered ones, so a full list keeps what can be cancelled", async () => {
+    await withWorld(async (world) => {
+      world.limits = { maxPerThreadPerDay: 0, maxPerProfilePerDay: 0, maxScheduledPerThread: 0 };
+      const waiting = await world.send(THREADS[0]!, 600);
+      if (!("id" in waiting)) throw new Error(waiting.refused);
+      for (let index = 0; index < 5; index += 1) {
+        await world.send(THREADS[1]!, 0);
+        await world.tick(MINUTE);
+      }
+      const listed = world.store.listAgentNotifications({ deliveredSince: 0, limit: 3 });
+      expect(listed[0]).toMatchObject({ id: waiting.id, status: "scheduled" });
+      expect(listed.slice(1).every((action) => action.status === "started")).toBe(true);
+    });
+  });
+
   it("refuses an agent's cancel of another thread's notice", async () => {
     await withWorld(async (world) => {
       const created = await world.send(THREADS[0]!, 30);
@@ -386,6 +410,7 @@ describe("notify_operator arguments", () => {
     expect(readNotificationArgs({ ...base, url: "javascript:alert(1)" }, now)).toContain("http");
     expect(readNotificationArgs({ ...base, url: "https://user:pw@example.com/" }, now)).toContain("credentials");
     expect(readNotificationArgs({ ...base, filePath: "relative/file.md" }, now)).toContain("absolute");
+    expect(readNotificationArgs({ ...base, filePath: path.resolve("/work/atlas/build.bin") }, now)).toContain("preview");
     expect(readNotificationArgs({ ...base, url: "https://a.example", filePath: "/tmp/a" }, now)).toContain("not both");
     expect(readNotificationArgs({ ...base, title: "" }, now)).toContain("title");
     expect(readNotificationArgs({ ...base, body: "x".repeat(601) }, now)).toContain("600");

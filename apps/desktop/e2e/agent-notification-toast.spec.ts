@@ -87,6 +87,8 @@ test("an agent's notice reaches the operator while another thread is focused", a
     await expect(bell).toHaveAccessibleName("Notifications, 1 unread, 1 scheduled");
     await bell.click();
     const popover = window.getByTestId("agent-notifications-popover");
+    // The list is a portal, so opening it moves keyboard focus into it.
+    await expect(popover).toBeFocused();
     await expect(popover.getByRole("region", { name: "Unread" })).toContainText("Review the 2.4 changelog");
     const scheduled = popover.getByRole("region", { name: "Scheduled" });
     await expect(scheduled).toContainText("Check the nightly benchmark");

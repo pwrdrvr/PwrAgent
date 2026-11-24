@@ -5326,6 +5326,11 @@ textarea,
   text-align: left;
 }
 
+.agent-notifications__popover:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
 .agent-notifications__head {
   display: flex;
   align-items: center;

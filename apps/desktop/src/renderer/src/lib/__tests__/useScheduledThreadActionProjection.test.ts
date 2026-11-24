@@ -146,6 +146,21 @@ describe("scheduled thread action projections", () => {
     ]);
   });
 
+  it("keeps an agent's scheduled notice out of the composer queue", () => {
+    const { result } = renderHook(() => useComposerDraftStore());
+    const store = result.current;
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
+    applyScheduledActionProjection(store, scheduledAction({
+      kind: "notification",
+      origin: "agent",
+      displayText: "Review the changelog",
+      turn: undefined,
+      notification: { title: "Review the changelog", body: "It is ready.", urgency: "normal" },
+    }));
+
+    expect(store.getQueuedTurns(scopeKey)).toEqual([]);
+  });
+
   it("removes the projection when the backend action becomes terminal", () => {
     const { result } = renderHook(() => useComposerDraftStore());
     const store = result.current;

@@ -108,6 +108,7 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
   private readonly hasLegacyPayloadColumn: boolean;
   // Payload refs are immutable. Retain only compact text, never execution inputs.
   private readonly wakePreviewCache = new Map<string, string>();
+  private readonly noticePayloadCache = new Map<string, ScheduledThreadActionPayload>();
   private suspendedAgentFollowUpThreads: Array<{ backend: ScheduledThreadAction["backend"]; threadId: string }> = [];
 
   constructor(
@@ -227,8 +228,10 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
   }
 
   /**
-   * Notices waiting, and notices delivered at or after `deliveredSince`,
-   * newest first, at most `limit`. `thread` narrows to one thread.
+   * Notices waiting, then notices delivered at or after `deliveredSince`,
+   * each newest first, at most `limit`, so delivered ones never crowd out
+   * the waiting ones the operator may cancel. `thread` narrows to one
+   * thread.
    */
   listAgentNotifications(request: {
     deliveredSince: number;
@@ -241,7 +244,7 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
          AND (? IS NULL OR (backend = ? AND thread_id = ?))
          AND (status IN ('held', 'scheduled', 'dispatching', 'queued')
            OR (status = 'started' AND updated_at >= ?))
-       ORDER BY updated_at DESC, action_id DESC
+       ORDER BY CASE WHEN status = 'started' THEN 1 ELSE 0 END, updated_at DESC, action_id DESC
        LIMIT ?`,
     ).all(
       request.thread?.backend ?? null,
@@ -252,7 +255,16 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
     ) as ScheduledThreadActionRow[];
     return rows.flatMap((row) => {
       try {
-        return [this.actionFromRow(row, 64 * 1024)];
+        // Payload refs are immutable, so a notice's text is read from disk
+        // once, not on every snapshot each window asks for.
+        const ref = row.payload_ref;
+        let payload = ref ? this.noticePayloadCache.get(ref) : undefined;
+        if (ref && !payload) {
+          payload = this.payloadStore.read(ref, 64 * 1024);
+          if (this.noticePayloadCache.size >= 256) this.noticePayloadCache.delete(this.noticePayloadCache.keys().next().value!);
+          this.noticePayloadCache.set(ref, payload);
+        }
+        return [this.actionFromRow(row, 64 * 1024, payload)];
       } catch {
         // An unreadable payload drops one notice, not the list.
         return [];
@@ -1176,12 +1188,16 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
     }
   }
 
-  private actionFromRow(row: ScheduledThreadActionRow, maxBytes?: number): ScheduledThreadAction {
+  private actionFromRow(
+    row: ScheduledThreadActionRow,
+    maxBytes?: number,
+    payload?: ScheduledThreadActionPayload,
+  ): ScheduledThreadAction {
     if (!row.payload_ref) {
       throw new Error(`Scheduled action ${row.action_id} has no payload reference.`);
     }
     return {
-      ...this.payloadStore.read(row.payload_ref, maxBytes),
+      ...(payload ?? this.payloadStore.read(row.payload_ref, maxBytes)),
       id: row.action_id,
       backend: row.backend,
       threadId: row.thread_id,

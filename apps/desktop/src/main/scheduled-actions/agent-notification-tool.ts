@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isFilePreviewPath } from "@pwragent/shared/file-preview";
 import {
   AGENT_NOTIFICATION_BODY_MAX_CHARS,
   AGENT_NOTIFICATION_TITLE_MAX_CHARS,
@@ -162,9 +163,13 @@ function readLink(args: NotifyOperatorToolArgs): AgentNotificationLink | undefin
   }
   if (args.filePath !== undefined) {
     const filePath = typeof args.filePath === "string" ? args.filePath.trim() : "";
-    // The file viewer that opens it checks the thread's directories again.
+    // The file viewer that opens it previews only previewable file types
+    // and refuses the rest; it does not limit the path to the thread.
     if (!filePath || !path.isAbsolute(filePath) || filePath.includes("\0")) {
-      return "filePath must be an absolute path inside this thread's directories.";
+      return "filePath must be an absolute path to a file.";
+    }
+    if (!isFilePreviewPath(filePath)) {
+      return "filePath must be a file type PwrAgent's file viewer can preview, such as Markdown, JSON, CSV, text or HTML.";
     }
     return { kind: "file", path: path.normalize(filePath) };
   }

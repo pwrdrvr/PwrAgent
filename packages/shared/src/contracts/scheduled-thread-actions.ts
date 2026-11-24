@@ -104,7 +104,7 @@ export type AgentNotificationUrgency = "normal" | "high";
 
 /**
  * What the notice's primary action opens besides its thread: an `http(s)`
- * page, or a file inside one of the thread's own directories.
+ * page, or a local file of a type PwrAgent's file viewer can preview.
  */
 export type AgentNotificationLink =
   | { kind: "url"; url: string }
@@ -154,7 +154,7 @@ export type NotifyOperatorToolArgs = {
   at?: string;
   /** Send: an `http(s)` URL the notice opens. */
   url?: string;
-  /** Send: an absolute file path inside this thread's directories. */
+  /** Send: an absolute path to a file PwrAgent's file viewer can preview. */
   filePath?: string;
   /** Cancel: an id from send or list. */
   notificationId?: string;
