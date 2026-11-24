@@ -261,27 +261,60 @@ describe("the persisted resource checkout authority", () => {
       else process.env[SQLITE_WRITE_METRICS_ENV] = old;
     }
   });
-  it("agrees with a FIFO capacity model across profile writers, replays, expiry and reopen", () => {
-    fc.assert(fc.property(fc.integer({ min: 1, max: 4 }), fc.array(fc.record({
+  it("agrees with an EASY-backfill FIFO capacity model across profile writers, replays, expiry and reopen", () => {
+    fc.assert(fc.property(fc.integer({ min: 1, max: 6 }), fc.array(fc.record({
       command: fc.constantFrom("request", "release", "expire", "reopen", "cancel", "replay"),
-      units: fc.integer({ min: -1, max: 4 }), writer: fc.boolean(),
+      units: fc.integer({ min: -1, max: 6 }),
+      durationMs: fc.constantFrom(200, 500, 1_000, 1_500),
+      writer: fc.boolean(),
     }), { minLength: 3, maxLength: 45 }), (capacity, commands) => {
       const harness = createHarness(capacity);
       try {
         let first = harness.open();
         const second = harness.open();
-        type Item = { purpose: string; units: number; actor: CheckoutActor };
+        let modelNow = 1;
+        type Item = { purpose: string; units: number; durationMs: number; deadlineAt?: number; actor: CheckoutActor };
         let held: Item[] = [];
         const queue: Item[] = [];
-        const requests: Array<{ key: string; who: CheckoutActor; units: number; receipt: unknown }> = [];
+        const requests: Array<{ key: string; who: CheckoutActor; units: number; durationMs: number; receipt: unknown }> = [];
         let generation = 0;
         const wake = () => {
           let free = capacity - held.reduce((sum, item) => sum + item.units, 0);
           while (queue.length && queue[0].units <= free) {
             const next = queue.shift()!;
             free -= next.units;
-            held.push(next);
+            held.push({ ...next, deadlineAt: modelNow + next.durationMs });
             generation++;
+          }
+          if (capacity <= 1 || queue.length <= 1 || free <= 0) return;
+          const ordered = [...held].sort((a, b) => (a.deadlineAt ?? 0) - (b.deadlineAt ?? 0));
+          let projected = free;
+          let shadowTime: number | undefined;
+          for (const grant of ordered) {
+            projected += grant.units;
+            if (projected >= queue[0].units) {
+              shadowTime = grant.deadlineAt;
+              break;
+            }
+          }
+          if (shadowTime === undefined) return;
+          let extraAtShadow = free
+            + ordered.filter((grant) => (grant.deadlineAt ?? 0) <= shadowTime).reduce((sum, grant) => sum + grant.units, 0)
+            - queue[0].units;
+          let i = 1;
+          while (i < queue.length && free > 0) {
+            const candidate = queue[i]!;
+            const finishesBeforeHead = modelNow + candidate.durationMs <= shadowTime;
+            const fitsInSpare = candidate.units <= extraAtShadow;
+            if (candidate.units <= free && (finishesBeforeHead || fitsInSpare)) {
+              queue.splice(i, 1);
+              free -= candidate.units;
+              if (!finishesBeforeHead) extraAtShadow -= candidate.units;
+              held.push({ ...candidate, deadlineAt: modelNow + candidate.durationMs });
+              generation++;
+            } else {
+              i++;
+            }
           }
         };
         for (const [index, step] of commands.entries()) {
@@ -290,12 +323,12 @@ describe("the persisted resource checkout authority", () => {
           const current = writer.records()[0];
           const key = String(index);
           if (step.command === "request") {
-            const result = writer.perform(who, request(key, { units: step.units }));
+            const result = writer.perform(who, request(key, { units: step.units, expectedDurationMs: step.durationMs }));
             if (step.units > 0 && step.units <= capacity) {
-              queue.push({ purpose: key, units: step.units, actor: who });
+              queue.push({ purpose: key, units: step.units, durationMs: step.durationMs, actor: who });
               wake();
               expect(result.outcome).toBe(held.some((item) => item.purpose === key) ? "granted" : "queued");
-              requests.push({ key, who, units: step.units, receipt: result });
+              requests.push({ key, who, units: step.units, durationMs: step.durationMs, receipt: result });
             } else {
               expect(result.outcome).toBe("rejected");
             }
@@ -307,8 +340,9 @@ describe("the persisted resource checkout authority", () => {
             held.shift();
             wake();
           } else if (step.command === "expire") {
-            harness.advance(1_001);
-            held = [];
+            harness.advance(1_501);
+            modelNow += 1_501;
+            held = held.filter((item) => (item.deadlineAt ?? 0) > modelNow);
             wake();
           } else if (step.command === "cancel" && current.queue[0]) {
             const entry = current.queue[0];
@@ -320,9 +354,10 @@ describe("the persisted resource checkout authority", () => {
             first = harness.open();
           } else if (step.command === "replay" && requests[0]) {
             const prior = requests[0];
-            expect(writer.perform(prior.who, request(prior.key, { units: prior.units }))).toEqual(prior.receipt);
+            expect(writer.perform(prior.who, request(prior.key, { units: prior.units, expectedDurationMs: prior.durationMs }))).toEqual(prior.receipt);
           }
           const durable = first.authority.records()[0];
+          expect(durable.grants.reduce((sum, grant) => sum + grant.units, 0)).toBeLessThanOrEqual(capacity);
           expect(durable.grants.map(({ purpose, units }) => ({ purpose, units }))).toEqual(held.map(({ purpose, units }) => ({ purpose, units })));
           expect(durable.queue.map(({ purpose, units }) => ({ purpose, units }))).toEqual(queue.map(({ purpose, units }) => ({ purpose, units })));
           expect(durable.generation).toBe(generation);
@@ -332,6 +367,132 @@ describe("the persisted resource checkout authority", () => {
         harness.close();
       }
     }), { numRuns: 60 });
+  });
+
+  it("backfills non-delaying waiters behind a large head without ever delaying the head's shadow start time", () => {
+    fc.assert(fc.property(
+      fc.integer({ min: 6, max: 24 }),
+      fc.integer({ min: 1, max: 5 }),
+      fc.integer({ min: 1_000, max: 8_000 }),
+      fc.array(fc.record({
+        units: fc.integer({ min: 1, max: 12 }),
+        durationMs: fc.integer({ min: 200, max: 9_000 }),
+      }), { minLength: 1, maxLength: 8 }),
+      (capacity, activeUnits, activeDurationMs, trailing) => {
+        const harness = createHarness(capacity);
+        try {
+          const { authority } = harness.open();
+          const holder = authority.perform(actor, request("holder", { units: activeUnits, expectedDurationMs: activeDurationMs }));
+          expect(holder.outcome).toBe("granted");
+          const headUnits = capacity - activeUnits + 1;
+          if (headUnits > capacity) return;
+          const head = authority.perform(other, request("head", { units: headUnits, expectedDurationMs: 2_000 }));
+          expect(head.outcome).toBe("queued");
+          const shadowTime = 1 + activeDurationMs;
+
+          for (const [index, entry] of trailing.entries()) {
+            const units = Math.min(entry.units, capacity);
+            authority.perform(actor, request(`trail-${index}`, { units, expectedDurationMs: entry.durationMs }));
+            const state = authority.records()[0];
+            expect(state.grants.reduce((sum, grant) => sum + grant.units, 0)).toBeLessThanOrEqual(capacity);
+          }
+
+          // Advance directly to the head's original shadow time: every backfilled
+          // job either finished by then or left enough spare capacity for #1.
+          harness.advance(shadowTime - 1);
+          const afterShadow = authority.records()[0];
+          expect(afterShadow.grants.some((grant) => grant.purpose === "head")).toBe(true);
+          expect(afterShadow.grants.reduce((sum, grant) => sum + grant.units, 0)).toBeLessThanOrEqual(capacity);
+        } finally {
+          harness.close();
+        }
+      },
+    ), { numRuns: 50 });
+
+    // Concrete scenario from an 18-CPU host: 4 held (12m), 16 queued #1,
+    // 4-slot 10m request backfills immediately while 4-slot 15m request waits.
+    const harness = createHarness(18);
+    try {
+      const { authority } = harness.open();
+      expect(authority.perform(actor, request("g193", { units: 4, expectedDurationMs: 7_200 })).outcome).toBe("granted");
+      expect(authority.perform(other, request("head-16", { units: 16, expectedDurationMs: 6_000 })).outcome).toBe("queued");
+      expect(authority.perform(actor, request("short-4", { units: 4, expectedDurationMs: 6_000 })).outcome).toBe("granted");
+      expect(authority.perform(other, request("long-4", { units: 4, expectedDurationMs: 9_000 })).outcome).toBe("queued");
+      expect(authority.perform(actor, request("spare-2", { units: 2, expectedDurationMs: 9_000 })).outcome).toBe("granted");
+      harness.advance(7_200);
+      expect(authority.records()[0].grants.map((grant) => grant.purpose)).toEqual(["spare-2", "head-16"]);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it("resolves live thread titles for new and already-persisted thread checkouts", async () => {
+    const harness = createHarness();
+    try {
+      const dbPath = path.join(harness.root, "titles.db");
+      const titles = new Map<string, string>([
+        ["codex:t-1", "Fix Duplicate Access Mode Dialogs"],
+      ]);
+      // Persist an older grant with the generic fallback title first.
+      const legacyService = new DesktopResourceCheckoutService({
+        viewer: { instanceId: "default", instanceLabel: "default", profile: "default", machineId: "host" },
+        machineStore: openResourceCheckoutStore(dbPath, "host"),
+        machineCpuCount: 18,
+        bindings: [],
+        now: () => 1,
+        requestPeer: async () => { throw new Error("Offline"); },
+        warn: () => {},
+      });
+      const machineId = legacyService.localMachineResourceId();
+      const legacyGrant = await legacyService.perform(
+        request("legacy", { resourceId: machineId, units: 4, expectedDurationMs: 60_000 }),
+        legacyService.threadActor("codex", "t-1"),
+      );
+      expect(legacyGrant.outcome).toBe("granted");
+      expect(legacyService.read().resources[0].allocations[0].holder).toMatchObject({
+        kind: "thread",
+        thread: { title: "Agent thread" },
+      });
+      await legacyService.close();
+
+      // Reopen with a live title resolver: both persisted and newly queued entries show real titles.
+      const titledService = new DesktopResourceCheckoutService({
+        viewer: { instanceId: "default", instanceLabel: "default", profile: "default", machineId: "host" },
+        machineStore: openResourceCheckoutStore(dbPath, "host"),
+        machineCpuCount: 18,
+        bindings: [],
+        now: () => 2,
+        resolveThreadTitle: ({ backend, threadId }) => titles.get(`${backend}:${threadId}`),
+        requestPeer: async () => { throw new Error("Offline"); },
+        warn: () => {},
+      });
+      try {
+        titles.set("acp:antigravity:t-2", "AntiGravity Review PR");
+        await titledService.perform(
+          request("queued-16", { resourceId: machineId, units: 16, expectedDurationMs: 60_000 }),
+          titledService.threadActor("acp:antigravity", "t-2"),
+        );
+        const snapshot = titledService.read().resources[0];
+        expect(snapshot.allocations[0].holder).toMatchObject({
+          kind: "thread",
+          thread: { threadId: "t-1", title: "Fix Duplicate Access Mode Dialogs" },
+        });
+        expect(snapshot.queue[0].requester).toMatchObject({
+          kind: "thread",
+          thread: { threadId: "t-2", title: "AntiGravity Review PR" },
+        });
+        // Renaming a thread updates subsequent snapshots immediately.
+        titles.set("codex:t-1", "Renamed Thread Title");
+        expect(titledService.read().resources[0].allocations[0].holder).toMatchObject({
+          kind: "thread",
+          thread: { title: "Renamed Thread Title" },
+        });
+      } finally {
+        await titledService.close();
+      }
+    } finally {
+      harness.close();
+    }
   });
 
   it("keeps preparing and active work reserved across same-boot restarts and wakes after a verified reboot", async () => {
@@ -718,6 +879,126 @@ describe("delegated checkout execution", () => {
       harness.close();
       if (previous === undefined) delete process.env[SQLITE_WRITE_METRICS_ENV];
       else process.env[SQLITE_WRITE_METRICS_ENV] = previous;
+    }
+  });
+});
+
+describe("resource_checkout_acquire (blocking Code Mode checkout)", () => {
+  const caller = { backend: "claude" as const, threadId: "t1", turnId: "turn-1", callId: "call-1", transport: "mcp" as const };
+  const holder = { backend: "codex" as const, threadId: "t-holder", turnId: "turn-2", callId: "call-2", transport: "mcp" as const };
+
+  function openRealService(capacity = 8) {
+    const root = mkdtempSync(path.join(os.tmpdir(), "pwragent-acquire-tool-"));
+    const service = new DesktopResourceCheckoutService({
+      viewer: { instanceId: "default", instanceLabel: "default", profile: "default", machineId: "host" },
+      machineStore: openResourceCheckoutStore(path.join(root, "machine.db"), "host"),
+      machineCpuCount: capacity,
+      bindings: [],
+      requestPeer: async () => { throw new Error("Offline"); },
+      warn: () => {},
+    });
+    return {
+      service,
+      close: async () => {
+        await service.close();
+        rmSync(root, { recursive: true, force: true });
+      },
+    };
+  }
+
+  it("requires explicit units on counted resources and returns releaseAction for immediate try/finally release", async () => {
+    const { service, close } = openRealService(8);
+    try {
+      const handler = createResourceCheckoutToolHandler(service);
+      await expect(handler("resource_checkout_acquire", {
+        purpose: "Focused tests",
+        expectedDurationMs: 60_000,
+      }, caller)).rejects.toThrow(/Specify units/i);
+
+      const lease = await handler("resource_checkout_acquire", {
+        purpose: "Focused tests",
+        expectedDurationMs: 60_000,
+        units: 4,
+      }, caller) as { outcome: string; resourceId: string; idempotencyKey: string; releaseAction: Record<string, unknown> };
+      expect(lease.outcome).toBe("granted");
+      expect(lease.resourceId).toBe(service.localMachineResourceId());
+      expect(service.read().resources[0].allocations).toHaveLength(1);
+
+      const released = await handler("resource_checkout_action", { action: lease.releaseAction }, caller);
+      expect(released).toMatchObject({ outcome: "accepted" });
+      expect(service.read().resources[0].allocations).toHaveLength(0);
+    } finally {
+      await close();
+    }
+  });
+
+  it("blocks event-driven until a holder releases and wakes without sleeping 2s", async () => {
+    const { service, close } = openRealService(8);
+    try {
+      const handler = createResourceCheckoutToolHandler(service);
+      const first = await handler("resource_checkout_acquire", {
+        purpose: "First hold",
+        expectedDurationMs: 60_000,
+        units: 6,
+      }, holder) as { releaseAction: Record<string, unknown> };
+
+      const startedAt = performance.now();
+      const pending = handler("resource_checkout_acquire", {
+        purpose: "Waiting script",
+        expectedDurationMs: 60_000,
+        units: 4,
+        waitTimeoutMs: 5_000,
+      }, caller);
+
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(service.read().resources[0].queue).toHaveLength(1);
+      await handler("resource_checkout_action", { action: first.releaseAction }, holder);
+
+      const granted = await pending as { outcome: string; releaseAction: Record<string, unknown> };
+      expect(granted.outcome).toBe("granted");
+      expect(performance.now() - startedAt).toBeLessThan(1_000);
+      await handler("resource_checkout_action", { action: granted.releaseAction }, caller);
+      expect(service.read().resources[0].allocations).toHaveLength(0);
+    } finally {
+      await close();
+    }
+  });
+
+  it("automatically cancels its queued entry on timeout or abort so no phantom waiters remain", async () => {
+    const { service, close } = openRealService(8);
+    try {
+      const handler = createResourceCheckoutToolHandler(service);
+      const first = await handler("resource_checkout_acquire", {
+        purpose: "Blocking hold",
+        expectedDurationMs: 60_000,
+        units: 8,
+      }, holder) as { releaseAction: Record<string, unknown> };
+
+      const timedOut = await handler("resource_checkout_acquire", {
+        purpose: "Short wait",
+        expectedDurationMs: 60_000,
+        units: 4,
+        waitTimeoutMs: 40,
+      }, caller);
+      expect(timedOut).toMatchObject({ outcome: "timed_out", cancelled: true });
+      expect(service.read().resources[0].queue).toHaveLength(0);
+
+      const controller = new AbortController();
+      const aborting = handler("resource_checkout_acquire", {
+        purpose: "Aborting wait",
+        expectedDurationMs: 60_000,
+        units: 4,
+        waitTimeoutMs: 5_000,
+      }, { ...caller, signal: controller.signal });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(service.read().resources[0].queue).toHaveLength(1);
+      controller.abort(new Error("User cancelled"));
+      await expect(aborting).rejects.toThrow(/User cancelled/);
+      expect(service.read().resources[0].queue).toHaveLength(0);
+
+      await handler("resource_checkout_action", { action: first.releaseAction }, holder);
+    } finally {
+      await close();
     }
   });
 });

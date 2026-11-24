@@ -161,10 +161,10 @@ export function ResourceInspector(props: {
           )}
         </Section>
 
-        <Section title="Queue" aside="First in, first out">
+        <Section title="Queue" aside="FIFO with backfill">
           {waitingForSlots ? (
             <p className="resources-note">
-              The first request needs {firstRequest} {unitLabel}s. {free} free now. Later requests wait behind it.
+              The first request needs {firstRequest} {unitLabel}s. {free} free now. Shorter requests that fit without delaying #1 can backfill.
             </p>
           ) : null}
           {resource.queue.length === 0 ? (

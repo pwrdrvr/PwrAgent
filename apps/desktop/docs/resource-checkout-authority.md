@@ -24,11 +24,17 @@ resize the pool or invalidate reservations. Units are reservations among
 cooperating jobs. They neither measure live load nor set process affinity. The same
 machine key and queue apply to every profile in the shared root.
 
-Use `resource_checkout_action` and omit `units` to reserve the whole machine
-for a full test suite or heavy build. Known smaller jobs can request their
-expected number of parallel workers. Acquire before launching and release
-after the command exits. A large request at the head of the queue waits
-for enough slots to clear, and later small requests wait behind it.
+Supply an explicit `units` count on counted resources (such as 4 CPU slots for
+focused tests, lint, or typecheck). Acquire before launching and release when
+the command exits. In Code Mode and scripts, prefer `resource_checkout_acquire`,
+which blocks event-driven until granted, returns a ready-to-use `releaseAction`
+for a `try`/`finally` block, and automatically cancels or releases on timeout or
+abort. When a large request at the head of the queue waits for slots to clear,
+the authority uses EASY backfilling: later requests that fit in the free slots
+without delaying the head's guaranteed shadow start time (either finishing
+before the head can start or fitting in spare slots at that time) start right
+away, while requests that could delay the head wait in FIFO order. Thread
+holders and waiters display their resolved thread titles in Resources.
 
 Codex environment setup, detached environment actions, and local automation
 gates do not require, claim, or wait on machine CPU checkouts. They run

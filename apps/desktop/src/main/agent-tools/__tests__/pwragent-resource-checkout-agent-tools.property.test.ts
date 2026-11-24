@@ -87,6 +87,8 @@ describe("resource checkout tools: waiting for a grant", () => {
       expect(tool.description).not.toMatch(/inspect status .* to see a queued request/i);
     }
     expect(description("resource_checkout_action")).toMatch(/resource_checkout_wait .*continuation, then end the turn/);
+    expect(description("resource_checkout_action")).not.toMatch(/omit units to reserve the full machine pool/i);
+    expect(description("resource_checkout_acquire")).toMatch(/try\/finally/i);
     expect(description("resource_checkout_wait")).toMatch(/Pass continuation.*end the turn/);
     expect(description("resource_checkout_status")).toMatch(/Do not call it repeatedly to wait for a grant/);
   });

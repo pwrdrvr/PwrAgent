@@ -2,6 +2,7 @@ import { realpath } from "node:fs/promises";
 import { cpus } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { readMachineCheckoutEvidence } from "./checkout-machine-evidence";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type { ResourceAdvertisement, ResourceOwnershipConflict } from "@pwragent/shared/contracts/resource-checkouts";
 import { getMainLogger } from "../log";
 import { readOrCreateFederationMachineId } from "../federation/federation-host-info";
@@ -43,7 +44,12 @@ export async function checkoutRootCanHostMachine(root: string, primaryRoot: stri
   return actual !== undefined && actual === primary;
 }
 
-export async function initializeResourceCheckouts(federation: DesktopFederationRuntime, approvedLabCheckouts?: ReadonlyMap<string, ApprovedLabCheckout>, isPackaged = true): Promise<DesktopResourceCheckoutService> {
+export async function initializeResourceCheckouts(
+  federation: DesktopFederationRuntime,
+  approvedLabCheckouts?: ReadonlyMap<string, ApprovedLabCheckout>,
+  isPackaged = true,
+  resolveThreadTitle?: (thread: { backend: AppServerBackendKind; threadId: string; instanceId?: string }) => string | undefined,
+): Promise<DesktopResourceCheckoutService> {
   const root = resolvePwragentRoot();
   const [machineId, evidence] = await Promise.all([
     readOrCreateFederationMachineId({ rootDir: root }), readMachineCheckoutEvidence(),
@@ -93,7 +99,7 @@ export async function initializeResourceCheckouts(federation: DesktopFederationR
   runtime = new DesktopResourceCheckoutService({
     viewer: { instanceId, profile, machineId, instanceLabel: defaultInstanceLabel() },
     machineStore, machineUnresolved, adoptMachineStore, machineCpuCount: cpus().length, externalStore, externalUnresolved,
-    bindings, allowAgentDrafts, approvedLabCheckouts, warn,
+    bindings, allowAgentDrafts, approvedLabCheckouts, resolveThreadTitle, warn,
     bootId: evidence.hostBinding ? evidence.bootId : undefined,
     readMachineAdvertisements: () => buildDockProfileSnapshot().profiles
       .filter((entry) => entry.name !== profile)

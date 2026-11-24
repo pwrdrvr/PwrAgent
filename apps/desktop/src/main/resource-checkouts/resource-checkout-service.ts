@@ -11,7 +11,7 @@ import type {
 import {
   RESOURCE_CHECKOUTS_CONTRACT_VERSION, type ResourceAuthority, type ResourceCheckoutActionResult,
   type ResourceCheckoutsSnapshot, type ResourceViewer, type ResourceDomain, type ResourceAdvertisement, type ResourceCheckoutActionRequest,
-  type ResourceOwnershipConflict,
+  type ResourceHolder, type ResourceOwnershipConflict, type ResourceThreadRef,
 } from "@pwragent/shared/contracts/resource-checkouts";
 import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
@@ -45,6 +45,7 @@ type Options = {
   approvedLabCheckouts?: ReadonlyMap<string, ApprovedLabCheckout>;
   bootId?: string;
   readMachineAdvertisements?: () => ResourceAdvertisement[];
+  resolveThreadTitle?: (thread: { backend: AppServerBackendKind; threadId: string; instanceId?: string }) => string | undefined;
   requestPeer: <T>(instanceId: string, request: unknown) => Promise<T>;
   warn: (error: unknown) => void;
   now?: () => number;
@@ -160,12 +161,61 @@ export class DesktopResourceCheckoutService {
     };
   }
 
+  private resolveThreadTitle(backend: AppServerBackendKind, threadId: string, instanceId?: string): string {
+    const resolved = this.options.resolveThreadTitle?.({
+      backend,
+      threadId,
+      ...(instanceId ? { instanceId } : {}),
+    })?.trim();
+    if (resolved) return resolved;
+    return instanceId && instanceId !== this.options.viewer.instanceId
+      ? "Federation agent thread"
+      : "Agent thread";
+  }
+
+  private enrichResourceTitles(resource: ResourceDomain): ResourceDomain {
+    if (!this.options.resolveThreadTitle) return resource;
+    const enrichThread = (thread: ResourceThreadRef): ResourceThreadRef => {
+      const resolved = this.options.resolveThreadTitle?.({
+        backend: thread.backend,
+        threadId: thread.threadId,
+        ...(thread.instanceId ? { instanceId: thread.instanceId } : {}),
+      })?.trim();
+      return resolved && resolved !== thread.title ? { ...thread, title: resolved } : thread;
+    };
+    const enrichHolder = (holder: ResourceHolder): ResourceHolder =>
+      holder.kind === "thread" ? { kind: "thread", thread: enrichThread(holder.thread) } : holder;
+    return {
+      ...resource,
+      allocations: resource.allocations.map((allocation) => ({
+        ...allocation,
+        holder: enrichHolder(allocation.holder),
+        ...(allocation.delegatedExecutor ? { delegatedExecutor: enrichThread(allocation.delegatedExecutor) } : {}),
+      })),
+      queue: resource.queue.map((entry) => ({
+        ...entry,
+        requester: enrichHolder(entry.requester),
+      })),
+    };
+  }
+
   threadActor(backend: AppServerBackendKind, threadId: string): CheckoutActor {
     return {
       key: JSON.stringify([this.options.viewer.instanceId, backend, threadId]),
-      holder: { kind: "thread", thread: { backend, threadId, title: "Agent thread" } },
+      holder: { kind: "thread", thread: { backend, threadId, title: this.resolveThreadTitle(backend, threadId) } },
       manage: this.options.allowAgentDrafts === true,
     };
+  }
+
+  localMachineResourceId(): string {
+    return this.machineDefinition.resourceId;
+  }
+
+  isCountedResource(resourceId: string): boolean {
+    const binding = this.options.bindings.find((candidate) => candidate.definition.resourceId === resourceId);
+    if (binding) return binding.definition.counted;
+    if (resourceId === this.machineDefinition.resourceId) return this.machineDefinition.counted;
+    return this.machine?.records(resourceId)[0]?.definition.counted ?? false;
   }
 
   private authorityView(definition: CheckoutDefinition, kind: ResourceAuthority["kind"], status: ResourceAuthority["status"]): ResourceAuthority {
@@ -256,7 +306,10 @@ export class DesktopResourceCheckoutService {
         }, actor, authority) });
       }
     }
-    return local;
+    return local.map((view) => ({
+      authority: view.authority,
+      resource: this.enrichResourceTitles(view.resource),
+    }));
   }
 
   read(): ResourceCheckoutsSnapshot {
@@ -709,7 +762,10 @@ export class DesktopResourceCheckoutService {
     // The authenticated owner can delegate a subject on its own instance only.
     return {
       key: JSON.stringify([sourceInstanceId, backend, threadId]), manage: false,
-      holder: { kind: "thread", thread: { backend, threadId, title: "Federation agent thread", instanceId: sourceInstanceId } },
+      holder: {
+        kind: "thread",
+        thread: { backend, threadId, title: this.resolveThreadTitle(backend, threadId, sourceInstanceId), instanceId: sourceInstanceId },
+      },
     };
   }
 
