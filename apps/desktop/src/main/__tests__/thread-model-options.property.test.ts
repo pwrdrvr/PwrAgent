@@ -1,6 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { buildLaunchpadOptions, getDefaultModelOption } from "../app-server/thread-model-options";
+import { defaultModelOption } from "@pwragent/shared/model-defaults";
+import { buildLaunchpadOptions } from "../app-server/thread-model-options";
 
 describe("new-thread model defaults", () => {
   it("chooses an available 6.1 coding model regardless of catalog order or legacy default flags", () => {
@@ -18,7 +19,7 @@ describe("new-thread model defaults", () => {
         const selected = options?.models?.filter((model) => model.current) ?? [];
         expect(selected).toHaveLength(1);
         expect(modern).toContain(selected[0]!.id);
-        expect(getDefaultModelOption("codex", options)?.id).toBe(selected[0]!.id);
+        expect(defaultModelOption("codex", options)?.id).toBe(selected[0]!.id);
       },
     ));
   });
@@ -26,14 +27,14 @@ describe("new-thread model defaults", () => {
   it("uses a 6.1 coding model before discovery on a fresh install", () => {
     const options = buildLaunchpadOptions("codex", []);
     expect(["gpt-6.1-terra", "gpt-6.1-sol"])
-      .toContain(getDefaultModelOption("codex", options)?.id);
+      .toContain(defaultModelOption("codex", options)?.id);
   });
 
   it("honors the advertised default when no preferred coding model is available", () => {
     fc.assert(fc.property(fc.constantFrom("codex", "claude"), fc.integer({ min: 0, max: 3 }), (backend, current) => {
       const models = Array.from({ length: 4 }, (_, index) => ({ id: `model-${index}`, current: index === current }));
       const options = buildLaunchpadOptions(backend, models);
-      expect(getDefaultModelOption(backend, options)?.id).toBe(models[current]!.id);
+      expect(defaultModelOption(backend, options)?.id).toBe(models[current]!.id);
     }));
   });
 });
