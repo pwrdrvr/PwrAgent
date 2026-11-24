@@ -54,7 +54,9 @@ import { resolveActiveProfilePath } from "../profile";
 import { toTranscriptImageProtocolUrl } from "../transcript-images";
 import { ClaudeSessionReaderError, type ClaudeSessionReader, type ClaudeSessionReads } from "./claude-session-reader";
 import { buildClaudeSessionPrimer } from "./claude-session-primer";
-import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, isClaudeInstallationAvailable, signInWithClaudeCode, supportsClaudeMcpInitialize, type ClaudeInstallation } from "./claude-executable";
+import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, isClaudeInstallationAvailable, signInWithClaudeCode, signOutOfClaudeCode, supportsClaudeMcpInitialize, type ClaudeInstallation } from "./claude-executable";
+import { ClaudeGatewaySignInSession, claudeUserSettingsPath, normalizeClaudeGatewayUrl, writeClaudeGatewaySetting, type ClaudeGatewaySpawn } from "./claude-gateway";
+import type { ClaudeGatewayRequest, ClaudeGatewayResponse } from "@pwragent/shared/contracts/claude-gateway";
 import {
   CLAUDE_EXIT_PLAN_TOOL, claudeAllowedTools, createClaudePermissionHandler, claudePermissionMode,
   threadExecutionModeForClaudePermission,
@@ -105,6 +107,13 @@ export type ClaudeBackendOptions = {
   openSessionReader?: (env: NodeJS.ProcessEnv) => ClaudeSessionReader;
   inspectInstallation?: typeof inspectClaudeInstallation;
   signInWithClaudeCode?: typeof signInWithClaudeCode;
+  signOutOfClaudeCode?: typeof signOutOfClaudeCode;
+  /** Opens the gateway's sign-in page; Claude Code leaves that to its host. */
+  openExternal?: (url: string) => Promise<void>;
+  /** Starts `claude auth login --gateway-json`; tests substitute a fixture. */
+  spawnGatewaySignIn?: ClaudeGatewaySpawn;
+  /** Claude Code's user settings file; defaults to CLAUDE_CONFIG_DIR's. */
+  claudeSettingsPath?: (env: NodeJS.ProcessEnv) => string;
   discoverModels?: typeof discoverClaudeModels;
   readCommands?: (params: { executable: string; env: NodeJS.ProcessEnv; cwd: string }) => Promise<SlashCommand[]>;
   readMcpServers?: (params: { executable: string; env: NodeJS.ProcessEnv; cwd: string }) => Promise<McpServerStatus[]>;
@@ -372,7 +381,7 @@ function claudeWakeSignal(): { promise: Promise<typeof CLAUDE_WAKE>; wake: () =>
 
 /** Signed out, or billed outside a Claude subscription: no plan limit applies. */
 function claudeHasNoPlanLimits({ authStatus, authMethod }: ClaudeInstallation): boolean {
-  return authStatus === "sign-in-required" || authMethod === "api-key" || authMethod === "external";
+  return authStatus === "sign-in-required" || authMethod === "api-key" || authMethod === "gateway" || authMethod === "external";
 }
 
 /** Tells accounts apart without keeping their identifiers. */
@@ -701,6 +710,7 @@ export class ClaudeBackend {
   private authSequence = 0;
   private authObservation = { sequence: 0, expired: false };
   private signInOperation?: Promise<void>;
+  private gatewaySignIn?: ClaudeGatewaySignInSession;
   private discovery?: { models: boolean; promise: Promise<void> };
   private modelDiscovery?: Promise<void>;
   private readonly discoveryOperations = new Set<Promise<unknown>>();
@@ -822,6 +832,10 @@ export class ClaudeBackend {
     if (!this.installation.executable) await this.discover({ models: false });
     const executable = this.installation.executable;
     if (!executable) throw new Error(CLAUDE_SETUP_INSTRUCTIONS);
+    if (this.installation.gatewayUrl) {
+      // `claude auth login` would start a claude.ai sign-in the gateway setting then refuses.
+      throw new Error("Claude Code signs in through an LLM gateway. Sign in from Settings → AI Providers → Claude.");
+    }
     const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
     await this.ownDiscoveryOperation((this.options.signInWithClaudeCode ?? signInWithClaudeCode)(
       executable, env, this.discoveryController.signal,
@@ -830,6 +844,101 @@ export class ClaudeBackend {
     // Older turns may still report results for the credentials this login replaced.
     this.authObservation = { sequence: ++this.authSequence, expired: false };
     // A probe started before login finished can still report the old account.
+    await this.discovery?.promise.catch(() => {});
+    await this.discover({ models: false });
+    if (!this.closing) await this.reportAuthStatus();
+  }
+
+  /**
+   * Interactive sign-in to an LLM gateway. Claude Code runs it and keeps the
+   * token; this names the gateway in Claude Code's user settings, relays its
+   * questions, and re-reads the installation once it finishes.
+   */
+  async claudeGateway(request: ClaudeGatewayRequest): Promise<ClaudeGatewayResponse> {
+    this.options.assertOwnerAdmission?.();
+    if (this.closing) throw new Error("Claude backend is closing.");
+    switch (request.action) {
+      case "start":
+        return { progress: (await this.startGatewaySignIn(String(request.url ?? ""))).progress() };
+      case "wait": {
+        const session = this.gatewaySession(request.id);
+        return { progress: await session.wait(Number(request.after) || 0) };
+      }
+      case "answer": {
+        const session = this.gatewaySession(request.id);
+        session.answer(Number(request.revision));
+        return { progress: session.progress() };
+      }
+      case "openBrowser": {
+        const session = this.gatewaySession(request.id);
+        await session.openBrowser();
+        return { progress: session.progress() };
+      }
+      case "cancel": {
+        const session = this.gatewaySignIn;
+        if (session?.id === request.id) session.cancel();
+        return { progress: session?.id === request.id ? session.progress() : undefined };
+      }
+      case "signOut":
+        await this.signOutOfGateway(request.forget === true);
+        return {};
+      default:
+        throw new Error("Unknown Claude gateway action.");
+    }
+  }
+
+  private gatewaySession(id: string): ClaudeGatewaySignInSession {
+    const session = this.gatewaySignIn;
+    if (!session || session.id !== id) throw new Error("This gateway sign-in has ended. Start it again from Claude settings.");
+    return session;
+  }
+
+  private async startGatewaySignIn(input: string): Promise<ClaudeGatewaySignInSession> {
+    const url = normalizeClaudeGatewayUrl(input);
+    if (!this.installation.executable) await this.discover({ models: false });
+    const { executable, gatewaySignIn } = this.installation;
+    if (!executable) throw new Error(CLAUDE_SETUP_INSTRUCTIONS);
+    if (!gatewaySignIn) {
+      throw new Error("Gateway sign-in needs Claude Code 2.1.330 or newer. Update Claude Code, then try again.");
+    }
+    const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
+    await writeClaudeGatewaySetting((this.options.claudeSettingsPath ?? claudeUserSettingsPath)(env), url);
+    this.gatewaySignIn?.cancel();
+    const session = new ClaudeGatewaySignInSession({
+      executable, env, url,
+      openExternal: async (page) => { await this.options.openExternal?.(page); },
+      spawn: this.options.spawnGatewaySignIn,
+    });
+    this.gatewaySignIn = session;
+    const finished = session.finished.then(async (step) => {
+      if (step.state !== "done" || this.closing) return;
+      // Older turns may still report results for the credentials this sign-in replaced.
+      this.authObservation = { sequence: ++this.authSequence, expired: false };
+      await this.discovery?.promise.catch(() => {});
+      await this.discover({ models: false });
+      if (!this.closing) await this.reportAuthStatus();
+    }).catch((error: unknown) => claudeBackendLog.warn("Could not refresh Claude after gateway sign-in", error));
+    void this.ownDiscoveryOperation(finished);
+    session.start();
+    return session;
+  }
+
+  private async signOutOfGateway(forget: boolean): Promise<void> {
+    this.gatewaySignIn?.cancel();
+    if (!this.installation.executable) await this.discover({ models: false });
+    const executable = this.installation.executable;
+    if (!executable) throw new Error(CLAUDE_SETUP_INSTRUCTIONS);
+    const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
+    // Logout removes every Claude Code login. Run it only for a gateway
+    // sign-in, so forgetting an unused gateway keeps a claude.ai login.
+    if (this.installation.authMethod === "gateway") {
+      await this.ownDiscoveryOperation((this.options.signOutOfClaudeCode ?? signOutOfClaudeCode)(
+        executable, env, this.discoveryController.signal,
+      ));
+    }
+    if (forget) await writeClaudeGatewaySetting((this.options.claudeSettingsPath ?? claudeUserSettingsPath)(env), undefined);
+    if (this.closing) return;
+    this.authObservation = { sequence: ++this.authSequence, expired: false };
     await this.discovery?.promise.catch(() => {});
     await this.discover({ models: false });
     if (!this.closing) await this.reportAuthStatus();
@@ -3694,6 +3803,7 @@ export class ClaudeBackend {
 
   private async closeResources(): Promise<void> {
     this.closing = true;
+    this.gatewaySignIn?.cancel();
     this.discoveryController.abort();
     this.unsubscribePlanLimits();
     if (this.ownsPlanLimits) this.planLimits.close();

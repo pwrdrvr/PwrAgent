@@ -1039,6 +1039,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       ? inspectClaudeInstallation
       : async () => ({ authStatus: "unknown" }),
     resolveEnv: async () => await settingsService?.resolveTerminalSpawnEnvAsync() ?? process.env,
+    openExternal: async (url) => { await getOwnerHostServices().links.openExternal(url); },
     // A chunk's __dirname is its own folder; this module is bundled into
     // the main entry, beside the worker.
     openSessionReader: (env) => openClaudeSessionReader(env, {

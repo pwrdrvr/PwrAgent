@@ -18,6 +18,40 @@ the CLI owns sign-in, and opts in to CLI behavior that PwrAgent renders:
 | `CLAUDE_CODE_ARTIFACT=1` | Turns on artifacts (see below). |
 | `CLAUDE_CODE_ARTIFACT_AUTO_OPEN=0` | A publish does not open the browser. |
 
+## LLM gateway sign-in
+
+Claude Code 2.1.330 and later sign in to an LLM gateway themselves (Claude
+Desktop calls this a gateway with "Interactive sign-in"). PwrAgent drives that
+sign-in from Settings → AI Providers → Claude
+([claude-gateway.ts](../src/main/claude/claude-gateway.ts)). It never handles
+the gateway token.
+
+- Claude Code reads a developer-named gateway for sign-in only from its user
+  settings (`$CLAUDE_CONFIG_DIR/settings.json`, default
+  `~/.claude/settings.json`): `"forceLoginMethod": "gateway"` with
+  `"forceLoginGatewayUrl"`. PwrAgent writes those two keys and keeps every
+  other key. This changes Claude Code in a terminal too, which the Settings
+  pane says.
+- The sign-in runs `claude auth login --gateway-json`. Claude Code writes one
+  JSON line per step (`url_input`, `connecting`, `trust_prompt`, `polling`,
+  `confirm_account`, `saving`, `done`, `error`) and acts on a
+  `{"state","shown","accept":true}` line only when both match the question it
+  is showing. Closing stdin cancels. In this mode it does not open the
+  browser, so PwrAgent opens the `polling` step's page.
+- PwrAgent answers `url_input` itself when `shown` is the URL the operator
+  asked for. The trust and account questions always go to the operator.
+- Claude Code refuses this sign-in when `CLAUDECODE` or
+  `CLAUDE_CODE_CHILD_SESSION` is set, so the sign-in drops both.
+- The gateway side is an OAuth device flow on the gateway's own origin:
+  `/.well-known/oauth-authorization-server`, `/oauth/device_authorization`,
+  `/oauth/token`. After sign-in, every session sends `Authorization: Bearer`
+  to the gateway, and `claude auth status` reports `apiProvider: "gateway"`
+  (`authMethod: "gateway"` here). The launch environment does not change.
+- `claude auth logout` removes every Claude Code login. Stopping the gateway
+  runs it only while the gateway is the active sign-in.
+- Other providers (API key, Bedrock, Vertex AI, Foundry, OIDC, helper
+  scripts) are recognised as `external` and are not configured here.
+
 ## Session reads
 
 The Agent SDK's `getSessionMessages` and `getSessionInfo` read sessions under

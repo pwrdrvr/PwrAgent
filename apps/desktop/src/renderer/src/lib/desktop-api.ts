@@ -1,5 +1,6 @@
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
 import type { AgentPreset, ManageAgentPresetsRequest } from "@pwragent/shared/contracts/agent-presets";
+import type { ClaudeGatewayRequest, ClaudeGatewayResponse } from "@pwragent/shared/contracts/claude-gateway";
 import type { DecisionModelListing, DecisionProviderId } from "@pwragent/shared/decision-models";
 import type {
   ReadWorktreeReflinkCapabilitiesRequest,
@@ -1558,6 +1559,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   ) => Promise<{ threadId: string }>;
   /** Run Claude Code's own sign-in on this machine. */
   signInClaude?: () => Promise<void>;
+  /** Claude Code's interactive LLM gateway sign-in on this machine. */
+  claudeGateway?: (request: ClaudeGatewayRequest) => Promise<ClaudeGatewayResponse>;
   configureGrokWorkflowBudget?: (
     request: ConfigureGrokWorkflowBudgetRequest,
   ) => Promise<ConfigureGrokWorkflowBudgetResponse>;

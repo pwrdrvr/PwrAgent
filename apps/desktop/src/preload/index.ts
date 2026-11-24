@@ -4,6 +4,7 @@ import type {
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
 import { AGENT_MEMORY_CHANNEL, AGENT_PRESETS_CHANNEL } from "../shared/ipc";
 import type { AgentPreset, ManageAgentPresetsRequest } from "@pwragent/shared/contracts/agent-presets";
+import type { ClaudeGatewayRequest, ClaudeGatewayResponse } from "@pwragent/shared/contracts/claude-gateway";
 import type {
   ResearchThread,
   ResearchUpdateRequest,
@@ -956,6 +957,7 @@ import {
   AGENT_UNDO_THREAD_REWIND_CHANNEL,
   AGENT_CONTINUE_CLAUDE_THREAD_IN_NEW_SESSION_CHANNEL,
   AGENT_SIGN_IN_CLAUDE_CHANNEL,
+  AGENT_CLAUDE_GATEWAY_CHANNEL,
   AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
@@ -3062,6 +3064,8 @@ const desktopApi = Object.freeze({
   ): Promise<{ threadId: string }> =>
     await ipcRenderer.invoke(AGENT_CONTINUE_CLAUDE_THREAD_IN_NEW_SESSION_CHANNEL, request),
   signInClaude: async (): Promise<void> => await ipcRenderer.invoke(AGENT_SIGN_IN_CLAUDE_CHANNEL),
+  claudeGateway: async (request: ClaudeGatewayRequest): Promise<ClaudeGatewayResponse> =>
+    await ipcRenderer.invoke(AGENT_CLAUDE_GATEWAY_CHANNEL, request),
   configureGrokWorkflowBudget: async (
     request: ConfigureGrokWorkflowBudgetRequest,
   ): Promise<ConfigureGrokWorkflowBudgetResponse> =>
