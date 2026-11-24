@@ -1,0 +1,46 @@
+name: Property test phase profile
+
+on:
+  push:
+    branches: [codex/property-test-profile]
+
+permissions:
+  contents: read
+
+jobs:
+  profile:
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - name: Turn off Spotlight indexing
+        continue-on-error: true
+        run: sudo mdutil -a -i off
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f
+        with:
+          node-version: "^24.22.1"
+          cache-electron: "true"
+      - name: Profile paired baseline and candidate samples
+        run: |
+          set -o pipefail
+          mkdir -p .local/property-profile
+          paths=(single-visible-tooltip.property.test.tsx LinkedProjectsPanel.property.test.tsx thread-search-ranked.property.test.ts)
+          failed=0
+          for trial in '1753 baseline' '1753 candidate' '7187 candidate' '7187 baseline' '34567 baseline' '34567 candidate'; do
+            read -r seed variant <<< "$trial"
+            git restore -- ':(glob)**/single-visible-tooltip.property.test.tsx' ':(glob)**/LinkedProjectsPanel.property.test.tsx' ':(glob)**/thread-search-ranked.property.test.ts'
+            python3 scripts/ci/profile-property-tests.py "$variant"
+            echo "::group::$trial"
+            PROPERTY_PROFILE_SEED="$seed" pnpm test "${paths[@]}" --reporter=default --reporter=json --outputFile=".local/property-profile/$seed-$variant.json" | tee ".local/property-profile/$seed-$variant.log" || failed=1
+            echo "::endgroup::"
+          done
+          git restore -- ':(glob)**/single-visible-tooltip.property.test.tsx' ':(glob)**/LinkedProjectsPanel.property.test.tsx' ':(glob)**/thread-search-ranked.property.test.ts'
+          exit "$failed"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: property-test-phase-profile
+          path: .local/property-profile/
+          include-hidden-files: true
