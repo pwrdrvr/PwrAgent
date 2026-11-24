@@ -18,7 +18,9 @@ const thread: NavigationThreadSummary = {
 const parentTurn = "turn-1";
 const reviewTurn = "review-1";
 
-function expectUsageOwnership(options: { parentCompletes: boolean; reviewReportsUsage: boolean; tokens: number }) {
+type ParentCompletion = "before-review-usage" | "before-review-completion" | "after-review-completion" | "missing";
+
+function expectUsageOwnership(options: { parentCompletion: ParentCompletion; reviewReportsUsage: boolean; tokens: number }) {
   let emit!: (event: AgentEvent) => void;
   const persist = vi.fn<NonNullable<DesktopApi["persistThreadUsageActivity"]>>()
     .mockImplementation(async ({ backend, threadId, activity }) => ({ backend, threadId, activityId: activity.id, persisted: true }));
@@ -27,41 +29,67 @@ function expectUsageOwnership(options: { parentCompletes: boolean; reviewReports
     persistThreadUsageActivity: persist,
   };
   const { result, unmount } = renderHook(() => useThreadSessionState({ desktopApi, thread }));
-  const reportUsage = (turnId: string, inputTokens: number) => {
+  const reportUsage = (turnId: string, inputTokens: number, previousInputTokens = 0) => {
     const usage = { input_tokens: inputTokens, cached_input_tokens: 0, output_tokens: 10, total_tokens: inputTokens + 10 };
+    const total = previousInputTokens === 0 ? usage : {
+      ...usage, input_tokens: inputTokens + previousInputTokens, output_tokens: 20,
+      total_tokens: inputTokens + previousInputTokens + 20,
+    };
     emit({ backend: "codex", notification: { method: "thread/tokenUsage/updated", params: {
-      threadId: thread.id, turnId, tokenUsage: { last_token_usage: usage, total_token_usage: usage },
+      threadId: thread.id, turnId, tokenUsage: { last_token_usage: usage, total_token_usage: total },
     } } });
   };
   const complete = (turnId: string) => emit({ backend: "codex", notification: { method: "turn/completed", params: {
     threadId: thread.id, turnId, turn: { id: turnId, status: "completed", output: [] },
   } } });
   try {
-    act(() => result.current.setActiveTurnId(parentTurn));
+    const parentStartedAt = 1_800_000_000_000;
+    act(() => emit({ backend: "codex", notification: { method: "turn/started", params: {
+      threadId: thread.id, turn: { id: parentTurn, status: "in_progress", startedAt: parentStartedAt },
+    } } }));
     act(() => reportUsage(parentTurn, options.tokens));
     expect(result.current.runningTurnUsageText).toContain("Usage so far:");
 
     // The inline review is selected before the preceding turn's delayed end.
     act(() => result.current.setActiveTurnId(reviewTurn));
     const reviewUsageBeforeAnyReport = result.current.runningTurnUsageText;
-    if (options.parentCompletes) act(() => complete(parentTurn));
-    if (options.reviewReportsUsage) act(() => reportUsage(reviewTurn, options.tokens + 1));
+    if (options.parentCompletion === "before-review-usage") act(() => complete(parentTurn));
+    if (options.reviewReportsUsage) act(() => reportUsage(reviewTurn, options.tokens + 1, options.tokens));
+    if (options.parentCompletion === "before-review-completion") act(() => complete(parentTurn));
+    expect(result.current.activeTurnId).toBe(reviewTurn);
     act(() => complete(reviewTurn));
+    if (options.parentCompletion === "after-review-completion") act(() => complete(parentTurn));
+    // A terminal event can be redelivered, but its pending total has settled.
+    if (options.parentCompletion !== "missing") act(() => complete(parentTurn));
 
-    expect(persist.mock.calls.map(([{ activity }]) => [activity.id, activity.turn?.id])).toEqual(
-      options.reviewReportsUsage ? [[`live-turn-usage-${reviewTurn}`, reviewTurn]] : [],
-    );
-    if (!options.reviewReportsUsage) {
-      expect(result.current.entries.filter((entry) => entry.type === "activity")).toEqual([]);
-    }
+    const expected = [
+      ...(options.parentCompletion !== "missing" ? [{
+        id: `live-turn-usage-${parentTurn}`,
+        summary: `Turn usage: ${options.tokens.toLocaleString("en-US")} uncached in · 0 cached · 10 out`,
+        turn: { id: parentTurn, status: "completed", startedAt: parentStartedAt },
+      }] : []),
+      ...(options.reviewReportsUsage ? [{
+        id: `live-turn-usage-${reviewTurn}`,
+        summary: `Turn usage: ${(options.tokens + 1).toLocaleString("en-US")} uncached in · 0 cached · 10 out`,
+        turn: { id: reviewTurn, status: "completed" },
+      }] : []),
+    ];
+    const saved = persist.mock.calls.map(([{ activity }]) => activity).toSorted((a, b) => a.id.localeCompare(b.id));
+    expect(saved).toMatchObject(expected.toSorted((a, b) => a.id.localeCompare(b.id)));
+    expect(result.current.entries.filter((entry) => entry.type === "activity").map((entry) => entry.id).sort())
+      .toEqual(expected.map(({ id }) => id).sort());
     expect(reviewUsageBeforeAnyReport).toBeUndefined();
   } finally {
     unmount();
   }
 }
 
-it("never finalizes the previous turn's pending usage under an inline review without usage", () => {
-  expectUsageOwnership({ parentCompletes: true, reviewReportsUsage: false, tokens: 123 });
+it("finalizes the parent total under the parent while an inline review is active", () => {
+  expectUsageOwnership({ parentCompletion: "before-review-usage", reviewReportsUsage: false, tokens: 123 });
+});
+
+it("keeps the delayed parent total after the review collects and finalizes its own usage", () => {
+  expectUsageOwnership({ parentCompletion: "after-review-completion", reviewReportsUsage: true, tokens: 123 });
 });
 
 it("keeps a late transcript or pagination response scoped to the thread that requested it", async () => {
@@ -109,9 +137,13 @@ it("keeps a late transcript or pagination response scoped to the thread that req
   ), { numRuns: 25 });
 });
 
-it("persists a review total only from usage received for that review", () => {
+it("persists exactly the usage of each turn whose completion arrived", () => {
   fc.assert(fc.property(
-    fc.record({ parentCompletes: fc.boolean(), reviewReportsUsage: fc.boolean(), tokens: fc.integer({ min: 1, max: 1_000_000 }) }),
+    fc.record({
+      parentCompletion: fc.constantFrom<ParentCompletion>("before-review-usage", "before-review-completion", "after-review-completion", "missing"),
+      reviewReportsUsage: fc.boolean(),
+      tokens: fc.integer({ min: 1, max: 10_000 }),
+    }),
     expectUsageOwnership,
   ), { numRuns: 25 });
 });

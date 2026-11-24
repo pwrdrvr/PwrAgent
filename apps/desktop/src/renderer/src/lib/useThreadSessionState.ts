@@ -165,6 +165,11 @@ type RecentlyCompletedTurnUsage = {
   turn: AppServerThreadTurnMetadata;
 };
 
+type PendingTurnUsage = {
+  accumulator?: TurnUsageAccumulator;
+  entry: AppServerThreadActivityEntry;
+};
+
 type ThreadSessionEntry = ThreadActiveTurnState & ThreadPendingInteractionState & {
   completionHydrationRetries: number;
   contextWindow?: ThreadContextWindowState;
@@ -211,10 +216,10 @@ type ThreadSessionEntry = ThreadActiveTurnState & ThreadPendingInteractionState 
   recentlyCompletedTurnUsage?: RecentlyCompletedTurnUsage;
   optimisticEntries: AppServerThreadEntry[];
   pendingAssistantMessage?: AppServerThreadMessageEntry;
-  pendingUsageActivityEntry?: AppServerThreadActivityEntry;
+  // A review may take focus before the parent turn's terminal event arrives.
+  pendingUsageByTurn?: ReadonlyMap<string, PendingTurnUsage>;
   settledTransientMessages: AppServerTransientThreadMessageEntry[];
   transientMessage?: AppServerTransientThreadMessageEntry;
-  pendingTurnUsage?: TurnUsageAccumulator;
   response?: AppServerReadThreadResponse;
   /** The running turn's output is held for a provider safety review. */
   safetyBuffering?: SafetyBufferingState;
@@ -323,6 +328,17 @@ function mergeFinalizedUsageEntry(
   }
 
   return mergeItems(olderItems, [usageEntry]);
+}
+
+function removePendingTurnUsage(
+  pendingUsageByTurn: ThreadSessionEntry["pendingUsageByTurn"],
+  turnId: string | undefined,
+): ThreadSessionEntry["pendingUsageByTurn"] {
+  if (turnId === undefined || !pendingUsageByTurn?.has(turnId)) return pendingUsageByTurn;
+  if (pendingUsageByTurn.size === 1) return undefined;
+  const remaining = new Map(pendingUsageByTurn);
+  remaining.delete(turnId);
+  return remaining;
 }
 
 function persistFinalizedUsageEntry(params: {
@@ -6346,7 +6362,6 @@ export function useThreadSessionState(params: {
           lastTouchedAt: Date.now(),
           optimisticEntries: nextOptimisticEntries,
           pendingStatusText: nextPendingStatusText,
-          pendingTurnUsage: undefined,
         };
       });
     }
@@ -7173,7 +7188,6 @@ export function useThreadSessionState(params: {
             expectOwnUpdate: true,
             interacted: retainTranscript || current.interacted,
             lastTouchedAt: nextLastTouchedAt,
-            pendingTurnUsage: undefined,
           };
         }
 
@@ -7387,32 +7401,35 @@ export function useThreadSessionState(params: {
         }
 
         if (event.notification.method === "turn/completed") {
-          const completedTurn = buildTurnMetadata({
+          const terminalTurn = buildTurnMetadata({
             fallbackId: event.notification.params.turnId ?? current.activeTurnId,
-            fallbackStartedAt: current.activeTurnStartedAt,
             fallbackStatus: "completed",
             turn: event.notification.params.turn,
           });
+          const turnId = terminalTurn?.id;
+          const pendingUsage = turnId === undefined ? undefined : current.pendingUsageByTurn?.get(turnId);
+          const startedAt = (turnId === current.activeTurnId ? current.activeTurnStartedAt : undefined)
+            ?? pendingUsage?.entry.turn?.startedAt;
+          const completedTurn = terminalTurn && terminalTurn.startedAt === undefined && startedAt !== undefined
+            ? { ...terminalTurn, startedAt }
+            : terminalTurn;
           const completedTurnMatchesActive = terminalTurnMatchesActiveTurn(
             current,
             completedTurn?.id,
             event.relatedReviewTurnId,
           );
-          // A related review ID settles the session without transferring live
-          // transcript or usage from one provider turn onto the other.
+          // A related review ID can settle the session without owning another
+          // turn's pending transcript items.
           const completedTurnOwnsPendingItems = terminalTurnMatchesActiveTurn(current, completedTurn?.id, undefined);
           if (completedTurnMatchesActive && completedTurn?.id) {
             consumedOptimisticActiveTurnKeysRef.current.add(
               `${targetThreadKey}:${completedTurn.id}`
             );
           }
-          // A review can take over activeTurnId before the parent turn ends.
-          // Finalize only the usage that was collected for this completion.
-          const pendingUsage = current.pendingUsageActivityEntry;
-          const completedUsageActivity = completedTurn && completedTurnOwnsPendingItems
-            && pendingUsage?.turn?.id === completedTurn.id
-            ? { ...pendingUsage, turn: completedTurn }
+          const completedUsageActivity = completedTurn && pendingUsage
+            ? { ...pendingUsage.entry, turn: completedTurn }
             : undefined;
+          const pendingUsageByTurn = removePendingTurnUsage(current.pendingUsageByTurn, turnId);
           const settledLifecycle = completedTurnMatchesActive ? {
             activeTurnId: undefined,
             activeTurnStartedAt: undefined,
@@ -7422,13 +7439,9 @@ export function useThreadSessionState(params: {
             pendingAssistantMessage: undefined,
             pendingMcpInteraction: undefined,
             pendingRequest: undefined,
-            pendingUsageActivityEntry: undefined,
-            pendingTurnUsage: undefined,
             ...(completedTurn ? {
               recentlyCompletedTurnUsage: {
-                accumulator: completedTurnOwnsPendingItems && current.pendingTurnUsage?.turnId === completedTurn.id
-                  ? current.pendingTurnUsage
-                  : undefined,
+                accumulator: pendingUsage?.accumulator,
                 ...(!retainTranscript && completedUsageActivity ? { entry: completedUsageActivity } : {}),
                 turn: completedTurn,
               },
@@ -7447,6 +7460,7 @@ export function useThreadSessionState(params: {
             return {
               ...current,
               ...settledLifecycle,
+              pendingUsageByTurn,
               error: undefined,
               lastTouchedAt: nextLastTouchedAt,
             };
@@ -7623,6 +7637,7 @@ export function useThreadSessionState(params: {
           return {
             ...current,
             ...settledLifecycle,
+            pendingUsageByTurn,
             error: undefined,
             expectOwnUpdate: true,
             hydratedUpdatedAt:
@@ -7647,7 +7662,7 @@ export function useThreadSessionState(params: {
               current.retainedLiveEntryVersion
               + (didCompleteRetainedLiveEntry ? 1 : 0),
             optimisticEntries:
-              completedTurnMatchesActive && completedUsageActivity
+              completedUsageActivity
                 ? mergeFinalizedUsageEntry(
                     remainingOptimisticEntries,
                     completedUsageActivity
@@ -7657,19 +7672,21 @@ export function useThreadSessionState(params: {
           };
         }
 
-        if (event.notification.method === "turn/failed") {
+        if (event.notification.method === "turn/failed" || event.notification.method === "turn/cancelled") {
+          const turnId = event.notification.params.turnId;
+          const pendingUsageByTurn = removePendingTurnUsage(current.pendingUsageByTurn, turnId ?? current.activeTurnId);
           if (
             !terminalTurnMatchesActiveTurn(
               current,
-              event.notification.params.turnId,
+              turnId,
               event.relatedReviewTurnId,
             )
           ) {
-            return current;
+            return pendingUsageByTurn === current.pendingUsageByTurn ? current : { ...current, pendingUsageByTurn };
           }
-          if (event.notification.params.turnId) {
+          if (turnId) {
             consumedOptimisticActiveTurnKeysRef.current.add(
-              `${targetThreadKey}:${event.notification.params.turnId}`
+              `${targetThreadKey}:${turnId}`
             );
           }
 
@@ -7692,45 +7709,7 @@ export function useThreadSessionState(params: {
             pendingAssistantMessage: undefined,
             pendingMcpInteraction: undefined,
             pendingRequest: undefined,
-            pendingUsageActivityEntry: undefined,
-            pendingTurnUsage: undefined,
-            recentlyCompletedTurnUsage: undefined,
-            pendingUserInput: undefined,
-            pendingStatusText: undefined,
-          };
-        }
-
-        if (event.notification.method === "turn/cancelled") {
-          if (
-            !terminalTurnMatchesActiveTurn(
-              current,
-              event.notification.params.turnId,
-              event.relatedReviewTurnId,
-            )
-          ) {
-            return current;
-          }
-          if (event.notification.params.turnId) {
-            consumedOptimisticActiveTurnKeysRef.current.add(
-              `${targetThreadKey}:${event.notification.params.turnId}`
-            );
-          }
-
-          return {
-            ...current,
-            activeTurnId: undefined,
-            activeTurnStartedAt: undefined,
-            backendReportedActive: false,
-            completionHydrationRetries: 0,
-            error: undefined,
-            expectOwnUpdate: false,
-            lastTouchedAt: nextLastTouchedAt,
-            needsHydrationAfterCompletion: false,
-            pendingAssistantMessage: undefined,
-            pendingMcpInteraction: undefined,
-            pendingRequest: undefined,
-            pendingUsageActivityEntry: undefined,
-            pendingTurnUsage: undefined,
+            pendingUsageByTurn,
             recentlyCompletedTurnUsage: undefined,
             pendingUserInput: undefined,
             pendingStatusText: undefined,
@@ -7807,8 +7786,7 @@ export function useThreadSessionState(params: {
             loading: false,
             loadingMore: false,
             providerPageTurnIds: undefined,
-            pendingUsageActivityEntry: undefined,
-            pendingTurnUsage: undefined,
+            pendingUsageByTurn: undefined,
             pendingStatusText: undefined,
             response: undefined,
           };
@@ -7871,10 +7849,7 @@ export function useThreadSessionState(params: {
             ?? current.activeTurnId
             ?? recentlyCompletedTurnUsage?.turn.id;
           const knownTurnUsage = findKnownTurnUsageMetadata(current, resolvedTurnId);
-          const usageBelongsToActiveTurn = Boolean(
-            current.activeTurnId &&
-              (!notificationTurnId || notificationTurnId === current.activeTurnId)
-          );
+          const usageBelongsToActiveTurn = resolvedTurnId !== undefined && resolvedTurnId === current.activeTurnId;
           const turn = buildTurnMetadata({
             fallbackId: resolvedTurnId,
             fallbackStartedAt:
@@ -7935,26 +7910,26 @@ export function useThreadSessionState(params: {
               turn,
             }),
           });
-          let pendingTurnUsage = current.pendingTurnUsage;
-          const activeTurnUsage = Boolean(
-            usageEntry &&
-              current.activeTurnId &&
-              turn?.id === current.activeTurnId &&
-              turn.status !== "completed"
-          );
-          if (activeTurnUsage) {
+          let pendingUsageByTurn = current.pendingUsageByTurn;
+          const inProgressTurn = usageBelongsToActiveTurn && turn?.status !== "completed" ? turn : undefined;
+          const holdUsageUntilTurnCompletes = Boolean(usageEntry && inProgressTurn);
+          if (usageEntry && inProgressTurn) {
+            const pendingUsage = pendingUsageByTurn?.get(inProgressTurn.id);
             const turnUsage = buildPendingTurnUsage({
               contextWindow: current.contextWindow,
-              existing: current.pendingTurnUsage,
+              existing: pendingUsage?.accumulator,
               fastMode,
               model,
               pricingAt,
               serviceTier,
               tokenUsage: event.notification.params.tokenUsage,
-              turn,
+              turn: inProgressTurn,
             });
-            pendingTurnUsage = turnUsage.accumulator ?? current.pendingTurnUsage;
             usageEntry = turnUsage.entry ?? usageEntry;
+            pendingUsageByTurn = new Map(pendingUsageByTurn).set(inProgressTurn.id, {
+              accumulator: turnUsage.accumulator ?? pendingUsage?.accumulator,
+              entry: usageEntry,
+            });
           }
           let nextRecentlyCompletedTurnUsage = current.recentlyCompletedTurnUsage;
           const trailingCompletedTurnUsage = Boolean(
@@ -7984,12 +7959,6 @@ export function useThreadSessionState(params: {
             return current;
           }
 
-          const holdUsageUntilTurnCompletes = Boolean(
-            usageEntry &&
-              current.activeTurnId &&
-              turn?.id === current.activeTurnId &&
-              turn.status !== "completed"
-          );
           const suppressUsageEntry =
             usageEntry && shouldSuppressLiveUsageEntry(current, usageEntry);
           if (usageEntry && !holdUsageUntilTurnCompletes) {
@@ -8022,12 +7991,7 @@ export function useThreadSessionState(params: {
                     { replaceCompleted: trailingCompletedTurnUsage },
                   )
               : current.optimisticEntries,
-            pendingUsageActivityEntry: holdUsageUntilTurnCompletes
-              ? usageEntry
-              : current.pendingUsageActivityEntry,
-            pendingTurnUsage: holdUsageUntilTurnCompletes
-              ? pendingTurnUsage
-              : current.pendingTurnUsage,
+            pendingUsageByTurn,
             recentlyCompletedTurnUsage: nextRecentlyCompletedTurnUsage,
           };
         }
@@ -8419,7 +8383,6 @@ export function useThreadSessionState(params: {
           expectOwnUpdate: Boolean(turnId) || current.expectOwnUpdate,
           interacted: Boolean(turnId) || current.interacted,
           lastTouchedAt: Date.now(),
-          pendingTurnUsage: undefined,
           recentlyCompletedTurnUsage: undefined,
         };
       });
@@ -8948,8 +8911,8 @@ export function useThreadSessionState(params: {
     pendingStatusText,
     transientMessage: selectedSession?.transientMessage,
     transientMessages,
-    runningTurnUsageText: selectedSession?.activeTurnId === selectedSession?.pendingUsageActivityEntry?.turn?.id
-      ? runningTurnUsageTextFromEntry(selectedSession?.pendingUsageActivityEntry)
+    runningTurnUsageText: selectedSession?.activeTurnId
+      ? runningTurnUsageTextFromEntry(selectedSession.pendingUsageByTurn?.get(selectedSession.activeTurnId)?.entry)
       : undefined,
     approvalRequestThreadKeys,
     inputRequestThreadKeys,
