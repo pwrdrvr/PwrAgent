@@ -15,7 +15,7 @@ type PrefetchMetadata = {
   repos: GitHubRepoRef[];
   refreshedRemoteNames: string[];
   refreshRemoteNames?: boolean;
-  publish?: () => void;
+  publish?: () => Promise<void>;
   nativeHeadReads?: true;
   proof?: { heads?: ReadonlyMap<string, string>; unchanged: () => Promise<boolean> };
 };
@@ -25,11 +25,15 @@ export type ScheduledPrPrefetchMetadataScope = {
   repositories: ReturnType<typeof createScheduledPrefetchRemoteReader>;
   configOutputTooLarge?: true;
   includePaths?: string[];
+  watchingNativeConfig?: true;
 };
 
 function prefetchGitInputs(cwd: string) {
   const env = buildPwrAgentChildProcessEnv(process.env);
-  if (process.platform === "win32" || gitCommandPreference(env) || getSelectedManagedGit()) return "native-only" as const;
+  const preference = gitCommandPreference(env);
+  const executable = bundledGitExecutable();
+  if (getSelectedManagedGit() || (preference && path.normalize(preference) !== path.normalize(executable))) return "native-only" as const;
+  const nativeOnly = process.platform === "win32" || Boolean(preference);
   if (!path.isAbsolute(cwd) || Object.keys(env).some((key) =>
     /^(GIT_(DIR|WORK_TREE|COMMON_DIR|IMPLICIT_WORK_TREE|OBJECT_DIRECTORY|NAMESPACE|CONFIG|CONFIG_COUNT|CONFIG_PARAMETERS|TEST_.*))$/i.test(key))) {
     return undefined;
@@ -48,13 +52,13 @@ function prefetchGitInputs(cwd: string) {
     ? [global]
     : [path.join(xdg || path.join(home!, ".config"), "git/config"), path.join(home!, ".gitconfig")];
   if (noSystem !== "1") paths.push(system!);
-  paths.push(bundledGitExecutable());
+  paths.push(executable);
   if (paths.some((file) => /[\r\n\uFFFD]/.test(file) || hasParentComponent(file))) return undefined;
-  return { env, paths: paths.map((file) => path.normalize(file)) };
+  return { env, paths: paths.map((file) => path.normalize(file)), nativeOnly };
 }
 
 function hasParentComponent(file: string): boolean {
-  return file.split("/").includes("..");
+  return file.split(/[\\/]/).includes("..");
 }
 
 function configPath(directory: string, value: string): string | undefined {
@@ -92,7 +96,7 @@ function parseConfigWithOrigins(cwd: string, stdout: string) {
     }
   }
   const configuration = parseGitRemoteConfiguration([...config, ""].join("\0"));
-  return configuration && {
+  return {
     configuration,
     sources: canTrackIncludes && includes.size <= MAX_CONFIG_INCLUDES ? { origins, localOrigins, includes } : undefined,
   };
@@ -105,7 +109,7 @@ export async function observeScheduledPrPrefetchMetadata(
   const currentInputs = () => {
     try { return prefetchGitInputs(cwd); } catch { return undefined; }
   };
-  const readFallback = async (options: { useGitRemote?: true; preferLiveIdentity?: true }) => {
+  const readFallback = async (options: { useGitRemote?: true; preferLiveIdentity?: true; verifyPublication?: () => Promise<boolean> }) => {
     const observation = await repositories.read(undefined, options);
     return { ...observation, refreshedRemoteNames: observation.refreshedRemoteNames ?? [] };
   };
@@ -115,8 +119,10 @@ export async function observeScheduledPrPrefetchMetadata(
     const inputs = currentInputs();
     if (inputs === "native-only") return await readFallback({ preferLiveIdentity: true });
     if (!inputs) return undefined;
+    if (inputs.nativeOnly && !scope.watchingNativeConfig && repositories.hasLiveIdentity()) return await readFallback({ preferLiveIdentity: true });
     const roots = await observePrCheckoutConfigFiles(cwd, inputs.paths);
     if (!roots) return undefined;
+    if (inputs.nativeOnly) scope.watchingNativeConfig = true;
     // Watch known includes before sampling the next branch's config. This
     // remembers only the paths to watch, independent of any previous answer.
     const knownIncludes = scope.includePaths;
@@ -140,7 +146,15 @@ export async function observeScheduledPrPrefetchMetadata(
     if (config?.stderr) return undefined;
     const parsed = config ? parseConfigWithOrigins(roots.directory, config.stdout)
       : { configuration: { names: [], remotes: [] }, sources: undefined };
-    if (!parsed) return await readFallback({ useGitRemote: true });
+    const rootsUnchanged = async () => Boolean(await roots.unchanged() && isDeepStrictEqual(inputs, currentInputs()));
+    if (!parsed?.configuration) {
+      const sources = parsed?.sources;
+      // A rejected config layout can still give Git's effective source files.
+      // Only publish native URL reads when that entire graph was watched.
+      const verifyPublication = sources && !sources.includes.size && sources.localOrigins.has(path.join(roots.commonDir, "config"))
+        && [...sources.origins].every((file) => roots.paths.has(file)) ? rootsUnchanged : undefined;
+      return await readFallback({ useGitRemote: true, verifyPublication });
+    }
     const { configuration, sources } = parsed;
     const remoteNames = configuration.names;
     const inputsUnchanged = () => isDeepStrictEqual(inputs, currentInputs());
@@ -158,7 +172,7 @@ export async function observeScheduledPrPrefetchMetadata(
     scope.includePaths = files && originsWatched && extra.length ? extra : undefined;
     // With a warm identity and no config-only reuse path, only a remote HEAD
     // proof can pay for confirming the include graph.
-    const verifyHeadsBeforeConfirming = extra.length > 0 && Boolean(files) && originsWatched
+    const verifyHeadsBeforeConfirming = !inputs.nativeOnly && extra.length > 0 && Boolean(files) && originsWatched
       && !canReuseConfig && !canConfirmCheckout && repositories.hasGitHubIdentityFor(configuration);
     const earlyHeadProof = verifyHeadsBeforeConfirming ? await observeProvenRemoteHeads(cwd, remoteNames) : undefined;
     if (!files || !originsWatched || (verifyHeadsBeforeConfirming && !earlyHeadProof && !includesWatchedBeforeRead)) {
@@ -179,20 +193,33 @@ export async function observeScheduledPrPrefetchMetadata(
     }
     const configUnchanged = async () => Boolean(await files.unchanged()
       && (files === roots || await roots.unchanged()) && inputsUnchanged());
+    const nativeConfigVerified = inputs.nativeOnly && sources?.localOrigins.has(path.join(files.commonDir, "config"));
     // Resolve identities from the config Git already sampled. OpenSSH aliases
     // use one expansion per observation, bounded by the scheduled batch.
     const { repos, sshIdentityUnchanged, publish } = await repositories.read(configuration, {
       configSampleOrder,
       validateNegative: async () => Boolean((!config || sources) && await configUnchanged()),
+      verifyPublication: nativeConfigVerified ? configUnchanged : undefined,
     });
     const sample = {
-      repos, refreshedRemoteNames: remoteNames, refreshRemoteNames: !sources,
+      repos, refreshedRemoteNames: remoteNames, refreshRemoteNames: inputs.nativeOnly || !sources,
       publish: sources ? publish : undefined,
     };
     const currentSample = async () => await configUnchanged() ? sample : undefined;
     // Keep Git's current config answer for the ordinary branch path even
     // when it cannot support reuse of the checkout observation.
     if (!sources || !repos.length) return await currentSample();
+
+    if (inputs.nativeOnly) {
+      const unchanged = async () => Boolean(await configUnchanged() && (!sshIdentityUnchanged || sshIdentityUnchanged()));
+      if (!await unchanged()) return undefined;
+      // Git still owns the branch's remote-list and ref reads. Reuse only
+      // the effective config tied to this checkout's watched local origin.
+      return {
+        ...sample, nativeHeadReads: true,
+        proof: nativeConfigVerified ? { unchanged } : undefined,
+      };
+    }
 
     // A single remote still needs one native HEAD read per branch.
     if (singleRemote && !extra.length && !canConfirmCheckout) return await currentSample();

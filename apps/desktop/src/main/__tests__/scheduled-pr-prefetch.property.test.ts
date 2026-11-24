@@ -8,7 +8,7 @@ import * as gitExecutable from "../app-server/git-executable";
 import { bundledGitExecutable } from "../bundled-git";
 import { GitSubprocessDiagnostics, gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 import { clearGitHubRemoteCache, readObservedGitOrigin, REMOTE_CONFIG_KEYS, resolveGitHubRepoForDirectory, resolveGitHubReposForDirectory } from "../pr-status/git-remote";
-import { createScheduledPrPrefetchRepoResolver, detectPullRequestsForThread } from "../pr-status/pr-detection";
+import { createScheduledPrPrefetchRepoResolver, detectPullRequestsForThread, resolveScheduledPrPrefetchRepos } from "../pr-status/pr-detection";
 import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -114,6 +114,39 @@ it.skipIf(process.platform === "win32")("launches checkout metadata once for twe
   });
 });
 
+it.skipIf(process.platform === "win32")("uses five bundled Git launches across three branches versus ten without reuse", async () => {
+  const cwd = await fixture();
+  const expected = await oracle(cwd);
+  const starts = recordPrefetchStarts();
+  const branches = topics.slice(0, 3);
+  for (const branch of branches) await expectEligible((cwd, branch) => resolveScheduledPrPrefetchRepos(cwd, branch), cwd, branch, expected(branch));
+  expect(starts.calls.map(([, args]) => args[0])).toEqual([
+    "config", "remote", "rev-parse", "for-each-ref", "remote", "rev-parse", "for-each-ref", "remote", "rev-parse", "for-each-ref",
+  ]);
+  clearGitHubRemoteCache();
+  starts.clear();
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  for (const branch of branches) await expectEligible(resolve, cwd, branch, expected(branch));
+  expect(starts.calls.map(([, args]) => args[0])).toEqual(["config", "rev-parse", "for-each-ref", "for-each-ref", "for-each-ref"]);
+});
+
+it("keeps the cold native fallback at thirteen launches across three branches", async () => {
+  const cwd = await fixture();
+  vi.stubEnv("PWRAGENT_GIT_PATH", bundledGitExecutable());
+  onTestFinished(() => { vi.unstubAllEnvs(); });
+  const expected = await oracle(cwd);
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  expect(readObservedGitOrigin(cwd)).toBeUndefined();
+  const starts = recordPrefetchStarts();
+  for (const branch of topics.slice(0, 3)) await expectEligible(resolve, cwd, branch, expected(branch));
+  expect(starts.snapshot().startsByCaller["pr-scheduled-prefetch"]).toBe(13);
+  expect(starts.calls.filter(([, args]) => args[0] === "config")).toHaveLength(1);
+  expect(readObservedGitOrigin(cwd)?.repo?.repo).toBe("origin");
+  starts.clear();
+  await expect(resolveGitHubRepoForDirectory(cwd)).resolves.toEqual({ host: "github.com", owner: "fixture", repo: "origin" });
+  expect(starts.calls).toHaveLength(0);
+});
+
 it.skipIf(process.platform === "win32")("shares checkout metadata between an eligible topic and a renamed upstream", async () => {
   const cwd = await fixture();
   const expected = await oracle(cwd);
@@ -150,7 +183,7 @@ it("uses the existing Git remote HEAD fallback with one configured remote", asyn
   for (const branch of ["topic-0", "topic-1"]) await expectEligible(resolve, cwd, branch, expected(branch));
   const metadata = process.platform === "win32" ? ["config", "remote"] : ["config", "rev-parse"];
   expect(starts.calls.map(([, args]) => args[0])).toEqual([
-    ...metadata, "symbolic-ref", "for-each-ref", ...(process.platform === "win32" ? metadata : []), "symbolic-ref", "for-each-ref",
+    ...metadata, "symbolic-ref", "for-each-ref", ...(process.platform === "win32" ? ["remote"] : []), "symbolic-ref", "for-each-ref",
   ]);
 });
 
@@ -617,6 +650,14 @@ it.skipIf(process.platform === "win32")("uses one current config read per branch
   }
 });
 
+async function selectWrappedGit(cwd: string): Promise<void> {
+  const wrapper = path.join(cwd, "git-wrapper");
+  await writeFile(wrapper, '#!/bin/sh\nexec "$PWRAGENT_TEST_WRAPPED_GIT" "$@"\n', { mode: 0o755 });
+  vi.stubEnv("PWRAGENT_TEST_WRAPPED_GIT", bundledGitExecutable());
+  vi.stubEnv("PWRAGENT_GIT_PATH", wrapper);
+  onTestFinished(() => { vi.unstubAllEnvs(); });
+}
+
 it.skipIf(process.platform === "win32").each(["symlinked include", "custom Git"])("rechecks remote names after unverified HTTPS config with %s", async (kind) => {
   const cwd = await fixture();
   const included = path.join(cwd, "included-config");
@@ -630,8 +671,7 @@ it.skipIf(process.platform === "win32").each(["symlinked include", "custom Git"]
     await symlink(before, included);
     await readGit(cwd, "config", "--local", "include.path", included);
   } else {
-    vi.stubEnv("PWRAGENT_GIT_PATH", bundledGitExecutable());
-    onTestFinished(() => { vi.unstubAllEnvs(); });
+    await selectWrappedGit(cwd);
   }
   expect((await oracle(cwd))("release")).toHaveLength(2);
 
@@ -705,7 +745,7 @@ it.skipIf(process.platform === "win32").each(["matching", "nonmatching"])("keeps
   await expectEligible(resolve, cwd, "release", (await oracle(cwd))("release"));
 });
 
-it("observes conditional URLs natively before publishing a batch-only identity", async () => {
+it("observes conditional URLs natively and leaves live discovery to read its own identity", async () => {
   const cwd = await fixture();
   const included = path.join(cwd, "branch-config");
   const original = "https://github.com/fixture/origin.git";
@@ -722,12 +762,50 @@ it("observes conditional URLs natively before publishing a batch-only identity",
   const starts = recordPrefetchStarts();
   await expectEligible(resolve, cwd, "topic-1", expected("topic-1"));
   expect(starts.calls.filter(([, args]) => args[0] === "remote" && args[1] === "get-url")).toHaveLength(2);
+  expect(readObservedGitOrigin(cwd)).toBeUndefined();
   await expect(resolveGitHubRepoForDirectory(cwd)).resolves.toEqual({ host: "github.com", owner: "fixture", repo: "conditional" });
   expect(readObservedGitOrigin(cwd)?.repo?.repo).toBe("conditional");
 
   starts.clear();
   await expectEligible(resolve, cwd, "topic-2", expected("topic-2"));
   expect(starts.calls.filter(([, args]) => args[0] === "remote").map(([, args]) => args)).toEqual([["remote"]]);
+});
+
+it("keeps native conditional URLs out of the live cache after a late branch switch", async () => {
+  const cwd = await fixture();
+  const included = path.join(cwd, "branch-config");
+  const original = "https://github.com/fixture/origin.git";
+  const rewritten = "https://github.com/fixture/conditional.git";
+  await readGit(cwd, "config", "--file", included, `url.${rewritten}.insteadOf`, original);
+  await readGit(cwd, "config", "--global", "includeIf.onbranch:topic-1.path", included);
+  await readGit(cwd, "switch", "topic-0");
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  await expectEligible(resolve, cwd, "topic-0", (await oracle(cwd))("topic-0"));
+  expect(readObservedGitOrigin(cwd)).toBeUndefined();
+  await readGit(cwd, "switch", "topic-1");
+  expect(await readGit(cwd, "remote", "get-url", "--all", "origin")).toBe(rewritten);
+
+  const urls = new Map<string, string>();
+  let switched = false;
+  const runner = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (directory, args, options) => {
+    if (directory === cwd && options?.purpose === "pr-discovery" && args.length === 1 && args[0] === "remote") {
+      expect(urls.get("origin")).toBe(rewritten);
+      expect(urls.get("upstream")).toBe("https://github.com/fixture/upstream.git");
+      await readGit(cwd, "switch", "topic-2");
+      switched = true;
+    }
+    const result = await runGitCommand(directory, args, options);
+    if (directory === cwd && args[0] === "remote" && args[1] === "get-url") urls.set(args[3], result.stdout.trim());
+    return result;
+  });
+  onTestFinished(() => { runner.mockRestore(); });
+  await resolve(cwd, "topic-1");
+  runner.mockRestore();
+
+  expect(switched).toBe(true);
+  expect(await readGit(cwd, "remote", "get-url", "--all", "origin")).toBe(original);
+  expect(readObservedGitOrigin(cwd)).toBeUndefined();
+  await expect(resolveGitHubRepoForDirectory(cwd)).resolves.toEqual({ host: "github.com", owner: "fixture", repo: "origin" });
 });
 
 it.skipIf(process.platform === "win32").each(["symlinked include", "custom Git", "native URLs"])("filters a default branch added during %s SSH fallback", async (kind) => {
@@ -748,7 +826,7 @@ it.skipIf(process.platform === "win32").each(["symlinked include", "custom Git",
   expect((await oracle(cwd))("release")).toEqual(["https://github.com/fixture/upstream.git"]);
 
   const ssh = await holdSshResolution(cwd);
-  if (kind === "custom Git") vi.stubEnv("PWRAGENT_GIT_PATH", bundledGitExecutable());
+  if (kind === "custom Git") await selectWrappedGit(cwd);
   const starts = recordPrefetchStarts();
   const scheduled = createScheduledPrPrefetchRepoResolver()(cwd, "release");
   try {

@@ -247,7 +247,10 @@ export function createScheduledPrefetchRemoteReader(cwd: string) {
   };
   const read = async (
     configuration?: GitRemoteConfiguration,
-    options: { useGitRemote?: boolean; preferLiveIdentity?: boolean; configSampleOrder?: number; validateNegative?: () => Promise<boolean> } = {},
+    options: {
+      useGitRemote?: boolean; preferLiveIdentity?: boolean; configSampleOrder?: number;
+      validateNegative?: () => Promise<boolean>; verifyPublication?: () => Promise<boolean>;
+    } = {},
   ) => {
     const cacheGeneration = remoteCacheGeneration;
     const reused = observationForReuse();
@@ -288,8 +291,9 @@ export function createScheduledPrefetchRemoteReader(cwd: string) {
     // The live phase can reuse successful SSH or native URL discovery once
     // the caller accepts this sample. Leave current live reads alone.
     const publish = repos.length && complete && !observation.sshResolutionFailed
-      && (sshIdentityUnchanged || observation.readWithGitRemote)
-      ? () => {
+      && (options.verifyPublication || (!observation.readWithGitRemote && sshIdentityUnchanged))
+      ? async () => {
+        if (options.verifyPublication && !await options.verifyPublication()) return;
         if (remoteCacheGeneration === cacheGeneration && isCurrentRemoteObservation(snapshot)
           && !isCurrentRemoteObservation(remoteCache.get(cwd)) && !remoteLookups.has(cwd)) remoteCache.set(cwd, snapshot);
       }
@@ -301,6 +305,7 @@ export function createScheduledPrefetchRemoteReader(cwd: string) {
   return {
     read,
     nextSampleOrder: nextRemoteSampleOrder,
+    hasLiveIdentity: () => isCurrentRemoteObservation(remoteCache.get(cwd)),
     hasGitHubIdentityFor: (configuration: GitRemoteConfiguration) => {
       const observation = observationForReuse();
       return Boolean(observation && sameRemoteUrls(configuration.remotes, observation.value)
@@ -528,7 +533,7 @@ async function defaultReadRemotes(
   // Name agreement is enough for an existing live entry or previously read
   // native URLs. Batch-only config must get URLs before it can warm the cache.
   if (isCurrentRemoteObservation(previous) && useNativeList
-    && (previous.readWithGitRemote || previous.value === remoteCache.get(cwd)?.value)
+    && ((previous.readWithGitRemote && !previous.hasConditionalIncludes) || previous.value === remoteCache.get(cwd)?.value)
     && previous.names?.length === names.length
     && names.every((name, index) => name === previous.names?.[index]) && hasAllRemoteUrls(previous)) {
     return { names, remotes: previous.value, readWithGitRemote: true, hasConditionalIncludes: previous.hasConditionalIncludes };
@@ -550,7 +555,7 @@ async function defaultReadRemotes(
       }
     }),
   );
-  return { names, remotes: entries.flat(), readWithGitRemote: true, urlSampleOrder };
+  return { names, remotes: entries.flat(), readWithGitRemote: true, hasConditionalIncludes: previous?.hasConditionalIncludes, urlSampleOrder };
 }
 
 function uniqueNonEmptyLines(value: string): string[] {

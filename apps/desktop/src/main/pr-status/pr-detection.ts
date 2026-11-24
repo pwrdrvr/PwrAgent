@@ -156,8 +156,9 @@ type ScheduledCheckoutMetadata = {
   defaults?: DefaultBranchInfo;
   verifiedHeads?: ReadonlyMap<string, string>;
   nativeHeadReads?: true;
+  refreshRemoteNames?: boolean;
   unchanged: () => Promise<boolean>;
-  publish?: () => void;
+  publish?: () => Promise<void>;
 };
 type ScheduledPrefetchCheckout = ScheduledPrPrefetchMetadataScope & {
   verified?: ScheduledCheckoutMetadata;
@@ -179,7 +180,7 @@ export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string, che
           const defaults = heads?.size === remoteNames.length ? await readDefaultBranchInfo(cwd, undefined, remoteNames, heads) : undefined;
           metadata = {
             repos: observed.repos, remoteNames, unchanged, publish: observed.publish,
-            nativeHeadReads: observed.nativeHeadReads,
+            nativeHeadReads: observed.nativeHeadReads, refreshRemoteNames: observed.refreshRemoteNames,
             defaults, verifiedHeads: defaults ? undefined : heads,
           };
         } else {
@@ -187,14 +188,17 @@ export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string, che
         }
       }
       if (metadata) {
-        const plan = await resolvePrLookupPlan({
-          cwd, branch, remoteNames: metadata.remoteNames, defaultBranchInfo: metadata.defaults,
-          nativeHeadReads: metadata.nativeHeadReads, verifiedHeads: metadata.verifiedHeads,
-        });
-        if (await metadata.unchanged()) {
-          checkout.verified = metadata;
-          metadata.publish?.();
-          return plan.branches.includes(branch) ? metadata.repos : [];
+        const remoteNames = metadata.refreshRemoteNames ? await refreshScheduledRemoteNames(cwd, metadata.remoteNames) : metadata.remoteNames;
+        if (remoteNames) {
+          const plan = await resolvePrLookupPlan({
+            cwd, branch, remoteNames, defaultBranchInfo: metadata.defaults,
+            nativeHeadReads: metadata.nativeHeadReads, verifiedHeads: metadata.verifiedHeads,
+          });
+          if (await metadata.unchanged()) {
+            checkout.verified = metadata;
+            await metadata.publish?.();
+            return plan.branches.includes(branch) ? metadata.repos : [];
+          }
         }
         checkout.verified = undefined;
       }
@@ -205,22 +209,25 @@ export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string, che
     if (repos.length === 0) return [];
     let remoteNames = checkout ? refreshedRemoteNames : undefined;
     if (scheduledSample?.refreshRemoteNames) {
-      const stdout = await readGitLine(cwd, ["remote"]);
-      if (stdout === undefined) return [];
-      const currentNames = uniqueNonEmpty(stdout.split(/\r?\n/));
-      // A changed remote list also invalidates the identity sample for this
-      // branch. Let the next discovery read resolve the new repository set.
-      if (refreshedRemoteNames && (currentNames.length !== refreshedRemoteNames.length
-        || currentNames.some((name) => !refreshedRemoteNames.includes(name)))) return [];
-      remoteNames = currentNames;
+      remoteNames = await refreshScheduledRemoteNames(cwd, refreshedRemoteNames);
+      if (!remoteNames) return [];
     }
     const plan = await resolvePrLookupPlan({
       cwd, branch, remoteNames,
       nativeHeadReads: sampled?.nativeHeadReads,
     });
-    scheduledSample?.publish?.();
+    await scheduledSample?.publish?.();
     return plan.branches.includes(branch) ? repos : [];
   });
+}
+
+async function refreshScheduledRemoteNames(cwd: string, sampledNames?: string[]): Promise<string[] | undefined> {
+  const stdout = await readGitLine(cwd, ["remote"]);
+  if (stdout === undefined) return undefined;
+  const names = uniqueNonEmpty(stdout.split(/\r?\n/));
+  // A changed list also invalidates the repository identity for this branch.
+  if (sampledNames && (names.length !== sampledNames.length || names.some((name) => !sampledNames.includes(name)))) return undefined;
+  return names;
 }
 
 /** Each discovery batch owns its observations, keyed by the exact cwd passed to Git. */

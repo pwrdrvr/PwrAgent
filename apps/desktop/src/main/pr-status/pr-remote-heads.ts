@@ -196,6 +196,8 @@ export async function observePrCheckoutConfigFiles(cwd: string, configPaths: str
     if (!(await files.status(path.join(gitDir, "HEAD")))?.isFile()
       || !(await files.status(path.join(commonDir, "objects")))?.isDirectory()
       || !(await files.status(path.join(commonDir, "refs")))?.isDirectory()) return undefined;
+    // Native URL resolution can also read these legacy remote definitions.
+    if (await files.status(path.join(commonDir, "remotes")) || await files.status(path.join(commonDir, "branches"))) return undefined;
     const paths = new Set([...configPaths, path.join(commonDir, "config"), path.join(gitDir, "config.worktree")]);
     for (const file of paths) {
       const info = await files.status(file);
