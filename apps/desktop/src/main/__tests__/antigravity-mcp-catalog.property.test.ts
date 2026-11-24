@@ -1,13 +1,14 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
+import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import { agentToolSuccess, type AgentToolDefinition } from "../agent-tools/agent-tool-definition";
 import { AgentToolMcpServer } from "../agent-tools/agent-tool-mcp-server";
 import { AgentToolRouter } from "../agent-tools/agent-tool-router";
 
 const turn = { backend: "acp:antigravity", threadId: "thread", turnId: "turn" } as const;
-const directTools = ["add_todo", "call_mcp_tool", "create_instance_thread", "create_monitor_delegation",
-  "handoff_instance_thread", "handoff_task", "search_mcp_tools"];
-const discoveryTools = ["call_pwragent_tool", "search_pwragent_tools"];
+const directTools = ["agent_memory", "call_mcp_tool", "create_monitor_delegation",
+  "get_current_turn_input_source", "handoff_task", "read_tool_guide", "search_mcp_tools"];
+const discoveryTools = ["call_pwragent_tool", "tool_search"];
 
 function definition(name: string): AgentToolDefinition {
   return {
@@ -18,6 +19,28 @@ function definition(name: string): AgentToolDefinition {
     dispatch: (args, context) => agentToolSuccess({ name, args, ...context }),
   };
 }
+
+it("keeps the production Antigravity MCP bootstrap under 16 KiB of tool declarations", async () => {
+  const catalogs = resolveAgentToolCatalogs({
+    appManagementAllowed: true,
+    currentTurnInputSource: () => "unknown",
+  }, { taskMonitorRole: "all" });
+  const server = new AgentToolMcpServer({ resolveCatalogs: () => catalogs, resolveCallContext: () => turn });
+  try {
+    const client = await server.registerClient(turn);
+    const listing = (await post(client, "tools/list")).result;
+    expect(Buffer.byteLength(JSON.stringify(listing.tools))).toBeLessThanOrEqual(16 * 1024);
+    expect(listing.tools.map(({ name }: { name: string }) => name).sort()).toEqual([...directTools, ...discoveryTools].sort());
+    const search = await post(client, "tools/call", {
+      name: "tool_search",
+      arguments: { query: "create_instance_thread handoff_instance_thread add_todo", limit: 1 },
+    });
+    expect(search.result.structuredContent.tools.map(({ name }: { name: string }) => name))
+      .toEqual(["create_instance_thread", "handoff_instance_thread", "add_todo"]);
+  } finally {
+    await server.close();
+  }
+});
 
 it("keeps the Antigravity MCP catalog bounded as tools are added and resolves exact deferred schemas", async () => {
   await fc.assert(fc.asyncProperty(fc.integer({ min: 70, max: 150 }), async (size) => {
@@ -34,7 +57,7 @@ it("keeps the Antigravity MCP catalog bounded as tools are added and resolves ex
       expect(tools.map(({ name }: { name: string }) => name).sort()).toEqual([...directTools, ...discoveryTools].sort());
       expect((await post(claude, "tools/list")).result.tools).toHaveLength(original.length);
       const name = `probe_tool_${size - 1}`;
-      const search = await post(acp, "tools/call", { name: "search_pwragent_tools", arguments: { query: name } });
+      const search = await post(acp, "tools/call", { name: "tool_search", arguments: { query: name } });
       expect(search.result.structuredContent.tools[0]).toMatchObject({
         name,
         inputSchema: definition(name).inputSchema,

@@ -57,6 +57,7 @@ import {
 import type { AcpProviderStatus } from "../acp/acp-provider-status";
 import { readAntigravityUsage } from "../acp/antigravity-usage.js";
 import { pwragentToolSkipsAgentApproval } from "./acp-host-tool-approval";
+import { CALL_PWRAGENT_TOOL, readPwrAgentCallTarget } from "../agent-tools/antigravity-mcp-catalog";
 import { PlanLimitStore } from "./plan-limit-store";
 import {
   MAX_TURN_INPUT_ATTACHMENT_BYTES,
@@ -3956,9 +3957,14 @@ export class AcpBackendAdapter {
               servers: [http ? registration.server : buildAgentMemoryStdioServer(registration.server)],
               bindThread: registration.bindThread,
               ...(readTool ? {
-                hostApprovesToolCall: async (serverName: string, toolName: string) =>
-                  serverName === registration.server.name
-                  && pwragentToolSkipsAgentApproval(await readTool(toolName)),
+                hostApprovesToolCall: async (serverName: string, toolName: string, args?: unknown) => {
+                  if (serverName !== registration.server.name) return false;
+                  if (toolName === CALL_PWRAGENT_TOOL) {
+                    const target = readPwrAgentCallTarget(args);
+                    return target !== undefined && pwragentToolSkipsAgentApproval(await readTool(target.name, "catalog"));
+                  }
+                  return pwragentToolSkipsAgentApproval(await readTool(toolName));
+                },
               } : {}),
               ...(http && observeJobMonitorCatalog ? {
                 readListedJobMonitorCreation: registration.readListedJobMonitorCreation,

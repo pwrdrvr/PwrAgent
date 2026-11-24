@@ -8,9 +8,12 @@ Codex. ACP receives them through the existing PwrAgent MCP server.
 Antigravity receives a small native PwrAgent catalog. Large catalogs can
 cause Antigravity to omit tools from the model even after a successful
 `tools/list`. Core operations such as `handoff_task` are directly callable.
-For the rest, `search_pwragent_tools` returns the exact schema and
+For the rest, PwrAgent's `tool_search` returns exact schemas and
 `call_pwragent_tool` invokes the selected operation under its existing
-permissions. Antigravity discovers and invokes tools from thread-selected
+permissions. Antigravity can re-list after `notifications/tools/list_changed`
+while its current turn still rejects the newly listed tool as unknown.
+The fixed invocation tool lets the agent use the search result in that turn.
+Antigravity discovers and invokes tools from thread-selected
 connections through `search_mcp_tools` and `call_mcp_tool`, which read the
 current selection on every call.
 

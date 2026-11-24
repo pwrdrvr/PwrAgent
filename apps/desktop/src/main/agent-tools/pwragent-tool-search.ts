@@ -1,9 +1,20 @@
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
 import { agentToolFailure, agentToolSuccess, type AgentToolDefinition } from "./agent-tool-definition";
-import { AgentToolRouter } from "./agent-tool-router";
+import { AgentToolRouter, type AgentMcpTool } from "./agent-tool-router";
 import type { TokenMiserStore } from "../token-miser/token-miser-store";
 import { GET_CURRENT_TURN_INPUT_SOURCE } from "./current-turn-input-source-tool";
+
+export const PWRAGENT_TOOL_SEARCH = "tool_search";
+export const PWRAGENT_TOOL_SEARCH_INPUT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["query"],
+  properties: {
+    query: { type: "string", minLength: 1, maxLength: 500 },
+    limit: { type: "integer", minimum: 1, maximum: 5 },
+  },
+};
 
 export const PWRAGENT_TOOL_SEARCH_DESCRIPTION = `Search for PwrAgent tools before using PwrAgent capabilities. Full tool instructions and parameter schemas are loaded on demand. Prefer PwrAgent tools when they cover the task.
 Search when the user wants to:
@@ -175,7 +186,7 @@ function describesRuntimeModelDiscovery(tool: { name: string; description: strin
 export function searchPwrAgentTools(catalog: DynamicToolSpec[], query: string, limit = 3) {
   const tools = catalog.flatMap((spec) =>
     spec.type === "namespace" && spec.name === PWRAGENT_TOOL_NAMESPACE
-      ? spec.tools.filter((tool) => tool.name !== "tool_search")
+      ? spec.tools.filter((tool) => tool.name !== PWRAGENT_TOOL_SEARCH)
       : []
   );
   return rankPwrAgentTools(tools, query, limit, (tool) => ({
@@ -187,7 +198,7 @@ export function searchPwrAgentTools(catalog: DynamicToolSpec[], query: string, l
   }));
 }
 
-export function rankPwrAgentTools<T extends { name: string; description: string }, Definition>(
+function rankPwrAgentTools<T extends { name: string; description: string }, Definition>(
   tools: readonly T[],
   query: string,
   limit: number,
@@ -229,46 +240,50 @@ export function rankPwrAgentTools<T extends { name: string; description: string 
   return result;
 }
 
+function runPwrAgentToolSearch<T>(
+  args: Record<string, unknown>,
+  search: (query: string, limit?: number) => T[],
+) {
+  if (
+    typeof args.query !== "string" || !args.query.trim() || args.query.length > 500
+    || (args.limit !== undefined && (!Number.isInteger(args.limit) || Number(args.limit) < 1 || Number(args.limit) > 5))
+  ) {
+    return agentToolFailure({ code: "invalid_arguments", message: "Provide a nonempty query of at most 500 characters and an optional integer limit from 1 to 5." });
+  }
+  const tools = search(args.query, args.limit as number | undefined);
+  return agentToolSuccess({
+    tools,
+    ...(!tools.length ? {
+      noMatchReason: isRuntimeModelDiscoveryQuery(args.query)
+        ? "No tool in this thread's catalog lists available runtime models or subscription providers. Thread settings and registered decisions do not provide that capability."
+        : "No matching tool in this thread's catalog. Try a more specific action or an exact tool name.",
+    } : {}),
+  });
+}
+
+export function searchPwrAgentMcpTools(catalog: AgentMcpTool[], args: Record<string, unknown>) {
+  return runPwrAgentToolSearch(args, (query, limit = 3) => rankPwrAgentTools(catalog, query, limit, (tool) => tool));
+}
+
 export function buildPwrAgentToolSearchDefinition(
   catalog: DynamicToolSpec[],
   store?: TokenMiserStore,
 ): AgentToolDefinition {
   return {
     namespace: PWRAGENT_TOOL_NAMESPACE,
-    name: "tool_search",
+    name: PWRAGENT_TOOL_SEARCH,
     description: PWRAGENT_TOOL_SEARCH_DESCRIPTION,
     deferLoading: false,
     advertiseMcp: false,
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      required: ["query"],
-      properties: {
-        query: { type: "string", minLength: 1, maxLength: 500 },
-        limit: { type: "integer", minimum: 1, maximum: 5 },
-      },
-    },
+    inputSchema: PWRAGENT_TOOL_SEARCH_INPUT_SCHEMA,
     dispatch: async (args, context) => {
-      if (
-        typeof args.query !== "string" || !args.query.trim() || args.query.length > 500
-        || (args.limit !== undefined && (!Number.isInteger(args.limit) || Number(args.limit) < 1 || Number(args.limit) > 5))
-      ) {
-        return agentToolFailure({ code: "invalid_arguments", message: "Provide a nonempty query of at most 500 characters and an optional integer limit from 1 to 5." });
-      }
-      const tools = searchPwrAgentTools(catalog, args.query, args.limit as number | undefined);
-      const result = {
-        tools,
-        ...(!tools.length ? {
-          noMatchReason: isRuntimeModelDiscoveryQuery(args.query)
-            ? "No tool in this thread's catalog lists available runtime models or subscription providers. Thread settings and registered decisions do not provide that capability."
-            : "No matching tool in this thread's catalog. Try a more specific action or an exact tool name.",
-        } : {}),
-      };
-      const visibleText = JSON.stringify(result);
+      const result = runPwrAgentToolSearch(args, (query, limit) => searchPwrAgentTools(catalog, query, limit));
+      if (!result.ok) return result;
+      const visibleText = JSON.stringify(result.data);
       const delivery = store && context.turnId
         ? await store.prepareToolDefinitionDelivery({ threadId: context.threadId, turnId: context.turnId, visibleText })
         : undefined;
-      return agentToolSuccess(result, {
+      return agentToolSuccess(result.data, {
         contentItems: [{ type: "inputText", text: delivery?.text ?? visibleText }],
       });
     },
@@ -310,7 +325,7 @@ export const MESSAGING_EAGER_TOOLS: ReadonlySet<string> = new Set([
   "watch_thread_pull_request",
 ]);
 
-/** Only parent Codex catalogs opt in; MCP and restricted helper catalogs stay unchanged. */
+/** Adds native Codex discovery to a parent dynamic-tool catalog. */
 export function withPwrAgentToolDiscovery(
   catalog: DynamicToolSpec[],
   enabled: boolean,
@@ -324,7 +339,7 @@ export function withPwrAgentToolDiscovery(
       ...spec,
       tools: [
         ...bootstrap.tools,
-        ...spec.tools.filter((tool) => tool.name !== "tool_search")
+        ...spec.tools.filter((tool) => tool.name !== PWRAGENT_TOOL_SEARCH)
           .map((tool) => ({ ...tool, deferLoading: tool.name !== GET_CURRENT_TURN_INPUT_SOURCE && !eagerTools.has(tool.name) })),
       ],
     };

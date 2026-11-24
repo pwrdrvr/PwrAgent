@@ -19,13 +19,13 @@ import { getMainLogger } from "../log.js";
 import { lazyModule } from "../lazy-module.js";
 import { loadedMcpTypes, mcpServer as mcpServerSdk, mcpServerStreamableHttp, mcpTypes } from "../mcp-connections/mcp-sdk.js";
 import type { ResolvedAgentToolCatalog } from "./agent-tool-catalog-registry.js";
-import { agentToolFailure, agentToolSuccess } from "./agent-tool-definition.js";
+import { agentToolFailure } from "./agent-tool-definition.js";
 import {
   ANTIGRAVITY_DIRECT_MCP_TOOLS,
   ANTIGRAVITY_TOOL_DISCOVERY,
   ANTIGRAVITY_TOOL_DISCOVERY_INSTRUCTIONS,
   CALL_PWRAGENT_TOOL,
-  SEARCH_PWRAGENT_TOOLS,
+  readPwrAgentCallTarget,
 } from "./antigravity-mcp-catalog.js";
 import { agentToolPermissionDeniedMessage } from "./app-management-authorization.js";
 import {
@@ -38,7 +38,7 @@ import {
   PWRAGENT_SKILLS_EXTENSION,
   PWRAGENT_WORKFLOW_SKILLS,
 } from "./pwragent-workflow-skills.js";
-import { rankPwrAgentTools } from "./pwragent-tool-search.js";
+import { PWRAGENT_TOOL_SEARCH, searchPwrAgentMcpTools } from "./pwragent-tool-search.js";
 
 // The SDK's built-in request union does not yet include the skills extension.
 // The SDK loads with the first request, not with the owner.
@@ -140,8 +140,8 @@ export type AgentToolMcpRegistration = {
   server: AgentToolHttpMcpServerConfig;
   bindThread: (threadId: string) => void;
   readListedJobMonitorCreation?: () => boolean | undefined;
-  /** The tool as this client's `tools/list` describes it now, if listed. */
-  readTool?: (name: string) => Promise<AgentMcpTool | undefined>;
+  /** The live tool description. Use catalog scope for a deferred invocation's target. */
+  readTool?: (name: string, scope?: "listed" | "catalog") => Promise<AgentMcpTool | undefined>;
 };
 
 type JobMonitorCatalogListing = { scope: string; enabled?: boolean };
@@ -242,10 +242,10 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       ...(listing ? {
         readListedJobMonitorCreation: () => this.jobMonitorListings.get(token) === listing ? listing.enabled : undefined,
       } : {}),
-      readTool: async (name) => {
+      readTool: async (name, scope = "listed") => {
         const current = this.contextsByToken.get(token);
         if (!current) return undefined;
-        if (usesAntigravityCatalog(current) && !ANTIGRAVITY_DIRECT_MCP_TOOLS.has(name)) {
+        if (scope === "listed" && usesAntigravityCatalog(current) && !ANTIGRAVITY_DIRECT_MCP_TOOLS.has(name)) {
           return ANTIGRAVITY_TOOL_DISCOVERY.find((tool) => tool.name === name);
         }
         return await this.resolveMcpTool(current, name);
@@ -627,25 +627,17 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     }
     let { name, arguments: args } = request.params;
     if (usesAntigravityCatalog(clientContext)) {
-      if (name === SEARCH_PWRAGENT_TOOLS) {
-        const query = args?.query;
-        if (typeof query !== "string" || !query.trim() || query.length > 500) {
-          return invalidMcpArguments("Provide a nonempty query of at most 500 characters.");
-        }
+      if (name === PWRAGENT_TOOL_SEARCH) {
         const catalog = await this.resolveMcpTools(clientContext);
-        const tools = rankPwrAgentTools(catalog, query, 3, (tool) => tool);
-        return toMcpToolResponse(agentToolSuccess({ tools }));
+        return toMcpToolResponse(searchPwrAgentMcpTools(catalog, args ?? {}));
       }
       if (name === CALL_PWRAGENT_TOOL) {
-        const target = args?.toolName;
-        const targetArgs = args?.arguments;
-        if (typeof target !== "string" || !target.trim()
-          || !targetArgs || typeof targetArgs !== "object" || Array.isArray(targetArgs)) {
+        const target = readPwrAgentCallTarget(args);
+        if (!target) {
           return invalidMcpArguments("Provide a toolName and an arguments object.");
         }
-        if (!await this.resolveMcpTool(clientContext, target)) return unsupportedMcpTool();
-        name = target;
-        args = targetArgs as Record<string, unknown>;
+        if (!await this.resolveMcpTool(clientContext, target.name)) return unsupportedMcpTool();
+        ({ name, args } = target);
       }
     }
     const catalog = this.options
