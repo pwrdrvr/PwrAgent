@@ -250,7 +250,7 @@ export function createScheduledPrefetchRemoteReader(cwd: string) {
   ) => {
     const cacheGeneration = remoteCacheGeneration;
     const reused = observationForReuse();
-    const observation = await loadParsedGitRemotes(cwd, {}, {}, {
+    const { observation, refreshRemoteNames } = await loadParsedGitRemotes(cwd, {}, {}, {
       configuration, configSampleOrder: options.configSampleOrder, previous: reused, useGitRemote: options.useGitRemote,
     });
     const repos = collectForgeRepositories(observation.value, "github");
@@ -265,13 +265,12 @@ export function createScheduledPrefetchRemoteReader(cwd: string) {
       previous = snapshot;
     }
     const hasSshRemotes = observation.value.some(({ url }) => readSshHost(url));
-    const expandedSshIdentity = hasSshRemotes && observation.value !== reused?.value;
     // A native fallback has no config proof. If an owner read completed
-    // during SSH expansion, use its later checkout sample for this branch too.
+    // during URL or SSH resolution, use its later sample for this branch too.
     const live = remoteCache.get(cwd);
     if (observation.readWithGitRemote && isCurrentRemoteObservation(live) && live.sampleOrder > snapshot.sampleOrder
       && !live.readFailed && !live.sshResolutionFailed && hasAllRemoteUrls(live)) {
-      return { repos: collectForgeRepositories(live.value, "github"), refreshedRemoteNames: live.names, expandedSshIdentity };
+      return { repos: collectForgeRepositories(live.value, "github"), refreshedRemoteNames: live.names, refreshRemoteNames };
     }
     const sshIdentityUnchanged = hasSshRemotes ? () => {
       if (!isCurrentRemoteObservation(snapshot)) return false;
@@ -291,7 +290,7 @@ export function createScheduledPrefetchRemoteReader(cwd: string) {
       }
       : undefined;
     return {
-      repos, refreshedRemoteNames: observation.names, sshIdentityUnchanged, expandedSshIdentity, publish,
+      repos, refreshedRemoteNames: observation.names, sshIdentityUnchanged, refreshRemoteNames, publish,
     };
   };
   return {
@@ -376,7 +375,7 @@ async function readParsedGitRemotes(
 
   const pending = new SharedPrMetadataRead(async (demand) => {
     try {
-      const loaded = await loadParsedGitRemotes(cwd, options, demand);
+      const { observation: loaded } = await loadParsedGitRemotes(cwd, options, demand);
       demand.signal?.throwIfAborted();
       const observation = { ...loaded, fetchedAt: now() };
       if (remoteLookups.get(cwd) === pending) remoteCache.set(cwd, observation);
@@ -394,7 +393,7 @@ async function loadParsedGitRemotes(
   options: ResolveGitHubRepoOptions,
   demand: PrMetadataDemand,
   prefetch?: { configuration?: GitRemoteConfiguration; configSampleOrder?: number; previous?: RemoteCacheEntry; useGitRemote?: boolean },
-): Promise<ParsedRemoteObservation> {
+): Promise<{ observation: ParsedRemoteObservation; refreshRemoteNames: boolean }> {
   const resolveSshHostname =
     options.resolveSshHostname ?? defaultResolveSshHostname;
   // Also retain resolved values within this probe, including negative answers.
@@ -404,12 +403,16 @@ async function loadParsedGitRemotes(
     const raw: Awaited<ReturnType<typeof defaultReadRemotes>> = prefetch?.configuration ?? (options.readRemotes
       ? { remotes: await options.readRemotes(cwd) }
       : await defaultReadRemotes(cwd, demand, Boolean(options.confirmEmpty || options.fresh), prefetch));
-    const sampleOrder = prefetch?.configSampleOrder ?? raw.sampleOrder ?? nextRemoteSampleOrder();
+    const sampleOrder = prefetch?.configSampleOrder ?? raw.urlSampleOrder ?? nextRemoteSampleOrder();
+    const readNativeUrls = raw.urlSampleOrder !== undefined;
     const { names, remotes, unconfirmedEmpty, readWithGitRemote } = raw;
     const prior = prefetch?.previous;
     if (prior && (remotes === prior.value || (isCurrentRemoteObservation(prior) && sameRemoteUrls(remotes, prior.value)))) {
-      return { names, value: prior.value, unconfirmedEmpty, readWithGitRemote,
-        sshResolutionFailed: prior.sshResolutionFailed, sampleOrder: prior.sampleOrder };
+      return {
+        observation: { names, value: prior.value, unconfirmedEmpty, readWithGitRemote,
+          sshResolutionFailed: prior.sshResolutionFailed, sampleOrder: prior.sampleOrder },
+        refreshRemoteNames: readNativeUrls,
+      };
     }
     let sshResolutionFailed: true | undefined;
     const value = await Promise.all(
@@ -434,11 +437,15 @@ async function loadParsedGitRemotes(
         };
       }),
     );
-    return { names, value, unconfirmedEmpty, readWithGitRemote, sshResolutionFailed, sampleOrder };
+    return {
+      observation: { names, value, unconfirmedEmpty, readWithGitRemote, sshResolutionFailed, sampleOrder },
+      // Native URL reads and SSH evaluation can both outlive the remote list.
+      refreshRemoteNames: readNativeUrls || localSshLookups.size > 0,
+    };
   } catch {
     demand.signal?.throwIfAborted();
     // Preserve the bounded negative cache, including non-git directories.
-    return { value: [], readFailed: true, sampleOrder: nextRemoteSampleOrder() };
+    return { observation: { value: [], readFailed: true, sampleOrder: nextRemoteSampleOrder() }, refreshRemoteNames: false };
   }
 }
 
@@ -466,7 +473,7 @@ function resolveSshHostInFlight(host: string, resolve: SshResolver, demand: PrMe
 async function defaultReadRemotes(
   cwd: string, demand: PrMetadataDemand, confirmEmpty: boolean,
   prefetch?: { previous?: RemoteCacheEntry; useGitRemote?: boolean },
-): Promise<{ names?: string[]; remotes: GitRemote[]; unconfirmedEmpty?: true; readWithGitRemote?: true; sampleOrder?: number }> {
+): Promise<{ names?: string[]; remotes: GitRemote[]; unconfirmedEmpty?: true; readWithGitRemote?: true; urlSampleOrder?: number }> {
   const childEnv = buildPwrAgentChildProcessEnv(process.env);
   const gitOptions = {
     purpose: "pr-remotes" as const,
@@ -506,7 +513,7 @@ async function defaultReadRemotes(
   }
   // A native URL read spans several commands. Order it from the remote list
   // so an overlapping owner sample can supersede this mixed observation.
-  const sampleOrder = nextRemoteSampleOrder();
+  const urlSampleOrder = nextRemoteSampleOrder();
   const entries = await Promise.all(
     names.map(async (name): Promise<GitRemote[]> => {
       try {
@@ -521,7 +528,7 @@ async function defaultReadRemotes(
       }
     }),
   );
-  return { names, remotes: entries.flat(), readWithGitRemote: true, sampleOrder };
+  return { names, remotes: entries.flat(), readWithGitRemote: true, urlSampleOrder };
 }
 
 function uniqueNonEmptyLines(value: string): string[] {

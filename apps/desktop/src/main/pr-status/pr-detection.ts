@@ -200,12 +200,11 @@ export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string, che
       }
     }
 
-    const fallback = sampled ? undefined : await checkout?.repositories.read();
-    const scheduledSample = sampled ?? fallback;
+    const scheduledSample = sampled ?? await checkout?.repositories.read();
     const { repos, refreshedRemoteNames } = scheduledSample ?? await observeForgeRepositoriesForDirectory(cwd, "github");
     if (repos.length === 0) return [];
     let remoteNames = checkout ? refreshedRemoteNames : undefined;
-    if (sampled?.refreshRemoteNames || fallback?.expandedSshIdentity) {
+    if (scheduledSample?.refreshRemoteNames) {
       const stdout = await readGitLine(cwd, ["remote"]);
       if (stdout === undefined) return [];
       const currentNames = uniqueNonEmpty(stdout.split(/\r?\n/));

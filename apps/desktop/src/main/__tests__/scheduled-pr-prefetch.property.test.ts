@@ -176,7 +176,8 @@ it.each(["warm", "cold"])("avoids repeated URL probes in a %s single-branch clon
   const commands = starts.calls.map(([, args]) => args.slice(0, args[0] === "remote" ? 2 : 1).join(" "));
   expect(commands.filter((command) => command === "remote get-url")).toHaveLength(cache === "warm" ? 0 : 1);
   expect(commands.filter((command) => command === "config")).toHaveLength(cache === "warm" ? 0 : 1);
-  expect(commands.filter((command) => command === "remote")).toHaveLength(3);
+  // Only the first cold lookup reads URLs after listing remotes.
+  expect(commands.filter((command) => command === "remote")).toHaveLength(cache === "warm" ? 3 : 4);
   expect(commands.filter((command) => command === "symbolic-ref")).toHaveLength(3);
   expect(commands.filter((command) => command === "for-each-ref")).toHaveLength(3);
 
@@ -658,6 +659,44 @@ it.skipIf(process.platform === "win32").each(["symlinked include", "custom Git",
   expect(expected).toEqual([]);
   await expect(scheduled).resolves.toEqual(expected);
   expect(metadataReads).toEqual(kind === "native URLs" ? ["config", "remote", "remote"] : ["config", "remote"]);
+  expect(readObservedGitOrigin(cwd)).toBeUndefined();
+});
+
+it("filters a default branch added during native HTTPS URL probing", async () => {
+  const cwd = await fixture();
+  await readGit(cwd, "config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main");
+  expect((await oracle(cwd))("release")).toHaveLength(2);
+  const started = Promise.withResolvers<void>();
+  const releaseUrl = Promise.withResolvers<void>();
+  let holdOrigin = true;
+  const runner = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (directory, args, options) => {
+    const hold = holdOrigin && directory === cwd && args[0] === "remote" && args[1] === "get-url" && args[3] === "origin";
+    const result = await runGitCommand(directory, args, options);
+    if (hold) {
+      started.resolve();
+      await releaseUrl.promise;
+    }
+    return result;
+  });
+  onTestFinished(() => { runner.mockRestore(); });
+  const starts = recordPrefetchStarts();
+  const scheduled = createScheduledPrPrefetchRepoResolver()(cwd, "release");
+  try {
+    await Promise.race([started.promise, scheduled.then(() => { throw new Error("Scheduled lookup did not read the origin URL"); })]);
+    holdOrigin = false;
+    await readGit(cwd, "remote", "add", "added", "https://github.com/fixture/added.git");
+    await readGit(cwd, "update-ref", "refs/remotes/added/release", "HEAD");
+    await remoteHead(cwd, "added", "release");
+  } finally {
+    releaseUrl.resolve();
+    await scheduled;
+  }
+
+  const remoteLists = starts.calls.filter(([, args]) => args[0] === "remote" && args.length === 1);
+  const expected = (await oracle(cwd))("release");
+  expect(expected).toEqual([]);
+  await expect(scheduled).resolves.toEqual(expected);
+  expect(remoteLists).toHaveLength(2);
   expect(readObservedGitOrigin(cwd)).toBeUndefined();
 });
 

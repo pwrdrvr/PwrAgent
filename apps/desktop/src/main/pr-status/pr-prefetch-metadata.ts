@@ -127,8 +127,8 @@ export async function observeScheduledPrPrefetchMetadata(
     const parsed = config ? parseConfigWithOrigins(roots.directory, config.stdout)
       : { configuration: { names: [], remotes: [] }, sources: undefined };
     if (!parsed) {
-      const { repos, refreshedRemoteNames, expandedSshIdentity, publish } = await repositories.read(undefined, { useGitRemote: true });
-      return { repos, refreshedRemoteNames: refreshedRemoteNames ?? [], refreshRemoteNames: expandedSshIdentity, publish };
+      const { repos, refreshedRemoteNames, refreshRemoteNames, publish } = await repositories.read(undefined, { useGitRemote: true });
+      return { repos, refreshedRemoteNames: refreshedRemoteNames ?? [], refreshRemoteNames, publish };
     }
     const { configuration, sources } = parsed;
     const remoteNames = configuration.names;
@@ -150,12 +150,12 @@ export async function observeScheduledPrPrefetchMetadata(
     if (!files || !originsWatched || (verifyHeadsBeforeConfirming && !earlyHeadProof)) {
       // An unverified sample applies only to the current branch. It cannot
       // establish a reusable negative or warm the live cache.
-      const { repos, expandedSshIdentity } = await repositories.read(configuration, { configSampleOrder, validateNegative: async () => false });
+      const { repos, refreshRemoteNames } = await repositories.read(configuration, { configSampleOrder, validateNegative: async () => false });
       if (!await roots.unchanged() || !inputsUnchanged()) return undefined;
       // An include may have changed while OpenSSH was evaluating aliases.
       // Have Git list current names before using them for branch eligibility.
       return {
-        repos, refreshedRemoteNames: remoteNames, refreshRemoteNames: expandedSshIdentity,
+        repos, refreshedRemoteNames: remoteNames, refreshRemoteNames,
         nativeHeadReads: verifyHeadsBeforeConfirming ? true : undefined,
       };
     }
@@ -168,12 +168,12 @@ export async function observeScheduledPrPrefetchMetadata(
       && (files === roots || await roots.unchanged()) && inputsUnchanged());
     // Resolve identities from the config Git already sampled. OpenSSH aliases
     // use one expansion per observation, bounded by the scheduled batch.
-    const { repos, sshIdentityUnchanged, expandedSshIdentity, publish } = await repositories.read(configuration, {
+    const { repos, sshIdentityUnchanged, refreshRemoteNames, publish } = await repositories.read(configuration, {
       configSampleOrder,
       validateNegative: async () => Boolean((!config || sources) && await configUnchanged()),
     });
     const sample = {
-      repos, refreshedRemoteNames: remoteNames, refreshRemoteNames: !sources && expandedSshIdentity,
+      repos, refreshedRemoteNames: remoteNames, refreshRemoteNames: !sources && refreshRemoteNames,
       publish: sources ? publish : undefined,
     };
     const currentSample = async () => await configUnchanged() ? sample : undefined;
