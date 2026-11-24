@@ -381,8 +381,29 @@ describe("ResourcesScreen", () => {
   it("opens the holder's thread from the inspector", async () => {
     const { onOpenThread } = await renderScreen(liveSource(buildPreviewSnapshot(Date.now())).source);
     selectRow("win-lab-07");
-    fireEvent.click(within(inspector()).getByRole("button", { name: "Verify installer shutdown on Windows" }));
+    fireEvent.click(within(inspector()).getByRole("button", { name: "Open thread Verify installer shutdown on Windows" }));
     expect(onOpenThread).toHaveBeenCalledWith(expect.objectContaining({ threadId: "thr-win" }));
+  });
+
+  // Rule: every holder and every waiter is a thread chip with its own title,
+  // and clicking one opens exactly the thread it names, owner included.
+  it("names each holder and waiter by a thread chip that opens that thread", async () => {
+    const snapshot = buildPreviewSnapshot(Date.now());
+    const { onOpenThread } = await renderScreen(liveSource(snapshot).source);
+    for (const resource of snapshot.resources) {
+      const threads = [
+        ...resource.allocations.map((allocation) => allocation.holder),
+        ...resource.queue.map((entry) => entry.requester),
+      ].flatMap((holder) => holder.kind === "thread" ? [holder.thread] : []);
+      if (threads.length === 0) continue;
+      selectRow(resource.displayName);
+      for (const thread of threads) {
+        onOpenThread.mockClear();
+        const [chip] = within(inspector()).getAllByRole("button", { name: `Open thread ${thread.title}` });
+        fireEvent.click(chip!);
+        expect(onOpenThread).toHaveBeenCalledExactlyOnceWith(thread);
+      }
+    }
   });
 });
 

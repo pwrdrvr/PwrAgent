@@ -129,6 +129,12 @@ export type ContinueAfterDialogProps = {
  * to the body like the other thread dialogs.
  */
 export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, returnFocus, onClose }: ContinueAfterDialogProps) {
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  // A thread shown from another window, such as a holder clicked in
+  // Resources, or by an agent replaces the thread this dialog is about.
+  // Left open, the dialog covers the thread that just opened.
+  useEffect(() => desktopApi?.onShowThreadRequested?.(() => onCloseRef.current()), [desktopApi]);
   const [dependencies, setDependencies] = useState<ThreadDependency[]>([]);
   const [dependents, setDependents] = useState<ThreadDependency[]>([]);
   const [peerDependents, setPeerDependents] = useState<Array<{ dependency: ThreadDependency; owner: FederationTarget }>>([]);
@@ -937,6 +943,7 @@ function DependencyCard(props: {
                     state={props.resourceWait.state}
                     now={Date.now()}
                     onOpenResource={props.resourceWait.onOpenResource}
+                    onNavigate={props.onNavigate}
                   />
                 ) : reason ? <span className="thread-dependencies__reason">{reason}</span> : null}
               </li>
