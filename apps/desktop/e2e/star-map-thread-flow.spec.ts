@@ -13,7 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test, type Page } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
-import { openStarMapWindow } from "./fixtures/star-map-window";
+import { focusStarMapWindow, openStarMapWindow } from "./fixtures/star-map-window";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -342,6 +342,9 @@ test("keeps the star map's top band from overlapping itself", async () => {
     await expect(
       starMap.getByRole("group", { name: "Thread filters" }),
     ).toBeVisible();
+
+    // The facet feed runs only while the map is visible and focused.
+    await focusStarMapWindow(app, mapWindow);
 
     // The strip stays mounted even when collapsed. A numeric count signals
     // that the facet feed has arrived, so the band can drop zero-count chips.
