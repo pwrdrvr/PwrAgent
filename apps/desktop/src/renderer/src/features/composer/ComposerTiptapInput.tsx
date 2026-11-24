@@ -20,7 +20,14 @@ import StarterKit from "@tiptap/starter-kit";
 import { closeHistory } from "prosemirror-history";
 import { Plugin, PluginKey } from "prosemirror-state";
 import { Decoration, DecorationSet } from "prosemirror-view";
-import { EditorContent, Extension, useEditor, type EditorOptions, type JSONContent } from "@tiptap/react";
+import {
+  EditorContent,
+  Extension,
+  textblockTypeInputRule,
+  useEditor,
+  type EditorOptions,
+  type JSONContent,
+} from "@tiptap/react";
 import { parseThreadUrl, type ThreadLinkRef } from "@pwragent/shared/contracts/thread-link";
 import { readSkillOrigin } from "@pwragent/shared/skill-origin";
 import {
@@ -455,6 +462,35 @@ const IgnoreUnderlineShortcut = Extension.create({
   },
 });
 
+// Tiptap's built-in CodeBlock input rules only match exact triple fences
+// (`^```([a-z]+)?[\s\n]$` and `^~~~([a-z]+)?[\s\n]$`). CommonMark accepts
+// 3+ backticks or tildes and non-alphabetic info strings (such as `c++` or
+// `json5`), so typing 4+ backticks before Space still starts a code block.
+const FLEXIBLE_BACKTICK_CODE_BLOCK_REGEX = /^`{3,}([^`\s]+)?[\s\n]$/;
+const FLEXIBLE_TILDE_CODE_BLOCK_REGEX = /^~{3,}([^~\s]+)?[\s\n]$/;
+
+const FlexibleCodeBlockInputRules = Extension.create({
+  name: "flexibleCodeBlockInputRules",
+  addInputRules() {
+    const codeBlockType = this.editor.schema.nodes.codeBlock;
+    if (!codeBlockType) {
+      return [];
+    }
+    return [
+      textblockTypeInputRule({
+        find: FLEXIBLE_BACKTICK_CODE_BLOCK_REGEX,
+        type: codeBlockType,
+        getAttributes: (match) => ({ language: match[1] ?? null }),
+      }),
+      textblockTypeInputRule({
+        find: FLEXIBLE_TILDE_CODE_BLOCK_REGEX,
+        type: codeBlockType,
+        getAttributes: (match) => ({ language: match[1] ?? null }),
+      }),
+    ];
+  },
+});
+
 const commandChipPluginKey = new PluginKey<DecorationSet>("composerCommandChip");
 
 /**
@@ -655,7 +691,7 @@ function parseInlineMarkdownWithMarks(
     flush();
     const innerStart = cursor + matchedSpec.delimiter.length;
     const inner = text.slice(innerStart, closeIndex);
-    const nextMarks = [...inheritedMarks, { type: matchedSpec.mark }];
+    const nextMarks = mergeInlineMarks(inheritedMarks, { type: matchedSpec.mark });
     if (matchedSpec.verbatim) {
       nodes.push({
         type: "text",
@@ -968,7 +1004,7 @@ function getHtmlInlineMark(tagName: string): { type: string } | undefined {
   return undefined;
 }
 
-function mergeHtmlInlineMarks(
+function mergeInlineMarks(
   inheritedMarks: { type: string }[],
   mark: { type: string } | undefined,
 ): { type: string }[] {
@@ -976,11 +1012,11 @@ function mergeHtmlInlineMarks(
     return inheritedMarks;
   }
 
-  // ProseMirror's inline code mark excludes every other mark. Transcript
-  // clipboard HTML can legitimately nest it inside <strong>, for example for
-  // Markdown like **10 `Promise.all` cells**. Keep the code mark and split the
-  // surrounding emphasis around it instead of constructing an invalid mark set
-  // that aborts the whole paste.
+  // ProseMirror's inline code mark excludes every other mark. Both clipboard
+  // HTML and plain-text Markdown can legitimately nest inline code inside
+  // emphasis, for example **10 `Promise.all` cells** or **Codex (`gpt`)**.
+  // Keep the code mark and split surrounding emphasis around it instead of
+  // constructing an invalid mark set that aborts paste or draft restoration.
   if (mark.type === "code") {
     return [mark];
   }
@@ -1018,7 +1054,7 @@ function parseHtmlInlineContent(
   }
 
   const mark = getHtmlInlineMark(node.tagName.toLowerCase());
-  const nextMarks = mergeHtmlInlineMarks(inheritedMarks, mark);
+  const nextMarks = mergeInlineMarks(inheritedMarks, mark);
   return Array.from(node.childNodes).flatMap((child) =>
     parseHtmlInlineContent(child, nextMarks),
   );
@@ -2837,6 +2873,7 @@ export const ComposerTiptapInput = forwardRef<
   const extensions = useMemo(
     () => [
       props.markdownConversion ? MarkdownStarterKit : PlainTextStarterKit,
+      ...(props.markdownConversion ? [FlexibleCodeBlockInputRules] : []),
       IgnoreUnderlineShortcut,
       SkillMention,
       Extension.create({

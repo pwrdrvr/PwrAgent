@@ -1,4 +1,4 @@
-import { act, render } from "@testing-library/react";
+import { act, fireEvent, render } from "@testing-library/react";
 import { createRef, useState } from "react";
 import type { Editor } from "@tiptap/react";
 import { expect, it } from "vitest";
@@ -105,4 +105,121 @@ it("preserves the active selection anywhere in the existing draft when appending
       view.unmount();
     }
   }), { numRuns: 25 });
+});
+
+it("pastes plain-text Markdown blocks containing inline code nested in any emphasis without dropping the paste", () => {
+  const token = fc.stringMatching(/^[a-z][a-z0-9_/-]{1,8}$/);
+  const emphasisDelimiter = fc.constantFrom("**", "*", "~~");
+  const blockPrefix = fc.constantFrom("- ", "1. ", "### ", "> ");
+  const wrappedCodeLine = fc.record({
+    prefix: blockPrefix,
+    outer: emphasisDelimiter,
+    inner: fc.option(emphasisDelimiter, { nil: undefined }),
+    before: token,
+    code: token,
+    after: token,
+  });
+
+  fc.assert(fc.property(fc.array(wrappedCodeLine, { minLength: 1, maxLength: 4 }), (entries) => {
+    const markdown = entries
+      .map(({ prefix, outer, inner, before, code, after }) => {
+        const body = inner
+          ? `${before} ${inner}\`${code}\`${inner} ${after}`
+          : `${before} \`${code}\` ${after}`;
+        return `${prefix}${outer}${body}${outer}`;
+      })
+      .join("\n");
+
+    const changes: string[] = [];
+    const view = render(
+      <ComposerTiptapInput
+        id="paste-inline-code-prop"
+        label="Reply"
+        markdownConversion
+        onChange={(next) => changes.push(next)}
+        placeholder="Reply"
+        skillTokens={[]}
+        value=""
+      />,
+    );
+    try {
+      const textbox = view.getByRole("textbox", { name: "Reply" });
+      act(() => {
+        fireEvent.paste(textbox, {
+          clipboardData: {
+            files: [],
+            getData: (type: string) => type === "text/plain" ? markdown : "",
+            items: [],
+            types: ["text/plain"],
+          },
+        });
+      });
+
+      expect(changes.length).toBeGreaterThan(0);
+      const codeTexts = Array.from(textbox.querySelectorAll("code"), (node) => node.textContent);
+      for (const entry of entries) {
+        expect(codeTexts).toContain(entry.code);
+        expect(textbox.textContent).toContain(entry.before);
+        expect(textbox.textContent).toContain(entry.after);
+      }
+    } finally {
+      view.unmount();
+    }
+  }), { numRuns: 25 });
+});
+
+function typeTextWithInputRules(editor: Editor, text: string): void {
+  for (const char of text) {
+    const { from, to } = editor.state.selection;
+    let handled = false;
+    editor.view.someProp("handleTextInput", (handler) => {
+      if (handler(editor.view, from, to, char, () => editor.state.tr.insertText(char, from, to))) {
+        handled = true;
+        return true;
+      }
+      return false;
+    });
+    if (!handled) {
+      editor.view.dispatch(editor.state.tr.insertText(char, from, to));
+    }
+  }
+}
+
+it("starts a code block on space for any 3+ backtick or tilde fence and leaves shorter runs as prose", () => {
+  const marker = fc.constantFrom("`", "~");
+  const fenceLength = fc.integer({ min: 1, max: 8 });
+  const language = fc.constantFrom("", "ts", "markdown", "c++", "json5");
+
+  fc.assert(fc.property(marker, fenceLength, language, (fenceChar, count, lang) => {
+    const view = render(
+      <ComposerTiptapInput
+        id="code-fence-input-rule-prop"
+        label="Reply"
+        markdownConversion
+        onChange={() => {}}
+        placeholder="Reply"
+        skillTokens={[]}
+        value=""
+      />,
+    );
+    try {
+      const textbox = view.getByRole("textbox", { name: "Reply" });
+      const editor = (textbox as HTMLElement & { editor: Editor }).editor;
+      act(() => {
+        typeTextWithInputRules(editor, `${fenceChar.repeat(count)}${lang} `);
+      });
+
+      const codeBlock = textbox.querySelector("pre code");
+      if (count >= 3) {
+        expect(codeBlock).not.toBeNull();
+        expect(editor.state.doc.firstChild?.type.name).toBe("codeBlock");
+        expect(editor.state.doc.firstChild?.attrs.language ?? "").toBe(lang);
+      } else {
+        expect(codeBlock).toBeNull();
+        expect(editor.state.doc.firstChild?.type.name).toBe("paragraph");
+      }
+    } finally {
+      view.unmount();
+    }
+  }), { numRuns: 30 });
 });
