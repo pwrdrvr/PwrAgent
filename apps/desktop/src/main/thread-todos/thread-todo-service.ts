@@ -57,8 +57,8 @@ type StartThreadAction = Extract<ThreadTodoAction, { type: "start_thread" }>;
 /**
  * The two actions that run in the main process. `start_review` is not here:
  * it opens the composer's own `/review` flow in the renderer, so the operator
- * still picks the target and reviewer, and the renderer resolves the card
- * once the review starts.
+ * still picks the target and reviewer. A queued review carries the card to
+ * the scheduler, which resolves it once the review starts.
  */
 export type ThreadTodoActionRunners = {
   sendMessage?: (params: {
@@ -715,6 +715,18 @@ export class ThreadTodoService {
       ...(params.resolution ? { resolution: params.resolution } : {}),
       ...(params.allowOpenItems ? { allowOpenItems: true } : {}),
     });
+  }
+
+  /** A scheduled review can complete only its own open review card. */
+  resolveStartedReview(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    id: string;
+    allowOpenItems?: boolean;
+  }): void {
+    const todo = this.findForThread(params);
+    if (todo.status !== "open" || todo.action?.type !== "start_review") return;
+    this.resolve({ id: todo.id, status: "done", allowOpenItems: params.allowOpenItems });
   }
 
   /** Any card on this owner, by id. */

@@ -43,7 +43,6 @@ import type {
   RecreateThreadWorktreeRequest,
   RecreateThreadWorktreeResponse,
   AppServerAvailableCommandSummary,
-  AppServerBackendKind,
   AppServerPendingRequestNotification,
   AppServerReviewTarget,
   AppServerThreadActivityEntry,
@@ -2233,6 +2232,7 @@ export function ThreadView(props: ThreadViewProps) {
     handleAnswerAsyncQuestions,
     todoReviewRequest,
     startTodoReview,
+    handleReviewRequestHandled,
     handleReviewStarted,
     doTodoHere,
     handleReplySubmissionSettled,
@@ -3162,6 +3162,7 @@ export function ThreadView(props: ThreadViewProps) {
           onDraftRestoreHandled: handleDraftRestoreHandled,
           onReplySubmissionSettled: handleReplySubmissionSettled,
           reviewRequest: todoReviewRequest,
+          onReviewRequestHandled: handleReviewRequestHandled,
           focusRequest: props.composerFocusRequest,
           onFocusRequestHandled: props.onComposerFocusRequestHandled,
           composerInsertRequest: props.composerInsertRequest,
@@ -4859,12 +4860,7 @@ function useThreadQuestionReplies(
   });
   // A review card's Start review opens the composer's `/review` panel, and
   // the card resolves only once a review actually starts from it.
-  const [todoReviewRequest, setTodoReviewRequest] = useState<{
-    id: number;
-    threadId: string;
-    backend: AppServerBackendKind;
-    federationTarget?: FederationRemoteTarget;
-  }>();
+  const [todoReviewRequest, setTodoReviewRequest] = useState<ComposerProps["reviewRequest"]>();
   // The card's answer about open steps rides along, so the resolve once the
   // review starts sends the override only if the operator confirmed it.
   const pendingReviewTodos = useRef(new Map<number, { todo: ThreadTodo; options?: ThreadTodoResolveOptions }>());
@@ -4883,10 +4879,15 @@ function useThreadQuestionReplies(
       threadId: todo.threadId,
       backend: todo.backend,
       federationTarget: todo.federationTarget,
+      todo: { id: todo.id, ...options },
     });
+  });
+  const handleReviewRequestHandled = useEventCallback((requestId: number) => {
+    setTodoReviewRequest((current) => (current?.id === requestId ? undefined : current));
   });
   const handleReviewStarted = useEventCallback((threadKey: string, requestId?: number) => {
     if (requestId === undefined) return;
+    setTodoReviewRequest((current) => (current?.id === requestId ? undefined : current));
     const pending = pendingReviewTodos.current.get(requestId);
     if (!pending || threadTodoThreadKey(pending.todo) !== threadKey) return;
     pendingReviewTodos.current.delete(requestId);
@@ -5002,6 +5003,7 @@ function useThreadQuestionReplies(
     handleAnswerAsyncQuestions,
     todoReviewRequest,
     startTodoReview,
+    handleReviewRequestHandled,
     handleReviewStarted,
     doTodoHere,
     handleReplySubmissionSettled,
