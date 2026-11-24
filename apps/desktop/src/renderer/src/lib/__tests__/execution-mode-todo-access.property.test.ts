@@ -5,6 +5,7 @@ import type {
   BackendAcpRuntimeConfigOption,
   BackendSummary,
 } from "@pwragent/shared/contracts/backend";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { ThreadExecutionMode } from "@pwragent/shared/contracts/normalized-app-server";
 import { resolveThreadTodoStartAccess, threadTodoAccessForPick } from "@pwragent/shared/thread-todo-access";
 import { getAcpRuntimeModeControl } from "../execution-mode";
@@ -92,6 +93,9 @@ describe("the composer's mode picker and a start card's Access menu", () => {
       expect(access.acpRuntime).toEqual(composer!.source === "configOption"
         ? { configValues: { [composer!.optionId]: option.id } }
         : { currentModeId: option.id });
+      // The composer then shows the pick on the started thread.
+      const thread = { acpRuntime: access.acpRuntime } as unknown as NavigationThreadSummary;
+      expect(getAcpRuntimeModeControl(backend, thread)?.value).toBe(option.id);
     }), { numRuns: 500 });
   });
 });
