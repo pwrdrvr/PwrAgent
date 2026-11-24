@@ -15,7 +15,7 @@ function put(root, path, value) {
   writeFileSync(filename, typeof value === "string" ? value : JSON.stringify(value));
 }
 
-function fixture() {
+function fixture({ nativeCompiler = true } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "pwragent-typecheck-")));
   directories.push(root);
   mkdirSync(join(root, "scripts"));
@@ -24,7 +24,9 @@ function fixture() {
     if (existsSync(source)) copyFileSync(source, join(root, "scripts", script));
   }
   mkdirSync(join(root, "node_modules"));
-  symlinkSync(realpathSync(join(repository, "node_modules/typescript-native")), join(root, "node_modules/typescript-native"), "junction");
+  if (nativeCompiler) {
+    symlinkSync(realpathSync(join(repository, "node_modules/typescript-native")), join(root, "node_modules/typescript-native"), "junction");
+  }
   put(root, "package.json", {});
   put(root, "apps/desktop/package.json", {});
   put(root, "apps/desktop/empty.ts", "export {};\n");
@@ -114,4 +116,42 @@ it.each(["--watch", "-w", "--WATCH"])("desktop %s selects the same files as the 
   expect(oracle.status, oracle.stdout + oracle.stderr).toBe(0);
   expect(wrapped.status, wrapped.stdout + wrapped.stderr).toBe(0);
   expect(JSON.parse(wrapped.stdout).files).toEqual(JSON.parse(oracle.stdout).files);
+});
+
+it.each([
+  { gib: 16, checkers: "2", limit: "4608MiB", override: false },
+  { gib: 32, checkers: "4", limit: null, override: false },
+  { gib: 64, checkers: "4", limit: null, override: false },
+  { gib: 16, checkers: "1", limit: "3GiB", override: true },
+  { gib: 64, checkers: "1", limit: "3GiB", override: true },
+])("selects the expected desktop compiler profile at $gib GiB (override $override)", ({ gib, checkers, limit, override }) => {
+  const root = fixture({ nativeCompiler: false });
+  put(root, "node_modules/typescript-native/bin/tsc", `
+    console.log(JSON.stringify({
+      config: process.argv[3],
+      checkers: process.argv[process.argv.lastIndexOf("--checkers") + 1],
+      limit: process.env.GOMEMLIMIT ?? null,
+    }));
+  `);
+  const memorySetup = `
+    import os from "node:os";
+    import { syncBuiltinESMExports } from "node:module";
+    os.totalmem = () => ${gib} * 1024 ** 3;
+    syncBuiltinESMExports();
+    ${override ? 'process.env.GOMEMLIMIT = "3GiB";' : "delete process.env.GOMEMLIMIT;"}
+  `;
+  const args = ["--import", `data:text/javascript,${encodeURIComponent(memorySetup)}`, "scripts/typecheck.mjs"];
+  const flags = override ? ["--checkers", "1"] : [];
+  const build = run(root, ...args, "--dry", ...flags);
+  expect(build.status, build.stderr).toBe(0);
+  const ordinaryStage = { checkers: override ? "1" : "4", limit: override ? "3GiB" : null };
+  expect(build.stdout.trim().split("\n").map((line) => JSON.parse(line))).toEqual([
+    { config: "tsconfig.typecheck.json", ...ordinaryStage },
+    { config: "apps/desktop/tsconfig.tests.json", checkers, limit },
+    { config: "apps/desktop/tsconfig.renderer.json", ...ordinaryStage },
+  ]);
+
+  const watch = run(root, ...args, "--desktop", "--watch", ...flags);
+  expect(watch.status, watch.stderr).toBe(0);
+  expect(JSON.parse(watch.stdout)).toEqual({ config: "apps/desktop/tsconfig.json", checkers, limit });
 });

@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { totalmem } from "node:os";
 import { fileURLToPath } from "node:url";
 import { invalidateTypecheckCaches } from "./typecheck-cache.mjs";
 
@@ -24,12 +25,16 @@ if (!desktopWatch && !enabledOption("--clean") && !enabledOption("--dry", "-d")
 }
 
 const compilerEnv = { ...process.env, GOMAXPROCS: process.env.GOMAXPROCS ?? "4" };
-const desktopTestEnv = { ...compilerEnv, GOMEMLIMIT: compilerEnv.GOMEMLIMIT ?? "4608MiB" };
+const lowMemory = totalmem() < 32 * 1024 ** 3;
+const desktopCheckers = lowMemory ? "2" : "4";
+const desktopTestEnv = lowMemory
+  ? { ...compilerEnv, GOMEMLIMIT: compilerEnv.GOMEMLIMIT ?? "4608MiB" }
+  : compilerEnv;
 let projects;
 if (scope === "--package") {
   projects = [{ config: "tsconfig.json", checkers: "4", env: compilerEnv }];
 } else if (desktopWatch) {
-  projects = [{ config: "apps/desktop/tsconfig.json", checkers: "2", env: desktopTestEnv }];
+  projects = [{ config: "apps/desktop/tsconfig.json", checkers: desktopCheckers, env: desktopTestEnv }];
 } else {
   projects = [
     {
@@ -37,7 +42,7 @@ if (scope === "--package") {
       checkers: "4",
       env: compilerEnv,
     },
-    { config: "apps/desktop/tsconfig.tests.json", checkers: "2", env: desktopTestEnv },
+    { config: "apps/desktop/tsconfig.tests.json", checkers: desktopCheckers, env: desktopTestEnv },
     { config: "apps/desktop/tsconfig.renderer.json", checkers: "4", env: compilerEnv },
   ];
 }
