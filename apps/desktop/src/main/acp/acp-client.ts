@@ -46,7 +46,11 @@ import {
   readAcpToolContentCommand,
   readAcpToolText,
 } from "./acp-command-extraction.js";
-import type { AcpSessionMetadata, AcpSessionStorage } from "@pwragent/owner-core/acp-storage";
+import {
+  acpSessionExecutionMode,
+  type AcpSessionMetadata,
+  type AcpSessionStorage,
+} from "@pwragent/owner-core/acp-storage";
 import {
   isPwrAgentSyntheticAcpUpdate,
   type AcpRolloutRecord,
@@ -240,8 +244,8 @@ export const ACP_THREAD_TOOL_GRANT_OPTION_ID = "pwragent_allow_tool_for_thread";
 type AcpSessionMcpServers = {
   /** Names as the agent received them in `session/new` or `session/load`. */
   agentNames: string[];
-  /** Names a registration can vouch for: those the wire did not rewrite. */
-  registeredNames: ReadonlySet<string>;
+  /** Names a live registration can vouch for. Absent while awaiting reload. */
+  registeredNames?: ReadonlySet<string>;
   hostApprovesToolCall?: AcpMcpServerRegistration["hostApprovesToolCall"];
 };
 
@@ -313,6 +317,8 @@ type AcpHydratedSessionHistory = {
 export type AcpAgentClientOptions = {
   backendId: AcpBackendId;
   agentDisplayName?: string;
+  antigravityFullAccess?: boolean;
+  assertSessionOwner?: (sessionId: string) => void;
   initialRuntimeCapabilities?: BackendAcpRuntimeCapabilities;
   /** Bound to the launched build; vendor Grok does not implement the extension. */
   supportsTurnSteering?: boolean;
@@ -555,13 +561,28 @@ export class AcpAgentClient {
 
   /** Release just this session; never cancel another session on the process. */
   async closeSessionForArchive(sessionId: string): Promise<boolean> {
+    this.options.assertSessionOwner?.(sessionId);
     if (this.activeTurns.has(sessionId) || this.hasActiveOperations()) {
       throw new Error("An ACP operation is still active; the checkout was kept.");
     }
-    if (!this.ownsSession(sessionId)) return true;
+    return await this.closeOwnedSession(sessionId);
+  }
+
+  async closeSessionForTransfer(sessionId: string): Promise<void> {
+    if (this.activeTurns.has(sessionId) || this.hasActiveOperations() || this.hasNativeBackgroundWork(sessionId)) {
+      throw new Error("Wait for Antigravity's active work to finish before moving the session.");
+    }
+    if (!await this.closeOwnedSession(sessionId, true)) {
+      throw new Error("This Antigravity runtime cannot close the session for transfer.");
+    }
+    this.normalizers.delete(sessionId);
+  }
+
+  private async closeOwnedSession(sessionId: string, retainMcpGrants = false): Promise<boolean> {
+    const protocolSessionId = this.agentSessionIdsByAppSessionId.get(sessionId);
+    if (!protocolSessionId) return true;
     if (!this.supportsSessionClose()) return false;
     return await this.withOperation(async () => {
-      const protocolSessionId = this.protocolSessionIdFor(sessionId);
       const idleClosed = this.idleClosedSessions.get(sessionId);
       await idleClosed?.closed;
       // An idle close already released it, unless a request reloaded it.
@@ -569,10 +590,12 @@ export class AcpAgentClient {
         await this.options.transport.request("session/close", { sessionId: protocolSessionId });
       }
       this.loadedSessionCwds.delete(protocolSessionId);
+      this.sessionLoadReplays.delete(protocolSessionId);
+      this.sessionConfigOptions.delete(protocolSessionId);
       this.agentSessionIdsByAppSessionId.delete(sessionId);
       this.appSessionIdsByAgentSessionId.delete(protocolSessionId);
       this.retainableSessionIds.delete(sessionId);
-      this.forgetSessionActivity(sessionId);
+      this.forgetSessionActivity(sessionId, retainMcpGrants);
       return true;
     });
   }
@@ -760,6 +783,7 @@ export class AcpAgentClient {
    * request for an open session still goes out synchronously.
    */
   private reloadBeforeRequest(sessionId: string): Promise<void> | undefined {
+    this.options.assertSessionOwner?.(sessionId);
     this.touchSession(sessionId);
     return this.idleClosedSessions.has(sessionId)
       ? this.reopenIdleClosedSession(sessionId)
@@ -770,15 +794,22 @@ export class AcpAgentClient {
     this.sessionLastActivityAt.set(sessionId, this.now());
   }
 
-  private forgetSessionActivity(sessionId: string): void {
+  private forgetSessionActivity(sessionId: string, retainMcpGrants: boolean): void {
     this.sessionLastActivityAt.delete(sessionId);
     this.sessionContextFill.delete(sessionId);
     this.idleClosedSessions.delete(sessionId);
     this.pendingPermissionRequests.delete(sessionId);
     this.sessionsWithoutFaithfulReload.delete(sessionId);
     this.sessionAgentToolCatalogKeys.delete(sessionId);
-    this.sessionMcpServers.delete(sessionId);
-    this.sessionMcpToolGrants.delete(sessionId);
+    const previousMcpServers = this.sessionMcpServers.get(sessionId);
+    if (retainMcpGrants && previousMcpServers && this.sessionMcpToolGrants.has(sessionId)) {
+      // Keep the names for reload validation, without the closed worker's
+      // live tool registration.
+      this.sessionMcpServers.set(sessionId, { agentNames: previousMcpServers.agentNames });
+    } else {
+      this.sessionMcpServers.delete(sessionId);
+      this.sessionMcpToolGrants.delete(sessionId);
+    }
     this.jobMonitorCatalogs.delete(sessionId);
     this.grokBackgroundSessions.delete(sessionId);
     this.antigravityBackgroundCommands.delete(sessionId);
@@ -825,6 +856,8 @@ export class AcpAgentClient {
     this.grokBackgroundSessions.clear();
     this.antigravityBackgroundCommands.clear();
     this.sessionAgentToolCatalogKeys.clear();
+    this.sessionMcpServers.clear();
+    this.sessionMcpToolGrants.clear();
     await this.options.transport.close?.();
   }
 
@@ -1061,6 +1094,7 @@ export class AcpAgentClient {
 
     let nextPrompt: Promise<unknown>;
     try {
+      this.assertPromptAccess(params.sessionId);
       const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
       nextPrompt = this.options.transport.request(
         "session/prompt",
@@ -1163,6 +1197,11 @@ export class AcpAgentClient {
   private async startSessionOperation(
     params: Parameters<AcpAgentClient["startSession"]>[0],
   ): Promise<AcpSessionMetadata> {
+    if (params.sessionId) this.options.assertSessionOwner?.(params.sessionId);
+    if (this.options.antigravityFullAccess !== undefined
+      && this.options.antigravityFullAccess !== (params.executionMode === "full-access")) {
+      throw new Error("The Antigravity process does not match the new thread's access.");
+    }
     const cwd = params.cwd ?? process.cwd();
     // Read before the servers are built, so a change meanwhile reads as stale.
     const agentToolCatalogKey = this.options.agentToolCatalogKey?.();
@@ -1220,6 +1259,7 @@ export class AcpAgentClient {
       createdAt: params.createdAt ?? now,
       updatedAt: now,
       executionMode: params.executionMode,
+      ...(this.options.antigravityFullAccess === true ? { antigravityFullAccessConfirmed: true } : {}),
       ...(params.approvalPolicy ? { approvalPolicy: params.approvalPolicy } : {}),
       acpRuntime: combinedRuntimeState,
       ...(params.hidden ? { hidden: true } : {}),
@@ -1416,12 +1456,16 @@ export class AcpAgentClient {
     // The caller may hold metadata from before a prompt recorded what the
     // session was sent. That record is this client's, so keep the stored one.
     const { agentInstructionsDigest: _captured, ...captured } = metadata;
-    const storedDigest = this.options.store.getSession(
+    const stored = this.options.store.getSession(
       this.options.backendId,
       metadata.sessionId,
-    )?.agentInstructionsDigest;
+    );
+    const storedDigest = stored?.agentInstructionsDigest;
     metadata = {
       ...captured,
+      ...(this.options.antigravityFullAccess !== undefined && stored
+        ? { executionMode: acpSessionExecutionMode(stored), antigravityFullAccessConfirmed: stored.antigravityFullAccessConfirmed }
+        : {}),
       ...(storedDigest ? { agentInstructionsDigest: storedDigest } : {}),
     };
     if (this.idleClosedSessions.has(metadata.sessionId)) {
@@ -1457,6 +1501,7 @@ export class AcpAgentClient {
     agentInstructions?: string;
     readAgentMemory?: () => Promise<string | undefined>;
   }): Promise<{ sessionId: string; turnId: string }> {
+    this.assertPromptAccess(params.sessionId);
     const turnId = params.turnId ?? `pending:${params.sessionId}:${this.now()}`;
     const activeTurn = this.startTrackedTurn(params.sessionId, turnId);
     const acceptance = Promise.withResolvers<{ sessionId: string; turnId: string }>();
@@ -1662,6 +1707,7 @@ export class AcpAgentClient {
   }> {
     const reload = this.reloadBeforeRequest(params.sessionId);
     if (reload) await reload;
+    this.assertPromptAccess(params.sessionId);
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
     const selectedModel = readAcpSelectedModel(
       this.options.store.getSession(this.options.backendId, params.sessionId)
@@ -2356,9 +2402,10 @@ export class AcpAgentClient {
     const toolName = this.antigravityMcpToolName(asRecord(params.toolCall) ?? {});
     const allowOnce = allowOncePermissionOptionId(options);
     if (!toolName || !allowOnce) return undefined;
-    if (this.sessionMcpToolGrants.get(sessionId)?.has(toolName)) return allowOnce;
     const servers = this.sessionMcpServers.get(sessionId);
-    if (!servers?.hostApprovesToolCall) return undefined;
+    if (!servers?.registeredNames) return undefined;
+    if (this.sessionMcpToolGrants.get(sessionId)?.has(toolName)) return allowOnce;
+    if (!servers.hostApprovesToolCall) return undefined;
     const target = resolveAntigravityMcpToolTarget(toolName, servers.agentNames);
     if (!target || !servers.registeredNames.has(target.serverName)) return undefined;
     try {
@@ -2949,6 +2996,7 @@ export class AcpAgentClient {
         await this.refreshAgentToolCatalog(params.sessionId);
       }
       if (cancelledBeforePrompt) return cancelled;
+      this.assertPromptAccess(params.sessionId);
       params.onDispatch?.();
       if (activeTurn) {
         activeTurn.cancelBeforePrompt = undefined;
@@ -3188,6 +3236,7 @@ export class AcpAgentClient {
   }
 
   private rememberSessionIds(metadata: AcpSessionMetadata): void {
+    this.options.assertSessionOwner?.(metadata.sessionId);
     const protocolSessionId = protocolSessionIdForMetadata(metadata);
     this.agentSessionIdsByAppSessionId.set(metadata.sessionId, protocolSessionId);
     this.appSessionIdsByAgentSessionId.set(protocolSessionId, metadata.sessionId);
@@ -3197,12 +3246,23 @@ export class AcpAgentClient {
   }
 
   private protocolSessionIdFor(sessionId: string): string {
+    this.options.assertSessionOwner?.(sessionId);
     const metadata = this.options.store.getSession(this.options.backendId, sessionId);
     if (metadata) {
       this.rememberSessionIds(metadata);
       return protocolSessionIdForMetadata(metadata);
     }
     return this.agentSessionIdsByAppSessionId.get(sessionId) ?? sessionId;
+  }
+
+  private assertPromptAccess(sessionId: string): void {
+    const fullAccess = this.options.antigravityFullAccess;
+    if (fullAccess === undefined) return;
+    this.options.assertSessionOwner?.(sessionId);
+    const session = this.options.store.getSession(this.options.backendId, sessionId);
+    if (!session || fullAccess !== (acpSessionExecutionMode(session) === "full-access")) {
+      throw new Error("The Antigravity process does not match the thread's applied access. Try again.");
+    }
   }
 
   private appSessionIdFor(protocolSessionId: string): string {

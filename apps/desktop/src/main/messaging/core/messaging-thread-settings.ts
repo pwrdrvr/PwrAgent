@@ -184,7 +184,7 @@ export class MessagingThreadSettings {
         binding,
         choices: runtimeMode.choices,
         createdAt: this.context.now(),
-        prompt: "Select Permissions",
+        prompt: summary.kind === "acp:antigravity" ? "Select Agent mode" : "Select Permissions",
       }),
       binding,
       event,

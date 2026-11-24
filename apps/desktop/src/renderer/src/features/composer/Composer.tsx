@@ -15780,7 +15780,7 @@ function useComposerController(props: ComposerProps) {
                     ? "full-access"
                     : "default";
                   handleLaunchpadPatch({
-                    executionMode,
+                    ...(backend?.kind !== "acp:antigravity" ? { executionMode } : {}),
                     acpRuntime: {
                       ...props.launchpad.acpRuntime,
                       configValues:

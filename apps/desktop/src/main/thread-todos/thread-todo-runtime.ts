@@ -770,10 +770,7 @@ export function createThreadTodoRunners(params: {
       const chosen = { backend: selected.backend, model: validated.model, reasoningEffort: validated.reasoningEffort };
       const sameBackend = chosen.backend === sourceBackend;
       const inheritedSpeed = sameBackend ? source : undefined;
-      // The card shows the same derivation against the same catalog: an
-      // agent whose own selector owns approval policy (Antigravity, current
-      // Kimi, Grok with permission_mode) lists no PwrAgent modes, and its
-      // native mode, or the operator's pick of one, carries the access.
+      // Use the same access derivation and catalog as the card.
       const destination = (await registry.listBackends({ includeUnavailable: true })).backends
         .find((backend) => backend.kind === chosen.backend);
       const access = resolveThreadTodoStartAccess({

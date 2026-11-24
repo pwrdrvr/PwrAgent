@@ -305,7 +305,17 @@ it("retires legacy activity fields and makes registry busy admission read the un
     const visit = (node: ts.Node): void => {
       if (ts.isIdentifier(node) && retired.has(node.text)) mentions.push(`${name}:${node.text}`);
       if (name === "backend-registry.ts" && ts.isMethodDeclaration(node) && node.name.getText(file) === "threadHasActiveTurn") {
-        readsUnion = node.body?.getText(file).includes("return this.context.turnState.hasActiveTurn(threadId, ignoreCodexStartReservation);") ?? false;
+        const [threadId, , ignoreReservation] = node.parameters.map(({ name }) => name.getText(file));
+        readsUnion = ts.forEachChild(node, function findUnionReturn(child): true | undefined {
+          if (ts.isReturnStatement(child) && child.expression && ts.isCallExpression(child.expression)) {
+            const { expression, arguments: args } = child.expression;
+            if (expression.getText(file) === "this.context.turnState.hasActiveTurn"
+              && args.length === 2
+              && args[0]?.getText(file) === threadId
+              && args[1]?.getText(file) === ignoreReservation) return true;
+          }
+          return ts.forEachChild(child, findUnionReturn);
+        }) === true;
       }
       ts.forEachChild(node, visit);
     };

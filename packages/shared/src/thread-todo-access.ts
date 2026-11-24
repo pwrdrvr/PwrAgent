@@ -90,6 +90,7 @@ const MODE_WORDS: Record<ThreadExecutionMode, string> = {
  * approval policy lists no PwrAgent modes: the operator's pick of one of its
  * modes stands, and otherwise its highest mode at or below the wanted access
  * is used, so a provider switch never raises access.
+ * Antigravity retains the chosen Agent mode alongside process access.
  */
 export function resolveThreadTodoStartAccess(input: {
   card: ThreadTodoAccessCard;
@@ -110,12 +111,39 @@ export function resolveThreadTodoStartAccess(input: {
 
   // A peer's older catalog may leave the list out.
   const listed = destination.executionModes ?? [];
+  const runtime = destination.acp?.runtime;
   if (listed.length > 0) {
     const options: ThreadTodoAccessOption[] = ACCESS_ORDER
       .filter((mode) => listed.some((entry) => entry.mode === mode && entry.available))
       .map((mode) => ({ kind: "mode", mode }));
     const offers = (mode: ThreadExecutionMode) =>
       options.some((option) => option.kind === "mode" && option.mode === mode);
+    const antigravityModes = input.destinationBackend === "acp:antigravity" && offers("default")
+      ? acpNativeAccessOptions(runtime).filter((option) => option.executionMode !== "full-access")
+        .map((option) => ({ kind: "native" as const, ...option }))
+      : [];
+    options.splice(1, 0, ...antigravityModes.filter((option) => option.id !== "default"
+      && !(option.id === "auto" && offers("auto"))));
+    const savedMode = card.nativeAccessMode?.backend === input.destinationBackend
+      ? antigravityModes.find((option) => option.id === card.nativeAccessMode?.id
+        && (option.executionMode === undefined || threadExecutionModeRank(option.executionMode) <= threadExecutionModeRank(wanted)))
+      : undefined;
+    if (wanted === "full-access" && offers(wanted) && savedMode) {
+      return {
+        status: "ready", selected: { kind: "mode", mode: wanted }, source: named, wanted,
+        executionMode: wanted, acpRuntime: acpNativeAccessRuntime(runtime, savedMode.id), options,
+      };
+    }
+    const defaultProcessMode = wanted !== "full-access"
+      ? savedMode ?? (wanted === "auto" ? antigravityModes.find((option) => option.id === "auto") : undefined)
+      : undefined;
+    if (defaultProcessMode) {
+      return {
+        status: "ready", selected: defaultProcessMode.id === "default" ? { kind: "mode", mode: "default" } : defaultProcessMode,
+        source: named, wanted, executionMode: "default",
+        acpRuntime: acpNativeAccessRuntime(runtime, defaultProcessMode.id), options,
+      };
+    }
     const ready = (mode: ThreadExecutionMode, source: ThreadTodoAccessSource): ThreadTodoStartAccess => ({
       status: "ready", selected: { kind: "mode", mode }, source, wanted, executionMode: mode, options,
     });
@@ -139,7 +167,6 @@ export function resolveThreadTodoStartAccess(input: {
     };
   }
 
-  const runtime = destination.acp?.runtime;
   const options: ThreadTodoAccessOption[] = acpNativeAccessOptions(runtime)
     .map((option) => ({ kind: "native", ...option }));
   // The Full Access gate judges the card's mode, so a pick above it, which

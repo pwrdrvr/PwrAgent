@@ -20364,7 +20364,7 @@ describe("Composer", () => {
     });
   });
 
-  it("requires confirmation before switching a thread from Default Access to Full Access", async () => {
+  it.each(["codex", "acp:antigravity"] as const)("requires confirmation before switching a %s thread from Default Access to Full Access", async (provider) => {
     const onSetExecutionMode = vi.fn(async () => undefined);
     const onDismissFullAccessRiskWarning = vi.fn(async () => undefined);
 
@@ -20372,7 +20372,7 @@ describe("Composer", () => {
       <Composer
         backends={[
           {
-            ...backendSummary("codex"),
+            ...backendSummary(provider),
             executionModes: [
               {
                 mode: "default",
@@ -20396,7 +20396,7 @@ describe("Composer", () => {
           id: "thread-1",
           title: "Risky switch",
           titleSource: "explicit",
-          source: "codex",
+          source: provider,
           executionMode: "default",
           linkedDirectories: [],
           inbox: { inInbox: false },

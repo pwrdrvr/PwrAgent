@@ -191,7 +191,7 @@ export function acpRuntimeHasExecutionModeSelection(params: {
   runtimeCapabilities?: BackendAcpRuntimeCapabilities;
 }): boolean {
   const { runtime, runtimeCapabilities } = params;
-  if (!runtime) {
+  if (!runtime || params.registryId === "antigravity") {
     return false;
   }
   if (params.registryId === "grok") {

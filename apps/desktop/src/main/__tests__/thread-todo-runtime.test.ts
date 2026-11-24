@@ -581,9 +581,10 @@ describe("dispatch onto an agent's native access modes", () => {
   function withNativeDestination(
     registry: ReturnType<typeof fakeRegistry>["registry"],
     runtime: Pick<BackendAcpRuntimeCapabilities, "modes" | "configOptions">,
+    executionModes: Array<{ mode: ThreadExecutionMode; available: boolean }> = [],
   ) {
     registry.listBackends.mockResolvedValue({ fetchedAt: 0, backends: [
-      { kind: "acp:antigravity", label: "Antigravity", executionModes: [], acp: { runtime } },
+      { kind: "acp:antigravity", label: "Antigravity", executionModes, acp: { runtime } },
     ] } as never);
   }
   const startOnAntigravity = (runners: ReturnType<typeof fakeRegistry>["runners"], executionMode?: ThreadExecutionMode) =>
@@ -592,13 +593,28 @@ describe("dispatch onto an agent's native access modes", () => {
       action: { type: "start_thread", prompt: "Build it", ...(executionMode ? { executionMode } : {}) },
       modelSettings: { backend: "acp:antigravity" } });
 
-  it("starts a Codex Auto thread's card in Antigravity's own Auto mode", async () => {
+  const antigravityProcessModes = [
+    { mode: "default", available: true }, { mode: "full-access", available: true },
+  ] satisfies Array<{ mode: ThreadExecutionMode; available: boolean }>;
+
+  it.each([
+    { modes: [], processAccess: false }, { modes: antigravityProcessModes, processAccess: true },
+  ])("starts a Codex Auto thread's card in native Auto with process access $processAccess", async ({ modes }) => {
     const { registry, runners } = fakeRegistry({ ...FULL_ACCESS_SOL, executionMode: "auto" });
-    withNativeDestination(registry, { modes: { availableModes: ANTIGRAVITY_SESSION_MODES, currentModeId: "default" } });
+    withNativeDestination(registry, { modes: { availableModes: ANTIGRAVITY_SESSION_MODES, currentModeId: "default" } }, modes);
     await startOnAntigravity(runners);
     expect(registry.startThread).toHaveBeenCalledWith(expect.objectContaining({
       backend: "acp:antigravity", executionMode: "default", acpRuntime: expect.objectContaining({ currentModeId: "auto" }),
     }));
+  });
+
+  it("starts an inherited Full Access card on Antigravity's Full Access process", async () => {
+    const { registry, runners } = fakeRegistry(FULL_ACCESS_SOL);
+    withNativeDestination(registry, { modes: { availableModes: ANTIGRAVITY_SESSION_MODES, currentModeId: "default" } }, antigravityProcessModes);
+    await startOnAntigravity(runners);
+    const start = registry.startThread.mock.calls[0]?.[0];
+    expect(start).toMatchObject({ backend: "acp:antigravity", executionMode: "full-access" });
+    expect(start).not.toHaveProperty("acpRuntime");
   });
 
   it("picks the highest native mode at or below the source's access, and never a mode without a level", async () => {
