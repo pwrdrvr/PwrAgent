@@ -38,15 +38,41 @@ const runtimeArb: fc.Arbitrary<BackendAcpRuntimeCapabilities> = fc.record({
   ...(sessionModes ? { modes: { availableModes: sessionModes.map((id) => ({ id, label: id })) } } : {}),
 }) as unknown as BackendAcpRuntimeCapabilities);
 
+/** An agent whose own selector owns approval policy, as current Kimi is: it lists no PwrAgent modes. */
 function backendFor(runtime: BackendAcpRuntimeCapabilities): BackendSummary {
   return {
-    kind: "acp:antigravity",
-    label: "Antigravity",
+    kind: "acp:kimi",
+    label: "Kimi",
     available: true,
     methods: [],
     executionModes: [],
     acp: { runtime },
   } as unknown as BackendSummary;
+}
+
+/** Antigravity: PwrAgent's Default and Full Access pick its process, and its own modes ride along. */
+function antigravityFor(runtime: BackendAcpRuntimeCapabilities): BackendSummary {
+  return {
+    kind: "acp:antigravity",
+    label: "Antigravity",
+    available: true,
+    methods: [],
+    executionModes: [
+      { mode: "default", label: "Default Access", available: true },
+      { mode: "full-access", label: "Full Access", available: true },
+    ],
+    acp: { runtime },
+  } as unknown as BackendSummary;
+}
+
+/** What the composer writes for a pick of `id`, and then shows on the thread. */
+function expectComposerWrite(backend: BackendSummary, runtime: unknown, id: string) {
+  const composer = getAcpRuntimeModeControl(backend, undefined)!;
+  expect(runtime).toEqual(composer.source === "configOption"
+    ? { configValues: { [composer.optionId]: id } }
+    : { currentModeId: id });
+  const thread = { acpRuntime: runtime } as unknown as NavigationThreadSummary;
+  expect(getAcpRuntimeModeControl(backend, thread)?.value).toBe(id);
 }
 
 function cardAccess(backend: BackendSummary, sourceExecutionMode: ThreadExecutionMode = "full-access") {
@@ -73,9 +99,8 @@ describe("the composer's mode picker and a start card's Access menu", () => {
   it("start a picked mode through the selector the composer writes", () => {
     fc.assert(fc.property(runtimeArb, fc.nat(), (runtime, index) => {
       const backend = backendFor(runtime);
-      const composer = getAcpRuntimeModeControl(backend, undefined);
       const shown = cardAccess(backend);
-      fc.pre(composer !== undefined && shown.options.length > 0);
+      fc.pre(getAcpRuntimeModeControl(backend, undefined) !== undefined && shown.options.length > 0);
       const option = shown.options[index % shown.options.length]!;
       fc.pre(option.kind === "native");
       if (option.kind !== "native") return;
@@ -90,12 +115,44 @@ describe("the composer's mode picker and a start card's Access menu", () => {
       });
       expect(access.status).toBe("ready");
       if (access.status !== "ready") return;
-      expect(access.acpRuntime).toEqual(composer!.source === "configOption"
-        ? { configValues: { [composer!.optionId]: option.id } }
-        : { currentModeId: option.id });
       // The composer then shows the pick on the started thread.
-      const thread = { acpRuntime: access.acpRuntime } as unknown as NavigationThreadSummary;
-      expect(getAcpRuntimeModeControl(backend, thread)?.value).toBe(option.id);
+      expectComposerWrite(backend, access.acpRuntime, option.id);
+    }), { numRuns: 500 });
+  });
+
+  it("offer Antigravity only its own modes that the composer lists, beside its process access", () => {
+    fc.assert(fc.property(runtimeArb, (runtime) => {
+      const backend = antigravityFor(runtime);
+      const composer = getAcpRuntimeModeControl(backend, undefined);
+      const card = cardAccess(backend);
+      const native = card.options.flatMap((option) => option.kind === "native" ? [option.id] : []);
+      const listed = composer?.options.map((option) => option.value) ?? [];
+      expect(native.every((id) => listed.includes(id))).toBe(true);
+      // Full Access is the process, never Yolo through the Agent mode.
+      expect(card.options.some((option) => option.kind === "native" && option.executionMode === "full-access")).toBe(false);
+    }), { numRuns: 500 });
+  });
+
+  it("start Antigravity's picked or saved mode through the selector the composer writes, at either process", () => {
+    fc.assert(fc.property(runtimeArb, fc.nat(), fc.boolean(), (runtime, index, fullAccess) => {
+      const backend = antigravityFor(runtime);
+      const native = cardAccess(backend).options.filter((option) => option.kind === "native");
+      fc.pre(native.length > 0);
+      const option = native[index % native.length]!;
+      if (option.kind !== "native") return;
+      const pick = threadTodoAccessForPick(option, backend.kind);
+      const card = fullAccess ? { ...pick, executionMode: "full-access" as const } : pick;
+      const access = resolveThreadTodoStartAccess({
+        card,
+        sourceBackend: backend.kind,
+        sourceExecutionMode: card.executionMode,
+        destination: backend,
+        destinationBackend: backend.kind,
+      });
+      expect(access.status).toBe("ready");
+      if (access.status !== "ready") return;
+      expect(access.executionMode).toBe(fullAccess ? "full-access" : "default");
+      expectComposerWrite(backend, access.acpRuntime, option.id);
     }), { numRuns: 500 });
   });
 });
