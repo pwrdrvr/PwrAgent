@@ -58,6 +58,19 @@ const isQueued = (value: unknown): boolean => {
   return "state" in record ? record.state === "queued" : record.outcome === "queued";
 };
 
+describe("resource checkout tools: machine CPU scope", () => {
+  it.each([
+    ["resource_checkout_discover", /machine CPU reservations are advisory/i],
+    ["resource_checkout_action", /substantial workloads or when the operator explicitly requests a reservation/i],
+    ["resource_checkout_action", /start routine dev launches, short debugger or profiler sessions, and lightweight inspection without requesting or waiting for a checkout/i],
+    ["resource_checkout_action", /omit units to reserve the full machine pool.*parallel worker count/i],
+  ])("advertises the machine CPU policy in %s (%s)", (name, guidance) => {
+    const tools = buildResourceCheckoutToolDefinitions(async () => null);
+    const tool = tools.find((definition) => definition.name === name);
+    expect(tool?.description).toMatch(guidance);
+  });
+});
+
 describe("resource checkout tools: waiting for a grant", () => {
   it("names wait-with-continuation on exactly the results that leave the request queued", async () => {
     await fc.assert(fc.asyncProperty(statusArb, actionResultArb, keyArb, paddingArb, async (status, result, key, pad) => {

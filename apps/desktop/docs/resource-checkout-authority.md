@@ -31,10 +31,17 @@ resize the pool or invalidate reservations. Units are reservations among
 cooperating jobs. They neither measure live load nor set process affinity. The same
 machine key and queue apply to every profile in the shared root.
 
-Use `resource_checkout_action` and omit `units` to reserve the whole machine
-for a full test suite or heavy build. Known smaller jobs can request their
-expected number of parallel workers. Acquire before launching and release
-after the command exits. A large request at the head of the queue waits
+Machine CPU checkouts are advisory. Request one to coordinate a substantial
+workload, such as a full test suite or heavy build, or when the operator
+explicitly asks for a reservation. By default, start routine Dev launches from
+an installed environment, short debugger or profiler sessions, and lightweight
+inspection without requesting or waiting for a checkout.
+
+For work you reserve, use `resource_checkout_action` and set `units` to the
+planned parallel worker count. Omitting `units` reserves the full machine pool.
+See [local CPU checkout](../../../docs/local-cpu-checkout.md) for repository
+verification budgets. Wait for the grant before launching the reserved job and
+release it after the job exits. A large request at the head of the queue waits
 for enough slots to clear, and later small requests wait behind it.
 
 Codex environment setup, detached environment actions, and local automation
