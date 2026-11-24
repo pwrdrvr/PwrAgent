@@ -46,6 +46,15 @@ describe("research service, validated against projections", () => {
     expect(coverage.events.resumed, "operator resume recorded after takeover").toBe(1);
 
     await fc.assert(fc.asyncProperty(fc.array(researchDifferentialBoundsStepArb, { size: "max", minLength: 15, maxLength: 45 }), compare), { numRuns: 30 });
+    // Only an operator's change to a running run reaches the worker-count check, and a generated one names zero workers
+    // in about one bounds step in eleven, so some seeds never send it. This history always does, through the same comparison.
+    // It keeps its own tally, so its accepted change cannot stand in for one the generated histories never reached.
+    const storage = new MemoryResearchStorage();
+    const fixed = emptyResearchDifferentialCoverage();
+    await expectResearchServicesAgree(uuid, INVALID_WORKER_COUNT_HISTORY, storage, (id) => storage.records.get(id), fixed);
+    expect(fixed.refusals, "the fixed history's refusals").toEqual({ "Choose 1–64 workers": 1 });
+    expect(fixed.accepted, "the fixed history's accepted commands").toEqual({ start: 1, bounds: 1 });
+    coverage.refusals["Choose 1–64 workers"] = (coverage.refusals["Choose 1–64 workers"] ?? 0) + 1;
     // Each bound has to be reached, changed and refused for the comparison to cover it.
     for (const type of ["bounds", "worker:turn-limit", "status:worker-time"]) expect(coverage.events[type] ?? 0, `${type} events recorded`).toBeGreaterThan(0);
     expect(coverage.accepted.bounds ?? 0).toBeGreaterThan(0);
@@ -75,6 +84,16 @@ describe("research service, validated against projections", () => {
     expect(withdrawals, "resumes withdrawn at the limit").toBeGreaterThan(0);
   });
 });
+
+const step = (kind: ResearchDifferentialStep["kind"], fields: Partial<ResearchDifferentialStep> = {}): ResearchDifferentialStep => ({
+  kind, run: 0, actor: 0, approach: 0, item: 0, other: 0, variant: 0, flag: true,
+  faults: { spawn: "ok", stop: "ok", notify: "plain", cancel: "plain" }, ...fields,
+});
+/**
+ * A one-worker run with no per-worker or total worker time limit, then the operator's bounds naming zero workers (`variant` 7), then one worker,
+ * which the refused change must not have blocked.
+ */
+const INVALID_WORKER_COUNT_HISTORY: ResearchDifferentialStep[] = [step("start"), step("bounds", { variant: 7 }), step("bounds", { variant: 1 })];
 
 type Driven = Pick<ResearchService, "initialize" | "close" | "observeStart" | "observeEnd"> & {
   start: (...args: Parameters<ResearchService["start"]>) => Promise<{ id: string }>;
