@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import { normalizeAcpMcpServerConfigs, type AcpMcpServerConfig } from "@pwrdrvr/agent-acp/mcp-server-config";
-import { findAcpPermissionModeConfigOption } from "@pwragent/shared/acp-permission-mode";
+import {
+  ACP_PERMISSION_MODE_OPTION_ID,
+  acpSessionStartMode,
+  findAcpPermissionModeConfigOption,
+} from "@pwragent/shared/acp-permission-mode";
 import { stripAgentMemoryChunk } from "@pwragent/shared/contracts/agent-memory";
 import { buildAcpAgentInstructionBlock } from "../../shared/agent-instruction-delivery.js";
 import type {
@@ -15,6 +19,7 @@ import type { AcpThreadRewindPoint, GrokWorkflowBudgetPolicy } from "@pwragent/s
 import type {
   BackendAcpRuntimeCapabilities,
   BackendAcpRuntimeConfigOption,
+  BackendAcpRuntimeModeState,
   BackendAcpRuntimeOptionSource,
   BackendAcpSessionRuntimeState,
 } from "@pwragent/shared/contracts/backend";
@@ -133,6 +138,19 @@ type AcpRuntimeOptionWrite = {
   rejectUnofferedThoughtLevel?: boolean;
   /** The owner supplied an explicit selection for Antigravity's mode option. */
   antigravityModeSession?: AcpSessionMetadata;
+  /**
+   * A session start's mode write: ACP session modes, or a mode config option
+   * such as Antigravity's `mode` or Grok's `permission_mode`. The value came
+   * from the agent's cached menu, so a mode this session's own start reply
+   * does not list falls back by `acpSessionStartMode` instead of failing.
+   */
+  sessionStartMode?: true;
+};
+
+/** The mode selectors a session's own session/new or session/load reply listed. */
+type AcpSessionModeMenu = {
+  modes?: BackendAcpRuntimeModeState;
+  configOptions: BackendAcpRuntimeConfigOption[];
 };
 
 // Host configurations keep record environments for process/Codex callers;
@@ -397,6 +415,11 @@ export class AcpAgentClient {
     string,
     BackendAcpRuntimeConfigOption[]
   >();
+  // The mode selectors each session's own session/new or session/load reply
+  // listed, by protocol session id. Unlike `sessionConfigOptions`, a later
+  // reply without a menu leaves this alone: a start writes its model before
+  // its mode, and the model write's reply need not repeat the mode menu.
+  private readonly sessionModeMenus = new Map<string, AcpSessionModeMenu>();
   private readonly suppressedControlPromptSessions = new Map<
     string,
     AcpSuppressedControlPrompt
@@ -847,6 +870,7 @@ export class AcpAgentClient {
     this.retainableSessionIds.clear();
     this.loadedSessionCwds.clear();
     this.sessionConfigOptions.clear();
+    this.sessionModeMenus.clear();
     this.sessionLastActivityAt.clear();
     this.sessionContextFill.clear();
     this.pendingPermissionRequests.clear();
@@ -1281,6 +1305,7 @@ export class AcpAgentClient {
     this.rememberAgentToolCatalogKey(appSessionId, agentToolCatalogKey);
     this.rememberSessionMcpServers(appSessionId, mcpRegistration, mcpServerWireConfigs);
     this.rememberSessionConfigOptions(sessionId, result);
+    this.rememberSessionModeMenu(sessionId, result);
     await Promise.resolve(mcpRegistration.bindThread?.(appSessionId));
     this.notifyRuntimeCapabilities({
       sessionId: appSessionId,
@@ -1768,11 +1793,17 @@ export class AcpAgentClient {
     const reload = this.reloadBeforeRequest(params.sessionId);
     if (reload) await reload;
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
+    const value = params.sessionStartMode
+      ? this.sessionStartModeValue(protocolSessionId, params)
+      : params.value;
+    if (value === undefined) {
+      return this.recordUnwrittenSessionStartMode(protocolSessionId, params);
+    }
     const write = await this.setRuntimeOptionOnTransport({
       protocolSessionId,
       source: params.source,
       optionId: params.optionId,
-      value: params.value,
+      value,
       reasoningEffort: params.reasoningEffort,
     });
     if (write.unofferedThoughtLevel) {
@@ -1790,14 +1821,14 @@ export class AcpAgentClient {
           source: params.source,
           value:
             params.source === "configOption"
-              ? params.value
+              ? value
               : params.reasoningEffort,
         },
       );
       if (refused) {
         // The refusal the agent would have sent, without the round trip.
         throw new Error(
-          `The session's model does not offer "${params.value}" for ${params.optionId}`,
+          `The session's model does not offer "${value}" for ${params.optionId}`,
         );
       }
       if (params.source === "configOption") {
@@ -1808,7 +1839,7 @@ export class AcpAgentClient {
       }
     }
     const result = write.result;
-    if (params.antigravityModeSession) this.assertAntigravityModeConfirmed(result, params.value, "apply");
+    if (params.antigravityModeSession) this.assertAntigravityModeConfirmed(result, value, "apply");
     const reasoningEffort = write.unofferedThoughtLevel
       ? undefined
       : params.reasoningEffort;
@@ -1823,23 +1854,23 @@ export class AcpAgentClient {
     const requestedRuntimeState: BackendAcpSessionRuntimeState =
       params.source === "configOption"
         ? {
-            configValues: { [params.optionId]: params.value },
+            configValues: { [params.optionId]: value },
             ...(this.isRuntimeModeConfigOption(params.optionId)
-              ? { currentModeId: params.value }
+              ? { currentModeId: value }
               : {}),
             updatedAt: now,
           }
         : params.source === "mode"
           ? {
-              currentModeId: params.value,
+              currentModeId: value,
               updatedAt: now,
             }
           : {
-              currentModelId: params.value,
+              currentModelId: value,
               ...(modelConfigOption
                 ? {
                     configValues: {
-                      [modelConfigOption.id]: params.value,
+                      [modelConfigOption.id]: value,
                       ...(reasoningEffort && thoughtLevelConfigOption
                         ? {
                             [thoughtLevelConfigOption.id]: reasoningEffort,
@@ -1864,6 +1895,86 @@ export class AcpAgentClient {
       runtimeState,
     });
     return runtimeState;
+  }
+
+  private rememberSessionModeMenu(protocolSessionId: string, result: unknown): void {
+    const runtime = normalizeAcpRuntimeCapabilities({
+      value: result,
+      now: this.now(),
+      source: "session-load",
+    });
+    this.sessionModeMenus.set(protocolSessionId, {
+      ...(runtime?.modes ? { modes: runtime.modes } : {}),
+      configOptions:
+        runtime?.configOptions?.filter((option) => option.category === "mode") ?? [],
+    });
+  }
+
+  /**
+   * The mode a session start writes for `params.value`, by the menu that
+   * session's own start reply listed; undefined writes none. Antigravity
+   * 1.5.15 refuses a mode the session does not list with -32602
+   * `Unknown mode: <id>`, through session/set_mode and its `mode` option alike.
+   */
+  private sessionStartModeValue(
+    protocolSessionId: string,
+    params: AcpRuntimeOptionWrite,
+  ): string | undefined {
+    const menu = this.sessionModeMenus.get(protocolSessionId);
+    // No start reply was seen for this session, so the agent decides.
+    if (!menu) return params.value;
+    const offered = params.source === "mode"
+      ? menu.modes?.availableModes.map((mode) => mode.id) ?? []
+      : menu.configOptions
+        .find((option) => option.id === params.optionId)
+        ?.values.map((value) => value.value) ?? [];
+    const value = acpSessionStartMode(params.value, offered);
+    if (value !== params.value) {
+      acpClientLog.info("the session does not offer the requested start mode", {
+        backendId: this.options.backendId,
+        optionId: params.optionId,
+        requested: params.value,
+        applied: value ?? null,
+      });
+    }
+    return value;
+  }
+
+  /**
+   * Records the mode a session kept when its start wrote none. session/new
+   * stored the requested mode beside the reply's, and a reply without a mode
+   * menu left the requested one standing.
+   */
+  private recordUnwrittenSessionStartMode(
+    protocolSessionId: string,
+    params: AcpRuntimeOptionWrite,
+  ): BackendAcpSessionRuntimeState | undefined {
+    const metadata = this.options.store.getSession(this.options.backendId, params.sessionId);
+    if (!metadata) return undefined;
+    const menu = this.sessionModeMenus.get(protocolSessionId);
+    const kept = params.source === "mode"
+      ? menu?.modes?.currentModeId
+      : menu?.configOptions.find((option) => option.id === params.optionId)?.currentValue;
+    const { currentModeId, ...withoutMode } = metadata.acpRuntime ?? {};
+    // Every mode selector but Grok's permission config mirrors currentModeId.
+    const modeId = params.source === "mode" || params.optionId !== ACP_PERMISSION_MODE_OPTION_ID
+      ? kept
+      : currentModeId;
+    const configValues = Object.fromEntries(
+      Object.entries(withoutMode.configValues ?? {}).filter(([id]) =>
+        params.source !== "configOption" || id !== params.optionId),
+    );
+    if (params.source === "configOption" && kept !== undefined) {
+      configValues[params.optionId] = kept;
+    }
+    const runtime: BackendAcpSessionRuntimeState = {
+      ...withoutMode,
+      configValues,
+      ...(modeId !== undefined ? { currentModeId: modeId } : {}),
+      updatedAt: this.now(),
+    };
+    this.options.store.upsertSession({ ...metadata, acpRuntime: runtime });
+    return runtime;
   }
 
   private isRuntimeModeConfigOption(optionId: string): boolean {
@@ -2666,6 +2777,7 @@ export class AcpAgentClient {
       result,
     });
     this.rememberSessionConfigOptions(protocolSessionId, result);
+    this.rememberSessionModeMenu(protocolSessionId, result);
     this.rememberSessionMcpServers(metadata.sessionId, mcpRegistration, mcpServerWireConfigs);
     await Promise.resolve(mcpRegistration.bindThread?.(metadata.sessionId));
     const runtimeState = this.runtimeStateFromResponse(result, this.now());

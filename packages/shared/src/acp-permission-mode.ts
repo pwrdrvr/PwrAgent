@@ -5,12 +5,15 @@ import type {
 } from "./contracts/backend";
 import type { ThreadExecutionMode } from "./contracts/normalized-app-server";
 
+/** The id of Grok's permission config option. */
+export const ACP_PERMISSION_MODE_OPTION_ID = "permission_mode";
+
 /** Grok's permission config is independent of ACP's native planning mode. */
 export function findAcpPermissionModeConfigOption(
   runtime: BackendAcpRuntimeCapabilities | undefined,
 ): BackendAcpRuntimeConfigOption | undefined {
   return runtime?.configOptions?.find(
-    (option) => option.id === "permission_mode" && option.category === "mode",
+    (option) => option.id === ACP_PERMISSION_MODE_OPTION_ID && option.category === "mode",
   );
 }
 
@@ -84,10 +87,40 @@ export function acpNativeAccessMode(
   executionMode: ThreadExecutionMode,
 ): AcpNativeAccessMode | undefined {
   const offered = acpNativeAccessOptions(runtime).map((option) => option.id);
+  const native = highestNativeAccessMode(offered, executionMode);
+  return native
+    ? { executionMode: native[0], runtime: acpNativeAccessRuntime(runtime, native[1]) }
+    : undefined;
+}
+
+/** The highest of `offered` whose PwrAgent level is at or below `executionMode`. */
+function highestNativeAccessMode(
+  offered: readonly string[],
+  executionMode: ThreadExecutionMode,
+): readonly [ThreadExecutionMode, string] | undefined {
   const ceiling = ACP_NATIVE_ACCESS_MODE_IDS.findIndex(([mode]) => mode === executionMode);
-  for (const [mode, id] of ACP_NATIVE_ACCESS_MODE_IDS.slice(0, ceiling + 1).reverse()) {
-    if (!offered.includes(id)) continue;
-    return { executionMode: mode, runtime: acpNativeAccessRuntime(runtime, id) };
-  }
-  return undefined;
+  return ACP_NATIVE_ACCESS_MODE_IDS.slice(0, ceiling + 1)
+    .reverse()
+    .find(([, id]) => offered.includes(id));
+}
+
+/**
+ * The mode a new session is switched to when PwrAgent asks for `requested`,
+ * given the modes that session's own `session/new` or `session/load` reply
+ * lists. The agent's cached menu came from another session, and agents differ
+ * by session: some Antigravity sessions have no native Auto and refuse it.
+ *
+ * A listed mode is used as asked. Otherwise the start falls back to the
+ * highest listed mode at or below the requested mode's access level, and never
+ * to a mode without a level, such as Plan. Undefined leaves the session in the
+ * mode it started in: nothing at or below that level is listed, or the
+ * requested mode has no level to fall back from.
+ */
+export function acpSessionStartMode(
+  requested: string,
+  offered: readonly string[],
+): string | undefined {
+  if (offered.includes(requested)) return requested;
+  const level = acpNativeAccessLevel(requested);
+  return level ? highestNativeAccessMode(offered, level)?.[1] : undefined;
 }

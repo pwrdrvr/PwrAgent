@@ -944,11 +944,13 @@ describe("DesktopBackendRegistry", () => {
       source: "configOption",
       optionId: "permission_mode",
       value: "auto",
+      sessionStartMode: true,
     }], [{
       sessionId: "kimi-session-1",
       source: "mode",
       optionId: "mode",
       value: planningMode,
+      sessionStartMode: true,
     }]]);
     expect(sendControlPrompt).not.toHaveBeenCalled();
     await registry.close();
@@ -1833,6 +1835,7 @@ describe("DesktopBackendRegistry", () => {
       source: "mode",
       optionId: "mode",
       value: "autoEdit",
+      sessionStartMode: true,
     });
     expect(setRuntimeOption).not.toHaveBeenCalledWith(
       expect.objectContaining({ value: "default" }),
