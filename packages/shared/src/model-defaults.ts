@@ -1,4 +1,4 @@
-import type { BackendLaunchpadOptions, BackendModelOption } from "./contracts/backend";
+import type { BackendLaunchpadOptions, BackendModelOption, BackendSummary } from "./contracts/backend";
 import { modelMenuEntryProviderId } from "./model-menu";
 
 /**
@@ -49,6 +49,20 @@ export function defaultModelOption(
   );
 }
 
+/** The first candidate the catalog lists, else the model a thread starts on. */
+export function modelOptionFor(
+  backend: string | undefined,
+  options: BackendLaunchpadOptions | undefined,
+  candidates: ReadonlyArray<string | undefined>,
+): BackendModelOption | undefined {
+  const models = options?.models ?? [];
+  for (const candidate of candidates) {
+    const model = candidate === undefined ? undefined : models.find((entry) => entry.id === candidate);
+    if (model) return model;
+  }
+  return defaultModelOption(backend, options);
+}
+
 /** The efforts a model offers: its own list, else the backend's. */
 export function reasoningEffortsForModel(
   options: BackendLaunchpadOptions | undefined,
@@ -78,4 +92,50 @@ export function offeredReasoningEffort(
   const efforts = reasoningEffortsForModel(options, model);
   return candidates.find((candidate): candidate is string => candidate !== undefined && efforts.includes(candidate))
     ?? defaultReasoningEffort(options, model);
+}
+
+/**
+ * The effort a surface shows for a thread: `offeredReasoningEffort`, except
+ * that with no catalog to check against (`options` and `model` both absent,
+ * as for an unreachable peer) the first saved effort stands.
+ */
+export function displayedReasoningEffort(
+  options: BackendLaunchpadOptions | undefined,
+  model: BackendModelOption | undefined,
+  candidates: ReadonlyArray<string | undefined>,
+): string | undefined {
+  if (!options && !model) {
+    return candidates.find((candidate): candidate is string => Boolean(candidate));
+  }
+  return offeredReasoningEffort(options, model, candidates);
+}
+
+/** A backend's catalog as its summary carries it. */
+type BackendCatalog = Pick<BackendSummary, "kind" | "launchpadOptions"> | undefined;
+
+/** `defaultModelOption` for a backend summary. */
+export function backendDefaultModel(backend: BackendCatalog): BackendModelOption | undefined {
+  return defaultModelOption(backend?.kind, backend?.launchpadOptions);
+}
+
+/** `reasoningEffortsForModel` for a backend summary. */
+export function backendReasoningEfforts(backend: BackendCatalog, model: BackendModelOption | undefined): string[] {
+  return reasoningEffortsForModel(backend?.launchpadOptions, model);
+}
+
+/** `defaultReasoningEffort` for a backend summary. */
+export function backendDefaultReasoningEffort(
+  backend: BackendCatalog,
+  model: BackendModelOption | undefined,
+): string | undefined {
+  return defaultReasoningEffort(backend?.launchpadOptions, model);
+}
+
+/** `offeredReasoningEffort` for a backend summary and one current effort. */
+export function backendReasoningEffortValue(
+  backend: BackendCatalog,
+  model: BackendModelOption | undefined,
+  current: string | undefined,
+): string | undefined {
+  return offeredReasoningEffort(backend?.launchpadOptions, model, [current]);
 }

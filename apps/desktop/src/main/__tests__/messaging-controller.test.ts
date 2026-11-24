@@ -8339,7 +8339,8 @@ describe("MessagingController", () => {
           fastMode: false,
           model: "gpt-5.3-codex",
           prompt: "",
-          reasoningEffort: "low",
+          // The owner's default for a model that names none: Medium.
+          reasoningEffort: "medium",
           serviceTier: undefined,
           workMode: "local",
         }),

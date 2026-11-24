@@ -945,26 +945,6 @@ export function mergeAcpRuntimeState(
   };
 }
 
-export function acpRuntimeValueLooksPrivileged(value: string | undefined): boolean {
-  // ACP agents such as Qwen implement Auto/Auto-Edit internally; only Yolo
-  // means the client should bypass every permission request.
-  return value === "yolo";
-}
-
-export function formatAcpRuntimeLabel(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return value;
-  }
-  if (trimmed.toLowerCase() === "yolo") {
-    return "Yolo";
-  }
-  return trimmed
-    .replace(/[_-]+/g, " ")
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/\b\w/g, (match) => match.toUpperCase());
-}
-
 export function acpSessionToThreadSummary(
   session: AcpSessionMetadata,
   capabilities?: AcpAgentCapabilities,

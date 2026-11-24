@@ -22,6 +22,7 @@ export type AcpRuntimeModeChoice = {
   id: string;
   /** The agent's name for the mode, unformatted. */
   label: string;
+  description?: string;
 };
 
 /**
@@ -55,7 +56,11 @@ export function acpRuntimeModeSelector(
       source: "configOption",
       optionId: option.id,
       ...(option.currentValue !== undefined ? { currentValue: option.currentValue } : {}),
-      choices: option.values.map((value) => ({ id: value.value, label: value.label ?? value.value })),
+      choices: option.values.map((value) => ({
+        id: value.value,
+        label: value.label || value.value,
+        ...(value.description ? { description: value.description } : {}),
+      })),
     };
   }
   const modes = runtime?.modes;
@@ -64,8 +69,58 @@ export function acpRuntimeModeSelector(
     source: "mode",
     optionId: "mode",
     ...(modes.currentModeId !== undefined ? { currentValue: modes.currentModeId } : {}),
-    choices: modes.availableModes.map((mode) => ({ id: mode.id, label: mode.label || mode.id })),
+    choices: modes.availableModes.map((mode) => ({
+      id: mode.id,
+      label: mode.label || mode.id,
+      ...(mode.description ? { description: mode.description } : {}),
+    })),
   };
+}
+
+/**
+ * The mode a session is in, as the selector reads it. A legacy mode config
+ * option mirrors `currentModeId`; Grok's `permission_mode` does not, because
+ * there `currentModeId` is the planning mode. With nothing recorded, the
+ * agent's own current value, else its Default, else its first mode.
+ */
+export function acpRuntimeModeValue(
+  selector: AcpRuntimeModeSelector,
+  state: Pick<BackendAcpSessionRuntimeState, "configValues" | "currentModeId"> | undefined,
+): string | undefined {
+  const offers = (value: string | undefined): value is string =>
+    value !== undefined && selector.choices.some((choice) => choice.id === value);
+  const recorded = selector.source === "mode"
+    ? state?.currentModeId
+    : (selector.optionId !== "permission_mode" && offers(state?.currentModeId) ? state?.currentModeId : undefined)
+      ?? state?.configValues?.[selector.optionId];
+  return recorded
+    ?? selector.currentValue
+    ?? selector.choices.find((choice) => choice.id === "default")?.id
+    ?? selector.choices[0]?.id;
+}
+
+/** An agent's mode id as the composer, to-do card and messaging show it. */
+export function formatAcpRuntimeModeLabel(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return value;
+  }
+  if (trimmed.toLowerCase() === "yolo") {
+    return "Yolo";
+  }
+  return trimmed
+    .replace(/[_-]+/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+/**
+ * Whether an agent's own mode skips every permission request, which only
+ * Yolo does. Auto and Auto Edit are the agent's own judgment, not PwrAgent
+ * Full Access.
+ */
+export function acpRuntimeModeIsFullAccess(value: string | undefined): boolean {
+  return value?.trim().replace(/[-\s]+/g, "_").toLowerCase() === "yolo";
 }
 
 /** The native ids for PwrAgent's access levels, lowest first, as ACP session

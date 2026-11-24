@@ -135,7 +135,8 @@ import { useTranscriptWindow } from "./useTranscriptWindow";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { formatOwnerProviderLabel } from "../../lib/thread-provider-label";
 import { resolvePreferredEditor } from "../../lib/preferred-application";
-import { Composer, getDefaultModelOption, type ComposerProps } from "../composer/Composer";
+import { backendDefaultModel } from "@pwragent/shared/model-defaults";
+import { Composer, type ComposerProps } from "../composer/Composer";
 import { ComposerTerminalToggle } from "../composer/ComposerTerminalToggle";
 import type { EnvironmentSetupRowModel } from "../composer/EnvironmentSetupRow";
 import {
@@ -4308,7 +4309,7 @@ function renderThreadViewHeader({
   // the backend's default while the launchpad has chosen none.
   const launchpadHeaderModel = composerLaunchpad
     ? composerLaunchpad.model
-      ?? getDefaultModelOption(props.backends?.find((backend) => backend.kind === composerLaunchpad.backend))?.id
+      ?? backendDefaultModel(props.backends?.find((backend) => backend.kind === composerLaunchpad.backend))?.id
     : undefined;
   return props.pendingThreadStart ? (
     <ThreadPlaceholderHeader

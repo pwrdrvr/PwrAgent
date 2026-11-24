@@ -3,6 +3,10 @@ import { useEffect, useRef } from "react";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { AppServerTurnInputItem } from "@pwragent/shared/contracts/normalized-app-server";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import {
+  backendDefaultModel as getDefaultModelOption,
+  backendReasoningEffortValue as getReasoningEffortValue,
+} from "@pwragent/shared/model-defaults";
 import type { ComposerThreadOwner } from "@pwragent/shared/contracts/composer-drafts";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import {
@@ -17,10 +21,6 @@ import { readCompleteNavigationQueue } from "./navigation-queue-projection";
 import { readNavigationActionThread } from "./navigation-action-authority";
 import { federationTargetsEqual } from "./federated-thread-events";
 
-type ModelOption = NonNullable<
-  NonNullable<BackendSummary["launchpadOptions"]>["models"]
->[number];
-
 const TERMINAL_TURN_METHODS = new Set([
   "turn/completed",
   "turn/failed",
@@ -28,47 +28,6 @@ const TERMINAL_TURN_METHODS = new Set([
 ]);
 const BACKGROUND_QUEUE_RELEASE_INTERVAL_MS = 30_000;
 const globalInFlightScopeKeys = new Set<string>();
-
-function getDefaultModelOption(backend?: BackendSummary): ModelOption | undefined {
-  const models = backend?.launchpadOptions?.models ?? [];
-  return (
-    models.find((model) => model.current) ??
-    models.find((model) => model.supportsReasoning) ??
-    models[0]
-  );
-}
-
-function getReasoningEffortsForModel(
-  backend: BackendSummary | undefined,
-  model: ModelOption | undefined,
-): string[] {
-  return model?.reasoningEfforts ?? backend?.launchpadOptions?.reasoningEfforts ?? [];
-}
-
-function getDefaultReasoningEffort(
-  backend: BackendSummary | undefined,
-  model: ModelOption | undefined,
-): string | undefined {
-  const reasoningEfforts = getReasoningEffortsForModel(backend, model);
-  if (
-    model?.defaultReasoningEffort &&
-    reasoningEfforts.includes(model.defaultReasoningEffort)
-  ) {
-    return model.defaultReasoningEffort;
-  }
-  return reasoningEfforts.includes("medium") ? "medium" : reasoningEfforts[0];
-}
-
-function getReasoningEffortValue(
-  backend: BackendSummary | undefined,
-  model: ModelOption | undefined,
-  currentValue: string | undefined,
-): string | undefined {
-  const reasoningEfforts = getReasoningEffortsForModel(backend, model);
-  return reasoningEfforts.includes(currentValue ?? "")
-    ? currentValue
-    : getDefaultReasoningEffort(backend, model);
-}
 
 function buildQueuedTurnInput(
   queuedTurn: ComposerQueuedTurnSnapshot,

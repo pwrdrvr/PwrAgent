@@ -1,4 +1,4 @@
-import { findAcpPermissionModeConfigOption } from "@pwragent/shared/acp-permission-mode";
+import { acpRuntimeModeIsFullAccess, findAcpPermissionModeConfigOption } from "@pwragent/shared/acp-permission-mode";
 import { CODEX_GOAL_METHODS } from "@pwragent/shared/contracts/thread-goal";
 import {
   type AppServerAvailableCommandSummary,
@@ -29,10 +29,7 @@ import {
   preferredModelId,
 } from "@pwragent/shared/model-defaults";
 import { parseProviderPickerValue } from "@pwragent/shared/provider-picker";
-import {
-  acpRuntimeValueLooksPrivileged,
-  type AcpRuntimeClient,
-} from "./acp-backend-adapter";
+import type { AcpRuntimeClient } from "./acp-backend-adapter";
 import { formatRateLimitWindowName } from "../codex-app-server/desktop-client";
 import { resolveCodexProtocolCompatibility } from "../codex-app-server/protocol-compatibility";
 import { managedCodexTagForCommand } from "../codex-build-channel";
@@ -247,7 +244,7 @@ export function acpRuntimeStateRequiresFullAccess(params: {
   if (!runtime) {
     return false;
   }
-  if (acpRuntimeValueLooksPrivileged(runtime.currentModeId)) {
+  if (acpRuntimeModeIsFullAccess(runtime.currentModeId)) {
     return true;
   }
 
@@ -262,7 +259,7 @@ export function acpRuntimeStateRequiresFullAccess(params: {
   }
 
   for (const optionId of modeOptionIds) {
-    if (acpRuntimeValueLooksPrivileged(configValues[optionId])) {
+    if (acpRuntimeModeIsFullAccess(configValues[optionId])) {
       return true;
     }
   }

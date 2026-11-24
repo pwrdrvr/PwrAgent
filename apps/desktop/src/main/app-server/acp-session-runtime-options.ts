@@ -4,7 +4,11 @@ import {
   isAcpBackendId,
   type ThreadPermissionTransition,
 } from "@pwragent/shared/contracts/navigation";
-import { findAcpPermissionModeConfigOption } from "@pwragent/shared/acp-permission-mode";
+import {
+  acpRuntimeModeIsFullAccess,
+  findAcpPermissionModeConfigOption,
+  formatAcpRuntimeModeLabel,
+} from "@pwragent/shared/acp-permission-mode";
 import {
   type AcpBackendId,
   type AppServerBackendKind,
@@ -19,8 +23,6 @@ import {
 } from "@pwragent/shared/contracts/agent";
 import { getMainLogger } from "../log";
 import {
-  acpRuntimeValueLooksPrivileged,
-  formatAcpRuntimeLabel,
   mergeAcpRuntimeState,
   type AcpBackendAdapter,
   type AcpRuntimeClient,
@@ -133,8 +135,8 @@ export class AcpSessionRuntimeOptions {
       threadId: params.threadId,
       transition: {
         id: randomUUID(),
-        fromExecutionMode: antigravityAccess ?? (acpRuntimeValueLooksPrivileged(fromValue) ? "full-access" : "default"),
-        toExecutionMode: antigravityAccess ?? (acpRuntimeValueLooksPrivileged(params.value) ? "full-access" : "default"),
+        fromExecutionMode: antigravityAccess ?? (acpRuntimeModeIsFullAccess(fromValue) ? "full-access" : "default"),
+        toExecutionMode: antigravityAccess ?? (acpRuntimeModeIsFullAccess(params.value) ? "full-access" : "default"),
         fromLabel,
         toLabel,
         status: "queued",
@@ -199,7 +201,7 @@ export class AcpSessionRuntimeOptions {
     const mergedRuntime = mergeAcpRuntimeState(current.acpRuntime, runtimeState);
     const changesExecutionMode = this.isAcpRuntimeExecutionModeOption(params);
     const nextExecutionMode = changesExecutionMode
-      ? acpRuntimeValueLooksPrivileged(params.value)
+      ? acpRuntimeModeIsFullAccess(params.value)
         ? "full-access"
         : "default"
       : current.executionMode;
@@ -234,7 +236,7 @@ export class AcpSessionRuntimeOptions {
       transition: {
         id: randomUUID(),
         fromExecutionMode: changesExecutionMode
-          ? acpRuntimeValueLooksPrivileged(fromValue) ? "full-access" : "default"
+          ? acpRuntimeModeIsFullAccess(fromValue) ? "full-access" : "default"
           : current.executionMode ?? "default",
         toExecutionMode: nextExecutionMode ?? "default",
         fromLabel,
@@ -342,10 +344,10 @@ export class AcpSessionRuntimeOptions {
           threadId,
           transition: {
             id: randomUUID(),
-            fromExecutionMode: acpRuntimeValueLooksPrivileged(queue.fromValue)
+            fromExecutionMode: acpRuntimeModeIsFullAccess(queue.fromValue)
               ? "full-access"
               : "default",
-            toExecutionMode: acpRuntimeValueLooksPrivileged(queue.value)
+            toExecutionMode: acpRuntimeModeIsFullAccess(queue.value)
               ? "full-access"
               : "default",
             fromLabel: queue.fromLabel,
@@ -489,13 +491,13 @@ export class AcpSessionRuntimeOptions {
     if (params.source === "configOption") {
       const option = runtime?.configOptions?.find((item) => item.id === params.optionId);
       const label = option?.values.find((item) => item.value === value)?.label;
-      return formatAcpRuntimeLabel(label ?? value);
+      return formatAcpRuntimeModeLabel(label ?? value);
     }
     if (params.source === "model") {
       const label = runtime?.models?.availableModels.find((model) => model.id === value)?.label;
-      return formatAcpRuntimeLabel(label ?? value);
+      return formatAcpRuntimeModeLabel(label ?? value);
     }
     const label = runtime?.modes?.availableModes.find((mode) => mode.id === value)?.label;
-    return formatAcpRuntimeLabel(label ?? value);
+    return formatAcpRuntimeModeLabel(label ?? value);
   }
 }
