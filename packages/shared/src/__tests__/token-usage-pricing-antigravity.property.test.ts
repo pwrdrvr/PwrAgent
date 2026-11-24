@@ -91,23 +91,27 @@ const CLAUDE_55_RATE_CARDS = [
 ] as const;
 
 describe("Antigravity Gemini and Claude 5.5 list pricing", () => {
-  it("prices every Gemini model and thought-level alias by published date without double-counting thoughts", () => {
+  it("prices Gemini cache writes as standard input and counts thoughts once for every model and alias", () => {
     fc.assert(fc.property(
       fc.constantFrom(...GEMINI_RATE_CARDS),
       fc.integer({ min: 0, max: 500_000 }),
+      fc.integer({ min: 0, max: 100_000 }),
       fc.integer({ min: 0, max: 500_000 }),
       fc.integer({ min: 0, max: 100_000 }),
       fc.integer({ min: 0, max: 100_000 }),
-      (card, uncachedInputTokens, cachedInputTokens, outputTokens, rawThoughtTokens) => {
+      (card, regularInputTokens, cacheWriteInputTokens, cachedInputTokens, outputTokens, rawThoughtTokens) => {
+        const uncachedInputTokens = regularInputTokens + cacheWriteInputTokens;
         const reasoningOutputTokens = Math.min(rawThoughtTokens, outputTokens);
         for (const interval of card.rates) {
-          const expectedUncached = usdMicros(uncachedInputTokens, interval.input);
+          const expectedInput = usdMicros(uncachedInputTokens, interval.input);
+          const expectedCacheWrite = usdMicros(cacheWriteInputTokens, interval.input);
           const expectedCached = usdMicros(cachedInputTokens, interval.cached);
           const expectedOutput = usdMicros(outputTokens, interval.output);
-          const expectedTotal = expectedUncached + expectedCached + expectedOutput;
+          const expectedTotal = expectedInput + expectedCached + expectedOutput;
 
           const canonical = estimateTokenUsageCost({
             at: interval.at,
+            cacheWriteInputTokens,
             cachedInputTokens,
             model: card.model,
             outputTokens,
@@ -115,18 +119,20 @@ describe("Antigravity Gemini and Claude 5.5 list pricing", () => {
             uncachedInputTokens,
           });
           expect(canonical).toMatchObject({
+            cacheWriteInputCostMicros: expectedCacheWrite,
             cachedInputCostMicros: expectedCached,
             outputCostMicros: expectedOutput,
             outputTokensIncludeReasoning: true,
             provider: "google",
             serviceTier: "standard",
             totalCostMicros: expectedTotal,
-            uncachedInputCostMicros: expectedUncached,
+            uncachedInputCostMicros: expectedInput - expectedCacheWrite,
           });
 
           for (const alias of card.aliases) {
             const aliased = estimateTokenUsageCost({
               at: interval.at,
+              cacheWriteInputTokens,
               cachedInputTokens,
               model: alias,
               outputTokens,
@@ -139,6 +145,16 @@ describe("Antigravity Gemini and Claude 5.5 list pricing", () => {
         }
       },
     ));
+  });
+
+  it("prices a single Gemini cache write as standard input", () => {
+    expect(estimateTokenUsageCost({
+      ...NO_USAGE,
+      at: Date.UTC(2026, 10, 18),
+      cacheWriteInputTokens: 1,
+      model: "gemini-4-neon",
+      uncachedInputTokens: 1,
+    })).toMatchObject({ cacheWriteInputCostMicros: 3, uncachedInputCostMicros: 0, totalCostMicros: 3 });
   });
 
   it("prices Claude Opus 5.5 and Sonnet 5.5 with 5-minute cache writes and no thought double-counting", () => {

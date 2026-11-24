@@ -3492,7 +3492,7 @@ export class AcpBackendAdapter {
         // that running turn. Live lifecycle is owned by turn/started and the
         // prompt-settled terminal events, not transcript replay snapshots.
       },
-      onPromptError: async ({ sessionId, turnId, error }) => {
+      onPromptError: async ({ sessionId, turnId, error, usage }) => {
         this.liveTurnUsage.delete(
           [agent.backendId, sessionId, turnId].join(":"),
         );
@@ -3506,6 +3506,24 @@ export class AcpBackendAdapter {
           threadId: sessionId,
           turnId,
         });
+        if (usage) {
+          const notification = acpUsageNotification({
+            envelope: usage,
+            model: selectedAcpModel(agent, this.getSession(agent.backendId, sessionId)),
+            threadId: sessionId,
+            totalTokenUsage: usage.tokenUsage,
+            turnId,
+          });
+          if (notification) {
+            await this.emit({ backend: agent.backendId, notification }).catch((usageError: unknown) => {
+              acpBackendAdapterLog.warn("acp_failed_prompt_usage_unreported", {
+                backend: agent.backendId,
+                turnId,
+                error: usageError instanceof Error ? usageError.message : String(usageError),
+              });
+            });
+          }
+        }
         await this.emit({
           backend: agent.backendId,
           notification: {

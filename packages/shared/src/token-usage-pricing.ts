@@ -1144,7 +1144,7 @@ const ANTHROPIC_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
   },
 ];
 
-const GOOGLE_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
+const GOOGLE_PRICING_CATALOG: readonly PricingCatalogEntry[] = ([
   {
     aliases: [
       "gemini-4-neon-low",
@@ -1302,7 +1302,11 @@ const GOOGLE_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
     outputUsdPerMillion: 3.75,
     outputTokensIncludeReasoning: true,
   },
-];
+] satisfies PricingCatalogEntry[]).map((entry) => ({
+  ...entry,
+  // Gemini implicit caching discounts cache hits. Cache creation is billed at the input rate.
+  cacheWriteInputUsdPerMillion: entry.inputUsdPerMillion,
+}));
 
 const TOKEN_USAGE_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
   ...ANTHROPIC_PRICING_CATALOG,
@@ -1688,14 +1692,14 @@ function estimateTokenUsageCostFromCatalog(
         params.requestInputTokenCeiling,
       ),
   );
-  const uncachedInputCostMicros = calculateTokenCostMicros(
-    params.uncachedInputTokens - cacheWriteInputTokens,
-    entry.inputUsdPerMillion,
-  );
   const cacheWriteInputCostMicros = calculateTokenCostMicros(
     cacheWriteInputTokens,
     entry.cacheWriteInputUsdPerMillion ?? 0,
   );
+  // When both buckets share a rate, round their combined cost once.
+  const uncachedInputCostMicros = entry.cacheWriteInputUsdPerMillion === entry.inputUsdPerMillion
+    ? calculateTokenCostMicros(params.uncachedInputTokens, entry.inputUsdPerMillion) - cacheWriteInputCostMicros
+    : calculateTokenCostMicros(params.uncachedInputTokens - cacheWriteInputTokens, entry.inputUsdPerMillion);
   const cachedInputCostMicros = calculateTokenCostMicros(
     params.cachedInputTokens,
     entry.cachedInputUsdPerMillion,
