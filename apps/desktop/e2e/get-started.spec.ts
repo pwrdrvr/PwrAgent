@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { findLiveProfileRuntimeMarkers, isProcessAlive } from "../src/main/profile";
+import { E2E_ACP_DISCOVERY_ROOT_ENV } from "../src/main/settings/desktop-settings-env";
 import { APP_QUIT_CHANNEL, PROFILES_OPEN_CHANNEL } from "../src/shared/ipc";
 import { expect, test } from "./fixtures/electron-test";
 import {
@@ -83,7 +84,10 @@ if (name === "qwen") {
 
 async function launchGetStarted(
   env: Record<string, string | undefined> = {},
-  graduatedProfile?: string,
+  { graduatedProfile, isolateAcpDiscovery }: {
+    graduatedProfile?: string;
+    isolateAcpDiscovery?: boolean;
+  } = {},
 ) {
   const homeRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), "pwragent-get-started-e2e-"),
@@ -121,10 +125,36 @@ async function launchGetStarted(
         }
       : {}),
     env: {
+      ...(isolateAcpDiscovery ? absentAcpDiscoveryEnv(homeRoot) : {}),
       PWRAGENT_CODEX_COMMAND: codexCommand,
       ...env,
     },
   });
+}
+
+function absentAcpDiscoveryEnv(homeRoot: string): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = {};
+  // Drop inherited CLI overrides and all PATH spellings (Windows folds case).
+  for (const key of Object.keys(process.env)) {
+    if (/^(?:PATH|PWRAGENT_ACP_AGENTS_.*_CLI_PATH)$/i.test(key)) {
+      env[key] = undefined;
+    }
+  }
+  env[E2E_ACP_DISCOVERY_ROOT_ENV] = homeRoot;
+  if (process.platform === "win32") {
+    env.PATH = path.join(homeRoot, ".local", "bin");
+  } else {
+    env.PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
+    env.SHELL = process.platform === "darwin" ? "/bin/zsh" : "/bin/bash";
+    env.ZDOTDIR = homeRoot;
+    // Login shells can restore paths through /etc/zprofile (path_helper on
+    // macOS) or /etc/profile. Reset PATH after those files run.
+    const profile = `export PATH="${env.PATH}"\n`;
+    for (const name of [".profile", ".bash_profile", ".zprofile"]) {
+      fs.writeFileSync(path.join(homeRoot, name), profile, "utf8");
+    }
+  }
+  return env;
 }
 
 function wellKnownFakeProviderCommands(
@@ -405,7 +435,7 @@ test.describe("Get started", () => {
       "Detached Linux handoff requires a sandbox-enabled CI launch.",
     );
     test.setTimeout(60_000);
-    const app = await launchGetStarted({ PWRAGENT_PROFILE: "test2" }, "test2");
+    const app = await launchGetStarted({ PWRAGENT_PROFILE: "test2" }, { graduatedProfile: "test2" });
     try {
       await expect(
         page(app).getByRole("heading", { name: /Set up.+test2/i }),
@@ -432,7 +462,7 @@ test.describe("Get started", () => {
       "Detached Linux handoff requires a sandbox-enabled CI launch.",
     );
     test.setTimeout(60_000);
-    const app = await launchGetStarted({ PWRAGENT_PROFILE: "work" }, "work");
+    const app = await launchGetStarted({ PWRAGENT_PROFILE: "work" }, { graduatedProfile: "work" });
     try {
       // The detached process inherits this harness setting from bootstrap.
       expect(
@@ -499,7 +529,7 @@ test.describe("Get started", () => {
   });
 
   test("Install shows each agent's own install commands", async () => {
-    const app = await launchGetStarted();
+    const app = await launchGetStarted({}, { isolateAcpDiscovery: true });
     try {
       await expect(agentRow(app, "codex")).toContainText("Needs sign-in", { timeout: 20_000 });
       await showMoreAgents(app);
@@ -519,7 +549,8 @@ test.describe("Get started", () => {
       ];
       for (const [id, command] of expected) {
         const row = agentRow(app, id);
-        await row.getByRole("button", { name: "Install" }).click();
+        await expect(row).toContainText("Not installed");
+        await row.getByRole("button", { name: "Install", exact: true }).click();
         await expect(row.getByText(command).first()).toBeVisible();
         await expect(row.getByRole("link", { name: "Official setup guide" })).toBeVisible();
       }
