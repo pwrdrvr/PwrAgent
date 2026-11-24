@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
 import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +7,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import * as gitExecutable from "../app-server/git-executable";
 import { bundledGitExecutable } from "../bundled-git";
 import { GitSubprocessDiagnostics, gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
-import { clearGitHubRemoteCache, readObservedGitOrigin, resolveGitHubRepoForDirectory, resolveGitHubReposForDirectory } from "../pr-status/git-remote";
+import { clearGitHubRemoteCache, readObservedGitOrigin, REMOTE_CONFIG_KEYS, resolveGitHubRepoForDirectory, resolveGitHubReposForDirectory } from "../pr-status/git-remote";
 import { createScheduledPrPrefetchRepoResolver, detectPullRequestsForThread } from "../pr-status/pr-detection";
 import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
 
@@ -503,6 +503,36 @@ it.skipIf(process.platform === "win32")("uses one current config read per branch
       ? ["config", "symbolic-ref", "for-each-ref"]
       : ["config"]);
   }
+});
+
+it.skipIf(process.platform === "win32")("tries oversized config provenance once per checkout in a batch", async () => {
+  const cwd = await fixture();
+  await readGit(cwd, "remote", "remove", "upstream");
+  const trackingConfig = Array.from({ length: 600 }, (_, index) =>
+    `[branch "tracking-${String(index).padStart(3, "0")}"]\n\tremote = origin\n\tmerge = refs/heads/main\n`).join("");
+  await appendFile(path.join(cwd, ".git", "config"), trackingConfig);
+  const configArgs = ["--null", "--show-scope", "--includes", "--get-regexp", REMOTE_CONFIG_KEYS];
+  const ordinary = await runGitCommand(cwd, ["config", ...configArgs]);
+  const withOrigins = await runGitCommand(cwd, ["config", "--show-origin", ...configArgs]);
+  expect(Buffer.byteLength(ordinary.stdout)).toBeLessThan(64 * 1024);
+  expect(Buffer.byteLength(withOrigins.stdout)).toBeGreaterThan(64 * 1024);
+  await resolveGitHubRepoForDirectory(cwd);
+
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  const starts = recordPrefetchStarts();
+  for (const [index, branch] of ["topic-0", "main", "topic-1"].entries()) {
+    if (index === 2) await readGit(cwd, "remote", "set-url", "origin", "https://github.com/fixture/after-overflow.git");
+    const expected = (await oracle(cwd))(branch);
+    starts.clear();
+    await expectEligible(resolve, cwd, branch, expected);
+    // Only the first branch attempts provenance. Each fallback still samples current config.
+    expect(starts.calls.filter(([, args]) => args[0] === "config").map(([, args]) => args.includes("--show-origin")))
+      .toEqual(index === 0 ? [true, false] : [false]);
+  }
+  const expectedNextBatch = (await oracle(cwd))("topic-2");
+  starts.clear();
+  await expectEligible(createScheduledPrPrefetchRepoResolver(), cwd, "topic-2", expectedNextBatch);
+  expect(starts.calls.filter(([, args]) => args[0] === "config" && args.includes("--show-origin"))).toHaveLength(1);
 });
 
 it.skipIf(process.platform === "win32")("uses native HEAD reads after one rejected checkout proof", async () => {

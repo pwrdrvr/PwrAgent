@@ -19,6 +19,12 @@ type PrefetchMetadata = {
   proof?: { heads?: ReadonlyMap<string, string>; unchanged: () => Promise<boolean> };
 };
 
+export type ScheduledPrPrefetchMetadataScope = {
+  branchCount: number;
+  repositories: ReturnType<typeof createScheduledPrefetchRemoteReader>;
+  configOutputTooLarge?: true;
+};
+
 function prefetchGitInputs(cwd: string) {
   const env = buildPwrAgentChildProcessEnv(process.env);
   if (process.platform === "win32" || !path.isAbsolute(cwd) || gitCommandPreference(env) || getSelectedManagedGit()
@@ -89,25 +95,30 @@ function parseConfigWithOrigins(cwd: string, stdout: string) {
 }
 
 export async function observeScheduledPrPrefetchMetadata(
-  cwd: string, repositories: ReturnType<typeof createScheduledPrefetchRemoteReader>, branchCount: number,
+  cwd: string, scope: ScheduledPrPrefetchMetadataScope,
 ): Promise<PrefetchMetadata | undefined> {
+  const { repositories, branchCount } = scope;
   const currentInputs = () => {
     try { return prefetchGitInputs(cwd); } catch { return undefined; }
   };
   try {
     if (repositories.shouldSkipLookup()) return { repos: [], refreshedRemoteNames: [] };
-    if (repositories.usesGitRemote()) return undefined;
+    if (scope.configOutputTooLarge || repositories.usesGitRemote()) return undefined;
     const inputs = currentInputs();
     if (!inputs) return undefined;
     const roots = await observePrCheckoutConfigFiles(cwd, inputs.paths);
     if (!roots) return undefined;
     const readConfig = () => runPrMetadataGit(cwd, [
       "config", "--null", "--show-scope", "--show-origin", "--includes", "--get-regexp", `${REMOTE_CONFIG_KEYS}|^include\\.|^includeif\\.`,
-    ], { purpose: "pr-remotes", env: inputs.env, maxBuffer: 64 * 1024, timeout: 2_000 });
-    const config = await readConfig().catch((error: unknown) => {
+    ], { purpose: "pr-remotes", env: inputs.env, maxBuffer: 64 * 1024, timeout: 2_000 }).catch((error: unknown) => {
       if (isGitConfigNoMatch(error)) return undefined;
+      if (error && typeof error === "object" && "code" in error && error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+        // Keep reading current config through the ordinary path for this batch.
+        scope.configOutputTooLarge = true;
+      }
       throw error;
     });
+    const config = await readConfig();
     if (config?.stderr) return undefined;
     const parsed = config ? parseConfigWithOrigins(roots.directory, config.stdout)
       : { configuration: { names: [], remotes: [] }, sources: undefined };
@@ -131,7 +142,7 @@ export async function observeScheduledPrPrefetchMetadata(
     }
     if (extra.length) {
       const confirmed = await readConfig();
-      if (confirmed.stderr !== "" || confirmed.stdout !== config?.stdout) return undefined;
+      if (confirmed?.stderr !== "" || confirmed.stdout !== config?.stdout) return undefined;
     }
     const configUnchanged = async () => Boolean(await files.unchanged()
       && (files === roots || await roots.unchanged()) && inputsUnchanged());

@@ -8,7 +8,7 @@ import { runPrMetadataGit, SharedPrMetadataRead, type PrMetadataDemand } from ".
 import { prMatchesSourceRepository } from "./pr-source-repository";
 import { hasForgeRepositoryName } from "./forge-repository-names";
 import { readGitRemoteHead, readProvenRemoteHeads } from "./pr-remote-heads";
-import { observeScheduledPrPrefetchMetadata } from "./pr-prefetch-metadata";
+import { observeScheduledPrPrefetchMetadata, type ScheduledPrPrefetchMetadataScope } from "./pr-prefetch-metadata";
 
 const GIT_BRANCH_LOOKUP_TIMEOUT_MS = 2_000;
 const FALLBACK_DEFAULT_BRANCHES = [
@@ -159,10 +159,8 @@ type ScheduledCheckoutMetadata = {
   unchanged: () => Promise<boolean>;
   publish?: () => void;
 };
-type ScheduledPrefetchCheckout = {
+type ScheduledPrefetchCheckout = ScheduledPrPrefetchMetadataScope & {
   verified?: ScheduledCheckoutMetadata;
-  repositories: ReturnType<typeof createScheduledPrefetchRemoteReader>;
-  branchCount: number;
 };
 
 /** Resolve the GitHub repositories eligible for scheduled branch prefetch. */
@@ -174,7 +172,7 @@ export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string, che
       let metadata = cached && await cached.unchanged() ? cached : undefined;
       if (!metadata) {
         checkout.verified = undefined;
-        const observed = await observeScheduledPrPrefetchMetadata(cwd, checkout.repositories, checkout.branchCount);
+        const observed = await observeScheduledPrPrefetchMetadata(cwd, checkout);
         if (observed?.proof) {
           const { heads, unchanged } = observed.proof;
           const remoteNames = observed.refreshedRemoteNames;
