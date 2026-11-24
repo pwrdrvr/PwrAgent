@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => {
     store: {
       readNavigationPullRequests: vi.fn((): PrSummary[][] => []),
       readNavigationSourceVersion: vi.fn(() => "unchanged"),
+      getThreadPrAutoDispatchPending: vi.fn(async () => undefined),
       readNavigationQueryIndex: vi.fn((_params: { threads: NavigationThreadSummary[] }): NavigationQueryIndex => ({ threads: [], directories: [] })),
       readDirectoryGitStatusCache: vi.fn(async (): Promise<Record<string, { gitStatus: NavigationDirectoryGitStatus }>> => ({})),
       listAllActivePrStatusWatches: vi.fn(async (): Promise<ThreadPullRequestWatchSummary[]> => []),
@@ -46,9 +47,11 @@ vi.mock("../messaging/desktop-messaging-store", () => ({ getDesktopMessagingStor
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: vi.fn() }));
 vi.mock("../app-server/scratch-projects", () => ({ resolveScratchProjectsRoots: () => [] }));
 import { loadLocalNavigationQueryIndex, projectBoundNavigationStacks, projectSelectedStackLayers, readNavigationStackLayers } from "../app-server/navigation-query-source";
-import { StackReader, StackReadObservation } from "../stacks/stack-reader";
+import { StackReader } from "../stacks/stack-reader";
 import { resolveNavigationWorktreeProjects } from "../app-server/navigation-worktree-projects";
 import { runGitCommand } from "../app-server/git-executable";
+import { gitSubprocessDiagnostics, prGitSubprocessCaller } from "../diagnostics/git-subprocess-diagnostics";
+import { filterStoredDiscoveredPullRequests } from "../pr-status/pr-detection";
 import { resolveWorktreeRepositoryDirectory } from "../git-info/worktree-store";
 import { NavigationQueryPool } from "../app-server/navigation-query-pool";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
@@ -142,33 +145,101 @@ it("keeps the lead PR's position even when the thread holds more layers than the
   }));
 });
 
-it("omits a stale automatic attachment from selected stack details and avoids a forge lookup", async () => {
+it.each([false, true])("omits stale automatic attachment evidence when the stack branch is checked out: %s", async (checkedOut) => {
   const source = createSource();
-  const directory = os.tmpdir();
-  const thread: NavigationThreadSummary = {
-    source: "codex", id: "stale-stack", title: "Stale stack", titleSource: "derived", inbox: { inInbox: false },
-    gitBranch: "topic", linkedDirectories: [{ id: directory, path: directory, label: "Fixture", kind: "local" }],
-  };
-  const stalePr: PrSummary = {
-    number: 41, provider: "github.com", org: "old", repo: "remote", state: "passing",
-    url: "https://github.com/old/remote/pull/41", linkedDirectoryPaths: [directory],
-  };
-  const canonicalize = vi.fn(async (_prs: PrSummary[], _demand?: unknown, verify = true) => verify ? [] : [stalePr]);
-  // The checkout validator rejects the attachment. The layer reader must see
-  // that validated inventory even when the consumer just opened a popover.
-  const registry = { ...source.registry, canonicalizeNavigationPullRequests: canonicalize } as unknown as DesktopBackendRegistry;
-  vi.mocked(getDesktopBackendRegistry).mockReturnValue(registry);
-  mocks.store.readNavigationQueryIndex.mockReturnValueOnce({ directories: [], threads: [thread] });
-  mocks.store.readNavigationPullRequests.mockReturnValueOnce([[stalePr]]);
-  const read = vi.spyOn(StackReader.prototype, "read").mockResolvedValue({ stacks: [], catalogs: [] });
+  const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-navigation-stale-stack-")));
+  const restoreGit = isolateProcessGitEnvironment();
   try {
+    await runIsolatedGit(directory, ["init", "-b", "main"]);
+    await runIsolatedGit(directory, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+      "commit", "--allow-empty", "-m", "base"]);
+    const head = (await runIsolatedGit(directory, ["rev-parse", "HEAD"])).stdout.trim();
+    await writeFile(path.join(directory, ".git", "gh-stack"), JSON.stringify({
+      schemaVersion: 1, repository: "github.com:old/remote",
+      stacks: [{ trunk: { branch: "main", head }, branches: [{ branch: "topic", head, base: head, pullRequest: { number: 41 } }] }],
+    }));
+    const worktree = path.join(directory, "linked");
+    if (checkedOut) await runIsolatedGit(directory, ["worktree", "add", "-b", "topic", worktree]);
+    const cwd = checkedOut ? worktree : directory;
+    const thread: NavigationThreadSummary = {
+      source: "codex", id: "stale-stack", title: "Stale stack", titleSource: "derived", inbox: { inInbox: false },
+      gitBranch: checkedOut ? "topic" : "main", linkedDirectories: [{ id: cwd, path: cwd, label: "Fixture", kind: "local" }],
+    };
+    const stalePr: PrSummary = {
+      number: 41, provider: "github.com", org: "old", repo: "remote", state: "passing",
+      url: "https://github.com/old/remote/pull/41", linkedDirectoryPaths: [cwd], headSha: head, mergeState: "conflicting",
+    };
+    const canonicalize = vi.fn(async (_prs: PrSummary[], _demand?: unknown, verify = true) => verify ? [] : [stalePr]);
+    const registry = { ...source.registry, canonicalizeNavigationPullRequests: canonicalize } as unknown as DesktopBackendRegistry;
+    vi.mocked(getDesktopBackendRegistry).mockReturnValue(registry);
+    mocks.store.readNavigationQueryIndex.mockReturnValueOnce({ directories: [], threads: [thread] });
+    mocks.store.readNavigationPullRequests.mockReturnValueOnce([[stalePr]]);
     source.finish();
-    await readNavigationStackLayers({ backend: thread.source, threadId: thread.id });
-    expect(canonicalize).toHaveBeenCalledWith([stalePr], expect.objectContaining({ allowForgeLookup: false }));
-    expect(read).toHaveBeenCalledWith([expect.objectContaining({ prs: [] })], [], undefined, expect.any(Function), expect.any(StackReadObservation));
+    const detail = await readNavigationStackLayers({ backend: thread.source, threadId: thread.id });
+    // If the checkout validator had not run, the stored PR would bind the
+    // thread as the holder of that layer without a checked-out topic branch.
+    expect(detail.count).toBe(checkedOut ? 1 : 0);
+    if (checkedOut) {
+      expect(detail.page(0, 1)[0]?.layer).toMatchObject({
+        role: "layer", pullRequest: { number: 41 }, unsettled: "settlement unknown",
+      });
+    }
+    expect(canonicalize).toHaveBeenNthCalledWith(1, [stalePr], expect.objectContaining({ allowForgeLookup: false }), false);
+    expect(canonicalize).toHaveBeenNthCalledWith(2, [stalePr], expect.objectContaining({ allowForgeLookup: false }));
   } finally {
-    read.mockRestore();
     vi.mocked(getDesktopBackendRegistry).mockReset();
+    restoreGit();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it("does not validate automatic attachments that cannot participate in a navigation stack", async () => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-navigation-stack-admission-")));
+  const restoreGit = isolateProcessGitEnvironment();
+  const source = createSource();
+  const original = gitSubprocessDiagnostics.startGit;
+  const starts = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+  const validationPaths = new Set<string>();
+  starts.mockImplementation((...args) => {
+    if (prGitSubprocessCaller.getStore() === "pr-stored-attachment-validation") validationPaths.add(args[0]);
+    return original.call(gitSubprocessDiagnostics, ...args);
+  });
+  try {
+    await runIsolatedGit(root, ["init", "-b", "main"]);
+    await runIsolatedGit(root, ["remote", "add", "origin", "https://github.com/fixture/no-stack.git"]);
+    const registry = {
+      ...source.registry,
+      canonicalizeNavigationPullRequests: (prs: PrSummary[], demand: NonNullable<Parameters<typeof filterStoredDiscoveredPullRequests>[1]>["demand"], verify = true) =>
+        verify ? filterStoredDiscoveredPullRequests(prs, { demand }) : prs,
+    } as unknown as DesktopBackendRegistry;
+    source.finish();
+    await fc.assert(fc.asyncProperty(fc.uniqueArray(fc.integer({ min: 1, max: 12 }), { minLength: 1, maxLength: 5 }),
+      async (numbers) => {
+        const threads = numbers.map((number): NavigationThreadSummary => ({
+          source: "codex", id: `thread-${number}`, title: "Fixture", titleSource: "derived", inbox: { inInbox: false },
+          gitBranch: `topic-${number}`, linkedDirectories: [{ id: root, path: root, label: "Fixture", kind: "local" }],
+        }));
+        const attachments = numbers.map((number): PrSummary[] => [{
+          number, provider: "github.com", org: "fixture", repo: "no-stack", state: "passing", lifecycleState: "open",
+          url: `https://github.com/fixture/no-stack/pull/${number}`, headRefName: `topic-${number}`, baseRefName: "main",
+          linkedDirectoryPaths: [root],
+        }]);
+        mocks.store.readNavigationQueryIndex.mockReturnValueOnce({ threads, directories: [] });
+        mocks.store.readNavigationPullRequests.mockReturnValueOnce(attachments);
+        const result = await loadLocalNavigationQueryIndex({
+          registry, callerReason: "fixture-navigation-stack-admission", includeStacks: true, refreshProviders: true,
+        });
+        source.emit("thread/started");
+        expect(result.threads).toHaveLength(numbers.length);
+        expect(result.stacks ?? []).toEqual([]);
+        // PRs sharing only a trunk cannot make an inferred stack. With no
+        // tracked catalog, their checkout metadata cannot affect this read.
+        expect(validationPaths.size).toBe(0);
+      }), { numRuns: 8 });
+  } finally {
+    starts.mockRestore();
+    restoreGit();
+    await rm(root, { recursive: true, force: true });
   }
 });
 

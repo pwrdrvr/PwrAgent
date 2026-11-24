@@ -1700,8 +1700,8 @@ export class DesktopBackendRegistry {
   }
 
   canonicalizeNavigationPullRequests(prs: NonNullable<NavigationSnapshot["threads"][number]["prs"]>,
-    demand?: PrMetadataDemand): Promise<typeof prs> {
-    return this.forgeToolBridge.canonicalizeNavigationPullRequests(prs, demand);
+    demand?: PrMetadataDemand, verifyAttachments?: boolean): Promise<typeof prs> {
+    return this.forgeToolBridge.canonicalizeNavigationPullRequests(prs, demand, verifyAttachments);
   }
 
   withNavigationPrimaryGitRepositories(threads: NavigationSnapshot["threads"]): NavigationSnapshot["threads"] {

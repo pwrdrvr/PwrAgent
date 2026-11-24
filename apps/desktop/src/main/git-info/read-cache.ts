@@ -62,6 +62,25 @@ export class GitReadCache<T> {
     this.now = options.now ?? (() => performance.now());
   }
 
+  private readCompleted(key: string): Promise<T> | undefined {
+    const cached = this.entries.get(key);
+    if (!cached || cached.expiresAt <= this.now()) return undefined;
+    return cached.failed ? Promise.reject(cached.error) : Promise.resolve(cached.value);
+  }
+
+  /** Join an existing read without admitting a new load. */
+  readExisting(key: string): Promise<T> | undefined {
+    return this.pending.get(key) ?? this.readCompleted(key);
+  }
+
+  /** Publish a prepared observation with its original lifetime. */
+  prime(key: string, value: T, observedAt: number): void {
+    const now = this.now();
+    const expiresAt = observedAt + (this.options.ttlFor?.(value, key) ?? this.options.ttlMs);
+    if (expiresAt <= now || this.pending.has(key) || (this.entries.get(key)?.expiresAt ?? -Infinity) > now) return;
+    this.remember(key, { failed: false, value, expiresAt });
+  }
+
   read(
     key: string,
     // Nested caches receive the admitted decision, never the caller's claim.
@@ -74,12 +93,12 @@ export class GitReadCache<T> {
       reused?.("pending-reuse");
       return pending;
     }
-    const cached = this.entries.get(key);
     const bypass = request.userAction === true
       && (this.options.budget ?? userRefreshBudget).tryTake(key, request.caller);
-    if (cached && !bypass && cached.expiresAt > this.now()) {
+    const cached = !bypass ? this.readCompleted(key) : undefined;
+    if (cached) {
       reused?.("cache-hit");
-      return cached.failed ? Promise.reject(cached.error) : Promise.resolve(cached.value);
+      return cached;
     }
     // Defer the loader until pending is installed, including synchronous failures.
     const result = Promise.resolve().then(() => load({ userRefresh: bypass })).then((value) => {

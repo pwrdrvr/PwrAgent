@@ -1,6 +1,7 @@
 import { constants } from "node:fs";
 import { lstat, open, readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
+import { collectConcurrent } from "../../../shared/concurrent-work";
 
 const MAX_POINTER_BYTES = 1024 * 1024;
 
@@ -47,6 +48,9 @@ export type GitDirectoryObservation = {
   separateGitDirectory?: boolean;
   commonDirectory?: string;
   commonVersion?: string;
+  physicalDirectory?: string;
+  registeredWorktree?: boolean;
+  standardWorktreeLink?: boolean;
 };
 
 type FileState = Awaited<ReturnType<typeof fileState>>;
@@ -62,6 +66,7 @@ async function fileState(target: string, signal?: AbortSignal, followSymlinks = 
       file: info.isFile(),
       device: info.dev,
       owner: info.uid,
+      mode: info.mode,
       size: info.size,
       signature: [
         info.dev,
@@ -77,6 +82,41 @@ async function fileState(target: string, signal?: AbortSignal, followSymlinks = 
   }
 }
 
+type ReadCommonFile = (target: string) => Promise<FileState>;
+
+/** A display scan can share each common file only while its evidence is current. */
+export function createGitDirectoryCommonFileObservation() {
+  const files = new Map<string, { previous: Promise<FileState>; checkouts: Set<string> }>();
+  return {
+    readFor(cwd: string): ReadCommonFile {
+      return (target) => {
+        let sample = files.get(target);
+        if (!sample) {
+          sample = { previous: fileState(target), checkouts: new Set() };
+          files.set(target, sample);
+        }
+        sample.checkouts.add(cwd);
+        return sample.previous;
+      };
+    },
+    async changedCheckouts(checkpoint: () => void): Promise<Set<string>> {
+      const changed = new Set<string>();
+      await collectConcurrent([...files], 16, async ([target, { previous, checkouts }]) => {
+        checkpoint();
+        try {
+          const before = await previous;
+          const current = await fileState(target);
+          if (before?.signature === current?.signature && before?.owner === current?.owner && before?.mode === current?.mode) return;
+        } catch {
+          // A failed recheck cannot confirm the shared evidence.
+        }
+        for (const cwd of checkouts) changed.add(cwd);
+      });
+      return changed;
+    },
+  };
+}
+
 /**
  * On-demand filesystem evidence, never a timer or watcher. Tiny Git pointer
  * files are read only when their stat signature changes. This reads Git's
@@ -86,6 +126,7 @@ export function createGitDirectoryObserver(options: { navigation?: boolean; requ
   cwd: string,
   onCheckoutBoundary?: (root: string) => void,
   signal?: AbortSignal,
+  readCommonFile?: ReadCommonFile,
 ) => Promise<GitDirectoryObservation | undefined> {
   const files = new Map<string, { signature: string; value: string }>();
   async function pointer(target: string, state: FileState, signal?: AbortSignal): Promise<string> {
@@ -122,8 +163,9 @@ export function createGitDirectoryObserver(options: { navigation?: boolean; requ
     return /^(?:ref:\s*refs\/[^\s]+|[a-f0-9]{40}|[a-f0-9]{64})$/i.test((await pointer(headPath, head, signal)).trim());
   }
 
-  return async (cwd, onCheckoutBoundary, signal) => {
+  return async (cwd, onCheckoutBoundary, signal, readCommonFile) => {
     const observeFile = (target: string) => fileState(target, signal);
+    const observeCommon = readCommonFile ?? observeFile;
     const directory = await observeFile(cwd);
     if (!directory?.directory) return undefined;
     signal?.throwIfAborted();
@@ -172,11 +214,12 @@ export function createGitDirectoryObserver(options: { navigation?: boolean; requ
     const common = parseGitPathPointer(await pointer(commonPath, commonState, signal));
     if (commonState && !common) return undefined;
     signal?.throwIfAborted();
-    const commonDir = common ? await realpath(gitPointerTarget(adminTarget, common)) : gitdir;
-    const commonInfo = await observeFile(commonDir);
+    const commonDir = gitdirPointer && common === "../.." ? path.dirname(path.dirname(gitdir))
+      : common ? await realpath(gitPointerTarget(adminTarget, common)) : gitdir;
+    const commonInfo = await observeCommon(commonDir);
     if (!commonInfo?.directory) return undefined;
     const configPath = path.join(commonDir, "config");
-    const config = await observeFile(configPath);
+    const config = await observeCommon(configPath);
     const worktreeConfig = await observeFile(path.join(gitdir, "config.worktree"));
     const backlink = await observeFile(path.join(gitdir, "gitdir"));
     // A reusable checkout identity must defer to Git for HEAD symlinks. The
@@ -186,8 +229,9 @@ export function createGitDirectoryObserver(options: { navigation?: boolean; requ
     if (options.navigation) {
       const owner = process.getuid?.();
       if (owner !== undefined && (dotGit.owner !== BigInt(owner)
-        || admin.owner !== BigInt(owner) || (await observeFile(parent))?.owner !== BigInt(owner))) return undefined;
-      const objects = await observeFile(path.join(commonDir, "objects"));
+        || admin.owner !== BigInt(owner)
+        || (resolved === parent ? directory : await observeFile(parent))?.owner !== BigInt(owner))) return undefined;
+      const objects = await observeCommon(path.join(commonDir, "objects"));
       const configText = await pointer(configPath, config, signal);
       // A layout hint cannot account for injected configuration, an external
       // work tree or a bare main repository. Leave those layouts to Git.
@@ -206,10 +250,21 @@ export function createGitDirectoryObserver(options: { navigation?: boolean; requ
     const refs = await observeFile(path.join(gitdir, "reftable", "tables.list"));
     const commonRefs = commonDir === gitdir
       ? refs
-      : await observeFile(path.join(commonDir, "reftable", "tables.list"));
+      : await observeCommon(path.join(commonDir, "reftable", "tables.list"));
     if (refs?.directory || commonRefs?.directory) return undefined;
+    const worktreeLink = gitdirPointer?.replaceAll("/", path.sep);
+    const standardWorktreeLink = options.navigation && worktreeLink === gitdir && common === "../.."
+      && path.dirname(gitdir) === path.join(commonDir, "worktrees")
+      && parseGitPathPointer(await pointer(path.join(gitdir, "gitdir"), backlink, signal))?.replaceAll("/", path.sep) === dotGitPath;
+    const registeredWorktree = options.requireRegularHead && standardWorktreeLink && resolved === parent && !refs && !commonRefs
+      && (await fileState(dotGitPath, signal, false))?.file
+      && /^(?:ref: refs\/heads\/[^\r\n]+|[0-9a-f]{40}|[0-9a-f]{64})\r?\n?$/
+        .test(await pointer(path.join(gitdir, "HEAD"), head, signal));
     return {
       repository: true,
+      physicalDirectory: resolved,
+      registeredWorktree,
+      standardWorktreeLink,
       checkoutRoot: parent,
       gitDirectory: gitdir,
       dotGitDirectory: dotGit.directory,
