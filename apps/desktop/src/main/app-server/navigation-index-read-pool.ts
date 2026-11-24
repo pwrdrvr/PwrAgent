@@ -149,8 +149,11 @@ export class NavigationIndexReadPool {
     if (backing.leases++ === 0) this.retainedBytes += backing.bytes;
     if (threads && threads.leases++ === 0) this.retainedBytes += threads.bytes;
     this.evict(key);
-    while (this.retained.size >= 8 || this.retainedBytes > RETAINED_BYTE_BUDGET) this.evict(this.retained.keys().next().value!);
     const now = Date.now();
+    while (this.retained.size >= 8 || this.retainedBytes > RETAINED_BYTE_BUDGET) {
+      const comparisonOnly = [...this.retained].find(([, entry]) => entry.expires <= now);
+      this.evict(comparisonOnly?.[0] ?? this.retained.keys().next().value!);
+    }
     const timer = setTimeout(() => this.stopServing(key), this.retentionMs);
     timer.unref?.();
     this.retained.set(key, { index, backing, threads, expires: now + this.retentionMs,

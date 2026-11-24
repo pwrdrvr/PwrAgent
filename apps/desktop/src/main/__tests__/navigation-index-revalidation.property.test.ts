@@ -48,3 +48,29 @@ it("revalidates expired or invalidated inventories before reusing their backing"
     vi.useRealTimers();
   }
 });
+
+it.each(["entry", "byte"])("evicts comparison backing before a serving snapshot under %s pressure", async (pressure) => {
+  vi.useFakeTimers();
+  try {
+    const pool = new NavigationIndexReadPool(100, 1_000);
+    const keys = pressure === "entry" ? 8 : 2;
+    const title = pressure === "entry" ? "Fixture" : "a".repeat(3 * 1024 * 1024);
+    const load = (id: string) => vi.fn(async () => createNavigationQuerySnapshot({
+      directories: [], threads: [{ id, source: "codex", title, titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: false } }],
+    }));
+    const serving = load("serving");
+    const first = await pool.read("serving", serving);
+    for (let i = 1; i < keys; i++) await pool.read(String(i), load(String(i)));
+    pool.invalidate("1");
+    expect(pool.retainedUsage().entries).toBe(keys);
+
+    const admit = load("new");
+    const admitted = await pool.read("new", admit);
+    expect(pool.retainedUsage().entries).toBe(keys);
+    expect(await pool.read("serving", serving)).toBe(first);
+    expect(await pool.read("new", admit)).toBe(admitted);
+    expect(serving).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.useRealTimers();
+  }
+});
