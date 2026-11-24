@@ -15480,9 +15480,6 @@ function useComposerController(props: ComposerProps) {
                     className={`composer__autocomplete-option${index === activeHashReferenceIndex ? " is-active" : ""}`}
                     role="option"
                     tabIndex={index === activeHashReferenceIndex ? 0 : -1}
-                    // The visible label is one clamped line; hovering the
-                    // row still gives the operator the whole title.
-                    title={threadTitle}
                     type="button"
                     onMouseDown={(event) => {
                       event.preventDefault();
@@ -15508,7 +15505,7 @@ function useComposerController(props: ComposerProps) {
                   >
                     <span className="composer__autocomplete-title">
                       <ThreadIcon size={13} aria-hidden="true" />
-                      <span className="composer__autocomplete-label">
+                      <span className="composer__autocomplete-label tooltip-target" data-tooltip={threadTitle}>
                         <HighlightedAutocompleteLabel
                           label={`#${threadLabel.replace(/^#/, "")}`}
                           matchAnywhere

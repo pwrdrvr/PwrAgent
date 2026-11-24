@@ -5299,9 +5299,9 @@ describe("Composer", () => {
       "#Apparently we don't allow cross-provider parent/child relationships? We…",
     );
     expect(label?.textContent).not.toContain("refuse to render it");
-    // The untruncated title stays reachable on the row itself.
-    expect(options[0]).toHaveAttribute(
-      "title",
+    // The title label exposes the full title independently of the row's badges.
+    expect(label).toHaveAttribute(
+      "data-tooltip",
       promptTitle.replace(/\s+/g, " "),
     );
 
@@ -6034,7 +6034,9 @@ describe("Composer", () => {
         });
         const row = within(option);
         if (result.agent) {
-          expect(row.getByLabelText("Agent thread")).toHaveTextContent(/^Agent$/);
+          const badge = row.getByLabelText("Agent thread");
+          expect(badge).toHaveTextContent(/^Agent$/);
+          expect(badge.closest("[title], [data-tooltip]")).toBeNull();
           expect(row.queryByText("Thread", { exact: true })).not.toBeInTheDocument();
         } else {
           expect(row.getByText("Thread", { exact: true })).toBeInTheDocument();

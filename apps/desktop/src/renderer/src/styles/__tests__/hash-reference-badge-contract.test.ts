@@ -38,4 +38,11 @@ describe("hash reference badge contract", () => {
     const label = cssRuleBody(".composer__autocomplete-label");
     expect(label).toMatch(/flex:\s*0 1 auto\s*;/);
   });
+
+  it("uses a neutral treatment for the Agent badge in hash search", () => {
+    const badge = cssRuleBody(".composer__autocomplete--hash-references .chip--agent");
+    expect(badge).toContain("border-color: var(--border-strong);");
+    expect(badge).toContain("background: transparent;");
+    expect(badge).toContain("color: var(--text-primary);");
+  });
 });

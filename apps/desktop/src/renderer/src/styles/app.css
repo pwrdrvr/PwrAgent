@@ -50381,6 +50381,9 @@ button.composer__subthread-source-parent:hover {
 .composer__autocomplete--hash-references .chip--agent {
   height: auto;
   padding: 2px 6px;
+  border-color: var(--border-strong);
+  background: transparent;
+  color: var(--text-primary);
   font-size: 10px;
   line-height: 1.2;
 }
