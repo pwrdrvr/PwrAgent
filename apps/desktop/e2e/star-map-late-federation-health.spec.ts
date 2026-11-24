@@ -67,7 +67,9 @@ test("keeps an open Star Map chat card mounted when federation health lands late
       }, HEALTH_DELAY_MS),
     );
 
-    const mapWindow = await openStarMapWindow(app);
+    // Opening the native window is setup for the card's late-health ordering.
+    // Hosted runs can drop the header click even after the bridge is ready.
+    const mapWindow = await openStarMapWindow(app, { viaPreload: true });
     const trajectory = await recordDomTrajectory(mapWindow, {
       attributes: ["data-composer-block", "data-card-mount"],
       editableSelector: ".composer-tiptap-input__editor",

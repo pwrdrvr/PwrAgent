@@ -72,6 +72,8 @@ export function findPeerCounterpartDirectory<T extends PeerDirectory>(
   const localNames = directoryIdentityNames(local);
   const choose = (matches: readonly T[]): T | undefined => {
     if (matches.length <= 1) return matches[0];
+    // Only the owner can fold linked worktrees into a primary checkout.
+    // Distinct rows must be compared without interpreting the owner's paths.
     for (const name of localNames) {
       const named = matches.filter((directory) => directory.label.trim().toLowerCase() === name);
       if (named.length === 1) return named[0];

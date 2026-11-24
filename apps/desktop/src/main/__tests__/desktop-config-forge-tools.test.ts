@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import fc from "fast-check";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -83,6 +84,93 @@ describe("CI rerun policy config", () => {
     ));
     expect(written).toContain("# Operator policy");
     expect(parseDesktopSettingsToml(written, "test.toml").git?.agentTools?.access).toEqual({ read: "off", comments: "ask", ci });
+  });
+});
+
+describe("GitHub Enterprise hosts in settings", () => {
+  it.each([
+    ['[git]\ngithub_enterprise_hosts = "ghe.example.com"\n', []],
+    ['[git]\ngithub_enterprise_hosts = ["ghe.example.com", 42]\n', ["new.example.com"]],
+    ['[[git.github_enterprise_hosts]]\nhost = "ghe.example.com"\n', ["new.example.com"]],
+  ] as const)("reports and replaces malformed host configuration", async (contents, replacement) => {
+    const { service } = createService(contents);
+    const setting = (await service.readSettingsProjection()).git.githubEnterpriseHosts!;
+    expect(setting).toMatchObject({ value: [], source: "config", error: expect.stringMatching(/array of strings/) });
+    expect(service.resolveGithubEnterpriseHosts()).toEqual([]);
+    await service.writeConfigPatchTargeted({
+      git: { githubEnterpriseHosts: { hosts: [...replacement], expectedRevision: setting.revision } },
+    });
+    expect((await service.readSettingsProjection()).git.githubEnterpriseHosts?.error).toBeUndefined();
+    expect(service.resolveGithubEnterpriseHosts()).toEqual(replacement);
+  });
+
+  it("refuses conflicting host tables and preserves their bytes", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom(
+      "git.github_enterprise_hosts", "git . github_enterprise_hosts",
+      '"git"."github_enterprise_hosts"', "git.github_enterprise_hosts.extra",
+    ), fc.boolean(), async (section, clear) => {
+      const contents = `[${section}]\nowner = "operator"\n`;
+      const { service, configPath } = createService(contents);
+      const setting = (await service.readSettingsProjection()).git.githubEnterpriseHosts!;
+      await expect(service.writeConfigPatchTargeted({
+        git: { githubEnterpriseHosts: { hosts: clear ? [] : ["ghe.example.com"], expectedRevision: setting.revision } },
+      })).rejects.toThrow(/TOML table/);
+      expect(setting).toMatchObject({ value: [], repairable: false });
+      expect(service.resolveGithubEnterpriseHosts()).toEqual([]);
+      expect(fs.readFileSync(configPath, "utf8")).toBe(contents);
+    }), { numRuns: 12 });
+  });
+
+  it("removes one unused entry at a time and saves pins separately from approval", async () => {
+    const { service, configPath } = createService([
+      "[git]",
+      'github_enterprise_hosts = ["ghe.example.com", "*.example.com", "https://example.com"]',
+      "# Keep this comment",
+      "watch_merge_builds = false",
+    ].join("\n"));
+    const original = (await service.readSettingsProjection()).git.githubEnterpriseHosts!;
+    await service.writeConfigPatchTargeted({
+      git: { githubEnterpriseAccounts: [{ host: "ghe.example.com", login: "build-bot" }] },
+    });
+    expect(service.resolveGithubEnterpriseAccount("ghe.example.com")).toBe("build-bot");
+    expect((await service.readSettingsProjection()).git.githubEnterpriseHosts).toEqual(original);
+    expect(fs.readFileSync(configPath, "utf8")).toContain('[[git.github_enterprise_accounts]]');
+    await service.writeConfigPatchTargeted({
+      git: { githubEnterpriseHosts: { hosts: ["ghe.example.com", "*.example.com"], expectedRevision: original.revision } },
+    });
+    const updated = (await service.readSettingsProjection()).git;
+    expect(updated.githubEnterpriseHosts?.value).toEqual(["ghe.example.com", "*.example.com"]);
+    expect(updated.githubEnterpriseAccounts).toEqual([{ host: "ghe.example.com", login: "build-bot" }]);
+    expect(fs.readFileSync(configPath, "utf8")).toContain("# Keep this comment");
+    await service.writeConfigPatchTargeted({
+      git: { githubEnterpriseAccounts: [{ host: "ghe.example.com", login: "" }] },
+    });
+    expect(service.resolveGithubEnterpriseAccount("ghe.example.com")).toBeUndefined();
+    expect((await service.readSettingsProjection()).git.githubEnterpriseHosts).toEqual(updated.githubEnterpriseHosts);
+  });
+
+  it("shows ignored entries and updates both the settings snapshot and CI-run config", async () => {
+    const rawHosts = ["github.example.com", "*.example.com", "https://github.example.com"];
+    const { service } = createService(`[git]\ngithub_enterprise_hosts = ${JSON.stringify(rawHosts)}\n`);
+    const setting = (await service.readSettingsProjection()).git.githubEnterpriseHosts!;
+    expect(setting).toMatchObject({
+      value: rawHosts,
+      source: "config",
+    });
+
+    const hosts = ["ghe.internal.example:8443"];
+    await service.writeConfigPatchTargeted({
+      git: { githubEnterpriseHosts: { hosts, expectedRevision: setting.revision } },
+    });
+    const saved = (await service.readSettingsProjection()).git.githubEnterpriseHosts!;
+    expect(saved.value).toEqual(hosts);
+    expect(service.resolveGithubEnterpriseHosts()).toEqual(hosts);
+
+    await service.writeConfigPatchTargeted({
+      git: { githubEnterpriseHosts: { hosts: [], expectedRevision: saved.revision } },
+    });
+    expect((await service.readSettingsProjection()).git.githubEnterpriseHosts?.value).toEqual([]);
+    expect(service.resolveGithubEnterpriseHosts()).toEqual([]);
   });
 });
 

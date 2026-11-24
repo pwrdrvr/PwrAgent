@@ -5,6 +5,41 @@ export type AcpProviderStatus = {
   rateLimits?: BackendRateLimitSummary[];
 };
 
+/** Antigravity's headless /usage reports one quota group per shared pool. */
+export function normalizeAntigravityUsageStatus(value: unknown): AcpProviderStatus | undefined {
+  const root = asRecord(value);
+  const command = asRecord(root?.command);
+  const groups = asRecord(command?.data)?.groups;
+  if (root?.status !== "SUCCESS" || command?.name !== "usage" || !Array.isArray(groups)) {
+    return undefined;
+  }
+
+  const rateLimits = new Map<string, BackendRateLimitSummary>();
+  for (const value of groups) {
+    const group = asRecord(value);
+    const groupName = readString(group, "name");
+    if (!groupName || !Array.isArray(group?.buckets)) continue;
+    const label = groupName === "Claude and GPT models"
+      ? "Claude/GPT"
+      : groupName.replace(/ models$/i, "");
+    for (const value of group.buckets) {
+      const bucket = asRecord(value);
+      const limitId = readString(bucket, "id");
+      const remaining = readFiniteNumber(bucket, "remaining_fraction");
+      if (bucket?.window !== "weekly" || !limitId || remaining === undefined
+        || remaining < 0 || remaining > 1) continue;
+      const resetAt = parseTimestamp(readString(bucket, "reset_time"));
+      rateLimits.set(limitId, {
+        name: `Weekly ${label} limit`,
+        limitId,
+        usedPercent: 100 - remaining * 100,
+        ...(resetAt !== undefined ? { resetAt } : {}),
+      });
+    }
+  }
+  return rateLimits.size ? { rateLimits: [...rateLimits.values()] } : undefined;
+}
+
 /**
  * Normalize Grok's `x.ai/billing` ACP extension into the same provider
  * metadata contract used by Codex. Newer Grok builds report a percentage and

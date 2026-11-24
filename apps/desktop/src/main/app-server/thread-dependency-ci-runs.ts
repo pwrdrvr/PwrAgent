@@ -10,6 +10,10 @@ import {
   threadDependencyCiRunId,
   threadDependencyCiRunOutcomes,
 } from "@pwragent/shared/contracts/thread-dependencies";
+import {
+  CI_RUN_MAX_GITHUB_ENTERPRISE_HOSTS,
+  normalizeGithubEnterpriseHost,
+} from "@pwragent/shared/github-enterprise-hosts";
 import type { ForgeRepository } from "../pr-status/forge-tool-contract";
 
 /**
@@ -25,9 +29,6 @@ export type CiRunGet = (repository: ForgeRepository, path: string) => Promise<un
 /** The hosts beyond github.com and gitlab.com that the operator authorized. */
 export type CiRunUrlOptions = { githubEnterpriseHosts?: readonly string[] };
 
-const HOST = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+(?::\d{1,5})?$/;
-export const CI_RUN_MAX_GITHUB_ENTERPRISE_HOSTS = 16;
-
 /**
  * `[git] github_enterprise_hosts` as exact hosts. An entry is one hostname,
  * with a port when the server uses one. Anything else is dropped: a wildcard,
@@ -38,8 +39,8 @@ export const CI_RUN_MAX_GITHUB_ENTERPRISE_HOSTS = 16;
 export function normalizeGithubEnterpriseHosts(values: readonly unknown[] | undefined): string[] {
   const hosts = new Set<string>();
   for (const value of values ?? []) {
-    const host = typeof value === "string" ? value.trim().toLowerCase().replace(/:443$/, "") : "";
-    if (HOST.test(host) && host !== "github.com" && host !== "gitlab.com") hosts.add(host);
+    const host = normalizeGithubEnterpriseHost(value);
+    if (host) hosts.add(host);
     if (hosts.size >= CI_RUN_MAX_GITHUB_ENTERPRISE_HOSTS) break;
   }
   return [...hosts];

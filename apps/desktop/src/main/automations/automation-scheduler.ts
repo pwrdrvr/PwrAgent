@@ -176,6 +176,7 @@ export class AutomationScheduler {
   stop(): void {
     this.stopped = true;
     this.running = false;
+    this.options.gateRunner?.stopAll?.();
     clearTimeout(this.providerRetryTimer);
     this.providerRetryTimer = undefined;
     this.leaseBlockedLanes.clear();
@@ -913,6 +914,7 @@ export class AutomationScheduler {
   }): Promise<AutomationGateRunResult | undefined> {
     if (!params.automation.gate || !this.options.gateRunner) return undefined;
     const gateResult = await this.options.gateRunner.runGate(params.automation.gate);
+    if (this.stopped) return undefined;
     if (gateResult.status === "proceed") {
       return gateResult;
     }

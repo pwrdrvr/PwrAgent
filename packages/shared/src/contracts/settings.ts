@@ -624,6 +624,32 @@ export type DesktopSettingsValue<T> = {
   error?: string;
 };
 
+export type DesktopGithubEnterpriseHostsSetting = DesktopSettingsValue<string[]> & {
+  /** Identifies the saved field value the editor started from. */
+  revision: string;
+  /** A conflicting TOML table requires a manual edit. */
+  repairable?: false;
+};
+
+export type DesktopGithubEnterpriseHostsPatch = {
+  hosts: string[];
+  expectedRevision: string;
+};
+
+export type GithubEnterpriseServer = {
+  host: string;
+  accounts: string[];
+  activeLogin?: string;
+  environmentToken?: "GH_ENTERPRISE_TOKEN" | "GITHUB_ENTERPRISE_TOKEN";
+};
+
+export type GithubEnterpriseDiscovery = {
+  state: "ready" | "missing" | "upgrade" | "unavailable";
+  servers: GithubEnterpriseServer[];
+};
+
+export type GithubEnterpriseAccountPin = { host: string; login: string };
+
 export type PrAutoDispatchBudgetConfig = {
   capacity: number;
   refillPerMinute: number;
@@ -1841,6 +1867,9 @@ export type DesktopSettingsSnapshot = {
      * its merge commit on the target branch and wake the thread if it fails.
      */
     watchMergeBuilds?: DesktopSettingsValue<boolean>;
+    /** Configured entries, including entries ignored by the CI run parser. */
+    githubEnterpriseHosts?: DesktopGithubEnterpriseHostsSetting;
+    githubEnterpriseAccounts?: GithubEnterpriseAccountPin[];
     prAutoDispatchBudgetCapacity: DesktopSettingsValue<number>;
     prAutoDispatchBudgetRefillPerMinute: DesktopSettingsValue<number>;
     pausePrAutoDispatchWhenBudgetEmpty: DesktopSettingsValue<boolean>;
@@ -2158,6 +2187,10 @@ export type DesktopSettingsConfigPatch = {
     prAutoDispatchAllowed?: boolean;
     defaultPrAutoDispatchEnabled?: boolean;
     watchMergeBuilds?: boolean;
+    /** Replaces [git] github_enterprise_hosts. An empty list clears it. */
+    githubEnterpriseHosts?: DesktopGithubEnterpriseHostsPatch;
+    /** Update these exact hosts. An empty login clears a pin. */
+    githubEnterpriseAccounts?: GithubEnterpriseAccountPin[];
     prAutoDispatchBudgetCapacity?: number;
     prAutoDispatchBudgetRefillPerMinute?: number;
     pausePrAutoDispatchWhenBudgetEmpty?: boolean;

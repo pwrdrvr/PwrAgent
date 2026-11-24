@@ -16872,6 +16872,64 @@ describe("Composer", () => {
     });
   });
 
+  async function checkComposerReviewTerminal(terminalBeforeResponse: boolean) {
+    let emit!: (event: AgentEvent) => void;
+    const reviewStart = Promise.withResolvers<{
+      backend: "codex"; threadId: string; reviewThreadId: string; turnId: string;
+    }>();
+    const startReview = vi.fn(() => reviewStart.promise);
+    const view = render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: (listener) => { emit = listener; return () => undefined; },
+          startReview,
+          startTurn: vi.fn(),
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1", title: "Review thread", titleSource: "explicit", source: "codex",
+          linkedDirectories: [], inbox: { inInbox: false },
+        }}
+      />
+    );
+    const reply = () => reviewStart.resolve({
+      backend: "codex", threadId: "thread-1", reviewThreadId: "thread-1", turnId: "outer",
+    });
+    try {
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/review main" } });
+      await clickButton("Send");
+      expect(startReview).toHaveBeenCalledTimes(1);
+      if (!terminalBeforeResponse) await act(async () => reply());
+      await act(async () => emit({ backend: "codex", notification: { method: "turn/started", params: {
+        threadId: "thread-1", turnId: "inner", turn: { id: "inner", status: "in_progress" },
+      } } }));
+      expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+
+      await act(async () => emit({ backend: "codex", relatedReviewTurnId: "outer", notification: {
+        method: "turn/completed", params: {
+          threadId: "thread-1", turnId: "inner", turn: { id: "inner", status: "completed", output: [] },
+        },
+      } }));
+      if (terminalBeforeResponse) await act(async () => reply());
+      expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Queue" })).not.toBeInTheDocument();
+    } finally {
+      view.unmount();
+    }
+  }
+
+  it("does not resurrect an inline review when its start response follows the inner terminal", async () => {
+    await checkComposerReviewTerminal(true);
+  });
+
+  it("settles Composer for either ordering of the correlated terminal and start response", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), checkComposerReviewTerminal), {
+      examples: [[true], [false]],
+      numRuns: 2,
+    });
+  });
+
   it("does not open the review picker for backends without review support", async () => {
     const kimiBackend = backendSummary("acp:kimi" as BackendSummary["kind"]);
     const startReview = vi.fn();

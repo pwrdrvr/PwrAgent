@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import type { MessagingApprovalIntent } from "@pwragent/messaging-interface";
+import { buildApprovalIntent } from "../messaging/core/messaging-approval-renderer";
 import { DesktopNotificationService } from "../shell/notifications/desktop-notification-service";
 
 const {
@@ -504,6 +505,50 @@ describe("DesktopNotificationService", () => {
     expect(onDecision).toHaveBeenCalledTimes(1);
     expect(onDecision).toHaveBeenLastCalledWith("accept");
     expect(onShow).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the transcript's MCP tool and target in chat and native approvals", () => {
+    const service = new DesktopNotificationService();
+    const onDecision = vi.fn();
+    getAllWindows.mockReturnValue([
+      { isDestroyed: () => false, isFocused: () => false, isMinimized: () => false },
+    ]);
+    vi.spyOn(service as unknown as { supportsActionButtons: () => boolean },
+      "supportsActionButtons").mockReturnValue(true);
+
+    fc.assert(fc.property(
+      fc.stringMatching(/^[a-z][a-z0-9_]{2,24}$/),
+      fc.integer({ min: 1, max: 1000 }),
+      (name, number) => {
+        const toolName = `mcp_pwragent_${name}`;
+        const prompt = `Read pull request #${number}.`;
+        const key = `request-${shownNotifications.length}`;
+        const intent = buildApprovalIntent({
+          createdAt: 0,
+          id: key,
+          request: {
+            method: "item/commandExecution/requestApproval",
+            params: {
+              threadId: "thread-1",
+              requestId: key,
+              acpMcpToolName: toolName,
+              prompt,
+              acpPermissionOptions: [
+                { optionId: "allow", name: "Allow", kind: "allow_once" },
+              ],
+            },
+          },
+        });
+        service.notifyApproval({ enabled: true, key, intent, onDecision });
+        expect(intent.title).toBe("MCP Tool Approval");
+        expect(intent.body).toContain(toolName);
+        expect(intent.body).toContain(prompt);
+        const notification = shownNotifications.at(-1);
+        expect(notification?.body).toBe(`MCP Tool Approval: ${toolName} · ${prompt}`);
+        expect(notification?.actions).toEqual([{ type: "button", text: "Approve" }]);
+        notification?.instance.emitClose();
+      },
+    ));
   });
 
   it("keeps the native approve action when a fallback prompt includes command details", () => {

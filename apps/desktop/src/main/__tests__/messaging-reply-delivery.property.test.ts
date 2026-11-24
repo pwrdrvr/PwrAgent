@@ -92,6 +92,7 @@ const FAULTS = [
   "crash-before-send",
   // After the marker: the adapter is stopped and nothing replaced it.
   "adapter-stopped",
+  "adapter-stopped-during-admission",
   // During the send: the provider refuses or errs, landing or not. Only a
   // retryable rate limit proves nothing visible was posted.
   "rate-limited",
@@ -222,6 +223,8 @@ function boot(
       || (intent.kind === "stream_update" && intent.stream.isFinal);
     if (!step || !final) return apply(intent);
     switch (step.fault) {
+      case "adapter-stopped-during-admission":
+        return { channel: "telegram", deliveredAt: 1, outcome: "discarded", adapterStoppedBeforeWrite: true };
       case "crash-before-send":
         fault.crashed?.();
         return await new Promise<never>(() => {});
@@ -387,7 +390,7 @@ describe("final reply delivery model", () => {
           // Delivered once, or flagged.
           expect(copies === 1 || flagged, `reply ${index} (${step.fault}) lost`).toBe(true);
           // Proved non-delivery is sent again, and a clean send raises nothing.
-          if (step.fault === "adapter-stopped" || step.fault === "rate-limited") {
+          if (step.fault === "adapter-stopped" || step.fault === "adapter-stopped-during-admission" || step.fault === "rate-limited") {
             expect(copies, `reply ${index} (${step.fault}) resent`).toBe(1);
           }
           if (step.fault === "none" || step.fault === "marker-write-fails") {
@@ -408,6 +411,7 @@ describe("final reply delivery model", () => {
   // The two losses PWR-223 named, pinned so they never depend on the seed.
   it.each([
     ["the adapter is stopped before the send", "adapter-stopped", 1],
+    ["the adapter stops while waiting for its first write", "adapter-stopped-during-admission", 1],
     ["PwrAgent restarts between the turn's end and the send", "crash-before-send", 0],
   ] as const)("keeps a final reply when %s", async (_name, fault, copies) => {
     const w = await runModel([{ fault, landed: false }]);

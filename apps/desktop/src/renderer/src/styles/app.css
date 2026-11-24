@@ -18725,6 +18725,33 @@ button.stack-display__thread,
 }
 
 .settings-switch:hover,
+.settings-enterprise-host-list .settings-field {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.settings-enterprise-host-list .settings-field__label {
+  overflow-wrap: anywhere;
+}
+
+.settings-enterprise-host-switch {
+  position: relative;
+}
+
+.settings-enterprise-host-switch input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+
+.settings-enterprise-host-switch:has(input:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .settings-switch:focus-visible {
   border-color: var(--accent-border);
 }
@@ -24428,6 +24455,10 @@ button.stack-display__thread,
 }
 
 .star-map-card__menu-button {
+  /* WCAG 2.5.8 at the default map zoom: the open-thread target fills
+     the card behind this button, so there is no spacing exception. */
+  min-width: 24px;
+  min-height: 24px;
   padding: 1px 6px;
   border: 1px solid var(--border-subtle);
   border-radius: 5px;

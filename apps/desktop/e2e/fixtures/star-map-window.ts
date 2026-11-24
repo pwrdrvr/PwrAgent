@@ -11,6 +11,7 @@
 // that exists. Those have different fixes and the CI log is usually all
 // anybody has, so the wait now reports which one it was.
 import { expect, type ConsoleMessage, type Page } from "@playwright/test";
+import type { DesktopApi } from "../../src/renderer/src/lib/desktop-api";
 import type { launchElectronApp } from "./electron-app";
 import { withProbeTimeout } from "./probe-report";
 import { retryTransientRpcCall, tolerateTransientRpcFailure } from "./transient-rpc-poll";
@@ -217,8 +218,14 @@ export async function focusStarMapWindow(
  * completed Settings flow — before clicking, which is why the one spec
  * that clicks straight after launch was the only one that ever failed
  * here. This makes the barrier explicit instead of incidental.
+ *
+ * Specs that exercise behavior inside the native window can opt into the
+ * preload call as setup. The default exercises the header control.
  */
-export async function openStarMapWindow(app: LaunchedApp): Promise<Page> {
+export async function openStarMapWindow(
+  app: LaunchedApp,
+  options?: { viaPreload?: boolean },
+): Promise<Page> {
   // Both barriers read across the Electron RPC boundary, so both are wrapped:
   // `expect.poll` does not retry a THROWING callback, and a round trip can
   // fail for reasons unrelated to the readiness being polled. See
@@ -256,7 +263,14 @@ export async function openStarMapWindow(app: LaunchedApp): Promise<Page> {
 
   const errorLog = recordRendererErrors(app.window);
   try {
-    await app.window.getByRole("button", { name: "Open Star Map" }).click();
+    if (options?.viaPreload) {
+      await app.window.evaluate(async () => {
+        const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+        await api.openStarMapWindow!();
+      });
+    } else {
+      await app.window.getByRole("button", { name: "Open Star Map" }).click();
+    }
     return await waitForStarMapWindow(app, errorLog);
   } finally {
     errorLog.stop();

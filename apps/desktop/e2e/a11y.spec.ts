@@ -403,6 +403,10 @@ async function runAxeScan(
     include?: string;
     /** Run only the named axe rules when a regression gate is rule-specific. */
     rules?: string[];
+    /** Record the result matrix for the shared-launch comparison. */
+    comparisonKey?: string;
+    /** Continue to audit later appearances after reporting a violation. */
+    softViolations?: boolean;
   },
 ): Promise<void> {
   // setLegacyMode is required under Electron: the default analyze()
@@ -430,6 +434,20 @@ async function runAxeScan(
     builder = builder.exclude(known.selector);
   }
   const results = await builder.analyze();
+  if (options?.comparisonKey) {
+    const outcomes = ["passes", "violations", "incomplete", "inapplicable"] as const;
+    const matrix = Object.fromEntries(outcomes.map((outcome) => [
+      outcome,
+      results[outcome].map(({ id, nodes }) => ({
+        id,
+        targets: nodes.map(({ target }) => JSON.stringify(target)).sort(),
+      })).sort((left, right) => left.id.localeCompare(right.id)),
+    ]));
+    await test.info().attach(`axe-copy-chips-${options.comparisonKey}`, {
+      body: JSON.stringify(matrix),
+      contentType: "application/json",
+    });
+  }
 
   // Surface the human-readable summary on failure so the CI log tells
   // you which rules + selectors failed without having to download the
@@ -458,10 +476,83 @@ async function runAxeScan(
         }),
       )
     ).join("\n");
-    throw new Error(
-      `axe-core found ${results.violations.length} WCAG2 AA violation(s) on ${surface}:\n${summary}`,
-    );
+    const message = `axe-core found ${results.violations.length} WCAG2 AA violation(s) on ${surface}:\n${summary}`;
+    if (options?.softViolations) {
+      expect.soft(results.violations.length, message).toBe(0);
+    } else {
+      throw new Error(message);
+    }
   }
+}
+
+// The dedicated fixture carries a worktree chip, a local-directory chip,
+// and a branch chip. Audit the whole window to catch nested-interactive
+// regressions on the row that contains them.
+async function scanCopyChips(page: Page, appearance: AuditAppearance): Promise<void> {
+  const label = appearance.colorTheme ?? `tangerine-${appearance.theme}`;
+  await test.step(`sidebar rows carrying copy chips (${label})`, async () => {
+    // The branch chip renders last, after the linked-directory chips.
+    await expect(page.getByRole("button", {
+      name: "Copy branch feature/copy-chip-audit",
+    })).toBeVisible();
+    // Startup hydrates the transcript and then checks its linked checkout.
+    // Wait for both before scanning the full window in either launch mode.
+    await expect(page.getByText("The copy chip row is live.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "This thread’s worktree is gone" })).toBeVisible();
+    await expect.poll(() => page.locator("html").evaluate((root) => ({
+      scheme: root.getAttribute("data-theme"),
+      colorTheme: root.getAttribute("data-color-theme"),
+    }))).toEqual({
+      scheme: appearance.theme === "light" ? "light" : null,
+      colorTheme: appearance.colorTheme ?? null,
+    });
+    await runAxeScan(page, `sidebar rows carrying copy chips (${label})`, {
+      rules: appearance.colorTheme ? COLOR_RULES : undefined,
+      comparisonKey: label,
+      softViolations: true,
+    });
+  });
+}
+
+// The copy-chip scenario never interacts with the sidebar. Each appearance
+// can therefore scan the same hydrated surface after the settings broadcast.
+// This switch runs the exact same scans with one fresh launch per appearance
+// when collecting a native comparison.
+const freshCopyChipLaunches = process.env.PWRAGENT_E2E_A11Y_FRESH_COPY_CHIPS === "1";
+const copyChipGroups = freshCopyChipLaunches
+  ? AUDIT_APPEARANCES.map((appearance) => [appearance])
+  : [AUDIT_APPEARANCES];
+for (const appearances of copyChipGroups) {
+  const initial = appearances[0]!;
+  const title = freshCopyChipLaunches
+    ? initial.colorTheme ?? `tangerine-${initial.theme}`
+    : "all appearances";
+  test(`sidebar copy-chip fixture surface has no violations (${title})`, async () => {
+    const app = await test.step("launch copy-chip fixture", () =>
+      launchAuditApp({ ...initial, fixturePath: COPY_CHIP_FIXTURE }));
+    try {
+      await scanCopyChips(app.window, initial);
+      for (const appearance of appearances.slice(1)) {
+        await app.window.evaluate(async ({ theme, darkTheme, lightTheme }) => {
+          const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+          await api.writeSettingsConfig!({
+            patch: {
+              general: {
+                appearance: {
+                  theme,
+                  darkTheme: darkTheme ?? "tangerine-dark",
+                  lightTheme: lightTheme ?? "tangerine-light",
+                },
+              },
+            },
+          });
+        }, appearance);
+        await scanCopyChips(app.window, appearance);
+      }
+    } finally {
+      await test.step("close copy-chip fixture", () => app.close());
+    }
+  });
 }
 
 for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
@@ -717,41 +808,6 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
             app.window.getByRole("img", { name: "Unsent draft" }).first(),
           ).toBeVisible();
           await runAxe(app.window, "thread row carrying an unsent draft");
-        });
-      } finally {
-        await app.close();
-      }
-    });
-
-    // The smoke thread above has no linked directories and no branch, so
-    // its row renders none of the click-to-copy chips
-    // (`CopyableThreadChip` — a `role="button"` span). Those chips are what
-    // made the row's own button a `nested-interactive` violation, so the
-    // block above cannot catch a regression of it. This one audits a row
-    // carrying all three chip flavours: a worktree directory, a local one,
-    // and a branch.
-    //
-    // Its own fixture, deliberately: borrowing another spec's would work
-    // too, but this gate's coverage would then hinge on a file it does not
-    // own — drop a directory there and this block goes quiet with no
-    // failure anywhere. Keeping the scan UNSCOPED matters for the same
-    // reason; narrowing it with `include` is the cheap way out and would
-    // stop this block catching anything outside the sidebar.
-    test("sidebar copy-chip fixture surface has no violations", async () => {
-      const app = await launchAuditApp({
-        ...appearance,
-        fixturePath: COPY_CHIP_FIXTURE,
-      });
-      try {
-        await test.step("sidebar rows carrying copy chips", async () => {
-          // The branch chip renders last of the row's copy chips, so waiting
-          // on it means the linked-directory chips are up too.
-          await expect(
-            app.window.getByRole("button", {
-              name: "Copy branch feature/copy-chip-audit",
-            }),
-          ).toBeVisible();
-          await runAxe(app.window, "sidebar rows carrying copy chips");
         });
       } finally {
         await app.close();
@@ -1675,6 +1731,7 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
         });
         const starMapCard = starMap.getByRole("button", {
           name: "Open thread: Star map attention thread",
+          exact: true,
         });
 
         await test.step("star map window", async () => {
@@ -1682,6 +1739,21 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
           // Gate on a card rather than only the map body: cards populate
           // after the window mounts, and an empty map skips the card contrast.
           await expect(starMapCard).toBeVisible();
+          // The menu trigger is transparent until hover or focus. Reveal it
+          // before axe so coverage doesn't depend on where the native window
+          // opens relative to the pointer.
+          const secondCard = starMap.getByRole("button", {
+            name: "Open thread: Second star map attention thread",
+            exact: true,
+          });
+          const secondCardMenu = starMap.locator(".star-map-card__menu").filter({
+            has: mapWindow.getByRole("button", {
+              name: "Actions for Second star map attention thread",
+              exact: true,
+            }),
+          });
+          await secondCard.hover({ position: { x: 4, y: 4 } });
+          await expect(secondCardMenu).toHaveCSS("opacity", "1");
           await runAxe(mapWindow, "star map window");
         });
 

@@ -30,15 +30,12 @@ expected number of parallel workers. Acquire before launching and release
 after the command exits. A large request at the head of the queue waits
 for enough slots to clear, and later small requests wait behind it.
 
-Codex environment setup, environment actions, and local automation gates
-claim the whole pool before launch unless they bind an explicit grant.
-Startup, explicit reruns, workspace restore and owner-routed
-Federation environment actions use the same admission path. A finite setup
-can use its thread's existing grant and returns it to `granted` after verified
-cleanup. An environment action consumes the grant. A launch with an unknown
-thread or an automation gate can use idle capacity. An operator hold or
-earlier waiter blocks those launches. Agent shells, terminals, remote CI
-workers, and independent applications are advisory.
+Codex environment setup, detached environment actions, and local automation
+gates do not require, claim, or wait on machine CPU checkouts. They run
+outside checkout enforcement alongside agent shells, terminals, remote CI
+workers, and independent applications, so an active CPU checkout never blocks
+thread startup, dev servers, or automation gates, and starting a dev server
+never claims the machine pool or stops when a checkout expires.
 
 A managed job can bind the thread's only idle grant. If it has more than
 one, release the extra grants before launching so the job uses the intended

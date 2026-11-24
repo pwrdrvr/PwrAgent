@@ -89,6 +89,7 @@ export class FederatedDirectoryIndexCache {
         kind: directory.kind,
         label: directory.label,
         ...(directory.path !== undefined ? { path: directory.path } : {}),
+        ...(directory.checkoutPaths !== undefined ? { checkoutPaths: [...directory.checkoutPaths] } : {}),
         ...(directory.repositoryKey !== undefined
           ? { repositoryKey: directory.repositoryKey }
           : {}),

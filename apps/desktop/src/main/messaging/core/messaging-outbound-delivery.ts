@@ -667,7 +667,9 @@ export class MessagingOutboundDelivery {
         receipt.providerCalled = true;
         receipt.notSent = undefined;
       }
-      const result = await adapter.deliver(routedIntent);
+      const result = guard
+        ? await adapter.deliver(routedIntent, guard)
+        : await adapter.deliver(routedIntent);
       if (result.outcome === "discarded") releaseCapacity?.();
       if (guard?.isCancelled()) {
         await guard.onCancelledDelivery?.(result);
@@ -681,6 +683,21 @@ export class MessagingOutboundDelivery {
           );
         }
         return cancelledResult();
+      }
+      if (result.adapterStoppedBeforeWrite) {
+        const replacement = await this.adapterForSend();
+        if (guard?.isCancelled()) return cancelledResult();
+        if (replacement && replacement !== adapter) {
+          const replacementScope = replacement.resolveDeliveryScope?.(routedIntent);
+          if (replacementScope?.id !== scope?.id) {
+            lane.ticket?.release();
+            lane.ticket = undefined;
+          }
+          scope = replacementScope;
+          continue;
+        }
+        if (receipt) receipt.notSent = "adapter-stopped";
+        return result;
       }
       this.logDeliveryResult(routedIntent, binding, result);
       if (this.deliveryBudget && result.rateLimit) {
@@ -1044,6 +1061,7 @@ function shouldRetryArtifactInline(
   return (
     intent.artifactDelivery.mode === "attachment_summary" &&
     !result.rateLimit &&
+    !result.fallbackUnsafe &&
     (result.outcome === "failed" || result.outcome === "unsupported")
   );
 }

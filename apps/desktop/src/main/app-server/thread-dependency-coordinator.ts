@@ -99,7 +99,8 @@ type Options = {
   readLocalFile?: (file: ThreadDependencyLocalFile) => Promise<"result" | "exited" | undefined>;
   /** Without it, operator registrations are refused. */
   operatorTodos?: OperatorTodoDelivery;
-  readThread(condition: Pick<ThreadDependencyCondition, "backend" | "threadId"> & Partial<ThreadDependencyCondition>): Promise<DependencyThreadSnapshot>;
+  readThread(condition: Pick<ThreadDependencyCondition, "backend" | "threadId"> & Partial<ThreadDependencyCondition>,
+    automaticMergeBuild?: "recover" | "verified"): Promise<DependencyThreadSnapshot>;
   submit(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -219,6 +220,11 @@ export class ThreadDependencyCoordinator {
       return this.canonicalizePrUrl(named) === url;
     }));
     if (covered) return false;
+    // The polling index can include legacy attachments. Verify the exact PR
+    // against the primary checkout before creating a durable wake.
+    const snapshot = await this.options.readThread({ ...target, when: "merge_build", prUrl: url });
+    const verifiedUrl = this.canonicalizePrUrl(url);
+    if (!snapshot.prs.some(({ pr: attached }) => this.canonicalizePrUrl(attached.url) === verifiedUrl)) return false;
     await this.manage({
       action: "create", backend: target.backend, threadId: target.threadId,
       // The URL the thread's PR chips show, so windows can match it; the
@@ -307,7 +313,7 @@ export class ThreadDependencyCoordinator {
           conditions.push(condition);
           continue;
         }
-        const snapshot = await this.options.readThread(condition);
+        const snapshot = await this.options.readThread(condition, registration.automatic ? "verified" : undefined);
         turnOrder.set(identity(condition), snapshot.turns.map((turn) => turn.id));
         if (condition.when === "turn_completed" && !condition.turnId) {
           condition.turnId = snapshot.activeTurnId ?? snapshot.turns.at(-1)?.id;
@@ -861,7 +867,8 @@ export class ThreadDependencyCoordinator {
         const snapshotKey = JSON.stringify([identity(condition), condition.when === "turn_completed" ? condition.turnId : "pr"]);
         let snapshot = snapshots.get(snapshotKey);
         if (!snapshot) {
-          snapshot = await this.options.readThread(condition);
+          const automaticMergeBuild = item.automatic ? (previous?.reason === MERGE_BUILD_WAITING_REASON ? "verified" : "recover") : undefined;
+          snapshot = await this.options.readThread(condition, automaticMergeBuild);
           snapshots.set(snapshotKey, snapshot);
         }
         // Only a forge resolve waits: an extra await here would delay every

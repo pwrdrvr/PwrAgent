@@ -1,8 +1,11 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { TRACE_CATEGORIES } from "./chromium-trace-filter";
 import { onChromiumTraceReleased, tryAcquireChromiumTrace } from "./chromium-trace-lease";
 
-const TRACE_BUFFER_KB = 32 * 1024;
+// Chromium converts the whole Perfetto ring to JSON before returning the
+// stream handle. Bound that native work as well as the bytes we read from it.
+const TRACE_BUFFER_KB = 8 * 1024;
 const START_TIMEOUT_MS = 1_000;
 const STOP_TIMEOUT_MS = 4_000;
 
@@ -15,20 +18,31 @@ export type ChromiumTraceConfig = {
 
 export type ChromiumTraceChunk = { data: string; base64Encoded?: boolean };
 
+type TraceFailureCategory = "timeout" | "protocol" | "invalid-data" | "limit" | "worker" | "io";
+export type TraceExportPhase = "stop" | "stream-open" | "stream-read" | "stream-close" | "filter" | "publish";
+type ReportTracePhase = (phase: TraceExportPhase) => void;
+
+export class ChromiumTraceExportError extends Error {
+  constructor(readonly category: TraceFailureCategory, readonly phase?: TraceExportPhase) {
+    super("Chromium trace export failed");
+  }
+}
+
 export type ChromiumTraceSession = {
   start: (config: ChromiumTraceConfig) => Promise<void>;
-  read: (signal: AbortSignal) => AsyncIterable<ChromiumTraceChunk>;
+  read: (signal: AbortSignal, reportPhase?: ReportTracePhase) => AsyncIterable<ChromiumTraceChunk>;
   dispose: () => void;
 };
 
-export type PublishChromiumTrace = (
-  chunks: AsyncIterable<ChromiumTraceChunk>, pendingPath: string, signal: AbortSignal,
-) => Promise<void>;
+export type ProcessChromiumTrace = (
+  chunks: AsyncIterable<ChromiumTraceChunk>, signal: AbortSignal,
+  reportPhase?: ReportTracePhase,
+) => Promise<Uint8Array>;
 
-type TraceCapture =
+export type TraceCapture =
   | { status: "written"; recordingStartedAtMs: number; recordingStoppedAtMs: number }
   | { status: "skipped"; reason: "not-recording" | "trigger-predates-recording" }
-  | { status: "failed" };
+  | { status: "failed"; phase: TraceExportPhase; category: TraceFailureCategory };
 
 type TraceOptions = {
   wallNow?: () => number;
@@ -55,7 +69,7 @@ async function withDeadline<T>(
       operation(controller.signal),
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => {
-          const error = new Error("Chromium tracing timed out");
+          const error = new ChromiumTraceExportError("timeout");
           controller.abort(error);
           reject(error);
         }, timeoutMs);
@@ -77,7 +91,7 @@ export class ChromiumTrace {
 
   constructor(
     private readonly createSession: () => ChromiumTraceSession,
-    private readonly publish: PublishChromiumTrace,
+    private readonly processTrace: ProcessChromiumTrace,
     private readonly warn: (message: string) => void,
     private readonly options: TraceOptions = {},
   ) {}
@@ -102,24 +116,64 @@ export class ChromiumTrace {
         return { status: "skipped", reason: "trigger-predates-recording" };
       }
       const recordingStoppedAtMs = this.options.wallNow?.() ?? Date.now();
-      const pendingPath = `${filePath}.tmp`;
+      const pendingPath = `${filePath}.${randomUUID()}.tmp`;
+      let staged = false;
+      const progress: { phase: TraceExportPhase } = { phase: "stop" };
+      const reportPhase: ReportTracePhase = (phase) => { progress.phase = phase; };
       try {
-        await withDeadline(
-          (signal) => this.publish(recording.session.read(signal), pendingPath, signal),
-          this.options.stopTimeoutMs ?? STOP_TIMEOUT_MS,
-        );
+        await withDeadline(async (signal) => {
+          const filtered = await this.processTrace(recording.session.read(signal, reportPhase), signal, reportPhase);
+          signal.throwIfAborted();
+          reportPhase("publish");
+          await this.stageTrace(pendingPath, filtered, signal);
+        }, this.options.stopTimeoutMs ?? STOP_TIMEOUT_MS);
+        staged = true;
+        // Only the on-time caller can publish. Late writes clean up their own
+        // staging file, and cannot rename it or touch a later attempt.
         await fs.rename(pendingPath, filePath);
+        staged = false;
         return { status: "written", recordingStartedAtMs: recording.wallMs, recordingStoppedAtMs };
-      } catch {
+      } catch (error) {
         // Protocol and parse errors can contain private input.
+        const failure = error instanceof ChromiumTraceExportError ? error : undefined;
+        const phase = failure?.phase ?? progress.phase;
         this.warn("Could not save Chromium trace");
-        return { status: "failed" };
+        return {
+          status: "failed",
+          phase,
+          category: failure?.category ?? (phase === "publish" ? "io" : "protocol"),
+        };
       } finally {
         this.discard();
-        await fs.rm(pendingPath, { force: true }).catch(() => {
-          this.warn("Could not remove pending Chromium trace");
-        });
+        // This owner is still collecting its V8 tail. Other renderers can
+        // trigger on a fresh recording as soon as Chromium is available.
+        if ([...this.renderers].some((owner) => owner !== renderer)) {
+          void this.enqueue(() => this.reconcile());
+        }
+        if (staged) void this.removePendingTrace(pendingPath);
       }
+    });
+  }
+
+  private async stageTrace(path: string, filtered: Uint8Array, signal: AbortSignal): Promise<void> {
+    const file = await fs.open(path, "wx", 0o600);
+    try {
+      try {
+        signal.throwIfAborted();
+        await file.writeFile(filtered, { signal });
+      } finally {
+        await file.close();
+      }
+      signal.throwIfAborted();
+    } catch (error) {
+      await this.removePendingTrace(path);
+      throw error;
+    }
+  }
+
+  private async removePendingTrace(path: string): Promise<void> {
+    await fs.rm(path, { force: true }).catch(() => {
+      this.warn("Could not remove pending Chromium trace");
     });
   }
 

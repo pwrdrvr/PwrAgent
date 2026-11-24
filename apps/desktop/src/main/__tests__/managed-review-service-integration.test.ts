@@ -1705,6 +1705,74 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("submits a managed review from an existing Antigravity thread", async () => {
+    const backend = "acp:antigravity";
+    const threadId = "antigravity-review-parent";
+    const startPrompt = vi.fn((params: Parameters<KimiStartPrompt>[0]) => ({
+      sessionId: params.sessionId,
+      turnId: "antigravity-review-turn",
+    }));
+    const { acpClient, registry } = createKimiAcpRegistry({
+      sessionId: threadId,
+      installedAgent: {
+        ...createKimiAgentRecord(backend),
+        registryId: "antigravity",
+        name: "Antigravity",
+        launchDescriptor: {
+          backendId: backend,
+          registryId: "antigravity",
+          distributionKind: "local",
+          command: "agy",
+          args: ["--acp"],
+          env: {},
+        },
+        capabilities: {
+          conversationRewind: false,
+          liveWorkspaceHandoff: false,
+          managedReview: false,
+          steerTurn: false,
+        },
+      },
+      sessions: [{
+        backendId: backend,
+        sessionId: threadId,
+        title: "Antigravity review parent",
+        cwd: "/repo/worktree",
+        createdAt: 1_000,
+        updatedAt: 1_000,
+        executionMode: "default",
+        status: "idle",
+      }],
+      startPrompt,
+    });
+    onTestFinished(() => registry.close());
+
+    const review = await registry.submitReview({
+      backend,
+      threadId,
+      target: { type: "uncommittedChanges" },
+      delivery: "inline",
+      runMode: "pwragent-sub-agent",
+    });
+    const childSessionId = startPrompt.mock.calls[0]?.[0].sessionId;
+    expect(childSessionId).toEqual(expect.any(String));
+    expect(childSessionId).not.toBe(threadId);
+    expect(review).toMatchObject({
+      status: "started",
+      response: {
+        backend,
+        threadId,
+        reviewThreadId: childSessionId,
+        turnId: "antigravity-review-turn",
+      },
+    });
+    expect(acpClient.startSession).toHaveBeenCalledWith(expect.objectContaining({ hidden: true }));
+    expect(startPrompt).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      sessionId: childSessionId,
+      prompt: expect.stringContaining("Perform a code review."),
+    }));
+  });
+
   it("rejects managed review start for ACP providers without the capability", async () => {
     const geminiBackendId = "acp:gemini" as AcpBackendId;
     const { acpBackendId, registry } = createKimiAcpRegistry({

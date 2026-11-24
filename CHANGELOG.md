@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.5.0-prerelease.2 - 2026-11-23
+
+- Stacked Pull Requests - Advance one layer at a time from the bottom of a stack. Repair, Auto-fix, CI waits, and review and merge offers show which lower layer is blocking progress. After a parent merges, update the immediate child before advancing farther up the stack.
+- Antigravity - Enable managed reviews from the composer and to-do cards. Show MCP permission requests as tool approvals with the reported tool name.
+- GitHub CI - Manage the opt-in GitHub Enterprise hosts for Continue After in Settings → Git, with optional account selection per host. Recover automatic merge build watches that were stuck after the PR merged.
+- Telegram - Pace multipart replies across text and attachments. Respect Telegram's retry delay and retry a rate-limited request without replaying chunks already accepted.
+- Desktop and Outpost - Keep live threads visible during startup discovery and reduce work during sidebar refreshes, PR discovery, and docked-thread scrolling. Bound Chromium trace export when a hot CPU rule triggers so the CPU profile can continue recording.
+
 ## v1.5.0-prerelease.1 - 2026-11-23
 
 - Stacked Pull Requests - See stack order, health, and merge prerequisites in thread and PR views. Add, adopt, remove, and restack local layers, with optional separate worktrees for new layers. Layer merges wait for lower layers to merge and for the PR to target trunk.

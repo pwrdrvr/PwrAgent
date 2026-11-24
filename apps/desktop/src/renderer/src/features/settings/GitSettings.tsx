@@ -24,7 +24,9 @@ import {
   MAX_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
   MIN_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
   MIN_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
+  type DesktopGithubEnterpriseHostsPatch,
   type DesktopSettingsSnapshot,
+  type GithubEnterpriseAccountPin,
 } from "@pwragent/shared/contracts/settings";
 import {
   DEFAULT_THREAD_TODO_MERGE_METHOD,
@@ -51,6 +53,7 @@ import {
 } from "./ForgeProjectRules";
 import { decodeForgeRulesRoute, FORGE_AGENT_TOOLS_SECTION_ID } from "./forge-rules-route";
 import { acpAgentEnabledInSnapshot } from "./useAcpAgentCatalog";
+import { GithubEnterpriseHostsSettings } from "./GithubEnterpriseHostsSettings";
 
 const DEFAULT_BACKGROUND_PR_POLLING_VALUE = {
   value: DEFAULT_BACKGROUND_PR_POLLING,
@@ -128,6 +131,8 @@ export function GitSettings(props: {
   onPrAutoDispatchAllowedChange: (enabled: boolean) => Promise<void>;
   onDefaultPrAutoDispatchEnabledChange: (enabled: boolean) => Promise<void>;
   onWatchMergeBuildsChange?: (enabled: boolean) => Promise<void>;
+  onGithubEnterpriseHostsChange: (patch: DesktopGithubEnterpriseHostsPatch) => Promise<"saved" | "conflict" | "failed">;
+  onGithubEnterpriseAccountChange: (pin: GithubEnterpriseAccountPin) => Promise<boolean>;
   onPrAutoDispatchBudgetCapacityChange: (capacity: number) => Promise<void>;
   onPrAutoDispatchBudgetRefillPerMinuteChange: (
     refillPerMinute: number,
@@ -368,6 +373,15 @@ export function GitSettings(props: {
           {...forgeSections[provider]}
         />
       ))}
+      <GithubEnterpriseHostsSettings
+        hosts={props.snapshot.git?.githubEnterpriseHosts}
+        accounts={props.snapshot.git?.githubEnterpriseAccounts}
+        desktopApi={props.desktopApi}
+        saving={props.saving}
+        onReload={props.onRefresh}
+        onSave={props.onGithubEnterpriseHostsChange}
+        onAccountChange={props.onGithubEnterpriseAccountChange}
+      />
       <SettingsSection
         eyebrow="Git"
         title="Background pull request status"

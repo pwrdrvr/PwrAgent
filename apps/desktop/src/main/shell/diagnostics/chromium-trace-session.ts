@@ -1,12 +1,12 @@
 import { WebContentsView } from "electron";
-import type {
-  ChromiumTraceChunk, ChromiumTraceConfig, ChromiumTraceSession,
+import {
+  ChromiumTraceExportError, type ChromiumTraceConfig, type ChromiumTraceSession,
 } from "../../diagnostics/chromium-trace";
 
 const READ_BYTES = 512 * 1024;
 // The byte cap is enforced by the publisher. Cap reads as well so an
 // invalid stream cannot keep returning empty or tiny chunks.
-const MAX_READS = 200;
+const MAX_READS = 128;
 
 type TargetInfo = { type?: string; targetId?: string };
 
@@ -74,29 +74,33 @@ export function createChromiumTraceSession(): ChromiumTraceSession {
       started = !closed;
     },
 
-    async *read(signal: AbortSignal): AsyncIterable<ChromiumTraceChunk> {
+    async *read(signal, reportPhase) {
+      signal.throwIfAborted();
       if (closed || !started) throw new Error("Chromium trace session is not recording");
       started = false;
       trackingTargets = false;
+      reportPhase?.("stop");
       await debuggerApi.sendCommand("Tracing.end");
+      reportPhase?.("stream-open");
       const handle = await completion;
       if (!handle) throw new Error("Chromium trace stream unavailable");
-      try {
-        for (let reads = 0; reads < MAX_READS; reads += 1) {
-          signal.throwIfAborted();
-          const chunk = await debuggerApi.sendCommand("IO.read", { handle, size: READ_BYTES });
-          if (typeof chunk.data !== "string" || typeof chunk.eof !== "boolean") {
-            throw new Error("Invalid Chromium trace chunk");
-          }
-          if (chunk.data) yield { data: chunk.data, base64Encoded: chunk.base64Encoded === true };
-          if (chunk.eof) return;
+      reportPhase?.("stream-read");
+      for (let reads = 0; reads < MAX_READS; reads += 1) {
+        signal.throwIfAborted();
+        const chunk = await debuggerApi.sendCommand("IO.read", { handle, size: READ_BYTES });
+        if (typeof chunk.data !== "string" || typeof chunk.eof !== "boolean") {
+          throw new ChromiumTraceExportError("invalid-data");
         }
-        throw new Error("Chromium trace exceeded the read limit");
-      } finally {
-        if (!closed && debuggerApi.isAttached()) {
+        if (chunk.data) yield { data: chunk.data, base64Encoded: chunk.base64Encoded === true };
+        if (chunk.eof) {
+          signal.throwIfAborted();
+          reportPhase?.("stream-close");
           await debuggerApi.sendCommand("IO.close", { handle });
+          return;
         }
       }
+      // On interrupted reads, disposing the session closes its native stream.
+      throw new ChromiumTraceExportError("limit");
     },
 
     dispose() {

@@ -76,8 +76,8 @@ export function projectCheckoutDomain(
       mode: "counted", capacity: definition.capacity, inUse: held, unitLabel: machine ? "CPU slots" : "slots",
     } : { mode: "exclusive" },
     enforcement: machine ? {
-      coverage: "mixed", summary: "Managed environment setup, environment actions, and automation gates must hold capacity.",
-      gaps: ["Agent shell commands, terminals, CI, and other applications are outside checkout enforcement."],
+      coverage: "advisory", summary: "This authority coordinates cooperative CPU reservations across local profiles.",
+      gaps: ["Environment setup, environment actions, automation gates, agent shell commands, terminals, CI, and other applications are outside checkout enforcement."],
     } : approvedProvider ? {
       coverage: "mixed", summary: "PwrSuiteLab enforces the approved workload and cleanup policy.",
       gaps: ["Provider credentials and independently launched work are outside checkout enforcement."],
@@ -101,13 +101,11 @@ export function projectCheckoutDomain(
       ...(definition.counted ? { units: entry.units } : {}),
       eligibility: { eligible: true }, viewerOwns: entry.actor.key === actor.key,
     })),
-    ...(machine ? { admission: held || queue.length ? {
-      state: "paused", detail: "The current checkout or earlier waiter has priority.",
-    } : { state: "open", detail: "Managed jobs can request capacity." } } : {}),
     readiness: [], advertisements: [],
     routes: machine ? [{
-      routeId: "local-environment", kind: "local_process", label: "Local environment setup, actions, and automation gates",
-      status: "available", enforcement: "enforced",
+      routeId: "local-process", kind: "local_process", label: "Local processes",
+      status: "available", enforcement: "advisory",
+      detail: "Agents and operators coordinate machine CPU checkouts cooperatively through the checkout tools.",
     }] : approvedProvider ? [{
       routeId: "provider", kind: "provider_adapter", label: "Approved PwrSuiteLab workload",
       status: "available", enforcement: "enforced",
@@ -121,7 +119,7 @@ export function projectCheckoutDomain(
       manageScope: "Operator", maxHoldMs: definition.maxHoldMs,
       renewalRule: "One renewal while no requester is waiting, within the maximum hold.",
       costCeilingLabel: approvedProvider ? "Operator-approved workload only" : "No spending permission",
-      finalEffect: machine ? "Verify owned work has ended" : approvedProvider ? "Stop compute and verify retained assets" : "No provider lifecycle operations",
+      finalEffect: machine ? "Release reserved CPU slots" : approvedProvider ? "Stop compute and verify retained assets" : "No provider lifecycle operations",
     },
     cleanup: recovery ? { state: "unknown", detail: "Owned workload cleanup is unverified." }
       : draining ? { state: "in_progress", detail: "Capacity stays reserved during cleanup." }

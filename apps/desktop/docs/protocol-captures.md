@@ -106,6 +106,28 @@ Raw captures belong under the ignored
 `apps/desktop/.local/protocol-captures/job-monitor-refresh/`. Keep only
 contrived or sanitized evidence in version control.
 
+### Antigravity mode across session reload
+
+The November 23, 2026 probes used Antigravity 1.5.15 with
+`acp --process-per-session` and a disposable directory. The driver selected
+Auto with `session/set_config_option` (`configId: "mode", value: "auto"`),
+then selected Gemini 4 Neon and high reasoning. All three replies reported
+Auto in the mode config option. After `session/close`, `session/load`
+reported Default in both `modes.currentModeId` and the mode config option.
+
+| Mode at prompt dispatch | Result for `rg -l antigravity marker.txt` |
+| --- | --- |
+| Default after reload | Antigravity sent `session/request_permission`. |
+| Auto restored after reload | Antigravity completed the command without an approval request. |
+
+The restore reply carried `configOptions` but omitted the legacy `modes`
+object. PwrAgent uses the confirmed config value for both mode fields before
+publishing the loaded state. Antigravity still decides whether to send a
+permission request for a particular tool call.
+
+Raw captures are under the ignored
+`apps/desktop/.local/protocol-captures/antigravity-auto/`.
+
 ## Capturing Codex Account Protocol
 
 `scripts/capture-codex-usage-protocol.ts` records a complete Codex App Server

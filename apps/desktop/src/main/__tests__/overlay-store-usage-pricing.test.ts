@@ -2852,4 +2852,37 @@ describe("SqliteOverlayStore thread pricing summaries", () => {
     // The same rows the thread's own Pricing summary shows.
     expect(summaries[0]).toEqual((await store.readThreadPricing({ backend: "codex", threadId: "thread-1" })).summaries[0]);
   });
+
+  it("re-prices an existing unpriced Google Gemini row from the native catalog on read", async () => {
+    const at = Date.UTC(2026, 10, 23);
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        backend: "acp:antigravity",
+        cachedInputTokens: 12_368,
+        createdAt: at,
+        inputTokens: 29_161,
+        model: "unknown-gemini-model",
+        outputTokens: 541,
+        priceStatus: "unpriced",
+        priceUnavailableReason: "missing-rate",
+        provider: "google",
+        reasoningOutputTokens: 436,
+        totalCostMicros: 0,
+        totalTokens: 29_702,
+        uncachedInputTokens: 16_793,
+      }),
+    });
+    stateDb.raw.prepare("UPDATE thread_usage_lines SET model = ? WHERE usage_line_id = ?").run("gemini-4-neon", "line-1");
+
+    const pricing = await store.readThreadPricing({
+      backend: "acp:antigravity",
+      threadId: "thread-1",
+    });
+    expect(pricing.lines[0]).toMatchObject({
+      priceStatus: "priced",
+      pricingCatalogId: "google-gemini-api",
+      provider: "google",
+      totalCostMicros: 60_349,
+    });
+  });
 });

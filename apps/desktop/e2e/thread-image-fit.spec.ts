@@ -2,14 +2,22 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 import { expect, test, type Locator } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { writeFakeKimiExecutable, writeOwnerProfileConfig } from "./fixtures/fake-agent-executables";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 const fixtureImagePath = path.resolve(
   specDir,
   "fixtures/thread-image-fit/thread-image.png"
 );
+
+async function seedSvgReplayProfile(homeRoot: string): Promise<void> {
+  // Startup discovery can run a host Kimi version probe even in Codex replay.
+  // Kimi extracts a native bundle into this fixture home during that probe.
+  await writeOwnerProfileConfig({ homeRoot, contents: "[acp_agents.kimi]\nenabled = false\n" });
+}
 
 function createSvgImageDataUrl(params: {
   color: string;
@@ -396,10 +404,19 @@ test("runs SVG flamegraph controls in an isolated lightbox frame", async () => {
     if (message.id === "message-image-fit-2") message.parts[2] = image;
   }
   await writeFile(fixture.fixturePath, JSON.stringify(replay));
+  const invocationLogPath = path.join(path.dirname(fixture.fixturePath), "kimi-invocations.jsonl");
+  const fakeBin = path.join(homeRoot, "bin");
+  await writeFile(invocationLogPath, "");
+  await writeFakeKimiExecutable(path.join(fakeBin, "kimi"), { invocationLogPath });
+  const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
     homeRoot,
-    env: { CODEX_HOME: codexHome },
+    env: {
+      CODEX_HOME: codexHome,
+      [pathKey]: [fakeBin, path.dirname(process.execPath), process.env[pathKey]].filter(Boolean).join(path.delimiter),
+    },
+    preLaunchHook: seedSvgReplayProfile,
   });
 
   try {
@@ -427,11 +444,18 @@ test("runs SVG flamegraph controls in an isolated lightbox frame", async () => {
       x: Math.floor(frameBox.x + frameBox.width / 2),
       y: Math.floor(frameBox.y + frameBox.height / 2),
     };
-    await expect.poll(() => nativeWindow.evaluate(async (window, point) => {
-      const image = await window.webContents.capturePage({ ...point, width: 1, height: 1 });
-      return [...image.toBitmap().subarray(0, 4)];
-    }, hoverPoint), { message: "Window compositor has presented the SVG hover target" })
-      .toEqual([0, 255, 0, 255]); // Opaque lime, in either RGBA or BGRA byte order.
+    const opaqueLime = [0, 255, 0, 255]; // The same bytes in RGBA and BGRA.
+    await expect.poll(async () => {
+      const pixel = await nativeWindow.evaluate(async (window, point) => {
+        const image = await window.webContents.capturePage({ ...point, width: 1, height: 1 });
+        return [...image.toBitmap().subarray(0, 4)];
+      }, hoverPoint);
+      // Software capture on macOS has returned [0, 255, 1, 255] for lime.
+      // Allow one level in RGB and still require full opacity.
+      return pixel.map((channel, index) =>
+        index < 3 && Math.abs(channel - opaqueLime[index]) <= 1 ? opaqueLime[index] : channel,
+      );
+    }, { message: "Window compositor has presented the SVG hover target" }).toEqual(opaqueLime);
     await frame.locator("#frame").hover();
     await expect(frame.locator("#details")).toHaveText("Function: frame");
     await frame.locator("#frame").click();
@@ -463,6 +487,13 @@ test("runs SVG flamegraph controls in an isolated lightbox frame", async () => {
       popupOpened: false,
       fetchAllowed: false,
     });
+    // The replay thread can open before startup ACP discovery finishes.
+    await expect.poll(() => app.window.evaluate(async () => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      const { providerRefresh } = await api.listBackends!();
+      return providerRefresh?.state;
+    }), { message: "Startup provider discovery completed" }).toEqual(expect.stringMatching(/^(ready|degraded)$/));
+    expect(await readFile(invocationLogPath, "utf8"), "SVG replay must never invoke Kimi").toBe("");
   } finally {
     await app.close();
     await fixture.cleanup();
@@ -518,6 +549,7 @@ for (const shape of INTERACTIVE_SVG_SHAPES) {
       fixturePath: fixture.fixturePath,
       homeRoot,
       env: { CODEX_HOME: codexHome },
+      preLaunchHook: seedSvgReplayProfile,
       windowSize: { width: 1280, height: 900 },
     });
 

@@ -1,3 +1,4 @@
+import { GITHUB_ENTERPRISE_HOSTS_CONFLICT } from "@pwragent/shared/github-enterprise-hosts";
 import type {
   DesktopSettingsConfigPatch,
   DesktopSettingsSecretName,
@@ -30,7 +31,7 @@ import {
   assertProviderDiscoveryPermit,
   type ProviderDiscoveryPermit,
 } from "../provider-discovery-permit";
-import type { DesktopSettingsConfig } from "../desktop-config";
+import { readGithubEnterpriseHostsSetting, type DesktopSettingsConfig } from "../desktop-config";
 import { writeAntigravitySelection } from "../../acp/antigravity-runtime-retention";
 import {
   parseRawConfigText,
@@ -152,9 +153,15 @@ export class DesktopConfigStore {
       config: {},
       previousProviders,
     });
+    const durableGit = durableConfig?.domains.git;
+    const durableHosts = durableGit?.githubEnterpriseHosts;
     const durableDomains = durableConfig
       ? deepFreeze({
           ...durableConfig.domains,
+          // Schema v1 also stored this field as a bare array.
+          ...(Array.isArray(durableHosts) ? {
+            git: { ...durableGit, githubEnterpriseHosts: readGithubEnterpriseHostsSetting(durableHosts) },
+          } : {}),
           // Provider discoveries have their own atomic durable boundary and
           // can be newer than the whole-config snapshot. Hydrate those rows
           // over the config snapshot so startup can immediately reuse the
@@ -271,7 +278,15 @@ export class DesktopConfigStore {
     returnDomains: readonly K[],
   ): ConfigUpdateResult<K> {
     const previous = this.snapshot;
-    const written = writeRawConfigPatch(this.options.configPath, patch);
+    let written: ReturnType<typeof writeRawConfigPatch>;
+    try {
+      written = writeRawConfigPatch(this.options.configPath, patch);
+    } catch (error) {
+      if (error instanceof Error && error.message === GITHUB_ENTERPRISE_HOSTS_CONFLICT) {
+        this.reloadFromDisk("watch");
+      }
+      throw error;
+    }
     const observation = parseRawConfigText(
       written.text,
       this.options.configPath,

@@ -1,12 +1,13 @@
 import type { LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
-import { observeForgeRepositoriesForDirectory, type GitHubRepoRef } from "./git-remote";
+import { prGitSubprocessCaller } from "../diagnostics/git-subprocess-diagnostics";
+import { observeForgeRepositoriesForDirectory, resolveGitHubReposForDirectory, type GitHubRepoRef } from "./git-remote";
 import type { GithubPrFetcher } from "./github-pr-fetcher";
 import { runPrMetadataGit, SharedPrMetadataRead, type PrMetadataDemand } from "./pr-metadata-process";
 import { prMatchesSourceRepository } from "./pr-source-repository";
 import { hasForgeRepositoryName } from "./forge-repository-names";
-import { readProvenRemoteHeads } from "./pr-remote-heads";
+import { readGitRemoteHead, readProvenRemoteHeads } from "./pr-remote-heads";
 
 const GIT_BRANCH_LOOKUP_TIMEOUT_MS = 2_000;
 const FALLBACK_DEFAULT_BRANCHES = [
@@ -64,7 +65,7 @@ export async function detectPullRequestsForThread(params: {
     return [];
   }
 
-  const results = await Promise.all(
+  const results = await prGitSubprocessCaller.run("pr-live-branch-lookup", () => Promise.all(
     dirs.map(async (cwd) => {
       const { repos, refreshedRemoteNames } = await observeForgeRepositoriesForDirectory(cwd);
       if (repos.length === 0) {
@@ -121,7 +122,7 @@ export async function detectPullRequestsForThread(params: {
         ]),
       }));
     }),
-  );
+  ));
 
   const seenByUrl = new Map<string, PrSummary>();
   for (const prs of results) {
@@ -146,6 +147,15 @@ export async function resolvePrLookupBranches(params: {
   cwd: string;
 }): Promise<string[]> {
   return (await resolvePrLookupPlan(params)).branches;
+}
+
+/** Resolve the GitHub repositories eligible for scheduled branch prefetch. */
+export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string): Promise<GitHubRepoRef[]> {
+  return prGitSubprocessCaller.run("pr-scheduled-prefetch", async () => {
+    const repos = await resolveGitHubReposForDirectory(cwd);
+    if (repos.length === 0) return [];
+    return (await resolvePrLookupBranches({ cwd, branch })).includes(branch) ? repos : [];
+  });
 }
 
 type PrLookupPlan = {
@@ -306,7 +316,7 @@ function readStoredDiscoveryContext(cwd: string, demand?: PrMetadataDemand): Pro
   const cached = storedDiscoveryContexts.get(cwd);
   if (cached && cached.expiresAt > Date.now()) return Promise.resolve(cached.context);
   storedDiscoveryContexts.delete(cwd);
-  const pending = new SharedPrMetadataRead(async (sharedDemand) => {
+  const pending = new SharedPrMetadataRead((sharedDemand) => prGitSubprocessCaller.run("pr-stored-attachment-validation", async () => {
     try {
       const { repos, refreshedRemoteNames } = await observeForgeRepositoriesForDirectory(cwd, undefined, { demand: sharedDemand });
       // Inconclusive identity keeps the attachment without reading default refs.
@@ -326,7 +336,7 @@ function readStoredDiscoveryContext(cwd: string, demand?: PrMetadataDemand): Pro
     } finally {
       if (storedDiscoveryReads.get(cwd) === pending) storedDiscoveryReads.delete(cwd);
     }
-  });
+  }));
   storedDiscoveryReads.set(cwd, pending);
   return pending.read(demand);
 }
@@ -423,12 +433,7 @@ async function readRemoteDefaultBranches(cwd: string, demand?: PrMetadataDemand,
   let confirmed = heads !== undefined;
   const defaults = await Promise.all(
     remoteNames.map(async (remote) => {
-      const remoteHead = heads?.get(remote) ?? await readGitLine(cwd, [
-        "symbolic-ref",
-        "--quiet",
-        "--short",
-        `refs/remotes/${remote}/HEAD`,
-      ], demand);
+      const remoteHead = heads?.get(remote) ?? await readGitRemoteHead(cwd, remote, demand);
       if (remoteHead !== undefined) confirmed = true;
       const prefix = `${remote}/`;
       return remoteHead?.startsWith(prefix)

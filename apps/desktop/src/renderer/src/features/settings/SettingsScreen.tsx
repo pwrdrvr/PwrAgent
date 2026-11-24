@@ -1,3 +1,4 @@
+import { GITHUB_ENTERPRISE_HOSTS_CONFLICT } from "@pwragent/shared/github-enterprise-hosts";
 import { FORGE_KINDS, FORGE_PRODUCTS, type ForgeKind } from "@pwragent/shared/forge-product";
 import { FORGE_SETTINGS } from "./forge-settings";
 import type { GhStatus, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
@@ -1616,6 +1617,15 @@ function SettingsSectionBody(props: {
             git: { watchMergeBuilds: enabled },
           });
         }}
+        onGithubEnterpriseHostsChange={async (patch) => {
+          let conflict = false;
+          const saved = await props.settings.writeConfig({ git: { githubEnterpriseHosts: patch } }, (message) => {
+            conflict = message.includes(GITHUB_ENTERPRISE_HOSTS_CONFLICT);
+          });
+          return saved ? "saved" : conflict ? "conflict" : "failed";
+        }}
+        onGithubEnterpriseAccountChange={(pin) =>
+          props.settings.writeConfig({ git: { githubEnterpriseAccounts: [pin] } })}
         onPrAutoDispatchBudgetCapacityChange={async (capacity: number) => {
           await props.settings.writeConfig({
             git: { prAutoDispatchBudgetCapacity: capacity },

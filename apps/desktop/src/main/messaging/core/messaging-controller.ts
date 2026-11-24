@@ -27,7 +27,7 @@ import { MessagingBackendEventRouter } from "./messaging-backend-event-router";
 import type { MessagingBackendEventHost } from "./messaging-backend-event-context";
 import { MessagingPrivateResponses } from "./messaging-private-response-state";
 import { MessagingPrivateReplyClaims } from "./messaging-private-reply-claims";
-import { asPlainRecord, assistantItemIdForBackendEvent, turnIdForBackendEvent, bindingMatchesFederationTarget, federationTargetForBinding, turnQueueUpdateForBackendEvent, threadKeyForBackendEvent, rememberBoundedKey, messagingSurfaceKey, agentMessagingTurnKey, MAX_TRACKED_TURN_PROSE, TYPING_ACTIVITY_REFRESH_MS, type MessagingTaskMonitorLifecycle, type MessagingDeliveryGuard, type MessagingCancellationSignal, type AssistantMessageDeliveryIdentity, type ActiveAgentMessagingOrigin, type MessagingControllerLogger } from "./messaging-backend-event-helpers";
+import { createMessagingTurnCancellation, asPlainRecord, assistantItemIdForBackendEvent, turnIdForBackendEvent, bindingMatchesFederationTarget, federationTargetForBinding, turnQueueUpdateForBackendEvent, threadKeyForBackendEvent, rememberBoundedKey, messagingSurfaceKey, agentMessagingTurnKey, MAX_TRACKED_TURN_PROSE, TYPING_ACTIVITY_REFRESH_MS, type MessagingTaskMonitorLifecycle, type MessagingDeliveryGuard, type MessagingCancellationSignal, type AssistantMessageDeliveryIdentity, type ActiveAgentMessagingOrigin, type MessagingControllerLogger } from "./messaging-backend-event-helpers";
 import { automatedWorkStartedLabel, automationRunFailureNotice, incomingWorkText } from "./messaging-thread-notifications";
 import { MessagingBrowseWorkflow } from "./messaging-browse-workflow";
 import { rememberBoundedMap } from "../../bounded-map";
@@ -1810,35 +1810,9 @@ export class MessagingController {
     if (existing) {
       return existing;
     }
-    let cancelled = this.isTerminalPrivateResponseTurn(
-      binding.backend,
-      binding.threadId,
-      turnId,
+    const cancellation = createMessagingTurnCancellation(() =>
+      this.isTerminalPrivateResponseTurn(binding.backend, binding.threadId, turnId),
     );
-    let resolveCancellation!: () => void;
-    const whenCancelled = new Promise<void>((resolve) => {
-      resolveCancellation = resolve;
-    });
-    const cancellation: MessagingCancellationSignal = {
-      cancel: () => {
-        if (cancelled) {
-          return;
-        }
-        cancelled = true;
-        resolveCancellation();
-      },
-      isCancelled: () =>
-        cancelled
-        || this.isTerminalPrivateResponseTurn(
-          binding.backend,
-          binding.threadId,
-          turnId,
-        ),
-      whenCancelled,
-    };
-    if (cancelled) {
-      resolveCancellation();
-    }
     this.workingUpdateCancellationSignals.set(key, cancellation);
     return cancellation;
   }
@@ -4538,6 +4512,7 @@ export class MessagingController {
         {
           isCancelled: guardedIsCancelled,
           whenCancelled: cancellation.whenCancelled,
+          signal: cancellation.signal,
           onCancelledDelivery: async (cancelledResult) => {
             if (
               cancelledResult.surface

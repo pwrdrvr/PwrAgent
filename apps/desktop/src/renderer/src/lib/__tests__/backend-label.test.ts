@@ -92,6 +92,7 @@ describe("formatBackendLabel", () => {
 
   it("falls back to stable built-in and ACP labels", () => {
     expect(formatBackendLabel("codex")).toBe("OpenAI");
+    expect(formatBackendLabel("acp:antigravity")).toBe("Antigravity");
     expect(formatBackendLabel("acp:gemini")).toBe("Gemini");
     expect(formatBackendLabel("acp:kimi")).toBe("Kimi");
     expect(formatBackendLabel("acp:grok")).toBe("Grok");
@@ -99,13 +100,14 @@ describe("formatBackendLabel", () => {
     expect(formatBackendLabel("acp:unknown")).toBe("unknown");
   });
 
-  it("uses the canonical Grok label for the ACP Grok backend even when no summary is provided", () => {
-    // ThreadHeader.tsx and ThreadMetaChips.tsx call formatBackendLabel
-    // WITHOUT the summaries array, so the canonical label must come from
-    // the hardcoded branch — otherwise the chip falls through to the
-    // bare registry id and reads "grok" (lowercase). Regression test
-    // for #579 follow-up reported on 2026-05-28.
+  it("uses canonical labels for built-in ACP backends even when no summary is provided", () => {
+    // ThreadHeader.tsx, ThreadInfoCard.tsx, and ThreadMetaChips.tsx call
+    // formatBackendLabel WITHOUT the summaries array, so canonical labels must
+    // come from the hardcoded branches rather than falling through to bare
+    // lowercase registry ids ("grok", "antigravity").
     expect(formatBackendLabel("acp:grok")).toBe("Grok");
     expect(formatBackendLabel("acp:grok", [])).toBe("Grok");
+    expect(formatBackendLabel("acp:antigravity")).toBe("Antigravity");
+    expect(formatBackendLabel("acp:antigravity", [])).toBe("Antigravity");
   });
 });

@@ -46,6 +46,7 @@ vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: vi
 vi.mock("../app-server/scratch-projects", () => ({ resolveScratchProjectsRoots: () => [] }));
 import { loadLocalNavigationQueryIndex, projectBoundNavigationStacks, projectSelectedStackLayers, readNavigationStackLayers } from "../app-server/navigation-query-source";
 import { StackReader } from "../stacks/stack-reader";
+import { resolveNavigationWorktreeProjects } from "../app-server/navigation-worktree-projects";
 import { runGitCommand } from "../app-server/git-executable";
 import { resolveWorktreeRepositoryDirectory } from "../git-info/worktree-store";
 import { NavigationQueryPool } from "../app-server/navigation-query-pool";
@@ -267,6 +268,41 @@ it("publishes the repository once when a same-named worktree has a saved project
   } finally {
     mocks.store.readNavigationQueryIndex.mockImplementation(previous!);
     mocks.store.readDirectoryGitStatusCache.mockResolvedValue({});
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it("folds registered worktree rows only into the checkout Git identifies", async () => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-separate-project-index-")));
+  try {
+    const primary = canonicalizeNavigationPath(path.join(root, "Project"));
+    const worktree = canonicalizeNavigationPath(path.join(root, "tasks", "Project"));
+    const other = canonicalizeNavigationPath(path.join(root, "other", "Project"));
+    await runGitCommand(root, ["init", "--separate-git-dir", path.join(root, "admin"), primary]);
+    await runGitCommand(primary, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.com",
+      "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "Fixture"]);
+    await runGitCommand(primary, ["worktree", "add", "--detach", worktree]);
+    await runGitCommand(root, ["init", other]);
+    const gitCommonDir = async (checkout: string) =>
+      (await runGitCommand(checkout, ["rev-parse", "--path-format=absolute", "--git-common-dir"])).stdout.trim();
+    expect(await gitCommonDir(worktree)).toBe(await gitCommonDir(primary));
+    expect(await gitCommonDir(worktree)).not.toBe(await gitCommonDir(other));
+
+    const row = (checkout: string) => ({
+      key: `directory:${checkout}`, kind: "directory" as const, label: "Project", path: checkout,
+      repositoryKey: "github.com/example/project", threadKeys: [], needsAttentionCount: 0,
+    });
+    const primaryRow = row(primary);
+    const linkedRow = row(worktree);
+    const otherRow = row(other);
+    const { directories, worktreeProjectAliases } = await resolveNavigationWorktreeProjects(
+      [linkedRow, otherRow, primaryRow], { threads: [] },
+    );
+    expect(directories.map(({ key }) => key).sort()).toEqual([primaryRow.key, otherRow.key].sort());
+    expect(worktreeProjectAliases).toEqual({ [primaryRow.key]: [linkedRow.key] });
+    expect((await resolveNavigationWorktreeProjects([linkedRow, otherRow], { threads: [] })).directories)
+      .toEqual([linkedRow, otherRow]);
+  } finally {
     await rm(root, { force: true, recursive: true });
   }
 });
