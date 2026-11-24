@@ -395,6 +395,34 @@ function threadDirectories(thread: StackThreadRow): string[] {
   return (thread.linkedDirectories ?? []).map((directory) => directory.worktreePath ?? directory.path);
 }
 
+async function resolveAttachmentRoots(
+  rows: readonly StackThreadRow[], checkouts: ReadonlyMap<string, Checkout>, clones: ReadonlyMap<string, Checkout>,
+  demand: PrMetadataDemand,
+): Promise<Map<string, string>> {
+  const resolved = new Map<string, string>();
+  if (!clones.size) return resolved;
+  const roots = new Set(Array.from(checkouts.values(), ({ root }) => root));
+  const aliases = new Set<string>();
+  for (const row of rows) {
+    if (!row.prs?.length || !threadDirectories(row).some((cwd) => {
+      const checkout = checkouts.get(cwd);
+      return checkout && clones.has(checkout.commonDir);
+    })) continue;
+    for (const pr of row.prs) {
+      for (const cwd of pr.linkedDirectoryPaths ?? []) {
+        if (!checkouts.has(cwd) && !roots.has(cwd) && path.isAbsolute(cwd)) aliases.add(cwd);
+      }
+    }
+  }
+  // Navigation may spell a worktree physically while its stored PR uses a
+  // symlink. Resolve each alias afresh, using only roots already verified by Git.
+  const scan = new IterableMapper(aliases, async (cwd) => ({
+    cwd, root: await runPrMetadataFileProbe(() => realpath(cwd), demand),
+  }), STACK_CHECKOUT_SCAN_LIMITS);
+  for await (const { cwd, root } of scan) if (root && roots.has(root)) resolved.set(cwd, root);
+  return resolved;
+}
+
 type CloneThread = { row: StackThreadRow; paths: string[] };
 
 function stackPullRequest(pr: PrSummary): StackLayerPullRequest {
@@ -839,14 +867,6 @@ export class StackReader {
         }
       }
     }
-    // Scoped admission used the initial catalog. A change during discovery
-    // requires fresh admission before projection can assert settlement.
-    if (scopedClones.size && (await Promise.all(
-      [...scopedClones.keys()].map((commonDir) => observation.revalidateCatalog(commonDir)),
-    )).some(Boolean)) {
-      if (retried) return { stacks: [], catalogs: [{ status: "unavailable" }] };
-      return await this.readProjection(threads, knownPrs, directories, activity, new StackReadObservation(demand), true, validateAttachments);
-    }
     const checkouts = new Map(anchors.map((entry) => [entry.cwd, entry] as const));
     // Keep the existing path order regardless of which probes finish first.
     for (const cwd of paths) {
@@ -865,14 +885,24 @@ export class StackReader {
       return { ...row, prs: await validateAttachments({ ...row, prs: row.prs }) };
     })) : local;
     demand.signal?.throwIfAborted();
+    const attachmentRoots = await resolveAttachmentRoots(rows, checkouts, cloneCheckouts, inventoryDemand);
     if (validatedAny && !await observation.checkoutsStillMatch(checkouts.values())) {
+      if (retried) return { stacks: [], catalogs: [{ status: "unavailable" }] };
+      return await this.readProjection(threads, knownPrs, directories, activity, new StackReadObservation(demand), true, validateAttachments);
+    }
+    // Scoped admission used the initial catalog. A change during discovery
+    // requires fresh admission before projection can assert settlement.
+    if (scopedClones.size && (await Promise.all(
+      [...scopedClones.keys()].map((commonDir) => observation.revalidateCatalog(commonDir)),
+    )).some(Boolean)) {
       if (retried) return { stacks: [], catalogs: [{ status: "unavailable" }] };
       return await this.readProjection(threads, knownPrs, directories, activity, new StackReadObservation(demand), true, validateAttachments);
     }
     const cloneThreads = new Map<string, CloneThread[]>();
     for (const row of rows) {
       const pathsByClone = new Map<string, string[]>();
-      for (const cwd of threadDirectories(row)) {
+      const rowPaths = threadDirectories(row);
+      for (const cwd of rowPaths) {
         const checkout = checkouts.get(cwd);
         if (!checkout) continue;
         pathsByClone.set(checkout.commonDir, [...pathsByClone.get(checkout.commonDir) ?? [], checkout.root]);
@@ -880,8 +910,12 @@ export class StackReader {
       for (const [commonDir, paths] of pathsByClone) {
         const entries = cloneThreads.get(commonDir) ?? [];
         const prs = row.prs?.filter((pr) => pr.linkedDirectoryPaths?.length
-          ? pr.linkedDirectoryPaths.some((directory) => paths.includes(checkouts.get(directory)?.root ?? directory))
-          : pathsByClone.size === 1 && !threadDirectories(row).some((cwd) => unavailablePaths.has(cwd)));
+          ? pr.linkedDirectoryPaths.some((directory) => {
+            const checkout = checkouts.get(directory);
+            return checkout ? checkout.commonDir === commonDir && paths.includes(checkout.root)
+              : paths.includes(attachmentRoots.get(directory) ?? directory);
+          })
+          : pathsByClone.size === 1 && !rowPaths.some((cwd) => unavailablePaths.has(cwd)));
         entries.push({ row: { ...row, prs }, paths });
         cloneThreads.set(commonDir, entries);
       }

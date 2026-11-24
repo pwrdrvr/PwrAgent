@@ -979,6 +979,82 @@ describe("stack checkout demand", () => {
     }
   });
 
+  it("keeps inferred attachments when only the stored PR paths use symlink spellings", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-attachment-aliases-"));
+    const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    try {
+      const seed = path.join(sandbox, "seed");
+      const clone = path.join(sandbox, "clone");
+      const other = path.join(sandbox, "other-clone");
+      const lowerPath = path.join(sandbox, "lower");
+      const upperPath = path.join(sandbox, "upper");
+      const lowerAlias = path.join(sandbox, "lower-alias");
+      const upperAlias = path.join(sandbox, "upper-alias");
+      await mkdir(seed);
+      initialize(seed);
+      git(seed, "branch", "-m", "main");
+      git(sandbox, "clone", seed, clone);
+      git(sandbox, "clone", seed, other);
+      git(clone, "worktree", "add", "-b", "lower", lowerPath);
+      git(clone, "worktree", "add", "-b", "upper", upperPath, "lower");
+      git(other, "switch", "-c", "lower");
+      const [lower, upper, separate, primary] = await Promise.all([lowerPath, upperPath, other, clone].map((cwd) => realpath(cwd)));
+      await symlink(lower, lowerAlias, "junction");
+      await symlink(upper, upperAlias, "junction");
+      const checkout = async (cwd: string) => {
+        const dirs = git(cwd, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir").split(/\r?\n/);
+        const [root, commonDir] = await Promise.all(dirs.map((entry) => realpath(entry)));
+        return { root, commonDir };
+      };
+      const lowerCheckout = await checkout(lower);
+      const upperCheckout = await checkout(upper);
+      const separateCheckout = await checkout(separate);
+      expect(await checkout(lowerAlias)).toEqual(lowerCheckout);
+      expect(await checkout(upperAlias)).toEqual(upperCheckout);
+      expect(lowerCheckout.root).not.toBe(upperCheckout.root);
+      expect(lowerCheckout.commonDir).toBe(upperCheckout.commonDir);
+      expect(separateCheckout.commonDir).not.toBe(lowerCheckout.commonDir);
+
+      const stackRow = (name: string, root: string, number: number, base: string, alias: string) => ({
+        ...row(root, name),
+        linkedDirectories: [{ id: primary, path: primary, worktreePath: root, label: name, kind: "worktree" as const }],
+        prs: [{
+          number, provider: "github.com", org: "fixture", repo: "shared", lifecycleState: "open", state: "passing",
+          headRefName: name, baseRefName: base, url: `https://github.com/fixture/shared/pull/${number}`, linkedDirectoryPaths: [alias],
+        } satisfies PrSummary],
+      });
+      const rows = [stackRow("lower", lower, 1, "main", lowerAlias), stackRow("upper", upper, 2, "lower", upperAlias)];
+      const reader = new StackReader();
+      start.mockClear();
+      const { stacks } = await reader.read(rows, [], [lower]);
+      // Git's (worktree root, common dir) pair decides attachment provenance.
+      // Changing only its spelling cannot remove either inferred layer.
+      expect(stacks).toMatchObject([{
+        inferred: true,
+        layers: [
+          { pullRequest: { number: 1 }, thread: { key: "codex:lower" } },
+          { pullRequest: { number: 2 }, thread: { key: "codex:upper" } },
+        ],
+      }]);
+      expect(start.mock.calls.filter(([, args]) => args[0] === "rev-parse").map(([cwd]) => cwd).sort())
+        .toEqual([lower, upper].sort());
+      const fleet = await reader.read(rows, [], undefined, undefined, new StackReadObservation(), async ({ prs }) => prs);
+      expect(fleet.stacks).toEqual(stacks);
+
+      for (const target of [separate, upper, lower]) {
+        await rm(lowerAlias);
+        await symlink(target, lowerAlias, "junction");
+        const aliasedCheckout = await checkout(lowerAlias);
+        expect(aliasedCheckout).toEqual(await checkout(target));
+        const sameCheckout = aliasedCheckout.root === lowerCheckout.root && aliasedCheckout.commonDir === lowerCheckout.commonDir;
+        expect((await reader.read(rows, [], [lower])).stacks).toEqual(sameCheckout ? stacks : []);
+      }
+    } finally {
+      start.mockRestore();
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
   it("keeps checking a bare layout with a worktree even when an invalid .git directory exists", async () => {
     const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-bare-layout-"));
     try {
