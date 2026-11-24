@@ -25,6 +25,7 @@ export type {
 } from "@pwragent/owner-core/pr-status-storage";
 import { canonicalizeDetachedPrKeys, normalizeDetachedPrKeys } from "@pwragent/owner-core/detached-pr-keys";
 import { patchOwnerThreadMetadata, type OwnerThreadIdentity, type OwnerThreadMetadataPatch, type OwnerThreadRecord, type OwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
+import { claimAgentReviewBudget, rearmAgentReviewBudget, type AgentReviewAdmission, type AgentReviewBudget, type AgentReviewRefusal, type OperatorReviewInput } from "@pwragent/owner-core/agent-review-admission";
 import { buildLegacyEncodedThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { mergeCausalMessagingContext } from "@pwragent/shared/messaging-causal-context";
 import {
@@ -5640,6 +5641,36 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     const nextState: ThreadOverlayState = params.keepAwake ? { ...rest, keepCheckoutAwake: true } : rest;
     this.putThread(threadKey, nextState);
     return nextState;
+  }
+
+  private agentReviewBudgetKey(thread: OwnerThreadIdentity): string {
+    return `agent_review_admission:${encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(thread.backend, thread.threadId))}`;
+  }
+
+  readAgentReviewBudget(thread: OwnerThreadIdentity): AgentReviewBudget | undefined {
+    const value = this.stateDb.getMeta(this.agentReviewBudgetKey(thread));
+    return value === undefined ? undefined : JSON.parse(value) as AgentReviewBudget;
+  }
+
+  claimAgentReview(request: AgentReviewAdmission): AgentReviewRefusal | undefined {
+    // A claim must survive an owner restart and be exclusive across instances
+    // sharing this profile. Refusals commit no changes.
+    return this.stateDb.raw.transaction(() => {
+      const next = claimAgentReviewBudget(this.readAgentReviewBudget(request), request);
+      if (typeof next === "string") return next;
+      this.stateDb.setMeta(this.agentReviewBudgetKey(request), JSON.stringify(next));
+      return undefined;
+    }).immediate();
+  }
+
+  rearmAgentReviews(thread: OwnerThreadIdentity, operatorInput: OperatorReviewInput): void {
+    // Most operator turns have no review attempts to clear, so avoid taking
+    // the write lock unless a reset would change the persisted budget.
+    if (!rearmAgentReviewBudget(this.readAgentReviewBudget(thread), operatorInput)) return;
+    this.stateDb.raw.transaction(() => {
+      const next = rearmAgentReviewBudget(this.readAgentReviewBudget(thread), operatorInput);
+      if (next) this.stateDb.setMeta(this.agentReviewBudgetKey(thread), JSON.stringify(next));
+    }).immediate();
   }
 
   claimMonitorJobSuggestion(params: {
@@ -13052,6 +13083,9 @@ export type OverlayStoreLike = Pick<
   | "setAcpWorktreeDirectory"
   | "persistThreadUsageActivity"
   | "upsertManagedReviewEntry"
+  | "readAgentReviewBudget"
+  | "claimAgentReview"
+  | "rearmAgentReviews"
   | "consumeManagedReviewContexts"
   | "upsertThreadUsageLine"
   | "readThreadPricing"
