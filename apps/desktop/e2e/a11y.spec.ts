@@ -419,6 +419,11 @@ async function runAxeScan(
   // everything we render anyway. See
   // https://github.com/dequelabs/axe-core-npm/blob/develop/packages/playwright/error-handling.md
   let builder = new AxeBuilder({ page: window }).setLegacyMode(true);
+  if (options?.comparisonKey) {
+    // Axe records ID-free structural paths while reporting the scan. A
+    // transient target may be gone by the time Playwright receives the results.
+    builder = builder.options({ ancestry: true });
+  }
   if (options?.rules) {
     builder = builder.withRules(options.rules);
   } else {
@@ -437,33 +442,15 @@ async function runAxeScan(
   const results = await builder.analyze();
   if (options?.comparisonKey) {
     const outcomes = ["passes", "violations", "incomplete", "inapplicable"] as const;
-    // Resolve axe's selectors in the audited document, then identify each
-    // node by its element position from the root. Axe XPath also uses IDs.
-    const selectors = [...new Set(outcomes.flatMap((outcome) =>
-      results[outcome].flatMap(({ nodes }) => nodes.map(({ target }) => {
-        if (target.length !== 1 || typeof target[0] !== "string") {
-          throw new Error(`Expected a same-document audit target: ${JSON.stringify(target)}`);
-        }
-        return target[0];
-      })),
-    ))];
-    const paths = new Map(await window.evaluate((selectors) => selectors.map((selector) => {
-      const matches = document.querySelectorAll(selector);
-      if (matches.length !== 1) throw new Error(`Expected one audit target for ${selector}`);
-      const path: string[] = [];
-      for (let element: Element | null = matches[0]!; element; element = element.parentElement) {
-        const position = element.parentElement
-          ? Array.prototype.indexOf.call(element.parentElement.children, element) + 1
-          : 1;
-        path.unshift(`${element.localName}:nth-child(${position})`);
-      }
-      return [selector, path.join(" > ")] as const;
-    }), selectors));
     const matrix = Object.fromEntries(outcomes.map((outcome) => [
       outcome,
       results[outcome].map(({ id, nodes }) => ({
         id,
-        targets: nodes.map(({ target }) => paths.get(target[0] as string)!).sort(),
+        // Axe omits the position for an only child. Keep the same path
+        // when that node is still first but has gained a later sibling.
+        targets: nodes.map(({ ancestry }) =>
+          JSON.stringify(ancestry).replaceAll(":nth-child(1)", ""),
+        ).sort(),
       })).sort((left, right) => left.id.localeCompare(right.id)),
     ]));
     await test.info().attach(`axe: ${options.comparisonKey}`, {
