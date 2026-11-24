@@ -26,6 +26,7 @@ export function readAcpToolDescription(
 
 export function readAcpToolInvocation(
   record: Record<string, unknown>,
+  followsTitleScript = false,
 ): string | undefined {
   const mcpToolName = readAcpMcpToolName(record);
   if (mcpToolName) {
@@ -45,7 +46,17 @@ export function readAcpToolInvocation(
     return `web_fetch(url=${formatInvocationValue(webFetchUrl)})`;
   }
 
-  return readAcpCodeSearch(record)?.invocation;
+  const codeSearch = readAcpCodeSearch(record);
+  if (codeSearch) {
+    return codeSearch.invocation;
+  }
+  // Some ACP executors supply the script only as the title.
+  const title = record.title;
+  return typeof title === "string"
+    && /[\r\n]/.test(title.trim())
+    && (isShellLikeAcpTool(record) || (followsTitleScript && !readString(record, "kind")))
+    ? title
+    : undefined;
 }
 
 /** Grok's MCP dispatcher exposes the invoked tool inside its UseTool input. */

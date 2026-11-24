@@ -58,6 +58,7 @@ describe("AcpSessionReplayNormalizer", () => {
             label: "pwragent__list_federation_instances",
             command: expect.objectContaining({
               displayCommand: 'pwragent__list_federation_instances\n{\n  "query": "Fixture",\n  "includeLoad": false\n}',
+              rawCommand: "pwragent__list_federation_instances",
               source: "tool",
             }),
           })],
@@ -1572,6 +1573,49 @@ describe("AcpSessionReplayNormalizer", () => {
             },
           }),
         ],
+      }),
+    ]);
+  });
+
+  it.each([false, true])("replays the full title-only script through completion (revised: %s)", (revised) => {
+    const normalizer = new AcpSessionReplayNormalizer();
+    const title = "\tif true; then\n  echo ok\nfi";
+    const completedTitle = revised ? "if true; then\n  echo done\nfi" : title;
+    const label = revised ? "if true; then echo done fi" : "if true; then echo ok fi";
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "script",
+        kind: "execute",
+        title,
+        status: "in_progress",
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "script",
+        status: "completed",
+        ...(revised ? { title: completedTitle } : {}),
+      },
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        summary: label,
+        status: "completed",
+        details: [expect.objectContaining({
+          label,
+          command: expect.objectContaining({
+            displayCommand: completedTitle,
+            source: "tool",
+            rawCommand: undefined,
+          }),
+        })],
       }),
     ]);
   });

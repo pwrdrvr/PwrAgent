@@ -5,11 +5,71 @@ import type { AppServerThreadActivityDetail } from "@pwragent/shared/contracts/n
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { TranscriptActivity } from "../TranscriptActivity";
-import { buildLiveActivityEntry } from "../live-transcript-activity";
+import { buildLiveActivityEntry, buildLiveToolDetails } from "../live-transcript-activity";
 
 describe("TranscriptActivity", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("renders a live tool script's original lines in the expanded invocation", () => {
+    const command = "if true; then\n  echo ok\nfi";
+    const entry = buildLiveActivityEntry({
+      id: "script",
+      details: buildLiveToolDetails({
+        id: "script",
+        type: "commandExecution",
+        status: "completed",
+        command,
+        commandSource: "tool",
+      }),
+    });
+
+    render(<TranscriptActivity entry={entry} />);
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+
+    expect(screen.getByLabelText("Invocation").textContent).toBe(command);
+    expect(screen.getByText("3 lines")).toBeInTheDocument();
+  });
+
+  it.each(["read_thread", "send_message_to_thread", "watch_thread_pull_request"])(
+    "keeps a script starting with ./%s in a collapsed command row",
+    (tool) => {
+      const command = `./${tool}\necho done`;
+      const entry = buildLiveActivityEntry({
+        id: "script",
+        details: buildLiveToolDetails({
+          id: "script", type: "commandExecution", status: "completed", command,
+          commandSource: "tool", data: { output: '{"error":{"message":"sample"}}' },
+        }),
+      });
+
+      render(<TranscriptActivity entry={entry} />);
+
+      expect(screen.queryByLabelText("Invocation")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { expanded: false }));
+      expect(screen.getByLabelText("Invocation").textContent).toBe(command);
+    },
+  );
+
+  it("recognizes a live ACP thread tool from its explicit identity", () => {
+    const entry = buildLiveActivityEntry({
+      id: "read-thread",
+      details: buildLiveToolDetails({
+        id: "read-thread",
+        type: "commandExecution",
+        status: "completed",
+        command: 'pwragent/read_thread\n{\n  "threadId": "sample-thread"\n}',
+        commandToolName: "pwragent/read_thread",
+        commandActions: [{ type: "unknown", name: "pwragent/read_thread" }],
+        commandSource: "tool",
+      }),
+    });
+
+    render(<TranscriptActivity entry={entry} />);
+
+    expect(screen.getByRole("button", { name: "Read thread" })).toBeInTheDocument();
+    expect(screen.getByText("#sample-thread")).toBeInTheDocument();
   });
 
   it("shows unavailable tool images as text without loading them", () => {

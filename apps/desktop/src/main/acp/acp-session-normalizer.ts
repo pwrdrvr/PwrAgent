@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type {
   AppServerThreadActivityEntry,
+  AppServerThreadCommandDetail,
   AppServerThreadEntry,
   AppServerThreadImagePart,
   AppServerThreadMessage,
@@ -1011,6 +1012,10 @@ export class AcpSessionReplayNormalizer {
     if (toolCallId && fileRead) {
       this.fileReads.set(toolCallId, fileRead);
     }
+    const currentIndex = toolCallId ? this.typedEntryIndexes.get(`activity:${toolCallId}`) : undefined;
+    const current = currentIndex !== undefined ? this.entries[currentIndex] : undefined;
+    const followsTitleScript = current?.type === "activity"
+      && isTitleOnlyAcpScript(current.details[0]?.command);
     this.upsertActivity(
       toolActivity(
         update,
@@ -1019,6 +1024,7 @@ export class AcpSessionReplayNormalizer {
         providerTool,
         fileRead,
         this.fileEditOptions,
+        followsTitleScript,
       ),
       providerTool
         ? (label) => isProviderToolPlaceholder(label, providerTool)
@@ -1809,6 +1815,7 @@ function toolActivity(
   providerTool?: AcpProviderTool,
   fileRead?: AcpFileRead,
   fileEditOptions?: ReadAcpFileEditOptions,
+  followsTitleScript = false,
 ): AppServerThreadActivityEntry {
   const id =
     readAcpToolCallId(update.update) ??
@@ -1929,10 +1936,11 @@ function toolActivity(
   const description = rawCommand
     ? readAcpToolDescription(update.update)
     : undefined;
-  const invocation = readAcpToolInvocation(update.update);
+  const invocation = readAcpToolInvocation(update.update, followsTitleScript);
+  const mcpToolName = readAcpMcpToolName(update.update);
   const displayCommand = rawCommand ?? invocation;
   const titleCandidate =
-    readAcpMcpToolName(update.update) ??
+    mcpToolName ??
     description ??
     readString(update.update, "title") ??
     readString(update.update, "name") ??
@@ -1951,6 +1959,7 @@ function toolActivity(
       : displayCommand
           && (
             isGenericShellToolTitle(labelCandidate)
+            || (followsTitleScript && isGenericActivityLabel(labelCandidate))
             // Antigravity titles a `run_command` with the whole script.
             || normalizeCommandText(labelCandidate) === normalizeCommandText(displayCommand)
           )
@@ -1985,7 +1994,7 @@ function toolActivity(
           displayCommand || output !== undefined || exitCode !== undefined
             ? {
                 displayCommand: displayCommand ?? label,
-                rawCommand,
+                rawCommand: rawCommand ?? mcpToolName,
                 ...(invocation && !rawCommand ? { source: "tool" as const } : {}),
                 output,
                 exitCode,
@@ -2045,6 +2054,7 @@ function mergeActivity(
   const status = incoming.status ?? existing.status;
   const fileEditGainedPath = incoming.details[0]?.kind === "write"
     && Boolean(incoming.details[0].path) && !existing.details[0]?.path;
+  const updatedScript = readUpdatedAcpScript(existing.details[0]?.command, incoming.details[0]?.command);
   const details = mergeActivityEntryDetails(
     existing.details,
     incoming.details,
@@ -2059,7 +2069,7 @@ function mergeActivity(
     ...existing,
     createdAt: existing.createdAt ?? incoming.createdAt,
     summary: settledSearchLabel(
-      fileEditGainedPath
+      fileEditGainedPath || updatedScript
         ? incoming.summary
         : preferSpecificLabel(existing.summary, incoming.summary, isPlaceholderLabel),
       status,
@@ -2103,6 +2113,9 @@ function mergeActivityEntryDetails(
       merged[existingIndex] = incomingDetail;
       continue;
     }
+    const existingCommand = existingDetail.command;
+    const incomingCommand = incomingDetail.command;
+    const updatedScript = readUpdatedAcpScript(existingCommand, incomingCommand);
     merged[existingIndex] = {
       ...existingDetail,
       ...incomingDetail,
@@ -2111,44 +2124,41 @@ function mergeActivityEntryDetails(
         && !isWeakLabel(existingDetail.label, isPlaceholderLabel)
           ? existingDetail.kind
           : incomingDetail.kind,
-      label: preferSpecificLabel(
+      label: updatedScript ? incomingDetail.label : preferSpecificLabel(
         existingDetail.label,
         incomingDetail.label,
         isPlaceholderLabel,
       ),
       path: incomingDetail.path ?? existingDetail.path,
       command:
-        existingDetail.command || incomingDetail.command
+        existingCommand || incomingCommand
           ? {
               displayCommand:
-                preferSpecificCommand(
-                  existingDetail.command?.displayCommand,
-                  incomingDetail.command?.displayCommand,
+                updatedScript?.displayCommand
+                ?? preferSpecificCommand(
+                  existingCommand?.displayCommand,
+                  incomingCommand?.displayCommand,
                 )
                 ?? preferSpecificLabel(existingDetail.label, incomingDetail.label),
               rawCommand:
                 preferSpecificCommand(
-                  existingDetail.command?.rawCommand,
-                  incomingDetail.command?.rawCommand,
+                  existingCommand?.rawCommand,
+                  incomingCommand?.rawCommand,
                 ),
               source:
-                incomingDetail.command?.rawCommand
-                && existingDetail.command?.source === "tool"
+                incomingCommand?.source !== "tool"
+                && incomingCommand?.rawCommand
+                && existingCommand?.source === "tool"
                   ? "shell"
-                  : incomingDetail.command?.source
-                    ?? existingDetail.command?.source,
+                  : incomingCommand?.source ?? existingCommand?.source,
               output:
-                incomingDetail.command?.output
-                ?? existingDetail.command?.output,
+                incomingCommand?.output ?? existingCommand?.output,
               exitCode:
-                incomingDetail.command?.exitCode
-                ?? existingDetail.command?.exitCode,
+                incomingCommand?.exitCode ?? existingCommand?.exitCode,
               durationMs:
-                incomingDetail.command?.durationMs
-                ?? existingDetail.command?.durationMs,
+                incomingCommand?.durationMs ?? existingCommand?.durationMs,
               cwd:
-                incomingDetail.command?.cwd
-                ?? existingDetail.command?.cwd,
+                incomingCommand?.cwd ?? existingCommand?.cwd,
             }
           : undefined,
       fileDiff: incomingDetail.fileDiff ?? existingDetail.fileDiff,
@@ -2207,6 +2217,20 @@ function isGenericActivityLabel(value: string): boolean {
     "tool_call_update",
     "searching web",
   ]).has(value.toLowerCase());
+}
+
+function isTitleOnlyAcpScript(command: AppServerThreadCommandDetail | undefined): boolean {
+  return command?.source === "tool" && !command.rawCommand && /[\r\n]/.test(command.displayCommand);
+}
+
+function readUpdatedAcpScript(
+  existing: AppServerThreadCommandDetail | undefined,
+  incoming: AppServerThreadCommandDetail | undefined,
+): AppServerThreadCommandDetail | undefined {
+  // An output-only update has a fallback display label, with neither a command nor an invocation.
+  return isTitleOnlyAcpScript(existing) && (incoming?.source === "tool" || incoming?.rawCommand)
+    ? incoming
+    : undefined;
 }
 
 function preferSpecificCommand(

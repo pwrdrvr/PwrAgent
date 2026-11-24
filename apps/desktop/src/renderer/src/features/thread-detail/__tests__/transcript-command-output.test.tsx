@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TranscriptCommandOutput } from "../TranscriptCommandOutput";
+import { buildLiveToolDetails } from "../live-transcript-activity";
 
 describe("TranscriptCommandOutput", () => {
   afterEach(() => {
@@ -244,6 +245,25 @@ describe("TranscriptCommandOutput", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy invocation" })).toBeInTheDocument();
     expect(screen.queryByText("tool call update")).not.toBeInTheDocument();
+  });
+
+  it("copies the leading indentation and escaped final space of an ACP script", () => {
+    const copyText = vi.fn(async () => undefined);
+    (window as Window & { pwragent?: unknown }).pwragent = { copyText };
+    const command = "\techo start\necho end\\ ";
+    const [detail] = buildLiveToolDetails({
+      id: "script",
+      type: "commandExecution",
+      command,
+      commandSource: "tool",
+      status: "completed",
+    });
+    if (!detail) throw new Error("Expected one live command detail");
+
+    render(<TranscriptCommandOutput detail={detail} />);
+    fireEvent.click(screen.getByRole("button", { name: "Copy invocation" }));
+
+    expect(copyText).toHaveBeenCalledWith(command);
   });
 
   it("truncates long output and expands on demand", () => {
