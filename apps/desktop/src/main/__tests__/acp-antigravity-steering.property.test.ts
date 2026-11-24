@@ -164,7 +164,7 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
   });
 
   async function checkWireHandoff(
-    outcome: "detach" | "detach-with-usage" | "cancel" | "write-failure",
+    outcome: "detach" | "detach-with-usage" | "detach-response" | "finish" | "cancel" | "write-failure",
     together: boolean,
     text: string,
     verifiedReplay = false,
@@ -297,25 +297,40 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
         totalTokens: 75,
       };
       const final = { stopReason: "end_turn", usage: finalUsage };
-      const followup = outcome === "cancel"
-        ? frame({ id: nextId, error: { code: -32603, message: "the running prompt is being cancelled" } })
-        : chunk("After") + response(nextId, final);
+      const rejected = outcome === "cancel" || outcome === "finish";
+      const followup = rejected
+        ? frame({ id: nextId, error: {
+            code: -32603,
+            message: outcome === "finish" ? "no active turn" : "the running prompt is being cancelled",
+          } })
+        : (outcome === "detach-response" ? "" : chunk("After")) + response(nextId, final);
       const oldResult = outcome === "cancel"
         ? { stopReason: "cancelled", usage: detachUsage }
-        : outcome === "detach-with-usage"
+        : outcome === "detach-with-usage" || outcome === "finish"
           ? { stopReason: "end_turn", usage: detachUsage }
           : { stopReason: "end_turn" };
       const oldResponse = response(oldId, oldResult);
       child.stdout.write(together ? oldResponse + followup : oldResponse);
       if (!together) {
-        await new Promise<void>((resolve) => setImmediate(resolve));
+        const beforeEvidence = await Promise.race([receipt, new Promise((resolve) => setImmediate(() => resolve("pending")))]);
         child.stdout.write(followup);
+        if (outcome !== "cancel") expect(beforeEvidence).toBe("pending");
       }
       const terminalKind = await terminal.promise;
       expect(await Promise.race([receipt, new Promise((resolve) => setImmediate(() => resolve("pending")))]))
-        .toBe(outcome === "cancel" ? "rejected" : "accepted");
+        .toBe(rejected ? "rejected" : "accepted");
       expect(terminalKind).toBe("finished");
-      expect(order).toEqual(outcome === "cancel" ? ["answer"] : ["answer", "steer", "answer"]);
+      const expectedOrder = ["answer"];
+      const expectedMessages = ["Initial prompt", "Before"];
+      if (!rejected) {
+        expectedOrder.push("steer");
+        expectedMessages.push(text);
+        if (outcome !== "detach-response") {
+          expectedOrder.push("answer");
+          expectedMessages.push("After");
+        }
+      }
+      expect(order).toEqual(expectedOrder);
       if (outcome !== "cancel") {
         expect(cancelRequests).toBe(0);
       }
@@ -328,6 +343,8 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
           thoughtTokens: 10,
           totalTokens: 245,
         });
+      } else if (outcome === "finish") {
+        expect(finalTurnUsage).toEqual(detachUsage);
       }
       if (verifiedReplay) {
         const records = rolloutStore.readUpdates({ backendId: "acp:antigravity", sessionId });
@@ -343,9 +360,7 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
         expect(records.every(({ update }) => !("prompt" in update || "parts" in update))).toBe(true);
       } else if (outcome !== "write-failure") {
         const replay = rolloutStore.readReplay({ backendId: "acp:antigravity", sessionId });
-        expect(replay.messages.map((message) => message.text)).toEqual(
-          outcome === "cancel" ? ["Initial prompt", "Before"] : ["Initial prompt", "Before", text, "After"],
-        );
+        expect(replay.messages.map((message) => message.text)).toEqual(expectedMessages);
       } else {
         expect(failedWrite).toHaveBeenCalledTimes(1);
       }
@@ -354,7 +369,7 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
     }
   }
 
-  it.each(["detach", "detach-with-usage", "cancel", "write-failure"] as const)(
+  it.each(["detach", "detach-with-usage", "detach-response", "finish", "cancel", "write-failure"] as const)(
     "keeps prompt ownership and receipt settlement independent of stdout batching on %s",
     async (outcome) => {
       await fc.assert(fc.asyncProperty(fc.boolean(), nonEmptyWord, async (together, text) => {
@@ -362,6 +377,10 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
       }), { numRuns: 10 });
     },
   );
+
+  it("keeps a normal completion when a concurrent steer is rejected in the same stdout read", async () => {
+    await checkWireHandoff("finish", true, "Change course");
+  });
 
   it("applies a detach and its first post-steer chunk in wire order", async () => {
     await checkWireHandoff("detach", true, "Change course");
@@ -488,6 +507,12 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
                 prompts[activeOwnerIndex]!.resolve({
                   stopReason: "end_turn",
                   ...(step.detachUsage ? { usage: step.detachUsage } : {}),
+                });
+                await flushMicrotasks();
+                expect(steeredUpdates).toEqual(expectedUserMessages.slice(1));
+                transport.emitSessionUpdate("agy-prop-session", {
+                  sessionUpdate: "agent_thought_chunk",
+                  content: { type: "text", text: "Considering the steer" },
                 });
                 await expect(steerPromise).resolves.toEqual({ delivery: "currentTurn" });
                 activeOwnerIndex = nextIndex;

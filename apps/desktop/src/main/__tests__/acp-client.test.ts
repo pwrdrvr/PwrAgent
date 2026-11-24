@@ -386,6 +386,11 @@ describe("AcpAgentClient", () => {
 
     // Antigravity immediately detaches the running prompt with end_turn (no usage).
     prompts[0]!.resolve({ stopReason: "end_turn" });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    transport.emitSessionUpdate("agy-session", {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "PINEAPPLE" },
+    });
     await expect(steerPromise).resolves.toEqual({ delivery: "currentTurn" });
 
     // The turn remains active under the second prompt; no premature turn_finished.
@@ -395,10 +400,6 @@ describe("AcpAgentClient", () => {
     expect(updates.some((entry) => entry.update.kind === "pwragent_steered_user_prompt")).toBe(true);
     expect(onPromptError).not.toHaveBeenCalled();
 
-    transport.emitSessionUpdate("agy-session", {
-      sessionUpdate: "agent_message_chunk",
-      content: { type: "text", text: "PINEAPPLE" },
-    });
     prompts[1]!.resolve({ stopReason: "end_turn", usage: { totalTokens: 42 } });
 
     await vi.waitFor(() => {
@@ -552,6 +553,10 @@ describe("AcpAgentClient", () => {
     });
     await vi.waitFor(() => expect(prompts).toHaveLength(2));
     prompts[0]!.resolve({ stopReason: "end_turn" });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    transport.emitSessionUpdate("agy-session", {
+      sessionUpdate: "tool_call", toolCallId: "after-first-steer", status: "in_progress",
+    });
     await expect(steer1).resolves.toEqual({ delivery: "currentTurn" });
 
     const steer2 = client.steerSession({
@@ -562,6 +567,10 @@ describe("AcpAgentClient", () => {
     });
     await vi.waitFor(() => expect(prompts).toHaveLength(3));
     prompts[1]!.resolve({ stopReason: "end_turn" });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    transport.emitSessionUpdate("agy-session", {
+      sessionUpdate: "tool_call", toolCallId: "after-second-steer", status: "in_progress",
+    });
     await expect(steer2).resolves.toEqual({ delivery: "currentTurn" });
 
     await client.cancelSession(session.sessionId);
@@ -719,14 +728,7 @@ describe("AcpAgentClient", () => {
         totalTokens: 29_759,
       },
     });
-    await expect(steer).resolves.toEqual({ delivery: "currentTurn" });
-
-    expect(client.hasActiveTurns()).toBe(true);
-    expect(store.getSession("acp:antigravity", session.sessionId)?.status).toBe("active");
-    expect(transport.notifications.some((n) => n.method === "session/cancel")).toBe(false);
-    expect(onPromptError).not.toHaveBeenCalled();
-    expect(updates.some((u) => u.kind === "turn_finished")).toBe(false);
-
+    await new Promise<void>((resolve) => setImmediate(resolve));
     transport.emitSessionUpdate("agy-session", {
       sessionUpdate: "tool_call_update",
       toolCallId: "call-2",
@@ -737,6 +739,14 @@ describe("AcpAgentClient", () => {
       sessionUpdate: "agent_message_chunk",
       content: { type: "text", text: "MANGO" },
     });
+    await expect(steer).resolves.toEqual({ delivery: "currentTurn" });
+
+    expect(client.hasActiveTurns()).toBe(true);
+    expect(store.getSession("acp:antigravity", session.sessionId)?.status).toBe("active");
+    expect(transport.notifications.some((n) => n.method === "session/cancel")).toBe(false);
+    expect(onPromptError).not.toHaveBeenCalled();
+    expect(updates.some((u) => u.kind === "turn_finished")).toBe(false);
+
     prompts[1]!.resolve({
       stopReason: "end_turn",
       usage: {
@@ -819,6 +829,11 @@ describe("AcpAgentClient", () => {
         thoughtTokens: 20,
         totalTokens: 1_550,
       },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    transport.emitSessionUpdate("agy-session", {
+      sessionUpdate: "agent_thought_chunk",
+      content: { type: "text", text: "Considering the steer" },
     });
     await expect(steer).resolves.toEqual({ delivery: "currentTurn" });
 

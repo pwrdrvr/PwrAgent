@@ -1345,9 +1345,11 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     prepareSteer: async (entry) => {
       const active = ports.getActiveTurnForThread(entry);
       if (!active) return undefined;
-      const backend = (await ports.listBackends({ includeUnavailable: true })).backends
-        .find((candidate) => candidate.kind === entry.backend);
-      if (!backend?.capabilities.steerTurn) return undefined;
+      const supportsSteering = entry.backend === "acp:antigravity"
+        ? acpBackend.supportsActiveAntigravitySteering(entry.threadId)
+        : (await ports.listBackends({ includeUnavailable: true })).backends
+          .find((candidate) => candidate.kind === entry.backend)?.capabilities.steerTurn;
+      if (!supportsSteering) return undefined;
       // Review ownership can change while backend discovery is pending.
       if (ports.findReviewForParentTurn({
         backend: entry.backend,

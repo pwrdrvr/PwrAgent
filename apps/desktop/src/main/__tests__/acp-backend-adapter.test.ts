@@ -1384,6 +1384,11 @@ describe("AcpBackendAdapter", () => {
       });
       await vi.waitFor(() => expect(prompts).toHaveLength(2));
       prompts[0]!.resolve({ stopReason: "end_turn" });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      transport.emitSessionUpdate("agy-session-1", {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "PINEAPPLE" },
+      });
 
       await expect(steerPromise).resolves.toEqual({ delivery: "currentTurn" });
       await vi.waitFor(() => {
@@ -1407,10 +1412,6 @@ describe("AcpBackendAdapter", () => {
         },
       });
 
-      transport.emitSessionUpdate("agy-session-1", {
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: "PINEAPPLE" },
-      });
       prompts[1]!.resolve({ stopReason: "end_turn" });
       await vi.waitFor(() => {
         expect(events.filter((event) => event.notification.method === "turn/completed")).toHaveLength(1);

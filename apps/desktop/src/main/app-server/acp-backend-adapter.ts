@@ -2147,6 +2147,15 @@ export class AcpBackendAdapter {
     return { ...result, targetPromptIndex };
   }
 
+  supportsActiveAntigravitySteering(sessionId: string): boolean {
+    const owner = this.findSessionOwner("acp:antigravity", sessionId);
+    return owner !== undefined
+      && !owner.disposePromise
+      && !owner.client.disconnected
+      && owner.client.steerSession !== undefined
+      && owner.client.supportsTurnSteering?.() === true;
+  }
+
   async steerSession(params: {
     backend: AcpBackendId;
     content: AcpPromptContentBlock[];
@@ -2167,10 +2176,12 @@ export class AcpBackendAdapter {
       const label = params.backend === "acp:antigravity" ? "Antigravity" : "Grok";
       throw new Error(`The ${label} turn finished before steering was accepted`);
     }
-    const client = await this.getClientForSession(
-      params.backend,
-      params.sessionId,
-    );
+    const owner = params.backend === "acp:antigravity"
+      ? this.findSessionOwner(params.backend, params.sessionId)
+      : undefined;
+    const client = owner
+      ? await owner.promise
+      : await this.getClientForSession(params.backend, params.sessionId);
     if (!client.steerSession || client.supportsTurnSteering?.() !== true) {
       throw new Error(
         params.backend === "acp:antigravity"

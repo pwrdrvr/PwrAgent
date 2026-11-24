@@ -311,6 +311,8 @@ type AcpRolloutStoreLike = {
 
 type AcpPromptSteerHandoff = {
   nextGeneration: number;
+  replacementReady: Promise<boolean>;
+  confirm?: () => void;
   accept: () => void;
   reject: (error: unknown) => void;
 };
@@ -1103,6 +1105,7 @@ export class AcpAgentClient {
     const messageId = `user:${activeTurn.turnId}:steer:${params.interjectionId}`;
     const displayPrompt = params.prompt ?? params.text;
     const handoff = Promise.withResolvers<void>();
+    const replacementReady = Promise.withResolvers<boolean>();
     let nextPromptSettled = false;
 
     const adoptSteer = (): void => {
@@ -1146,7 +1149,11 @@ export class AcpAgentClient {
 
     activeTurn.pendingSteerHandoff = {
       nextGeneration,
-      accept: adoptSteer,
+      replacementReady: replacementReady.promise,
+      accept: () => {
+        replacementReady.resolve(true);
+        adoptSteer();
+      },
       reject: (error) => {
         if (!nextPromptSettled && !this.disconnected) {
           void this.cancelSessionOperation(params.sessionId).catch(() => undefined);
@@ -1177,18 +1184,19 @@ export class AcpAgentClient {
     void nextPrompt.then(
       () => {
         nextPromptSettled = true;
+        replacementReady.resolve(true);
       },
       (error) => {
         nextPromptSettled = true;
+        replacementReady.resolve(false);
         if (activeTurn.pendingSteerHandoff?.nextGeneration === nextGeneration) {
           activeTurn.pendingSteerHandoff = undefined;
           handoff.reject(error);
         }
       },
     );
-    // A successful overlapping request alone does not show that it took
-    // over this turn. Observe its lifecycle only after the displaced prompt
-    // confirms that the replacement owns the turn.
+    // Observe the replacement's lifecycle only after the previous prompt
+    // ends and the replacement provides evidence that it took ownership.
     void handoff.promise.then(() => {
       this.observeActiveTurnPrompt({
         sessionId: params.sessionId,
@@ -1756,7 +1764,7 @@ export class AcpAgentClient {
     const { sessionId, activeTurn, generation, promptPromise } = params;
     let failedPromptUsage: AcpUsageEnvelope | undefined;
     void promptPromise
-      .then((result) => {
+      .then(async (result) => {
         if (params.isDispatched && !params.isDispatched()) {
           throw new Error("The ACP prompt was cancelled before it was sent.");
         }
@@ -1769,21 +1777,30 @@ export class AcpAgentClient {
         const cancelled = promptWasCancelled(result);
         if (activeTurn.pendingSteerHandoff) {
           const handoff = activeTurn.pendingSteerHandoff;
-          activeTurn.pendingSteerHandoff = undefined;
-          if (!activeTurn.terminalResponseGraceStarted && isAntigravityPromptDetach(result)) {
-            activeTurn.accumulatedPromptUsage = mergeAcpPromptResultUsage(
-              activeTurn.accumulatedPromptUsage,
-              readAcpPromptResultUsage(result, this.options.backendId),
+          if (!activeTurn.terminalResponseGraceStarted && isAntigravityPromptEndTurn(result)) {
+            // Natural completion and a handoff can have the same response.
+            // Adopt synchronously before applying the replacement's first update.
+            handoff.confirm = () => {
+              activeTurn.pendingSteerHandoff = undefined;
+              activeTurn.accumulatedPromptUsage = mergeAcpPromptResultUsage(
+                activeTurn.accumulatedPromptUsage,
+                readAcpPromptResultUsage(result, this.options.backendId),
+              );
+              activeTurn.promptGeneration = handoff.nextGeneration;
+              handoff.accept();
+            };
+            if (await handoff.replacementReady) {
+              if (activeTurn.pendingSteerHandoff === handoff) handoff.confirm();
+              return;
+            }
+          } else {
+            activeTurn.pendingSteerHandoff = undefined;
+            handoff.reject(
+              new Error(cancelled
+                ? "The active Antigravity turn was cancelled before steering was accepted"
+                : "The active Antigravity turn finished before steering was accepted"),
             );
-            activeTurn.promptGeneration = handoff.nextGeneration;
-            handoff.accept();
-            return;
           }
-          handoff.reject(
-            new Error(cancelled
-              ? "The active Antigravity turn was cancelled before steering was accepted"
-              : "The active Antigravity turn finished before steering was accepted"),
-          );
         }
         const promptUsage = mergeAcpPromptResultUsage(
           activeTurn.accumulatedPromptUsage,
@@ -2416,6 +2433,13 @@ export class AcpAgentClient {
     const fromSessionLoad = loadState !== undefined || isExplicitSessionReplay;
     const activeTurn = this.activeTurns.get(sessionId);
     const updateKind = readUpdateKind(update);
+    if (!fromSessionLoad && (
+      updateKind === "agent_message_chunk"
+      || updateKind === "agent_thought_chunk"
+      || updateKind === "tool_call"
+    )) {
+      activeTurn?.pendingSteerHandoff?.confirm?.();
+    }
     if (loadState?.restoringAntigravityMode
       && (updateKind === "current_mode_update" || updateKind === "config_option_update")) {
       // Publish the restored mode only after the restore reply confirms it.
@@ -4038,12 +4062,8 @@ function promptWasCancelled(result: unknown): boolean {
     || resultRecord?.stop_reason === "cancelled";
 }
 
-function isAntigravityPromptDetach(result: unknown): boolean {
+function isAntigravityPromptEndTurn(result: unknown): boolean {
   const record = asRecord(result);
-  // Antigravity detaches a running prompt with stopReason "end_turn" when a
-  // concurrent session/prompt takes over. Once any model call has completed
-  // (for example after a tool round), the detached response includes the
-  // pre-steer segment's usage rather than omitting usage.
   return record?.stopReason === "end_turn"
     || record?.stop_reason === "end_turn";
 }
