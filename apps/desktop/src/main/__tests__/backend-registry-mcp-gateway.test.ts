@@ -6,10 +6,14 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { DEFAULT_FORGE_AGENT_TOOL_POLICY } from "@pwragent/shared/contracts/forge-agent-tools";
 import {
+  BOAT_MCP_CONNECTION_ID,
+  DEFAULT_BOAT_SANDBOX_POLICY,
   MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY,
   MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY,
 } from "@pwragent/shared/contracts/mcp-connections";
 import type { AgentToolMcpServerLike } from "../agent-tools/agent-tool-mcp-server";
+import type { BoatApiRequest } from "../mcp-connections/boat-api";
+import { BoatTools } from "../mcp-connections/boat-tools";
 import { SandboxerConnection } from "../mcp-connections/sandboxer-connection";
 import { sandboxerStub } from "./helpers/sandboxer-stub";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -1448,10 +1452,26 @@ select_for_new_threads = true
     expect(internals.pendingServerRequests.size).toBe(0);
   });
 
-  it.each(["default", "full-access"] as const)("uses Antigravity's %s process access for gateway and Auto forge writes in native Default", async (executionMode) => {
-    const backend = "acp:antigravity";
+  function mockAntigravitySession(executionMode: ThreadExecutionMode) {
+    const backend = "acp:antigravity" as const;
     const threadId = "agy-thread";
     const turnId = "agy-turn";
+    vi.spyOn(internals.acpBackend, "getSession").mockReturnValue({
+      backendId: backend, sessionId: threadId, title: "Fixture", cwd: directory,
+      createdAt: 1, updatedAt: 1, status: "active", executionMode,
+      acpRuntime: { currentModeId: "default", updatedAt: 1 },
+    });
+    vi.spyOn(internals.acpBackend, "getInstalledAgent").mockReturnValue({
+      backendId: backend, registryId: "antigravity", name: "Antigravity", version: "1.5.15",
+      distributionKind: "local", distributionSource: "agy", installStatus: "installed",
+      authStatus: "not-required", verificationStatus: "not-applicable",
+      allowlistRuleId: "local-antigravity-cli", installedAt: 1, updatedAt: 1,
+    });
+    return { backend, threadId, turnId };
+  }
+
+  it.each(["default", "full-access"] as const)("uses Antigravity's %s process access for gateway and Auto forge writes in native Default", async (executionMode) => {
+    const { backend, threadId, turnId } = mockAntigravitySession(executionMode);
     const forgeArgs = { number: 9, body: "Contrived issue comment." };
     const writeArgs = { ...args, toolName: "write_record" };
     const forgeWrite = vi.fn(async () => ({ ok: true }));
@@ -1467,17 +1487,6 @@ select_for_new_threads = true
           annotations: { readOnlyHint: false },
         } }]
       : { content: [{ type: "text", text: "Fixture record written." }] });
-    vi.spyOn(internals.acpBackend, "getSession").mockReturnValue({
-      backendId: backend, sessionId: threadId, title: "Fixture", cwd: directory,
-      createdAt: 1, updatedAt: 1, status: "active", executionMode,
-      acpRuntime: { currentModeId: "default", updatedAt: 1 },
-    });
-    vi.spyOn(internals.acpBackend, "getInstalledAgent").mockReturnValue({
-      backendId: backend, registryId: "antigravity", name: "Antigravity", version: "1.5.15",
-      distributionKind: "local", distributionSource: "agy", installStatus: "installed",
-      authStatus: "not-required", verificationStatus: "not-applicable",
-      allowlistRuleId: "local-antigravity-cli", installedAt: 1, updatedAt: 1,
-    });
     const cards: AppServerMcpElicitationRequestNotification[] = [];
     const stop = registry.onEvent(async (event) => {
       if (event.backend !== backend || event.notification.method !== "mcpServer/elicitation/request") return;
@@ -1506,6 +1515,112 @@ select_for_new_threads = true
       expect(forgeWrite).toHaveBeenCalledTimes(fullAccess ? 1 : 0);
       expect(cards).toHaveLength(fullAccess ? 0 : 2);
       expect(internals.pendingServerRequests.size).toBe(0);
+    } finally {
+      stop();
+      await client.close();
+      await registry.publishLocalEvent({ backend, notification: { method: "turn/completed", params: {
+        threadId, turnId, turn: { id: turnId, status: "completed", output: [] },
+      } } });
+    }
+  });
+
+  it.each(["default", "full-access"] as const)("delivers oversized schemas and a 20 KB Boat write through Antigravity in %s", async (executionMode) => {
+    const { backend, threadId, turnId } = mockAntigravitySession(executionMode);
+    const boatId = BOAT_MCP_CONNECTION_ID;
+    const content = "Boat fixture.\n".repeat(1_428) + "12345678";
+    expect(Buffer.byteLength(content)).toBe(20_000);
+    const path = "/workspace/fixture.txt";
+    const write = vi.fn(async (_request: BoatApiRequest) => ({ path, size: 20_000 }));
+    const boat = new BoatTools({
+      api: { request: write, redact: (value) => value },
+      role: "thread", policy: () => DEFAULT_BOAT_SANDBOX_POLICY,
+      ownedSandboxIds: () => new Set(["bx_fixture"]), recordOwned: () => {}, forgetOwned: () => {},
+    });
+    const oversized: McpGatewayTool["definition"] = {
+      name: "inspect_record",
+      inputSchema: { type: "object", properties: { id: { type: "string", description: "文".repeat(9_000) } } },
+    };
+    await store.setThreadMcpConnectionIds({ backend, threadId, connectionIds: [boatId, "one"] });
+    const approve = vi.spyOn(registryModules(registry).threadMcpConnections, "approveGatewayInvocation");
+    operation.mockImplementation(async ({ operation, connectionId, invocation, signal }) => {
+      const serverName = connectionId === boatId ? "Boat" : "Fixture";
+      if (operation === "gateway/tools/list") {
+        return (connectionId === boatId ? boat.list() : [oversized]).map((definition) => ({
+          connectionId, serverName, toolName: definition.name, schemaRevision: "r1", definition,
+        }));
+      }
+      if (connectionId === boatId && invocation) return await boat.call(invocation.toolName, invocation.arguments, signal);
+      return { content: [{ type: "text", text: "Fixture inspected." }] };
+    });
+    const cards: AppServerMcpElicitationRequestNotification[] = [];
+    const stop = registry.onEvent(async ({ backend: eventBackend, notification }) => {
+      if (eventBackend !== backend || notification.method !== "mcpServer/elicitation/request") return;
+      cards.push(notification as AppServerMcpElicitationRequestNotification);
+      await registry.submitServerRequest({
+        backend, threadId, turnId, requestId: String(notification.params.requestId),
+        response: { action: "accept", content: {}, _meta: null },
+      });
+    });
+    const client = new Client({ name: "antigravity-large-payload-fixture", version: "1" });
+    try {
+      await registry.publishLocalEvent({ backend, notification: { method: "turn/started", params: {
+        threadId, turnId, turn: { id: turnId, status: "in_progress" },
+      } } });
+      const { server } = await internals.claudeAgentToolMcpServer.registerClient({ backend, threadId });
+      await client.connect(new StreamableHTTPClientTransport(new URL(server.url), {
+        requestInit: { headers: Object.fromEntries(server.headers.map(({ name, value }) => [name, value])) },
+      }));
+      const listed = (await client.listTools()).tools.map(({ name }) => name);
+      expect(listed).toContain("handoff_task");
+      expect(listed).not.toContain("write_file");
+      expect(listed).not.toContain(oversized.name);
+
+      const search = async (args: Record<string, unknown>) => {
+        const result = await client.callTool({ name: "search_mcp_tools", arguments: args });
+        expect(result.isError).not.toBe(true);
+        const text = (result.content as Array<{ text: string }>)[0].text;
+        return JSON.parse(text) as { tools: McpGatewayTool[]; unavailable: Array<{ message: string }> };
+      };
+      const normal = await search({ query: oversized.name, connectionId: "one" });
+      expect(normal.tools).toEqual([]);
+      expect(normal.unavailable[0].message).toContain("includeLargeSchema: true");
+      expect((await search({ query: "inspect", connectionId: "one", includeLargeSchema: true })).tools).toEqual([]);
+      const exact = await search({ query: oversized.name, connectionId: "one", includeLargeSchema: true });
+      expect(exact.tools.map(({ definition }) => definition)).toEqual([oversized]);
+      const [schema] = exact.tools;
+      const inspected = await client.callTool({ name: "call_mcp_tool", arguments: {
+        connectionId: schema.connectionId, toolName: schema.toolName, schemaRevision: schema.schemaRevision, arguments: { id: "fixture" },
+      } });
+      expect(inspected.isError).not.toBe(true);
+
+      const [tool] = (await search({ query: "write_file", connectionId: boatId, limit: 1 })).tools;
+      const writeArgs = {
+        connectionId: tool.connectionId, toolName: tool.toolName, schemaRevision: tool.schemaRevision,
+        arguments: { sandboxId: "bx_fixture", path, content },
+      };
+      const invalid = await client.callTool({ name: "call_mcp_tool", arguments: {
+        ...writeArgs, arguments: { ...writeArgs.arguments, path: 42 },
+      } });
+      expect(invalid.isError).toBe(true);
+      expect(write).not.toHaveBeenCalled();
+      const result = await client.callTool({ name: "call_mcp_tool", arguments: writeArgs });
+      expect(result.isError).not.toBe(true);
+      expect(result._meta?.["pwragent/source"]).toEqual({
+        connectionId: boatId, serverName: "Boat", toolName: "write_file", schemaRevision: tool.schemaRevision,
+      });
+      expect(write).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        method: "PUT", path: ["sandboxes", "bx_fixture", "files"], body: { path, content, encoding: "utf8" },
+      }));
+      expect(approve.mock.calls.map(([, context]) => context.callId)).toEqual([expect.any(String), expect.any(String)]);
+      expect(new Set(approve.mock.calls.map(([, context]) => context.callId)).size).toBe(2);
+      expect(cards).toHaveLength(executionMode === "default" ? 2 : 0);
+      if (executionMode === "default") expect(cards[1].params._meta?.tool_params_display).toContainEqual({ name: "content", value: content });
+      expect((await client.listTools()).tools.map(({ name }) => name)).toEqual(listed);
+
+      await store.setThreadMcpConnectionIds({ backend, threadId, connectionIds: ["one"] });
+      const deselected = await client.callTool({ name: "call_mcp_tool", arguments: writeArgs });
+      expect(deselected.isError).toBe(true);
+      expect(write).toHaveBeenCalledOnce();
     } finally {
       stop();
       await client.close();
