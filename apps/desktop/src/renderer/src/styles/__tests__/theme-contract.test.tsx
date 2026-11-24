@@ -1530,6 +1530,9 @@ describe("Tangerine Terminal theme contract", () => {
       ".thread-row__pin",
       ".thread-row__pin-button",
       ".thread-row__chip--add-reaction",
+      // A reaction chip shared its hover paint with focus and took no ring,
+      // so the focused chip looked like the hovered one.
+      ".thread-row__chip--reaction",
       ".thread-row__overflow-button",
     ];
     const sharedSelector = controls
@@ -2800,31 +2803,45 @@ describe("Tangerine Terminal theme contract", () => {
     // The tint is the popover language; the edge + border + row-active
     // fill stays reserved for `.thread-row.is-selected`, which marks a
     // persistent selection rather than a transient "Enter lands here".
-    const sharedHighlight = css.match(
-      /\.composer__autocomplete-option:hover:not\(:disabled\),\s*\.composer__autocomplete-option\.is-active\s*\{(?<body>[^}]*)\}/
+    //
+    // The tint belongs to the keyboard cursor alone. The pointer does not
+    // move that cursor, and hover used to share the rule, so a pointer on
+    // `/agents` and the cursor on `/review` drew two identical rows. The
+    // cursor also takes the inset ring an `aria-activedescendant` row takes.
+    const cursor = css.match(
+      /\n\.composer__autocomplete-option\.is-active\s*\{(?<body>[^}]*)\}/
     )?.groups?.body;
-    expect(sharedHighlight).toBeTruthy();
-    expect(sharedHighlight).toContain("background: var(--accent-soft);");
-    expect(sharedHighlight).toContain("color: var(--accent-bright);");
+    expect(cursor).toBeTruthy();
+    expect(cursor).toContain("background: var(--accent-soft);");
+    expect(cursor).toContain("color: var(--accent-bright);");
+    expect(cursor).toContain("outline: 2px solid var(--focus-ring);");
+    expect(cursor).toContain("outline-offset: -2px;");
     // No per-picker override may reintroduce a second highlight: not an
     // accent bar or edge, and not the thread-row fill/outline pair.
     expect(css).not.toMatch(
       /\.composer__autocomplete-option(?:[^{]*)\.is-active(?:[^{]*)::before\s*\{/
     );
-    expect(sharedHighlight).not.toContain("box-shadow");
-    expect(sharedHighlight).not.toContain("var(--bg-row-active)");
-    expect(sharedHighlight).not.toContain("var(--accent-border)");
+    expect(cursor).not.toContain("box-shadow");
+    expect(cursor).not.toContain("var(--bg-row-active)");
+    expect(cursor).not.toContain("var(--accent-border)");
+
+    const hover = extractRuleBody(
+      css,
+      ".composer__autocomplete-option:hover:not(:disabled):not(.is-active)",
+    );
+    expect(hover).toContain("background: var(--surface-overlay-hover);");
+    expect(hover).not.toMatch(/var\(--accent/);
   });
 
-  it("does not let a disabled autocomplete row hover into the accent tint", () => {
+  it("does not let a disabled autocomplete row hover into a highlight", () => {
     // `.composer__autocomplete-option:disabled` sits ~1200 lines earlier
     // with identical specificity, so it loses on source order. Without
     // the guard, hovering a disabled row (the remote-federation "Add
-    // directory… / Add file…" actions) paints it in full accent and
-    // overrides its muted disabled color — the row looks live. The
-    // sibling pickers guard the same way.
+    // directory… / Add file…" actions) paints it and overrides its muted
+    // disabled color — the row looks live. The sibling pickers guard the
+    // same way.
     expect(css).toContain(
-      ".composer__autocomplete-option:hover:not(:disabled),",
+      ".composer__autocomplete-option:hover:not(:disabled):not(.is-active) {",
     );
     expect(css).not.toMatch(
       /^\.composer__autocomplete-option:hover\s*[,{]/m
@@ -3078,8 +3095,8 @@ describe("color theme contract", () => {
   });
 
   it("keeps the composer autocomplete popup's text at its floor in every theme", () => {
-    // The `$` and `@` popups are a raised panel, and a hovered or keyboard
-    // active row lays the 12% accent tint over it. The sweep above tints the
+    // The `$` and `@` popups are a raised panel. The keyboard-active row lays
+    // the 12% accent tint over it, and a hovered row the neutral wash. The sweep above tints the
     // panel, sidebar, and hover surfaces, not the raised panel, and the E2E
     // gate scans the open popup's contrast in Tangerine only. Every color
     // the popup paints comes from a token, so the theme blocks are measured
@@ -3087,12 +3104,13 @@ describe("color theme contract", () => {
     expect(extractRuleBody(css, ".composer__autocomplete")).toContain(
       "background: var(--bg-panel-elevated);",
     );
-    const activeRow = extractRuleBody(
-      css,
-      ".composer__autocomplete-option:hover:not(:disabled),\n.composer__autocomplete-option.is-active",
-    );
+    const activeRow = extractRuleBody(css, ".composer__autocomplete-option.is-active");
     expect(activeRow).toContain("background: var(--accent-soft);");
     expect(activeRow).toContain("color: var(--accent-bright);");
+    expect(extractRuleBody(
+      css,
+      ".composer__autocomplete-option:hover:not(:disabled):not(.is-active)",
+    )).toContain("background: var(--surface-overlay-hover);");
 
     // Each ink is measured on every surface it can reach. Everything meets
     // the panel. Everything also meets the active row, except two cases:
@@ -3150,17 +3168,31 @@ describe("color theme contract", () => {
     const pickerRules = collectAppCssRules();
     const pickerRule = (selector: string): string =>
       pickerRules.find((rule) => rule.selector.split(/,\s*/).includes(selector))?.body ?? "";
-    for (const row of [
-      ".project-picker__row:hover:not(:disabled)",
-      ".project-picker__row:focus-visible:not(:disabled)",
-      ".messaging-surface-picker__list .project-picker__row.is-cursor",
-      ".reference-picker__row:hover:not(:disabled)",
-      ".reference-picker__row:focus-visible:not(:disabled)",
-    ]) {
+    // A hovered row takes the neutral wash, not the tint; its path lifts the
+    // same way, and the hover wash is measured below with the tint's inks.
+    for (const [row, paintRule, fill] of [
+      [
+        ".project-picker__row:hover:not(:disabled)",
+        ".project-picker__row:hover:not(:disabled):not(:focus-visible):not(.is-cursor)",
+        "surface-overlay-hover",
+      ],
+      [".project-picker__row:focus-visible:not(:disabled)", ".project-picker__row:focus-visible:not(:disabled)", "accent-soft"],
+      [
+        ".messaging-surface-picker__list .project-picker__row.is-cursor",
+        ".messaging-surface-picker__list .project-picker__row.is-cursor",
+        "accent-soft",
+      ],
+      [
+        ".reference-picker__row:hover:not(:disabled)",
+        ".reference-picker__row:hover:not(:disabled):not(:focus-visible)",
+        "surface-overlay-hover",
+      ],
+      [".reference-picker__row:focus-visible:not(:disabled)", ".reference-picker__row:focus-visible:not(:disabled)", "accent-soft"],
+    ] as const) {
       const path = row.includes("reference-picker")
         ? ".reference-picker__row-path"
         : ".project-picker__row-path";
-      expect(pickerRule(row), row).toContain("background: var(--accent-soft);");
+      expect(pickerRule(paintRule), paintRule).toContain(`background: var(--${fill});`);
       expect(pickerRule(path), path).toContain("color: var(--text-muted);");
       expect(pickerRule(`${row} ${path}`), `${row} ${path}`)
         .toContain("color: var(--text-secondary);");
@@ -3184,6 +3216,9 @@ describe("color theme contract", () => {
       const surfaces = {
         panel,
         "active row": paint(theme, theme["accent-soft"], panel),
+        // Every ink a highlighted row can show is measured on the hover wash
+        // too: a hovered row repaints the same parts with the same tokens.
+        "hovered row": paint(theme, theme["surface-overlay-hover"], panel),
       };
       const misses: string[] = [];
       for (const [kind, reach] of Object.entries(inks)) {
@@ -3191,7 +3226,8 @@ describe("color theme contract", () => {
           ? (tangerine ? TANGERINE_TEXT_FLOOR : TEXT_FLOOR)
           : (tangerine ? TANGERINE_MARK_FLOOR : MARK_FLOOR);
         for (const [surface, background] of Object.entries(surfaces)) {
-          for (const token of reach[surface as keyof typeof reach]) {
+          const reached = surface === "hovered row" ? reach["active row"] : reach[surface as keyof typeof reach];
+          for (const token of reached) {
             if (contrastRatio(paint(theme, theme[token], background), background) < floor) {
               misses.push(`${token} on the ${surface}`);
             }
@@ -3261,8 +3297,11 @@ describe("color theme contract", () => {
         text: ".messaging-surface-picker__context",
         rows: [
           {
-            tint: ".project-picker__row:hover:not(:disabled)",
+            // Hover takes the neutral wash, not the tint (UI-THEME.md,
+            // "Hover is not a selection"), and lifts the context the same way.
+            tint: ".project-picker__row:hover:not(:disabled):not(:focus-visible):not(.is-cursor)",
             row: ".messaging-surface-picker__list .project-picker__row:hover:not(:disabled)",
+            fill: "surface-overlay-hover",
           },
           {
             tint: ".project-picker__row:focus-visible:not(:disabled)",
@@ -3272,17 +3311,22 @@ describe("color theme contract", () => {
         ],
       },
     ];
-    const reach = { panel: new Set<string>(), "active row": new Set<string>() };
-    for (const { panel, text, rows } of menus) {
+    type MenuRow = { tint: string; row?: string; fill?: "accent-soft" | "surface-overlay-hover" };
+    const reach = {
+      panel: new Set<string>(),
+      "active row": new Set<string>(),
+      "hovered row": new Set<string>(),
+    };
+    for (const { panel, text, rows } of menus as Array<{ panel: string; text: string; rows: MenuRow[] }>) {
       expect(declared(panel, "background"), panel).toBe("bg-panel-elevated");
       const rest = declared(text, "color");
       expect(rest, text).toBe("text-muted");
       reach.panel.add(rest ?? "");
-      for (const { tint, row = tint } of rows) {
-        expect(declared(tint, "background"), tint).toBe("accent-soft");
+      for (const { tint, row = tint, fill = "accent-soft" } of rows) {
+        expect(declared(tint, "background"), tint).toBe(fill);
         const lifted = declared(`${row} ${text}`, "color");
         expect(lifted, `${row} ${text}`).toBe("text-secondary");
-        reach["active row"].add(lifted ?? "");
+        reach[fill === "accent-soft" ? "active row" : "hovered row"].add(lifted ?? "");
       }
     }
 
@@ -3303,6 +3347,7 @@ describe("color theme contract", () => {
       const surfaces = {
         panel,
         "active row": paint(theme, theme["accent-soft"], panel),
+        "hovered row": paint(theme, theme["surface-overlay-hover"], panel),
       };
       const misses: string[] = [];
       for (const [surface, background] of Object.entries(surfaces)) {
