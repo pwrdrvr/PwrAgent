@@ -896,7 +896,7 @@ export class ManagedReviewService {
         : undefined;
       const acpRuntime = parentSession?.acpRuntime;
       const executionMode =
-        (inheritsParentSession ? params.overlay?.executionMode : undefined)
+        (inheritsParentSession && params.backend !== "acp:antigravity" ? params.overlay?.executionMode : undefined)
         ?? parentSession?.executionMode
         ?? "default";
       const thread = await this.host().startAcpSession({

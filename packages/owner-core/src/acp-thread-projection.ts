@@ -1,5 +1,5 @@
 import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
-import type { AcpSessionMetadata } from "./acp-storage";
+import { acpSessionExecutionMode, type AcpSessionMetadata } from "./acp-storage";
 
 export const ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR =
   "This ACP agent cannot hand off a workspace after the first message in a thread. Start a new thread in the target workspace instead.";
@@ -45,7 +45,7 @@ export function projectAcpSessionThread(
     // directory is the thread's home once `@`-referenced ones join it.
     ...(session.cwd ? { projectKey: session.cwd } : {}),
     source: session.backendId,
-    executionMode: session.executionMode,
+    executionMode: acpSessionExecutionMode(session),
     acpRuntime: session.acpRuntime,
     workspaceHandoff: workspaceHandoffAvailable
       ? { available: true }

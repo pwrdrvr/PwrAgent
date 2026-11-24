@@ -29,6 +29,8 @@ export type AcpSessionMetadata = {
   createdAt: number;
   updatedAt: number;
   executionMode: ThreadExecutionMode;
+  /** Full Access was committed by the owner after selecting the privileged process. */
+  antigravityFullAccessConfirmed?: true;
   /** Host-enforced policy for helpers that must never request user approval. */
   approvalPolicy?: "deny-all";
   acpRuntime?: BackendAcpSessionRuntimeState;
@@ -45,6 +47,15 @@ export type AcpSessionMetadata = {
   archivedAt?: number;
   lastError?: string;
 };
+
+export function acpSessionExecutionMode(session: AcpSessionMetadata): ThreadExecutionMode {
+  // Older owners could record Full Access without starting a privileged process.
+  if (session.backendId === "acp:antigravity") {
+    return session.executionMode === "full-access" && session.antigravityFullAccessConfirmed === true
+      ? "full-access" : "default";
+  }
+  return session.executionMode;
+}
 
 export type AcpSessionInventoryGroup = {
   backendId: AcpBackendId;

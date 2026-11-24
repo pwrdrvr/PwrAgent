@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
-import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { StateDb } from "../state/state-db";
@@ -22,9 +22,16 @@ const backend = "acp:antigravity";
 type Access = "default" | "full-access";
 type Model = { access: Access; active: boolean; mode: "default" | "plan"; pending?: Access };
 type Action = { type: "select"; access: Access } | { type: "start" } | { type: "finish" }
-  | { type: "failed-load" } | { type: "plan" } | { type: "overlay-failure" };
+  | { type: "failed-load" } | { type: "plan" } | { type: "overlay-failure" }
+  | { type: "lower-access-prompt" } | { type: "finish-with-blocked-close" } | { type: "retry-downgrade" }
+  | { type: "inherit"; child: "review" | "monitor" };
 
-async function exercise(initial: Access, commands: Iterable<fc.AsyncCommand<Model, Real>>, db?: StateDb) {
+async function exercise(
+  initial: Access,
+  commands: Iterable<fc.AsyncCommand<Model, Real>>,
+  options?: { db?: StateDb; legacy?: boolean },
+) {
+  const db = options?.db;
   const sessionId = "test-session";
   const sessions = db ? new AcpSessionStore(db) : createAcpSessionStoreMock([]);
   const base = createKimiAgentRecord(backend);
@@ -42,8 +49,13 @@ async function exercise(initial: Access, commands: Iterable<fc.AsyncCommand<Mode
   }];
   const prompts: Access[] = [];
   let failNextLoad = false;
+  let closeBlocked = false;
+  let closeAttempts = 0;
   let active: { reply: () => void; done: Promise<void> } | undefined;
   let expectTerminal: (() => void) | undefined;
+  const start = (executionMode?: Access) => registry.startTurn({
+    backend, threadId: sessionId, input: [{ type: "text", text: "Test prompt" }], executionMode,
+  });
   const overlayStore = db ? new SqliteOverlayStore(db) : createOverlayStoreMock();
   const registry = createDesktopBackendRegistry({
     codexClient: new MockBackendClient({ threads: [] }),
@@ -69,6 +81,8 @@ async function exercise(initial: Access, commands: Iterable<fc.AsyncCommand<Mode
               return { sessionId, configOptions: modeOptions("default") };
             case "session/close":
               expect(active).toBeUndefined();
+              closeAttempts += 1;
+              if (closeBlocked) throw new Error("A background command is still running");
               expect(workers.delete(access)).toBe(true);
               return {};
             case "session/set_config_option":
@@ -115,7 +129,15 @@ async function exercise(initial: Access, commands: Iterable<fc.AsyncCommand<Mode
       (entry) => entry.kind === backend,
     );
     expect(catalog?.executionModes.map((entry) => entry.mode)).toEqual(["default", "full-access"]);
-    await registry.startThread({ backend, cwd: nonRepositoryCwd, executionMode: initial });
+    if (options?.legacy) {
+      sessions.upsertSession({
+        backendId: backend, sessionId, cwd: nonRepositoryCwd, title: "Legacy session",
+        executionMode: "full-access", status: "idle", createdAt: 1, updatedAt: 1,
+      });
+      await registry.readThread({ backend, threadId: sessionId });
+    } else {
+      await registry.startThread({ backend, cwd: nonRepositoryCwd, executionMode: initial });
+    }
     if (db) {
       db.raw.pragma("wal_checkpoint(TRUNCATE)");
       const { writes } = await measureSqliteWrites(async () => {
@@ -158,6 +180,7 @@ async function exercise(initial: Access, commands: Iterable<fc.AsyncCommand<Mode
             break;
           case "overlay-failure": {
             const target = model.access === "default" ? "full-access" : "default";
+            await overlayStore.setThreadExecutionMode({ backend, threadId: sessionId, executionMode: model.access });
             const project = vi.spyOn(overlayStore, "setThreadExecutionMode")
               .mockRejectedValueOnce(new Error("Cannot write the permission overlay"));
             try {
@@ -169,11 +192,74 @@ async function exercise(initial: Access, commands: Iterable<fc.AsyncCommand<Mode
             }
             break;
           }
+          case "inherit": {
+            const overlay = await overlayStore.getThreadOverlayState({ backend, threadId: sessionId });
+            expect(overlay?.executionMode).toBe(model.access === "default" ? "full-access" : "default");
+            const modules = registryModules(registry);
+            const stop = new Error("Child access observed");
+            const startChild = vi.spyOn(registry as unknown as {
+              startAcpSession: typeof registry["startAcpSession"];
+            }, "startAcpSession").mockRejectedValueOnce(stop);
+            try {
+              const child = action.child === "review"
+                ? modules.managedReviewService["startManagedReviewChild"]({
+                    backend, parentBackend: backend, parentThreadId: sessionId, overlay,
+                    modelSettings: {}, target: { type: "baseBranch", branch: "main" }, tokenMiserEnabled: false,
+                  })
+                : modules.subAgentMonitorService["startManagedTaskMonitor"]({
+                    context: { backend, threadId: sessionId, turnId: "parent-turn" },
+                    cwd: nonRepositoryCwd, monitorBackend: backend, monitorId: "test-monitor",
+                    preferredModel: "default", preferredReasoningEffort: "provider-default", prompt: "Monitor the job",
+                  });
+              await expect(child).rejects.toBe(stop);
+              expect(startChild).toHaveBeenCalledWith(expect.objectContaining({ backend, executionMode: model.access }));
+            } finally {
+              startChild.mockRestore();
+            }
+            break;
+          }
           case "start":
-            await registry.startTurn({ backend, threadId: sessionId, input: [{ type: "text", text: "Test prompt" }] });
+            await start();
             expect(prompts.at(-1)).toBe(model.access);
             model.active = true;
             break;
+          case "lower-access-prompt": {
+            const previousPrompts = prompts.length;
+            if (model.access === "full-access") {
+              await expect(start("default")).rejects.toThrow("lower access mode");
+              expect(prompts).toHaveLength(previousPrompts);
+            } else {
+              await start("default");
+              expect(prompts.slice(previousPrompts)).toEqual(["default"]);
+              model.active = true;
+            }
+            break;
+          }
+          case "finish-with-blocked-close": {
+            closeBlocked = true;
+            const previous = active!;
+            active = undefined;
+            previous.reply();
+            await previous.done;
+            model.active = false;
+            break;
+          }
+          case "retry-downgrade": {
+            const previousPrompts = prompts.length;
+            for (let attempt = 0; attempt < 4; attempt++) {
+              await expect(start()).rejects.toThrow("switching to Default Access");
+              expect(prompts).toHaveLength(previousPrompts);
+            }
+            const attempts = closeAttempts;
+            closeBlocked = false;
+            await start();
+            expect(closeAttempts).toBe(attempts + 1);
+            expect(prompts.slice(previousPrompts)).toEqual(["default"]);
+            model.access = "default";
+            model.pending = undefined;
+            model.active = true;
+            break;
+          }
           case "finish": {
             const previous = active!;
             active = undefined;
@@ -215,7 +301,8 @@ type Real = { dispatch: (model: Model, action: Action) => Promise<void> };
 
 function command(action: Action): fc.AsyncCommand<Model, Real> {
   return {
-    check: (model) => action.type === "select" || model.active === (action.type === "finish"),
+    check: (model) => action.type === "select"
+      || model.active === (action.type === "finish" || action.type === "finish-with-blocked-close"),
     run: async (model, real) => await real.dispatch(model, action),
     toString: () => action.type === "select" ? "select " + action.access : action.type,
   };
@@ -229,6 +316,7 @@ describe("Antigravity session access", () => {
         fc.constant(command({ type: "select", access: "default" })),
         fc.constant(command({ type: "select", access: "full-access" })),
         fc.constant(command({ type: "start" })),
+        fc.constant(command({ type: "lower-access-prompt" })),
         fc.constant(command({ type: "finish" })),
         fc.constant(command({ type: "failed-load" })),
         fc.constant(command({ type: "plan" })),
@@ -238,16 +326,44 @@ describe("Antigravity session access", () => {
     ), { numRuns: 30 });
   });
 
+  it("refuses a lower-access prompt on a Full Access worker", async () => {
+    await exercise("full-access", [command({ type: "lower-access-prompt" })]);
+  });
+
+  it("blocks prompts while a queued downgrade cannot close the worker and retries before starting", async () => {
+    await exercise("full-access", [
+      command({ type: "start" }), command({ type: "select", access: "default" }),
+      command({ type: "finish-with-blocked-close" }), command({ type: "retry-downgrade" }), command({ type: "finish" }),
+    ]);
+  });
+
+  it("loads an unconfirmed legacy Full Access session with permissions enabled until escalation", async () => {
+    await exercise("default", [
+      command({ type: "start" }), command({ type: "finish" }), command({ type: "select", access: "full-access" }),
+      command({ type: "start" }), command({ type: "finish" }),
+    ], { legacy: true });
+  });
+
   it("publishes the committed access when the overlay write fails", async () => {
     await exercise("default", [command({ type: "overlay-failure" }), command({ type: "start" }), command({ type: "finish" })]);
   });
+
+  it.each(["review", "monitor"] as const)(
+    "inherits committed session access for a %s child when the overlay write fails",
+    async (child) => {
+      await fc.assert(fc.asyncProperty(
+        fc.constantFrom<Access>("default", "full-access"),
+        (initial) => exercise(initial, [command({ type: "overlay-failure" }), command({ type: "inherit", child })]),
+      ), { numRuns: 6 });
+    },
+  );
 
   it("keeps access moves within their SQLite write budget", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const { dbPath, tempDir } = createTempStateDb("antigravity-access-");
     const db = StateDb.open(dbPath);
     try {
-      await exercise("default", [], db);
+      await exercise("default", [], { db });
     } finally {
       db.close();
       removeTempStateDbDir(tempDir);

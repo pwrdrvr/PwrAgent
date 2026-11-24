@@ -15,7 +15,7 @@ import type { ManagedReviewService } from "./managed-review-service";
 import { isOnlyTaskMonitorWake, type SubAgentMonitorService } from "./subagent-monitor-service";
 import type { ThreadUsageLedger } from "./thread-usage-ledger";
 import type { ThreadArchiveCoordinator } from "./thread-archive-coordinator";
-import type { RegistryReadThreadRequest } from "./registry-host-ports";
+import type { RegistryHostPorts, RegistryReadThreadRequest } from "./registry-host-ports";
 import type { ThreadWorkspaceService } from "./thread-workspace-service";
 import type { ThreadDirectoryService } from "./thread-directory-service";
 import { resolvePendingWindowsDirectoryKey } from "./navigation-windows-directory-aliases";
@@ -2306,7 +2306,7 @@ export class DesktopBackendRegistry {
       set spendAlertPolicy(value) { current().spendAlertPolicy = value; },
       get starMapHandler() { return current().starMapHandler; },
       startAcpSession: (...args: Parameters<typeof this.startAcpSession>) => this.startAcpSession(...args),
-      startAcpTurn: (...args: Parameters<typeof this.startAcpTurn>) => this.startAcpTurn(...args),
+      startAcpTurn: (params: Parameters<RegistryHostPorts["startAcpTurn"]>[0]) => this.startAcpTurn(params),
       startReview: (...args: Parameters<typeof this.startReview>) => this.startReview(...args),
       startThread: (...args: Parameters<typeof this.startThread>) => this.startThread(...args),
       withPendingThreadStart: <T>(...args: Parameters<typeof this.withPendingThreadStart<T>>) => this.withPendingThreadStart(...args),
@@ -6208,18 +6208,25 @@ export class DesktopBackendRegistry {
     return { threadId: session.sessionId };
   }
 
-  private async startAcpTurn(params: {
-    backend: AcpBackendId;
-    threadId: string;
-    input: AppServerTurnInputItem[];
-    model?: string;
-    reasoningEffort?: string;
-  }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+  private async startAcpTurn(
+    params: Parameters<RegistryHostPorts["startAcpTurn"]>[0],
+    reservedStart?: { executionMode?: ThreadExecutionMode },
+  ): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+    const key = executionModeQueueKey(params.backend, params.threadId);
     return await this.acpSessionPromptLocks.run(
-      executionModeQueueKey(params.backend, params.threadId),
+      key,
       async () => {
         if (params.backend === "acp:antigravity") {
-          await this.flushQueuedExecutionModeLocked(params.threadId, params.backend);
+          await this.flushQueuedExecutionModeLocked(params.threadId, params.backend, reservedStart !== undefined);
+          const applied = this.acpBackend.getSession(params.backend, params.threadId)?.executionMode;
+          if (applied === "full-access") {
+            if (this.queuedExecutionModes.get(key)?.mode === "default") {
+              throw new Error("Antigravity must finish switching to Default Access before starting another turn.");
+            }
+            if (reservedStart?.executionMode && reservedStart.executionMode !== "full-access") {
+              throw new Error("Antigravity cannot apply a lower access mode for one turn. Switch the thread to Default Access first.");
+            }
+          }
         }
         return await this.startAcpTurnLocked(params);
       },
@@ -11777,7 +11784,7 @@ export class DesktopBackendRegistry {
           ...identity, input,
           model: modelSettings.model,
           reasoningEffort: modelSettings.reasoningEffort,
-        }),
+        }, { executionMode: params.executionMode }),
         bindOrigin: (origin, result) => this.bindStartingTurnOrigin(origin, result),
         consumeReviewContexts: () => this.overlayStore.consumeManagedReviewContexts({
           ...identity, entryIds: pendingManagedReviewContextEntryIds,
@@ -14607,15 +14614,15 @@ export class DesktopBackendRegistry {
   private threadHasActiveTurn(
     threadId: string,
     backend: AppServerBackendKind = "codex",
-    ignoreCodexStartReservation = false,
+    ignoreStartReservation = false,
   ): boolean {
     if (this.managedReviewService.findReviewForParentTurn({ backend, parentThreadId: threadId })) {
       return true;
     }
     if (backend === "codex") {
-      return this.context.turnState.hasActiveTurn(threadId, ignoreCodexStartReservation);
+      return this.context.turnState.hasActiveTurn(threadId, ignoreStartReservation);
     }
-    if (this.reservedAcpStartThreadKeys.has(
+    if (!ignoreStartReservation && this.reservedAcpStartThreadKeys.has(
       buildTurnStartReservationKey(backend, threadId),
     )) {
       return true;
@@ -14802,9 +14809,10 @@ export class DesktopBackendRegistry {
    *    (race-safe ordering).
    *
    * Idempotent: a no-op when no queue is present. On apply error, the
-   * queue is retained and the failure counter is incremented; after
-   * `MAX_QUEUE_FLUSH_ATTEMPTS` consecutive failures, the queue is
-   * auto-cancelled with an explanatory note in the audit log.
+   * queue is retained and the failure counter is incremented. After
+   * `MAX_QUEUE_FLUSH_ATTEMPTS` consecutive failures, most queues are
+   * auto-cancelled with a note in the audit log. An Antigravity downgrade
+   * stays queued until it can safely apply or the operator cancels it.
    */
   private async flushQueuedExecutionModeIfPresent(
     threadId: string,
@@ -14823,6 +14831,7 @@ export class DesktopBackendRegistry {
   private async flushQueuedExecutionModeLocked(
     threadId: string,
     backend: AppServerBackendKind,
+    ownsStartReservation = false,
   ): Promise<void> {
     const queueKey = executionModeQueueKey(backend, threadId);
     const activeFlush = this.queuedExecutionModeFlushes.get(queueKey);
@@ -14833,7 +14842,7 @@ export class DesktopBackendRegistry {
 
     const queue = this.queuedExecutionModes.get(queueKey);
     if (!queue) return;
-    if (backend === "acp:antigravity" && this.threadHasActiveTurn(threadId, backend)) return;
+    if (backend === "acp:antigravity" && this.threadHasActiveTurn(threadId, backend, ownsStartReservation)) return;
     // Atomic claim: in JS's single-threaded event loop, `Map.delete`
     // returning true gives this caller exclusive ownership of the
     // apply. Concurrent flushes (one from the emit-listener turn-end
@@ -14885,7 +14894,10 @@ export class DesktopBackendRegistry {
         // state wins.
         return;
       }
-      if (attempts >= MAX_QUEUE_FLUSH_ATTEMPTS) {
+      // A downgrade holds the next prompt until it succeeds or the operator
+      // cancels it. A failed transfer cannot authorize another privileged turn.
+      const downgrade = queue.backend === "acp:antigravity" && queue.mode === "default";
+      if (attempts >= MAX_QUEUE_FLUSH_ATTEMPTS && !downgrade) {
         backendRegistryLog.error(
           "auto-cancelling queued execution mode change after repeated failures",
           {

@@ -104,7 +104,12 @@ import {
   acpRuntimeSupportsSessionHistoryReplay,
   acpRuntimeSupportsSessionLoad,
 } from "../acp/acp-runtime-capabilities";
-import type { AcpSessionInventoryGroup, AcpSessionMetadata, AcpSessionStorage } from "@pwragent/owner-core/acp-storage";
+import {
+  acpSessionExecutionMode,
+  type AcpSessionInventoryGroup,
+  type AcpSessionMetadata,
+  type AcpSessionStorage,
+} from "@pwragent/owner-core/acp-storage";
 import {
   AcpSessionReplayNormalizer,
   acpSessionReplayNormalizerOptions,
@@ -1764,7 +1769,10 @@ export class AcpBackendAdapter {
     backendId: AcpBackendId,
     sessionId: string,
   ): AcpSessionMetadata | undefined {
-    return this.acpSessionStore?.getSession(backendId, sessionId);
+    const session = this.acpSessionStore?.getSession(backendId, sessionId);
+    if (!session) return undefined;
+    const executionMode = acpSessionExecutionMode(session);
+    return executionMode === session.executionMode ? session : { ...session, executionMode };
   }
 
   deleteStoredSession(backendId: AcpBackendId, sessionId: string): void {
@@ -1796,6 +1804,7 @@ export class AcpBackendAdapter {
       this.upsertSession({
         ...(this.getSession(backend, sessionId) ?? session),
         executionMode,
+        antigravityFullAccessConfirmed: executionMode === "full-access" ? true : undefined,
       });
     });
   }

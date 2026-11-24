@@ -3659,7 +3659,7 @@ export class SubAgentMonitorService {
             { threadId: params.context.threadId, turnId: params.context.turnId },
           )
         : undefined) ??
-      sourceOverlay?.executionMode ??
+      (params.context.backend === "acp:antigravity" ? undefined : sourceOverlay?.executionMode) ??
       (params.context.backend === "codex"
         ? await this.host().resolveCodexThreadExecutionModeForActiveTurn(
             params.context.threadId,

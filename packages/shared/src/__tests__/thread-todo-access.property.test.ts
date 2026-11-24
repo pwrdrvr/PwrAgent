@@ -177,6 +177,39 @@ describe("resolveThreadTodoStartAccess", () => {
     }));
   });
 
+  it("starts Antigravity in the saved Agent mode at the card's process access", () => {
+    fc.assert(fc.property(
+      fc.constantFrom("default", "full-access"),
+      fc.constantFrom("default", "plan", "accept-edits"),
+      (executionMode, id) => {
+        const backend = "acp:antigravity";
+        const destination: ThreadTodoAccessDestination = {
+          kind: backend, label: "Antigravity",
+          executionModes: [
+            { mode: "default", available: true, label: "Default Access" },
+            { mode: "full-access", available: true, label: "Full Access" },
+          ],
+          acp: {
+            registryId: "antigravity", distributionKinds: ["local"], installStatus: "installed",
+            authStatus: "not-required", verificationStatus: "not-applicable",
+            runtime: { schemaVersion: 1, status: "discovered", modes: { availableModes: [
+              { id: "default", label: "Default" }, { id: "plan", label: "Plan" },
+              { id: "accept-edits", label: "Accept Edits" },
+            ] } },
+          },
+        };
+        const access = resolveThreadTodoStartAccess({
+          card: { executionMode, nativeAccessMode: { backend, id } },
+          sourceBackend: backend, sourceExecutionMode: "default", destination, destinationBackend: backend,
+        });
+        expect(access).toMatchObject({ status: "ready", executionMode, acpRuntime: { currentModeId: id } });
+        if (executionMode === "full-access") {
+          expect(access).toMatchObject({ selected: { kind: "mode", mode: "full-access" } });
+        }
+      },
+    ));
+  });
+
   it("matches the stated rules for every card, source and destination", () => {
     fc.assert(fc.property(scenarioArb, (scenario) => {
       const actual = resolve(scenario);

@@ -46,7 +46,11 @@ import {
   readAcpToolContentCommand,
   readAcpToolText,
 } from "./acp-command-extraction.js";
-import type { AcpSessionMetadata, AcpSessionStorage } from "@pwragent/owner-core/acp-storage";
+import {
+  acpSessionExecutionMode,
+  type AcpSessionMetadata,
+  type AcpSessionStorage,
+} from "@pwragent/owner-core/acp-storage";
 import {
   isPwrAgentSyntheticAcpUpdate,
   type AcpRolloutRecord,
@@ -1255,6 +1259,7 @@ export class AcpAgentClient {
       createdAt: params.createdAt ?? now,
       updatedAt: now,
       executionMode: params.executionMode,
+      ...(this.options.antigravityFullAccess === true ? { antigravityFullAccessConfirmed: true } : {}),
       ...(params.approvalPolicy ? { approvalPolicy: params.approvalPolicy } : {}),
       acpRuntime: combinedRuntimeState,
       ...(params.hidden ? { hidden: true } : {}),
@@ -1458,7 +1463,9 @@ export class AcpAgentClient {
     const storedDigest = stored?.agentInstructionsDigest;
     metadata = {
       ...captured,
-      ...(this.options.antigravityFullAccess !== undefined && stored ? { executionMode: stored.executionMode } : {}),
+      ...(this.options.antigravityFullAccess !== undefined && stored
+        ? { executionMode: acpSessionExecutionMode(stored), antigravityFullAccessConfirmed: stored.antigravityFullAccessConfirmed }
+        : {}),
       ...(storedDigest ? { agentInstructionsDigest: storedDigest } : {}),
     };
     if (this.idleClosedSessions.has(metadata.sessionId)) {
@@ -3253,7 +3260,7 @@ export class AcpAgentClient {
     if (fullAccess === undefined) return;
     this.options.assertSessionOwner?.(sessionId);
     const session = this.options.store.getSession(this.options.backendId, sessionId);
-    if (!session || fullAccess !== (session.executionMode === "full-access")) {
+    if (!session || fullAccess !== (acpSessionExecutionMode(session) === "full-access")) {
       throw new Error("The Antigravity process does not match the thread's applied access. Try again.");
     }
   }
