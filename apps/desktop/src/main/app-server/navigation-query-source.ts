@@ -13,7 +13,7 @@ import { getDesktopBackendRegistry, type DesktopBackendRegistry } from "./backen
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import { hydrateMissingLinkedDirectoriesFromSiblingRepos } from "@pwragent/owner-core/codex-app-server/thread-directory-fallback";
-import { createNavigationQuerySnapshot } from "@pwragent/owner-core/navigation-query-projection";
+import { createNavigationQuerySnapshot, navigationQuerySnapshotSharedThreads, navigationQuerySnapshotToken } from "@pwragent/owner-core/navigation-query-projection";
 import type { NavigationPullRequestProjection } from "@pwragent/owner-core/navigation-query-store";
 import { resolveScratchProjectsRoots } from "./scratch-projects";
 import { buildNavigationIndexMessagingBindings } from "../messaging/messaging-bindings-snapshot";
@@ -34,7 +34,9 @@ import { comparePullRequestStack } from "@pwragent/shared/pull-request-rollup";
 import { readNavigationCheckout } from "../git-info/directory-store";
 import { collectConcurrent } from "../../shared/concurrent-work";
 
-const indexReads = new NavigationIndexReadPool(1_000);
+// Keep a bounded comparison candidate across nearby refreshes. The serving
+// window and the provider/filesystem validation on its expiry still apply.
+const indexReads = new NavigationIndexReadPool(1_000, 15_000);
 const actionIndexReads = new NavigationIndexReadPool();
 const stackReader = new StackReader();
 
@@ -62,6 +64,9 @@ export function navigationQueryShowsStacks(query: NavigationQueryRequest["query"
 }
 
 const latestVisibilityScanByRegistry = new WeakMap<DesktopBackendRegistry, number>();
+// A stack result names the owner rows it was derived from without retaining
+// the underlying inventory after the pool releases it.
+const stackBases = new WeakMap<NavigationQueryIndex, { rowSourceId: number; token?: symbol }>();
 const sourceIds = new WeakMap<object, number>();
 let nextSourceId = 0;
 function sourceId(value: object): number {
@@ -154,7 +159,7 @@ export async function loadLocalNavigationQueryIndex(params: {
   // before the pool's (owner PR metadata) would join the stale index.
   const version = `${overlayStore.readNavigationSourceVersion?.() ?? ""}|${
     registry.getStartupProviderRefreshStatus?.()?.state ?? ""}`;
-  return reads.read(key, async (signal, checkpoint) => {
+  return reads.read(key, async (signal, checkpoint, previous) => {
     let navigationChanged = false;
     // An event during a scan stops later readers from joining it; they share
     // one follow-up scan. Each run owns its listener, because the pool can
@@ -178,15 +183,36 @@ export async function loadLocalNavigationQueryIndex(params: {
     if (params.includeStacks) {
       // Share the same membership and viewer projection with stack-free queries.
       const local = await loadLocalNavigationQueryIndex({ ...params, includeStacks: false, signal });
+      if (params.viewer && !params.requireVerifiedDirectories && !params.refreshProviders) {
+        const owner = await loadLocalNavigationQueryIndex({ ...params, viewer: undefined, signal });
+        const nativeRows = navigationQuerySnapshotSharedThreads(local);
+        const basis = stackBases.get(owner);
+        // A provider boundary can overtake the viewer while it resolves
+        // pins. Only apply stacks to the exact native listing they observed.
+        if (nativeRows && basis?.rowSourceId === sourceId(nativeRows) && owner.observedAt === local.observedAt) {
+          if (basis.token === navigationQuerySnapshotToken(local)) return owner;
+          const pins = local.threads.slice(nativeRows.length);
+          if (pins.every((thread) => thread.federation)) {
+            if (!owner.stacks) return local;
+            return createNavigationQuerySnapshot({
+              ...local,
+              stacks: owner.stacks,
+              threads: [...owner.threads, ...pins],
+            }, undefined, owner, previous());
+          }
+        }
+      }
       const projection = await projectNavigationStacks(local.threads, registry, signal);
-      return projection ? createNavigationQuerySnapshot({ ...local, ...projection }, undefined, local) : local;
+      const stacked = projection ? createNavigationQuerySnapshot({ ...local, ...projection }, undefined, local, previous()) : local;
+      if (!params.viewer) stackBases.set(stacked, { rowSourceId: sourceId(local.threads), token: navigationQuerySnapshotToken(local) });
+      return stacked;
     }
     if (params.viewer) {
       const local = await loadLocalNavigationQueryIndex({ ...params, viewer: undefined, signal });
       checkpoint();
       const projected = await params.viewer.project(local);
       signal.throwIfAborted();
-      return createNavigationQuerySnapshot(projected, undefined, local);
+      return createNavigationQuerySnapshot(projected, undefined, local, previous());
     }
     // Taken before listing. The registry drops its cached and pending
     // listings for a boundary before it tells listeners, so this listing
@@ -213,7 +239,7 @@ export async function loadLocalNavigationQueryIndex(params: {
     if (publishesSidebar && !params.registry) {
       getNavigationDirectorySetAnnouncer().observe(index.directories);
     }
-    return createNavigationQuerySnapshot(index);
+    return createNavigationQuerySnapshot(index, undefined, undefined, previous());
   }, params.signal, version, params.viewer || params.includeStacks ? "projection" : "source");
 }
 

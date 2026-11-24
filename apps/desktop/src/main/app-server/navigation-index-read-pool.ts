@@ -1,6 +1,6 @@
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
-import { navigationQuerySnapshotAuxiliaryBytes, navigationQuerySnapshotSharedThreads, releaseNavigationQuerySnapshotProjection } from "@pwragent/owner-core/navigation-query-projection";
+import { navigationQuerySnapshotAuxiliaryBytes, navigationQuerySnapshotSharedThreads, navigationQuerySnapshotToken, releaseNavigationQuerySnapshotProjection } from "@pwragent/owner-core/navigation-query-projection";
 
 const RETAINED_BYTE_BUDGET = 8 * 1024 * 1024;
 
@@ -18,7 +18,8 @@ function rowBytes(rows: readonly unknown[], start = 0, remaining = RETAINED_BYTE
   return bytes;
 }
 
-function retainedIndexBytes(index: NavigationQueryIndex, sharedRows: number, budget: number): number {
+function retainedIndexBytes(index: NavigationQueryIndex, sharedRows: number, budget: number,
+  sizeRows: (rows: readonly unknown[], start: number, remaining: number) => number): number {
   let bytes = Buffer.byteLength(JSON.stringify({ ...index, threads: [], directories: [], inputRequestThreadKeys: [],
     ...(index.stacks ? { stacks: [] } : {}),
   }));
@@ -26,10 +27,10 @@ function retainedIndexBytes(index: NavigationQueryIndex, sharedRows: number, bud
     if (bytes > budget) break;
     const { layers, ...header } = stack;
     bytes += Buffer.byteLength(JSON.stringify({ ...header, layers: [] })) + (offset ? 1 : 0);
-    if (bytes <= budget) bytes += rowBytes(layers, 0, budget - bytes);
+    if (bytes <= budget) bytes += sizeRows(layers, 0, budget - bytes);
   }
-  if (bytes <= budget) bytes += rowBytes(index.threads, sharedRows, budget - bytes);
-  if (bytes <= budget) bytes += rowBytes(index.directories, 0, budget - bytes);
+  if (bytes <= budget) bytes += sizeRows(index.threads, sharedRows, budget - bytes);
+  if (bytes <= budget) bytes += sizeRows(index.directories, 0, budget - bytes);
   if (bytes <= budget && index.inputRequestThreadKeys) bytes += rowBytes([...index.inputRequestThreadKeys], 0, budget - bytes);
   return bytes;
 }
@@ -40,7 +41,7 @@ function retainedIndexBytes(index: NavigationQueryIndex, sharedRows: number, bud
  * follow-up instead (see `NavigationIndexReadPool`).
  */
 export type NavigationIndexCheckpoint = () => void;
-type Load = (signal: AbortSignal, checkpoint: NavigationIndexCheckpoint) => Promise<NavigationQueryIndex>;
+type Load = (signal: AbortSignal, checkpoint: NavigationIndexCheckpoint, previous: () => NavigationQueryIndex | undefined) => Promise<NavigationQueryIndex>;
 type Member = { pending: Pending };
 type Pending = {
   projection: boolean;
@@ -82,10 +83,12 @@ export class NavigationIndexReadPool {
   private readonly slots = new Map<string, Slot>();
   private readonly physical = new Set<Pending>();
   private readers = 0;
-  private readonly retained = new Map<string, { index: NavigationQueryIndex; backing: Charge; threads?: ThreadCharge; expires: number; timer: ReturnType<typeof setTimeout>; owner: Pending }>();
+  private readonly retained = new Map<string, { index: NavigationQueryIndex; backing: Charge; threads?: ThreadCharge; expires: number;
+    discardAt: number; timer: ReturnType<typeof setTimeout>; owner: Pending }>();
+  private readonly collectionBytes = new WeakMap<readonly unknown[], { start: number; bytes: number }>();
   private retainedBytes = 0;
 
-  constructor(private readonly retentionMs = 0) {}
+  constructor(private readonly retentionMs = 0, private readonly revalidationMs = retentionMs) {}
 
   private evict(key: string): void {
     const entry = this.retained.get(key);
@@ -97,20 +100,45 @@ export class NavigationIndexReadPool {
     entry.owner.controller.abort();
   }
 
+  private stopServing(key: string): void {
+    const entry = this.retained.get(key);
+    if (!entry || !entry.expires) return;
+    const remaining = entry.discardAt - Date.now();
+    if (remaining <= 0 || this.revalidationMs <= this.retentionMs || !navigationQuerySnapshotToken(entry.index)) {
+      this.evict(key);
+      return;
+    }
+    // The old inventory can certify identical backing in a fresh scan.
+    // It cannot answer reads or keep its source subscription alive.
+    entry.expires = 0;
+    entry.owner.controller.abort();
+    clearTimeout(entry.timer);
+    entry.timer = setTimeout(() => this.evict(key), remaining);
+    entry.timer.unref?.();
+  }
+
   private retain(key: string, index: NavigationQueryIndex, owner: Pending): void {
     if (!this.retentionMs || owner.stale || owner.controller.signal.aborted) return;
     // Owner and viewer leases have independent generations and lifetimes.
     // Charge only certified identical objects together, including the native
     // row prefix when the viewer has appended pins. At most eight live keys.
     const rows = navigationQuerySnapshotSharedThreads(index);
+    const sizeRows = (collection: readonly unknown[], start: number, remaining: number): number => {
+      if (!rows) return rowBytes(collection, start, remaining);
+      const cached = this.collectionBytes.get(collection);
+      if (cached?.start === start) return cached.bytes;
+      const bytes = rowBytes(collection, start, remaining);
+      if (bytes <= remaining) this.collectionBytes.set(collection, { start, bytes });
+      return bytes;
+    };
     const entries = rows ? [...this.retained.values()] : [];
     const threads = rows ? entries.find((entry) => entry.threads?.rows === rows)?.threads
-      ?? { rows, bytes: rowBytes(rows), leases: 0 } : undefined;
+      ?? { rows, bytes: sizeRows(rows, 0, RETAINED_BYTE_BUDGET), leases: 0 } : undefined;
     const prefixBytes = threads?.bytes ?? 0;
     if (prefixBytes > RETAINED_BYTE_BUDGET) return;
     let backing = entries.find((entry) => entry.index === index)?.backing;
     if (!backing) {
-      let bytes = retainedIndexBytes(index, rows?.length ?? 0, RETAINED_BYTE_BUDGET - prefixBytes);
+      let bytes = retainedIndexBytes(index, rows?.length ?? 0, RETAINED_BYTE_BUDGET - prefixBytes, sizeRows);
       if (prefixBytes + bytes > RETAINED_BYTE_BUDGET) return;
       const auxiliaryBytes = navigationQuerySnapshotAuxiliaryBytes(index);
       if (prefixBytes + bytes + auxiliaryBytes > RETAINED_BYTE_BUDGET) {
@@ -122,9 +150,11 @@ export class NavigationIndexReadPool {
     if (threads && threads.leases++ === 0) this.retainedBytes += threads.bytes;
     this.evict(key);
     while (this.retained.size >= 8 || this.retainedBytes > RETAINED_BYTE_BUDGET) this.evict(this.retained.keys().next().value!);
-    const timer = setTimeout(() => this.evict(key), this.retentionMs);
+    const now = Date.now();
+    const timer = setTimeout(() => this.stopServing(key), this.retentionMs);
     timer.unref?.();
-    this.retained.set(key, { index, backing, threads, expires: Date.now() + this.retentionMs, timer, owner });
+    this.retained.set(key, { index, backing, threads, expires: now + this.retentionMs,
+      discardAt: now + this.revalidationMs, timer, owner });
   }
 
   retainedUsage(): { entries: number; bytes: number } { return { entries: this.retained.size, bytes: this.retainedBytes }; }
@@ -133,7 +163,7 @@ export class NavigationIndexReadPool {
   invalidate(key: string): void {
     const current = this.slots.get(key)?.current;
     if (current) current.stale = true;
-    this.evict(key);
+    this.stopServing(key);
   }
 
   private start(key: string, slot: Slot, owned: Pending): void {
@@ -149,7 +179,11 @@ export class NavigationIndexReadPool {
       }
     };
     const stage = owned.projection ? "viewer-index" : "index";
-    const traced = listingDiagnostics.trace(stage, {}, () => owned.load(owned.controller.signal, checkpoint));
+    const previous = () => {
+      const entry = this.retained.get(key);
+      if (entry && entry.discardAt > Date.now()) return entry.index;
+    };
+    const traced = listingDiagnostics.trace(stage, {}, () => owned.load(owned.controller.signal, checkpoint, previous));
     listingDiagnostics.remember(owned.promise, traced);
     traced.then((index) => {
       try {
@@ -204,7 +238,7 @@ export class NavigationIndexReadPool {
       listingDiagnostics.link(stage, "cache-hit", retained.owner.promise);
       return Promise.resolve(retained.index);
     }
-    if (retained) this.evict(key);
+    if (retained) this.stopServing(key);
     if (this.readers >= 256) return Promise.reject(new Error("Navigation index consumer admission is full."));
     let slot = this.slots.get(key);
     let owned: Pending;

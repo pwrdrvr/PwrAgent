@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rename, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -19,6 +19,7 @@ import { getDesktopBackendRegistry, type DesktopBackendRegistry } from "../app-s
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import type { NavigationDirectoryGitStatus } from "@pwragent/shared/contracts/navigation";
 import budgets from "./fixtures/navigation-listing-budgets.json";
+import { isolateProcessGitEnvironment, runIsolatedGit } from "./helpers/isolated-git";
 
 const mocks = vi.hoisted(() => {
   const findActiveBindings = vi.fn(async (): Promise<MessagingBindingRecord[]> => []);
@@ -1061,5 +1062,60 @@ it("reuses membership across a PR status burst while pages observe the current r
   } finally {
     project.mockImplementation(original);
     source.emit("thread/name/updated");
+  }
+});
+
+it("shares one live stack observation across concurrent owner and viewer inventory refreshes", async () => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-nav-stack-work-")));
+  const restore = isolateProcessGitEnvironment(root);
+  const source = createSource();
+  source.registry.stackThreadHeld = () => true;
+  const original = mocks.store.readNavigationQueryIndex.getMockImplementation()!;
+  try {
+    const git = async (...args: string[]) => (await runIsolatedGit(root, args)).stdout.trim();
+    await git("init", "-b", "topic");
+    await git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "Fixture");
+    const head = await git("rev-parse", "HEAD");
+    await git("branch", "main");
+    await writeFile(path.join(root, ".git", "gh-stack"), JSON.stringify({
+      schemaVersion: 1, repository: "github.com:fixture/stack",
+      stacks: [{ trunk: { branch: "main", head }, branches: [{ branch: "topic", head, base: head }] }],
+    }));
+    source.listThreads.mockImplementation(async () => [{
+      id: "stacked", source: "codex", title: "Stacked", titleSource: "explicit",
+      gitBranch: "topic", linkedDirectories: [{ id: root, path: root, kind: "local", label: "Fixture" }],
+      inbox: { inInbox: false },
+    }]);
+    mocks.store.readNavigationQueryIndex.mockImplementation(({ threads }) => ({ threads, directories: [] }));
+    const pin: NavigationThreadSummary = {
+      id: "remote", source: "codex", title: "Viewer pin", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false }, federation: { instanceLabel: "Peer",
+        ref: buildFederatedThreadRef({ backend: "codex", threadId: "remote", instanceId: "peer" }) },
+    };
+    const viewer = { source: {}, project: async (index: NavigationQueryIndex) => appendViewerNavigationPins(index, [pin]) };
+    const stackReads = vi.spyOn(StackReader.prototype, "read");
+    try {
+      const read = (view?: typeof viewer) => loadLocalNavigationQueryIndex({
+        registry: source.registry, callerReason: "renderer-navigation-query", includeStacks: true, viewer: view,
+      });
+      for (const method of ["thread/name/updated", "pullRequest/status/updated", "turn/completed"]) {
+        source.emit(method);
+        const [owner, shown] = await Promise.all([read(), read(viewer)]);
+        expect(owner.threads).toHaveLength(1);
+        expect(shown.threads).toHaveLength(2);
+        expect(owner.stacks?.length).toBe(1);
+        expect(shown.stacks?.length).toBe(1);
+      }
+      // The owner and viewer have identical native membership. A stack
+      // refresh verifies the checkout once, including on a PR-only fence.
+      expect(stackReads).toHaveBeenCalledTimes(3);
+    } finally {
+      stackReads.mockRestore();
+    }
+  } finally {
+    source.emit("thread/name/updated");
+    mocks.store.readNavigationQueryIndex.mockImplementation(original);
+    restore();
+    await rm(root, { recursive: true, force: true });
   }
 });
