@@ -3,10 +3,13 @@ import type {
   BackendAcpRuntimeCapabilities,
   BackendAcpSessionRuntimeState,
 } from "@pwragent/shared/contracts/backend";
+import type { ThreadExecutionMode } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   findAcpThoughtLevelConfigOption,
   type AcpRuntimeClient,
 } from "./acp-backend-adapter";
+import { acpRuntimeHasExecutionModeSelection } from "./backend-registry-notifications";
+import { acpRuntimeStateRequiresFullAccess } from "./thread-model-options";
 
 /**
  * Writes a new session's runtime selection: config values, then its mode,
@@ -83,4 +86,31 @@ export async function applyAcpRuntimeSelection(params: {
       reasoningEffort,
     });
   }
+}
+
+/**
+ * The access a new ACP session holds once its runtime selection is written.
+ * Where the agent's native mode carries access, as Kimi's and Qwen's modes and
+ * Grok's `permission_mode` do, the thread was recorded at Full Access for the
+ * native Yolo the start asked for. A session that does not list Yolo falls
+ * back below it, and a native mode below Full Access records the thread at
+ * Default Access. The level is never raised: a session that kept a privileged
+ * mode of its own does not lift a Default Access start.
+ *
+ * `runtime` is the session's applied state, not the requested one.
+ */
+export function acpStartedExecutionMode(params: {
+  executionMode: ThreadExecutionMode;
+  registryId?: string;
+  runtime: BackendAcpSessionRuntimeState | undefined;
+  runtimeCapabilities: BackendAcpRuntimeCapabilities | undefined;
+}): ThreadExecutionMode {
+  const { executionMode, registryId, runtime, runtimeCapabilities } = params;
+  if (executionMode !== "full-access") return executionMode;
+  // Permission requests follow the same predicates, so the recorded level
+  // matches what PwrAgent approves.
+  return acpRuntimeHasExecutionModeSelection({ registryId, runtime, runtimeCapabilities })
+    && !acpRuntimeStateRequiresFullAccess({ runtime, runtimeCapabilities })
+    ? "default"
+    : executionMode;
 }

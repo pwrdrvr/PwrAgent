@@ -198,7 +198,7 @@ export interface RegistryHostPorts {
     reasoningEffort?: string;
     mcpRegistration?: AcpMcpServerRegistration;
     hidden?: boolean;
-  }): Promise<{ threadId: string }>;
+  }): Promise<{ threadId: string; executionMode: ThreadExecutionMode }>;
   startAcpTurn(params: {
     backend: AcpBackendId;
     threadId: string;

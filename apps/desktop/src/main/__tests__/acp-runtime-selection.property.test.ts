@@ -15,7 +15,7 @@ import type {
 } from "@pwragent/shared/contracts/normalized-app-server";
 import { AcpAgentClient } from "../acp/acp-client";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
-import { applyAcpRuntimeSelection } from "../app-server/acp-runtime-selection";
+import { acpStartedExecutionMode, applyAcpRuntimeSelection } from "../app-server/acp-runtime-selection";
 import { AcpSessionStore } from "../storage/acp-session-store";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
@@ -30,6 +30,11 @@ const BACKEND: Record<Selector, AcpBackendId> = {
   legacy: "acp:qwen",
   modeOption: "acp:antigravity",
   permission: "acp:grok",
+};
+const REGISTRY_ID: Record<Selector, string> = {
+  legacy: "qwen",
+  modeOption: "antigravity",
+  permission: "grok",
 };
 const OPTION_ID: Record<Selector, string> = {
   legacy: "mode",
@@ -194,11 +199,26 @@ async function startSession(scenario: Scenario) {
     } catch (caught) {
       error = caught;
     }
+    const recorded = store.getSession(BACKEND[selector], sessionId)?.acpRuntime;
+    // A native mode below Full Access records the thread at Default Access,
+    // as resolveThreadTodoStartAccess does for the mode it asks for.
+    const requestedExecutionMode: ThreadExecutionMode =
+      requested !== undefined && acpNativeAccessLevel(requested) === "full-access"
+        ? "full-access"
+        : "default";
     return {
       error,
       requested,
+      requestedExecutionMode,
       transport,
-      recorded: store.getSession(BACKEND[selector], sessionId)?.acpRuntime,
+      recorded,
+      // As BackendRegistry.startAcpSession records it.
+      executionMode: acpStartedExecutionMode({
+        executionMode: requestedExecutionMode,
+        registryId: REGISTRY_ID[selector],
+        runtime: recorded,
+        runtimeCapabilities: capabilities,
+      }),
     };
   } finally {
     await client.dispose();
@@ -231,6 +251,34 @@ describe("ACP session start mode selection", () => {
         expect(recorded?.configValues?.mode).toBe(transport.mode);
       }
     }));
+  });
+
+  it("records Full Access only while the session holds the native Yolo it was asked for", async () => {
+    await fc.assert(fc.asyncProperty(scenario, async (input) => {
+      const { requestedExecutionMode, transport, executionMode } = await startSession(input);
+      const expected =
+        // Antigravity's Full Access is the process it runs in, not a mode.
+        input.selector === "modeOption"
+        // A session without a native selector leaves access to PwrAgent.
+        || transport.mode === undefined
+        || transport.mode === "yolo"
+          ? requestedExecutionMode
+          : "default";
+      expect(executionMode).toBe(expected);
+    }));
+  });
+
+  it("records Default Access when a Grok Yolo start falls back to Auto", async () => {
+    const result = await startSession({
+      selector: "permission",
+      cached: ["default", "auto", "yolo"],
+      sessionModes: ["default", "auto"],
+      sessionCurrentIndex: 0,
+      request: { kind: "level", level: "full-access" },
+    });
+    expect(result.requestedExecutionMode).toBe("full-access");
+    expect(result.recorded?.configValues?.permission_mode).toBe("auto");
+    expect(result.executionMode).toBe("default");
   });
 
   it("falls back from Auto to Default for an Antigravity session without native Auto", async () => {
