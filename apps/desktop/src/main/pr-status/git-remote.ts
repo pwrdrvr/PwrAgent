@@ -105,6 +105,7 @@ type RemoteCacheEntry = {
   value: ParsedGitRemote[];
   names?: string[];
   unconfirmedEmpty?: true;
+  readWithGitRemote?: true;
   fetchedAt: number;
 };
 type ParsedRemoteObservation = Omit<RemoteCacheEntry, "fetchedAt">;
@@ -224,16 +225,26 @@ export async function observeForgeRepositoriesForDirectory(
 /** Sample current Git config while reusing completed identity resolution for matching URLs. */
 export function createScheduledPrefetchRemoteReader(cwd: string) {
   let previous: ParsedRemoteObservation | undefined;
-  return async (configuration?: GitRemoteConfiguration) => {
+  const observationForReuse = () => {
     const live = remoteCache.get(cwd);
     const warm = live && Date.now() - live.fetchedAt < REMOTE_CACHE_TTL_MS ? live : undefined;
-    const observation = await loadParsedGitRemotes(cwd, { fresh: true }, {}, { configuration, previous: previous ?? warm });
+    return previous ?? warm;
+  };
+  const read = async (configuration?: GitRemoteConfiguration, useGitRemote = false) => {
+    const observation = await loadParsedGitRemotes(cwd, { fresh: true }, {}, {
+      configuration, previous: observationForReuse(), useGitRemote,
+    });
     const repos = collectForgeRepositories(observation.value, "github");
-    const namesWithUrls = new Set(observation.value.map(({ name }) => name));
-    if (repos.length && observation.names?.every((name) => namesWithUrls.has(name))) previous = observation;
+    if (repos.length && hasAllRemoteUrls(observation)) previous = observation;
     // Scheduled probes never publish into the live cache, including on failure.
     return { repos, refreshedRemoteNames: observation.names };
   };
+  return { read, usesGitRemote: () => observationForReuse()?.readWithGitRemote === true };
+}
+
+function hasAllRemoteUrls(observation: ParsedRemoteObservation): boolean {
+  const namesWithUrls = new Set(observation.value.map(({ name }) => name));
+  return observation.names?.every((name) => namesWithUrls.has(name)) ?? false;
 }
 
 function collectForgeRepositories(remotes: ParsedGitRemote[], kind?: ForgeKind): GitHubRepoRef[] {
@@ -296,7 +307,7 @@ async function loadParsedGitRemotes(
   cwd: string,
   options: ResolveGitHubRepoOptions,
   demand: PrMetadataDemand,
-  prefetch?: { configuration?: GitRemoteConfiguration; previous?: ParsedRemoteObservation },
+  prefetch?: { configuration?: GitRemoteConfiguration; previous?: ParsedRemoteObservation; useGitRemote?: boolean },
 ): Promise<ParsedRemoteObservation> {
   const resolveSshHostname =
     options.resolveSshHostname ?? defaultResolveSshHostname;
@@ -306,12 +317,12 @@ async function loadParsedGitRemotes(
     demand.signal?.throwIfAborted();
     const raw: Awaited<ReturnType<typeof defaultReadRemotes>> = prefetch?.configuration ?? (options.readRemotes
       ? { remotes: await options.readRemotes(cwd) }
-      : await defaultReadRemotes(cwd, demand, Boolean(options.confirmEmpty || options.fresh)));
-    const { names, remotes, unconfirmedEmpty } = raw;
+      : await defaultReadRemotes(cwd, demand, Boolean(options.confirmEmpty || options.fresh), prefetch));
+    const { names, remotes, unconfirmedEmpty, readWithGitRemote } = raw;
     const previous = prefetch?.previous?.value;
     if (previous && previous.length === remotes.length && remotes.every(({ name, url }, index) =>
       name === previous[index].name && url === previous[index].url)) {
-      return { names, value: previous, unconfirmedEmpty };
+      return { names, value: previous, unconfirmedEmpty, readWithGitRemote };
     }
     const value = await Promise.all(
       remotes.map(async (remote) => {
@@ -334,7 +345,7 @@ async function loadParsedGitRemotes(
         };
       }),
     );
-    return { names, value, unconfirmedEmpty };
+    return { names, value, unconfirmedEmpty, readWithGitRemote };
   } catch {
     demand.signal?.throwIfAborted();
     // Preserve the bounded negative cache, including non-git directories.
@@ -365,7 +376,8 @@ function resolveSshHostInFlight(host: string, resolve: SshResolver, demand: PrMe
 
 async function defaultReadRemotes(
   cwd: string, demand: PrMetadataDemand, confirmEmpty: boolean,
-): Promise<{ names?: string[]; remotes: GitRemote[]; unconfirmedEmpty?: true }> {
+  prefetch?: { previous?: ParsedRemoteObservation; useGitRemote?: boolean },
+): Promise<{ names?: string[]; remotes: GitRemote[]; unconfirmedEmpty?: true; readWithGitRemote?: true }> {
   const childEnv = buildPwrAgentChildProcessEnv(process.env);
   const gitOptions = {
     purpose: "pr-remotes" as const,
@@ -376,7 +388,9 @@ async function defaultReadRemotes(
   // GIT_CONFIG affects the config subcommand, while remote reads the standard
   // hierarchy. Keep the original Git commands in this case and for unusual
   // configuration. `remote --verbose` prints only the first fetch URL.
-  if (!Object.keys(childEnv).some((key) => key.toUpperCase() === "GIT_CONFIG")) {
+  const previous = prefetch?.previous;
+  if (!prefetch?.useGitRemote && !previous?.readWithGitRemote
+    && !Object.keys(childEnv).some((key) => key.toUpperCase() === "GIT_CONFIG")) {
     try {
       const { stdout } = await runPrMetadataGit(cwd,
         ["config", "--null", "--show-scope", "--includes", "--get-regexp", REMOTE_CONFIG_KEYS], gitOptions, demand);
@@ -396,6 +410,12 @@ async function defaultReadRemotes(
   // command to distinguish a checkout without an origin from an unavailable one.
   const { stdout } = await runPrMetadataGit(cwd, ["remote"], gitOptions, demand);
   const names = uniqueNonEmptyLines(stdout);
+  // Unusual config uses the ordinary remote-identity freshness window.
+  // Each branch still gets a current list and native ref reads.
+  if (previous?.readWithGitRemote && previous.names?.length === names.length
+    && names.every((name, index) => name === previous.names?.[index]) && hasAllRemoteUrls(previous)) {
+    return { names, remotes: previous.value, readWithGitRemote: true };
+  }
   const entries = await Promise.all(
     names.map(async (name): Promise<GitRemote[]> => {
       try {
@@ -410,7 +430,7 @@ async function defaultReadRemotes(
       }
     }),
   );
-  return { names, remotes: entries.flat() };
+  return { names, remotes: entries.flat(), readWithGitRemote: true };
 }
 
 function uniqueNonEmptyLines(value: string): string[] {

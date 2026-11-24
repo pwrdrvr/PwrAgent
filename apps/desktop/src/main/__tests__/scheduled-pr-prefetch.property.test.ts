@@ -148,6 +148,52 @@ it("uses the existing Git remote HEAD fallback with one configured remote", asyn
   ]);
 });
 
+it.each(["warm", "cold"])("avoids repeated URL probes in a %s single-branch clone", async (cache) => {
+  const source = await fixture();
+  const cwd = path.join(source, "single-branch");
+  await readGit(source, "clone", "--single-branch", "--branch", "main", "--", source, cwd);
+  await readGit(cwd, "remote", "set-url", "origin", "https://github.com/fixture/single-branch.git");
+  await remoteHead(cwd, "origin", "main");
+  const branches = topics.slice(0, 3);
+  for (const branch of branches) await readGit(cwd, "branch", branch);
+  if (cache === "warm") await resolveGitHubRepoForDirectory(cwd);
+  const expected = await oracle(cwd);
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  const starts = recordPrefetchStarts();
+  for (const branch of branches) await expectEligible(resolve, cwd, branch, expected(branch));
+
+  const commands = starts.calls.map(([, args]) => args.slice(0, args[0] === "remote" ? 2 : 1).join(" "));
+  expect(commands.filter((command) => command === "remote get-url")).toHaveLength(cache === "warm" ? 0 : 1);
+  expect(commands.filter((command) => command === "config")).toHaveLength(cache === "warm" ? 0 : 1);
+  expect(commands.filter((command) => command === "remote")).toHaveLength(3);
+  expect(commands.filter((command) => command === "symbolic-ref")).toHaveLength(3);
+  expect(commands.filter((command) => command === "for-each-ref")).toHaveLength(3);
+
+  await readGit(cwd, "remote", "rename", "origin", "renamed");
+  await readGit(cwd, "remote", "set-url", "renamed", "https://github.com/fixture/rename.git");
+  await expectEligible(resolve, cwd, "topic-3", (await oracle(cwd))("topic-3"));
+});
+
+it.skipIf(process.platform === "win32")("keeps two warm single-remote lookups within the ordinary launch count with system config", async () => {
+  const cwd = await fixture();
+  await readGit(cwd, "remote", "remove", "upstream");
+  const systemConfig = path.join(cwd, "system-config");
+  await writeFile(systemConfig, "[user]\n\tname = Fixture\n");
+  process.env.GIT_CONFIG_SYSTEM = systemConfig;
+  process.env.GIT_CONFIG_NOSYSTEM = "0";
+  await resolveGitHubRepoForDirectory(cwd);
+  const expected = await oracle(cwd);
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  const starts = recordPrefetchStarts();
+  for (const branch of topics.slice(0, 2)) {
+    await expectEligible((directory, head) => resolve(directory, head, 2), cwd, branch, expected(branch));
+  }
+
+  expect(starts.calls.map(([, args]) => args[0])).toEqual([
+    "config", "symbolic-ref", "for-each-ref", "config", "symbolic-ref", "for-each-ref",
+  ]);
+});
+
 it.skipIf(process.platform === "win32").each([1, 2])("reuses SSH remote discovery for %i configured remotes", async (remoteCount) => {
   const cwd = await fixture();
   const bin = path.join(cwd, "bin");

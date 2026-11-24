@@ -75,12 +75,13 @@ function parseConfigWithOrigins(cwd: string, stdout: string) {
 }
 
 export async function observeScheduledPrPrefetchMetadata(
-  cwd: string, readRepositories: ReturnType<typeof createScheduledPrefetchRemoteReader>,
+  cwd: string, repositories: ReturnType<typeof createScheduledPrefetchRemoteReader>, branchCount: number,
 ): Promise<PrefetchMetadata | undefined> {
   const currentInputs = () => {
     try { return prefetchGitInputs(cwd); } catch { return undefined; }
   };
   try {
+    if (repositories.usesGitRemote()) return undefined;
     const inputs = currentInputs();
     if (!inputs) return undefined;
     const roots = await observePrCheckoutConfigFiles(cwd, inputs.paths);
@@ -89,12 +90,16 @@ export async function observeScheduledPrPrefetchMetadata(
       "config", "--null", "--show-scope", "--show-origin", "--includes", "--get-regexp", `${REMOTE_CONFIG_KEYS}|^include\\.|^includeif\\.`,
     ], { purpose: "pr-remotes", env: inputs.env, maxBuffer: 64 * 1024, timeout: 2_000 });
     const { stdout, stderr } = await readConfig();
-    const parsed = stderr === "" ? parseConfigWithOrigins(roots.directory, stdout) : undefined;
-    if (!parsed) return undefined;
+    if (stderr !== "") return undefined;
+    const parsed = parseConfigWithOrigins(roots.directory, stdout);
+    if (!parsed) {
+      const { repos, refreshedRemoteNames } = await repositories.read(undefined, true);
+      return { repos, refreshedRemoteNames: refreshedRemoteNames ?? [] };
+    }
     const { configuration, sources } = parsed;
     // Resolve identities from the config Git already sampled. OpenSSH aliases
     // use one expansion per observation, bounded by the scheduled batch.
-    const { repos } = await readRepositories(configuration);
+    const { repos } = await repositories.read(configuration);
     const remoteNames = configuration.names;
     const sample = { repos, refreshedRemoteNames: remoteNames };
     const inputsUnchanged = () => isDeepStrictEqual(inputs, currentInputs());
@@ -106,6 +111,9 @@ export async function observeScheduledPrPrefetchMetadata(
     // The first Git read discovers include paths, even absent ones. Before
     // retaining that answer, bracket a second read with all those inputs.
     const extra = [...sources.includes].filter((file) => !roots.paths.has(file));
+    // A single remote still needs one native HEAD read per branch. Its
+    // config proof only saves launches beyond the initial proof cost.
+    if (remoteNames.length === 1 && branchCount <= (extra.length ? 3 : 2)) return await currentSample();
     const files = extra.length ? await observePrCheckoutConfigFiles(cwd, [...inputs.paths, ...extra]) : roots;
     if (!files || [...sources.origins].some((file) => !files.paths.has(file))) return await currentSample();
     if (extra.length) {

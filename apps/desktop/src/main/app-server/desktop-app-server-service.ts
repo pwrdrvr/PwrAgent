@@ -6441,8 +6441,10 @@ class DesktopAppServerService {
 
     const entries: { cwd: string; branch: string; repos: GitHubRepoRef[]; refs: BranchRef[] }[] = [];
     for (const { cwd, branch } of candidates) {
-      const resolve = branchesByCheckout.get(cwd)!.size > 1 ? resolvePrefetchRepos : resolveScheduledPrPrefetchRepos;
-      const repos = await resolve(cwd, branch);
+      const branchCount = branchesByCheckout.get(cwd)!.size;
+      const repos = branchCount > 1
+        ? await resolvePrefetchRepos(cwd, branch, branchCount)
+        : await resolveScheduledPrPrefetchRepos(cwd, branch);
       if (repos.length === 0) continue;
       entries.push({
         cwd,

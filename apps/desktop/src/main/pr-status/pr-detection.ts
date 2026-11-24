@@ -158,7 +158,8 @@ type ScheduledCheckoutMetadata = {
 };
 type ScheduledPrefetchCheckout = {
   verified?: ScheduledCheckoutMetadata;
-  readRepositories: ReturnType<typeof createScheduledPrefetchRemoteReader>;
+  repositories: ReturnType<typeof createScheduledPrefetchRemoteReader>;
+  branchCount: number;
 };
 
 /** Resolve the GitHub repositories eligible for scheduled branch prefetch. */
@@ -171,7 +172,7 @@ export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string, che
       let branchDefaults = metadata?.defaults;
       if (!metadata) {
         checkout.verified = undefined;
-        const observed = await observeScheduledPrPrefetchMetadata(cwd, checkout.readRepositories);
+        const observed = await observeScheduledPrPrefetchMetadata(cwd, checkout.repositories, checkout.branchCount);
         if (observed?.proof) {
           const { heads, unchanged } = observed.proof;
           const remoteNames = observed.refreshedRemoteNames;
@@ -195,7 +196,7 @@ export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string, che
     }
 
     const { repos, refreshedRemoteNames } = sampled ?? (checkout
-      ? await checkout.readRepositories()
+      ? await checkout.repositories.read()
       : await observeForgeRepositoriesForDirectory(cwd, "github"));
     if (repos.length === 0) return [];
     const plan = await resolvePrLookupPlan({ cwd, branch, remoteNames: checkout ? refreshedRemoteNames : undefined });
@@ -204,10 +205,10 @@ export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string, che
 }
 
 /** Each discovery batch owns its observations, keyed by the exact cwd passed to Git. */
-export function createScheduledPrPrefetchRepoResolver(): (cwd: string, branch: string) => Promise<GitHubRepoRef[]> {
+export function createScheduledPrPrefetchRepoResolver() {
   const batch = new Map<string, ScheduledPrefetchCheckout>();
-  return (cwd, branch) => {
-    const checkout = batch.get(cwd) ?? { readRepositories: createScheduledPrefetchRemoteReader(cwd) };
+  return (cwd: string, branch: string, branchCount = Number.POSITIVE_INFINITY): Promise<GitHubRepoRef[]> => {
+    const checkout = batch.get(cwd) ?? { repositories: createScheduledPrefetchRemoteReader(cwd), branchCount };
     batch.set(cwd, checkout);
     return resolveScheduledPrPrefetchRepos(cwd, branch, checkout);
   };
