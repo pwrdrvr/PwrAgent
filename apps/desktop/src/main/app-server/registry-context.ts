@@ -44,7 +44,9 @@ export type RegistryPullRequestStore = Pick<BackendRegistryOverlayStoreLike,
   | "readPrStatusCache"
 >;
 
-export type RegistryReviewStore = Pick<BackendRegistryOverlayStoreLike, "upsertManagedReviewEntry">;
+export type RegistryReviewStore = Pick<BackendRegistryOverlayStoreLike,
+  "upsertManagedReviewEntry" | "readAgentReviewBudget" | "claimAgentReview"
+>;
 
 export type RegistryArchiveStore = Pick<BackendRegistryOverlayStoreLike,
   "setThreadArchiveTombstone" | "setThreadKeepCheckoutAwake" | "upsertWorktreeSnapshot"

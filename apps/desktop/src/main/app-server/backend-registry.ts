@@ -46,7 +46,7 @@ import { ThreadOwnerUnavailableError, type ThreadOwnerAdmission } from "@pwragen
 import { NavigationDirectoryScope } from "@pwragent/owner-core/navigation-directory-scope";
 import { delegatedTurnAttribution, withoutTurnAttribution } from "./delegated-turn-attribution";
 import { resolveTurnInputSource, type TurnInputSource } from "@pwragent/owner-core/turn-input-source";
-import { GET_CURRENT_TURN_INPUT_SOURCE, type CurrentTurnInputSourceHandler } from "../agent-tools/current-turn-input-source-tool";
+import { GET_CURRENT_TURN_INPUT_SOURCE } from "../agent-tools/current-turn-input-source-tool";
 import { SELF_STARTED_TURN_ENTRY_PREFIX } from "./thread-pending-wakes";
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared/contracts/agent";
 import type { ThreadTodoMessageTarget } from "@pwragent/shared/contracts/thread-todos";
@@ -1494,7 +1494,9 @@ export class DesktopBackendRegistry {
     return unbound;
   }
 
-  private readonly currentTurnInputSource: CurrentTurnInputSourceHandler = (context) => {
+  private readonly currentTurnInputSource = (context: {
+    backend: AppServerBackendKind; threadId: string; turnId?: string;
+  }): TurnInputSource => {
     if (!context.turnId) return "unknown";
     const turn = { ...context, turnId: context.turnId };
     const exact = this.context.turnState.readTurnInputSource(turn);
@@ -1540,6 +1542,7 @@ export class DesktopBackendRegistry {
     if (!entry) return;
     this.context.turnState.bindStartingOrigin(entry, turn);
     const identity = { ...turn, backend: entry.backend };
+    this.managedReviewService.observeOperatorReviewInput(identity, entry.turnInputSource);
     if (entry.turnInputSource !== undefined && !terminalObserved
       && (entry.backend === "codex" || this.context.turnState.hasRegisteredTurn(identity))) {
       this.context.turnState.rememberTurnInputSource(identity, entry.turnInputSource, entry.admittedCodexTurnSequence);

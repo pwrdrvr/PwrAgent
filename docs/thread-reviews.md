@@ -117,6 +117,16 @@ The trusted calling context supplies backend and thread identity. An agent
 cannot inspect or mutate another thread's review by passing its id. Reusing a
 source key returns the existing record and never reopens settled findings.
 
+The `start_review` tool admits one review request per turn. A matching
+retry returns the pending review. Across turns, the owner refuses another
+agent review of the same full commit or captured PR diff, and admits at
+most three agent requests on a thread between operator turns. New commits,
+CI wakes, review-fix turns and call IDs do not reset the limit. The owner
+records the claim before scheduling it, so a restart cannot replay that
+admission. Even a failed start counts as an attempt. A new turn started
+by the operator allows a fresh set of requests. The operator can also start
+an individual review directly.
+
 ## Import and the queue
 
 Final native and managed review events are imported automatically. Tracking

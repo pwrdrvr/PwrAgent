@@ -858,6 +858,7 @@ export type ReviewTerminal = {
 };
 
 export type PendingReviewStartRecord = {
+  agentRequestKey?: string;
   turnAttribution?: ReturnType<typeof delegatedTurnAttribution>;
   pendingReviewId: string;
   backend: AppServerBackendKind;
