@@ -242,10 +242,8 @@ async function projectNavigationCheckoutDirectories(
   const checkouts = await readNavigationCheckouts(entries.map(([cwd]) => cwd), {
     fresh,
     verified,
-    checkpoint: () => {
-      signal.throwIfAborted();
-      checkpoint();
-    },
+    signal,
+    checkpoint,
   });
   const observed = entries.map(([cwd, rows], index) => ({ cwd, rows, checkout: checkouts[index] }));
   // Git does not record the primary checkout path in a separate git-dir.

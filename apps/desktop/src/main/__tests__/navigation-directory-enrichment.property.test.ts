@@ -4,7 +4,7 @@ import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { buildDirectorySummaries } from "@pwragent/shared/directory-navigation";
@@ -363,50 +363,106 @@ it.each([false, true])("does not give an expired checkout a new TTL (late waiter
   }
 });
 
-it.each(["join", "owner cancelled", "verified"])("coordinates overlapping checkout inventory scopes: %s", async (mode) => {
-  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-navigation-pending-")));
-  const shared = path.join(root, "shared");
-  const slow = path.join(root, "slow");
-  const other = path.join(root, "other");
-  const release = Promise.withResolvers<void>();
-  const started = Promise.withResolvers<void>();
-  const controller = new AbortController();
-  const stat = vi.mocked(fs.stat).getMockImplementation()!;
-  const restoreGit = isolateProcessGitEnvironment();
-  const batches: Promise<unknown>[] = [];
-  let sharedLoads = 0;
-  try {
-    await Promise.all([mkdir(shared), mkdir(slow), mkdir(other)]);
-    vi.mocked(fs.stat).mockImplementation(async (...args) => {
-      if (args[0] === slow) await release.promise;
-      if (args[0] === shared && args[1] === undefined) {
-        sharedLoads++;
-        started.resolve();
+it.each(["join", "owner cancelled", "follower cancelled", "verified"])(
+  "coordinates overlapping checkout inventory scopes: %s", async (mode) => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-navigation-pending-")));
+    const shared = path.join(root, "shared");
+    const slow = path.join(root, "slow");
+    const other = path.join(root, "other");
+    const release = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    const followerWaiting = Promise.withResolvers<void>();
+    const owner = new AbortController();
+    const follower = new AbortController();
+    const stat = vi.mocked(fs.stat).getMockImplementation()!;
+    const restoreGit = isolateProcessGitEnvironment();
+    const batches: Promise<unknown>[] = [];
+    let sharedLoads = 0;
+    onTestFinished(async () => {
+      release.resolve();
+      await Promise.allSettled(batches);
+    });
+    try {
+      await Promise.all([mkdir(shared), mkdir(slow), mkdir(other)]);
+      vi.mocked(fs.stat).mockImplementation(async (...args) => {
+        if (args[0] === slow) await release.promise;
+        if (args[0] === shared && args[1] === undefined) {
+          sharedLoads++;
+          started.resolve();
+        }
+        return await stat(...args);
+      });
+      const ownerOptions = {
+        fresh: false, verified: false, signal: owner.signal, checkpoint: () => owner.signal.throwIfAborted(),
+      };
+      const first = readNavigationCheckouts([slow, shared], ownerOptions);
+      let ownerFinished = false;
+      batches.push(first.catch(() => undefined).finally(() => { ownerFinished = true; }));
+      await started.promise;
+      const verified = mode === "verified";
+      let followerCheckpoints = 0;
+      const followerOptions = {
+        fresh: verified, verified, signal: follower.signal,
+        checkpoint: () => {
+          follower.signal.throwIfAborted();
+          if (++followerCheckpoints === 2) followerWaiting.resolve();
+        },
+      };
+      const second = readNavigationCheckouts(mode === "follower cancelled" ? [shared] : [shared, other], followerOptions);
+      batches.push(second.catch(() => undefined));
+      if (mode === "owner cancelled") {
+        owner.abort(new Error("original inventory stopped"));
+        await second;
       }
-      return await stat(...args);
-    });
-    const first = readNavigationCheckouts([slow, shared], {
-      fresh: false, verified: false, checkpoint: () => controller.signal.throwIfAborted(),
-    });
-    batches.push(first.catch(() => undefined));
-    await started.promise;
-    const second = readNavigationCheckouts([shared, other], {
-      fresh: mode === "verified", verified: mode === "verified", checkpoint: () => {},
-    });
-    batches.push(second);
-    if (mode === "verified") await second;
-    if (mode === "owner cancelled") controller.abort(new Error("original inventory stopped"));
-    release.resolve();
-    if (mode === "owner cancelled") await expect(first).rejects.toThrow("original inventory stopped");
-    else await first;
-    expect((await second)[0]?.directories).toEqual([
-      expect.objectContaining({ path: normalize(shared) }),
-    ]);
-    expect(sharedLoads).toBe(mode === "join" ? 1 : 2);
+      if (mode === "follower cancelled") {
+        await followerWaiting.promise;
+        follower.abort(new Error("waiting inventory stopped"));
+        await expect(second).rejects.toThrow("waiting inventory stopped");
+      }
+      if (verified) await second;
+      // The independent result or abort must finish while the original I/O is still held.
+      expect(ownerFinished).toBe(false);
+      release.resolve();
+      if (mode === "owner cancelled") await expect(first).rejects.toThrow("original inventory stopped");
+      else await first;
+      if (mode !== "follower cancelled") {
+        expect((await second)[0]?.directories).toEqual([expect.objectContaining({ path: normalize(shared) })]);
+      }
+      expect(sharedLoads).toBe(mode === "join" || mode === "follower cancelled" ? 1 : 2);
+    } finally {
+      release.resolve();
+      await Promise.allSettled(batches);
+      vi.mocked(fs.stat).mockImplementation(stat);
+      restoreGit();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 5_000,
+);
+
+it("does not publish checkout evidence when cancelled after the final validation checkpoint", async () => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-navigation-publish-abort-")));
+  const cwd = path.join(root, "checkout");
+  const restoreGit = isolateProcessGitEnvironment();
+  const owner = new AbortController();
+  const stopped = new Error("inventory stopped before publication");
+  let checkpoints = 0;
+  try {
+    await mkdir(cwd);
+    const options = {
+      fresh: false, verified: false, signal: owner.signal,
+      checkpoint: () => {
+        owner.signal.throwIfAborted();
+        // An unversioned path has no common-file probes. Abort as the
+        // observation returns on its final checkpoint.
+        if (++checkpoints === 3) queueMicrotask(() => owner.abort(stopped));
+      },
+    };
+    await expect(readNavigationCheckouts([cwd], options)).rejects.toThrow(stopped);
+    await rm(cwd, { recursive: true });
+    const live = await readNavigationCheckout(cwd, true);
+    expect(live?.directories).toEqual([]);
+    expect(await readNavigationCheckout(cwd)).toEqual(live);
   } finally {
-    release.resolve();
-    await Promise.allSettled(batches);
-    vi.mocked(fs.stat).mockImplementation(stat);
     restoreGit();
     await rm(root, { recursive: true, force: true });
   }

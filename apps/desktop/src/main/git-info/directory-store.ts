@@ -184,11 +184,10 @@ export function readNavigationCheckout(cwd: string, fresh = false): Promise<Navi
 }
 
 async function readPendingNavigationCheckout(
-  cwd: string, pending: PendingNavigationCheckout | undefined, requestedAt = performance.now(), checkpoint?: () => void,
+  cwd: string, pending: PendingNavigationCheckout | undefined, requestedAt = performance.now(),
 ): Promise<NavigationCheckout | undefined> {
   while (pending) {
     const prepared = await pending;
-    checkpoint?.();
     if (prepared && requestedAt < prepared.observedAt + NAVIGATION_CHECKOUT_TTL_MS) return prepared.checkout;
     // A cancelled batch publishes nothing. A waiter that arrived after an
     // observation expired also needs a replacement or a regular per-path read.
@@ -199,52 +198,87 @@ async function readPendingNavigationCheckout(
 
 export async function readNavigationCheckouts(
   directories: readonly string[],
-  options: { fresh: boolean; verified: boolean; checkpoint: () => void },
+  options: { fresh: boolean; verified: boolean; signal?: AbortSignal; checkpoint: () => void },
 ): Promise<Array<NavigationCheckout | undefined>> {
-  const { fresh, verified, checkpoint } = options;
+  const { fresh, verified, signal, checkpoint } = options;
+  signal?.throwIfAborted();
   if (hasGitDiscoveryOverrides()) return directories.map(() => undefined);
+  const check = () => {
+    signal?.throwIfAborted();
+    checkpoint();
+  };
   if (fresh || verified) {
-    const observations = await observeNavigationCheckouts(directories, verified, checkpoint);
+    const observations = await observeNavigationCheckouts(directories, verified, check);
     return observations.map(({ checkout }) => checkout);
   }
 
-  checkpoint();
+  check();
   const requestedAt = performance.now();
   const claims = new Map<string, PromiseWithResolvers<NavigationCheckoutSample | undefined>>();
-  // Reserve before yielding to I/O. A batch validates its own observations
-  // before awaiting paths owned by other batches.
+  const abandon = () => {
+    for (const [cwd, claim] of claims) {
+      if (pendingNavigationCheckouts.get(cwd) === claim.promise) pendingNavigationCheckouts.delete(cwd);
+      claim.resolve(undefined);
+    }
+    claims.clear();
+  };
+  const cancelled = signal && Promise.withResolvers<never>();
+  // Use one abort listener for the batch even when several paths await other owners.
+  void cancelled?.promise.catch(() => {});
+  const onAbort = () => {
+    abandon();
+    cancelled?.reject(signal?.reason);
+  };
+  const wait = <T>(pending: Promise<T>): Promise<T> =>
+    cancelled ? Promise.race([pending, cancelled.promise]) : pending;
+  const readClaim = async (cwd: string, pending: PendingNavigationCheckout): Promise<NavigationCheckout | undefined> => {
+    const prepared = await wait(pending);
+    check();
+    if (prepared && requestedAt < prepared.observedAt + NAVIGATION_CHECKOUT_TTL_MS) return prepared.checkout;
+    // A surviving reader can acquire a fresh claim. Give its single-path
+    // retry a separate signal so concurrent retries share no listener limit.
+    const retryOptions = signal ? { ...options, signal: AbortSignal.any([signal]) } : options;
+    return (await readNavigationCheckouts([cwd], retryOptions))[0];
+  };
+
+  // Reserve before yielding. A batch validates its own observations before
+  // awaiting foreign claims, and still drains admitted I/O on cancellation.
   const readers = directories.map((cwd) => {
     const pending = pendingNavigationCheckouts.get(cwd);
-    if (pending) return () => readPendingNavigationCheckout(cwd, pending, requestedAt, checkpoint);
+    if (pending) return () => readClaim(cwd, pending);
     const existing = navigationCheckouts.readExisting(cwd);
-    if (existing) return () => existing;
+    if (existing) return () => wait(existing);
     const claim = Promise.withResolvers<NavigationCheckoutSample | undefined>();
     claims.set(cwd, claim);
     pendingNavigationCheckouts.set(cwd, claim.promise);
-    return () => readPendingNavigationCheckout(cwd, claim.promise, requestedAt, checkpoint);
+    return () => readClaim(cwd, claim.promise);
   });
 
+  signal?.addEventListener("abort", onAbort, { once: true });
   try {
-    if (claims.size) {
-      const observations = await observeNavigationCheckouts([...claims.keys()], false, checkpoint);
-      for (const { cwd, checkout, observedAt } of observations) {
-        navigationCheckouts.prime(cwd, checkout, observedAt);
-        claims.get(cwd)!.resolve({ checkout, observedAt });
+    try {
+      if (claims.size) {
+        const observations = await observeNavigationCheckouts([...claims.keys()], false, check);
+        check();
+        for (const { cwd, checkout, observedAt } of observations) {
+          const claim = claims.get(cwd);
+          if (!claim || pendingNavigationCheckouts.get(cwd) !== claim.promise) continue;
+          navigationCheckouts.prime(cwd, checkout, observedAt);
+          claim.resolve({ checkout, observedAt });
+        }
       }
+    } finally {
+      abandon();
     }
+    const results = await collectConcurrent(readers, 16, async (read) => {
+      check();
+      return await read();
+    });
+    check();
+    return results;
   } finally {
-    // Settle abandoned claims even if the batch exits at an owner checkpoint.
-    for (const [cwd, claim] of claims) {
-      pendingNavigationCheckouts.delete(cwd);
-      claim.resolve(undefined);
-    }
+    signal?.removeEventListener("abort", onAbort);
   }
-  const results = await collectConcurrent(readers, 16, async (read) => {
-    checkpoint();
-    return await read();
-  });
-  checkpoint();
-  return results;
 }
 
 async function observeNavigationCheckouts(
