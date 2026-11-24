@@ -30,46 +30,7 @@ const BASH_EXIT_TRAP =
  * KILL_ON_JOB_CLOSE job. Assignment is part of CreateProcess itself: killing
  * this launcher cannot strand an unassigned suspended process holding pipes.
  */
-const WINDOWS_JOB_WRAPPER_SCRIPT = String.raw`
-$ErrorActionPreference = 'Stop'
-$application = [string]$env:PWRAGENT_JOB_WRAPPER_EXECUTABLE
-$argumentsJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([string]$env:PWRAGENT_JOB_WRAPPER_ARGUMENTS))
-$arguments = @((ConvertFrom-Json -InputObject $argumentsJson) | ForEach-Object { [string]$_ })
-$workingDirectory = [string]$env:PWRAGENT_JOB_WRAPPER_CWD
-$readyFile = [string]$env:PWRAGENT_JOB_WRAPPER_READY_FILE
-$exitFile = [string]$env:PWRAGENT_JOB_WRAPPER_EXIT_FILE
-$startupStartedAt = [long]$env:PWRAGENT_JOB_WRAPPER_STARTED_AT
-$startupStatusFile = [string]$env:PWRAGENT_JOB_WRAPPER_STARTUP_STATUS_FILE
-$stopFile = [string]$env:PWRAGENT_JOB_WRAPPER_STOP_FILE
-$terminateDescendants = $env:PWRAGENT_JOB_WRAPPER_TERMINATE_DESCENDANTS -eq '1'
-Remove-Item Env:PWRAGENT_JOB_WRAPPER_EXECUTABLE -ErrorAction SilentlyContinue
-Remove-Item Env:PWRAGENT_JOB_WRAPPER_ARGUMENTS -ErrorAction SilentlyContinue
-Remove-Item Env:PWRAGENT_JOB_WRAPPER_CWD -ErrorAction SilentlyContinue
-Remove-Item Env:PWRAGENT_JOB_WRAPPER_READY_FILE -ErrorAction SilentlyContinue
-Remove-Item Env:PWRAGENT_JOB_WRAPPER_STARTED_AT -ErrorAction SilentlyContinue
-Remove-Item Env:PWRAGENT_JOB_WRAPPER_STARTUP_STATUS_FILE -ErrorAction SilentlyContinue
-Remove-Item Env:PWRAGENT_JOB_WRAPPER_STOP_FILE -ErrorAction SilentlyContinue
-Remove-Item Env:PWRAGENT_JOB_WRAPPER_TERMINATE_DESCENDANTS -ErrorAction SilentlyContinue
-
-function Write-StartupPhase {
-  param(
-    [Parameter(Mandatory = $true)][string]$Phase,
-    [string]$Detail = ''
-  )
-  try {
-    $elapsedMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - $startupStartedAt
-    $encodedDetail = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Detail))
-    [IO.File]::AppendAllText(
-      $startupStatusFile,
-      ([string]$elapsedMs + [char]9 + $Phase + [char]9 + $encodedDetail + [Environment]::NewLine))
-  } catch {
-    # Startup telemetry is best-effort and must never weaken Job ownership.
-  }
-}
-
-Write-StartupPhase -Phase 'powershell-started'
-
-$source = @'
+export const WINDOWS_JOB_RUNNER_SOURCE = String.raw`
 using System;
 using System.ComponentModel;
 using System.IO;
@@ -77,7 +38,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 
-public static class PwrAgentWindowsJobRunner
+public static partial class PwrAgentWindowsJobRunner
 {
     private const uint CREATE_SUSPENDED = 0x00000004;
     private const uint CREATE_NO_WINDOW = 0x08000000;
@@ -447,7 +408,7 @@ public static class PwrAgentWindowsJobRunner
             // The kernel assigned the Job before CreateProcess returned. A
             // separate AssignProcessToJobObject leaves a fatal-kill race here.
             WriteStartupPhase(startupStatusFile, startupStartedAt, "target-assigned");
-            // A stop received during PowerShell startup fences the suspended
+            // A stop received during launcher startup fences the suspended
             // target before it can run. The launcher keeps its Job handle.
             bool stopped = StopJobIfRequested(job, stopFile);
             if (!stopped)
@@ -523,6 +484,49 @@ public static class PwrAgentWindowsJobRunner
         }
     }
 }
+`;
+
+const WINDOWS_JOB_WRAPPER_SCRIPT = String.raw`
+$ErrorActionPreference = 'Stop'
+$application = [string]$env:PWRAGENT_JOB_WRAPPER_EXECUTABLE
+$argumentsJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([string]$env:PWRAGENT_JOB_WRAPPER_ARGUMENTS))
+$arguments = @((ConvertFrom-Json -InputObject $argumentsJson) | ForEach-Object { [string]$_ })
+$workingDirectory = [string]$env:PWRAGENT_JOB_WRAPPER_CWD
+$readyFile = [string]$env:PWRAGENT_JOB_WRAPPER_READY_FILE
+$exitFile = [string]$env:PWRAGENT_JOB_WRAPPER_EXIT_FILE
+$startupStartedAt = [long]$env:PWRAGENT_JOB_WRAPPER_STARTED_AT
+$startupStatusFile = [string]$env:PWRAGENT_JOB_WRAPPER_STARTUP_STATUS_FILE
+$stopFile = [string]$env:PWRAGENT_JOB_WRAPPER_STOP_FILE
+$terminateDescendants = $env:PWRAGENT_JOB_WRAPPER_TERMINATE_DESCENDANTS -eq '1'
+Remove-Item Env:PWRAGENT_JOB_WRAPPER_EXECUTABLE -ErrorAction SilentlyContinue
+Remove-Item Env:PWRAGENT_JOB_WRAPPER_ARGUMENTS -ErrorAction SilentlyContinue
+Remove-Item Env:PWRAGENT_JOB_WRAPPER_CWD -ErrorAction SilentlyContinue
+Remove-Item Env:PWRAGENT_JOB_WRAPPER_READY_FILE -ErrorAction SilentlyContinue
+Remove-Item Env:PWRAGENT_JOB_WRAPPER_STARTED_AT -ErrorAction SilentlyContinue
+Remove-Item Env:PWRAGENT_JOB_WRAPPER_STARTUP_STATUS_FILE -ErrorAction SilentlyContinue
+Remove-Item Env:PWRAGENT_JOB_WRAPPER_STOP_FILE -ErrorAction SilentlyContinue
+Remove-Item Env:PWRAGENT_JOB_WRAPPER_TERMINATE_DESCENDANTS -ErrorAction SilentlyContinue
+
+function Write-StartupPhase {
+  param(
+    [Parameter(Mandatory = $true)][string]$Phase,
+    [string]$Detail = ''
+  )
+  try {
+    $elapsedMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - $startupStartedAt
+    $encodedDetail = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Detail))
+    [IO.File]::AppendAllText(
+      $startupStatusFile,
+      ([string]$elapsedMs + [char]9 + $Phase + [char]9 + $encodedDetail + [Environment]::NewLine))
+  } catch {
+    # Startup telemetry is best-effort and must never weaken Job ownership.
+  }
+}
+
+Write-StartupPhase -Phase 'powershell-started'
+
+$source = @'
+${WINDOWS_JOB_RUNNER_SOURCE}
 '@
 
 $invokingNativeJob = $false
@@ -566,6 +570,7 @@ export type WindowsJobWrappedCommand = {
   readyFilePath: string;
   startupStartedAt: number;
   startupStatusFilePath: string;
+  compiledLauncher?: true;
 };
 
 export type WindowsJobStartupPhase = {
@@ -583,7 +588,7 @@ export type WindowsJobReadyPoll = {
 };
 
 export type WindowsJobStartupTimeout = {
-  stage: "overall-ready" | "powershell-start" | "progress-stall";
+  stage: "overall-ready" | "powershell-start" | "launcher-start" | "progress-stall";
   telemetry: WindowsJobStartupTelemetry;
   timeoutMs: number;
 };
@@ -657,6 +662,8 @@ export function formatWindowsJobStartupTimeout(
   if (timeout.stage === "powershell-start") {
     timeoutDescription =
       `PowerShell host did not begin executing within ${timeout.timeoutMs}ms`;
+  } else if (timeout.stage === "launcher-start") {
+    timeoutDescription = `compiled launcher did not begin executing within ${timeout.timeoutMs}ms`;
   } else if (timeout.stage === "progress-stall") {
     const lastPhase = timeout.telemetry.phases.at(-1);
     timeoutDescription =
@@ -674,7 +681,7 @@ export function formatWindowsJobStartupTimeout(
 export function startWindowsJobReadyPoll(params: {
   launch: Pick<
     WindowsJobWrappedCommand,
-    "readyFilePath" | "startupStartedAt" | "startupStatusFilePath"
+    "readyFilePath" | "startupStartedAt" | "startupStatusFilePath" | "compiledLauncher"
   >;
   onReady: (telemetry: WindowsJobStartupTelemetry) => void;
   onTimeout: (timeout: WindowsJobStartupTimeout) => void;
@@ -693,8 +700,10 @@ export function startWindowsJobReadyPoll(params: {
     ?? WINDOWS_JOB_STARTUP_PROGRESS_TIMEOUT_MS;
   const overallReadyDeadline =
     params.launch.startupStartedAt + overallReadyTimeoutMs;
-  const powershellStartDeadline =
+  const hostStartDeadline =
     params.launch.startupStartedAt + powershellStartTimeoutMs;
+  const hostStartPhase = params.launch.compiledLauncher ? "native-job-started" : "powershell-started";
+  const hostStartStage = params.launch.compiledLauncher ? "launcher-start" : "powershell-start";
   let cancelled = false;
   let timer: NodeJS.Timeout | undefined;
   const cancel = () => {
@@ -713,30 +722,28 @@ export function startWindowsJobReadyPoll(params: {
       params.onReady(telemetry);
       return;
     }
-    const powershellStarted = telemetry.phases.find(
-      ({ phase }) => phase === "powershell-started",
-    );
+    const hostStarted = telemetry.phases.find(({ phase }) => phase === hostStartPhase);
     const now = Date.now();
-    if (!powershellStarted && now >= powershellStartDeadline) {
+    if (!hostStarted && now >= hostStartDeadline) {
       cancelled = true;
       params.onTimeout({
-        stage: "powershell-start",
+        stage: hostStartStage,
         telemetry,
         timeoutMs: powershellStartTimeoutMs,
       });
       return;
     }
-    if (powershellStarted) {
-      if (powershellStarted.elapsedMs > powershellStartTimeoutMs) {
+    if (hostStarted) {
+      if (hostStarted.elapsedMs > powershellStartTimeoutMs) {
         cancelled = true;
         params.onTimeout({
-          stage: "powershell-start",
+          stage: hostStartStage,
           telemetry,
           timeoutMs: powershellStartTimeoutMs,
         });
         return;
       }
-      const lastPhase = telemetry.phases.at(-1) ?? powershellStarted;
+      const lastPhase = telemetry.phases.at(-1) ?? hostStarted;
       const progressDeadline =
         params.launch.startupStartedAt
         + lastPhase.elapsedMs
@@ -786,6 +793,7 @@ export function wrapCommandInWindowsJob(params: {
   // (for example Git-for-Windows Bash) must keep the default natural drain.
   terminateDescendantsOnExit?: boolean;
   keepDrainEvidenceOnStop?: boolean;
+  compiledLauncher?: string;
 }): WindowsJobWrappedCommand {
   const stateDirectory = mkdtempSync(
     path.join(os.tmpdir(), "pwragent-windows-job-"),
@@ -800,10 +808,12 @@ export function wrapCommandInWindowsJob(params: {
     encoding: "utf8",
     mode: 0o600,
   });
-  writeFileSync(scriptPath, WINDOWS_JOB_WRAPPER_SCRIPT, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
+  if (!params.compiledLauncher) {
+    writeFileSync(scriptPath, WINDOWS_JOB_WRAPPER_SCRIPT, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+  }
   const systemRoot = readSystemRoot(params.env);
   const powershell = systemRoot
     ? path.win32.join(
@@ -824,8 +834,8 @@ export function wrapCommandInWindowsJob(params: {
   }
   let stopRequested = false;
   return {
-    command: powershell,
-    args: [
+    command: params.compiledLauncher ?? powershell,
+    args: params.compiledLauncher ? wrappedArgs : [
       "-NoLogo",
       "-NoProfile",
       "-NonInteractive",
@@ -834,6 +844,7 @@ export function wrapCommandInWindowsJob(params: {
       "-File",
       scriptPath,
     ],
+    ...(params.compiledLauncher ? { compiledLauncher: true } : {}),
     cleanup: () => {
       rmSync(stateDirectory, {
         force: true,
@@ -853,7 +864,7 @@ export function wrapCommandInWindowsJob(params: {
       ...params.env,
       [STOP_FILE_ENV]: params.keepDrainEvidenceOnStop ? stopFilePath : "",
       [EXECUTABLE_ENV]: params.command,
-      [ARGUMENTS_ENV]: encodeArgument(JSON.stringify(wrappedArgs)),
+      [ARGUMENTS_ENV]: params.compiledLauncher ? undefined : encodeArgument(JSON.stringify(wrappedArgs)),
       [WORKING_DIRECTORY_ENV]: params.cwd ?? process.cwd(),
       [READY_FILE_ENV]: readyFilePath,
       [EXIT_FILE_ENV]: exitFilePath,

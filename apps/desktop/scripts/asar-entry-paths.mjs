@@ -24,6 +24,7 @@ export function requiredPackagedRuntimeFiles(platform, arch) {
     ...stagedNativeFiles(platform),
     { entry: `/node_modules/${claudePackage}/${platform === "win32" ? "claude.exe" : "claude"}`, unpacked: true },
   ];
+  if (platform === "win32") stagedNatives.push({ entry: "/out/main/pwragent-windows-job.exe", unpacked: true });
   if (platform !== "win32" || arch !== "x64") {
     return stagedNatives;
   }
