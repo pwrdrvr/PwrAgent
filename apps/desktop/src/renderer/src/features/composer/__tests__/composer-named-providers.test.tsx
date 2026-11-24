@@ -149,8 +149,9 @@ describe("named Codex model providers in the composer", () => {
   it("lists each provider by its own name in the Provider picker, and says why one offers nothing", () => {
     renderLaunchpad();
     const list = openDropdown("Provider");
-    // The main list holds the providers that work now; the rest wait one level down.
-    expect(composerDropdownOptionLabels(list)).toEqual(["OpenAI", "MathOS", "Unavailable"]);
+    // The main list holds the providers that work now. The rest wait one level
+    // down, at the end of the menu farthest from the trigger.
+    expect(composerDropdownOptionLabels(list)).toEqual(["Unavailable", "OpenAI", "MathOS"]);
     expect(within(list).getByRole("option", { name: /MathOS/ })).toHaveTextContent("Runs on Codex · 301 models");
     const unavailable = openUnavailableProviders(list);
     expect(composerDropdownOptionLabels(unavailable)).toEqual(["Refuseless", "Acme Lab", "Flint"]);

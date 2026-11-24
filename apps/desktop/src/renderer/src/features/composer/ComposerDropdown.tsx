@@ -152,6 +152,18 @@ export function ComposerDropdown(props: {
   const otherButtonRef = useRef<HTMLButtonElement>(null);
   const firstOtherOptionRef = useRef<HTMLButtonElement>(null);
   const otherMenuRef = useRef<HTMLDivElement>(null);
+  // The Other row holds the choices least likely to be wanted, so it sits
+  // at the end of the list farthest from the trigger: first when the menu
+  // opens up, last when it opens down.
+  const otherFirst = props.menuPlacement !== "below";
+  // The flyout runs from the Other row along the menu, toward the trigger:
+  // top edges aligned when the row is first, bottom edges when it is last.
+  // It stays inside the window.
+  const otherMenuTop = useCallback((row: DOMRect, height: number): number => {
+    const padding = 8;
+    const anchored = otherFirst ? row.top : row.bottom - height;
+    return Math.max(padding, Math.min(anchored, window.innerHeight - height - padding));
+  }, [otherFirst]);
   const otherOptions = props.otherOptions ?? [];
   const groups = (props.groups ?? []).filter((group) => group.options.length > 0);
   const groupOptions = groups.flatMap((group) => group.options);
@@ -217,22 +229,21 @@ export function ComposerDropdown(props: {
   }, [open, showingOther]);
 
   // The flyout is first placed from an estimate of 40px rows, but a row
-  // with a description line is taller. Once it is laid out, line its real
-  // bottom up with the Other row's bottom, still inside the window.
+  // with a description line is taller. Once it is laid out, place it again
+  // from its real height.
   useLayoutEffect(() => {
     if (!open || !showingOther) return;
     const row = otherButtonRef.current?.getBoundingClientRect();
     const height = otherMenuRef.current?.getBoundingClientRect().height;
     if (!row || !height) return;
-    const padding = 8;
-    const top = Math.max(padding, Math.min(row.bottom - height, window.innerHeight - height - padding));
+    const top = otherMenuTop(row, height);
     setOtherMenuPosition((current) => (Math.abs(current.top - top) < 0.5 ? current : { ...current, top }));
-  }, [open, showingOther, otherOptions.length]);
+  }, [open, showingOther, otherOptions.length, otherMenuTop]);
 
   useEffect(() => {
     if (!open || !props.triggerRole) return;
     const selected = ref.current?.querySelector<HTMLButtonElement>('[role="option"][aria-selected="true"]');
-    const first = ref.current?.querySelector<HTMLButtonElement>('[role="option"]:not(:disabled)');
+    const first = ref.current?.querySelector<HTMLButtonElement>('[role="option"]:not(:disabled):not([aria-haspopup])');
     (selected ?? first)?.focus();
   }, [open, props.triggerRole, ref]);
 
@@ -325,39 +336,38 @@ export function ComposerDropdown(props: {
         : left >= padding
           ? left
           : Math.max(padding, Math.min(row.left, window.innerWidth - width - padding));
-      setOtherMenuPosition({
-        left: nextLeft,
-        top: Math.max(padding, Math.min(row.bottom - height, window.innerHeight - height - padding)),
-      });
+      setOtherMenuPosition({ left: nextLeft, top: otherMenuTop(row, height) });
     }
     setShowOther(true);
   };
 
+  const otherRow = otherOptions.length > 0 ? (
+    <button
+      aria-controls={showingOther ? otherListboxId : undefined}
+      aria-expanded={showingOther}
+      aria-haspopup="listbox"
+      aria-selected={false}
+      className="composer-dropdown__option"
+      ref={otherButtonRef}
+      role="option"
+      type="button"
+      onClick={toggleOtherMenu}
+    >
+      <span aria-hidden="true" className="composer-dropdown__check" />
+      <span className="composer-dropdown__option-label">{props.otherLabel ?? "Other"}</span>
+      <span aria-hidden="true" className="composer-dropdown__option-chevron">›</span>
+    </button>
+  ) : null;
+
   const listContent = (
     <>
+      {otherFirst ? otherRow : null}
       {groups.length > 0 && props.optionsLabel && props.options.length > 0 ? (
         <div aria-hidden="true" className="composer-dropdown__group-label">
           <span>{props.optionsLabel}</span>
         </div>
       ) : null}
       {renderOptions(props.options, listboxId, false)}
-      {otherOptions.length > 0 ? (
-        <button
-          aria-controls={showingOther ? otherListboxId : undefined}
-          aria-expanded={showingOther}
-          aria-haspopup="listbox"
-          aria-selected={false}
-          className="composer-dropdown__option"
-          ref={otherButtonRef}
-          role="option"
-          type="button"
-          onClick={toggleOtherMenu}
-        >
-          <span aria-hidden="true" className="composer-dropdown__check" />
-          <span className="composer-dropdown__option-label">{props.otherLabel ?? "Other"}</span>
-          <span aria-hidden="true" className="composer-dropdown__option-chevron">›</span>
-        </button>
-      ) : null}
       {groups.map((group, groupIndex) => (
         <div
           aria-label={group.label}
@@ -374,6 +384,7 @@ export function ComposerDropdown(props: {
           {renderOptions(group.options, `${listboxId}-group-${groupIndex}`, false)}
         </div>
       ))}
+      {otherFirst ? null : otherRow}
     </>
   );
 

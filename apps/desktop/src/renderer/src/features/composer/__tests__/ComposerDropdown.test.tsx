@@ -150,7 +150,7 @@ describe("ComposerDropdown Other models", () => {
     fireEvent.click(trigger);
     expect(screen.getAllByRole("option").map((option) =>
       option.querySelector(".composer-dropdown__option-label")?.textContent,
-    )).toEqual(["GPT-6.1-Sol", "GPT-6-Sol", "Other"]);
+    )).toEqual(["Other", "GPT-6.1-Sol", "GPT-6-Sol"]);
     expect(screen.queryByRole("option", { name: "GPT-5.6-Sol" })).toBeNull();
 
     fireEvent.click(screen.getByRole("option", { name: "Other" }));
@@ -253,20 +253,24 @@ describe("ComposerDropdown menu action", () => {
     expect(action.compareDocumentPosition(listbox) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
   });
 
-  it("lines a flyout of described rows up with the Other row, from its real height", () => {
+  function mockFlyoutGeometry(row: DOMRect) {
     vi.spyOn(window, "innerHeight", "get").mockReturnValue(800);
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-      // The Other row ends at y=600. The flyout holds three described rows,
-      // 60px each, taller than the 40px rows the first placement assumes.
+      // Three described rows, 60px each: taller than the 40px rows the
+      // first placement assumes (3 x 40 + 12 = 132).
       if (this.matches(".composer-dropdown__menu--other")) return new DOMRect(0, 0, 260, 192);
-      if (this.getAttribute("aria-haspopup") === "listbox") return new DOMRect(0, 560, 260, 40);
+      if (this.getAttribute("aria-haspopup") === "listbox") return row;
       return new DOMRect(0, 0, 0, 0);
     });
+  }
+
+  function renderUnavailable(menuPlacement?: "below") {
     render(
       <ComposerDropdown
         ariaLabel="Provider"
+        menuPlacement={menuPlacement}
         onChange={vi.fn()}
-        options={[{ value: "codex", label: "OpenAI" }]}
+        options={[{ value: "codex", label: "OpenAI" }, { value: "claude", label: "Claude" }]}
         otherLabel="Unavailable"
         otherOptions={["juniper", "slate", "acme"].map((value) => ({
           value, label: value, description: "Runs on Codex · offline",
@@ -275,9 +279,39 @@ describe("ComposerDropdown menu action", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /^Provider(?::|$)/ }));
+  }
+
+  it("puts the flyout row farthest from the trigger: first when the menu opens up", () => {
+    renderUnavailable();
+    expect(composerOptionLabels()).toEqual(["Unavailable", "OpenAI", "Claude"]);
+  });
+
+  it("puts the flyout row farthest from the trigger: last when the menu opens down", () => {
+    renderUnavailable("below");
+    expect(composerOptionLabels()).toEqual(["OpenAI", "Claude", "Unavailable"]);
+  });
+
+  it("runs a flyout from the first row downward, inside the window, from its real height", () => {
+    // The row spans y=640-680 in an 800px window. Aligned with the row's top,
+    // the real 192px flyout would end at 832, so it rises to 800 - 8 - 192.
+    // The 40px-row estimate alone left it at 640, hanging past the window.
+    mockFlyoutGeometry(new DOMRect(0, 640, 260, 40));
+    renderUnavailable();
     fireEvent.click(screen.getByRole("option", { name: "Unavailable" }));
-    // 600 - 192: the flyout's bottom meets the row's bottom. The 40px
+    expect(screen.getByRole("listbox", { name: "Provider: Unavailable" })).toHaveStyle({ top: "600px" });
+  });
+
+  it("runs a flyout from the last row upward, from its real height", () => {
+    // The row ends at y=600: the flyout's bottom meets it at 600 - 192. The
     // estimate alone put its top at 600 - 132 = 468, 60px too low.
+    mockFlyoutGeometry(new DOMRect(0, 560, 260, 40));
+    renderUnavailable("below");
+    fireEvent.click(screen.getByRole("option", { name: "Unavailable" }));
     expect(screen.getByRole("listbox", { name: "Provider: Unavailable" })).toHaveStyle({ top: "408px" });
   });
 });
+
+function composerOptionLabels(): string[] {
+  return screen.getAllByRole("option").map((option) =>
+    option.querySelector(".composer-dropdown__option-label")?.textContent ?? "");
+}
