@@ -262,9 +262,21 @@ export function acpToolUpdateNotifications(params: {
     return [];
   }
 
-  const item = antigravityFileEditItem(params) ?? liveItemForAcpToolUpdate(params.update);
+  const item = liveItemForAcpToolUpdate(params.update);
   if (!item) {
     return [];
+  }
+  if (params.backendId === "acp:antigravity" && item.type === "commandExecution") {
+    const edit = readAcpFileEdit(params.update, {
+      wholeFileDiffContent: true, antigravity: true, cwd: params.cwd,
+    });
+    if (edit) {
+      // Keep commandExecution and its invocation metadata for tool accounting.
+      item.acpFileEdit = true;
+      item.title = `${edit.verb} ${fileBaseName(edit.path)}`;
+      item.path = edit.path;
+      item.fileDiff = edit.fileDiff;
+    }
   }
 
   const method = isTerminalToolStatus(item.status) ? "item/completed" : "item/started";
@@ -278,32 +290,6 @@ export function acpToolUpdateNotifications(params: {
       },
     } as AppServerNotification,
   ];
-}
-
-function antigravityFileEditItem(params: {
-  backendId?: string;
-  cwd?: string;
-  update: Record<string, unknown>;
-}): Record<string, unknown> | undefined {
-  if (params.backendId !== "acp:antigravity") {
-    return undefined;
-  }
-  const id = readAcpToolCallId(params.update);
-  const edit = readAcpFileEdit(params.update, { wholeFileDiffContent: true, cwd: params.cwd });
-  if (!id || !edit) {
-    return undefined;
-  }
-  const status = normalizeAcpToolStatus(readString(params.update, "status"));
-  const output = status === "failed" ? readAcpToolOutput(params.update) : undefined;
-  return {
-    type: "acpFileEdit",
-    id,
-    title: `${edit.verb} ${fileBaseName(edit.path)}`,
-    path: edit.path,
-    status,
-    ...(edit.fileDiff ? { fileDiff: edit.fileDiff } : {}),
-    ...(output ? { data: { output } } : {}),
-  };
 }
 
 export function acpUsageNotification(params: {

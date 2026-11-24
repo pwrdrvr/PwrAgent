@@ -450,6 +450,7 @@ function liveToolNotificationFingerprint(
     commandActions: item.commandActions,
     outputHash: hashString(output),
     outputLength: output.length,
+    title: item.title,
     path: item.path,
     fileDiff: fileDiff && { ...fileDiff, diff: diff && hashString(diff), diffLength: diff?.length },
   });

@@ -9,7 +9,8 @@ import {
   AcpSessionReplayNormalizer,
   acpSessionReplayNormalizerOptions,
 } from "../acp/acp-session-normalizer";
-import { acpToolUpdateNotifications } from "../acp/acp-live-notifications";
+import { AcpLiveToolUpdateResolver, acpToolUpdateNotifications } from "../acp/acp-live-notifications";
+import { toolInvocationFromNotification } from "../app-server/tool-invocation-accounting";
 import { applyUnifiedDiff, fileLines, parseHunks } from "./helpers/unified-diff";
 
 // ACP `diff` content is `{path, oldText, newText}` with no position. Gemini
@@ -208,6 +209,65 @@ describe("whole-file ACP edit diffs", () => {
     });
   });
 
+  it("treats an explicit empty Antigravity before-image as an existing file", () => {
+    const frames = antigravityEditFrames({ oldText: "", newText: "first line\n" });
+    for (const frame of frames) frame.name = "write_file";
+    expect(fileDiffOf(replay("acp:antigravity", frames))).toMatchObject({
+      kind: "update",
+      additions: 1,
+      removals: 0,
+      diff: expect.stringContaining("--- a/work/notes/checkers.md\n+++ b/work/notes/checkers.md"),
+    });
+  });
+
+  it("retains the write identity on a sparse completion, even if the path also arrives late", () => {
+    const frames = antigravityEditFrames({ newText: "new file\n" });
+    const start = { ...frames[0], rawInput: {}, locations: [] };
+    const completion = {
+      sessionUpdate: "tool_call_update", toolCallId: frames[0]!.toolCallId,
+      status: "completed", content: frames[1]!.content,
+    };
+    const resolver = new AcpLiveToolUpdateResolver();
+    const context = { backendId: "acp:antigravity", threadId: sessionId };
+    resolver.resolve({ ...context, update: start });
+    const resolved = resolver.resolve({ ...context, update: completion })!;
+    const [notification] = acpToolUpdateNotifications({ ...context, update: resolved });
+    const [activity] = activities(replay(context.backendId, [start, completion]));
+    expect(activity?.details).toHaveLength(1);
+    expect(activity?.details[0]).toMatchObject({
+      kind: "write", label: "Wrote checkers.md", fileDiff: { kind: "add" },
+    });
+    expect(notification).toMatchObject({
+      params: { item: {
+        id: activity?.details[0]?.id, title: activity?.details[0]?.label,
+        fileDiff: activity?.details[0]?.fileDiff,
+      } },
+    });
+  });
+
+  it.each(["in_progress", "completed", "failed"])("accounts for Antigravity edits with status %s", (status) => {
+    const [start, completed] = antigravityEditFrames({ oldText: "old\n", newText: "new\n" });
+    const [notification] = acpToolUpdateNotifications({
+      backendId: "acp:antigravity", threadId: sessionId, turnId: "edit-turn",
+      update: { ...(status === "in_progress" ? start : completed), status },
+    });
+    expect(toolInvocationFromNotification({
+      backend: "acp:antigravity", notification: notification!,
+    })).toMatchObject({ itemId: "antigravity-edit", toolName: "edit", status });
+  });
+
+  it("caps a replacement with more lines than a JavaScript call can take as arguments", () => {
+    const lines = 150_000;
+    const frames = antigravityEditFrames({
+      oldText: "old\n".repeat(lines),
+      newText: "new\n".repeat(lines),
+    });
+    expect(fileDiffOf(replay("acp:antigravity", frames))).toMatchObject({
+      kind: "update", additions: lines, removals: lines, diff: "",
+      omittedReason: "This diff is too large to show.",
+    });
+  });
+
   it("property: live and replayed Antigravity patches reconstruct the provider's after image", () => {
     const line = fc.constantFrom("alpha", "beta", "gamma", "");
     fc.assert(fc.property(fc.array(line, { maxLength: 30 }), fc.nat(), (lines, offset) => {
@@ -226,7 +286,7 @@ describe("whole-file ACP edit diffs", () => {
       });
       expect(notification).toMatchObject({
         method: "item/completed",
-        params: { item: { type: "acpFileEdit", fileDiff: saved } },
+        params: { item: { type: "commandExecution", acpFileEdit: true, fileDiff: saved } },
       });
       expect(saved).toBeDefined();
       expect(applyUnifiedDiff(before, saved!.diff)).toEqual(after);

@@ -756,7 +756,7 @@ export function buildLiveToolDetails(
     return report ? [buildSubAgentActivityDetail(report)] : [];
   }
 
-  if (itemType === "acpfileedit") {
+  if (itemType === "commandexecution" && item.acpFileEdit === true) {
     return buildLiveFileEditDetails(item);
   }
 
@@ -1013,19 +1013,27 @@ export function summarizeLiveActivity(details: AppServerThreadActivityDetail[]):
   return parts.join(" · ") || "Activity";
 }
 
+export function hasTranscriptFileDiff(detail: AppServerThreadActivityDetail): boolean {
+  const diff = detail.fileDiff;
+  return Boolean(diff?.diff || diff?.diffRef || diff?.diffRefs?.length || diff?.omittedReason);
+}
+
 function buildLiveFileEditDetails(item: Record<string, unknown>): AppServerThreadActivityDetail[] {
   const id = readString(item, "id");
   const label = readString(item, "title");
   const path = readString(item, "path");
   if (!id || !label || !path) return [];
   const fileDiff = item.fileDiff as AppServerThreadActivityDetail["fileDiff"];
-  const output = readString(item.data as Record<string, unknown> | undefined, "output");
+  const status = normalizeItemStatus(item.status);
+  const output = status === "failed"
+    ? readString(item.data as Record<string, unknown> | undefined, "output")
+    : undefined;
   return [{
-    id: `${id}:detail`,
+    id,
     kind: "write",
     label,
     path,
-    status: normalizeItemStatus(item.status),
+    status,
     ...(fileDiff ? { fileDiff } : {}),
     ...(output ? { command: { displayCommand: label, source: "tool", output } } : {}),
   }];
@@ -1108,6 +1116,12 @@ export function mergeActivityDetails(
     const existingIndex = merged.findIndex((entry) => entry.id === detail.id);
     if (existingIndex >= 0) {
       const existing = merged[existingIndex];
+      // The path can arrive after a generic tool start. The edit now owns the
+      // detail, including its label and any failure output.
+      if (detail.kind === "write" && detail.path && existing?.kind !== "write") {
+        merged[existingIndex] = detail;
+        continue;
+      }
       const command = mergeCommandDetail(existing?.command, detail.command);
       merged[existingIndex] = {
         ...existing,

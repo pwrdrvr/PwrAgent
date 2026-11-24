@@ -9,7 +9,7 @@ import type {
 import { turnUsageEntryTurnId } from "@pwragent/shared/thread-usage-display";
 import { formatElapsedMs } from "../../lib/format-duration";
 import { isRewindMarkerEntry } from "./rewind-marker-entries";
-import { formatFileEditActivitySummary } from "./live-transcript-activity";
+import { formatFileEditActivitySummary, hasTranscriptFileDiff } from "./live-transcript-activity";
 
 export type TranscriptRenderItem =
   | {
@@ -666,9 +666,7 @@ function isTerminalTurnFailureActivity(
 }
 
 function isFileDiffActivity(entry: AppServerThreadActivityEntry): boolean {
-  return entry.details.some((detail) =>
-    Boolean(detail.fileDiff?.diff || detail.fileDiff?.omittedReason)
-  );
+  return entry.details.some(hasTranscriptFileDiff);
 }
 
 function isTokenUsageActivity(entry: AppServerThreadActivityEntry): boolean {
