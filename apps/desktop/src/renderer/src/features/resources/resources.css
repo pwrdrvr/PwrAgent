@@ -1045,3 +1045,93 @@
   overflow: visible;
   white-space: normal;
 }
+
+/* Last 30 minutes: held units stacked under waiting units, one bar per
+   30 seconds, against a dashed capacity line. Series colors are the Usage
+   Activity chart's first two, which every theme tunes for non-text contrast. */
+.resources-usage {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+}
+
+.resources-usage__plot {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-bottom: 1px solid var(--border-subtle);
+  overflow: visible;
+}
+
+.resources-usage__held,
+.resources-usage__swatch--held {
+  fill: var(--usage-series-1);
+  background: var(--usage-series-1);
+}
+
+.resources-usage__waiting,
+.resources-usage__swatch--waiting {
+  fill: var(--usage-series-2);
+  background: var(--usage-series-2);
+}
+
+.resources-usage__capacity {
+  stroke: var(--text-muted);
+  stroke-dasharray: 3 3;
+  stroke-width: 1;
+}
+
+.resources-usage__unobserved {
+  stroke: var(--text-muted);
+  stroke-dasharray: 1 3;
+  stroke-width: 1;
+}
+
+.resources-usage__pointer {
+  fill: var(--border-subtle);
+}
+
+.resources-usage__bar.is-dimmed {
+  opacity: 0.4;
+}
+
+.resources-usage__axis {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.resources-usage__readout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.resources-usage__when {
+  min-width: 52px;
+  color: var(--text-muted);
+}
+
+.resources-usage__key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.resources-usage__swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.resources-usage__swatch--capacity {
+  height: 0;
+  border-top: 1px dashed var(--text-muted);
+  border-radius: 0;
+}

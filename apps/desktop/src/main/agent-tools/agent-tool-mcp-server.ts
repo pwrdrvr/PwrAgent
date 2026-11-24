@@ -455,6 +455,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     });
     const toolCalls: Promise<unknown>[] = [];
     const clientGone = new AbortController();
+    const disconnectSignal = AbortSignal.any([clientGone.signal, params.request.signal]);
     const toolNames = (await this.resolveMcpTools(params.clientContext)).map((tool) => tool.name);
     const isAntigravity = usesAntigravityCatalog(params.clientContext);
     const discoveryTools = isAntigravity ? await this.resolveAntigravityDiscoveryTools(params.clientContext) : [];
@@ -560,7 +561,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
               message = line;
               if (Date.now() - lastSentAt >= AGENT_TOOL_MCP_REPORTED_PROGRESS_MIN_GAP_MS) sendProgress();
             };
-        const call = this.callTool(request, extra, sessionNonce, params.responseFlushed, reportProgress);
+        const call = this.callTool(request, extra, disconnectSignal, sessionNonce, params.responseFlushed, reportProgress);
         toolCalls.push(call.catch(() => undefined));
         try {
           return await call;
@@ -604,6 +605,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
   private async callTool(
     request: CallToolRequest,
     extra: CallToolExtra,
+    disconnectSignal: AbortSignal,
     sessionNonce: string | undefined,
     responseFlushed?: Promise<void>,
     reportProgress?: (message: string) => void,
@@ -682,7 +684,9 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
         : randomUUID(),
       tool: name,
       args,
-      signal: extra.signal,
+      signal: name === "resource_checkout_acquire"
+        ? AbortSignal.any([extra.signal, disconnectSignal])
+        : extra.signal,
       responseFlushed,
       ...(reportProgress ? { reportProgress } : {}),
     });
@@ -891,6 +895,7 @@ function closeWhenDone(
         controller.enqueue(value);
       } catch (error) {
         controller.error(error);
+        onCancel();
         closeOnce();
       }
     },

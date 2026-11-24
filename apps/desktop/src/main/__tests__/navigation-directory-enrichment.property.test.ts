@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { buildDirectorySummaries } from "@pwragent/shared/directory-navigation";
@@ -11,11 +12,16 @@ import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
 import { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
-import { createThreadDirectoryEnricher, readNavigationCheckout } from "../git-info/directory-store";
+import { createThreadDirectoryEnricher, readNavigationCheckout, readNavigationCheckouts } from "../git-info/directory-store";
 import { StackReader } from "../stacks/stack-reader";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { isolateProcessGitEnvironment, runIsolatedGitSync } from "./helpers/isolated-git";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
+
+vi.mock("node:fs/promises", async (load) => {
+  const actual = await load<typeof fs>();
+  return { ...actual, stat: vi.fn(actual.stat) };
+});
 
 const overlays = vi.hoisted(() => ({
   current: undefined as SqliteOverlayStore | undefined,
@@ -248,6 +254,216 @@ it.skipIf(process.platform === "win32")("groups raw navigation threads by Git's 
     launches.mockRestore();
     await client.close();
     restore();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it.each([
+  { change: "config", fresh: true },
+  { change: "HEAD", fresh: true },
+  { change: "config", fresh: false },
+  { change: "HEAD", fresh: false },
+])("rechecks changed common $change before publishing linked directories (forced refresh: $fresh)", async ({ change, fresh }) => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-navigation-common-race-")));
+  const repo = path.join(root, "repo");
+  const first = path.join(root, "first");
+  const second = path.join(root, "second");
+  const head = path.join(repo, ".git", "HEAD");
+  const { read, client } = navigationFixture([first, second]);
+  const restoreGit = isolateProcessGitEnvironment();
+  const changed = Promise.withResolvers<void>();
+  try {
+    await mkdir(repo);
+    const git = (...args: string[]) => runIsolatedGitSync(repo, args);
+    git("init", "-b", "main");
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "base");
+    git("worktree", "add", "--detach", first);
+    git("worktree", "add", "--detach", second);
+    const probe = vi.mocked(fs.stat);
+    const stat = probe.getMockImplementation()!;
+    let mutated = false;
+    probe.mockImplementation(async (...args) => {
+      if (args[0] === path.join(second, ".git")) await changed.promise;
+      const result = await stat(...args);
+      if (!mutated && args[0] === head) {
+        mutated = true;
+        if (change === "config") git("config", "core.bare", "true");
+        else await rm(head);
+        changed.resolve();
+      }
+      return result;
+    });
+    try {
+      const inventory = read(fresh);
+      const follower = fresh ? undefined : changed.promise.then(() => readNavigationCheckout(first));
+      const result = await inventory;
+      expect(mutated).toBe(true);
+      if (follower) expect((await follower)?.directories).toBeUndefined();
+      for (const [index, cwd] of [first, second].entries()) {
+        expect((await readNavigationCheckout(cwd, true))?.directories).toBeUndefined();
+        const row = result.threads.find(({ id }) => id === "thread-" + index);
+        expect(normalize(row?.linkedDirectories?.[0]?.path ?? "")).toBe(normalize(cwd));
+        if (!fresh) expect((await readNavigationCheckout(cwd))?.directories).toBeUndefined();
+      }
+    } finally {
+      changed.resolve();
+      probe.mockImplementation(stat);
+    }
+  } finally {
+    await client.close();
+    restoreGit();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it.each([false, true])("does not give an expired checkout a new TTL (late waiter: %s)", async (joinLate) => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-navigation-expiry-")));
+  const early = path.join(root, "early");
+  const slow = path.join(root, "slow");
+  const repo = path.join(root, "repo");
+  const primaryHead = path.join(repo, ".git", "HEAD");
+  const release = Promise.withResolvers<void>();
+  const sampled = Promise.withResolvers<void>();
+  const stat = vi.mocked(fs.stat).getMockImplementation()!;
+  const restoreGit = isolateProcessGitEnvironment();
+  let now = 0;
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+  let batch: ReturnType<typeof readNavigationCheckouts> | undefined;
+  try {
+    await Promise.all([mkdir(repo), mkdir(slow)]);
+    const git = (...args: string[]) => runIsolatedGitSync(repo, args);
+    git("init", "-b", "main");
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "base");
+    git("worktree", "add", "--detach", early);
+    vi.mocked(fs.stat).mockImplementation(async (...args) => {
+      if (args[0] === slow) await release.promise;
+      const result = await stat(...args);
+      if (args[0] === primaryHead) sampled.resolve();
+      return result;
+    });
+    batch = readNavigationCheckouts([early, slow], { fresh: false, verified: false, checkpoint: () => {} });
+    await sampled.promise;
+    // Drain the early checkout's continuations while the unrelated probe is held.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    now = 1_000;
+    git("worktree", "move", early, path.join(root, "moved"));
+    const late = joinLate ? readNavigationCheckout(early) : undefined;
+    release.resolve();
+    if (late) expect((await late)?.directories).toEqual([]);
+    await batch;
+    expect((await readNavigationCheckout(early, true))?.directories).toEqual([]);
+    expect((await readNavigationCheckout(early))?.directories).toEqual([]);
+  } finally {
+    release.resolve();
+    if (batch) await Promise.allSettled([batch]);
+    clock.mockRestore();
+    vi.mocked(fs.stat).mockImplementation(stat);
+    restoreGit();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it.each(["join", "owner cancelled", "follower cancelled", "verified"])(
+  "coordinates overlapping checkout inventory scopes: %s", async (mode) => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-navigation-pending-")));
+    const shared = path.join(root, "shared");
+    const slow = path.join(root, "slow");
+    const other = path.join(root, "other");
+    const release = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    const followerWaiting = Promise.withResolvers<void>();
+    const owner = new AbortController();
+    const follower = new AbortController();
+    const stat = vi.mocked(fs.stat).getMockImplementation()!;
+    const restoreGit = isolateProcessGitEnvironment();
+    const batches: Promise<unknown>[] = [];
+    let sharedLoads = 0;
+    onTestFinished(async () => {
+      release.resolve();
+      await Promise.allSettled(batches);
+    });
+    try {
+      await Promise.all([mkdir(shared), mkdir(slow), mkdir(other)]);
+      vi.mocked(fs.stat).mockImplementation(async (...args) => {
+        if (args[0] === slow) await release.promise;
+        if (args[0] === shared && args[1] === undefined) {
+          sharedLoads++;
+          started.resolve();
+        }
+        return await stat(...args);
+      });
+      const ownerOptions = {
+        fresh: false, verified: false, signal: owner.signal, checkpoint: () => owner.signal.throwIfAborted(),
+      };
+      const first = readNavigationCheckouts([slow, shared], ownerOptions);
+      let ownerFinished = false;
+      batches.push(first.catch(() => undefined).finally(() => { ownerFinished = true; }));
+      await started.promise;
+      const verified = mode === "verified";
+      let followerCheckpoints = 0;
+      const followerOptions = {
+        fresh: verified, verified, signal: follower.signal,
+        checkpoint: () => {
+          follower.signal.throwIfAborted();
+          if (++followerCheckpoints === 2) followerWaiting.resolve();
+        },
+      };
+      const second = readNavigationCheckouts(mode === "follower cancelled" ? [shared] : [shared, other], followerOptions);
+      batches.push(second.catch(() => undefined));
+      if (mode === "owner cancelled") {
+        owner.abort(new Error("original inventory stopped"));
+        await second;
+      }
+      if (mode === "follower cancelled") {
+        await followerWaiting.promise;
+        follower.abort(new Error("waiting inventory stopped"));
+        await expect(second).rejects.toThrow("waiting inventory stopped");
+      }
+      if (verified) await second;
+      // The independent result or abort must finish while the original I/O is still held.
+      expect(ownerFinished).toBe(false);
+      release.resolve();
+      if (mode === "owner cancelled") await expect(first).rejects.toThrow("original inventory stopped");
+      else await first;
+      if (mode !== "follower cancelled") {
+        expect((await second)[0]?.directories).toEqual([expect.objectContaining({ path: normalize(shared) })]);
+      }
+      expect(sharedLoads).toBe(mode === "join" || mode === "follower cancelled" ? 1 : 2);
+    } finally {
+      release.resolve();
+      await Promise.allSettled(batches);
+      vi.mocked(fs.stat).mockImplementation(stat);
+      restoreGit();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 5_000,
+);
+
+it("does not publish checkout evidence when cancelled after the final validation checkpoint", async () => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-navigation-publish-abort-")));
+  const cwd = path.join(root, "checkout");
+  const restoreGit = isolateProcessGitEnvironment();
+  const owner = new AbortController();
+  const stopped = new Error("inventory stopped before publication");
+  let checkpoints = 0;
+  try {
+    await mkdir(cwd);
+    const options = {
+      fresh: false, verified: false, signal: owner.signal,
+      checkpoint: () => {
+        owner.signal.throwIfAborted();
+        // An unversioned path has no common-file probes. Abort as the
+        // observation returns on its final checkpoint.
+        if (++checkpoints === 3) queueMicrotask(() => owner.abort(stopped));
+      },
+    };
+    await expect(readNavigationCheckouts([cwd], options)).rejects.toThrow(stopped);
+    await rm(cwd, { recursive: true });
+    const live = await readNavigationCheckout(cwd, true);
+    expect(live?.directories).toEqual([]);
+    expect(await readNavigationCheckout(cwd)).toEqual(live);
+  } finally {
+    restoreGit();
     await rm(root, { recursive: true, force: true });
   }
 });

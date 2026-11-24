@@ -67,6 +67,7 @@ import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-regi
 import { AgentToolRouter } from "../agent-tools/agent-tool-router";
 import { buildMcpGatewayToolDefinitions } from "../agent-tools/pwragent-mcp-gateway-tools";
 import { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
+import { READ_MCP_CONTEXT } from "../mcp-connections/mcp-gateway-context";
 import { getTokenMiserBridgeDescriptorPath, TokenMiserHookBridge } from "../token-miser/token-miser-hook-bridge";
 import { TokenMiserPluginManager } from "../token-miser/token-miser-plugin-manager";
 import { TOKEN_MISER_DIAGNOSTICS_DIRNAME } from "../token-miser/token-miser-types";
@@ -927,6 +928,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         }] : [])]);
       },
       serverNameInAgent: (connectionId, context) => ports.threadMcpServerNameInAgent(connectionId, context),
+      contextAllowed: (context) => isAgentToolAdvertisedLocally(READ_MCP_CONTEXT) && !ports.isTaskMonitorThread(context),
       toolAllowed: (tool, context) => !ports.isTaskMonitorThread(context)
         || (tool.definition.annotations?.readOnlyHint === true && tool.definition.annotations.destructiveHint !== true),
       approve: (invocation, context, signal, annotations, catalogRevision, consentRevision) => ports.approveGatewayInvocation(invocation, context, signal, annotations, catalogRevision, consentRevision),
@@ -1000,7 +1002,10 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
               researchHandler: ports.mcpResearchHandler,
               checkoutHandler: ports.checkoutHandler,
               checkoutMode: ports.resourceCheckoutToolMode(context),
-            }, { taskMonitorRole: "all" }),
+            }, {
+              taskMonitorRole: "all",
+              antigravityMcpContext: context.backend === "acp:antigravity" && !context.memoryOnly,
+            }),
           authorizeToolCall: (params) =>
             ports.authorizeAgentToolMcpCall(params),
           isToolAdvertised: async (name, context) => isAgentToolAdvertisedLocally(name)

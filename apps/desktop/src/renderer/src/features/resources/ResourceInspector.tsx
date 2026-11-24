@@ -28,6 +28,8 @@ import {
 } from "./resource-view-model";
 import { allocationHoldTime, describeQueueEntryHold, holderAlsoQueued, queueEntryHold } from "./resource-wait";
 import { ResourceThreadChip } from "./ResourceThreadChip";
+import { ResourceUsageChart } from "./ResourceUsageChart";
+import { usageChart } from "./resource-usage";
 
 /** The header controls group recovery steps behind one Recover control. */
 export type ResourceInspectorIntent =
@@ -100,6 +102,7 @@ export function ResourceInspector(props: {
   const firstRequest = resource.queue[0]?.units;
   const free = freeUnits(resource);
   const waitingForSlots = condition === "busy" && firstRequest !== undefined && free !== undefined && firstRequest > free;
+  const usage = usageChart(resource, props.now);
 
   return (
     <aside aria-labelledby="resources-inspector-title" className="resources-inspector">
@@ -145,6 +148,12 @@ export function ResourceInspector(props: {
           ) : null}
         />
 
+        {usage ? (
+          <Section title="Last 30 minutes" aside={`peak ${usage.peakHeld} held · ${usage.peakWaiting} waiting`}>
+            <ResourceUsageChart chart={usage} now={props.now} unitLabel={unitLabel} />
+          </Section>
+        ) : null}
+
         <Section title="Holder" aside={counted ?? (resource.sharing.mode === "exclusive" ? "Exclusive" : undefined)}>
           {resource.allocations.length === 0 ? (
             <p className="resources-note">
@@ -165,10 +174,10 @@ export function ResourceInspector(props: {
           )}
         </Section>
 
-        <Section title="Queue" aside="First in, first out">
+        <Section title="Queue" aside="FIFO with backfill">
           {waitingForSlots ? (
             <p className="resources-note">
-              The first request needs {firstRequest} {unitLabel}s. {free} free now. Later requests wait behind it.
+              The first request needs {firstRequest} {unitLabel}s. {free} free now. Shorter requests that fit without delaying #1 can backfill.
             </p>
           ) : null}
           {resource.queue.length === 0 ? (

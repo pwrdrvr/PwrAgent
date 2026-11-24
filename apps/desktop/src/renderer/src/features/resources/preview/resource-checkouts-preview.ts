@@ -10,6 +10,7 @@ import {
   type ResourceDomain,
   type ResourceHolder,
   type ResourceThreadRef,
+  type ResourceUsageHistory,
 } from "@pwragent/shared/contracts/resource-checkouts";
 import type { ResourceCheckoutsSource } from "../resource-checkouts-source";
 import { requestWouldWait } from "../resource-view-model";
@@ -22,6 +23,18 @@ import { requestWouldWait } from "../resource-view-model";
  */
 
 const MIN = 60_000;
+
+/** Invented history as [minutes ago, held, waiting] steps, oldest first. */
+function previewUsage(
+  now: number,
+  steps: ReadonlyArray<readonly [number, number, number]>,
+  observedMinutesAgo = 45,
+): ResourceUsageHistory {
+  return {
+    observedSince: now - observedMinutesAgo * MIN,
+    points: steps.map(([minutesAgo, held, waiting]) => ({ at: now - minutesAgo * MIN, held, waiting })),
+  };
+}
 
 const thread = (threadId: string, title: string, instanceLabel?: string): ResourceThreadRef => ({
   backend: "codex",
@@ -124,6 +137,7 @@ export function buildPreviewResources(now: number): ResourceDomain[] {
       authorityId: "broker-studio",
       condition: "busy",
       sharing: { mode: "counted", capacity: 4, inUse: 3, unitLabel: "heavy-job slots" },
+      usage: previewUsage(now, [[40, 1, 0], [33, 2, 0], [29, 0, 0], [26, 2, 0], [24, 4, 0], [21, 4, 1], [19, 4, 3], [17, 3, 1], [14, 2, 0], [12, 3, 0], [6, 3, 2]]),
       enforcement: { coverage: "mixed", summary: "Enforced for PwrAgent launches", gaps: ["CI runner and IDE builds on this Mac aren't admitted. Host load is advisory."] },
       allocations: [
         allocation(now, { allocationId: "alloc-311", state: "active", holder: threadHolder(THREADS.index), taskLabel: "pnpm build:fixtures", executorLabel: "studio-m4 · default", grantedMinutesAgo: 26, deadlineMinutes: 34, renewalsUsed: 0, renewalsAllowed: 3, generation: 31, authorityEpoch: 4, units: 2 }),
@@ -234,6 +248,7 @@ export function buildPreviewResources(now: number): ResourceDomain[] {
       condition: "waiting_interactive",
       conditionDetail: "Headed tests can't start until someone signs in to an unlocked desktop on win-lab-07. The deadline is running.",
       sharing: { mode: "exclusive" },
+      usage: previewUsage(now, [[9, 0, 0], [7, 1, 0], [5, 0, 0], [4, 1, 0], [3, 1, 1]], 9),
       enforcement: { coverage: "mixed", summary: "Enforced through the provider adapter", gaps: ["Direct remote-desktop sessions outside PwrAgent are advisory."] },
       allocations: [
         allocation(now, { allocationId: "alloc-77", state: "preparing", holder: threadHolder(THREADS.windows), taskLabel: "Installer shutdown suite", executorLabel: "studio-m4 · default", grantedMinutesAgo: 4, deadlineMinutes: 41, renewalsUsed: 0, renewalsAllowed: 1, generation: 77, authorityEpoch: 7 }),
@@ -472,7 +487,7 @@ export function createPreviewResourceCheckoutsSource(options: {
     switch (request.kind) {
       case "request": {
         // The same rule that labels the button Request checkout or Join queue.
-        if (!requestWouldWait(resource, resource.condition)) {
+        if (!resource.queue.length && !requestWouldWait(resource, resource.condition)) {
           generation += 1;
           const allocationId = `alloc-${generation}`;
           update(resource.resourceId, (current) => ({

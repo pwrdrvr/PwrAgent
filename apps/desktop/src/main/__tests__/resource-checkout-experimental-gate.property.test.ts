@@ -20,6 +20,7 @@ import {
 
 const RESOURCE_CHECKOUT_TOOLS = [
   "resource_checkout_discover",
+  "resource_checkout_acquire",
   "resource_checkout_action",
   "resource_checkout_status",
   "resource_checkout_wait",
@@ -42,7 +43,7 @@ function flattenTools(specs: DynamicToolSpec[]): Array<{ name: string; deferLoad
  * - While the flag is off (including the default when no predicate is passed),
  *   threads without outstanding checkouts see no tools. Cleanup still reaches
  *   the authority through a live turn, including with a stale tool catalog.
- * - While the flag is on, all six tools are advertised/listed and live calls
+ * - While the flag is on, all checkout tools are advertised/listed and live calls
  *   reach the checkout handler. Without tool discovery, the Codex tools load
  *   eagerly so a provider without search can use them.
  */

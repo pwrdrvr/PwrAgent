@@ -19,6 +19,7 @@ import { parseCheckoutAction, parseCheckoutToken, object, text } from "./checkou
 import type { ExternalBinding } from "./checkout-configuration";
 import { labelResourceThreads, projectCheckoutDomain, UNEXPLAINED_OWNERSHIP_CONFLICT } from "./checkout-projection";
 import { misboundAuthorityConflict, OWNERSHIP_CONFLICTS } from "./checkout-ownership";
+import { ResourceUsageRecorder } from "./checkout-usage-history";
 
 export const CHECKOUT_FEDERATION_METHOD = "resourceCheckouts.authority.v1";
 const REFRESH_MS = 2_000;
@@ -71,6 +72,7 @@ export class DesktopResourceCheckoutService {
   private readonly changedDefinitions = new Set<string>();
   private readonly operator: CheckoutActor;
   private readonly listeners = new Set<(revision: number) => void>();
+  private readonly usage = new ResourceUsageRecorder();
   private readonly remoteViews = new Map<string, ExternalView>();
   private readonly threadsWithCheckouts = new Set<string>();
   private readonly timer: NodeJS.Timeout;
@@ -181,6 +183,17 @@ export class DesktopResourceCheckoutService {
     };
   }
 
+  localMachineResourceId(): string {
+    return this.machineDefinition.resourceId;
+  }
+
+  isCountedResource(resourceId: string): boolean {
+    const binding = this.options.bindings.find((candidate) => candidate.definition.resourceId === resourceId);
+    if (binding) return binding.definition.counted;
+    if (resourceId === this.machineDefinition.resourceId) return this.machineDefinition.counted;
+    return this.machine?.records(resourceId)[0]?.definition.counted ?? false;
+  }
+
   private threadTitle(thread: Omit<ResourceThreadRef, "title">, fallback: string): string {
     try {
       return this.options.threadTitle?.({ ...thread, title: fallback })?.trim() || fallback;
@@ -287,12 +300,31 @@ export class DesktopResourceCheckoutService {
   }
 
   read(): ResourceCheckoutsSnapshot {
+    const { authorities, resources, registerGate, observedAt } = this.observe();
+    return {
+      contractVersion: RESOURCE_CHECKOUTS_CONTRACT_VERSION, revision: this.revision, observedAt,
+      viewer: this.options.viewer, authorities, registerGate,
+      resources: resources.map((resource) => {
+        const usage = this.usage.history(resource.resourceId);
+        return usage ? { ...resource, usage } : resource;
+      }),
+    };
+  }
+
+  /**
+   * Usage history stays out of the fingerprint: its last point holds until
+   * the snapshot's `observedAt`, so a reader extends it to now until the
+   * next revision, which comes only when a held or waiting value changes.
+   */
+  private observe(): Pick<ResourceCheckoutsSnapshot, "authorities" | "resources" | "registerGate" | "observedAt"> {
     const views = this.readView(this.operator, this.remoteViews);
     const authorities = [...new Map(views.map(({ authority }) => [authority.authorityId, authority])).values()];
     const resources = views.map(({ resource }) => resource);
     const registerGate = this.machineConflict
       ? { allowed: false as const, reason: "ownership_unresolved" as const, detail: "The machine store is unresolved." }
       : { allowed: true as const };
+    const observedAt = this.now();
+    this.usage.observe(resources, observedAt);
     const fingerprint = JSON.stringify([authorities, resources, registerGate]);
     if (fingerprint !== this.fingerprint) {
       this.fingerprint = fingerprint;
@@ -311,10 +343,7 @@ export class DesktopResourceCheckoutService {
       const revision = ++this.revision;
       for (const listener of this.listeners) listener(revision);
     }
-    return {
-      contractVersion: RESOURCE_CHECKOUTS_CONTRACT_VERSION, revision: this.revision, observedAt: this.now(),
-      viewer: this.options.viewer, authorities, resources, registerGate,
-    };
+    return { authorities, resources, registerGate, observedAt };
   }
 
   /** Discovery hint from the last owner poll. Mutations still check ownership at the authority. */
@@ -328,7 +357,7 @@ export class DesktopResourceCheckoutService {
   }
 
   private poll(): void {
-    if (!this.closing && !this.closed) this.read();
+    if (!this.closing && !this.closed) this.observe();
   }
 
   refreshPeers(): Promise<void> {

@@ -46,12 +46,14 @@ export type ResourceWaitSummary = {
 };
 
 /**
- * Why a queued request has not started. Promotion is strictly first in,
- * first out: only the head is granted, and only once it fits.
+ * Why a queued request has not started. Promotion is first in, first out with
+ * EASY backfilling: the head starts as soon as it fits, and later requests
+ * that fit without delaying the head's guaranteed start time can backfill.
  *
  * - `capacity`: the head needs more than is free.
  * - `order`: an earlier request goes first. `fitsNow` marks a request that
- *   would fit in the free capacity, the case where FIFO alone holds it.
+ *   fits the free slots right now, but running it for its expected duration
+ *   could delay `#1`.
  * - `pending`: the head fits; the authority has not granted it yet, or a
  *   recovery holds the whole resource.
  */
@@ -88,7 +90,7 @@ export function describeQueueEntryHold(hold: QueueEntryHold, position: number, u
       return `Fits in the ${hold.free} free. Waiting for the authority to grant it.`;
     case "order":
       return hold.fitsNow
-        ? `Would fit now (${hold.needs} of ${hold.free} free), but waits for ${position === 2 ? "#1" : `#1 to #${position - 1}`}: first in, first out.`
+        ? `Would fit now (${hold.needs} of ${hold.free} free), but waits for ${position === 2 ? "#1" : `#1 to #${position - 1}`}: would delay #1.`
         : `Needs ${units(hold.needs)}. Waits for ${position - 1} earlier request${position === 2 ? "" : "s"}.`;
   }
 }

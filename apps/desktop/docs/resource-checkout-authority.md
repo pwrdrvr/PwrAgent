@@ -38,13 +38,24 @@ an installed environment, short debugger or profiler sessions, and lightweight
 inspection without requesting or waiting for a checkout.
 
 For work you reserve, use `resource_checkout_discover` to find the machine's
-`sharing.capacity` and cap command parallelism at that capacity. Set `units`
-in `resource_checkout_action` to the capped parallel worker count. Omitting
-`units` reserves the full machine pool.
+`sharing.capacity` and cap command parallelism at that capacity. Supply the
+capped parallel worker count as explicit `units` on counted resources.
 See [local CPU checkout](../../../docs/local-cpu-checkout.md) for repository
 verification budgets. Wait for the grant before launching the reserved job and
-release it after the job exits. A large request at the head of the queue waits
-for enough slots to clear, and later small requests wait behind it.
+release it after the job exits. In Code Mode and scripts, prefer `resource_checkout_acquire`,
+which blocks event-driven until granted, returns a ready-to-use `releaseAction`
+for a `try`/`finally` block, and automatically cancels or releases on timeout or
+abort.
+
+When a large request at the head of the queue waits for slots to clear,
+the authority uses EASY backfilling: later requests that fit in the free slots
+without delaying the head's guaranteed shadow start time (either finishing
+before the head can start or fitting in spare slots at that time) start right
+away, while requests that could delay the head wait in FIFO order. Backfilled
+holds are advisory and cannot start managed jobs. Managed holds release
+capacity only after verified cleanup, so the scheduler does not count their
+deadlines as capacity returning. Thread
+holders and waiters display their resolved thread titles in Resources.
 
 Codex environment setup, detached environment actions, and local automation
 gates do not require, claim, or wait on machine CPU checkouts. They run

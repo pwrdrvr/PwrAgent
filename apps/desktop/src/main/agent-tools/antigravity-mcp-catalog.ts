@@ -30,7 +30,7 @@ export const ANTIGRAVITY_DIRECT_MCP_TOOLS: ReadonlySet<string> = new Set([
 export const ANTIGRAVITY_TOOL_DISCOVERY_INSTRUCTIONS =
   "For other PwrAgent actions, use tool_search for the exact schema and invoke it with call_pwragent_tool.";
 export const ANTIGRAVITY_MCP_CONNECTION_INSTRUCTIONS =
-  "For enabled PwrAgent MCP connections such as Linear, use search_mcp_tools and call_mcp_tool.";
+  "For selected managed MCP connections, use search_mcp_tools to discover tools and routes to resources, skills, and prompts. Invoke upstream tools with call_mcp_tool.";
 
 export const ANTIGRAVITY_TOOL_DISCOVERY: readonly AgentMcpTool[] = [
   {

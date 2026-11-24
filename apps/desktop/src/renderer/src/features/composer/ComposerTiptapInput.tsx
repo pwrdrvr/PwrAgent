@@ -20,7 +20,14 @@ import StarterKit from "@tiptap/starter-kit";
 import { closeHistory } from "prosemirror-history";
 import { Plugin, PluginKey } from "prosemirror-state";
 import { Decoration, DecorationSet } from "prosemirror-view";
-import { EditorContent, Extension, useEditor, type EditorOptions, type JSONContent } from "@tiptap/react";
+import {
+  EditorContent,
+  Extension,
+  textblockTypeInputRule,
+  useEditor,
+  type EditorOptions,
+  type JSONContent,
+} from "@tiptap/react";
 import { parseThreadUrl, type ThreadLinkRef } from "@pwragent/shared/contracts/thread-link";
 import { readSkillOrigin } from "@pwragent/shared/skill-origin";
 import {
@@ -455,6 +462,36 @@ const IgnoreUnderlineShortcut = Extension.create({
   },
 });
 
+// Tiptap's built-in CodeBlock input rules only match exact triple fences
+// (`^```([a-z]+)?[\s\n]$` and `^~~~([a-z]+)?[\s\n]$`). CommonMark accepts
+// 3+ backticks or tildes and non-alphabetic info strings (such as `c++` or
+// `json5`), so typing 4+ backticks before Space still starts a code block.
+const FLEXIBLE_BACKTICK_CODE_BLOCK_REGEX = /^`{3,}([^`\s]+)?[\s\n]$/;
+// Typed tilde fences serialize as backtick fences, whose info strings cannot contain backticks.
+const FLEXIBLE_TILDE_CODE_BLOCK_REGEX = /^~{3,}([^~`\s]+)?[\s\n]$/;
+
+const FlexibleCodeBlockInputRules = Extension.create({
+  name: "flexibleCodeBlockInputRules",
+  addInputRules() {
+    const codeBlockType = this.editor.schema.nodes.codeBlock;
+    if (!codeBlockType) {
+      return [];
+    }
+    return [
+      textblockTypeInputRule({
+        find: FLEXIBLE_BACKTICK_CODE_BLOCK_REGEX,
+        type: codeBlockType,
+        getAttributes: (match) => ({ language: match[1] ?? null }),
+      }),
+      textblockTypeInputRule({
+        find: FLEXIBLE_TILDE_CODE_BLOCK_REGEX,
+        type: codeBlockType,
+        getAttributes: (match) => ({ language: match[1] ?? null }),
+      }),
+    ];
+  },
+});
+
 const commandChipPluginKey = new PluginKey<DecorationSet>("composerCommandChip");
 
 /**
@@ -655,7 +692,7 @@ function parseInlineMarkdownWithMarks(
     flush();
     const innerStart = cursor + matchedSpec.delimiter.length;
     const inner = text.slice(innerStart, closeIndex);
-    const nextMarks = [...inheritedMarks, { type: matchedSpec.mark }];
+    const nextMarks = mergeInlineMarks(inheritedMarks, { type: matchedSpec.mark });
     if (matchedSpec.verbatim) {
       nodes.push({
         type: "text",
@@ -968,7 +1005,7 @@ function getHtmlInlineMark(tagName: string): { type: string } | undefined {
   return undefined;
 }
 
-function mergeHtmlInlineMarks(
+function mergeInlineMarks(
   inheritedMarks: { type: string }[],
   mark: { type: string } | undefined,
 ): { type: string }[] {
@@ -976,11 +1013,11 @@ function mergeHtmlInlineMarks(
     return inheritedMarks;
   }
 
-  // ProseMirror's inline code mark excludes every other mark. Transcript
-  // clipboard HTML can legitimately nest it inside <strong>, for example for
-  // Markdown like **10 `Promise.all` cells**. Keep the code mark and split the
-  // surrounding emphasis around it instead of constructing an invalid mark set
-  // that aborts the whole paste.
+  // ProseMirror's inline code mark excludes every other mark. Both clipboard
+  // HTML and plain-text Markdown can legitimately nest inline code inside
+  // emphasis, for example **10 `Promise.all` cells** or **Codex (`gpt`)**.
+  // Keep the code mark and split surrounding emphasis around it instead of
+  // constructing an invalid mark set that aborts paste or draft restoration.
   if (mark.type === "code") {
     return [mark];
   }
@@ -1018,7 +1055,7 @@ function parseHtmlInlineContent(
   }
 
   const mark = getHtmlInlineMark(node.tagName.toLowerCase());
-  const nextMarks = mergeHtmlInlineMarks(inheritedMarks, mark);
+  const nextMarks = mergeInlineMarks(inheritedMarks, mark);
   return Array.from(node.childNodes).flatMap((child) =>
     parseHtmlInlineContent(child, nextMarks),
   );
@@ -1635,8 +1672,8 @@ function appendMarkdownBlock(
   }
 
   if (node.type.name === "codeBlock") {
-    const language = typeof node.attrs.language === "string" ? node.attrs.language : "";
-    state.value += `\`\`\`${language}\n${node.textContent}\n\`\`\``;
+    const { prefix, content, suffix } = getCodeBlockMarkdownParts(node);
+    state.value += `${prefix}${content}${suffix}`;
     return;
   }
 
@@ -2064,18 +2101,25 @@ function pastePlainMarkdownText(
 }
 
 function getCodeBlockMarkdownParts(node: ProseMirrorNode): {
-  contentLength: number;
-  prefixLength: number;
+  content: string;
+  prefix: string;
+  suffix: string;
   totalLength: number;
 } {
   const language = typeof node.attrs.language === "string" ? node.attrs.language : "";
-  const prefixLength = `\`\`\`${language}\n`.length;
-  const contentLength = node.textContent.length;
-  const suffixLength = "\n```".length;
+  const content = node.textContent;
+  let fenceLength = 3;
+  for (const [run] of content.matchAll(/`{3,}/g)) {
+    fenceLength = Math.max(fenceLength, run.length + 1);
+  }
+  const fence = "`".repeat(fenceLength);
+  const prefix = `${fence}${language}\n`;
+  const suffix = `\n${fence}`;
   return {
-    contentLength,
-    prefixLength,
-    totalLength: prefixLength + contentLength + suffixLength,
+    content,
+    prefix,
+    suffix,
+    totalLength: prefix.length + content.length + suffix.length,
   };
 }
 
@@ -2240,7 +2284,7 @@ export function getDraftIndexAtDocumentPosition(
           index += codeBlock.totalLength;
           return false;
         }
-        index += codeBlock.prefixLength;
+        index += codeBlock.prefix.length;
         return true;
       }
       if (position <= pos + 1) {
@@ -2365,10 +2409,10 @@ export function getPositionAtDocumentDraftIndex(
       if (mode === "markdown" && node.type.name === "codeBlock") {
         const codeBlock = getCodeBlockMarkdownParts(node);
         if (draftIndex <= index + codeBlock.totalLength) {
-          const codeContentIndex = draftIndex - index - codeBlock.prefixLength;
+          const codeContentIndex = draftIndex - index - codeBlock.prefix.length;
           if (codeContentIndex <= 0) {
             position = pos + 1;
-          } else if (codeContentIndex <= codeBlock.contentLength) {
+          } else if (codeContentIndex <= codeBlock.content.length) {
             position = pos + 1 + codeContentIndex;
           } else {
             position = pos + node.nodeSize;
@@ -2837,6 +2881,7 @@ export const ComposerTiptapInput = forwardRef<
   const extensions = useMemo(
     () => [
       props.markdownConversion ? MarkdownStarterKit : PlainTextStarterKit,
+      ...(props.markdownConversion ? [FlexibleCodeBlockInputRules] : []),
       IgnoreUnderlineShortcut,
       SkillMention,
       Extension.create({

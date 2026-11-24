@@ -59,16 +59,19 @@ const isQueued = (value: unknown): boolean => {
 };
 
 describe("resource checkout tools: machine CPU scope", () => {
-  it.each([
-    ["resource_checkout_discover", /machine CPU reservations are advisory/i],
-    ["resource_checkout_action", /substantial workloads or when the operator explicitly requests a reservation/i],
-    ["resource_checkout_action", /start routine dev launches, short debugger or profiler sessions, and lightweight inspection without requesting or waiting for a checkout/i],
-    ["resource_checkout_action", /omit units to reserve the full machine pool.*parallel worker count/i],
-    ["resource_checkout_action", /resource_checkout_discover.*sharing\.capacity.*cap command parallelism at that capacity.*set units to the capped parallel worker count/i],
-  ])("advertises the machine CPU policy in %s (%s)", (name, guidance) => {
+  it("describes machine CPU reservations as advisory during discovery", () => {
+    const tools = buildResourceCheckoutToolDefinitions(async () => null);
+    const tool = tools.find((definition) => definition.name === "resource_checkout_discover");
+    expect(tool?.description).toMatch(/machine CPU reservations are advisory/i);
+  });
+
+  it.each(["resource_checkout_action", "resource_checkout_acquire"])("advertises the machine CPU policy in %s", (name) => {
     const tools = buildResourceCheckoutToolDefinitions(async () => null);
     const tool = tools.find((definition) => definition.name === name);
-    expect(tool?.description).toMatch(guidance);
+    expect(tool?.description).toMatch(/substantial workloads or when the operator explicitly requests a reservation/i);
+    expect(tool?.description).toMatch(/start routine dev launches, short debugger or profiler sessions, and lightweight inspection without requesting or waiting for a checkout/i);
+    expect(tool?.description).toMatch(/explicit units on counted resources/i);
+    expect(tool?.description).toMatch(/resource_checkout_discover.*sharing\.capacity.*cap command parallelism at that capacity.*set units to the capped parallel worker count/i);
   });
 });
 
@@ -101,6 +104,8 @@ describe("resource checkout tools: waiting for a grant", () => {
       expect(tool.description).not.toMatch(/inspect status .* to see a queued request/i);
     }
     expect(description("resource_checkout_action")).toMatch(/resource_checkout_wait .*continuation, then end the turn/);
+    expect(description("resource_checkout_action")).not.toMatch(/omit units to reserve the full machine pool/i);
+    expect(description("resource_checkout_acquire")).toMatch(/try\/finally/i);
     expect(description("resource_checkout_wait")).toMatch(/Pass continuation.*end the turn/);
     expect(description("resource_checkout_status")).toMatch(/Do not call it repeatedly to wait for a grant/);
   });

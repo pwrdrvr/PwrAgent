@@ -46,6 +46,33 @@ export function rejectCheckout(reason: Failure["reason"], message: string): Fail
   return { outcome: "rejected", reason, message };
 }
 
+/**
+ * Earliest time `grants` will free enough capacity for `needed` units, plus
+ * spare capacity remaining at that time beyond `needed`.
+ */
+function headReservationWindow(
+  grants: readonly CheckoutGrant[],
+  available: number,
+  needed: number,
+): { shadowTime: number; extraAtShadow: number } | undefined {
+  const ordered = [...grants].sort((a, b) => a.deadlineAt - b.deadlineAt);
+  let projected = available;
+  let shadowTime: number | undefined;
+  for (const grant of ordered) {
+    projected += grant.units;
+    if (projected >= needed) {
+      shadowTime = grant.deadlineAt;
+      break;
+    }
+  }
+  if (shadowTime === undefined) return undefined;
+  const totalAtShadow = available
+    + ordered
+      .filter((grant) => grant.deadlineAt <= shadowTime)
+      .reduce((sum, grant) => sum + grant.units, 0);
+  return { shadowTime, extraAtShadow: totalAtShadow - needed };
+}
+
 function wake(record: CheckoutDomainRecord, now: number): void {
   const { definition, queue, grants } = record;
   if (grants.some((grant) => grant.state === "recovery_required")) return;
@@ -57,6 +84,33 @@ function wake(record: CheckoutDomainRecord, now: number): void {
       ...next, generation: ++record.generation, grantedAt: now, renewals: 0,
       deadlineAt: now + next.durationMs, state: "granted",
     });
+  }
+  // EASY backfilling: when the head request waits for capacity on a counted
+  // resource, allow later waiters that fit now AND cannot delay the head's
+  // guaranteed shadow start time (either they finish by `shadowTime` or fit
+  // within spare slots at `shadowTime`). Renewals are refused while any waiter
+  // is queued, so backfilled grants cannot extend past `shadowTime`.
+  if (!definition.counted || queue.length <= 1 || available <= 0) return;
+  const reservation = headReservationWindow(grants.filter((grant) => !grant.job), available, queue[0].units);
+  if (!reservation) return;
+  const { shadowTime } = reservation;
+  let extraAtShadow = reservation.extraAtShadow;
+  let index = 1;
+  while (index < queue.length && available > 0) {
+    const candidate = queue[index]!;
+    const finishesBeforeHead = now + candidate.durationMs <= shadowTime;
+    const fitsInSpareAtShadow = candidate.units <= extraAtShadow;
+    if (candidate.units <= available && (finishesBeforeHead || fitsInSpareAtShadow)) {
+      queue.splice(index, 1);
+      available -= candidate.units;
+      if (!finishesBeforeHead) extraAtShadow -= candidate.units;
+      grants.push({
+        ...candidate, generation: ++record.generation, grantedAt: now, renewals: 0,
+        deadlineAt: now + candidate.durationMs, state: "granted", backfilled: true,
+      });
+    } else {
+      index++;
+    }
   }
 }
 
@@ -316,7 +370,8 @@ export class ResourceCheckoutAuthority {
       if (!record || record.definition.publication !== "published") return undefined;
       const now = this.now();
       const changed = reconcile(record, now);
-      const candidates = record.grants.filter((entry) => executionOwner(entry).key === actor.key && entry.state === "granted" && !entry.job);
+      const candidates = record.grants.filter((entry) => executionOwner(entry).key === actor.key
+        && entry.state === "granted" && !entry.job && !entry.backfilled);
       if (candidates.length > 1) {
         throw new Error("Multiple idle machine reservations belong to this thread. Release the extra reservations before launching a managed job.");
       }
@@ -397,7 +452,7 @@ export class ResourceCheckoutAuthority {
   /** Persist ownership before the adapter can launch any effect. */
   bindJob(actor: CheckoutActor, token: CheckoutToken, job: NonNullable<CheckoutGrant["job"]>): boolean {
     return this.changeJob(token, (record, grant) => {
-      if (executionOwner(grant).key !== actor.key || grant.state !== "granted" || grant.job
+      if (executionOwner(grant).key !== actor.key || grant.state !== "granted" || grant.job || grant.backfilled
         || (job.provider && job.provider.deadlineAt !== grant.deadlineAt)) return false;
       grant.job = job;
       grant.state = "preparing";

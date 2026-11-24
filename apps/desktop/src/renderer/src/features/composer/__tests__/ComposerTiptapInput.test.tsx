@@ -919,6 +919,79 @@ describe("ComposerTiptapInput", () => {
     expect(container.querySelector("code")).toHaveTextContent("Promise.all");
   });
 
+  it("pastes plain-text Markdown blocks that nest inline code inside emphasis", async () => {
+    const markdown = [
+      "### Context",
+      "- **Alpha (`one`, `two`)** summary:",
+      "  1. **P2 – Check (`src/spec.ts`):** details",
+      "- *Italic `three` text*",
+      "- ~~Struck `four` text~~",
+    ].join("\n");
+    const { container, onChange } = renderTiptapInput();
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        files: [],
+        getData: (type: string) => type === "text/plain" ? markdown : "",
+        items: [],
+        types: ["text/plain"],
+      },
+    });
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalled();
+    });
+    expect(container.querySelector("h3")).toHaveTextContent("Context");
+    expect(Array.from(container.querySelectorAll("code"), (node) => node.textContent)).toEqual([
+      "one",
+      "two",
+      "src/spec.ts",
+      "three",
+      "four",
+    ]);
+    expect(textbox).toHaveTextContent("Alpha (one, two) summary:");
+    expect(textbox).toHaveTextContent("P2 – Check (src/spec.ts): details");
+  });
+
+  it("restores a Markdown draft that nests inline code inside bold text", async () => {
+    const { container } = renderTiptapInput({
+      value: "**Review `src/index.ts` now**",
+    });
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+    expect(container.querySelector("code")).toHaveTextContent("src/index.ts");
+    expect(Array.from(container.querySelectorAll("strong"), (node) => node.textContent)).toEqual([
+      "Review ",
+      " now",
+    ]);
+    expect(textbox).toHaveValue("**Review** `src/index.ts` **now**");
+  });
+
+  it("starts a code block when typing four backticks and pressing space", async () => {
+    const { container } = renderTiptapInput();
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+    const editor = (textbox as HTMLElement & { editor: Editor }).editor;
+
+    act(() => {
+      for (const char of "```` ") {
+        const { from, to } = editor.state.selection;
+        let handled = false;
+        editor.view.someProp("handleTextInput", (handler) => {
+          if (handler(editor.view, from, to, char, () => editor.state.tr.insertText(char, from, to))) {
+            handled = true;
+            return true;
+          }
+          return false;
+        });
+        if (!handled) {
+          editor.view.dispatch(editor.state.tr.insertText(char, from, to));
+        }
+      }
+    });
+
+    expect(container.querySelector("pre code")).toBeInTheDocument();
+  });
+
   it("pastes copied handoff markdown as fences and lists without extra blank lines", async () => {
     const { container, onChange } = renderTiptapInput();
     const textbox = await screen.findByRole("textbox", { name: "Reply" });
