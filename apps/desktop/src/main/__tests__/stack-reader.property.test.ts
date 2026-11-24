@@ -819,6 +819,54 @@ describe("stack checkout demand", () => {
     }
   });
 
+  it("coalesces concurrent scoped inventory lookups while checking each explicit anchor live", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-shared-inventory-"));
+    const primary = path.join(sandbox, "primary");
+    const sibling = path.join(sandbox, "sibling");
+    const releaseLookup = Promise.withResolvers<void>();
+    const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    try {
+      await mkdir(primary);
+      initialize(primary);
+      git(primary, "worktree", "add", "-b", "sibling", sibling);
+      await writeCatalog(primary, "shared");
+      const reader = new StackReader();
+      const observations = [new StackReadObservation(), new StackReadObservation()];
+      let siblingWitnesses = 0;
+      for (const observation of observations) {
+        const witness = observation.hints.checkoutIdentity.bind(observation.hints);
+        observation.hints.checkoutIdentity = async (cwd) => {
+          const result = await witness(cwd);
+          if (cwd === sibling && result) siblingWitnesses++;
+          return result;
+        };
+      }
+      const runGitCommand = gitExecutable.runGitCommand;
+      const run = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (cwd, args, options) => {
+        if (cwd === sibling && args[0] === "rev-parse") await releaseLookup.promise;
+        return await runGitCommand(cwd, args, options);
+      });
+      const rows = [row(primary, "primary"), row(sibling, "sibling")];
+      const reads = Promise.allSettled(observations.map((observation) => reader.read(rows, [], [primary], undefined, observation)));
+      try {
+        await vi.waitFor(() => expect(siblingWitnesses).toBe(2));
+        await runPrMetadataProcess(async () => {});
+        releaseLookup.resolve();
+        expect((await reads).map(({ status }) => status)).toEqual(["fulfilled", "fulfilled"]);
+        const checkoutStarts = (cwd: string) => start.mock.calls.filter(([path, args]) => path === cwd && args[0] === "rev-parse").length;
+        expect(checkoutStarts(primary)).toBe(2);
+        expect(checkoutStarts(sibling)).toBe(1);
+      } finally {
+        releaseLookup.resolve();
+        await reads;
+        run.mockRestore();
+      }
+    } finally {
+      start.mockRestore();
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
   it("keeps ordinary catalog preflights launch-free until a catalog appears", async () => {
     const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-ordinary-offer-"));
     const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");

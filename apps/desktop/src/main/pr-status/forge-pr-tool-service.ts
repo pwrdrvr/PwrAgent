@@ -7,7 +7,7 @@ import { ForgeReadError, repositoryKey, type ForgeRepository } from "./forge-too
 import { repositoryFromPr, resolveForgeRepositories, type ForgeReadScope } from "./forge-read-service";
 import type { ForgePrToolContext } from "./forge-pr-tool-shared";
 import type { ForgePrToolArgs, ForgePrToolOperation } from "./forge-pr-tool-contract";
-import { readStackClones } from "../stacks/stack-reader";
+import { readLiveStackCatalogs } from "../stacks/stack-reader";
 
 export type ForgePrToolScope = Pick<ForgeReadScope, "remotes" | "attached" | "branch"> & {
   directories: string[];
@@ -111,9 +111,13 @@ export class ForgePrToolService {
       const r = repositoryFromPr(pr.url);
       return r && repositoryKey(r) === repositoryKey(repository) && Number.isSafeInteger(pr.number) ? [{ number: pr.number, headRefName: pr.headRefName }] : [];
     });
-    const stackCatalogs = operation === "merge_pull_request" && repository.provider === "github"
-      ? (await readStackClones(scope.directories, { signal })).flatMap(({ catalog }) => catalog.status === "ok" ? [catalog.catalog] : [])
+    const stackEvidence = operation === "merge_pull_request" && repository.provider === "github"
+      ? await readLiveStackCatalogs(scope.directories, { signal })
       : undefined;
+    if (stackEvidence?.some(({ status }) => status === "unavailable")) {
+      throw new ForgeReadError("unavailable", "Could not verify local stack evidence. Retry the merge when the checkout is available.");
+    }
+    const stackCatalogs = stackEvidence?.flatMap((catalog) => catalog.status === "ok" ? [catalog.catalog] : []);
     return await this.options.clients[repository.provider].execute(operation, args, {
       repository, branch: scope.branch, directories: scope.directories, attached,
       privateRoots: scope.privateRoots, defaultMergeMethod: this.options.defaultMergeMethod, assertCanMerge: this.options.assertCanMerge, stackCatalogs, signal,

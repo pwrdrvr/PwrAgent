@@ -169,17 +169,21 @@ export class StackReadObservation {
     return catalogs;
   }
 
-  async preflightCatalogs(directories: readonly string[], lookup?: (cwd: string) => Promise<CheckoutLookup>): Promise<CatalogRead[]> {
-    const candidates = await this.hints.markerCandidates(directories);
+  async checkoutCatalogs(directories: readonly string[], lookup = (cwd: string) => this.checkoutLookup(cwd)): Promise<CatalogRead[]> {
     let unavailable = false;
-    const clones = await this.clones(candidates, async (cwd) => {
-      const checkout = await this.recordCheckout(cwd, lookup);
+    const clones = await this.clones(directories, async (cwd) => {
+      const checkout = await lookup(cwd);
       if (checkout !== "unavailable") return checkout;
       unavailable = true;
     });
     const catalogs = clones.map(({ catalog }) => catalog);
     if (unavailable) catalogs.push({ status: "unavailable" });
     return catalogs;
+  }
+
+  async preflightCatalogs(directories: readonly string[], lookup?: (cwd: string) => Promise<CheckoutLookup>): Promise<CatalogRead[]> {
+    const candidates = await this.hints.markerCandidates(directories);
+    return await this.checkoutCatalogs(candidates, (cwd) => this.recordCheckout(cwd, lookup));
   }
 
   async revalidateAfterListing(): Promise<void> {
@@ -209,6 +213,10 @@ export class StackReadObservation {
 
 export async function readStackClones(directories: readonly string[], demand?: PrMetadataDemand): Promise<Clone[]> {
   return await new StackReadObservation({ priority: () => PR_METADATA_PRIORITY.selected, ...demand }).clones(directories);
+}
+
+export async function readLiveStackCatalogs(directories: readonly string[], demand?: PrMetadataDemand): Promise<CatalogRead[]> {
+  return await new StackReadObservation({ priority: () => PR_METADATA_PRIORITY.selected, ...demand }).checkoutCatalogs(directories);
 }
 
 function checkedOutWorktrees(output: string): StackWorktree[] {
@@ -441,7 +449,7 @@ function possibleInferredLayers(threads: readonly StackThreadRow[], knownPrs: re
 }
 
 export class StackReader {
-  private readonly pendingPreflights = new Map<string, SharedPrMetadataRead<CheckoutLookup>>();
+  private readonly pendingInventoryCheckouts = new Map<string, SharedPrMetadataRead<CheckoutLookup>>();
   private readonly inventoryCheckouts = new Map<string, {
     version: string; checkout: Checkout | undefined; expiresAt: number;
   }>();
@@ -455,32 +463,32 @@ export class StackReader {
     }
     return await observation.preflightCatalogs(directories, async (cwd) => {
       const candidates = await observation.hints.possibleCommonDirs(cwd);
-      return candidates ? await this.readInventoryCheckout(cwd, observation, candidates, true) : await observation.checkoutLookup(cwd);
+      return candidates ? await this.readInventoryCheckout(cwd, observation, candidates) : await observation.checkoutLookup(cwd);
     });
   }
 
-  private async sharedPreflight(
+  private async sharedInventoryCheckout(
     cwd: string, version: string, demand: PrMetadataDemand, load: (demand: PrMetadataDemand) => Promise<CheckoutLookup>,
   ): Promise<CheckoutLookup> {
     demand.signal?.throwIfAborted();
     const key = JSON.stringify([cwd, version]);
-    let pending = this.pendingPreflights.get(key);
+    let pending = this.pendingInventoryCheckouts.get(key);
     if (!pending || pending.signal.aborted) {
       const read = new SharedPrMetadataRead(async (sharedDemand) => {
         try {
           return await load(sharedDemand);
         } finally {
-          if (this.pendingPreflights.get(key) === read) this.pendingPreflights.delete(key);
+          if (this.pendingInventoryCheckouts.get(key) === read) this.pendingInventoryCheckouts.delete(key);
         }
       });
-      this.pendingPreflights.set(key, read);
+      this.pendingInventoryCheckouts.set(key, read);
       pending = read;
     }
     return await pending.read(demand);
   }
 
   private async readInventoryCheckout(
-    cwd: string, observation: StackReadObservation, candidates: readonly string[], sharePreflight = false,
+    cwd: string, observation: StackReadObservation, candidates: readonly string[],
   ): Promise<CheckoutLookup> {
     const { hints, inventoryDemand } = observation;
     const identity = candidates.length ? await hints.checkoutIdentity(cwd) : undefined;
@@ -503,8 +511,8 @@ export class StackReader {
       }
       return checkout;
     };
-    return sharePreflight && version
-      ? await this.sharedPreflight(cwd, version, inventoryDemand,
+    return version
+      ? await this.sharedInventoryCheckout(cwd, version, inventoryDemand,
         (demand) => read(demand, () => locateCheckout(cwd, demand), createStackCheckoutHints(demand)))
       : await read(inventoryDemand, () => observation.checkoutLookup(cwd, inventoryDemand));
   }

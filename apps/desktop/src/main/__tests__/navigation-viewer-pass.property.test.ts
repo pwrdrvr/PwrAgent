@@ -14,6 +14,8 @@ import {
 import type { AppServerListThreadsResponse } from "@pwragent/shared/contracts/normalized-app-server";
 import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import { type ProjectForgeAutomation } from "@pwragent/shared/project-forge-automation";
+import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
+import type { StackSummary } from "@pwragent/shared/stacks/stack-status";
 import * as gitExecutable from "../app-server/git-executable";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 import { isolateProcessGitEnvironment, runIsolatedGitSync } from "./helpers/isolated-git";
@@ -776,5 +778,50 @@ it("reuses installed Git for repeated merge offers while reading the live guard 
     start.mockRestore();
     restore();
     await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+it("keeps watch and healthy PR status when a different PR's stack read fails", async () => {
+  const db = openInMemoryStateDb();
+  try {
+    const store = new SqliteOverlayStore(db);
+    current.store = store;
+    resetAppServerServiceForTests();
+    const service = initializeDesktopAppServerService();
+    const thread = { backend: "codex" as const, threadId: "fixture" };
+    const healthy: PrSummary = {
+      number: 2, provider: "github.com", org: "fixture", repo: "stack", state: "passing",
+      lifecycleState: "open", url: "https://github.com/fixture/stack/pull/2", headRefName: "healthy",
+    };
+    const unavailable = { ...healthy, number: 1, url: "https://github.com/fixture/stack/pull/1", headRefName: "unavailable" };
+    const watch: ThreadPullRequestWatchSummary = {
+      ...thread, watchId: "fixture-watch", prKey: "github.com/fixture/stack#2", prUrl: healthy.url, prNumber: 2,
+      headSha: "a".repeat(40), notifyOn: ["success"], createdAt: 1, failureHandledByAutoFix: false,
+    };
+    const stack: StackSummary = {
+      key: "fixture-stack", name: "healthy", repository: "github.com:fixture/stack", inferred: false, trunk: "main",
+      layers: [{ branch: "healthy", parent: "main", health: "in_sync", role: "unbound", pullRequest: { number: 2 } }],
+    };
+    vi.spyOn(store, "listActiveThreadPrStatusWatches").mockResolvedValue([watch]);
+    const internals = service as unknown as {
+      primaryAttachedPrsForThread: () => PrSummary[];
+      readPrReviewReadiness: () => Promise<[]>;
+      resolveThreadForgeProject: () => undefined;
+      readPrStacks: (pr: PrSummary) => Promise<StackSummary[]>;
+    };
+    vi.spyOn(internals, "primaryAttachedPrsForThread").mockReturnValue([unavailable, healthy]);
+    vi.spyOn(internals, "readPrReviewReadiness").mockResolvedValue([]);
+    vi.spyOn(internals, "resolveThreadForgeProject").mockReturnValue(undefined);
+    vi.spyOn(internals, "readPrStacks").mockImplementation(async ({ number }) => {
+      if (number === 1) throw new Error("fixture checkout timeout");
+      return [stack];
+    });
+    const status = await service.getThreadPullRequestAutomationStatus(thread);
+    expect(status.watches).toEqual([watch]);
+    expect(status.autoFixEnabled).toBe(false);
+    expect(status.guidance).toContain("#1 is held while stack settlement is unavailable.");
+    expect(status.guidance).toContain("#2 is layer 1 of 1");
+  } finally {
+    db.close();
   }
 });

@@ -5199,9 +5199,14 @@ class DesktopAppServerService {
     prs: PrSummary[],
   ): Promise<Array<{ text: string; held?: boolean }>> {
     if (!prs.length) return [];
-    const scoped = await Promise.all(prs.map((pr) => this.readPrStacks(pr)));
+    const scoped = await Promise.allSettled(prs.map((pr) => this.readPrStacks(pr)));
     return prs.flatMap((pr, offset) => {
-      const candidates = scoped[offset]!;
+      const result = scoped[offset]!;
+      if (result.status === "rejected") {
+        appServerLog.debug("could not read PR stack guidance", { pr: pr.url, error: String(result.reason) });
+        return [{ text: `#${pr.number} is held while stack settlement is unavailable.`, held: true }];
+      }
+      const candidates = result.value;
       const stack = candidates.find((entry) => entry.layers.some((layer) => layer.pullRequest?.number === pr.number
         && stackDispatchBlock(layer))) ?? candidates[0];
       if (!stack) return [];
