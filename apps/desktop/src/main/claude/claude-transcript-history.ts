@@ -258,16 +258,33 @@ type HistorySnapshot = {
 const CACHE_BYTES = 96 * 1024 * 1024;
 const CACHE_THREADS = 12;
 
+type PendingTranscriptRead = {
+  started: boolean;
+  result: Promise<ClaudeTranscriptHistory>;
+};
+
 export class ClaudeTranscriptCache {
   private readonly snapshots = new Map<string, HistorySnapshot>();
-  private readonly reads = new Map<string, Promise<ClaudeTranscriptHistory>>();
+  private readonly reads = new Map<string, PendingTranscriptRead>();
 
   read(file: string): Promise<ClaudeTranscriptHistory> {
     const current = this.reads.get(file);
-    if (current) return current;
-    const pending = this.readFile(file).finally(() => this.reads.delete(file));
+    // Only share a read whose file observation is still ahead of every caller.
+    // A later caller may have begun after a write completed. Let it join the
+    // next batch, which checks the file even when the cached contents are warm.
+    if (current && !current.started) return current.result;
+    const previous = current?.result.catch(() => undefined) ?? Promise.resolve();
+    const pending: PendingTranscriptRead = {
+      started: false,
+      result: previous.then(() => {
+        pending.started = true;
+        return this.readFile(file);
+      }).finally(() => {
+        if (this.reads.get(file) === pending) this.reads.delete(file);
+      }),
+    };
     this.reads.set(file, pending);
-    return pending;
+    return pending.result;
   }
 
   private async readFile(file: string): Promise<ClaudeTranscriptHistory> {

@@ -11,6 +11,7 @@ import {
   createTranscriptReviewHistoryIndex,
   deriveTranscriptReviewPresentation,
   presentIndexedTranscriptReviews,
+  reviseArchivedAssistantReviewEvidence,
   summarizeTranscriptReviewSegment,
   type TranscriptReviewHistoryIndex,
   type TranscriptReviewPresentation,
@@ -168,12 +169,14 @@ function retainTranscriptPage(params: TranscriptHistoryPageInput, position: "old
         const entries = params.index.warmEntryOverrides;
         entries.set(entry.id, { value: entry, version, previous: entries.get(entry.id) });
       }
-      for (const message of messagesForEntries(revisions, params.page.replay.messages)) {
+      const revisedMessages = messagesForEntries(revisions, params.page.replay.messages);
+      for (const message of revisedMessages) {
         if (!params.index.messageIds.has(message.id)) continue;
         params.index.warmMessageIds.add(message.id);
         const messages = params.index.warmMessageOverrides;
         messages.set(message.id, { value: message, version, previous: messages.get(message.id) });
       }
+      reviseArchivedAssistantReviewEvidence(params.index.review, revisions, revisedMessages);
     }
   }
   const entries = params.page.replay.entries.filter(
@@ -306,11 +309,12 @@ function excludedIndexedHistoryIds<T extends { id: string }>(
   historyIds: ReadonlySet<string>,
   presentationIds: ReadonlySet<string> | undefined,
   exclusionsAreIndexed?: boolean,
+  revisionVisibility?: ReadonlyMap<string, boolean>,
 ): TranscriptIdLookup {
   const overlap = historyOverlapIds(tail, historyIds);
-  if (!presentationIds?.size) return overlap;
+  if (!presentationIds?.size && !revisionVisibility?.size) return overlap;
   let excluded = presentationIds;
-  if (!exclusionsAreIndexed) {
+  if (presentationIds?.size && !exclusionsAreIndexed) {
     let projection = projectedHistoryExclusions.get(presentationIds);
     if (projection?.index !== historyIds || projection.indexSize !== historyIds.size) {
       const ids = new Set<string>();
@@ -320,9 +324,16 @@ function excludedIndexedHistoryIds<T extends { id: string }>(
     }
     excluded = projection.ids;
   }
-  let size = overlap.size + excluded.size;
-  for (const id of overlap) if (excluded.has(id)) size--;
-  return { size, has: (id) => overlap.has(id) || excluded.has(id) };
+  let size = overlap.size + (excluded?.size ?? 0);
+  for (const id of overlap) if (excluded?.has(id)) size--;
+  const wasExcluded = (id: string) => overlap.has(id) || excluded?.has(id) === true;
+  for (const [id, visible] of revisionVisibility ?? []) {
+    if (wasExcluded(id) === visible) size += visible ? -1 : 1;
+  }
+  return {
+    size,
+    has: (id) => revisionVisibility?.has(id) ? !revisionVisibility.get(id) : wasExcluded(id),
+  };
 }
 
 type SegmentedArraySource<T> = {
@@ -654,7 +665,7 @@ export function combineTranscriptEntries(
   tailEntries: AppServerThreadEntry[],
   presentation?: Pick<
     TranscriptReviewPresentation,
-    "excludedHistoryEntryIds" | "historyEntryOverrides" | "indexedHistoryExclusions"
+    "excludedHistoryEntryIds" | "historyEntryOverrides" | "indexedHistoryExclusions" | "revisedHistoryEntryVisibility"
   >,
   retainedEntries: readonly AppServerThreadEntry[] = [],
 ): AppServerThreadEntry[] {
@@ -666,6 +677,7 @@ export function combineTranscriptEntries(
   const { tail, revisions } = separateWarmRevisions(tailEntries, index.warmEntryIds);
   const excludedHistoryIds = excludedIndexedHistoryIds(
     tail, index.entryIds, presentation?.excludedHistoryEntryIds, presentation?.indexedHistoryExclusions,
+    presentation?.revisedHistoryEntryVisibility,
   );
   const warmOverrides = index.warmEntryOverrides;
   const warmRevisionVersion = index.warmRevisionVersion;
@@ -972,7 +984,7 @@ export function combineTranscriptMessages(
   tailMessages: AppServerThreadMessage[],
   presentation?: Pick<
     TranscriptReviewPresentation,
-    "excludedHistoryMessageIds" | "indexedHistoryExclusions"
+    "excludedHistoryMessageIds" | "indexedHistoryExclusions" | "revisedHistoryMessageVisibility"
   >,
 ): AppServerThreadMessage[] {
   if (!history?.oldestPage || !index) {
@@ -981,6 +993,7 @@ export function combineTranscriptMessages(
   const { tail, revisions } = separateWarmRevisions(tailMessages, index.warmMessageIds);
   const excludedHistoryIds = excludedIndexedHistoryIds(
     tail, index.messageIds, presentation?.excludedHistoryMessageIds, presentation?.indexedHistoryExclusions,
+    presentation?.revisedHistoryMessageVisibility,
   );
   const warmOverrides = index.warmMessageOverrides;
   const warmRevisionVersion = index.warmRevisionVersion;
@@ -997,6 +1010,16 @@ export function combineTranscriptMessages(
   });
 }
 
+function revisedHistoryVisibility<T extends { id: string }>(
+  before: readonly T[], after: readonly T[], warmIds: ReadonlySet<string>,
+): ReadonlyMap<string, boolean> | undefined {
+  if (!warmIds.size) return undefined;
+  const revisions = before.filter(({ id }) => warmIds.has(id));
+  if (!revisions.length) return undefined;
+  const visible = new Set(after.map(({ id }) => id));
+  return new Map(revisions.map(({ id }) => [id, visible.has(id)]));
+}
+
 export function createTranscriptReviewPresentation(params: {
   history: LoadedTranscriptHistory | undefined;
   index: TranscriptHistoryIndex | undefined;
@@ -1004,13 +1027,24 @@ export function createTranscriptReviewPresentation(params: {
   tailMessages: AppServerThreadMessage[];
 }): TranscriptReviewPresentation {
   if (params.history && params.index) {
-    return presentIndexedTranscriptReviews({
+    const presentation = presentIndexedTranscriptReviews({
       ...params,
       index: params.index.review,
       historyEntryIds: params.index.entryIds,
       historyMessageIds: params.index.messageIds,
       historyTurns: params.index.turnPages,
     });
+    // The revision has already been classified as current evidence. Its old
+    // slot must have the same visibility after it is removed from the tail.
+    return {
+      ...presentation,
+      revisedHistoryEntryVisibility: revisedHistoryVisibility(
+        params.tailEntries, presentation.tailEntries, params.index.warmEntryIds,
+      ),
+      revisedHistoryMessageVisibility: revisedHistoryVisibility(
+        params.tailMessages, presentation.tailMessages, params.index.warmMessageIds,
+      ),
+    };
   }
   return deriveTranscriptReviewPresentation({
     historyEvents: [],

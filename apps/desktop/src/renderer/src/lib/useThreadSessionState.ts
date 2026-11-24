@@ -210,6 +210,7 @@ type ThreadSessionEntry = ThreadActiveTurnState & ThreadPendingInteractionState 
    * page that shares one of these turns continues the tail without a gap.
    */
   providerPageTurnIds?: ReadonlySet<string>;
+  providerPageAnchorTurnId?: string;
   needsHydrationAfterCompletion: boolean;
   nextLiveEntrySequence: number;
   // ThreadView's completed live aggregates live in a keyed ref store. State
@@ -5821,12 +5822,13 @@ export function useThreadSessionState(params: {
           const pageTurnIds = transcriptTurnIds(response.replay.entries);
           const previousPageTurnIds = current.providerPageTurnIds;
           const recoveringStream = (current.hydratedStreamRecoveryVersion ?? 0) !== streamRecoveryVersion;
-          // Once the last provider anchor has moved out of the working tail,
-          // a stream gap requires the new page's cursor. The live rows alone
-          // cannot prove that every intervening turn was delivered.
-          const lostRetiredPageBridge = recoveringStream && Boolean(current.loadedHistory)
+          // Once the provider page has retired from the working tail, only
+          // its last owner-confirmed turn can still prove this bridge. The
+          // observed live tail alone cannot prove continuity.
+          const lostRetiredPageBridge = Boolean(current.loadedHistory)
             && !previousPageTurnIds?.size
-            && Boolean(loadedHistoryIndexesRef.current[targetThreadKey]?.warmEntryIds.size);
+            && Boolean(loadedHistoryIndexesRef.current[targetThreadKey]?.warmEntryIds.size)
+            && (current.providerPageAnchorTurnId === undefined || !pageTurnIds.has(current.providerPageAnchorTurnId));
           // A bridge assumes the page continues the provider rows above it.
           // A page cursor falls between turns, so that holds only when the page
           // shares a turn with them. Otherwise turns can lie between the two
@@ -6051,6 +6053,7 @@ export function useThreadSessionState(params: {
                 }
               : {}),
             providerPageTurnIds,
+            providerPageAnchorTurnId: [...pageTurnIds].at(-1),
             loading: false,
             completionHydrationRetries,
             compactionOrderSources: undefined,
@@ -7791,6 +7794,7 @@ export function useThreadSessionState(params: {
             loading: false,
             loadingMore: false,
             providerPageTurnIds: undefined,
+            providerPageAnchorTurnId: undefined,
             pendingUsageByTurn: undefined,
             pendingStatusText: undefined,
             response: undefined,

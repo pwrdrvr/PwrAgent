@@ -1,11 +1,46 @@
 import type { AppServerReadThreadResponse, AppServerThreadEntry, AppServerThreadMessageEntry } from "@pwragent/shared/contracts/normalized-app-server";
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import { appendTranscriptHistoryPage, combineTranscriptEntries, createTranscriptHistoryIndex, createTranscriptReviewPresentation, prependTranscriptHistoryPage } from "../segmented-transcript";
+import { appendTranscriptHistoryPage, combineTranscriptEntries, combineTranscriptMessages, createTranscriptHistoryIndex, createTranscriptReviewPresentation, prependTranscriptHistoryPage } from "../segmented-transcript";
 import { createTranscriptReviewHistoryIndex, deriveTranscriptReviewPresentation } from "../transcript-review-presentation";
 
 const assistant = (id: string, text: string, turnId: string): AppServerThreadMessageEntry => ({
   type: "message", id, role: "assistant", text, turn: { id: turnId, status: "completed" },
+});
+
+it("reclassifies a stable assistant ID as its retired copy is corrected and retired again", () => {
+  fc.assert(fc.property(fc.string(), fc.string(), fc.boolean(), (suffix, different, plainFindings) => {
+    const duplicate = plainFindings
+      ? `Review comments:\n- [P2] Check export — export.ts:12 ${suffix}`
+      : `Review result ${suffix}`;
+    const corrected = `Corrected reply ${different}`;
+    const newest = assistant("latest", "Last answer.", "next-turn");
+    const review: AppServerThreadEntry = { type: "review", id: "findings", review: duplicate, turn: { id: "review-turn" } };
+    const index = createTranscriptHistoryIndex();
+    let history = appendTranscriptHistoryPage({
+      history: undefined, index, page: replay([review, assistant("answer", duplicate, "review-turn"), newest]), tailEntries: [],
+    });
+    for (const text of [corrected, duplicate, corrected]) {
+      const revision = assistant("answer", text, "review-turn");
+      const raw = [review, revision, newest];
+      const oracle = deriveTranscriptReviewPresentation({
+        historyEvents: [], historyIndex: createTranscriptReviewHistoryIndex(), tailEntries: raw, tailMessages: replay(raw).replay.messages,
+      });
+      for (const tail of [[revision], []]) {
+        if (!tail.length) {
+          history = appendTranscriptHistoryPage({ history, index, page: replay([revision]), tailEntries: [] });
+        }
+        const display = createTranscriptReviewPresentation({ history, index, tailEntries: tail, tailMessages: replay(tail).replay.messages });
+        const entries = combineTranscriptEntries(history, index, display.tailEntries, display);
+        const messages = combineTranscriptMessages(history, index, display.tailMessages, display);
+        expect(entries).toHaveLength(oracle.tailEntries.length);
+        expect([...entries]).toEqual(oracle.tailEntries);
+        expect(messages).toHaveLength(oracle.tailMessages.length);
+        expect([...messages].map(({ id, text }) => ({ id, text })))
+          .toEqual(oracle.tailMessages.map(({ id, text }) => ({ id, text })));
+      }
+    }
+  }));
 });
 function replay(entries: AppServerThreadEntry[]): AppServerReadThreadResponse {
   return {

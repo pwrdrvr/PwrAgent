@@ -102,7 +102,7 @@ it("does not revisit older pages in warm desktop and federated observers of a tu
   }
 });
 
-it("retires settled rows from the working tail of a continuously mounted remote observer", async () => {
+it.each(["reconnect", "reload", "overlapping reload"])("reconciles the owner cursor after %s in a continuously mounted remote observer", async (trigger) => {
   let firstRowVisits = 0;
   const first: AppServerThreadEntry = {
     id: "first", get type() { firstRowVisits++; return "message" as const; },
@@ -134,7 +134,7 @@ it("retires settled rows from the working tail of a continuously mounted remote 
     display: { revision: "revision", pricing: buildThreadPricingDisplay({}) },
     replay: {
       entries: request.display?.resource === "accounting" ? [usage]
-        : request.before ? [gap] : recovering ? [recovered] : [first],
+        : request.before ? [gap] : recovering ? trigger === "overlapping reload" ? [first, recovered] : [recovered] : [first],
       messages: [], pagination: recovering && !request.before
         ? { supportsPagination: true, hasPreviousPage: true, previousCursor: "gap" }
         : { supportsPagination: true, hasPreviousPage: false },
@@ -187,12 +187,22 @@ it("retires settled rows from the working tail of a continuously mounted remote 
     expect(result.current.entries[0]).toMatchObject({ id: "first", text: "First answer revised." });
     recovering = true;
     await act(async () => {
+      if (trigger !== "reconnect") {
+        await result.current.reload();
+        return;
+      }
       const event: AgentEvent = {
         backend: "claude", federationTarget: target,
         notification: { method: "federation/eventStream/changed", params: { instanceId: target.instanceId, epoch: "gap" } },
       };
       for (const listener of listeners) listener(event);
     });
+    if (trigger === "overlapping reload") {
+      expect(result.current.entries.map((entry) => entry.id)).toContain("first");
+      expect(result.current.entries.map((entry) => entry.id)).toContain("recovered");
+      expect(result.current.entries.map((entry) => entry.id)).toContain("answer-0");
+      return;
+    }
     expect(result.current.entries.map((entry) => entry.id)).toEqual(["recovered"]);
     await act(async () => { await result.current.loadOlder(); });
     expect(result.current.entries.map((entry) => entry.id)).toEqual(["in-gap", "recovered"]);

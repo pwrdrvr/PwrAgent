@@ -23,7 +23,14 @@ async function measure(size: number) {
       return Reflect.get(target, field, receiver);
     },
   }));
-  let entries: AppServerThreadMessageEntry[] = [];
+  // The refreshed owner page must overlap an owner-confirmed turn before
+  // retaining history. Keep a real anchor so this test measures review work
+  // with a valid bridge, independent of gap recovery.
+  const anchor: AppServerThreadMessageEntry = {
+    id: "owner-anchor", type: "message", role: "assistant", text: "Earlier owner reply",
+    createdAt: start - 1, turn: { id: "owner-anchor-turn", status: "completed" },
+  };
+  let entries = [anchor];
   let emit: (event: AgentEvent) => void = () => { throw new Error("missing subscription"); };
   const readThread = vi.fn<NonNullable<DesktopApi["readThread"]>>(async () => ({
     backend: "claude", threadId: thread.id, fetchedAt: Date.now(),
@@ -34,7 +41,7 @@ async function measure(size: number) {
   const desktopApi: DesktopApi = {
     readThread, onAgentEvent: (listener) => { emit = listener; return () => undefined; },
   };
-  const { result, unmount } = renderHook(() => useThreadSessionState({ desktopApi, thread, initialHistoryLimit: 1 }));
+  const { result, unmount } = renderHook(() => useThreadSessionState({ desktopApi, thread, initialHistoryLimit: 2 }));
   const clock = vi.spyOn(Date, "now");
   try {
     await act(async () => {});
@@ -56,16 +63,16 @@ async function measure(size: number) {
         } } });
       }
     });
-    entries = page;
+    entries = [anchor, ...page];
     clock.mockReturnValue(start + 200_000);
     await act(async () => { await result.current.reload(); });
-    expect(result.current.entries.length).toBe(2 * size);
+    expect(result.current.entries.length).toBe(2 * size + 1);
     fieldReads = 0;
     const readsBefore = readThread.mock.calls.length;
     act(() => { result.current.addOptimisticReviewEntry("Review sample"); });
     const observed = fieldReads;
     expect(readThread).toHaveBeenCalledTimes(readsBefore);
-    expect(result.current.entries).toHaveLength(2 * size + 1);
+    expect(result.current.entries).toHaveLength(2 * size + 2);
     return observed;
   } finally {
     clock.mockRestore();

@@ -1,4 +1,4 @@
-import { appendFile, mkdtemp, rm } from "node:fs/promises";
+import { appendFile, mkdtemp, open, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
@@ -10,6 +10,12 @@ import { ClaudeBackend } from "../claude/claude-backend";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { ClaudeTranscriptHistory } from "../claude/claude-transcript-history";
 
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const fs = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...fs, open: vi.fn(fs.open) };
+});
+
+const realOpen = (await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")).open;
 const id = "e4444444-4444-4444-8444-444444444444";
 
 function row(index: number, revision = "saved", turnId = `turn-${index}`): AppServerThreadMessageEntry {
@@ -55,6 +61,44 @@ it("reads only newly appended transcript records after another store updates a w
       }
     }),
   ), { numRuns: 20 });
+});
+
+it("includes appends committed before a second reader joins", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 8 }), fc.integer({ min: 1, max: 6 }), async (count, joiners) => withStores(async (writer, reader, root) => {
+    const first = row(0);
+    await writer.append(id, [first]);
+    const captured = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const mockedOpen = vi.mocked(open).mockClear().mockImplementationOnce(async (file, flags, mode) => {
+      expect(file).toBe(path.join(root, `${id}.jsonl`));
+      const handle = await realOpen(file, flags, mode);
+      const stat = handle.stat.bind(handle);
+      const readStat = async () => {
+        const snapshot = await stat();
+        captured.resolve();
+        await release.promise;
+        return snapshot;
+      };
+      vi.spyOn(handle, "stat").mockImplementationOnce(readStat as typeof handle.stat);
+      return handle;
+    });
+    const firstRead = reader.entries(id);
+    try {
+      await Promise.race([captured.promise, firstRead.then(() => { throw new Error("The first read did not capture its file stat"); })]);
+      const appended = [row(0, "revised"), ...Array.from({ length: count }, (_, index) => row(index + 1))];
+      await writer.append(id, appended);
+      const laterReads = Array.from({ length: joiners }, () => reader.entries(id));
+      release.resolve();
+      expect(await firstRead).toEqual([first]);
+      for (const entries of await Promise.all(laterReads)) expect(entries).toEqual(appended);
+      expect(mockedOpen).toHaveBeenCalledTimes(2);
+      expect(await reader.entries(id)).toEqual(appended);
+    } finally {
+      release.resolve();
+      await firstRead.catch(() => undefined);
+      mockedOpen.mockReset();
+    }
+  })), { numRuns: 12 });
 });
 
 it("matches a cold restart through append, revision, rewind, undo and a torn final line", async () => {
