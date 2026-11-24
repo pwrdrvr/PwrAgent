@@ -19,11 +19,12 @@ current selection on every call. PwrAgent uses this route at session creation
 and reload when both tools are available. Sessions without gateway access,
 including those on contained members, keep their selected native connections.
 The MCP Access panel reports when a session uses tool search and when the
-gateway has connected to each selected server. When a schema exceeds the
-ordinary search budget, Antigravity can call `search_mcp_tools` with the
-selected `connectionId`, the exact tool name as `query`, and
+gateway has connected to each selected server. When an oversized-schema
+notice includes a `toolName`, Antigravity can retry `search_mcp_tools` with
+the notice's `connectionId`, its full `toolName` as `query`, and
 `includeLargeSchema: true`. This returns at most one exact definition with
 its usual invocation identity, within a 64,000-byte serialized result.
+Optional server metadata and instructions are included as space permits.
 
 Search returns the original server display name, stable connection ID, tool
 name, exact MCP definition and opaque schema revision. Invoke through

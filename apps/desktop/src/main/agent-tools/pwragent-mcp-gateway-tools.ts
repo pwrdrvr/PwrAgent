@@ -1,5 +1,5 @@
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
-import type { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
+import { MCP_GATEWAY_SEARCH_QUERY_MAX_LENGTH, type McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
 import type { TokenMiserStore } from "../token-miser/token-miser-store";
 import { agentToolFailure, type AgentToolCallContentItems, type AgentToolDefinition } from "./agent-tool-definition";
 import { isMcpError } from "../mcp-connections/mcp-sdk";
@@ -13,14 +13,14 @@ export function buildMcpGatewayToolDefinitions(service?: McpGatewayToolService, 
     inputSchema: {
       type: "object", additionalProperties: false, required: ["query"],
       properties: {
-        query: { type: "string", minLength: 1, maxLength: 500 },
+        query: { type: "string", minLength: 1, maxLength: MCP_GATEWAY_SEARCH_QUERY_MAX_LENGTH },
         connectionId: { type: "string", minLength: 1 },
         limit: { type: "integer", minimum: 1, maximum: 5 },
         includeLargeSchema: { type: "boolean", description: "Antigravity only. With connectionId and the exact tool name as query, return one schema in a response of up to 64,000 bytes." },
       },
     },
     dispatch: async (args, context) => {
-      if (typeof args.query !== "string" || !args.query.trim() || args.query.length > 500
+      if (typeof args.query !== "string" || !args.query.trim() || args.query.length > MCP_GATEWAY_SEARCH_QUERY_MAX_LENGTH
         || (args.connectionId !== undefined && (typeof args.connectionId !== "string" || !args.connectionId))
         || (args.limit !== undefined && (!Number.isInteger(args.limit) || Number(args.limit) < 1 || Number(args.limit) > 5))
         || (args.includeLargeSchema !== undefined && typeof args.includeLargeSchema !== "boolean")
