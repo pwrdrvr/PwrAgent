@@ -610,13 +610,17 @@ describe("WaitingForPanel resource waits", () => {
     },
   };
 
-  /** The preview's compute pool: 4 slots, 3 held, a 2-slot head, then this thread asking for 1. */
+  /**
+   * The preview's compute pool, set to first in, first out: 4 slots, 3 held,
+   * a 2-slot head, then this thread asking for 1.
+   */
   function snapshot(): ResourceCheckoutsSnapshot {
     const base = buildPreviewSnapshot(NOW);
     return {
       ...base,
       resources: base.resources.map((resource) => resource.resourceId !== CPU ? resource : {
         ...resource,
+        policy: { ...resource.policy, queueOrder: "fifo" },
         queue: [
           ...resource.queue,
           {

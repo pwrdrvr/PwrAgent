@@ -73,29 +73,41 @@ test("default and dev contend for one durable machine allocation through preload
     })).resolves.toMatchObject({ outcome: "accepted" });
 
     if (sharing.mode === "counted" && sharing.capacity > 1) {
-      const request = (idempotencyKey: string, units?: number) => ({
-        kind: "request" as const, resourceId, idempotencyKey, purpose: idempotencyKey, expectedDurationMs: 120_000,
+      const request = (idempotencyKey: string, units?: number, expectedDurationMs = 120_000) => ({
+        kind: "request" as const, resourceId, idempotencyKey, purpose: idempotencyKey, expectedDurationMs,
         ...(units === undefined ? {} : { units }),
       });
       const lightA = await perform(reopened.window, request("light-default", 1));
       const lightB = await perform(waiter.window, request("light-dev", 1));
-      const heavy = await perform(reopened.window, request("heavy"));
-      const late = await perform(waiter.window, request("late-light", 1));
-      if (lightA.outcome !== "granted" || lightB.outcome !== "granted" || heavy.outcome !== "queued" || late.outcome !== "queued") {
-        throw new Error("Expected two light grants followed by two FIFO waiters.");
+      if (lightA.outcome !== "granted" || lightB.outcome !== "granted") {
+        throw new Error(`Expected two light grants. Results: ${JSON.stringify([lightA, lightB])}`);
       }
-      const release = (page: Page, lease: typeof lightA) => perform(page, {
+      const release = (page: Page, lease: { allocationId: string; generation: number }) => perform(page, {
         kind: "release", resourceId, allocationId: lease.allocationId, generation: lease.generation,
         idempotencyKey: `release-${lease.allocationId}`,
       });
+      // A profile holding part of the pool can't also wait for the rest.
+      await expect(perform(reopened.window, request("heavy-while-holding"))).resolves.toMatchObject({
+        outcome: "rejected", reason: "policy", message: expect.stringMatching(/Release what it holds/),
+      });
       await release(reopened.window, lightA);
+      const heavy = await perform(reopened.window, request("heavy"));
+      // The machine pool backfills: a short light request from the other
+      // profile ends before the whole-pool request could start, so it
+      // starts now, even though that profile already holds a slot.
+      const late = await perform(waiter.window, request("late-light", 1, 60_000));
+      if (heavy.outcome !== "queued" || late.outcome !== "granted") {
+        throw new Error(`Expected a queued whole-pool request and a backfilled light grant. Results: ${JSON.stringify([heavy, late])}`);
+      }
       expect((await read(waiter.window)).resources[0]).toMatchObject({
-        queue: [{ queueEntryId: heavy.queueEntryId }, { queueEntryId: late.queueEntryId }],
-        allocations: [{ allocationId: lightB.allocationId, units: 1 }],
+        policy: { queueOrder: "backfill" },
+        queue: [{ queueEntryId: heavy.queueEntryId }],
+        allocations: [{ allocationId: lightB.allocationId, units: 1 }, { allocationId: late.allocationId, units: 1 }],
       });
       await release(waiter.window, lightB);
+      await release(waiter.window, late);
       expect((await read(reopened.window)).resources[0]).toMatchObject({
-        queue: [{ queueEntryId: late.queueEntryId }], allocations: [{ allocationId: heavy.queueEntryId, units: sharing.capacity }],
+        queue: [], allocations: [{ allocationId: heavy.queueEntryId, units: sharing.capacity }],
       });
     }
   } finally {

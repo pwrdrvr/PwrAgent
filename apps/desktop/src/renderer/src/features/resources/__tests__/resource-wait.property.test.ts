@@ -19,10 +19,10 @@ import {
 /**
  * The rules a waiting thread's view of a checkout queue must keep:
  *
- * - "Why hasn't it started" agrees with the authority's own promotion, which
- *   is strictly first in, first out: only the head is granted, and only once
- *   it fits (owner-core `resource-checkout-authority.ts`, `wake`). The oracle
- *   below is that loop, re-stated.
+ * - "Why hasn't it started" agrees with the authority's own promotion on a
+ *   `fifo` resource: only the head is granted, and only once it fits
+ *   (owner-core `resource-checkout-authority.ts`, `promoteQueue`). The
+ *   oracle below is that loop, re-stated.
  * - A request marked "fits now" is exactly one the free capacity could run
  *   if the queue were not FIFO: the case an operator reads as a stall.
  * - The waiter's place is its own entry's position, never another thread's.
@@ -100,6 +100,8 @@ const settledArb = fc.record({
   return {
     ...base,
     resourceId: "res",
+    // Settled by `fifoOracle`, so it is a first-in, first-out resource.
+    policy: { ...base.policy, queueOrder: "fifo" },
     sharing: { mode: "counted", capacity, inUse, unitLabel: "CPU slots" },
     allocations,
     queue,
@@ -150,6 +152,22 @@ describe("resource wait view", () => {
         expect(hold.fitsNow).toBe((entry.units ?? 1) <= free);
         const sentence = describeQueueEntryHold(hold, entry.position, "CPU slot");
         expect(sentence.includes("Would fit now")).toBe(hold.reason === "order" && hold.fitsNow);
+      }
+    }));
+  });
+
+  it("blames first in, first out only on a fifo resource; on a backfill one, protecting the head", () => {
+    fc.assert(fc.property(settledArb, fc.constantFrom("fifo", "backfill", undefined), (settled, queueOrder) => {
+      const resource: ResourceDomain = { ...settled, policy: { ...settled.policy, queueOrder } };
+      // Unset, a counted resource backfills and an exclusive one is fifo.
+      const effective = queueOrder ?? (resource.sharing.mode === "counted" ? "backfill" : "fifo");
+      for (const entry of resource.queue) {
+        const hold = queueEntryHold(resource, entry);
+        expect(hold.queueOrder).toBe(effective);
+        const sentence = describeQueueEntryHold(hold, entry.position, "CPU slot");
+        const waitsWhileFitting = hold.reason === "order" && hold.fitsNow;
+        expect(sentence.includes("first in, first out")).toBe(waitsWhileFitting && effective === "fifo");
+        expect(sentence.includes("can't delay #1")).toBe(waitsWhileFitting && effective === "backfill");
       }
     }));
   });

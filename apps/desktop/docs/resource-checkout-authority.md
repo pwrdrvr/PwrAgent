@@ -54,8 +54,13 @@ before the head can start or fitting in spare slots at that time) start right
 away, while requests that could delay the head wait in FIFO order. Backfilled
 holds are advisory and cannot start managed jobs. Managed holds release
 capacity only after verified cleanup, so the scheduler does not count their
-deadlines as capacity returning. Thread
-holders and waiters display their resolved thread titles in Resources.
+deadlines as capacity returning. Backfill is the default for counted
+resources; a resource definition can set `queueOrder` to `"fifo"` to grant
+strictly in order, and exclusive resources are always FIFO. A requester that
+already holds part of a resource is refused a request for more unless it can
+start at once, and one with a request queued is refused a second, so no
+requester holds while it waits. Thread holders and waiters display their
+resolved thread titles in Resources.
 
 Codex environment setup, detached environment actions, and local automation
 gates do not require, claim, or wait on machine CPU checkouts. They run
