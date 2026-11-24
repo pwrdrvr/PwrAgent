@@ -37,8 +37,10 @@ explicitly asks for a reservation. By default, start routine Dev launches from
 an installed environment, short debugger or profiler sessions, and lightweight
 inspection without requesting or waiting for a checkout.
 
-For work you reserve, use `resource_checkout_action` and set `units` to the
-planned parallel worker count. Omitting `units` reserves the full machine pool.
+For work you reserve, use `resource_checkout_discover` to find the machine's
+`sharing.capacity` and cap command parallelism at that capacity. Set `units`
+in `resource_checkout_action` to the capped parallel worker count. Omitting
+`units` reserves the full machine pool.
 See [local CPU checkout](../../../docs/local-cpu-checkout.md) for repository
 verification budgets. Wait for the grant before launching the reserved job and
 release it after the job exits. A large request at the head of the queue waits
