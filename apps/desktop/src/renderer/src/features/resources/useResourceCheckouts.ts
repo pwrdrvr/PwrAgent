@@ -28,6 +28,23 @@ export function acceptSnapshot(
   return current === undefined || incoming.revision > current.revision;
 }
 
+/** Where the shown snapshot's clock stood, against this renderer's monotonic clock. */
+export type SnapshotClock = {
+  /** The snapshot's `observedAt`, on the serving process's clock. */
+  observedAt: number;
+  /** `performance.now()` when the snapshot was accepted. */
+  receivedAt: number;
+};
+
+/**
+ * Now on the snapshot's clock, at a tick taken at `monotonic`
+ * (`performance.now()`). Never before the snapshot's own `observedAt`: a
+ * snapshot can arrive after the tick.
+ */
+export function snapshotNow(clock: SnapshotClock, monotonic: number): number {
+  return clock.observedAt + Math.max(0, monotonic - clock.receivedAt);
+}
+
 export type PendingResourceAction = {
   request: ResourceCheckoutActionRequest;
 };
@@ -56,10 +73,12 @@ export function useResourceCheckouts(source: ResourceCheckoutsSource) {
   const [view, setView] = useState<ResourceCheckoutsView>({ status: "loading" });
   const [pending, setPending] = useState<readonly PendingResourceAction[]>([]);
   const [settled, setSettled] = useState<SettledResourceAction | null>(null);
-  // How far the serving process's clock is ahead of this renderer's
-  // `Date.now()`, measured when the shown snapshot arrived. Main's clock never
-  // steps back, so after the wall clock does, it runs ahead of the renderer.
-  const [clockOffset, setClockOffset] = useState(0);
+  // The shown snapshot's `observedAt` and the monotonic time it arrived.
+  // Main's clock never steps back, so after the wall clock does, it runs
+  // ahead of this renderer's `Date.now()`; time since arrival is measured on
+  // `performance.now()`, which a wall-clock step while the screen is open
+  // can't move.
+  const [snapshotClock, setSnapshotClock] = useState<SnapshotClock>();
   const shownRef = useRef<ResourceCheckoutsSnapshot | undefined>(undefined);
   const mountedRef = useRef(true);
   const readSeqRef = useRef(0);
@@ -73,7 +92,7 @@ export function useResourceCheckouts(source: ResourceCheckoutsSource) {
       succeededSeqRef.current = Math.max(succeededSeqRef.current, seq);
       if (!acceptSnapshot(shownRef.current, snapshot)) return;
       shownRef.current = snapshot;
-      setClockOffset(snapshot.observedAt - Date.now());
+      setSnapshotClock({ observedAt: snapshot.observedAt, receivedAt: performance.now() });
       setView({ status: "ready", snapshot });
     } catch (error) {
       // A read started after this one already succeeded, so what is on
@@ -133,5 +152,5 @@ export function useResourceCheckouts(source: ResourceCheckoutsSource) {
 
   const dismissSettled = useCallback(() => setSettled(null), []);
 
-  return { view, clockOffset, pending, settled, perform, refresh, dismissSettled };
+  return { view, snapshotClock, pending, settled, perform, refresh, dismissSettled };
 }

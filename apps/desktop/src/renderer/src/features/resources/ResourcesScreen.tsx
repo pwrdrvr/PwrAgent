@@ -8,7 +8,7 @@ import type {
 import { BrandLockup } from "../chrome/BrandLockup";
 import { SearchIcon } from "../../icons";
 import { newResourceActionIdempotencyKey, type ResourceCheckoutsSource } from "./resource-checkouts-source";
-import { useResourceCheckouts, type SettledResourceAction } from "./useResourceCheckouts";
+import { snapshotNow, useResourceCheckouts, type SettledResourceAction } from "./useResourceCheckouts";
 import { ResourceList, type ResourceListGroup } from "./ResourceList";
 import { ResourceInspector, type ResourceInspectorIntent } from "./ResourceInspector";
 import { StatusDot } from "./ResourceConditionChip";
@@ -79,11 +79,20 @@ function useDirectActionKeys() {
   };
 }
 
-/** Re-render on a slow tick so deadlines and ages stay current. */
-function useNow(intervalMs: number): number {
-  const [now, setNow] = useState(() => Date.now());
+type Tick = { wall: number; monotonic: number };
+
+function readTick(): Tick {
+  return { wall: Date.now(), monotonic: performance.now() };
+}
+
+/**
+ * Re-render on a slow tick so deadlines and ages stay current. Each tick
+ * reads both clocks, so the snapshot's clock can be projected from it.
+ */
+function useNow(intervalMs: number): Tick {
+  const [now, setNow] = useState(readTick);
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), intervalMs);
+    const timer = window.setInterval(() => setNow(readTick()), intervalMs);
     return () => window.clearInterval(timer);
   }, [intervalMs]);
   return now;
@@ -111,10 +120,11 @@ export function ResourcesScreen(props: {
   /** Select this resource, clearing filters that would hide it. */
   focus?: ResourceFocusRequest;
 }): ReactElement {
-  const { view, clockOffset, pending, settled, perform, refresh, dismissSettled } = useResourceCheckouts(props.source);
-  const now = useNow(30_000);
+  const { view, snapshotClock, pending, settled, perform, refresh, dismissSettled } = useResourceCheckouts(props.source);
+  const tick = useNow(30_000);
+  const now = tick.wall;
   // The tick on the snapshot's clock, which stamped the usage points.
-  const snapshotNow = now + clockOffset;
+  const chartNow = snapshotClock ? snapshotNow(snapshotClock, tick.monotonic) : now;
   const [filter, setFilter] = useState<ResourceFilter>("all");
   const [scope, setScope] = useState<ResourceScopeFilter>("all");
   const [query, setQuery] = useState("");
@@ -350,7 +360,7 @@ export function ResourcesScreen(props: {
               busyKind={pending.find(({ request }) => "resourceId" in request && request.resourceId === selected?.resource.resourceId)?.request.kind}
               item={selected}
               now={now}
-              snapshotNow={snapshotNow}
+              snapshotNow={chartNow}
               onIntent={onIntent}
               onOpenThread={props.onOpenThread}
               {...(snapshot ? { localInstanceId: snapshot.viewer.instanceId } : {})}

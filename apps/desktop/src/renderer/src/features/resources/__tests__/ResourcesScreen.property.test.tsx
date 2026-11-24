@@ -42,8 +42,9 @@ function ago(at: number, now: number): string {
  * snapshot's `observedAt` are stamped by the serving process's clock, and the
  * last point holds until now on that clock. Main's clock never steps back,
  * so after the wall clock does it runs ahead of the renderer's `Date.now()`.
- * With main ahead by any Δ, an idle chart (no new points, no new revision)
- * still advances one bar per 30 seconds of elapsed time, and the readout's
+ * With main ahead by any Δ, at the read or from a step while the screen is
+ * open, an idle chart (no new points, no new revision) still advances one
+ * bar per 30 seconds of elapsed time, and the readout's
  * ages are measured on the points' clock: what `usageChart` draws at main's
  * own now.
  */
@@ -61,8 +62,13 @@ describe("ResourcesScreen usage chart clock", () => {
         fc.integer({ min: 1, max: 20 }),
         // The bar pointed at, counted back from the newest.
         fc.integer({ min: 1, max: 59 }),
-        async (ahead, newestAge, recordedBefore, ticks, back) => {
-          vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+        // A backward wall-clock step after the read, with the screen open.
+        // Main's clock never steps back, so it keeps running; only the
+        // renderer's `Date.now()` drops. (A forward step past main's lead
+        // moves main too, which needs its own oracle.)
+        fc.integer({ min: 0, max: 2 * 60 * MIN }),
+        async (ahead, newestAge, recordedBefore, ticks, back, stepBack) => {
+          vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date", "performance"] });
           vi.setSystemTime(RENDERER_START);
           const mainAtRead = RENDERER_START + ahead;
           const newest = mainAtRead - newestAge;
@@ -76,6 +82,8 @@ describe("ResourcesScreen usage chart clock", () => {
             await act(async () => {});
             const title = screen.getAllByText(RESOURCE).find((node) => node.classList.contains("resources-row__title"))!;
             fireEvent.click(within(title.closest("li") as HTMLElement).getByRole("button", { name: new RegExp(`^${RESOURCE}`) }));
+            // `setSystemTime` moves only `Date`, not `performance.now()`.
+            vi.setSystemTime(Date.now() - stepBack);
             act(() => {
               vi.advanceTimersByTime(ticks * USAGE_BUCKET_MS);
             });
@@ -117,20 +125,7 @@ describe("ResourcesScreen usage chart clock", () => {
   });
 
   it("keeps sliding an idle chart when main runs ten minutes ahead", async () => {
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
-    vi.setSystemTime(RENDERER_START);
-    const mainAtRead = RENDERER_START + 10 * MIN;
-    const snapshot = buildPreviewSnapshot(mainAtRead);
-    snapshot.resources = snapshot.resources.map((resource) => resource.displayName === RESOURCE
-      ? { ...resource, usage: { observedSince: mainAtRead - 5 * MIN, points: [{ at: mainAtRead, held: 2, waiting: 1 }] } }
-      : resource);
-    render(<ResourcesScreen source={staticSource(snapshot)} onClose={() => undefined} onOpenThread={() => undefined} />);
-    await act(async () => {});
-    const title = screen.getAllByText(RESOURCE).find((node) => node.classList.contains("resources-row__title"))!;
-    fireEvent.click(within(title.closest("li") as HTMLElement).getByRole("button", { name: new RegExp(`^${RESOURCE}`) }));
-    const leadingBars = () => Number(
-      within(inspector()).getByTestId("resources-usage-plot").querySelector(".resources-usage__unobserved")?.getAttribute("x2"),
-    ) / 5;
+    const leadingBars = await openIdleChart(10 * MIN);
     const before = leadingBars();
     act(() => {
       vi.advanceTimersByTime(4 * USAGE_BUCKET_MS);
@@ -139,4 +134,36 @@ describe("ResourcesScreen usage chart clock", () => {
     // further back. The renderer's clock is still behind the newest point.
     expect(leadingBars()).toBe(before - 4);
   });
+
+  it("keeps sliding an idle chart when the wall clock steps back while the screen is open", async () => {
+    const leadingBars = await openIdleChart(0);
+    const before = leadingBars();
+    // No revision follows the step: the resource is idle.
+    vi.setSystemTime(Date.now() - 10 * MIN);
+    act(() => {
+      vi.advanceTimersByTime(4 * USAGE_BUCKET_MS);
+    });
+    expect(leadingBars()).toBe(before - 4);
+  });
 });
+
+/**
+ * Opens the screen on an idle resource, with main `ahead` of the renderer,
+ * and returns how many bars lead the chart unrecorded.
+ */
+async function openIdleChart(ahead: number): Promise<() => number> {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date", "performance"] });
+  vi.setSystemTime(RENDERER_START);
+  const mainAtRead = RENDERER_START + ahead;
+  const snapshot = buildPreviewSnapshot(mainAtRead);
+  snapshot.resources = snapshot.resources.map((resource) => resource.displayName === RESOURCE
+    ? { ...resource, usage: { observedSince: mainAtRead - 5 * MIN, points: [{ at: mainAtRead, held: 2, waiting: 1 }] } }
+    : resource);
+  render(<ResourcesScreen source={staticSource(snapshot)} onClose={() => undefined} onOpenThread={() => undefined} />);
+  await act(async () => {});
+  const title = screen.getAllByText(RESOURCE).find((node) => node.classList.contains("resources-row__title"))!;
+  fireEvent.click(within(title.closest("li") as HTMLElement).getByRole("button", { name: new RegExp(`^${RESOURCE}`) }));
+  return () => Number(
+    within(inspector()).getByTestId("resources-usage-plot").querySelector(".resources-usage__unobserved")?.getAttribute("x2"),
+  ) / 5;
+}
