@@ -147,6 +147,20 @@ export type ResearchHarnessSource = "mathos" | "bridge";
 export type ResearchMathosConfig = { team?: string; origin?: string };
 export type MathosTeam = { id: string; name: string };
 export type MathosTeamsResult = { ok: true; teams: MathosTeam[] } | { ok: false; error: string };
+/** A session's running or latest swarm on the team's VM, as its read-only status reports it. */
+export type MathosSwarm = {
+  project: string;
+  session: string;
+  swarm: string;
+  /** The source's own word: running, interrupted, ended… */
+  state: string;
+  /** A bounded preview of the swarm's task. */
+  task: string;
+  members: number;
+  running: boolean;
+};
+/** `truncated`: the VM has more sessions than PwrAgent looked through. */
+export type MathosSwarmsResult = { ok: true; swarms: MathosSwarm[]; sessions: number; truncated: boolean } | { ok: false; error: string };
 export const MATHOS_PLATFORM_DEFAULT_ORIGIN = "https://os.openmathmodel.org";
 /** A MathOS team id, as the platform's own client validates it. */
 export const MATHOS_TEAM_ID = /^o-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;

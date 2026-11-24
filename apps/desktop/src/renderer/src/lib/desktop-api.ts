@@ -14,6 +14,7 @@ import type {
   ResearchHarnessRequest,
   ResearchHarnessStatus,
   MathosTeamsResult,
+  MathosSwarmsResult,
 } from "@pwragent/shared/research-harness";
 import type { ResearchProfileRunsPage, ResearchProfileRunsQuery } from "@pwragent/shared/research";
 import { expandNavigationRemoteOwner } from "@pwragent/shared/navigation-remote-owner";
@@ -1277,6 +1278,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   pickResearchHarnessBridge?: () => Promise<{ path?: string }>;
   /** Settings: the MathOS teams the stored Platform key can open, on the saved origin. */
   listMathosTeams?: () => Promise<MathosTeamsResult>;
+  /** New run: the saved MathOS team's swarms (each session's running or latest), read-only. */
+  listMathosSwarms?: () => Promise<MathosSwarmsResult>;
   researchProfileRuns?: (request?: ResearchProfileRunsQuery) => Promise<ResearchProfileRunsPage>;
   openResearchWindow?: (request?: { runId?: string }) => Promise<void>;
   onResearchWindowSelect?: (callback: (runId: string) => void) => () => void;

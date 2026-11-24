@@ -1,11 +1,14 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { RESEARCH_MAX_MINUTES, RESEARCH_MAX_WORKERS, type ResearchThread } from "@pwragent/shared/research";
 import {
+  type MathosSwarm,
+  type MathosSwarmsResult,
   type ResearchHarnessCheck,
   type ResearchHarnessRequest,
   type ResearchHarnessStatus,
 } from "@pwragent/shared/research-harness";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { Select } from "../../components/Select";
 
 type Operation = "import" | "discovery" | "execute";
 type Capability = keyof Extract<ResearchHarnessCheck, { ok: true }>["capabilities"];
@@ -75,6 +78,9 @@ export function ResearchHarnessForm({ api, thread, onStarted, onCancel, onOpenSe
   const [acknowledged, setAcknowledged] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [swarms, setSwarms] = useState<MathosSwarmsResult>();
+  const [listing, setListing] = useState(false);
+  const [manualIds, setManualIds] = useState(false);
   const identity = useRef<{ signature: string; id: string }>(undefined);
   useEffect(() => {
     let active = true;
@@ -82,6 +88,20 @@ export function ResearchHarnessForm({ api, thread, onStarted, onCancel, onOpenSe
       .catch((failure: unknown) => { if (active) { setStatus({ configured: false, configError: message(failure) }); } });
     return () => { active = false; };
   }, [api, thread]);
+
+  async function listSwarms() {
+    if (!api.listMathosSwarms) return;
+    setListing(true);
+    try { setSwarms(await api.listMathosSwarms()); }
+    catch (failure) { setSwarms({ ok: false, error: message(failure) }); }
+    finally { setListing(false); }
+  }
+  const wantsSwarms = status?.source === "mathos" && status.configured && operation === "import" && !manualIds;
+  useEffect(() => {
+    // Once per form: listing opens the team's VM, which is an explicit network read.
+    if (wantsSwarms && swarms === undefined && !listing) void listSwarms();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- listSwarms reads the same api; re-running on its identity would re-list.
+  }, [wantsSwarms]);
 
   async function runCheck() {
     if (!api.checkResearchHarness) return;
@@ -96,8 +116,9 @@ export function ResearchHarnessForm({ api, thread, onStarted, onCancel, onOpenSe
   const blocked = blocker(operation, status, check);
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!api.startResearchHarness || busy) return;
-    const title = objective.trim() || `Import ${project.trim()} / ${swarm.trim()}`;
+    // Enter can submit a form whose button is disabled; the same rule applies.
+    if (!api.startResearchHarness || busy || missingIds) return;
+    const title = objective.trim() || chosenSwarm?.task || `Import ${project.trim()} / ${swarm.trim()}`;
     const request: Omit<ResearchHarnessRequest, "requestId"> = { ...thread, mode: execute ? "execute" : "import", source: discovery ? "discovery" : "swarm",
       objective: execute ? objective.trim() : title, project: project.trim(), session: discovery ? "" : session.trim(), swarm: swarm.trim(),
       ...(discovery && problem.trim() ? { problem: problem.trim() } : {}),
@@ -115,7 +136,14 @@ export function ResearchHarnessForm({ api, thread, onStarted, onCancel, onOpenSe
 
   const caps = check?.ok ? check.capabilities : undefined;
   const mathos = status?.source === "mathos";
-  return <form className="research-form" aria-label="Harness research" onSubmit={(event) => { void submit(event); }}>
+  // MathOS imports pick a swarm the team's VM reports, instead of typing three IDs.
+  const picking = mathos && operation === "import" && Boolean(api.listMathosSwarms) && !manualIds;
+  const swarmKey = (entry: Pick<MathosSwarm, "project" | "session" | "swarm">) => JSON.stringify([entry.project, entry.session, entry.swarm]);
+  const listed = swarms?.ok ? swarms.swarms : [];
+  const chosenSwarm = picking ? listed.find((entry) => entry.project === project && entry.session === session && entry.swarm === swarm) : undefined;
+  const missingIds = !project.trim() || !swarm.trim() || (!discovery && !session.trim()) || (execute && !objective.trim());
+  // noValidate: the browser's own "fill out this field" bubble is not shipped UI; the submit button waits for the fields instead.
+  return <form className="research-form" aria-label="Harness research" noValidate onSubmit={(event) => { void submit(event); }}>
     <section className="research-bridge" aria-labelledby={`${id}-bridge`}>
       <div className="research-card__top">
         <h4 id={`${id}-bridge`} className="research-group">Source</h4>
@@ -170,20 +198,48 @@ export function ResearchHarnessForm({ api, thread, onStarted, onCancel, onOpenSe
         })}
       </fieldset>
       {execute
-        ? <label>Objective<textarea required maxLength={8000} rows={2} value={objective} onChange={(e) => setObjective(e.target.value)} placeholder="What should the swarm find?" /></label>
+        ? <label>Objective<textarea maxLength={8000} rows={2} value={objective} onChange={(e) => setObjective(e.target.value)} placeholder="What should the swarm find?" /></label>
         : null}
-      <div className="research-form__row">
-        <label>Project<input required maxLength={64} value={project} onChange={(e) => setProject(e.target.value)} /></label>
-        {!discovery && <label>Session<input required maxLength={64} value={session} onChange={(e) => setSession(e.target.value)} /></label>}
-      </div>
-      <div className="research-form__row">
-        <label>{discovery ? "Discovery run" : "Swarm"}<input required maxLength={64} value={swarm} onChange={(e) => setSwarm(e.target.value)} /></label>
-        {discovery && <label>Problem (optional)<input maxLength={64} value={problem} onChange={(e) => setProblem(e.target.value)} placeholder="Keeps its tree" /></label>}
-      </div>
-      {!execute && <label>Title (optional)<input maxLength={200} value={objective} onChange={(e) => setObjective(e.target.value)} placeholder={project && swarm ? `Import ${project} / ${swarm}` : "Names this run here"} /></label>}
+      {picking ? <div className="research-swarms" role="group" aria-label="Swarm to import">
+        <div className="research-card__top">
+          <span className="research-group">Swarm</span>
+          <button type="button" className="research-button research-button--ghost" disabled={listing} onClick={() => { void listSwarms(); }}>
+            {listing ? "Looking…" : "Refresh"}</button>
+        </div>
+        {listing && !swarms && <p className="research-muted" role="status">Looking for swarms on this team’s VM…</p>}
+        {swarms && !swarms.ok && <p className="research-error" role="alert">{swarms.error}</p>}
+        {swarms?.ok && listed.length === 0 && <p className="research-text" role="status">
+          No swarms on this team’s VM yet{swarms.sessions ? ` (${swarms.sessions} ${swarms.sessions === 1 ? "session" : "sessions"} looked at)` : ""}. Start one in MathOS, then refresh.
+        </p>}
+        {listed.length > 0 && <Select
+          className="research-select"
+          aria-label="Swarm to import"
+          value={chosenSwarm ? swarmKey(chosenSwarm) : ""}
+          placeholder={`Choose one of ${listed.length} ${listed.length === 1 ? "swarm" : "swarms"}`}
+          options={listed.map((entry) => ({ value: swarmKey(entry), label: entry.task || entry.swarm,
+            description: `${entry.project} / ${entry.session} · ${entry.state}${entry.running ? " (running)" : ""} · ${entry.members} ${entry.members === 1 ? "member" : "members"}` }))}
+          onChange={(key) => {
+            const entry = listed.find((candidate) => swarmKey(candidate) === key);
+            if (!entry) return;
+            setProject(entry.project); setSession(entry.session); setSwarm(entry.swarm);
+          }}
+        />}
+        {swarms?.ok && swarms.truncated && <p className="research-muted">Only the first {swarms.sessions} sessions were looked at.</p>}
+        <button type="button" className="research-button research-button--ghost" onClick={() => setManualIds(true)}>Enter IDs instead</button>
+      </div> : <>
+        <div className="research-form__row">
+          <label>Project<input maxLength={64} value={project} onChange={(e) => setProject(e.target.value)} /></label>
+          {!discovery && <label>Session<input maxLength={64} value={session} onChange={(e) => setSession(e.target.value)} /></label>}
+        </div>
+        <div className="research-form__row">
+          <label>{discovery ? "Discovery run" : "Swarm"}<input maxLength={64} value={swarm} onChange={(e) => setSwarm(e.target.value)} /></label>
+          {discovery && <label>Problem (optional)<input maxLength={64} value={problem} onChange={(e) => setProblem(e.target.value)} placeholder="Keeps its tree" /></label>}
+        </div>
+      </>}
+      {!execute && <label>Title (optional)<input maxLength={200} value={objective} onChange={(e) => setObjective(e.target.value)} placeholder={chosenSwarm?.task || (project && swarm ? `Import ${project} / ${swarm}` : "Names this run here")} /></label>}
       {execute && <div className="research-form__row">
-        <label>Members<input type="number" min={1} max={RESEARCH_MAX_WORKERS} required value={workers} onChange={(e) => setWorkers(Number(e.target.value))} /></label>
-        <label>Deadline (minutes)<input type="number" min={1} max={RESEARCH_MAX_MINUTES} required value={minutes} onChange={(e) => setMinutes(Number(e.target.value))} /></label>
+        <label>Members<input type="number" min={1} max={RESEARCH_MAX_WORKERS} value={workers} onChange={(e) => setWorkers(Number(e.target.value))} /></label>
+        <label>Deadline (minutes)<input type="number" min={1} max={RESEARCH_MAX_MINUTES} value={minutes} onChange={(e) => setMinutes(Number(e.target.value))} /></label>
       </div>}
       <dl className="research-dl">
         <dt>Evidence opens from</dt>
@@ -205,7 +261,7 @@ export function ResearchHarnessForm({ api, thread, onStarted, onCancel, onOpenSe
     </>}
     <div className="research-actions">
       {status?.configured && <button type="submit" className="research-button research-button--primary"
-        disabled={busy || Boolean(blocked) || !status.workspace || (execute && !acknowledged)}>{execute ? "Start swarm" : discovery ? "Take snapshot" : "Import records"}</button>}
+        disabled={busy || Boolean(blocked) || !status.workspace || missingIds || (execute && !acknowledged)}>{execute ? "Start swarm" : discovery ? "Take snapshot" : "Import records"}</button>}
       {onCancel && <button type="button" className="research-button research-button--ghost" onClick={onCancel}>Cancel</button>}
     </div>
   </form>;

@@ -10,6 +10,7 @@ import { StateDb } from "../state/state-db";
 import { createTempStateDb } from "./sqlite-test-utils";
 import {
   MATHOS_RUNTIME_SUBPROTOCOL,
+  listMathosSwarms,
   listMathosTeams,
   openMathosPlatformConnection,
   type MathosPlatformDeps,
@@ -328,6 +329,60 @@ describe("PwrAgent's MathOS Platform client", () => {
     await expect(connection.request("hello", {})).rejects.toThrow(/runtime version from its web app \(no entry script\)/);
     // Nothing was opened without a runtime version.
     expect(missing.opens()).toBe(0);
+  });
+
+  it("lists each session's swarm across session pages, skipping sessions that started none", async () => {
+    const sessions = [
+      { project: "alpha", name: "default" }, { project: "alpha", name: "quiet" },
+      { project: "beta", name: "default" }, { project: "beta", name: "second" },
+    ];
+    const statuses: Record<string, Record<string, unknown>> = {
+      "alpha/default": { swarm: "s-old", state: "ended", task: "Prove   the lemma\n quickly", members: [{}, {}], running: false },
+      "beta/second": { swarm: "s-live", state: "running", task: "Search", limits: { members: 3 }, running: true },
+      "beta/default": { swarm: "s-two", state: "interrupted", task: "", members: [{}], running: false },
+    };
+    const target = platform({ runtime: (frame, socket) => {
+      if (frame.op === "sessions.list") {
+        const page = frame.after === undefined ? { sessions: sessions.slice(0, 2), next: "alpha/quiet" } : { sessions: sessions.slice(2) };
+        socket.reply({ id: frame.id, ok: page });
+        return true;
+      }
+      if (frame.op === "swarm.status") {
+        const status = statuses[`${String(frame.project)}/${String(frame.session)}`];
+        socket.reply(status ? { id: frame.id, ok: status } : { id: frame.id, error: { code: "invalid_input", message: "this session has started no swarm" } });
+        return true;
+      }
+      return false;
+    } });
+    const listed = await listMathosSwarms(target.deps, { origin: ORIGIN, team: TEAM, apiKey: KEY });
+    expect(listed).toEqual({ sessions: 4, truncated: false, swarms: [
+      // Running first, then in the order the VM lists its sessions.
+      { project: "beta", session: "second", swarm: "s-live", state: "running", task: "Search", members: 3, running: true },
+      { project: "alpha", session: "default", swarm: "s-old", state: "ended", task: "Prove the lemma quickly", members: 2, running: false },
+      { project: "beta", session: "default", swarm: "s-two", state: "interrupted", task: "", members: 1, running: false },
+    ] });
+    // Only reads, and the socket is closed when the list is done.
+    const ops = new Set(target.frames.map((line) => JSON.parse(line) as Record<string, unknown>).filter((frame) => "op" in frame).map((frame) => frame.op));
+    expect(ops).toEqual(new Set(["sessions.list", "swarm.status"]));
+    expect(target.sockets[0]!.closedWith).toBe(1000);
+    expect(target.opens()).toBe(1);
+  });
+
+  it("falls back to the conversation list, and reports a refusal rather than an empty VM", async () => {
+    const fallback = platform({ runtime: (frame, socket) => {
+      if (frame.op === "sessions.list") { socket.reply({ id: frame.id, error: { code: "permission_denied", message: "not granted" } }); return true; }
+      if (frame.op === "conversation.list") { socket.reply({ id: frame.id, ok: { sessions: [{ project: "alpha", name: "default" }], next_after: null } }); return true; }
+      if (frame.op === "swarm.status") { socket.reply({ id: frame.id, ok: { swarm: "s1", state: "ended", task: "T", members: [], running: false } }); return true; }
+      return false;
+    } });
+    expect((await listMathosSwarms(fallback.deps, { origin: ORIGIN, team: TEAM, apiKey: KEY })).swarms.map((entry) => entry.swarm)).toEqual(["s1"]);
+
+    const refused = platform({ runtime: (frame, socket) => {
+      if (frame.op === "sessions.list") { socket.reply({ id: frame.id, ok: { sessions: [{ project: "alpha", name: "default" }] } }); return true; }
+      if (frame.op === "swarm.status") { socket.reply({ id: frame.id, error: { code: "permission_denied", message: "swarm status is not granted" } }); return true; }
+      return false;
+    } });
+    await expect(listMathosSwarms(refused.deps, { origin: ORIGIN, team: TEAM, apiKey: KEY })).rejects.toThrow(/not granted/);
   });
 
   it("lists the key's teams across pages and drops anything that is not a team", async () => {

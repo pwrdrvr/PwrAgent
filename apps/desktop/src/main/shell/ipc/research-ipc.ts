@@ -30,9 +30,9 @@ import type { ResearchProfileRunsPage, ResearchProfileRunsQuery } from "@pwragen
 import { RESEARCH_RUN_ATTENTION_ORDER } from "@pwragent/shared/research";
 import { RESEARCH_PROFILE_RUNS_CHANNEL, RESEARCH_OPEN_WINDOW_CHANNEL } from "../../../shared/ipc";
 import { researchWindowRunId, showResearchWindow } from "../research-window";
-import { RESEARCH_HARNESS_STATUS_CHANNEL, RESEARCH_HARNESS_START_CHANNEL, RESEARCH_HARNESS_CHECK_CHANNEL, RESEARCH_HARNESS_RECONCILE_CHANNEL, RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL, RESEARCH_HARNESS_SETTINGS_CHECK_CHANNEL, RESEARCH_HARNESS_PICK_BRIDGE_CHANNEL, RESEARCH_MATHOS_TEAMS_CHANNEL } from "../../../shared/ipc";
+import { RESEARCH_HARNESS_STATUS_CHANNEL, RESEARCH_HARNESS_START_CHANNEL, RESEARCH_HARNESS_CHECK_CHANNEL, RESEARCH_HARNESS_RECONCILE_CHANNEL, RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL, RESEARCH_HARNESS_SETTINGS_CHECK_CHANNEL, RESEARCH_HARNESS_PICK_BRIDGE_CHANNEL, RESEARCH_MATHOS_TEAMS_CHANNEL, RESEARCH_MATHOS_SWARMS_CHANNEL } from "../../../shared/ipc";
 import { resolveDesktopConfigPath } from "../../settings/desktop-config";
-import { getResearchHarnessService, listResearchMathosTeams, researchHarnessPlatformKeyStored, researchHarnessStatus } from "../../research/research-runtime";
+import { getResearchHarnessService, listResearchMathosSwarms, listResearchMathosTeams, researchHarnessPlatformKeyStored, researchHarnessStatus } from "../../research/research-runtime";
 import { getDesktopSettingsService } from "../../settings/desktop-settings-singleton";
 
 const researchIpcLog = getMainLogger("pwragent:research");
@@ -98,6 +98,14 @@ export function registerResearchIpcHandlers(): void {
   ipcMain.handle(RESEARCH_MATHOS_TEAMS_CHANNEL, async (event) => {
     if (!isLocalMainWindowWebContents(event.sender)) throw new Error("List MathOS teams on the owning instance");
     return await listResearchMathosTeams();
+  });
+  // The New run form lists the saved team's swarms to choose from. Read-only; the window supplies nothing.
+  ipcMain.handle(RESEARCH_MATHOS_SWARMS_CHANNEL, async (event) => {
+    if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");
+    requireResearchEnabled();
+    const result = await listResearchMathosSwarms();
+    if (!result.ok) researchIpcLog.warn("MathOS swarm listing failed", { error: result.error });
+    return result;
   });
   // Reveals this profile's own config file. The window supplies no path.
   ipcMain.handle(RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL, (event) => {
@@ -198,6 +206,7 @@ export function disposeResearchIpcHandlers(): void {
   ipcMain.removeHandler(RESEARCH_HARNESS_SETTINGS_CHECK_CHANNEL);
   ipcMain.removeHandler(RESEARCH_HARNESS_PICK_BRIDGE_CHANNEL);
   ipcMain.removeHandler(RESEARCH_MATHOS_TEAMS_CHANNEL);
+  ipcMain.removeHandler(RESEARCH_MATHOS_SWARMS_CHANNEL);
   ipcMain.removeHandler(RESEARCH_PROFILE_RUNS_CHANNEL);
   ipcMain.removeHandler(RESEARCH_OPEN_WINDOW_CHANNEL);
   for (const channel of [RESEARCH_CHANGES_CHANNEL, RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL, RESEARCH_WITHDRAW_CHANNEL, RESEARCH_EVENTS_CHANNEL]) ipcMain.removeHandler(channel);

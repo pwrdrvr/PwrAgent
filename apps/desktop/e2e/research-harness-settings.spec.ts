@@ -103,6 +103,13 @@ async function startFakePlatform(): Promise<{ origin: string; observed: Observed
           observed.ops.push(String(frame.op));
           const reply = (value: unknown) => ws.send(Buffer.from(`${JSON.stringify(value)}\n`), { binary: true });
           if (frame.op === "whoami") reply({ id: frame.id, ok: { process: 3, handles: [{ endpoint: "swarm", actions: ["records", "status", "stop"] }] } });
+          // Two sessions: one started this swarm, the other started none.
+          else if (frame.op === "sessions.list") reply({ id: frame.id, ok: { sessions: [{ project: "contrived-project", name: "default", live: true }, { project: "contrived-project", name: "notes", live: false }] } });
+          else if (frame.op === "swarm.status") {
+            reply(frame.session === "default"
+              ? { id: frame.id, ok: { swarm: SWARM, state: "ended", task: "Contrived objective", members: [{ member: "m1" }, { member: "m2" }], running: false } }
+              : { id: frame.id, error: { code: "invalid_input", message: "this session has started no swarm" } });
+          }
           else if (frame.op === "swarm.records") {
             const after = typeof frame.after === "number" ? frame.after : 0;
             reply({ id: frame.id, ok: { swarm: frame.swarm, records: records.filter((record) => (record.seq as number) > after) } });
@@ -198,9 +205,11 @@ test("MathOS Platform settings sign in, find the team, and import a swarm from t
     await expect(panel.getByText("This team’s VM does not offer discovery reads to PwrAgent.")).toBeVisible();
     await capture(app.window, testInfo, "source-configured");
 
-    await panel.getByLabel("Project", { exact: true }).fill("contrived-project");
-    await panel.getByLabel("Session", { exact: true }).fill("default");
-    await panel.getByLabel("Swarm", { exact: true }).fill(SWARM);
+    // The team's swarms are listed to choose from; no IDs are typed.
+    const picker = panel.getByRole("combobox", { name: "Swarm to import" });
+    await picker.click();
+    await app.window.getByRole("option", { name: /Contrived objective/ }).click();
+    await capture(app.window, testInfo, "swarm-picked");
     await panel.getByRole("button", { name: "Import records", exact: true }).click();
     await panel.getByRole("tab", { name: "Findings", exact: true }).click();
     await expect(panel.getByText("Contrived platform finding 3")).toBeVisible();
@@ -211,7 +220,7 @@ test("MathOS Platform settings sign in, find the team, and import a swarm from t
     expect(platform.observed.authorizations.every((value) => value === `Bearer ${PLATFORM_KEY}`)).toBe(true);
     expect(platform.observed.urls.some((url) => url.includes(PLATFORM_KEY))).toBe(false);
     expect(platform.observed.firstLines.every((line) => line === JSON.stringify({ nucleus_key: PLATFORM_KEY }))).toBe(true);
-    expect(new Set(platform.observed.ops)).toEqual(new Set(["whoami", "swarm.records"]));
+    expect(new Set(platform.observed.ops)).toEqual(new Set(["whoami", "sessions.list", "swarm.status", "swarm.records"]));
   } finally {
     await app.close();
     await platform.close();

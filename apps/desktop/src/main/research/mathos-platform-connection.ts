@@ -1,4 +1,4 @@
-import { RESEARCH_HARNESS_REVISION, MATHOS_TEAM_ID, type MathosTeam } from "@pwragent/shared/research-harness";
+import { RESEARCH_HARNESS_REVISION, MATHOS_TEAM_ID, type MathosSwarm, type MathosTeam } from "@pwragent/shared/research-harness";
 import type { ResearchHarnessConnection } from "@pwragent/owner-core/research-harness-service";
 
 /**
@@ -303,6 +303,86 @@ export async function connectMathosRuntime(deps: MathosPlatformDeps, target: Mat
     close: () => fail("The MathOS runtime connection closed."),
     get closed() { return closed; },
   };
+}
+
+/** Sessions looked through for swarms; the rest are reported as not looked at. */
+const MAX_LISTED_SESSIONS = 200;
+/** Session status reads in flight at once, well inside the runtime's request bound. */
+const STATUS_CONCURRENCY = 8;
+const NO_SWARM = /started no swarm|has no swarm/i;
+
+type SessionRef = { project: string; session: string };
+
+/** Every session on the VM by project and name, a page at a time: `sessions.list`, else `conversation.list`. */
+async function listSessions(runtime: RuntimeSocket): Promise<{ sessions: SessionRef[]; truncated: boolean }> {
+  const read = async (op: "sessions.list" | "conversation.list") => {
+    const sessions: SessionRef[] = [];
+    let after: unknown;
+    for (let page = 0; page < 20; page++) {
+      const body = record(await runtime.request(op, after === undefined ? {} : { after }));
+      if (!Array.isArray(body?.sessions)) throw new MathosPlatformError("The MathOS runtime returned an invalid session list.");
+      for (const entry of body.sessions) {
+        const session = record(entry);
+        if (typeof session?.project === "string" && typeof session.name === "string") sessions.push({ project: session.project, session: session.name });
+        if (sessions.length >= MAX_LISTED_SESSIONS) return { sessions, truncated: true };
+      }
+      after = op === "sessions.list" ? body.next : body.next_after;
+      if (after === undefined || after === null) return { sessions, truncated: false };
+    }
+    return { sessions, truncated: true };
+  };
+  try {
+    return await read("sessions.list");
+  } catch (error) {
+    // A window may hold the conversation list without the sessions service's.
+    if (error instanceof MathosPlatformError && error.code === "permission_denied") return await read("conversation.list");
+    throw error;
+  }
+}
+
+/**
+ * The swarms on the team's VM: each session's running or latest swarm, from
+ * its read-only `swarm.status`. Sessions that started none are skipped. Opens
+ * the VM as an import does, reads, and closes; nothing is written anywhere.
+ */
+export async function listMathosSwarms(deps: MathosPlatformDeps, target: MathosPlatformTarget):
+  Promise<{ swarms: MathosSwarm[]; sessions: number; truncated: boolean }> {
+  const version = await readMathosRuntimeVersion(deps, target.origin);
+  const runtime = await connectMathosRuntime(deps, target, await openMathosRuntime(deps, target, version));
+  try {
+    const { sessions, truncated } = await listSessions(runtime);
+    const swarms: Array<MathosSwarm | undefined> = new Array(sessions.length);
+    let refused: unknown;
+    let next = 0;
+    const worker = async () => {
+      for (let i = next++; i < sessions.length; i = next++) {
+        const { project, session } = sessions[i]!;
+        try {
+          const status = record(await runtime.request("swarm.status", { project, session }));
+          const limits = record(status?.limits);
+          if (typeof status?.swarm !== "string") continue;
+          swarms[i] = {
+            project, session, swarm: status.swarm,
+            state: typeof status.state === "string" ? status.state : "unknown",
+            task: typeof status.task === "string" ? status.task.replace(/\s+/g, " ").trim().slice(0, 240) : "",
+            members: Array.isArray(status.members) ? status.members.length : typeof limits?.members === "number" ? limits.members : 0,
+            running: status.running === true,
+          };
+        } catch (error) {
+          if (!(error instanceof MathosPlatformError && NO_SWARM.test(error.message))) refused ??= error;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(STATUS_CONCURRENCY, sessions.length) }, worker));
+    const found = swarms.filter((swarm): swarm is MathosSwarm => swarm !== undefined);
+    // Every status read refused for another reason: say why rather than report an empty VM.
+    if (!found.length && refused) throw refused;
+    // Running swarms first, then by project and session as the VM lists them.
+    found.sort((a, b) => Number(b.running) - Number(a.running));
+    return { swarms: found, sessions: sessions.length, truncated };
+  } finally {
+    runtime.close();
+  }
 }
 
 type Handle = { endpoint: string; actions: string[] };
