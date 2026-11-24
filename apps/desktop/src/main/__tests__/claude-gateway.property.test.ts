@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -8,11 +8,13 @@ import fc from "fast-check";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   applyClaudeGatewaySetting,
+  claudeGatewayKeysOf,
   claudeGatewaySignInEnvironment,
   claudeGatewayUrlFromSettings,
   ClaudeGatewaySignInSession,
   normalizeClaudeGatewayUrl,
   parseClaudeGatewayLine,
+  restoreClaudeGatewaySetting,
   supportsClaudeGatewaySignIn,
   writeClaudeGatewaySetting,
 } from "../claude/claude-gateway";
@@ -48,6 +50,41 @@ describe("Claude Code settings: the gateway keys", () => {
         expect(JSON.parse(applyClaudeGatewaySetting(text, undefined))).toEqual(JSON.parse(text));
       },
     ));
+  });
+
+  it("a sign-in that did not finish leaves the file exactly as it found it, whatever the gateway keys held", () => {
+    const gatewayKeys = fc.record({
+      forceLoginMethod: fc.oneof(fc.constantFrom("gateway", "claudeai", "console"), fc.jsonValue()),
+      forceLoginGatewayUrl: fc.oneof(gatewayUrl, fc.jsonValue()),
+    }, { requiredKeys: [] });
+    fc.assert(fc.property(settingsObject, gatewayKeys, gatewayUrl, (settings, keys, wrote) => {
+      const before = JSON.stringify({ ...settings, ...keys });
+      const written = applyClaudeGatewaySetting(before, wrote);
+      const restored = restoreClaudeGatewaySetting(written, claudeGatewayKeysOf(before), wrote);
+      expect(JSON.parse(restored ?? written)).toEqual(JSON.parse(before));
+    }));
+  });
+
+  it("keeps a gateway someone set after the sign-in started", () => {
+    const wrote = "https://gateway.example.com";
+    const later = applyClaudeGatewaySetting("{}", "https://other.example.com");
+    expect(restoreClaudeGatewaySetting(later, {}, wrote)).toBeUndefined();
+  });
+
+  it.skipIf(process.platform === "win32")("writes through a symlinked settings file and leaves the link in place", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-settings-link-"));
+    try {
+      await mkdir(path.join(root, "dotfiles"));
+      const target = path.join(root, "dotfiles", "settings.json");
+      const link = path.join(root, "settings.json");
+      await writeFile(target, JSON.stringify({ model: "opus" }));
+      await symlink(target, link);
+      await writeClaudeGatewaySetting(link, "https://gateway.example.com");
+      expect((await lstat(link)).isSymbolicLink()).toBe(true);
+      expect(JSON.parse(await readFile(target, "utf8"))).toMatchObject({ model: "opus", forceLoginMethod: "gateway" });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("refuses a file that is not a JSON object instead of replacing it", () => {
@@ -183,7 +220,8 @@ describe("ClaudeGatewaySignInSession", () => {
   // match the question it is showing. The session must therefore write an
   // answer only for the question it currently shows, at the revision the
   // operator saw, and must answer the URL question by itself only for the URL
-  // the operator asked for.
+  // the operator asked for. Each question is answered once: Claude Code
+  // cancels on an answer for a question it has already moved past.
   it("writes an answer only for the question the operator is looking at", async () => {
     type Command =
       | { kind: "say"; state: (typeof QUESTION_STATES)[number] | "connecting" | "polling"; shown: string }
@@ -199,6 +237,7 @@ describe("ClaudeGatewaySignInSession", () => {
     await fc.assert(fc.asyncProperty(fc.array(command, { maxLength: 14 }), async (commands) => {
       const { session, answers, say } = open();
       const expected: Array<{ state: string; shown: string; accept: boolean }> = [];
+      let answeredRevision = -1;
       for (const next of commands) {
         if (next.kind === "say") {
           await say({ version: 1, state: next.state, ...(next.state === "connecting" || next.state === "polling" ? {} : { shown: next.shown }) });
@@ -208,8 +247,11 @@ describe("ClaudeGatewaySignInSession", () => {
         const { revision, step } = session.progress();
         const accepted = session.answer(revision - next.staleBy);
         const isQuestion = step.state === "url_input" || step.state === "trust_prompt" || step.state === "confirm_account";
-        expect(accepted).toBe(next.staleBy === 0 && isQuestion);
-        if (accepted && isQuestion) expected.push({ state: step.state, shown: step.shown, accept: true });
+        expect(accepted).toBe(next.staleBy === 0 && isQuestion && revision !== answeredRevision);
+        if (accepted && isQuestion) {
+          answeredRevision = revision;
+          expected.push({ state: step.state, shown: step.shown, accept: true });
+        }
         await new Promise((resolve) => setImmediate(resolve));
       }
       expect(answers).toEqual(expected);

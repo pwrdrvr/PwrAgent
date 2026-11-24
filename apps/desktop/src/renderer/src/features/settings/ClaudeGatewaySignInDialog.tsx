@@ -96,7 +96,7 @@ export function ClaudeGatewaySignInDialog(props: {
     );
     actions = (
       <>
-        <button className="button button--secondary" type="button" onClick={props.onClose}>Close</button>
+        <button className="button button--secondary" type="button" onClick={cancel}>Close</button>
         <button className="button button--primary" type="button" onClick={props.onRetry}>Try again</button>
       </>
     );

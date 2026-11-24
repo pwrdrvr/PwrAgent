@@ -80,7 +80,8 @@ export function ClaudeSettings(props: {
     const api = props.desktopApi;
     if (!api?.claudeGateway) return;
     await api.claudeGateway({ action: "signOut", forget });
-    refresh();
+    // Read the summary before the switch stops being pinned to the choice.
+    await onCheckedRef.current().catch(() => {});
   };
   const chooseMode = (next: ClaudeSignInMode) => {
     if (next === "account" && gatewayConfigured) {
@@ -345,7 +346,8 @@ export function ClaudeSettings(props: {
             void signOut(true).then(
               () => {
                 setStopping(undefined);
-                setChosenMode("account");
+                // The refreshed summary names no gateway, so the switch follows it again.
+                setChosenMode(undefined);
                 setUrlDraft(undefined);
               },
               (caught: unknown) => setStopping({ busy: false, error: claudeGatewayErrorMessage(caught) }),

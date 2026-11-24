@@ -1,6 +1,6 @@
 import { spawn as spawnProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
@@ -104,6 +104,39 @@ export function applyClaudeGatewaySetting(text: string | undefined, url: string 
   return `${JSON.stringify(settings, null, 2)}\n`;
 }
 
+/** The two gateway keys as the file held them; an absent key is left out. */
+export type ClaudeGatewayKeys = Partial<Record<typeof CLAUDE_GATEWAY_METHOD_KEY | typeof CLAUDE_GATEWAY_URL_KEY, unknown>>;
+
+export function claudeGatewayKeysOf(text: string | undefined, file = "settings.json"): ClaudeGatewayKeys {
+  const settings = parseSettingsObject(text, file);
+  const keys: ClaudeGatewayKeys = {};
+  for (const key of [CLAUDE_GATEWAY_METHOD_KEY, CLAUDE_GATEWAY_URL_KEY] as const) {
+    if (Object.hasOwn(settings, key)) keys[key] = settings[key];
+  }
+  return keys;
+}
+
+/**
+ * Puts the gateway keys back as `previous` held them, but only while the
+ * settings still name the gateway `wrote` set. A sign-in that did not finish
+ * then leaves Claude Code's settings as they were; a later change is kept.
+ * Returns `undefined` when nothing should change.
+ */
+export function restoreClaudeGatewaySetting(
+  text: string | undefined,
+  previous: ClaudeGatewayKeys,
+  wrote: string,
+  file = "settings.json",
+): string | undefined {
+  const settings = parseSettingsObject(text, file);
+  if (settings[CLAUDE_GATEWAY_METHOD_KEY] !== "gateway" || settings[CLAUDE_GATEWAY_URL_KEY] !== wrote) return undefined;
+  for (const key of [CLAUDE_GATEWAY_METHOD_KEY, CLAUDE_GATEWAY_URL_KEY] as const) {
+    if (Object.hasOwn(previous, key)) settings[key] = previous[key];
+    else delete settings[key];
+  }
+  return `${JSON.stringify(settings, null, 2)}\n`;
+}
+
 async function readOptionalFile(file: string): Promise<string | undefined> {
   try {
     return await readFile(file, "utf8");
@@ -117,18 +150,44 @@ export async function readClaudeGatewayUrl(file: string): Promise<string | undef
   return claudeGatewayUrlFromSettings(await readOptionalFile(file).catch(() => undefined));
 }
 
-/** Rewrites Claude Code's settings file atomically, keeping its mode. */
-export async function writeClaudeGatewaySetting(file: string, url: string | undefined): Promise<void> {
+/**
+ * Replaces Claude Code's settings file atomically, keeping its mode. A
+ * symlinked file (a dotfiles checkout) is written at its target, so the
+ * link stays a link.
+ */
+async function replaceSettingsFile(file: string, text: string): Promise<void> {
+  const target = await realpath(file).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return file;
+    throw error;
+  });
+  await mkdir(path.dirname(target), { recursive: true });
+  const mode = await stat(target).then((info) => info.mode & 0o777, () => undefined);
+  const temporary = `${target}.pwragent-${process.pid}-${Date.now()}.tmp`;
+  try {
+    await writeFile(temporary, text, { encoding: "utf8", mode: mode ?? 0o600 });
+    if (mode !== undefined) await chmod(temporary, mode);
+    await rename(temporary, target);
+  } catch (error) {
+    await unlink(temporary).catch(() => {});
+    throw error;
+  }
+}
+
+/** Sets or clears the gateway; returns the keys as they were before. */
+export async function writeClaudeGatewaySetting(file: string, url: string | undefined): Promise<ClaudeGatewayKeys> {
   const before = await readOptionalFile(file);
-  if (before === undefined && url === undefined) return;
+  const previous = claudeGatewayKeysOf(before, file);
+  if (before === undefined && url === undefined) return previous;
   const after = applyClaudeGatewaySetting(before, url, file);
-  if (after === before) return;
-  await mkdir(path.dirname(file), { recursive: true });
-  const mode = await stat(file).then((info) => info.mode & 0o777, () => undefined);
-  const temporary = `${file}.pwragent-${process.pid}-${Date.now()}.tmp`;
-  await writeFile(temporary, after, { encoding: "utf8", mode: mode ?? 0o600 });
-  if (mode !== undefined) await chmod(temporary, mode);
-  await rename(temporary, file);
+  if (after !== before) await replaceSettingsFile(file, after);
+  return previous;
+}
+
+/** Undoes `writeClaudeGatewaySetting(file, wrote)` while the file still names `wrote`. */
+export async function restoreClaudeGatewaySettingFile(file: string, previous: ClaudeGatewayKeys, wrote: string): Promise<void> {
+  const before = await readOptionalFile(file);
+  const after = restoreClaudeGatewaySetting(before, previous, wrote, file);
+  if (after !== undefined && after !== before) await replaceSettingsFile(file, after);
 }
 
 const MAX_TEXT = 2_000;
@@ -248,6 +307,7 @@ const WAIT_LIMIT_MS = 25_000;
 export class ClaudeGatewaySignInSession {
   readonly id = randomUUID();
   private revision = 0;
+  private answeredRevision = -1;
   private step: ClaudeGatewaySignInStep = { state: "connecting" };
   private waiters: Array<() => void> = [];
   private child: ChildProcessWithoutNullStreams | undefined;
@@ -308,12 +368,13 @@ export class ClaudeGatewaySignInSession {
   async wait(after: number, limitMs = WAIT_LIMIT_MS): Promise<ClaudeGatewaySignInProgress> {
     if (this.revision > after || isClaudeGatewaySignInFinished(this.step)) return this.progress();
     await new Promise<void>((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        this.waiters = this.waiters.filter((waiter) => waiter !== done);
+        resolve();
+      };
       const timer = setTimeout(done, limitMs);
       timer.unref?.();
-      function done() {
-        clearTimeout(timer);
-        resolve();
-      }
       this.waiters.push(done);
     });
     return this.progress();
@@ -322,9 +383,13 @@ export class ClaudeGatewaySignInSession {
   /** Accepts the question shown at `revision`; anything else is ignored. */
   answer(revision: number): boolean {
     const step = this.step;
-    if (revision !== this.revision) return false;
+    // Claude Code cancels on an answer for a question it has moved past, so
+    // each question is answered once.
+    if (revision !== this.revision || revision === this.answeredRevision) return false;
     if (step.state !== "url_input" && step.state !== "trust_prompt" && step.state !== "confirm_account") return false;
-    return this.write(step);
+    if (!this.write(step)) return false;
+    this.answeredRevision = revision;
+    return true;
   }
 
   async openBrowser(): Promise<void> {

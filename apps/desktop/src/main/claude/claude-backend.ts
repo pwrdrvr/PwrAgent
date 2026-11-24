@@ -55,7 +55,7 @@ import { toTranscriptImageProtocolUrl } from "../transcript-images";
 import { ClaudeSessionReaderError, type ClaudeSessionReader, type ClaudeSessionReads } from "./claude-session-reader";
 import { buildClaudeSessionPrimer } from "./claude-session-primer";
 import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, isClaudeInstallationAvailable, signInWithClaudeCode, signOutOfClaudeCode, supportsClaudeMcpInitialize, type ClaudeInstallation } from "./claude-executable";
-import { ClaudeGatewaySignInSession, claudeUserSettingsPath, normalizeClaudeGatewayUrl, writeClaudeGatewaySetting, type ClaudeGatewaySpawn } from "./claude-gateway";
+import { ClaudeGatewaySignInSession, claudeUserSettingsPath, normalizeClaudeGatewayUrl, restoreClaudeGatewaySettingFile, writeClaudeGatewaySetting, type ClaudeGatewaySpawn } from "./claude-gateway";
 import type { ClaudeGatewayRequest, ClaudeGatewayResponse } from "@pwragent/shared/contracts/claude-gateway";
 import {
   CLAUDE_EXIT_PLAN_TOOL, claudeAllowedTools, createClaudePermissionHandler, claudePermissionMode,
@@ -902,7 +902,8 @@ export class ClaudeBackend {
       throw new Error("Gateway sign-in needs Claude Code 2.1.330 or newer. Update Claude Code, then try again.");
     }
     const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
-    await writeClaudeGatewaySetting((this.options.claudeSettingsPath ?? claudeUserSettingsPath)(env), url);
+    const settingsFile = (this.options.claudeSettingsPath ?? claudeUserSettingsPath)(env);
+    const previous = await writeClaudeGatewaySetting(settingsFile, url);
     this.gatewaySignIn?.cancel();
     const session = new ClaudeGatewaySignInSession({
       executable, env, url,
@@ -911,7 +912,13 @@ export class ClaudeBackend {
     });
     this.gatewaySignIn = session;
     const finished = session.finished.then(async (step) => {
-      if (step.state !== "done" || this.closing) return;
+      if (step.state !== "done") {
+        // A sign-in that did not finish saves nothing: put Claude Code's
+        // settings back, unless a newer sign-in has since taken over.
+        if (this.gatewaySignIn === session) await restoreClaudeGatewaySettingFile(settingsFile, previous, url);
+        return;
+      }
+      if (this.closing) return;
       // Older turns may still report results for the credentials this sign-in replaced.
       this.authObservation = { sequence: ++this.authSequence, expired: false };
       await this.discovery?.promise.catch(() => {});
