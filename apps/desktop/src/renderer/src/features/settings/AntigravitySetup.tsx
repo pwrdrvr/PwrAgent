@@ -195,7 +195,10 @@ export function AntigravitySetup(props: {
           <div className="settings-paths">
             {progress ? (
               <ManagedRuntimeProgressStrip progress={progress} onRetry={installing || step ? undefined : () => void install()} />
-            ) : (
+            ) : null}
+            {/* A failed strip stays until the next attempt, so the status line
+                and the manual install guide stay beside it. */}
+            {!progress || progress.phase === "failed" ? (
               <AntigravityRuntimeStatusLine
                 view={view}
                 busy={installing || Boolean(step)}
@@ -204,7 +207,7 @@ export function AntigravitySetup(props: {
                 onCheckForUpdates={() => void checkForUpdates(true)}
                 onOpenGuide={openGuide}
               />
-            )}
+            ) : null}
           </div>
         }
       />
@@ -303,7 +306,13 @@ export function AntigravityRuntimeStatusLine(props: {
       break;
     case "installed": {
       const state = [
-        view.inUse ? "in use" : "installed · not in use, another Antigravity install is active",
+        view.inUse
+          ? "in use"
+          : view.notInUseReason === "disabled"
+            ? "installed · Antigravity is off"
+            : view.notInUseReason === "other-install"
+              ? "installed · not in use, another Antigravity install is active"
+              : "installed",
         ...(view.updateAvailable
           ? [`${view.latestVersion} available from Google`]
           : view.latestVersion ? ["up to date"] : []),

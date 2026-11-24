@@ -72,6 +72,29 @@ describe("Antigravity Runtime row", () => {
     await waitFor(() => expect(desktopApi.antigravitySetup).toHaveBeenCalledWith({ action: "check-update", force: true }));
   });
 
+  it("keeps the status line and the manual install guide beside a failed install", async () => {
+    const desktopApi = Object.assign(setupApi(), {
+      readManagedRuntimeProgress: vi.fn(async () => [{
+        runtime: "antigravity" as const,
+        phase: "failed" as const,
+        error: "Checksum mismatch",
+        failedPhase: "verifying" as const,
+        updatedAt: Date.now(),
+      }]),
+    });
+    render(<AntigravitySetup desktopApi={desktopApi} entry={entry()} onChanged={vi.fn()}>{null}</AntigravitySetup>);
+    expect(await screen.findByText(/Checksum mismatch/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Manual install guide" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Check for updates" })).toBeInTheDocument();
+  });
+
+  it("says Antigravity is off instead of naming another install when it is disabled", async () => {
+    const desktopApi = setupApi("1.5.15");
+    render(<AntigravitySetup desktopApi={desktopApi} entry={entry({ enabled: false })} onChanged={vi.fn()}>{null}</AntigravitySetup>);
+    expect(await screen.findByText(/installed · Antigravity is off/)).toBeInTheDocument();
+    expect(screen.queryByText(/another Antigravity install is active/)).not.toBeInTheDocument();
+  });
+
   it("says when another Antigravity install runs new threads", async () => {
     const desktopApi = setupApi("1.5.15");
     render(

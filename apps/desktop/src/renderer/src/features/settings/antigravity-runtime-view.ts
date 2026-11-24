@@ -30,6 +30,11 @@ export type AntigravityRuntimeView =
       command: string;
       /** New threads launch this managed release. */
       inUse: boolean;
+      /**
+       * Why new threads do not run it: Antigravity is off, discovery has not
+       * named an active command yet, or another install is active.
+       */
+      notInUseReason?: "disabled" | "unknown" | "other-install";
       latestVersion?: string;
       checkedAt?: number;
       updateAvailable: boolean;
@@ -54,11 +59,17 @@ export function antigravityRuntimeView(params: {
     };
   }
   const { command, version } = runtime.runtime;
+  const notInUseReason = entry?.enabled === false
+    ? "disabled" as const
+    : !entry?.activeCommand
+      ? "unknown" as const
+      : isManagedCommand(entry.activeCommand, command) ? undefined : "other-install" as const;
   return {
     kind: "installed",
     version,
     command,
-    inUse: entry?.enabled !== false && isManagedCommand(entry?.activeCommand, command),
+    inUse: notInUseReason === undefined,
+    ...(notInUseReason ? { notInUseReason } : {}),
     ...latest,
     updateAvailable: release !== undefined
       && compareAntigravityVersions(release.latestVersion, version) > 0,

@@ -83,6 +83,25 @@ describe("Antigravity runtime view", () => {
     expect(antigravityUpdateNoticeVersion(disabled)).toBeUndefined();
   });
 
+  it("names why a managed install is not in use, and claims another install only when one is active", () => {
+    const runtime = { status: "installed" as const, runtime: { command: managedCommand("1.5.15"), version: "1.5.15" } };
+    const arbEntry = fc.record({
+      enabled: fc.option(fc.boolean(), { nil: undefined }),
+      activeCommand: fc.constantFrom(undefined, runtime.runtime.command, `${ROOT}/active`, "/opt/contrived/agy"),
+    });
+    fc.assert(fc.property(arbEntry, (entry) => {
+      const view = antigravityRuntimeView({ runtime, entry });
+      if (view.kind !== "installed") throw new Error("expected an installed view");
+      const expected = entry.enabled === false
+        ? "disabled"
+        : entry.activeCommand === undefined
+          ? "unknown"
+          : entry.activeCommand === "/opt/contrived/agy" ? "other-install" : undefined;
+      expect(view.notInUseReason).toBe(expected);
+      expect(view.inUse).toBe(expected === undefined);
+    }));
+  });
+
   it("says nothing about updates before a release check has answered", () => {
     const command = managedCommand("1.5.15");
     const view = antigravityRuntimeView({

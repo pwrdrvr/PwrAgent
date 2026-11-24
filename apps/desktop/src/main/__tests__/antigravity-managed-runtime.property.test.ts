@@ -584,6 +584,21 @@ describe("Antigravity release checks", () => {
     });
   });
 
+  it("fails only the caller whose signal aborts, not the others sharing its request", async () => {
+    resetAntigravityReleaseChecks();
+    await withRuntimeRoot(async (rootDir) => {
+      const fetch = releaseFetch(await makeArchive(rootDir), "1.5.16");
+      const options = { ...appleSilicon, rootDir, fetch, maxAgeMs: 0 };
+      const leaving = new AbortController();
+      const first = checkLatestAntigravityRelease({ ...options, signal: leaving.signal });
+      const second = checkLatestAntigravityRelease({ ...options, signal: new AbortController().signal });
+      leaving.abort(new Error("window closed"));
+      await expect(first).rejects.toThrow("window closed");
+      await expect(second).resolves.toMatchObject({ latestVersion: "1.5.16" });
+      expect(fetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("keeps unsupported platforms off the manifest", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>();
     await expect(checkLatestAntigravityRelease({ platform: "linux", arch: "x64", fetch })).rejects.toThrow("Apple Silicon");

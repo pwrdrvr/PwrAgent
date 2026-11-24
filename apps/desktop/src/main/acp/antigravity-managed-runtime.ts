@@ -120,20 +120,40 @@ export async function checkLatestAntigravityRelease(
   const now = options.now ?? Date.now;
   const cached = releaseChecks.get(key);
   if (cached && now() - cached.checkedAt < (options.maxAgeMs ?? 0)) return cached;
-  const pending = pendingReleaseChecks.get(key);
-  if (pending) return await pending;
-  const check = (async () => {
-    const timeout = AbortSignal.timeout(VALIDATION_TIMEOUT_MS);
-    const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
-    const release = await fetchRelease(signal, options.fetch ?? globalThis.fetch);
-    const result = { latestVersion: release.version, checkedAt: now() };
-    releaseChecks.set(key, result);
-    return result;
-  })().finally(() => {
-    pendingReleaseChecks.delete(key);
+  let check = pendingReleaseChecks.get(key);
+  if (!check) {
+    // The shared request runs on its own timeout, not on any one caller's
+    // signal: a caller that gives up must not fail the others joined to it.
+    check = (async () => {
+      const release = await fetchRelease(
+        AbortSignal.timeout(VALIDATION_TIMEOUT_MS),
+        options.fetch ?? globalThis.fetch,
+      );
+      const result = { latestVersion: release.version, checkedAt: now() };
+      releaseChecks.set(key, result);
+      return result;
+    })().finally(() => {
+      pendingReleaseChecks.delete(key);
+    });
+    pendingReleaseChecks.set(key, check);
+  }
+  return await abortable(check, options.signal);
+}
+
+/** Settle with `promise`, or reject as soon as `signal` aborts. */
+async function abortable<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return await promise;
+  signal.throwIfAborted();
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
   });
-  pendingReleaseChecks.set(key, check);
-  return await check;
+  try {
+    return await Promise.race([promise, aborted]);
+  } finally {
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+  }
 }
 
 async function fetchRelease(signal: AbortSignal, fetchImpl: typeof globalThis.fetch): Promise<Release> {

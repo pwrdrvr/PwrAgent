@@ -42,24 +42,32 @@ export function AntigravityUpdateNotice(props: {
   const [dismissedVersion, setDismissedVersion] = useState<string>();
   const progress = useManagedRuntimeProgress(desktopApi, "antigravity");
 
+  // Evaluations overlap (launch, discovery refreshes, a finished install), and
+  // a release check can wait on Google. Only the newest one may set the view,
+  // or a check begun before an install would restore the old runtime.
+  const generationRef = useRef(0);
   const evaluate = useCallback(async (): Promise<void> => {
     const request = desktopApi?.antigravitySetup;
     if (!request) return;
+    const generation = ++generationRef.current;
+    const isCurrent = () => generation === generationRef.current;
     // A cache-only read: no discovery, no CLI spawn.
     const listed = await desktopApi?.listAcpAgents?.({ refresh: false });
+    if (!isCurrent()) return;
     const entry = listed?.entries.find((candidate) => candidate.registryId === "antigravity");
     if (!entry || entry.enabled === false) {
       setView({ kind: "loading" });
       return;
     }
     const read = await request({ action: "read" });
-    if (!read.ok) return;
+    if (!read.ok || !isCurrent()) return;
     const local = antigravityRuntimeView({ runtime: read.runtime, entry });
     if (local.kind !== "installed" || !local.inUse) {
       setView(local);
       return;
     }
     const checked = await request({ action: "check-update" });
+    if (!isCurrent()) return;
     setView(checked.ok
       ? antigravityRuntimeView({ runtime: checked.runtime ?? read.runtime, release: checked.release, entry })
       : local);
