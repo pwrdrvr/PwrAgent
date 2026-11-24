@@ -130,25 +130,28 @@ export async function observeScheduledPrPrefetchMetadata(
       return { repos, refreshedRemoteNames: refreshedRemoteNames ?? [], publish };
     }
     const { configuration, sources } = parsed;
+    const remoteNames = configuration.names;
     const inputsUnchanged = () => isDeepStrictEqual(inputs, currentInputs());
     // A discovered include could have changed before we could observe its
     // file. Confirm the first answer with the complete graph watched before
     // retaining either a positive or a negative result.
     const extra = sources ? [...sources.includes].filter((file) => !roots.paths.has(file)) : [];
-    const singleRemote = configuration.names.length === 1;
+    const singleRemote = remoteNames.length === 1;
     const canReuseConfig = Boolean(extra.length && sources?.localOrigins.has(path.join(roots.commonDir, "config")));
     const canConfirmCheckout = singleRemote && branchCount > (extra.length ? 3 : 2);
-    // A small single-remote batch with a warm identity cannot recover the
-    // cost of confirming the include graph without a common config origin.
-    const useCurrentSample = extra.length && singleRemote && !canReuseConfig && !canConfirmCheckout
-      && repositories.hasGitHubIdentityFor(configuration);
-    const files = extra.length && !useCurrentSample ? await observePrCheckoutConfigFiles(cwd, [...inputs.paths, ...extra]) : roots;
-    if (useCurrentSample || !files || (sources && [...sources.origins].some((file) => !files.paths.has(file)))) {
+    const files = extra.length ? await observePrCheckoutConfigFiles(cwd, [...inputs.paths, ...extra]) : roots;
+    const originsWatched = !sources || [...sources.origins].every((file) => files?.paths.has(file));
+    // With a warm identity and no config-only reuse path, only a remote HEAD
+    // proof can pay for confirming the include graph.
+    const verifyHeadsBeforeConfirming = extra.length > 0 && Boolean(files) && originsWatched
+      && !canReuseConfig && !canConfirmCheckout && repositories.hasGitHubIdentityFor(configuration);
+    const earlyHeadProof = verifyHeadsBeforeConfirming ? await observeProvenRemoteHeads(cwd, remoteNames) : undefined;
+    if (!files || !originsWatched || (verifyHeadsBeforeConfirming && !earlyHeadProof)) {
       // An unverified sample applies only to the current branch. It cannot
       // establish a reusable negative or warm the live cache.
       const { repos } = await repositories.read(configuration, { configSampleOrder, validateNegative: async () => false });
       if (!await roots.unchanged() || !inputsUnchanged()) return undefined;
-      return { repos, refreshedRemoteNames: configuration.names };
+      return { repos, refreshedRemoteNames: remoteNames, nativeHeadReads: verifyHeadsBeforeConfirming ? true : undefined };
     }
     if (extra.length) {
       const confirmed = await readConfig();
@@ -163,7 +166,6 @@ export async function observeScheduledPrPrefetchMetadata(
       configSampleOrder,
       validateNegative: async () => Boolean((!config || sources) && await configUnchanged()),
     });
-    const remoteNames = configuration.names;
     const sample = { repos, refreshedRemoteNames: remoteNames, publish: sources ? publish : undefined };
     const currentSample = async () => await configUnchanged() ? sample : undefined;
     // Keep Git's current config answer for the ordinary branch path even
@@ -173,7 +175,7 @@ export async function observeScheduledPrPrefetchMetadata(
     // A single remote still needs one native HEAD read per branch.
     if (singleRemote && !extra.length && !canConfirmCheckout) return await currentSample();
 
-    const proof = await observeProvenRemoteHeads(cwd, remoteNames);
+    const proof = earlyHeadProof ?? await observeProvenRemoteHeads(cwd, remoteNames);
     if (proof && (proof.gitDir !== files.gitDir || proof.commonDir !== files.commonDir)) return undefined;
     // Git's exact local config origin can establish config reuse without a
     // HEAD proof. Native HEAD and tracking reads still run for each branch.

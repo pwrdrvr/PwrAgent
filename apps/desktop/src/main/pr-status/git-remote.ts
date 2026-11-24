@@ -400,7 +400,7 @@ async function loadParsedGitRemotes(
     const raw: Awaited<ReturnType<typeof defaultReadRemotes>> = prefetch?.configuration ?? (options.readRemotes
       ? { remotes: await options.readRemotes(cwd) }
       : await defaultReadRemotes(cwd, demand, Boolean(options.confirmEmpty || options.fresh), prefetch));
-    const sampleOrder = prefetch?.configSampleOrder ?? nextRemoteSampleOrder();
+    const sampleOrder = prefetch?.configSampleOrder ?? raw.sampleOrder ?? nextRemoteSampleOrder();
     const { names, remotes, unconfirmedEmpty, readWithGitRemote } = raw;
     const prior = prefetch?.previous;
     if (prior && (remotes === prior.value || (isCurrentRemoteObservation(prior) && sameRemoteUrls(remotes, prior.value)))) {
@@ -462,7 +462,7 @@ function resolveSshHostInFlight(host: string, resolve: SshResolver, demand: PrMe
 async function defaultReadRemotes(
   cwd: string, demand: PrMetadataDemand, confirmEmpty: boolean,
   prefetch?: { previous?: RemoteCacheEntry; useGitRemote?: boolean },
-): Promise<{ names?: string[]; remotes: GitRemote[]; unconfirmedEmpty?: true; readWithGitRemote?: true }> {
+): Promise<{ names?: string[]; remotes: GitRemote[]; unconfirmedEmpty?: true; readWithGitRemote?: true; sampleOrder?: number }> {
   const childEnv = buildPwrAgentChildProcessEnv(process.env);
   const gitOptions = {
     purpose: "pr-remotes" as const,
@@ -500,6 +500,9 @@ async function defaultReadRemotes(
     && names.every((name, index) => name === previous.names?.[index]) && hasAllRemoteUrls(previous)) {
     return { names, remotes: previous.value, readWithGitRemote: true };
   }
+  // A native URL read spans several commands. Order it from the remote list
+  // so an overlapping owner sample can supersede this mixed observation.
+  const sampleOrder = nextRemoteSampleOrder();
   const entries = await Promise.all(
     names.map(async (name): Promise<GitRemote[]> => {
       try {
@@ -514,7 +517,7 @@ async function defaultReadRemotes(
       }
     }),
   );
-  return { names, remotes: entries.flat(), readWithGitRemote: true };
+  return { names, remotes: entries.flat(), readWithGitRemote: true, sampleOrder };
 }
 
 function uniqueNonEmptyLines(value: string): string[] {

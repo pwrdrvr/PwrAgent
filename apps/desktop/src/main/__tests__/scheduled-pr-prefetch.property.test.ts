@@ -307,6 +307,39 @@ it.skipIf(process.platform === "win32")("prefers the owner URL sampled during a 
   expect(starts.calls.filter(([, args]) => args[0] === "remote" && args[1] === "get-url")).toHaveLength(0);
 });
 
+it("prefers the owner URLs when native remote probes span an owner refresh", async () => {
+  const cwd = await fixture();
+  await readGit(cwd, "config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main");
+  const originSampled = Promise.withResolvers<void>();
+  const releaseUpstream = Promise.withResolvers<void>();
+  let delayScheduledReads = true;
+  const runner = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (directory, args, options) => {
+    const delay = delayScheduledReads && directory === cwd && args[0] === "remote" && args[1] === "get-url";
+    if (delay && args[3] === "upstream") await releaseUpstream.promise;
+    const result = await runGitCommand(directory, args, options);
+    if (delay && args[3] === "origin") originSampled.resolve();
+    return result;
+  });
+  onTestFinished(() => { runner.mockRestore(); });
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  const scheduled = resolve(cwd, "topic-0");
+  try {
+    await Promise.race([originSampled.promise, scheduled.then(() => { throw new Error("Scheduled lookup did not read the origin URL"); })]);
+    delayScheduledReads = false;
+    await readGit(cwd, "remote", "set-url", "origin", "https://github.com/fixture/owner-overlap.git");
+    expect((await resolveGitHubReposForDirectory(cwd, { fresh: true })).map(({ repo }) => repo)).toEqual(["owner-overlap", "upstream"]);
+  } finally {
+    releaseUpstream.resolve();
+    await scheduled;
+  }
+
+  const expected = await oracle(cwd);
+  expect((await scheduled).map(({ host, owner, repo }) => `https://${host}/${owner}/${repo}.git`).sort()).toEqual(expected("topic-0"));
+  const starts = recordPrefetchStarts();
+  await expectEligible(resolve, cwd, "topic-1", expected("topic-1"));
+  expect(starts.calls.filter(([, args]) => args[0] === "remote" && args[1] === "get-url")).toHaveLength(0);
+});
+
 it.each(["GitLab-only", "remote-less"].flatMap((kind) => ["warm", "cold"].map((cache) => ({ kind, cache }))))(
   "keeps $cache $kind checkouts off the GitHub discovery path until expiry", async ({ kind, cache }) => {
     const cwd = await fixture();
@@ -577,20 +610,25 @@ it.skipIf(process.platform === "win32")("uses one current config read per branch
   }
 });
 
-it.skipIf(process.platform === "win32").each([2, 3])("uses one config read for each of %i small linked-worktree lookups", async (count) => {
+it.skipIf(process.platform === "win32").each([[2, 1], [3, 1], [3, 2]])("uses one config read per branch for %i linked-worktree lookups with %i remotes", async (count, remoteCount) => {
   const source = await fixture();
   await readGit(source, "remote", "remove", "origin");
   await readGit(source, "remote", "remove", "upstream");
   await readGit(source, "config", "extensions.worktreeConfig", "true");
   const cwd = path.join(source, "linked");
   await readGit(source, "worktree", "add", "--detach", cwd);
-  await readGit(cwd, "config", "--worktree", "remote.origin.url", "https://github.com/fixture/worktree.git");
-  await readGit(cwd, "config", "--worktree", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*");
+  for (const remote of ["origin", "upstream"].slice(0, remoteCount)) {
+    await readGit(cwd, "config", "--worktree", `remote.${remote}.url`, `https://github.com/fixture/worktree-${remote}.git`);
+    await readGit(cwd, "config", "--worktree", `remote.${remote}.fetch`, `+refs/heads/*:refs/remotes/${remote}/*`);
+  }
   await readGit(cwd, "update-ref", "refs/remotes/origin/main", "HEAD");
   await remoteHead(cwd, "origin", "main");
   const included = path.join(source, "included-config");
+  const systemConfig = path.join(source, "system-config");
   await writeFile(included, "[user]\n\tname = Fixture\n");
-  await readGit(cwd, "config", "--global", "include.path", included);
+  await readGit(cwd, "config", "--file", systemConfig, "include.path", included);
+  process.env.GIT_CONFIG_SYSTEM = systemConfig;
+  process.env.GIT_CONFIG_NOSYSTEM = "0";
   await resolveGitHubRepoForDirectory(cwd);
   const expected = await oracle(cwd);
   const resolve = createScheduledPrPrefetchRepoResolver();
@@ -600,9 +638,22 @@ it.skipIf(process.platform === "win32").each([2, 3])("uses one config read for e
   }
 
   // Confirming the include graph cannot save a launch for this worktree in a small batch.
+  const headReads = Array.from({ length: remoteCount }, () => "symbolic-ref");
   expect(starts.calls.map(([, args]) => args[0])).toEqual(
-    Array.from({ length: count }, () => ["config", "symbolic-ref", "for-each-ref"]).flat(),
+    Array.from({ length: count }, () => ["config", ...headReads, "for-each-ref"]).flat(),
   );
+  if (remoteCount === 2) {
+    await readGit(cwd, "update-ref", "refs/remotes/upstream/release", "HEAD");
+    await remoteHead(cwd, "upstream", "release");
+    const after = await oracle(cwd);
+    starts.clear();
+    await expectEligible(resolve, cwd, "release", after("release"));
+    await expectEligible(resolve, cwd, "topic-3", after("topic-3"));
+    // Once the second HEAD exists, one confirmed observation serves both branches.
+    expect(starts.calls.map(([, args]) => args[0])).toEqual([
+      "config", "rev-parse", "config", "for-each-ref", "for-each-ref",
+    ]);
+  }
 });
 
 it.skipIf(process.platform === "win32")("tries oversized config provenance once per checkout in a batch", async () => {
