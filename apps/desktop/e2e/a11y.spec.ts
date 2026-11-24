@@ -7,8 +7,9 @@
 // of individual components) so that real styling from app.css — focus
 // rings, contrast, sticky-header layout — gets audited as it actually
 // ships. Surfaces that share a fixture and theme reuse one Electron
-// launch, with named steps and explicit state resets keeping failures
-// attributable and preventing overlays from leaking into the next scan.
+// launch, with named steps keeping failures attributable. Compatible
+// scenarios hold each surface open while its appearances are scanned.
+// Explicit state resets keep overlays from leaking into later scans.
 // The coverage is what a screen-reader / keyboard-only operator actually
 // encounters.
 //
@@ -418,6 +419,7 @@ async function runAxeScan(
   // everything we render anyway. See
   // https://github.com/dequelabs/axe-core-npm/blob/develop/packages/playwright/error-handling.md
   let builder = new AxeBuilder({ page: window }).setLegacyMode(true);
+  if (options?.comparisonKey) builder = builder.options({ xpath: true });
   if (options?.rules) {
     builder = builder.withRules(options.rules);
   } else {
@@ -440,10 +442,12 @@ async function runAxeScan(
       outcome,
       results[outcome].map(({ id, nodes }) => ({
         id,
-        targets: nodes.map(({ target }) => JSON.stringify(target)).sort(),
+        // React useId values and selector specificity depend on portal
+        // mount order. Compare the actual structural location of each node.
+        targets: nodes.map(({ target, xpath }) => JSON.stringify(xpath ?? target)).sort(),
       })).sort((left, right) => left.id.localeCompare(right.id)),
     ]));
-    await test.info().attach(`axe-copy-chips-${options.comparisonKey}`, {
+    await test.info().attach(`axe: ${options.comparisonKey}`, {
       body: JSON.stringify(matrix),
       contentType: "application/json",
     });
@@ -485,75 +489,447 @@ async function runAxeScan(
   }
 }
 
-// The dedicated fixture carries a worktree chip, a local-directory chip,
-// and a branch chip. Audit the whole window to catch nested-interactive
-// regressions on the row that contains them.
-async function scanCopyChips(page: Page, appearance: AuditAppearance): Promise<void> {
-  const label = appearance.colorTheme ?? `tangerine-${appearance.theme}`;
-  await test.step(`sidebar rows carrying copy chips (${label})`, async () => {
-    // The branch chip renders last, after the linked-directory chips.
-    await expect(page.getByRole("button", {
+type ScanSurface = (
+  page: Page,
+  surface: string,
+  options?: Parameters<typeof runAxeScan>[2],
+) => Promise<void>;
+
+const freshAuditFixtures = process.env.PWRAGENT_E2E_A11Y_FRESH_FIXTURES === "1";
+const freshCopyChipLaunches = freshAuditFixtures
+  || process.env.PWRAGENT_E2E_A11Y_FRESH_COPY_CHIPS === "1";
+
+function appearanceLabel(appearance: AuditAppearance): string {
+  return appearance.colorTheme ?? `tangerine-${appearance.theme}`;
+}
+
+async function settleSidebarPointer(page: Page): Promise<void> {
+  await page.mouse.move(0, 0);
+  await expect(page.locator(".thread-row__time-lane > .thread-row__time").first())
+    .toHaveCSS("opacity", "1");
+}
+
+async function applyAuditAppearance(page: Page, appearance: AuditAppearance): Promise<void> {
+  await page.evaluate(async ({ theme, darkTheme, lightTheme }) => {
+    const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+    await api.writeSettingsConfig!({
+      patch: {
+        general: {
+          appearance: {
+            theme,
+            darkTheme: darkTheme ?? "tangerine-dark",
+            lightTheme: lightTheme ?? "tangerine-light",
+          },
+        },
+      },
+    });
+  }, appearance);
+}
+
+function registerSharedAudit({
+  key, title, launch, exercise, fresh = freshAuditFixtures, skipOnWindows,
+}: {
+  key: string;
+  title: string;
+  launch: (initial: AuditAppearance) => ReturnType<typeof launchAuditApp>;
+  exercise: (
+    app: Awaited<ReturnType<typeof launchAuditApp>>,
+    scan: ScanSurface,
+    hasFunctionalAppearance: boolean,
+  ) => Promise<void>;
+  fresh?: boolean;
+  skipOnWindows?: string;
+}): void {
+  const groups = fresh ? AUDIT_APPEARANCES.map((appearance) => [appearance]) : [AUDIT_APPEARANCES];
+  for (const appearances of groups) {
+    const initial = appearances[0]!;
+    test(`${title} (${fresh ? appearanceLabel(initial) : "all appearances"})`, async () => {
+      if (skipOnWindows) test.skip(process.platform === "win32", skipOnWindows);
+      test.setTimeout(75_000);
+      const app = await test.step(`launch ${key} fixture`, () => launch(initial));
+      let current = initial;
+      try {
+        await exercise(app, async (page, surface, options) => {
+          for (const appearance of appearances) {
+            const label = appearanceLabel(appearance);
+            await test.step(`${surface} (${label})`, async () => {
+              if (current !== appearance) {
+                await applyAuditAppearance(app.window, appearance);
+                current = appearance;
+              }
+              await expect.poll(() => page.locator("html").evaluate((root) => ({
+                scheme: root.getAttribute("data-theme"),
+                colorTheme: root.getAttribute("data-color-theme"),
+              }))).toEqual({
+                scheme: appearance.theme === "light" ? "light" : null,
+                colorTheme: appearance.colorTheme ?? null,
+              });
+              await runAxeScan(page, `${surface} (${label})`, {
+                ...options,
+                rules: options?.rules ?? (appearance.colorTheme ? COLOR_RULES : undefined),
+                comparisonKey: `${key} / ${surface} / ${label}`,
+                softViolations: true,
+              });
+            });
+          }
+        }, appearances.includes(AUDIT_APPEARANCES[0]!));
+      } finally {
+        await test.step(`close ${key} fixture`, () => app.close());
+      }
+    });
+  }
+}
+
+// The dedicated fixture carries worktree, local-directory, and branch chips.
+registerSharedAudit({
+  key: "copy-chips",
+  title: "sidebar copy-chip fixture surface has no violations",
+  fresh: freshCopyChipLaunches,
+  launch: (appearance) => launchAuditApp({ ...appearance, fixturePath: COPY_CHIP_FIXTURE }),
+  exercise: async ({ window }, scan) => {
+    await expect(window.getByRole("button", {
       name: "Copy branch feature/copy-chip-audit",
     })).toBeVisible();
     // Startup hydrates the transcript and then checks its linked checkout.
-    // Wait for both before scanning the full window in either launch mode.
-    await expect(page.getByText("The copy chip row is live.", { exact: true })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "This thread’s worktree is gone" })).toBeVisible();
-    await expect.poll(() => page.locator("html").evaluate((root) => ({
-      scheme: root.getAttribute("data-theme"),
-      colorTheme: root.getAttribute("data-color-theme"),
-    }))).toEqual({
-      scheme: appearance.theme === "light" ? "light" : null,
-      colorTheme: appearance.colorTheme ?? null,
-    });
-    await runAxeScan(page, `sidebar rows carrying copy chips (${label})`, {
-      rules: appearance.colorTheme ? COLOR_RULES : undefined,
-      comparisonKey: label,
-      softViolations: true,
-    });
-  });
-}
+    await expect(window.getByText("The copy chip row is live.", { exact: true })).toBeVisible();
+    await expect(window.getByRole("heading", { name: "This thread’s worktree is gone" })).toBeVisible();
+    await scan(window, "sidebar rows carrying copy chips");
+  },
+});
 
-// The copy-chip scenario never interacts with the sidebar. Each appearance
-// can therefore scan the same hydrated surface after the settings broadcast.
-// This switch runs the exact same scans with one fresh launch per appearance
-// when collecting a native comparison.
-const freshCopyChipLaunches = process.env.PWRAGENT_E2E_A11Y_FRESH_COPY_CHIPS === "1";
-const copyChipGroups = freshCopyChipLaunches
-  ? AUDIT_APPEARANCES.map((appearance) => [appearance])
-  : [AUDIT_APPEARANCES];
-for (const appearances of copyChipGroups) {
-  const initial = appearances[0]!;
-  const title = freshCopyChipLaunches
-    ? initial.colorTheme ?? `tangerine-${initial.theme}`
-    : "all appearances";
-  test(`sidebar copy-chip fixture surface has no violations (${title})`, async () => {
-    const app = await test.step("launch copy-chip fixture", () =>
-      launchAuditApp({ ...initial, fixturePath: COPY_CHIP_FIXTURE }));
+registerSharedAudit({
+  key: "job-monitors",
+  title: "Job Monitors composer options have no violations",
+  launch: (appearance) => launchAuditApp(appearance),
+  exercise: async (app, scan) => {
+    await app.window.getByRole("button", { name: /Replay smoke thread/i }).first().click();
+    const trigger = app.window.getByRole("button", { name: "Thread options", exact: true });
+    await trigger.click();
+    const menu = app.window.getByRole("menu", { name: "Thread options", exact: true });
+    const monitors = menu.getByRole("menuitemcheckbox", { name: "Job Monitors", exact: true });
+    const include = ".composer-thread-options__menu";
+    await expect(monitors).toHaveAttribute("aria-checked", "true");
+    const mcpAccess = menu.getByRole("menuitem", { name: /^PwrAgent MCPs/ });
+    await expect(mcpAccess).toContainText("none selected");
+    await mcpAccess.hover();
+    await scan(app.window, "Job Monitors on", { include });
+    await monitors.click();
+    await expect(monitors).toHaveAttribute("aria-checked", "false");
+    await expect(monitors).not.toHaveAttribute("aria-busy", "true");
+    await expect(monitors).toContainText("The agent can't start new ones.");
+    const suggestions = menu.getByRole("menuitemcheckbox", { name: "Monitor job suggestions", exact: true });
+    await expect(suggestions).toHaveAttribute("aria-disabled", "true");
+    await expect(suggestions).toContainText("needs Job Monitors");
+    await scan(app.window, "Job Monitors off", { include });
+    await monitors.press("ArrowDown");
+    await expect(suggestions).toBeFocused();
+    await app.window.keyboard.press("Escape");
+    await expect(trigger).toBeFocused();
+  },
+});
+
+// The active sub-agents strip above the composer. Nothing else in this
+// gate renders it: it only appears when a thread has a non-terminal
+// sub-agent or an undismissed failure, and no fixture produces one.
+//
+// It carries contrast pairs nothing else does — the `--status-*` dots, the
+// `--danger-text` "Failed" cell, the neutral count pill, and two row
+// controls sized right at the WCAG 2.2 target floor — so it went unaudited
+// in both themes for as long as it shipped without this block.
+//
+// No dedicated replay fixture, unlike the copy-chip block: the surface's
+// data comes from the sqlite seeder rather than the fixture, so a private
+// fixture would be a file containing nothing this test depends on. What it
+// does need from the smoke fixture — a thread that exists and opens — is
+// exactly what that fixture guarantees for every other block here.
+registerSharedAudit({
+  key: "sub-agents",
+  title: "active sub-agents strip has no violations",
+  launch: (appearance) => launchAuditApp(appearance),
+  exercise: async (app, scan) => {
+    // The backend's listThreads waits for startup reconciliation. Seed
+    // live fixture cards after it finishes so it cannot mark them orphaned.
+    await app.window.evaluate(async () => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      await api.listThreads!({ backend: "codex" });
+    });
+    const stateDb = StateDb.open(stateDbPathForHomeRoot(app.homeRoot), { profileName: "default" });
     try {
-      await scanCopyChips(app.window, initial);
-      for (const appearance of appearances.slice(1)) {
-        await app.window.evaluate(async ({ theme, darkTheme, lightTheme }) => {
-          const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
-          await api.writeSettingsConfig!({
-            patch: {
-              general: {
-                appearance: {
-                  theme,
-                  darkTheme: darkTheme ?? "tangerine-dark",
-                  lightTheme: lightTheme ?? "tangerine-light",
-                },
-              },
-            },
-          });
-        }, appearance);
-        await scanCopyChips(app.window, appearance);
-      }
+      await new SqliteOverlayStore(stateDb).upsertThreadSubAgents({
+        backend: "codex",
+        subAgents: buildAuditSubAgents(),
+        threadId: "thread-smoke",
+      });
     } finally {
-      await test.step("close copy-chip fixture", () => app.close());
+      stateDb.close();
     }
-  });
-}
+    // The renderer does not re-poll after a direct database write.
+    await app.window.reload();
+
+    const smokeThread = app.window
+      .getByRole("button", { name: /Replay smoke thread/i })
+      .first();
+    await expect(smokeThread).toBeVisible();
+    await smokeThread.click();
+
+    // Four rows seeds the disclosure collapsed, so the header audits
+    // first and the list is opened deliberately below.
+    const strip = app.window.getByRole("button", {
+      name: /^Active sub-agents, 2, 2 failed$/,
+    });
+
+    await test.step("sub-agents strip header", async () => {
+      await expect(strip).toBeVisible();
+      await expect(strip).toHaveAttribute("aria-expanded", "false");
+      // Bulk dismiss only renders past one failure; assert it is painted
+      // so the audit cannot go quiet by the seed drifting to a single one.
+      await expect(
+        app.window.getByRole("button", {
+          name: "Dismiss all 2 failed sub-agents",
+        }),
+      ).toBeVisible();
+      await scan(app.window, "sub-agents strip header");
+    });
+
+    await test.step("sub-agents strip expanded rows", async () => {
+      await strip.click();
+      await expect(strip).toHaveAttribute("aria-expanded", "true");
+      // One assertion per row branch. Without these the scan still passes
+      // on an empty list and stops auditing the states it exists for.
+      await expect(
+        app.window.getByRole("button", {
+          name: /^Stop sub-agent: Run and monitor/,
+        }),
+      ).toBeVisible();
+      // Exact: `getByText` matches substrings, and "Blocked on approval"
+      // is sanctioned copy elsewhere in the style guide.
+      await expect(
+        app.window.getByText("Blocked", { exact: true }),
+      ).toBeVisible();
+      await expect(
+        app.window.getByRole("button", {
+          name: /^Dismiss failed sub-agent: Build and verify/,
+        }),
+      ).toBeVisible();
+      await expect(app.window.locator(".live-strip__item")).toHaveCount(4);
+      await settleSidebarPointer(app.window);
+      await scan(app.window, "sub-agents strip expanded rows");
+    });
+  },
+});
+
+// The Share storage dialog is reachable only from a worktree row, and
+// only when the selected Git's help lists `git worktree reflink`. No
+// fixture thread has a worktree that exists on disk, and what a real run
+// reports depends on the runner's filesystem, so this block links a real
+// directory to the smoke thread and selects a stand-in Git (see
+// fixtures/worktree-storage-seeding.ts). The main process still
+// authorizes the path against the thread and probes the Git's help
+// before the renderer is offered anything.
+registerSharedAudit({
+  key: "worktree-storage",
+  title: "share storage dialog has no violations",
+  skipOnWindows: "The stand-in Git is a shell script, which Windows cannot run as PWRAGENT_GIT_PATH.",
+  launch: async (appearance) => {
+    const audit = await prepareWorktreeStorageAudit(test.info().outputPath("worktree-storage"));
+    return launchAuditApp({
+      ...appearance,
+      env: { PWRAGENT_GIT_PATH: audit.gitPath },
+      preLaunchHook: async (homeRoot) => {
+        await seedWorktreeStorageAuditState(homeRoot, audit);
+      },
+    });
+  },
+  exercise: async (app, scan, hasFunctionalAppearance) => {
+    await app.window
+      .getByRole("button", { name: /Replay smoke thread/i })
+      .first()
+      .click();
+    await expect(
+      app.window.getByRole("heading", { level: 2, name: "Replay smoke thread" }),
+    ).toBeVisible();
+    const contextRail = app.window.getByRole("complementary", { name: "Thread context" });
+    await contextRail.getByRole("tab", { name: "Linked projects" }).click();
+    await contextRail
+      .getByRole("button", { name: `Share storage for ${WORKTREE_STORAGE_AUDIT_LABEL}`, exact: true })
+      .click();
+    const dialog = app.window.getByRole("dialog", { name: "Share worktree storage", exact: true });
+    const verify = dialog.getByRole("checkbox", { name: /^Verify filtered files/ });
+    const share = dialog.getByRole("button", { name: "Share storage", exact: true });
+
+    await test.step("share storage estimate", async () => {
+      // Without the estimate and the option, this would scan the
+      // "Checking the selected Git..." state and pass on an empty dialog.
+      await expect(dialog.getByText(/1,204 of 3,310 files can be shared, freeing about 412 MB\./))
+        .toBeVisible();
+      await expect(verify).toBeVisible();
+      if (hasFunctionalAppearance) {
+        // Filter verification is never on until the operator asks.
+        await expect(verify).not.toBeChecked();
+        await expect(share).toBeEnabled();
+      }
+      await scan(app.window, "share storage estimate");
+    });
+
+    await test.step("share storage with filter verification chosen", async () => {
+      await verify.check();
+      await expect(verify).toBeChecked();
+      await scan(app.window, "share storage with filter verification chosen");
+    });
+
+    await test.step("share storage result", async () => {
+      await share.click();
+      await expect(dialog.getByText(/Shared 1,204 files, freeing 412 MB\./)).toBeVisible();
+      await expect(dialog.getByText(/Filtered files were verified\./)).toBeVisible();
+      await expect(dialog.getByRole("button", { name: "Done", exact: true })).toBeVisible();
+      await scan(app.window, "share storage result");
+    });
+  },
+});
+
+// PR watches: the eye on a sidebar PR chip, the chip's hover card and
+// menu, and the rail's "Wakes this thread" list with its history. Nothing
+// else renders them: a watch exists only after an agent or Watch CI arms
+// one, and no replay fixture carries PRs at all.
+//
+// The list carries controls nothing else has: Stop, Turn Off and Watch CI
+// at 11px, a dashed hint box, a mono attempt aside in the menu, and a
+// history toggle that sits 4px into the card's padding. The hover card
+// adds a muted Auto-fix value.
+registerSharedAudit({
+  key: "pr-watches",
+  title: "PR watch surfaces have no violations",
+  launch: (appearance) => launchAuditApp({
+    ...appearance,
+    fixturePath: PR_WATCHES_FIXTURE,
+    env: NO_FORGE_CREDENTIALS,
+    preLaunchHook: async (homeRoot) => {
+      await seedPrWatchAuditState(homeRoot);
+    },
+  }),
+  exercise: async (app, scan, hasFunctionalAppearance) => {
+    const watched = PR_WATCH_AUDIT_WATCHED_PR;
+    const unwatched = PR_WATCH_AUDIT_UNWATCHED_PR;
+    const repository = `${watched.org}/${watched.repo}`;
+    const threadRow = app.window
+      .getByRole("button", { name: /PR watch audit thread/i })
+      .first();
+    await expect(threadRow).toBeVisible();
+    await threadRow.click();
+    await expect(
+      app.window.getByRole("heading", { level: 2, name: "PR watch audit thread" }),
+    ).toBeVisible();
+
+    // Scoped to the sidebar row: the rail's card draws the same chip with
+    // the same name.
+    const sidebarRow = app.window.locator("[data-thread-row-key]").filter({
+      has: app.window.getByRole("button", { name: /PR watch audit thread/i }),
+    });
+    const sidebarChip = sidebarRow.getByRole("button", {
+      name: new RegExp(`^Open ${repository}#${watched.number} .*, waiting for CI$`),
+    });
+
+    await test.step("sidebar PR chip with a CI watch", async () => {
+      await expect(sidebarChip).toBeVisible();
+      // The unwatched PR, behind the `+1 PR` chip, draws no eye. Without
+      // both, a seed that armed nothing would leave this scan green on a
+      // plain row.
+      await expect(sidebarChip.locator(".pr-chip__watch")).toBeVisible();
+      const overflowChip = sidebarRow.getByRole("button", {
+        name: /^\+1 PR: 1 more pull request, [^,]*$/,
+      });
+      await expect(overflowChip).toBeVisible();
+      await expect(overflowChip.locator(".pr-chip__watch")).toHaveCount(0);
+      if (hasFunctionalAppearance) {
+        // The eye is drawn inside the 20px chip, not beside or below it.
+        const chipBox = await sidebarChip.boundingBox();
+        const eyeBox = await sidebarChip.locator(".pr-chip__watch").boundingBox();
+        expect(chipBox).not.toBeNull();
+        expect(eyeBox).not.toBeNull();
+        expect(eyeBox!.x).toBeGreaterThanOrEqual(chipBox!.x);
+        expect(eyeBox!.y).toBeGreaterThanOrEqual(chipBox!.y);
+        expect(eyeBox!.x + eyeBox!.width).toBeLessThanOrEqual(chipBox!.x + chipBox!.width);
+        expect(eyeBox!.y + eyeBox!.height).toBeLessThanOrEqual(chipBox!.y + chipBox!.height);
+      }
+      await scan(app.window, "sidebar PR chip with a CI watch");
+    });
+
+    await test.step("PR chip hover card with watches", async () => {
+      await sidebarChip.hover();
+      const card = app.window.locator(".pr-status-card").filter({
+        hasText: "Wakes this thread",
+      });
+      await expect(card).toBeVisible();
+      await expect(card).toContainText("attempt 2");
+      await expect(card).toContainText("Merge or close");
+      await expect(card).toContainText("Auto-fix");
+      await scan(app.window, "PR chip hover card with watches");
+      // Park the pointer so the card closes and no later scan sees it.
+      await app.window.mouse.move(0, 0);
+      await expect(card).toBeHidden();
+    });
+
+    await test.step("PR chip menu with watch items", async () => {
+      await sidebarChip.click({ button: "right" });
+      const menu = app.window.getByRole("menu");
+      await expect(
+        menu.getByRole("menuitem", { name: /^Stop Waiting for CI/ }),
+      ).toBeVisible();
+      await expect(
+        menu.getByRole("menuitem", { name: "Stop Watching for Merge" }),
+      ).toBeVisible();
+      await settleSidebarPointer(app.window);
+      await scan(app.window, "PR chip menu with watch items");
+      await app.window.keyboard.press("Escape");
+      await expect(menu).toBeHidden();
+    });
+
+    const panel = app.window.locator("#context-rail-panel");
+    const watchedCard = panel.locator(".rail-card").filter({
+      hasText: watched.title!,
+    });
+    const unwatchedCard = panel.locator(".rail-card").filter({
+      hasText: unwatched.title!,
+    });
+
+    await test.step("rail Pull requests panel with watches", async () => {
+      await app.window.getByRole("tab", { name: /^Pull requests/ }).click();
+      // One assertion per row kind, so a seed drifting to fewer watches
+      // fails here instead of auditing a shorter list.
+      await expect(watchedCard.getByText("Waiting for CI · attempt 2")).toBeVisible();
+      await expect(watchedCard.getByText("Waiting for merge or close")).toBeVisible();
+      await expect(
+        watchedCard.getByRole("button", {
+          name: `Stop waiting for CI on #${watched.number}`,
+        }),
+      ).toBeVisible();
+      await expect(
+        watchedCard.getByRole("button", {
+          name: `Stop watching #${watched.number} for merge`,
+        }),
+      ).toBeVisible();
+      await expect(
+        watchedCard.getByRole("button", { name: "Turn off Auto-fix for this thread" }),
+      ).toBeVisible();
+      await expect(unwatchedCard.getByText("Not waiting for CI.")).toBeVisible();
+      await expect(
+        unwatchedCard.getByRole("button", { name: `Watch CI on #${unwatched.number}` }),
+      ).toBeVisible();
+      await settleSidebarPointer(app.window);
+      await scan(app.window, "rail Pull requests panel with watches");
+    });
+
+    await test.step("rail Pull requests watch history", async () => {
+      const toggle = watchedCard.getByRole("button", { name: /^History/ });
+      await toggle.click();
+      await expect(toggle).toHaveAttribute("aria-expanded", "true");
+      await expect(watchedCard.getByText("Stopped by you")).toBeVisible();
+      await expect(watchedCard.getByText("Stopped by the agent")).toBeVisible();
+      await settleSidebarPointer(app.window);
+      await scan(app.window, "rail Pull requests watch history");
+    });
+  },
+});
 
 for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
   // Tangerine keeps its original titles so its results stay comparable.
@@ -576,37 +952,6 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
       rules: options?.rules ?? (colorTheme ? COLOR_RULES : undefined),
     });
   test.describe(`desktop renderer accessibility (WCAG2 AA, ${theme} theme${colorThemeLabel})`, () => {
-    test("Job Monitors composer options have no violations", async () => {
-      const app = await launchAuditApp(appearance);
-      try {
-        await app.window.getByRole("button", { name: /Replay smoke thread/i }).first().click();
-        const trigger = app.window.getByRole("button", { name: "Thread options", exact: true });
-        await trigger.click();
-        const menu = app.window.getByRole("menu", { name: "Thread options", exact: true });
-        const monitors = menu.getByRole("menuitemcheckbox", { name: "Job Monitors", exact: true });
-        const include = ".composer-thread-options__menu";
-        await expect(monitors).toHaveAttribute("aria-checked", "true");
-        const mcpAccess = menu.getByRole("menuitem", { name: /^PwrAgent MCPs/ });
-        await expect(mcpAccess).toContainText("none selected");
-        await mcpAccess.hover();
-        await runAxe(app.window, "Job Monitors on", { include });
-        await monitors.click();
-        await expect(monitors).toHaveAttribute("aria-checked", "false");
-        await expect(monitors).not.toHaveAttribute("aria-busy", "true");
-        await expect(monitors).toContainText("The agent can't start new ones.");
-        const suggestions = menu.getByRole("menuitemcheckbox", { name: "Monitor job suggestions", exact: true });
-        await expect(suggestions).toHaveAttribute("aria-disabled", "true");
-        await expect(suggestions).toContainText("needs Job Monitors");
-        await runAxe(app.window, "Job Monitors off", { include });
-        await monitors.press("ArrowDown");
-        await expect(suggestions).toBeFocused();
-        await app.window.keyboard.press("Escape");
-        await expect(trigger).toBeFocused();
-      } finally {
-        await app.close();
-      }
-    });
-
     test("smoke fixture surfaces have no violations", async () => {
       const app = await launchAuditApp(appearance);
       try {
@@ -808,95 +1153,6 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
             app.window.getByRole("img", { name: "Unsent draft" }).first(),
           ).toBeVisible();
           await runAxe(app.window, "thread row carrying an unsent draft");
-        });
-      } finally {
-        await app.close();
-      }
-    });
-
-    // The active sub-agents strip above the composer. Nothing else in this
-    // gate renders it: it only appears when a thread has a non-terminal
-    // sub-agent or an undismissed failure, and no fixture produces one.
-    //
-    // It carries contrast pairs nothing else does — the `--status-*` dots, the
-    // `--danger-text` "Failed" cell, the neutral count pill, and two row
-    // controls sized right at the WCAG 2.2 target floor — so it went unaudited
-    // in both themes for as long as it shipped without this block.
-    //
-    // No dedicated replay fixture, unlike the copy-chip block: the surface's
-    // data comes from the sqlite seeder rather than the fixture, so a private
-    // fixture would be a file containing nothing this test depends on. What it
-    // does need from the smoke fixture — a thread that exists and opens — is
-    // exactly what that fixture guarantees for every other block here.
-    test("active sub-agents strip has no violations", async () => {
-      const app = await launchAuditApp(appearance);
-      try {
-        // The backend's listThreads waits for startup reconciliation. Seed
-        // live fixture cards after it finishes so it cannot mark them orphaned.
-        await app.window.evaluate(async () => {
-          const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
-          await api.listThreads!({ backend: "codex" });
-        });
-        const stateDb = StateDb.open(stateDbPathForHomeRoot(app.homeRoot), { profileName: "default" });
-        try {
-          await new SqliteOverlayStore(stateDb).upsertThreadSubAgents({
-            backend: "codex",
-            subAgents: buildAuditSubAgents(),
-            threadId: "thread-smoke",
-          });
-        } finally {
-          stateDb.close();
-        }
-        // The renderer does not re-poll after a direct database write.
-        await app.window.reload();
-
-        const smokeThread = app.window
-          .getByRole("button", { name: /Replay smoke thread/i })
-          .first();
-        await expect(smokeThread).toBeVisible();
-        await smokeThread.click();
-
-        // Four rows seeds the disclosure collapsed, so the header audits
-        // first and the list is opened deliberately below.
-        const strip = app.window.getByRole("button", {
-          name: /^Active sub-agents, 2, 2 failed$/,
-        });
-
-        await test.step("sub-agents strip header", async () => {
-          await expect(strip).toBeVisible();
-          await expect(strip).toHaveAttribute("aria-expanded", "false");
-          // Bulk dismiss only renders past one failure; assert it is painted
-          // so the audit cannot go quiet by the seed drifting to a single one.
-          await expect(
-            app.window.getByRole("button", {
-              name: "Dismiss all 2 failed sub-agents",
-            }),
-          ).toBeVisible();
-          await runAxe(app.window, "sub-agents strip header");
-        });
-
-        await test.step("sub-agents strip expanded rows", async () => {
-          await strip.click();
-          await expect(strip).toHaveAttribute("aria-expanded", "true");
-          // One assertion per row branch. Without these the scan still passes
-          // on an empty list and stops auditing the states it exists for.
-          await expect(
-            app.window.getByRole("button", {
-              name: /^Stop sub-agent: Run and monitor/,
-            }),
-          ).toBeVisible();
-          // Exact: `getByText` matches substrings, and "Blocked on approval"
-          // is sanctioned copy elsewhere in the style guide.
-          await expect(
-            app.window.getByText("Blocked", { exact: true }),
-          ).toBeVisible();
-          await expect(
-            app.window.getByRole("button", {
-              name: /^Dismiss failed sub-agent: Build and verify/,
-            }),
-          ).toBeVisible();
-          await expect(app.window.locator(".live-strip__item")).toHaveCount(4);
-          await runAxe(app.window, "sub-agents strip expanded rows");
         });
       } finally {
         await app.close();
@@ -1187,227 +1443,6 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
         await expect(panel.getByRole("textbox", { name: "Objective", exact: true })).toBeVisible();
         await runAxe(app.window, "research request form");
       } finally { await app.close(); }
-    });
-
-    // PR watches: the eye on a sidebar PR chip, the chip's hover card and
-    // menu, and the rail's "Wakes this thread" list with its history. Nothing
-    // else renders them: a watch exists only after an agent or Watch CI arms
-    // one, and no replay fixture carries PRs at all.
-    //
-    // The list carries controls nothing else has: Stop, Turn Off and Watch CI
-    // at 11px, a dashed hint box, a mono attempt aside in the menu, and a
-    // history toggle that sits 4px into the card's padding. The hover card
-    // adds a muted Auto-fix value.
-    test("PR watch surfaces have no violations", async () => {
-      // Five unscoped scans plus a launch, like the Directories block.
-      test.setTimeout(75_000);
-      const app = await launchAuditApp({
-        ...appearance,
-        fixturePath: PR_WATCHES_FIXTURE,
-        env: NO_FORGE_CREDENTIALS,
-        // Through the overlay store's own writers, so the PR list, the
-        // Auto-fix opt-in and the watch table each keep one owner.
-        preLaunchHook: async (homeRoot) => {
-          await seedPrWatchAuditState(homeRoot);
-        },
-      });
-      const watched = PR_WATCH_AUDIT_WATCHED_PR;
-      const unwatched = PR_WATCH_AUDIT_UNWATCHED_PR;
-      const repository = `${watched.org}/${watched.repo}`;
-      try {
-        const threadRow = app.window
-          .getByRole("button", { name: /PR watch audit thread/i })
-          .first();
-        await expect(threadRow).toBeVisible();
-        await threadRow.click();
-        await expect(
-          app.window.getByRole("heading", { level: 2, name: "PR watch audit thread" }),
-        ).toBeVisible();
-
-        // Scoped to the sidebar row: the rail's card draws the same chip with
-        // the same name.
-        const sidebarRow = app.window.locator("[data-thread-row-key]").filter({
-          has: app.window.getByRole("button", { name: /PR watch audit thread/i }),
-        });
-        const sidebarChip = sidebarRow.getByRole("button", {
-          name: new RegExp(`^Open ${repository}#${watched.number} .*, waiting for CI$`),
-        });
-
-        await test.step("sidebar PR chip with a CI watch", async () => {
-          await expect(sidebarChip).toBeVisible();
-          // The unwatched PR, behind the `+1 PR` chip, draws no eye. Without
-          // both, a seed that armed nothing would leave this scan green on a
-          // plain row.
-          await expect(sidebarChip.locator(".pr-chip__watch")).toBeVisible();
-          const overflowChip = sidebarRow.getByRole("button", {
-            name: /^\+1 PR: 1 more pull request, [^,]*$/,
-          });
-          await expect(overflowChip).toBeVisible();
-          await expect(overflowChip.locator(".pr-chip__watch")).toHaveCount(0);
-          if (runsFunctionalChecks) {
-            // The eye is drawn inside the 20px chip, not beside or below it.
-            const chipBox = await sidebarChip.boundingBox();
-            const eyeBox = await sidebarChip.locator(".pr-chip__watch").boundingBox();
-            expect(chipBox).not.toBeNull();
-            expect(eyeBox).not.toBeNull();
-            expect(eyeBox!.x).toBeGreaterThanOrEqual(chipBox!.x);
-            expect(eyeBox!.y).toBeGreaterThanOrEqual(chipBox!.y);
-            expect(eyeBox!.x + eyeBox!.width).toBeLessThanOrEqual(chipBox!.x + chipBox!.width);
-            expect(eyeBox!.y + eyeBox!.height).toBeLessThanOrEqual(chipBox!.y + chipBox!.height);
-          }
-          await runAxe(app.window, "sidebar PR chip with a CI watch");
-        });
-
-        await test.step("PR chip hover card with watches", async () => {
-          await sidebarChip.hover();
-          const card = app.window.locator(".pr-status-card").filter({
-            hasText: "Wakes this thread",
-          });
-          await expect(card).toBeVisible();
-          await expect(card).toContainText("attempt 2");
-          await expect(card).toContainText("Merge or close");
-          await expect(card).toContainText("Auto-fix");
-          await runAxe(app.window, "PR chip hover card with watches");
-          // Park the pointer so the card closes and no later scan sees it.
-          await app.window.mouse.move(0, 0);
-          await expect(card).toBeHidden();
-        });
-
-        await test.step("PR chip menu with watch items", async () => {
-          await sidebarChip.click({ button: "right" });
-          const menu = app.window.getByRole("menu");
-          await expect(
-            menu.getByRole("menuitem", { name: /^Stop Waiting for CI/ }),
-          ).toBeVisible();
-          await expect(
-            menu.getByRole("menuitem", { name: "Stop Watching for Merge" }),
-          ).toBeVisible();
-          await runAxe(app.window, "PR chip menu with watch items");
-          await app.window.keyboard.press("Escape");
-          await expect(menu).toBeHidden();
-        });
-
-        const panel = app.window.locator("#context-rail-panel");
-        const watchedCard = panel.locator(".rail-card").filter({
-          hasText: watched.title!,
-        });
-        const unwatchedCard = panel.locator(".rail-card").filter({
-          hasText: unwatched.title!,
-        });
-
-        await test.step("rail Pull requests panel with watches", async () => {
-          await app.window.getByRole("tab", { name: /^Pull requests/ }).click();
-          // One assertion per row kind, so a seed drifting to fewer watches
-          // fails here instead of auditing a shorter list.
-          await expect(watchedCard.getByText("Waiting for CI · attempt 2")).toBeVisible();
-          await expect(watchedCard.getByText("Waiting for merge or close")).toBeVisible();
-          await expect(
-            watchedCard.getByRole("button", {
-              name: `Stop waiting for CI on #${watched.number}`,
-            }),
-          ).toBeVisible();
-          await expect(
-            watchedCard.getByRole("button", {
-              name: `Stop watching #${watched.number} for merge`,
-            }),
-          ).toBeVisible();
-          await expect(
-            watchedCard.getByRole("button", { name: "Turn off Auto-fix for this thread" }),
-          ).toBeVisible();
-          await expect(unwatchedCard.getByText("Not waiting for CI.")).toBeVisible();
-          await expect(
-            unwatchedCard.getByRole("button", { name: `Watch CI on #${unwatched.number}` }),
-          ).toBeVisible();
-          await app.window.mouse.move(0, 0);
-          await runAxe(app.window, "rail Pull requests panel with watches");
-        });
-
-        await test.step("rail Pull requests watch history", async () => {
-          const toggle = watchedCard.getByRole("button", { name: /^History/ });
-          await toggle.click();
-          await expect(toggle).toHaveAttribute("aria-expanded", "true");
-          await expect(watchedCard.getByText("Stopped by you")).toBeVisible();
-          await expect(watchedCard.getByText("Stopped by the agent")).toBeVisible();
-          await app.window.mouse.move(0, 0);
-          await runAxe(app.window, "rail Pull requests watch history");
-        });
-      } finally {
-        await app.close();
-      }
-    });
-
-    // The Share storage dialog is reachable only from a worktree row, and
-    // only when the selected Git's help lists `git worktree reflink`. No
-    // fixture thread has a worktree that exists on disk, and what a real run
-    // reports depends on the runner's filesystem, so this block links a real
-    // directory to the smoke thread and selects a stand-in Git (see
-    // fixtures/worktree-storage-seeding.ts). The main process still
-    // authorizes the path against the thread and probes the Git's help
-    // before the renderer is offered anything.
-    test("share storage dialog has no violations", async () => {
-      test.skip(
-        process.platform === "win32",
-        "The stand-in Git is a shell script, which Windows cannot run as PWRAGENT_GIT_PATH.",
-      );
-      // Three unscoped scans plus a launch, an estimate and a share. The same
-      // budget as the neighbouring blocks, so a slow guest reports an axe
-      // result and not a timeout from inside a step.
-      test.setTimeout(75_000);
-      const audit = await prepareWorktreeStorageAudit(test.info().outputPath("worktree-storage"));
-      const app = await launchAuditApp({
-        ...appearance,
-        env: { PWRAGENT_GIT_PATH: audit.gitPath },
-        preLaunchHook: async (homeRoot) => {
-          await seedWorktreeStorageAuditState(homeRoot, audit);
-        },
-      });
-      try {
-        await app.window
-          .getByRole("button", { name: /Replay smoke thread/i })
-          .first()
-          .click();
-        await expect(
-          app.window.getByRole("heading", { level: 2, name: "Replay smoke thread" }),
-        ).toBeVisible();
-        const contextRail = app.window.getByRole("complementary", { name: "Thread context" });
-        await contextRail.getByRole("tab", { name: "Linked projects" }).click();
-        await contextRail
-          .getByRole("button", { name: `Share storage for ${WORKTREE_STORAGE_AUDIT_LABEL}`, exact: true })
-          .click();
-        const dialog = app.window.getByRole("dialog", { name: "Share worktree storage", exact: true });
-        const verify = dialog.getByRole("checkbox", { name: /^Verify filtered files/ });
-        const share = dialog.getByRole("button", { name: "Share storage", exact: true });
-
-        await test.step("share storage estimate", async () => {
-          // Without the estimate and the option, this would scan the
-          // "Checking the selected Git..." state and pass on an empty dialog.
-          await expect(dialog.getByText(/1,204 of 3,310 files can be shared, freeing about 412 MB\./))
-            .toBeVisible();
-          await expect(verify).toBeVisible();
-          if (runsFunctionalChecks) {
-            // Filter verification is never on until the operator asks.
-            await expect(verify).not.toBeChecked();
-            await expect(share).toBeEnabled();
-          }
-          await runAxe(app.window, "share storage estimate");
-        });
-
-        await test.step("share storage with filter verification chosen", async () => {
-          await verify.check();
-          await expect(verify).toBeChecked();
-          await runAxe(app.window, "share storage with filter verification chosen");
-        });
-
-        await test.step("share storage result", async () => {
-          await share.click();
-          await expect(dialog.getByText(/Shared 1,204 files, freeing 412 MB\./)).toBeVisible();
-          await expect(dialog.getByText(/Filtered files were verified\./)).toBeVisible();
-          await expect(dialog.getByRole("button", { name: "Done", exact: true })).toBeVisible();
-          await runAxe(app.window, "share storage result");
-        });
-      } finally {
-        await app.close();
-      }
     });
 
     // The Directories lens was never audited: every block above stays on the
