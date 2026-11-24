@@ -31,12 +31,23 @@ resize the pool or invalidate reservations. Units are reservations among
 cooperating jobs. They neither measure live load nor set process affinity. The same
 machine key and queue apply to every profile in the shared root.
 
-Supply an explicit `units` count on counted resources (such as 4 CPU slots for
-focused tests, lint, or typecheck). Acquire before launching and release when
-the command exits. In Code Mode and scripts, prefer `resource_checkout_acquire`,
+Machine CPU checkouts are advisory. Request one to coordinate a substantial
+workload, such as a full test suite or heavy build, or when the operator
+explicitly asks for a reservation. By default, start routine Dev launches from
+an installed environment, short debugger or profiler sessions, and lightweight
+inspection without requesting or waiting for a checkout.
+
+For work you reserve, use `resource_checkout_discover` to find the machine's
+`sharing.capacity` and cap command parallelism at that capacity. Supply the
+capped parallel worker count as explicit `units` on counted resources.
+See [local CPU checkout](../../../docs/local-cpu-checkout.md) for repository
+verification budgets. Wait for the grant before launching the reserved job and
+release it after the job exits. In Code Mode and scripts, prefer `resource_checkout_acquire`,
 which blocks event-driven until granted, returns a ready-to-use `releaseAction`
 for a `try`/`finally` block, and automatically cancels or releases on timeout or
-abort. When a large request at the head of the queue waits for slots to clear,
+abort.
+
+When a large request at the head of the queue waits for slots to clear,
 the authority uses EASY backfilling: later requests that fit in the free slots
 without delaying the head's guaranteed shadow start time (either finishing
 before the head can start or fitting in spare slots at that time) start right
