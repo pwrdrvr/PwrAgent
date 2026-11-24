@@ -5,6 +5,7 @@ import type { BackendModelOption, CodexModelProviderCatalogState } from "../cont
 import {
   buildProviderPickerEntries,
   codexModelProviderCatalogNote,
+  codexModelProviderOffline,
   describeCodexModelProviderEntry,
   findCodexModelProviderLabel,
   parseProviderPickerValue,
@@ -27,12 +28,22 @@ import {
 const UPSTREAM_IDS = ["gpt-oss-120b", "qwen3-coder", "deepseek-v4.1", "mathos-coder-large", "gpt-6-sol"];
 const PROVIDER_IDS = ["mathos", "refuseless", "openrouter", "acme"];
 const NAMES = ["MathOS", "Refuseless", "OpenRouter", "Acme Lab", "OpenAI-compatible box"];
+/** Reads whose endpoint never answered: a local model server that is stopped. */
+const UNREACHABLE_ERRORS = [
+  "fetch failed",
+  "The endpoint did not answer within 8 seconds.",
+  "connect ECONNREFUSED 127.0.0.1:8080",
+  "getaddrinfo ENOTFOUND flint.local",
+];
+/** Reads the endpoint answered with an error: a misconfigured provider. */
+const ANSWERED_ERRORS = ["HTTP 401", "HTTP 503: model is loading", "The response was larger than 8 MiB."];
 
 const provider = fc.record({
   id: fc.constantFrom(...PROVIDER_IDS),
   name: fc.constantFrom(...NAMES),
   models: fc.uniqueArray(fc.constantFrom(...UPSTREAM_IDS), { maxLength: UPSTREAM_IDS.length }),
   status: fc.constantFrom<CodexModelProviderCatalogState["status"]>("ready", "unavailable", "off", "pending"),
+  error: fc.constantFrom(...UNREACHABLE_ERRORS, ...ANSWERED_ERRORS),
   reportsState: fc.boolean(),
 });
 
@@ -59,7 +70,7 @@ function toBackends(input: Owner): ProviderPickerBackend[] {
     name: entry.name,
     status: entry.status,
     listedCount: entry.models.length,
-    ...(entry.status === "unavailable" ? { error: "HTTP 401" } : {}),
+    ...(entry.status === "unavailable" ? { error: entry.error } : {}),
   }));
   return [
     { kind: "codex", launchpadOptions: { models }, ...(states.length ? { codexModelProviders: states } : {}) },
@@ -110,6 +121,42 @@ describe("provider picker", () => {
   });
 });
 
+describe("an offline provider", () => {
+  /**
+   * The rule: a provider whose endpoint did not answer is offline, the
+   * ordinary state of a local model server that is not started. Its picker
+   * row reads "offline" in the same shape whether or not it lists models,
+   * and never quotes the error; the error moves to the tooltip. An endpoint
+   * that answered with an error is misconfigured and keeps its reason.
+   */
+  it("reads offline in one shape, and keeps an answered error's reason", () => {
+    fc.assert(fc.property(owner, (input) => {
+      const entries = buildProviderPickerEntries(toBackends(input));
+      for (const registered of input.providers) {
+        if (!registered.reportsState || registered.status !== "unavailable") continue;
+        const entry = entries.find((candidate) => candidate.codexModelProviderId === registered.id)!;
+        const described = describeCodexModelProviderEntry(entry);
+        const note = codexModelProviderCatalogNote(entry.catalog);
+        const count = registered.models.length;
+        const offline = UNREACHABLE_ERRORS.includes(registered.error);
+        expect(codexModelProviderOffline(entry.catalog)).toBe(offline);
+        expect(described.disabled).toBe(count === 0);
+        if (offline) {
+          expect(described.description).toBe(count === 0
+            ? "Runs on Codex · offline"
+            : `Runs on Codex · ${count} ${count === 1 ? "model" : "models"} · offline`);
+          expect(described.tooltip).toContain(registered.error.replace(/\.$/u, ""));
+          expect(note).toBe(`${registered.name} is offline. Showing the models listed in Settings.`);
+        } else {
+          expect(described.description).toContain(count === 0 ? registered.error : "catalog unavailable");
+          expect(described.tooltip).toBeUndefined();
+          expect(note).toContain(registered.error);
+        }
+      }
+    }));
+  });
+});
+
 describe("provider picker examples", () => {
   const backends: ProviderPickerBackend[] = [{
     kind: "codex",
@@ -149,6 +196,33 @@ describe("provider picker examples", () => {
     expect(codexModelProviderCatalogNote({
       id: "mathos", name: "MathOS", status: "ready", listedCount: 0, discoveredCount: 2000, truncated: true,
     })).toBe("MathOS lists more models than PwrAgent loads. Showing the first 2,000 models.");
+  });
+
+  it("reads two stopped local servers the same, listed model or not", () => {
+    const entries = buildProviderPickerEntries([{
+      kind: "codex",
+      launchpadOptions: {
+        models: [{ id: "@bonsai/bonsai-27b", providerId: "bonsai", providerLabel: "Bonsai (local)" }],
+      },
+      codexModelProviders: [
+        { id: "bonsai", name: "Bonsai (local)", status: "unavailable", listedCount: 1, error: "fetch failed" },
+        { id: "flint", name: "Flint", status: "unavailable", listedCount: 0, error: "fetch failed" },
+      ],
+    }]);
+    expect(entries.slice(1).map(describeCodexModelProviderEntry)).toEqual([
+      {
+        description: "Runs on Codex · 1 model · offline",
+        disabled: false,
+        tooltip: "Bonsai (local) did not answer (fetch failed). Its models listed in Settings are still offered.",
+      },
+      {
+        description: "Runs on Codex · offline",
+        disabled: true,
+        tooltip: "Flint did not answer (fetch failed). Start it, or list a model in Settings.",
+      },
+    ]);
+    expect(codexModelProviderCatalogNote(entries[1].catalog))
+      .toBe("Bonsai (local) is offline. Showing the models listed in Settings.");
   });
 
   it("files a qualified id reported without providerId under its own provider", () => {

@@ -91,6 +91,7 @@ const codex = {
     { id: "mathos", name: "MathOS", status: "ready", listedCount: 0, discoveredCount: 301 },
     { id: "refuseless", name: "Refuseless", status: "unavailable", listedCount: 1, error: "HTTP 503" },
     { id: "acme", name: "Acme Lab", status: "unavailable", listedCount: 0, error: "HTTP 401" },
+    { id: "flint", name: "Flint", status: "unavailable", listedCount: 0, error: "fetch failed" },
   ],
 } as BackendSummary;
 
@@ -143,13 +144,20 @@ describe("named Codex model providers in the composer", () => {
   it("lists each provider by its own name in the Provider picker, and says why one offers nothing", () => {
     renderLaunchpad();
     const list = openDropdown("Provider");
-    expect(composerDropdownOptionLabels(list)).toEqual(["OpenAI", "MathOS", "Refuseless", "Acme Lab"]);
+    expect(composerDropdownOptionLabels(list)).toEqual(["OpenAI", "MathOS", "Refuseless", "Acme Lab", "Flint"]);
     expect(within(list).getByRole("option", { name: /MathOS/ })).toHaveTextContent("Runs on Codex · 301 models");
     expect(within(list).getByRole("option", { name: /Refuseless/ }))
       .toHaveTextContent("Runs on Codex · 1 model · catalog unavailable");
     const acme = within(list).getByRole("option", { name: /Acme Lab/ });
     expect(acme).toHaveTextContent("No models. Catalog unavailable: HTTP 401");
     expect(acme).toHaveAttribute("aria-disabled", "true");
+    // A stopped local server is offline, not an error: the reason waits in the tooltip.
+    const flint = within(list).getByRole("option", { name: /Flint/ });
+    expect(flint).toHaveTextContent("Runs on Codex · offline");
+    expect(flint).not.toHaveTextContent("fetch failed");
+    expect(flint).toHaveAttribute("aria-disabled", "true");
+    expect(flint).toHaveAttribute("aria-description",
+      "Flint did not answer (fetch failed). Start it, or list a model in Settings.");
   });
 
   it("starts a MathOS thread on Codex with a MathOS model, and offers MathOS's whole catalog alone", async () => {
