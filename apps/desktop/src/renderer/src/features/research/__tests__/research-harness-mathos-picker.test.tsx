@@ -36,12 +36,35 @@ it("lists the team's swarms and imports the one chosen, titled by its task", asy
   expect(startResearchHarness.mock.calls[0]![0]).toMatchObject({ mode: "import", source: "swarm", project: "beta", session: "second", swarm: "s-old", objective: "Contrived proof" });
 });
 
+it("stops offering an import once a refresh no longer lists the chosen swarm", async () => {
+  const first: MathosSwarmsResult = { ok: true, sessions: 1, truncated: false, swarms: [
+    { project: "beta", session: "second", swarm: "s-old", state: "ended", task: "Contrived proof", members: 2, running: false }] };
+  const listMathosSwarms = vi.fn(async (): Promise<MathosSwarmsResult> => first);
+  const { api: desktop, startResearchHarness } = api(first);
+  (desktop as { listMathosSwarms: typeof listMathosSwarms }).listMathosSwarms = listMathosSwarms;
+  render(<ResearchHarnessForm api={desktop} thread={thread} onStarted={() => {}} />);
+  chooseSelectOption(await screen.findByRole("combobox", { name: "Swarm to import" }), /Contrived proof/);
+  const submit = screen.getByRole("button", { name: "Import records" });
+  await waitFor(() => expect(submit).toBeEnabled());
+  listMathosSwarms.mockResolvedValueOnce({ ok: true, sessions: 1, truncated: false, swarms: [
+    { project: "alpha", session: "default", swarm: "s-new", state: "running", task: "Contrived search", members: 1, running: true }] });
+  fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+  await waitFor(() => expect(screen.getByRole("combobox", { name: "Swarm to import" })).toHaveTextContent("Choose one of 1 swarm"));
+  expect(submit).toBeDisabled();
+  fireEvent.submit(screen.getByRole("form", { name: "Harness research" }));
+  expect(startResearchHarness).not.toHaveBeenCalled();
+});
+
 it("says plainly when the team's VM has no swarms, and still allows typed IDs", async () => {
   const { api: desktop } = api({ ok: true, sessions: 2, truncated: false, swarms: [] });
   render(<ResearchHarnessForm api={desktop} thread={thread} onStarted={() => {}} />);
   expect(await screen.findByText(/No swarms on this team’s VM yet \(2 sessions looked at\)\. Start one in MathOS, then refresh\./)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Enter IDs instead" }));
   expect(screen.getByLabelText("Project")).toBeInTheDocument();
+  // And back again, without closing the form.
+  fireEvent.click(screen.getByRole("button", { name: "Choose from the list" }));
+  expect(screen.queryByLabelText("Project")).toBeNull();
+  expect(screen.getByText(/No swarms on this team’s VM yet/)).toBeInTheDocument();
 });
 
 it("shows why the swarms could not be listed", async () => {

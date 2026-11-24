@@ -385,6 +385,28 @@ describe("PwrAgent's MathOS Platform client", () => {
     await expect(listMathosSwarms(refused.deps, { origin: ORIGIN, team: TEAM, apiKey: KEY })).rejects.toThrow(/not granted/);
   });
 
+  it("calls a VM truncated only when sessions are left unread", async () => {
+    const list = (count: number, next?: string) => platform({ runtime: (frame, socket) => {
+      if (frame.op === "sessions.list") {
+        socket.reply({ id: frame.id, ok: { sessions: Array.from({ length: count }, (_, i) => ({ project: "alpha", name: `s${i}` })), ...(next ? { next } : {}) } });
+        return true;
+      }
+      if (frame.op === "swarm.status") { socket.reply({ id: frame.id, error: { code: "invalid_input", message: "this session has started no swarm" } }); return true; }
+      return false;
+    } });
+    const target = { origin: ORIGIN, team: TEAM, apiKey: KEY };
+    expect(await listMathosSwarms(list(200).deps, target)).toMatchObject({ sessions: 200, truncated: false, swarms: [] });
+    expect(await listMathosSwarms(list(201).deps, target)).toMatchObject({ sessions: 200, truncated: true });
+    expect(await listMathosSwarms(list(200, "more").deps, target)).toMatchObject({ sessions: 200, truncated: true });
+  });
+
+  it("keeps the advice to check the address and network when the platform cannot be reached", async () => {
+    const offline = platform();
+    const deps = { ...offline.deps, fetch: async () => { throw new TypeError("fetch failed"); } };
+    const connection = openMathosPlatformConnection({ origin: ORIGIN, team: TEAM, apiKey: KEY }, deps);
+    await expect(connection.request("hello", {})).rejects.toThrow("Could not reach the MathOS Platform. Check the address and your network.");
+  });
+
   it("lists the key's teams across pages and drops anything that is not a team", async () => {
     const target = platform();
     expect(await listMathosTeams(target.deps, { origin: ORIGIN, apiKey: KEY })).toEqual([

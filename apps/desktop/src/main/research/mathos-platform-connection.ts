@@ -130,15 +130,15 @@ export async function readMathosRuntimeVersion(deps: MathosPlatformDeps, origin:
   const unreadable = (detail: string) =>
     new MathosPlatformError(`Could not read the MathOS Platform’s runtime version from its web app (${detail}).`, "runtime_version");
   // The web app lives at /app/; the platform answers / with a redirect there, and no request here follows redirects.
-  const page = await platformFetch(deps, new URL(MATHOS_WEB_APP_PATH, origin).href, { method: "GET" }).catch(() => {
-    throw unreadable(`${MATHOS_WEB_APP_PATH} did not load`);
-  });
+  // An unreachable platform keeps its own advice to check the address and the network.
+  const wrap = (detail: string) => (error: unknown): never => {
+    throw error instanceof MathosPlatformError && error.code === "unreachable" ? error : unreadable(detail);
+  };
+  const page = await platformFetch(deps, new URL(MATHOS_WEB_APP_PATH, origin).href, { method: "GET" }).catch(wrap(`${MATHOS_WEB_APP_PATH} did not load`));
   if (page.status !== 200) throw unreadable(`${MATHOS_WEB_APP_PATH} answered HTTP ${page.status}`);
   const entry = ENTRY_SCRIPT.exec(page.text)?.[0];
   if (!entry) throw unreadable("no entry script");
-  const script = await platformFetch(deps, new URL(entry, origin).href, { method: "GET" }).catch(() => {
-    throw unreadable("the entry script did not load");
-  });
+  const script = await platformFetch(deps, new URL(entry, origin).href, { method: "GET" }).catch(wrap("the entry script did not load"));
   const pin = RUNTIME_PIN.exec(script.text);
   const ipc = pin ? Number(pin[2]) : NaN;
   if (script.status !== 200) throw unreadable(`the entry script answered HTTP ${script.status}`);
@@ -321,13 +321,15 @@ async function listSessions(runtime: RuntimeSocket): Promise<{ sessions: Session
     for (let page = 0; page < 20; page++) {
       const body = record(await runtime.request(op, after === undefined ? {} : { after }));
       if (!Array.isArray(body?.sessions)) throw new MathosPlatformError("The MathOS runtime returned an invalid session list.");
-      for (const entry of body.sessions) {
+      after = op === "sessions.list" ? body.next : body.next_after;
+      const more = after !== undefined && after !== null;
+      for (const [index, entry] of body.sessions.entries()) {
         const session = record(entry);
         if (typeof session?.project === "string" && typeof session.name === "string") sessions.push({ project: session.project, session: session.name });
-        if (sessions.length >= MAX_LISTED_SESSIONS) return { sessions, truncated: true };
+        // Truncated only when something is left unread: later entries on this page, or another page.
+        if (sessions.length >= MAX_LISTED_SESSIONS) return { sessions, truncated: more || index < body.sessions.length - 1 };
       }
-      after = op === "sessions.list" ? body.next : body.next_after;
-      if (after === undefined || after === null) return { sessions, truncated: false };
+      if (!more) return { sessions, truncated: false };
     }
     return { sessions, truncated: true };
   };

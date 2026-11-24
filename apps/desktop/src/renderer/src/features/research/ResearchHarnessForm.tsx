@@ -141,7 +141,8 @@ export function ResearchHarnessForm({ api, thread, onStarted, onCancel, onOpenSe
   const swarmKey = (entry: Pick<MathosSwarm, "project" | "session" | "swarm">) => JSON.stringify([entry.project, entry.session, entry.swarm]);
   const listed = swarms?.ok ? swarms.swarms : [];
   const chosenSwarm = picking ? listed.find((entry) => entry.project === project && entry.session === session && entry.swarm === swarm) : undefined;
-  const missingIds = !project.trim() || !swarm.trim() || (!discovery && !session.trim()) || (execute && !objective.trim());
+  // While picking, only a swarm the refreshed list still shows counts as chosen.
+  const missingIds = !project.trim() || !swarm.trim() || (!discovery && !session.trim()) || (execute && !objective.trim()) || (picking && !chosenSwarm);
   // noValidate: the browser's own "fill out this field" bubble is not shipped UI; the submit button waits for the fields instead.
   return <form className="research-form" aria-label="Harness research" noValidate onSubmit={(event) => { void submit(event); }}>
     <section className="research-bridge" aria-labelledby={`${id}-bridge`}>
@@ -235,6 +236,8 @@ export function ResearchHarnessForm({ api, thread, onStarted, onCancel, onOpenSe
           <label>{discovery ? "Discovery run" : "Swarm"}<input maxLength={64} value={swarm} onChange={(e) => setSwarm(e.target.value)} /></label>
           {discovery && <label>Problem (optional)<input maxLength={64} value={problem} onChange={(e) => setProblem(e.target.value)} placeholder="Keeps its tree" /></label>}
         </div>
+        {manualIds && mathos && operation === "import" && <button type="button" className="research-button research-button--ghost research-swarms__back"
+          onClick={() => setManualIds(false)}>Choose from the list</button>}
       </>}
       {!execute && <label>Title (optional)<input maxLength={200} value={objective} onChange={(e) => setObjective(e.target.value)} placeholder={chosenSwarm?.task || (project && swarm ? `Import ${project} / ${swarm}` : "Names this run here")} /></label>}
       {execute && <div className="research-form__row">
