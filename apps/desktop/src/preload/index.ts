@@ -547,6 +547,8 @@ import type {
   GetMessagingActivitySummaryResponse,
   InboundPreviewMessage,
   ListInboundTopicsRequest,
+  ListTelegramConnectionConversationsRequest,
+  ListTelegramConnectionConversationsResponse,
   ListInboundTopicsResponse,
   ListMessagingActivityRequest,
   ListMessagingActivityResponse,
@@ -1235,6 +1237,7 @@ import {
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
   MESSAGING_REJECT_PAIRING_CHANNEL,
   MESSAGING_READ_TELEGRAM_PAIRING_GRANTS_CHANNEL,
+  MESSAGING_LIST_TELEGRAM_CONNECTION_CONVERSATIONS_CHANNEL,
   MESSAGING_REVOKE_TELEGRAM_PAIRING_GRANT_CHANNEL,
   MESSAGING_RESET_TOOL_UPDATE_BINDINGS_CHANNEL,
   MESSAGING_SET_ENABLED_CHANNEL,
@@ -4137,6 +4140,10 @@ const desktopApi = Object.freeze({
     request: ListInboundTopicsRequest,
   ): Promise<ListInboundTopicsResponse> =>
     await ipcRenderer.invoke(MESSAGING_LIST_INBOUND_TOPICS_CHANNEL, request),
+  listTelegramConnectionConversations: async (
+    request: ListTelegramConnectionConversationsRequest,
+  ): Promise<ListTelegramConnectionConversationsResponse> =>
+    await ipcRenderer.invoke(MESSAGING_LIST_TELEGRAM_CONNECTION_CONVERSATIONS_CHANNEL, request),
   onInboundPreviewMessage: (
     callback: (message: InboundPreviewMessage) => void,
   ): (() => void) => {

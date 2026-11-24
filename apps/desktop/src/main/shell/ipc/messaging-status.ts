@@ -10,6 +10,8 @@ import type {
   GetMessagingPlatformStatusesRequest,
   InboundPreviewMessage,
   ListInboundTopicsRequest,
+  ListTelegramConnectionConversationsRequest,
+  ListTelegramConnectionConversationsResponse,
   ListInboundTopicsResponse,
   ListMessagingRoutesResponse,
   ListMessagingActivityRequest,
@@ -85,6 +87,7 @@ import {
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
   MESSAGING_REJECT_PAIRING_CHANNEL,
   MESSAGING_READ_TELEGRAM_PAIRING_GRANTS_CHANNEL,
+  MESSAGING_LIST_TELEGRAM_CONNECTION_CONVERSATIONS_CHANNEL,
   MESSAGING_REVOKE_TELEGRAM_PAIRING_GRANT_CHANNEL,
   MESSAGING_RESET_TOOL_UPDATE_BINDINGS_CHANNEL,
   MESSAGING_SET_ENABLED_CHANNEL,
@@ -98,7 +101,7 @@ import {
   startInboundPreview,
   stopInboundPreview,
 } from "../../messaging/inbound-preview-bus";
-import { getDesktopMessagingStore } from "../../messaging/desktop-messaging-store";
+import { resolveTelegramConnectionConversations } from "../../messaging/telegram-connection-catalog";
 import {
   clearDesktopMessagingDefaultAgent,
   listDesktopMessagingRoutes,
@@ -646,7 +649,15 @@ export function registerMessagingStatusIpcHandlers(): void {
       request: ListInboundTopicsRequest,
     ): Promise<ListInboundTopicsResponse> => {
       if (!request.groupId) return { topics: [] };
-      const records = await getDesktopMessagingStore().findManagedTopicsForSupergroup(
+      // A named connection's topics live in its own store. One that is not
+      // running here lists none rather than the original bot's topics.
+      let store: ReturnType<typeof runtime.getConnectionBindingStore>;
+      try {
+        store = runtime.getConnectionBindingStore(request.connectionId);
+      } catch {
+        return { topics: [] };
+      }
+      const records = await store.findManagedTopicsForSupergroup(
         { channel: request.provider, supergroupId: request.groupId },
       );
       const topics = records
@@ -880,6 +891,31 @@ export function registerMessagingStatusIpcHandlers(): void {
     }
     return service.readTelegramPairingGrants(service.resolveTelegramBotTokenSync());
   });
+
+  ipcMain.removeHandler(MESSAGING_LIST_TELEGRAM_CONNECTION_CONVERSATIONS_CHANNEL);
+  ipcMain.handle(
+    MESSAGING_LIST_TELEGRAM_CONNECTION_CONVERSATIONS_CHANNEL,
+    (_event, request?: ListTelegramConnectionConversationsRequest): ListTelegramConnectionConversationsResponse => {
+      const service = getDesktopSettingsService();
+      const telegram = service.readMessagingSettings().telegram;
+      return resolveTelegramConnectionConversations({
+        connectionId: request?.connectionId,
+        connections: service.readConfiguredTelegramConnections(),
+        original: {
+          supergroups: telegram.authorizedSupergroups.value,
+          users: telegram.authorizedUserIds.value,
+          grants: service.readTelegramPairingGrants(service.resolveTelegramBotTokenSync()),
+        },
+        readNamedGrants: (connection) => {
+          try {
+            return runtime.getConnectionPairingStore(connection.id).readTelegramGrants(connection.botAccountId);
+          } catch {
+            return undefined;
+          }
+        },
+      });
+    },
+  );
 
   ipcMain.removeHandler(MESSAGING_REVOKE_TELEGRAM_PAIRING_GRANT_CHANNEL);
   ipcMain.handle(
@@ -1117,6 +1153,7 @@ export async function disposeMessagingStatusIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(MESSAGING_APPROVE_PAIRING_CHANNEL);
   ipcMain.removeHandler(MESSAGING_REJECT_PAIRING_CHANNEL);
   ipcMain.removeHandler(MESSAGING_READ_TELEGRAM_PAIRING_GRANTS_CHANNEL);
+  ipcMain.removeHandler(MESSAGING_LIST_TELEGRAM_CONNECTION_CONVERSATIONS_CHANNEL);
   ipcMain.removeHandler(MESSAGING_REVOKE_TELEGRAM_PAIRING_GRANT_CHANNEL);
   ipcMain.removeHandler(MESSAGING_UNBIND_THREAD_CHANNEL);
   ipcMain.removeHandler(MESSAGING_RESET_TOOL_UPDATE_BINDINGS_CHANNEL);

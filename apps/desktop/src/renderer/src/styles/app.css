@@ -41764,6 +41764,14 @@ div.composer-error-row__toggle {
   font-size: 12px;
 }
 
+/* A saved bot that cannot carry the conversation, under the Bot picker. */
+.automation-bot__notice {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .automation-sender-picker__menu {
   position: absolute;
   top: 100%;
@@ -41873,6 +41881,15 @@ div.composer-error-row__toggle {
    Here the conversation picker takes its own full row under the Provider
    select instead of sharing one. */
 .automation-inline-fields--stacked-picker > .automation-field--picker {
+  grid-column: 1 / -1;
+}
+
+/* Provider and Bot share a row; the conversation they scope gets its own. */
+.automation-inline-fields--bot {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.automation-inline-fields--bot > .automation-field--picker {
   grid-column: 1 / -1;
 }
 
