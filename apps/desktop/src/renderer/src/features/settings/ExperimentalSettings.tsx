@@ -1,5 +1,7 @@
 import { formatFilesystemPath } from "@pwragent/shared/path-display";
 import {
+  type DesktopSettingsConfigPatch,
+  type DesktopSettingsSecretName,
   type DesktopSettingsSnapshot,
   type DesktopTokenMiserUsage,
 } from "@pwragent/shared/contracts/settings";
@@ -18,6 +20,7 @@ import {
   ToggleField,
 } from "./SettingsLayout";
 import { sourceBadge } from "./settings-fields";
+import { ResearchHarnessSettings } from "./ResearchHarnessSettings";
 
 const DEFAULT_CODEX_DEFAULT_MODE_REQUEST_USER_INPUT = {
   value: false,
@@ -99,6 +102,9 @@ export function ExperimentalSettings(props: {
   onTokenMiserDefaultEnabledChange: (enabled: boolean) => Promise<void>;
   onCodexToolDiscoveryChange: (enabled: boolean) => Promise<void>;
   onResearchEnabledChange: (enabled: boolean) => Promise<void>;
+  onWriteConfig: (patch: DesktopSettingsConfigPatch, onError?: (message: string) => void) => Promise<boolean>;
+  onClearSecret: (secret: DesktopSettingsSecretName) => Promise<boolean>;
+  onReplaceSecret: (secret: DesktopSettingsSecretName, value: string) => Promise<boolean>;
   onCodexDefaultModeRequestUserInputChange: (
     enabled: boolean,
   ) => Promise<void>;
@@ -213,6 +219,15 @@ export function ExperimentalSettings(props: {
           />
         </div>
       </SettingsSection>
+
+      <ResearchHarnessSettings
+        desktopApi={props.desktopApi}
+        saving={props.saving}
+        snapshot={props.snapshot}
+        onWriteConfig={props.onWriteConfig}
+        onClearSecret={props.onClearSecret}
+        onReplaceSecret={props.onReplaceSecret}
+      />
 
       <SettingsSection
         eyebrow="Experimental"

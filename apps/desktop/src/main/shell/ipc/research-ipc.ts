@@ -1,4 +1,5 @@
-import { BrowserWindow, ipcMain, shell } from "electron";
+import { BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { getMainLogger } from "../../log";
 import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
 import {
   type ResearchThread,
@@ -29,10 +30,12 @@ import type { ResearchProfileRunsPage, ResearchProfileRunsQuery } from "@pwragen
 import { RESEARCH_RUN_ATTENTION_ORDER } from "@pwragent/shared/research";
 import { RESEARCH_PROFILE_RUNS_CHANNEL, RESEARCH_OPEN_WINDOW_CHANNEL } from "../../../shared/ipc";
 import { researchWindowRunId, showResearchWindow } from "../research-window";
-import { RESEARCH_HARNESS_STATUS_CHANNEL, RESEARCH_HARNESS_START_CHANNEL, RESEARCH_HARNESS_CHECK_CHANNEL, RESEARCH_HARNESS_RECONCILE_CHANNEL, RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL } from "../../../shared/ipc";
+import { RESEARCH_HARNESS_STATUS_CHANNEL, RESEARCH_HARNESS_START_CHANNEL, RESEARCH_HARNESS_CHECK_CHANNEL, RESEARCH_HARNESS_RECONCILE_CHANNEL, RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL, RESEARCH_HARNESS_SETTINGS_CHECK_CHANNEL, RESEARCH_HARNESS_PICK_BRIDGE_CHANNEL, RESEARCH_MATHOS_TEAMS_CHANNEL, RESEARCH_MATHOS_SWARMS_CHANNEL } from "../../../shared/ipc";
 import { resolveDesktopConfigPath } from "../../settings/desktop-config";
-import { getResearchHarnessService, researchHarnessStatus } from "../../research/research-runtime";
+import { getResearchHarnessService, listResearchMathosSwarms, listResearchMathosTeams, researchHarnessPlatformKeyStored, researchHarnessStatus } from "../../research/research-runtime";
 import { getDesktopSettingsService } from "../../settings/desktop-settings-singleton";
+
+const researchIpcLog = getMainLogger("pwragent:research");
 
 /** Native research is local-owner only. A federation viewer cannot read or mutate this profile. */
 export function registerResearchIpcHandlers(): void {
@@ -40,7 +43,7 @@ export function registerResearchIpcHandlers(): void {
   ipcMain.handle(RESEARCH_HARNESS_STATUS_CHANNEL, async (event, request: ResearchThread) => {
     if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");
     validateThread(request);
-    return researchHarnessStatus(await harnessWorkspace(request));
+    return researchHarnessStatus(await harnessWorkspace(request), process.env, await researchHarnessPlatformKeyStored());
   });
   ipcMain.handle(RESEARCH_HARNESS_CHECK_CHANNEL, async (event, request: ResearchThread) => {
     if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");
@@ -74,6 +77,35 @@ export function registerResearchIpcHandlers(): void {
     if (!isLocalResearchWebContents(event.sender)) throw new Error("Open research on its owning instance");
     requireResearchEnabled();
     showResearchWindow({ sourceWindow: BrowserWindow.fromWebContents(event.sender) ?? undefined }, { runId: researchWindowRunId(request?.runId) });
+  });
+  // Settings checks the saved bridge with no thread: a check binds no evidence, so it runs from the temporary directory.
+  ipcMain.handle(RESEARCH_HARNESS_SETTINGS_CHECK_CHANNEL, async (event) => {
+    if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Check the bridge on its owning instance");
+    const result = await getResearchHarnessService().check(await realpath(tmpdir()));
+    // The window shows the reason; the log keeps it for a later look. Neither carries a credential.
+    if (!result.ok) researchIpcLog.warn("Harness connection check failed", { error: result.error });
+    return result;
+  });
+  // The operator chooses the bridge program in the system file picker; Settings saves it like any other field.
+  ipcMain.handle(RESEARCH_HARNESS_PICK_BRIDGE_CHANNEL, async (event): Promise<{ path?: string }> => {
+    if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Choose the bridge on its owning instance");
+    const window = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+    const options: Electron.OpenDialogOptions = { title: "Choose the Harness bridge", properties: ["openFile"] };
+    const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
+    return result.canceled || !result.filePaths[0] ? {} : { path: result.filePaths[0] };
+  });
+  // Settings lists the teams the stored key can open, on the saved origin. The window supplies no address or key.
+  ipcMain.handle(RESEARCH_MATHOS_TEAMS_CHANNEL, async (event) => {
+    if (!isLocalMainWindowWebContents(event.sender)) throw new Error("List MathOS teams on the owning instance");
+    return await listResearchMathosTeams();
+  });
+  // The New run form lists the saved team's swarms to choose from. Read-only; the window supplies nothing.
+  ipcMain.handle(RESEARCH_MATHOS_SWARMS_CHANNEL, async (event) => {
+    if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");
+    requireResearchEnabled();
+    const result = await listResearchMathosSwarms();
+    if (!result.ok) researchIpcLog.warn("MathOS swarm listing failed", { error: result.error });
+    return result;
   });
   // Reveals this profile's own config file. The window supplies no path.
   ipcMain.handle(RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL, (event) => {
@@ -171,6 +203,10 @@ export function disposeResearchIpcHandlers(): void {
   ipcMain.removeHandler(RESEARCH_HARNESS_CHECK_CHANNEL);
   ipcMain.removeHandler(RESEARCH_HARNESS_RECONCILE_CHANNEL);
   ipcMain.removeHandler(RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL);
+  ipcMain.removeHandler(RESEARCH_HARNESS_SETTINGS_CHECK_CHANNEL);
+  ipcMain.removeHandler(RESEARCH_HARNESS_PICK_BRIDGE_CHANNEL);
+  ipcMain.removeHandler(RESEARCH_MATHOS_TEAMS_CHANNEL);
+  ipcMain.removeHandler(RESEARCH_MATHOS_SWARMS_CHANNEL);
   ipcMain.removeHandler(RESEARCH_PROFILE_RUNS_CHANNEL);
   ipcMain.removeHandler(RESEARCH_OPEN_WINDOW_CHANNEL);
   for (const channel of [RESEARCH_CHANGES_CHANNEL, RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL, RESEARCH_WITHDRAW_CHANNEL, RESEARCH_EVENTS_CHANNEL]) ipcMain.removeHandler(channel);

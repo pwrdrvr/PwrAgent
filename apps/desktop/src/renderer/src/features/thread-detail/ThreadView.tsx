@@ -880,6 +880,8 @@ export type ThreadViewProps = {
   decisionSettings?: DecisionSetupSettings;
   /** Opens Settings → AI Providers, at a decision provider's screen when one is named. */
   onOpenDecisionSettings?: (focus?: string) => void;
+  /** Settings › Experimental, where Open Math Harness is configured. */
+  onOpenResearchSettings?: () => void;
   onRevealSelectedThreadInList?: () => void;
   /** Show the breadcrumb's project in the Directories lens. */
   onRevealSelectedProjectInList?: (directory: NavigationDirectorySummary) => void;
@@ -3869,6 +3871,7 @@ export function ThreadView(props: ThreadViewProps) {
               onOpenAutomations={props.onOpenAutomations}
               decisionSettings={props.decisionSettings}
               onOpenDecisionSettings={props.onOpenDecisionSettings}
+              onOpenResearchSettings={props.onOpenResearchSettings}
               onActiveTabChange={onActiveContextTabChange}
               onResizingChange={setContextRailResizing}
               onWidthChange={setContextRailWidth}

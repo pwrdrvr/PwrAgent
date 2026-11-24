@@ -4452,6 +4452,7 @@ function DesktopAppShell(props: {
         onOpenPluginSettings: openPluginSettings,
         decisionSettings: props.settings,
         onOpenDecisionSettings: (focus?: string) => openSettingsSection("models", focus),
+        onOpenResearchSettings: () => openSettingsSection("experimental"),
         onRevealSelectedThreadInList: revealSelectedThreadInList,
         onRevealSelectedProjectInList: revealSelectedProjectInList,
         projectThreadActions: {

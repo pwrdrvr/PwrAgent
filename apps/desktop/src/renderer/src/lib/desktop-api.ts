@@ -13,6 +13,8 @@ import type {
   ResearchHarnessReconcileRequest,
   ResearchHarnessRequest,
   ResearchHarnessStatus,
+  MathosTeamsResult,
+  MathosSwarmsResult,
 } from "@pwragent/shared/research-harness";
 import type { ResearchProfileRunsPage, ResearchProfileRunsQuery } from "@pwragent/shared/research";
 import { expandNavigationRemoteOwner } from "@pwragent/shared/navigation-remote-owner";
@@ -1274,6 +1276,14 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   checkResearchHarness?: (request: ResearchThread) => Promise<ResearchHarnessCheck>;
   reconcileResearchHarness?: (request: ResearchHarnessReconcileRequest) => Promise<ResearchUpdateReceipt>;
   revealResearchHarnessConfig?: () => Promise<void>;
+  /** Settings: check the saved bridge with `hello` only. No thread, no model call, nothing written. */
+  checkResearchHarnessBridge?: () => Promise<ResearchHarnessCheck>;
+  /** Settings: the system file picker for the bridge program. Empty when cancelled. */
+  pickResearchHarnessBridge?: () => Promise<{ path?: string }>;
+  /** Settings: the MathOS teams the stored Platform key can open, on the saved origin. */
+  listMathosTeams?: () => Promise<MathosTeamsResult>;
+  /** New run: the saved MathOS team's swarms (each session's running or latest), read-only. */
+  listMathosSwarms?: () => Promise<MathosSwarmsResult>;
   researchProfileRuns?: (request?: ResearchProfileRunsQuery) => Promise<ResearchProfileRunsPage>;
   openResearchWindow?: (request?: { runId?: string }) => Promise<void>;
   onResearchWindowSelect?: (callback: (runId: string) => void) => () => void;

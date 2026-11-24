@@ -26,6 +26,7 @@ import { normalizeThreadArchivePolicy } from "@pwragent/shared/thread-archive-po
 import { bundledGitExecutable, bundledGitLfsExecutable } from "../bundled-git";
 import { gitRuntimeEnvironment } from "../git-runtime";
 import { createTokenMiserStorage } from "../storage/desktop-runtime-storage";
+import { resolveResearchHarnessSource } from "@pwragent/shared/research-harness";
 import {
   DESKTOP_MARKDOWN_RENDERING_DEFAULTS,
   DESKTOP_UI_LAYOUT_DEFAULTS,
@@ -926,6 +927,12 @@ export class DesktopSettingsService {
       undefined,
       secretStorage.available,
     );
+    // No environment fallback: the bridge receives this key only from the store.
+    const mathosPlatformApiKey = await this.readSecretState(
+      "mathosPlatformApiKey",
+      undefined,
+      secretStorage.available,
+    );
     const codexModelProviderKeyIds = secretStorage.available && config.models?.codex?.providers?.length
       ? await this.readCodexModelProviderKeyIds()
       : new Set<string>();
@@ -1260,6 +1267,15 @@ export class DesktopSettingsService {
         },
       },
       onboarding: this.resolveOnboarding(config.onboarding),
+      research: {
+        source: resolveResearchHarnessSource(config.research),
+        ...(config.research?.harness ? { harness: config.research.harness } : {}),
+        ...(config.research?.mathos ? { mathos: config.research.mathos } : {}),
+        ...(config.research?.harness?.apiKeyEnv
+          ? { modelKeyEnvSet: Boolean(readEnvString(this.env, config.research.harness.apiKeyEnv)) }
+          : {}),
+        platformApiKey: mathosPlatformApiKey,
+      },
       experimental: {
         chatReplyComposer: this.resolveComposer(
           config.experimental?.chatReplyComposer,
@@ -2940,6 +2956,21 @@ export class DesktopSettingsService {
     await this.options.secretStore.deleteSecret("pwrsnapMcpCredential");
   }
 
+  /**
+   * The stored MathOS Platform API key, for the Open Math Harness bridge's
+   * environment only. Read when the owner starts the bridge; never projected
+   * into a snapshot, IPC reply, agent tool or model request.
+   */
+  /** Presence of the MathOS Platform key, without decrypting it. */
+  async hasMathosPlatformApiKey(): Promise<boolean> {
+    return await this.options.secretStore.hasSecret("mathosPlatformApiKey");
+  }
+
+  resolveMathosPlatformApiKeySync(): string | undefined {
+    // A store that cannot be read throws, so the bridge never starts silently signed out.
+    return this.options.secretStore.getSecretSync?.("mathosPlatformApiKey") || undefined;
+  }
+
   async resolvePwrGitMcpCredential(): Promise<string | undefined> {
     return await this.options.secretStore.getSecret("pwrgitMcpCredential");
   }
@@ -4467,6 +4498,7 @@ export class DesktopSettingsService {
         ui: this.configStore.read("ui"),
         integratedTerminal: this.configStore.read("integratedTerminal"),
         imageUploads: this.configStore.read("imageUploads"),
+        research: this.configStore.read("research"),
       } satisfies DesktopSettingsConfig),
       ...(fileStatus.kind === "invalid" ? { error: fileStatus.error } : {}),
     };
@@ -5403,6 +5435,7 @@ function secretEnvironmentKey(
     case "typesafeJevApiKey":
     case "openaiTranscriptionApiKey":
     case "codexModelProviderKeys":
+    case "mathosPlatformApiKey":
       return undefined;
     case "openaiDecisionsApiKey":
       return OPENAI_DECISIONS_API_KEY_ENV;

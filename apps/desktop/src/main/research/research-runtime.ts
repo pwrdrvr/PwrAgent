@@ -3,10 +3,19 @@ import { ResearchHarnessService } from "@pwragent/owner-core/research-harness-se
 import { probeResearchModel, researchModelRequest } from "@pwragent/owner-core/research-model-adapter";
 import path from "node:path";
 import { getDesktopConfigStore } from "../settings/config-store/desktop-config-store-singleton";
-import { readResearchHarnessConfig } from "../settings/config-store/research-runtime-config";
+import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import { readResearchConfig } from "../settings/config-store/research-runtime-config";
+import { listMathosSwarms, listMathosTeams, MathosPlatformError, openMathosPlatformConnection, type MathosPlatformDeps, type MathosPlatformTarget } from "./mathos-platform-connection";
 import { openResearchHarnessProcess } from "./research-harness-process";
 import { createHarnessModelTransport, selectHarnessModel } from "./research-harness-model";
-import type { ResearchHarnessStatus } from "@pwragent/shared/research-harness";
+import {
+  MATHOS_TEAM_ID,
+  normalizeMathosPlatformOrigin,
+  resolveResearchHarnessSource,
+  type MathosSwarmsResult,
+  type MathosTeamsResult,
+  type ResearchHarnessStatus,
+} from "@pwragent/shared/research-harness";
 import { RESEARCH_BOARD_PAGE, researchDeadlinePassed } from "@pwragent/shared/research";
 import type {
   ResearchActor,
@@ -24,14 +33,29 @@ let service: ResearchService | undefined;
 let harness: ResearchHarnessService | undefined;
 
 /**
- * What the window may know about the bridge. The credential is reported only as
- * a variable name and whether it is set; its value never leaves this process.
+ * What the window may know about the configured source. A bridge's model
+ * credential is reported only as a variable name and whether it is set; the
+ * MathOS Platform key only as stored or not. No value leaves this process.
  */
-export function researchHarnessStatus(workspace?: string, env: NodeJS.ProcessEnv = process.env): ResearchHarnessStatus {
-  let config: ReturnType<typeof readResearchHarnessConfig>;
-  try { config = readResearchHarnessConfig(getDesktopConfigStore()); }
+export function researchHarnessStatus(workspace?: string, env: NodeJS.ProcessEnv = process.env,
+  platformKeyStored?: boolean): ResearchHarnessStatus {
+  let research: ReturnType<typeof readResearchConfig>;
+  try { research = readResearchConfig(getDesktopConfigStore()); }
   catch (error) { return { configured: false, configError: error instanceof Error ? error.message : "This profile's config.toml cannot be used", ...(workspace ? { workspace } : {}) }; }
-  const status: ResearchHarnessStatus = { configured: Boolean(config?.command), ...(workspace ? { workspace } : {}) };
+  if (resolveResearchHarnessSource(research) === "mathos") {
+    const origin = normalizeMathosPlatformOrigin(research.mathos?.origin);
+    const team = research.mathos?.team && MATHOS_TEAM_ID.test(research.mathos.team) ? research.mathos.team : undefined;
+    return {
+      configured: Boolean(origin.ok && team && platformKeyStored !== false),
+      source: "mathos",
+      ...(origin.ok ? { platformOrigin: origin.origin } : { configError: `research.mathos.origin: ${origin.error}` }),
+      ...(team ? { platformTeam: team } : {}),
+      ...(platformKeyStored !== undefined ? { platformKeyStored } : {}),
+      ...(workspace ? { workspace } : {}),
+    };
+  }
+  const config = research.harness;
+  const status: ResearchHarnessStatus = { configured: Boolean(config?.command), source: "bridge", ...(workspace ? { workspace } : {}) };
   if (!config?.command) return status;
   status.bridge = path.basename(config.command);
   if (config.model) status.model = config.model;
@@ -43,6 +67,59 @@ export function researchHarnessStatus(workspace?: string, env: NodeJS.ProcessEnv
   if (config.apiKeyEnv) { status.credentialEnv = config.apiKeyEnv; status.credentialSet = Boolean(env[config.apiKeyEnv]); }
   return status;
 }
+
+/** Whether a Platform key is stored, without decrypting it. Undefined when the store cannot be read. */
+export async function researchHarnessPlatformKeyStored(): Promise<boolean | undefined> {
+  try { return await getDesktopSettingsService().hasMathosPlatformApiKey(); }
+  catch { return undefined; }
+}
+
+/** The network seams the MathOS Platform client uses: the owner's own fetch and WebSocket. */
+function mathosPlatformDeps(): MathosPlatformDeps {
+  const socket = (globalThis as { WebSocket?: unknown }).WebSocket;
+  if (typeof socket !== "function") throw new Error("This PwrAgent runtime cannot open WebSockets, so it cannot reach the MathOS Platform.");
+  return { fetch: (input, init) => fetch(input, init), WebSocket: socket as MathosPlatformDeps["WebSocket"] };
+}
+
+/**
+ * The saved MathOS target and the stored key, read only when the owner is about
+ * to sign in. The key stays in this process.
+ */
+function mathosPlatformTarget(research: ReturnType<typeof readResearchConfig>): MathosPlatformTarget {
+  const origin = normalizeMathosPlatformOrigin(research.mathos?.origin);
+  if (!origin.ok) throw new Error(`research.mathos.origin: ${origin.error}`);
+  const team = research.mathos?.team;
+  if (!team || !MATHOS_TEAM_ID.test(team)) throw new Error("Choose a MathOS team in Settings › Experimental › Open Math Harness.");
+  const apiKey = getDesktopSettingsService().resolveMathosPlatformApiKeySync();
+  if (!apiKey) throw new Error("Store a MathOS Platform API key in Settings › Experimental › Open Math Harness.");
+  return { origin: origin.origin, team, apiKey };
+}
+
+/** The swarms on the saved team's VM, for the New run form. Read-only; nothing is written. */
+export async function listResearchMathosSwarms(): Promise<MathosSwarmsResult> {
+  try {
+    const research = readResearchConfig(getDesktopConfigStore());
+    if (resolveResearchHarnessSource(research) !== "mathos") return { ok: false, error: "Open Math Harness is set to a custom bridge." };
+    return { ok: true, ...await listMathosSwarms(mathosPlatformDeps(), mathosPlatformTarget(research)) };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "Could not list this team’s swarms." };
+  }
+}
+
+/** The teams the stored key can open, on the saved platform origin. Errors carry the platform's words, never the key. */
+export async function listResearchMathosTeams(): Promise<MathosTeamsResult> {
+  try {
+    const research = readResearchConfig(getDesktopConfigStore());
+    const origin = normalizeMathosPlatformOrigin(research.mathos?.origin);
+    if (!origin.ok) return { ok: false, error: origin.error };
+    const apiKey = getDesktopSettingsService().resolveMathosPlatformApiKeySync();
+    if (!apiKey) return { ok: false, error: "Store a MathOS Platform API key first." };
+    return { ok: true, teams: await listMathosTeams(mathosPlatformDeps(), { origin: origin.origin, apiKey }) };
+  } catch (error) {
+    return { ok: false, error: error instanceof MathosPlatformError ? error.message : "Could not list your MathOS teams." };
+  }
+}
+
 export function getResearchHarnessService(): ResearchHarnessService {
   if (!harness) throw new Error("Research Harness owner has not started");
   return harness;
@@ -55,8 +132,11 @@ export function initializeResearchRuntime(ports: ResearchPorts): ResearchService
   harness = new ResearchHarnessService(storage, {
     ...ports,
     open: (workspace, id, mode) => {
-      const config = readResearchHarnessConfig(getDesktopConfigStore());
-      if (!config?.command) throw new Error("Configure research.harness in this profile's config.toml");
+      const research = readResearchConfig(getDesktopConfigStore());
+      // PwrAgent's own client: read-only, so `hello` offers neither execution nor cancellation.
+      if (resolveResearchHarnessSource(research) === "mathos") return openMathosPlatformConnection(mathosPlatformTarget(research), mathosPlatformDeps());
+      const config = research.harness;
+      if (!config?.command) throw new Error("Choose a custom bridge program in Settings › Experimental › Open Math Harness");
       const selectedModel = selectHarnessModel(config, mode);
       let modelBusy = false;
       const connection = openResearchHarnessProcess(config, workspace, async (method, params, signal) => {
@@ -69,7 +149,7 @@ export function initializeResearchRuntime(ports: ResearchPorts): ResearchService
       }, ports.onError);
       if (selectedModel) models.set(id, selectedModel);
       return { ...(selectedModel ? { model: { model: selectedModel.model, endpointOrigin: selectedModel.endpointOrigin } } : {}),
-        request: (method, params) => connection.request(method, params), close: () => { models.delete(id); return connection.close(); } };
+        source: `bridge:${config.command}`, request: (method, params) => connection.request(method, params), close: () => { models.delete(id); return connection.close(); } };
     },
     probe: async (id, signal) => {
       const model = models.get(id);

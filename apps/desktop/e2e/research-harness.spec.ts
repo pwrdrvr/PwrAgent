@@ -4,7 +4,8 @@ import AxeBuilder from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
-import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
+import { configTomlPathForHomeRoot, stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
+import { applyDesktopSettingsPatch } from "../src/main/settings/desktop-config";
 import { seedDiscoveryResearchState, seedHarnessResearchState } from "./fixtures/research-harness-state-seeding";
 import { enableResearchFixture } from "./fixtures/research-state-seeding";
 
@@ -18,7 +19,12 @@ async function expectAccessiblePanel(window: Page, surface: string) {
 test("Discovery status, problems and bounded ancestry retain source authority", async ({ playwright: _playwright }, testInfo) => {
   // A laptop-sized window: the context rail is narrower than at the 1440px default, as on the Windows runners.
   const app = await launchElectronApp({ fixturePath: path.join(specDir, "fixtures/research/replay.fixture.json"), windowSize: { width: 1100, height: 900 },
-    preLaunchHook: async (homeRoot) => { enableResearchFixture(homeRoot); seedDiscoveryResearchState(stateDbPathForHomeRoot(homeRoot)); } });
+    preLaunchHook: async (homeRoot) => {
+      enableResearchFixture(homeRoot);
+      seedDiscoveryResearchState(stateDbPathForHomeRoot(homeRoot));
+      // This profile chose a custom bridge but has none yet: the form explains the bridge table.
+      applyDesktopSettingsPatch(configTomlPathForHomeRoot(homeRoot), { research: { source: "bridge" } });
+    } });
   try {
     await app.window.getByRole("button", { name: /Queue ordering research/ }).first().click();
     await app.window.getByRole("tab", { name: "Research", exact: true }).click();
@@ -68,9 +74,9 @@ for (const theme of ["dark", "light"] as const) {
       await expect(panel.getByRole("button", { name: /Open worker/ })).toHaveCount(0);
       await testInfo.attach(`harness-outcome-${theme}`, { body: await app.window.screenshot(), contentType: "image/png" });
       await expectAccessiblePanel(app.window, `harness outcome ${theme}`);
-      // With no bridge configured, reconciling reports why and restores the unknown outcome; nothing is resent.
+      // With no source set up, reconciling reports why and restores the unknown outcome; nothing is resent.
       await outcome.getByRole("button", { name: "Reconcile from source" }).click();
-      await expect(outcome).toContainText("Reconcile stopped: Configure research.harness");
+      await expect(outcome).toContainText("Reconcile stopped: Choose a MathOS team");
       await panel.getByRole("tab", { name: "Findings", exact: true }).click();
       await expect(panel.getByText(/^From m1 · #4/)).toBeVisible();
       await expectAccessiblePanel(app.window, `harness findings ${theme}`);

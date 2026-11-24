@@ -27,7 +27,7 @@ const VIEWS = [
 const DISCOVERY_VIEWS = [{ id: "discovery", label: "Discovery" }, { id: "activity", label: "Activity" }] as const;
 type View = typeof VIEWS[number]["id"] | typeof DISCOVERY_VIEWS[number]["id"];
 
-export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: DesktopApi; thread?: NavigationThreadSummary }) {
+export function ResearchPanel({ desktopApi: api, thread, onOpenSettings }: { desktopApi?: DesktopApi; thread?: NavigationThreadSummary; onOpenSettings?: () => void }) {
   const remote = Boolean(thread?.federation?.ref.target ?? readRendererFederationTarget());
   const identity = thread && !remote ? { backend: thread.source, threadId: thread.id } : undefined;
   const [selectedRunId, setSelectedRunId] = useState<string>();
@@ -130,7 +130,7 @@ export function ResearchPanel({ desktopApi: api, thread }: { desktopApi?: Deskto
       <button type="button" aria-pressed={formSource === "native"} onClick={() => setSource("native")}>PwrAgent workers</button>
       <button type="button" aria-pressed={formSource === "harness"} onClick={() => setSource("harness")}>Open Math Harness</button>
     </div>}
-    {showForm && formSource === "harness" && <ResearchHarnessForm api={api} thread={identity} onStarted={harnessStarted} onCancel={firstRun ? undefined : () => setCreating(false)} />}
+    {showForm && formSource === "harness" && <ResearchHarnessForm api={api} thread={identity} onOpenSettings={onOpenSettings} onStarted={harnessStarted} onCancel={firstRun ? undefined : () => setCreating(false)} />}
     {showForm && formSource === "native" && <ResearchStartForm firstRun={firstRun} busy={busy} disabled={!api.submitThreadReply || !api.prepareResearch} replacesPending={Boolean(pending)}
       onSubmit={start} onCancel={firstRun ? undefined : () => setCreating(false)} />}
     {(error || state.error) && <p role="alert" className="research-error">{error || state.error}</p>}
