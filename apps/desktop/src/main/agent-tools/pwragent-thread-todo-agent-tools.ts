@@ -323,8 +323,20 @@ function normalizeAction(
       }
       return { ok: true, value: { type: "send_message", prompt, target } };
     }
-    case "start_review":
-      return { ok: true, value: { type: "start_review" } };
+    case "start_review": {
+      if (action.pullRequest === undefined) {
+        return { ok: true, value: { type: "start_review" } };
+      }
+      const pullRequest = normalizePullRequestReference(action.pullRequest);
+      if (!pullRequest || (!pullRequest.startsWith("https://") && !Number.isSafeInteger(Number(pullRequest)))) {
+        return {
+          ok: false,
+          message: "start_review pullRequest must be a PR number or a github.com pull request URL.",
+        };
+      }
+      // The owner resolves a number against the calling thread before saving.
+      return { ok: true, value: { type: "start_review", pullRequest } };
+    }
     case "merge_pull_request": {
       const pullRequest = normalizePullRequestReference(action.pullRequest);
       if (!pullRequest) {
@@ -642,6 +654,7 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "Cards stay in the corner of the transcript and in the To-dos panel.",
         "Use one when the next step is the operator's.",
         "Use start_review when the work is ready for review.",
+        "When reviewing a PR, set action.pullRequest so Start review selects it if it is attached to the thread.",
         "Use merge_pull_request only after a review covers the PR head, its findings are settled, and CI is green.",
         "PwrAgent raises review and merge offers for the thread's attached PR itself.",
         "Check prAutomation.reviewReadiness first, and do not duplicate its offer.",
@@ -767,8 +780,10 @@ function inputSchemaForOperation(
               },
               pullRequest: {
                 type: "string",
-                description:
-                  "merge_pull_request only: the PR number in this thread's repository, or its github.com URL. The operator picks the merge method.",
+                description: [
+                  "Optional for start_review. Pass the full github.com URL or a PR number from this thread's attachments or repository.",
+                  "Required for merge_pull_request. Pass the full github.com URL or a PR number in this thread's repository. The operator picks the merge method.",
+                ].join(" "),
               },
               prompt: {
                 type: "string",
