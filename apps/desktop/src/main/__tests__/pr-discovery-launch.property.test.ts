@@ -3,8 +3,9 @@ import path from "node:path";
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import * as gitExecutable from "../app-server/git-executable";
+import { GitSubprocessDiagnostics, prGitSubprocessCaller } from "../diagnostics/git-subprocess-diagnostics";
 import { resolvePrLookupBranches } from "../pr-status/pr-detection";
-import { runPrMetadataProcess } from "../pr-status/pr-metadata-process";
+import * as prMetadataProcess from "../pr-status/pr-metadata-process";
 import { readGitRemoteHead } from "../pr-status/pr-remote-heads";
 
 async function expectQueuedProbePerCheckout(groupSizes: number[]): Promise<void> {
@@ -36,7 +37,7 @@ async function expectQueuedProbePerCheckout(groupSizes: number[]): Promise<void>
   try {
     await remotesStarted.promise;
     for (let index = 0; index < 8; index++) {
-      blockers.push(runPrMetadataProcess(async () => {
+      blockers.push(prMetadataProcess.runPrMetadataProcess(async () => {
         if (++occupiedSlots === 8) admissionFull.resolve();
         await releaseAdmission.promise;
       }));
@@ -74,16 +75,21 @@ it("starts one queued remote HEAD probe per remote and exact checkout", async ()
   ), { numRuns: 30 });
 });
 
-async function expectQueuedProbePerContext(contexts: number[]): Promise<void> {
-  const cwd = path.join(os.tmpdir(), "fixture-checkout");
+async function holdMetadataAdmission() {
   const admissionFull = Promise.withResolvers<void>();
   const releaseAdmission = Promise.withResolvers<void>();
   let occupiedSlots = 0;
-  const blockers = Array.from({ length: 8 }, () => runPrMetadataProcess(async () => {
+  const blockers = Array.from({ length: 8 }, () => prMetadataProcess.runPrMetadataProcess(async () => {
     if (++occupiedSlots === 8) admissionFull.resolve();
     await releaseAdmission.promise;
   }));
   await admissionFull.promise;
+  return { blockers, releaseAdmission: releaseAdmission.resolve };
+}
+
+async function expectQueuedProbePerContext(contexts: number[]): Promise<void> {
+  const cwd = path.join(os.tmpdir(), "fixture-checkout");
+  const { blockers, releaseAdmission } = await holdMetadataAdmission();
 
   const runner = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (_cwd, _args, options) => ({
     stdout: `origin/${path.basename(options?.env?.GIT_DIR ?? "")}\n`,
@@ -95,7 +101,7 @@ async function expectQueuedProbePerContext(contexts: number[]): Promise<void> {
     return readGitRemoteHead(cwd, "origin");
   });
   try {
-    releaseAdmission.resolve();
+    releaseAdmission();
     expect(await Promise.all(lookups)).toEqual(gitDirs.map((gitDir) => `origin/${path.basename(gitDir)}`));
     // All arrivals overlap before admission. The model has one launch per
     // distinct context, regardless of the order in which readers arrive.
@@ -117,4 +123,53 @@ it("starts one queued remote HEAD probe for each distinct Git context", async ()
     fc.array(fc.integer({ min: 0, max: 3 }), { minLength: 3, maxLength: 12 }),
     expectQueuedProbePerContext,
   ), { numRuns: 30 });
+});
+
+const callers = ["pr-scheduled-prefetch", "pr-live-branch-lookup", "pr-stored-attachment-validation"] as const;
+
+it.each(callers)("credits a shared queued remote HEAD probe to %s when it arrives first", async (initiator) => {
+  const cwd = path.join(os.tmpdir(), "fixture-shared-checkout");
+  const diagnostics = new GitSubprocessDiagnostics(() => 0);
+  const { blockers, releaseAdmission } = await holdMetadataAdmission();
+  const probeQueued = Promise.withResolvers<void>();
+  const runPrMetadataGit = prMetadataProcess.runPrMetadataGit;
+  const enqueue = vi.spyOn(prMetadataProcess, "runPrMetadataGit").mockImplementation((...args) => {
+    const result = runPrMetadataGit(...args);
+    probeQueued.resolve();
+    return result;
+  });
+  const runner = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (checkout, args, options) => {
+    diagnostics.startGit(checkout, args, options?.purpose)(false);
+    return { stdout: "origin/main\n", stderr: "" };
+  });
+  const { background, selected } = prMetadataProcess.PR_METADATA_PRIORITY;
+  const read = (caller: typeof callers[number], priority: number) =>
+    prGitSubprocessCaller.run(caller, () => readGitRemoteHead(cwd, "origin", { priority: () => priority }));
+  const lookups = [read(initiator, background)];
+  try {
+    await Promise.race([probeQueued.promise, lookups[0].then(() => {
+      throw new Error("The initiating lookup completed before it queued a Git probe");
+    })]);
+    for (const caller of callers) {
+      if (caller !== initiator) lookups.push(read(caller, selected));
+    }
+    expect(runner).not.toHaveBeenCalled();
+    releaseAdmission();
+
+    expect(await Promise.all(lookups)).toEqual(callers.map(() => "origin/main"));
+    // A queued read of one checkout and ref launches once. Later readers
+    // may raise its priority, while the initiating caller owns the start.
+    expect(runner.mock.calls.map(([checkout, args]) => [checkout, args])).toEqual([
+      [cwd, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]],
+    ]);
+    const [bucket] = diagnostics.snapshot().buckets;
+    expect(bucket.startsByCaller).toEqual(Object.fromEntries(callers.map((caller) =>
+      [caller, Number(caller === initiator)],
+    )));
+  } finally {
+    releaseAdmission();
+    await Promise.allSettled([...blockers, ...lookups]);
+    runner.mockRestore();
+    enqueue.mockRestore();
+  }
 });

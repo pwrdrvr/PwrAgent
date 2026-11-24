@@ -6,7 +6,7 @@ const callers = ["pr-scheduled-prefetch", "pr-live-branch-lookup", "pr-stored-at
 
 it("counts every attributed start by caller when all directory rows are occupied", () => {
   fc.assert(fc.property(
-    fc.array(fc.constantFrom(...callers, undefined), { minLength: 8, maxLength: 50 }),
+    fc.array(fc.constantFrom(...callers, undefined), { minLength: 33, maxLength: 50 }),
     (overflowCallers) => {
       let now = 0;
       const diagnostics = new GitSubprocessDiagnostics(() => now, () => now);
@@ -26,6 +26,7 @@ it("counts every attributed start by caller when all directory rows are occupied
       expect(Object.values(completions.startsByCaller)).toEqual([0, 0, 0]);
       expect(completions.totals.succeeded).toBe(overflowCallers.length);
       expect(completions.rows.map((row) => row.caller)).toEqual(overflowCallers.slice(0, 32));
+      expect(completions.overflow.succeeded).toBe(overflowCallers.length - 32);
     },
   ));
 });
