@@ -34,13 +34,16 @@ export type ChromiumTraceSession = {
   dispose: () => void;
 };
 
+export type ChromiumTraceFilterMetrics = { filterCpuMs: number; filterElapsedMs: number };
+export type FilteredChromiumTrace = ChromiumTraceFilterMetrics & { bytes: Uint8Array };
+
 export type ProcessChromiumTrace = (
   chunks: AsyncIterable<ChromiumTraceChunk>, signal: AbortSignal,
   reportPhase?: ReportTracePhase,
-) => Promise<Uint8Array>;
+) => Promise<FilteredChromiumTrace>;
 
 export type TraceCapture =
-  | { status: "written"; recordingStartedAtMs: number; recordingStoppedAtMs: number }
+  | (ChromiumTraceFilterMetrics & { status: "written"; recordingStartedAtMs: number; recordingStoppedAtMs: number })
   | { status: "skipped"; reason: "not-recording" | "trigger-predates-recording" }
   | { status: "failed"; phase: TraceExportPhase; category: TraceFailureCategory };
 
@@ -121,18 +124,19 @@ export class ChromiumTrace {
       const progress: { phase: TraceExportPhase } = { phase: "stop" };
       const reportPhase: ReportTracePhase = (phase) => { progress.phase = phase; };
       try {
-        await withDeadline(async (signal) => {
-          const filtered = await this.processTrace(recording.session.read(signal, reportPhase), signal, reportPhase);
+        const metrics = await withDeadline(async (signal) => {
+          const { bytes, ...metrics } = await this.processTrace(recording.session.read(signal, reportPhase), signal, reportPhase);
           signal.throwIfAborted();
           reportPhase("publish");
-          await this.stageTrace(pendingPath, filtered, signal);
+          await this.stageTrace(pendingPath, bytes, signal);
+          return metrics;
         }, this.options.stopTimeoutMs ?? STOP_TIMEOUT_MS);
         staged = true;
         // Only the on-time caller can publish. Late writes clean up their own
         // staging file, and cannot rename it or touch a later attempt.
         await fs.rename(pendingPath, filePath);
         staged = false;
-        return { status: "written", recordingStartedAtMs: recording.wallMs, recordingStoppedAtMs };
+        return { status: "written", recordingStartedAtMs: recording.wallMs, recordingStoppedAtMs, ...metrics };
       } catch (error) {
         // Protocol and parse errors can contain private input.
         const failure = error instanceof ChromiumTraceExportError ? error : undefined;

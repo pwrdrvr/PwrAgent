@@ -35,6 +35,7 @@ import { createMainProcessHotCpuTarget } from "../diagnostics/main-process-hot-c
 import { SharedHotCpuProfiler } from "../diagnostics/shared-hot-cpu-profiler";
 import { ChromiumTrace } from "../diagnostics/chromium-trace";
 import { chromiumTraceProcessor } from "../diagnostics/chromium-trace-processor";
+import { startChromiumTraceFilterProcess } from "./diagnostics/chromium-trace-filter-process";
 import { createChromiumTraceSession } from "./diagnostics/chromium-trace-session";
 import { HotCpuProfiler } from "./diagnostics/hot-cpu-profiler";
 import { resolveAppBuildMetadata } from "./app-build-metadata";
@@ -136,7 +137,7 @@ type HotCpuProfilerLifecycle = Pick<HotCpuProfiler, "start" | "stop" | "rearmLis
 const hotCpuLog = getMainLogger("pwragent:hot-cpu");
 const chromiumTrace = new ChromiumTrace(
   createChromiumTraceSession,
-  chromiumTraceProcessor(join(moduleDirectory, "chromium-trace-worker.js")),
+  chromiumTraceProcessor(() => startChromiumTraceFilterProcess(join(moduleDirectory, "chromium-trace-utility.js"))),
   (message) => hotCpuLog.warn(message),
 );
 const rendererConsoleLog = getMainLogger("pwragent:renderer:console");

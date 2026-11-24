@@ -20,5 +20,6 @@ port.on("message", (chunk: ChromiumTraceChunk | null) => {
     port.postMessage("invalid-data");
   } finally {
     buffers.length = 0;
+    port.close();
   }
 });
