@@ -303,6 +303,10 @@ import {
   CodexVersionNotice,
 } from "./features/notifications/CodexVersionNotice";
 import {
+  ANTIGRAVITY_UPDATE_NOTICE_ID_PREFIXES,
+  AntigravityUpdateNotice,
+} from "./features/notifications/AntigravityUpdateNotice";
+import {
   CODEX_RESTART_NOTICE_ID_PREFIXES,
   CodexRestartNotice,
 } from "./features/notifications/CodexRestartNotice";
@@ -750,10 +754,12 @@ function DesktopAppShell(props: {
     syncCloudflareSignInNotice,
     syncMessagingErrorNotice,
     syncGrokCliUpdateNotice,
+    syncAntigravityUpdateNotice,
     syncCodexVersionNotice,
     syncRestartGateNotice,
     syncCodexRestartNotice,
     openCodexSettings,
+    openAntigravitySettings,
     syncCodexLaunchNotice,
     changeCodexManagedBuilds,
     checkCodexManagedBuildUpdates,
@@ -965,6 +971,17 @@ function DesktopAppShell(props: {
       }
     }, [showAppNotice]);
 
+    const syncAntigravityUpdateNotice = useCallback((
+      notice: AppNoticeToastNotice | undefined,
+    ): void => {
+      for (const prefix of ANTIGRAVITY_UPDATE_NOTICE_ID_PREFIXES) {
+        dispatchAppNotice({ type: "dismiss-prefix", prefix });
+      }
+      if (notice) {
+        showAppNotice(notice);
+      }
+    }, [showAppNotice]);
+
     const syncCodexVersionNotice = useCallback((
       notice: AppNoticeToastNotice | undefined,
     ): void => {
@@ -997,6 +1014,9 @@ function DesktopAppShell(props: {
     }, [showAppNotice]);
     const openCodexSettings = useCallback(() => {
       openSettingsSection("models", "codex");
+    }, [openSettingsSection]);
+    const openAntigravitySettings = useCallback(() => {
+      openSettingsSection("models", "antigravity");
     }, [openSettingsSection]);
     const continueClaudeThreadInNewSession = useCallback((threadId: string, failureNoticeId: string) => {
       const noticeId = `claude-new-session:${threadId}`;
@@ -1713,10 +1733,12 @@ function DesktopAppShell(props: {
       syncCloudflareSignInNotice,
       syncMessagingErrorNotice,
       syncGrokCliUpdateNotice,
+      syncAntigravityUpdateNotice,
       syncCodexVersionNotice,
       syncRestartGateNotice,
       syncCodexRestartNotice,
       openCodexSettings,
+      openAntigravitySettings,
       syncCodexLaunchNotice,
       changeCodexManagedBuilds,
       checkCodexManagedBuildUpdates,
@@ -5283,6 +5305,11 @@ function DesktopAppShell(props: {
           <GrokCliUpdateNotice
             desktopApi={desktopApi}
             onNoticeChanged={syncGrokCliUpdateNotice}
+          />
+          <AntigravityUpdateNotice
+            desktopApi={desktopApi}
+            onNoticeChanged={syncAntigravityUpdateNotice}
+            onOpenSettings={openAntigravitySettings}
           />
           <CodexVersionNotice
             desktopApi={desktopApi}

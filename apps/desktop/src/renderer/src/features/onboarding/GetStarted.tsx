@@ -20,7 +20,10 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import { useModalDialog } from "../../lib/useModalDialog";
 import type { ClaudeSignInControls } from "../notifications/useClaudeSignIn";
+import { findCodexLaunchFailure } from "../notifications/CodexLaunchNotice";
+import { ManagedRuntimeProgressStrip, useManagedRuntimeProgress } from "../settings/ManagedRuntimeProgress";
 import type { DesktopSettingsState } from "../settings/useDesktopSettings";
+import type { ManagedRuntimeProgress } from "../../../../shared/managed-runtime-progress";
 import {
   CheckIcon,
   CloseIcon,
@@ -33,8 +36,10 @@ import {
   canStartWithAgents,
   claudeAgentState,
   codexAgentState,
+  codexInstallOffer,
   getStartedAgentAction,
   selectedCodexCandidate,
+  type CodexInstallOffer,
   type CodexSignInState,
   type GetStartedAgentState,
 } from "./get-started-agents";
@@ -611,6 +616,16 @@ type AgentsModel = {
   noteSetupStep: () => void;
   /** The command that signs in the Claude Code CLI PwrAgent found. */
   claudeLoginCommand: string;
+  codexInstall: CodexInstallModel;
+};
+
+/** PwrAgent installing its own verified Codex build from this page. */
+type CodexInstallModel = {
+  offer?: CodexInstallOffer;
+  installing: boolean;
+  error?: string;
+  progress?: ManagedRuntimeProgress;
+  install: () => Promise<void>;
 };
 
 function desktopPlatform(platform?: string): DesktopPlatform {
@@ -793,12 +808,20 @@ function useGetStartedAgents(params: {
   }, []);
 
   const snapshot = settings.snapshot;
+  const codexDiscovering = refreshing && !selectedCodexCandidate(snapshot);
+  const codexInstall = useCodexInstall({
+    snapshot,
+    discovering: codexDiscovering,
+    desktopApi,
+    settingsRef,
+    refresh,
+  });
   const rows = useMemo((): AgentRow[] => AGENTS.map((definition) => {
     let state: GetStartedAgentState;
     if (definition.id === "codex") {
       state = codexAgentState({
         snapshot,
-        discovering: refreshing && !selectedCodexCandidate(snapshot),
+        discovering: codexDiscovering,
         signIn: codexSignIn,
         separateLogin,
       });
@@ -816,7 +839,7 @@ function useGetStartedAgents(params: {
       });
     }
     return { definition, state };
-  }), [acpEntries, backends, codexSignIn, optimisticEnabled, refreshing, separateLogin, snapshot]);
+  }), [acpEntries, backends, codexDiscovering, codexSignIn, optimisticEnabled, separateLogin, snapshot]);
 
   recheckOnFocusRef.current = codexSignIn.kind === "waiting"
     || !canStartWithAgents(rows.map((row) => row.state));
@@ -834,6 +857,59 @@ function useGetStartedAgents(params: {
     // The bundled CLI is not on PATH, so its command names it by path.
     claudeLoginCommand: backends?.find((backend) => backend.kind === "claude")?.claude?.loginCommand
       ?? CLAUDE_SIGN_IN_COMMAND,
+    codexInstall,
+  };
+}
+
+/**
+ * Install PwrAgent's verified Codex build for a user with no working Codex,
+ * as T3 Code does, instead of sending them to a terminal. Turning the build
+ * on downloads, verifies and activates it before the write returns; the
+ * discovery that follows makes it the Codex this page signs in with. If the
+ * build is already on and a first install failed, discovery retries it.
+ */
+function useCodexInstall(params: {
+  snapshot: DesktopSettingsSnapshot | undefined;
+  discovering: boolean;
+  desktopApi?: DesktopApi;
+  settingsRef: { current: DesktopSettingsState };
+  refresh: () => Promise<void>;
+}): CodexInstallModel {
+  const { snapshot, discovering, desktopApi, settingsRef, refresh } = params;
+  const [installing, setInstalling] = useState(false);
+  const [error, setError] = useState<string>();
+  const progress = useManagedRuntimeProgress(desktopApi, "codex");
+  const offer = codexInstallOffer({
+    snapshot,
+    discovering,
+    launchFailure: findCodexLaunchFailure(snapshot?.models?.codex?.discovery),
+  });
+  const install = useCallback(async (): Promise<void> => {
+    setInstalling(true);
+    setError(undefined);
+    try {
+      const codex = settingsRef.current.snapshot?.models.codex;
+      const managedOn = codex?.managedBuildsRequiredBy !== undefined || codex?.managedBuilds?.value === true;
+      if (!managedOn) {
+        const saved = await settingsRef.current.writeConfig({ models: { codex: { managedBuilds: true } } });
+        if (!saved) {
+          setError("PwrAgent couldn't install its Codex build. Try again, or install Codex yourself.");
+          return;
+        }
+      }
+      await refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setInstalling(false);
+    }
+  }, [refresh, settingsRef]);
+  return {
+    offer,
+    installing,
+    ...(error ? { error } : {}),
+    ...(progress ? { progress } : {}),
+    install,
   };
 }
 
@@ -919,6 +995,11 @@ function AgentRowView(props: {
   const codexSignIn = props.agents.codexSignIn;
   const codexWaiting = definition.id === "codex"
     && (codexSignIn.kind === "waiting" || codexSignIn.kind === "starting");
+  const codexInstall = props.agents.codexInstall;
+  const codexInstallOffer = definition.id === "codex" ? codexInstall.offer : undefined;
+  const codexProgress = definition.id === "codex" ? codexInstall.progress : undefined;
+  const codexInstalling = codexInstall.installing
+    || (codexProgress !== undefined && codexProgress.phase !== "ready" && codexProgress.phase !== "failed");
 
   const copy = (value: string): void => {
     setCopied(undefined);
@@ -954,6 +1035,17 @@ function AgentRowView(props: {
           Cancel
         </button>
       </div>
+    );
+  } else if (action === "install" && codexInstallOffer) {
+    actionNode = (
+      <button
+        type="button"
+        className="get-started__btn get-started__btn--primary"
+        disabled={codexInstalling}
+        onClick={() => void props.agents.codexInstall.install()}
+      >
+        {codexInstalling ? "Installing…" : "Install Codex"}
+      </button>
     );
   } else if (action === "install") {
     actionNode = (
@@ -1035,7 +1127,13 @@ function AgentRowView(props: {
 
   const detail = codexWaiting
     ? "Finish signing in on the page that opened. PwrAgent checks again when you come back."
-    : "detail" in state ? state.detail : undefined;
+    : codexInstallOffer?.reason === "missing" && state.kind === "not-installed"
+      ? "PwrAgent can download and verify its own Codex build for you."
+      : codexInstallOffer?.reason === "broken" && state.kind === "not-installed"
+        ? "The Codex on this computer doesn't start. PwrAgent can install its own verified build."
+        : "detail" in state ? state.detail : undefined;
+  const showCodexInstallPanel = definition.id === "codex"
+    && (codexInstallOffer !== undefined || codexProgress !== undefined || codexInstall.error !== undefined);
 
   return (
     <li className={`get-started__agent is-${state.kind}`} data-agent={definition.id}>
@@ -1048,6 +1146,18 @@ function AgentRowView(props: {
         <AgentStatus state={state} />
         {actionNode}
       </div>
+      {showCodexInstallPanel ? (
+        <CodexInstallPanel
+          install={codexInstall}
+          installing={codexInstalling}
+          manualOpen={expanded}
+          manualPanelId={panelId}
+          onToggleManual={state.kind === "not-installed" ? () => {
+            if (!expanded) props.agents.noteSetupStep();
+            setExpanded(!expanded);
+          } : undefined}
+        />
+      ) : null}
       {expanded ? (
         <div id={panelId} className="get-started__agent-panel">
           {definition.id === "claude" ? (
@@ -1087,6 +1197,61 @@ function AgentRowView(props: {
         </div>
       ) : null}
     </li>
+  );
+}
+
+function CodexInstallPanel(props: {
+  install: CodexInstallModel;
+  installing: boolean;
+  manualOpen: boolean;
+  manualPanelId: string;
+  /** Present while no Codex works: the copy-paste commands stay one click away. */
+  onToggleManual?: () => void;
+}) {
+  const { install } = props;
+  const offer = install.offer;
+  return (
+    <div className="get-started__agent-panel">
+      {install.progress ? (
+        <ManagedRuntimeProgressStrip
+          progress={install.progress}
+          onRetry={props.installing ? undefined : () => void install.install()}
+        />
+      ) : null}
+      {offer?.reason === "outdated" && !install.progress ? (
+        <>
+          <p className="get-started__agent-note">
+            Codex {offer.version} is too old for the newest models, which need
+            Codex {offer.minimumVersion} or later. PwrAgent can install its own
+            verified build and keep it current.
+          </p>
+          <div className="get-started__row-actions">
+            <button
+              type="button"
+              className="get-started__btn get-started__btn--ghost"
+              disabled={props.installing}
+              onClick={() => void install.install()}
+            >
+              {props.installing ? "Installing…" : "Use PwrAgent's Codex"}
+            </button>
+          </div>
+        </>
+      ) : null}
+      {install.error && install.progress?.phase !== "failed" ? (
+        <p className="get-started__error" role="status">{install.error}</p>
+      ) : null}
+      {props.onToggleManual && offer?.reason !== "outdated" ? (
+        <button
+          type="button"
+          className="get-started__btn get-started__btn--link"
+          aria-expanded={props.manualOpen}
+          aria-controls={props.manualPanelId}
+          onClick={props.onToggleManual}
+        >
+          {props.manualOpen ? "Hide install commands" : "Install it yourself instead"}
+        </button>
+      ) : null}
+    </div>
   );
 }
 

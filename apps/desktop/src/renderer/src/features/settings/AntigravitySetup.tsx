@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import type { AcpAgentSettingsEntry } from "@pwragent/shared/contracts/backend";
-import type { AntigravityRuntimeStatus, AntigravitySetupRequest, AntigravitySetupResult } from "../../../../shared/antigravity-setup";
+import type {
+  AntigravityReleaseStatus,
+  AntigravityRuntimeStatus,
+  AntigravitySetupRequest,
+  AntigravitySetupResult,
+} from "../../../../shared/antigravity-setup";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { acpRelativeTime } from "./acp-agent-copy";
+import { antigravityRuntimeView, type AntigravityRuntimeView } from "./antigravity-runtime-view";
 import { ManagedRuntimeProgressStrip, useManagedRuntimeProgress } from "./ManagedRuntimeProgress";
 import { SettingsField } from "./SettingsLayout";
 
@@ -16,6 +23,9 @@ export function AntigravitySetup(props: {
   const { desktopApi, entry } = props;
   const request = desktopApi?.antigravitySetup;
   const [runtime, setRuntime] = useState<AntigravityRuntimeStatus>();
+  const [release, setRelease] = useState<AntigravityReleaseStatus>();
+  const [checking, setChecking] = useState(false);
+  const [checkError, setCheckError] = useState<string>();
   const [installing, setInstalling] = useState(false);
   const [runtimeError, setRuntimeError] = useState<string>();
   const [accountError, setAccountError] = useState<string>();
@@ -33,12 +43,34 @@ export function AntigravitySetup(props: {
     })) ?? { ok: false, message: "Antigravity setup is unavailable in this build." };
   }
 
+  async function checkForUpdates(force: boolean): Promise<void> {
+    setChecking(true);
+    setCheckError(undefined);
+    const result = await send({ action: "check-update", force });
+    setChecking(false);
+    if (!result.ok) {
+      setCheckError(result.message);
+      return;
+    }
+    if (result.runtime) setRuntime(result.runtime);
+    if (result.release) setRelease(result.release);
+  }
+  const checkForUpdatesRef = useRef(checkForUpdates);
+  checkForUpdatesRef.current = checkForUpdates;
+
   useEffect(() => {
     let current = true;
+    // Read the installed runtime first: it is local and fast. Opening this
+    // page is also when an operator expects to learn about a newer release,
+    // so the manifest check follows (reusing a check from the last minutes).
     void request?.({ action: "read" }).then((result) => {
       if (!current) return;
-      if (result.ok) setRuntime(result.runtime);
-      else setRuntimeError(result.message);
+      if (result.ok) {
+        setRuntime(result.runtime);
+        if (result.runtime && result.runtime.status !== "unsupported") {
+          void checkForUpdatesRef.current(false);
+        }
+      } else setRuntimeError(result.message);
     }).catch(() => {
       if (current) setRuntimeError("Could not check the managed Antigravity installation.");
     });
@@ -49,6 +81,18 @@ export function AntigravitySetup(props: {
       if (id) void request?.({ action: "cancel", attemptId: id }).catch(() => undefined);
     };
   }, [request]);
+
+  // An install another surface started (the startup notice, another window)
+  // finished: the runtime this page read still names the old release.
+  const installedAt = progress?.phase === "ready" ? progress.updatedAt : undefined;
+  useEffect(() => {
+    if (installedAt === undefined) return;
+    let current = true;
+    void request?.({ action: "read" }).then((result) => {
+      if (current && result.ok && result.runtime) setRuntime(result.runtime);
+    }).catch(() => undefined);
+    return () => { current = false; };
+  }, [installedAt, request]);
 
   useEffect(() => {
     if (step !== "code") return;
@@ -136,35 +180,31 @@ export function AntigravitySetup(props: {
   const verified = Boolean(verifiedCommand && verifiedCommand === entry.activeCommand);
   const accessConfirmed = Boolean(entry.lastDiscoveredAt && !entry.lastDiscoveryError);
   const needsSignIn = entry.installed && Boolean(entry.unavailableReason);
-  const managed = runtime?.status === "installed" ? runtime.runtime : undefined;
-  const installLabel = managed ? "Reinstall Antigravity" : "Install Antigravity";
+  const view = antigravityRuntimeView({ runtime, release, entry });
+  const openGuide = () => {
+    void send({ action: "install-guide" }).then((result) => { if (!result.ok) setRuntimeError(result.message); });
+  };
 
   return (
     <>
       <SettingsField
         label="Runtime"
-        sub="Download and verify the CLI from Google, or select an installation below."
-        error={progress?.phase === "failed" ? undefined : runtimeError}
+        sub="PwrAgent downloads Antigravity from Google, verifies its checksum and ACP startup, and checks for a newer release when you open this page."
+        error={progress?.phase === "failed" ? undefined : runtimeError ?? checkError}
         control={
           <div className="settings-paths">
-            <p className="settings-empty">
-              {managed
-                ? `Managed version ${managed.version} installed.`
-                : entry.installed
-                  ? `Detected version ${entry.version ?? "unknown"}.`
-                  : "Antigravity is not installed."}
-            </p>
-            <div className="settings-inline-actions">
-              {runtime && runtime.status !== "unsupported" ? (
-                <button type="button" className="button button--secondary" disabled={installing || Boolean(step)} onClick={() => void install()}>
-                  {installing ? "Installing…" : installLabel}
-                </button>
-              ) : null}
-              <button type="button" className="button button--ghost" onClick={() => {
-                void send({ action: "install-guide" }).then((result) => { if (!result.ok) setRuntimeError(result.message); });
-              }}>Manual install guide</button>
-            </div>
-            {progress ? <ManagedRuntimeProgressStrip progress={progress} onRetry={installing || step ? undefined : () => void install()} /> : null}
+            {progress ? (
+              <ManagedRuntimeProgressStrip progress={progress} onRetry={installing || step ? undefined : () => void install()} />
+            ) : (
+              <AntigravityRuntimeStatusLine
+                view={view}
+                busy={installing || Boolean(step)}
+                checking={checking}
+                onInstall={() => void install()}
+                onCheckForUpdates={() => void checkForUpdates(true)}
+                onOpenGuide={openGuide}
+              />
+            )}
           </div>
         }
       />
@@ -215,5 +255,105 @@ export function AntigravitySetup(props: {
         }
       />
     </>
+  );
+}
+
+/**
+ * The managed runtime reported the way the Grok and Codex PwrAgent builds
+ * are: which version is in use, whether Google has a newer one, when PwrAgent
+ * last asked, and the one action that moves it forward. Reinstall stays
+ * available, but only once there is nothing newer to install.
+ */
+export function AntigravityRuntimeStatusLine(props: {
+  view: AntigravityRuntimeView;
+  busy: boolean;
+  checking: boolean;
+  onInstall: () => void;
+  onCheckForUpdates: () => void;
+  onOpenGuide: () => void;
+}) {
+  const { view } = props;
+  const checkedAt = view.kind === "installed" || view.kind === "not-installed" ? view.checkedAt : undefined;
+  const checked = checkedAt !== undefined ? ` · checked ${acpRelativeTime(checkedAt)}` : "";
+  let line: ReactNode;
+  switch (view.kind) {
+    case "loading":
+      line = <span className="acp-build__state">Reading the managed installation…</span>;
+      break;
+    case "unsupported":
+      line = (
+        <span className="acp-build__state">
+          PwrAgent can install Antigravity on Apple Silicon Macs. Use the manual install guide on this computer.
+        </span>
+      );
+      break;
+    case "not-installed":
+      line = (
+        <>
+          <span className="status-dot" aria-hidden="true" />
+          <span className="acp-build__state">
+            {view.detectedVersion
+              ? `Not installed by PwrAgent · using your Antigravity ${view.detectedVersion}`
+              : "Antigravity is not installed."}
+            {view.latestVersion ? ` · Google's current release is ${view.latestVersion}` : ""}
+            {checked}
+          </span>
+        </>
+      );
+      break;
+    case "installed": {
+      const state = [
+        view.inUse ? "in use" : "installed · not in use, another Antigravity install is active",
+        ...(view.updateAvailable
+          ? [`${view.latestVersion} available from Google`]
+          : view.latestVersion ? ["up to date"] : []),
+      ].join(" · ");
+      line = (
+        <>
+          <span
+            className={`status-dot${view.inUse && !view.updateAvailable ? " status-dot--ok" : " status-dot--warning"}`}
+            aria-hidden="true"
+          />
+          <span className="acp-build__tag">{view.version}</span>
+          <span className="acp-build__state">{state}{checked}</span>
+        </>
+      );
+      break;
+    }
+  }
+  const canInstall = view.kind === "installed" || view.kind === "not-installed";
+  const latest = canInstall ? view.latestVersion : undefined;
+  const offerInstall = view.kind === "not-installed" || (view.kind === "installed" && view.updateAvailable);
+  return (
+    <div className="acp-build">
+      <p className="acp-build__line" role="status">{line}</p>
+      <div className="settings-inline-actions">
+        {offerInstall ? (
+          <button type="button" className="button button--primary" disabled={props.busy} onClick={props.onInstall}>
+            {props.busy
+              ? "Installing…"
+              : view.kind === "installed"
+                ? `Update to ${latest}`
+                : `Install Antigravity${latest ? ` ${latest}` : ""}`}
+          </button>
+        ) : null}
+        {canInstall ? (
+          <button
+            type="button"
+            className="button button--secondary"
+            disabled={props.busy || props.checking}
+            onClick={props.onCheckForUpdates}
+          >
+            {props.checking ? "Checking…" : "Check for updates"}
+          </button>
+        ) : null}
+        {view.kind === "installed" && !view.updateAvailable ? (
+          <button type="button" className="button button--ghost" disabled={props.busy} onClick={props.onInstall}>
+            {props.busy ? "Installing…" : "Reinstall"}
+          </button>
+        ) : null}
+        <button type="button" className="button button--ghost" onClick={props.onOpenGuide}>Manual install guide</button>
+      </div>
+    </div>
   );
 }
