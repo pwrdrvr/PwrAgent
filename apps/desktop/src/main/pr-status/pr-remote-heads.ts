@@ -152,12 +152,14 @@ function safeRef(ref: string): boolean {
     /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(part) && !part.endsWith(".") && !part.endsWith(".lock"));
 }
 
-async function locateRefs(cwd: string, files: RefFiles): Promise<{ gitDir: string; commonDir: string } | undefined> {
+type CheckoutLocation = { directory: string; gitDir: string; commonDir: string; gitDirLink?: string };
+
+async function locateRefs(cwd: string, files: RefFiles): Promise<CheckoutLocation | undefined> {
   const directory = await files.directory(cwd);
   const dotGit = path.join(directory, ".git");
   const dotGitInfo = await files.status(dotGit);
   if (!dotGitInfo) return undefined;
-  if (dotGitInfo.isDirectory()) return { gitDir: dotGit, commonDir: dotGit };
+  if (dotGitInfo.isDirectory()) return { directory, gitDir: dotGit, commonDir: dotGit };
   if (!dotGitInfo.isFile()) return undefined;
   const gitDirLink = /^gitdir: ([^\r\n]+)\r?\n?$/.exec(await files.text(dotGit, dotGitInfo))?.[1];
   if (!gitDirLink) return undefined;
@@ -170,7 +172,30 @@ async function locateRefs(cwd: string, files: RefFiles): Promise<{ gitDir: strin
   const commonLink = path.join(gitDir, "commondir");
   const commonLinkInfo = await files.status(commonLink);
   if (!commonLinkInfo || !/^\.\.\/\.\.\r?\n?$/.test(await files.text(commonLink, commonLinkInfo))) return undefined;
-  return { gitDir, commonDir };
+  return { directory, gitDir, commonDir, gitDirLink };
+}
+
+/** Observe the inputs to Git's checkout discovery and config hierarchy. */
+export async function observePrCheckoutConfigFiles(cwd: string, configPaths: string[]) {
+  return await runPrMetadataFileProbe(async (signal) => {
+    const files = new RefFiles(signal);
+    const location = await locateRefs(cwd, files);
+    if (!location) return undefined;
+    const { commonDir, gitDir, gitDirLink } = location;
+    // An ordinary checkout must keep resolving its own metadata directory.
+    // A gitdir link crossing parent components can follow intermediate symlinks.
+    if (gitDirLink?.split("/").includes("..")
+      || gitDir === commonDir && await files.status(path.join(gitDir, "commondir"))) return undefined;
+    if (!(await files.status(path.join(gitDir, "HEAD")))?.isFile()
+      || !(await files.status(path.join(commonDir, "objects")))?.isDirectory()
+      || !(await files.status(path.join(commonDir, "refs")))?.isDirectory()) return undefined;
+    const paths = new Set([...configPaths, path.join(commonDir, "config"), path.join(gitDir, "config.worktree")]);
+    for (const file of paths) {
+      const info = await files.status(file);
+      if (info && !info.isFile()) return undefined;
+    }
+    return { ...location, paths, unchanged: () => runPrMetadataFileProbe((currentSignal) => files.unchanged(currentSignal)) };
+  });
 }
 
 async function readPackedNames(commonDir: string, files: RefFiles): Promise<Set<string> | undefined> {
@@ -233,9 +258,7 @@ async function readRemoteHead(
   return undefined;
 }
 
-type RefObservation = {
-  gitDir: string;
-  commonDir: string;
+type RefObservation = CheckoutLocation & {
   heads: Map<string, string>;
   files: RefFiles;
 };
@@ -260,9 +283,9 @@ async function observeRefs(cwd: string, remotes: string[], signal: AbortSignal):
  * and SHA-1 files backend observed by the filesystem reader. One observation
  * is scoped to its checkout and refresh, including the abbreviation checks.
  */
-export async function readProvenRemoteHeads(
+export async function observeProvenRemoteHeads(
   cwd: string, remotes: string[], demand?: PrMetadataDemand,
-): Promise<ReadonlyMap<string, string> | undefined> {
+) {
   const env = buildPwrAgentChildProcessEnv(process.env);
   if (process.platform === "win32" || remotes.length < 2 || remotes.length > MAX_REMOTES || !path.isAbsolute(cwd)
     || !constants.O_NOFOLLOW || !constants.O_NONBLOCK || getConfiguredGitCommand()
@@ -281,6 +304,13 @@ export async function readProvenRemoteHeads(
     demand?.signal?.throwIfAborted();
     return undefined;
   }
-  return await runPrMetadataFileProbe((signal) => observation.files.unchanged(signal), demand)
-    ? observation.heads : undefined;
+  const unchanged = () => runPrMetadataFileProbe((signal) => observation.files.unchanged(signal), demand);
+  if (!await unchanged()) return undefined;
+  return { gitDir: observation.gitDir, commonDir: observation.commonDir, heads: observation.heads, unchanged };
+}
+
+export async function readProvenRemoteHeads(
+  cwd: string, remotes: string[], demand?: PrMetadataDemand,
+): Promise<ReadonlyMap<string, string> | undefined> {
+  return (await observeProvenRemoteHeads(cwd, remotes, demand))?.heads;
 }

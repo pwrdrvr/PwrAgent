@@ -1549,6 +1549,45 @@ describe("app server ipc", () => {
     }
   });
 
+  it.skipIf(process.platform === "win32")("shares verified checkout metadata within one scheduled discovery batch", async () => {
+    const { runGitCommand } = await import("../app-server/git-executable");
+    const { gitSubprocessDiagnostics } = await import("../diagnostics/git-subprocess-diagnostics");
+    const { appServerService } = await import("../shell/ipc/app-server");
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "pwragent-scheduled-discovery-"));
+    const restore = isolateProcessGitEnvironment(cwd);
+    onTestFinished(async () => {
+      restore();
+      await rm(cwd, { recursive: true, force: true });
+    });
+    await runGitCommand(cwd, ["init", "-b", "main", "--ref-format=files", "--object-format=sha1"]);
+    await runGitCommand(cwd, ["-c", "commit.gpgsign=false", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+      "commit", "--allow-empty", "-m", "fixture"]);
+    const remotes = ["origin", "upstream"];
+    for (const remote of remotes) {
+      await runGitCommand(cwd, ["remote", "add", remote, `https://github.com/fixture/${remote}.git`]);
+      await runGitCommand(cwd, ["update-ref", `refs/remotes/${remote}/main`, "HEAD"]);
+      await runGitCommand(cwd, ["symbolic-ref", `refs/remotes/${remote}/HEAD`, `refs/remotes/${remote}/main`]);
+    }
+    const branches = ["topic", "main", "other"];
+    for (const branch of ["topic", "other"]) await runGitCommand(cwd, ["branch", branch]);
+    const service = appServerService as unknown as {
+      primeDiscoveryBranchLookups: (contexts: { branch: string; directoryPaths: string[] }[]) => Promise<void>;
+      getPrGraphqlClient: () => unknown;
+    };
+    const fetchPullRequestsForBranches = vi.fn(async () => new Map());
+    const transport = vi.spyOn(service, "getPrGraphqlClient").mockReturnValue({ fetchPullRequestsForBranches });
+    const starts = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    onTestFinished(() => { transport.mockRestore(); starts.mockRestore(); });
+
+    await service.primeDiscoveryBranchLookups(branches.map((branch) => ({ branch, directoryPaths: [cwd] })));
+    expect(fetchPullRequestsForBranches).toHaveBeenCalledExactlyOnceWith(
+      ["topic", "other"].flatMap((branch) => remotes.map((repo) => ({ branch, repo, owner: "fixture" }))),
+    );
+    expect(starts.mock.calls.filter(([directory]) => directory === cwd).map(([, args]) => args[0])).toEqual([
+      "config", "rev-parse", "for-each-ref", "for-each-ref", "for-each-ref",
+    ]);
+  });
+
   beforeEach(() => {
     // Each test gets its own service. The last test's afterEach closed the
     // outgoing one, so its timers and subscriptions are already gone.

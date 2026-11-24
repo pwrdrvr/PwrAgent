@@ -9,7 +9,7 @@ import { runPrMetadataGit, runPrMetadataProcess, SharedPrMetadataRead, type PrMe
 
 const execFileAsync = promisify(execFile);
 const GIT_REMOTE_TIMEOUT_MS = 2_000;
-const REMOTE_CONFIG_KEYS = "^remote\\.|^url\\..*\\.(push)?insteadof$|^branch\\..*\\.(remote|pushremote|merge)$";
+export const REMOTE_CONFIG_KEYS = "^remote\\.|^url\\..*\\.(push)?insteadof$|^branch\\..*\\.(remote|pushremote|merge)$";
 /** Remotes change infrequently; re-probing on every PR refresh is wasted work. */
 const REMOTE_CACHE_TTL_MS = 5 * 60_000;
 
@@ -212,8 +212,23 @@ export async function observeForgeRepositoriesForDirectory(
 ): Promise<{ repos: GitHubRepoRef[]; refreshedRemoteNames?: string[] }> {
   const previous = remoteCache.get(cwd);
   const observation = await readParsedGitRemotes(cwd, options);
+  // Default-branch reads can reuse names sampled by this lookup, while an
+  // older identity cache hit must not extend their separate freshness window.
+  return {
+    repos: collectForgeRepositories(observation.value, kind),
+    refreshedRemoteNames: observation === previous ? undefined : observation.names,
+  };
+}
+
+/** The batch proof covers Git config. SSH aliases also depend on OpenSSH config. */
+export function gitHubReposFromHttpRemotes(remotes: GitRemote[]): GitHubRepoRef[] | undefined {
+  if (remotes.some(({ url }) => !/^https?:\/\//i.test(url))) return undefined;
+  return collectForgeRepositories(remotes.map((remote) => ({ ...remote, repo: parseForgeRemote(remote.url) })), "github");
+}
+
+function collectForgeRepositories(remotes: ParsedGitRemote[], kind?: ForgeKind): GitHubRepoRef[] {
   const repos = new Map<string, GitHubRepoRef>();
-  for (const { repo } of observation.value) {
+  for (const { repo } of remotes) {
     if (!repo) continue;
     const matched = forgeKindForRemoteHost(repo.host);
     if (!matched || (kind !== undefined && matched !== kind)) continue;
@@ -221,9 +236,7 @@ export async function observeForgeRepositoriesForDirectory(
     const key = `${repo.host}/${repo.owner}/${repo.repo}`.toLowerCase();
     if (!repos.has(key)) repos.set(key, repo);
   }
-  // Default-branch reads can reuse names sampled by this lookup, while an
-  // older identity cache hit must not extend their separate freshness window.
-  return { repos: [...repos.values()], refreshedRemoteNames: observation === previous ? undefined : observation.names };
+  return [...repos.values()];
 }
 
 /** Unclassified hosts require explicit product evidence from the caller. */

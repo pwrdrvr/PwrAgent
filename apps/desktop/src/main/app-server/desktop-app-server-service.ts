@@ -455,8 +455,8 @@ import { getDesktopAutomationService } from "../automations/desktop-automation-s
 import { GitLabPrFetcher } from "../pr-status/gitlab-pr-fetcher";
 import { ForgePrFetcher, parseForgePrRefFromUrl as parsePrRefFromUrl, type ForgePrRef } from "../pr-status/forge-pr-fetcher";
 import {
+  createScheduledPrPrefetchRepoResolver,
   filterStoredDiscoveredPullRequests,
-  resolveScheduledPrPrefetchRepos,
 } from "../pr-status/pr-detection";
 import {
   GithubGraphqlPrClient,
@@ -6419,6 +6419,7 @@ class DesktopAppServerService {
     contexts: ThreadPrRefreshContext[],
   ): Promise<void> {
     if (!this.getPrFetcher().isProviderEnabled("github")) return;
+    const resolvePrefetchRepos = createScheduledPrPrefetchRepoResolver();
     const wanted = new Map<
       string,
       { cwd: string; branch: string; refs: BranchRef[] }
@@ -6435,7 +6436,7 @@ class DesktopAppServerService {
         if (wanted.has(dedupeKey)) {
           continue;
         }
-        const repos = await resolveScheduledPrPrefetchRepos(cwd, branch);
+        const repos = await resolvePrefetchRepos(cwd, branch);
         if (repos.length === 0) {
           continue;
         }

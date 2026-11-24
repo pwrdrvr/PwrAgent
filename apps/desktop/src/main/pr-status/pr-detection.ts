@@ -2,12 +2,13 @@ import type { LinkedDirectorySummary } from "@pwragent/shared/contracts/normaliz
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { prGitSubprocessCaller } from "../diagnostics/git-subprocess-diagnostics";
-import { observeForgeRepositoriesForDirectory, resolveGitHubReposForDirectory, type GitHubRepoRef } from "./git-remote";
+import { observeForgeRepositoriesForDirectory, type GitHubRepoRef } from "./git-remote";
 import type { GithubPrFetcher } from "./github-pr-fetcher";
 import { runPrMetadataGit, SharedPrMetadataRead, type PrMetadataDemand } from "./pr-metadata-process";
 import { prMatchesSourceRepository } from "./pr-source-repository";
 import { hasForgeRepositoryName } from "./forge-repository-names";
 import { readGitRemoteHead, readProvenRemoteHeads } from "./pr-remote-heads";
+import { observeScheduledPrPrefetchMetadata } from "./pr-prefetch-metadata";
 
 const GIT_BRANCH_LOOKUP_TIMEOUT_MS = 2_000;
 const FALLBACK_DEFAULT_BRANCHES = [
@@ -149,13 +150,52 @@ export async function resolvePrLookupBranches(params: {
   return (await resolvePrLookupPlan(params)).branches;
 }
 
+type ScheduledCheckoutMetadata = {
+  repos: GitHubRepoRef[];
+  defaults: DefaultBranchInfo;
+  unchanged: () => Promise<boolean>;
+};
+type ScheduledPrefetchBatch = Map<string, ScheduledCheckoutMetadata>;
+
 /** Resolve the GitHub repositories eligible for scheduled branch prefetch. */
-export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string): Promise<GitHubRepoRef[]> {
+export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string, batch?: ScheduledPrefetchBatch): Promise<GitHubRepoRef[]> {
   return prGitSubprocessCaller.run("pr-scheduled-prefetch", async () => {
-    const repos = await resolveGitHubReposForDirectory(cwd);
+    let sampled;
+    if (batch) {
+      const cached = batch.get(cwd);
+      let metadata = cached && await cached.unchanged() ? cached : undefined;
+      if (!metadata) {
+        batch.delete(cwd);
+        const observed = await observeScheduledPrPrefetchMetadata(cwd);
+        if (observed?.proof) {
+          const defaults = await readDefaultBranchInfo(cwd, undefined, observed.refreshedRemoteNames, observed.proof.heads);
+          metadata = { repos: observed.repos, unchanged: observed.proof.unchanged, defaults };
+        } else {
+          sampled = observed;
+        }
+      }
+      if (metadata) {
+        const plan = await resolvePrLookupPlan({ cwd, branch, defaultBranchInfo: metadata.defaults });
+        if (await metadata.unchanged()) {
+          batch.set(cwd, metadata);
+          return plan.branches.includes(branch) ? metadata.repos : [];
+        }
+        batch.delete(cwd);
+      }
+    }
+
+    const { repos, refreshedRemoteNames } = sampled
+      ?? await observeForgeRepositoriesForDirectory(cwd, "github", { fresh: Boolean(batch) });
     if (repos.length === 0) return [];
-    return (await resolvePrLookupBranches({ cwd, branch })).includes(branch) ? repos : [];
+    const plan = await resolvePrLookupPlan({ cwd, branch, remoteNames: batch ? refreshedRemoteNames : undefined });
+    return plan.branches.includes(branch) ? repos : [];
   });
+}
+
+/** Each discovery batch owns its observations, keyed by the exact cwd passed to Git. */
+export function createScheduledPrPrefetchRepoResolver(): (cwd: string, branch: string) => Promise<GitHubRepoRef[]> {
+  const batch: ScheduledPrefetchBatch = new Map();
+  return (cwd, branch) => resolveScheduledPrPrefetchRepos(cwd, branch, batch);
 }
 
 type PrLookupPlan = {
@@ -172,8 +212,9 @@ async function resolvePrLookupPlan(params: {
   branch: string;
   cwd: string;
   remoteNames?: string[];
+  defaultBranchInfo?: DefaultBranchInfo;
 }): Promise<PrLookupPlan> {
-  const defaultBranchInfo = await readDefaultBranchInfo(params.cwd, undefined, params.remoteNames);
+  const defaultBranchInfo = params.defaultBranchInfo ?? await readDefaultBranchInfo(params.cwd, undefined, params.remoteNames);
   // A timed-out/failed git probe must not turn a default branch into an
   // eligible head-name lookup against every contributor's fork.
   if (defaultBranchInfo.remotes.size === 0) return { branches: [] };
@@ -383,9 +424,11 @@ async function readTrackedRemoteBranch(params: {
   return undefined;
 }
 
-async function readDefaultBranchInfo(cwd: string, demand?: PrMetadataDemand, remoteNames?: string[]): Promise<DefaultBranchInfo> {
+async function readDefaultBranchInfo(
+  cwd: string, demand?: PrMetadataDemand, remoteNames?: string[], verifiedHeads?: ReadonlyMap<string, string>,
+): Promise<DefaultBranchInfo> {
   try {
-    const { defaultsByRemote, remotes, confirmed } = await readRemoteDefaultBranches(cwd, demand, remoteNames);
+    const { defaultsByRemote, remotes, confirmed } = await readRemoteDefaultBranches(cwd, demand, remoteNames, verifiedHeads);
     const names = new Set(defaultsByRemote.values());
 
     if (names.size === 0) {
@@ -415,7 +458,9 @@ async function readDefaultBranchInfo(cwd: string, demand?: PrMetadataDemand, rem
   }
 }
 
-async function readRemoteDefaultBranches(cwd: string, demand?: PrMetadataDemand, remoteNames?: string[]): Promise<{
+async function readRemoteDefaultBranches(
+  cwd: string, demand?: PrMetadataDemand, remoteNames?: string[], verifiedHeads?: ReadonlyMap<string, string>,
+): Promise<{
   defaultsByRemote: Map<string, string>;
   remotes: Set<string>;
   confirmed: boolean;
@@ -429,7 +474,7 @@ async function readRemoteDefaultBranches(cwd: string, demand?: PrMetadataDemand,
     }, demand);
     remoteNames = uniqueNonEmpty(stdout.split(/\r?\n/));
   }
-  const heads = await readProvenRemoteHeads(cwd, remoteNames, demand);
+  const heads = verifiedHeads ?? await readProvenRemoteHeads(cwd, remoteNames, demand);
   let confirmed = heads !== undefined;
   const defaults = await Promise.all(
     remoteNames.map(async (remote) => {
