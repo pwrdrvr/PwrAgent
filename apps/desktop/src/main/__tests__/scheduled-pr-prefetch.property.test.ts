@@ -242,6 +242,28 @@ it("refreshes fallback URLs at the original live cache expiry", async () => {
   expect(starts.calls.filter(([, args]) => args[0] === "remote" && args[1] === "get-url")).toHaveLength(1);
 });
 
+it.each([0, 1])("follows an owner remote refresh %i ms into the batch", async (elapsed) => {
+  const { cwd, branches: [first, second] } = await singleBranchClone();
+  let now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  onTestFinished(() => { clock.mockRestore(); });
+  await resolveGitHubRepoForDirectory(cwd);
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  await expectEligible(resolve, cwd, first, (await oracle(cwd))(first));
+
+  await readGit(cwd, "remote", "set-url", "origin", "https://github.com/fixture/owner-refresh.git");
+  now += elapsed;
+  await expect(resolveGitHubRepoForDirectory(cwd, { fresh: true })).resolves.toEqual({
+    host: "github.com", owner: "fixture", repo: "owner-refresh",
+  });
+  const expected = (await oracle(cwd))(second);
+  const starts = recordPrefetchStarts();
+  await expectEligible(resolve, cwd, second, expected);
+  // The current names agree with the owner's native URL read, which can be reused.
+  expect(starts.calls.map(([, args]) => args.slice(0, args[0] === "remote" ? 2 : 1).join(" ")))
+    .toEqual(["remote", "symbolic-ref", "for-each-ref"]);
+});
+
 it.each(["GitLab-only", "remote-less"].flatMap((kind) => ["warm", "cold"].map((cache) => ({ kind, cache }))))(
   "keeps $cache $kind checkouts off the GitHub discovery path until expiry", async ({ kind, cache }) => {
     const cwd = await fixture();

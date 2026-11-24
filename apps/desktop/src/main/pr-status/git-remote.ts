@@ -231,9 +231,11 @@ export function createScheduledPrefetchRemoteReader(cwd: string) {
   let previous: RemoteCacheEntry | undefined;
   const observationForReuse = () => {
     const live = remoteCache.get(cwd);
-    if (isCurrentRemoteObservation(previous)
-      && (!previous.readFailed || !isCurrentRemoteObservation(live) || live.readFailed)) return previous;
-    return isCurrentRemoteObservation(live) ? live : undefined;
+    if (!isCurrentRemoteObservation(previous)) return isCurrentRemoteObservation(live) ? live : undefined;
+    if (!isCurrentRemoteObservation(live)) return previous;
+    if (previous.readFailed !== live.readFailed) return previous.readFailed ? live : previous;
+    // The owner may refresh a URL without changing the native remote names.
+    return live.fetchedAt >= previous.fetchedAt ? live : previous;
   };
   const read = async (
     configuration?: GitRemoteConfiguration,
