@@ -17,7 +17,7 @@
  * PwrAgent Claude Design project, "Project Index Reorder UX Review".
  */
 
-/** One project section's box, in px from the top of the list's scrollport. */
+/** One project section's box, in the same coordinates as the viewport edges. */
 export type ProjectBlockBox = { key: string; top: number; bottom: number };
 
 export type ProjectSpy = { current: string | null; inView: string[] };
@@ -62,33 +62,32 @@ export const PROJECT_INDEX_KEYBOARD_STEP = 16;
  * Current is the first section whose bottom is below the line the headers
  * stick to, which is the section whose sticky header is stuck there. It is
  * never "the most visible" section, which flips back and forth inside a tall
- * project. The line is the list's top edge, or `topInset` below it while the
- * selected thread's dock takes the top: a section ending under the dock has
- * lost its header, and shows nothing the operator can read.
+ * project. `stickyTop` is the list's top edge plus the selected thread's dock
+ * reserve: a section ending under the dock has lost its header, and shows
+ * nothing the operator can read.
  */
 export function spyProjects(
   count: number,
   readBlock: (index: number) => ProjectBlockBox,
-  viewportHeight: number,
-  topInset = 0,
+  viewportBottom: number,
+  stickyTop = 0,
 ): ProjectSpy {
   // The Directories list lays out its project sections in DOM order with
   // non-overlapping, increasing bounds. Only their headers are sticky.
   // Find the first section past the existing 1px cutoff, then read through
-  // the viewport. The reader samples the live layout even after a jump or
-  // resize, so there are no cached offsets to invalidate.
+  // the viewport.
   let first = 0;
   let end = count;
   while (first < end) {
     const middle = first + Math.floor((end - first) / 2);
-    if (readBlock(middle).bottom <= topInset + 1) first = middle + 1;
+    if (readBlock(middle).bottom <= stickyTop + 1) first = middle + 1;
     else end = middle;
   }
 
   const inView: string[] = [];
   for (let index = first; index < count; index += 1) {
     const block = readBlock(index);
-    if (block.top >= viewportHeight) break;
+    if (block.top >= viewportBottom) break;
     inView.push(block.key);
   }
   return { current: inView[0] ?? null, inView };

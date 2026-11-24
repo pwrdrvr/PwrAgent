@@ -414,13 +414,15 @@ function hasOnlyRepeatedLabel(entry: AppServerThreadActivityEntry): boolean {
     || command.cwd !== undefined
     || command.subAgent !== undefined
   );
+  const isPathOnlyEdit = detail.kind === "write"
+    && (detail.status === undefined || detail.status === "completed");
   return !hasCommandDetails
     && !detail.fileDiff
     && !detail.markdown
     && !detail.url
-    && !detail.path
+    && (!detail.path || isPathOnlyEdit)
     && !detail.images?.length
-    && !detail.status;
+    && (!detail.status || isPathOnlyEdit);
 }
 
 function singleDirectDetail(

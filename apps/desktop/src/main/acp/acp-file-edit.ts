@@ -37,16 +37,20 @@ const CONTEXT_LINES = 3;
  *   `_meta.kind` of `add`, `modify` or `delete` on live updates.
  * - Qwen Code 0.26.9 sends the same, without `_meta`; a file too large to
  *   keep arrives as text content instead.
+ * - Antigravity sends full snapshots for edit_file and omits oldText for a
+ *   new file written by write_file.
  * - Kimi Code 0.34 sends the edit's `old_string` and `new_string`, and Grok
  *   sends snippets positioned by `_meta.details`.
  */
 export function acpDiffContentIsWholeFile(backendId: string): boolean {
-  return backendId === "acp:gemini" || backendId === "acp:qwen";
+  return backendId === "acp:gemini" || backendId === "acp:qwen" || backendId === "acp:antigravity";
 }
 
 export type ReadAcpFileEditOptions = {
   /** The agent sends whole files in `diff` content. */
   wholeFileDiffContent?: boolean;
+  /** Antigravity omits oldText for a new file and preserves empty before-images. */
+  antigravity?: boolean;
   /**
    * The session's workspace. A file inside it is named relative to it in the
    * diff header, as Claude's edits are.
@@ -57,8 +61,8 @@ export type ReadAcpFileEditOptions = {
 export function readAcpFileEdit(
   record: Record<string, unknown>,
   options: ReadAcpFileEditOptions = {},
+  providerTool = readAcpProviderTool(record),
 ): AcpFileEdit | undefined {
-  const providerTool = readAcpProviderTool(record);
   const toolKind = providerTool?.kind ?? readString(record, "kind");
   const diffs = readDiffContent(record);
   if (toolKind !== "edit" && toolKind !== "write" && diffs.length === 0) {
@@ -69,12 +73,20 @@ export function readAcpFileEdit(
     readString(rawInput, "file_path")
     ?? readString(rawInput, "path")
     ?? diffs[0]?.path
-    ?? readFirstLocationPath(record);
+    ?? readFirstLocationPath(record)
+    ?? readString(rawInput, "Path");
   if (!path) {
     return undefined;
   }
+  const writeFile = (providerTool?.name ?? record.name) === "write_file";
   const verb =
-    providerTool?.name === "write" || toolKind === "write" ? "Wrote" : "Edited";
+    providerTool?.name === "write" || toolKind === "write" || writeFile ? "Wrote" : "Edited";
+  if (writeFile && options.antigravity) {
+    for (const diff of diffs) {
+      // ACP permits either null or omission for a new file.
+      diff.oldText ??= null;
+    }
+  }
   const fileDiff = buildFileDiff(path, diffs, options);
   return { path, verb, ...(fileDiff ? { fileDiff } : {}) };
 }
@@ -177,17 +189,19 @@ function buildFileDiff(
   for (const diff of diffs) {
     if (diff.replacements) {
       created &&= diff.replacements.every(isWholeFileCreation);
-      hunks.push(...diff.replacements.flatMap(replacementHunk));
+      for (const replacement of diff.replacements) {
+        for (const hunk of replacementHunk(replacement)) hunks.push(hunk);
+      }
     } else if (diff.oldText === null) {
-      hunks.push(...lineHunks([], splitLines(diff.newText), 1, 1));
+      for (const hunk of lineHunks([], splitLines(diff.newText), 1, 1)) hunks.push(hunk);
     } else if (options.wholeFileDiffContent && diff.oldText !== undefined) {
-      // Whole-file agents send `""` before a file they create.
-      if (diff.oldText !== "") {
+      // Gemini and Qwen send `""` before a file they create.
+      if (options.antigravity || diff.oldText !== "") {
         created = false;
       }
-      hunks.push(
-        ...lineHunks(splitLines(diff.oldText), splitLines(diff.newText), 1, 1),
-      );
+      for (const hunk of lineHunks(splitLines(diff.oldText), splitLines(diff.newText), 1, 1)) {
+        hunks.push(hunk);
+      }
     } else {
       return undefined;
     }
@@ -441,7 +455,8 @@ function groupChanges(ops: LineOp[]): LineOp[] {
   let removed: LineOp[] = [];
   let added: LineOp[] = [];
   const flush = () => {
-    grouped.push(...removed, ...added);
+    for (const op of removed) grouped.push(op);
+    for (const op of added) grouped.push(op);
     removed = [];
     added = [];
   };

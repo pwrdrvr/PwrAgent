@@ -217,15 +217,17 @@ export function buildBindingStatusIntent(params: {
     params.capabilityProfile?.conversationInput?.reportsBotMention === true;
   const acpExecutionModePermissions = isAcpBackendId(params.binding.backend)
     && acpBackendUsesExecutionModePermissions(params.backendSummary);
+  const separateAgentMode = params.binding.backend === "acp:antigravity" && acpExecutionModePermissions;
   const acpRuntimeMode = isAcpBackendId(params.binding.backend)
-    && !acpExecutionModePermissions
+    && (!acpExecutionModePermissions || separateAgentMode)
     ? buildMessagingAcpRuntimeModeSummary({
         backend: params.backendSummary,
         runtime: params.threadState.acpRuntime,
       })
     : undefined;
-  const acpRuntimeLabel = acpRuntimeMode?.currentLabel;
+  const acpRuntimeLabel = separateAgentMode ? undefined : acpRuntimeMode?.currentLabel;
   const acpRuntimeChoices = acpRuntimeMode?.choices ?? [];
+  const agentModeLabel = separateAgentMode && acpRuntimeChoices.length ? acpRuntimeMode?.currentLabel : undefined;
   const permissionsLineLabel = formatPermissionsLineDisplayLabel({
     acpRuntimeLabel,
     current: permissionsMode,
@@ -267,6 +269,7 @@ export function buildBindingStatusIntent(params: {
         : supportsFastMode ? `Fast mode: ${fastMode ? "on" : "off"}` : undefined,
       planDeliveryLine(params.capabilityProfile),
       `Permissions: ${permissionsLineLabel}`,
+      agentModeLabel ? `Agent mode: ${agentModeLabel}` : undefined,
       showResponseModeControl
         ? `Responses: ${formatMessagingResponseModeLabel(responseMode)} (${
             params.binding.preferences?.responseMode
@@ -304,7 +307,8 @@ export function buildBindingStatusIntent(params: {
       handoff: params.handoff,
       permissionsMode,
       permissionsActionLabel,
-      permissionsChoices: acpRuntimeChoices,
+      permissionsChoices: separateAgentMode ? undefined : acpRuntimeChoices,
+      agentModeLabel,
       supportsLegacyPermissionsAction:
         !isAcpBackendId(params.binding.backend) ||
         acpExecutionModePermissions ||
@@ -609,6 +613,7 @@ function buildStatusActions(params: {
   handoff?: MessagingWorkspaceHandoffContext;
   permissionsMode: string;
   permissionsActionLabel: string;
+  agentModeLabel?: string;
   permissionsChoices?: MessagingAcpRuntimeModeChoice[];
   supportsLegacyPermissionsAction?: boolean;
   queuedExecutionMode?: ThreadExecutionMode;
@@ -675,6 +680,13 @@ function buildStatusActions(params: {
         ]
       : []),
     ...(permissionsAction ? [permissionsAction] : []),
+    ...(params.agentModeLabel ? [{
+      id: "status:runtime-mode",
+      label: `Agent mode: ${params.agentModeLabel}`,
+      style: "secondary" as const,
+      fallbackText: "agent mode",
+      priority: 7,
+    }] : []),
     ...(params.handoff
       ? [
           {

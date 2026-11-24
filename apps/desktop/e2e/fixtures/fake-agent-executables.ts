@@ -85,13 +85,17 @@ async function writeWindowsSpawnableShim(targetPath: string): Promise<string> {
 
 export async function writeFakeKimiExecutable(
   targetPath: string,
+  options?: { invocationLogPath: string },
 ): Promise<string> {
   await mkdir(path.dirname(targetPath), { recursive: true });
+  const recordInvocation = options
+    ? `require("node:fs").appendFileSync(${JSON.stringify(options.invocationLogPath)}, JSON.stringify(process.argv.slice(2)) + "\\n");\n`
+    : "";
   // Major 0.x so discovery does not treat this as legacy Python kimi-cli (1.x).
   await writeFile(
     targetPath,
     `#!/usr/bin/env node
-if (process.argv.includes("--version")) {
+${recordInvocation}if (process.argv.includes("--version")) {
   process.stdout.write("kimi-code 0.1.0\\n");
   process.exit(0);
 }

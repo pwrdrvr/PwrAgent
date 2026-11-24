@@ -7,7 +7,7 @@ import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigat
 import { OperatorWaitsContext, useOperatorRequests } from "../../operator-requests/useOperatorRequests";
 import budgets from "./fixtures/thread-meta-wait-budgets.json";
 import * as identity from "../../../lib/federated-thread-events";
-import * as tooltips from "../../../lib/useViewportTooltip";
+import * as providerChips from "../provider-chip-visibility";
 import { ThreadMetaChips } from "../ThreadMetaChips";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -36,10 +36,10 @@ async function fixture(count: number) {
   }
   const mounted = render(<Owner />);
   await waitFor(() => expect(controller.ready).toBe(true));
-  const tooltip = vi.spyOn(tooltips, "useViewportTooltip");
+  const contentRenders = vi.spyOn(providerChips, "useProviderChipNeeded");
   const beforeReads = list.mock.calls.length;
   return {
-    mounted, tooltip, controller: () => controller,
+    mounted, contentRenders, controller: () => controller,
     reads: () => list.mock.calls.length - beforeReads,
     update: async (seenKeys: string[]) => {
       response = { ...response, seenKeys };
@@ -61,7 +61,7 @@ it("projects an owner seen update onto only the displayed thread's items", async
         for (const mark of marks) {
           await f.update([`other-thread:${mark}`]);
           expect(f.mounted.container.innerHTML).toBe(before);
-          expect(f.tooltip).not.toHaveBeenCalled();
+          expect(f.contentRenders).not.toHaveBeenCalled();
         }
         expect(f.reads()).toBe(marks.length);
       } finally { f.mounted.unmount(); vi.restoreAllMocks(); }
@@ -77,19 +77,18 @@ it.each([20, 40])("budgets chip-content work for 20 unrelated broadcasts across 
   const filters = vi.spyOn(Array.prototype, "filter");
   const budget = budgets[String(count) as keyof typeof budgets];
   for (let i = 0; i < budget.broadcasts; i++) await f.update([`offscreen:${i}`]);
-  // No tooltip hooks means no chip-content render and none of its tooltip,
-  // closure or JSX allocations. The small context adapter still executes.
+  // The chip content skips unrelated changes. The small context adapter still executes.
   expect({
     broadcasts: budget.broadcasts,
     ownerReads: f.reads(),
     contextProjections: projections.mock.calls.length,
-    tooltipHooks: f.tooltip.mock.calls.length,
+    contentRenders: f.contentRenders.mock.calls.length,
     waitFilterArrays: filters.mock.contexts.filter((array) => rowArrays.has(array)).length,
   }).toEqual(budget);
   expect(f.controller().waitsByThreadKey).toBe(waits);
   filters.mockRestore();
   // A selected row's own freshness is necessary work, even with equal waits.
   await f.update([f.controller().waits[0]!.key]);
-  expect(f.tooltip.mock.calls.length).toBeGreaterThan(0);
+  expect(f.contentRenders.mock.calls.length).toBeGreaterThan(0);
   expect(f.mounted.container.querySelectorAll(".thread-row__chip--todos.is-unread").length).toBe(count - 1);
 });

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rename, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -6,7 +6,8 @@ import fc from "fast-check";
 import type { StackSummary } from "@pwragent/shared/stacks/stack-status";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { AppServerBackendScope } from "@pwragent/shared/contracts/normalized-app-server";
-import type { NavigationLaunchpadDraft, NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { NavigationLaunchpadDraft, NavigationQueryRequest, NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
+import { buildPullRequestStatusKey } from "@pwragent/shared/contracts/navigation";
 import { buildDirectorySummaries, canonicalizeNavigationPath } from "@pwragent/shared/directory-navigation";
 import { findPeerCounterpartDirectory } from "@pwragent/shared/federation-project-match";
 import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
@@ -14,15 +15,17 @@ import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import { appendViewerNavigationPins } from "../app-server/navigation-viewer-pins";
 import { buildPrependPinRank } from "@pwragent/shared/thread-pins";
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
-import type { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { getDesktopBackendRegistry, type DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import type { NavigationDirectoryGitStatus } from "@pwragent/shared/contracts/navigation";
 import budgets from "./fixtures/navigation-listing-budgets.json";
+import { isolateProcessGitEnvironment, runIsolatedGit } from "./helpers/isolated-git";
 
 const mocks = vi.hoisted(() => {
   const findActiveBindings = vi.fn(async (): Promise<MessagingBindingRecord[]> => []);
   return {
     store: {
+      readNavigationPullRequests: vi.fn((): PrSummary[][] => []),
       readNavigationSourceVersion: vi.fn(() => "unchanged"),
       readNavigationQueryIndex: vi.fn((_params: { threads: NavigationThreadSummary[] }): NavigationQueryIndex => ({ threads: [], directories: [] })),
       readDirectoryGitStatusCache: vi.fn(async (): Promise<Record<string, { gitStatus: NavigationDirectoryGitStatus }>> => ({})),
@@ -42,7 +45,9 @@ vi.mock("../storage/desktop-overlay-store", () => ({ getDesktopOverlayStore: () 
 vi.mock("../messaging/desktop-messaging-store", () => ({ getDesktopMessagingStore: () => mocks.messaging }));
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: vi.fn() }));
 vi.mock("../app-server/scratch-projects", () => ({ resolveScratchProjectsRoots: () => [] }));
-import { loadLocalNavigationQueryIndex, projectBoundNavigationStacks, projectSelectedStackLayers } from "../app-server/navigation-query-source";
+import { loadLocalNavigationQueryIndex, projectBoundNavigationStacks, projectSelectedStackLayers, readNavigationStackLayers } from "../app-server/navigation-query-source";
+import { StackReader, StackReadObservation } from "../stacks/stack-reader";
+import { resolveNavigationWorktreeProjects } from "../app-server/navigation-worktree-projects";
 import { runGitCommand } from "../app-server/git-executable";
 import { resolveWorktreeRepositoryDirectory } from "../git-info/worktree-store";
 import { NavigationQueryPool } from "../app-server/navigation-query-pool";
@@ -106,6 +111,65 @@ it("stores only serviceable stacks and pages past the compact membership preview
     expect([...detail.page(0, 8), ...detail.page(8, selected)].map(({ stackKey }) => stackKey))
       .toEqual(inventory.slice(0, selected).map(({ key }) => key));
   }));
+});
+
+it("keeps the lead PR's position even when the thread holds more layers than the preview", () => {
+  fc.assert(fc.property(fc.integer({ min: 9, max: 36 }), fc.constantFrom("all", "above base", "top"), (height, held) => {
+    const prs = Array.from({ length: height }, (_, index) => ({
+      number: 1 + index, provider: "github.com", org: "fixture", repo: "project",
+      url: `https://github.com/fixture/project/pull/${index + 1}`, lifecycleState: "open" as const,
+      state: "passing" as const, createdAt: index + 1,
+    }));
+    const thread: NavigationThreadSummary = {
+      id: "selected", source: "codex", title: "Selected", titleSource: "derived",
+      linkedDirectories: [], inbox: { inInbox: false }, prs,
+    };
+    const stack: StackSummary = {
+      key: "fixture", name: "stack-1", repository: "github.com:fixture/project", inferred: false, trunk: "main",
+      layers: prs.map((pr, index) => ({
+        branch: `stack-${index + 1}`, parent: index ? `stack-${index}` : "main",
+        pullRequest: { number: pr.number, lifecycleState: "open" },
+        thread: { key: "codex:selected", title: "Selected" }, health: "in_sync", role: "holder",
+        ...(held === "all" || (held === "above base" && index > 0) || index === height - 1 ? { heldBy: { branch: "base", reason: "CI running" } } : {}),
+      })),
+    };
+    const row = projectBoundNavigationStacks([thread], [stack])!.threads[0]!;
+    const members = row.stackMemberships!;
+    const expectedLead = held === "all" ? height : held === "above base" ? 1 : height - 1;
+    expect(row.stackLeadPrKey).toBe(buildPullRequestStatusKey(prs[expectedLead - 1]!));
+    expect(members).toHaveLength(8);
+    expect(members).toContainEqual(expect.objectContaining({ position: expectedLead, number: expectedLead, trunk: "main" }));
+  }));
+});
+
+it("omits a stale automatic attachment from selected stack details and avoids a forge lookup", async () => {
+  const source = createSource();
+  const directory = os.tmpdir();
+  const thread: NavigationThreadSummary = {
+    source: "codex", id: "stale-stack", title: "Stale stack", titleSource: "derived", inbox: { inInbox: false },
+    gitBranch: "topic", linkedDirectories: [{ id: directory, path: directory, label: "Fixture", kind: "local" }],
+  };
+  const stalePr: PrSummary = {
+    number: 41, provider: "github.com", org: "old", repo: "remote", state: "passing",
+    url: "https://github.com/old/remote/pull/41", linkedDirectoryPaths: [directory],
+  };
+  const canonicalize = vi.fn(async (_prs: PrSummary[], _demand?: unknown, verify = true) => verify ? [] : [stalePr]);
+  // The checkout validator rejects the attachment. The layer reader must see
+  // that validated inventory even when the consumer just opened a popover.
+  const registry = { ...source.registry, canonicalizeNavigationPullRequests: canonicalize } as unknown as DesktopBackendRegistry;
+  vi.mocked(getDesktopBackendRegistry).mockReturnValue(registry);
+  mocks.store.readNavigationQueryIndex.mockReturnValueOnce({ directories: [], threads: [thread] });
+  mocks.store.readNavigationPullRequests.mockReturnValueOnce([[stalePr]]);
+  const read = vi.spyOn(StackReader.prototype, "read").mockResolvedValue({ stacks: [], catalogs: [] });
+  try {
+    source.finish();
+    await readNavigationStackLayers({ backend: thread.source, threadId: thread.id });
+    expect(canonicalize).toHaveBeenCalledWith([stalePr], expect.objectContaining({ allowForgeLookup: false }));
+    expect(read).toHaveBeenCalledWith([expect.objectContaining({ prs: [] })], [], undefined, expect.any(Function), expect.any(StackReadObservation));
+  } finally {
+    read.mockRestore();
+    vi.mocked(getDesktopBackendRegistry).mockReset();
+  }
 });
 
 it("publishes the repository once when a same-named worktree has a saved project registration", async () => {
@@ -205,6 +269,41 @@ it("publishes the repository once when a same-named worktree has a saved project
   } finally {
     mocks.store.readNavigationQueryIndex.mockImplementation(previous!);
     mocks.store.readDirectoryGitStatusCache.mockResolvedValue({});
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it("folds registered worktree rows only into the checkout Git identifies", async () => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-separate-project-index-")));
+  try {
+    const primary = canonicalizeNavigationPath(path.join(root, "Project"));
+    const worktree = canonicalizeNavigationPath(path.join(root, "tasks", "Project"));
+    const other = canonicalizeNavigationPath(path.join(root, "other", "Project"));
+    await runGitCommand(root, ["init", "--separate-git-dir", path.join(root, "admin"), primary]);
+    await runGitCommand(primary, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.com",
+      "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "Fixture"]);
+    await runGitCommand(primary, ["worktree", "add", "--detach", worktree]);
+    await runGitCommand(root, ["init", other]);
+    const gitCommonDir = async (checkout: string) =>
+      (await runGitCommand(checkout, ["rev-parse", "--path-format=absolute", "--git-common-dir"])).stdout.trim();
+    expect(await gitCommonDir(worktree)).toBe(await gitCommonDir(primary));
+    expect(await gitCommonDir(worktree)).not.toBe(await gitCommonDir(other));
+
+    const row = (checkout: string) => ({
+      key: `directory:${checkout}`, kind: "directory" as const, label: "Project", path: checkout,
+      repositoryKey: "github.com/example/project", threadKeys: [], needsAttentionCount: 0,
+    });
+    const primaryRow = row(primary);
+    const linkedRow = row(worktree);
+    const otherRow = row(other);
+    const { directories, worktreeProjectAliases } = await resolveNavigationWorktreeProjects(
+      [linkedRow, otherRow, primaryRow], { threads: [] },
+    );
+    expect(directories.map(({ key }) => key).sort()).toEqual([primaryRow.key, otherRow.key].sort());
+    expect(worktreeProjectAliases).toEqual({ [primaryRow.key]: [linkedRow.key] });
+    expect((await resolveNavigationWorktreeProjects([linkedRow, otherRow], { threads: [] })).directories)
+      .toEqual([linkedRow, otherRow]);
+  } finally {
     await rm(root, { force: true, recursive: true });
   }
 });
@@ -964,4 +1063,120 @@ it("reuses membership across a PR status burst while pages observe the current r
     project.mockImplementation(original);
     source.emit("thread/name/updated");
   }
+});
+
+async function withNavigationStackCheckout(run: (fixture: {
+  source: ReturnType<typeof createSource>;
+  read: (viewer?: { source: object; project: (index: NavigationQueryIndex) => Promise<NavigationQueryIndex> }) => Promise<NavigationQueryIndex>;
+  viewer: { source: object; project: (index: NavigationQueryIndex) => Promise<NavigationQueryIndex> };
+  retargetCatalog: () => Promise<void>;
+}) => Promise<void>) {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-nav-stack-work-")));
+  const restore = isolateProcessGitEnvironment(root);
+  const source = createSource();
+  source.registry.stackThreadHeld = () => true;
+  const original = mocks.store.readNavigationQueryIndex.getMockImplementation()!;
+  try {
+    const git = async (...args: string[]) => (await runIsolatedGit(root, args)).stdout.trim();
+    await git("init", "-b", "topic");
+    await git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "Fixture");
+    const head = await git("rev-parse", "HEAD");
+    await git("branch", "main");
+    const writeCatalog = (branch: string, commit: string) => writeFile(path.join(root, ".git", "gh-stack"), JSON.stringify({
+      schemaVersion: 1, repository: "github.com:fixture/stack",
+      stacks: [{ trunk: { branch: "main", head }, branches: [{ branch, head: commit, base: head }] }],
+    }));
+    await writeCatalog("topic", head);
+    source.listThreads.mockImplementation(async () => [{
+      id: "stacked", source: "codex", title: "Stacked", titleSource: "explicit",
+      gitBranch: "topic", linkedDirectories: [{ id: root, path: root, kind: "local", label: "Fixture" }],
+      inbox: { inInbox: false },
+    }]);
+    mocks.store.readNavigationQueryIndex.mockImplementation(({ threads }) => ({ threads, directories: [] }));
+    const pin: NavigationThreadSummary = {
+      id: "remote", source: "codex", title: "Viewer pin", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false }, federation: { instanceLabel: "Peer",
+        ref: buildFederatedThreadRef({ backend: "codex", threadId: "remote", instanceId: "peer" }) },
+    };
+    const viewer = { source: {}, project: async (index: NavigationQueryIndex) => appendViewerNavigationPins(index, [pin]) };
+    const read = (view?: typeof viewer) => loadLocalNavigationQueryIndex({
+      registry: source.registry, callerReason: "renderer-navigation-query", includeStacks: true, viewer: view,
+    });
+    await run({ source, read, viewer, retargetCatalog: async () => {
+      await git("branch", "other-topic");
+      const next = await git("rev-parse", "refs/heads/other-topic");
+      await writeCatalog("other-topic", next);
+    } });
+  } finally {
+    source.emit("thread/name/updated");
+    mocks.store.readNavigationQueryIndex.mockImplementation(original);
+    restore();
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+it("shares one live stack observation across concurrent owner and viewer inventory refreshes", async () => {
+  await withNavigationStackCheckout(async ({ source, read, viewer }) => {
+    const stackReads = vi.spyOn(StackReader.prototype, "read");
+    try {
+      for (const method of ["thread/name/updated", "pullRequest/status/updated", "turn/completed"]) {
+        source.emit(method);
+        const [owner, shown] = await Promise.all([read(), read(viewer)]);
+        expect(owner.threads).toHaveLength(1);
+        expect(shown.threads).toHaveLength(2);
+        expect(owner.stacks?.length).toBe(1);
+        expect(shown.stacks?.length).toBe(1);
+      }
+      expect(stackReads).toHaveBeenCalledTimes(3);
+    } finally {
+      stackReads.mockRestore();
+    }
+  });
+});
+
+it("keeps the viewer listing when publishing pins advances the durable navigation version", async () => {
+  await withNavigationStackCheckout(async ({ source, read, viewer }) => {
+    const version = mocks.store.readNavigationSourceVersion.getMockImplementation()!;
+    const before = mocks.store.readNavigationQueryIndex.mock.calls.length;
+    const stackReads = vi.spyOn(StackReader.prototype, "read");
+    try {
+      const shown = await read({
+        ...viewer,
+        project: async (index) => {
+          // Saving a newer peer pin advances the durable version even when
+          // the already-observed native listing is unaffected.
+          mocks.store.readNavigationSourceVersion.mockReturnValue("new peer pin snapshot");
+          return await viewer.project(index);
+        },
+      });
+      expect(shown.threads).toHaveLength(2);
+      expect(shown.stacks).toHaveLength(1);
+      expect(source.listThreads).toHaveBeenCalledTimes(1);
+      expect(mocks.store.readNavigationQueryIndex.mock.calls.length - before).toBe(1);
+      expect(stackReads).toHaveBeenCalledTimes(1);
+    } finally {
+      mocks.store.readNavigationSourceVersion.mockImplementation(version);
+      stackReads.mockRestore();
+    }
+  });
+});
+
+it("observes a retired Git stack before starting a new viewer lease", async () => {
+  await withNavigationStackCheckout(async ({ read, viewer, retargetCatalog }) => {
+    const started = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(started);
+    const layers = (index: NavigationQueryIndex) => projectSelectedStackLayers(index, { backend: "codex", threadId: "stacked" }).count;
+    try {
+      expect(layers(await read())).toBe(1);
+      clock.mockReturnValue(started + 600);
+      await retargetCatalog();
+      const shown = await read(viewer);
+      clock.mockReturnValue(started + 1_100);
+      expect(layers(await read())).toBe(0);
+      expect(layers(shown)).toBe(0);
+      expect(layers(await read(viewer))).toBe(0);
+    } finally {
+      clock.mockRestore();
+    }
+  });
 });

@@ -22,7 +22,7 @@ describe("Git subprocess diagnostics", () => {
     const diagnostics = new GitSubprocessDiagnostics(() => now, () => now);
     for (let bucket = 0; bucket < 70; bucket++) {
       now = bucket * 2_000;
-      for (let row = 0; row < 40; row++) diagnostics.startGit(`/fixture/${row}`, ["status"])(false);
+      for (let row = 0; row < 40; row++) diagnostics.startGit(`/fixture/${row}`, ["status"], row < 32 ? "unspecified" : "stack-checkout")(false);
     }
     const snapshot = diagnostics.snapshot();
     expect(snapshot.buckets).toHaveLength(60);
@@ -30,6 +30,7 @@ describe("Git subprocess diagnostics", () => {
       expect(bucket.rows).toHaveLength(32);
       expect(bucket.totals.started).toBe(40);
       expect(bucket.overflow.started).toBe(8);
+      expect(bucket.startsByPurpose).toEqual({ unspecified: 32, "stack-checkout": 8 });
     }
     now += 120_000;
     expect(diagnostics.snapshot().buckets).toEqual([]);

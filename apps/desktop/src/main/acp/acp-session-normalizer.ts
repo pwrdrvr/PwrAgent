@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
@@ -52,19 +53,19 @@ export type AcpSessionUpdate = {
   deferTurnCompletion?: boolean;
 };
 
-export type AcpSessionReplayNormalizerOptions = {
+export type AcpReplayPromptIdentity = {
+  receivedAt: number;
+  textDigest: string;
+  turnId: string;
+  steerMessageId?: string;
+};
+
+export function acpReplayPromptTextDigest(text: string): string {
+  return createHash("sha256").update(text.trim()).digest("hex");
+}
+
+export type AcpSessionReplayNormalizerOptions = ReadAcpFileEditOptions & {
   surfaceThoughtsAsMessages?: boolean;
-  /**
-   * The agent puts the whole file before and after an edit in ACP `diff`
-   * content, so a diff with no position can still be drawn at its real line
-   * numbers. See `acpDiffContentIsWholeFile`.
-   */
-  wholeFileDiffContent?: boolean;
-  /**
-   * The session's workspace. Edit diffs name a file inside it relative to it,
-   * as Claude's do; without it they name the absolute path.
-   */
-  cwd?: string;
 };
 
 export function shouldSurfaceAcpThoughtsAsMessages(backendId: string): boolean {
@@ -79,6 +80,7 @@ export function acpSessionReplayNormalizerOptions(
   return {
     surfaceThoughtsAsMessages: shouldSurfaceAcpThoughtsAsMessages(backendId),
     wholeFileDiffContent: acpDiffContentIsWholeFile(backendId),
+    antigravity: backendId === "acp:antigravity",
     ...(cwd ? { cwd } : {}),
   };
 }
@@ -320,6 +322,11 @@ export class AcpSessionReplayNormalizer {
   /** The automatic compaction whose row is still in progress, if any. */
   private openCompactionId?: string;
   private readonly subAgents = new Map<string, AcpSubAgentState>();
+  private providerPromptReplay?: {
+    prompts: AcpReplayPromptIdentity[];
+    steeredTurns: Set<string>;
+    nextIndex: number;
+  };
 
   /** How this session's edits are read; the workspace can arrive later. */
   private fileEditOptions: ReadAcpFileEditOptions;
@@ -327,6 +334,7 @@ export class AcpSessionReplayNormalizer {
   constructor(private readonly options: AcpSessionReplayNormalizerOptions = {}) {
     this.fileEditOptions = {
       wholeFileDiffContent: options.wholeFileDiffContent,
+      antigravity: options.antigravity,
       cwd: options.cwd,
     };
   }
@@ -337,6 +345,21 @@ export class AcpSessionReplayNormalizer {
    */
   setWorkspace(cwd: string): void {
     this.fileEditOptions = { ...this.fileEditOptions, cwd };
+  }
+
+  beginProviderPromptReplay(prompts: AcpReplayPromptIdentity[]): void {
+    this.providerPromptReplay = {
+      prompts,
+      steeredTurns: new Set(prompts.filter((prompt) => prompt.steerMessageId).map((prompt) => prompt.turnId)),
+      nextIndex: 0,
+    };
+  }
+
+  endProviderPromptReplay(completedAt: number | undefined): void {
+    this.providerPromptReplay = undefined;
+    if (this.currentTurnId && completedAt !== undefined) {
+      this.recordTurnFinished(this.currentTurnId, completedAt);
+    }
   }
 
   recordUserPrompt(params: {
@@ -372,6 +395,38 @@ export class AcpSessionReplayNormalizer {
     if (params.waitingForAgent) {
       this.upsertAgentWaitingActivity(params.turnId, createdAt);
     }
+    this.status = "active";
+    return this.replay();
+  }
+
+  /**
+   * Records a mid-turn steer message inside the active turn without replacing
+   * the initial prompt (`user:<turnId>`), resetting assistant numbering, or
+   * clearing in-flight tool tracking. Closes the open assistant bubble so later
+   * chunks start a new message after the operator's steering text.
+   */
+  recordSteeredUserPrompt(params: {
+    sessionId: string;
+    messageId: string;
+    prompt: string;
+    parts?: AppServerThreadMessagePart[];
+    turnId?: string;
+    receivedAt?: number;
+  }): AppServerThreadReplay {
+    const createdAt = params.receivedAt ?? Date.now();
+    const normalizedPrompt = normalizeUserPrompt(params.prompt, params.parts);
+    const activeTurnId = params.turnId ?? this.currentTurnId;
+    if (activeTurnId) {
+      this.removeAgentWaitingActivity(activeTurnId);
+    }
+    this.endActiveAssistantMessage();
+    this.upsertMessage({
+      id: params.messageId,
+      role: "user",
+      text: normalizedPrompt.text,
+      ...(normalizedPrompt.parts?.length ? { parts: normalizedPrompt.parts } : {}),
+      createdAt,
+    });
     this.status = "active";
     return this.replay();
   }
@@ -551,7 +606,7 @@ export class AcpSessionReplayNormalizer {
     } else if (kind === "user_message_chunk") {
       this.activeAssistantMessageId = undefined;
       this.activeAssistantMessagePhase = undefined;
-      this.knownToolCallIds.clear();
+      if (!this.providerPromptReplay) this.knownToolCallIds.clear();
       this.applyUserMessageChunk(update, createdAt);
     } else if (kind === "available_commands_update") {
       // Command metadata belongs in provider capabilities, not the transcript.
@@ -655,6 +710,20 @@ export class AcpSessionReplayNormalizer {
           receivedAt: createdAt,
           waitingForAgent: readBoolean(update.update, "waitingForAgent"),
         });
+      } else if (kind === "pwragent_steered_user_prompt") {
+        const turnId = readString(update.update, "turnId") ?? this.currentTurnId;
+        this.recordSteeredUserPrompt({
+          sessionId: update.sessionId,
+          messageId:
+            readString(update.update, "messageId")
+            ?? `user:${turnId ?? update.sessionId}:steer:${createdAt}:${this.generatedMessageSequence++}`,
+          prompt: readString(update.update, "prompt") ?? "",
+          parts: readMessageParts(update.update),
+          ...(turnId ? { turnId } : {}),
+          receivedAt: createdAt,
+        });
+      } else if (kind === "pwragent_antigravity_prompt_identity") {
+        // Identity metadata is applied only to matching provider replay rows.
       } else if (kind === "pwragent_rewind_marker") {
         this.rewindToPromptIndex(
           readNumber(update.update, "targetPromptIndex") ?? -1,
@@ -755,7 +824,11 @@ export class AcpSessionReplayNormalizer {
       // are setup/control text the agent saw, not user-authored turns.
       return;
     }
-    if (this.currentTurnId) {
+    if (this.providerPromptReplay) {
+      if (this.applyProviderPromptIdentity(update, createdAt, text)) return;
+      this.knownToolCallIds.clear();
+      if (this.currentTurnId) this.recordTurnFinished(this.currentTurnId, createdAt);
+    } else if (this.currentTurnId) {
       const localPromptId = `user:${this.currentTurnId}`;
       if (this.messageIndexes.has(localPromptId)) {
         return;
@@ -763,7 +836,8 @@ export class AcpSessionReplayNormalizer {
     }
     const lastUserMessage = this.lastUserMessageIndex === undefined
       ? undefined : this.messages[this.lastUserMessageIndex];
-    if (lastUserMessage?.text.trim() === text.trim()) {
+    if (lastUserMessage?.text.trim() === text.trim()
+      && (!this.providerPromptReplay || lastUserMessage.createdAt === createdAt)) {
       return;
     }
     const id =
@@ -771,6 +845,55 @@ export class AcpSessionReplayNormalizer {
       readString(update.update, "id") ??
       `user:${update.sessionId}:${createdAt}:${this.generatedMessageSequence++}`;
     this.appendMessageChunk({ id, role: "user", text, createdAt });
+  }
+
+  private applyProviderPromptIdentity(update: AcpSessionUpdate, createdAt: number, text: string): boolean {
+    const replay = this.providerPromptReplay;
+    if (!replay || readAcpUpdateTimestamp(update.update) === undefined) return false;
+    const textDigest = acpReplayPromptTextDigest(text);
+    // The same host timestamps both streams. Allow for dispatch/receipt and
+    // timestamp rounding, and consume each matching occurrence in wire order.
+    const timestampSlopMs = 1_000;
+    while (replay.nextIndex < replay.prompts.length
+      && replay.prompts[replay.nextIndex]!.receivedAt < createdAt - timestampSlopMs) {
+      replay.nextIndex += 1;
+    }
+    let matchIndex = -1;
+    let matchDistance = timestampSlopMs + 1;
+    for (let index = replay.nextIndex; index < replay.prompts.length; index += 1) {
+      const prompt = replay.prompts[index]!;
+      if (prompt.receivedAt > createdAt + timestampSlopMs) break;
+      if (prompt.steerMessageId && prompt.turnId !== this.currentTurnId) continue;
+      const distance = Math.abs(prompt.receivedAt - createdAt);
+      if (distance > timestampSlopMs || prompt.textDigest !== textDigest) continue;
+      if (prompt.steerMessageId) {
+        // Repeated steers within this turn use occurrence order, including
+        // when provider timestamps were rounded to the same second.
+        matchIndex = index;
+        break;
+      }
+      if (distance < matchDistance) {
+        matchIndex = index;
+        matchDistance = distance;
+      }
+    }
+    if (matchIndex === -1) return false;
+    const identity = replay.prompts[matchIndex]!;
+    replay.nextIndex = matchIndex + 1;
+    if (!replay.steeredTurns.has(identity.turnId)) return false;
+    const params = {
+      sessionId: update.sessionId,
+      prompt: text,
+      turnId: identity.turnId,
+      receivedAt: createdAt,
+    };
+    if (identity.steerMessageId) {
+      this.recordSteeredUserPrompt({ ...params, messageId: identity.steerMessageId });
+    } else {
+      if (this.currentTurnId) this.recordTurnFinished(this.currentTurnId, createdAt);
+      this.recordUserPrompt(params);
+    }
+    return true;
   }
 
   private applyAgentThoughtChunk(update: AcpSessionUpdate, createdAt: number): void {
@@ -854,7 +977,10 @@ export class AcpSessionReplayNormalizer {
     createdAt: number,
     toolCallId: string | undefined,
   ): void {
-    const declared = readAcpProviderTool(update.update);
+    const name = this.fileEditOptions.antigravity ? readString(update.update, "name") : undefined;
+    const declared = name === "write_file" || name === "edit_file"
+      ? { name, kind: "edit" }
+      : readAcpProviderTool(update.update);
     if (toolCallId && declared) {
       this.providerTools.set(toolCallId, {
         ...this.providerTools.get(toolCallId),
@@ -1671,6 +1797,9 @@ function toolActivity(
   const id =
     readAcpToolCallId(update.update) ??
     `${kind}:${update.sessionId}`;
+  // Antigravity's generic live tool starts and file-edit completions both
+  // use the call ID. Replay must use the same identity to acknowledge them.
+  const detailId = fileEditOptions?.antigravity ? id : `${id}:detail`;
   const webSearch = readAcpWebSearch(update.update);
   if (webSearch) {
     const status = normalizeToolActivityStatus(readString(update.update, "status"));
@@ -1688,7 +1817,7 @@ function toolActivity(
         webSearch.query || webSearch.sources.length
           ? [
               {
-                id: `${id}:detail`,
+                id: detailId,
                 kind: "read",
                 label: detailLabel,
                 status,
@@ -1732,7 +1861,7 @@ function toolActivity(
       status,
       details: [
         {
-          id: `${id}:detail`,
+          id: detailId,
           kind: "read",
           label: detailLabel,
           command: {
@@ -1745,7 +1874,7 @@ function toolActivity(
       ],
     };
   }
-  const fileEdit = readAcpFileEdit(update.update, fileEditOptions);
+  const fileEdit = readAcpFileEdit(update.update, fileEditOptions, providerTool);
   if (fileEdit) {
     const label = `${fileEdit.verb} ${fileBaseName(fileEdit.path)}`;
     const status = readToolActivityStatus(update.update);
@@ -1761,10 +1890,11 @@ function toolActivity(
       ...(status ? { status } : {}),
       details: [
         {
-          id: `${id}:detail`,
+          id: detailId,
           kind: "write",
           label,
           path: fileEdit.path,
+          ...(status ? { status } : {}),
           ...(fileEdit.fileDiff ? { fileDiff: fileEdit.fileDiff } : {}),
           ...(failure
             ? {
@@ -1826,7 +1956,7 @@ function toolActivity(
     status,
     details: [
       {
-        id: `${id}:detail`,
+        id: detailId,
         kind: detailKind,
         label,
         path,
@@ -1892,6 +2022,8 @@ function mergeActivity(
   isPlaceholderLabel: (label: string) => boolean = () => false,
 ): AppServerThreadActivityEntry {
   const status = incoming.status ?? existing.status;
+  const fileEditGainedPath = incoming.details[0]?.kind === "write"
+    && Boolean(incoming.details[0].path) && !existing.details[0]?.path;
   const details = mergeActivityEntryDetails(
     existing.details,
     incoming.details,
@@ -1900,12 +2032,15 @@ function mergeActivity(
     .map((detail) => ({
       ...detail,
       label: settledSearchLabel(detail.label, status),
+      ...(detail.kind === "write" && detail.path && status ? { status } : {}),
     }));
   return {
     ...existing,
     createdAt: existing.createdAt ?? incoming.createdAt,
     summary: settledSearchLabel(
-      preferSpecificLabel(existing.summary, incoming.summary, isPlaceholderLabel),
+      fileEditGainedPath
+        ? incoming.summary
+        : preferSpecificLabel(existing.summary, incoming.summary, isPlaceholderLabel),
       status,
     ),
     status,
@@ -1941,6 +2076,10 @@ function mergeActivityEntryDetails(
     }
     const existingDetail = merged[existingIndex];
     if (!existingDetail) {
+      continue;
+    }
+    if (incomingDetail.kind === "write" && incomingDetail.path && !existingDetail.path) {
+      merged[existingIndex] = incomingDetail;
       continue;
     }
     merged[existingIndex] = {

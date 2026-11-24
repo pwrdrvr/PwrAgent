@@ -3,6 +3,11 @@ import fc from "fast-check";
 import { createRef, Profiler } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { ProjectIndex, type ProjectIndexEntry } from "../ProjectIndex";
+import {
+  TOP_DOCK_CLASS,
+  TOP_DOCK_RESERVE_CHANGE_EVENT,
+  TOP_DOCK_RESERVE_PROPERTY,
+} from "../selected-thread-dock-reserve";
 
 type Row = { key: string; height: number };
 
@@ -18,6 +23,8 @@ function entriesOf(rows: Row[], selectedKey?: string): ProjectIndexEntry[] {
 
 function mountIndex(projectRows: Row[], { gap = 8, height = 145, scrollTop = 0 } = {}) {
   const listTop = 52;
+  let dock = 0;
+  let dividerHeight = gap;
   let rows = projectRows;
   let boxes = new Map<string, { top: number; bottom: number }>();
   const layOut = (): void => {
@@ -25,14 +32,14 @@ function mountIndex(projectRows: Row[], { gap = 8, height = 145, scrollTop = 0 }
     boxes = new Map(rows.map(({ key, height }, index) => {
       const bottom = top + height;
       const result = [key, { top, bottom }] as const;
-      top = bottom + (index === 0 ? gap : 0); // Pin divider after the first project.
+      top = bottom + (index === 0 ? dividerHeight : 0);
       return result;
     }));
   };
   layOut();
 
   const work = {
-    queries: 0, listRects: 0, listHeights: 0, sectionRects: 0,
+    queries: 0, listRects: 0, listHeights: 0, sectionRects: 0, scrollReads: 0,
     resizePublications: 0, mutationPublications: 0, frames: 0, commits: 0,
   };
   const resetWork = (): void => {
@@ -108,6 +115,14 @@ function mountIndex(projectRows: Row[], { gap = 8, height = 145, scrollTop = 0 }
     }
     return clientHeight.call(this) as number;
   });
+  const elementScrollTop = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!.get!;
+  vi.spyOn(Element.prototype, "scrollTop", "get").mockImplementation(function (this: Element) {
+    if (this.classList.contains("directory-list")) {
+      work.scrollReads += 1;
+      return scrollTop;
+    }
+    return elementScrollTop.call(this) as number;
+  });
   const selectAll = Element.prototype.querySelectorAll;
   vi.spyOn(Element.prototype, "querySelectorAll").mockImplementation(function (this: Element, selector: string) {
     if (this.classList.contains("directory-list")) work.queries += 1;
@@ -129,7 +144,7 @@ function mountIndex(projectRows: Row[], { gap = 8, height = 145, scrollTop = 0 }
           onWidthChange={onWidthChange}
         />
       </Profiler>
-      <div key={regionVersion} ref={target} id="fixture-region">
+      <div key={regionVersion} ref={target} id="fixture-region" className="sidebar__scroll-region">
         <div key={listVersion} className="directory-list">
           <div className="directory-list__starting" />
           {rows.map(({ key }) => (
@@ -167,7 +182,7 @@ function mountIndex(projectRows: Row[], { gap = 8, height = 145, scrollTop = 0 }
   const matchOracle = (): string[] => {
     // Full scan of fixture data. No selectors or layout reads on the feature's list.
     const expected = height === 0 ? [] : [...boxes].filter(([, box]) =>
-      box.bottom > scrollTop + 1 && box.top < scrollTop + height).map(([key]) => key);
+      box.bottom > scrollTop + dock + 1 && box.top < scrollTop + height).map(([key]) => key);
     const nav = view.container.querySelector("nav")!;
     expect(Array.from(nav.querySelectorAll<HTMLElement>(".is-current, .is-in-view"), (item) =>
       item.dataset["projectKey"]).sort()).toEqual([...expected].sort());
@@ -185,6 +200,18 @@ function mountIndex(projectRows: Row[], { gap = 8, height = 145, scrollTop = 0 }
     resize(next: number) {
       height = next;
       publishResize(list(), target.current!);
+    },
+    resizeDivider(next: number) {
+      dividerHeight = next;
+      layOut();
+      publishResize(list().querySelector(".directories-pinned-divider")!);
+    },
+    setDockReserve(next: number) {
+      dock = next;
+      const region = target.current!;
+      region.classList.toggle(TOP_DOCK_CLASS, next > 0);
+      region.style.setProperty(TOP_DOCK_RESERVE_PROPERTY, `${next}px`);
+      region.dispatchEvent(new Event(TOP_DOCK_RESERVE_CHANGE_EVENT));
     },
     replaceRows(next: Row[], replaceList = false) {
       rows = next;
@@ -226,10 +253,17 @@ describe("Project Index scroll work", () => {
     try {
       fixture.publishResize(fixture.list());
       fixture.paint();
+      const offsets = [99, 100, 199, 200, 299, 300, 301, 302, 303, 304];
+      // Warm the same route, then restart at the first project.
+      for (const offset of [...offsets, 0]) {
+        fixture.scroll(offset);
+        fixture.paint();
+        fixture.matchOracle();
+      }
       fixture.resetWork();
       // Coalesce three events per frame, including events at the same offset.
       // The final four frames move within the same project and need no UI publication.
-      for (const offset of [99, 100, 199, 200, 299, 300, 301, 302, 303, 304]) {
+      for (const offset of offsets) {
         fixture.scroll(offset - 1);
         fixture.scroll(offset);
         fixture.scroll(offset);
@@ -238,11 +272,12 @@ describe("Project Index scroll work", () => {
         fixture.matchOracle();
       }
       expect(fixture.work, JSON.stringify(fixture.work)).toMatchObject({
-        queries: 0, listRects: 10, listHeights: 10, resizePublications: 0, mutationPublications: 0,
+        queries: 0, listRects: 0, listHeights: 0, sectionRects: 0, scrollReads: 10,
+        resizePublications: 0, mutationPublications: 0,
         frames: 10, commits: 3,
       });
-      expect(fixture.work.sectionRects, `section rect reads with ${count} rows across 10 frames`)
-        .toBeLessThanOrEqual(10 * (Math.ceil(Math.log2(count + 1)) + 3));
+      fixture.scroll(304, fixture.section("project-3").lastElementChild!);
+      expect(fixture.frames.size).toBe(0);
     } finally {
       fixture.dispose();
     }
@@ -253,14 +288,16 @@ describe("Project Index scroll work", () => {
       fc.array(fc.integer({ min: 20, max: 230 }).map((height) => height / 2), { minLength: 12, maxLength: 32 }),
       fc.integer({ min: 5, max: 260 }),
       fc.nat(),
-      (heights, viewport, index) => {
+      fc.integer({ min: 0, max: 50 }).map((reserve) => reserve / 2),
+      (heights, viewport, index, reserve) => {
         const rows = rowsOf(heights);
         const gap = 9.5;
         const before = index % rows.length;
         const bottom = heights.slice(0, before + 1).reduce((sum, height) => sum + height, gap * (before > 0 ? 2 : 1));
         const fixture = mountIndex(rows, { gap, height: viewport });
         try {
-          for (const offset of [gap - viewport, 0, bottom - 1.5, bottom - 1, bottom - 0.5, bottom + 0.5]) {
+          fixture.setDockReserve(reserve);
+          for (const offset of [gap - viewport, 0, bottom - reserve - 1.5, bottom - reserve - 1, bottom - reserve - 0.5]) {
             fixture.resetWork();
             fixture.scroll(Math.max(0, offset));
             fixture.paint();
@@ -281,7 +318,7 @@ describe("Project Index scroll work", () => {
     const rows = rowsOf([100, 100, 100, 100, 100]);
     const fixture = mountIndex(rows, { gap: 0, height: 80 });
     try {
-      fixture.scroll(210, fixture.section(rows[0]!.key).lastElementChild!);
+      fixture.scroll(210);
       fixture.paint();
       expect(fixture.matchOracle()).toEqual(["project-2"]);
       fixture.resetWork();
@@ -303,6 +340,13 @@ describe("Project Index scroll work", () => {
       fixture.resize(191);
       fixture.paint();
       expect(fixture.matchOracle()).toEqual(["project-2", "project-3", "project-4"]);
+      fixture.resizeDivider(10);
+      fixture.paint();
+      expect(fixture.matchOracle()).toEqual(["project-2", "project-3"]);
+      fixture.setDockReserve(23);
+      fixture.scroll(287);
+      fixture.paint();
+      expect(fixture.matchOracle()).toEqual(["project-3", "project-4"]);
     } finally {
       fixture.dispose();
     }
@@ -393,7 +437,7 @@ describe("Project Index scroll work", () => {
       fixture.publishResize(fixture.list());
       fixture.paint();
       expect(fixture.work).toEqual({
-        queries: 0, listRects: 0, listHeights: 0, sectionRects: 0,
+        queries: 0, listRects: 0, listHeights: 0, sectionRects: 0, scrollReads: 0,
         resizePublications: 0, mutationPublications: 0, frames: 0, commits: 0,
       });
       fixture.enableSpy(true);

@@ -51,7 +51,7 @@ const START_STEPS = [
 type StartStep = typeof START_STEPS[number];
 
 /** The steps before the start records its review, where only retained evidence can carry a terminal. */
-const PRE_RECORD_STEPS = START_STEPS.slice(0, START_STEPS.indexOf("resolveCodexThreadExecutionModeForActiveTurn") + 1);
+const PRE_RECORD_STEPS = START_STEPS.slice(0, START_STEPS.indexOf("resolveCodexThreadExecutionModeForActiveTurn"));
 
 /**
  * A review service over an in-memory host whose turn-activity sets are real,
@@ -289,7 +289,9 @@ describe("ManagedReviewService", () => {
 
         expect(idleSteps).toEqual([]);
         expect(harness.activity.hasStartReservation(THREAD)).toBe(false);
-        expect(outcome).toBe(failAt ? "failed" : "started");
+        // The inline review is already accepted when its mode is refreshed.
+        const startFails = failAt && failAt !== "resolveCodexThreadExecutionModeForActiveTurn";
+        expect(outcome).toBe(startFails ? "failed" : "started");
         const turnKey = buildActiveTurnKey("codex", THREAD, REVIEW_TURN);
         if (failAt && PRE_RECORD_STEPS.includes(failAt)) {
           // The start never took effect: nothing of it may remain.

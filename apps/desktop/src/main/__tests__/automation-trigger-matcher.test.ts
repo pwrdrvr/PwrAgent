@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { matchesAutomationConversation } from "@pwragent/shared/contracts/automations";
 import type {
@@ -626,6 +627,31 @@ describe("automation replay helpers", () => {
     expect(source.matchedTriggerId).toBe("datadog-error");
     expect(source.conversation.title).toBe("#alerts-prod");
     expect(source.message?.text).toBe("ERROR rate spike");
+  });
+
+  it("replies through the trigger's bot whatever connection the replayed message carries", () => {
+    // Rule: a replayed run's reply leaves through the bot its trigger names.
+    // A history row or older window can drop the message's connection, and
+    // routing by the message alone sent a named bot's run through the
+    // original route.
+    const bot = fc.constantFrom(undefined, `mc_${"a".repeat(32)}`, `mc_${"b".repeat(32)}`);
+    fc.assert(fc.property(bot, fc.boolean(), (triggerBot, stamped) => {
+      const named = {
+        ...trigger,
+        conversation: {
+          ...trigger.conversation,
+          ...(triggerBot === undefined ? {} : { connectionId: triggerBot }),
+        },
+      };
+      const replayed = {
+        ...message("m1", "ERROR"),
+        ...(stamped && triggerBot !== undefined ? { connectionId: triggerBot } : {}),
+      };
+      const source = buildReplayRunSourceMetadata({ trigger: named, message: replayed, now: 9_000 });
+      expect(source.conversation.connectionId).toBe(triggerBot);
+      expect("connectionId" in source.conversation).toBe(triggerBot !== undefined);
+      expect(source.sourceEventKey === "replay:m1:9000").toBe(triggerBot === undefined);
+    }));
   });
 });
 

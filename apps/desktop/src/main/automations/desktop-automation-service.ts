@@ -137,6 +137,9 @@ function replayUnsupportedReason(
   trigger: AutomationInboundMessageTriggerDefinition,
   supportsHistory: (provider: MessagingChannelKind) => boolean,
 ): AutomationReplayUnsupportedReason | undefined {
+  // History is read through the original route's adapter. A named
+  // connection's conversation must not be read through another bot.
+  if (trigger.conversation.connectionId !== undefined) return "provider";
   if (!supportsHistory(trigger.conversation.channel)) return "provider";
   if (trigger.conversation.recipientUserId) return "contact_dm";
   if (trigger.conversation.parentId) return "scoped_thread";
@@ -600,12 +603,16 @@ export class DesktopAutomationService {
       add(actor, "automation_runs");
     }
 
-    const directory = await deps.searchDirectory({
-      provider: request.provider,
-      query: request.query,
-      ...(request.conversationId ? { conversationId: request.conversationId } : {}),
-      limit,
-    });
+    // The directory is the original route's adapter. A named connection's
+    // sender comes from its own past runs, never another bot's directory.
+    const directory = request.connectionId === undefined
+      ? await deps.searchDirectory({
+        provider: request.provider,
+        query: request.query,
+        ...(request.conversationId ? { conversationId: request.conversationId } : {}),
+        limit,
+      })
+      : { actors: [], supported: false };
     for (const actor of directory.actors) {
       add(actor, "directory");
     }
@@ -630,7 +637,7 @@ export class DesktopAutomationService {
     request: SearchMessagingSendersRequest,
   ): MessagingDirectoryActor[] {
     if (!request.automationId) return [];
-    const key = `${request.automationId}:${request.provider}`;
+    const key = JSON.stringify([request.automationId, request.provider, request.connectionId ?? null]);
     const cached = this.runActorCache.get(key);
     const now = Date.now();
     if (cached && now - cached.readAt < RUN_ACTOR_CACHE_TTL_MS) {
@@ -645,6 +652,7 @@ export class DesktopAutomationService {
       const actor = run.source?.actor;
       if (!actor) continue;
       if (run.source?.conversation.channel !== request.provider) continue;
+      if (run.source.conversation.connectionId !== request.connectionId) continue;
       if (byId.has(actor.platformUserId)) continue;
       byId.set(actor.platformUserId, {
         platformUserId: actor.platformUserId,
@@ -988,6 +996,14 @@ export class DesktopAutomationService {
           ? "This automation no longer watches that conversation."
           : "This message is not from a conversation this automation watches.",
       );
+    }
+    // The run replies through the trigger's bot. A message stamped by a
+    // different bot is another conversation, even with the same chat ID.
+    if (
+      request.message.connectionId !== undefined
+      && request.message.connectionId !== trigger.conversation.connectionId
+    ) {
+      throw new Error("This message arrived through a different bot than this automation watches.");
     }
     const result = await this.scheduler.replayInboundRun({
       automation,

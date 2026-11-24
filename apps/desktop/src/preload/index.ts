@@ -112,6 +112,7 @@ import type {
   RunThreadTodoActionRequest,
   SetThreadTodoItemCheckedRequest,
   ReviewThreadTodoCiDeploymentRequest,
+  SetThreadTodoAccessRequest,
   SetThreadTodoProjectRequest,
   ListThreadTodoDispatchEnvironmentsRequest,
   ListThreadTodoDispatchEnvironmentsResponse,
@@ -546,6 +547,8 @@ import type {
   GetMessagingActivitySummaryResponse,
   InboundPreviewMessage,
   ListInboundTopicsRequest,
+  ListTelegramConnectionConversationsRequest,
+  ListTelegramConnectionConversationsResponse,
   ListInboundTopicsResponse,
   ListMessagingActivityRequest,
   ListMessagingActivityResponse,
@@ -912,6 +915,7 @@ import {
   THREAD_PULL_REQUEST_READ_MERGE_CHANNEL,
   THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL,
   THREAD_TODOS_REVIEW_CI_DEPLOYMENT_CHANNEL,
+  THREAD_TODOS_SET_ACCESS_CHANNEL,
   THREAD_TODOS_SET_PROJECT_CHANNEL,
   THREAD_TODOS_LIST_DISPATCH_ENVIRONMENTS_CHANNEL,
   OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL,
@@ -1234,6 +1238,7 @@ import {
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
   MESSAGING_REJECT_PAIRING_CHANNEL,
   MESSAGING_READ_TELEGRAM_PAIRING_GRANTS_CHANNEL,
+  MESSAGING_LIST_TELEGRAM_CONNECTION_CONVERSATIONS_CHANNEL,
   MESSAGING_REVOKE_TELEGRAM_PAIRING_GRANT_CHANNEL,
   MESSAGING_RESET_TOOL_UPDATE_BINDINGS_CHANNEL,
   MESSAGING_SET_ENABLED_CHANNEL,
@@ -2918,6 +2923,10 @@ const desktopApi = Object.freeze({
     request: SetThreadTodoProjectRequest,
   ): Promise<ThreadTodoMutationResponse> =>
     await ipcRenderer.invoke(THREAD_TODOS_SET_PROJECT_CHANNEL, request),
+  setThreadTodoAccess: async (
+    request: SetThreadTodoAccessRequest,
+  ): Promise<ThreadTodoMutationResponse> =>
+    await ipcRenderer.invoke(THREAD_TODOS_SET_ACCESS_CHANNEL, request),
   listThreadTodoDispatchEnvironments: async (
     request: ListThreadTodoDispatchEnvironmentsRequest,
   ): Promise<ListThreadTodoDispatchEnvironmentsResponse> =>
@@ -4136,6 +4145,10 @@ const desktopApi = Object.freeze({
     request: ListInboundTopicsRequest,
   ): Promise<ListInboundTopicsResponse> =>
     await ipcRenderer.invoke(MESSAGING_LIST_INBOUND_TOPICS_CHANNEL, request),
+  listTelegramConnectionConversations: async (
+    request: ListTelegramConnectionConversationsRequest,
+  ): Promise<ListTelegramConnectionConversationsResponse> =>
+    await ipcRenderer.invoke(MESSAGING_LIST_TELEGRAM_CONNECTION_CONVERSATIONS_CHANNEL, request),
   onInboundPreviewMessage: (
     callback: (message: InboundPreviewMessage) => void,
   ): (() => void) => {

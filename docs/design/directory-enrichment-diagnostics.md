@@ -71,3 +71,23 @@ This instrumentation does not change probing, cache retention, invalidation,
 process ownership, retry behavior or timeouts. Its purpose is to distinguish
 cold discovery, owner churn, failed probes and actual invalidations before
 changing any of those contracts.
+
+## Git subprocess callers
+
+The sibling `gitSubprocesses` summary records spawn attempts in fixed
+two-second buckets. In schema version 2, each bucket's `startsByCaller` counts
+all attempts for `pr-scheduled-prefetch`, `pr-live-branch-lookup`, and
+`pr-stored-attachment-validation`, including attempts that exceed the 32-row
+limit. For a caller's overflow count, subtract that caller's retained row
+starts from its aggregate. Shared probes are attributed to the requester that
+created the work. Joining an existing probe or using a cached result adds no
+start. Command and purpose still identify the operation within each retained
+row.
+
+The highest fixed bucket is a lower bound on the peak over any rolling
+two-second interval. Measuring the rolling peak requires individual start
+times in a controlled run. Use contrived repositories for that measurement
+and keep raw captures private. Captured rows use process-salted checkout and
+common-directory IDs. A common-directory ID can link related worktrees when
+the relationship is known. The snapshot excludes paths, refs, argv, remote
+hostnames, command output, and environment values.

@@ -86,6 +86,7 @@ import {
   parseFileChangeOutput,
   readRendererSequence,
   summarizeActivityStatus,
+  hasTranscriptFileDiff,
   summarizeLiveActivity,
   withRendererSequence,
 } from "../features/thread-detail/live-transcript-activity";
@@ -2516,8 +2517,13 @@ function carryForwardTranscriptEntryOrder(
       continue;
     }
 
+    const pendingSource = response.backend === "acp:antigravity" && source.id.startsWith("live-tools-")
+      ? retainUnreplayedAntigravityDetails(source, readDetailOwners)
+      : source;
+    if (!pendingSource) continue;
+
     changed = true;
-    entries = mergeTranscriptEntries(entries, [source]);
+    entries = mergeTranscriptEntries(entries, [pendingSource]);
   }
 
   const durableMonitorUsageSources = sources.filter(isDurableMonitorUsageActivity);
@@ -2566,6 +2572,31 @@ function latestTranscriptTurnId(entries: AppServerThreadEntry[]): string | undef
   }
 
   return undefined;
+}
+
+/** One live tool row can be acknowledged by several independent replay calls. */
+function retainUnreplayedAntigravityDetails(
+  source: AppServerThreadActivityEntry,
+  readDetailOwners: DetailOwners,
+): AppServerThreadActivityEntry | undefined {
+  const details = source.details.filter((detail) => {
+    for (const owner of readDetailOwners.get(detail.id) ?? []) {
+      if (owner.type === "activity" && owner.turn?.id === source.turn?.id
+        && owner.details.some((replayed) => replayed.id === detail.id
+          && (hasTranscriptFileDiff(detail) ? hasTranscriptFileDiff(replayed) : replayed.status === "completed"))) {
+        return false;
+      }
+    }
+    return true;
+  });
+  if (details.length === source.details.length) return source;
+  if (details.length === 0) return undefined;
+  return {
+    ...source,
+    details,
+    summary: summarizeLiveActivity(details),
+    status: summarizeActivityStatus(details),
+  };
 }
 
 function isDurableDiffActivity(
@@ -2798,6 +2829,10 @@ function readResponseThreadStatus(
   response: AppServerReadThreadResponse
 ): AppServerReadThreadResponse["threadStatus"] {
   return response.threadStatus ?? response.replay.threadStatus;
+}
+
+function isInactiveThreadStatus(status: unknown): boolean {
+  return status === "idle" || status === "notLoaded";
 }
 
 function responseHasInProgressTurn(
@@ -3518,11 +3553,13 @@ function findKnownTurnUsageMetadata(
 function terminalTurnMatchesActiveTurn(
   session: ThreadSessionEntry,
   terminalTurnId: string | undefined,
+  relatedReviewTurnId: string | undefined,
 ): boolean {
   return Boolean(
     !session.activeTurnId ||
       !terminalTurnId ||
-      terminalTurnId === session.activeTurnId
+      terminalTurnId === session.activeTurnId ||
+      relatedReviewTurnId === session.activeTurnId
   );
 }
 
@@ -5285,7 +5322,7 @@ function transitionTransientMessagesAtBoundary(
     isApprovalRequestNotification(notification) ||
     isRequestUserInputNotification(notification) ||
     isMcpElicitationNotification(notification) ||
-    statusType === "idle";
+    isInactiveThreadStatus(statusType);
   if (!isBoundary) {
     return current;
   }
@@ -5645,7 +5682,9 @@ export function useThreadSessionState(params: {
           threadStatus: readResponseThreadStatus(params.response),
         },
         level: "warn",
-        message: "stale thinking state cleared after idle thread read",
+        message: readResponseThreadStatus(params.response) === "notLoaded"
+          ? "stale thinking state cleared after unloaded thread read"
+          : "stale thinking state cleared after idle thread read",
       }).catch(() => undefined);
     },
     [desktopApi?.logRendererDiagnostic]
@@ -5866,10 +5905,11 @@ export function useThreadSessionState(params: {
           const responseThreadStatus = lifecycleChangedDuringRead
             ? undefined
             : readResponseThreadStatus(response);
+          const responseThreadInactive = isInactiveThreadStatus(responseThreadStatus);
           const backendReportedActive =
             responseThreadStatus === "active"
               ? true
-              : responseThreadStatus === "idle"
+              : responseThreadInactive
                 ? false
                 : current.backendReportedActive;
           const now = Date.now();
@@ -5894,7 +5934,7 @@ export function useThreadSessionState(params: {
             )
             && now < ownUpdateSettlesAt;
           const shouldClearStaleThinking =
-            responseThreadStatus === "idle"
+            responseThreadInactive
             && thinkingReasons.length > 0
             && !hydratedPendingInteraction
             && !ownUpdateStillSettling
@@ -6139,7 +6179,7 @@ export function useThreadSessionState(params: {
       return;
     }
 
-    if (thread.threadStatus === "active" || thread.threadStatus === "idle") {
+    if (thread.threadStatus === "active" || isInactiveThreadStatus(thread.threadStatus)) {
       const summarySeed = `${thread.threadStatus}:${thread.updatedAt ?? "unknown"}`;
       if (threadStatusSummarySeedRef.current[threadKey] !== summarySeed) {
         threadStatusSummarySeedRef.current[threadKey] = summarySeed;
@@ -6617,6 +6657,13 @@ export function useThreadSessionState(params: {
         || event.notification.method === "turn/failed"
         || event.notification.method === "turn/cancelled"
       ) {
+        if (event.relatedReviewTurnId) {
+          consumedOptimisticActiveTurnKeysRef.current.add(`${targetThreadKey}:${event.relatedReviewTurnId}`);
+          const terminalTurnId = readNotificationTurnId(event.notification);
+          if (terminalTurnId) {
+            consumedOptimisticActiveTurnKeysRef.current.add(`${targetThreadKey}:${terminalTurnId}`);
+          }
+        }
         void desktopApi.logRendererDiagnostic?.({
           level: "info",
           message: "renderer received terminal turn notification",
@@ -6690,10 +6737,25 @@ export function useThreadSessionState(params: {
       }
 
       updateSession(targetThreadKey, (session) => {
-        const current = transitionSafetyBuffering(
+        const transitioned = transitionSafetyBuffering(
           transitionTransientMessagesAtBoundary(session, event.notification),
           event.notification,
         );
+        // End the related turn's live placeholders while preserving the
+        // output already captured in its activity rows.
+        const current = event.relatedReviewTurnId
+          ? {
+              ...transitioned,
+              optimisticEntries: transitioned.optimisticEntries.flatMap((entry) => {
+                const turn = entry.turn;
+                if (!turn || turn.id !== event.relatedReviewTurnId) return [entry];
+                if (entry.type === "activity" && entry.status === "in_progress") {
+                  return [settleTurnActivity(entry, { ...turn, status: "interrupted" })];
+                }
+                return isLiveOptimisticEntry(entry) ? [] : [entry];
+              }),
+            }
+          : transitioned;
         if (event.notification.method === "turn/safetyBuffering/updated") {
           return current;
         }
@@ -7334,14 +7396,18 @@ export function useThreadSessionState(params: {
           const completedTurnMatchesActive = terminalTurnMatchesActiveTurn(
             current,
             completedTurn?.id,
+            event.relatedReviewTurnId,
           );
+          // A related review ID settles the session without transferring live
+          // transcript or usage from one provider turn onto the other.
+          const completedTurnOwnsPendingItems = terminalTurnMatchesActiveTurn(current, completedTurn?.id, undefined);
           if (completedTurnMatchesActive && completedTurn?.id) {
             consumedOptimisticActiveTurnKeysRef.current.add(
               `${targetThreadKey}:${completedTurn.id}`
             );
           }
           const completedUsageActivity = current.pendingUsageActivityEntry
-            && completedTurn && completedTurnMatchesActive
+            && completedTurn && completedTurnOwnsPendingItems
             ? { ...current.pendingUsageActivityEntry, turn: completedTurn }
             : undefined;
           const settledLifecycle = completedTurnMatchesActive ? {
@@ -7357,7 +7423,7 @@ export function useThreadSessionState(params: {
             pendingTurnUsage: undefined,
             ...(completedTurn ? {
               recentlyCompletedTurnUsage: {
-                accumulator: current.pendingTurnUsage,
+                accumulator: completedTurnOwnsPendingItems ? current.pendingTurnUsage : undefined,
                 ...(!retainTranscript && completedUsageActivity ? { entry: completedUsageActivity } : {}),
                 turn: completedTurn,
               },
@@ -7440,7 +7506,7 @@ export function useThreadSessionState(params: {
                   }
                 );
               }),
-            ...(current.pendingAssistantMessage && completedTurnMatchesActive
+            ...(current.pendingAssistantMessage && completedTurnOwnsPendingItems
               ? completedTurnHasReview
                 ? []
                 : [
@@ -7591,6 +7657,7 @@ export function useThreadSessionState(params: {
             !terminalTurnMatchesActiveTurn(
               current,
               event.notification.params.turnId,
+              event.relatedReviewTurnId,
             )
           ) {
             return current;
@@ -7633,6 +7700,7 @@ export function useThreadSessionState(params: {
             !terminalTurnMatchesActiveTurn(
               current,
               event.notification.params.turnId,
+              event.relatedReviewTurnId,
             )
           ) {
             return current;
@@ -7680,7 +7748,7 @@ export function useThreadSessionState(params: {
             };
           }
 
-          if (statusType === "idle") {
+          if (isInactiveThreadStatus(statusType)) {
             const shouldRecheckStaleThinking =
               hasThinkingState(current) && !hasPendingInteraction(current);
             if (shouldRecheckStaleThinking) {

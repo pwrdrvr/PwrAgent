@@ -5737,6 +5737,107 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("keeps a deferred auto-review row through its turn's completion read and drops it once the next turn is in the replay", async () => {
+    // Codex's thread/read has no record of auto reviews, so the row lives only
+    // in memory: kept after its turn, discarded after the next one.
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: { method: string; params: Record<string, unknown> };
+        }) => void)
+      | undefined;
+    const turnOf = (id: string) => ({ id, status: "completed" as const, durationMs: 60_000 });
+    const turnEntries = (index: number): AppServerThreadEntry[] => [
+      { type: "message", id: `u${index}`, role: "user", text: `Request ${index}.`, turn: turnOf(`turn-${index}`) },
+      {
+        type: "activity",
+        id: `t${index}`,
+        createdAt: index * 10_000 + 2_000,
+        summary: "Used 1 tool",
+        status: "completed",
+        details: [{ id: `t${index}-cmd`, kind: "command", label: "pnpm test", status: "completed" }],
+        turn: turnOf(`turn-${index}`),
+      },
+      {
+        type: "message",
+        id: `a${index}`,
+        role: "assistant",
+        text: "Done.",
+        phase: "final",
+        createdAt: index * 10_000 + 3_000,
+        turn: turnOf(`turn-${index}`),
+      },
+    ];
+    const read = (entries: AppServerThreadEntry[]) => ({
+      backend: "codex" as const,
+      fetchedAt: Date.now(),
+      threadId: "thread-1",
+      replay: {
+        entries,
+        messages: [],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+      },
+    });
+    const readThread = vi.fn()
+      .mockResolvedValueOnce(read(turnEntries(1).slice(0, 1)))
+      .mockResolvedValueOnce(read(turnEntries(1)))
+      .mockResolvedValue(read([...turnEntries(1), ...turnEntries(2)]));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread,
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({ desktopApi, thread: buildThread({ id: "thread-1", updatedAt: 1_000 }) })
+    );
+    await waitFor(() => {
+      expect(result.current.entries).toHaveLength(1);
+    });
+
+    const reviewRow: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "live-auto-review-warnings@turn-1",
+      createdAt: 12_500,
+      summary: "Auto reviews: 1 approved",
+      details: [{ id: "live-auto-review-1", kind: "command", label: "Approved: Runs the tests." }],
+      turn: turnOf("turn-1"),
+    };
+    act(() => {
+      result.current.upsertLiveTranscriptEntry(reviewRow);
+    });
+    const completeTurn = async (turnId: string, reads: number) => {
+      await act(async () => {
+        agentEventHandler?.({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: { threadId: "thread-1", turnId, turn: turnOf(turnId) },
+          },
+        });
+      });
+      await waitFor(() => {
+        expect(readThread).toHaveBeenCalledTimes(reads);
+      });
+    };
+
+    await completeTurn("turn-1", 2);
+    await waitFor(() => {
+      expect(result.current.entries.map((entry) => entry.id)).toEqual([
+        "u1",
+        "t1",
+        "live-auto-review-warnings@turn-1",
+        "a1",
+      ]);
+    });
+
+    await completeTurn("turn-2", 3);
+    await waitFor(() => {
+      expect(result.current.entries.map((entry) => entry.id)).toEqual(["u1", "t1", "a1", "u2", "t2", "a2"]);
+    });
+  });
+
   it("materializes a new thread in user-then-assistant order on completion", async () => {
     let agentEventHandler:
       | ((event: {
@@ -8121,6 +8222,64 @@ describe("useThreadSessionState", () => {
         "message:Here it is.",
       ]);
     });
+  });
+
+  it.each([2, 4])("keeps each of %i live Antigravity patches once through partial and complete replay", async (count) => {
+    const backend = "acp:antigravity";
+    const threadId = "antigravity-edits";
+    const turn = { id: "edit-turn", status: "in_progress" as const };
+    const thread = { ...buildThread({ id: threadId, updatedAt: 1_000 }), source: backend } as const;
+    let listener: ((event: AgentEvent) => void) | undefined;
+    let snapshot: AppServerThreadEntry[] = [];
+    const readThread = vi.fn(async (): Promise<AppServerReadThreadResponse> => ({
+      backend, threadId, fetchedAt: Date.now(),
+      replay: {
+        entries: snapshot, messages: [],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (handler) => { listener = handler; return () => undefined; },
+      readThread,
+    };
+    const calls = Array.from({ length: count }, (_, index) => ({
+      id: `call-${index}`, title: "Edited rules.md", path: "/work/rules.md",
+      fileDiff: { kind: "update" as const, diff: `patch-${index}`, additions: 1, removals: 1 },
+    }));
+    const replay = calls.map((call, index): AppServerThreadActivityEntry => ({
+      type: "activity", id: call.id, summary: call.title, status: "completed",
+      createdAt: 2000 + index, turn,
+      details: [{
+        id: call.id, kind: "write", label: call.title, path: call.path,
+        fileDiff: call.fileDiff, status: "completed",
+      }],
+    }));
+    const { result, rerender } = renderHook(
+      ({ selected }) => useThreadSessionState({ desktopApi, thread: selected }),
+      { initialProps: { selected: thread } },
+    );
+    const visiblePatches = () => result.current.entries.flatMap((entry) =>
+      entry.type === "activity" ? entry.details.map((detail) => detail.fileDiff?.diff) : []);
+    const expected = calls.map((call) => call.fileDiff.diff);
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => {
+      for (const call of calls) {
+        listener?.({ backend, notification: { method: "item/completed", params: {
+          threadId, turnId: turn.id,
+          item: { ...call, type: "commandExecution", acpFileEdit: true, status: "completed" },
+        } } });
+      }
+    });
+    expect(visiblePatches()).toEqual(expected);
+
+    for (const [index, received] of [1, count].entries()) {
+      snapshot = replay.slice(0, received);
+      rerender({ selected: { ...thread, updatedAt: 3_000 + index } });
+      await waitFor(() => {
+        expect(result.current.entries.some((entry) => entry.id === replay[received - 1]?.id)).toBe(true);
+        expect(visiblePatches()).toEqual(expected);
+      });
+    }
   });
 
   it("does not delete edited file diffs when a later hydration omits them", async () => {
@@ -17072,7 +17231,7 @@ describe("useThreadSessionState", () => {
     expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
   });
 
-  it("logs and clears stale thinking when a selected thread read proves the thread is idle", async () => {
+  it.each(["idle", "notLoaded"] as const)("logs and clears stale thinking when a selected thread read reports %s", async (threadStatus) => {
     const logRendererDiagnostic = vi.fn(async () => undefined);
     const readThread = vi
       .fn()
@@ -17093,7 +17252,7 @@ describe("useThreadSessionState", () => {
         backend: backend ?? "codex",
         fetchedAt: Date.now(),
         threadId,
-        threadStatus: "idle",
+        threadStatus,
         replay: {
           entries: [],
           messages: [],
@@ -17146,13 +17305,15 @@ describe("useThreadSessionState", () => {
     expect(logRendererDiagnostic).toHaveBeenCalledWith({
       details: expect.objectContaining({
         threadKey: "codex:thread-1",
-        threadStatus: "idle",
+        threadStatus,
         reasons: expect.arrayContaining([
           expect.objectContaining({ kind: "pendingStatus" }),
         ]),
       }),
       level: "warn",
-      message: "stale thinking state cleared after idle thread read",
+      message: threadStatus === "idle"
+        ? "stale thinking state cleared after idle thread read"
+        : "stale thinking state cleared after unloaded thread read",
     });
   });
 

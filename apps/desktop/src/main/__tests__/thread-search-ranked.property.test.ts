@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 import { expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { ThreadSearchStore } from "../storage/thread-search-store";
+import { seedSearchThreads } from "./helpers/thread-search-fixture";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 it.each([1000, 2000, 4000, 8000])("opens one ranked MATCH cursor for %i visible matching threads", (n) => {
@@ -10,7 +11,7 @@ it.each([1000, 2000, 4000, 8000])("opens one ranked MATCH cursor for %i visible 
     const store = new ThreadSearchStore(db);
     const threads = Array.from({ length: n }, (_, i) => ({ id: `match-${i}`, source: "codex" as const,
       title: "Needle matching title", titleSource: "explicit" as const, updatedAt: i + 1, linkedDirectories: [] }));
-    store.upsertThreads(threads);
+    seedSearchThreads(db, threads);
     let matchOpens = 0;
     // A value-preserving, non-deterministic RHS marks each FTS cursor opening.
     // Counting SQL preparations alone cannot see repeated native MATCH setup.

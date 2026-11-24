@@ -62,6 +62,10 @@ notifications beyond `thread/executionMode/updated`:
   — clients should see the apply before the queue-clear so the UI
   transitions cleanly through "queued → applying → applied".
 
+When an Antigravity switch to Default Access cannot close the Full Access
+session at turn end, the next prompt retries the switch. PwrAgent refuses
+the prompt if the switch still cannot apply.
+
 The persistent `permissionTransitionLog` on `ThreadOverlayState` (capped
 at 100 entries, sqlite-backed) is the audit trail. Renderer materializes
 log entries into the transcript as synthetic activity entries with id

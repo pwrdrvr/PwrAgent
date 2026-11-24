@@ -1,9 +1,13 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHmac, randomBytes } from "node:crypto";
 
 export type GitSubprocessPurpose =
   | "unspecified" | "directory-enrichment" | "directory-status"
   | "working-state" | "pr-remotes" | "pr-discovery" | "pr-local-head"
-  | "pr-review-coverage" | "review-working-tree";
+  | "pr-review-coverage" | "review-working-tree" | "stack-checkout" | "stack-status";
+
+type PrGitSubprocessCaller = "pr-scheduled-prefetch" | "pr-live-branch-lookup" | "pr-stored-attachment-validation";
+export const prGitSubprocessCaller = new AsyncLocalStorage<PrGitSubprocessCaller | undefined>();
 
 type Command =
   | "remote-list" | "remote-url" | "remote-other" | "refs" | "symbolic-ref"
@@ -11,8 +15,15 @@ type Command =
   | "config" | "log" | "rev-list" | "merge-base" | "other" | "ssh-config";
 type Counts = { started: number; succeeded: number; failed: number; durationMs: number };
 type Identity = { directory?: string; commonDirectory?: string; sshHost?: string };
-type Row = Counts & { command: Command; purpose: GitSubprocessPurpose; directoryId: string; commonDirectoryId?: string; sshHostId?: string };
-type Bucket = { startMs: number; totals: Counts; overflow: Counts; rows: Map<string, Row> };
+type Row = Counts & { command: Command; purpose: GitSubprocessPurpose; caller?: PrGitSubprocessCaller; directoryId: string; commonDirectoryId?: string; sshHostId?: string };
+type Bucket = {
+  startMs: number;
+  totals: Counts;
+  overflow: Counts;
+  startsByCaller: Record<PrGitSubprocessCaller, number>;
+  startsByPurpose: Partial<Record<GitSubprocessPurpose, number>>;
+  rows: Map<string, Row>;
+};
 const counts = (): Counts => ({ started: 0, succeeded: 0, failed: 0, durationMs: 0 });
 
 /** No raw argv, paths, hosts, output, environment, stacks, timers or writes.
@@ -48,6 +59,7 @@ export class GitSubprocessDiagnostics {
 
   start(command: Command, purpose: GitSubprocessPurpose, identity?: Identity): (failed: boolean) => void {
     const started = this.monotonicNow();
+    const caller = prGitSubprocessCaller.getStore();
     const directoryId = identity?.directory ? this.id(identity.directory) : "none";
     const common = identity?.commonDirectory ?? (identity?.directory && this.commonDirectories.get(identity.directory));
     const commonDirectoryId = common ? this.id(common) : undefined;
@@ -57,13 +69,18 @@ export class GitSubprocessDiagnostics {
       let bucket = this.buckets.get(startMs);
       if (!bucket) {
         this.prune(startMs);
-        bucket = { startMs, totals: counts(), overflow: counts(), rows: new Map() };
+        bucket = {
+          startMs, totals: counts(), overflow: counts(), startsByPurpose: {}, rows: new Map(),
+          startsByCaller: { "pr-scheduled-prefetch": 0, "pr-live-branch-lookup": 0, "pr-stored-attachment-validation": 0 },
+        };
         this.buckets.set(startMs, bucket);
       }
-      const key = `${command}:${purpose}:${directoryId}:${commonDirectoryId ?? ""}:${sshHostId ?? ""}`;
+      if (caller) bucket.startsByCaller[caller] += delta.started;
+      if (delta.started) bucket.startsByPurpose[purpose] = (bucket.startsByPurpose[purpose] ?? 0) + delta.started;
+      const key = `${command}:${purpose}:${caller ?? ""}:${directoryId}:${commonDirectoryId ?? ""}:${sshHostId ?? ""}`;
       let row = bucket.rows.get(key);
       if (!row && bucket.rows.size < 32) {
-        row = { command, purpose, directoryId, commonDirectoryId, sshHostId, ...counts() };
+        row = { command, purpose, caller, directoryId, commonDirectoryId, sshHostId, ...counts() };
         bucket.rows.set(key, row);
       }
       for (const name of Object.keys(delta) as Array<keyof Counts>) {
@@ -90,9 +107,11 @@ export class GitSubprocessDiagnostics {
     const capturedAtMs = this.now();
     this.prune(Math.floor(capturedAtMs / 2_000) * 2_000);
     return {
-      schemaVersion: 1, capturedAtMs, bucketMs: 2_000, retentionMs: 120_000, rowsPerBucket: 32,
+      schemaVersion: 2, capturedAtMs, bucketMs: 2_000, retentionMs: 120_000, rowsPerBucket: 32,
       buckets: [...this.buckets.values()].map((bucket) => ({
         startMs: bucket.startMs, totals: { ...bucket.totals }, overflow: { ...bucket.overflow },
+        startsByCaller: { ...bucket.startsByCaller },
+        startsByPurpose: { ...bucket.startsByPurpose },
         rows: [...bucket.rows.values()].map((row) => ({ ...row })),
       })),
     };

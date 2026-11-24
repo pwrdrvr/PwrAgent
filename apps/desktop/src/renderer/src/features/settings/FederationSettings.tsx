@@ -2090,6 +2090,8 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   // Placement of a handoff's thread is negotiation, not a remote action.
   thread_todo_placement: "",
   thread_todo_placement_sibling: "",
+  // Storing an Access pick rides on turn_control, which the operator grants.
+  thread_todo_access: "",
   operator_requests: "operator request queue",
   operator_questions: "dismiss async questions",
   thread_mcp_connections: "Thread MCP connections",

@@ -5299,9 +5299,9 @@ describe("Composer", () => {
       "#Apparently we don't allow cross-provider parent/child relationships? We…",
     );
     expect(label?.textContent).not.toContain("refuse to render it");
-    // The untruncated title stays reachable on the row itself.
-    expect(options[0]).toHaveAttribute(
-      "title",
+    // The title label exposes the full title independently of the row's badges.
+    expect(label).toHaveAttribute(
+      "data-tooltip",
       promptTitle.replace(/\s+/g, " "),
     );
 
@@ -5967,7 +5967,86 @@ describe("Composer", () => {
     });
   });
 
-  it("appends Cmd+K federation results and inserts a remote thread link", async () => {
+  it.each(["local", "remote"] as const)(
+    "uses Agent metadata to label %s hash search results",
+    async (scope) => {
+      const currentThread: NavigationThreadSummary = {
+        id: "thread-current",
+        title: "Current thread",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+      };
+      const results = [false, true].map((isAgent): NavigationThreadSummary => {
+        const id = isAgent ? "thread-triage" : "thread-notes";
+        return {
+          ...currentThread,
+          id,
+          title: isAgent ? "Weekly triage" : "Weekly notes",
+          ...(isAgent ? {
+            agent: {
+              name: "Weekly triage",
+              instructionLineCount: 0,
+              instructionsTooLong: false,
+              updatedAt: 1,
+            },
+          } : {}),
+          ...(scope === "remote" ? {
+            federation: {
+              ref: buildFederatedThreadRef({
+                backend: "codex",
+                instanceId: "peer-laptop",
+                threadId: id,
+              }),
+              instanceLabel: "Laptop",
+              peerStatus: "connected",
+              capabilities: [],
+            },
+          } : {}),
+        };
+      });
+      render(
+        <Composer
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            ...(scope === "remote" ? {
+              jumpSearchRemoteThreads: async () => ({ results }),
+            } : {}),
+          }}
+          skills={[]}
+          thread={currentThread}
+          threads={scope === "local" ? [currentThread, ...results] : [currentThread]}
+        />,
+      );
+
+      fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), {
+        target: { value: "Ask #Weekly" },
+      });
+      const listbox = await screen.findByRole("listbox", {
+        name: "Threads and pull requests",
+      });
+
+      // For either owner, the badge follows the result's Agent metadata.
+      for (const result of results) {
+        const option = await within(listbox).findByRole("option", {
+          name: new RegExp(`#${result.title}`),
+        });
+        const row = within(option);
+        if (result.agent) {
+          const badge = row.getByLabelText("Agent thread");
+          expect(badge).toHaveTextContent(/^Agent$/);
+          expect(badge.closest("[title], [data-tooltip]")).toBeNull();
+          expect(row.queryByText("Thread", { exact: true })).not.toBeInTheDocument();
+        } else {
+          expect(row.getByText("Thread", { exact: true })).toBeInTheDocument();
+          expect(row.queryByText("Agent", { exact: true })).not.toBeInTheDocument();
+        }
+      }
+    },
+  );
+
+  it("appends Cmd+K federation results and inserts a remote Agent thread link", async () => {
     const currentThread: NavigationThreadSummary = {
       id: "thread-current",
       title: "Current thread",
@@ -5983,6 +6062,12 @@ describe("Composer", () => {
       source: "codex",
       linkedDirectories: [],
       inbox: { inInbox: false },
+      agent: {
+        name: "Remote fix",
+        instructionLineCount: 0,
+        instructionsTooLong: false,
+        updatedAt: 1,
+      },
       federation: {
         ref: buildFederatedThreadRef({
           backend: "codex",
@@ -6036,6 +6121,8 @@ describe("Composer", () => {
       expect.any(Function),
     );
     expect(within(listbox).getByText("Other instances")).toBeInTheDocument();
+    expect(within(remoteOption).getByText("Agent", { exact: true }))
+      .toBeInTheDocument();
     expect(within(remoteOption).getByLabelText("Runs on Laptop"))
       .toBeInTheDocument();
     fireEvent.click(remoteOption);
@@ -16872,6 +16959,64 @@ describe("Composer", () => {
     });
   });
 
+  async function checkComposerReviewTerminal(terminalBeforeResponse: boolean) {
+    let emit!: (event: AgentEvent) => void;
+    const reviewStart = Promise.withResolvers<{
+      backend: "codex"; threadId: string; reviewThreadId: string; turnId: string;
+    }>();
+    const startReview = vi.fn(() => reviewStart.promise);
+    const view = render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: (listener) => { emit = listener; return () => undefined; },
+          startReview,
+          startTurn: vi.fn(),
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1", title: "Review thread", titleSource: "explicit", source: "codex",
+          linkedDirectories: [], inbox: { inInbox: false },
+        }}
+      />
+    );
+    const reply = () => reviewStart.resolve({
+      backend: "codex", threadId: "thread-1", reviewThreadId: "thread-1", turnId: "outer",
+    });
+    try {
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/review main" } });
+      await clickButton("Send");
+      expect(startReview).toHaveBeenCalledTimes(1);
+      if (!terminalBeforeResponse) await act(async () => reply());
+      await act(async () => emit({ backend: "codex", notification: { method: "turn/started", params: {
+        threadId: "thread-1", turnId: "inner", turn: { id: "inner", status: "in_progress" },
+      } } }));
+      expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+
+      await act(async () => emit({ backend: "codex", relatedReviewTurnId: "outer", notification: {
+        method: "turn/completed", params: {
+          threadId: "thread-1", turnId: "inner", turn: { id: "inner", status: "completed", output: [] },
+        },
+      } }));
+      if (terminalBeforeResponse) await act(async () => reply());
+      expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Queue" })).not.toBeInTheDocument();
+    } finally {
+      view.unmount();
+    }
+  }
+
+  it("does not resurrect an inline review when its start response follows the inner terminal", async () => {
+    await checkComposerReviewTerminal(true);
+  });
+
+  it("settles Composer for either ordering of the correlated terminal and start response", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), checkComposerReviewTerminal), {
+      examples: [[true], [false]],
+      numRuns: 2,
+    });
+  });
+
   it("does not open the review picker for backends without review support", async () => {
     const kimiBackend = backendSummary("acp:kimi" as BackendSummary["kind"]);
     const startReview = vi.fn();
@@ -20219,7 +20364,7 @@ describe("Composer", () => {
     });
   });
 
-  it("requires confirmation before switching a thread from Default Access to Full Access", async () => {
+  it.each(["codex", "acp:antigravity"] as const)("requires confirmation before switching a %s thread from Default Access to Full Access", async (provider) => {
     const onSetExecutionMode = vi.fn(async () => undefined);
     const onDismissFullAccessRiskWarning = vi.fn(async () => undefined);
 
@@ -20227,7 +20372,7 @@ describe("Composer", () => {
       <Composer
         backends={[
           {
-            ...backendSummary("codex"),
+            ...backendSummary(provider),
             executionModes: [
               {
                 mode: "default",
@@ -20251,7 +20396,7 @@ describe("Composer", () => {
           id: "thread-1",
           title: "Risky switch",
           titleSource: "explicit",
-          source: "codex",
+          source: provider,
           executionMode: "default",
           linkedDirectories: [],
           inbox: { inInbox: false },

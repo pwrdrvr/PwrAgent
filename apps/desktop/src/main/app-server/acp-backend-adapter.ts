@@ -52,6 +52,8 @@ import {
   type AcpPromptContentBlock,
 } from "../acp/acp-client";
 import type { AcpProviderStatus } from "../acp/acp-provider-status";
+import { readAntigravityUsage } from "../acp/antigravity-usage.js";
+import { pwragentToolSkipsAgentApproval } from "./acp-host-tool-approval";
 import { PlanLimitStore } from "./plan-limit-store";
 import {
   MAX_TURN_INPUT_ATTACHMENT_BYTES,
@@ -102,7 +104,12 @@ import {
   acpRuntimeSupportsSessionHistoryReplay,
   acpRuntimeSupportsSessionLoad,
 } from "../acp/acp-runtime-capabilities";
-import type { AcpSessionInventoryGroup, AcpSessionMetadata, AcpSessionStorage } from "@pwragent/owner-core/acp-storage";
+import {
+  acpSessionExecutionMode,
+  type AcpSessionInventoryGroup,
+  type AcpSessionMetadata,
+  type AcpSessionStorage,
+} from "@pwragent/owner-core/acp-storage";
 import {
   AcpSessionReplayNormalizer,
   acpSessionReplayNormalizerOptions,
@@ -159,6 +166,22 @@ export { ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR, acpSessionHasConversationHistory };
 const acpBackendAdapterLog = getMainLogger("pwragent:acp-backend-adapter");
 const ACP_PROVIDER_STATUS_CACHE_TTL_MS = 60_000;
 const ACP_CLOSE_TIMEOUT_MS = 5_000;
+const ANTIGRAVITY_FULL_ACCESS_FLAG = "--dangerously-skip-permissions";
+const ANTIGRAVITY_FULL_ACCESS_SLOT = "antigravity-full-access";
+type AcpClientSlot = AcpBackendId | typeof ANTIGRAVITY_FULL_ACCESS_SLOT;
+
+function acpClientSlot(backend: AcpBackendId, mode: ThreadExecutionMode): AcpClientSlot {
+  return backend === "acp:antigravity" && mode === "full-access" ? ANTIGRAVITY_FULL_ACCESS_SLOT : backend;
+}
+
+function withAntigravityAccess(agent: AcpInstalledAgentRecord, mode: ThreadExecutionMode): AcpInstalledAgentRecord {
+  const descriptor = agent.launchDescriptor;
+  if (agent.backendId !== "acp:antigravity" || !descriptor) return agent;
+  const args = descriptor.args.filter((arg) => arg !== ANTIGRAVITY_FULL_ACCESS_FLAG
+    && !arg.startsWith(`${ANTIGRAVITY_FULL_ACCESS_FLAG}=`));
+  if (mode === "full-access") args.push(ANTIGRAVITY_FULL_ACCESS_FLAG);
+  return { ...agent, launchDescriptor: { ...descriptor, args } };
+}
 
 export type AcpRuntimeClient = Pick<
   AcpAgentClient,
@@ -180,6 +203,7 @@ export type AcpRuntimeClient = Pick<
       AcpAgentClient,
       | "closeIdleSessions"
       | "closeSessionForArchive"
+      | "closeSessionForTransfer"
       | "didSessionLoadReplayHistory"
       | "disconnected"
       | "configureWorkflowBudget"
@@ -340,6 +364,7 @@ export type AcpBackendAdapterOptions = {
   createAcpClient?: AcpClientFactory;
   assertOwnerAdmission?: () => void;
   createAcpTransport?: AcpTransportFactory;
+  readAntigravityUsage?: typeof readAntigravityUsage;
   /**
    * Required so no caller can silently inherit machine-wide discovery.
    * Production passes `createLocalAcpAgentDiscovery(...)`; tests pass a stub.
@@ -399,6 +424,39 @@ function observedAcpSessionHistoryReplay(
   return client.didSessionLoadReplayHistory?.(sessionId);
 }
 
+function acpSteeredUserMessageNotification(params: {
+  threadId: string;
+  turnId: string;
+  update: Record<string, unknown>;
+}): AppServerNotification {
+  const messageId =
+    typeof params.update.messageId === "string" && params.update.messageId.trim()
+      ? params.update.messageId
+      : `user:${params.turnId}:steer`;
+  const text = typeof params.update.prompt === "string" ? params.update.prompt : "";
+  const content = Array.isArray(params.update.parts)
+    ? (params.update.parts as AppServerThreadMessagePart[])
+    : undefined;
+  const createdAt =
+    typeof params.update.createdAt === "number" && Number.isFinite(params.update.createdAt)
+      ? params.update.createdAt
+      : undefined;
+  return {
+    method: "item/completed",
+    params: {
+      threadId: params.threadId,
+      turnId: params.turnId,
+      item: {
+        id: messageId,
+        type: "userMessage",
+        text,
+        ...(content?.length ? { content } : {}),
+        ...(createdAt !== undefined ? { createdAt } : {}),
+      },
+    },
+  };
+}
+
 export function readKimiYoloExecutionModeFromText(
   text: string,
 ): ThreadExecutionMode | undefined {
@@ -439,6 +497,8 @@ function liveToolNotificationFingerprint(
   }
   const data = asPlainRecord(item.data);
   const output = readNonEmptyString(data, "output") ?? "";
+  const fileDiff = asPlainRecord(item.fileDiff);
+  const diff = typeof fileDiff?.diff === "string" ? fileDiff.diff : undefined;
   return JSON.stringify({
     method: notification.method,
     type: item.type,
@@ -448,6 +508,9 @@ function liveToolNotificationFingerprint(
     commandActions: item.commandActions,
     outputHash: hashString(output),
     outputLength: output.length,
+    title: item.title,
+    path: item.path,
+    fileDiff: fileDiff && { ...fileDiff, diff: diff && hashString(diff), diffLength: diff?.length },
   });
 }
 
@@ -658,13 +721,16 @@ function effectiveAcpAgentCapabilities(
     ...configured,
     // PwrAgent owns managed review. Older discovery records can have a stale value.
     managedReview: catalog.managedReview,
-    // The extension is downstream-only. Ignore the unconditional steerTurn
-    // value persisted by older catalog/discovery records for vendor Grok.
-    steerTurn: agent.registryId === "grok"
-      && (isPwrAgentOwnedGrokRuntime(agent)
-        || isPwrAgentGrokBuildVersion(
-          agent.runtimeCapabilities?.agentInfo?.version ?? agent.version,
-        )),
+    // Grok's steering extension is downstream-only. Ignore the unconditional
+    // steerTurn value persisted by older catalog/discovery records for vendor
+    // Grok. Antigravity steers natively through overlapping session/prompt.
+    steerTurn:
+      agent.registryId === "antigravity"
+      || (agent.registryId === "grok"
+        && (isPwrAgentOwnedGrokRuntime(agent)
+          || isPwrAgentGrokBuildVersion(
+            agent.runtimeCapabilities?.agentInfo?.version ?? agent.version,
+          ))),
     liveWorkspaceHandoff:
       configured.liveWorkspaceHandoff ||
       agent.runtimeCapabilities?.agentCapabilities?.loadSession === true,
@@ -707,7 +773,7 @@ function buildAcpExecutionModes(
   // session-wide approval policy via slash command; the registry treats them
   // identically at this layer (the per-agent slash command text + response
   // parsing lives in backend-registry.ts).
-  if (agent.registryId !== "kimi" && agent.registryId !== "grok") {
+  if (agent.registryId !== "kimi" && agent.registryId !== "grok" && agent.registryId !== "antigravity") {
     return [];
   }
   // If the agent advertises its OWN runtime "mode" selector (kimi surfaces
@@ -718,9 +784,9 @@ function buildAcpExecutionModes(
   // drive (kimi `/yolo`) is rejected by current kimi, failing the launch.
   // Grok's native modes control planning. Only its explicit permission_mode
   // config can replace the slash-driven permission control.
-  if (agent.registryId === "grok"
+  if (agent.registryId !== "antigravity" && (agent.registryId === "grok"
     ? (findAcpPermissionModeConfigOption(agent.runtimeCapabilities)?.values.length ?? 0) >= 2
-    : acpAdvertisesRuntimeModeSelector(agent.runtimeCapabilities)) {
+    : acpAdvertisesRuntimeModeSelector(agent.runtimeCapabilities))) {
     return [];
   }
   return [
@@ -1235,7 +1301,11 @@ export class AcpBackendAdapter {
     backend: AcpBackendId,
     request: AppServerPendingRequestNotification,
   ) => Promise<unknown>;
-  private readonly acpClients = new Map<AcpBackendId, AcpClientEntry>();
+  private readonly acpClients = new Map<AcpClientSlot, AcpClientEntry>();
+  // Also records the target of an unconfirmed load. A failed load can have
+  // opened a worker, so the target must be released before any other load.
+  private readonly antigravitySessionOwners = new Map<string, AcpClientEntry>();
+  private readonly antigravityTransfers = new Set<string>();
   // Includes clients still initializing and clients whose disposal failed.
   private readonly ownedAcpClients = new Map<AcpClientEntry, AcpBackendId>();
   private readonly ephemeralRuns = new Set<AcpEphemeralRun>();
@@ -1254,7 +1324,7 @@ export class AcpBackendAdapter {
     Set<AcpClientEntry>
   >();
   private readonly acpClientResolutions = new Map<
-    AcpBackendId,
+    AcpClientSlot,
     Promise<AcpRuntimeClient>
   >();
   private readonly liveToolUpdateResolver = new AcpLiveToolUpdateResolver();
@@ -1267,6 +1337,8 @@ export class AcpBackendAdapter {
   private readonly unsubscribePlanLimits: () => void;
   private readonly providerStatusRefreshAttempts = new Map<AcpBackendId, number>();
   private readonly providerStatusRefreshes = new Map<AcpBackendId, Promise<void>>();
+  private antigravityUsageSelection?: { identity: string; cancellation: AbortController };
+  private readonly antigravityUsageProbes = new Set<Promise<AcpProviderStatus | undefined>>();
   private readonly grokUpdateChecker?: typeof checkGrokCliUpdate;
   private readonly grokUpdateRefreshes = new Map<AcpBackendId, Promise<void>>();
   private readonly runtimeCapabilityProbe?: AcpRuntimeCapabilityProbe;
@@ -1359,7 +1431,7 @@ export class AcpBackendAdapter {
     };
   }
 
-  async describeInstalledBackends(): Promise<BackendSummary[]> {
+  async describeInstalledBackends(refreshAntigravityQuota = false): Promise<BackendSummary[]> {
     const installedAgents = await this.listAvailableAgents();
     const enabledAgents = installedAgents
       .filter((agent) =>
@@ -1367,15 +1439,21 @@ export class AcpBackendAdapter {
           ? this.isAcpAgentEnabled(agent.registryId)
           : true,
       );
+    if (!enabledAgents.some((agent) => agent.registryId === "antigravity")) {
+      this.invalidateAntigravityQuota();
+    }
     return enabledAgents.map((agent) => {
       const summary = describeInstalledAcpBackend(agent);
-      if (agent.registryId !== "grok" || !summary.available) {
+      if (agent.registryId === "antigravity") {
+        this.updateAntigravityQuotaSelection(agent, summary.available, refreshAntigravityQuota);
+      } else if (agent.registryId === "grok" && summary.available) {
+        this.refreshGrokProviderStatusInBackground(agent.backendId);
+      } else {
         return summary;
       }
       // Backend discovery is also used by launchpad and messaging flows.
-      // Merge only cached decoration here; vendor billing must never delay it.
+      // Merge only cached decoration here; provider quota reads must never delay it.
       const providerStatus = this.providerStatuses.get(agent.backendId);
-      this.refreshProviderStatusInBackground(agent.backendId);
       return providerStatus
         ? {
             ...summary,
@@ -1468,11 +1546,75 @@ export class AcpBackendAdapter {
     this.grokUpdateRefreshes.set(agent.backendId, refresh);
   }
 
-  private refreshProviderStatusInBackground(backend: AcpBackendId): void {
-    const clientPromise = this.acpClients.get(backend)?.promise;
+  private refreshGrokProviderStatusInBackground(backend: AcpBackendId): void {
+    const owner = this.acpClients.get(backend);
+    if (!owner) return;
+    const isCurrent = () => this.acpClients.get(backend) === owner;
+    this.refreshProviderStatusInBackground(backend, async () => {
+      const client = await owner.promise;
+      if (this.closed || !isCurrent()) return undefined;
+      return await client.readProviderStatus?.();
+    }, isCurrent);
+  }
+
+  private updateAntigravityQuotaSelection(
+    agent: AcpInstalledAgentRecord,
+    available: boolean,
+    refresh: boolean,
+  ): void {
+    if (this.closed) return;
+    const selected = recoverLegacyAntigravitySelection(agent);
+    const launch = selected.launchDescriptor;
+    if (!available || !launch || !this.isRuntimeSelectionCurrent(agent)) {
+      this.invalidateAntigravityQuota();
+      return;
+    }
+    const identity = acpAgentLaunchIdentity(selected);
+    if (this.antigravityUsageSelection?.identity !== identity) {
+      this.invalidateAntigravityQuota();
+      this.antigravityUsageSelection = { identity, cancellation: new AbortController() };
+    }
+    if (!refresh) return;
+    const { signal } = this.antigravityUsageSelection.cancellation;
+    this.refreshProviderStatusInBackground(agent.backendId,
+      () => this.probeAntigravityQuota(launch, signal),
+      () => !signal.aborted);
+  }
+
+  private invalidateAntigravityQuota(): void {
+    if (!this.antigravityUsageSelection) return;
+    this.antigravityUsageSelection.cancellation.abort();
+    this.antigravityUsageSelection = undefined;
+    this.providerStatusRefreshAttempts.delete("acp:antigravity");
+    this.providerStatusRefreshes.delete("acp:antigravity");
+    this.providerStatuses.delete("acp:antigravity");
+    this.planLimits.forget("acp:antigravity");
+  }
+
+  private async probeAntigravityQuota(
+    launch: AcpLaunchDescriptor,
+    signal: AbortSignal,
+  ): Promise<AcpProviderStatus | undefined> {
+    const probe = Promise.resolve().then(() => {
+      if (signal.aborted) return undefined;
+      this.options.assertOwnerAdmission?.();
+      return (this.options.readAntigravityUsage ?? readAntigravityUsage)(launch, signal);
+    });
+    this.antigravityUsageProbes.add(probe);
+    try {
+      return await probe;
+    } finally {
+      this.antigravityUsageProbes.delete(probe);
+    }
+  }
+
+  private refreshProviderStatusInBackground(
+    backend: AcpBackendId,
+    read: () => Promise<AcpProviderStatus | undefined>,
+    isCurrent: () => boolean,
+  ): void {
     if (
       this.closed
-      || !clientPromise
       || this.providerStatusRefreshes.has(backend)
     ) {
       return;
@@ -1486,7 +1628,7 @@ export class AcpBackendAdapter {
       return;
     }
     this.providerStatusRefreshAttempts.set(backend, now);
-    const refreshPromise = this.refreshProviderStatus(backend, clientPromise);
+    const refreshPromise = this.refreshProviderStatus(backend, read, isCurrent);
     this.providerStatusRefreshes.set(backend, refreshPromise);
     void refreshPromise.finally(() => {
       if (this.providerStatusRefreshes.get(backend) === refreshPromise) {
@@ -1497,14 +1639,14 @@ export class AcpBackendAdapter {
 
   private async refreshProviderStatus(
     backend: AcpBackendId,
-    clientPromise: Promise<AcpRuntimeClient>,
+    read: () => Promise<AcpProviderStatus | undefined>,
+    isCurrent: () => boolean,
   ): Promise<void> {
     try {
-      const client = await clientPromise;
-      // Reads run one at a time, so each answer is newer than the last.
+      // Reads for the current selection run one at a time.
       let since = this.planLimits.mark(backend);
-      const providerStatus = await client.readProviderStatus?.();
-      if (!providerStatus || this.closed) {
+      const providerStatus = await read();
+      if (!providerStatus || this.closed || !isCurrent()) {
         return;
       }
       this.providerStatuses.set(backend, { account: providerStatus.account });
@@ -1563,6 +1705,7 @@ export class AcpBackendAdapter {
     for (const registryId of registryIds) {
       this.invalidatedProviderRegistryIds.add(registryId);
     }
+    if (registryIds.includes("antigravity")) this.invalidateAntigravityQuota();
   }
 
   async archiveCleanupBackendIds(): Promise<AcpBackendId[]> {
@@ -1626,7 +1769,10 @@ export class AcpBackendAdapter {
     backendId: AcpBackendId,
     sessionId: string,
   ): AcpSessionMetadata | undefined {
-    return this.acpSessionStore?.getSession(backendId, sessionId);
+    const session = this.acpSessionStore?.getSession(backendId, sessionId);
+    if (!session) return undefined;
+    const executionMode = acpSessionExecutionMode(session);
+    return executionMode === session.executionMode ? session : { ...session, executionMode };
   }
 
   deleteStoredSession(backendId: AcpBackendId, sessionId: string): void {
@@ -1635,10 +1781,32 @@ export class AcpBackendAdapter {
     }
     this.acpRolloutStore.deleteSession(backendId, sessionId);
     this.acpSessionStore.deleteSession(backendId, sessionId);
+    if (backendId === "acp:antigravity") this.antigravitySessionOwners.delete(sessionId);
   }
 
   upsertSession(session: AcpSessionMetadata): void {
     this.acpSessionStore?.upsertSession?.(session);
+  }
+
+  async moveAntigravitySession(sessionId: string, executionMode: ThreadExecutionMode): Promise<void> {
+    const backend = "acp:antigravity";
+    await this.environmentClientLocks.run(JSON.stringify([backend, sessionId]), async () => {
+      const session = this.getSession(backend, sessionId);
+      if (!session) throw new Error(`ACP session not found: ${sessionId}`);
+      if (session.archivedAt) throw new Error("Restore the Antigravity thread before changing its access.");
+      const target = await this.getAntigravityClientForSessionLocked(session, executionMode);
+      if (target.supportsSessionLoad?.() !== true) {
+        throw new Error("This Antigravity runtime cannot load the session in another process.");
+      }
+      await target.loadSession(this.getSession(backend, sessionId) ?? session);
+      // Load can refresh native mode and model metadata. Apply access only
+      // after the new process has opened the same session.
+      this.upsertSession({
+        ...(this.getSession(backend, sessionId) ?? session),
+        executionMode,
+        antigravityFullAccessConfirmed: executionMode === "full-access" ? true : undefined,
+      });
+    });
   }
 
   worktreeArchiveBlockedReason(backend: AcpBackendId, sessionId: string): string | undefined {
@@ -1704,7 +1872,7 @@ export class AcpBackendAdapter {
     if (session.requiresAgentSessionRebind) throw new Error("The original ACP session identity is unavailable.");
     const key = JSON.stringify([backend, sessionId]);
     const previous = this.environmentClients.get(key);
-    const agent = await this.resolveInstalledAgent(backend);
+    const agent = withAntigravityAccess(await this.resolveInstalledAgent(backend), session.executionMode);
     if (!agent.launchDescriptor) throw new Error(`ACP backend ${backend} has no launch descriptor`);
     const configuredAgent = {
       ...agent,
@@ -1719,6 +1887,7 @@ export class AcpBackendAdapter {
         await client.initialize();
         if (this.closed) throw new Error("ACP backend adapter is closed");
         if (client.supportsArchivedSessionRestore?.() !== true) throw new Error("This ACP provider cannot reload the archived session.");
+        if (backend === "acp:antigravity") await this.claimAntigravitySession(sessionId, entry);
         await client.ensureSession(session);
         if (this.closed) throw new Error("ACP backend adapter is closed");
         return client;
@@ -1815,8 +1984,30 @@ export class AcpBackendAdapter {
     backend: AcpBackendId,
     sessionId: string,
   ): Promise<AppServerThreadReplay> {
+    if (backend === "acp:antigravity") {
+      return await this.environmentClientLocks.run(JSON.stringify([backend, sessionId]), async () => {
+        const session = this.getSession(backend, sessionId);
+        if (!session || session.archivedAt) return await this.readReplayFromClient(backend, sessionId);
+        try {
+          const owner = this.findSessionOwner(backend, sessionId);
+          const client = await this.getAntigravityClientForSessionLocked(session);
+          return await this.readReplayFromClient(backend, sessionId, client, owner?.client !== client);
+        } catch (error) {
+          return this.loadFailureReplayOrRolloutFallback({ backend, error, session });
+        }
+      });
+    }
+    return await this.readReplayFromClient(backend, sessionId);
+  }
+
+  private async readReplayFromClient(
+    backend: AcpBackendId,
+    sessionId: string,
+    selectedClient?: AcpRuntimeClient,
+    cold = false,
+  ): Promise<AppServerThreadReplay> {
     const session = this.getSession(backend, sessionId);
-    const cachedClient = await (
+    const cachedClient = selectedClient ?? await (
       this.findSessionOwner(backend, sessionId) ?? this.acpClients.get(backend)
     )
       ?.promise.catch(() => undefined);
@@ -1829,7 +2020,7 @@ export class AcpBackendAdapter {
       const replay = cachedClient.readReplay(sessionId);
       if (
         session &&
-        acpSessionHasConversationHistory(session) &&
+        (cold || acpSessionHasConversationHistory(session)) &&
         replay.entries.length === 0 &&
         acpRuntimeSupportsSessionLoad(
           this.getInstalledAgent(backend)?.runtimeCapabilities,
@@ -1898,7 +2089,7 @@ export class AcpBackendAdapter {
     ) {
       return this.readRolloutReplay(session, "rollout-session-load-unsupported");
     }
-    const client = await this.getClient(backend);
+    const client = await this.getClient(backend, session.executionMode);
     try {
       const replay = await client.loadSession(session);
       void client.refreshSession(session).catch((error) => {
@@ -1984,10 +2175,12 @@ export class AcpBackendAdapter {
     backend: AcpBackendId;
     content: AcpPromptContentBlock[];
     interjectionId: string;
+    parts?: AppServerThreadMessagePart[];
+    prompt?: string;
     sessionId: string;
     text: string;
   }): Promise<{ delivery: "currentTurn" | "nextTurn" }> {
-    if (params.backend !== "acp:grok") {
+    if (params.backend !== "acp:grok" && params.backend !== "acp:antigravity") {
       throw new Error(`ACP backend ${params.backend} does not support turn steering`);
     }
     const session = this.getSession(params.backend, params.sessionId);
@@ -1995,18 +2188,25 @@ export class AcpBackendAdapter {
       throw new Error(`ACP session not found: ${params.sessionId}`);
     }
     if (session.status !== "active") {
-      throw new Error("The Grok turn finished before steering was accepted");
+      const label = params.backend === "acp:antigravity" ? "Antigravity" : "Grok";
+      throw new Error(`The ${label} turn finished before steering was accepted`);
     }
     const client = await this.getClientForSession(
       params.backend,
       params.sessionId,
     );
     if (!client.steerSession || client.supportsTurnSteering?.() !== true) {
-      throw new Error("Installed Grok Build does not support turn steering over ACP");
+      throw new Error(
+        params.backend === "acp:antigravity"
+          ? "Installed Antigravity CLI does not support turn steering over ACP"
+          : "Installed Grok Build does not support turn steering over ACP",
+      );
     }
     return await client.steerSession({
       sessionId: params.sessionId,
       text: params.text,
+      ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
+      ...(params.parts?.length ? { parts: params.parts } : {}),
       content: params.content,
       interjectionId: params.interjectionId,
     });
@@ -2057,22 +2257,23 @@ export class AcpBackendAdapter {
     return session;
   }
 
-  async getClient(backend: AcpBackendId): Promise<AcpRuntimeClient> {
+  async getClient(backend: AcpBackendId, mode: ThreadExecutionMode = "default"): Promise<AcpRuntimeClient> {
     if (this.closed) {
       throw new Error("ACP backend adapter is closed");
     }
-    const resolving = this.acpClientResolutions.get(backend);
+    const slot = acpClientSlot(backend, mode);
+    const resolving = this.acpClientResolutions.get(slot);
     if (resolving) {
       return await resolving;
     }
 
-    const resolution = this.resolveClient(backend);
-    this.acpClientResolutions.set(backend, resolution);
+    const resolution = this.resolveClient(backend, mode, slot);
+    this.acpClientResolutions.set(slot, resolution);
     try {
       return await resolution;
     } finally {
-      if (this.acpClientResolutions.get(backend) === resolution) {
-        this.acpClientResolutions.delete(backend);
+      if (this.acpClientResolutions.get(slot) === resolution) {
+        this.acpClientResolutions.delete(slot);
       }
     }
   }
@@ -2093,6 +2294,7 @@ export class AcpBackendAdapter {
     backend: AcpBackendId,
     sessionId: string,
     shellEnvironment?: Record<string, string>,
+    executionMode?: ThreadExecutionMode,
   ): Promise<void> {
     if (this.closed) {
       throw new Error("ACP backend adapter is closed");
@@ -2109,7 +2311,7 @@ export class AcpBackendAdapter {
     if (!session) {
       throw new Error(`ACP session not found: ${sessionId}`);
     }
-    const agent = await this.resolveInstalledAgent(backend);
+    const agent = withAntigravityAccess(await this.resolveInstalledAgent(backend), executionMode ?? session.executionMode);
     if (!agent.launchDescriptor) {
       throw new Error(`ACP backend ${backend} has no launch descriptor`);
     }
@@ -2120,13 +2322,14 @@ export class AcpBackendAdapter {
     const launchIdentity = acpAgentLaunchIdentity(configuredAgent);
     const environmentUnchanged = previous?.environmentKey === environmentKey;
     const disconnected = previous?.entry.client.disconnected === true;
-    if (environmentUnchanged && previous.entry.launchIdentity === launchIdentity && !disconnected) {
+    if (environmentUnchanged && previous.entry.launchIdentity === launchIdentity && !disconnected
+      && !previous.entry.disposePromise) {
       return;
     }
-    const owner = previous
-      ? await previous.entry.promise
-      : await this.getClientForSession(backend, sessionId);
-    if (!disconnected && (
+    const owner = backend === "acp:antigravity"
+      ? this.findSessionOwner(backend, sessionId)?.client
+      : previous ? await previous.entry.promise : await this.getClientForSession(backend, sessionId);
+    if (owner && backend !== "acp:antigravity" && !disconnected && (
       session.status === "active"
       || owner.hasActiveTurns?.() === true
       || owner.hasActiveOperations?.() === true
@@ -2138,7 +2341,8 @@ export class AcpBackendAdapter {
       }
       throw new Error("Wait for the ACP operation to finish before changing its environment.");
     }
-    if (!(owner.supportsSessionLoad?.() ?? acpRuntimeSupportsSessionLoad(agent.runtimeCapabilities))) {
+    if (backend !== "acp:antigravity"
+      && !(owner?.supportsSessionLoad?.() ?? acpRuntimeSupportsSessionLoad(agent.runtimeCapabilities))) {
       throw new Error("This ACP provider cannot reload an existing session with a new environment. Clear the environment selection to continue.");
     }
     if (disconnected) await this.disposeAcpClient(previous.entry);
@@ -2157,7 +2361,8 @@ export class AcpBackendAdapter {
         if (client.supportsSessionLoad?.() === false) {
           throw new Error("This ACP provider cannot reload an existing session with a new environment.");
         }
-        await client.ensureSession(session);
+        if (backend === "acp:antigravity") await this.claimAntigravitySession(sessionId, entry);
+        await client.ensureSession(this.getSession(backend, sessionId) ?? session);
         if (this.closed) throw new Error("ACP backend adapter is closed");
         return client;
       })();
@@ -2189,7 +2394,9 @@ export class AcpBackendAdapter {
     if (this.closed) return;
     const owners = new Map<AcpClientEntry, AcpBackendId>();
     for (const { backend, entry } of this.environmentClients.values()) owners.set(entry, backend);
-    for (const [backend, entry] of this.acpClients) owners.set(entry, backend);
+    for (const [slot, entry] of this.acpClients) {
+      owners.set(entry, slot === ANTIGRAVITY_FULL_ACCESS_SLOT ? "acp:antigravity" : slot);
+    }
     for (const [backend, entries] of this.retainedAcpClients) {
       for (const entry of entries) owners.set(entry, backend);
     }
@@ -2236,6 +2443,13 @@ export class AcpBackendAdapter {
     sessionId: string,
   ): Promise<AcpRuntimeClient> {
     const key = JSON.stringify([backend, sessionId]);
+    if (backend === "acp:antigravity") {
+      return await this.environmentClientLocks.run(key, async () => {
+        const session = this.getSession(backend, sessionId);
+        if (!session) throw new Error(`ACP session not found: ${sessionId}`);
+        return await this.getAntigravityClientForSessionLocked(session);
+      });
+    }
     if (this.environmentClients.has(key)) {
       return await this.environmentClientLocks.run(key, async () => {
         if (this.closed) {
@@ -2274,18 +2488,66 @@ export class AcpBackendAdapter {
     return owner && !owner.client.disconnected ? await owner.promise : current;
   }
 
-  private async resolveClient(backend: AcpBackendId): Promise<AcpRuntimeClient> {
-    const agent = await this.resolveInstalledAgent(backend);
+  private async getAntigravityClientForSessionLocked(
+    session: AcpSessionMetadata,
+    executionMode = session.executionMode,
+  ): Promise<AcpRuntimeClient> {
+    const { backendId: backend, sessionId } = session;
+    const key = JSON.stringify([backend, sessionId]);
+    const environment = this.environmentClients.get(key);
+    if (environment) {
+      await this.prepareSessionEnvironmentLocked(backend, sessionId, environment.shellEnvironment, executionMode);
+      const entry = this.environmentClients.get(key)!.entry;
+      await this.claimAntigravitySession(sessionId, entry);
+      return await entry.promise;
+    }
+    const client = await this.getClient(backend, executionMode);
+    const entry = this.acpClients.get(acpClientSlot(backend, executionMode));
+    if (!entry || entry.client !== client || entry.disposePromise) {
+      throw new Error("Antigravity's process changed while opening the session. Try again.");
+    }
+    await this.claimAntigravitySession(sessionId, entry);
+    return client;
+  }
+
+  private async claimAntigravitySession(sessionId: string, target: AcpClientEntry): Promise<void> {
+    const source = this.findSessionOwner("acp:antigravity", sessionId);
+    if (source === target) return;
+    if (this.closed) throw new Error("ACP backend adapter is closed");
+    this.antigravityTransfers.add(sessionId);
+    try {
+      if (source && this.ownedAcpClients.has(source)) {
+        if (target.client.supportsSessionLoad?.() !== true) {
+          throw new Error("This Antigravity runtime cannot load the session in another process.");
+        }
+        if (source.disposePromise || source.client.disconnected) {
+          await this.disposeAcpClient(source);
+        } else {
+          if (!source.client.closeSessionForTransfer) {
+            throw new Error("This Antigravity runtime cannot release the session for transfer.");
+          }
+          await source.client.closeSessionForTransfer(sessionId);
+        }
+      }
+      if (this.closed) throw new Error("ACP backend adapter is closed");
+      this.antigravitySessionOwners.set(sessionId, target);
+    } finally {
+      this.antigravityTransfers.delete(sessionId);
+    }
+  }
+
+  private async resolveClient(backend: AcpBackendId, mode: ThreadExecutionMode, slot: AcpClientSlot): Promise<AcpRuntimeClient> {
+    const agent = withAntigravityAccess(await this.resolveInstalledAgent(backend), mode);
     if (this.closed) {
       throw new Error("ACP backend adapter is closed");
     }
     const launchIdentity = acpAgentLaunchIdentity(agent);
-    let cached = this.acpClients.get(backend);
+    let cached = this.acpClients.get(slot);
     if (cached?.client.disconnected) {
       // Keep the dead owner fenced until its process tree has been reaped.
       await this.disposeAcpClient(cached);
       if (this.closed) throw new Error("ACP backend adapter is closed");
-      this.acpClients.delete(backend);
+      this.acpClients.delete(slot);
       cached = undefined;
     }
     if (cached?.launchIdentity === launchIdentity) {
@@ -2301,7 +2563,7 @@ export class AcpBackendAdapter {
       ) {
         return await cached.promise;
       }
-      this.acpClients.delete(backend);
+      this.acpClients.delete(slot);
       const supportsSessionLoad =
         cached.client.supportsSessionLoad?.() ?? cached.supportsSessionLoad;
       if (
@@ -2337,10 +2599,10 @@ export class AcpBackendAdapter {
       return client;
     })();
     this.ownedAcpClients.set(entry, backend);
-    this.acpClients.set(backend, entry);
+    this.acpClients.set(slot, entry);
     entry.promise.catch(() => {
-      if (this.acpClients.get(backend) === entry && !entry.client.disconnected) {
-        this.acpClients.delete(backend);
+      if (this.acpClients.get(slot) === entry && !entry.client.disconnected) {
+        this.acpClients.delete(slot);
       }
     });
     return await entry.promise;
@@ -2557,12 +2819,7 @@ export class AcpBackendAdapter {
       throw new Error(`ACP backend is not installed: ${backend}`);
     }
     if (this.invalidatedProviderRegistryIds.has(agent.registryId)) {
-      const currentFingerprint =
-        this.resolveProviderDependencyFingerprint?.(agent.registryId);
-      if (
-        !currentFingerprint
-        || agent.configDependencyFingerprint !== currentFingerprint
-      ) {
+      if (!this.isRuntimeSelectionCurrent(agent)) {
         throw new Error(
           `ACP provider configuration changed for ${backend}. Refresh this provider in Settings before starting new work.`,
         );
@@ -2576,6 +2833,12 @@ export class AcpBackendAdapter {
       throw new Error(`ACP backend authentication required: ${backend}`);
     }
     return recoverLegacyAntigravitySelection(agent);
+  }
+
+  private isRuntimeSelectionCurrent(agent: AcpInstalledAgentRecord): boolean {
+    if (!this.invalidatedProviderRegistryIds.has(agent.registryId)) return true;
+    const fingerprint = this.resolveProviderDependencyFingerprint?.(agent.registryId);
+    return !!fingerprint && agent.configDependencyFingerprint === fingerprint;
   }
 
   /**
@@ -2945,10 +3208,13 @@ export class AcpBackendAdapter {
       return await this.closePromise;
     }
     this.closed = true;
+    const quotaProbes = [...this.antigravityUsageProbes];
+    this.invalidateAntigravityQuota();
     const acpClients = [...this.ownedAcpClients].map(
       ([entry, backend]): [AcpBackendId, AcpClientEntry] => [backend, entry],
     );
     this.acpClients.clear();
+    this.antigravitySessionOwners.clear();
     this.environmentClients.clear();
     this.retainedAcpClients.clear();
     this.acpClientResolutions.clear();
@@ -2965,12 +3231,13 @@ export class AcpBackendAdapter {
     this.liveTurnUsage.clear();
     this.liveContextWindows.clear();
     this.localAgentSnapshot = [];
-    this.closePromise = this.closeResources(acpClients);
+    this.closePromise = this.closeResources(acpClients, quotaProbes);
     return await this.closePromise;
   }
 
   private async closeResources(
     acpClients: Array<[AcpBackendId, AcpClientEntry]>,
+    quotaProbes: Array<Promise<AcpProviderStatus | undefined>>,
   ): Promise<void> {
     const resources = [
       ...acpClients.map(async ([backend, entry]) => {
@@ -2992,6 +3259,7 @@ export class AcpBackendAdapter {
         if (drained.status === "rejected") throw drained.reason;
         if (drained.value.error !== undefined) throw drained.value.error;
       }),
+      ...quotaProbes,
       Promise.resolve().then(() => this.agentToolMcpServer?.close()),
     ];
     const cleanup = Promise.allSettled(resources).then((results) => {
@@ -3003,7 +3271,8 @@ export class AcpBackendAdapter {
             resource:
               index < acpClients.length
                 ? acpClients[index]?.[0]
-                : index < resources.length - 1 ? "ephemeral" : "agent-tool-mcp",
+                : index < resources.length - quotaProbes.length - 1 ? "ephemeral"
+                  : index < resources.length - 1 ? "antigravity-quota" : "agent-tool-mcp",
             error:
               result.reason instanceof Error
                 ? result.reason.message
@@ -3036,7 +3305,13 @@ export class AcpBackendAdapter {
   private disposeAcpClient(entry: AcpClientEntry): Promise<void> {
     entry.disposePromise ??= Promise.resolve().then(async () => {
       await entry.client.dispose();
+      const backend = this.ownedAcpClients.get(entry);
       this.ownedAcpClients.delete(entry);
+      if (backend === "acp:antigravity") {
+        for (const [sessionId, owner] of this.antigravitySessionOwners) {
+          if (owner === entry) this.antigravitySessionOwners.delete(sessionId);
+        }
+      }
     }).catch((error: unknown) => {
       entry.disposePromise = undefined;
       throw error;
@@ -3057,6 +3332,12 @@ export class AcpBackendAdapter {
     backend: AcpBackendId,
     sessionId: string,
   ): AcpClientEntry | undefined {
+    if (backend === "acp:antigravity") {
+      const claimed = this.antigravitySessionOwners.get(sessionId);
+      if (claimed) return claimed;
+      const fullAccess = this.acpClients.get(ANTIGRAVITY_FULL_ACCESS_SLOT);
+      if (fullAccess?.client.ownsSession?.(sessionId) === true) return fullAccess;
+    }
     const environmentClient = this.environmentClients.get(JSON.stringify([backend, sessionId]));
     if (environmentClient) {
       return environmentClient.entry;
@@ -3149,17 +3430,28 @@ export class AcpBackendAdapter {
     if (!this.acpSessionStore?.upsertSession) {
       throw new Error("ACP session store is unavailable");
     }
+    const antigravity = agent.backendId === "acp:antigravity";
+    const fullAccess = antigravity && agent.launchDescriptor.args.includes(ANTIGRAVITY_FULL_ACCESS_FLAG);
     const acpCapture = createProtocolCaptureFromEnv({
       backend: agent.backendId,
-      backendInstance: "default",
+      backendInstance: fullAccess ? "full-access" : "default",
     });
     if (acpCapture) {
       this.captureStores.push(acpCapture.store);
     }
     const readPreference = this.readJobMonitorCreationPreference;
     const observeJobMonitorCatalog = !!readPreference && verifiedJobMonitorCatalogBuild(agent);
-    return new AcpAgentClient({
+    const client = new AcpAgentClient({
       backendId: agent.backendId,
+      ...(antigravity ? {
+        antigravityFullAccess: fullAccess,
+        assertSessionOwner: (sessionId: string) => {
+          const owner = this.antigravitySessionOwners.get(sessionId);
+          if (this.closed || this.antigravityTransfers.has(sessionId) || (owner && owner.client !== client)) {
+            throw new Error("The Antigravity session belongs to a different process. Try again.");
+          }
+        },
+      } : {}),
       agentDisplayName: agent.name,
       initialRuntimeCapabilities: acpRuntimeCapabilitiesForAgent(agent),
       onSessionStartError: (error) => this.recordSessionStartRejection(agent, error),
@@ -3267,6 +3559,10 @@ export class AcpBackendAdapter {
             });
         const toolNotifications = resolvedToolUpdate
           ? acpToolUpdateNotifications({
+              backendId: agent.backendId,
+              cwd: agent.backendId === "acp:antigravity" && resolvedToolUpdate.kind === "edit"
+                ? this.getSession(agent.backendId, sessionId)?.cwd
+                : undefined,
               threadId: sessionId,
               turnId,
               update: resolvedToolUpdate,
@@ -3284,6 +3580,7 @@ export class AcpBackendAdapter {
                 })
                 .flatMap((deferredUpdate) =>
                   acpToolUpdateNotifications({
+                    backendId: agent.backendId,
                     threadId: sessionId,
                     turnId,
                     update: deferredUpdate,
@@ -3368,6 +3665,20 @@ export class AcpBackendAdapter {
               },
             });
           }
+        }
+        if (
+          updateKind === "pwragent_steered_user_prompt"
+          && turnId
+          && !fromSessionLoad
+        ) {
+          await this.emit({
+            backend: agent.backendId,
+            notification: acpSteeredUserMessageNotification({
+              threadId: sessionId,
+              turnId,
+              update,
+            }),
+          });
         }
         if (
           turnId &&
@@ -3664,9 +3975,15 @@ export class AcpBackendAdapter {
               ...(!http ? { memoryOnly: true } : {}),
               ...(http && observeJobMonitorCatalog ? { observeJobMonitorCatalog: true } : {}),
             });
+            const readTool = registration.readTool;
             baseRegistration = {
               servers: [http ? registration.server : buildAgentMemoryStdioServer(registration.server)],
               bindThread: registration.bindThread,
+              ...(readTool ? {
+                hostApprovesToolCall: async (serverName: string, toolName: string) =>
+                  serverName === registration.server.name
+                  && pwragentToolSkipsAgentApproval(await readTool(toolName)),
+              } : {}),
               ...(http && observeJobMonitorCatalog ? {
                 readListedJobMonitorCreation: registration.readListedJobMonitorCreation,
               } : {}),
@@ -3687,5 +4004,6 @@ export class AcpBackendAdapter {
         );
       },
     });
+    return client;
   }
 }

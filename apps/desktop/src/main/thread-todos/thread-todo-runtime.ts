@@ -30,6 +30,7 @@ import {
   threadTodoPlacementParent,
 } from "@pwragent/shared/contracts/thread-todos";
 import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared/contracts/navigation";
+import { resolveThreadTodoStartAccess } from "@pwragent/shared/thread-todo-access";
 import { threadReviewTodo } from "@pwragent/shared/contracts/thread-reviews";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools.js";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
@@ -49,7 +50,6 @@ import {
   resolveThreadTodoStartCwd,
   resolveThreadTodoStartEnvironment,
   resolveThreadTodoStartSpeed,
-  threadTodoSpeedNeedsDestination,
 } from "./thread-todo-dispatch.js";
 import {
   ThreadTodoError,
@@ -387,6 +387,7 @@ export function installThreadTodoRuntime(params: {
       thread: { backend: thread.backend, model: settings.model, reasoningEffort: settings.reasoningEffort },
       ...(Object.keys(threadSpeed).length > 0 ? { threadSpeed } : {}),
       ...(settings.parentThread ? { threadParent: settings.parentThread } : {}),
+      threadExecutionMode: settings.executionMode,
     };
   });
   // An archived thread's cards have nothing left to act on.
@@ -768,22 +769,19 @@ export function createThreadTodoRunners(params: {
       if (!validated.ok) throw new ThreadTodoError("invalid_arguments", validated.message);
       const chosen = { backend: selected.backend, model: validated.model, reasoningEffort: validated.reasoningEffort };
       const sameBackend = chosen.backend === sourceBackend;
-      let executionMode = action.executionMode ?? source.executionMode;
       const inheritedSpeed = sameBackend ? source : undefined;
-      const destination = (!sameBackend && action.executionMode === undefined)
-        || threadTodoSpeedNeedsDestination(speed, inheritedSpeed)
-        ? (await registry.listBackends({ includeUnavailable: true })).backends
-          .find((backend) => backend.kind === chosen.backend)
-        : undefined;
-      if (!sameBackend && action.executionMode === undefined) {
-        if (destination && !destination.executionModes.some((mode) => mode.mode === executionMode && mode.available)) {
-          // An inherited mode must never raise access to make a provider fit.
-          if (!destination.executionModes.some((mode) => mode.mode === "default" && mode.available)) {
-            throw new ThreadTodoError("invalid_arguments", `${destination.label} cannot use the inherited access mode or Default Access.`);
-          }
-          executionMode = "default";
-        }
-      }
+      // Use the same access derivation and catalog as the card.
+      const destination = (await registry.listBackends({ includeUnavailable: true })).backends
+        .find((backend) => backend.kind === chosen.backend);
+      const access = resolveThreadTodoStartAccess({
+        card: action,
+        sourceBackend,
+        sourceExecutionMode: source.executionMode,
+        destination,
+        destinationBackend: chosen.backend,
+      });
+      if (access.status === "refused") throw new ThreadTodoError("invalid_arguments", access.message);
+      const executionMode = access.executionMode;
       const speedSettings = resolveThreadTodoStartSpeed({
         ...(destination ? { destination } : {}),
         ...(catalog ? { catalog } : {}),
@@ -817,6 +815,7 @@ export function createThreadTodoRunners(params: {
         backend: chosen.backend,
         ...(cwd ? { cwd } : {}),
         ...settings,
+        ...(access.acpRuntime ? { acpRuntime: { ...access.acpRuntime, updatedAt: Date.now() } } : {}),
         // The lists draw the card's thread as starting while its worktree
         // and setup run; the thread's own row takes the slot when it lands.
         pendingStart: {

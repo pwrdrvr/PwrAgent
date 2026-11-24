@@ -37,7 +37,7 @@ export type TodoDispatchChoices = {
 type DispatchContext = {
   /** False for the default context, which keeps no choices. */
   provided: boolean;
-  api?: Pick<DesktopApi, "listBackends" | "listModelSettingsRecents" | "listThreadTodoDispatchEnvironments">
+  api?: Pick<DesktopApi, "listBackends" | "listModelSettingsRecents" | "listThreadTodoDispatchEnvironments" | "setThreadTodoAccess">
     & ThreadJumpSearchApi;
   /** Settings → Models → Allow Fast mode, on this window's own machine. */
   localCodexFastAllowed: boolean;

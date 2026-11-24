@@ -1,5 +1,6 @@
 import { IterableMapper } from "@shutterstock/p-map-iterable";
 import { runGitCommand } from "../app-server/git-executable";
+import { prGitSubprocessCaller } from "../diagnostics/git-subprocess-diagnostics";
 
 // All PR consumers share these slots, including filesystem probes, Git ref
 // reads, and SSH config expansion. Timeouts start only after admission.
@@ -15,6 +16,7 @@ let timedOutFileProbes = 0;
 export const PR_METADATA_PRIORITY = { background: 0, page: 1, selected: 2 };
 
 export type PrMetadataDemand = {
+  allowForgeLookup?: false;
   signal?: AbortSignal;
   priority?: () => number;
 };
@@ -78,6 +80,9 @@ async function enqueueProcess<T>(
 ): Promise<T> {
   const signal = demand?.signal;
   signal?.throwIfAborted();
+  // The process mapper drains on its own async chain. Keep the caller that
+  // queued the observation, including when another reader raises its priority.
+  const caller = prGitSubprocessCaller.getStore();
   return await new Promise<T>((resolve, reject) => {
     const onAbort = () => {
       waiting.delete(job);
@@ -91,7 +96,7 @@ async function enqueueProcess<T>(
       }
       try {
         signal?.throwIfAborted();
-        resolve(await run(fileSlot));
+        resolve(await prGitSubprocessCaller.run(caller, run, fileSlot));
       } catch (error) {
         reject(error);
       }

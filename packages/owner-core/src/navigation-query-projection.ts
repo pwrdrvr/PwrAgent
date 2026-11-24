@@ -2,6 +2,7 @@ import { sortSubthreadSummaries } from "@pwragent/shared/subthreads";
 import { threadProviderIdentity } from "@pwragent/shared/provider-picker";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
+import { isDeepStrictEqual } from "node:util";
 import type {
   AppServerBackendKind,
   LinkedDirectorySummary,
@@ -29,7 +30,7 @@ import type {
 } from "@pwragent/shared/contracts/navigation";
 import type { NavigationStarMapSignals } from "@pwragent/shared/navigation-star-map-filters";
 import { STACK_UNSETTLED_REASONS } from "@pwragent/shared/stacks/stack-automation";
-import { readCompactStackMemberships, type StackSummary } from "@pwragent/shared/stacks/stack-status";
+import { MAX_COMPACT_STACK_MEMBERSHIPS, readCompactStackMemberships, type StackSummary } from "@pwragent/shared/stacks/stack-status";
 import {
   buildThreadIdentityKey,
   isNavigationThreadRunning,
@@ -110,10 +111,23 @@ type ProjectionIndex = {
 
 export type NavigationProjectionWork = (stage: "index" | "children", threads: number) => void;
 
+type SnapshotShell = Omit<NavigationQueryIndex, "threads" | "directories" | "stacks" | "inputRequestThreadKeys" | "observedAt">;
+type CertifiedSnapshot = {
+  token: symbol;
+  shell: SnapshotShell;
+  sharedThreads: readonly NavigationThreadSummary[];
+  rowOwners?: readonly string[];
+  projection?: ProjectionIndex;
+  bytes: number;
+  onWork?: NavigationProjectionWork;
+};
+
 // Only detached, deeply frozen snapshots enter this table. A mutable provider
 // array (or a caller reusing its index object after a mutation) never does.
 // The existing index pool owns their lifetime; this is not another index pool.
-const snapshots = new WeakMap<NavigationQueryIndex, { token: symbol; sharedThreads: readonly NavigationThreadSummary[]; rowOwners?: readonly string[]; projection?: ProjectionIndex; bytes: number; onWork?: NavigationProjectionWork }>();
+const snapshots = new WeakMap<NavigationQueryIndex, CertifiedSnapshot>();
+const certifiedCollections = new WeakSet<readonly unknown[]>();
+const certifiedRows = new WeakSet<object>();
 const SNAPSHOT_SET_READ_METHODS = new Set([
   "has", "keys", "values", "entries", "union", "intersection",
   "difference", "symmetricDifference", "isSubsetOf", "isSupersetOf", "isDisjointFrom",
@@ -132,69 +146,124 @@ function freezeSnapshot(value: unknown): boolean {
   return true;
 }
 
+function detachSnapshotRows<T extends object>(rows: T[], key: (row: T) => string, previous?: T[]): T[] | undefined {
+  if (certifiedCollections.has(rows)) return rows;
+  const changed: T[] = [];
+  let previousByKey: Map<string, T> | undefined;
+  const detached = rows.map((row, i) => {
+    if (certifiedRows.has(row)) return row;
+    let prior = previous?.[i];
+    if (previous && (!prior || key(row) !== key(prior))) {
+      // Provider ordering can move one updated row across the whole list.
+      previousByKey ??= new Map(previous.map((item) => [key(item), item]));
+      prior = previousByKey.get(key(row));
+    }
+    if (prior && isDeepStrictEqual(row, prior)) return prior;
+    changed.push(row);
+    return undefined;
+  });
+  if (previous && previous.length === rows.length && detached.every((row, i) => row === previous[i])) {
+    return previous;
+  }
+  const copies = changed.length ? structuredClone(changed) : changed;
+  if (!freezeSnapshot(copies)) return undefined;
+  let position = 0;
+  const result = detached.map((row) => row ?? copies[position++]!);
+  for (const row of copies) if (row && typeof row === "object") certifiedRows.add(row);
+  certifiedCollections.add(result);
+  Object.freeze(result);
+  return result;
+}
+
+function detachSnapshotKeys(source: ReadonlySet<string>): ReadonlySet<string> {
+  // Freezing a Set leaves add/delete available. Bind only the read methods
+  // to the private backing and keep forEach from exposing that backing.
+  const keys = new Set(source);
+  const readers = new Map<PropertyKey, unknown>();
+  const readonlyKeys = Object.freeze(new Proxy(keys, {
+    get(target, property, receiver) {
+      if (property === "size") return target.size;
+      if (property === "add" || property === "delete" || property === "clear") {
+        return () => { throw new TypeError("Navigation snapshot membership is immutable."); };
+      }
+      if (property === "forEach") return (callback: (value: string, key: string, set: ReadonlySet<string>) => void, thisArg?: unknown) => {
+        target.forEach((key) => callback.call(thisArg, key, key, readonlyKeys));
+      };
+      if (property === Symbol.iterator || SNAPSHOT_SET_READ_METHODS.has(String(property))) {
+        if (readers.has(property)) return readers.get(property);
+        const method = Reflect.get(target, property, target) as unknown;
+        const reader: unknown = typeof method === "function" ? method.bind(target) : method;
+        readers.set(property, reader);
+        return reader;
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  }));
+  return readonlyKeys;
+}
+
 /** A detached immutable inventory, admitted under the index pool's byte budget. */
 export function createNavigationQuerySnapshot(index: NavigationQueryIndex, onWork?: NavigationProjectionWork,
-  owner?: NavigationQueryIndex): NavigationQueryIndex {
-  if (owner === index && snapshots.has(owner)) return owner;
-  const prefix = owner && snapshots.get(owner)?.sharedThreads;
-  // Viewer pins append to the certified native rows. Only reuse the exact
-  // immutable prefix. Unknown or independently replaced rows are detached.
-  const shared = prefix && prefix.length <= index.threads.length
-    && prefix.every((row, position) => row === index.threads[position]) ? prefix : undefined;
-  const { inputRequestThreadKeys, ...json } = index;
-  const copy: NavigationQueryIndex = structuredClone(shared ? { ...json, threads: json.threads.slice(shared.length) } : json);
-  for (const child of Object.values(copy)) if (!freezeSnapshot(child)) return index;
-  if (shared) {
-    copy.threads = [...shared, ...copy.threads];
-    Object.freeze(copy.threads);
-  }
-  if (inputRequestThreadKeys) {
-    // Object.freeze(Set) still permits add/delete. Expose only read operations
-    // on a private copy so the certification also covers approval membership.
-    const keys = new Set(inputRequestThreadKeys);
-    const readers = new Map<PropertyKey, unknown>();
-    copy.inputRequestThreadKeys = Object.freeze(new Proxy(keys, {
-      get(target, property, receiver) {
-        if (property === "size") return target.size;
-        if (property === "add" || property === "delete" || property === "clear") {
-          return () => { throw new TypeError("Navigation snapshot membership is immutable."); };
-        }
-        if (property === "forEach") return (callback: (value: string, key: string, set: ReadonlySet<string>) => void, thisArg?: unknown) => {
-          target.forEach((key) => callback.call(thisArg, key, key, copy.inputRequestThreadKeys!));
-        };
-        // Bind only Set's read methods, never Object.valueOf (which would
-        // expose the backing Set) or the constructor. This also supports the
-        // newer non-mutating Set operations when provided by the runtime.
-        if (property === Symbol.iterator || SNAPSHOT_SET_READ_METHODS.has(String(property))) {
-          if (readers.has(property)) return readers.get(property);
-          const method = Reflect.get(target, property, target) as unknown;
-          const reader: unknown = typeof method === "function" ? method.bind(target) : method;
-          readers.set(property, reader);
-          return reader;
-        }
-        return Reflect.get(target, property, receiver);
-      },
-    }));
+  owner?: NavigationQueryIndex, previous?: NavigationQueryIndex): NavigationQueryIndex {
+  if (snapshots.has(index)) return index;
+  // The previous inventory is a comparison candidate only. The caller has
+  // already observed fresh inputs and still supplies the new observation.
+  const prior = previous && snapshots.get(previous);
+  const owned = owner && snapshots.get(owner);
+  const { observedAt, inputRequestThreadKeys, threads, directories, stacks, ...json } = index;
+  const detachedThreads = detachSnapshotRows(threads, (row) => row.id, prior && previous?.threads);
+  const detachedDirectories = detachSnapshotRows(directories, (row) => row.key, prior && previous?.directories);
+  const detachedStacks = stacks && detachSnapshotRows(stacks, (row) => row.key, prior && previous?.stacks);
+  if (!detachedThreads || !detachedDirectories || (stacks && !detachedStacks)) return index;
+  const earlierShell = prior?.shell ?? owned?.shell;
+  const shell = earlierShell && isDeepStrictEqual(json, earlierShell) ? earlierShell : structuredClone(json);
+  if (shell !== earlierShell && !freezeSnapshot(shell)) return index;
+  const copy: NavigationQueryIndex = { ...shell, threads: detachedThreads, directories: detachedDirectories,
+    ...("stacks" in index ? { stacks: detachedStacks } : {}),
+    ...("observedAt" in index ? { observedAt } : {}),
+  };
+  const earlierKeys = prior ? previous?.inputRequestThreadKeys : owned ? owner?.inputRequestThreadKeys : undefined;
+  if (inputRequestThreadKeys === earlierKeys
+    || (inputRequestThreadKeys && earlierKeys && inputRequestThreadKeys.size === earlierKeys.size
+      && isDeepStrictEqual([...inputRequestThreadKeys], [...earlierKeys]))) {
+    if (earlierKeys) copy.inputRequestThreadKeys = earlierKeys;
+  } else if (inputRequestThreadKeys) {
+    copy.inputRequestThreadKeys = detachSnapshotKeys(inputRequestThreadKeys);
   }
   Object.freeze(copy);
+  const sameInventory = prior && shell === prior.shell && copy.threads === previous?.threads
+    && copy.directories === previous.directories && copy.stacks === previous.stacks
+    && copy.inputRequestThreadKeys === previous.inputRequestThreadKeys;
+  const prepared = sameInventory ? prior : undefined;
   // JSON size is the pool's existing inventory charge. Charge auxiliary maps
   // conservatively as well: references/buckets plus UTF-16 identity/path keys.
-  const projection = buildProjectionIndex(copy, onWork);
-  let bytes = 1_024 + 512 * copy.threads.length + 256 * copy.directories.length;
-  for (const map of Object.values(projection)) for (const key of map.keys()) bytes += 2 * key.length;
+  const projection = prepared?.projection ?? buildProjectionIndex(copy, onWork);
+  let bytes = prepared?.bytes ?? 0;
+  if (!bytes) {
+    bytes = 1_024 + 512 * copy.threads.length + 256 * copy.directories.length;
+    for (const map of Object.values(projection)) for (const key of map.keys()) bytes += 2 * key.length;
+  }
   // Off-page rows and foreign parents are dependencies too. Keep the proof
   // optional and bounded even when the viewer has links across a large fleet.
+  const rowOwners = prepared ? prepared.rowOwners : snapshotRowOwners(copy);
+  // Viewer pins can share the owner's exactly identical immutable prefix.
+  // An altered stack row starts its own charge.
+  const prefix = owned?.sharedThreads;
+  const shared = prefix && prefix.length <= copy.threads.length
+    && prefix.every((row, position) => row === copy.threads[position]) ? prefix : copy.threads;
+  snapshots.set(copy, { shell, sharedThreads: shared, rowOwners, token: prepared?.token ?? Symbol("navigation-index"), projection, bytes, onWork });
+  return copy;
+}
+
+function snapshotRowOwners(index: NavigationQueryIndex): readonly string[] | undefined {
   const owners = new Set<string>();
-  for (const thread of copy.threads) {
+  for (const thread of index.threads) {
     const target = thread.federation?.ref.target;
     if (target?.scope === "remote") owners.add(target.instanceId);
     if (thread.parentThreadInstanceId) owners.add(thread.parentThreadInstanceId);
-    if (owners.size > 8) break;
+    if (owners.size > 8) return undefined;
   }
-  const rowOwners = owners.size <= 8 && [...owners].every((id) => id.length <= 120)
-    ? Object.freeze([...owners].sort()) : undefined;
-  snapshots.set(copy, { sharedThreads: shared ?? copy.threads, rowOwners, token: Symbol("navigation-index"), projection, bytes, onWork });
-  return copy;
+  return [...owners].every((id) => id.length <= 120) ? Object.freeze([...owners].sort()) : undefined;
 }
 
 /** Identity only: Attention views must not extend an inventory's retention. */
@@ -468,7 +537,7 @@ function limitRecords<T>(items: readonly T[] | undefined): {
   };
 }
 
-function previewPullRequests(prs: PrSummary[] | undefined): PrSummary[] | undefined {
+function previewPullRequests(prs: PrSummary[] | undefined, stackLeadPrKey?: string): PrSummary[] | undefined {
   if (!prs || prs.length <= MAX_ROW_NESTED_RECORDS) return prs;
   // The newest PR in stack order leads. Readiness ties use attachment order
   // for Minimal and stack order for the overflow after removing the lead.
@@ -497,6 +566,10 @@ function previewPullRequests(prs: PrSummary[] | undefined): PrSummary[] | undefi
   }
   // Fill the remaining slots with recent active work, then completed history.
   const retained = new Set([lead, representative, overflowRepresentative]);
+  if (stackLeadPrKey) {
+    const stackLead = prs.findIndex((pr) => buildPullRequestStatusKey(pr) === stackLeadPrKey);
+    if (stackLead >= 0) retained.add(stackLead);
+  }
   for (const index of [...active, ...finished]) {
     if (retained.size === MAX_ROW_NESTED_RECORDS) break;
     retained.add(index);
@@ -506,8 +579,8 @@ function previewPullRequests(prs: PrSummary[] | undefined): PrSummary[] | undefi
     .map((index) => prs[index]!);
 }
 
-export function projectNavigationPullRequests(prs?: PrSummary[]): Pick<NavigationRow, "prs" | "prsTruncated" | "prCount"> {
-  const preview = previewPullRequests(prs);
+export function projectNavigationPullRequests(prs?: PrSummary[], stackLeadPrKey?: string): Pick<NavigationRow, "prs" | "prsTruncated" | "prCount"> {
+  const preview = previewPullRequests(prs, stackLeadPrKey);
   return {
     ...(preview?.length ? { prs: preview } : {}),
     ...(prs && prs.length > MAX_ROW_NESTED_RECORDS ? { prsTruncated: true, prCount: prs.length } : {}),
@@ -515,10 +588,10 @@ export function projectNavigationPullRequests(prs?: PrSummary[]): Pick<Navigatio
 }
 
 function projectStackMemberships(thread: Pick<NavigationThreadSummary, "stacks" | "stackMemberships">): Pick<NavigationRow, "stackMemberships"> {
-  const stackMemberships = readCompactStackMemberships(thread).slice(0, 8).flatMap((entry) => {
+  const stackMemberships = readCompactStackMemberships(thread).slice(0, MAX_COMPACT_STACK_MEMBERSHIPS).flatMap((entry) => {
     if (typeof entry.key !== "string" || typeof entry.name !== "string" || !Number.isSafeInteger(entry.position)
       || !Number.isSafeInteger(entry.count) || entry.position < 1 || entry.position > entry.count) return [];
-    const heldBy = entry.heldBy;
+    const { heldBy, basePr } = entry;
     const positiveNumber = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
     return [{
       key: entry.key.length <= 512 ? entry.key : createHash("sha256").update(entry.key).digest("hex"),
@@ -528,6 +601,17 @@ function projectStackMemberships(thread: Pick<NavigationThreadSummary, "stacks" 
       count: entry.count,
       ...(typeof entry.repository === "string" && entry.repository.length <= 512 ? { repository: entry.repository } : {}),
       ...(positiveNumber(entry.number) ? { number: entry.number } : {}),
+      ...(typeof entry.trunk === "string" ? { trunk: entry.trunk.slice(0, 160) } : {}),
+      ...(typeof entry.hasOpenPr === "boolean" ? { hasOpenPr: entry.hasOpenPr } : {}),
+      ...(basePr && positiveNumber(basePr.number) ? {
+        basePr: {
+          number: basePr.number,
+          ...(typeof basePr.branch === "string" && basePr.branch.length <= 1024 ? { branch: basePr.branch } : {}),
+          ...(["open", "merged", "closed"].includes(basePr.lifecycleState ?? "") ? { lifecycleState: basePr.lifecycleState } : {}),
+          ...(["passing", "failing", "pending", "unknown"].includes(basePr.checkState ?? "") ? { checkState: basePr.checkState } : {}),
+          ...(basePr.mergeState === "conflicting" ? { mergeState: basePr.mergeState } : {}),
+        },
+      } : {}),
       ...(STACK_UNSETTLED_REASONS.includes(entry.unsettled!) ? { unsettled: entry.unsettled } : {}),
       ...(heldBy && typeof heldBy.branch === "string" && STACK_UNSETTLED_REASONS.includes(heldBy.reason) ? {
         heldBy: { branch: heldBy.branch.slice(0, 160), reason: heldBy.reason,
@@ -641,7 +725,8 @@ function projectNavigationRow(params: {
     ...(thread.lock ? { lock: thread.lock } : {}),
     ...(thread.checkoutHibernated ? { checkoutHibernated: true } : {}),
     ...(thread.keepCheckoutAwake ? { keepCheckoutAwake: true } : {}),
-    ...(!params.omitPullRequests ? projectNavigationPullRequests(thread.prs) : {}),
+    ...(!params.omitPullRequests ? projectNavigationPullRequests(thread.prs, thread.stackLeadPrKey) : {}),
+    ...(thread.stackLeadPrKey && thread.stackLeadPrKey.length <= 1024 ? { stackLeadPrKey: thread.stackLeadPrKey } : {}),
     ...projectStackMemberships(thread),
     ...(messagingBindings.items
       ? { messagingBindings: messagingBindings.items }

@@ -63,6 +63,9 @@ type NavigationQueryGeneration = {
   retainedBytes: number;
   scopeKey: string;
   attentionViewId?: string;
+  /** A retained generation can reuse projection from identical certified input. */
+  snapshotToken?: symbol;
+  projectionRequest?: string;
   /** Membership and attachment presence, independent of read-time PR projection. */
   sourceRevision?: string;
   pullRequests?: Map<number, ReturnType<typeof projectNavigationPullRequests>>;
@@ -91,7 +94,10 @@ function pullRequestPositions(generation: NavigationQueryGeneration, start: numb
 async function readPullRequestPositions(generation: NavigationQueryGeneration, positions: number[], load: NavigationPullRequestProjection["read"]): Promise<PullRequestObservation[]> {
   if (!positions.length) return [];
   const results = await load(positions.map((position) => generation.materialization.entries[position]!.row.ref));
-  return positions.map((position, index) => [position, projectNavigationPullRequests(results[index])] as const);
+  return positions.map((position, index) => [
+    position,
+    projectNavigationPullRequests(results[index], generation.materialization.entries[position]!.row.stackLeadPrKey),
+  ] as const);
 }
 
 function withPullRequestPositions(generation: NavigationQueryGeneration, rows: PullRequestObservation[]): NavigationQueryGeneration {
@@ -450,42 +456,55 @@ export class NavigationQueryStore {
       }
       if (lifetime?.closedAt !== undefined) throw new NavigationQueryError("navigation_invalid_request", "This Attention view closed during its owner read.");
       const attentionOrder = this.reconcileAttentionView(params.scopeKey, params.request, index, index.observedAt ?? readStartedAt);
-      const { directoryGitProof: gitProof, ...materialization } = projectNavigationQuery({
-        index,
-        request: params.request,
-        attentionOrder,
-        includeDirectoryGitProof: true,
-        deferPullRequests: Boolean(pullRequests) && !needsPullRequestMembership,
-      });
-      const owners = params.request.inventory === "viewer" && params.request.consumer === "main-sidebar"
-        ? navigationQuerySnapshotRowOwners(index) : undefined;
-      const { revision, retainedBytes, viewerRowOwners, directoryGitProof } = fingerprintNavigationMaterialization(materialization, owners, gitProof);
       const currentKey = `${params.scopeKey}\u0000${queryKey}`;
       const currentId = this.currentGenerationByScopeAndQuery.get(currentKey);
       const current = currentId ? this.generations.get(currentId) : undefined;
-      if (current?.completeRevision === revision && !materialization.pullRequestPositions) {
+      const deferPullRequests = Boolean(pullRequests) && !needsPullRequestMembership;
+      // Attention order advances separately. A Star Map with live PR
+      // membership has already replaced its certified index above.
+      const snapshotToken = attentionOrder ? undefined : navigationQuerySnapshotToken(index);
+      const projectionRequest = snapshotToken && createHash("sha256").update(JSON.stringify([
+        params.request.query, params.request.backend, params.request.inventory, params.request.consumer, deferPullRequests,
+      ])).digest("base64url");
+      if (snapshotToken && current?.snapshotToken === snapshotToken && current.projectionRequest === projectionRequest
+        && !current.materialization.pullRequestPositions) {
         generation = current;
       } else {
-        generation = {
-          completeRevision: revision,
-          createdAt: now,
-          generation: randomUUID(),
-          lastAccessedAt: now,
-          materialization,
-          viewerRowOwners,
-          directoryGitProof,
-          retainedBytes,
-          scopeKey: params.scopeKey,
-          attentionViewId: params.request.attentionView?.id,
-        };
-        if (generation.retainedBytes > NAVIGATION_QUERY_MAX_RETAINED_BYTES) {
-          throw new NavigationQueryError("navigation_busy", "Navigation query exceeds the process retained-memory budget.");
+        const { directoryGitProof: gitProof, ...materialization } = projectNavigationQuery({
+          index, request: params.request, attentionOrder, includeDirectoryGitProof: true, deferPullRequests,
+        });
+        const owners = params.request.inventory === "viewer" && params.request.consumer === "main-sidebar"
+          ? navigationQuerySnapshotRowOwners(index) : undefined;
+        const { revision, retainedBytes, viewerRowOwners, directoryGitProof } = fingerprintNavigationMaterialization(materialization, owners, gitProof);
+        if (current?.completeRevision === revision && !materialization.pullRequestPositions) {
+          generation = current;
+          generation.snapshotToken = snapshotToken;
+          generation.projectionRequest = projectionRequest;
+        } else {
+          generation = {
+            completeRevision: revision,
+            createdAt: now,
+            generation: randomUUID(),
+            lastAccessedAt: now,
+            materialization,
+            viewerRowOwners,
+            directoryGitProof,
+            retainedBytes,
+            scopeKey: params.scopeKey,
+            attentionViewId: params.request.attentionView?.id,
+            snapshotToken,
+            projectionRequest,
+          };
+          if (retainedBytes > NAVIGATION_QUERY_MAX_RETAINED_BYTES) {
+            throw new NavigationQueryError("navigation_busy", "Navigation query exceeds the process retained-memory budget.");
+          }
+          newCurrentKey = currentKey;
         }
-        newCurrentKey = currentKey;
       }
       if (params.request.anchor) offset = this.anchorOffset(generation, params.request, index);
-      if (materialization.pullRequestPositions) {
-        generation.sourceRevision = revision;
+      if (generation.materialization.pullRequestPositions) {
+        generation.sourceRevision = generation.completeRevision;
+        const revision = generation.sourceRevision;
         const prepared = await this.preparePullRequestGeneration({
           generation, current, request: params.request, pageOffset: offset, load: pullRequests!.read,
         });
@@ -752,6 +771,7 @@ export class NavigationQueryStore {
       ...(collectionKind === "models" ? { modelGroups: [] } : collectionKind === "directories" ? { directories: [] } : {}),
       complete: false,
     };
+    let bytes = serializedBytes(page);
     let nextOffset = params.offset;
     for (
       ; nextOffset < collection.length
@@ -761,27 +781,19 @@ export class NavigationQueryStore {
       const entry = collectionKind === "entries" ? materialization.entries[nextOffset] : undefined;
       const prs = params.generation.pullRequests?.get(nextOffset) ?? params.projectedPullRequests?.get(nextOffset);
       const item = entry && prs ? { ...entry, row: { ...entry.row, ...prs } } : collection[nextOffset]!;
-      const candidate = collectionKind === "models"
-        ? { ...page, modelGroups: [...(page.modelGroups ?? []), item] }
-        : collectionKind === "directories"
-        ? {
-            ...page,
-            directories: [...(page.directories ?? []), item],
-          }
-        : {
-            ...page,
-            entries: [...page.entries, item],
-          };
+      // The empty collection's brackets have already been charged. Each
+      // candidate adds one row and, after the first, one separating comma.
+      const candidateBytes = bytes + serializedBytes(item) + Number(nextOffset > params.offset);
       const candidateNextOffset = nextOffset + 1;
-      if (candidateNextOffset < collection.length) {
-        candidate.nextCursor = encodeCursor({
+      const cursorBytes = candidateNextOffset < collection.length
+        ? serializedBytes({ nextCursor: encodeCursor({
           generation: params.generation.generation,
           offset: candidateNextOffset,
           queryKey: params.generation.materialization.queryKey,
           scopeKey: params.generation.scopeKey,
-        });
-      }
-      if (serializedBytes(candidate) > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
+        }) }) - 1
+        : 0;
+      if (candidateBytes + cursorBytes > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
         if (nextOffset === params.offset) {
           throw new NavigationQueryError(
             "navigation_item_too_large",
@@ -790,6 +802,7 @@ export class NavigationQueryStore {
         }
         break;
       }
+      bytes = candidateBytes;
       if (collectionKind === "models") {
         page.modelGroups!.push(item as NonNullable<NavigationQueryPage["modelGroups"]>[number]);
       } else if (collectionKind === "directories") {

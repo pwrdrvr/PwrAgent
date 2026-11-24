@@ -71,12 +71,6 @@ export function resolveThreadTodoStartSpeed(params: {
   return inherited;
 }
 
-/** Whether resolving `speed` needs the destination's summary. */
-export function threadTodoSpeedNeedsDestination(requested: CodexSpeed | undefined, inherited: SpeedSettings | undefined): boolean {
-  return (requested !== undefined && requested !== "standard")
-    || (inherited !== undefined && selectedCodexSpeed(pickSpeed(inherited)) !== "standard");
-}
-
 function pickSpeed(settings: SpeedSettings): SpeedSettings {
   return {
     ...(settings.serviceTier !== undefined ? { serviceTier: settings.serviceTier } : {}),

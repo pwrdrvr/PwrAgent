@@ -1,5 +1,10 @@
 import { useCallback, useRef, type ReactNode } from "react";
-import { threadTodoSeenExecutionMode, threadTodoStartActionForRun, type ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
+import {
+  threadTodoSeenExecutionMode,
+  threadTodoSeenNativeAccessMode,
+  threadTodoStartActionForRun,
+  type ThreadTodo,
+} from "@pwragent/shared/contracts/thread-todos";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useExecutionModeSelection } from "../../lib/useExecutionModeSelection";
 import type { ThreadTodoRunOptions } from "./thread-todos-view";
@@ -10,7 +15,10 @@ import type { ThreadTodoRunOptions } from "./thread-todos-view";
  * have started the thread itself (a Voice or Star Map manager at Default
  * Access), so the card is the operator's escalation and passes the gate.
  * Sending the prompt to an existing thread applies no mode, and a card that
- * names none inherits its own thread's, which raises nothing.
+ * names none inherits its own thread's, which raises nothing. The operator's
+ * pick from the card's Access menu is stored as the card's mode, so a pick of
+ * Full Access, or of an agent's own Yolo mode, which stores Full Access as
+ * its level, passes the gate here.
  */
 export function threadTodoRunRaisesToFullAccess(
   todo: ThreadTodo,
@@ -30,7 +38,11 @@ export function withSeenExecutionMode(
 ): ThreadTodoRunOptions | undefined {
   const action = threadTodoStartActionForRun(todo.action, options);
   if (!action) return options;
-  return { ...options, seenExecutionMode: threadTodoSeenExecutionMode(action) };
+  return {
+    ...options,
+    seenExecutionMode: threadTodoSeenExecutionMode(action),
+    seenNativeAccessMode: threadTodoSeenNativeAccessMode(action),
+  };
 }
 
 export type ThreadTodoFullAccessGate = {

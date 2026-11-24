@@ -132,6 +132,8 @@ export type AgentToolMcpRegistration = {
   server: AgentToolHttpMcpServerConfig;
   bindThread: (threadId: string) => void;
   readListedJobMonitorCreation?: () => boolean | undefined;
+  /** The tool as this client's `tools/list` describes it now, if listed. */
+  readTool?: (name: string) => Promise<AgentMcpTool | undefined>;
 };
 
 type JobMonitorCatalogListing = { scope: string; enabled?: boolean };
@@ -232,6 +234,10 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       ...(listing ? {
         readListedJobMonitorCreation: () => this.jobMonitorListings.get(token) === listing ? listing.enabled : undefined,
       } : {}),
+      readTool: async (name) => {
+        const current = this.contextsByToken.get(token);
+        return current ? await this.resolveMcpTool(current, name) : undefined;
+      },
       bindThread: (threadId) => {
         const normalizedThreadId = threadId.trim();
         const current = this.contextsByToken.get(token);
@@ -680,6 +686,17 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     if (!match) return undefined;
     const [, nonce, signature] = match;
     return timingSafeEqual(Buffer.from(signature), Buffer.from(this.signSession(nonce, token))) ? nonce : undefined;
+  }
+
+  /** One tool as `resolveMcpTools` would list it, without checking the others. */
+  private async resolveMcpTool(context: AgentToolMcpClientContext, name: string): Promise<AgentMcpTool | undefined> {
+    if (context.memoryOnly && name !== "agent_memory") return undefined;
+    const matches = this.options.resolveCatalogs(context)
+      .flatMap((catalog) => catalog.router.buildMcpTools())
+      .filter((tool) => tool.name === name);
+    if (matches.length !== 1) return undefined;
+    if (this.options.isToolAdvertised && !await this.options.isToolAdvertised(name, context)) return undefined;
+    return matches[0];
   }
 
   private async resolveMcpTools(context: AgentToolMcpClientContext): Promise<AgentMcpTool[]> {

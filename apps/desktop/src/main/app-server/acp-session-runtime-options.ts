@@ -114,6 +114,8 @@ export class AcpSessionRuntimeOptions {
     const queueKey = this.buildAcpRuntimeQueueKey(params.backend, params.threadId);
     const fromLabel = this.formatAcpRuntimeOptionLabel(params.backend, params, fromValue);
     const toLabel = this.formatAcpRuntimeOptionLabel(params.backend, params, params.value);
+    const antigravityAccess = params.backend === "acp:antigravity"
+      ? this.acpBackend.getSession(params.backend, params.threadId)?.executionMode : undefined;
     this.queuedAcpRuntimeOptions.set(queueKey, {
       source: params.source,
       optionId: params.optionId,
@@ -131,12 +133,8 @@ export class AcpSessionRuntimeOptions {
       threadId: params.threadId,
       transition: {
         id: randomUUID(),
-        fromExecutionMode: acpRuntimeValueLooksPrivileged(fromValue)
-          ? "full-access"
-          : "default",
-        toExecutionMode: acpRuntimeValueLooksPrivileged(params.value)
-          ? "full-access"
-          : "default",
+        fromExecutionMode: antigravityAccess ?? (acpRuntimeValueLooksPrivileged(fromValue) ? "full-access" : "default"),
+        toExecutionMode: antigravityAccess ?? (acpRuntimeValueLooksPrivileged(params.value) ? "full-access" : "default"),
         fromLabel,
         toLabel,
         status: "queued",
@@ -169,14 +167,14 @@ export class AcpSessionRuntimeOptions {
     if (!isAcpBackendId(params.backend)) {
       throw new Error("ACP runtime options are only available for ACP backends");
     }
-    const session = this.acpBackend.getSession(params.backend, params.threadId);
-    if (!session) {
-      throw new Error(`ACP session not found: ${params.threadId}`);
-    }
     const client = await this.acpBackend.getClientForSession(
       params.backend,
       params.threadId,
     );
+    const session = this.acpBackend.getSession(params.backend, params.threadId);
+    if (!session) {
+      throw new Error(`ACP session not found: ${params.threadId}`);
+    }
     const selectsAntigravityMode = params.backend === "acp:antigravity"
       && params.source === "configOption" && params.optionId === "mode";
     if (!selectsAntigravityMode) await client.ensureSession?.(session);
@@ -196,19 +194,21 @@ export class AcpSessionRuntimeOptions {
         rejectUnofferedThoughtLevel: true,
       }),
     );
-    const mergedRuntime = mergeAcpRuntimeState(session.acpRuntime, runtimeState);
+    const current = params.backend === "acp:antigravity"
+      ? this.acpBackend.getSession(params.backend, params.threadId) ?? session : session;
+    const mergedRuntime = mergeAcpRuntimeState(current.acpRuntime, runtimeState);
     const changesExecutionMode = this.isAcpRuntimeExecutionModeOption(params);
     const nextExecutionMode = changesExecutionMode
       ? acpRuntimeValueLooksPrivileged(params.value)
         ? "full-access"
         : "default"
-      : session.executionMode;
+      : current.executionMode;
     const updatedAt = Math.max(
-      session.updatedAt,
+      current.updatedAt,
       runtimeState?.updatedAt ?? Date.now(),
     );
     this.acpBackend.upsertSession({
-      ...session,
+      ...current,
       acpRuntime: mergedRuntime,
       executionMode: nextExecutionMode,
       updatedAt,
@@ -235,7 +235,7 @@ export class AcpSessionRuntimeOptions {
         id: randomUUID(),
         fromExecutionMode: changesExecutionMode
           ? acpRuntimeValueLooksPrivileged(fromValue) ? "full-access" : "default"
-          : session.executionMode ?? "default",
+          : current.executionMode ?? "default",
         toExecutionMode: nextExecutionMode ?? "default",
         fromLabel,
         toLabel,
@@ -463,6 +463,7 @@ export class AcpSessionRuntimeOptions {
   private isAcpRuntimeExecutionModeOption(
     params: Pick<SetAcpSessionRuntimeOptionRequest, "backend" | "source" | "optionId">,
   ): boolean {
+    if (params.backend === "acp:antigravity") return false;
     const agent = isAcpBackendId(params.backend)
       ? this.acpBackend.getInstalledAgent(params.backend)
       : undefined;

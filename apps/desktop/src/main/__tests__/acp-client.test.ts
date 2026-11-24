@@ -9,7 +9,8 @@ import {
 } from "@pwragent/shared/pending-request-response";
 import { deriveInboxState } from "@pwragent/shared/inbox";
 import type { AppServerPendingRequestNotification } from "@pwragent/shared/contracts/normalized-app-server";
-import { AcpAgentClient } from "../acp/acp-client";
+import { AcpAgentClient, resolveAntigravityMcpToolTarget } from "../acp/acp-client";
+import { pwragentToolSkipsAgentApproval } from "../app-server/acp-host-tool-approval";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import { AcpSessionStore } from "../storage/acp-session-store";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
@@ -315,6 +316,308 @@ describe("AcpAgentClient", () => {
         timeoutMs: 20_000,
       },
     ]);
+  });
+
+  it("steers an active Antigravity turn via overlapping session/prompt handoff", async () => {
+    const prompts: Array<ReturnType<typeof createDeferred<unknown>>> = [];
+    const transport = new FakeAcpAgentTransport({
+      "session/new": { sessionId: "agy-session" },
+    });
+    const baseRequest = transport.request.bind(transport);
+    transport.request = async (method, params, timeoutMs) => {
+      if (method === "session/prompt") {
+        transport.requests.push({ method, params, timeoutMs });
+        const deferred = createDeferred<unknown>();
+        prompts.push(deferred);
+        return await deferred.promise;
+      }
+      return await baseRequest(method, params, timeoutMs);
+    };
+    const rolloutStore = new AcpRolloutStore(path.join(tempDir, "rollouts"));
+    let clock = 1000;
+    const updates: Array<{ turnId?: string; update: Record<string, unknown> }> = [];
+    const onPromptError = vi.fn();
+    const client = new AcpAgentClient({
+      backendId: "acp:antigravity",
+      store,
+      rolloutStore,
+      transport,
+      now: () => (clock += 10),
+      onSessionUpdate: ({ turnId, update }) => {
+        updates.push({ turnId, update });
+      },
+      onPromptError,
+    });
+
+    await client.initialize();
+    expect(client.supportsTurnSteering()).toBe(true);
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+      mcpServers: "none",
+    });
+    const started = await client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "Write a 60-line poem about ocean waves.",
+      turnId: "turn-1",
+    });
+    expect(started.turnId).toBe("turn-1");
+    expect(prompts).toHaveLength(1);
+
+    // Stream only a thought chunk before steering — no assistant message text yet.
+    transport.emitSessionUpdate("agy-session", {
+      sessionUpdate: "agent_thought_chunk",
+      content: { type: "text", text: "Planning the poem..." },
+    });
+
+    const steerPromise = client.steerSession({
+      sessionId: session.sessionId,
+      text: "Stop and reply ONLY with PINEAPPLE.",
+      prompt: "Stop and reply ONLY with PINEAPPLE.",
+      parts: [{ type: "text", text: "Stop and reply ONLY with PINEAPPLE." }],
+      content: [{ type: "text", text: "Stop and reply ONLY with PINEAPPLE." }],
+      interjectionId: "steer-1",
+    });
+    await vi.waitFor(() => expect(prompts).toHaveLength(2));
+
+    // Antigravity immediately detaches the running prompt with end_turn (no usage).
+    prompts[0]!.resolve({ stopReason: "end_turn" });
+    await expect(steerPromise).resolves.toEqual({ delivery: "currentTurn" });
+
+    // The turn remains active under the second prompt; no premature turn_finished.
+    expect(client.hasActiveTurns()).toBe(true);
+    expect(store.getSession("acp:antigravity", session.sessionId)?.status).toBe("active");
+    expect(updates.some((entry) => entry.update.kind === "turn_finished")).toBe(false);
+    expect(updates.some((entry) => entry.update.kind === "pwragent_steered_user_prompt")).toBe(true);
+    expect(onPromptError).not.toHaveBeenCalled();
+
+    transport.emitSessionUpdate("agy-session", {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "PINEAPPLE" },
+    });
+    prompts[1]!.resolve({ stopReason: "end_turn", usage: { totalTokens: 42 } });
+
+    await vi.waitFor(() => {
+      expect(updates.filter((entry) => entry.update.kind === "turn_finished")).toHaveLength(1);
+    });
+    expect(client.hasActiveTurns()).toBe(false);
+    expect(store.getSession("acp:antigravity", session.sessionId)?.status).toBe("idle");
+    expect(onPromptError).not.toHaveBeenCalled();
+
+    const replay = client.readReplay(session.sessionId);
+    expect(replay.messages.map((message) => ({ role: message.role, text: message.text }))).toEqual([
+      { role: "user", text: "Write a 60-line poem about ocean waves." },
+      { role: "assistant", text: "Planning the poem..." },
+      { role: "user", text: "Stop and reply ONLY with PINEAPPLE." },
+      { role: "assistant", text: "PINEAPPLE" },
+    ]);
+
+    // Rollout history reproduces the steered user message on a fresh client.
+    await client.dispose();
+    const restoredClient = new AcpAgentClient({
+      backendId: "acp:antigravity",
+      store,
+      rolloutStore,
+      transport: new FakeAcpAgentTransport({ initialize: { protocolVersion: 1, agentCapabilities: { loadSession: false } } }),
+    });
+    await restoredClient.initialize();
+    const restoredReplay = await restoredClient.loadSession(
+      store.getSession("acp:antigravity", session.sessionId)!,
+    );
+    expect(restoredReplay.messages.map((message) => ({ role: message.role, text: message.text }))).toEqual([
+      { role: "user", text: "Write a 60-line poem about ocean waves." },
+      { role: "assistant", text: "Planning the poem..." },
+      { role: "user", text: "Stop and reply ONLY with PINEAPPLE." },
+      { role: "assistant", text: "PINEAPPLE" },
+    ]);
+    await restoredClient.dispose();
+  });
+
+  it("keeps the original Antigravity prompt running when a concurrent steer is rejected", async () => {
+    const prompts: Array<ReturnType<typeof createDeferred<unknown>>> = [];
+    const transport = new FakeAcpAgentTransport({
+      "session/new": { sessionId: "agy-session" },
+    });
+    const baseRequest = transport.request.bind(transport);
+    transport.request = async (method, params, timeoutMs) => {
+      if (method === "session/prompt") {
+        transport.requests.push({ method, params, timeoutMs });
+        const deferred = createDeferred<unknown>();
+        prompts.push(deferred);
+        return await deferred.promise;
+      }
+      return await baseRequest(method, params, timeoutMs);
+    };
+    const updates: Array<Record<string, unknown>> = [];
+    const onPromptError = vi.fn();
+    const client = new AcpAgentClient({
+      backendId: "acp:antigravity",
+      store,
+      transport,
+      onSessionUpdate: ({ update }) => { updates.push(update); },
+      onPromptError,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+      mcpServers: "none",
+    });
+    await client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "Run echo hello",
+      turnId: "turn-1",
+    });
+
+    const steerPromise = client.steerSession({
+      sessionId: session.sessionId,
+      text: "Never mind",
+      content: [{ type: "text", text: "Never mind" }],
+      interjectionId: "steer-perm",
+    });
+    await vi.waitFor(() => expect(prompts).toHaveLength(2));
+
+    prompts[1]!.reject(
+      new Error("the running prompt is waiting for a permission or question answer; answer it or send session/cancel, then send this prompt again"),
+    );
+    await expect(steerPromise).rejects.toThrow("waiting for a permission or question answer");
+
+    // Original prompt is still alive and no steered message was recorded.
+    expect(client.hasActiveTurns()).toBe(true);
+    expect(onPromptError).not.toHaveBeenCalled();
+    expect(updates.some((update) => update.kind === "pwragent_steered_user_prompt")).toBe(false);
+
+    transport.emitSessionUpdate("agy-session", {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "hello" },
+    });
+    prompts[0]!.resolve({ stopReason: "end_turn" });
+
+    await vi.waitFor(() => {
+      expect(updates.filter((update) => update.kind === "turn_finished")).toHaveLength(1);
+    });
+    expect(client.hasActiveTurns()).toBe(false);
+    expect(client.readReplay(session.sessionId).messages.map((m) => m.text)).toEqual([
+      "Run echo hello",
+      "hello",
+    ]);
+    await client.dispose();
+  });
+
+  it("chains multiple Antigravity steers and cancels the latest in-flight prompt", async () => {
+    const prompts: Array<ReturnType<typeof createDeferred<unknown>>> = [];
+    const transport = new FakeAcpAgentTransport({
+      "session/new": { sessionId: "agy-session" },
+    });
+    const baseRequest = transport.request.bind(transport);
+    transport.request = async (method, params, timeoutMs) => {
+      if (method === "session/prompt") {
+        transport.requests.push({ method, params, timeoutMs });
+        const deferred = createDeferred<unknown>();
+        prompts.push(deferred);
+        return await deferred.promise;
+      }
+      return await baseRequest(method, params, timeoutMs);
+    };
+    const updates: Array<Record<string, unknown>> = [];
+    const client = new AcpAgentClient({
+      backendId: "acp:antigravity",
+      store,
+      transport,
+      onSessionUpdate: ({ update }) => { updates.push(update); },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({ cwd: "/repo", executionMode: "default", mcpServers: "none" });
+    await client.startPrompt({ sessionId: session.sessionId, prompt: "First", turnId: "turn-1" });
+
+    const steer1 = client.steerSession({
+      sessionId: session.sessionId,
+      text: "Second",
+      content: [{ type: "text", text: "Second" }],
+      interjectionId: "s-1",
+    });
+    await vi.waitFor(() => expect(prompts).toHaveLength(2));
+    prompts[0]!.resolve({ stopReason: "end_turn" });
+    await expect(steer1).resolves.toEqual({ delivery: "currentTurn" });
+
+    const steer2 = client.steerSession({
+      sessionId: session.sessionId,
+      text: "Third",
+      content: [{ type: "text", text: "Third" }],
+      interjectionId: "s-2",
+    });
+    await vi.waitFor(() => expect(prompts).toHaveLength(3));
+    prompts[1]!.resolve({ stopReason: "end_turn" });
+    await expect(steer2).resolves.toEqual({ delivery: "currentTurn" });
+
+    await client.cancelSession(session.sessionId);
+    prompts[2]!.resolve({ stopReason: "cancelled" });
+
+    await vi.waitFor(() => {
+      expect(updates.filter((update) => update.kind === "turn_finished")).toHaveLength(1);
+    });
+    expect(updates.find((update) => update.kind === "turn_finished")?.stopReason).toBe("cancelled");
+    expect(client.hasActiveTurns()).toBe(false);
+    expect(client.readReplay(session.sessionId).messages.map((m) => m.text)).toEqual([
+      "First",
+      "Second",
+      "Third",
+    ]);
+    await client.dispose();
+  });
+
+  it("rejects Antigravity steering and cancels an unsettled follow-up if the active prompt is cancelled mid-handoff", async () => {
+    const prompts: Array<ReturnType<typeof createDeferred<unknown>>> = [];
+    const transport = new FakeAcpAgentTransport({
+      "session/new": { sessionId: "agy-session" },
+    });
+    const baseRequest = transport.request.bind(transport);
+    transport.request = async (method, params, timeoutMs) => {
+      if (method === "session/prompt") {
+        transport.requests.push({ method, params, timeoutMs });
+        const deferred = createDeferred<unknown>();
+        prompts.push(deferred);
+        return await deferred.promise;
+      }
+      return await baseRequest(method, params, timeoutMs);
+    };
+    const updates: Array<Record<string, unknown>> = [];
+    const onPromptError = vi.fn();
+    const client = new AcpAgentClient({
+      backendId: "acp:antigravity",
+      store,
+      transport,
+      onSessionUpdate: ({ update }) => { updates.push(update); },
+      onPromptError,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({ cwd: "/repo", executionMode: "default", mcpServers: "none" });
+    await client.startPrompt({ sessionId: session.sessionId, prompt: "First", turnId: "turn-1" });
+
+    const steer = client.steerSession({
+      sessionId: session.sessionId,
+      text: "Late steer",
+      content: [{ type: "text", text: "Late steer" }],
+      interjectionId: "s-cancel",
+    });
+    await vi.waitFor(() => expect(prompts).toHaveLength(2));
+
+    // Active prompt settles as cancelled instead of detaching with end_turn.
+    prompts[0]!.resolve({ stopReason: "cancelled" });
+    await expect(steer).rejects.toThrow("cancelled before steering was accepted");
+
+    // Late rejection/settlement of the follow-up prompt must not emit a second terminal event or error.
+    prompts[1]!.reject(new Error("the running prompt is being cancelled"));
+    await vi.waitFor(() => {
+      expect(updates.filter((update) => update.kind === "turn_finished")).toHaveLength(1);
+    });
+    expect(transport.notifications.some((n) => n.method === "session/cancel")).toBe(true);
+    expect(onPromptError).not.toHaveBeenCalled();
+    expect(client.hasActiveTurns()).toBe(false);
+    await client.dispose();
   });
 
   it("lists and executes Grok conversation-only rewind extensions", async () => {
@@ -1322,6 +1625,193 @@ describe("AcpAgentClient", () => {
         await checkRequest(`mcp_${name}`, "execute", false);
       },
     ));
+  });
+
+  it("resolves an Antigravity MCP name to one session server or none", () => {
+    const segment = fc.stringMatching(/^[a-zA-Z][a-zA-Z0-9]{0,5}$/);
+    const serverName = fc.array(segment, { minLength: 1, maxLength: 3 })
+      .chain((parts) => fc.constantFrom(parts.join("_"), parts.join("-")));
+    fc.assert(fc.property(
+      fc.array(serverName, { minLength: 1, maxLength: 5 }),
+      fc.nat(),
+      fc.array(segment, { minLength: 1, maxLength: 3 }),
+      (servers, pick, toolParts) => {
+        const reported = `mcp_${servers[pick % servers.length]}_${toolParts.join("_")}`;
+        const fold = (value: string) => value.replace(/-/gu, "_").toLowerCase();
+        // Oracle: every server whose name, before or after Antigravity folds
+        // `-` to `_` or changes case, prefixes the reported name could have
+        // produced it.
+        const sources = [...new Set(servers)].filter((server) =>
+          fold(reported).startsWith(`mcp_${fold(server)}_`)
+          && fold(reported).length > `mcp_${fold(server)}_`.length);
+        const target = resolveAntigravityMcpToolTarget(reported, servers);
+        if (sources.length !== 1) {
+          expect(target).toBeUndefined();
+          return;
+        }
+        if (target) {
+          expect(target.serverName).toBe(sources[0]);
+          expect(`mcp_${target.serverName}_${target.toolName}`).toBe(reported);
+        } else {
+          expect(reported.startsWith(`mcp_${sources[0]}_`)).toBe(false);
+        }
+      },
+    ));
+  });
+
+  it("asks the operator about an Antigravity MCP call only when PwrAgent cannot decide it (model)", async () => {
+    // PwrAgent's own tools as its MCP server lists them.
+    const ownTools = [
+      { name: "list_ci_runs", annotations: { readOnlyHint: true } },
+      { name: "merge_pull_request", annotations: { readOnlyHint: false, destructiveHint: true } },
+      { name: "call_mcp_tool", annotations: { readOnlyHint: false } },
+      { name: "add_todo", annotations: { readOnlyHint: false } },
+      { name: "purge_cache", annotations: { readOnlyHint: true, destructiveHint: true } },
+    ];
+    // Model: the gateway and forge cards decide these calls, or they only read.
+    const decidedByPwrAgent = new Set(["list_ci_runs", "merge_pull_request", "call_mcp_tool"]);
+    const reportedNames = [
+      ...ownTools.map((tool) => `mcp_pwragent_${tool.name}`),
+      "mcp_pwragent_unlisted",
+      "mcp_linear_list_issues",
+    ];
+    type Choice = "accept" | "accept_for_session" | "decline";
+    await fc.assert(fc.asyncProperty(
+      // A connection named `pwragent_list` makes `mcp_pwragent_list_ci_runs`
+      // ambiguous: its `ci_runs` tool flattens to the same name.
+      fc.boolean(),
+      fc.array(fc.record({
+        name: fc.constantFrom(...reportedNames),
+        choice: fc.constantFrom<Choice>("accept", "accept_for_session", "decline"),
+      }), { minLength: 1, maxLength: 12 }),
+      async (withCollidingServer, calls) => {
+        const transport = new FakeAcpAgentTransport();
+        const asked: AppServerPendingRequestNotification[] = [];
+        let choice: Choice = "accept";
+        const onRequest = vi.fn((request: AppServerPendingRequestNotification) => {
+          asked.push(request);
+          const action = buildPendingRequestActions(request).find((entry) => entry.decision === choice)!;
+          return buildPendingRequestResponse(request, action);
+        });
+        const client = new AcpAgentClient({
+          backendId: "acp:antigravity",
+          store,
+          transport,
+          onRequest,
+          mcpServers: () => ({
+            servers: [
+              { name: "pwragent", type: "http", url: "http://127.0.0.1:1/mcp", headers: [] },
+              { name: "linear", type: "http", url: "http://127.0.0.1:2/mcp", headers: [] },
+              ...withCollidingServer
+                ? [{ name: "pwragent_list", type: "http" as const, url: "http://127.0.0.1:3/mcp", headers: [] }]
+                : [],
+            ],
+            hostApprovesToolCall: async (server, tool) => server === "pwragent"
+              && pwragentToolSkipsAgentApproval(ownTools.find((entry) => entry.name === tool)),
+          }),
+        });
+        await client.initialize();
+        const session = await client.startSession({ cwd: "/repo", executionMode: "default" });
+        const granted = new Set<string>();
+        for (const [index, call] of calls.entries()) {
+          choice = call.choice;
+          const askedBefore = asked.length;
+          const outcome = await transport.emitRequest("session/request_permission", {
+            sessionId: session.sessionId,
+            toolCall: { toolCallId: `tool-${index}`, kind: "other", name: call.name, status: "pending" },
+            options: [
+              { optionId: "allow", name: "Allow", kind: "allow_once" },
+              { optionId: "deny", name: "Deny", kind: "reject_once" },
+            ],
+          }, index + 1);
+          const ambiguous = withCollidingServer && call.name === "mcp_pwragent_list_ci_runs";
+          const ownTool = call.name.replace(/^mcp_pwragent_/u, "");
+          const answeredByPwrAgent = granted.has(call.name)
+            || (!ambiguous && call.name.startsWith("mcp_pwragent_") && decidedByPwrAgent.has(ownTool));
+          if (answeredByPwrAgent) {
+            expect(asked).toHaveLength(askedBefore);
+            expect(outcome).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+            continue;
+          }
+          expect(asked).toHaveLength(askedBefore + 1);
+          expect(buildPendingRequestActions(asked.at(-1)!).map((action) => action.label))
+            .toEqual(["Allow", "Allow for this thread", "Deny", "Cancel turn"]);
+          if (call.choice === "accept_for_session") granted.add(call.name);
+          // Antigravity hears only options it offered.
+          expect(outcome).toEqual({
+            outcome: { outcome: "selected", optionId: call.choice === "decline" ? "deny" : "allow" },
+          });
+        }
+      },
+    ), { numRuns: 60 });
+  });
+
+  it("keeps Antigravity's own allow-always choice instead of a thread grant", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const onRequest = vi.fn((request: AppServerPendingRequestNotification) => {
+      const always = buildPendingRequestActions(request).find((action) => action.decision === "accept_for_session")!;
+      return buildPendingRequestResponse(request, always);
+    });
+    const client = new AcpAgentClient({ backendId: "acp:antigravity", store, transport, onRequest });
+    await client.initialize();
+    const session = await client.startSession({ cwd: "/repo", executionMode: "default" });
+    const request = {
+      sessionId: session.sessionId,
+      toolCall: { toolCallId: "tool", kind: "other", name: "mcp_linear_list_issues", status: "pending" },
+      options: [
+        { optionId: "allow", name: "Allow", kind: "allow_once" },
+        { optionId: "always", name: "Always allow", kind: "allow_always" },
+        { optionId: "deny", name: "Deny", kind: "reject_once" },
+      ],
+    };
+    expect(await transport.emitRequest("session/request_permission", request, 1))
+      .toEqual({ outcome: { outcome: "selected", optionId: "always" } });
+    expect(buildPendingRequestActions(onRequest.mock.lastCall![0]).map((action) => action.label))
+      .toEqual(["Allow", "Always allow", "Deny", "Cancel turn"]);
+    // Antigravity remembers its own choice; PwrAgent does not answer for it.
+    await transport.emitRequest("session/request_permission", request, 2);
+    expect(onRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { reloadServers: ["Case-Probe"], retained: true },
+    { reloadServers: ["Case-Probe", "Another-Server"], retained: false },
+  ])("rechecks tool grants when a transferred Antigravity session reloads with $reloadServers", async ({ reloadServers, retained }) => {
+    let serverNames = ["Case-Probe"];
+    const transport = new FakeAcpAgentTransport({
+      initialize: { protocolVersion: 1, agentCapabilities: { loadSession: true, sessionCapabilities: { close: {} } } },
+    });
+    const onRequest = vi.fn()
+      .mockImplementationOnce(() => ({ decision: "accept_for_session" }))
+      .mockImplementation(() => ({ decision: "decline" }));
+    const client = new AcpAgentClient({
+      backendId: "acp:antigravity", store, transport, onRequest,
+      mcpServers: () => ({ servers: serverNames.map((name) => ({
+        name, type: "http", url: "http://127.0.0.1:1/mcp", headers: [],
+      })) }),
+    });
+    await client.initialize();
+    const session = await client.startSession({ cwd: "/repo", executionMode: "default" });
+    const request = {
+      sessionId: session.sessionId,
+      toolCall: { toolCallId: "tool", kind: "other", name: "mcp_Case-Probe_list_probe", status: "pending" },
+      options: [
+        { optionId: "allow", name: "Allow", kind: "allow_once" },
+        { optionId: "deny", name: "Deny", kind: "reject_once" },
+      ],
+    };
+    try {
+      expect(await transport.emitRequest("session/request_permission", request, 1))
+        .toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+      await client.closeSessionForTransfer(session.sessionId);
+      serverNames = reloadServers;
+      await client.loadSession(session);
+      expect(await transport.emitRequest("session/request_permission", request, 2))
+        .toEqual({ outcome: { outcome: "selected", optionId: retained ? "allow" : "deny" } });
+      expect(onRequest).toHaveBeenCalledTimes(retained ? 1 : 2);
+    } finally {
+      await client.dispose();
+    }
   });
 
   it("maps generic session approvals to ACP allow-always options", async () => {

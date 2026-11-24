@@ -27032,6 +27032,77 @@ describe("MessagingController", () => {
     );
   });
 
+  it.each(["default", "full-access"] as const)(
+    "keeps Antigravity Agent mode separate from %s access in messaging",
+    async (executionMode) => {
+      const backend = "acp:antigravity";
+      const navigation = buildNavigationSnapshot();
+      const acpRuntime = { currentModeId: "default", updatedAt: 1000 };
+      navigation.launchpadDefaults = { ...navigation.launchpadDefaults, backend, executionMode, acpRuntime };
+      navigation.threads[0] = { ...navigation.threads[0]!, source: backend, executionMode, acpRuntime };
+      const summary = buildAcpRuntimeBackendSummary({ kind: backend, label: "Antigravity", executionModes: [
+        { mode: "default", label: "Default Access", available: true },
+        { mode: "full-access", label: "Full Access", available: true },
+      ] });
+      summary.acp!.registryId = "antigravity";
+      summary.acp!.runtime!.modes!.availableModes = [
+        { id: "default", label: "Default" }, { id: "plan", label: "Plan" },
+      ];
+      const harness = await createHarness({
+        navigation, listBackends: async () => ({ fetchedAt: 1000, backends: [summary] }),
+      });
+      const selection = { optionId: "mode", source: "mode", value: "plan" };
+
+      await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+      await harness.controller.handleInboundEvent(buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: { directoryKey: "directory:pwragent", label: "PwrAgent", path: "/repo/pwragent" },
+      }));
+      expect(harness.delivered.at(-1)).toMatchObject({
+        body: expect.stringContaining("Agent mode: Default"),
+        actions: expect.arrayContaining([
+          expect.objectContaining({ id: "browse:new:permissions" }),
+          expect.objectContaining({ id: "browse:new:runtime-mode" }),
+        ]),
+      });
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "browse:new:runtime-mode" }));
+      expect(harness.delivered.at(-1)).toMatchObject({
+        title: "Select Agent mode",
+        actions: expect.arrayContaining([expect.objectContaining({ id: "browse:new:set-runtime-mode", value: selection })]),
+      });
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "browse:new:set-runtime-mode", value: selection }));
+      await harness.controller.handleInboundEvent(buildTextEvent("Make a plan"));
+      expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
+        launchpad: expect.objectContaining({ backend, executionMode, acpRuntime: expect.objectContaining({ currentModeId: "plan" }) }),
+      }), expectMaterializeOptions());
+
+      await harness.store.upsertBinding({
+        id: `binding:telegram:dm::chat-1:${backend}:thread-1`, authorizedActorIds: ["user-1"], backend,
+        channel: buildCommandEvent("/status").channel, createdAt: 900, threadId: "thread-1", updatedAt: 900,
+      });
+      await harness.controller.handleInboundEvent(buildCommandEvent("/status"));
+      const permissions = executionMode === "full-access" ? "Full Access" : "Default Access";
+      expect(harness.delivered.at(-1)).toMatchObject({
+        text: expect.stringContaining(`Permissions: ${permissions}\nAgent mode: Default`),
+        actions: expect.arrayContaining([
+          expect.objectContaining({ id: "status:permissions" }),
+          expect.objectContaining({ id: "status:runtime-mode" }),
+        ]),
+      });
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:runtime-mode" }));
+      expect(harness.delivered.at(-1)).toMatchObject({
+        prompt: "Select Agent mode",
+        choices: expect.arrayContaining([expect.objectContaining({ id: "status:set-runtime-mode", value: selection })]),
+      });
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:set-runtime-mode", value: selection }));
+      expect(harness.setAcpSessionRuntimeOption).toHaveBeenCalledWith({ backend, threadId: "thread-1", ...selection });
+      expect(harness.setThreadExecutionMode).not.toHaveBeenCalled();
+      expect(harness.delivered.at(-1)).toMatchObject({
+        text: expect.stringContaining(`Permissions: ${permissions}\nAgent mode: Plan`),
+      });
+    },
+  );
+
   it("lets ACP messaging change permissions from the status card", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads[0] = {

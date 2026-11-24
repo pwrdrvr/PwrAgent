@@ -7,7 +7,7 @@ import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import fc from "fast-check";
-import type { AcpAgentUpdateStatus } from "@pwragent/shared/contracts/backend";
+import type { AcpAgentUpdateStatus, BackendRateLimitSummary } from "@pwragent/shared/contracts/backend";
 import type {
   AcpBackendId,
   AppServerPendingRequestNotification,
@@ -24,6 +24,7 @@ import {
   type AcpSessionMetadata,
 } from "../app-server/acp-backend-adapter";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
+import type { AcpLaunchDescriptor } from "../acp/acp-launch-descriptor";
 import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
@@ -1278,6 +1279,124 @@ describe("AcpBackendAdapter", () => {
       }
       expect(transport.requests.filter((request) => request.method === "_x.ai/session/steer"))
         .toHaveLength(supported ? 1 : 0);
+    } finally {
+      await adapter.close();
+    }
+  });
+
+  it("advertises steerTurn for Antigravity and emits item/completed userMessage on overlapping-prompt steer", async () => {
+    const backendId = "acp:antigravity" as AcpBackendId;
+    let agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "antigravity",
+      name: "Antigravity",
+      version: "1.5.15",
+      // Simulate an older persisted record whose cached capabilities had steerTurn: false.
+      capabilities: {
+        conversationRewind: false,
+        liveWorkspaceHandoff: false,
+        managedReview: false,
+        steerTurn: false,
+      },
+      launchDescriptor: {
+        backendId,
+        registryId: "antigravity",
+        distributionKind: "local",
+        command: "/fixture/agy",
+        args: ["acp", "--process-per-session"],
+        env: {},
+      },
+    };
+    const sessions = new Map<string, AcpSessionMetadata>();
+    const prompts: Array<{ resolve: (value: unknown) => void; reject: (error: unknown) => void }> = [];
+    const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentInfo: { name: "Antigravity ACP Server", version: "1.5.15" },
+      },
+      "session/new": { sessionId: "agy-session-1" },
+    });
+    const baseRequest = transport.request.bind(transport);
+    transport.request = async (method, params, timeoutMs) => {
+      if (method === "session/prompt") {
+        transport.requests.push({ method, params, timeoutMs });
+        return await new Promise((resolve, reject) => {
+          prompts.push({ resolve, reject });
+        });
+      }
+      return await baseRequest(method, params, timeoutMs);
+    };
+    const events: AgentEvent[] = [];
+    const adapter = createTestAcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn((updated: AcpInstalledAgentRecord) => { agent = updated; }),
+      },
+      acpSessionStore: {
+        listSessions: () => [...sessions.values()],
+        getSession: (_backendId, sessionId) => sessions.get(sessionId),
+        upsertSession: (metadata) => { sessions.set(metadata.sessionId, metadata); },
+      },
+      captureStores: [],
+      createAcpTransport: () => transport,
+      emit: async (event) => { events.push(event); },
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+
+    try {
+      expect(describeInstalledAcpBackend(agent).capabilities.steerTurn).toBe(true);
+      const client = await adapter.getClient(backendId);
+      const session = await client.startSession({ cwd: "/repo", executionMode: "default" });
+      await client.startPrompt({
+        sessionId: session.sessionId,
+        prompt: "Write a poem",
+        turnId: "turn-1",
+      });
+
+      const steerPromise = adapter.steerSession({
+        backend: backendId,
+        sessionId: session.sessionId,
+        text: "Say PINEAPPLE",
+        prompt: "Say PINEAPPLE",
+        parts: [{ type: "text", text: "Say PINEAPPLE" }],
+        content: [{ type: "text", text: "Say PINEAPPLE" }],
+        interjectionId: "agy-steer-1",
+      });
+      await vi.waitFor(() => expect(prompts).toHaveLength(2));
+      prompts[0]!.resolve({ stopReason: "end_turn" });
+
+      await expect(steerPromise).resolves.toEqual({ delivery: "currentTurn" });
+      await vi.waitFor(() => {
+        expect(events.some((event) => event.notification.method === "item/completed")).toBe(true);
+      });
+      expect(events.filter((event) => event.notification.method === "turn/completed")).toHaveLength(0);
+      expect(events.find((event) => event.notification.method === "item/completed")).toMatchObject({
+        backend: backendId,
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: session.sessionId,
+            turnId: "turn-1",
+            item: {
+              id: "user:turn-1:steer:agy-steer-1",
+              type: "userMessage",
+              text: "Say PINEAPPLE",
+              content: [{ type: "text", text: "Say PINEAPPLE" }],
+            },
+          },
+        },
+      });
+
+      transport.emitSessionUpdate("agy-session-1", {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "PINEAPPLE" },
+      });
+      prompts[1]!.resolve({ stopReason: "end_turn" });
+      await vi.waitFor(() => {
+        expect(events.filter((event) => event.notification.method === "turn/completed")).toHaveLength(1);
+      });
     } finally {
       await adapter.close();
     }
@@ -3856,6 +3975,128 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
+  it("publishes Antigravity quota on explicit refresh before any ACP session starts", async () => {
+    const agent = buildAntigravityQuotaAgent("/fake/agy");
+    const reading = Promise.withResolvers<{ rateLimits: BackendRateLimitSummary[] }>();
+    const readAntigravityUsage = vi.fn(() => reading.promise);
+    const emit = vi.fn(async () => undefined);
+    const createAcpClient = vi.fn(() => { throw new Error("Quota started an ACP client"); });
+    const adapter = createTestAcpBackendAdapter({
+      captureStores: [],
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      createAcpClient,
+      readAntigravityUsage,
+      emit,
+      handleServerRequest: async () => ({}),
+    });
+    try {
+      expect((await adapter.describeInstalledBackends())[0]?.rateLimits).toBeUndefined();
+      expect(readAntigravityUsage).not.toHaveBeenCalled();
+      expect((await adapter.describeInstalledBackends(true))[0]?.rateLimits).toBeUndefined();
+      await adapter.describeInstalledBackends(true);
+      expect(readAntigravityUsage).toHaveBeenCalledExactlyOnceWith(agent.launchDescriptor, expect.any(AbortSignal));
+      expect(createAcpClient).not.toHaveBeenCalled();
+      const rateLimits = [
+        { name: "Weekly Gemini limit", limitId: "gemini-weekly", usedPercent: 20 },
+        { name: "Weekly Claude/GPT limit", limitId: "3p-weekly", usedPercent: 45 },
+      ];
+      reading.resolve({ rateLimits });
+      await vi.waitFor(() => expect(emit).toHaveBeenCalledWith({
+        backend: agent.backendId,
+        notification: { method: "backend/providerStatus/updated", params: { backend: agent.backendId } },
+      }));
+      expect((await adapter.describeInstalledBackends())[0]?.rateLimits).toEqual(rateLimits);
+    } finally {
+      await adapter.close();
+    }
+  });
+
+  it("only shows quota from the selected Antigravity executable, including when a retired read finishes late", async () => {
+    const oldLimits = [{ name: "Weekly Gemini limit", limitId: "gemini-weekly", usedPercent: 20 }];
+    // The selected executable determines both quota visibility and eligibility
+    // to read, regardless of whether its predecessor had finished reading.
+    await fc.assert(fc.asyncProperty(fc.boolean(), async (oldReadCompleted) => {
+      let agent = buildAntigravityQuotaAgent("/old/agy");
+      const oldRead = Promise.withResolvers<{ rateLimits: BackendRateLimitSummary[] }>();
+      const readAntigravityUsage = vi.fn((launch: AcpLaunchDescriptor, _signal: AbortSignal) =>
+        launch.command === "/old/agy" ? oldRead.promise : Promise.resolve(undefined));
+      const adapter = createTestAcpBackendAdapter({
+        captureStores: [],
+        acpAgentStore: {
+          getInstalledAgent: () => agent,
+          listInstalledAgents: () => [agent],
+          upsertInstalledAgent: vi.fn(),
+        },
+        createAcpClient: () => ({
+          initialize: async () => undefined,
+          dispose: async () => undefined,
+        }) as never,
+        readAntigravityUsage,
+        emit: async () => undefined,
+        handleServerRequest: async () => ({}),
+      });
+      try {
+        await adapter.getClient(agent.backendId);
+        await adapter.describeInstalledBackends(true);
+        if (oldReadCompleted) {
+          oldRead.resolve({ rateLimits: oldLimits });
+          await vi.waitFor(async () => expect((await adapter.describeInstalledBackends())[0]?.rateLimits).toEqual(oldLimits));
+        }
+        agent = buildAntigravityQuotaAgent("/new/agy");
+        expect((await adapter.describeInstalledBackends(true))[0]?.rateLimits).toBeUndefined();
+        expect(readAntigravityUsage.mock.calls.map(([launch]) => launch.command)).toEqual(["/old/agy", "/new/agy"]);
+        expect(readAntigravityUsage.mock.calls[0]?.[1].aborted).toBe(true);
+        oldRead.resolve({ rateLimits: oldLimits });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect((await adapter.describeInstalledBackends())[0]?.rateLimits).toBeUndefined();
+      } finally {
+        oldRead.resolve({ rateLimits: oldLimits });
+        await adapter.close();
+      }
+    }), { numRuns: 12, examples: [[false], [true]] });
+  });
+
+  it("aborts Antigravity quota and keeps ACP close pending until the probe drains", async () => {
+    const agent = buildAntigravityQuotaAgent("/fake/agy");
+    const cleanup = Promise.withResolvers<undefined>();
+    const controllerObserved: AbortSignal[] = [];
+    const adapter = createTestAcpBackendAdapter({
+      captureStores: [],
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      createAcpClient: () => ({
+        initialize: async () => undefined,
+        dispose: async () => undefined,
+      }) as never,
+      readAntigravityUsage: async (_launch, signal) => {
+        controllerObserved.push(signal);
+        return await cleanup.promise;
+      },
+      emit: async () => undefined,
+      handleServerRequest: async () => ({}),
+    });
+    await adapter.getClient(agent.backendId);
+    await adapter.describeInstalledBackends(true);
+    const settled = vi.fn();
+    const closing = adapter.close().then(settled);
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(controllerObserved.map((signal) => signal?.aborted)).toEqual([true]);
+      expect(settled).not.toHaveBeenCalled();
+    } finally {
+      cleanup.resolve(undefined);
+      await closing;
+    }
+    expect(settled).toHaveBeenCalledTimes(1);
+  });
+
   it("does not block backend discovery while Grok billing is pending", async () => {
     const backendId = "acp:grok" as AcpBackendId;
     const agent: AcpInstalledAgentRecord = {
@@ -5512,6 +5753,7 @@ describe("AcpBackendAdapter", () => {
       const createAcpClient = vi.fn((_agent: AcpInstalledAgentRecord) => ({
         initialize: vi.fn(async () => undefined),
         ensureSession: vi.fn(async () => undefined),
+        closeSessionForTransfer: vi.fn(async () => undefined),
         dispose: vi.fn(async () => undefined),
         ownsSession: () => true,
         supportsSessionLoad: () => true,
@@ -6269,5 +6511,22 @@ function buildInstalledAgent(): AcpInstalledAgentRecord {
     allowlistRuleId: "local-gemini-cli",
     installedAt: 1000,
     updatedAt: 1000,
+  };
+}
+
+function buildAntigravityQuotaAgent(command: string): AcpInstalledAgentRecord {
+  return {
+    ...buildInstalledAgent(),
+    backendId: "acp:antigravity",
+    registryId: "antigravity",
+    name: "Antigravity",
+    launchDescriptor: {
+      backendId: "acp:antigravity",
+      registryId: "antigravity",
+      distributionKind: "local",
+      command,
+      args: ["acp", "--process-per-session"],
+      env: {},
+    },
   };
 }

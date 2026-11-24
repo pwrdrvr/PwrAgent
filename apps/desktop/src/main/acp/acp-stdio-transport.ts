@@ -119,13 +119,41 @@ export class AcpStdioJsonRpcTransport implements AcpJsonRpcTransport {
   private startConnection(): AcpStdioConnection {
     const { options } = this;
     const line = new AcpLineStdioTransport(options);
-    const observer = options.observer;
+    const preservePromptHandoffs = options.launchDescriptor.backendId === "acp:antigravity";
+    let responseBarrier: Promise<void> | undefined;
     // A response from an asynchronous agent request belongs to the child
     // that sent it, even if a replacement child has already connected.
     const rpc = new JsonRpcConnection(
       line,
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      observer && { onMessage: (event) => line.observe(event) },
+      (options.observer || preservePromptHandoffs) ? {
+        onMessage: async (event) => {
+          if (!preservePromptHandoffs || event.direction !== "inbound") {
+            return await line.observe(event);
+          }
+          const precedingResponse = responseBarrier;
+          const isResponse = event.envelope.id != null
+            && (Object.hasOwn(event.envelope, "result") || Object.hasOwn(event.envelope, "error"));
+          if (!isResponse) {
+            if (precedingResponse) await precedingResponse;
+            return await line.observe(event);
+          }
+          const barrier = Promise.withResolvers<void>();
+          responseBarrier = barrier.promise;
+          try {
+            if (precedingResponse) await precedingResponse;
+            await line.observe(event);
+          } finally {
+            // JsonRpcConnection settles the request after its observer runs.
+            // Give the client its promise continuations before a later frame
+            // can append to the transcript, even in the same stdout read.
+            setImmediate(() => {
+              if (responseBarrier === barrier.promise) responseBarrier = undefined;
+              barrier.resolve();
+            });
+          }
+        },
+      } : undefined,
       {
         logContext: { backend: options.launchDescriptor.backendId },
         logger: getMainLogger("pwragent:json-rpc"),

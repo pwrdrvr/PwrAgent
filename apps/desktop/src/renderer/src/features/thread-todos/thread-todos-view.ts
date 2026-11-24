@@ -31,6 +31,8 @@ export type ThreadTodoInstance = {
   placement?: boolean;
   /** The peer advertises `thread_todo_placement_sibling`: it makes sibling threads, by default. */
   placementSibling?: boolean;
+  /** The peer advertises `thread_todo_access`: as a card's owner it stores an Access pick. */
+  access?: boolean;
 };
 
 /** This window's own machine. Without an instance id, a card cannot start here from a peer. */

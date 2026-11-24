@@ -11,9 +11,11 @@ import {
 } from "./useAgentNotifications";
 
 /**
- * The window's agent notices: the controller for the notice stack and the
+ * The window's agent notices: the durable notice stack, with agent notices
+ * placed after approvals and before the other durable notices, and the
  * masthead bell every placement renders. A window showing a peer has no bell,
- * as the peer's own windows show its notices.
+ * as the peer's own windows show its notices. The stack is merged here so the
+ * app shell stays within its bytecode budget.
  */
 export function useAgentNotificationsSurface(
   api: AgentNotificationsApi | undefined,
@@ -21,7 +23,10 @@ export function useAgentNotificationsSurface(
   threadTitles: ReadonlyMap<string, string>,
   showThread: (thread: { backend: AppServerBackendKind; threadId: string }) => void,
   showNotice: (notice: AppNoticeToastNotice) => void,
-): { notices: AgentNotificationsController["notices"]; control: ReactNode } {
+  approvalNotices: readonly AppNoticeToastNotice[],
+  monitorWakeNotices: readonly AppNoticeToastNotice[],
+  otherDurableNotices: readonly AppNoticeToastNotice[],
+): { durable: AppNoticeToastNotice[]; control: ReactNode } {
   const threadTitle = useCallback(
     (backend: AppServerBackendKind, threadId: string) =>
       threadTitles.get(buildThreadIdentityKey(backend, threadId)) ?? "Untitled thread",
@@ -34,5 +39,10 @@ export function useAgentNotificationsSurface(
       : <AgentNotificationsButton controller={controller} threadTitle={threadTitle} />,
     [controller, threadTitle],
   );
-  return { notices: controller.notices, control };
+  const notices: AgentNotificationsController["notices"] = controller.notices;
+  const durable = useMemo(
+    () => [...approvalNotices, ...notices, ...monitorWakeNotices, ...otherDurableNotices],
+    [approvalNotices, monitorWakeNotices, notices, otherDurableNotices],
+  );
+  return { durable, control };
 }

@@ -264,6 +264,7 @@ export const THREAD_TODOS_RESOLVE_CHANNEL = "thread-todos:resolve";
 export const THREAD_TODOS_RUN_ACTION_CHANNEL = "thread-todos:run-action";
 export const THREAD_TODOS_LIST_PROJECTS_CHANNEL = "thread-todos:list-projects";
 export const THREAD_TODOS_SET_PROJECT_CHANNEL = "thread-todos:set-project";
+export const THREAD_TODOS_SET_ACCESS_CHANNEL = "thread-todos:set-access";
 export const THREAD_TODOS_LIST_DISPATCH_ENVIRONMENTS_CHANNEL = "thread-todos:list-dispatch-environments";
 export const THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL = "thread-todos:set-item-checked";
 export const THREAD_TODOS_REVIEW_CI_DEPLOYMENT_CHANNEL = "thread-todos:review-ci-deployment";
@@ -592,6 +593,8 @@ export const MESSAGING_APPROVE_PAIRING_CHANNEL = "messaging:approve-pairing";
 export const MESSAGING_REJECT_PAIRING_CHANNEL = "messaging:reject-pairing";
 export const MESSAGING_REVOKE_TELEGRAM_PAIRING_GRANT_CHANNEL = "messaging:revoke-telegram-pairing-grant";
 export const MESSAGING_READ_TELEGRAM_PAIRING_GRANTS_CHANNEL = "messaging:read-telegram-pairing-grants";
+export const MESSAGING_LIST_TELEGRAM_CONNECTION_CONVERSATIONS_CHANNEL =
+  "messaging:list-telegram-connection-conversations";
 export const MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL =
   "messaging:pairing-changed";
 export const AUTOMATIONS_LIST_CHANNEL = "automations:list";

@@ -1,4 +1,4 @@
-import { execFile as execFileCallback } from "node:child_process";
+import { execFile as execFileCallback, execFileSync } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -29,31 +29,43 @@ export function isolateProcessGitEnvironment(configRoot?: string): () => void {
 }
 
 /**
- * Runs Git with no machine configuration and untranslated messages, plus any
- * extra environment the caller supplies.
+ * Builds a fixture subprocess environment without machine configuration.
  */
+function isolatedGitEnvironment(cwd: string, extraEnv: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (isolatedGitKeys.test(key)) delete env[key];
+  }
+  return {
+    ...env,
+    ...extraEnv,
+    GIT_CONFIG_GLOBAL: path.join(cwd, "missing-global-config"),
+    GIT_CONFIG_SYSTEM: path.join(cwd, "missing-system-config"),
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_TERMINAL_PROMPT: "0",
+    // Callers match Git's English messages.
+    LANGUAGE: "C",
+    LC_ALL: "C",
+  };
+}
+
 export async function runIsolatedGit(
   cwd: string,
   args: string[],
   extraEnv: Record<string, string> = {},
 ): Promise<{ stdout: string; stderr: string }> {
-  const env = { ...process.env };
-  for (const key of Object.keys(env)) {
-    if (isolatedGitKeys.test(key)) delete env[key];
-  }
   return await execFile("git", ["-C", cwd, ...args], {
-    env: {
-      ...env,
-      ...extraEnv,
-      GIT_CONFIG_GLOBAL: path.join(cwd, "missing-global-config"),
-      GIT_CONFIG_SYSTEM: path.join(cwd, "missing-system-config"),
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_TERMINAL_PROMPT: "0",
-      // Callers match Git's English messages.
-      LANGUAGE: "C",
-      LC_ALL: "C",
-    },
+    env: isolatedGitEnvironment(cwd, extraEnv),
     encoding: "utf8",
+    windowsHide: true,
+  });
+}
+
+export function runIsolatedGitSync(cwd: string, args: string[]): string {
+  return execFileSync("git", ["-C", cwd, ...args], {
+    env: isolatedGitEnvironment(cwd),
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
 }

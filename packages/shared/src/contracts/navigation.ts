@@ -134,6 +134,8 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   /** Read-only stack membership projected by this checkout's owner. */
   stacks?: import("../stacks/stack-status").ThreadStackMembership[];
   stackMemberships?: import("../stacks/stack-status").CompactStackMembership[];
+  /** Owner-selected sidebar lead when the bounded stack memberships cannot prove it. */
+  stackLeadPrKey?: string;
   /** Owner-projected navigation group. Workspace paths still come from linkedDirectories. */
   checkoutProject?: NavigationCheckoutProject;
   /** Most recent completed probe for `gitWorkingState`, even when its value was unchanged. */
@@ -2370,6 +2372,7 @@ export type NavigationRow = {
   /** Read compatibility for owners that still include full stacks on rows. */
   stacks?: NavigationThreadSummary["stacks"];
   stackMemberships?: NavigationThreadSummary["stackMemberships"];
+  stackLeadPrKey?: string;
   ref: NavigationIdentity;
   rowRevision: string;
   id: ThreadIdentifier;

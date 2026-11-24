@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { AcpAgentInstance, AcpRejectedAgentInstance } from "@pwragent/shared/contracts/backend";
 import { discoverLocalAcpAgentInstances, type LocalAcpDiscoveryOptions } from "@pwrdrvr/agent-acp/discovery";
 import { resolveActiveAcpInstance } from "../acp/acp-instance-resolver";
@@ -325,6 +327,26 @@ describe("discoverAcpAgentInstances", () => {
 });
 
 describe("discoverLocalAcpAgentRecords", () => {
+  it("keeps every fixture discovery probe under the fixture root", async () => {
+    const root = path.resolve(tmpdir(), "acp-discovery-fixture");
+    const bin = path.join(root, ".local", "bin");
+    const probe = vi.fn(async (_command: string) => {
+      throw new Error("No provider executables in the fixture");
+    });
+    await discoverLocalAcpAgentRecords({
+      bundledGrokCommand: null,
+      env: { PATH: bin },
+      fallbackRootDir: root,
+      pathProbeRootDir: bin,
+      discover: (options) => discoverLocalAcpAgentInstances({ ...options, probe }),
+    });
+
+    expect(probe).toHaveBeenCalled();
+    for (const [command] of probe.mock.calls) {
+      expect(command.startsWith(root + path.sep), command).toBe(true);
+    }
+  });
+
   it("uses the official Antigravity ACP subcommand and excludes a pre-ACP install", async () => {
     const older = "/fixtures/old/agy";
     const current = "/fixtures/current/agy";

@@ -1,4 +1,9 @@
-import type { AcpSessionInventoryGroup, AcpSessionMetadata, AcpSessionStorage } from "@pwragent/owner-core/acp-storage";
+import {
+  acpSessionExecutionMode,
+  type AcpSessionInventoryGroup,
+  type AcpSessionMetadata,
+  type AcpSessionStorage,
+} from "@pwragent/owner-core/acp-storage";
 import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
 import { type AcpBackendId } from "@pwragent/shared/contracts/normalized-app-server";
 import type { StateDb } from "./state-db.js";
@@ -168,6 +173,7 @@ function stripAcpSessionHistory(metadata: AcpSessionMetadata): AcpSessionMetadat
     (legacyTranscriptUpdates.some(isConversationTranscriptUpdate) || undefined);
   return {
     ...metadataWithoutHistory,
+    executionMode: acpSessionExecutionMode(metadata),
     ...(hasConversationHistory === undefined ? {} : { hasConversationHistory }),
   };
 }

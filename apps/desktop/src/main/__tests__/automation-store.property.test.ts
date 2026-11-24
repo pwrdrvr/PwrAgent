@@ -33,6 +33,46 @@ it("round trips named automation routes while leaving an unloaded definition for
   }
 });
 
+it("keeps a definition whose bot selectors leave the ID absent readable by older stores", () => {
+  // Downgrade rule: only a named route hides a definition from an older
+  // PwrAgent. The editor's original-bot choice omits the ID, so those
+  // definitions stay where an older reader enumerates and runs them.
+  const db = openInMemoryStateDb();
+  try {
+    const route = fc.record({
+      conversationId: fc.constantFrom("-1001234567890", "42"),
+      named: fc.boolean(),
+    });
+    fc.assert(fc.property(fc.array(route, { minLength: 1, maxLength: 3 }), route, (sources, target) => {
+      const store = new AutomationStore(db);
+      const conversation = (entry: { conversationId: string; named: boolean }) => ({
+        channel: "telegram" as const,
+        ...(entry.named ? { connectionId: `mc_${"d".repeat(32)}` } : {}),
+        conversationId: entry.conversationId,
+        conversationKind: "channel" as const,
+      });
+      const triggers = sources.map((entry, index) => ({
+        kind: "inbound_message" as const, id: `source-${index}`, conversation: conversation(entry),
+      }));
+      const automation = store.createAutomation({
+        backend: "codex", threadId: "owner", name: "Orchard updates", taskPrompt: "Check.",
+        triggers,
+        outputActions: [{ kind: "messaging_target", id: "reply", target: conversation(target) }],
+        now: 1,
+      });
+      const stored = db.raw.prepare("SELECT payload FROM automations WHERE automation_id = ?")
+        .get(automation.id) as { payload: string };
+      const old = JSON.parse(stored.payload);
+      const anyNamed = target.named || sources.some((entry) => entry.named);
+      expect(old.triggers).toEqual(anyNamed ? [] : automation.triggers);
+      expect(old.connectionRouting === undefined).toBe(!anyNamed);
+      expect(new AutomationStore(db).getAutomation(automation.id)?.triggers).toEqual(automation.triggers);
+    }), { numRuns: 25 });
+  } finally {
+    db.close();
+  }
+});
+
 const statusRank = {
   pending: 0,
   queued: 1,

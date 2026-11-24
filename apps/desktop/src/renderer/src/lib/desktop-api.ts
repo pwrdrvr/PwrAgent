@@ -72,6 +72,7 @@ import type {
   RunThreadTodoActionRequest,
   SetThreadTodoItemCheckedRequest,
   ReviewThreadTodoCiDeploymentRequest,
+  SetThreadTodoAccessRequest,
   SetThreadTodoProjectRequest,
   ThreadTodoMutationResponse,
   ThreadTodosChangedEvent,
@@ -717,6 +718,8 @@ import type {
   GetMessagingActivitySummaryResponse,
   InboundPreviewMessage,
   ListInboundTopicsRequest,
+  ListTelegramConnectionConversationsRequest,
+  ListTelegramConnectionConversationsResponse,
   ListInboundTopicsResponse,
   ListMessagingActivityRequest,
   ListMessagingActivityResponse,
@@ -1459,6 +1462,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
     request: ListThreadTodoDispatchEnvironmentsRequest,
   ) => Promise<ListThreadTodoDispatchEnvironmentsResponse>;
   /** The operator's pick from a card's project menu. */
+  /** A start card's Access pick, stored on the card's owner. */
+  setThreadTodoAccess?: (
+    request: SetThreadTodoAccessRequest,
+  ) => Promise<ThreadTodoMutationResponse>;
   setThreadTodoProject?: (
     request: SetThreadTodoProjectRequest,
   ) => Promise<ThreadTodoMutationResponse>;
@@ -2322,6 +2329,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   listInboundTopics?: (
     request: ListInboundTopicsRequest,
   ) => Promise<ListInboundTopicsResponse>;
+  /** One Telegram bot's watchable conversations, for the Automations editor. */
+  listTelegramConnectionConversations?: (
+    request: ListTelegramConnectionConversationsRequest,
+  ) => Promise<ListTelegramConnectionConversationsResponse>;
   /** Spawns or focuses the dedicated Messaging Activity window. */
   openMessagingActivityWindow?: () => Promise<void>;
   /** Shut down the messaging runtime in *this* process and release

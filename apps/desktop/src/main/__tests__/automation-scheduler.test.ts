@@ -102,6 +102,16 @@ function buildSchedulerWithGate(gateRunner: AutomationGateRunner): AutomationSch
 }
 
 describe("AutomationScheduler", () => {
+  it("stops owned gates when shutting down the scheduler", () => {
+    const stopAll = vi.fn();
+    const scheduler = buildSchedulerWithGate({
+      runGate: async ({ command }) => ({ status: "proceed", command, durationMs: 0, output: "" }),
+      stopAll,
+    });
+    scheduler.stop();
+    expect(stopAll).toHaveBeenCalledOnce();
+  });
+
   it("persists running before invoking the provider, even before it acknowledges the turn", async () => {
     const automation = createIntervalAutomation();
     const provider = vi.spyOn(launcher, "startAutomationHeadlessTurn")

@@ -57,6 +57,7 @@ describe("ASAR entry paths", () => {
         unpacked: true,
       },
       { entry: "/node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe", unpacked: true },
+      { entry: "/out/main/pwragent-windows-job.exe", unpacked: true },
     ]);
   });
 
@@ -97,6 +98,7 @@ describe("ASAR entry paths", () => {
       "\\node_modules\\node-pty\\build\\Release\\conpty.node",
       "\\node_modules\\node-pty\\build\\Release\\conpty_console_list.node",
       "\\node_modules\\@anthropic-ai\\claude-agent-sdk-win32-x64\\claude.exe",
+      "\\out\\main\\pwragent-windows-job.exe",
     ], "win32", "x64");
 
     expect(missing).toEqual([

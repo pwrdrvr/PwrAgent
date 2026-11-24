@@ -12,16 +12,11 @@ import {
   useThreadPrWatches,
 } from "../pr-watches/useThreadPrWatchIndicators";
 
-type WatchedThread = Pick<
-  NavigationThreadSummary,
-  "id" | "source" | "federation" | "prAutoDispatchEnabled" | "primaryGitRepository" | "prCiWatches"
->;
-
 /**
  * What lets a row's PR card merge. A thread another PwrAgent owns merges
  * there, with its own holds, when that owner accepts the request.
  */
-function useThreadPrMerge(thread: WatchedThread): ComponentProps<typeof PrChip>["merge"] {
+function useThreadPrMerge(thread: NavigationThreadSummary): ComponentProps<typeof PrChip>["merge"] {
   const service = usePullRequestMergeService();
   const target = service ? threadPullRequestMergeTarget(thread) : undefined;
   // Keyed on the route, not the row's federation object, which a navigation
@@ -48,7 +43,7 @@ function useThreadPrMerge(thread: WatchedThread): ComponentProps<typeof PrChip>[
  * identity, so the chip itself still bails out.
  */
 export const ThreadRowPrChip = memo(function ThreadRowPrChip(
-  props: Omit<ComponentProps<typeof PrChip>, "watch"> & { thread: WatchedThread },
+  props: Omit<ComponentProps<typeof PrChip>, "watch"> & { thread: NavigationThreadSummary },
 ) {
   const { thread, ...chip } = props;
   const watches = useThreadPrWatches(thread);
@@ -58,6 +53,8 @@ export const ThreadRowPrChip = memo(function ThreadRowPrChip(
     <PrChip
       {...chip}
       watch={resolvePrChipWatch(watches, chip.pr, autoFixRepository)}
+      stackThread={thread}
+      showStackTag
       cardActions
       merge={merge}
     />
@@ -67,7 +64,7 @@ export const ThreadRowPrChip = memo(function ThreadRowPrChip(
 /** Minimal density's one PR chip, reading the watch context the same way. */
 export const ThreadRowPrRollupChip = memo(function ThreadRowPrRollupChip(
   props: Omit<ComponentProps<typeof PrRollupChip>, "prWatches" | "autoFixRepository"> & {
-    thread: WatchedThread;
+    thread: NavigationThreadSummary;
   },
 ) {
   const { thread, ...chip } = props;
@@ -77,6 +74,7 @@ export const ThreadRowPrRollupChip = memo(function ThreadRowPrRollupChip(
   return (
     <PrRollupChip
       {...chip}
+      stackThread={thread}
       prWatches={prWatches}
       autoFixRepository={autoFixRepository}
       merge={merge}
