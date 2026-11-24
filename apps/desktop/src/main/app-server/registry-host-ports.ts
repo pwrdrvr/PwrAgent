@@ -198,6 +198,7 @@ export interface RegistryHostPorts {
     reasoningEffort?: string;
     mcpRegistration?: AcpMcpRegistrationSource;
     hidden?: boolean;
+    requiredAntigravityMode?: string;
   }): Promise<{ threadId: string; executionMode: ThreadExecutionMode }>;
   startAcpTurn(params: {
     backend: AcpBackendId;
@@ -205,6 +206,7 @@ export interface RegistryHostPorts {
     input: AppServerTurnInputItem[];
     model?: string;
     reasoningEffort?: string;
+    requiredAntigravityMode?: string;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }>;
   /** A missing or local instance id resolves to the local owner. */
   ownerRelativeInstanceId(instanceId: string | undefined): string | undefined;
