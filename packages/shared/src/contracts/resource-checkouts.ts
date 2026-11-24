@@ -192,6 +192,35 @@ export type ResourceDomain = {
   definition: ResourceDefinitionStatus;
   /** Per-action gates from the authority for this viewer. */
   actions: ResourceActionGates;
+  /**
+   * What this viewer observed of the resource recently. The serving process
+   * keeps it in memory only, so it starts empty after a restart; peers never
+   * send it.
+   */
+  usage?: ResourceUsageHistory;
+};
+
+/** How long the serving process keeps observed usage. */
+export const RESOURCE_USAGE_WINDOW_MS = 30 * 60_000;
+
+/**
+ * Held and waiting units as a step function: each point holds until the
+ * next one, and the last holds until the snapshot's `observedAt`. Points are
+ * oldest first. The first point may predate the window; it is the value in
+ * force when the window began.
+ */
+export type ResourceUsageHistory = {
+  /** When this process first observed the resource; nothing is known before. */
+  observedSince: number;
+  points: ResourceUsagePoint[];
+};
+
+export type ResourceUsagePoint = {
+  at: number;
+  /** Units held by granted allocations; one per allocation when exclusive. */
+  held: number;
+  /** Units requested by queue entries; one per entry when exclusive. */
+  waiting: number;
 };
 
 export type ResourceThreadRef = {

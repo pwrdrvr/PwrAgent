@@ -103,6 +103,34 @@ simulated results.
   same function the main process parses with, and keeps **Save draft**
   disabled while it reports a problem.
 
+## Usage history
+
+The inspector's **Last 30 minutes** chart stacks held units under waiting
+units, one bar per 30 seconds, against a dashed capacity line. An exclusive
+resource counts one unit per allocation and per queue entry.
+
+- **Memory only.** The checkout store keeps current grants and queues, not
+  history, and the chart adds no SQLite reads or writes.
+  `ResourceUsageRecorder` (`src/main/resource-checkouts/checkout-usage-history.ts`)
+  watches the projection the service already reads on its 2-second poll and
+  appends a point only when held or waiting units change. Each series keeps
+  one point from before the window and at most `MAX_USAGE_POINTS`. A
+  resource unseen for 30 minutes is dropped. A restart starts empty, and
+  the chart says when recording began.
+- **Unanswered reads are not observations.** An `unreachable` or
+  `ownership_unresolved` resource, or one served from a last-known
+  snapshot, adds no point; its last observed value holds.
+- **Out of the fingerprint.** `ResourceDomain.usage` is attached in `read()`
+  after the revision fingerprint, so time passing never publishes a
+  revision. The last point holds until the next revision, and the renderer
+  extends it to now. Peers never send `usage`.
+- **One moment per bar.** `usageChart` (`resource-usage.ts`) draws each
+  bucket's busiest moment, by held plus waiting then by held, so a bar's
+  two segments come from the same instant.
+  `__tests__/resource-usage.property.test.ts` and
+  `src/main/__tests__/resource-checkout-usage-history.property.test.ts`
+  hold these rules.
+
 ## Action semantics
 
 - Each operator intent carries one `idempotencyKey` (`rco-<uuid>`). A dialog
