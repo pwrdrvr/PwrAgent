@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode, type SyntheticEvent } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type SyntheticEvent } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import { isBranchDrifted } from "@pwragent/shared/contracts/branch-drift";
@@ -101,6 +101,19 @@ type ThreadMetaChipItems = {
   openContinueAfter?: (thread: NavigationThreadSummary) => void;
 };
 
+type ChipTooltipRequest = { target: HTMLElement; content: string };
+
+function ThreadMetaTooltip({ request, dismiss }: {
+  request: ChipTooltipRequest;
+  dismiss: (target: HTMLElement) => void;
+}) {
+  const { show, tooltipNode } = useViewportTooltip({ className: "viewport-tooltip", onDismiss: dismiss });
+  useLayoutEffect(() => {
+    show(request.target, request.content);
+  }, [request, show]);
+  return tooltipNode;
+}
+
 export function ThreadMetaChips(props: ThreadMetaChipsProps) {
   const itemThreadKey = threadSummaryIdentityKey(props.thread);
   const openTodos = useThreadTodosForKey(itemThreadKey);
@@ -150,16 +163,19 @@ const ThreadMetaChipsContent = memo(function ThreadMetaChipsContent({
   const showProvider = (chipVisibility?.provider ?? true) && providerChipNeeded;
   const showBranch = chipVisibility?.branch ?? true;
   const maxLinkedDirectories = chipVisibility?.maxLinkedDirectories;
-  const gitStateTooltip = useViewportTooltip({ className: "viewport-tooltip" });
-  // Sidebar rows are a clipped scroll region, so a native `title` gets
-  // edge-clipped — the viewport tooltip is what the neighbouring chips use.
-  const terminalTooltip = useViewportTooltip({ className: "viewport-tooltip" });
-  // Same reason as the terminal chip: the sidebar clips a native `title`, and
-  // the Star Map layer would paint over one anyway.
-  const draftTooltip = useViewportTooltip({ className: "viewport-tooltip" });
-  const todoTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  // Chips share a portal that mounts only on hover or focus. A late leave or
+  // blur from one chip must not dismiss the tooltip taken by another.
+  const [tooltip, setTooltip] = useState<ChipTooltipRequest | null>(null);
+  const dismissTooltip = useCallback((target: HTMLElement): void => {
+    setTooltip((current) => current?.target === target ? null : current);
+  }, []);
+  const showTooltip = (target: HTMLElement, content: string): void => {
+    setTooltip({ target, content });
+  };
+  const leaveTooltip = (event: SyntheticEvent<HTMLElement>): void => {
+    dismissTooltip(event.currentTarget);
+  };
   const revealTodos = useThreadTodoReveal();
-  const waitTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   // Queue entries carry the same owner identity as navigation. The session's
   // own approval and input flags still show when the queue has no matching wait.
   const leadWait = leadingOperatorWait(waits);
@@ -171,16 +187,15 @@ const ThreadMetaChipsContent = memo(function ThreadMetaChipsContent({
     : formatWaitTooltip(waits);
   // The row would open the thread at its bottom; the chip opens the
   // question's card.
-  const openLeadQuestion = (event: SyntheticEvent): void => {
+  const openLeadQuestion = (event: SyntheticEvent<HTMLElement>): void => {
     if (!openQuestion || !leadWait) return;
     event.preventDefault();
     event.stopPropagation();
-    waitTooltip.hide();
+    leaveTooltip(event);
     openQuestion(leadWait);
   };
   // Continue After registrations on this thread. The chip opens the dialog
   // wherever one can open, and is a plain status marker elsewhere.
-  const dependencyTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const dependencyTooltipText = dependency
     ? openContinueAfter ? `${dependency.tooltip}\nClick to manage` : dependency.tooltip
     : "";
@@ -189,10 +204,10 @@ const ThreadMetaChipsContent = memo(function ThreadMetaChipsContent({
   const openItemNoun = waits.length === 0 ? "to-do" : "item";
   // The row would open the thread as it was left; the chip also brings its
   // cards into view, as a collapsed stack or another rail lens would hide them.
-  const openTodoCards = revealTodos ? (event: SyntheticEvent): void => {
+  const openTodoCards = revealTodos ? (event: SyntheticEvent<HTMLElement>): void => {
     event.preventDefault();
     event.stopPropagation();
-    todoTooltip.hide();
+    leaveTooltip(event);
     revealTodos(thread);
   } : undefined;
   const todoTooltipText = (): string => formatTodoTooltip(
@@ -406,12 +421,12 @@ const ThreadMetaChipsContent = memo(function ThreadMetaChipsContent({
           className="thread-row__chip thread-row__chip--draft thread-row__chip--persistent"
           data-thread-draft="unsent"
           onMouseEnter={(event) =>
-            draftTooltip.show(
+            showTooltip(
               event.currentTarget,
               "Unsent draft\nThis thread has composer text you have not sent.",
             )
           }
-          onMouseLeave={draftTooltip.hide}
+          onMouseLeave={leaveTooltip}
         >
           <span aria-hidden="true" className="thread-row__chip-icon">
             <DraftIcon size={12} />
@@ -419,7 +434,6 @@ const ThreadMetaChipsContent = memo(function ThreadMetaChipsContent({
           <span className="thread-row__chip-label">Draft</span>
         </span>
       ) : null}
-      {draftTooltip.tooltipNode}
 
       {leadWait ? (
         <span
@@ -430,21 +444,20 @@ const ThreadMetaChipsContent = memo(function ThreadMetaChipsContent({
             isBlockingWait(leadWait) ? "thread-row__chip--approval" : "thread-row__chip--question"
           }`}
           data-thread-wait={leadWait.kind}
-          onBlur={openQuestion ? waitTooltip.hide : undefined}
+          onBlur={openQuestion ? leaveTooltip : undefined}
           onClick={openQuestion ? openLeadQuestion : undefined}
           onFocus={openQuestion
-            ? (event) => waitTooltip.show(event.currentTarget, waitTooltipText())
+            ? (event) => showTooltip(event.currentTarget, waitTooltipText())
             : undefined}
           onKeyDown={openQuestion ? (event) => {
             if (event.key === "Enter" || event.key === " ") openLeadQuestion(event);
           } : undefined}
-          onMouseEnter={(event) => waitTooltip.show(event.currentTarget, waitTooltipText())}
-          onMouseLeave={waitTooltip.hide}
+          onMouseEnter={(event) => showTooltip(event.currentTarget, waitTooltipText())}
+          onMouseLeave={leaveTooltip}
         >
           {operatorWaitLabel(leadWait)}
         </span>
       ) : null}
-      {waitTooltip.tooltipNode}
 
       {openItemCount > 0 ? (
         <span
@@ -458,15 +471,15 @@ const ThreadMetaChipsContent = memo(function ThreadMetaChipsContent({
           }`}
           data-thread-todos={openItemCount}
           data-unread={unreadItemCount > 0 ? unreadItemCount : undefined}
-          onBlur={todoTooltip.hide}
+          onBlur={leaveTooltip}
           onClick={openTodoCards}
-          onFocus={openTodoCards ? (event) => todoTooltip.show(event.currentTarget, todoTooltipText()) : undefined}
+          onFocus={openTodoCards ? (event) => showTooltip(event.currentTarget, todoTooltipText()) : undefined}
           onKeyDown={openTodoCards ? (event) => {
             if (event.key !== "Enter" && event.key !== " ") return;
             openTodoCards(event);
           } : undefined}
-          onMouseEnter={(event) => todoTooltip.show(event.currentTarget, todoTooltipText())}
-          onMouseLeave={todoTooltip.hide}
+          onMouseEnter={(event) => showTooltip(event.currentTarget, todoTooltipText())}
+          onMouseLeave={leaveTooltip}
         >
           <span aria-hidden="true" className="thread-row__chip-icon">
             <TodoIcon size={12} />
@@ -474,7 +487,6 @@ const ThreadMetaChipsContent = memo(function ThreadMetaChipsContent({
           <span className="thread-row__chip-label">{openItemCount}</span>
         </span>
       ) : null}
-      {todoTooltip.tooltipNode}
 
       {dependency ? (
         <span
@@ -485,24 +497,24 @@ const ThreadMetaChipsContent = memo(function ThreadMetaChipsContent({
             dependency.alert ? " is-alert" : ""
           }`}
           data-thread-dependencies={dependency.count}
-          onBlur={dependencyTooltip.hide}
+          onBlur={leaveTooltip}
           onClick={openContinueAfter ? (event) => {
             // The row selects its thread on click; the chip opens the dialog instead.
             event.preventDefault();
             event.stopPropagation();
-            dependencyTooltip.hide();
+            leaveTooltip(event);
             openContinueAfter(thread);
           } : undefined}
-          onFocus={(event) => dependencyTooltip.show(event.currentTarget, dependencyTooltipText)}
+          onFocus={(event) => showTooltip(event.currentTarget, dependencyTooltipText)}
           onKeyDown={openContinueAfter ? (event) => {
             if (event.key !== "Enter" && event.key !== " ") return;
             event.preventDefault();
             event.stopPropagation();
-            dependencyTooltip.hide();
+            leaveTooltip(event);
             openContinueAfter(thread);
           } : undefined}
-          onMouseEnter={(event) => dependencyTooltip.show(event.currentTarget, dependencyTooltipText)}
-          onMouseLeave={dependencyTooltip.hide}
+          onMouseEnter={(event) => showTooltip(event.currentTarget, dependencyTooltipText)}
+          onMouseLeave={leaveTooltip}
         >
           <span aria-hidden="true" className="thread-row__chip-icon">
             <ContinueAfterIcon size={12} />
@@ -510,7 +522,6 @@ const ThreadMetaChipsContent = memo(function ThreadMetaChipsContent({
           <span className="thread-row__chip-label">{dependency.label}</span>
         </span>
       ) : null}
-      {dependencyTooltip.tooltipNode}
 
       {!leadWait && hasApprovalRequest ? (
         <span
@@ -537,10 +548,6 @@ const ThreadMetaChipsContent = memo(function ThreadMetaChipsContent({
           aria-label="Integrated terminal running"
           role="img"
           className="thread-row__chip thread-row__chip--terminal"
-          onMouseEnter={(event) =>
-            terminalTooltip.show(event.currentTarget, "Integrated terminal running")
-          }
-          onMouseLeave={terminalTooltip.hide}
         >
           <span aria-hidden="true" className="thread-row__chip-icon">
             <TerminalIcon size={12} />
@@ -606,9 +613,9 @@ const ThreadMetaChipsContent = memo(function ThreadMetaChipsContent({
           role="img"
           className="thread-row__chip thread-row__chip--dirty thread-row__chip--mono"
           onMouseEnter={(event) =>
-            gitStateTooltip.show(event.currentTarget, dirtyTooltip)
+            showTooltip(event.currentTarget, dirtyTooltip)
           }
-          onMouseLeave={gitStateTooltip.hide}
+          onMouseLeave={leaveTooltip}
         >
           {hasDirtyLineStats ? (
             <>
@@ -633,9 +640,9 @@ const ThreadMetaChipsContent = memo(function ThreadMetaChipsContent({
           role="img"
           className="thread-row__chip thread-row__chip--unpublished thread-row__chip--persistent"
           onMouseEnter={(event) =>
-            gitStateTooltip.show(event.currentTarget, detachedUnpublishedTooltip)
+            showTooltip(event.currentTarget, detachedUnpublishedTooltip)
           }
-          onMouseLeave={gitStateTooltip.hide}
+          onMouseLeave={leaveTooltip}
         >
           {unpushedCount.toLocaleString()} unpublished ·{" "}
           {detachedAheadCount.toLocaleString()} ahead
@@ -646,14 +653,14 @@ const ThreadMetaChipsContent = memo(function ThreadMetaChipsContent({
           role="img"
           className="thread-row__chip thread-row__chip--unpushed thread-row__chip--mono"
           onMouseEnter={(event) =>
-            gitStateTooltip.show(event.currentTarget, unpushedTooltip)
+            showTooltip(event.currentTarget, unpushedTooltip)
           }
-          onMouseLeave={gitStateTooltip.hide}
+          onMouseLeave={leaveTooltip}
         >
           ↑{unpushedCount.toLocaleString()}
         </span>
       ) : null}
-      {gitStateTooltip.tooltipNode}
+      {tooltip ? <ThreadMetaTooltip request={tooltip} dismiss={dismissTooltip} /> : null}
     </>
   );
 });

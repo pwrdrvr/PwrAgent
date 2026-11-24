@@ -124,6 +124,6 @@ it.each([6, 12].flatMap((count) => (["flat", "directories"] as const).map((lens)
     const measured = { rowRenders: renders, statusReads: readStatus.mock.calls.length, tooltipControllers: controllers.mock.calls.length };
     if (process.env.DRAFT_ROW_OPERATION_REPORT) console.info({ count, lens, ...measured });
     // This directory presentation has one additional tooltip controller.
-    expect(measured).toEqual({ rowRenders: 20, statusReads: 20, tooltipControllers: lens === "flat" ? 180 : 200 });
+    expect(measured).toEqual({ rowRenders: 20, statusReads: 20, tooltipControllers: lens === "flat" ? 60 : 80 });
   },
 );

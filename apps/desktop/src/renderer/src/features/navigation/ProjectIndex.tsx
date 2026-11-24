@@ -28,6 +28,7 @@ import {
   projectTypeaheadIndex,
   sameProjectSpy,
   spyProjects,
+  type ProjectBlockBox,
   type ProjectSpy,
 } from "./project-index";
 import { TOP_DOCK_RESERVE_CHANGE_EVENT, topDockReserve } from "./selected-thread-dock-reserve";
@@ -62,24 +63,40 @@ function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => v
   let list: HTMLElement | null = null;
   let sections: Element[] = [];
   let frame = 0;
+  let viewportHeight: number | undefined;
+  const blocks = new Map<number, ProjectBlockBox>();
 
   const measure = (): void => {
     const target = list;
-    const height = target?.clientHeight ?? 0;
-    if (target === null || height === 0 || sections.length === 0) {
+    if (target === null || sections.length === 0) {
       publish(NO_PROJECT_SPY);
       return;
     }
-    const top = target.getBoundingClientRect().top;
+    const height = viewportHeight ?? target.clientHeight;
+    if (height === 0) {
+      publish(NO_PROJECT_SPY);
+      return;
+    }
+    if (resize) viewportHeight = height;
+    const scrollTop = target.scrollTop;
+    let listTop: number | undefined;
     publish(spyProjects(sections.length, (index) => {
+      const cached = blocks.get(index);
+      if (cached) return cached;
+      listTop ??= target.getBoundingClientRect().top;
       const section = sections[index]!;
       const rect = section.getBoundingClientRect();
-      return {
+      // Sections stay in normal flow as the list scrolls. Their sticky
+      // headers move inside them, so a box in list coordinates can be
+      // reused until the list, a section, or an intervening child changes.
+      const block = {
         key: section.getAttribute("data-directory-key")!,
-        top: rect.top - top,
-        bottom: rect.bottom - top,
+        top: rect.top - listTop + scrollTop,
+        bottom: rect.bottom - listTop + scrollTop,
       };
-    }, height, topDockReserve(region)));
+      if (resize) blocks.set(index, block);
+      return block;
+    }, scrollTop + height, scrollTop + topDockReserve(region)));
   };
   const schedule = (): void => {
     if (frame !== 0) return;
@@ -89,7 +106,12 @@ function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => v
     });
   };
 
-  const resize = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : null;
+  const invalidateGeometry = (): void => {
+    blocks.clear();
+    viewportHeight = undefined;
+    schedule();
+  };
+  const resize = typeof ResizeObserver === "function" ? new ResizeObserver(invalidateGeometry) : null;
   const findList = () => region.querySelector<HTMLElement>(":scope > .directory-list");
   // DirectoriesList renders its sections as keyed direct children. Refresh
   // their references on membership changes. Nested thread updates can
@@ -108,7 +130,7 @@ function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => v
       const next = findList();
       if (next !== list) {
         watchList(next);
-        schedule();
+        invalidateGeometry();
         return;
       }
     }
@@ -120,7 +142,7 @@ function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => v
       }
     }
     syncSections();
-    schedule();
+    invalidateGeometry();
   });
   const watchList = (next: HTMLElement | null): void => {
     list = next;
@@ -136,17 +158,19 @@ function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => v
   };
 
   watchList(findList());
-  // Capture programmatic scrolls and scrolls from the nested list. A resize
-  // in any section (including a tray opening above the viewport) can move
-  // the active boundary without a scroll event.
-  region.addEventListener("scroll", schedule, { capture: true, passive: true });
+  // Follow the list itself, including programmatic jumps. Scrolling a
+  // control inside the list does not move any of its project sections.
+  const onScroll = (event: Event): void => {
+    if (event.target === list) schedule();
+  };
+  region.addEventListener("scroll", onScroll, { capture: true, passive: true });
   // The selected thread's dock arriving at the top moves the line the
   // headers stick to, without a scroll.
   region.addEventListener(TOP_DOCK_RESERVE_CHANGE_EVENT, schedule);
   measure();
   return () => {
     window.cancelAnimationFrame(frame);
-    region.removeEventListener("scroll", schedule, { capture: true });
+    region.removeEventListener("scroll", onScroll, { capture: true });
     region.removeEventListener(TOP_DOCK_RESERVE_CHANGE_EVENT, schedule);
     mutation.disconnect();
     resize?.disconnect();
