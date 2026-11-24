@@ -16,6 +16,8 @@ const rank = (mode: ThreadExecutionMode) => ORDER.indexOf(mode);
 const LEVEL_OF: Record<string, ThreadExecutionMode> = { default: "default", auto: "auto", yolo: "full-access" };
 const BACKENDS: AppServerBackendKind[] = ["codex", "claude", "acp:antigravity", "acp:kimi"];
 
+const nativeIdsArb = fc.uniqueArray(fc.constantFrom("default", "accept-edits", "auto", "plan", "yolo", "architect"), { maxLength: 6 });
+
 /** A provider as its catalog lists it: PwrAgent modes, an agent's own modes, or neither. */
 const destinationArb = (kind: AppServerBackendKind): fc.Arbitrary<ThreadTodoAccessDestination> => fc.oneof(
   fc.uniqueArray(fc.record({ mode: fc.constantFrom(...ORDER), available: fc.boolean() }), {
@@ -24,19 +26,27 @@ const destinationArb = (kind: AppServerBackendKind): fc.Arbitrary<ThreadTodoAcce
     kind, label: kind, executionModes: modes.map((entry) => ({ ...entry, label: entry.mode })),
   }) as ThreadTodoAccessDestination),
   fc.tuple(
-    fc.uniqueArray(fc.constantFrom("default", "accept-edits", "auto", "plan", "yolo", "architect"), { maxLength: 6 }),
-    fc.boolean(),
-  ).map(([ids, asPermissionOption]) => ({
+    nativeIdsArb,
+    fc.constantFrom("permission", "sessionModes", "modeConfig"),
+    nativeIdsArb,
+  ).map(([ids, shape, sessionIds]) => ({
     kind,
     label: kind,
     executionModes: [],
     acp: {
-      runtime: asPermissionOption
+      runtime: shape === "permission"
         ? { schemaVersion: 1, status: "ready", configOptions: [{
             id: "permission_mode", label: "Permissions", type: "select", category: "mode",
             values: ids.map((value) => ({ value })),
           }] }
-        : { schemaVersion: 1, status: "ready", modes: { availableModes: ids.map((id) => ({ id, label: id })) } },
+        : shape === "modeConfig"
+          // Antigravity, Kimi and Qwen list a `mode` config beside their session
+          // modes. They mirror each other today; nothing makes them.
+          ? { schemaVersion: 1, status: "ready", configOptions: [{
+              id: "mode", label: "Mode", type: "select", category: "mode",
+              values: ids.map((value) => ({ value })),
+            }], modes: { availableModes: sessionIds.map((id) => ({ id, label: id })) } }
+          : { schemaVersion: 1, status: "ready", modes: { availableModes: ids.map((id) => ({ id, label: id })) } },
     },
   }) as unknown as ThreadTodoAccessDestination),
 );
@@ -90,11 +100,20 @@ const scenarioArb: fc.Arbitrary<Scenario> = fc.record({
   };
 }));
 
-function nativeIds(destination: ThreadTodoAccessDestination): string[] {
+/**
+ * The selector the composer's mode picker shows: Grok's `permission_mode`,
+ * else any other mode config option with values, else the ACP session modes.
+ */
+function nativeSelector(destination: ThreadTodoAccessDestination): { configId?: string; ids: string[] } {
   const runtime = destination.acp?.runtime;
-  const permission = runtime?.configOptions?.find((option) => option.id === "permission_mode");
-  const ids = permission ? permission.values.map((value) => value.value) : runtime?.modes?.availableModes.map((mode) => mode.id) ?? [];
-  return ids.length < 2 ? [] : ids;
+  const config = runtime?.configOptions?.find((option) => option.id === "permission_mode" && option.category === "mode")
+    ?? runtime?.configOptions?.find((option) => option.category === "mode" && option.values.length > 0);
+  const ids = config ? config.values.map((value) => value.value) : runtime?.modes?.availableModes.map((mode) => mode.id) ?? [];
+  return { ...(config ? { configId: config.id } : {}), ids: ids.length < 2 ? [] : ids };
+}
+
+function nativeIds(destination: ThreadTodoAccessDestination): string[] {
+  return nativeSelector(destination).ids;
 }
 
 type Expected =
@@ -218,6 +237,15 @@ describe("resolveThreadTodoStartAccess", () => {
       if (actual.status !== "ready" || expected.status !== "ready") return;
       expect(sameThreadTodoAccessOption(actual.selected, expected.selected)).toBe(true);
       expect(actual.executionMode).toBe(expected.executionMode);
+      // The start writes the selector the menu listed the mode from.
+      if (actual.selected?.kind !== "native") {
+        expect(actual.acpRuntime).toBeUndefined();
+        return;
+      }
+      const { configId } = nativeSelector(scenario.destination);
+      expect(actual.acpRuntime).toEqual(configId
+        ? { configValues: { [configId]: actual.selected.id } }
+        : { currentModeId: actual.selected.id });
     }), { numRuns: 400 });
   });
 

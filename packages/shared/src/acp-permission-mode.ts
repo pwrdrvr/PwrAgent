@@ -17,6 +17,57 @@ export function findAcpPermissionModeConfigOption(
   );
 }
 
+/** One mode an agent's mode selector lists, as the agent names it. */
+export type AcpRuntimeModeChoice = {
+  id: string;
+  /** The agent's name for the mode, unformatted. */
+  label: string;
+};
+
+/**
+ * The selector that carries an agent's own modes, and how a pick is written:
+ * `configOption` through `session/set_config_option` on `optionId`, `mode`
+ * through ACP `session/set_mode`.
+ */
+export type AcpRuntimeModeSelector = {
+  source: "configOption" | "mode";
+  optionId: string;
+  /** The agent's own current value, if it reports one. */
+  currentValue?: string;
+  choices: AcpRuntimeModeChoice[];
+};
+
+/**
+ * Which of an agent's selectors lists its modes: Grok's `permission_mode`,
+ * else another mode config option with values (Antigravity, Kimi and Qwen
+ * list one beside their session modes), else the ACP session modes. The
+ * composer's mode picker and a start card's Access menu both read this, so
+ * they never offer an agent's modes from two different lists.
+ */
+export function acpRuntimeModeSelector(
+  runtime: BackendAcpRuntimeCapabilities | undefined,
+): AcpRuntimeModeSelector | undefined {
+  const option = findAcpPermissionModeConfigOption(runtime) ?? runtime?.configOptions?.find(
+    (candidate) => candidate.category === "mode" && candidate.values.length > 0,
+  );
+  if (option) {
+    return {
+      source: "configOption",
+      optionId: option.id,
+      ...(option.currentValue !== undefined ? { currentValue: option.currentValue } : {}),
+      choices: option.values.map((value) => ({ id: value.value, label: value.label ?? value.value })),
+    };
+  }
+  const modes = runtime?.modes;
+  if (!modes) return undefined;
+  return {
+    source: "mode",
+    optionId: "mode",
+    ...(modes.currentModeId !== undefined ? { currentValue: modes.currentModeId } : {}),
+    choices: modes.availableModes.map((mode) => ({ id: mode.id, label: mode.label || mode.id })),
+  };
+}
+
 /** The native ids for PwrAgent's access levels, lowest first, as ACP session
  * modes and Grok's `permission_mode` name them. An agent lists only some:
  * Antigravity offers `default` and `auto` but no `yolo`. */
@@ -41,17 +92,14 @@ export type AcpNativeAccessOption = {
 };
 
 /**
- * The modes that carry an agent's access, in the agent's order: Grok's
- * `permission_mode` values, else the ACP session modes. Empty when the agent
- * offers fewer than two, which leaves nothing to choose.
+ * The modes that carry an agent's access, in the agent's order, from
+ * `acpRuntimeModeSelector`. Empty when the agent offers fewer than two, which
+ * leaves nothing to choose.
  */
 export function acpNativeAccessOptions(
   runtime: BackendAcpRuntimeCapabilities | undefined,
 ): AcpNativeAccessOption[] {
-  const permission = findAcpPermissionModeConfigOption(runtime);
-  const offered = permission
-    ? permission.values.map((value) => ({ id: value.value, label: value.label ?? value.value }))
-    : runtime?.modes?.availableModes.map((mode) => ({ id: mode.id, label: mode.label || mode.id })) ?? [];
+  const offered = acpRuntimeModeSelector(runtime)?.choices ?? [];
   if (offered.length < 2) return [];
   return offered.map((option) => {
     const level = acpNativeAccessLevel(option.id);
@@ -66,13 +114,13 @@ export type AcpNativeAccessMode = {
   runtime: Pick<BackendAcpSessionRuntimeState, "configValues" | "currentModeId">;
 };
 
-/** Runtime state that starts a session in the agent's mode `id`. */
+/** Runtime state that starts a session in the agent's mode `id`, through the selector that lists it. */
 export function acpNativeAccessRuntime(
   runtime: BackendAcpRuntimeCapabilities | undefined,
   id: string,
 ): AcpNativeAccessMode["runtime"] {
-  const permission = findAcpPermissionModeConfigOption(runtime);
-  return permission ? { configValues: { [permission.id]: id } } : { currentModeId: id };
+  const selector = acpRuntimeModeSelector(runtime);
+  return selector?.source === "configOption" ? { configValues: { [selector.optionId]: id } } : { currentModeId: id };
 }
 
 /**

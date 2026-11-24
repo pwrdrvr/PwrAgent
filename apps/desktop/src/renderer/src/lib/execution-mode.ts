@@ -7,7 +7,7 @@ import type {
   NavigationLaunchpadDraft,
   NavigationThreadSummary,
 } from "@pwragent/shared/contracts/navigation";
-import { findAcpPermissionModeConfigOption } from "@pwragent/shared/acp-permission-mode";
+import { acpRuntimeModeSelector } from "@pwragent/shared/acp-permission-mode";
 
 export function formatExecutionModeLabel(mode?: ThreadExecutionMode): string {
   return mode === "auto" ? "Auto" : mode === "full-access" ? "Full Access" : "Default Access";
@@ -60,59 +60,28 @@ export function getAcpRuntimeModeControl(
   backend: BackendSummary | undefined,
   settings: NavigationLaunchpadDraft | NavigationThreadSummary | undefined,
 ): AcpRuntimeModeControl | undefined {
-  const runtime = backend?.acp?.runtime;
-  if (!runtime) {
+  // The same selector a start card's Access menu lists the agent's modes from.
+  const selector = acpRuntimeModeSelector(backend?.acp?.runtime);
+  if (!selector || selector.choices.length < 2) {
     return undefined;
   }
-
-  const modeConfigOption = findAcpPermissionModeConfigOption(runtime) ?? runtime.configOptions?.find(
-    (option) => option.category === "mode" && option.values.length > 0,
-  );
-  if (modeConfigOption) {
-    if (modeConfigOption.values.length < 2) {
-      return undefined;
-    }
-    const currentModeValue =
-      modeConfigOption.id !== findAcpPermissionModeConfigOption(runtime)?.id &&
-      settings?.acpRuntime?.currentModeId &&
-      modeConfigOption.values.some(
-        (option) => option.value === settings.acpRuntime?.currentModeId,
-      )
-        ? settings.acpRuntime.currentModeId
-        : undefined;
-    const value =
-      currentModeValue ??
-      settings?.acpRuntime?.configValues?.[modeConfigOption.id] ??
-      modeConfigOption.currentValue ??
-      modeConfigOption.values[0]?.value ??
-      "";
-    return {
-      optionId: modeConfigOption.id,
-      source: "configOption",
-      value,
-      options: modeConfigOption.values.map((option) => ({
-        label: formatAcpRuntimeModeLabel(option.label ?? option.value),
-        value: option.value,
-      })),
-    };
-  }
-
-  const modeOptions = runtime.modes?.availableModes ?? [];
-  if (modeOptions.length < 2) {
-    return undefined;
-  }
-
+  const offers = (value: string | undefined): value is string =>
+    value !== undefined && selector.choices.some((choice) => choice.id === value);
+  const currentModeId = settings?.acpRuntime?.currentModeId;
+  const value = selector.source === "mode"
+    ? currentModeId ?? selector.currentValue
+    // A legacy mode config option mirrors currentModeId. Grok's permission
+    // config does not: there currentModeId remains its planning mode.
+    : (selector.optionId !== "permission_mode" && offers(currentModeId) ? currentModeId : undefined)
+      ?? settings?.acpRuntime?.configValues?.[selector.optionId]
+      ?? selector.currentValue;
   return {
-    optionId: "mode",
-    source: "mode",
-    value:
-      settings?.acpRuntime?.currentModeId ??
-      runtime.modes?.currentModeId ??
-      modeOptions[0]?.id ??
-      "",
-    options: modeOptions.map((mode) => ({
-      label: formatAcpRuntimeModeLabel(mode.label ?? mode.id),
-      value: mode.id,
+    optionId: selector.optionId,
+    source: selector.source,
+    value: value ?? selector.choices[0]?.id ?? "",
+    options: selector.choices.map((choice) => ({
+      label: formatAcpRuntimeModeLabel(choice.label),
+      value: choice.id,
     })),
   };
 }
