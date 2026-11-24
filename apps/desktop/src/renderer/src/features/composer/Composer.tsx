@@ -169,7 +169,7 @@ import { projectWatchesMergeBuilds } from "@pwragent/shared/project-forge-automa
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import { ComposerPrMenu } from "./ComposerPrMenu";
 import { mergeBuildPullRequestUrl } from "../pr-watches/merge-build-watches";
-import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
+import type { ScheduledThreadAction, ScheduledThreadReviewPayload } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import {
   HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE,
 } from "@pwragent/shared/contracts/normalized-app-server";
@@ -513,10 +513,11 @@ export type ComposerProps = {
     threadId: string;
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
+    todo?: ScheduledThreadReviewPayload["todo"];
   };
   /** Clears a one-shot reviewRequest once the composer consumes or drops it. */
   onReviewRequestHandled?: (id: number) => void;
-  /** A review this composer submitted was accepted by the backend. */
+  /** An immediately submitted review started. The owner settles scheduled reviews. */
   onReviewStarted?: (threadKey: string, requestId?: number) => void;
   /**
    * Puts a prompt back in the composer, as a rewind does with the prompt it
@@ -1044,6 +1045,7 @@ type ReviewConfigState = {
   reviewer?: ModelSettingsRecent;
   /** One-shot to-do review request id that opened this panel, kept after the prop clears. */
   reviewRequestId?: number;
+  reviewTodo?: ScheduledThreadReviewPayload["todo"];
   runMode: ReviewRunMode;
   runModeChosen?: boolean;
   /**
@@ -5084,7 +5086,7 @@ function useComposerController(props: ComposerProps) {
     appliedReviewRequestId.current = request.id;
     props.onReviewRequestHandled?.(request.id);
     if (reviewConfig) {
-      setReviewConfig((current) => current ? { ...current, reviewRequestId: request.id } : current);
+      setReviewConfig((current) => current ? { ...current, reviewRequestId: request.id, reviewTodo: request.todo } : current);
       inputRef.current?.focus();
       return;
     }
@@ -5097,7 +5099,7 @@ function useComposerController(props: ComposerProps) {
       staleDraft: draft,
       staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
     };
-    enterReviewComposer(request.id);
+    enterReviewComposer(request);
     requestAnimationFrame(() => inputRef.current?.focus());
     // The helpers are recreated each render; the id guard opens once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -5318,11 +5320,20 @@ function useComposerController(props: ComposerProps) {
     applyRecoveredComposerDraft(snapshot);
     return true;
   };
+  const composerMountedRef = useRef(false);
+  useLayoutEffect(() => {
+    composerMountedRef.current = true;
+    return () => { composerMountedRef.current = false; };
+  }, []);
+  const isLiveComposerScope = (scopeKey: string): boolean =>
+    composerMountedRef.current
+    && activeComposerScopeKeyRef.current === scopeKey
+    && latestDraftSnapshotRef.current.scopeKey === scopeKey;
   const restoreSubmittedComposerDraftInScope = (
     scopeKey: string,
     snapshot: ComposerDraftSnapshot,
   ): boolean => {
-    if (activeComposerScopeKeyRef.current === scopeKey) {
+    if (isLiveComposerScope(scopeKey)) {
       return recoverSubmittedComposerDraft(snapshot);
     }
 
@@ -6057,6 +6068,31 @@ function useComposerController(props: ComposerProps) {
     saveComposerDraftSnapshot(scopeKey, snapshot);
     persistLaunchpadDraftSnapshot(scopeKey, snapshot);
   };
+  const withoutReviewPlaceholder = (snapshot: ComposerDraftSnapshot): ComposerDraftSnapshot => ({
+    ...snapshot,
+    draft: "",
+    editorDocument: undefined,
+  });
+  const discardReviewPlaceholder = (scopeKey: string, snapshot: ComposerDraftSnapshot): ComposerDraftSnapshot => {
+    const remaining = withoutReviewPlaceholder(snapshot);
+    if (hasComposerDraftContent(remaining)) {
+      flushComposerDraftSnapshot(scopeKey, remaining);
+    } else {
+      clearComposerDraftSnapshot(scopeKey);
+      persistLaunchpadDraftSnapshot(scopeKey, remaining);
+    }
+    return remaining;
+  };
+  const restoreRejectedReviewDraft = (scopeKey: string, snapshot: ComposerDraftSnapshot): boolean => {
+    const live = isLiveComposerScope(scopeKey);
+    // The bare command stands in for panel state, which only exists in the
+    // live composer. Keep its attachments if the panel cannot be restored.
+    const recoverable = !live && snapshot.draft.trim() === "/review"
+      ? withoutReviewPlaceholder(snapshot) : snapshot;
+    return hasComposerDraftContent(recoverable)
+      && restoreSubmittedComposerDraftInScope(scopeKey, recoverable)
+      && live;
+  };
   const updateActiveTurnId = (
     nextTurnId?: string,
     options?: { review?: boolean },
@@ -6659,8 +6695,9 @@ function useComposerController(props: ComposerProps) {
   const isReviewComposerOpen = Boolean(
     supportsReview && reviewConfig && parsedReviewCommand
   );
-  const isReviewComposerOpenRef = useRef(isReviewComposerOpen);
-  isReviewComposerOpenRef.current = isReviewComposerOpen;
+  const hasReviewPlaceholder = Boolean(reviewConfig && (parsedReviewCommand ?? parseReviewCommand(draft)));
+  const hasReviewPlaceholderRef = useRef(hasReviewPlaceholder);
+  hasReviewPlaceholderRef.current = hasReviewPlaceholder;
   // Dictation is the viewer's: this machine's microphone and key fill a local
   // draft, so a thread owned by a remote instance dictates the same way.
   const dictationApi = props.dictationAvailable && !props.composerCovered && !isReviewComposerOpen
@@ -6802,8 +6839,8 @@ function useComposerController(props: ComposerProps) {
   useEffect(() => {
     return () => {
       const latest = latestDraftSnapshotRef.current;
-      if (isReviewComposerOpenRef.current) {
-        clearComposerDraftSnapshot(latest.scopeKey);
+      if (hasReviewPlaceholderRef.current) {
+        discardReviewPlaceholder(latest.scopeKey, latest.snapshot);
         return;
       }
       flushComposerDraftSnapshot(latest.scopeKey, latest.snapshot);
@@ -6872,8 +6909,8 @@ function useComposerController(props: ComposerProps) {
       }
       saveComposerDraftSnapshot(composerScopeKey, previousSnapshot);
       persistLaunchpadDraftSnapshot(composerScopeKey, previousSnapshot);
-    } else if (isReviewComposerOpen) {
-      clearComposerDraftSnapshot(previousScopeKey);
+    } else if (hasReviewPlaceholder) {
+      discardReviewPlaceholder(previousScopeKey, previousSnapshot);
     } else {
       flushComposerDraftSnapshot(previousScopeKey, previousSnapshot);
     }
@@ -7904,10 +7941,7 @@ function useComposerController(props: ComposerProps) {
       }
       inFlightReviewSubmissionKeyRef.current = undefined;
       if (!options?.queued) {
-        if (
-          restoreSubmittedComposerDraftInScope(submittedScopeKey, submittedSnapshot)
-          && activeComposerScopeKeyRef.current === submittedScopeKey
-        ) {
+        if (restoreRejectedReviewDraft(submittedScopeKey, submittedSnapshot)) {
           setReviewConfig(submittedReviewConfig ?? createReviewConfig({
             directory: props.directory,
             reviewCommand,
@@ -8179,14 +8213,19 @@ function useComposerController(props: ComposerProps) {
     }
   };
 
-  const enterReviewComposer = (reviewRequestId?: number): void => {
-    clearComposerDraftSnapshot(composerScopeKey);
+  const enterReviewComposer = (request?: ComposerProps["reviewRequest"]): void => {
+    const remaining = withoutReviewPlaceholder(latestDraftSnapshotRef.current.snapshot);
+    if (hasComposerDraftContent(remaining)) {
+      saveComposerDraftSnapshot(composerScopeKey, remaining);
+    } else {
+      clearComposerDraftSnapshot(composerScopeKey);
+    }
     setReviewConfig({
       ...createReviewConfig({
         directory: props.directory,
         thread: props.thread,
       }),
-      ...(reviewRequestId !== undefined ? { reviewRequestId } : {}),
+      ...(request ? { reviewRequestId: request.id, reviewTodo: request.todo } : {}),
     });
     void refreshReviewerRecents();
     updateVisibleDraft("/review");
@@ -8200,7 +8239,9 @@ function useComposerController(props: ComposerProps) {
     setReviewConfig(undefined);
     setScheduledDraftSendAt(undefined);
     setScheduleArmed(true);
-    resetComposerDraftAndState(composerScopeKey);
+    const remaining = discardReviewPlaceholder(composerScopeKey, latestDraftSnapshotRef.current.snapshot);
+    latestDraftSnapshotRef.current = { scopeKey: composerScopeKey, snapshot: remaining };
+    updateVisibleDraft(remaining.draft, remaining.skillTokens);
     setSendError(undefined);
     requestAnimationFrame(() => inputRef.current?.focus());
   };
@@ -8284,6 +8325,7 @@ function useComposerController(props: ComposerProps) {
       // One review per pull request, in list order. The owner's queue starts
       // the first when the thread is free and runs each of the rest after the
       // one before it; each is pinned to its own published head when queued.
+      // The first request owns the review draft for the whole batch.
       const orderedUrls = pullRequestUrls;
       for (const [index, url] of orderedUrls.entries()) {
         const queued = await queueReviewCommand(
@@ -8292,9 +8334,7 @@ function useComposerController(props: ComposerProps) {
             target: { type: "pullRequest", url },
             displayText: `Review ${url}`,
           },
-          futureScheduledDraftSendAt
-            ? { scheduledSendAt: futureScheduledDraftSendAt }
-            : undefined,
+          { scheduledSendAt: futureScheduledDraftSendAt, batchContinuation: index > 0 },
         );
         if (typeof queued === "string") {
           // The panel closed when the first review queued, so name the
@@ -8303,7 +8343,9 @@ function useComposerController(props: ComposerProps) {
             const pr = reviewPullRequestOptions.find((option) => option.pr.url === unqueuedUrl)?.pr;
             return pr ? `#${pr.number}` : unqueuedUrl;
           });
-          setSendError(`${queued} Not queued: ${unqueued.join(", ")}.`);
+          if (isLiveComposerScope(composerScopeKey)) {
+            setSendError(`${queued} Not queued: ${unqueued.join(", ")}.`);
+          }
           return;
         }
       }
@@ -9215,7 +9257,7 @@ function useComposerController(props: ComposerProps) {
       target: AppServerReviewTarget;
       reviewer?: ModelSettingsRecent;
     },
-    options?: { scheduledSendAt?: number },
+    options?: { scheduledSendAt?: number; batchContinuation?: boolean },
   ): Promise<true | string> | undefined => {
     // Setup has no thread id yet. Keep the review in the starting composer's
     // FIFO; handoffLaunchpadComposer moves it to the thread before selection.
@@ -9253,12 +9295,14 @@ function useComposerController(props: ComposerProps) {
     }
     const claudeCodeReview = reviewCommand.runMode === "claude-code-review";
     const submittedScopeKey = composerScopeKey;
-    const submittedSnapshot = latestDraftSnapshotRef.current.snapshot;
+    const draftToSubmit = options?.batchContinuation ? undefined : latestDraftSnapshotRef.current.snapshot;
     const submittedThread = props.thread;
     const submittedReviewConfig = reviewConfig;
-    const submittedReviewRequestId = reviewConfig?.reviewRequestId ?? props.reviewRequest?.id;
-    const hadReviewDraft = Boolean(reviewConfig || parseReviewCommand(submittedSnapshot.draft));
-    if (hadReviewDraft) {
+    const submittedSnapshot = draftToSubmit && (reviewConfig || parseReviewCommand(draftToSubmit.draft))
+      ? draftToSubmit : undefined;
+    const submittedSendAt = options?.scheduledSendAt ?? scheduledDraftSendAt;
+    const submittedScheduleArmed = options?.scheduledSendAt !== undefined || scheduleArmed;
+    if (submittedSnapshot) {
       resetComposerDraftAndState(submittedScopeKey);
       setScheduledDraftSendAt(undefined);
       setScheduleArmed(true);
@@ -9290,6 +9334,7 @@ function useComposerController(props: ComposerProps) {
         displayText: reviewCommand.displayText,
         review: {
           target: reviewCommand.target,
+          ...(submittedReviewConfig?.reviewTodo ? { todo: submittedReviewConfig.reviewTodo } : {}),
           draftText: text,
           delivery: "inline",
           ...(reviewCommand.runMode ? { runMode: reviewCommand.runMode } : {}),
@@ -9346,29 +9391,26 @@ function useComposerController(props: ComposerProps) {
     };
     const queued = enqueue().then(
       () => {
-        if (hadReviewDraft && submittedSnapshot.draft.trim() !== "/review") {
+        if (submittedSnapshot && submittedSnapshot.draft.trim() !== "/review") {
           recordComposerDraftHistory(
             submittedScopeKey,
             submittedSnapshot,
             "unsent",
           );
         }
-        if (submittedThread && submittedReviewRequestId !== undefined) {
-          props.onReviewStarted?.(threadSummaryIdentityKey(submittedThread), submittedReviewRequestId);
-        }
         return true as const;
       },
       (error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         if (
-          hadReviewDraft
-          && restoreSubmittedComposerDraftInScope(submittedScopeKey, submittedSnapshot)
-          && activeComposerScopeKeyRef.current === submittedScopeKey
-          && submittedReviewConfig
+          submittedSnapshot
+          && restoreRejectedReviewDraft(submittedScopeKey, submittedSnapshot)
         ) {
           setReviewConfig(submittedReviewConfig);
+          setScheduledDraftSendAt(submittedSendAt);
+          setScheduleArmed(submittedScheduleArmed);
         }
-        if (activeComposerScopeKeyRef.current === submittedScopeKey) {
+        if (isLiveComposerScope(submittedScopeKey)) {
           setSendError(message);
         }
         return message;

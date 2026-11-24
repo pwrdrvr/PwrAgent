@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import fc from "fast-check";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
@@ -9,7 +9,7 @@ import type { DesktopApi } from "../../../lib/desktop-api";
 import { useIntegratedTerminals } from "../../../lib/useIntegratedTerminals";
 import { ThreadView, type ThreadViewProps } from "../../thread-detail/ThreadView";
 import type { ThreadTodosView } from "../../thread-todos/thread-todos-view";
-import { Composer } from "../Composer";
+import { Composer, type ComposerProps } from "../Composer";
 import {
   buildThreadComposerScopeKey,
   useComposerDraftStore,
@@ -118,6 +118,13 @@ function makeTodosView(todo: ThreadTodo, resolve: ThreadTodosView["resolve"]): T
   };
 }
 
+async function openReviewPanel(): Promise<void> {
+  const input = screen.getByLabelText("Reply");
+  fireEvent.change(input, { target: { value: "/review" } });
+  await act(async () => fireEvent.keyDown(input, { key: "Enter" }));
+  expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+}
+
 describe("review composer lifecycle invariants", () => {
   it("never reopens the review panel or leaves /review in the composer across entry, action, and thread-switch sequences", async () => {
     await fc.assert(
@@ -157,14 +164,14 @@ describe("review composer lifecycle invariants", () => {
             createScheduledThreadAction,
           };
           let capturedStore: ComposerDraftStore | undefined;
-          let reviewRequest: { id: number; threadId: string; backend: "codex" } | undefined;
+          let reviewRequest: ComposerProps["reviewRequest"];
           const onReviewStarted = vi.fn();
 
           function Harness(props: {
             thread: NavigationThreadSummary;
             activeTurnId?: string;
             threadBusy?: boolean;
-            request?: { id: number; threadId: string; backend: "codex" };
+            request?: ComposerProps["reviewRequest"];
             remountKey?: number;
           }) {
             const store = useComposerDraftStore();
@@ -214,7 +221,7 @@ describe("review composer lifecycle invariants", () => {
               fireEvent.click(option);
             });
           } else {
-            reviewRequest = { id: 1, threadId: threadA.id, backend: "codex" };
+            reviewRequest = { id: 1, threadId: threadA.id, backend: "codex", todo: { id: "todo-a", allowOpenItems: true } };
             view.rerender(
               <Harness
                 thread={threadA}
@@ -253,15 +260,94 @@ describe("review composer lifecycle invariants", () => {
           expect(screen.getByLabelText("Reply")).toHaveValue("");
           expect(capturedStore?.get(scopeA)).toBeUndefined();
           expect(capturedStore?.hasDraftContent(scopeA)).toBe(false);
-          if (entry === "review-request" && (outcome === "start-immediate" || outcome === "queue-busy")) {
+          if (entry === "review-request" && outcome === "start-immediate") {
             await waitFor(() =>
               expect(onReviewStarted).toHaveBeenCalledWith("codex:thread-a", 1),
             );
+          } else if (outcome === "queue-busy") {
+            expect(onReviewStarted).not.toHaveBeenCalled();
+            expect(createScheduledThreadAction).toHaveBeenCalledWith(expect.objectContaining({
+              review: expect.objectContaining(entry === "review-request"
+                ? { todo: { id: "todo-a", allowOpenItems: true } }
+                : { target: { type: "uncommittedChanges" } }),
+            }));
           }
         },
       ),
-      { numRuns: 24 },
+      { numRuns: 24, examples: [["review-request", "queue-busy", false]] },
     );
+  });
+
+  it("discards only the review placeholder when cancelling or leaving the panel", async () => {
+    // Attachments were never submitted. Every exit must leave the same unsent
+    // attachments in the active draft, whether React reuses the editor or not.
+    for (const exit of ["cancel", "switch", "unmount"] as const) {
+      for (const kind of ["image", "file", "both"] as const) {
+        cleanup();
+        const thread = makeThread("thread-a");
+        const scope = buildThreadComposerScopeKey(thread.source, thread.id, { scope: "local" });
+        const { result } = renderHook(() => useComposerDraftStore());
+        const attachments = {
+          imageAttachments: kind === "file" ? [] : [{ id: "image", name: "fixture.png", size: 1, type: "image/png", url: "data:image/png;base64,AA==" }],
+          fileAttachments: kind === "image" ? [] : [{ id: "file", label: "fixture.txt", path: "/fixture.txt" }],
+        };
+        act(() => result.current.set(scope, { draft: "", skillTokens: [], ...attachments }));
+        const composer = (owner: NavigationThreadSummary, key = 0) => (
+          <Composer key={key} backends={[codexBackend]} disabled={false} draftStore={result.current} skills={[]} thread={owner} />
+        );
+        const view = render(composer(thread));
+        await openReviewPanel();
+
+        await act(async () => {
+          if (exit === "cancel") {
+            fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+          } else {
+            view.rerender(composer(makeThread("thread-b"), exit === "unmount" ? 1 : 0));
+          }
+        });
+        if (exit !== "cancel") {
+          await act(async () => view.rerender(composer(thread, exit === "unmount" ? 2 : 0)));
+        }
+
+        expect(screen.getByLabelText("Reply")).toHaveValue("");
+        expect(result.current.get(scope)).toMatchObject({ draft: "", ...attachments });
+        expect(result.current.hasDraftContent(scope)).toBe(true);
+        if (kind !== "file") expect(screen.getByRole("button", { name: "Remove fixture.png" })).toBeInTheDocument();
+        if (kind !== "image") expect(screen.getByRole("button", { name: "Remove fixture.txt" })).toBeInTheDocument();
+      }
+    }
+  });
+
+  it("preserves the newest reply in the live editor and store when review admission fails", async () => {
+    // The reply belongs to the user who wrote it, regardless of whether the
+    // in-flight submission still has its original Composer instance.
+    for (const remount of [true, false]) {
+      cleanup();
+      const thread = makeThread("thread-a");
+      const scope = buildThreadComposerScopeKey(thread.source, thread.id, { scope: "local" });
+      const { result } = renderHook(() => useComposerDraftStore());
+      const receipt = Promise.withResolvers<never>();
+      const createScheduledThreadAction = vi.fn(() => receipt.promise);
+      const desktopApi: DesktopApi = { onAgentEvent: () => () => undefined, createScheduledThreadAction };
+      const composer = (owner: NavigationThreadSummary, key = 0) => (
+        <Composer key={key} backends={[codexBackend]} desktopApi={desktopApi} disabled={false}
+          draftStore={result.current} skills={[]} thread={owner} threadBusy />
+      );
+      const view = render(composer(thread));
+      await openReviewPanel();
+      fireEvent.click(screen.getByRole("button", { name: /Current changes/i }));
+      fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+      expect(createScheduledThreadAction).toHaveBeenCalledOnce();
+      view.rerender(composer(makeThread("thread-b"), remount ? 1 : 0));
+      view.rerender(composer(thread, remount ? 2 : 0));
+      const reply = "New reply after returning";
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: reply } });
+
+      await act(async () => receipt.reject(new Error("Review was rejected")));
+
+      expect(screen.getByLabelText("Reply")).toHaveValue(reply);
+      expect(result.current.get(scope)?.draft).toBe(reply);
+    }
   });
 
   it("does not reopen the review creation screen in ThreadView after returning from an archived thread or launchpad", async () => {
