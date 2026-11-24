@@ -590,7 +590,9 @@ function sortDirectoryThreadKeysByCreation(
 
   return summaries.map((summary) => ({
     ...summary,
-    threadKeys: [...summary.threadKeys].sort(
+    // Deduplicate at materialization so building a large bucket doesn't scan
+    // all the keys already collected for each incoming thread.
+    threadKeys: [...new Set(summary.threadKeys)].sort(
       (left, right) =>
         (threadOrder.get(left) ?? Number.MAX_SAFE_INTEGER) -
         (threadOrder.get(right) ?? Number.MAX_SAFE_INTEGER),
@@ -643,9 +645,7 @@ export function buildDirectorySummaries(params: {
           kind: "unlinked",
           label: "No linked directory",
         });
-        if (!summary.threadKeys.includes(threadKey)) {
-          summary.threadKeys.push(threadKey);
-        }
+        summary.threadKeys.push(threadKey);
         if (thread.inbox.inInbox) {
           summary.needsAttentionCount += 1;
         }
@@ -686,9 +686,7 @@ export function buildDirectorySummaries(params: {
       continue;
     }
     const summary = ensureSummary(summaries, homeDescriptor);
-    if (!summary.threadKeys.includes(threadKey)) {
-      summary.threadKeys.push(threadKey);
-    }
+    summary.threadKeys.push(threadKey);
     if (thread.inbox.inInbox) {
       summary.needsAttentionCount += 1;
     }
