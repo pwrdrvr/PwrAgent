@@ -2645,6 +2645,13 @@ function reviewEntriesMatch(
     }
   }
 
+  // Two local headers can name the same target without belonging to the
+  // same submission. Replacing the earlier one puts its findings after the
+  // later header when the renderer merges reviews missing from the replay.
+  if (candidateIsStart && isPendingEntryId(candidate.id) && isPendingEntryId(optimisticEntry.id)) {
+    return candidate.id === optimisticEntry.id;
+  }
+
   if (candidateIsStart && (candidateTurnId || optimisticTurnId)) {
     const authoritativeEntry = candidateTurnId ? candidate : optimisticEntry;
     if (authoritativeEntry.turn?.status !== "in_progress") {
