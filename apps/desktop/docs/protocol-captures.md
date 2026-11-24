@@ -203,6 +203,30 @@ requests offered `allow_always`.
 Raw captures are under the ignored `apps/desktop/.local/protocol-captures/`
 in a directory named `antigravity-default-mcp.*`.
 
+### Antigravity managed MCP context
+
+The November 24, 2026 probes used Antigravity 1.5.16
+(`agy acp --process-per-session`) and a disposable Orchard connection. The
+ACP session received only PwrAgent's HTTP MCP server. The owner broker used an
+MCP SDK client connected to a loopback fixture with 101 tool definitions.
+Full Access used a separate process with `--dangerously-skip-permissions`.
+The Default driver answered `allow_once` only for the named PwrAgent calls in
+the probe. The upstream invocation approval handler used a fixture answer.
+
+| Mode | Gateway tool calls | Upstream context requests with the route disabled | Upstream context requests with the route enabled | ACP permission requests with the route enabled |
+| --- | ---: | ---: | ---: | ---: |
+| Default | 1 | 0 | 11 | 12 |
+| Full Access | 1 | 0 | 11 | 0 |
+
+The 11 requests include skill indexing during search, two resource-list
+pages, a resource-template listing, a resource read, a skill listing,
+manifest and directory reads, a separate read of `SKILL.md`, and prompt list
+and get. The model reported the resource, skill, prompt and tool markers in
+both modes. The Default permission request for the deferred call included
+`rawInput.toolName: "read_mcp_context"` and the nested arguments, the fields
+PwrAgent uses to evaluate the target tool. Raw captures are under the ignored
+`apps/desktop/.local/protocol-captures/managed-context/`.
+
 ### Antigravity mode the session does not list
 
 The November 23, 2026 macOS capture of Antigravity 1.5.15

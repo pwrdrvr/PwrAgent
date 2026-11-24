@@ -4,6 +4,7 @@ import { lazyModule } from "../lazy-module";
 import { mcpTypes } from "./mcp-sdk";
 import type { McpConnectionToolApproval } from "@pwragent/shared/contracts/mcp-connections";
 import type { McpSkillSummary } from "./mcp-skills-relay";
+import type { McpContextMethod } from "./mcp-gateway-context";
 
 export type McpGatewaySource = {
   connectionId: string;
@@ -37,6 +38,7 @@ export type McpGatewayCatalog = {
   tools: McpGatewayTool[];
   serverName: string;
   serverIdentity?: McpGatewayIdentity;
+  contextMethods?: McpContextMethod[];
   /**
    * The workflow skills the server publishes, cleaned by `listedMcpSkills`.
    * Present only when the server offers skills and resources.

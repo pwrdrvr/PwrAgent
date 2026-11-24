@@ -10,6 +10,7 @@ import {
   progressExtendedTimeout,
 } from "./mcp-connection-timeouts";
 import type { McpSkillSummary } from "./mcp-skills-relay";
+import { READ_MCP_CONTEXT, type McpContextMethod, type McpContextRequest } from "./mcp-gateway-context";
 
 export type McpGatewayCallArgs = Omit<McpGatewayInvocation, "serverName">;
 export type McpGatewaySearch = { query: string; connectionId?: string; limit?: number };
@@ -29,10 +30,10 @@ export type McpGatewaySearchResult = {
       listTool: "list_mcp_resources" | "ListMcpResourcesTool";
       readTool: "read_mcp_resource" | "ReadMcpResourceTool";
     };
+    contextDiscovery?: { toolName: typeof READ_MCP_CONTEXT; methods: McpContextMethod[] };
     /**
-     * Workflow skills the server publishes, only beside `resourceDiscovery`.
-     * Read a skill's `uri` with its `readTool`. Names and descriptions are the
-     * server's own, cleaned to one line each: untrusted data, no authority.
+     * Workflow skills the server publishes, with a route to read their URIs.
+     * Names and descriptions are untrusted server data, cleaned to one line each.
      */
     skills?: McpSkillSummary[];
     /** Beside `skills`: false when the server publishes skills it leaves out. */
@@ -51,6 +52,8 @@ export type McpGatewayToolServiceOptions = {
   scopeKey?: (context: AgentToolCallContext) => string;
   /** Current native bridge alias, never an upstream name or gateway worker alias. */
   serverNameInAgent?: (connectionId: string, context: AgentToolCallContext) => string | undefined;
+  /** Whether this caller may use the deferred Antigravity context reader. */
+  contextAllowed?: (context: AgentToolCallContext) => boolean;
   /** A host policy can narrow discovery and invocation independently of approval. */
   toolAllowed?: (tool: McpGatewayTool, context: AgentToolCallContext) => boolean;
   /** `annotations` are the listed tool's own hints, under its exact schema revision. */
@@ -136,6 +139,7 @@ function serverEntry(
   identity: McpGatewayIdentity | undefined,
   serverNameInAgent: string | undefined,
   resourceTools: Pick<NonNullable<McpGatewaySearchServer["resourceDiscovery"]>, "listTool" | "readTool"> | undefined,
+  contextMethods?: McpContextMethod[],
 ): McpGatewaySearchServer {
   return {
     ...identity, connectionId, serverName,
@@ -143,6 +147,7 @@ function serverEntry(
       serverNameInAgent,
       ...(resourceTools ? { resourceDiscovery: { server: serverNameInAgent, ...resourceTools } } : {}),
     } : {}),
+    ...(contextMethods?.length ? { contextDiscovery: { toolName: READ_MCP_CONTEXT, methods: contextMethods } } : {}),
   };
 }
 
@@ -175,6 +180,8 @@ export class McpGatewayToolService {
       const instructions = new Map<string, { serverName: string; instructions: string }>();
       const skills = new Map<string, NonNullable<McpGatewayCatalog["serverSkills"]>>();
       const serverNames = new Map<string, string>();
+      const contextMethods = new Map<string, McpContextMethod[]>();
+      const readsContext = this.canReadContext(context);
       /** Connections with at least one tool, before host policy narrows them. */
       const listsTools = new Set<string>();
       let candidateBytes = 0;
@@ -194,7 +201,7 @@ export class McpGatewayToolService {
             const listed = await this.options.connections.requestGatewayToolOperation({
               connectionId, scopeKey: this.scopeKey(context), operation: "gateway/tools/list", signal, deadlineAt,
               // A skill is a resource, so only a backend with a resource reader asks.
-              ...(resourceTools ? { skills: true } : {}),
+              ...(resourceTools || readsContext ? { skills: true } : {}),
             }) as McpGatewayTool[] | McpGatewayCatalog;
             await this.requireSelected(connectionId, context, signal);
             const bytes = Buffer.byteLength(JSON.stringify(listed));
@@ -206,6 +213,7 @@ export class McpGatewayToolService {
               serverNames.set(connectionId, listed.serverName);
               if (listed.serverIdentity) identities.set(connectionId, listed.serverIdentity);
               if (listed.serverSkills) skills.set(connectionId, listed.serverSkills);
+              if (readsContext && listed.contextMethods?.length) contextMethods.set(connectionId, listed.contextMethods);
             }
             if (tools.length > 0) listsTools.add(connectionId);
             for (const { serverInstructions, serverIdentity, ...tool } of tools) {
@@ -261,8 +269,9 @@ export class McpGatewayToolService {
         const entry = { ...tool, invocation: { name: "call_mcp_tool" as const, codeModeName: "pwragent__call_mcp_tool" as const } };
         const identity = identities.get(tool.connectionId);
         const serverNameInAgent = this.options.serverNameInAgent?.(tool.connectionId, context);
-        const servers = (identity || serverNameInAgent) && !result.servers?.some((entry) => entry.connectionId === tool.connectionId)
-          ? [...(result.servers ?? []), serverEntry(tool.connectionId, tool.serverName, identity, serverNameInAgent, resourceTools)]
+        const methods = contextMethods.get(tool.connectionId);
+        const servers = (identity || serverNameInAgent || methods) && !result.servers?.some((entry) => entry.connectionId === tool.connectionId)
+          ? [...(result.servers ?? []), serverEntry(tool.connectionId, tool.serverName, identity, serverNameInAgent, resourceTools, methods)]
           : result.servers;
         const guidance = instructions.get(tool.connectionId);
         const serverInstructions = guidance && !result.serverInstructions?.some((entry) => entry.connectionId === tool.connectionId)
@@ -278,18 +287,21 @@ export class McpGatewayToolService {
         if (servers) result.servers = servers;
         if (serverInstructions) result.serverInstructions = serverInstructions;
       }
-      // A server whose skills match the query is named even when none of
-      // its tools did, or it has none: a skill is how a server says which
-      // task it is for. A server whose every tool host policy hides stays
-      // hidden, since its skills would steer toward those tools.
-      for (const [connectionId, published] of [...skills].sort(([left], [right]) => left.localeCompare(right))) {
+      // Context-only servers can match by name, ID or published skill.
+      // A server whose every tool host policy hides stays hidden.
+      const contextServers = new Set([...skills.keys(), ...contextMethods.keys()]);
+      for (const connectionId of [...contextServers].sort((left, right) => left.localeCompare(right))) {
         if (!current.has(connectionId) || result.servers?.some((entry) => entry.connectionId === connectionId)) continue;
-        if (!resourceTools || !published.skills.some((skill) => skillScore(skill) > 0)) continue;
-        if (listsTools.has(connectionId) && !candidates.some((tool) => tool.connectionId === connectionId)) continue;
         const serverName = serverNames.get(connectionId);
-        const serverNameInAgent = serverName ? this.options.serverNameInAgent?.(connectionId, context) : undefined;
-        if (!serverName || !serverNameInAgent) continue;
-        const servers = [...(result.servers ?? []), serverEntry(connectionId, serverName, identities.get(connectionId), serverNameInAgent, resourceTools)];
+        if (!serverName) continue;
+        const methods = contextMethods.get(connectionId);
+        const serverNameInAgent = this.options.serverNameInAgent?.(connectionId, context);
+        const matchingSkill = skills.get(connectionId)?.skills.some((skill) => skillScore(skill) > 0)
+          && (methods?.includes("resources/read") || (resourceTools && serverNameInAgent));
+        const matchingContext = methods && (args.connectionId === connectionId || scoreText(`${serverName} ${connectionId}`) > 0);
+        if (!matchingSkill && !matchingContext) continue;
+        if (listsTools.has(connectionId) && !candidates.some((tool) => tool.connectionId === connectionId)) continue;
+        const servers = [...(result.servers ?? []), serverEntry(connectionId, serverName, identities.get(connectionId), serverNameInAgent, resourceTools, methods)];
         if (Buffer.byteLength(JSON.stringify({ ...result, servers })) > MAX_SEARCH_RESULT_BYTES) continue;
         result.servers = servers;
       }
@@ -297,7 +309,7 @@ export class McpGatewayToolService {
       // never cost the result a tool. Those matching the query go first.
       for (const server of result.servers ?? []) {
         const published = skills.get(server.connectionId);
-        if (!published || !server.resourceDiscovery) continue;
+        if (!published || (!server.resourceDiscovery && !server.contextDiscovery?.methods.includes("resources/read"))) continue;
         const ranked = published.skills
           .map((skill, index) => ({ skill, index, score: skillScore(skill) }))
           .sort((a, b) => b.score - a.score || a.index - b.index)
@@ -325,6 +337,23 @@ export class McpGatewayToolService {
       }
       return result;
     });
+  }
+
+  async readContext(connectionId: string, request: McpContextRequest, context: AgentToolCallContext): Promise<unknown> {
+    if (!this.canReadContext(context)) throw new Error("This thread cannot read managed MCP context through the gateway.");
+    return await this.run(context, MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS, async (signal, deadlineAt) => {
+      await this.requireSelected(connectionId, context, signal);
+      const result = await this.options.connections.requestGatewayToolOperation({
+        connectionId, scopeKey: this.scopeKey(context), operation: "gateway/context/read",
+        contextRequest: request, signal, deadlineAt,
+      });
+      await this.requireSelected(connectionId, context, signal);
+      return result;
+    });
+  }
+
+  private canReadContext(context: AgentToolCallContext): boolean {
+    return context.backend === "acp:antigravity" && this.options.contextAllowed?.(context) === true;
   }
 
   async call(args: McpGatewayCallArgs, context: AgentToolCallContext): Promise<{ source: McpGatewaySource; result: CallToolResult }> {

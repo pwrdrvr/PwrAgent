@@ -4,6 +4,7 @@ import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-regi
 import { agentToolSuccess, type AgentToolDefinition } from "../agent-tools/agent-tool-definition";
 import { AgentToolMcpServer } from "../agent-tools/agent-tool-mcp-server";
 import { AgentToolRouter } from "../agent-tools/agent-tool-router";
+import { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
 
 const turn = { backend: "acp:antigravity", threadId: "thread", turnId: "turn" } as const;
 const directTools = ["agent_memory", "call_mcp_tool", "create_monitor_delegation",
@@ -37,6 +38,68 @@ it("keeps the production Antigravity MCP bootstrap under 16 KiB of tool declarat
     });
     expect(search.result.structuredContent.tools.map(({ name }: { name: string }) => name))
       .toEqual(["create_instance_thread", "handoff_instance_thread", "add_todo"]);
+  } finally {
+    await server.close();
+  }
+});
+
+it("offers context-only connections through the bounded catalog and checks the deferred target", async () => {
+  // Every advertised context route must reach just its selected connection,
+  // even when the upstream catalog contains no tools and has no native alias.
+  const skills = [{ name: "orchard-triage", uri: "skill://orchard/triage/SKILL.md" }];
+  const calls: unknown[] = [];
+  let selected = true;
+  let permitted = true;
+  const gateway = new McpGatewayToolService({
+    connections: {
+      requestGatewayToolOperation: async ({ connectionId, contextRequest, operation, scopeKey }) => {
+        if (operation === "gateway/tools/list") return {
+          tools: [], serverName: "Orchard", contextMethods: ["resources/read", "prompts/get"],
+          serverSkills: { skills, complete: true },
+        };
+        calls.push({ connectionId, contextRequest, scopeKey });
+        return { contents: [{ uri: skills[0].uri, text: "Orchard fixture" }] };
+      },
+    },
+    selectedConnections: async () => selected ? ["orchard"] : [],
+    contextAllowed: () => true,
+    approve: async () => { throw new Error("Context retrieval must not enter the tools/call approval flow."); },
+  });
+  const catalogs = resolveAgentToolCatalogs({ mcpGatewayTools: gateway, currentTurnInputSource: () => "unknown" }, {
+    taskMonitorRole: "all", antigravityMcpContext: true,
+  });
+  const server = new AgentToolMcpServer({
+    resolveCatalogs: () => catalogs,
+    resolveCallContext: () => turn,
+    authorizeToolCall: ({ tool, catalogId }) =>
+      tool === "read_mcp_context" && catalogId === "mcp_connections" && !permitted ? "test denial" : undefined,
+  });
+  try {
+    const client = await server.registerClient(turn);
+    const listing = (await post(client, "tools/list")).result;
+    expect(listing.tools.map(({ name }: { name: string }) => name).sort()).toEqual([...directTools, ...discoveryTools].sort());
+    expect(Buffer.byteLength(JSON.stringify(listing.tools))).toBeLessThanOrEqual(16 * 1024);
+    const call = async (name: string, args: object) =>
+      (await post(client, "tools/call", { name, arguments: args })).result.structuredContent;
+    const found = await call("search_mcp_tools", { query: "triage", connectionId: "orchard" });
+    expect(found.tools).toEqual([]);
+    expect(found.servers).toMatchObject([{
+      connectionId: "orchard", skills, skillsComplete: true,
+      contextDiscovery: { toolName: "read_mcp_context", methods: ["resources/read", "prompts/get"] },
+    }]);
+    const deferred = await call("tool_search", { query: "read_mcp_context" });
+    expect(deferred.tools[0].name).toBe("read_mcp_context");
+    const contextRequest = { method: "resources/read", params: { uri: skills[0].uri } };
+    const read = () => call("call_pwragent_tool", {
+      toolName: "read_mcp_context", arguments: { connectionId: "orchard", ...contextRequest },
+    });
+    expect((await read()).result.contents[0].text).toBe("Orchard fixture");
+    permitted = false;
+    expect((await read()).code).toBe("forbidden");
+    permitted = true;
+    selected = false;
+    expect((await read()).code).toBe("mcp_gateway_error");
+    expect(calls).toEqual([{ connectionId: "orchard", contextRequest, scopeKey: '["gateway","acp:antigravity","thread"]' }]);
   } finally {
     await server.close();
   }

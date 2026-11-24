@@ -30,6 +30,7 @@ import { isMcpError, isStreamableHttpError, loadedMcpTypes, mcpClient, mcpClient
 import { McpInitializationTransport } from "./mcp-initialization-transport";
 import { McpDiscovery, discoveryFailure, isMcpDiscoveryError, mcpDiscoveryContext, mcpDiscoveryPhaseContext, mcpRequestSignalContext, waitForMcp } from "./mcp-discovery";
 import { listedMcpSkills, offersMcpSkills, skillsAwareInstructions } from "./mcp-skills-relay";
+import { MAX_MCP_CONTEXT_RESULT_BYTES, mcpContextMethods, parseMcpContextRequest, type McpContextRequest } from "./mcp-gateway-context";
 import { unrelayedMcpCapabilities } from "./mcp-bridge-capabilities";
 import { SandboxerConnection } from "./sandboxer-connection";
 import { BoatConnection, type BoatSessionScope } from "./boat-connection";
@@ -2612,8 +2613,9 @@ export class McpConnectionGatewayService {
   async requestGatewayToolOperation(params: {
     connectionId: string;
     scopeKey: string;
-    operation: "gateway/tools/list" | "gateway/tools/call";
+    operation: "gateway/tools/list" | "gateway/tools/call" | "gateway/context/read";
     invocation?: McpGatewayInvocation;
+    contextRequest?: McpContextRequest;
     /** A list also reads the server's skills, and answers as a `McpGatewayCatalog`. */
     skills?: boolean;
     signal: AbortSignal;
@@ -2624,7 +2626,7 @@ export class McpConnectionGatewayService {
     elicitUrl?: boolean;
     /** Called for each progress report from the upstream server during a call. */
     onProgress?: () => void;
-  }): Promise<McpGatewayTool[] | McpGatewayCatalog | CallToolResult> {
+  }): Promise<McpGatewayTool[] | McpGatewayCatalog | CallToolResult | Record<string, unknown>> {
     params.signal.throwIfAborted();
     const discovery = new McpDiscovery(params.connectionId, params.deadlineAt ?? Date.now() + MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS, params.signal);
     try {
@@ -2639,13 +2641,13 @@ export class McpConnectionGatewayService {
       const call = params.operation === "gateway/tools/call";
       return await rpc.request(
         params.operation,
-        call ? params.invocation : params.skills ? { skills: true } : undefined,
+        call ? params.invocation : params.contextRequest ?? (params.skills ? { skills: true } : undefined),
         params.signal, discovery.deadlineAt, discovery.id,
         call ? MCP_CONNECTION_TOOL_TIMEOUT_MS : undefined,
         call ? params.elicit : undefined,
         call ? params.onProgress : undefined,
         call && params.elicit && params.elicitUrl ? { urlElicitation: true } : undefined,
-      ) as McpGatewayTool[] | McpGatewayCatalog | CallToolResult;
+      ) as McpGatewayTool[] | McpGatewayCatalog | CallToolResult | Record<string, unknown>;
     } finally {
       discovery.close();
     }
@@ -5222,6 +5224,7 @@ export class McpConnectionGatewayService {
       tools,
       serverName: connection.displayName,
       serverIdentity,
+      contextMethods: mcpContextMethods(capabilities),
       ...(serverSkills && serverSkills.skills.length > 0 ? { serverSkills } : {}),
     };
   }
@@ -5318,6 +5321,14 @@ export class McpConnectionGatewayService {
       let releaseRoute: (() => void) | undefined;
       let releaseSession: (() => void) | undefined;
       try {
+        const contextRequest = operation === "gateway/context/read" ? parseMcpContextRequest(params) : undefined;
+        if (contextRequest) {
+          const scope = this.gatewaySelectionScope(grant);
+          if (scope.backend !== "acp:antigravity" || scope.delegation) {
+            throw new Error("This thread cannot read managed MCP context through the gateway.");
+          }
+          await this.requireGatewaySelection(grant);
+        }
         if (operation === "gateway/tools/list" || operation === "gateway/tools/call") {
           await this.requireGatewaySelection(grant);
           signal?.throwIfAborted();
@@ -5326,12 +5337,14 @@ export class McpConnectionGatewayService {
         if (delegated && operation !== "gateway/tools/list" && operation !== "gateway/tools/call") {
           throw new Error("Delegated MCP access requires the read-only gateway.");
         }
-        const readUri = operation === "resources/read" && params && typeof params === "object"
-          && typeof (params as { uri?: unknown }).uri === "string"
-          ? (params as { uri: string }).uri
+        const method = contextRequest?.method ?? operation;
+        const wireParams = contextRequest?.params ?? params;
+        const readUri = method === "resources/read" && wireParams && typeof wireParams === "object"
+          && typeof (wireParams as { uri?: unknown }).uri === "string"
+          ? (wireParams as { uri: string }).uri
           : undefined;
         const upstream = await this.ensureUpstreamClient(token, grant, discovery, {
-          operation,
+          operation: method,
           delegated: Boolean(delegated),
           ...(readUri !== undefined ? { uri: readUri } : {}),
         });
@@ -5359,6 +5372,9 @@ export class McpConnectionGatewayService {
         const values = params && typeof params === "object"
           ? params as Record<string, unknown>
           : {};
+        if (contextRequest) {
+          return await this.readGatewayContext(token, grant, client, contextRequest, discovery);
+        }
         const { ErrorCode, McpError } = await mcpTypes.load();
         switch (operation) {
           case "gateway/tools/list": {
@@ -5450,41 +5466,19 @@ export class McpConnectionGatewayService {
           }
           // The caller's cancel reaches the server; it no longer waits out
           // the SDK's default timeout.
-          case "resources/list":
-            return await client.listResources(values, cancelOnly(signal));
-          case "resources/templates/list":
-            return await client.listResourceTemplates(values, cancelOnly(signal));
-          case "resources/read":
-            return await client.readResource(
-              values as Parameters<Client["readResource"]>[0],
-              cancelOnly(signal),
-            );
           case "resources/subscribe":
             return await client.subscribeResource(values as Parameters<Client["subscribeResource"]>[0], cancelOnly(signal));
           case "resources/unsubscribe":
             return await client.unsubscribeResource(values as Parameters<Client["unsubscribeResource"]>[0], cancelOnly(signal));
+          case "resources/list":
+          case "resources/templates/list":
+          case "resources/read":
           case "prompts/list":
-            return await client.listPrompts(values, cancelOnly(signal));
           case "prompts/get":
-            return await client.getPrompt(
-              values as Parameters<Client["getPrompt"]>[0],
-              cancelOnly(signal),
-            );
           case "skills/list":
           case "skills/get":
-          case "resources/directory/read": {
-            // Only to a server that offered the extension. The SDK's request
-            // union has no skills methods, so the result passes through whole.
-            if (!offersMcpSkills(client.getServerCapabilities())) {
-              throw new McpError(ErrorCode.MethodNotFound, "This MCP server does not offer skills.");
-            }
-            const { ResultSchema } = await mcpTypes.load();
-            return await client.request(
-              { method: operation, params: values } as never,
-              ResultSchema,
-              cancelOnly(signal),
-            );
-          }
+          case "resources/directory/read":
+            return await this.readUpstreamMcpContext(client, operation, values, signal);
           default:
             throw new Error("unsupported MCP operation");
         }
@@ -5498,6 +5492,58 @@ export class McpConnectionGatewayService {
       }
     });
     return await mcpDiscoveryContext.exit(async () => await mcpDiscoveryPhaseContext.exit(dispatch));
+  }
+
+  private async readGatewayContext(
+    token: string,
+    grant: BridgeGrant,
+    client: Client,
+    { method, params }: McpContextRequest,
+    discovery: McpDiscovery,
+  ): Promise<Record<string, unknown>> {
+    if (!mcpContextMethods(client.getServerCapabilities()).includes(method)) {
+      const { ErrorCode, McpError } = await mcpTypes.load();
+      throw new McpError(ErrorCode.MethodNotFound, "This MCP server does not advertise this context operation.");
+    }
+    const checkAccess = async () => {
+      await this.requireGatewaySelection(grant);
+      discovery.remaining();
+      this.requireAvailableConnection(grant.connectionId);
+      if (this.grants.get(token) !== grant || !this.isCurrentUpstream(token, client)) {
+        throw new Error("The MCP connection changed during the read.");
+      }
+    };
+    await checkAccess();
+    const result = await discovery.phase(method, () => this.readUpstreamMcpContext(client, method, params, discovery.signal));
+    await checkAccess();
+    if (Buffer.byteLength(JSON.stringify(result)) > MAX_MCP_CONTEXT_RESULT_BYTES) {
+      throw new Error("The MCP context reply exceeds the 256 KiB size limit.");
+    }
+    return result;
+  }
+
+  private async readUpstreamMcpContext(
+    client: Client,
+    method: McpContextRequest["method"],
+    params: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<Record<string, unknown>> {
+    const options = cancelOnly(signal);
+    switch (method) {
+      case "resources/list": return await client.listResources(params, options);
+      case "resources/templates/list": return await client.listResourceTemplates(params, options);
+      case "resources/read": return await client.readResource(params as Parameters<Client["readResource"]>[0], options);
+      case "prompts/list": return await client.listPrompts(params, options);
+      case "prompts/get": return await client.getPrompt(params as Parameters<Client["getPrompt"]>[0], options);
+      default: {
+        // The SDK request union has no skills methods. Preserve their full results.
+        const { ErrorCode, McpError, ResultSchema } = await mcpTypes.load();
+        if (!offersMcpSkills(client.getServerCapabilities())) {
+          throw new McpError(ErrorCode.MethodNotFound, "This MCP server does not offer skills.");
+        }
+        return await client.request({ method, params } as never, ResultSchema, options);
+      }
+    }
   }
 
   /**

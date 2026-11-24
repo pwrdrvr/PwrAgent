@@ -480,6 +480,26 @@ sampling remain unsupported by the existing connection bridge.
 
 ## Backend compatibility
 
+Antigravity keeps managed connections behind PwrAgent's bounded MCP catalog.
+`search_mcp_tools` returns a connection's `contextDiscovery` route when the
+server advertises resources, prompts or the skills extension. Search by the
+connection's name or ID to find servers that publish context without tools.
+Use `call_pwragent_tool` with `toolName: "read_mcp_context"` and
+`arguments: { connectionId, method, params }`. The deferred definition is
+available through `tool_search`. It adds no native MCP function.
+
+Resource listings, resource template listings, skill listings and prompt
+listings take an optional opaque cursor from the preceding page. To read a
+skill, get its manifest with `skills/get`, then read the listed files through
+`resources/read`. The skills extension can also list its directories.
+`prompts/get` returns the server's messages as data. Each response is one MCP
+result, bounded to 256 KiB.
+
+The owner validates the requested method, the current upstream capabilities
+and connection access before sending the request. It rechecks selection and
+session ownership before releasing the result. Read requests leave upstream
+tool approval, elicitation and containment policy in force.
+
 Existing Codex threads receive the two fixed tools at an idle/next-turn
 replacement boundary when their runtime advertises `dynamicToolsResumeField`.
 Once registered, they can discover additions during a turn. Older runtimes
@@ -487,9 +507,9 @@ without this capability need a new thread or supported reload that actually
 installs the entry tools. An ACP session that predates the entry tools needs
 its next session load. Search descriptions cannot bootstrap missing contracts.
 
-This does not change native MCP server refresh. Direct named tools and their
-per-connection registrations remain available. Only PwrAgent-managed,
-currently selected connections are accessible through the fixed entry tools.
+Native MCP registration and refresh continue on backends that receive managed
+connections directly. The fixed entry tools reach currently selected
+PwrAgent-managed connections.
 
 ## Token Miser and accounting
 
