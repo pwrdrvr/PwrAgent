@@ -8,12 +8,21 @@ import { lock } from "proper-lockfile";
 import type {
   AppServerThreadEntry,
   AppServerThreadSummary,
-  AppServerThreadTurnMetadata,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type { BackendRateLimitSummary } from "@pwragent/shared/contracts/backend";
 import type { ClaudeSessionMetadataStorage } from "@pwragent/owner-core/claude-profile-storage";
 import { createClaudeSessionMetadataStorage } from "../storage/desktop-claude-profile-storage";
 import { persistTranscriptEntryImages } from "../transcript-images";
+import {
+  ClaudeTranscriptCache,
+  ClaudeTranscriptHistory,
+  type ClaudeHistoryLine,
+  type ClaudeTruncationRecord,
+  type ClaudeTruncationUndoRecord,
+  type ClaudeTurnEndRecord,
+} from "./claude-transcript-history";
+
+export type { ClaudeTurnEndRecord } from "./claude-transcript-history";
 
 /** Not a thread id, so list() never reads it as session metadata. */
 const RATE_LIMITS_FILE = "rate-limits.json";
@@ -108,83 +117,6 @@ export type ClaudeRewindRecord = {
   undoneAt?: number;
 };
 
-/**
- * A history line that drops an entry and every entry recorded after it. The
- * history stays append-only, so a rewind survives a restart without
- * rewriting the file.
- */
-type ClaudeTruncationRecord = {
-  type: "pwragent_truncation";
-  id: string;
-  beforeEntryId: string;
-  createdAt: number;
-};
-
-/** A history line that puts back what a truncation dropped. */
-type ClaudeTruncationUndoRecord = {
-  type: "pwragent_truncation_undo";
-  truncationId: string;
-  createdAt: number;
-};
-
-/**
- * A history line that ends a turn. Every entry of the turn takes its status
- * and times, so an entry saved while the turn ran is not written again just
- * to change its status. Files written before this record existed stamp each
- * entry instead, and read the same.
- */
-export type ClaudeTurnEndRecord = {
-  type: "pwragent_turn_end";
-  turnId: string;
-  status: NonNullable<AppServerThreadTurnMetadata["status"]>;
-  startedAt?: number;
-  completedAt?: number;
-  createdAt: number;
-};
-
-type ClaudeHistoryLine = AppServerThreadEntry | ClaudeTruncationRecord | ClaudeTruncationUndoRecord | ClaudeTurnEndRecord;
-
-/** The transcript a history describes: latest revisions, truncations and turn ends applied. */
-function historyEntries(lines: readonly ClaudeHistoryLine[]): AppServerThreadEntry[] {
-  const undone = new Set(lines.flatMap((line) =>
-    line.type === "pwragent_truncation_undo" ? [line.truncationId] : []));
-  const turnEnds = new Map<string, ClaudeTurnEndRecord>();
-  // Revisions of a tool entry append rather than rewriting history.
-  const entries = new Map<string, AppServerThreadEntry>();
-  for (const entry of lines) {
-    if (entry.type === "pwragent_truncation_undo") continue;
-    if (entry.type === "pwragent_turn_end") {
-      turnEnds.set(entry.turnId, entry);
-      continue;
-    }
-    if (entry.type === "pwragent_truncation") {
-      if (undone.has(entry.id)) continue;
-      // Map keys keep the order entries were first recorded in.
-      let removing = false;
-      for (const key of entries.keys()) {
-        if (key === entry.beforeEntryId) removing = true;
-        if (removing) entries.delete(key);
-      }
-      continue;
-    }
-    entries.set(entry.id, entry);
-  }
-  // A turn's end covers every entry of the turn, including a revision saved
-  // after it, such as a task row the turn's task settled later.
-  return [...entries.values()].map((entry) => {
-    const end = entry.turn ? turnEnds.get(entry.turn.id) : undefined;
-    if (!end) return entry;
-    return {
-      ...entry,
-      turn: {
-        id: end.turnId, status: end.status,
-        ...(end.startedAt !== undefined ? { startedAt: end.startedAt } : {}),
-        ...(end.completedAt !== undefined ? { completedAt: end.completedAt } : {}),
-      },
-    };
-  });
-}
-
 export type ClaudeRateLimitsRecord = {
   limits: BackendRateLimitSummary[];
   /** Hash of the account the limits describe; never the account's own identifiers. */
@@ -201,7 +133,8 @@ export type ClaudeRateLimitsRecord = {
  */
 export class ClaudeSessionStore {
   /** Ephemeral sessions and their entries, by thread id. */
-  private readonly memory = new Map<string, { session: string; lines: ClaudeHistoryLine[] }>();
+  private readonly memory = new Map<string, { session: string; history: ClaudeTranscriptHistory }>();
+  private readonly history = new ClaudeTranscriptCache();
   /** Ended ephemeral threads. A late write for one must not create a file. */
   private readonly forgotten = new Set<string>();
   private readonly mutationContext = new AsyncLocalStorage<{ id: string; active: boolean }>();
@@ -217,7 +150,7 @@ export class ClaudeSessionStore {
 
   /** Starts holding an ephemeral session in memory. */
   holdEphemeral(session: ClaudeSession): void {
-    this.memory.set(session.thread.id, { session: JSON.stringify({ ...session, ephemeral: true }), lines: [] });
+    this.memory.set(session.thread.id, { session: JSON.stringify({ ...session, ephemeral: true }), history: new ClaudeTranscriptHistory() });
   }
 
   /** Drops an ephemeral session. A later save or append for it does nothing. */
@@ -444,7 +377,7 @@ export class ClaudeSessionStore {
     const record: ClaudeTurnEndRecord[] = turnEnd ? [{ type: "pwragent_turn_end", ...turnEnd, createdAt: Date.now() }] : [];
     const held = this.memory.get(id);
     if (held) {
-      held.lines.push(...[...entries, ...record].map((line) => JSON.parse(JSON.stringify(line)) as ClaudeHistoryLine));
+      held.history.apply([...entries, ...record].map((line) => JSON.parse(JSON.stringify(line)) as ClaudeHistoryLine));
       return;
     }
     await this.withWrite(id, async () => {
@@ -526,8 +459,11 @@ export class ClaudeSessionStore {
     });
   }
 
+  async transcript(id: string): Promise<ClaudeTranscriptHistory> {
+    return this.memory.get(id)?.history ?? await this.history.read(this.file(id, "jsonl"));
+  }
+
   async entries(id: string): Promise<AppServerThreadEntry[]> {
-    const held = this.memory.get(id);
-    return historyEntries(held ? held.lines : await this.lines(id));
+    return (await this.transcript(id)).entries();
   }
 }

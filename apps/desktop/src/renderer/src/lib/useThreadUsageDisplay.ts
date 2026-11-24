@@ -5,6 +5,7 @@ import type {
   AppServerThreadActivityEntry,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import {
   THREAD_DISPLAY_LEGACY_MAX_ACCOUNTING_TURNS,
   THREAD_DISPLAY_MAX_ACCOUNTING_TURNS,
@@ -27,12 +28,37 @@ export function applyThreadUsageDisplay(entries: AppServerThreadEntry[], activit
   });
 }
 
+export async function readThreadUsageDisplay(params: {
+  readThread: NonNullable<DesktopApi["readThread"]>;
+  thread: NavigationThreadSummary;
+  target: FederationTarget | undefined;
+  entries: AppServerThreadEntry[];
+  isCurrent?: () => boolean;
+}): Promise<AppServerThreadActivityEntry[]> {
+  const { readThread, thread, target, entries, isCurrent } = params;
+  const turns = [...new Map(entries.flatMap((entry) => entry.turn ? [[entry.turn.id, entry.turn] as const] : [])).values()];
+  const activities: AppServerThreadActivityEntry[] = [];
+  const chunk = supportsBulkDisplayReads(target, thread)
+    ? THREAD_DISPLAY_MAX_ACCOUNTING_TURNS : THREAD_DISPLAY_LEGACY_MAX_ACCOUNTING_TURNS;
+  for (let offset = 0; offset < turns.length; offset += chunk) {
+    const response = await readThread({
+      backend: thread.source, threadId: thread.id, federationTarget: target,
+      display: { resource: "accounting", turns: turns.slice(offset, offset + chunk) },
+      includeTurns: false, viewOnly: true,
+    });
+    if (isCurrent && !isCurrent()) return [];
+    activities.push(...response.replay.entries.filter((entry): entry is AppServerThreadActivityEntry => entry.type === "activity"));
+  }
+  return activities;
+}
+
 export function useThreadUsageDisplay(params: {
   desktopApi?: DesktopApi;
   thread?: NavigationThreadSummary;
   entries: AppServerThreadEntry[];
   response?: AppServerReadThreadResponse;
   suspended?: boolean;
+  onResolved?: (entries: AppServerThreadActivityEntry[]) => void;
 }) {
   const target = params.thread?.federation?.ref.target ?? readRendererFederationTarget();
   const key = JSON.stringify([params.thread?.source, params.thread?.id, target, params.response?.display?.revision]);
@@ -40,32 +66,24 @@ export function useThreadUsageDisplay(params: {
   current.current = params;
   const [state, setState] = useState<{ key: string; entries: AppServerThreadActivityEntry[] }>({ key, entries: [] });
   useEffect(() => {
-    const { desktopApi, thread, suspended, response } = current.current;
+    const { desktopApi, thread, suspended, response, onResolved } = current.current;
     const effectTarget = thread?.federation?.ref.target ?? readRendererFederationTarget();
-    if (!response?.display || suspended || !desktopApi?.readThread || !thread) return;
+    const readThread = desktopApi?.readThread;
+    if (!response?.display || suspended || !readThread || !thread) return;
     let cancelled = false;
     let version = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const refresh = async () => {
       const sequence = ++version;
-      const turns = [...new Map(current.current.entries.flatMap((entry) => entry.turn ? [[entry.turn.id, entry.turn] as const] : [])).values()];
-      const activities: AppServerThreadActivityEntry[] = [];
-      // Each read rebuilds the owner's whole thread display: ask once when it can.
-      const chunk = supportsBulkDisplayReads(effectTarget, current.current.thread)
-        ? THREAD_DISPLAY_MAX_ACCOUNTING_TURNS : THREAD_DISPLAY_LEGACY_MAX_ACCOUNTING_TURNS;
       try {
-        // Loaded history, not total thread length, bounds this resource.
-        for (let offset = 0; offset < turns.length; offset += chunk) {
-          const response = await desktopApi.readThread!({
-            backend: thread.source, threadId: thread.id,
-            federationTarget: effectTarget,
-            display: { resource: "accounting", turns: turns.slice(offset, offset + chunk) },
-            includeTurns: false, viewOnly: true,
-          });
-          if (cancelled || sequence !== version) return;
-          activities.push(...response.replay.entries.filter((entry): entry is AppServerThreadActivityEntry => entry.type === "activity"));
+        const activities = await readThreadUsageDisplay({
+          readThread, thread, target: effectTarget, entries: current.current.entries,
+          isCurrent: () => !cancelled && sequence === version,
+        });
+        if (!cancelled && sequence === version) {
+          onResolved?.(activities);
+          setState({ key, entries: activities });
         }
-        if (!cancelled && sequence === version) setState({ key, entries: activities });
       } catch {
         // Keep the previous owner projection; the next boundary or reconnect retries.
       }

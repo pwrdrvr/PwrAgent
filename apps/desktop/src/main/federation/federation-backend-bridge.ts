@@ -1319,7 +1319,9 @@ export function registerFederationBackendHandlers(params: {
       // without those bounds only after the bounded read proves that native
       // pagination is unavailable.
       if (
-        !response.replay.pagination.supportsPagination
+        request.includeTurns !== false
+        && request.limit !== 0
+        && !response.replay.pagination.supportsPagination
         && (request.before !== undefined || request.limit !== undefined)
       ) {
         const boundedReadDurationMs = response.readDurationMs;

@@ -2,6 +2,7 @@ import type {
   AppServerReadThreadResponse,
   AppServerThreadEntry,
   AppServerThreadMessage,
+  AppServerThreadMessageEntry,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import { turnUsageEntryTurnId } from "@pwragent/shared/thread-usage-display";
 import { isTurnAnswer, lateWorkBelongsAboveAnswer } from "../features/thread-detail/turn-answer-placement";
@@ -9,7 +10,7 @@ import {
   addTranscriptReviewSegmentToIndex,
   createTranscriptReviewHistoryIndex,
   deriveTranscriptReviewPresentation,
-  iterateTranscriptReviewHistoryEvents,
+  presentIndexedTranscriptReviews,
   summarizeTranscriptReviewSegment,
   type TranscriptReviewHistoryIndex,
   type TranscriptReviewPresentation,
@@ -20,8 +21,10 @@ export type TranscriptHistoryPage = {
   entryCount: number;
   messageCount: number;
   messages: AppServerThreadMessage[];
+  prompts: AppServerThreadMessageEntry[];
   newerPage?: TranscriptHistoryPage;
   olderPage?: TranscriptHistoryPage;
+  olderPromptPage?: TranscriptHistoryPage;
 };
 
 export type LoadedTranscriptHistory = {
@@ -29,6 +32,10 @@ export type LoadedTranscriptHistory = {
   messageCount: number;
   newestPage?: TranscriptHistoryPage;
   oldestPage?: TranscriptHistoryPage;
+  newestPromptPage?: TranscriptHistoryPage;
+  oldestPromptPage?: TranscriptHistoryPage;
+  previous?: LoadedTranscriptHistory;
+  appendedPage?: TranscriptHistoryPage;
   pagination: AppServerReadThreadResponse["replay"]["pagination"];
 };
 
@@ -49,9 +56,19 @@ type CachedRetainedEntryPlacement = {
   turnPageCount: number;
 };
 
+type TranscriptRevision<T> = { value: T; version: number; previous?: TranscriptRevision<T> };
+
 export type TranscriptHistoryIndex = {
   entryIds: Set<string>;
   messageIds: Set<string>;
+  warmEntryIds: Set<string>;
+  warmMessageIds: Set<string>;
+  warmEntryOverrides: Map<string, TranscriptRevision<AppServerThreadEntry>>;
+  warmMessageOverrides: Map<string, TranscriptRevision<AppServerThreadMessage>>;
+  warmRevisionVersion: number;
+  activityRevision: number;
+  promptsById: Map<string, AppServerThreadMessageEntry>;
+  promptsByTurn: Map<string, AppServerThreadMessageEntry[]>;
   retainedEntryPlacements: Map<string, CachedRetainedEntryPlacement>;
   review: TranscriptReviewHistoryIndex;
   turnPages: Map<string, TranscriptHistoryTurnPage[]>;
@@ -61,15 +78,30 @@ export function createTranscriptHistoryIndex(): TranscriptHistoryIndex {
   return {
     entryIds: new Set(),
     messageIds: new Set(),
+    warmEntryIds: new Set(),
+    warmMessageIds: new Set(),
+    warmEntryOverrides: new Map(),
+    warmMessageOverrides: new Map(),
+    warmRevisionVersion: 0,
+    activityRevision: 0,
+    promptsById: new Map(),
+    promptsByTurn: new Map(),
     retainedEntryPlacements: new Map(),
     review: createTranscriptReviewHistoryIndex(),
     turnPages: new Map(),
   };
 }
 
+function transcriptRevisionAt<T>(revisions: ReadonlyMap<string, TranscriptRevision<T>>, id: string, version: number): T | undefined {
+  let revision = revisions.get(id);
+  while (revision && revision.version > version) revision = revision.previous;
+  return revision?.value;
+}
+
 function messagesForEntries(
   entries: AppServerThreadEntry[],
   messages: AppServerThreadMessage[],
+  prompts?: AppServerThreadMessageEntry[],
 ): AppServerThreadMessage[] {
   const messagesById = new Map(messages.map((message) => [message.id, message]));
 
@@ -77,6 +109,7 @@ function messagesForEntries(
     if (entry.type !== "message") {
       return [];
     }
+    if (entry.role === "user") prompts?.push(entry);
 
     const message = messagesById.get(entry.id);
     return message
@@ -94,6 +127,10 @@ function messagesForEntries(
   });
 }
 
+function isTranscriptPrompt(entry: AppServerThreadEntry): entry is AppServerThreadMessageEntry {
+  return entry.type === "message" && entry.role === "user";
+}
+
 /**
  * Adds one server page without traversing or copying previously loaded pages.
  *
@@ -102,46 +139,118 @@ function messagesForEntries(
  * Set here would merely move the cumulative history copy from the entry array
  * to the ID index.
  */
-export function prependTranscriptHistoryPage(params: {
+type TranscriptHistoryPageInput = {
   history: LoadedTranscriptHistory | undefined;
   index: TranscriptHistoryIndex;
   page: AppServerReadThreadResponse;
   tailEntries: AppServerThreadEntry[];
-}): LoadedTranscriptHistory {
+};
+
+export function prependTranscriptHistoryPage(params: TranscriptHistoryPageInput): LoadedTranscriptHistory {
+  return retainTranscriptPage(params, "older");
+}
+
+export function appendTranscriptHistoryPage(params: TranscriptHistoryPageInput): LoadedTranscriptHistory {
+  return retainTranscriptPage(params, "newer");
+}
+
+function retainTranscriptPage(params: TranscriptHistoryPageInput, position: "older" | "newer"): LoadedTranscriptHistory {
   const tailEntryIds = new Set(params.tailEntries.map((entry) => entry.id));
+  if (position === "newer") {
+    const revisions = params.page.replay.entries.filter((entry) => params.index.entryIds.has(entry.id) && !tailEntryIds.has(entry.id));
+    if (revisions.length > 0) {
+      // Record only the touched IDs. An existing view captures its revision
+      // version, so later updates need no copies of its historical overrides.
+      const version = ++params.index.warmRevisionVersion;
+      for (const entry of revisions) {
+        if (entry.type === "activity") params.index.activityRevision++;
+        params.index.warmEntryIds.add(entry.id);
+        const entries = params.index.warmEntryOverrides;
+        entries.set(entry.id, { value: entry, version, previous: entries.get(entry.id) });
+      }
+      for (const message of messagesForEntries(revisions, params.page.replay.messages)) {
+        if (!params.index.messageIds.has(message.id)) continue;
+        params.index.warmMessageIds.add(message.id);
+        const messages = params.index.warmMessageOverrides;
+        messages.set(message.id, { value: message, version, previous: messages.get(message.id) });
+      }
+    }
+  }
   const entries = params.page.replay.entries.filter(
     (entry) =>
       !tailEntryIds.has(entry.id)
       && !params.index.entryIds.has(entry.id),
   );
-  const messages = messagesForEntries(entries, params.page.replay.messages);
+  const prompts: AppServerThreadMessageEntry[] = [];
+  const messages = messagesForEntries(entries, params.page.replay.messages, prompts);
   const reviewSummary = summarizeTranscriptReviewSegment(entries, messages);
 
   for (const entry of entries) {
     params.index.entryIds.add(entry.id);
+    if (position === "newer") params.index.warmEntryIds.add(entry.id);
   }
   for (const message of messages) {
     params.index.messageIds.add(message.id);
+    if (position === "newer") params.index.warmMessageIds.add(message.id);
   }
-  addTranscriptReviewSegmentToIndex(params.index.review, reviewSummary);
+  addTranscriptReviewSegmentToIndex(
+    params.index.review, reviewSummary, position,
+    position === "newer" && !entries.some((entry) => !entry.turn?.id || params.index.turnPages.has(entry.turn.id)),
+  );
 
   const previousEntryCount = params.history?.entryCount ?? 0;
   const previousMessageCount = params.history?.messageCount ?? 0;
   let oldestPage = params.history?.oldestPage;
   let newestPage = params.history?.newestPage;
+  let newestPromptPage = params.history?.newestPromptPage;
+  let oldestPromptPage = params.history?.oldestPromptPage;
+  let appendedPage: TranscriptHistoryPage | undefined;
   if (entries.length > 0) {
     const page: TranscriptHistoryPage = {
       entries,
       entryCount: entries.length,
       messageCount: messages.length,
       messages,
-      newerPage: params.history?.oldestPage,
+      prompts,
     };
-    if (oldestPage) {
-      // This reverse link is an append-only navigation index. Older array
-      // views remain bounded by their captured entry count, so attaching the
-      // next page cannot make a previously returned view grow.
-      oldestPage.olderPage = page;
+    // Both links are append-only. Array views capture their own first and
+    // last page so linking new pages does not grow a previously returned view.
+    if (position === "newer") {
+      page.olderPage = newestPage;
+      if (newestPage) newestPage.newerPage = page;
+      newestPage = page;
+      oldestPage ??= page;
+      appendedPage = page;
+    } else {
+      page.newerPage = oldestPage;
+      if (oldestPage) oldestPage.olderPage = page;
+      oldestPage = page;
+      newestPage ??= page;
+    }
+    if (prompts.length > 0) {
+      if (position === "newer") {
+        page.olderPromptPage = newestPromptPage;
+        newestPromptPage = page;
+        oldestPromptPage ??= page;
+      } else {
+        if (oldestPromptPage) oldestPromptPage.olderPromptPage = page;
+        oldestPromptPage = page;
+        newestPromptPage ??= page;
+      }
+      const promptsByTurn = new Map<string, AppServerThreadMessageEntry[]>();
+      for (const prompt of prompts) {
+        params.index.promptsById.set(prompt.id, prompt);
+        if (!prompt.turn?.id) continue;
+        const byTurn = promptsByTurn.get(prompt.turn.id) ?? [];
+        byTurn.push(prompt);
+        promptsByTurn.set(prompt.turn.id, byTurn);
+      }
+      for (const [turnId, prompts] of promptsByTurn) {
+        const previous = params.index.promptsByTurn.get(turnId);
+        if (!previous) params.index.promptsByTurn.set(turnId, prompts);
+        else if (position === "newer") previous.push(...prompts);
+        else previous.unshift(...prompts);
+      }
     }
     const entryIndexesByTurn = new Map<string, number[]>();
     entries.forEach((entry, entryIndex) => {
@@ -155,11 +264,11 @@ export function prependTranscriptHistoryPage(params: {
     });
     for (const [turnId, entryIndexes] of entryIndexesByTurn) {
       const turnPages = params.index.turnPages.get(turnId) ?? [];
-      turnPages.push({ entryIndexes, page });
+      // The insertion helper visits the oldest page first.
+      if (position === "newer") turnPages.unshift({ entryIndexes, page });
+      else turnPages.push({ entryIndexes, page });
       params.index.turnPages.set(turnId, turnPages);
     }
-    oldestPage = page;
-    newestPage ??= page;
   }
 
   return {
@@ -167,7 +276,10 @@ export function prependTranscriptHistoryPage(params: {
     messageCount: previousMessageCount + messages.length,
     newestPage,
     oldestPage,
-    pagination: params.page.replay.pagination,
+    newestPromptPage,
+    oldestPromptPage,
+    ...(appendedPage ? { previous: params.history, appendedPage } : {}),
+    pagination: position === "newer" && params.history ? params.history.pagination : params.page.replay.pagination,
   };
 }
 
@@ -184,13 +296,42 @@ function historyOverlapIds<T extends { id: string }>(
   return overlap;
 }
 
+type TranscriptIdLookup = Pick<ReadonlySet<string>, "has" | "size">;
+const projectedHistoryExclusions = new WeakMap<ReadonlySet<string>, {
+  index: ReadonlySet<string>; indexSize: number; ids: Set<string>;
+}>();
+
+function excludedIndexedHistoryIds<T extends { id: string }>(
+  tail: T[],
+  historyIds: ReadonlySet<string>,
+  presentationIds: ReadonlySet<string> | undefined,
+  exclusionsAreIndexed?: boolean,
+): TranscriptIdLookup {
+  const overlap = historyOverlapIds(tail, historyIds);
+  if (!presentationIds?.size) return overlap;
+  let excluded = presentationIds;
+  if (!exclusionsAreIndexed) {
+    let projection = projectedHistoryExclusions.get(presentationIds);
+    if (projection?.index !== historyIds || projection.indexSize !== historyIds.size) {
+      const ids = new Set<string>();
+      for (const id of presentationIds) if (historyIds.has(id)) ids.add(id);
+      projection = { index: historyIds, indexSize: historyIds.size, ids };
+      projectedHistoryExclusions.set(presentationIds, projection);
+    }
+    excluded = projection.ids;
+  }
+  let size = overlap.size + excluded.size;
+  for (const id of overlap) if (excluded.has(id)) size--;
+  return { size, has: (id) => overlap.has(id) || excluded.has(id) };
+}
+
 type SegmentedArraySource<T> = {
-  excludedHistoryIds: ReadonlySet<string>;
+  excludedHistoryIds: TranscriptIdLookup;
   excludedTailIds?: ReadonlySet<string>;
   historyCount: number;
   historyNewestPage: TranscriptHistoryPage | undefined;
   historyPage: TranscriptHistoryPage | undefined;
-  itemOverrides?: ReadonlyMap<string, T>;
+  itemOverrides?: Pick<ReadonlyMap<string, T>, "get">;
   pageItems: (page: TranscriptHistoryPage) => readonly T[];
   tail: readonly T[];
 };
@@ -205,6 +346,7 @@ function* iterateSegmentedArray<T extends { id: string }>(
         yield source.itemOverrides?.get(item.id) ?? item;
       }
     }
+    if (page === source.historyNewestPage) break;
     page = page.newerPage;
   }
   for (const item of source.tail) {
@@ -477,23 +619,56 @@ function createSegmentedArray<T extends { id: string }>(
   return proxy;
 }
 
+function separateWarmRevisions<T extends { id: string }>(items: T[], warmIds: ReadonlySet<string>) {
+  const revisions = new Map<string, T>();
+  if (!warmIds.size) return { tail: items, revisions };
+  const tail = items.filter((item) => {
+    if (!warmIds.has(item.id)) return true;
+    revisions.set(item.id, item);
+    return false;
+  });
+  return { tail, revisions };
+}
+
+export type SegmentedTranscriptDisplay = {
+  history: LoadedTranscriptHistory;
+  tail: readonly AppServerThreadEntry[];
+  activityRevision: number;
+  historicalActivityOverlays: readonly AppServerThreadEntry[];
+  entriesForPage: (page: TranscriptHistoryPage) => Iterable<AppServerThreadEntry>;
+  entriesForTurn: (turnId: string | undefined) => Iterable<AppServerThreadEntry>;
+  latestPrompt: (predicate?: (entry: AppServerThreadMessageEntry) => boolean) => AppServerThreadMessageEntry | undefined;
+  hasRewindablePrompt: (allowUnbound: boolean) => boolean;
+  isFirstPrompt: (id: string, allowUnbound: boolean) => boolean;
+};
+
+const displaySegments = new WeakMap<readonly unknown[], SegmentedTranscriptDisplay>();
+
+export function segmentedTranscriptDisplay(entries: readonly unknown[]): SegmentedTranscriptDisplay | undefined {
+  return displaySegments.get(entries);
+}
+
 export function combineTranscriptEntries(
   history: LoadedTranscriptHistory | undefined,
   index: TranscriptHistoryIndex | undefined,
   tailEntries: AppServerThreadEntry[],
   presentation?: Pick<
     TranscriptReviewPresentation,
-    "excludedHistoryEntryIds" | "historyEntryOverrides"
+    "excludedHistoryEntryIds" | "historyEntryOverrides" | "indexedHistoryExclusions"
   >,
   retainedEntries: readonly AppServerThreadEntry[] = [],
 ): AppServerThreadEntry[] {
   if (!history?.oldestPage || !index) {
     return tailEntries;
   }
-  const excludedHistoryIds = historyOverlapIds(tailEntries, index.entryIds);
-  for (const id of presentation?.excludedHistoryEntryIds ?? []) {
-    excludedHistoryIds.add(id);
-  }
+  // A later item revision or a fresh owner page can carry a copy of a row
+  // already promoted from this live tail. Use its payload in the old slot.
+  const { tail, revisions } = separateWarmRevisions(tailEntries, index.warmEntryIds);
+  const excludedHistoryIds = excludedIndexedHistoryIds(
+    tail, index.entryIds, presentation?.excludedHistoryEntryIds, presentation?.indexedHistoryExclusions,
+  );
+  const warmOverrides = index.warmEntryOverrides;
+  const warmRevisionVersion = index.warmRevisionVersion;
   const historyInsertions = placeRetainedArtifactsInHistory(
     retainedEntries,
     index,
@@ -503,19 +678,85 @@ export function combineTranscriptEntries(
       [...insertionsByIndex.values()].flat().map((entry) => entry.id)
     )
   );
-  return createSegmentedArray({
+  const source: SegmentedArraySource<AppServerThreadEntry> = {
     excludedHistoryIds,
     excludedTailIds: insertedEntryIds,
     historyCount: history.entryCount + insertedEntryIds.size,
     historyNewestPage: history.newestPage,
     historyPage: history.oldestPage,
-    itemOverrides: presentation?.historyEntryOverrides,
+    itemOverrides: revisions.size || warmOverrides.size || presentation?.historyEntryOverrides.size
+      ? { get: (id) => revisions.get(id)
+        ?? transcriptRevisionAt(warmOverrides, id, warmRevisionVersion)
+        ?? presentation?.historyEntryOverrides.get(id) }
+      : undefined,
     pageItems: (page) => entriesWithHistoryInsertions(
       page,
       historyInsertions.get(page),
     ),
-    tail: tailEntries,
+    tail,
+  };
+  const entries = createSegmentedArray(source);
+  const visibleTail = insertedEntryIds.size ? tail.filter((entry) => !insertedEntryIds.has(entry.id)) : tail;
+  const visiblePrompt = (prompt: AppServerThreadMessageEntry) => {
+    if (excludedHistoryIds.has(prompt.id)) return undefined;
+    const resolved = source.itemOverrides?.get(prompt.id) ?? prompt;
+    return isTranscriptPrompt(resolved) ? resolved : undefined;
+  };
+  const latestPrompt: SegmentedTranscriptDisplay["latestPrompt"] = (predicate) => {
+    const live = visibleTail.findLast((entry): entry is AppServerThreadMessageEntry =>
+      isTranscriptPrompt(entry) && (!predicate || predicate(entry)));
+    if (live) return live;
+    let page = history.newestPromptPage;
+    while (page) {
+      for (let position = page.prompts.length - 1; position >= 0; position--) {
+        const prompt = visiblePrompt(page.prompts[position]!);
+        if (prompt && (!predicate || predicate(prompt))) return prompt;
+      }
+      if (page === history.oldestPromptPage) break;
+      page = page.olderPromptPage;
+    }
+    return undefined;
+  };
+  displaySegments.set(entries, {
+    history,
+    tail: visibleTail,
+    activityRevision: index.activityRevision,
+    historicalActivityOverlays: tailEntries.filter((entry) => entry.type === "activity"
+      && (index.entryIds.has(entry.id) || insertedEntryIds.has(entry.id))),
+    *entriesForPage(page) {
+      for (const entry of source.pageItems(page)) {
+        if (!excludedHistoryIds.has(entry.id)) yield source.itemOverrides?.get(entry.id) ?? entry;
+      }
+    },
+    *entriesForTurn(turnId) {
+      for (const entry of visibleTail) if (!turnId || entry.turn?.id === turnId) yield entry;
+      if (!turnId) return;
+      const pages = index.turnPages.get(turnId) ?? [];
+      for (const { page, entryIndexes } of pages) {
+        for (const position of entryIndexes) {
+          const entry = page.entries[position]!;
+          if (!excludedHistoryIds.has(entry.id)) yield source.itemOverrides?.get(entry.id) ?? entry;
+        }
+      }
+    },
+    latestPrompt,
+    hasRewindablePrompt: (allowUnbound) => allowUnbound
+      ? Boolean(latestPrompt())
+      : visibleTail.some((entry) => isTranscriptPrompt(entry) && Boolean(entry.turn?.id))
+        || (index.promptsByTurn.size > 0 && Boolean(latestPrompt((entry) => Boolean(entry.turn?.id)))),
+    isFirstPrompt(id, allowUnbound) {
+      const live = visibleTail.find((entry): entry is AppServerThreadMessageEntry => entry.id === id && isTranscriptPrompt(entry));
+      const historical = index.promptsById.get(id);
+      const candidate = live ?? (historical && visiblePrompt(historical));
+      if (!candidate) return false;
+      const turnId = candidate.turn?.id;
+      if (!turnId) return allowUnbound;
+      const firstHistorical = index.promptsByTurn.get(turnId)?.find((entry) => visiblePrompt(entry)?.turn?.id === turnId);
+      if (firstHistorical) return firstHistorical.id === id;
+      return visibleTail.find((entry) => isTranscriptPrompt(entry) && entry.turn?.id === turnId)?.id === id;
+    },
   });
+  return entries;
 }
 
 type HistoryEntryInsertions = Map<
@@ -731,23 +972,28 @@ export function combineTranscriptMessages(
   tailMessages: AppServerThreadMessage[],
   presentation?: Pick<
     TranscriptReviewPresentation,
-    "excludedHistoryMessageIds"
+    "excludedHistoryMessageIds" | "indexedHistoryExclusions"
   >,
 ): AppServerThreadMessage[] {
   if (!history?.oldestPage || !index) {
     return tailMessages;
   }
-  const excludedHistoryIds = historyOverlapIds(tailMessages, index.messageIds);
-  for (const id of presentation?.excludedHistoryMessageIds ?? []) {
-    excludedHistoryIds.add(id);
-  }
+  const { tail, revisions } = separateWarmRevisions(tailMessages, index.warmMessageIds);
+  const excludedHistoryIds = excludedIndexedHistoryIds(
+    tail, index.messageIds, presentation?.excludedHistoryMessageIds, presentation?.indexedHistoryExclusions,
+  );
+  const warmOverrides = index.warmMessageOverrides;
+  const warmRevisionVersion = index.warmRevisionVersion;
   return createSegmentedArray({
     excludedHistoryIds,
     historyCount: history.messageCount,
     historyNewestPage: history.newestPage,
     historyPage: history.oldestPage,
+    itemOverrides: revisions.size || warmOverrides.size
+      ? { get: (id) => revisions.get(id) ?? transcriptRevisionAt(warmOverrides, id, warmRevisionVersion) }
+      : undefined,
     pageItems: (page) => page.messages,
-    tail: tailMessages,
+    tail,
   });
 }
 
@@ -757,13 +1003,18 @@ export function createTranscriptReviewPresentation(params: {
   tailEntries: AppServerThreadEntry[];
   tailMessages: AppServerThreadMessage[];
 }): TranscriptReviewPresentation {
+  if (params.history && params.index) {
+    return presentIndexedTranscriptReviews({
+      ...params,
+      index: params.index.review,
+      historyEntryIds: params.index.entryIds,
+      historyMessageIds: params.index.messageIds,
+      historyTurns: params.index.turnPages,
+    });
+  }
   return deriveTranscriptReviewPresentation({
-    historyEvents: params.history && params.index
-      ? iterateTranscriptReviewHistoryEvents(params.index.review)
-      : [],
-    historyIndex:
-      params.index?.review
-      ?? createTranscriptReviewHistoryIndex(),
+    historyEvents: [],
+    historyIndex: createTranscriptReviewHistoryIndex(),
     tailEntries: params.tailEntries,
     tailMessages: params.tailMessages,
   });
