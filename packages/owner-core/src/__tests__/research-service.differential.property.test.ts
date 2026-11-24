@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import type { ResearchEvent, ResearchThread } from "@pwragent/shared/research";
 import { ResearchService, type ResearchPorts } from "../research-service";
-import { emptyResearchDifferentialCoverage, expectResearchServicesAgree, researchDifferentialBoundsStepArb, researchDifferentialStepArb } from "./fixtures/research-differential";
+import { emptyResearchDifferentialCoverage, expectResearchServicesAgree, researchDifferentialBoundsStepArb, researchDifferentialStepArb, type ResearchDifferentialStep } from "./fixtures/research-differential";
 import { MemoryResearchStorage } from "./fixtures/research-memory-storage";
 import { ReplayMemoryStorage, ReplayResearchService } from "./fixtures/research-service-replay-reference";
 
@@ -27,10 +27,25 @@ describe("research service, validated against projections", () => {
 
   it("agrees on the operator's bounds: changes to them, and the per-worker limits and total worker time their timers enforce", async () => {
     const coverage = emptyResearchDifferentialCoverage();
-    await fc.assert(fc.asyncProperty(fc.array(researchDifferentialBoundsStepArb, { size: "max", minLength: 15, maxLength: 45 }), async (steps) => {
+    const compare = async (steps: ResearchDifferentialStep[]) => {
       const storage = new MemoryResearchStorage();
       await expectResearchServicesAgree(uuid, steps, storage, (id) => storage.records.get(id), coverage);
-    }), { numRuns: 30 });
+    };
+
+    // A takeover cuts off a live worker while it is still within its time
+    // limit. The operator names that worker and receives a new turn.
+    const operatorStep: Omit<ResearchDifferentialStep, "kind"> = {
+      run: 0, actor: 3, approach: 0, item: 0, other: 0, variant: 0, flag: true,
+      faults: { spawn: "ok", stop: "ok", notify: "turn", cancel: "plain" },
+    };
+    await compare([
+      { ...operatorStep, kind: "start", other: 4, variant: 3 },
+      { ...operatorStep, kind: "restart" },
+      { ...operatorStep, kind: "resume" },
+    ]);
+    expect(coverage.events.resumed, "operator resume recorded after takeover").toBe(1);
+
+    await fc.assert(fc.asyncProperty(fc.array(researchDifferentialBoundsStepArb, { size: "max", minLength: 15, maxLength: 45 }), compare), { numRuns: 30 });
     // Each bound has to be reached, changed and refused for the comparison to cover it.
     for (const type of ["bounds", "worker:turn-limit", "status:worker-time"]) expect(coverage.events[type] ?? 0, `${type} events recorded`).toBeGreaterThan(0);
     expect(coverage.accepted.bounds ?? 0).toBeGreaterThan(0);
