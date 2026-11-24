@@ -1,4 +1,4 @@
-name: Property test phase profile
+name: Verify property test performance changes
 
 on:
   push:
@@ -22,25 +22,24 @@ jobs:
         with:
           node-version: "^24.22.1"
           cache-electron: "true"
-      - name: Profile paired baseline and candidate samples
+      - name: Check exact test diff
         run: |
-          set -o pipefail
+          pnpm lint:boundaries
+          pnpm lint:oxlint
+          pnpm lint:oxlint:typed
+          pnpm typecheck
+      - name: Run focused tests with default randomized seeds
+        if: '!cancelled()'
+        run: |
           mkdir -p .local/property-profile
-          paths=(single-visible-tooltip.property.test.tsx LinkedProjectsPanel.property.test.tsx thread-search-ranked.property.test.ts)
-          failed=0
-          for trial in '1753 baseline' '1753 candidate' '7187 candidate' '7187 baseline' '34567 baseline' '34567 candidate'; do
-            read -r seed variant <<< "$trial"
-            git restore -- ':(glob)**/single-visible-tooltip.property.test.tsx' ':(glob)**/LinkedProjectsPanel.property.test.tsx' ':(glob)**/thread-search-ranked.property.test.ts'
-            python3 scripts/ci/profile-property-tests.py "$variant"
-            echo "::group::$trial"
-            PROPERTY_PROFILE_SEED="$seed" pnpm test "${paths[@]}" --reporter=default --reporter=json --outputFile=".local/property-profile/$seed-$variant.json" | tee ".local/property-profile/$seed-$variant.log" || failed=1
-            echo "::endgroup::"
-          done
-          git restore -- ':(glob)**/single-visible-tooltip.property.test.tsx' ':(glob)**/LinkedProjectsPanel.property.test.tsx' ':(glob)**/thread-search-ranked.property.test.ts'
-          exit "$failed"
+          pnpm test single-visible-tooltip.property.test.tsx LinkedProjectsPanel.property.test.tsx \
+            thread-search-ranked.property.test.ts LinkedProjectsPanel.test.tsx \
+            thread-search-store.test.ts thread-search-query-budget.test.ts \
+            data-tooltip-content.property.test.tsx \
+            --reporter=default --reporter=json --outputFile=.local/property-profile/final.json
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: property-test-phase-profile
+          name: property-test-verification
           path: .local/property-profile/
           include-hidden-files: true
