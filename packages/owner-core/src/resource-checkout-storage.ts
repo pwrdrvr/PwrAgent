@@ -44,6 +44,8 @@ export type CheckoutGrant = CheckoutWaiter & {
   deadlineAt: number;
   renewals: number;
   state: ResourceAllocationState;
+  /** Backfilled capacity must expire without managed-job recovery. */
+  backfilled?: true;
   executor?: CheckoutActor;
   job?: {
     id: string;

@@ -1187,6 +1187,7 @@ export class DesktopBackendRegistry {
     string,
     AcceptedDynamicToolCall
   >();
+  private readonly blockingCheckoutTurns = new Map<string, AbortController>();
   private readonly codexProtocolCaptureSession?: CodexProtocolCaptureSession;
   private readonly captureStores: ProtocolCaptureStore[];
   readonly navigationDirectoryScope = new NavigationDirectoryScope();
@@ -1915,7 +1916,11 @@ export class DesktopBackendRegistry {
     connect: (ports: ReturnType<DesktopBackendRegistry["constructionPorts"]>) => void,
   ) {
     this.context = dependencies.context;
-    this.context.turnState.onTurnUnregistered((key) => { this.jobMonitorCreationDeferredTurns.delete(key); });
+    this.context.turnState.onTurnUnregistered((key) => {
+      this.jobMonitorCreationDeferredTurns.delete(key);
+      this.blockingCheckoutTurns.get(key)?.abort();
+      this.blockingCheckoutTurns.delete(key);
+    });
     this.turnEventObservers = dependencies.turnEventObservers;
     this.ownerAdmission = dependencies.ownerAdmission;
     this.configStore = dependencies.configStore;
@@ -2999,6 +3004,11 @@ export class DesktopBackendRegistry {
           throw new Error("Federation resource tools are disabled. Enable Federation resources in Settings → Experimental.");
         }
         if (!this.isLiveDynamicToolCall(context.backend, context)) throw new Error("Resource tools require an active thread turn.");
+        if (operation === "resource_checkout_acquire" && context.turnId) {
+          const turn = this.blockingCheckoutTurn(context.backend, context.threadId, context.turnId.trim());
+          const signal = context.signal ? AbortSignal.any([context.signal, turn.signal]) : turn.signal;
+          return handler(operation, args, { ...context, signal });
+        }
         return handler(operation, args, context);
       }
       : undefined;
@@ -3008,6 +3018,15 @@ export class DesktopBackendRegistry {
     if (this.resourceCheckoutsEnabled()) return "enabled";
     // Hidden definitions still resolve calls from previously advertised catalogs.
     return thread?.threadId && this.hasCheckoutToCleanUp?.(thread.backend, thread.threadId) ? "cleanup" : "hidden";
+  }
+
+  private blockingCheckoutTurn(backend: AppServerBackendKind, threadId: string, turnId: string): AbortController {
+    const key = buildActiveTurnKey(backend, threadId, turnId);
+    const existing = this.blockingCheckoutTurns.get(key);
+    if (existing) return existing;
+    const controller = new AbortController();
+    this.blockingCheckoutTurns.set(key, controller);
+    return controller;
   }
 
   setResearchHandler(handler: ResearchAgentHandler | undefined, workerCheck?: (thread: { backend: AppServerBackendKind; threadId: string }) => boolean, enabled: () => boolean = () => false): void {
@@ -13059,7 +13078,12 @@ export class DesktopBackendRegistry {
   }
 
   private readonly threadInterruption = new ThreadInterruptionLifecycle({
-    cancelTools: (target) => { this.mcpGatewayTools?.cancel(target.backend, target.threadId, target.turnId); },
+    cancelTools: (target) => {
+      this.mcpGatewayTools?.cancel(target.backend, target.threadId, target.turnId);
+      if (this.isLiveDynamicToolCall(target.backend, target)) {
+        this.blockingCheckoutTurn(target.backend, target.threadId, target.turnId).abort();
+      }
+    },
     findReview: (target) => {
       const review = this.managedReviewService.findReviewForParentTurn({
         backend: target.backend, parentThreadId: target.threadId, turnId: target.turnId,
@@ -16171,6 +16195,8 @@ export class DesktopBackendRegistry {
       await this.stopRunningTurnsForShutdown();
     }
     this.mcpGatewayTools?.cancel();
+    for (const controller of this.blockingCheckoutTurns.values()) controller.abort();
+    this.blockingCheckoutTurns.clear();
     this.threadMcpConnections.clearSessionApprovals();
     this.headlessAutomation.revokeRegistrations();
     this.closed = true;

@@ -181,6 +181,17 @@ export class DesktopResourceCheckoutService {
     };
   }
 
+  localMachineResourceId(): string {
+    return this.machineDefinition.resourceId;
+  }
+
+  isCountedResource(resourceId: string): boolean {
+    const binding = this.options.bindings.find((candidate) => candidate.definition.resourceId === resourceId);
+    if (binding) return binding.definition.counted;
+    if (resourceId === this.machineDefinition.resourceId) return this.machineDefinition.counted;
+    return this.machine?.records(resourceId)[0]?.definition.counted ?? false;
+  }
+
   private threadTitle(thread: Omit<ResourceThreadRef, "title">, fallback: string): string {
     try {
       return this.options.threadTitle?.({ ...thread, title: fallback })?.trim() || fallback;

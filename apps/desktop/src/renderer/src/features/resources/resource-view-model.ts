@@ -229,13 +229,13 @@ export type ResourceActionDescriptor = {
   label: string;
   emphasis: "primary" | "secondary" | "danger";
   gate: ResourceActionGate;
-  /** For `request`: whether it would wait in the queue instead of granting now. */
+  /** For `request`: whether the current snapshot rules out an immediate grant. */
   waits?: boolean;
 };
 
 /**
  * The header actions for one resource, in display order. Request and Join
- * queue are one control: the label follows whether the request would wait.
+ * queue are one control: the label follows the capacity shown in the snapshot.
  */
 export function resourceActions(
   resource: ResourceDomain,
@@ -275,14 +275,13 @@ export function resourceActions(
   return out;
 }
 
-/** Whether a request would queue rather than be granted now. */
+/** Whether the current snapshot rules out an immediate grant. */
 export function requestWouldWait(resource: ResourceDomain, condition: ResourceCondition): boolean {
   if (condition !== "available" && condition !== "busy") return true;
-  if (resource.queue.length > 0) return true;
   if (resource.sharing.mode === "counted") {
     return resource.sharing.inUse >= resource.sharing.capacity;
   }
-  return resource.allocations.length > 0;
+  return resource.queue.length > 0 || resource.allocations.length > 0;
 }
 
 export function freeUnits(resource: ResourceDomain): number | undefined {

@@ -1267,11 +1267,15 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
         await test.step("Join queue dialog", async () => {
           const inspector = inspectorFor(RESOURCES_AUDIT_POOL.displayName);
           const opener = inspector.getByTestId("resources-action-request");
-          await expect(opener).toHaveText("Join queue");
-          const dialog = window.getByRole("dialog", { name: `Join queue: ${RESOURCES_AUDIT_POOL.displayName}`, exact: true });
+          await expect(opener).toHaveText("Request checkout");
+          const dialog = window.getByRole("dialog", { name: new RegExp(`^(Request checkout|Join queue): ${RESOURCES_AUDIT_POOL.displayName}$`, "u") });
           await checkDialogKeyboard(opener, dialog);
           await dialog.getByRole("textbox", { name: "Purpose", exact: true }).fill("Accessibility audit render");
-          await expect(dialog.getByRole("spinbutton", { name: "Units", exact: true })).toBeVisible();
+          const units = dialog.getByRole("spinbutton", { name: "Units", exact: true });
+          await expect(units).toBeVisible();
+          // Request 2 of 4 slots (only 1 is free) so EASY backfilling queues it
+          // instead of granting it immediately, exercising the queued-request state.
+          await units.fill("2");
           await runAxe(window, "Join queue dialog");
           await dialog.getByRole("button", { name: "Join queue", exact: true }).click();
           await expect(dialog).toBeHidden();

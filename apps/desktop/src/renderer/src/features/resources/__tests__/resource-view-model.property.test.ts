@@ -259,10 +259,7 @@ describe("resource view model", () => {
     }));
   });
 
-  it("labels a request Request checkout only when it would be granted without waiting", () => {
-    // Narrowed to a bound, reachable, conflict-free resource with the request
-    // offered, where the label can go either way; elsewhere it is always
-    // "Join queue" or absent.
+  it("offers Request checkout whenever the snapshot leaves room for an immediate grant", () => {
     const requestableArb = fc.tuple(resourceArb, fc.constantFrom("available", "busy") as fc.Arbitrary<ResourceCondition>, fc.boolean())
       .map(([resource, condition, emptyQueue]): [ResourceDomain, ResourceAuthority] => [
         {
@@ -276,22 +273,18 @@ describe("resource view model", () => {
         },
         { authorityId: AUTHORITY_ID, kind: "machine_broker", label: "Broker", endpointLabel: "socket", epoch: 1, status: "reachable" },
       ]);
-    let granted = 0;
+    let possibleWithQueue = 0;
     fc.assert(fc.property(requestableArb, ([resource, authority]) => {
       const request = resourceActions(resource, authority).find((action) => action.kind === "request");
-      if (request?.label !== "Request checkout") return;
-      granted += 1;
-      const condition = effectiveCondition(resource, authority);
-      expect(["available", "busy"]).toContain(condition);
-      expect(resource.queue).toHaveLength(0);
-      if (resource.sharing.mode === "counted") {
-        expect(resource.sharing.inUse).toBeLessThan(resource.sharing.capacity);
-      } else {
-        expect(resource.allocations).toHaveLength(0);
-      }
+      if (!request) return;
+      const possible = resource.sharing.mode === "counted"
+        ? resource.sharing.inUse < resource.sharing.capacity
+        : resource.queue.length === 0 && resource.allocations.length === 0;
+      if (possible && resource.queue.length) possibleWithQueue += 1;
+      expect(request.label).toBe(possible ? "Request checkout" : "Join queue");
     }));
     // The generator must reach the case the property is about.
-    expect(granted).toBeGreaterThan(0);
+    expect(possibleWithQueue).toBeGreaterThan(0);
   });
 
   it("offers exactly one of request, cancel and release", () => {

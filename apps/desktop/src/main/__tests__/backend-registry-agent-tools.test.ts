@@ -63,6 +63,41 @@ import { MESSAGING_EAGER_TOOLS, VOICE_MANAGER_EAGER_TOOLS } from "../agent-tools
 import { THREAD_MAINTENANCE_TOOL_WAIT_MS } from "../agent-tools/thread-maintenance-tool-scans";
 
 describe("DesktopBackendRegistry", () => {
+  it.each(["interrupt", "terminal"])("cancels a blocking Codex checkout on %s", async (ending) => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const called = Promise.withResolvers<AbortSignal | undefined>();
+    const finish = Promise.withResolvers<void>();
+    const target = { backend: "codex" as const, threadId: "checkout-owner", turnId: "checkout-turn" };
+    registry.setResourceCheckoutHandler(async (_operation, _args, context) => {
+      called.resolve(context.signal);
+      await finish.promise;
+      return { outcome: "ended" };
+    }, undefined, () => true);
+    await registry.publishLocalEvent({
+      backend: target.backend,
+      notification: { method: "turn/started", params: { ...target, turn: { id: target.turnId } } },
+    });
+    const pending = codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        ...target, callId: "checkout-call", requestId: "checkout-call",
+        namespace: "pwragent", tool: "resource_checkout_acquire", arguments: {},
+      },
+    } as AppServerPendingRequestNotification);
+    try {
+      const signal = await called.promise;
+      if (ending === "interrupt") await registry.interruptTurn(target);
+      else await emitCompletedTurn(registry, target.backend, target.threadId, target.turnId);
+      expect(signal?.aborted).toBe(true);
+    } finally {
+      finish.resolve();
+      await pending;
+      if (ending === "interrupt") await emitCompletedTurn(registry, target.backend, target.threadId, target.turnId);
+      await registry.close();
+    }
+  });
+
   describe("existing Codex Agent designation", () => {
     const agent = { name: "Fixture manager", instructions: "Manage requested messaging attachments." };
     const capabilities = { codeModeOutputReducer: { protocolVersion: 1 as const, dynamicToolsResumeField: "dynamicTools" as const } };
