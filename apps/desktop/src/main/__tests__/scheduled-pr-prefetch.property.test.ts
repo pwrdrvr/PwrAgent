@@ -424,6 +424,39 @@ it.skipIf(process.platform === "win32").each(["positive", "negative"])("matches 
   await expectEligible(resolve, cwd, "topic-1", (await oracle(cwd))("topic-1"));
 });
 
+it.skipIf(process.platform === "win32")("uses one current config read per branch with a symlinked include", async () => {
+  const cwd = await fixture();
+  await readGit(cwd, "remote", "remove", "upstream");
+  const included = path.join(cwd, "included-config");
+  const urls = ["https://github.com/fixture/first.git", "https://gitlab.com/fixture/other.git", "https://github.com/fixture/last.git"];
+  const configs = await Promise.all(urls.map(async (url, index) => {
+    const file = path.join(cwd, `included-config-${index}`);
+    await readGit(cwd, "config", "--file", file, `url.${url}.insteadOf`, "https://github.com/fixture/origin.git");
+    return file;
+  }));
+  await symlink(configs[0], included);
+  await readGit(cwd, "config", "--global", "include.path", included);
+  await resolveGitHubRepoForDirectory(cwd);
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  const starts = recordPrefetchStarts();
+
+  for (const [index, url] of urls.entries()) {
+    if (index > 0) {
+      await symlink(configs[index], `${included}.next`);
+      await rename(`${included}.next`, included);
+    }
+    const branch = topics[index];
+    expect(await readGit(cwd, "remote", "get-url", "origin")).toBe(url);
+    const expected = (await oracle(cwd))(branch);
+    starts.clear();
+    await expectEligible(resolve, cwd, branch, expected);
+    // Each branch sees the current include target through one Git config read.
+    expect(starts.calls.map(([, args]) => args[0])).toEqual(expected.length
+      ? ["config", "symbolic-ref", "for-each-ref"]
+      : ["config"]);
+  }
+});
+
 it.skipIf(process.platform === "win32")("uses native HEAD reads after one rejected checkout proof", async () => {
   const cwd = await fixture("files", "sha256");
   for (const remote of ["origin", "upstream"]) await remoteHead(cwd, remote, "unfetched-default");

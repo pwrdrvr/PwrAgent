@@ -122,7 +122,13 @@ export async function observeScheduledPrPrefetchMetadata(
     // retaining either a positive or a negative result.
     const extra = sources ? [...sources.includes].filter((file) => !roots.paths.has(file)) : [];
     const files = extra.length ? await observePrCheckoutConfigFiles(cwd, [...inputs.paths, ...extra]) : roots;
-    if (!files || (sources && [...sources.origins].some((file) => !files.paths.has(file)))) return undefined;
+    if (!files || (sources && [...sources.origins].some((file) => !files.paths.has(file)))) {
+      // Git can read includes we cannot watch, such as symlinks. Use its
+      // answer for this branch without retaining a negative or publishing it.
+      const { repos } = await repositories.read(configuration, { validateNegative: async () => false });
+      if (!await roots.unchanged() || !inputsUnchanged()) return undefined;
+      return { repos, refreshedRemoteNames: configuration.names };
+    }
     if (extra.length) {
       const confirmed = await readConfig();
       if (confirmed.stderr !== "" || confirmed.stdout !== config?.stdout) return undefined;
