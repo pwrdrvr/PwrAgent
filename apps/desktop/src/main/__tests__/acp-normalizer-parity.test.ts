@@ -122,6 +122,46 @@ describe("KTD-P3 normalizer parity", () => {
     expect(canon(runKit(updates))).toEqual(canon(runInTree(updates)));
   });
 
+  const script = [
+    "printf '%s\\n' 'Checking fixture configuration'",
+    "printf '%s\\n' 'Checking fixture output'",
+  ].join("\n");
+
+  it.each([
+    {
+      scenario: "Antigravity run_command with a summary",
+      fields: {
+        name: "run_command",
+        title: script,
+        rawInput: { CommandLine: script, toolSummary: "Check fixture output" },
+      },
+      command: script,
+    },
+    {
+      scenario: "Antigravity run_command titled with its script",
+      fields: { name: "run_command", title: script, rawInput: { CommandLine: script } },
+      command: script,
+    },
+    {
+      scenario: "a long command with a generic Bash title",
+      fields: { title: "Bash", command: `/bin/bash -lc "${script}"` },
+      command: `/bin/bash -lc "${script}"`,
+    },
+  ])("shell label parity for $scenario", ({ fields, command }) => {
+    const call = { toolCallId: "fixture-command", kind: "execute", ...fields };
+    const updates: Update[] = [
+      { sessionUpdate: "tool_call", ...call, status: "in_progress" },
+      { sessionUpdate: "tool_call_update", ...call, status: "completed" },
+    ];
+    const replay = runKit(updates);
+
+    // Both pipelines should use the same heading and keep the full script in its details.
+    expect(canon(replay)).toEqual(canon(runInTree(updates)));
+    expect(replay.entries).toMatchObject([
+      { type: "activity", details: [{ command: { displayCommand: command, rawCommand: command } }] },
+    ]);
+  });
+
   it("plan then tool call", () => {
     const updates: Update[] = [
       { kind: "plan", steps: [{ step: "Inspect files", status: "in_progress" }] },
