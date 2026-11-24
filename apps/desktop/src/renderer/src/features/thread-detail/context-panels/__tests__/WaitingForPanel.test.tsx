@@ -648,13 +648,44 @@ describe("WaitingForPanel resource waits", () => {
     expect(within(card).getByText("studio-m4 compute")).toBeInTheDocument();
     expect(within(card).getByText("#2 of 2 in line, 1 ahead")).toBeInTheDocument();
     // One slot is free and this request needs one: only first in, first out holds it.
-    expect(within(card).getByText(/Would fit now \(1 of 1 free\), but waits for #1 and earlier/)).toHaveClass("is-warning");
+    expect(within(card).getByText(/Would fit now \(1 of 1 free\), but waits for #1:/)).toHaveClass("is-warning");
     expect(within(card).getByText(/Held 26m of 1h expected · 34m left/)).toBeInTheDocument();
     expect(within(card).getByText("Partly enforced")).toBeInTheDocument();
     expect(within(card).getByText("Every profile on this machine")).toBeInTheDocument();
 
     fireEvent.click(within(card).getByRole("button", { name: "Open in Resources…" }));
     expect(openResource).toHaveBeenCalledWith(CPU);
+  });
+
+  it("shows a thread that holds slots and queues for more as waiting, with what it holds", async () => {
+    const holdsOne = (): ResourceCheckoutsSnapshot => {
+      const base = snapshot();
+      return {
+        ...base,
+        resources: base.resources.map((resource) => resource.resourceId !== CPU ? resource : {
+          ...resource,
+          allocations: [...resource.allocations, {
+            ...resource.allocations[0]!,
+            allocationId: "alloc-mine",
+            holder: { kind: "thread", thread: { backend: "claude", threadId: "waiting", title: thread.title } },
+            units: 1,
+          }],
+        }),
+      };
+    };
+    render(
+      <WaitingForPanel
+        thread={thread}
+        controller={controller(ready([resourceWake]))}
+        now={NOW}
+        readResourceCheckouts={async () => holdsOne()}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Continue after a machine compute checkout is granted" }));
+    const card = screen.getByTestId("resource-wait-card");
+    expect(await within(card).findByText("#2 of 2 in line, 1 ahead")).toBeInTheDocument();
+    expect(within(card).queryByText("Granted. This thread holds it now.")).not.toBeInTheDocument();
+    expect(within(card).getByTestId("resource-wait-also-holds")).toHaveTextContent("This thread already holds 1 CPU slot.");
   });
 
   it("starts a long continuation at three lines and opens it on request", () => {

@@ -24,13 +24,15 @@ export function resourcesWindowHash(focus?: ResourceCheckoutsWindowFocus): strin
 /**
  * Opens the Resources window, or brings it forward. With `focus`, the window
  * selects that resource: a new window reads it from its hash, an open one
- * from the focus channel.
+ * from the focus channel. A window still loading has not subscribed to the
+ * channel yet, so it is pointed at the new hash instead.
  */
 export function showResourcesWindow(source: WindowPlacementSource, focus?: ResourceCheckoutsWindowFocus): void {
   if (resourcesWindow && !resourcesWindow.isDestroyed()) {
     positionWindowForSourceDisplay(resourcesWindow, source);
     showAndFocusAuxiliaryWindow(resourcesWindow);
-    if (focus) resourcesWindow.webContents.send(RESOURCE_CHECKOUTS_FOCUS_CHANNEL, focus);
+    if (focus && resourcesWindow.webContents.isLoading()) loadResourcesRoute(resourcesWindow, focus);
+    else if (focus) resourcesWindow.webContents.send(RESOURCE_CHECKOUTS_FOCUS_CHANNEL, focus);
     return;
   }
 
@@ -67,11 +69,15 @@ export function showResourcesWindow(source: WindowPlacementSource, focus?: Resou
     RESOURCE_CHECKOUTS_FOCUS_CHANNEL,
   ]);
 
+  loadResourcesRoute(window, focus);
+  showAuxiliaryWindowWhenReady(window);
+}
+
+function loadResourcesRoute(window: BrowserWindow, focus?: ResourceCheckoutsWindowFocus): void {
   const entry = getRendererEntry();
   if (entry.kind === "url") {
     void window.loadURL(`${entry.value}#${resourcesWindowHash(focus)}`);
   } else {
     void window.loadFile(entry.value, { hash: resourcesWindowHash(focus) });
   }
-  showAuxiliaryWindowWhenReady(window);
 }

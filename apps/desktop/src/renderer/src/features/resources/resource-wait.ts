@@ -13,12 +13,14 @@ import { capacitySummary, effectiveCondition, findAuthority, freeUnits, holderLa
 export type ResourceWaiter = { backend: string; threadId: string };
 
 /**
- * Where the waiting thread stands. A thread that holds the resource and also
- * queues for more reads as holding: its turn is not blocked on the queue.
+ * Where the waiting thread stands. Its own queue entry comes first: a wait is
+ * for a queued request, so a thread that holds some of the resource and also
+ * queues for more is still waiting, and `holds` is what it keeps reserved
+ * meanwhile.
  */
 export type ResourceWaitPlace =
   | { kind: "holding" }
-  | { kind: "queued"; position: number; ahead: number; queueLength: number; hold: QueueEntryHold }
+  | { kind: "queued"; position: number; ahead: number; queueLength: number; hold: QueueEntryHold; holds?: number }
   | { kind: "not_queued"; queueLength: number };
 
 export type ResourceWaitHolder = { label: string; grantedAt: number; deadlineAt: number; units?: number };
@@ -84,7 +86,7 @@ export function describeQueueEntryHold(hold: QueueEntryHold, position: number, u
       return `Fits in the ${hold.free} free. Waiting for the authority to grant it.`;
     case "order":
       return hold.fitsNow
-        ? `Would fit now (${hold.needs} of ${hold.free} free), but waits for #${position - 1} and earlier: first in, first out.`
+        ? `Would fit now (${hold.needs} of ${hold.free} free), but waits for ${position === 2 ? "#1" : `#1 to #${position - 1}`}: first in, first out.`
         : `Needs ${units(hold.needs)}. Waits for ${position - 1} earlier request${position === 2 ? "" : "s"}.`;
   }
 }
@@ -160,10 +162,18 @@ export function summarizeResourceWait(
   if (!resource) return undefined;
   const condition = effectiveCondition(resource, findAuthority(snapshot, resource));
   const queueLength = resource.queue.length;
-  const holding = resource.allocations.some((allocation) => isWaiter(allocation.holder, waiter));
+  const own = resource.allocations.filter((allocation) => isWaiter(allocation.holder, waiter));
+  const holds = own.reduce((sum, allocation) => sum + (allocation.units ?? 1), 0);
   const entry = resource.queue.find((candidate) => isWaiter(candidate.requester, waiter));
-  const place: ResourceWaitPlace = holding ? { kind: "holding" }
-    : entry ? { kind: "queued", position: entry.position, ahead: entry.position - 1, queueLength, hold: queueEntryHold(resource, entry) }
+  const place: ResourceWaitPlace = entry ? {
+    kind: "queued",
+    position: entry.position,
+    ahead: entry.position - 1,
+    queueLength,
+    hold: queueEntryHold(resource, entry),
+    ...(holds > 0 ? { holds } : {}),
+  }
+    : own.length > 0 ? { kind: "holding" }
     : { kind: "not_queued", queueLength };
   const capacity = capacitySummary(resource);
   return {

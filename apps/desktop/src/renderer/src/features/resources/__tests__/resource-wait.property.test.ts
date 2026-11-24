@@ -25,8 +25,10 @@ import {
  *   below is that loop, re-stated.
  * - A request marked "fits now" is exactly one the free capacity could run
  *   if the queue were not FIFO: the case an operator reads as a stall.
- * - The waiter's place is its own entry's position, never another thread's,
- *   and a thread that holds the resource reads as holding.
+ * - The waiter's place is its own entry's position, never another thread's.
+ *   A thread with a queued request reads as queued even while it holds some
+ *   of the resource (its wait is for that request), and says how much it
+ *   holds. Only a thread with no queued request reads as holding.
  * - "Held by" never lists the waiter itself.
  */
 
@@ -166,12 +168,15 @@ describe("resource wait view", () => {
   it("places the waiter by its own entry and never lists it as another holder", () => {
     fc.assert(fc.property(settledArb, (resource) => {
       const summary = summarizeResourceWait(snapshotOf(resource), "res", WAITER)!;
-      const holds = resource.allocations.some((allocation) => sameThread(allocation.holder, WAITER));
+      const held = resource.allocations
+        .filter((allocation) => sameThread(allocation.holder, WAITER))
+        .reduce((sum, allocation) => sum + (allocation.units ?? 1), 0);
       const own = resource.queue.find((entry) => sameThread(entry.requester, WAITER));
-      if (holds) {
-        expect(summary.place.kind).toBe("holding");
-      } else if (own) {
+      if (own) {
         expect(summary.place).toMatchObject({ kind: "queued", position: own.position, ahead: own.position - 1, queueLength: resource.queue.length });
+        expect(summary.place.kind === "queued" ? summary.place.holds : undefined).toBe(held > 0 ? held : undefined);
+      } else if (held > 0) {
+        expect(summary.place.kind).toBe("holding");
       } else {
         expect(summary.place).toEqual({ kind: "not_queued", queueLength: resource.queue.length });
       }

@@ -138,8 +138,9 @@ export function createResourceCheckoutToolHandler(
       throw new Error("This action is unavailable to agents.");
     }
     const result = await service.perform(action, actor);
+    // Name the key as the authority stored it, trimmed, as status and wait do.
     return action.kind === "request" && typeof action.resourceId === "string" && typeof action.idempotencyKey === "string"
-      ? withQueuedNextStep(result, action.resourceId, action.idempotencyKey)
+      ? withQueuedNextStep(result, action.resourceId.trim(), action.idempotencyKey.trim())
       : result;
   };
 }

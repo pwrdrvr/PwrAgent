@@ -118,6 +118,11 @@ export function ResourceWaitCard(props: {
               {describeQueueEntryHold(place.hold, place.position, summary.unit)}
             </span>
           ) : null}
+          {place.kind === "queued" && place.holds !== undefined ? (
+            <span className="resource-wait-card__sub is-warning" data-testid="resource-wait-also-holds">
+              {`This thread already holds ${place.holds} ${summary.unit}${place.holds === 1 ? "" : "s"}. They stay reserved while it waits.`}
+            </span>
+          ) : null}
         </dd>
         <dt>Held by</dt>
         <dd>

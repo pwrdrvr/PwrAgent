@@ -441,7 +441,7 @@ describe("ResourcesScreen focus", () => {
     const holds = within(inspector()).getAllByTestId("resources-queue-hold").map((node) => node.textContent);
     expect(holds).toEqual([
       "Needs 2 CPU slots, 1 free. Starts when 1 more frees up.",
-      "Would fit now (1 of 1 free), but waits for #1 and earlier: first in, first out.Fits now",
+      "Would fit now (1 of 1 free), but waits for #1: first in, first out.Fits now",
     ]);
   });
 });

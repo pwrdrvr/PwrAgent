@@ -40,6 +40,8 @@ const actionResultArb = fc.oneof(
 
 /** Keys the tools accept; a blank key is refused before any of this runs. */
 const keyArb = fc.stringMatching(/^[A-Za-z0-9][A-Za-z0-9._-]{0,19}$/);
+/** The same key as an agent may send it: the authority trims it. */
+const paddingArb = fc.constantFrom("", " ", "  ");
 
 function handlerFor(status: unknown, result: unknown) {
   const service = {
@@ -58,12 +60,13 @@ const isQueued = (value: unknown): boolean => {
 
 describe("resource checkout tools: waiting for a grant", () => {
   it("names wait-with-continuation on exactly the results that leave the request queued", async () => {
-    await fc.assert(fc.asyncProperty(statusArb, actionResultArb, keyArb, async (status, result, key) => {
+    await fc.assert(fc.asyncProperty(statusArb, actionResultArb, keyArb, paddingArb, async (status, result, key, pad) => {
       const handler = handlerFor(status, result);
-      const read = await handler("resource_checkout_status", { resourceId: RESOURCE, idempotencyKey: key }, context);
-      const waited = await handler("resource_checkout_wait", { resourceId: RESOURCE, idempotencyKey: key, timeoutMs: 1 }, context);
+      const sent = `${pad}${key}${pad}`;
+      const read = await handler("resource_checkout_status", { resourceId: RESOURCE, idempotencyKey: sent }, context);
+      const waited = await handler("resource_checkout_wait", { resourceId: RESOURCE, idempotencyKey: sent, timeoutMs: 1 }, context);
       const requested = await handler("resource_checkout_action", {
-        action: { kind: "request", resourceId: RESOURCE, idempotencyKey: key, purpose: "tests", expectedDurationMs: 60_000, units: 4 },
+        action: { kind: "request", resourceId: RESOURCE, idempotencyKey: sent, purpose: "tests", expectedDurationMs: 60_000, units: 4 },
       }, context);
       for (const [answer, source] of [[read, status], [waited, status], [requested, result]] as const) {
         const next = (answer as { next?: string } | null)?.next;
