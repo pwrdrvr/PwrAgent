@@ -23,6 +23,11 @@ const ACP_NATIVE_ACCESS_MODE_IDS: ReadonlyArray<readonly [ThreadExecutionMode, s
   ["full-access", "yolo"],
 ];
 
+/** The PwrAgent level a native mode id carries, if any. */
+export function acpNativeAccessLevel(id: string): ThreadExecutionMode | undefined {
+  return ACP_NATIVE_ACCESS_MODE_IDS.find(([, nativeId]) => nativeId === id)?.[0];
+}
+
 /** One of an agent's own access modes, as it lists them. */
 export type AcpNativeAccessOption = {
   id: string;
@@ -46,7 +51,7 @@ export function acpNativeAccessOptions(
     : runtime?.modes?.availableModes.map((mode) => ({ id: mode.id, label: mode.label || mode.id })) ?? [];
   if (offered.length < 2) return [];
   return offered.map((option) => {
-    const level = ACP_NATIVE_ACCESS_MODE_IDS.find(([, id]) => id === option.id)?.[0];
+    const level = acpNativeAccessLevel(option.id);
     return level ? { ...option, executionMode: level } : option;
   });
 }

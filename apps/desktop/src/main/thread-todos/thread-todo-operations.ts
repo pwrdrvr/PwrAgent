@@ -25,6 +25,8 @@ import type {
 } from "@pwragent/shared/contracts/thread-reviews";
 import type { CodexSpeed } from "@pwragent/shared/codex-speed";
 import { isThreadExecutionMode } from "@pwragent/shared/thread-execution-mode";
+import { acpNativeAccessLevel } from "@pwragent/shared/acp-permission-mode";
+import { threadExecutionModeRank } from "@pwragent/shared/thread-todo-access";
 import { buildThreadIdentityKey, isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
 import {
   parseThreadTodoItemTexts,
@@ -270,6 +272,12 @@ export const localThreadTodoOperations = {
     const modeId = typeof native?.id === "string" ? native.id.trim() : "";
     if (native !== undefined && (!backend || !modeId)) {
       throw new Error("A to-do's agent mode needs a provider and a mode id.");
+    }
+    // The Full Access gate judges the stored mode, so a pick must not carry
+    // more access than it: Yolo is stored at Full Access.
+    const level = modeId ? acpNativeAccessLevel(modeId) : undefined;
+    if (level && threadExecutionModeRank(level) > threadExecutionModeRank(request.executionMode)) {
+      throw new Error(`An agent's ${modeId} mode needs the card's access to be ${level} or higher.`);
     }
     return {
       todo: getThreadTodoService().setAccess({

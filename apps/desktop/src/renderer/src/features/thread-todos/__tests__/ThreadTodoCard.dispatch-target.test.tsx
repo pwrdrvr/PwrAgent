@@ -769,19 +769,48 @@ describe("to-do card access", () => {
     expect(api.setThreadTodoAccess).toHaveBeenCalledWith({ id: "card", executionMode: "full-access" });
   });
 
-  it("shows a viewer's card from an owner that cannot store a pick, without letting it change", async () => {
+  it("shows an older owner's card at its own mode, never holding Start for rules that owner does not apply", async () => {
+    // The card names Auto, which this catalog does not list. An owner
+    // without thread_todo_access passes it through, as it always did.
     const todo: ThreadTodo = {
       ...card,
       id: "remote-todo:win:card",
       federationTarget: { scope: "remote", instanceId: "win" },
-      action: { type: "start_thread", prompt: "Run the focused suite", executionMode: "default" },
+      action: { type: "start_thread", prompt: "Run the focused suite", executionMode: "auto" },
       dispatchDefaults: { thread: { backend: "codex", model: "sol" }, threadExecutionMode: "default" },
     };
     setup({ todo, instances: [WIN], win: [codex({ executionModes: modes("default", "full-access") })] });
     await settle();
-    const chipButton = accessChip() as HTMLButtonElement;
-    expect(chipButton.getAttribute("aria-label")).toBe("Access for the new thread: Default Access");
-    expect(chipButton.disabled).toBe(true);
-    expect(chipButton.getAttribute("data-tooltip")).toBe("Update PwrAgent on win-lab / dev to choose access here.");
+    const chipLabel = accessChip();
+    expect(chipLabel.tagName).toBe("SPAN");
+    expect(chipLabel.getAttribute("aria-label")).toBe("Access for the new thread: Auto");
+    expect(chipLabel.getAttribute("data-tooltip")).toBe("Update PwrAgent on win-lab / dev to choose access here.");
+    expect(screen.queryByTestId("todo-dispatch-access-note")).toBeNull();
+    expect(startButton().disabled).toBe(false);
+  });
+
+  it("holds Start after a pick until the card's saved version arrives", async () => {
+    const todo: ThreadTodo = { ...card, dispatchDefaults: { thread, threadExecutionMode: "default" } };
+    const { api, rerender, tree } = setup({
+      todo, local: [{ ...claude, executionModes: modes("default", "auto", "full-access") }, codex()],
+    });
+    const saved: ThreadTodo = {
+      ...todo, updatedAt: 1,
+      action: { type: "start_thread", prompt: "Run the focused suite", executionMode: "full-access" },
+    };
+    api.setThreadTodoAccess.mockResolvedValue({ todo: saved });
+    await settle();
+    await act(async () => { fireEvent.click(accessChip()); });
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole("menu", { name: "Access for the new thread" }))
+        .getByRole("menuitemradio", { name: /^Full Access/ }));
+    });
+    await settle();
+    // The save answered, but this window still shows the Default Access card.
+    expect(startButton().disabled).toBe(true);
+    rerender(tree(saved));
+    await settle();
+    expect(startButton().disabled).toBe(false);
+    expect(accessChip().getAttribute("aria-label")).toBe("Access for the new thread: Full Access");
   });
 });

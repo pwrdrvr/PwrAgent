@@ -124,22 +124,29 @@ export function resolveThreadTodoStartAccess(input: {
     if (fromCard) {
       return {
         status: "refused", reason: "card_mode_unavailable", wanted, options,
-        message: `${destination.label} does not offer ${MODE_WORDS[wanted]}. Choose one of its modes.`,
+        message: options.length > 0
+          ? `${destination.label} does not offer ${MODE_WORDS[wanted]}. Choose one of its modes.`
+          : `${destination.label} has no access mode it can start with now, not even Default Access. Choose another provider.`,
       };
     }
     // An inherited mode must never raise access to make a provider fit.
     if (offers("default")) return ready("default", "lowered");
     return {
       status: "refused", reason: "no_fit", wanted, options,
-      message: `${destination.label} cannot use the inherited access mode or Default Access. Choose one of its modes.`,
+      message: options.length > 0
+        ? `${destination.label} cannot use the inherited access mode or Default Access. Choose one of its modes.`
+        : `${destination.label} has no access mode it can start with now, not even Default Access. Choose another provider.`,
     };
   }
 
   const runtime = destination.acp?.runtime;
   const options: ThreadTodoAccessOption[] = acpNativeAccessOptions(runtime)
     .map((option) => ({ kind: "native", ...option }));
+  // The Full Access gate judges the card's mode, so a pick above it, which
+  // the card's own Access menu never stores, is not honored.
   const picked = card.nativeAccessMode?.backend === input.destinationBackend
-    ? options.find((option) => option.kind === "native" && option.id === card.nativeAccessMode?.id)
+    ? options.find((option) => option.kind === "native" && option.id === card.nativeAccessMode?.id
+      && (option.executionMode === undefined || threadExecutionModeRank(option.executionMode) <= threadExecutionModeRank(wanted)))
     : undefined;
   if (picked?.kind === "native") {
     return {

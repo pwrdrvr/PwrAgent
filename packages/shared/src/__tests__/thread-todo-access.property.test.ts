@@ -61,6 +61,9 @@ const scenarioArb: fc.Arbitrary<Scenario> = fc.record({
   proposed: fc.option(fc.constantFrom(...ORDER), { nil: undefined }),
   pickedOn: fc.option(fc.constantFrom(...BACKENDS), { nil: undefined }),
   pickIndex: fc.nat(),
+  // Any caller of setThreadTodoAccess, a federated peer included, can store
+  // a level that disagrees with the pick; the card's own menu never does.
+  storedLevel: fc.option(fc.constantFrom(...ORDER), { nil: undefined, freq: 4 }),
 }).chain((base) => fc.record({
   destination: destinationArb(base.destinationBackend),
   pickDestination: destinationArb(base.pickedOn ?? base.destinationBackend),
@@ -76,6 +79,7 @@ const scenarioArb: fc.Arbitrary<Scenario> = fc.record({
     });
     const option = shown.options[base.pickIndex % Math.max(shown.options.length, 1)];
     if (option) card = threadTodoAccessForPick(option, base.pickedOn);
+    if (base.storedLevel) card = { ...card, executionMode: base.storedLevel };
   }
   return {
     sourceBackend: base.sourceBackend,
@@ -117,7 +121,9 @@ function oracle(scenario: Scenario): Expected {
   const native = (id: string): ThreadTodoAccessOption => ({
     kind: "native", id, label: id, ...(LEVEL_OF[id] ? { executionMode: LEVEL_OF[id] } : {}),
   });
-  if (card.nativeAccessMode?.backend === scenario.destinationBackend && ids.includes(card.nativeAccessMode.id)) {
+  const pickLevel = card.nativeAccessMode ? LEVEL_OF[card.nativeAccessMode.id] : undefined;
+  if (card.nativeAccessMode?.backend === scenario.destinationBackend && ids.includes(card.nativeAccessMode.id)
+    && (pickLevel === undefined || rank(pickLevel) <= rank(wanted))) {
     return { status: "ready", selected: native(card.nativeAccessMode.id), executionMode: recorded(card.nativeAccessMode.id) };
   }
   let best: string | undefined;

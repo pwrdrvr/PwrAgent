@@ -298,8 +298,9 @@ function useDispatchAccess(params: {
 }): TodoDispatchAccess | undefined {
   const { todo, onOwner, destinationBackend } = params;
   const api = useTodoDispatchContext().api;
-  // The card whose pick is being stored.
-  const [pending, setPending] = useState<string>();
+  // A pick being stored, until the card's next version arrives: Start stays
+  // held, so the run never carries the access the card showed before it.
+  const [pending, setPending] = useState<{ todoId: string; updatedAt: number }>();
   const [error, setError] = useState<{ todoId: string; message: string }>();
   const stored = todo.action?.type === "start_thread" ? todo.action : undefined;
   const card: ThreadTodoAccessCard = stored ?? {};
@@ -307,21 +308,25 @@ function useDispatchAccess(params: {
   const wanted = card.executionMode ?? sourceMode;
   if (!params.canConfigureStart || !wanted || !destinationBackend) return undefined;
   const providerLabel = params.destination?.label ?? destinationBackend;
-  // Another machine applies only the card's mode, against its own catalog.
+  // Another machine applies only the card's mode, against its own catalog,
+  // and an owner without `thread_todo_access` predates these rules: both
+  // show the card's or the inherited mode, and never hold Start for it.
+  const ownerRules = onOwner && !params.legacy && params.owner.access;
   const resolved = resolveThreadTodoStartAccess({
-    card: onOwner ? card : { ...(card.executionMode ? { executionMode: card.executionMode } : {}) },
+    card: ownerRules ? card : { ...(card.executionMode ? { executionMode: card.executionMode } : {}) },
     sourceBackend: todo.backend,
     sourceExecutionMode: sourceMode ?? wanted,
-    destination: onOwner && params.catalogLoaded ? params.destination : undefined,
+    destination: ownerRules && params.catalogLoaded ? params.destination : undefined,
     destinationBackend,
   });
   const setAccess = api?.setThreadTodoAccess;
   const lockedReason = !stored ? undefined
     : !onOwner ? `Access is chosen on ${params.owner.label}, the card's machine.`
-    : params.legacy || !params.owner.access || !setAccess ? `Update PwrAgent on ${params.owner.label} to choose access here.`
+    : !ownerRules ? `Update PwrAgent on ${params.owner.label} to choose access here.`
     : undefined;
-  const editable = stored !== undefined && lockedReason === undefined && resolved.options.length > 0;
-  const pendingHere = pending === todo.id;
+  const editable = stored !== undefined && lockedReason === undefined && setAccess !== undefined
+    && resolved.options.length > 0;
+  const pendingHere = pending?.todoId === todo.id && pending.updatedAt === todo.updatedAt;
   return {
     resolved,
     providerLabel,
@@ -332,13 +337,19 @@ function useDispatchAccess(params: {
     pick: (option) => {
       if (!setAccess || !editable || pendingHere) return;
       if (resolved.status === "ready" && sameThreadTodoAccessOption(resolved.selected, option) && resolved.source === "card") return;
-      setPending(todo.id);
+      const pick = { todoId: todo.id, updatedAt: todo.updatedAt };
+      setPending(pick);
       setError(undefined);
+      const settle = () => setPending((current) => current === pick ? undefined : current);
       void setAccess({ id: todo.id, ...threadTodoAccessForPick(option, destinationBackend) })
-        .catch((cause: unknown) => {
-          setError({ todoId: todo.id, message: cause instanceof Error ? cause.message : String(cause) });
+        .then((response) => {
+          // An unchanged card brings no new version to wait for.
+          if (response.todo.updatedAt === pick.updatedAt) settle();
         })
-        .finally(() => setPending(undefined));
+        .catch((cause: unknown) => {
+          settle();
+          setError({ todoId: todo.id, message: cause instanceof Error ? cause.message : String(cause) });
+        });
     },
   };
 }
@@ -709,21 +720,21 @@ export function TodoDispatchFacts(props: {
       ? `${access.providerLabel} has no mode at or below ${wantedAccess}, so it starts in its own default. Choose one of its modes to set it.`
     : undefined;
   const accessTooltip = access?.lockedReason ?? (accessValue ? `Access: ${accessValue}` : undefined);
-  const accessChip = !accessValue ? null : access && access.resolved.options.length > 0 && (access.editable || access.lockedReason) ? (
+  const accessChip = !accessValue ? null : access?.editable ? (
     <TodoFactMenu
       label="Access for the new thread"
       value={access.pending ? "Saving…" : accessValue}
       entries={accessEntries}
-      disabled={props.disabled || !access.editable || access.pending}
+      disabled={props.disabled || access.pending}
       testId="todo-dispatch-access"
       {...(compact
         ? { icon: ShieldIcon, ...(accessTooltip ? { tooltip: accessTooltip } : {}) }
-        : access.lockedReason ? { tooltip: access.lockedReason } : {})}
+        : {})}
     />
   ) : compact ? (
     <span
       className="todo-dispatch-chips__static tooltip-target"
-      data-tooltip={`Access: ${accessValue}`}
+      data-tooltip={access?.lockedReason ?? `Access: ${accessValue}`}
       aria-label={`Access for the new thread: ${accessValue}`}
       role="img"
       data-testid="todo-dispatch-access"
