@@ -68,6 +68,12 @@ async function git(cwd: string, args: string[], demand?: PrMetadataDemand, check
 type Checkout = { cwd: string; root: string; commonDir: string };
 type CheckoutLookup = Checkout | "unavailable" | undefined;
 type Clone = Checkout & { catalog: CatalogRead };
+type CheckoutIdentity = NonNullable<Awaited<ReturnType<ReturnType<typeof createStackCheckoutHints>["checkoutIdentity"]>>>;
+type RegisteredWorktrees = {
+  commonVersion: string;
+  pending: Promise<ReadonlySet<string> | undefined>;
+  ready?: ReadonlySet<string>;
+};
 
 async function stackJournalInFlight(commonDir: string): Promise<boolean> {
   const journals = ["gh-stack-rebase-state", "gh-stack-modify-state", "gh-stack-migration", "pwrgit-stack-op.json", "pwragent-stack-op.json"];
@@ -105,6 +111,7 @@ export class StackReadObservation {
   private readonly checkouts = new Map<string, Promise<CheckoutLookup>>();
   private readonly preflightCheckoutVersions = new Map<string, string | undefined>();
   private readonly catalogs = new Map<string, Promise<CatalogObservation>>();
+  private readonly worktreeInventories = new Map<string, RegisteredWorktrees>();
 
   constructor(readonly demand: PrMetadataDemand = {}) {
     // A selected request can promote the explicit checkout without putting
@@ -124,6 +131,58 @@ export class StackReadObservation {
       this.checkouts.set(cwd, read);
     }
     return read;
+  }
+
+  hasCheckoutLookup(cwd: string): boolean {
+    return this.checkouts.has(cwd);
+  }
+
+  readyWorktreeInventory(commonDir: string): ReadonlySet<string> | undefined {
+    return this.worktreeInventories.get(commonDir)?.ready;
+  }
+
+  async registeredCheckout(cwd: string, before: CheckoutIdentity, ready?: ReadonlySet<string>): Promise<Checkout | undefined> {
+    if (!before.registeredWorktree || !before.commonVersion || this.hints.requiresGitDiscovery) return undefined;
+    const inventory = this.worktreeInventories.get(before.commonDir);
+    if (!inventory) {
+      const pending = this.readRegisteredWorktrees(cwd, before);
+      const entry: RegisteredWorktrees = { commonVersion: before.commonVersion, pending };
+      this.worktreeInventories.set(before.commonDir, entry);
+      entry.ready = await pending;
+      // The seed already has a direct Git read.
+      return undefined;
+    }
+    if (inventory.commonVersion !== before.commonVersion) return undefined;
+    const roots = await inventory.pending;
+    if (!roots?.has(before.root)) return undefined;
+    // A witness taken before Git finished the inventory can have changed
+    // while Git ran. A later witness already sees changes to that checkout.
+    if (roots !== ready && !await this.hasCurrentRegistration(cwd, before)) return undefined;
+    return { cwd, root: before.root, commonDir: before.commonDir };
+  }
+
+  private async hasCurrentRegistration(cwd: string, before: CheckoutIdentity): Promise<boolean> {
+    const current = await this.hints.checkoutIdentity(cwd);
+    return current?.registeredWorktree === true && current.version === before.version;
+  }
+
+  private async readRegisteredWorktrees(cwd: string, before: CheckoutIdentity): Promise<ReadonlySet<string> | undefined> {
+    const demand = this.inventoryDemand;
+    try {
+      const checkout = await this.checkoutLookup(cwd, demand);
+      if (!checkout || checkout === "unavailable" || checkout.root !== before.root || checkout.commonDir !== before.commonDir) return undefined;
+      const config = await git(cwd, ["config", "--local", "--no-includes", "--null", "--list"], demand, true);
+      // Ask Git to parse the common config. Worktree-specific configuration
+      // and includes can make a sibling's setup differ from the seed's.
+      const keys = config.split("\0").map((entry) => entry.split("\n", 1)[0]!);
+      if (keys.some((key) => /^(?:include(?:if)?\.|core\.worktree$|extensions\.worktreeconfig$)/.test(key))) return undefined;
+      const output = await git(cwd, ["worktree", "list", "--porcelain", "-z"], demand, true);
+      if (!await this.hasCurrentRegistration(cwd, before)) return undefined;
+      return new Set(checkedOutWorktrees(output).map(({ path }) => path));
+    } catch {
+      demand.signal?.throwIfAborted();
+      return undefined;
+    }
   }
 
   async checkout(cwd: string, demand = this.demand): Promise<Checkout | undefined> {
@@ -275,6 +334,7 @@ function sameRepositoryHead(pr: PrSummary): boolean {
 }
 
 type StackThreadRow = Pick<NavigationThreadSummary, "id" | "source" | "title" | "linkedDirectories" | "prs" | "federation">;
+type ValidateStackAttachments = (row: StackThreadRow & { prs: PrSummary[] }) => Promise<PrSummary[]>;
 
 function threadDirectories(thread: StackThreadRow): string[] {
   return (thread.linkedDirectories ?? []).map((directory) => directory.worktreePath ?? directory.path);
@@ -511,15 +571,34 @@ export class StackReader {
   }
 
   private async readInventoryCheckout(
-    cwd: string, observation: StackReadObservation, candidates: readonly string[],
+    cwd: string, observation: StackReadObservation, candidates: readonly string[], useWorktreeInventory = false,
   ): Promise<CheckoutLookup> {
     const { hints, inventoryDemand } = observation;
+    const ready = useWorktreeInventory ? observation.readyWorktreeInventory(candidates[0]!) : undefined;
     const identity = candidates.length ? await hints.checkoutIdentity(cwd) : undefined;
     const before = identity && candidates.includes(identity.commonDir) ? identity : undefined;
     const version = before?.version ?? (!candidates.length ? hints.installedGitVersion : undefined);
-    const cached = this.inventoryCheckouts.get(cwd);
-    if (version && cached?.version === version && cached.expiresAt > this.now()) return cached.checkout;
-    this.inventoryCheckouts.delete(cwd);
+    const key = (!hints.requiresGitDiscovery ? before?.physicalDirectory : undefined) ?? cwd;
+    const cached = this.inventoryCheckouts.get(key);
+    if (version && cached?.version === version && cached.expiresAt > this.now()) {
+      return cached.checkout && { ...cached.checkout, cwd };
+    }
+    this.inventoryCheckouts.delete(key);
+
+    const remember = (checkout: Checkout | undefined) => {
+      if (!version) return;
+      const expiresAt = hints.installedGitVersion ? this.now() + 30_000 : Infinity;
+      this.inventoryCheckouts.set(key, { version, checkout, expiresAt });
+      if (this.inventoryCheckouts.size > 2_048) this.inventoryCheckouts.delete(this.inventoryCheckouts.keys().next().value!);
+    };
+    if (useWorktreeInventory && before) {
+      const checkout = await observation.registeredCheckout(cwd, before, ready);
+      if (checkout) {
+        inventoryDemand.signal?.throwIfAborted();
+        remember(checkout);
+        return checkout;
+      }
+    }
 
     const read = async (demand: PrMetadataDemand, locate: () => Promise<CheckoutLookup>, currentHints = hints) => {
       const checkout = await locate();
@@ -527,29 +606,31 @@ export class StackReader {
       const agreed = before ? checkout?.root === before.root && checkout.commonDir === before.commonDir
         && (await currentHints.checkoutIdentity(cwd))?.version === version : !checkout;
       demand.signal?.throwIfAborted();
-      if (version && agreed) {
-        const expiresAt = hints.installedGitVersion ? this.now() + 30_000 : Infinity;
-        this.inventoryCheckouts.set(cwd, { version, checkout, expiresAt });
-        if (this.inventoryCheckouts.size > 2_048) this.inventoryCheckouts.delete(this.inventoryCheckouts.keys().next().value!);
-      }
+      if (agreed) remember(checkout);
       return checkout;
     };
-    return version
-      ? await this.sharedInventoryCheckout(cwd, version, inventoryDemand,
-        (demand) => read(demand, () => locateCheckout(cwd, demand), createStackCheckoutHints(demand)))
-      : await read(inventoryDemand, () => observation.checkoutLookup(cwd, inventoryDemand));
+    if (!version || observation.hasCheckoutLookup(cwd)) {
+      return await read(inventoryDemand, () => observation.checkoutLookup(cwd, inventoryDemand));
+    }
+    const checkout = await this.sharedInventoryCheckout(key, version, inventoryDemand,
+      (demand) => read(demand, () => locateCheckout(cwd, demand), createStackCheckoutHints(demand)));
+    if (!checkout || checkout === "unavailable" || checkout.cwd === cwd) return checkout;
+    // A second spelling can share Git's result for the same physical path.
+    // If the alias moved during that read, discover its current target.
+    return (await hints.checkoutIdentity(cwd))?.version === version
+      ? { ...checkout, cwd } : await observation.checkoutLookup(cwd, inventoryDemand);
   }
 
   async read(threads: readonly StackThreadRow[], knownPrs: readonly PrSummary[], directories?: readonly string[],
     activity?: (threadKey: string) => Promise<{ held?: boolean; repair?: boolean }>,
-    observation = new StackReadObservation(),
+    observation = new StackReadObservation(), validateAttachments?: ValidateStackAttachments,
   ) {
-    return await this.readProjection(threads, knownPrs, directories, activity, observation, false);
+    return await this.readProjection(threads, knownPrs, directories, activity, observation, false, validateAttachments);
   }
 
   private async readProjection(threads: readonly StackThreadRow[], knownPrs: readonly PrSummary[],
     directories: readonly string[] | undefined, activity: ((threadKey: string) => Promise<{ held?: boolean; repair?: boolean }>) | undefined,
-    observation: StackReadObservation, catalogRetried: boolean,
+    observation: StackReadObservation, catalogRetried: boolean, validateAttachments?: ValidateStackAttachments,
   ): Promise<{ stacks: StackSummary[]; catalogs: CatalogRead[] }> {
     const { demand, hints, inventoryDemand } = observation;
     demand.signal?.throwIfAborted();
@@ -618,12 +699,23 @@ export class StackReader {
       if (!paths.some(participates)) continue;
       for (const cwd of paths) if (possible.get(cwd)?.length) admitted.add(cwd);
     }
+    const checkoutCounts = new Map<string, number>();
+    if (!directories && !hints.requiresGitDiscovery
+      && (demand.priority?.() ?? PR_METADATA_PRIORITY.background) === PR_METADATA_PRIORITY.background) {
+      for (const cwd of admitted) {
+        const candidates = possible.get(cwd);
+        if (candidates?.length === 1) checkoutCounts.set(candidates[0]!, (checkoutCounts.get(candidates[0]!) ?? 0) + 1);
+      }
+    }
     let retargetedHints: typeof hints | undefined;
     const rediscoveredClones = new Set<string>();
     const verify = new IterableMapper(admitted, async (cwd) => {
       // Explicit anchors already have a live result in this observation.
       const candidates = possible.get(cwd)!;
-      const checkout = hinted.has(cwd) ? await this.readInventoryCheckout(cwd, observation, candidates) : located.get(cwd);
+      // A seed, config read and roster must save work even when the clone
+      // has a primary checkout alongside its linked worktrees.
+      const useWorktreeInventory = candidates.length === 1 && (checkoutCounts.get(candidates[0]!) ?? 0) >= 5;
+      const checkout = hinted.has(cwd) ? await this.readInventoryCheckout(cwd, observation, candidates, useWorktreeInventory) : located.get(cwd);
       if (checkout === "unavailable") {
         unavailablePaths.add(cwd);
         return { checkout: undefined };
@@ -684,7 +776,7 @@ export class StackReader {
       [...scopedClones.keys()].map((commonDir) => observation.revalidateCatalog(commonDir)),
     )).some(Boolean)) {
       if (catalogRetried) return { stacks: [], catalogs: [{ status: "unavailable" }] };
-      return await this.readProjection(threads, knownPrs, directories, activity, new StackReadObservation(demand), true);
+      return await this.readProjection(threads, knownPrs, directories, activity, new StackReadObservation(demand), true, validateAttachments);
     }
     const checkouts = new Map(anchors.map((entry) => [entry.cwd, entry] as const));
     // Keep the existing path order regardless of which probes finish first.
@@ -694,8 +786,16 @@ export class StackReader {
     }
     const cloneCheckouts = directories ? scopedClones : new Map([...checkouts.values()]
       .filter((checkout) => wanted.has(checkout.commonDir)).map((checkout) => [checkout.commonDir, checkout]));
+    const rows = validateAttachments ? await Promise.all(local.map(async (row) => {
+      if (!row.prs?.length || !threadDirectories(row).some((cwd) => {
+        const checkout = checkouts.get(cwd);
+        return checkout && cloneCheckouts.has(checkout.commonDir);
+      })) return row;
+      return { ...row, prs: await validateAttachments({ ...row, prs: row.prs }) };
+    })) : local;
+    demand.signal?.throwIfAborted();
     const cloneThreads = new Map<string, CloneThread[]>();
-    for (const row of local) {
+    for (const row of rows) {
       const pathsByClone = new Map<string, string[]>();
       for (const cwd of threadDirectories(row)) {
         const checkout = checkouts.get(cwd);

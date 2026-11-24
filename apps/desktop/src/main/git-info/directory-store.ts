@@ -1,7 +1,9 @@
 import path from "node:path";
 import { realpath, stat } from "node:fs/promises";
 import type { LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
-import { createGitDirectoryObserver, type GitDirectoryObservation } from "./private/directory-observation";
+import {
+  createGitDirectoryCommonFileReader, createGitDirectoryObserver, type GitDirectoryObservation,
+} from "./private/directory-observation";
 import {
   runGit, buildCheckoutLinkedDirectory, buildFallbackLinkedDirectory, hasGitDiscoveryOverrides,
   pathExists, parseGitWorktrees, readLiveWorktreeCommonDirectory, resolveWorktreeRepositoryDirectory,
@@ -156,6 +158,8 @@ export function createThreadDirectoryEnricher(options: { now?: () => number } = 
 // All production Codex clients share the same cache and in-flight work.
 export const enrichThreadDirectory = createThreadDirectoryEnricher();
 
+export { createGitDirectoryCommonFileReader } from "./private/directory-observation";
+
 const observeNavigationCheckout = createGitDirectoryObserver({ navigation: true });
 type NavigationCheckout = {
   directories?: LinkedDirectorySummary[];
@@ -170,7 +174,9 @@ const navigationCheckouts = new GitReadCache<NavigationCheckout | undefined>({ t
  * supplied through their own reads. Ambiguous layouts retain the provider cwd
  * until a caller requests Git-verified enrichment.
  */
-export function readNavigationCheckout(cwd: string, fresh = false): Promise<NavigationCheckout | undefined> {
+export function readNavigationCheckout(
+  cwd: string, fresh = false, readCommon?: ReturnType<typeof createGitDirectoryCommonFileReader>,
+): Promise<NavigationCheckout | undefined> {
   if (hasGitDiscoveryOverrides()) return Promise.resolve(undefined);
   const key = path.resolve(cwd);
   const load = async (): Promise<NavigationCheckout | undefined> => {
@@ -182,7 +188,7 @@ export function readNavigationCheckout(cwd: string, fresh = false): Promise<Navi
     }
     try {
       let boundary: string | undefined;
-      const observed = await observeNavigationCheckout(key, (root) => { boundary = root; });
+      const observed = await observeNavigationCheckout(key, (root) => { boundary = root; }, undefined, readCommon);
       const provisional = boundary ? { provisional: { root: boundary, directory: buildFallbackLinkedDirectory(key) } } : undefined;
       if (observed?.repository === false) return { directories: [buildFallbackLinkedDirectory(key)] };
       if (!observed?.checkoutRoot || !observed.gitDirectory) return provisional;
@@ -192,6 +198,18 @@ export function readNavigationCheckout(cwd: string, fresh = false): Promise<Navi
         if (observed.separateGitDirectory) {
           const commonDirectory = await realpath(observed.gitDirectory);
           return { directories: [checkout], separateGit: { commonDirectory, checkoutRoot: checkout.path, primary: checkout } };
+        }
+        const common = observed.commonDirectory;
+        if (observed.standardWorktreeLink && common) {
+          if (path.basename(common) !== ".git") {
+            return { ...provisional, separateGit: { commonDirectory: common, checkoutRoot: checkout.path } };
+          }
+          const primaryHead = path.join(common, "HEAD");
+          const hasHead = readCommon ? Boolean(await readCommon(primaryHead)) : await pathExists(primaryHead);
+          if (hasHead) {
+            return { directories: [buildCheckoutLinkedDirectory(path.dirname(common), observed.checkoutRoot)] };
+          }
+          return { ...provisional, separateGit: { commonDirectory: common, checkoutRoot: checkout.path } };
         }
         const linked = await resolveWorktreeRepositoryDirectory(observed.checkoutRoot, true);
         if (linked) return { directories: [linked] };

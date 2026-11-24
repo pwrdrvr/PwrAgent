@@ -43,6 +43,52 @@ async function writeCatalog(cwd: string, name: string) {
 }
 
 describe("stack checkout demand", () => {
+  it("reuses Git's registered worktree inventory for ordinary sibling checkouts", async () => {
+    const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-worktree-inventory-")));
+    const primary = path.join(sandbox, "primary");
+    try {
+      await mkdir(primary);
+      initialize(primary);
+      git(primary, "branch", "main");
+      await writeCatalog(primary, "registered");
+      const worktrees = await Promise.all(Array.from({ length: 7 }, async (_, index) => {
+        const branch = `sibling-${index}`;
+        const cwd = path.join(sandbox, branch);
+        git(primary, "worktree", "add", "-b", branch, cwd);
+        const [root, common] = git(cwd, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir").split("\n");
+        expect(await realpath(root!)).toBe(cwd);
+        expect(await realpath(common!)).toBe(path.join(primary, ".git"));
+        return row(cwd, branch);
+      }));
+      const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+      try {
+        await fc.assert(fc.asyncProperty(fc.uniqueArray(fc.integer({ min: 0, max: 6 }), { minLength: 4, maxLength: 7 }),
+          async (indices) => {
+            start.mockClear();
+            const result = await new StackReader().read([row(primary, "tracked"), ...indices.map((index) => worktrees[index]!)], []);
+            expect(result.stacks[0]?.layers[0]?.thread?.key).toBe("codex:tracked");
+            // Once Git has verified a checkout in this clone, its live roster
+            // can corroborate each standard linked checkout's disk identity.
+            expect(start.mock.calls.filter(([, args, purpose]) => args[0] === "rev-parse" && purpose === "stack-checkout").length)
+              .toBeLessThanOrEqual(2);
+          }), { numRuns: 6 });
+      } finally {
+        start.mockRestore();
+      }
+      const reader = new StackReader();
+      const inventory = [row(primary, "tracked"), ...worktrees];
+      const read = async () => (await reader.read(inventory, [])).stacks[0]?.layers[0]?.thread?.key;
+      expect(await read()).toBe("codex:tracked");
+      git(primary, "checkout", "main");
+      const sibling = worktrees[0]!.linkedDirectories[0]!.path;
+      git(sibling, "checkout", "topic");
+      expect(git(sibling, "symbolic-ref", "--short", "HEAD")).toBe("topic");
+      expect(await read()).toBe("codex:sibling-0");
+    } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
   it("refreshes a scoped catalog changed during sibling checkout discovery", async () => {
     const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-catalog-during-discovery-"));
     const primary = path.join(sandbox, "primary");

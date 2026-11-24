@@ -85,7 +85,8 @@ export function createStackCheckoutHints(demand: PrMetadataDemand) {
     const common = parseGitPathPointer(await readBoundedGitPointer(commonFile));
     if (!common) return null;
     signal.throwIfAborted();
-    return { commonDir: await realpath(gitPointerTarget(admin, common)) };
+    const commonDir = common === "../.." ? path.dirname(path.dirname(resolvedAdmin)) : await realpath(gitPointerTarget(admin, common));
+    return { commonDir };
   }
 
   async function inspect(directory: string): Promise<readonly string[] | undefined> {
@@ -154,7 +155,7 @@ export function createStackCheckoutHints(demand: PrMetadataDemand) {
         const observed = await observeInventoryCheckout(cwd, undefined, signal);
         if (!observed?.repository || !observed.checkoutRoot || !observed.commonDirectory) return undefined;
         signal.throwIfAborted();
-        const commonDir = await realpath(observed.commonDirectory);
+        const commonDir = observed.dotGitDirectory ? await realpath(observed.commonDirectory) : observed.commonDirectory;
         // Git can skip a nested .git directory when either discovery
         // directory is no longer searchable, even if HEAD is unchanged.
         for (const name of ["objects", "refs"]) {
@@ -164,7 +165,10 @@ export function createStackCheckoutHints(demand: PrMetadataDemand) {
         return {
           root: observed.checkoutRoot,
           commonDir,
-          version: JSON.stringify([observed.relationship, observed.head, commonDir, runtime, installedGitVersion,
+          physicalDirectory: observed.physicalDirectory,
+          commonVersion: JSON.stringify([observed.commonVersion, runtime, env.HOME, env.USERPROFILE, env.XDG_CONFIG_HOME, env.SUDO_UID]),
+          registeredWorktree: observed.registeredWorktree === true,
+          version: JSON.stringify([observed.relationship, observed.head, observed.registeredWorktree, commonDir, runtime, installedGitVersion,
             env.HOME, env.USERPROFILE, env.XDG_CONFIG_HOME, env.SUDO_UID]),
         };
       }, demand);
