@@ -257,17 +257,24 @@ export function createScheduledPrefetchRemoteReader(cwd: string) {
       && (repos.length > 0 || !options.validateNegative || await options.validateNegative())) {
       previous = snapshot;
     }
-    const identityExpiresAt = observation.value.some(({ url }) => readSshHost(url)) ? fetchedAt + REMOTE_CACHE_TTL_MS : undefined;
+    const sshIdentityUnchanged = observation.value.some(({ url }) => readSshHost(url)) ? () => {
+      if (!isCurrentRemoteObservation(snapshot)) return false;
+      const current = observationForReuse();
+      // Git config freshness covers URL changes. For the same URLs, the
+      // owner can observe a different SSH hostname without touching Git files.
+      return !current || current.value === snapshot.value || !sameRemoteUrls(current.value, snapshot.value)
+        || current.value.every(({ repo }, index) => repo?.host === snapshot.value[index]?.repo?.host);
+    } : undefined;
     // The live phase can reuse successful SSH or native URL discovery once
     // the caller accepts this sample. Leave current live reads alone.
     const publish = repos.length && complete && !observation.sshResolutionFailed
-      && (identityExpiresAt !== undefined || observation.readWithGitRemote)
+      && (sshIdentityUnchanged || observation.readWithGitRemote)
       ? () => {
         if (remoteCacheGeneration === cacheGeneration && isCurrentRemoteObservation(snapshot)
           && !isCurrentRemoteObservation(remoteCache.get(cwd)) && !remoteLookups.has(cwd)) remoteCache.set(cwd, snapshot);
       }
       : undefined;
-    return { repos, refreshedRemoteNames: observation.names, identityExpiresAt, publish };
+    return { repos, refreshedRemoteNames: observation.names, sshIdentityUnchanged, publish };
   };
   return {
     read,
@@ -295,6 +302,11 @@ function isCurrentRemoteObservation(observation: RemoteCacheEntry | undefined): 
 function hasAllRemoteUrls(observation: ParsedRemoteObservation): boolean {
   const namesWithUrls = new Set(observation.value.map(({ name }) => name));
   return observation.names?.every((name) => namesWithUrls.has(name)) ?? false;
+}
+
+function sameRemoteUrls(left: GitRemote[], right: GitRemote[]): boolean {
+  return left.length === right.length && left.every(({ name, url }, index) =>
+    name === right[index].name && url === right[index].url);
 }
 
 function collectForgeRepositories(remotes: ParsedGitRemote[], kind?: ForgeKind): GitHubRepoRef[] {
@@ -371,9 +383,7 @@ async function loadParsedGitRemotes(
     const { names, remotes, unconfirmedEmpty, readWithGitRemote } = raw;
     const prior = prefetch?.previous;
     const previous = prior?.value;
-    if (previous && (remotes === previous
-      || (isCurrentRemoteObservation(prior) && previous.length === remotes.length
-        && remotes.every(({ name, url }, index) => name === previous[index].name && url === previous[index].url)))) {
+    if (previous && (remotes === previous || (isCurrentRemoteObservation(prior) && sameRemoteUrls(remotes, previous)))) {
       return { names, value: previous, unconfirmedEmpty, readWithGitRemote, sshResolutionFailed: prior?.sshResolutionFailed };
     }
     let sshResolutionFailed: true | undefined;

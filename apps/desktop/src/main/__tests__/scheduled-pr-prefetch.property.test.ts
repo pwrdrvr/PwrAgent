@@ -7,7 +7,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import * as gitExecutable from "../app-server/git-executable";
 import { bundledGitExecutable } from "../bundled-git";
 import { GitSubprocessDiagnostics, gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
-import { clearGitHubRemoteCache, readObservedGitOrigin, resolveGitHubRepoForDirectory } from "../pr-status/git-remote";
+import { clearGitHubRemoteCache, readObservedGitOrigin, resolveGitHubRepoForDirectory, resolveGitHubReposForDirectory } from "../pr-status/git-remote";
 import { createScheduledPrPrefetchRepoResolver, detectPullRequestsForThread } from "../pr-status/pr-detection";
 import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
 
@@ -347,6 +347,32 @@ it.skipIf(process.platform === "win32")("expires a verified SSH identity at its 
 
   await expectEligible(resolve, cwd, "topic-1", []);
   expect(ssh.mock.calls.filter(([command]) => command === "ssh-config")).toHaveLength(1);
+});
+
+it.skipIf(process.platform === "win32")("keeps verified SSH metadata aligned with a live owner refresh", async () => {
+  const cwd = await fixture();
+  const bin = path.join(cwd, "bin");
+  const config = path.join(cwd, "ssh-result");
+  await mkdir(bin);
+  await writeFile(path.join(bin, "ssh"), '#!/bin/sh\ncat "$PWRAGENT_TEST_PREFETCH_SSH_CONFIG"\n', { mode: 0o755 });
+  vi.stubEnv("PATH", `${bin}${path.delimiter}${process.env.PATH}`);
+  vi.stubEnv("PWRAGENT_TEST_PREFETCH_SSH_CONFIG", config);
+  onTestFinished(() => { vi.unstubAllEnvs(); });
+  await readGit(cwd, "remote", "set-url", "origin", "git@fixture-ssh:fixture/origin.git");
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  const starts = recordPrefetchStarts();
+
+  for (const [index, host] of ["github.com", "github.com", "gitlab.com", "gitlab.com", "github.com"].entries()) {
+    await writeFile(config, `hostname ${host}\n`);
+    const ownerRepos = await resolveGitHubReposForDirectory(cwd, { fresh: true });
+    expect(ownerRepos.map(({ repo }) => repo)).toEqual(host === "github.com" ? ["origin", "upstream"] : ["upstream"]);
+    starts.clear();
+    await expect(resolve(cwd, topics[index])).resolves.toEqual(ownerRepos);
+    // An owner refresh changes the checkout observation only if it changes the identity.
+    expect(starts.calls.map(([, args]) => args[0])).toEqual(index === 1 || index === 3
+      ? ["for-each-ref"]
+      : ["config", "rev-parse", "for-each-ref"]);
+  }
 });
 
 it.skipIf(process.platform === "win32")("resolves a cold SSH identity once across prefetch and live branch discovery", async () => {

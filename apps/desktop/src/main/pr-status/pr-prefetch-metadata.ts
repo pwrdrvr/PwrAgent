@@ -137,7 +137,7 @@ export async function observeScheduledPrPrefetchMetadata(
       && (files === roots || await roots.unchanged()) && inputsUnchanged());
     // Resolve identities from the config Git already sampled. OpenSSH aliases
     // use one expansion per observation, bounded by the scheduled batch.
-    const { repos, identityExpiresAt, publish } = await repositories.read(configuration, {
+    const { repos, sshIdentityUnchanged, publish } = await repositories.read(configuration, {
       validateNegative: async () => Boolean((!config || sources) && await configUnchanged()),
     });
     const remoteNames = configuration.names;
@@ -157,7 +157,7 @@ export async function observeScheduledPrPrefetchMetadata(
     const configOnly = !proof && (Boolean(extra.length && sources.localOrigins.has(path.join(files.commonDir, "config")))
       || (remoteNames.length === 1 && branchCount > (extra.length ? 3 : 2) && await confirmPrFilesCheckout(cwd, files, inputs.env)));
     const unchanged = async () => Boolean((!proof || await proof.unchanged()) && await configUnchanged()
-      && (identityExpiresAt === undefined || Date.now() < identityExpiresAt));
+      && (!sshIdentityUnchanged || sshIdentityUnchanged()));
     if (!await unchanged()) return undefined;
     return {
       ...sample,
