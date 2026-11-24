@@ -350,11 +350,45 @@ export type ResourceInstructionsRef = {
   updatedAt: number;
 };
 
+/**
+ * How a resource starts queued requests.
+ *
+ * - `fifo`: head of line. Only the first request can start, once it fits.
+ * - `backfill`: the first request starts once it fits, as with `fifo`. A
+ *   later request that fits now starts early only if it cannot delay the
+ *   first: it ends, by its own deadline, before the first could start, or it
+ *   uses only units the first won't need. Deadlines are enforced and grants
+ *   aren't renewed while anyone waits, and a backfilled grant can't take a
+ *   managed job, so it always ends at its deadline. The first never starts
+ *   later than it would have without backfill.
+ *
+ * A definition without a queue order backfills when it is counted, as every
+ * counted resource has since backfilling was added, and is `fifo` when it
+ * is exclusive, where nothing can start beside the holder.
+ */
+export type ResourceQueueOrder = "fifo" | "backfill";
+
+export const RESOURCE_QUEUE_ORDERS: readonly ResourceQueueOrder[] = ["fifo", "backfill"];
+
+export function isResourceQueueOrder(value: unknown): value is ResourceQueueOrder {
+  return value === "fifo" || value === "backfill";
+}
+
+/** The order a resource's queue runs in, filling in the default. */
+export function effectiveQueueOrder(resource: { queueOrder?: ResourceQueueOrder; counted: boolean }): ResourceQueueOrder {
+  return resource.queueOrder ?? (resource.counted ? "backfill" : "fifo");
+}
+
 export type ResourcePolicySummary = {
   useScope: string;
   manageScope: string;
   maxHoldMs?: number;
   renewalRule: string;
+  /**
+   * Absent from older owners. Read it with `effectiveQueueOrder`: their
+   * counted resources backfill and exclusive ones are `fifo`.
+   */
+  queueOrder?: ResourceQueueOrder;
   costCeilingLabel?: string;
   /** Required final state, e.g. "Stop compute, keep disks". */
   finalEffect: string;

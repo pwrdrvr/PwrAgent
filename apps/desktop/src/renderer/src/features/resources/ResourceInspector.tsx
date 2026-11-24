@@ -4,6 +4,7 @@ import type {
   ResourceAllocationState,
   ResourceHolder,
   ResourceQueueEntry,
+  ResourceQueueOrder,
   ResourceReadinessState,
   ResourceRecoveryStatus,
   ResourceThreadRef,
@@ -15,11 +16,13 @@ import {
   conditionChipLabel,
   DEADLINE_SOON_MS,
   formatAge,
+  formatAgo,
   formatDeadline,
   formatDuration,
   freeUnits,
   holderLabel,
   presentCondition,
+  queueOrderOf,
   resourceActions,
   resourceRecoveries,
   resourceRecoveryGates,
@@ -103,6 +106,7 @@ export function ResourceInspector(props: {
   const free = freeUnits(resource);
   const waitingForSlots = condition === "busy" && firstRequest !== undefined && free !== undefined && firstRequest > free;
   const usage = usageChart(resource, props.now);
+  const queueOrder = queueOrderOf(resource);
 
   return (
     <aside aria-labelledby="resources-inspector-title" className="resources-inspector">
@@ -174,10 +178,13 @@ export function ResourceInspector(props: {
           )}
         </Section>
 
-        <Section title="Queue" aside="FIFO with backfill">
+        <Section title="Queue" aside={queueOrder === "backfill" ? "FIFO with backfill" : "First in, first out"}>
           {waitingForSlots ? (
             <p className="resources-note">
-              The first request needs {firstRequest} {unitLabel}s. {free} free now. Shorter requests that fit without delaying #1 can backfill.
+              {`The first request needs ${firstRequest} ${unitLabel}s. ${free} free now. `}
+              {queueOrder === "backfill"
+                ? "Shorter requests that fit without delaying #1 can backfill."
+                : "Later requests wait behind it."}
             </p>
           ) : null}
           {resource.queue.length === 0 ? (
@@ -262,7 +269,7 @@ export function ResourceInspector(props: {
                 {authority.status === "reachable"
                   ? "Reachable"
                   : authority.status === "unreachable"
-                    ? `Unreachable${authority.lastSnapshotAt ? ` · last snapshot ${formatAge(authority.lastSnapshotAt, props.now)} ago` : ""}`
+                    ? `Unreachable${authority.lastSnapshotAt ? ` · last snapshot ${formatAgo(authority.lastSnapshotAt, props.now)}` : ""}`
                     : "Unresolved"}
               </dd>
               <dt>Scope</dt>
@@ -314,6 +321,8 @@ export function ResourceInspector(props: {
               {resource.policy.maxHoldMs ? formatDuration(resource.policy.maxHoldMs) : "No limit"}
               {` · ${resource.policy.renewalRule}`}
             </dd>
+            <dt>Queue order</dt>
+            <dd data-testid="resources-queue-order">{queueOrderLabel(queueOrder)}</dd>
             <dt>Cost ceiling</dt>
             <dd>{resource.policy.costCeilingLabel ?? "None"}</dd>
             <dt>Enforcement</dt>
@@ -326,7 +335,7 @@ export function ResourceInspector(props: {
             <dt>Status</dt>
             <dd>{publicationLabel(resource.definition.publication)}</dd>
             <dt>Updated</dt>
-            <dd>{formatAge(resource.definition.updatedAt, props.now)} ago</dd>
+            <dd>{formatAgo(resource.definition.updatedAt, props.now)}</dd>
             {resource.aliases.length ? (
               <>
                 <dt>Aliases</dt>
@@ -378,7 +387,7 @@ function StateCallout(props: {
       body = (
         <>
           {authority?.lastSnapshotAt
-            ? `Showing the snapshot from ${formatAge(authority.lastSnapshotAt, props.now)} ago. `
+            ? `Showing the snapshot from ${formatAgo(authority.lastSnapshotAt, props.now)}. `
             : "No snapshot is available. "}
           It can't grant or queue work, and no other authority takes over automatically.
           {holder ? ` The last known holder may continue until its lease ends (${formatDeadline(holder.deadlineAt, props.now)}).` : ""}
@@ -429,6 +438,13 @@ function StateCallout(props: {
   );
 }
 
+/** How the resource starts queued requests, in the operator's words. */
+export function queueOrderLabel(order: ResourceQueueOrder): string {
+  return order === "backfill"
+    ? "Backfill: a later request that fits starts early if it can't delay the first"
+    : "First in, first out: only the first request can start";
+}
+
 function AllocationDetail(props: {
   allocation: ResourceAllocation;
   /** The holder's own request for more of the same resource. */
@@ -470,7 +486,7 @@ function AllocationDetail(props: {
         <dd>{allocation.executorLabel}</dd>
         <dt>Held</dt>
         <dd>
-          {`${formatDuration(heldMs)} of ${formatDuration(expectedMs)} expected · granted ${formatAge(allocation.grantedAt, props.now)} ago`}
+          {`${formatDuration(heldMs)} of ${formatDuration(expectedMs)} expected · granted ${formatAgo(allocation.grantedAt, props.now)}`}
           {props.alsoQueued ? (
             <span className="resources-row__meta resources-allocation__also-queued">
               {`Also waits at #${props.alsoQueued.position} in the queue${props.alsoQueued.units !== undefined ? ` for ${props.alsoQueued.units} more` : ""}. What it holds stays reserved until it releases.`}

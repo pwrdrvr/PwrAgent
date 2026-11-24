@@ -5,10 +5,11 @@ import type {
   ResourceEnforcement,
   ResourceHolder,
   ResourceQueueEntry,
+  ResourceQueueOrder,
   ResourceScope,
   ResourceThreadRef,
 } from "@pwragent/shared/contracts/resource-checkouts";
-import { capacitySummary, effectiveCondition, findAuthority, freeUnits, holderLabel, presentCondition } from "./resource-view-model";
+import { capacitySummary, effectiveCondition, findAuthority, freeUnits, holderLabel, presentCondition, queueOrderOf } from "./resource-view-model";
 
 /** The thread a resource wait belongs to, as checkout holders name threads. */
 export type ResourceWaiter = { backend: string; threadId: string };
@@ -46,14 +47,15 @@ export type ResourceWaitSummary = {
 };
 
 /**
- * Why a queued request has not started. Promotion is first in, first out with
- * EASY backfilling: the head starts as soon as it fits, and later requests
- * that fit without delaying the head's guaranteed start time can backfill.
+ * Why a queued request has not started. The head is granted once it fits.
+ * Under `fifo` nothing else is; under `backfill` a later request that fits
+ * starts early only if it cannot delay the head (owner-core
+ * `promoteQueue`).
  *
  * - `capacity`: the head needs more than is free.
  * - `order`: an earlier request goes first. `fitsNow` marks a request that
- *   fits the free slots right now, but running it for its expected duration
- *   could delay `#1`.
+ *   would fit in the free capacity: under `fifo`, order alone holds it;
+ *   under `backfill`, starting it could delay the head.
  * - `pending`: the head fits; the authority has not granted it yet, or a
  *   recovery holds the whole resource.
  */
@@ -62,6 +64,7 @@ export type QueueEntryHold = {
   needs: number;
   free: number;
   fitsNow: boolean;
+  queueOrder: ResourceQueueOrder;
 };
 
 /** Units still free, counting an exclusive resource as one unit. */
@@ -70,14 +73,14 @@ export function freeCapacity(resource: Pick<ResourceDomain, "sharing" | "allocat
 }
 
 export function queueEntryHold(
-  resource: Pick<ResourceDomain, "sharing" | "allocations">,
+  resource: Pick<ResourceDomain, "sharing" | "allocations" | "policy">,
   entry: Pick<ResourceQueueEntry, "position" | "units">,
 ): QueueEntryHold {
   const needs = resource.sharing.mode === "counted" ? entry.units ?? 1 : 1;
   const free = freeCapacity(resource);
   const fitsNow = needs <= free;
   const reason = entry.position > 1 ? "order" : fitsNow ? "pending" : "capacity";
-  return { reason, needs, free, fitsNow };
+  return { reason, needs, free, fitsNow, queueOrder: queueOrderOf(resource) };
 }
 
 /** One sentence on a queued request's hold, in the resource's unit. */
@@ -89,8 +92,11 @@ export function describeQueueEntryHold(hold: QueueEntryHold, position: number, u
     case "pending":
       return `Fits in the ${hold.free} free. Waiting for the authority to grant it.`;
     case "order":
+      if (hold.fitsNow && hold.queueOrder === "backfill") {
+        return `Fits now (${hold.needs} of ${hold.free} free), but would still be running when #1 can start. It starts early only if it can't delay #1.`;
+      }
       return hold.fitsNow
-        ? `Would fit now (${hold.needs} of ${hold.free} free), but waits for ${position === 2 ? "#1" : `#1 to #${position - 1}`}: would delay #1.`
+        ? `Would fit now (${hold.needs} of ${hold.free} free), but waits for ${position === 2 ? "#1" : `#1 to #${position - 1}`}: first in, first out.`
         : `Needs ${units(hold.needs)}. Waits for ${position - 1} earlier request${position === 2 ? "" : "s"}.`;
   }
 }

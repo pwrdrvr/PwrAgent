@@ -3,6 +3,7 @@ import type {
   ResourceCheckoutActionResult,
   ResourceHolder,
   ResourceInstructionsRef,
+  ResourceQueueOrder,
 } from "@pwragent/shared/contracts/resource-checkouts";
 
 export type CheckoutActor = {
@@ -25,6 +26,8 @@ export type CheckoutDefinition = {
   revision: number;
   updatedAt: number;
   publication: "published" | "pending_registration";
+  /** Absent: counted resources backfill and exclusive ones are `fifo` (`effectiveQueueOrder`). */
+  queueOrder?: ResourceQueueOrder;
   draftOwnerInstanceId?: string;
   instructions?: ResourceInstructionsRef;
 };

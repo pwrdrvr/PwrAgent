@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { MAX_CHECKOUT_HOLD_MS } from "@pwragent/owner-core/resource-checkout-authority";
 import type { CheckoutDefinition } from "@pwragent/owner-core/resource-checkout-storage";
+import { isResourceQueueOrder, RESOURCE_QUEUE_ORDERS, type ResourceQueueOrder } from "@pwragent/shared/contracts/resource-checkouts";
 import { canonicalKey as parseCanonicalKey, object, positiveInt, text } from "./checkout-input";
 
 export type ExternalBinding = {
@@ -10,6 +11,12 @@ export type ExternalBinding = {
   allowedInstances: string[];
   definition: CheckoutDefinition;
 };
+
+/** A domain's optional queue order. Changing it takes a new revision, like any definition change. */
+function queueOrder(value: unknown): ResourceQueueOrder {
+  if (!isResourceQueueOrder(value)) throw new Error(`Invalid queue order; use one of ${RESOURCE_QUEUE_ORDERS.join(", ")}.`);
+  return value;
+}
 
 export function readExternalCheckoutBindings(root: string): { bindings: ExternalBinding[]; allowAgentDrafts: boolean } {
   let raw: string;
@@ -47,6 +54,7 @@ export function readExternalCheckoutBindings(root: string): { bindings: External
         epoch: positiveInt(domain.epoch, "authority epoch"),
         maxHoldMs: positiveInt(domain.maxHoldMs, "maximum hold", MAX_CHECKOUT_HOLD_MS), updatedAt,
         publication: "published", revision,
+        ...(domain.queueOrder === undefined ? {} : { queueOrder: queueOrder(domain.queueOrder) }),
         ...(domain.instructions === undefined ? {} : { instructions: {
           revision, title: "Operating instructions", source: "pwragent" as const,
           sourceLabel: "Operator-managed definition", excerpt: text(domain.instructions, "instructions", 4_000), updatedAt,

@@ -8,9 +8,11 @@ import type {
   ResourceCondition,
   ResourceDomain,
   ResourceQueueEntry,
+  ResourceQueueOrder,
   ResourceRecoveryActionGates,
   ResourceRecoveryStatus,
 } from "@pwragent/shared/contracts/resource-checkouts";
+import { effectiveQueueOrder } from "@pwragent/shared/contracts/resource-checkouts";
 
 /**
  * Presentation rules for resource checkouts.
@@ -284,6 +286,11 @@ export function requestWouldWait(resource: ResourceDomain, condition: ResourceCo
   return resource.queue.length > 0 || resource.allocations.length > 0;
 }
 
+/** The order the resource's queue runs in; owners that omit it backfill a counted pool. */
+export function queueOrderOf(resource: Pick<ResourceDomain, "policy" | "sharing">): ResourceQueueOrder {
+  return effectiveQueueOrder({ queueOrder: resource.policy.queueOrder, counted: resource.sharing.mode === "counted" });
+}
+
 export function freeUnits(resource: ResourceDomain): number | undefined {
   if (resource.sharing.mode !== "counted") return undefined;
   return Math.max(0, resource.sharing.capacity - resource.sharing.inUse);
@@ -392,6 +399,12 @@ export function formatAge(at: number, now: number): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 48) return `${hours}h`;
   return `${Math.floor(hours / 24)}d`;
+}
+
+/** "5m ago", or "just now" where `formatAge` says "now": never "now ago". */
+export function formatAgo(at: number, now: number): string {
+  const age = formatAge(at, now);
+  return age === "now" ? "just now" : `${age} ago`;
 }
 
 export function formatDuration(ms: number): string {

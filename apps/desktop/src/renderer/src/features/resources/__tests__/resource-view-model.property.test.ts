@@ -13,6 +13,8 @@ import type {
 } from "@pwragent/shared/contracts/resource-checkouts";
 import {
   effectiveCondition,
+  formatAge,
+  formatAgo,
   effectiveGate,
   resourceActions,
   resourceGroup,
@@ -356,5 +358,18 @@ describe("snapshot ordering", () => {
         expect(shown!.revision).toBe(Math.max(...arrivals));
       },
     ));
+  });
+});
+
+describe("formatAgo", () => {
+  // A grant made this minute read "granted now ago" in the inspector.
+  it("reads as English at every age, and agrees with formatAge past a minute", () => {
+    fc.assert(fc.property(fc.integer({ min: 0, max: 10 * 24 * 60 * 60_000 }), fc.integer({ min: 0, max: 60_000 }), (age, skew) => {
+      const now = 1_800_000_000_000;
+      const at = now - age + (age === 0 ? skew : 0);
+      const text = formatAgo(at, now);
+      expect(text).not.toMatch(/now ago/);
+      expect(text).toBe(formatAge(at, now) === "now" ? "just now" : `${formatAge(at, now)} ago`);
+    }));
   });
 });
