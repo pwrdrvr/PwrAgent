@@ -4,6 +4,7 @@ import path from "node:path";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import type { HandoffSourceSettings } from "../app-server/backend-registry-types";
+import type { BackendAcpRuntimeCapabilities } from "@pwragent/shared/contracts/backend";
 import type {
   AppServerBackendKind,
   AppServerThreadMessageOrigin,
@@ -554,7 +555,74 @@ describe("dispatch access mode compatibility", () => {
       todo: CARD,
       action: { type: "start_thread", prompt: "Build it" } });
     expect(registry.startThread).toHaveBeenLastCalledWith(expect.objectContaining({ executionMode: "auto" }));
-    expect(registry.listBackends).not.toHaveBeenCalled();
+    // Only the provider switch reads the destination's modes.
+    expect(registry.listBackends).toHaveBeenCalledTimes(1);
+  });
+});
+
+/** The modes Antigravity's `session/new` reply listed in a 2026-11-23 capture. */
+const ANTIGRAVITY_SESSION_MODES = [
+  { id: "default", label: "Default" },
+  { id: "accept-edits", label: "Accept edits" },
+  { id: "auto", label: "Auto" },
+  { id: "plan", label: "Plan" },
+];
+
+describe("dispatch onto an agent's native access modes", () => {
+  function withNativeDestination(
+    registry: ReturnType<typeof fakeRegistry>["registry"],
+    runtime: Pick<BackendAcpRuntimeCapabilities, "modes" | "configOptions">,
+  ) {
+    registry.listBackends.mockResolvedValue({ fetchedAt: 0, backends: [
+      { kind: "acp:antigravity", label: "Antigravity", executionModes: [], acp: { runtime } },
+    ] } as never);
+  }
+  const startOnAntigravity = (runners: ReturnType<typeof fakeRegistry>["runners"], executionMode?: ThreadExecutionMode) =>
+    runners.startThread({ sourceBackend: "codex", sourceThreadId: "source", crossProject: false,
+      todo: CARD,
+      action: { type: "start_thread", prompt: "Build it", ...(executionMode ? { executionMode } : {}) },
+      modelSettings: { backend: "acp:antigravity" } });
+
+  it("starts a Codex Auto thread's card in Antigravity's own Auto mode", async () => {
+    const { registry, runners } = fakeRegistry({ ...FULL_ACCESS_SOL, executionMode: "auto" });
+    withNativeDestination(registry, { modes: { availableModes: ANTIGRAVITY_SESSION_MODES, currentModeId: "default" } });
+    await startOnAntigravity(runners);
+    expect(registry.startThread).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "acp:antigravity", executionMode: "default", acpRuntime: expect.objectContaining({ currentModeId: "auto" }),
+    }));
+  });
+
+  it("picks the highest native mode at or below the source's access, and never a mode without a level", async () => {
+    const order: ThreadExecutionMode[] = ["default", "auto", "full-access"];
+    const levelOf: Record<string, ThreadExecutionMode> = { default: "default", auto: "auto", yolo: "full-access" };
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom(...order),
+      fc.boolean(),
+      fc.uniqueArray(fc.constantFrom("default", "accept-edits", "auto", "plan", "yolo", "architect"), { maxLength: 6 }),
+      fc.boolean(),
+      async (inherited, explicit, ids, asPermissionOption) => {
+        const { registry, runners } = fakeRegistry({ ...FULL_ACCESS_SOL, executionMode: explicit ? "default" : inherited });
+        withNativeDestination(registry, asPermissionOption
+          ? { configOptions: [{ id: "permission_mode", label: "Permissions", type: "select" as const, category: "mode", values: ids.map((value) => ({ value })) }] }
+          : { modes: { availableModes: ids.map((id) => ({ id, label: id })) } });
+        await startOnAntigravity(runners, explicit ? inherited : undefined);
+        const started = registry.startThread.mock.calls[0]?.[0] as unknown as {
+          executionMode: ThreadExecutionMode;
+          acpRuntime?: { currentModeId?: string; configValues?: Record<string, string> };
+        };
+        // Oracle: scan the listed ids for the highest level at or below the source's.
+        const expected = ids.length < 2 ? undefined : ids
+          .filter((id) => levelOf[id] !== undefined && order.indexOf(levelOf[id]) <= order.indexOf(inherited))
+          .sort((left, right) => order.indexOf(levelOf[right]) - order.indexOf(levelOf[left]))[0];
+        const picked = asPermissionOption ? started.acpRuntime?.configValues?.permission_mode : started.acpRuntime?.currentModeId;
+        expect(picked).toBe(expected);
+        // Without a native match, an explicit card mode stands as before;
+        // an inherited one starts at the agent's default.
+        expect(started.executionMode).toBe(expected === "yolo" ? "full-access"
+          : expected === undefined && explicit ? inherited : "default");
+        expect(order.indexOf(started.executionMode)).toBeLessThanOrEqual(order.indexOf(inherited));
+      },
+    ), { numRuns: 100 });
   });
 });
 

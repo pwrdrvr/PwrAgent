@@ -30,6 +30,7 @@ import {
   threadTodoPlacementParent,
 } from "@pwragent/shared/contracts/thread-todos";
 import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared/contracts/navigation";
+import { acpNativeAccessMode } from "@pwragent/shared/acp-permission-mode";
 import { threadReviewTodo } from "@pwragent/shared/contracts/thread-reviews";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools.js";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
@@ -770,17 +771,22 @@ export function createThreadTodoRunners(params: {
       const sameBackend = chosen.backend === sourceBackend;
       let executionMode = action.executionMode ?? source.executionMode;
       const inheritedSpeed = sameBackend ? source : undefined;
-      const destination = (!sameBackend && action.executionMode === undefined)
-        || threadTodoSpeedNeedsDestination(speed, inheritedSpeed)
+      const destination = !sameBackend || threadTodoSpeedNeedsDestination(speed, inheritedSpeed)
         ? (await registry.listBackends({ includeUnavailable: true })).backends
           .find((backend) => backend.kind === chosen.backend)
         : undefined;
-      if (!sameBackend && action.executionMode === undefined) {
+      // An agent whose own selector owns approval policy (Antigravity, Kimi,
+      // Grok) lists no execution modes; its native mode carries the access.
+      const native = !sameBackend && destination?.executionModes.length === 0
+        ? acpNativeAccessMode(destination.acp?.runtime, executionMode)
+        : undefined;
+      if (native) {
+        executionMode = native.executionMode === "full-access" ? "full-access" : "default";
+      } else if (!sameBackend && action.executionMode === undefined) {
         if (destination && !destination.executionModes.some((mode) => mode.mode === executionMode && mode.available)) {
           // An inherited mode must never raise access to make a provider fit.
-          // A provider that lists no modes (Antigravity) governs its own
-          // permissions, so the inherited mode has nothing to map onto and
-          // the thread records Default Access.
+          // An agent that offers neither PwrAgent modes nor a native access
+          // mode starts at its own default, recorded as Default Access.
           if (destination.executionModes.length > 0
             && !destination.executionModes.some((mode) => mode.mode === "default" && mode.available)) {
             throw new ThreadTodoError("invalid_arguments", `${destination.label} cannot use the inherited access mode or Default Access.`);
@@ -821,6 +827,7 @@ export function createThreadTodoRunners(params: {
         backend: chosen.backend,
         ...(cwd ? { cwd } : {}),
         ...settings,
+        ...(native ? { acpRuntime: { ...native.runtime, updatedAt: Date.now() } } : {}),
         // The lists draw the card's thread as starting while its worktree
         // and setup run; the thread's own row takes the slot when it lands.
         pendingStart: {
