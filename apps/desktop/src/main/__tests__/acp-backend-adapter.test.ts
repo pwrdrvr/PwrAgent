@@ -4771,6 +4771,7 @@ describe("AcpBackendAdapter", () => {
       };
       const adapter = createTestAcpBackendAdapter({
         ...legacyStdioBridge,
+        managedMcpGatewayAvailable: true,
         acpAgentStore: {
           getInstalledAgent: () => agent,
           listInstalledAgents: () => [agent],

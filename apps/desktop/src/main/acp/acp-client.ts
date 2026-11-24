@@ -160,6 +160,7 @@ export type { AcpMcpServerConfig, AcpMcpServerWireConfig } from "@pwrdrvr/agent-
 
 export type AcpMcpServerRegistration = {
   servers: AcpMcpServerConfig[];
+  managedConnectionsViaGateway?: true;
   bindThread?: (threadId: string) => Promise<void> | void;
   readListedJobMonitorCreation?: () => boolean | undefined;
   /**
@@ -169,6 +170,9 @@ export type AcpMcpServerRegistration = {
    */
   hostApprovesToolCall?: (serverName: string, toolName: string, args?: unknown) => Promise<boolean>;
 };
+
+export type AcpMcpRegistrationSource =
+  AcpMcpServerRegistration | (() => Promise<AcpMcpServerRegistration | undefined>);
 
 export function mergeMcpServerRegistrations(
   ...registrations: Array<AcpMcpServerRegistration | undefined>
@@ -181,6 +185,9 @@ export function mergeMcpServerRegistrations(
     registration.hostApprovesToolCall ? [registration.hostApprovesToolCall] : []);
   return {
     servers: present.flatMap((registration) => registration.servers),
+    ...(present.some((registration) => registration.managedConnectionsViaGateway)
+      ? { managedConnectionsViaGateway: true }
+      : {}),
     readListedJobMonitorCreation: present.find((entry) => entry.readListedJobMonitorCreation)?.readListedJobMonitorCreation,
     ...(approvers.length ? {
       hostApprovesToolCall: async (serverName: string, toolName: string, args?: unknown) => {
@@ -266,6 +273,7 @@ type AcpSessionMcpServers = {
   /** Names a live registration can vouch for. Absent while awaiting reload. */
   registeredNames?: ReadonlySet<string>;
   hostApprovesToolCall?: AcpMcpServerRegistration["hostApprovesToolCall"];
+  managedConnectionsViaGateway?: true;
 };
 
 export type AcpPromptContentBlock =
@@ -1212,7 +1220,7 @@ export class AcpAgentClient {
     acpRuntime?: BackendAcpSessionRuntimeState;
     hidden?: boolean;
     mcpServers?: "default" | "none";
-    additionalMcpRegistration?: AcpMcpServerRegistration;
+    additionalMcpRegistration?: AcpMcpRegistrationSource;
     sessionMeta?: Record<string, unknown>;
   }): Promise<AcpSessionMetadata> {
     return await this.withOperation(
@@ -1233,17 +1241,20 @@ export class AcpAgentClient {
     const agentToolCatalogKey = this.options.agentToolCatalogKey?.();
     const jobMonitorCreationEnabled = this.jobMonitorCatalogRefreshSupported
       ? await this.options.readJobMonitorCreationPreference?.(params.sessionId) : undefined;
-    const defaultMcpRegistration =
+    const defaultMcpRegistration: AcpMcpServerRegistration =
       params.mcpServers === "none"
         ? { servers: [] }
         : await this.buildMcpServers({
             cwd,
             sessionId: params.sessionId,
           });
-    const mcpRegistration = mergeMcpServerRegistrations(
-      defaultMcpRegistration,
-      params.additionalMcpRegistration,
-    );
+    const additional = params.additionalMcpRegistration;
+    const mcpRegistration = defaultMcpRegistration.managedConnectionsViaGateway
+      ? defaultMcpRegistration
+      : mergeMcpServerRegistrations(
+          defaultMcpRegistration,
+          typeof additional === "function" ? await additional() : additional,
+        );
     const mcpServerWireConfigs = toAcpMcpServerWireConfigs(mcpRegistration.servers);
     const result = await this.options.transport.request("session/new", {
       cwd,
@@ -2893,6 +2904,7 @@ export class AcpAgentClient {
     }
     this.sessionMcpServers.set(sessionId, {
       agentNames,
+      ...(registration.managedConnectionsViaGateway ? { managedConnectionsViaGateway: true } : {}),
       registeredNames: new Set(registration.servers
         .map((server) => server.name)
         .filter((name) => sent.has(name))),
@@ -2900,6 +2912,11 @@ export class AcpAgentClient {
         ? { hostApprovesToolCall: registration.hostApprovesToolCall }
         : {}),
     });
+  }
+
+  usesManagedMcpGateway(sessionId: string): boolean {
+    return !this.disconnected
+      && this.sessionMcpServers.get(sessionId)?.managedConnectionsViaGateway === true;
   }
 
   private rememberAgentToolCatalogKey(sessionId: string, key: string | undefined): void {

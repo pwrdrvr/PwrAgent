@@ -54,7 +54,8 @@ type McpAccessPanelProps = {
  * the selection up while starting the next turn, but an ACP agent resolves
  * MCP servers only when its session is created or reloaded.
  */
-function applyTimingCopy(backend: AppServerBackendKind): string {
+function applyTimingCopy(backend: AppServerBackendKind, viaGateway: boolean): string {
+  if (viaGateway) return "Tool search uses this selection immediately.";
   return mcpSelectionApplyTiming(backend) === "next_turn"
     ? "Applies to your next message."
     : "Applies the next time this thread's session loads.";
@@ -77,6 +78,7 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
   const [connections, setConnections] = useState<McpConnectionStatus[]>();
   const [error, setError] = useState<string>();
   const [busyId, setBusyId] = useState<string>();
+  const verification = useThreadMcpVerification(props);
   const bodyId = useId();
   const backendSupported = backendLoadsMcpConnections(props.backend);
   // Only Codex can suppress the servers the agent loads for itself, so the
@@ -385,13 +387,9 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
         ) : null}
         {props.threadId ? (
           <ThreadMcpVerification
-            backend={props.backend}
-            desktopApi={props.desktopApi}
-            threadId={props.threadId}
-            federationTarget={props.federationTarget}
+            {...verification}
             // Names are not known until the connections are read.
             selected={connections === undefined ? [] : selected}
-            token={props.verifyToken ?? 0}
           />
         ) : null}
         {props.threadId && !props.federationTarget ? (
@@ -404,7 +402,7 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
         ) : null}
         <footer className="mcp-access-panel__footer">
           <span className="mcp-access-panel__detail">
-            {applyTimingCopy(props.backend)}
+            {applyTimingCopy(props.backend, verification.report?.managedConnectionsViaGateway === true)}
           </span>
           {props.onOpenSettings ? (
             <button
@@ -510,18 +508,10 @@ export function useThreadMcpConnectionCount(params: {
  * An ACP agent cannot be interrogated at all, so there the honest answer is
  * what PwrAgent handed over and when. That is strictly more than silence.
  */
-function ThreadMcpVerification(props: {
-  backend: AppServerBackendKind;
-  desktopApi?: DesktopApi;
-  federationTarget?: FederationRemoteTarget;
-  /** The thread's selected connections, shown while the agent is asked. */
-  selected: ReadonlyArray<{ connectionId: string; displayName: string }>;
-  threadId: string;
-  token: number;
-}) {
+function useThreadMcpVerification(props: Pick<McpAccessPanelProps, "backend" | "desktopApi" | "federationTarget" | "threadId" | "verifyToken">) {
   const [answer, setAnswer] = useState<{ key: string; report: DescribeThreadMcpConnectionsResponse }>();
   const [failed, setFailed] = useState(false);
-  const { backend, desktopApi, federationTarget, threadId, token } = props;
+  const { backend, desktopApi, federationTarget, threadId, verifyToken } = props;
   const describe = desktopApi?.describeThreadMcpConnections;
   const key = JSON.stringify([backend, federationTarget?.instanceId, threadId]);
   // Another thread's answer is never shown. This thread's last answer stays
@@ -531,7 +521,7 @@ function ThreadMcpVerification(props: {
   useEffect(() => {
     let cancelled = false;
     setFailed(false);
-    if (!describe) return;
+    if (!describe || !threadId) return;
     void (async () => {
       try {
         const response = await describe({
@@ -550,20 +540,25 @@ function ThreadMcpVerification(props: {
     return () => {
       cancelled = true;
     };
-  }, [backend, describe, federationTarget, key, threadId, token]);
+  }, [backend, describe, federationTarget, key, threadId, verifyToken]);
 
   // A failed read says nothing about now: an earlier answer is not shown as
   // though it were current.
-  if (failed) return null;
+  return { report: failed ? undefined : report, pending: !failed && Boolean(describe) && !report };
+}
+
+function ThreadMcpVerification({ report, pending, selected }: ReturnType<typeof useThreadMcpVerification> & {
+  selected: ReadonlyArray<{ connectionId: string; displayName: string }>;
+}) {
   if (!report) {
     // The check takes a moment. The section holds its place with the
     // rows it is about to fill, so the panel does not grow under the pointer.
-    if (!describe || props.selected.length === 0) return null;
+    if (!pending || selected.length === 0) return null;
     return (
       <section className="mcp-access-panel__verify" aria-busy="true">
         <h3 className="mcp-access-panel__verify-head">In this thread</h3>
         <ul className="mcp-access-panel__verify-list">
-          {props.selected.map((entry) => (
+          {selected.map((entry) => (
             <li key={entry.connectionId}>
               <span className="mcp-access-panel__verify-name">{entry.displayName}</span>
               <span className="mcp-access-panel__verify-meta">Checking…</span>
@@ -575,6 +570,7 @@ function ThreadMcpVerification(props: {
     );
   }
   if (report.connections.length === 0) return null;
+  const viaGateway = report.managedConnectionsViaGateway === true;
 
   const handedOver = report.handedOverAt
     ? new Date(report.handedOverAt).toLocaleTimeString([], {
@@ -586,7 +582,7 @@ function ThreadMcpVerification(props: {
   return (
     <section className="mcp-access-panel__verify">
       <h3 className="mcp-access-panel__verify-head">
-        {report.agentInventoryAvailable
+        {viaGateway || report.agentInventoryAvailable
           ? "In this thread"
           : "Handed to this session"}
       </h3>
@@ -599,6 +595,8 @@ function ThreadMcpVerification(props: {
             <span className="mcp-access-panel__verify-meta">
               {entry.sessions?.native === "ended" || entry.sessions?.gateway === "ended"
                 ? `Session ended (${[entry.sessions.native === "ended" ? "native MCP" : "", entry.sessions.gateway === "ended" ? "tool search" : ""].filter(Boolean).join(", ")})`
+                : viaGateway
+                  ? gatewayVerificationStatus(entry)
                 : entry.toolCount !== undefined
                 ? `${entry.toolCount} ${
                     entry.toolCount === 1 ? "tool" : "tools"
@@ -620,7 +618,9 @@ function ThreadMcpVerification(props: {
         {report.connections.some((entry) => entry.sessions?.native === "ended" || entry.sessions?.gateway === "ended")
           ? "For a local command, open its desktop app independently if needed, then Reconnect above. Search tools again and reread skills. A Settings test uses a separate session. Never replay a write or reuse its approval. "
           : ""}
-        {report.agentInventoryAvailable
+        {viaGateway
+          ? "PwrAgent makes these connections available through tool search."
+          : report.agentInventoryAvailable
           ? handedOver
             ? `Read from the agent. Last passed over at ${handedOver}.`
             : "Read from the agent."
@@ -630,6 +630,12 @@ function ThreadMcpVerification(props: {
       </p>
     </section>
   );
+}
+
+function gatewayVerificationStatus(entry: DescribeThreadMcpConnectionsResponse["connections"][number]): string {
+  if (entry.sessions?.gateway === "ready") return "Tool search connected";
+  if (entry.sessions?.gateway === "connecting") return "Connecting";
+  return entry.configured && entry.enabled && entry.state === "ready" ? "Available through tool search" : "Unavailable";
 }
 
 type ThreadMcpAccessPanelProps = {

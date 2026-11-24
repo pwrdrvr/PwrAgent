@@ -15,7 +15,11 @@ while its current turn still rejects the newly listed tool as unknown.
 The fixed invocation tool lets the agent use the search result in that turn.
 Antigravity discovers and invokes tools from thread-selected
 connections through `search_mcp_tools` and `call_mcp_tool`, which read the
-current selection on every call.
+current selection on every call. PwrAgent uses this route at session creation
+and reload when both tools are available. Sessions without gateway access,
+including those on contained members, keep their selected native connections.
+The MCP Access panel reports when a session uses tool search and when the
+gateway has connected to each selected server.
 
 Search returns the original server display name, stable connection ID, tool
 name, exact MCP definition and opaque schema revision. Invoke through

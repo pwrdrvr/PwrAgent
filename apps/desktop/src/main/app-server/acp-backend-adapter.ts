@@ -225,6 +225,7 @@ export type AcpRuntimeClient = Pick<
       | "supportsJobMonitorControl"
       | "supportsSessionLoad"
       | "supportsTurnSteering"
+      | "usesManagedMcpGateway"
       | "rewindSession"
     >
   >;
@@ -390,6 +391,7 @@ export type AcpBackendAdapterOptions = {
     backendId: AcpBackendId;
     sessionId?: string;
   }) => Promise<AcpMcpServerRegistration | undefined>;
+  managedMcpGatewayAvailable?: boolean;
   closeTimeoutMs?: number;
   emit: (event: AgentEvent) => Promise<void>;
   handleServerRequest: (
@@ -1273,6 +1275,7 @@ export class AcpBackendAdapter {
     registryId: string,
   ) => string | undefined;
   private readonly resolveMcpConnectionServers?: AcpBackendAdapterOptions["resolveMcpConnectionServers"];
+  private readonly managedMcpGatewayAvailable: boolean;
   private readonly emit: (event: AgentEvent) => Promise<void>;
   private readonly handleServerRequest: (
     backend: AcpBackendId,
@@ -1357,6 +1360,7 @@ export class AcpBackendAdapter {
     this.emit = options.emit;
     this.handleServerRequest = options.handleServerRequest;
     this.resolveMcpConnectionServers = options.resolveMcpConnectionServers;
+    this.managedMcpGatewayAvailable = options.managedMcpGatewayAvailable === true;
     this.closeTimeoutMs = options.closeTimeoutMs ?? ACP_CLOSE_TIMEOUT_MS;
     this.grokUpdateChecker = options.checkGrokCliUpdate === null
       ? undefined
@@ -3305,6 +3309,13 @@ export class AcpBackendAdapter {
     this.retainedAcpClients.set(backend, retained);
   }
 
+  usesManagedMcpGateway(backend: AppServerBackendKind, sessionId: string): boolean {
+    return backend === "acp:antigravity"
+      && isAgentToolAdvertisedLocally("search_mcp_tools")
+      && isAgentToolAdvertisedLocally("call_mcp_tool")
+      && this.findSessionOwner(backend, sessionId)?.client.usesManagedMcpGateway?.(sessionId) === true;
+  }
+
   private findSessionOwner(
     backend: AcpBackendId,
     sessionId: string,
@@ -3961,7 +3972,8 @@ export class AcpBackendAdapter {
                   if (serverName !== registration.server.name) return false;
                   if (toolName === CALL_PWRAGENT_TOOL) {
                     const target = readPwrAgentCallTarget(args);
-                    return target !== undefined && pwragentToolSkipsAgentApproval(await readTool(target.name, "catalog"));
+                    return target !== undefined && await readTool(CALL_PWRAGENT_TOOL) !== undefined
+                      && pwragentToolSkipsAgentApproval(await readTool(target.name, "catalog"));
                   }
                   return pwragentToolSkipsAgentApproval(await readTool(toolName));
                 },
@@ -3981,8 +3993,9 @@ export class AcpBackendAdapter {
         // A large connection catalog can crowd out even the small PwrAgent
         // catalog in Antigravity. Its fixed gateway tools read the selected
         // connections live and retain PwrAgent's per-tool approval policy.
-        if (backendId === "acp:antigravity" && http && baseRegistration) {
-          return baseRegistration;
+        if (backendId === "acp:antigravity" && http && baseRegistration && this.managedMcpGatewayAvailable
+          && isAgentToolAdvertisedLocally("search_mcp_tools") && isAgentToolAdvertisedLocally("call_mcp_tool")) {
+          return { ...baseRegistration, managedConnectionsViaGateway: true };
         }
         const connectionRegistration =
           await this.resolveMcpConnectionServers?.({ backendId, sessionId });
