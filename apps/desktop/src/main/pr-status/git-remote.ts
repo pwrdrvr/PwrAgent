@@ -230,29 +230,40 @@ export function createScheduledPrefetchRemoteReader(cwd: string) {
     const live = remoteCache.get(cwd);
     return isCurrentRemoteObservation(live) ? live : undefined;
   };
-  const read = async (configuration?: GitRemoteConfiguration, useGitRemote = false) => {
+  const read = async (
+    configuration?: GitRemoteConfiguration,
+    options: { useGitRemote?: boolean; validateNegative?: () => Promise<boolean> } = {},
+  ) => {
     const reused = observationForReuse();
-    const observation = await loadParsedGitRemotes(cwd, { fresh: true }, {}, {
-      configuration, previous: reused, useGitRemote,
+    const observation = await loadParsedGitRemotes(cwd, {}, {}, {
+      configuration, previous: reused, useGitRemote: options.useGitRemote,
     });
     const repos = collectForgeRepositories(observation.value, "github");
-    if (repos.length && hasAllRemoteUrls(observation)) {
-      // Matching names or URLs do not refresh the resolved identity's age.
-      const fetchedAt = reused && observation.value === reused.value ? reused.fetchedAt : Date.now();
+    // Matching names or URLs do not refresh the resolved identity's age.
+    const fetchedAt = reused && observation.value === reused.value ? reused.fetchedAt : Date.now();
+    if ((observation.unconfirmedEmpty || hasAllRemoteUrls(observation))
+      && (repos.length > 0 || !options.validateNegative || await options.validateNegative())) {
       previous = { ...observation, fetchedAt };
     }
     // Scheduled probes never publish into the live cache, including on failure.
-    return { repos, refreshedRemoteNames: observation.names };
+    const identityExpiresAt = observation.value.some(({ url }) => readSshHost(url)) ? fetchedAt + REMOTE_CACHE_TTL_MS : undefined;
+    return { repos, refreshedRemoteNames: observation.names, identityExpiresAt };
   };
   return {
     read,
     usesGitRemote: () => observationForReuse()?.readWithGitRemote === true,
-    hasWarmNegative: () => {
+    hasCachedNegative: () => {
       const observation = observationForReuse();
       return Boolean(observation && (observation.unconfirmedEmpty || hasAllRemoteUrls(observation))
         && collectForgeRepositories(observation.value, "github").length === 0);
     },
   };
+}
+
+export function isGitConfigNoMatch(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const result = error as { code?: number; stdout?: string; stderr?: string };
+  return result.code === 1 && result.stdout === "" && result.stderr === "";
 }
 
 function isCurrentRemoteObservation(observation: RemoteCacheEntry | undefined): observation is RemoteCacheEntry {
@@ -418,8 +429,7 @@ async function defaultReadRemotes(
       if (configuration && !confirmEmpty) return { remotes: [], unconfirmedEmpty: true };
     } catch (error) {
       demand.signal?.throwIfAborted();
-      const result = error as { code?: number; stdout?: string; stderr?: string };
-      if (!confirmEmpty && result.code === 1 && result.stdout === "" && result.stderr === "") {
+      if (!confirmEmpty && isGitConfigNoMatch(error)) {
         return { remotes: [], unconfirmedEmpty: true };
       }
     }

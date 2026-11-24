@@ -4,7 +4,7 @@ import { bundledGitExecutable } from "../bundled-git";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getSelectedManagedGit } from "../git-command";
 import { gitCommandPreference, gitRuntimeEnvironment } from "../git-runtime";
-import { REMOTE_CONFIG_KEYS, type createScheduledPrefetchRemoteReader, type GitHubRepoRef } from "./git-remote";
+import { isGitConfigNoMatch, REMOTE_CONFIG_KEYS, type createScheduledPrefetchRemoteReader, type GitHubRepoRef } from "./git-remote";
 import { parseGitRemoteConfiguration } from "./git-remote-config";
 import { runPrMetadataGit } from "./pr-metadata-process";
 import { confirmPrFilesCheckout, observePrCheckoutConfigFiles, observeProvenRemoteHeads } from "./pr-remote-heads";
@@ -27,7 +27,10 @@ function prefetchGitInputs(cwd: string) {
   const { GIT_CONFIG_SYSTEM: system, GIT_CONFIG_NOSYSTEM: noSystem, GIT_CONFIG_GLOBAL: global, HOME: home, XDG_CONFIG_HOME: xdg } = runtime;
   if (noSystem !== undefined && noSystem !== "0" && noSystem !== "1") return undefined;
   if (noSystem !== "1" && (!system || !path.isAbsolute(system))) return undefined;
-  if (global === undefined && (!home || !path.isAbsolute(home) || (xdg && !path.isAbsolute(xdg)))) return undefined;
+  // Joining a path removes parent components before the filesystem can
+  // follow any symlinks. Git can reach a different config with the raw path.
+  if (global === undefined && (!home || !path.isAbsolute(home) || hasParentComponent(home)
+    || (xdg && (!path.isAbsolute(xdg) || hasParentComponent(xdg))))) return undefined;
   if (global !== undefined && !path.isAbsolute(global)) return undefined;
 
   const paths = global !== undefined
@@ -35,13 +38,17 @@ function prefetchGitInputs(cwd: string) {
     : [path.join(xdg || path.join(home!, ".config"), "git/config"), path.join(home!, ".gitconfig")];
   if (noSystem !== "1") paths.push(system!);
   paths.push(bundledGitExecutable());
-  if (paths.some((file) => /[\r\n\uFFFD]/.test(file) || file.split("/").includes(".."))) return undefined;
+  if (paths.some((file) => /[\r\n\uFFFD]/.test(file) || hasParentComponent(file))) return undefined;
   return { env, paths: paths.map((file) => path.normalize(file)) };
+}
+
+function hasParentComponent(file: string): boolean {
+  return file.split("/").includes("..");
 }
 
 function configPath(directory: string, value: string): string | undefined {
   // Leave interpolation and paths crossing a parent component to Git.
-  if (!value || /^[~%]/.test(value) || /[\r\n\uFFFD]/.test(value) || value.split("/").includes("..")) return undefined;
+  if (!value || /^[~%]/.test(value) || /[\r\n\uFFFD]/.test(value) || hasParentComponent(value)) return undefined;
   return path.resolve(directory, value);
 }
 
@@ -81,7 +88,7 @@ export async function observeScheduledPrPrefetchMetadata(
     try { return prefetchGitInputs(cwd); } catch { return undefined; }
   };
   try {
-    if (repositories.hasWarmNegative()) return { repos: [], refreshedRemoteNames: [] };
+    if (repositories.hasCachedNegative()) return { repos: [], refreshedRemoteNames: [] };
     if (repositories.usesGitRemote()) return undefined;
     const inputs = currentInputs();
     if (!inputs) return undefined;
@@ -90,21 +97,26 @@ export async function observeScheduledPrPrefetchMetadata(
     const readConfig = () => runPrMetadataGit(cwd, [
       "config", "--null", "--show-scope", "--show-origin", "--includes", "--get-regexp", `${REMOTE_CONFIG_KEYS}|^include\\.|^includeif\\.`,
     ], { purpose: "pr-remotes", env: inputs.env, maxBuffer: 64 * 1024, timeout: 2_000 });
-    const { stdout, stderr } = await readConfig();
-    if (stderr !== "") return undefined;
-    const parsed = parseConfigWithOrigins(roots.directory, stdout);
+    const config = await readConfig().catch((error: unknown) => {
+      if (isGitConfigNoMatch(error)) return undefined;
+      throw error;
+    });
+    if (config?.stderr) return undefined;
+    const parsed = config ? parseConfigWithOrigins(roots.directory, config.stdout)
+      : { configuration: { names: [], remotes: [] }, sources: undefined };
     if (!parsed) {
-      const { repos, refreshedRemoteNames } = await repositories.read(undefined, true);
+      const { repos, refreshedRemoteNames } = await repositories.read(undefined, { useGitRemote: true });
       return { repos, refreshedRemoteNames: refreshedRemoteNames ?? [] };
     }
     const { configuration, sources } = parsed;
+    const inputsUnchanged = () => isDeepStrictEqual(inputs, currentInputs());
+    const configUnchanged = async () => Boolean(await roots.unchanged() && inputsUnchanged());
     // Resolve identities from the config Git already sampled. OpenSSH aliases
     // use one expansion per observation, bounded by the scheduled batch.
-    const { repos } = await repositories.read(configuration);
+    const { repos, identityExpiresAt } = await repositories.read(configuration, { validateNegative: configUnchanged });
     const remoteNames = configuration.names;
     const sample = { repos, refreshedRemoteNames: remoteNames };
-    const inputsUnchanged = () => isDeepStrictEqual(inputs, currentInputs());
-    const currentSample = async () => await roots.unchanged() && inputsUnchanged() ? sample : undefined;
+    const currentSample = async () => await configUnchanged() ? sample : undefined;
     // Keep Git's current config answer for the ordinary branch path even
     // when it cannot support reuse of the checkout observation.
     if (!sources || !repos.length) return await currentSample();
@@ -128,9 +140,10 @@ export async function observeScheduledPrPrefetchMetadata(
     // Re-read includes only when Git proved a checkout observation we can keep.
     if (extra.length) {
       const confirmed = await readConfig();
-      if (confirmed.stderr !== "" || confirmed.stdout !== stdout || !await roots.unchanged()) return undefined;
+      if (confirmed.stderr !== "" || confirmed.stdout !== config?.stdout || !await roots.unchanged()) return undefined;
     }
-    const unchanged = async () => Boolean(await files.unchanged() && (!proof || await proof.unchanged()) && inputsUnchanged());
+    const unchanged = async () => Boolean(await files.unchanged() && (!proof || await proof.unchanged()) && inputsUnchanged()
+      && (identityExpiresAt === undefined || Date.now() < identityExpiresAt));
     return await unchanged() ? { ...sample, proof: { heads: proof?.heads, unchanged } } : undefined;
   } catch {
     // Let the ordinary Git commands decide unsupported or unstable reads.

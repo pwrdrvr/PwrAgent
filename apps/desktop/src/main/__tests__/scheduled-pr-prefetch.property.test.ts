@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
@@ -198,26 +198,89 @@ it("refreshes fallback URLs at the original live cache expiry", async () => {
   expect(starts.calls.filter(([, args]) => args[0] === "remote" && args[1] === "get-url")).toHaveLength(1);
 });
 
-it.each(["GitLab-only", "remote-less"])("keeps warm %s checkouts off the GitHub discovery path until expiry", async (kind) => {
+it.each(["GitLab-only", "remote-less"].flatMap((kind) => ["warm", "cold"].map((cache) => ({ kind, cache }))))(
+  "keeps $cache $kind checkouts off the GitHub discovery path until expiry", async ({ kind, cache }) => {
+    const cwd = await fixture();
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    onTestFinished(() => { clock.mockRestore(); });
+    await readGit(cwd, "remote", "remove", "upstream");
+    if (kind === "remote-less") await readGit(cwd, "remote", "remove", "origin");
+    else await readGit(cwd, "remote", "set-url", "origin", "https://gitlab.com/fixture/origin.git");
+    if (cache === "warm") await resolveGitHubRepoForDirectory(cwd);
+    const retryAt = readObservedGitOrigin(cwd)?.retryAt ?? now + 5 * 60_000;
+    const resolve = createScheduledPrPrefetchRepoResolver();
+    const starts = recordPrefetchStarts();
+    for (const branch of topics.slice(0, 3)) await expectEligible(resolve, cwd, branch, []);
+    expect(starts.calls).toHaveLength(cache === "warm" ? 0 : 1);
+    if (cache === "cold") expect(readObservedGitOrigin(cwd)).toBeUndefined();
+
+    if (kind === "remote-less") await readGit(cwd, "remote", "add", "origin", "https://github.com/fixture/new.git");
+    else await readGit(cwd, "remote", "set-url", "origin", "https://github.com/fixture/new.git");
+    await remoteHead(cwd, "origin", "main");
+    now = retryAt;
+    await expectEligible(resolve, cwd, "topic-3", (await oracle(cwd))("topic-3"));
+  },
+);
+
+it.skipIf(process.platform === "win32").each(["HOME", "XDG_CONFIG_HOME"])(
+  "matches Git config resolution when %s traverses a symlink before a parent component", async (name) => {
+    const cwd = await fixture();
+    const alias = path.join(cwd, "alias");
+    const physical = path.join(cwd, "physical");
+    const leaf = path.join(physical, "leaf");
+    const home = path.join(cwd, "home");
+    await mkdir(alias);
+    await mkdir(home);
+    await mkdir(leaf, { recursive: true });
+    await symlink(leaf, path.join(alias, "link"));
+    const raw = `${alias}/link/..`;
+    const config = name === "HOME" ? path.join(physical, ".gitconfig") : path.join(physical, "git", "config");
+    await mkdir(path.dirname(config), { recursive: true });
+    vi.stubEnv("GIT_CONFIG_GLOBAL", undefined);
+    vi.stubEnv("HOME", name === "HOME" ? raw : home);
+    vi.stubEnv("XDG_CONFIG_HOME", name === "XDG_CONFIG_HOME" ? raw : undefined);
+    onTestFinished(() => { vi.unstubAllEnvs(); });
+
+    const url = "https://github.com/fixture/origin.git";
+    const rewritten = "https://github.com/fixture/rewritten.git";
+    expect(await readGit(cwd, "remote", "get-url", "origin")).toBe(url);
+    const resolve = createScheduledPrPrefetchRepoResolver();
+    await expectEligible(resolve, cwd, "topic-0", (await oracle(cwd))("topic-0"));
+    await readGit(cwd, "config", "--file", config, `url.${rewritten}.insteadOf`, url);
+    expect(await readGit(cwd, "remote", "get-url", "origin")).toBe(rewritten);
+    await expectEligible(resolve, cwd, "topic-1", (await oracle(cwd))("topic-1"));
+  },
+);
+
+it.skipIf(process.platform === "win32")("expires a verified SSH identity at its original live deadline", async () => {
   const cwd = await fixture();
+  const bin = path.join(cwd, "bin");
+  const config = path.join(cwd, "ssh-result");
+  await mkdir(bin);
+  await writeFile(path.join(bin, "ssh"), '#!/bin/sh\ncat "$PWRAGENT_TEST_PREFETCH_SSH_CONFIG"\n', { mode: 0o755 });
+  await writeFile(config, "hostname github.com\n");
+  vi.stubEnv("PATH", `${bin}${path.delimiter}${process.env.PATH}`);
+  vi.stubEnv("PWRAGENT_TEST_PREFETCH_SSH_CONFIG", config);
   let now = Date.now();
   const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-  onTestFinished(() => { clock.mockRestore(); });
-  await readGit(cwd, "remote", "remove", "upstream");
-  if (kind === "remote-less") await readGit(cwd, "remote", "remove", "origin");
-  else await readGit(cwd, "remote", "set-url", "origin", "https://gitlab.com/fixture/origin.git");
+  onTestFinished(() => { vi.unstubAllEnvs(); clock.mockRestore(); });
+  for (const remote of ["origin", "upstream"]) {
+    await readGit(cwd, "remote", "set-url", remote, `git@fixture-ssh:fixture/${remote}.git`);
+  }
   await resolveGitHubRepoForDirectory(cwd);
   const { retryAt } = readObservedGitOrigin(cwd)!;
+  now = retryAt - 1;
   const resolve = createScheduledPrPrefetchRepoResolver();
-  const starts = recordPrefetchStarts();
-  for (const branch of topics.slice(0, 3)) await expectEligible(resolve, cwd, branch, []);
-  expect(starts.calls).toHaveLength(0);
-
-  if (kind === "remote-less") await readGit(cwd, "remote", "add", "origin", "https://github.com/fixture/new.git");
-  else await readGit(cwd, "remote", "set-url", "origin", "https://github.com/fixture/new.git");
-  await remoteHead(cwd, "origin", "main");
+  const ssh = vi.spyOn(gitSubprocessDiagnostics, "start");
+  onTestFinished(() => { ssh.mockRestore(); });
+  await expectEligible(resolve, cwd, "topic-0", ["https://github.com/fixture/origin.git", "https://github.com/fixture/upstream.git"]);
+  expect(ssh.mock.calls.filter(([command]) => command === "ssh-config")).toHaveLength(0);
+  await writeFile(config, "hostname gitlab.com\n");
   now = retryAt;
-  await expectEligible(resolve, cwd, "topic-3", (await oracle(cwd))("topic-3"));
+
+  await expectEligible(resolve, cwd, "topic-1", []);
+  expect(ssh.mock.calls.filter(([command]) => command === "ssh-config")).toHaveLength(1);
 });
 
 it.skipIf(process.platform === "win32")("skips the second config probe when a remote has no HEAD", async () => {
