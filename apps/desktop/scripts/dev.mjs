@@ -53,8 +53,12 @@ function run(command, args, env) {
   return result.status ?? 1;
 }
 
-export function runDevSetup(node, env, runCommand = run) {
-  for (const script of DEV_SETUP_SCRIPTS) {
+export function runDevSetup(node, env, runCommand = run, platform = process.platform) {
+  // electron-vite clears out/main when it builds the main process for dev.
+  const scripts = platform === "win32"
+    ? [["./scripts/build-windows-job-launcher.mjs", ".local/windows-job-launcher"], ...DEV_SETUP_SCRIPTS]
+    : DEV_SETUP_SCRIPTS;
+  for (const script of scripts) {
     const args = Array.isArray(script) ? script : [script];
     const status = runCommand(node, args, env);
     if (status !== 0) return status;
