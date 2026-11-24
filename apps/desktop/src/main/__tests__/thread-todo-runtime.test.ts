@@ -399,9 +399,9 @@ describe("thread to-do Start thread on project pagination", () => {
 
 describe("thread to-do project menu", () => {
   const SNAP: ThreadTodoProject = { key: "directory:/src/pwrsnap", label: "PwrSnap", path: "/src/pwrsnap" };
-  const card = { id: "todo-1" } as ThreadTodo;
-  const deps = () => ({
-    todos: { update: vi.fn(() => card) },
+  const card = { id: "todo-1", kind: "handoff", action: { type: "start_thread", prompt: "Build it" } } as ThreadTodo;
+  const deps = (current: ThreadTodo = card) => ({
+    todos: { get: vi.fn(() => current), update: vi.fn(() => current) },
     listProjects: vi.fn(async () => [SNAP]),
   });
 
@@ -423,6 +423,19 @@ describe("thread to-do project menu", () => {
     await expect(setThreadTodoProject({ id: "todo-1", projectKey: "directory:/gone" }, fake))
       .rejects.toThrow("That project is no longer in the sidebar.");
     expect(fake.todos.update).not.toHaveBeenCalled();
+  });
+
+  it("refuses a project for a merge or review card, whose project is fixed", async () => {
+    const merge = { id: "todo-1", kind: "merge", action: { type: "merge_pull_request", pullRequest: "42" } } as ThreadTodo;
+    const review = { id: "todo-1", kind: "review", action: { type: "start_review" } } as ThreadTodo;
+    for (const current of [merge, review]) {
+      for (const projectKey of [SNAP.key, null]) {
+        const fake = deps(current);
+        await expect(setThreadTodoProject({ id: "todo-1", projectKey }, fake))
+          .rejects.toThrow("A review or merge card runs in its own thread's project.");
+        expect(fake.todos.update).not.toHaveBeenCalled();
+      }
+    }
   });
 
   it("lets a failed listing reject rather than read as a missing project", async () => {

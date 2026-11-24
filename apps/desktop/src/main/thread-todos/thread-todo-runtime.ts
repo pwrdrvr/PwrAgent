@@ -28,6 +28,7 @@ import {
   DEFAULT_THREAD_TODO_MERGE_METHOD,
   resolveThreadTodoModelSettings,
   threadTodoPlacementParent,
+  threadTodoProjectIsChoosable,
 } from "@pwragent/shared/contracts/thread-todos";
 import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared/contracts/navigation";
 import { defaultModelOption } from "@pwragent/shared/model-defaults";
@@ -143,16 +144,20 @@ export async function listThreadTodoProjectCandidates(): Promise<ThreadTodoProje
 
 /**
  * The operator's pick from a card's project menu. A key the sidebar no
- * longer lists is refused rather than kept as a stale label.
+ * longer lists is refused rather than kept as a stale label, and so is any
+ * pick on a review or merge card, whose project is fixed.
  */
 export async function setThreadTodoProject(
   params: { id: string; projectKey: string | null },
   deps: {
-    todos?: Pick<ThreadTodoService, "update">;
+    todos?: Pick<ThreadTodoService, "get" | "update">;
     listProjects?: () => Promise<ThreadTodoProject[]>;
   } = {},
 ): Promise<ThreadTodo> {
   const todos = deps.todos ?? getThreadTodoService();
+  if (!threadTodoProjectIsChoosable(todos.get(params.id))) {
+    throw new ThreadTodoError("invalid_arguments", "A review or merge card runs in its own thread's project.");
+  }
   if (params.projectKey === null) {
     return todos.update({ id: params.id, targetProject: null });
   }
