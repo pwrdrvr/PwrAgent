@@ -155,6 +155,7 @@ type ScheduledCheckoutMetadata = {
   remoteNames: string[];
   defaults?: DefaultBranchInfo;
   unchanged: () => Promise<boolean>;
+  publish?: () => void;
 };
 type ScheduledPrefetchCheckout = {
   verified?: ScheduledCheckoutMetadata;
@@ -178,7 +179,7 @@ export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string, che
           const remoteNames = observed.refreshedRemoteNames;
           if (heads) branchDefaults = await readDefaultBranchInfo(cwd, undefined, remoteNames, heads);
           metadata = {
-            repos: observed.repos, remoteNames, unchanged,
+            repos: observed.repos, remoteNames, unchanged, publish: observed.publish,
             defaults: heads?.size === remoteNames.length ? branchDefaults : undefined,
           };
         } else {
@@ -189,18 +190,24 @@ export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string, che
         const plan = await resolvePrLookupPlan({ cwd, branch, remoteNames: metadata.remoteNames, defaultBranchInfo: branchDefaults });
         if (await metadata.unchanged()) {
           checkout.verified = metadata;
-          return plan.branches.includes(branch) ? metadata.repos : [];
+          if (!plan.branches.includes(branch)) return [];
+          metadata.publish?.();
+          return metadata.repos;
         }
         checkout.verified = undefined;
       }
     }
 
-    const { repos, refreshedRemoteNames } = sampled ?? (checkout
-      ? await checkout.repositories.read()
-      : await observeForgeRepositoriesForDirectory(cwd, "github"));
+    const scheduledSample = sampled ?? await checkout?.repositories.read();
+    const { repos, refreshedRemoteNames } = scheduledSample ?? await observeForgeRepositoriesForDirectory(cwd, "github");
     if (repos.length === 0) return [];
-    const plan = await resolvePrLookupPlan({ cwd, branch, remoteNames: checkout ? refreshedRemoteNames : undefined });
-    return plan.branches.includes(branch) ? repos : [];
+    const plan = await resolvePrLookupPlan({
+      cwd, branch, remoteNames: checkout ? refreshedRemoteNames : undefined,
+      nativeHeadReads: sampled?.nativeHeadReads,
+    });
+    if (!plan.branches.includes(branch)) return [];
+    scheduledSample?.publish?.();
+    return repos;
   });
 }
 
@@ -229,8 +236,11 @@ async function resolvePrLookupPlan(params: {
   cwd: string;
   remoteNames?: string[];
   defaultBranchInfo?: DefaultBranchInfo;
+  nativeHeadReads?: true;
 }): Promise<PrLookupPlan> {
-  const defaultBranchInfo = params.defaultBranchInfo ?? await readDefaultBranchInfo(params.cwd, undefined, params.remoteNames);
+  const defaultBranchInfo = params.defaultBranchInfo ?? await readDefaultBranchInfo(
+    params.cwd, undefined, params.remoteNames, params.nativeHeadReads ? null : undefined,
+  );
   // A timed-out/failed git probe must not turn a default branch into an
   // eligible head-name lookup against every contributor's fork.
   if (defaultBranchInfo.remotes.size === 0) return { branches: [] };
@@ -441,7 +451,7 @@ async function readTrackedRemoteBranch(params: {
 }
 
 async function readDefaultBranchInfo(
-  cwd: string, demand?: PrMetadataDemand, remoteNames?: string[], verifiedHeads?: ReadonlyMap<string, string>,
+  cwd: string, demand?: PrMetadataDemand, remoteNames?: string[], verifiedHeads?: ReadonlyMap<string, string> | null,
 ): Promise<DefaultBranchInfo> {
   try {
     const { defaultsByRemote, remotes, confirmed } = await readRemoteDefaultBranches(cwd, demand, remoteNames, verifiedHeads);
@@ -455,7 +465,9 @@ async function readDefaultBranchInfo(
       ], demand);
       // A successful empty ref read still confirms that Git can read the
       // checkout. After only failures, revalidate the previously sampled names.
-      if (remoteNames && !confirmed && refs === undefined) return await readDefaultBranchInfo(cwd, demand);
+      if (remoteNames && !confirmed && refs === undefined) {
+        return await readDefaultBranchInfo(cwd, demand, undefined, verifiedHeads === null ? null : undefined);
+      }
       const localRefs = new Set(refs?.split(/\r?\n/));
       const fallbackDefaultBranch = FALLBACK_DEFAULT_BRANCHES.find((branch) => localRefs.has(`refs/heads/${branch}`));
       if (fallbackDefaultBranch) {
@@ -475,7 +487,7 @@ async function readDefaultBranchInfo(
 }
 
 async function readRemoteDefaultBranches(
-  cwd: string, demand?: PrMetadataDemand, remoteNames?: string[], verifiedHeads?: ReadonlyMap<string, string>,
+  cwd: string, demand?: PrMetadataDemand, remoteNames?: string[], verifiedHeads?: ReadonlyMap<string, string> | null,
 ): Promise<{
   defaultsByRemote: Map<string, string>;
   remotes: Set<string>;
@@ -490,7 +502,8 @@ async function readRemoteDefaultBranches(
     }, demand);
     remoteNames = uniqueNonEmpty(stdout.split(/\r?\n/));
   }
-  const heads = verifiedHeads ?? await readProvenRemoteHeads(cwd, remoteNames, demand);
+  // A null proof means this branch already tried the filesystem shortcut.
+  const heads = verifiedHeads === null ? undefined : verifiedHeads ?? await readProvenRemoteHeads(cwd, remoteNames, demand);
   let confirmed = heads !== undefined;
   const defaults = await Promise.all(
     remoteNames.map(async (remote) => {

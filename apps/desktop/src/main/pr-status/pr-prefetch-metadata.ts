@@ -14,6 +14,8 @@ const MAX_CONFIG_INCLUDES = 16;
 type PrefetchMetadata = {
   repos: GitHubRepoRef[];
   refreshedRemoteNames: string[];
+  publish?: () => void;
+  nativeHeadReads?: true;
   proof?: { heads?: ReadonlyMap<string, string>; unchanged: () => Promise<boolean> };
 };
 
@@ -105,17 +107,17 @@ export async function observeScheduledPrPrefetchMetadata(
     const parsed = config ? parseConfigWithOrigins(roots.directory, config.stdout)
       : { configuration: { names: [], remotes: [] }, sources: undefined };
     if (!parsed) {
-      const { repos, refreshedRemoteNames } = await repositories.read(undefined, { useGitRemote: true });
-      return { repos, refreshedRemoteNames: refreshedRemoteNames ?? [] };
+      const { repos, refreshedRemoteNames, publish } = await repositories.read(undefined, { useGitRemote: true });
+      return { repos, refreshedRemoteNames: refreshedRemoteNames ?? [], publish };
     }
     const { configuration, sources } = parsed;
     const inputsUnchanged = () => isDeepStrictEqual(inputs, currentInputs());
     const configUnchanged = async () => Boolean(await roots.unchanged() && inputsUnchanged());
     // Resolve identities from the config Git already sampled. OpenSSH aliases
     // use one expansion per observation, bounded by the scheduled batch.
-    const { repos, identityExpiresAt } = await repositories.read(configuration, { validateNegative: configUnchanged });
+    const { repos, identityExpiresAt, publish } = await repositories.read(configuration, { validateNegative: configUnchanged });
     const remoteNames = configuration.names;
-    const sample = { repos, refreshedRemoteNames: remoteNames };
+    const sample = { repos, refreshedRemoteNames: remoteNames, publish };
     const currentSample = async () => await configUnchanged() ? sample : undefined;
     // Keep Git's current config answer for the ordinary branch path even
     // when it cannot support reuse of the checkout observation.
@@ -135,7 +137,7 @@ export async function observeScheduledPrPrefetchMetadata(
     // For a single remote, Git still resolves HEAD per branch. Confirm the
     // checkout once so later branches can reuse just its remote configuration.
     if (!proof && (remoteNames.length !== 1 || !await confirmPrFilesCheckout(cwd, files, inputs.env))) {
-      return await files.unchanged() && inputsUnchanged() ? sample : undefined;
+      return await files.unchanged() && inputsUnchanged() ? { ...sample, nativeHeadReads: true } : undefined;
     }
     // Re-read includes only when Git proved a checkout observation we can keep.
     if (extra.length) {

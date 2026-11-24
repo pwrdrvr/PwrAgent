@@ -7,7 +7,7 @@ import * as gitExecutable from "../app-server/git-executable";
 import { bundledGitExecutable } from "../bundled-git";
 import { GitSubprocessDiagnostics, gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 import { clearGitHubRemoteCache, readObservedGitOrigin, resolveGitHubRepoForDirectory } from "../pr-status/git-remote";
-import { createScheduledPrPrefetchRepoResolver } from "../pr-status/pr-detection";
+import { createScheduledPrPrefetchRepoResolver, detectPullRequestsForThread } from "../pr-status/pr-detection";
 import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
 
 const runGitCommand = gitExecutable.runGitCommand;
@@ -16,7 +16,7 @@ const topics = Array.from({ length: 12 }, (_, index) => `topic-${index}`);
 const remoteHead = (cwd: string, remote: string, branch: string) =>
   readGit(cwd, "symbolic-ref", `refs/remotes/${remote}/HEAD`, `refs/remotes/${remote}/${branch}`);
 
-async function fixture(refFormat = "files") {
+async function fixture(refFormat = "files", objectFormat = "sha1") {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "pwragent-scheduled-pr-prefetch-"));
   const restoreEnv = isolateProcessGitEnvironment(cwd);
   onTestFinished(async () => {
@@ -24,7 +24,7 @@ async function fixture(refFormat = "files") {
     clearGitHubRemoteCache();
     await rm(cwd, { recursive: true, force: true });
   });
-  await readGit(cwd, "init", "-b", "main", `--ref-format=${refFormat}`, "--object-format=sha1");
+  await readGit(cwd, "init", "-b", "main", `--ref-format=${refFormat}`, `--object-format=${objectFormat}`);
   await readGit(cwd, "-c", "commit.gpgsign=false", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
     "commit", "--allow-empty", "-m", "fixture");
   const refs = [...topics, "release", "tracks-default", "tracks-other"].map((branch) => `refs/heads/${branch}`);
@@ -283,6 +283,50 @@ it.skipIf(process.platform === "win32")("expires a verified SSH identity at its 
   expect(ssh.mock.calls.filter(([command]) => command === "ssh-config")).toHaveLength(1);
 });
 
+it.skipIf(process.platform === "win32")("resolves a cold SSH identity once across prefetch and live branch discovery", async () => {
+  const cwd = await fixture();
+  const bin = path.join(cwd, "bin");
+  await mkdir(bin);
+  await writeFile(path.join(bin, "ssh"), "#!/bin/sh\nprintf 'hostname github.com\\n'\n", { mode: 0o755 });
+  vi.stubEnv("PATH", `${bin}${path.delimiter}${process.env.PATH}`);
+  onTestFinished(() => { vi.unstubAllEnvs(); });
+  await readGit(cwd, "remote", "remove", "upstream");
+  await readGit(cwd, "remote", "set-url", "origin", "git@fixture-ssh:fixture/origin.git");
+  const branches = topics.slice(0, 2);
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  const starts = recordPrefetchStarts();
+  const ssh = vi.spyOn(gitSubprocessDiagnostics, "start");
+  onTestFinished(() => { ssh.mockRestore(); });
+  for (const branch of branches) {
+    await expectEligible((directory, head) => resolve(directory, head, branches.length), cwd, branch,
+      ["https://github.com/fixture/origin.git"]);
+  }
+  const fetchAllPullRequestsForBranch = vi.fn(async () => []);
+  for (const branch of branches) {
+    await detectPullRequestsForThread({ branch, directoryPaths: [cwd], fetcher: { fetchAllPullRequestsForBranch } });
+  }
+
+  expect(fetchAllPullRequestsForBranch.mock.calls).toEqual(branches.map((branch) => [{ cwd, branch }]));
+  expect(ssh.mock.calls.filter(([command]) => command === "ssh-config")).toHaveLength(1);
+  expect(starts.calls.filter(([, args]) => args[0] === "config")).toHaveLength(2);
+});
+
+it.skipIf(process.platform === "win32")("leaves a failed SSH resolution out of the live cache", async () => {
+  const cwd = await fixture();
+  const bin = path.join(cwd, "bin");
+  const ssh = path.join(bin, "ssh");
+  await mkdir(bin);
+  await writeFile(ssh, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  vi.stubEnv("PATH", `${bin}${path.delimiter}${process.env.PATH}`);
+  onTestFinished(() => { vi.unstubAllEnvs(); });
+  await readGit(cwd, "remote", "set-url", "origin", "git@fixture-ssh:fixture/origin.git");
+  await expectEligible(createScheduledPrPrefetchRepoResolver(), cwd, "topic-0", ["https://github.com/fixture/upstream.git"]);
+  expect(readObservedGitOrigin(cwd)).toBeUndefined();
+
+  await writeFile(ssh, "#!/bin/sh\nprintf 'hostname github.com\\n'\n");
+  await expect(resolveGitHubRepoForDirectory(cwd)).resolves.toEqual({ host: "github.com", owner: "fixture", repo: "origin" });
+});
+
 it.skipIf(process.platform === "win32")("skips the second config probe when a remote has no HEAD", async () => {
   const cwd = await fixture();
   const included = path.join(cwd, "included-config");
@@ -300,6 +344,18 @@ it.skipIf(process.platform === "win32")("skips the second config probe when a re
   expect(commands.filter((command) => command === "symbolic-ref")).toHaveLength(6);
   expect(commands.filter((command) => command === "for-each-ref")).toHaveLength(3);
   expect(commands).toHaveLength(12);
+});
+
+it.skipIf(process.platform === "win32")("uses native HEAD reads after one rejected checkout proof", async () => {
+  const cwd = await fixture("files", "sha256");
+  for (const remote of ["origin", "upstream"]) await remoteHead(cwd, remote, "unfetched-default");
+  const expected = await oracle(cwd);
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  const starts = recordPrefetchStarts();
+  await expectEligible(resolve, cwd, "topic-0", expected("topic-0"));
+  expect(starts.calls.map(([, args]) => args[0])).toEqual([
+    "config", "rev-parse", "symbolic-ref", "symbolic-ref", "for-each-ref",
+  ]);
 });
 
 it.skipIf(process.platform === "win32")("keeps two warm single-remote lookups within the ordinary launch count with system config", async () => {

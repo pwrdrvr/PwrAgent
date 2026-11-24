@@ -106,18 +106,21 @@ type RemoteCacheEntry = {
   names?: string[];
   unconfirmedEmpty?: true;
   readWithGitRemote?: true;
+  sshResolutionFailed?: true;
   fetchedAt: number;
 };
 type ParsedRemoteObservation = Omit<RemoteCacheEntry, "fetchedAt">;
 
 const remoteCache = new Map<string, RemoteCacheEntry>();
 const remoteLookups = new Map<string, SharedPrMetadataRead<RemoteCacheEntry>>();
+let remoteCacheGeneration = 0;
 type SshResolver = (host: string, demand?: PrMetadataDemand) => Promise<string | undefined>;
 // Share only running OpenSSH evaluations. A completed evaluation belongs to
 // its directory's existing TTL; a new probe must evaluate Include/Match again.
 let sshLookups = new WeakMap<SshResolver, Map<string, SharedPrMetadataRead<string | undefined>>>();
 
 export function clearGitHubRemoteCache(): void {
+  remoteCacheGeneration++;
   remoteCache.clear();
   // Existing callers may finish, but cannot publish into the new cache.
   remoteLookups.clear();
@@ -234,6 +237,7 @@ export function createScheduledPrefetchRemoteReader(cwd: string) {
     configuration?: GitRemoteConfiguration,
     options: { useGitRemote?: boolean; validateNegative?: () => Promise<boolean> } = {},
   ) => {
+    const cacheGeneration = remoteCacheGeneration;
     const reused = observationForReuse();
     const observation = await loadParsedGitRemotes(cwd, {}, {}, {
       configuration, previous: reused, useGitRemote: options.useGitRemote,
@@ -241,13 +245,22 @@ export function createScheduledPrefetchRemoteReader(cwd: string) {
     const repos = collectForgeRepositories(observation.value, "github");
     // Matching names or URLs do not refresh the resolved identity's age.
     const fetchedAt = reused && observation.value === reused.value ? reused.fetchedAt : Date.now();
-    if ((observation.unconfirmedEmpty || hasAllRemoteUrls(observation))
+    const snapshot = { ...observation, fetchedAt };
+    const complete = hasAllRemoteUrls(observation);
+    if ((observation.unconfirmedEmpty || complete)
       && (repos.length > 0 || !options.validateNegative || await options.validateNegative())) {
-      previous = { ...observation, fetchedAt };
+      previous = snapshot;
     }
-    // Scheduled probes never publish into the live cache, including on failure.
     const identityExpiresAt = observation.value.some(({ url }) => readSshHost(url)) ? fetchedAt + REMOTE_CACHE_TTL_MS : undefined;
-    return { repos, refreshedRemoteNames: observation.names, identityExpiresAt };
+    // The live phase can reuse a successful SSH resolution once the caller
+    // accepts this sample. Leave existing live observations and reads alone.
+    const publish = repos.length && complete && identityExpiresAt !== undefined && !observation.sshResolutionFailed
+      ? () => {
+        if (remoteCacheGeneration === cacheGeneration && isCurrentRemoteObservation(snapshot)
+          && !isCurrentRemoteObservation(remoteCache.get(cwd)) && !remoteLookups.has(cwd)) remoteCache.set(cwd, snapshot);
+      }
+      : undefined;
+    return { repos, refreshedRemoteNames: observation.names, identityExpiresAt, publish };
   };
   return {
     read,
@@ -352,8 +365,9 @@ async function loadParsedGitRemotes(
     if (previous && (remotes === previous
       || (isCurrentRemoteObservation(prior) && previous.length === remotes.length
         && remotes.every(({ name, url }, index) => name === previous[index].name && url === previous[index].url)))) {
-      return { names, value: previous, unconfirmedEmpty, readWithGitRemote };
+      return { names, value: previous, unconfirmedEmpty, readWithGitRemote, sshResolutionFailed: prior?.sshResolutionFailed };
     }
+    let sshResolutionFailed: true | undefined;
     const value = await Promise.all(
       remotes.map(async (remote) => {
         const repo = parseForgeRemote(remote.url);
@@ -367,6 +381,7 @@ async function loadParsedGitRemotes(
           }
         }
         const resolvedHost = await hostname;
+        if (sshHost && !resolvedHost) sshResolutionFailed = true;
         return {
           ...remote,
           repo: repo && resolvedHost
@@ -375,7 +390,7 @@ async function loadParsedGitRemotes(
         };
       }),
     );
-    return { names, value, unconfirmedEmpty, readWithGitRemote };
+    return { names, value, unconfirmedEmpty, readWithGitRemote, sshResolutionFailed };
   } catch {
     demand.signal?.throwIfAborted();
     // Preserve the bounded negative cache, including non-git directories.
