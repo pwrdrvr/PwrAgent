@@ -156,6 +156,11 @@ shapes the platform's own web client uses:
    them. Every request is a read, so after the runtime closes the next request
    opens the VM again with a fresh ticket.
 
+A run records its source at admission (`sourceKey`: the platform origin and team,
+or the bridge program). Reconcile refuses a connection from a different source,
+since another deployment or team can hold the same project, session and swarm
+names; older runs without a key are unaffected.
+
 The key leaves the owner only in the `Authorization` header to the configured
 origin and the runtime's first line. Errors carry the platform's own words,
 bounded, never the key or a ticket.

@@ -75,7 +75,9 @@ export async function researchHarnessPlatformKeyStored(): Promise<boolean | unde
 
 /** The network seams the MathOS Platform client uses: the owner's own fetch and WebSocket. */
 function mathosPlatformDeps(): MathosPlatformDeps {
-  return { fetch: (input, init) => fetch(input, init), WebSocket: globalThis.WebSocket as unknown as MathosPlatformDeps["WebSocket"] };
+  const socket = (globalThis as { WebSocket?: unknown }).WebSocket;
+  if (typeof socket !== "function") throw new Error("This PwrAgent runtime cannot open WebSockets, so it cannot reach the MathOS Platform.");
+  return { fetch: (input, init) => fetch(input, init), WebSocket: socket as MathosPlatformDeps["WebSocket"] };
 }
 
 /**
@@ -135,7 +137,7 @@ export function initializeResearchRuntime(ports: ResearchPorts): ResearchService
       }, ports.onError);
       if (selectedModel) models.set(id, selectedModel);
       return { ...(selectedModel ? { model: { model: selectedModel.model, endpointOrigin: selectedModel.endpointOrigin } } : {}),
-        request: (method, params) => connection.request(method, params), close: () => { models.delete(id); return connection.close(); } };
+        source: `bridge:${config.command}`, request: (method, params) => connection.request(method, params), close: () => { models.delete(id); return connection.close(); } };
     },
     probe: async (id, signal) => {
       const model = models.get(id);

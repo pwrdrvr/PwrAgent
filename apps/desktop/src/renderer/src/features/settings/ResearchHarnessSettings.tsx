@@ -6,6 +6,7 @@ import type {
   DesktopSettingsSnapshot,
 } from "@pwragent/shared/contracts/settings";
 import {
+  MATHOS_API_KEY,
   MATHOS_PLATFORM_DEFAULT_ORIGIN,
   normalizeMathosPlatformOrigin,
   normalizeResearchHarnessConfig,
@@ -231,6 +232,7 @@ export function ResearchHarnessSettings(props: {
               help="Never written to config.toml, shown again, or given to an agent, a model or another program. Saves on its own."
               secret="mathosPlatformApiKey"
               state={platformKey}
+              validate={(value) => (MATHOS_API_KEY.test(value) ? undefined : "That is not a MathOS Platform API key: it has spaces or characters a key cannot hold.")}
               disabled={props.saving || !platformKey.writable}
               onClearSecret={props.onClearSecret}
               onReplaceSecret={props.onReplaceSecret}

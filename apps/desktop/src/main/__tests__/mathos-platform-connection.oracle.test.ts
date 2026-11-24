@@ -255,7 +255,6 @@ describe("PwrAgent's MathOS Platform client", () => {
   it("waits a bounded time for a VM the platform is preparing", async () => {
     let clock = 0;
     let replies = 0;
-    const ready = platform();
     const target = platform({ open: () => (++replies < 3
       ? { status: 202, body: { state: "preparing", stage: "starting" } }
       : { status: 200, body: { state: "ready", environment: ENVIRONMENT, version: "0.61.0", ipc_version: 6, ticket: "ticket-ready" } }) });
@@ -267,7 +266,9 @@ describe("PwrAgent's MathOS Platform client", () => {
     const stuck = openMathosPlatformConnection({ origin: ORIGIN, team: TEAM, apiKey: KEY },
       { ...forever.deps, now: () => clock, sleep: async (ms) => { clock += ms; } });
     await expect(stuck.request("hello", {})).rejects.toThrow(/still preparing/);
-    expect(ready.opens()).toBe(0);
+    // It polled, and it stopped at its bound instead of waiting forever.
+    expect(forever.opens()).toBeGreaterThan(1);
+    expect(forever.opens()).toBeLessThanOrEqual(16);
   });
 
   it("refuses a different runtime protocol and an over-long line, and reconnects after the runtime closes", async () => {
@@ -292,6 +293,29 @@ describe("PwrAgent's MathOS Platform client", () => {
     // A fresh ticket for the new socket: reads are repeatable, tickets are not.
     expect(target.opens()).toBe(2);
     expect(target.sockets[1]!.url).toContain("ticket=ticket-2");
+  });
+
+  it("never continues a run from a different source than the one it was imported from", async () => {
+    const records = sourceRecords(["m1", "m2"], 4).filter((record) => record.event !== "ended");
+    const first = platform({ records: records.slice(0, 3) });
+    const other = platform({ records });
+    let target = { team: TEAM, deps: first.deps };
+    const store = new ResearchStore(db);
+    const harness = new ResearchHarnessService(store, { ownerId: "owner", ownerPid: 42, ownerStartedAt: 100, isOwnerAlive: () => true, changed: () => {},
+      now: () => 1000, schedule: () => () => {}, onError: () => {}, probe: async () => {},
+      open: () => openMathosPlatformConnection({ origin: ORIGIN, team: target.team, apiKey: KEY }, target.deps) });
+    services.push(harness);
+    const started = await harness.start(importRequest(), fixture.tempDir);
+    for (let i = 0; i < 5 && store.header(started.id)!.harness!.cursor < 3; i++) await harness.poll(started.id);
+    await harness.stop(started.id, { backend: "codex", threadId: "coordinator", kind: "operator" }, "stopped", "Contrived stop").catch(() => undefined);
+    const before = store.get(started.id)!.harness!;
+    expect(before.sourceKey).toBe(`mathos:${ORIGIN}#${TEAM}`);
+    // Another team holding the same project, session and swarm names is a different source.
+    target = { team: "o-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", deps: other.deps };
+    const refused = await harness.reconcile(started.id, { backend: "codex", threadId: "coordinator", kind: "operator" });
+    expect(refused.harness!.cursor).toBe(before.cursor);
+    expect(refused.harness!.note).toMatch(/different Harness source/);
+    expect(other.frames.filter((line) => line.includes("swarm.records"))).toHaveLength(0);
   });
 
   it("lists the key's teams across pages and drops anything that is not a team", async () => {

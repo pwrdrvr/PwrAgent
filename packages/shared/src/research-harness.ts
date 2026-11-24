@@ -50,6 +50,11 @@ export type ResearchHarnessState = {
   upstreamRevision: string;
   state: "pending" | "running" | "imported" | "unknown" | "stopping" | "stopped" | "ended" | "reconciling";
   cursor: number;
+  /**
+   * Where the run's records came from: the MathOS Platform origin and team, or the bridge program.
+   * Recorded at admission; a reconcile through a different source is refused. Absent on older runs.
+   */
+  sourceKey?: string;
   /** When the owner last committed a source observation (page, snapshot or reconcile result). */
   observedAt?: number;
   /** A cancellation was requested and never acknowledged. It survives the owner rewriting the run's status on restart. */

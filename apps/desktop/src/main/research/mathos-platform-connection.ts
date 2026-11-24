@@ -260,6 +260,8 @@ export async function connectMathosRuntime(deps: MathosPlatformDeps, target: Mat
     if (!chunk) { fail("The MathOS runtime sent an unexpected frame."); return; }
     let start = 0;
     for (let newline = chunk.indexOf(10); newline !== -1 && !closed; newline = chunk.indexOf(10, start)) {
+      // Refuse before copying: a frame's size is the runtime's choice, not ours.
+      if (bufferedBytes + newline - start > MAX_LINE_BYTES) { fail("The MathOS runtime sent a line longer than PwrAgent reads."); return; }
       const line = new Uint8Array(bufferedBytes + newline - start);
       let offset = 0;
       for (const piece of buffered) { line.set(piece, offset); offset += piece.length; }
@@ -267,7 +269,6 @@ export async function connectMathosRuntime(deps: MathosPlatformDeps, target: Mat
       buffered = [];
       bufferedBytes = 0;
       start = newline + 1;
-      if (line.length > MAX_LINE_BYTES) { fail("The MathOS runtime sent a line longer than PwrAgent reads."); return; }
       answer(line);
     }
     if (start < chunk.length) { buffered.push(chunk.slice(start)); bufferedBytes += chunk.length - start; }
@@ -335,6 +336,7 @@ export function openMathosPlatformConnection(target: MathosPlatformTarget, deps:
   const text = (value: unknown) => (typeof value === "string" ? value : undefined);
 
   return {
+    source: `mathos:${target.origin}#${target.team}`,
     async request(method, params) {
       if (method === "hello") {
         const runtimeSocket = await connect();
