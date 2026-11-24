@@ -1,7 +1,7 @@
 import type { AppServerReadThreadResponse, AppServerThreadEntry, AppServerThreadMessageEntry } from "@pwragent/shared/contracts/normalized-app-server";
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import { combineTranscriptEntries, createTranscriptHistoryIndex, createTranscriptReviewPresentation, prependTranscriptHistoryPage } from "../segmented-transcript";
+import { appendTranscriptHistoryPage, combineTranscriptEntries, createTranscriptHistoryIndex, createTranscriptReviewPresentation, prependTranscriptHistoryPage } from "../segmented-transcript";
 import { createTranscriptReviewHistoryIndex, deriveTranscriptReviewPresentation } from "../transcript-review-presentation";
 
 const assistant = (id: string, text: string, turnId: string): AppServerThreadMessageEntry => ({
@@ -82,5 +82,62 @@ it("does not revisit completed reviews in earlier pages for a new turn's live ro
       expect(combineTranscriptEntries(history, index, created.tailEntries, created).length).toBe(size + 2);
     }
     expect(historicalVisits).toBe(0);
+  }));
+});
+
+it("does not replay earlier reviews after seeing unrelated legacy text without a turn", () => {
+  fc.assert(fc.property(fc.integer({ min: 10, max: 60 }), (size) => {
+    let visits = 0;
+    const oldReviews: AppServerThreadEntry[] = Array.from({ length: size }, (_, row) => ({
+      id: `old-${row}`, get type() { visits++; return "review" as const; },
+      review: `Old findings ${row}`, turn: { id: `old-turn-${row}` },
+    }));
+    const oldAnswer = { ...assistant("legacy", "Earlier ordinary answer.", "ignored"), turn: undefined };
+    const index = createTranscriptHistoryIndex();
+    let history = prependTranscriptHistoryPage({
+      history: undefined, index, page: replay([oldAnswer, ...oldReviews]), tailEntries: [],
+    });
+    createTranscriptReviewPresentation({ history, index, tailEntries: [], tailMessages: [] });
+    visits = 0;
+    for (let step = 0; step < 4; step++) {
+      const review: AppServerThreadEntry = {
+        id: `new-review-${step}`, type: "review", review: "No issues.", turn: { id: `new-turn-${step}` },
+      };
+      const tail = [review];
+      expect(createTranscriptReviewPresentation({ history, index, tailEntries: tail, tailMessages: [] }).tailEntries)
+        .toEqual(tail);
+      history = appendTranscriptHistoryPage({ history, index, page: replay(tail), tailEntries: [] });
+    }
+    expect(visits).toBe(0);
+  }));
+});
+
+it("agrees with a full replay when new pages actually share legacy review text", () => {
+  fc.assert(fc.property(fc.boolean(), fc.array(fc.constantFrom("Earlier answer.", "No issues.", "Other text."), {
+    minLength: 2, maxLength: 15,
+  }), (legacyReview, texts) => {
+    const raw: AppServerThreadEntry[] = [
+      { ...assistant("legacy-answer", "Earlier answer.", "ignored"), turn: undefined },
+      { id: "previous-review", type: "review", review: "No issues.",
+        ...(legacyReview ? {} : { turn: { id: "previous-turn" } }) },
+    ];
+    const index = createTranscriptHistoryIndex();
+    let history = prependTranscriptHistoryPage({ history: undefined, index, page: replay(raw), tailEntries: [] });
+    for (const [step, text] of texts.entries()) {
+      const turnId = `new-turn-${step}`;
+      const advanced: AppServerThreadEntry[] = [
+        assistant(`reply-${step}`, text, turnId),
+        { id: `review-${step}`, type: "review", review: texts.at(-1)!, turn: { id: turnId } },
+      ];
+      const displayed = createTranscriptReviewPresentation({
+        history, index, tailEntries: advanced, tailMessages: replay(advanced).replay.messages,
+      });
+      raw.push(...advanced);
+      const expected = deriveTranscriptReviewPresentation({
+        historyEvents: [], historyIndex: createTranscriptReviewHistoryIndex(), tailEntries: raw, tailMessages: replay(raw).replay.messages,
+      });
+      expect([...combineTranscriptEntries(history, index, displayed.tailEntries, displayed)]).toEqual(expected.tailEntries);
+      history = appendTranscriptHistoryPage({ history, index, page: replay(advanced), tailEntries: [] });
+    }
   }));
 });

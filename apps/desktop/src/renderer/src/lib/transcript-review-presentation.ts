@@ -26,7 +26,8 @@ export type TranscriptReviewHistoryIndex = {
   oldestEventSegment?: TranscriptReviewEventSegment;
   newestEventSegment?: TranscriptReviewEventSegment;
   eventIds: Set<string>;
-  hasUnboundEvidence: boolean;
+  hasUnboundReview: boolean;
+  unboundAssistantHashes: Set<number>;
   revision: number;
 };
 
@@ -172,7 +173,8 @@ export function createTranscriptReviewHistoryIndex(): TranscriptReviewHistoryInd
     assistantEntriesByTextHash: new Map(),
     assistantMessagesByTextHash: new Map(),
     eventIds: new Set(),
-    hasUnboundEvidence: false,
+    hasUnboundReview: false,
+    unboundAssistantHashes: new Set(),
     revision: 0,
   };
 }
@@ -191,6 +193,16 @@ function addTextCandidates(
   }
 }
 
+function sharesLegacyReviewEvidence(index: TranscriptReviewHistoryIndex, event: TranscriptReviewEvent): boolean {
+  if (event.type === "review") {
+    return index.unboundAssistantHashes.has(normalizedTextHash(normalizeTranscriptText(
+      event.output?.overall_explanation ?? event.review,
+    )));
+  }
+  return event.role === "assistant" && (index.hasUnboundReview
+    || index.unboundAssistantHashes.has(normalizedTextHash(normalizeTranscriptText(event.text))));
+}
+
 export function addTranscriptReviewSegmentToIndex(
   index: TranscriptReviewHistoryIndex,
   summary: TranscriptReviewSegmentSummary,
@@ -199,11 +211,17 @@ export function addTranscriptReviewSegmentToIndex(
 ): void {
   // A page of ordinary messages in new, known turns cannot change existing
   // review rules. Older pages and review-bearing segments can.
-  const hasUnboundEvidence = summary.events.some((event) => !event.turn?.id)
-    || [...summary.assistantEntriesByTextHash.values()].some((rows) => rows.some((candidate) => !candidate.turnId));
+  const unboundAssistantHashes = new Set<number>();
+  for (const textIndex of [summary.assistantEntriesByTextHash, summary.assistantMessagesByTextHash]) {
+    for (const [hash, rows] of textIndex) {
+      if (rows.some((candidate) => !candidate.turnId)) unboundAssistantHashes.add(hash);
+    }
+  }
+  const canExtend = position === "newer" && independent && unboundAssistantHashes.size === 0
+    && !summary.events.some((event) => !event.turn?.id || sharesLegacyReviewEvidence(index, event));
   const cached = cachedReviewRules.get(index);
   const previousRevision = index.revision;
-  if (position === "older" || !independent || summary.events.length || index.hasUnboundEvidence || hasUnboundEvidence) index.revision++;
+  if (!canExtend || summary.events.length || index.hasUnboundReview) index.revision++;
   addTextCandidates(
     index.assistantEntriesByTextHash,
     summary.assistantEntriesByTextHash,
@@ -224,15 +242,33 @@ export function addTranscriptReviewSegmentToIndex(
   }
   for (const event of summary.events) {
     index.eventIds.add(event.id);
+    if (event.type === "review" && !event.turn?.id) index.hasUnboundReview = true;
   }
-  index.hasUnboundEvidence ||= hasUnboundEvidence;
-  if (position === "newer" && independent && !index.hasUnboundEvidence
-    && cached?.revision === previousRevision && cached.history && summary.events.length > 0) {
-    const additions = analyzeTranscriptReviews({
-      historyEvents: summary.events, historyIndex: { ...emptyReviewHistory, ...summary },
-      tailEvents: [], historyOverlapIds: emptyReviewOverlaps,
-    });
-    extendIndependentHistoryRules(cached.history, additions);
+  for (const hash of unboundAssistantHashes) index.unboundAssistantHashes.add(hash);
+  if (canExtend && index.revision !== previousRevision && cached?.revision === previousRevision && cached.history) {
+    const history = cached.history;
+    if (index.hasUnboundReview) {
+      // A new page can repeat a legacy review. Look up its own texts in the
+      // cached rules rather than applying every historical rule to the page.
+      for (const [textIndex, exclusions] of [
+        [summary.assistantEntriesByTextHash, history.excludedHistoryEntryIds],
+        [summary.assistantMessagesByTextHash, history.excludedHistoryMessageIds],
+      ] as const) {
+        for (const rows of textIndex.values()) {
+          for (const row of rows) {
+            const turns = history.reviewTexts.get(normalizeTranscriptText(row.text));
+            if (turns?.has(undefined)) exclusions.add(row.id);
+          }
+        }
+      }
+    }
+    if (summary.events.length > 0) {
+      const additions = analyzeTranscriptReviews({
+        historyEvents: summary.events, historyIndex: { ...emptyReviewHistory, ...summary },
+        tailEvents: [], historyOverlapIds: emptyReviewOverlaps,
+      });
+      extendIndependentHistoryRules(history, additions);
+    }
     cached.revision = index.revision;
     cached.combined = undefined;
   }
@@ -522,9 +558,10 @@ export function presentIndexedTranscriptReviews(params: ReviewTail & {
 
   // With provider turn IDs, a new turn can classify its own review rows
   // without revisiting settled reviews from every earlier page. Fall back
-  // when a legacy row lacks ownership or the page boundary splits a turn.
+  // when the page boundary splits a turn or a legacy row can interact with
+  // the current evidence.
   const crossesPageBoundary = historyOverlaps.size > 0
-    || tailEvents.some((event) => index.hasUnboundEvidence || !event.turn?.id
+    || tailEvents.some((event) => !event.turn?.id || sharesLegacyReviewEvidence(index, event)
       || params.historyTurns.has(event.turn.id) || params.historyEntryIds.has(event.id)
       || params.historyMessageIds.has(event.id));
   if (!crossesPageBoundary) {
