@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -17,7 +16,7 @@ import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import { type ProjectForgeAutomation } from "@pwragent/shared/project-forge-automation";
 import * as gitExecutable from "../app-server/git-executable";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
-import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
+import { isolateProcessGitEnvironment, runIsolatedGitSync } from "./helpers/isolated-git";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
@@ -626,9 +625,7 @@ it.each(["changed catalog", "failed checkout lookup", "failed preflight lookup",
   const entered = Promise.withResolvers<void>();
   const listing = Promise.withResolvers<AppServerListThreadsResponse>();
   const finish = () => listing.resolve({ backend: "all", fetchedAt: 0, threads: [] });
-  const git = (...args: string[]) => execFileSync("git", ["-C", cwd, ...args], {
-    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
+  const git = (...args: string[]) => runIsolatedGitSync(cwd, args).trim();
   try {
     git("init", "-b", "upper");
     git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "upper");
@@ -699,9 +696,7 @@ it.each(["changed catalog", "failed checkout lookup", "failed preflight lookup",
 it.each(["absent", "unrelated"])("skips listing threads for a standalone PR with an %s catalog under installed Git", async (catalog) => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-no-hold-"));
   const restore = isolateProcessGitEnvironment();
-  const git = (...args: string[]) => execFileSync("git", ["-C", cwd, ...args], {
-    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
+  const git = (...args: string[]) => runIsolatedGitSync(cwd, args).trim();
   try {
     git("init", "-b", "standalone");
     git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "standalone");
@@ -734,9 +729,7 @@ it("reuses installed Git for repeated merge offers while reading the live guard 
   const cwd = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-merge-offer-reuse-"));
   const restore = isolateProcessGitEnvironment();
   const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
-  const git = (...args: string[]) => execFileSync("git", ["-C", cwd, ...args], {
-    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
+  const git = (...args: string[]) => runIsolatedGitSync(cwd, args).trim();
   try {
     git("init", "-b", "upper");
     git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "upper");

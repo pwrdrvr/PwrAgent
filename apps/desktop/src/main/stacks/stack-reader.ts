@@ -624,10 +624,11 @@ export class StackReader {
       const missingSibling = inferredRows.some((row) => {
         const sharesRepository = row.prs?.some((pr) =>
           eligible.has(prIdentity(pr)) && scopedRepositories.has(prRepository(pr)));
-        return threadDirectories(row).some((cwd) => unavailablePaths.has(cwd)
-          && (possible.get(cwd)?.length ? inScope(cwd) : sharesRepository));
+        return sharesRepository && threadDirectories(row).some((cwd) =>
+          unavailablePaths.has(cwd) && !possible.get(cwd)?.length);
       });
-      if (missingSibling) unavailable.push({ status: "unavailable" });
+      // A catalog can bind a thread by its worktree without any attached PR.
+      if ([...unavailablePaths].some(inScope) || missingSibling) unavailable.push({ status: "unavailable" });
     }
     const checkouts = new Map(anchors.map((entry) => [entry.cwd, entry] as const));
     // Keep the existing path order regardless of which probes finish first.

@@ -14,7 +14,7 @@ import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnost
 import { createThreadDirectoryEnricher, readNavigationCheckout } from "../git-info/directory-store";
 import { StackReader } from "../stacks/stack-reader";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
-import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
+import { isolateProcessGitEnvironment, runIsolatedGitSync } from "./helpers/isolated-git";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 const overlays = vi.hoisted(() => ({
@@ -228,7 +228,7 @@ it.skipIf(process.platform === "win32")("groups raw navigation threads by Git's 
   const { client, read } = navigationFixture([nested]);
   const restore = isolateProcessGitEnvironment();
   const launches = vi.spyOn(gitSubprocessDiagnostics, "startGit");
-  const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args], { stdio: "pipe", encoding: "utf8" });
+  const git = (...args: string[]) => runIsolatedGitSync(root, args);
   try {
     await mkdir(nested);
     git("init", "--initial-branch=topic");

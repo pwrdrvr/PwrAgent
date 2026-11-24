@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { cp, lstat, open, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,7 +10,7 @@ import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnost
 import { PR_METADATA_PRIORITY, runPrMetadataProcess } from "../pr-status/pr-metadata-process";
 import { StackOperationsService } from "../stacks/stack-operations-service";
 import { StackReader, StackReadObservation, readGhStackCatalog, readStackClones } from "../stacks/stack-reader";
-import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
+import { isolateProcessGitEnvironment, runIsolatedGitSync } from "./helpers/isolated-git";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const fs = await importOriginal<typeof import("node:fs/promises")>();
@@ -27,9 +26,7 @@ function row(cwd: string, id: string) {
   };
 }
 
-const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], {
-  encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
-}).trim();
+const git = (cwd: string, ...args: string[]) => runIsolatedGitSync(cwd, args).trim();
 
 function initialize(cwd: string) {
   git(cwd, "init", "-b", "topic");
@@ -46,7 +43,9 @@ async function writeCatalog(cwd: string, name: string) {
 }
 
 describe("stack checkout demand", () => {
-  it.each(["bundled", "installed"])("keeps scoped inference inconclusive when a linked sibling checkout times out under %s Git", async (runtime) => {
+  it.each([
+    ["bundled", "inferred"], ["installed", "inferred"], ["bundled", "tracked"],
+  ])("keeps %s Git scoped %s evidence inconclusive when a sibling checkout times out", async (runtime, kind) => {
     const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-inferred-sibling-"));
     const primary = path.join(sandbox, "primary");
     const sibling = path.join(sandbox, "sibling");
@@ -64,21 +63,51 @@ describe("stack checkout demand", () => {
       const lower: PrSummary = {
         ...upper, number: 1, url: "https://github.com/fixture/stack/pull/1", headRefName: "lower", baseRefName: "main",
       };
-      const rows = [{ ...row(primary, "upper"), prs: [upper] }, { ...row(sibling, "lower"), prs: [lower] }];
+      if (kind === "tracked") {
+        git(primary, "branch", "main");
+        const layer = (branch: string, number: number) => ({ branch, head, base: head, pullRequest: { number } });
+        await writeFile(path.join(primary, ".git", "gh-stack"), JSON.stringify({
+          schemaVersion: 1, repository: "github.com:fixture/stack",
+          stacks: [{ trunk: { branch: "main", head }, branches: [layer("lower", 1), layer("topic", 2)] }],
+        }));
+      }
+      const rows = [
+        { ...row(primary, "upper"), prs: [upper] },
+        { ...row(sibling, "lower"), prs: kind === "tracked" ? [] : [lower] },
+      ];
       const reader = new StackReader();
-      expect((await reader.read(rows, [], [primary])).stacks[0]).toMatchObject({ inferred: true });
+      const read = () => reader.read(rows, [], [primary], async (key) => ({ repair: key === "codex:lower" }));
+      const stack = (await read()).stacks[0];
+      expect(stack).toMatchObject({ inferred: kind === "inferred" });
+      if (kind === "tracked") {
+        expect(stack?.layers[1]?.heldBy).toMatchObject({ number: 1, reason: "repair in progress" });
+      }
       const runGitCommand = gitExecutable.runGitCommand;
       const run = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation((cwd, args, options) =>
         cwd === sibling && args[0] === "rev-parse"
           ? Promise.reject(Object.assign(new Error("fixture sibling checkout timeout"), { killed: true }))
           : runGitCommand(cwd, args, options));
       try {
-        const result = await reader.read(rows, [], [primary]);
-        expect(result.stacks).toEqual([]);
+        const result = await read();
+        if (kind === "inferred") expect(result.stacks).toEqual([]);
         expect(result.catalogs).toContainEqual({ status: "unavailable" });
       } finally {
         run.mockRestore();
       }
+    } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("builds fixtures without inheriting operator signing config", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-fixture-config-"));
+    try {
+      const config = path.join(sandbox, "operator.gitconfig");
+      await writeFile(config, "[commit]\n\tgpgSign = true\n[gpg]\n\tprogram = pwragent-fixture-no-signer\n");
+      process.env.GIT_CONFIG_GLOBAL = config;
+      initialize(sandbox);
+      expect(git(sandbox, "rev-parse", "--verify", "HEAD")).toMatch(/^[a-f0-9]{40}$/);
+      expect(process.env.GIT_CONFIG_GLOBAL).toBe(config);
     } finally {
       await rm(sandbox, { recursive: true, force: true });
     }
@@ -328,9 +357,8 @@ describe("stack checkout demand", () => {
       const catalogPath = path.join(retargeted, "gh-stack");
       const catalog = (await readFile(catalogPath, "utf8")).replace("fixture/first", "fixture/second");
       await writeFile(catalogPath, catalog);
-      const gitCommonDirectory = () => execFileSync("git", ["-C", worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"], {
-        encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
-      }).replace(/\n$/, "");
+      const gitCommonDirectory = () => runIsolatedGitSync(worktree, ["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .replace(/\n$/, "");
       const reader = new StackReader();
       const rows = [row(worktree, "worktree")];
       expect(await realpath(gitCommonDirectory())).toBe(await realpath(common));
