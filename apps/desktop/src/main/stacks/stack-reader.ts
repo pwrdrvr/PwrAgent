@@ -67,6 +67,7 @@ async function git(cwd: string, args: string[], demand?: PrMetadataDemand, check
 
 type Checkout = { cwd: string; root: string; commonDir: string };
 type CheckoutLookup = Checkout | "unavailable" | undefined;
+type InventoryCheckoutResult = { cwd: string; checkout: CheckoutLookup; corroborated: boolean };
 type Clone = Checkout & { catalog: CatalogRead };
 type CheckoutIdentity = NonNullable<Awaited<ReturnType<ReturnType<typeof createStackCheckoutHints>["checkoutIdentity"]>>>;
 type RegisteredWorktrees = {
@@ -168,21 +169,28 @@ export class StackReadObservation {
 
   private async readRegisteredWorktrees(cwd: string, before: CheckoutIdentity): Promise<ReadonlySet<string> | undefined> {
     const demand = this.inventoryDemand;
+    const seed = this.checkoutLookup(cwd, demand);
+    const checkout = await seed;
+    if (!checkout || checkout === "unavailable" || checkout.root !== before.root || checkout.commonDir !== before.commonDir) return undefined;
+    let roots: ReadonlySet<string> | undefined;
     try {
-      const checkout = await this.checkoutLookup(cwd, demand);
-      if (!checkout || checkout === "unavailable" || checkout.root !== before.root || checkout.commonDir !== before.commonDir) return undefined;
-      const config = await git(cwd, ["config", "--local", "--no-includes", "--null", "--list"], demand, true);
-      // Ask Git to parse the common config. Worktree-specific configuration
-      // and includes can make a sibling's setup differ from the seed's.
+      // Worktree-specific configuration and includes can make a sibling's
+      // setup differ from the seed's. Check the confirmed root even if its
+      // original spelling was an alias.
+      const config = await git(checkout.root, ["config", "--local", "--no-includes", "--null", "--list"], demand, true);
       const keys = config.split("\0").map((entry) => entry.split("\n", 1)[0]!);
-      if (keys.some((key) => /^(?:include(?:if)?\.|core\.worktree$|extensions\.worktreeconfig$)/.test(key))) return undefined;
-      const output = await git(cwd, ["worktree", "list", "--porcelain", "-z"], demand, true);
-      if (!await this.hasCurrentRegistration(cwd, before)) return undefined;
-      return new Set(checkedOutWorktrees(output).map(({ path }) => path));
+      if (!keys.some((key) => /^(?:include(?:if)?\.|core\.worktree$|extensions\.worktreeconfig$)/.test(key))) {
+        const output = await git(checkout.root, ["worktree", "list", "--porcelain", "-z"], demand, true);
+        roots = new Set(checkedOutWorktrees(output).map(({ path }) => path));
+      }
     } catch {
       demand.signal?.throwIfAborted();
-      return undefined;
     }
+    if (await this.hasCurrentRegistration(cwd, before)) return roots;
+    // The exact lookup predates a changed registration. Discard it so the
+    // fallback observes the seed's current checkout even if the roster failed.
+    if (this.checkouts.get(cwd) === seed) this.checkouts.delete(cwd);
+    return undefined;
   }
 
   async checkout(cwd: string, demand = this.demand): Promise<Checkout | undefined> {
@@ -433,12 +441,13 @@ function clonePrs(threads: readonly CloneThread[], knownPrs: readonly PrSummary[
 
 async function projectClone(
   clone: Clone, threads: readonly CloneThread[], knownPrs: readonly PrSummary[], demand?: PrMetadataDemand,
-): Promise<{ stacks: StackSummary[]; worktrees: StackWorktree[] }> {
+): Promise<{ stacks: StackSummary[]; worktrees: StackWorktree[]; observed: Map<string, PrSummary> }> {
   const catalog = clone.catalog.status === "ok" ? clone.catalog.catalog : undefined;
   const repositories = new Set(threads.flatMap(({ row }) => (row.prs ?? []).map(prRepository)));
   if (catalog?.stacks.length) repositories.add(catalog.repository.toLowerCase());
   const stacks: StackSummary[] = [];
-  if (!repositories.size) return { stacks, worktrees: [] };
+  const observed = new Map<string, PrSummary>();
+  if (!repositories.size) return { stacks, worktrees: [], observed };
   const plans = [...repositories].sort().flatMap((repository) => {
     const catalogStacks = catalog?.repository.toLowerCase() === repository ? catalog.stacks : [];
     const prs = clonePrs(threads, knownPrs, repository);
@@ -455,7 +464,7 @@ async function projectClone(
     const inferred = inferPullRequestStacks(prs.filter((pr) => attached.has(pr.number) && sameRepositoryHead(pr)), catalogBranches);
     return catalogStacks.length || inferred.length ? [{ repository, catalogStacks, prs, bindings, inferred }] : [];
   });
-  if (!plans.length) return { stacks, worktrees: [] };
+  if (!plans.length) return { stacks, worktrees: [], observed };
   const [worktreeOutput, refOutput] = await Promise.all([
     git(clone.cwd, ["worktree", "list", "--porcelain", "-z"], demand).catch(() => ""),
     git(clone.cwd, ["for-each-ref", "--format=%(refname)%00%(objectname)%00%(upstream)", "refs/heads/", "refs/remotes/"], demand).catch(() => ""),
@@ -465,6 +474,7 @@ async function projectClone(
   const cloneKey = createHash("sha256").update(clone.commonDir).digest("hex").slice(0, 24);
   const busy = Boolean(catalog?.stacks.length) && await stackJournalInFlight(clone.commonDir);
   for (const { repository, catalogStacks, prs, bindings, inferred } of plans) {
+    for (const pr of prs) observed.set(prIdentity(pr), pr);
     const prefix = `${cloneKey}:${repository}`;
     for (const stack of catalogStacks) {
       if (!stack.branches.length) continue;
@@ -496,7 +506,7 @@ async function projectClone(
       stacks.push({ key: `${prefix}:inferred:${chain[0]!.number}`, name, repository, inferred: true, trunk: chain[0]!.baseRefName!, layers });
     }
   }
-  return { stacks, worktrees };
+  return { stacks, worktrees, observed };
 }
 
 function prIdentity(pr: PrSummary): string {
@@ -532,7 +542,7 @@ function possibleInferredLayers(threads: readonly StackThreadRow[], knownPrs: re
 }
 
 export class StackReader {
-  private readonly pendingInventoryCheckouts = new Map<string, SharedPrMetadataRead<CheckoutLookup>>();
+  private readonly pendingInventoryCheckouts = new Map<string, SharedPrMetadataRead<InventoryCheckoutResult>>();
   private readonly inventoryCheckouts = new Map<string, {
     version: string; checkout: Checkout | undefined; expiresAt: number;
   }>();
@@ -551,8 +561,8 @@ export class StackReader {
   }
 
   private async sharedInventoryCheckout(
-    cwd: string, version: string, demand: PrMetadataDemand, load: (demand: PrMetadataDemand) => Promise<CheckoutLookup>,
-  ): Promise<CheckoutLookup> {
+    cwd: string, version: string, demand: PrMetadataDemand, load: (demand: PrMetadataDemand) => Promise<InventoryCheckoutResult>,
+  ): Promise<InventoryCheckoutResult> {
     demand.signal?.throwIfAborted();
     const key = JSON.stringify([cwd, version]);
     let pending = this.pendingInventoryCheckouts.get(key);
@@ -602,23 +612,26 @@ export class StackReader {
 
     const read = async (demand: PrMetadataDemand, locate: () => Promise<CheckoutLookup>, currentHints = hints) => {
       const checkout = await locate();
-      if (checkout === "unavailable") return checkout;
-      const agreed = before ? checkout?.root === before.root && checkout.commonDir === before.commonDir
+      if (checkout === "unavailable") return { cwd, checkout, corroborated: false };
+      const corroborated = before ? checkout?.root === before.root && checkout.commonDir === before.commonDir
         && (await currentHints.checkoutIdentity(cwd))?.version === version : !checkout;
       demand.signal?.throwIfAborted();
-      if (agreed) remember(checkout);
-      return checkout;
+      if (corroborated) remember(checkout);
+      return { cwd, checkout, corroborated };
     };
     if (!version || observation.hasCheckoutLookup(cwd)) {
-      return await read(inventoryDemand, () => observation.checkoutLookup(cwd, inventoryDemand));
+      return (await read(inventoryDemand, () => observation.checkoutLookup(cwd, inventoryDemand))).checkout;
     }
-    const checkout = await this.sharedInventoryCheckout(key, version, inventoryDemand,
+    const result = await this.sharedInventoryCheckout(key, version, inventoryDemand,
       (demand) => read(demand, () => locateCheckout(cwd, demand), createStackCheckoutHints(demand)));
-    if (!checkout || checkout === "unavailable" || checkout.cwd === cwd) return checkout;
-    // A second spelling can share Git's result for the same physical path.
-    // If the alias moved during that read, discover its current target.
-    return (await hints.checkoutIdentity(cwd))?.version === version
-      ? { ...checkout, cwd } : await observation.checkoutLookup(cwd, inventoryDemand);
+    const { checkout } = result;
+    if (result.cwd === cwd) return checkout;
+    // Another spelling can use only positive evidence for its verified
+    // physical checkout. A moved or unreadable alias speaks for itself.
+    if (before && result.corroborated && checkout && checkout !== "unavailable"
+      && checkout.root === before.root && checkout.commonDir === before.commonDir
+      && (await hints.checkoutIdentity(cwd))?.version === version) return { ...checkout, cwd };
+    return await observation.checkoutLookup(cwd, inventoryDemand);
   }
 
   async read(threads: readonly StackThreadRow[], knownPrs: readonly PrSummary[], directories?: readonly string[],
@@ -858,12 +871,11 @@ export class StackReader {
       }
     }
     demand.signal?.throwIfAborted();
-    const observed = new Map([...threads.flatMap((row) => row.prs ?? []), ...knownPrs].map((pr) => [prIdentity(pr), pr]));
-    const stacks = results.flatMap((result) => result.stacks);
-    const threadKeys = new Set(stacks.flatMap((stack) => stack.layers.flatMap((layer) => layer.thread ? [layer.thread.key] : [])));
+    const stacks = results.flatMap(({ stacks, observed }) => stacks.map((stack) => ({ stack, observed })));
+    const threadKeys = new Set(stacks.flatMap(({ stack }) => stack.layers.flatMap((layer) => layer.thread ? [layer.thread.key] : [])));
     const activityByThread = new Map(await Promise.all([...threadKeys].map(async (key) => [key, await activity?.(key)] as const)));
     demand.signal?.throwIfAborted();
-    return { stacks: stacks.map((stack) => {
+    return { stacks: stacks.map(({ stack, observed }) => {
       const layers = stack.layers.map((layer) => {
         const state = layer.thread && activityByThread.get(layer.thread.key);
         return state && state.held ? { ...layer, health: "held" as const } : layer;

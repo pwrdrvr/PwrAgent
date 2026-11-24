@@ -1,6 +1,7 @@
 import { constants } from "node:fs";
 import { lstat, open, readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
+import { collectConcurrent } from "../../../shared/concurrent-work";
 
 const MAX_POINTER_BYTES = 1024 * 1024;
 
@@ -65,6 +66,7 @@ async function fileState(target: string, signal?: AbortSignal, followSymlinks = 
       file: info.isFile(),
       device: info.dev,
       owner: info.uid,
+      mode: info.mode,
       size: info.size,
       signature: [
         info.dev,
@@ -80,16 +82,38 @@ async function fileState(target: string, signal?: AbortSignal, followSymlinks = 
   }
 }
 
-/** Share common metadata only within a display inventory. */
-export function createGitDirectoryCommonFileReader() {
-  const files = new Map<string, Promise<FileState>>();
-  return (target: string): Promise<FileState> => {
-    let observed = files.get(target);
-    if (!observed) {
-      observed = fileState(target);
-      files.set(target, observed);
-    }
-    return observed;
+type ReadCommonFile = (target: string) => Promise<FileState>;
+
+/** A display scan can share each common file only while its evidence is current. */
+export function createGitDirectoryCommonFileObservation() {
+  const files = new Map<string, { previous: Promise<FileState>; checkouts: Set<string> }>();
+  return {
+    readFor(cwd: string): ReadCommonFile {
+      return (target) => {
+        let sample = files.get(target);
+        if (!sample) {
+          sample = { previous: fileState(target), checkouts: new Set() };
+          files.set(target, sample);
+        }
+        sample.checkouts.add(cwd);
+        return sample.previous;
+      };
+    },
+    async changedCheckouts(checkpoint: () => void): Promise<Set<string>> {
+      const changed = new Set<string>();
+      await collectConcurrent([...files], 16, async ([target, { previous, checkouts }]) => {
+        checkpoint();
+        try {
+          const before = await previous;
+          const current = await fileState(target);
+          if (before?.signature === current?.signature && before?.owner === current?.owner && before?.mode === current?.mode) return;
+        } catch {
+          // A failed recheck cannot confirm the shared evidence.
+        }
+        for (const cwd of checkouts) changed.add(cwd);
+      });
+      return changed;
+    },
   };
 }
 
@@ -102,7 +126,7 @@ export function createGitDirectoryObserver(options: { navigation?: boolean; requ
   cwd: string,
   onCheckoutBoundary?: (root: string) => void,
   signal?: AbortSignal,
-  readCommonFile?: ReturnType<typeof createGitDirectoryCommonFileReader>,
+  readCommonFile?: ReadCommonFile,
 ) => Promise<GitDirectoryObservation | undefined> {
   const files = new Map<string, { signature: string; value: string }>();
   async function pointer(target: string, state: FileState, signal?: AbortSignal): Promise<string> {

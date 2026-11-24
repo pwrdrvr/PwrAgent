@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as gitExecutable from "../app-server/git-executable";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
-import { PR_METADATA_PRIORITY, runPrMetadataProcess } from "../pr-status/pr-metadata-process";
+import { PR_METADATA_PRIORITY, runPrMetadataProcess, SharedPrMetadataRead } from "../pr-status/pr-metadata-process";
 import { StackOperationsService } from "../stacks/stack-operations-service";
 import { StackReader, StackReadObservation, readGhStackCatalog, readStackClones } from "../stacks/stack-reader";
 import { isolateProcessGitEnvironment, runIsolatedGitSync } from "./helpers/isolated-git";
@@ -329,6 +329,120 @@ describe("stack checkout demand", () => {
     } finally {
       start.mockRestore();
       await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["another clone", "missing", "invalid"] as const)(
+    "keeps a stable checkout when the alias that started their shared read becomes %s", async (target) => {
+      const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-alias-race-")));
+      const first = path.join(root, "first");
+      const second = path.join(root, "second");
+      const alias = path.join(root, "alias");
+      const moved = Promise.withResolvers<void>();
+      const started = Promise.withResolvers<void>();
+      const waiting = Promise.withResolvers<void>();
+      const stableSignal = new AbortController();
+      const runGitCommand = gitExecutable.runGitCommand;
+      const sharedRead = SharedPrMetadataRead.prototype.read;
+      const observe = vi.spyOn(SharedPrMetadataRead.prototype, "read").mockImplementation(function (this: SharedPrMetadataRead<unknown>, demand) {
+        if (demand?.signal === stableSignal.signal) waiting.resolve();
+        return sharedRead.call(this, demand);
+      });
+      const run = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (cwd, args, options) => {
+        if (cwd === alias && args[0] === "rev-parse") {
+          started.resolve();
+          await moved.promise;
+        }
+        return await runGitCommand(cwd, args, options);
+      });
+      try {
+        await Promise.all([mkdir(first), mkdir(second)]);
+        initialize(first);
+        await writeCatalog(first, "stable");
+        if (target === "another clone") {
+          initialize(second);
+          await writeCatalog(second, "moved");
+        }
+        if (target === "invalid") await writeFile(path.join(second, ".git"), "not a Git pointer\n");
+        await symlink(first, alias, "junction");
+
+        const reader = new StackReader();
+        const aliasRead = reader.read([row(alias, "alias")], []);
+        await started.promise;
+        const stableRead = reader.read([row(first, "stable")], [], undefined, undefined,
+          new StackReadObservation({ signal: stableSignal.signal }));
+        await waiting.promise;
+        await rm(alias);
+        if (target !== "missing") await symlink(second, alias, "junction");
+        moved.resolve();
+        const [aliasResult, stableResult] = await Promise.all([aliasRead, stableRead]);
+        expect(git(first, "rev-parse", "--show-toplevel").replace(/\\/g, "/")).toBe(first.replace(/\\/g, "/"));
+        expect(stableResult.stacks.map(({ repository }) => repository)).toEqual(["github.com:fixture/stable"]);
+        expect(stableResult.stacks[0]?.layers[0]?.thread?.key).toBe("codex:stable");
+        expect(aliasResult.stacks.map(({ repository }) => repository))
+          .toEqual(target === "another clone" ? ["github.com:fixture/moved"] : []);
+      } finally {
+        moved.resolve();
+        observe.mockRestore();
+        run.mockRestore();
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("rediscovers the seed of a bundled Git worktree inventory when its alias moves during the config read", async () => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-roster-race-")));
+    const first = path.join(root, "first");
+    const second = path.join(root, "second");
+    const alias = path.join(root, "00-alias");
+    const seed = path.join(root, "seed");
+    const moved = Promise.withResolvers<void>();
+    try {
+      await Promise.all([mkdir(first), mkdir(second)]);
+      initialize(first);
+      initialize(second);
+      await Promise.all([writeCatalog(first, "before"), writeCatalog(second, "after")]);
+      git(first, "checkout", "-b", "main");
+      git(first, "worktree", "add", seed, "topic");
+      const siblings = Array.from({ length: 4 }, (_, index) => {
+        const branch = "sibling-" + index;
+        const cwd = path.join(root, branch);
+        git(first, "worktree", "add", "-b", branch, cwd);
+        return row(cwd, branch);
+      });
+      await symlink(seed, alias, "junction");
+
+      const observation = new StackReadObservation();
+      const checkoutIdentity = observation.hints.checkoutIdentity;
+      observation.hints.checkoutIdentity = async (cwd) => {
+        if (cwd !== alias) await moved.promise;
+        return await checkoutIdentity(cwd);
+      };
+      const runGitCommand = gitExecutable.runGitCommand;
+      let retargeted = false;
+      const run = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (cwd, args, options) => {
+        if (!retargeted && (cwd === alias || cwd === seed) && args[0] === "config") {
+          await rm(alias);
+          await symlink(second, alias, "junction");
+          retargeted = true;
+          moved.resolve();
+        }
+        return await runGitCommand(cwd, args, options);
+      });
+      try {
+        const result = await new StackReader().read([row(alias, "seed"), ...siblings], [], undefined, undefined, observation);
+        expect(retargeted).toBe(true);
+        const common = git(alias, "rev-parse", "--path-format=absolute", "--git-common-dir");
+        expect(await realpath(common)).toBe(path.join(second, ".git"));
+        expect(result.stacks.find(({ repository }) => repository === "github.com:fixture/after")?.layers[0]?.thread?.key)
+          .toBe("codex:seed");
+        expect(result.stacks.find(({ repository }) => repository === "github.com:fixture/before")?.layers[0]?.thread).toBeUndefined();
+      } finally {
+        moved.resolve();
+        run.mockRestore();
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 

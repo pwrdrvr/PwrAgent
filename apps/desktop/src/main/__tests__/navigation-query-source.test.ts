@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => {
     store: {
       readNavigationPullRequests: vi.fn((): PrSummary[][] => []),
       readNavigationSourceVersion: vi.fn(() => "unchanged"),
+      getThreadPrAutoDispatchPending: vi.fn(async () => undefined),
       readNavigationQueryIndex: vi.fn((_params: { threads: NavigationThreadSummary[] }): NavigationQueryIndex => ({ threads: [], directories: [] })),
       readDirectoryGitStatusCache: vi.fn(async (): Promise<Record<string, { gitStatus: NavigationDirectoryGitStatus }>> => ({})),
       listAllActivePrStatusWatches: vi.fn(async (): Promise<ThreadPullRequestWatchSummary[]> => []),
@@ -144,7 +145,7 @@ it("keeps the lead PR's position even when the thread holds more layers than the
   }));
 });
 
-it("omits a stale automatic attachment from selected stack details and avoids a forge lookup", async () => {
+it.each([false, true])("omits stale automatic attachment evidence when the stack branch is checked out: %s", async (checkedOut) => {
   const source = createSource();
   const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-navigation-stale-stack-")));
   const restoreGit = isolateProcessGitEnvironment();
@@ -157,13 +158,16 @@ it("omits a stale automatic attachment from selected stack details and avoids a 
       schemaVersion: 1, repository: "github.com:old/remote",
       stacks: [{ trunk: { branch: "main", head }, branches: [{ branch: "topic", head, base: head, pullRequest: { number: 41 } }] }],
     }));
+    const worktree = path.join(directory, "linked");
+    if (checkedOut) await runIsolatedGit(directory, ["worktree", "add", "-b", "topic", worktree]);
+    const cwd = checkedOut ? worktree : directory;
     const thread: NavigationThreadSummary = {
       source: "codex", id: "stale-stack", title: "Stale stack", titleSource: "derived", inbox: { inInbox: false },
-      gitBranch: "main", linkedDirectories: [{ id: directory, path: directory, label: "Fixture", kind: "local" }],
+      gitBranch: checkedOut ? "topic" : "main", linkedDirectories: [{ id: cwd, path: cwd, label: "Fixture", kind: "local" }],
     };
     const stalePr: PrSummary = {
       number: 41, provider: "github.com", org: "old", repo: "remote", state: "passing",
-      url: "https://github.com/old/remote/pull/41", linkedDirectoryPaths: [directory],
+      url: "https://github.com/old/remote/pull/41", linkedDirectoryPaths: [cwd], headSha: head, mergeState: "conflicting",
     };
     const canonicalize = vi.fn(async (_prs: PrSummary[], _demand?: unknown, verify = true) => verify ? [] : [stalePr]);
     const registry = { ...source.registry, canonicalizeNavigationPullRequests: canonicalize } as unknown as DesktopBackendRegistry;
@@ -174,7 +178,12 @@ it("omits a stale automatic attachment from selected stack details and avoids a 
     const detail = await readNavigationStackLayers({ backend: thread.source, threadId: thread.id });
     // If the checkout validator had not run, the stored PR would bind the
     // thread as the holder of that layer without a checked-out topic branch.
-    expect(detail.count).toBe(0);
+    expect(detail.count).toBe(checkedOut ? 1 : 0);
+    if (checkedOut) {
+      expect(detail.page(0, 1)[0]?.layer).toMatchObject({
+        role: "layer", pullRequest: { number: 41 }, unsettled: "settlement unknown",
+      });
+    }
     expect(canonicalize).toHaveBeenNthCalledWith(1, [stalePr], expect.objectContaining({ allowForgeLookup: false }), false);
     expect(canonicalize).toHaveBeenNthCalledWith(2, [stalePr], expect.objectContaining({ allowForgeLookup: false }));
   } finally {

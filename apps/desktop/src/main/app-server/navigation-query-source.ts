@@ -31,8 +31,7 @@ import { PR_METADATA_PRIORITY, SharedPrMetadataRead } from "../pr-status/pr-meta
 import { StackReader, StackReadObservation } from "../stacks/stack-reader";
 import { compactStackMembership, MAX_COMPACT_STACK_MEMBERSHIPS, type CompactStackMembership, type SelectedStackLayer, type StackSummary } from "@pwragent/shared/stacks/stack-status";
 import { comparePullRequestStack } from "@pwragent/shared/pull-request-rollup";
-import { createGitDirectoryCommonFileReader, readNavigationCheckout } from "../git-info/directory-store";
-import { collectConcurrent } from "../../shared/concurrent-work";
+import { readNavigationCheckouts } from "../git-info/directory-store";
 
 // Keep a bounded comparison candidate across nearby refreshes. The serving
 // window and the provider/filesystem validation on its expiry still apply.
@@ -239,12 +238,16 @@ async function projectNavigationCheckoutDirectories(
     rows.push(thread);
     candidates.set(cwd, rows);
   }
-  const readCommon = createGitDirectoryCommonFileReader();
-  const observed = await collectConcurrent([...candidates], 16, async ([cwd, rows]) => {
-    signal.throwIfAborted();
-    checkpoint();
-    return { cwd, rows, checkout: await readNavigationCheckout(cwd, fresh, readCommon) };
+  const entries = [...candidates];
+  const checkouts = await readNavigationCheckouts(entries.map(([cwd]) => cwd), {
+    fresh,
+    verified,
+    checkpoint: () => {
+      signal.throwIfAborted();
+      checkpoint();
+    },
   });
+  const observed = entries.map(([cwd, rows], index) => ({ cwd, rows, checkout: checkouts[index] }));
   // Git does not record the primary checkout path in a separate git-dir.
   // Join only to a primary established in this inventory, even when its row
   // follows the linked checkout. Multiple primary paths are ambiguous.

@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
@@ -16,6 +17,11 @@ import { StackReader } from "../stacks/stack-reader";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { isolateProcessGitEnvironment, runIsolatedGitSync } from "./helpers/isolated-git";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
+
+vi.mock("node:fs/promises", async (load) => {
+  const actual = await load<typeof fs>();
+  return { ...actual, stat: vi.fn(actual.stat) };
+});
 
 const overlays = vi.hoisted(() => ({
   current: undefined as SqliteOverlayStore | undefined,
@@ -248,6 +254,61 @@ it.skipIf(process.platform === "win32")("groups raw navigation threads by Git's 
     launches.mockRestore();
     await client.close();
     restore();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it.each([
+  { change: "config", fresh: true },
+  { change: "HEAD", fresh: true },
+  { change: "config", fresh: false },
+  { change: "HEAD", fresh: false },
+])("rechecks changed common $change before publishing linked directories (forced refresh: $fresh)", async ({ change, fresh }) => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-navigation-common-race-")));
+  const repo = path.join(root, "repo");
+  const first = path.join(root, "first");
+  const second = path.join(root, "second");
+  const head = path.join(repo, ".git", "HEAD");
+  const { read, client } = navigationFixture([first, second]);
+  const restoreGit = isolateProcessGitEnvironment();
+  const changed = Promise.withResolvers<void>();
+  try {
+    await mkdir(repo);
+    const git = (...args: string[]) => runIsolatedGitSync(repo, args);
+    git("init", "-b", "main");
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "base");
+    git("worktree", "add", "--detach", first);
+    git("worktree", "add", "--detach", second);
+    const probe = vi.mocked(fs.stat);
+    const stat = probe.getMockImplementation()!;
+    let mutated = false;
+    probe.mockImplementation(async (...args) => {
+      if (args[0] === path.join(second, ".git")) await changed.promise;
+      const result = await stat(...args);
+      if (!mutated && args[0] === head) {
+        mutated = true;
+        if (change === "config") git("config", "core.bare", "true");
+        else await rm(head);
+        changed.resolve();
+      }
+      return result;
+    });
+    try {
+      const result = await read(fresh);
+      expect(mutated).toBe(true);
+      for (const [index, cwd] of [first, second].entries()) {
+        expect((await readNavigationCheckout(cwd, true))?.directories).toBeUndefined();
+        const row = result.threads.find(({ id }) => id === "thread-" + index);
+        expect(row?.linkedDirectories?.[0]?.path).toBe(normalize(cwd));
+        if (!fresh) expect((await readNavigationCheckout(cwd))?.directories).toBeUndefined();
+      }
+    } finally {
+      changed.resolve();
+      probe.mockImplementation(stat);
+    }
+  } finally {
+    await client.close();
+    restoreGit();
     await rm(root, { recursive: true, force: true });
   }
 });
