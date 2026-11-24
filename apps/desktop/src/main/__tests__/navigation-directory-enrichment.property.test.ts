@@ -302,7 +302,7 @@ it.each([
       for (const [index, cwd] of [first, second].entries()) {
         expect((await readNavigationCheckout(cwd, true))?.directories).toBeUndefined();
         const row = result.threads.find(({ id }) => id === "thread-" + index);
-        expect(row?.linkedDirectories?.[0]?.path).toBe(normalize(cwd));
+        expect(normalize(row?.linkedDirectories?.[0]?.path ?? "")).toBe(normalize(cwd));
         if (!fresh) expect((await readNavigationCheckout(cwd))?.directories).toBeUndefined();
       }
     } finally {
