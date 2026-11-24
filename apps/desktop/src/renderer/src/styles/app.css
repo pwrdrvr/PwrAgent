@@ -41868,6 +41868,14 @@ div.composer-error-row__toggle {
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* The results card is the narrow half of a two-card row, so the capped
+   Provider column left the Destination picker a few characters ("Orch…").
+   Here the conversation picker takes its own full row under the Provider
+   select instead of sharing one. */
+.automation-inline-fields--stacked-picker > .automation-field--picker {
+  grid-column: 1 / -1;
+}
+
 .automation-weekdays {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
