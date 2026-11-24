@@ -534,6 +534,24 @@ describe("describeInstalledAcpBackend", () => {
     }));
   });
 
+  it.each([undefined, "1.4.9"])("does not advertise ACP steering for Antigravity %s", (version) => {
+    const antigravity = describeInstalledAcpBackend({
+      ...buildInstalledAgent(),
+      backendId: "acp:antigravity",
+      registryId: "antigravity",
+      name: "Antigravity",
+      version,
+      capabilities: {
+        conversationRewind: false,
+        liveWorkspaceHandoff: false,
+        managedReview: true,
+        steerTurn: true,
+      },
+    });
+
+    expect(antigravity.capabilities.steerTurn).toBe(false);
+  });
+
   it.each([undefined, "1.0.50"])("does not advertise ACP steering for vendor Grok %s", (version) => {
     const grok = describeInstalledAcpBackend({
       ...buildInstalledAgent(),

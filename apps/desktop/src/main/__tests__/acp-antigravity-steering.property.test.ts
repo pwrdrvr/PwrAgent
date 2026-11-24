@@ -5,6 +5,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isAntigravitySteerableVersion } from "../acp/acp-agent-capabilities";
 import { AcpAgentClient } from "../acp/acp-client";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
@@ -128,6 +129,28 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
   let tempDir: string;
   let stateDb: StateDb;
   let store: AcpSessionStore;
+
+  it("gates Antigravity prompt steering strictly on versions >= 1.5.0", () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 0, max: 5 }),
+        fc.integer({ min: 0, max: 20 }),
+        fc.integer({ min: 0, max: 50 }),
+        fc.constantFrom("", "v"),
+        fc.constantFrom("", "-beta.1", "+build.42"),
+        (major, minor, patch, prefix, suffix) => {
+          const expected = major > 1 || (major === 1 && minor >= 5);
+          expect(isAntigravitySteerableVersion(`${prefix}${major}.${minor}.${patch}${suffix}`)).toBe(expected);
+        },
+      ),
+    );
+    expect(isAntigravitySteerableVersion(undefined)).toBe(false);
+    expect(isAntigravitySteerableVersion("")).toBe(false);
+    expect(isAntigravitySteerableVersion("1.4.9")).toBe(false);
+    expect(isAntigravitySteerableVersion("1.5.0")).toBe(true);
+    expect(isAntigravitySteerableVersion("1.5.15")).toBe(true);
+    expect(isAntigravitySteerableVersion("not-a-version")).toBe(false);
+  });
 
   beforeEach(() => {
     tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-agy-steer-prop-"));

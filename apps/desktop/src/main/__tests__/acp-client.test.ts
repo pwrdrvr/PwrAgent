@@ -321,6 +321,10 @@ describe("AcpAgentClient", () => {
   it("steers an active Antigravity turn via overlapping session/prompt handoff", async () => {
     const prompts: Array<ReturnType<typeof createDeferred<unknown>>> = [];
     const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentInfo: { name: "Antigravity ACP Server", version: "1.5.15" },
+      },
       "session/new": { sessionId: "agy-session" },
     });
     const baseRequest = transport.request.bind(transport);
@@ -436,6 +440,10 @@ describe("AcpAgentClient", () => {
   it("keeps the original Antigravity prompt running when a concurrent steer is rejected", async () => {
     const prompts: Array<ReturnType<typeof createDeferred<unknown>>> = [];
     const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentInfo: { name: "Antigravity ACP Server", version: "1.5.15" },
+      },
       "session/new": { sessionId: "agy-session" },
     });
     const baseRequest = transport.request.bind(transport);
@@ -508,6 +516,10 @@ describe("AcpAgentClient", () => {
   it("chains multiple Antigravity steers and cancels the latest in-flight prompt", async () => {
     const prompts: Array<ReturnType<typeof createDeferred<unknown>>> = [];
     const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentInfo: { name: "Antigravity ACP Server", version: "1.5.15" },
+      },
       "session/new": { sessionId: "agy-session" },
     });
     const baseRequest = transport.request.bind(transport);
@@ -571,6 +583,10 @@ describe("AcpAgentClient", () => {
   it("rejects Antigravity steering and cancels an unsettled follow-up if the active prompt is cancelled mid-handoff", async () => {
     const prompts: Array<ReturnType<typeof createDeferred<unknown>>> = [];
     const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentInfo: { name: "Antigravity ACP Server", version: "1.5.15" },
+      },
       "session/new": { sessionId: "agy-session" },
     });
     const baseRequest = transport.request.bind(transport);
@@ -623,6 +639,10 @@ describe("AcpAgentClient", () => {
   it("accepts Antigravity steering when the detached prompt returns usage after tool rounds and sums turn usage", async () => {
     const prompts: Array<ReturnType<typeof createDeferred<unknown>>> = [];
     const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentInfo: { name: "Antigravity ACP Server", version: "1.5.15" },
+      },
       "session/new": { sessionId: "agy-session" },
     });
     const baseRequest = transport.request.bind(transport);
@@ -753,6 +773,10 @@ describe("AcpAgentClient", () => {
   it("preserves detached Antigravity prompt usage when the replacement prompt fails", async () => {
     const prompts: Array<ReturnType<typeof createDeferred<unknown>>> = [];
     const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentInfo: { name: "Antigravity ACP Server", version: "1.5.15" },
+      },
       "session/new": { sessionId: "agy-session" },
     });
     const baseRequest = transport.request.bind(transport);
@@ -815,6 +839,65 @@ describe("AcpAgentClient", () => {
       },
     }));
     await client.dispose();
+  });
+
+  it("refuses Antigravity turn steering on CLI versions below 1.5.0 without sending a concurrent prompt", async () => {
+    const prompts: Array<ReturnType<typeof createDeferred<unknown>>> = [];
+    const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentInfo: { name: "Antigravity ACP Server", version: "1.4.9" },
+      },
+      "session/new": { sessionId: "agy-old-session" },
+    });
+    const baseRequest = transport.request.bind(transport);
+    transport.request = async (method, params, timeoutMs) => {
+      if (method === "session/prompt") {
+        transport.requests.push({ method, params, timeoutMs });
+        const deferred = createDeferred<unknown>();
+        prompts.push(deferred);
+        return await deferred.promise;
+      }
+      return await baseRequest(method, params, timeoutMs);
+    };
+    const client = new AcpAgentClient({
+      backendId: "acp:antigravity",
+      // Even if a stale cached capability enabled steering, the live 1.4.9 handshake wins.
+      supportsTurnSteering: true,
+      store,
+      transport,
+    });
+
+    await client.initialize();
+    expect(client.supportsTurnSteering()).toBe(false);
+    const session = await client.startSession({ cwd: "/repo", executionMode: "default", mcpServers: "none" });
+    await client.startPrompt({ sessionId: session.sessionId, prompt: "First", turnId: "turn-1" });
+
+    await expect(client.steerSession({
+      sessionId: session.sessionId,
+      text: "Steer",
+      content: [{ type: "text", text: "Steer" }],
+      interjectionId: "s-old",
+    })).rejects.toThrow("Installed Antigravity CLI does not support turn steering over ACP");
+    expect(prompts).toHaveLength(1);
+    await client.dispose();
+
+    // Conversely, a live 1.5.0+ handshake enables steering even if a stale cached capability was false.
+    const upgradedTransport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentInfo: { name: "Antigravity ACP Server", version: "1.5.0" },
+      },
+    });
+    const upgradedClient = new AcpAgentClient({
+      backendId: "acp:antigravity",
+      supportsTurnSteering: false,
+      store,
+      transport: upgradedTransport,
+    });
+    await upgradedClient.initialize();
+    expect(upgradedClient.supportsTurnSteering()).toBe(true);
+    await upgradedClient.dispose();
   });
 
   it("lists and executes Grok conversation-only rewind extensions", async () => {

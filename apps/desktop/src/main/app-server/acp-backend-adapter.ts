@@ -44,6 +44,7 @@ import type { AcpAgentStorage } from "@pwragent/owner-core/acp-storage";
 import { isBannedAcpRegistryId } from "../acp/acp-agent-allowlist";
 import {
   acpAgentCapabilitiesForRegistryId,
+  isAntigravitySteerableVersion,
   isPwrAgentGrokBuildVersion,
   type AcpAgentCapabilities,
 } from "../acp/acp-agent-capabilities";
@@ -732,9 +733,13 @@ function effectiveAcpAgentCapabilities(
     managedReview: catalog.managedReview,
     // Grok's steering extension is downstream-only. Ignore the unconditional
     // steerTurn value persisted by older catalog/discovery records for vendor
-    // Grok. Antigravity steers natively through overlapping session/prompt.
+    // Grok. Antigravity 1.5.0+ steers natively through overlapping
+    // session/prompt; 1.4.x queues concurrent prompts instead.
     steerTurn:
-      agent.registryId === "antigravity"
+      (agent.registryId === "antigravity"
+        && isAntigravitySteerableVersion(
+          agent.runtimeCapabilities?.agentInfo?.version ?? agent.version,
+        ))
       || (agent.registryId === "grok"
         && (isPwrAgentOwnedGrokRuntime(agent)
           || isPwrAgentGrokBuildVersion(

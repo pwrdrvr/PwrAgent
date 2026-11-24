@@ -43,7 +43,10 @@ import {
   acpSessionRuntimeStateFromUpdate,
   normalizeAcpRuntimeCapabilities,
 } from "./acp-runtime-capabilities.js";
-import { isPwrAgentGrokBuildVersion } from "./acp-agent-capabilities.js";
+import {
+  isAntigravitySteerableVersion,
+  isPwrAgentGrokBuildVersion,
+} from "./acp-agent-capabilities.js";
 import {
   normalizeGrokBillingStatus,
   type AcpProviderStatus,
@@ -870,7 +873,11 @@ export class AcpAgentClient {
 
   supportsTurnSteering(): boolean {
     if (this.options.backendId === "acp:antigravity") {
-      return this.options.supportsTurnSteering !== false;
+      const runtimeVersion = this.runtimeCapabilities?.agentInfo?.version;
+      if (runtimeVersion !== undefined) {
+        return isAntigravitySteerableVersion(runtimeVersion);
+      }
+      return this.options.supportsTurnSteering === true;
     }
     return this.options.backendId === "acp:grok"
       && (this.options.supportsTurnSteering === true
