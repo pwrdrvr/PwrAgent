@@ -294,19 +294,24 @@ export async function observeProvenRemoteHeads(
 
   const observation = await runPrMetadataFileProbe((signal) => observeRefs(cwd, remotes, signal), demand);
   if (!observation) return undefined;
+  if (!await confirmPrFilesCheckout(cwd, observation, env, demand)) return undefined;
+  const unchanged = () => runPrMetadataFileProbe((signal) => observation.files.unchanged(signal), demand);
+  if (!await unchanged()) return undefined;
+  return { gitDir: observation.gitDir, commonDir: observation.commonDir, heads: observation.heads, unchanged };
+}
+
+export async function confirmPrFilesCheckout(
+  cwd: string, location: Pick<CheckoutLocation, "gitDir" | "commonDir">, env: NodeJS.ProcessEnv, demand?: PrMetadataDemand,
+): Promise<boolean> {
   try {
     const { stdout } = await runPrMetadataGit(cwd, [
       "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir", "--show-ref-format", "--show-object-format",
     ], { purpose: "pr-discovery", env, maxBuffer: 64 * 1024, timeout: 2_000 }, demand);
-    const expected = [observation.gitDir, observation.commonDir, "files", "sha1", ""].join("\n");
-    if (stdout !== expected) return undefined;
+    return stdout === [location.gitDir, location.commonDir, "files", "sha1", ""].join("\n");
   } catch {
     demand?.signal?.throwIfAborted();
-    return undefined;
+    return false;
   }
-  const unchanged = () => runPrMetadataFileProbe((signal) => observation.files.unchanged(signal), demand);
-  if (!await unchanged()) return undefined;
-  return { gitDir: observation.gitDir, commonDir: observation.commonDir, heads: observation.heads, unchanged };
 }
 
 export async function readProvenRemoteHeads(

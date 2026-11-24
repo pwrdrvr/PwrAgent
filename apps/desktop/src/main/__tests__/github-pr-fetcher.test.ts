@@ -459,6 +459,7 @@ describe("GitHub authentication sufficiency", () => {
 });
 
 describe("GithubPrFetcher", () => {
+  const primedRepos = [{ host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" }];
   const primedPr = {
     provider: "github.com",
     number: 42,
@@ -529,6 +530,21 @@ describe("GithubPrFetcher", () => {
   }
 
   describe("primeBranchLookup (batched in-process discovery)", () => {
+    it.each([
+      [{ host: "github.com", owner: "fixture", repo: "new-remote" }],
+      [{ host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" }, { host: "github.com", owner: "fixture", repo: "extra" }],
+      [],
+    ].map((repos) => ({ repos })))("matches a normal lookup when the primed repository set differs ($repos)", async ({ repos }) => {
+      const options = { branchResults: () => [primedPr] };
+      const request = { cwd: "/repo", branch: "feat/x" };
+      const expected = await buildFetcher(options).fetcher.fetchAllPullRequestsForBranch(request);
+      const { fetcher, fetchPullRequestsForBranches } = buildFetcher(options);
+      const entry = { ...request, repos, prs: [] };
+      fetcher.primeBranchLookup([entry]);
+      await expect(fetcher.fetchAllPullRequestsForBranch(request)).resolves.toEqual(expected);
+      expect(fetchPullRequestsForBranches).toHaveBeenCalledExactlyOnceWith([{ owner: "pwrdrvr", repo: "PwrAgent", branch: "feat/x" }]);
+    });
+
     it("rejects unrelated fork results from both fresh and primed branch lookups", async () => {
       const unrelatedPr = {
         ...primedPr,
@@ -541,7 +557,7 @@ describe("GithubPrFetcher", () => {
       await expect(fetcher.fetchAllPullRequestsForBranch({
         cwd: "/repo", branch: "feat/x", onProviderFailure,
       })).resolves.toEqual([primedPr]);
-      fetcher.primeBranchLookup([{ cwd: "/repo", branch: "feat/x", prs: [unrelatedPr, primedPr] }]);
+      fetcher.primeBranchLookup([{ cwd: "/repo", branch: "feat/x", repos: primedRepos, prs: [unrelatedPr, primedPr] }]);
       await expect(fetcher.fetchAllPullRequestsForBranch({
         cwd: "/repo", branch: "feat/x", onProviderFailure,
       })).resolves.toEqual([primedPr]);
@@ -553,7 +569,7 @@ describe("GithubPrFetcher", () => {
     it("answers from the primed value without another GraphQL request", async () => {
       const { fetcher, fetchPullRequestsForBranches } = buildFetcher();
       fetcher.primeBranchLookup([
-        { cwd: "/repo", branch: "feat/x", prs: [primedPr] },
+        { cwd: "/repo", branch: "feat/x", repos: primedRepos, prs: [primedPr] },
       ]);
 
       const result = await fetcher.fetchAllPullRequestsForBranch({
@@ -565,9 +581,20 @@ describe("GithubPrFetcher", () => {
       expect(fetchPullRequestsForBranches).not.toHaveBeenCalled();
     });
 
+    it("accepts the same repositories in a different order and case", async () => {
+      const other = { host: "github.com", owner: "fixture", repo: "other" };
+      const { fetcher, fetchPullRequestsForBranches } = buildFetcher({ repos: [...primedRepos, other] });
+      const request = { cwd: "/repo", branch: "feat/x" };
+      fetcher.primeBranchLookup([{
+        ...request, repos: [{ ...other, repo: "OTHER" }, ...primedRepos], prs: [primedPr],
+      }]);
+      await expect(fetcher.fetchAllPullRequestsForBranch(request)).resolves.toEqual([primedPr]);
+      expect(fetchPullRequestsForBranches).not.toHaveBeenCalled();
+    });
+
     it("honors a primed empty answer — that is an authoritative 'no PRs'", async () => {
       const { fetcher, fetchPullRequestsForBranches } = buildFetcher();
-      fetcher.primeBranchLookup([{ cwd: "/repo", branch: "feat/x", prs: [] }]);
+      fetcher.primeBranchLookup([{ cwd: "/repo", branch: "feat/x", repos: primedRepos, prs: [] }]);
 
       await expect(
         fetcher.fetchAllPullRequestsForBranch({ cwd: "/repo", branch: "feat/x" }),
@@ -578,7 +605,7 @@ describe("GithubPrFetcher", () => {
     it("is single-use, so a later refresh gets its own fresh read", async () => {
       const { fetcher, fetchPullRequestsForBranches } = buildFetcher();
       fetcher.primeBranchLookup([
-        { cwd: "/repo", branch: "feat/x", prs: [primedPr] },
+        { cwd: "/repo", branch: "feat/x", repos: primedRepos, prs: [primedPr] },
       ]);
 
       await fetcher.fetchAllPullRequestsForBranch({
@@ -602,7 +629,7 @@ describe("GithubPrFetcher", () => {
         branchResults: () => [freshPr],
       });
       fetcher.primeBranchLookup([
-        { cwd: "/repo", branch: "feat/x", prs: [primedPr] },
+        { cwd: "/repo", branch: "feat/x", repos: primedRepos, prs: [primedPr] },
       ]);
 
       const result = await fetcher.fetchAllPullRequestsForBranch({
@@ -629,7 +656,7 @@ describe("GithubPrFetcher", () => {
     it("does not answer for a different branch or directory", async () => {
       const { fetcher, fetchPullRequestsForBranches } = buildFetcher();
       fetcher.primeBranchLookup([
-        { cwd: "/repo", branch: "feat/x", prs: [primedPr] },
+        { cwd: "/repo", branch: "feat/x", repos: primedRepos, prs: [primedPr] },
       ]);
 
       await fetcher.fetchAllPullRequestsForBranch({
@@ -647,7 +674,7 @@ describe("GithubPrFetcher", () => {
     it("runs GraphQL once the primed value has expired", async () => {
       const { fetcher, fetchPullRequestsForBranches } = buildFetcher();
       fetcher.primeBranchLookup(
-        [{ cwd: "/repo", branch: "feat/x", prs: [primedPr] }],
+        [{ cwd: "/repo", branch: "feat/x", repos: primedRepos, prs: [primedPr] }],
         -1,
       );
 
@@ -714,7 +741,7 @@ describe("GithubPrFetcher", () => {
       const { fetcher } = buildRenamedFetcher();
       await fetcher.fetchAllPullRequestsForBranch({ cwd: "/repo", branch: "fix/renamed" });
       const primed = { ...primedPr, number: 3193, url: "https://github.com/pwrdrvr/PwrAgent/pull/3193" };
-      fetcher.primeBranchLookup([{ cwd: "/repo", branch: "fix/primed", prs: [primed] }]);
+      fetcher.primeBranchLookup([{ cwd: "/repo", branch: "fix/primed", repos: [{ ...primedRepos[0]!, repo: "PwrAgnt" }], prs: [primed] }]);
 
       await expect(fetcher.fetchAllPullRequestsForBranch({ cwd: "/repo", branch: "fix/primed" }))
         .resolves.toEqual([primed]);

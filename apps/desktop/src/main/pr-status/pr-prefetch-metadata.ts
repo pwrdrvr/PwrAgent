@@ -4,17 +4,17 @@ import { bundledGitExecutable } from "../bundled-git";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getSelectedManagedGit } from "../git-command";
 import { gitCommandPreference, gitRuntimeEnvironment } from "../git-runtime";
-import { gitHubReposFromHttpRemotes, REMOTE_CONFIG_KEYS, type GitHubRepoRef } from "./git-remote";
+import { readFreshGitHubReposForPrefetch, REMOTE_CONFIG_KEYS, type GitHubRepoRef } from "./git-remote";
 import { parseGitRemoteConfiguration } from "./git-remote-config";
 import { runPrMetadataGit } from "./pr-metadata-process";
-import { observePrCheckoutConfigFiles, observeProvenRemoteHeads } from "./pr-remote-heads";
+import { confirmPrFilesCheckout, observePrCheckoutConfigFiles, observeProvenRemoteHeads } from "./pr-remote-heads";
 
 const MAX_CONFIG_INCLUDES = 16;
 
 type PrefetchMetadata = {
   repos: GitHubRepoRef[];
   refreshedRemoteNames: string[];
-  proof?: { heads: ReadonlyMap<string, string>; unchanged: () => Promise<boolean>; complete: boolean };
+  proof?: { heads?: ReadonlyMap<string, string>; unchanged: () => Promise<boolean> };
 };
 
 function prefetchGitInputs(cwd: string) {
@@ -90,15 +90,16 @@ export async function observeScheduledPrPrefetchMetadata(cwd: string): Promise<P
     const parsed = stderr === "" ? parseConfigWithOrigins(roots.directory, stdout) : undefined;
     if (!parsed) return undefined;
     const { configuration, sources } = parsed;
-    const repos = gitHubReposFromHttpRemotes(configuration.remotes);
-    if (!repos) return undefined;
+    // Resolve identities from the config Git already sampled. OpenSSH aliases
+    // use one expansion per observation, bounded by the scheduled batch.
+    const { repos } = await readFreshGitHubReposForPrefetch(cwd, configuration);
     const remoteNames = configuration.names;
     const sample = { repos, refreshedRemoteNames: remoteNames };
     const inputsUnchanged = () => isDeepStrictEqual(inputs, currentInputs());
     const currentSample = async () => await roots.unchanged() && inputsUnchanged() ? sample : undefined;
     // Keep Git's current config answer for the ordinary branch path even
     // when it cannot support reuse of the checkout observation.
-    if (!sources || !repos.length || remoteNames.length < 2) return await currentSample();
+    if (!sources || !repos.length) return await currentSample();
 
     // The first Git read discovers include paths, even absent ones. Before
     // retaining that answer, bracket a second read with all those inputs.
@@ -112,12 +113,13 @@ export async function observeScheduledPrPrefetchMetadata(cwd: string): Promise<P
 
     const proof = await observeProvenRemoteHeads(cwd, remoteNames);
     if (proof && (proof.gitDir !== files.gitDir || proof.commonDir !== files.commonDir)) return undefined;
-    if (!proof) {
+    // For a single remote, Git still resolves HEAD per branch. Confirm the
+    // checkout once so later branches can reuse just its remote configuration.
+    if (!proof && (remoteNames.length !== 1 || !await confirmPrFilesCheckout(cwd, files, inputs.env))) {
       return await files.unchanged() && inputsUnchanged() ? sample : undefined;
     }
-    const unchanged = async () => Boolean(await files.unchanged() && await proof.unchanged() && inputsUnchanged());
-    const complete = proof.heads.size === remoteNames.length;
-    return await unchanged() ? { ...sample, proof: { heads: proof.heads, unchanged, complete } } : undefined;
+    const unchanged = async () => Boolean(await files.unchanged() && (!proof || await proof.unchanged()) && inputsUnchanged());
+    return await unchanged() ? { ...sample, proof: { heads: proof?.heads, unchanged } } : undefined;
   } catch {
     // Let the ordinary Git commands decide unsupported or unstable reads.
     return undefined;

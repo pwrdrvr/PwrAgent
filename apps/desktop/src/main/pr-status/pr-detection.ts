@@ -152,7 +152,8 @@ export async function resolvePrLookupBranches(params: {
 
 type ScheduledCheckoutMetadata = {
   repos: GitHubRepoRef[];
-  defaults: DefaultBranchInfo;
+  remoteNames: string[];
+  defaults?: DefaultBranchInfo;
   unchanged: () => Promise<boolean>;
 };
 type ScheduledPrefetchBatch = Map<string, ScheduledCheckoutMetadata>;
@@ -164,22 +165,26 @@ export function resolveScheduledPrPrefetchRepos(cwd: string, branch: string, bat
     if (batch) {
       const cached = batch.get(cwd);
       let metadata = cached && await cached.unchanged() ? cached : undefined;
-      let reusable = Boolean(metadata);
+      let branchDefaults = metadata?.defaults;
       if (!metadata) {
         batch.delete(cwd);
         const observed = await observeScheduledPrPrefetchMetadata(cwd);
         if (observed?.proof) {
-          const defaults = await readDefaultBranchInfo(cwd, undefined, observed.refreshedRemoteNames, observed.proof.heads);
-          metadata = { repos: observed.repos, unchanged: observed.proof.unchanged, defaults };
-          reusable = observed.proof.complete;
+          const { heads, unchanged } = observed.proof;
+          const remoteNames = observed.refreshedRemoteNames;
+          if (heads) branchDefaults = await readDefaultBranchInfo(cwd, undefined, remoteNames, heads);
+          metadata = {
+            repos: observed.repos, remoteNames, unchanged,
+            defaults: heads?.size === remoteNames.length ? branchDefaults : undefined,
+          };
         } else {
           sampled = observed;
         }
       }
       if (metadata) {
-        const plan = await resolvePrLookupPlan({ cwd, branch, defaultBranchInfo: metadata.defaults });
+        const plan = await resolvePrLookupPlan({ cwd, branch, remoteNames: metadata.remoteNames, defaultBranchInfo: branchDefaults });
         if (await metadata.unchanged()) {
-          if (reusable) batch.set(cwd, metadata);
+          batch.set(cwd, metadata);
           return plan.branches.includes(branch) ? metadata.repos : [];
         }
         batch.delete(cwd);

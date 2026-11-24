@@ -1552,6 +1552,7 @@ describe("app server ipc", () => {
   it.skipIf(process.platform === "win32")("shares verified checkout metadata within one scheduled discovery batch", async () => {
     const { runGitCommand } = await import("../app-server/git-executable");
     const { gitSubprocessDiagnostics } = await import("../diagnostics/git-subprocess-diagnostics");
+    const { branchRefKey } = await import("../pr-status/github-graphql-client");
     const { appServerService } = await import("../shell/ipc/app-server");
     const cwd = await mkdtemp(path.join(os.tmpdir(), "pwragent-scheduled-discovery-"));
     const restore = isolateProcessGitEnvironment(cwd);
@@ -1573,16 +1574,23 @@ describe("app server ipc", () => {
     const service = appServerService as unknown as {
       primeDiscoveryBranchLookups: (contexts: { branch: string; directoryPaths: string[] }[]) => Promise<void>;
       getPrGraphqlClient: () => unknown;
+      getPrFetcher: () => { isProviderEnabled: typeof isProviderEnabled; github: object };
     };
-    const fetchPullRequestsForBranches = vi.fn(async () => new Map());
+    const primeBranchLookup = vi.fn();
+    const fetcher = vi.spyOn(service, "getPrFetcher").mockReturnValue({ isProviderEnabled, github: { primeBranchLookup } });
+    const fetchPullRequestsForBranches = vi.fn(async (refs: Parameters<typeof branchRefKey>[0][]) =>
+      new Map(refs.map((ref) => [branchRefKey(ref), []])));
     const transport = vi.spyOn(service, "getPrGraphqlClient").mockReturnValue({ fetchPullRequestsForBranches });
     const starts = vi.spyOn(gitSubprocessDiagnostics, "startGit");
-    onTestFinished(() => { transport.mockRestore(); starts.mockRestore(); });
+    onTestFinished(() => { transport.mockRestore(); fetcher.mockRestore(); starts.mockRestore(); });
 
     await service.primeDiscoveryBranchLookups(branches.map((branch) => ({ branch, directoryPaths: [cwd] })));
     expect(fetchPullRequestsForBranches).toHaveBeenCalledExactlyOnceWith(
       ["topic", "other"].flatMap((branch) => remotes.map((repo) => ({ branch, repo, owner: "fixture" }))),
     );
+    expect(primeBranchLookup).toHaveBeenCalledExactlyOnceWith(["topic", "other"].map((branch) => ({
+      cwd, branch, prs: [], repos: remotes.map((repo) => ({ host: "github.com", owner: "fixture", repo })),
+    })));
     expect(starts.mock.calls.filter(([directory]) => directory === cwd).map(([, args]) => args[0])).toEqual([
       "config", "rev-parse", "for-each-ref", "for-each-ref", "for-each-ref",
     ]);

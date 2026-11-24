@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
@@ -141,9 +141,33 @@ it("uses the existing Git remote HEAD fallback with one configured remote", asyn
   const starts = recordPrefetchStarts();
   const resolve = createScheduledPrPrefetchRepoResolver();
   for (const branch of ["topic-0", "topic-1"]) await expectEligible(resolve, cwd, branch, expected(branch));
+  const metadata = process.platform === "win32" ? ["config"] : ["config", "rev-parse"];
   expect(starts.calls.map(([, args]) => args[0])).toEqual([
-    "config", "symbolic-ref", "for-each-ref", "config", "symbolic-ref", "for-each-ref",
+    ...metadata, "symbolic-ref", "for-each-ref", ...(process.platform === "win32" ? metadata : []), "symbolic-ref", "for-each-ref",
   ]);
+});
+
+it.skipIf(process.platform === "win32").each([1, 2])("reuses SSH remote discovery for %i configured remotes", async (remoteCount) => {
+  const cwd = await fixture();
+  const bin = path.join(cwd, "bin");
+  await mkdir(bin);
+  // OpenSSH alias evaluation is offline and isolated from the operator's config.
+  await writeFile(path.join(bin, "ssh"), "#!/bin/sh\nprintf 'hostname github.com\\n'\n", { mode: 0o755 });
+  vi.stubEnv("PATH", `${bin}${path.delimiter}${process.env.PATH}`);
+  onTestFinished(() => { vi.unstubAllEnvs(); });
+  await readGit(cwd, "remote", "set-url", "origin", "git@fixture-ssh:fixture/origin.git");
+  if (remoteCount === 2) await readGit(cwd, "remote", "set-url", "upstream", "git@fixture-ssh:fixture/upstream.git");
+  else await readGit(cwd, "remote", "remove", "upstream");
+  const resolve = createScheduledPrPrefetchRepoResolver();
+  const starts = recordPrefetchStarts();
+  const ssh = vi.spyOn(gitSubprocessDiagnostics, "start");
+  onTestFinished(() => { ssh.mockRestore(); });
+  const expected = ["https://github.com/fixture/origin.git", "https://github.com/fixture/upstream.git"].slice(0, remoteCount);
+  for (const branch of topics) await expectEligible(resolve, cwd, branch, expected);
+
+  expect(starts.calls.filter(([, args]) => args[0] === "config").length).toBe(1);
+  expect(starts.calls.filter(([, args]) => args[0] === "rev-parse").length).toBe(1);
+  expect(ssh.mock.calls.filter(([command]) => command === "ssh-config").length).toBe(1);
 });
 
 it.skipIf(process.platform === "win32")("reobserves a changed remote HEAD and URL once per checkout observation", async () => {

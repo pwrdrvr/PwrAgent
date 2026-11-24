@@ -35,7 +35,7 @@ import type { ForgePrToolPreflightResult } from "../agent-tools/pwragent-forge-p
 import { GitlabPrToolClient } from "../pr-status/gitlab-pr-tool-client";
 import type { ForgePrToolArgs, ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
 import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation, type ForgeRepository } from "../pr-status/forge-tool-contract";
-import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
+import { readForgeRepositoryRemotes, type GitHubRepoRef } from "../pr-status/git-remote";
 import { StackReader, StackReadObservation, stackMemberships } from "../stacks/stack-reader";
 import { StackOperationsService } from "../stacks/stack-operations-service";
 import { StackOperationError } from "@pwragent/owner-core/stacks/stack-coordinator";
@@ -6422,7 +6422,7 @@ class DesktopAppServerService {
     const resolvePrefetchRepos = createScheduledPrPrefetchRepoResolver();
     const wanted = new Map<
       string,
-      { cwd: string; branch: string; refs: BranchRef[] }
+      { cwd: string; branch: string; repos: GitHubRepoRef[]; refs: BranchRef[] }
     >();
     for (const context of contexts) {
       const branch = context.branch.trim();
@@ -6443,6 +6443,7 @@ class DesktopAppServerService {
         wanted.set(dedupeKey, {
           cwd,
           branch,
+          repos,
           refs: repos.map((repo) => ({
             owner: repo.owner,
             repo: repo.repo,
@@ -6467,13 +6468,14 @@ class DesktopAppServerService {
         return {
           cwd: entry.cwd,
           branch: entry.branch,
+          repos: entry.repos,
           prs: answers.some((answer) => answer === undefined)
             ? undefined
             : dedupePrsByStatusKey(answers.flatMap((answer) => answer ?? [])),
         };
       })
       .filter(
-        (entry): entry is { cwd: string; branch: string; prs: PrSummary[] } =>
+        (entry): entry is { cwd: string; branch: string; repos: GitHubRepoRef[]; prs: PrSummary[] } =>
           entry.prs !== undefined,
       );
     if (primed.length === 0) {
