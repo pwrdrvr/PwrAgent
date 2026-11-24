@@ -336,7 +336,7 @@ describe("HotCpuProfiler", () => {
               result.push(Buffer.from(data));
             }
             if (transition === "filter-failed") throw new ChromiumTraceExportError("worker", "filter");
-            return { bytes: Buffer.concat(result), filterCpuMs: 12, filterElapsedMs: 18 };
+            return { bytes: Buffer.concat(result), filterCpuMs: 12, filterElapsedMs: 18, filterPid: 42 };
           },
           vi.fn(), { stopTimeoutMs: transition === "native-timeout" ? 200 : undefined },
         ),
@@ -441,7 +441,7 @@ describe("HotCpuProfiler", () => {
           dispose() {},
         }), async (chunks) => {
           for await (const chunk of chunks) {
-            return { bytes: Buffer.from(chunk.data), filterCpuMs: 12, filterElapsedMs: 18 };
+            return { bytes: Buffer.from(chunk.data), filterCpuMs: 12, filterElapsedMs: 18, filterPid: 42 };
           }
           throw new Error("Contrived trace stream was empty");
         }, vi.fn(), { monotonicNow: () => sampleTimeMs }),

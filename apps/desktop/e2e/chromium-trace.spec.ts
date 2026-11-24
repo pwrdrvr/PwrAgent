@@ -182,6 +182,7 @@ test("native rolling trace evicts old events and publishes only filtered timing 
         const rolling = await run(false);
         return {
           old, rolling, warnings, externalConflict, externalStillOwned, conflictWarnings,
+          browserPid: process.pid,
           electron: process.versions.electron, chromium: process.versions.chrome,
         };
       } finally {
@@ -195,9 +196,10 @@ test("native rolling trace evicts old events and publishes only filtered timing 
     expect(result.warnings).toEqual([]);
     expect(result.old).toMatchObject({ capture: { status: "written" }, early: true, recent: false });
     expect(result.rolling).toMatchObject({
-      capture: { status: "written", filterCpuMs: expect.any(Number), filterElapsedMs: expect.any(Number) },
+      capture: { status: "written", filterPid: expect.any(Number), filterCpuMs: expect.any(Number), filterElapsedMs: expect.any(Number) },
       early: false, recent: true, hadPrivateUrl: true,
     });
+    expect(result.rolling.capture.filterPid).not.toBe(result.browserPid);
     expect(result.rolling.widths).toEqual([300, 513]);
     console.log(`Chromium trace oracle ran on Electron ${result.electron}, Chromium ${result.chromium}`);
     const saved = await readFile(artifact, "utf8");
@@ -291,12 +293,15 @@ test("automatic hot CPU capture preserves renderer layout while the V8 profile k
     const started = events.find((entry) => entry.type === "profile-started");
     expect(started?.detail).toMatchObject({ pid: expect.any(Number) });
     const exported = events.find((entry) => entry.type === "chromium-trace-written");
+    const browserPid = await app.electronApp.evaluate(() => process.pid);
     expect(exported?.detail).toMatchObject({
       triggeredAt: expect.any(String),
       recordingStoppedAtMs: expect.any(Number),
+      filterPid: expect.any(Number),
       filterCpuMs: expect.any(Number),
       filterElapsedMs: expect.any(Number),
     });
+    expect(exported.detail.filterPid).not.toBe(browserPid);
     expect(Math.abs(exported.detail.recordingStoppedAtMs - Date.parse(exported.detail.triggeredAt))).toBeLessThan(2_000);
     expect(Date.parse(event.capturedAt) - exported.detail.recordingStoppedAtMs).toBeGreaterThan(2_000);
     const profile = JSON.parse(await readFile(event.profilePath, "utf8"));

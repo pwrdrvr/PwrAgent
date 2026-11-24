@@ -34,7 +34,14 @@ export type ChromiumTraceSession = {
   dispose: () => void;
 };
 
-export type ChromiumTraceFilterMetrics = { filterCpuMs: number; filterElapsedMs: number };
+export type ChromiumTraceFilterMetrics = {
+  /** OS process that performed redaction. */
+  filterPid: number;
+  /** CPU time across the filter utility process. */
+  filterCpuMs: number;
+  /** Wall time from the end of input through encoding the redacted output. */
+  filterElapsedMs: number;
+};
 export type FilteredChromiumTrace = ChromiumTraceFilterMetrics & { bytes: Uint8Array };
 
 export type ProcessChromiumTrace = (

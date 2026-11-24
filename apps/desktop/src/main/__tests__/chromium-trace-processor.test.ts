@@ -6,6 +6,7 @@ import { build } from "esbuild";
 import { expect, it } from "vitest";
 import { ChromiumTraceExportError, type FilteredChromiumTrace } from "../diagnostics/chromium-trace";
 import { chromiumTraceProcessor, type ChromiumTraceFilterProcess } from "../diagnostics/chromium-trace-processor";
+import type { ChromiumTraceWorkerResult } from "../diagnostics/chromium-trace-worker";
 import { createTemporaryTestDirectory } from "../shell/testing/test-harness";
 
 function startNodeFilter(path: string): ChromiumTraceFilterProcess {
@@ -14,9 +15,9 @@ function startNodeFilter(path: string): ChromiumTraceFilterProcess {
     const fail = () => reject(new ChromiumTraceExportError("worker", "filter"));
     worker.once("error", fail);
     worker.once("exit", fail);
-    worker.once("message", (message: unknown) => {
-      if (types.isUint8Array(message)) {
-        resolve({ bytes: message, filterCpuMs: 1, filterElapsedMs: 1 });
+    worker.once("message", (message: ChromiumTraceWorkerResult | "invalid-data") => {
+      if (message !== "invalid-data" && types.isUint8Array(message.bytes)) {
+        resolve({ ...message, filterCpuMs: 1 });
       } else {
         reject(new ChromiumTraceExportError("invalid-data", "filter"));
       }

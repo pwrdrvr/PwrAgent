@@ -10,7 +10,7 @@ vi.mock("electron", () => ({ utilityProcess: { fork: vi.fn() } }));
 it("owns the filter through exit and accepts only a complete, uncancelled result", async () => {
   await fc.assert(fc.asyncProperty(
     fc.constantFrom("before-spawn", "after-spawn", "after-message", "never"),
-    fc.constantFrom("success", "invalid-data", "crash"),
+    fc.constantFrom("success", "wrong-pid", "invalid-data", "crash"),
     async (cancelAt, childOutcome) => {
       const child = Object.assign(new EventEmitter(), {
         pid: undefined as number | undefined,
@@ -23,7 +23,8 @@ it("owns the filter through exit and accepts only a complete, uncancelled result
       const processTrace = chromiumTraceProcessor(() => startChromiumTraceFilterProcess("filter.js"));
       const controller = new AbortController();
       async function* chunks() { yield { data: '{"traceEvents":[]}' }; }
-      const filtered = { bytes: new Uint8Array([1, 2, 3]), filterCpuMs: 8, filterElapsedMs: 12 };
+      const filterPid = process.pid + 1;
+      const filtered = { bytes: new Uint8Array([1, 2, 3]), filterCpuMs: 8, filterElapsedMs: 12, filterPid };
       let finished = false;
       const capture = processTrace(chunks(), controller.signal).then(
         (value) => { finished = true; return value; },
@@ -31,10 +32,11 @@ it("owns the filter through exit and accepts only a complete, uncancelled result
       );
       if (cancelAt === "before-spawn") controller.abort();
       expect(child.kill).not.toHaveBeenCalled();
-      child.pid = 42;
+      child.pid = filterPid;
       child.emit("spawn");
       if (cancelAt === "after-spawn") controller.abort();
       if (childOutcome === "success") child.emit("message", filtered);
+      if (childOutcome === "wrong-pid") child.emit("message", { ...filtered, filterPid: process.pid });
       if (childOutcome === "invalid-data") child.emit("message", "invalid-data");
       if (cancelAt === "after-message") controller.abort();
 
@@ -45,7 +47,7 @@ it("owns the filter through exit and accepts only a complete, uncancelled result
       expect(child.kill).toHaveBeenCalledTimes(cancelAt === "never" ? 0 : 1);
 
       child.pid = undefined;
-      child.emit("exit", cancelAt === "never" && childOutcome === "success" ? 0 : 1);
+      child.emit("exit", cancelAt === "never" && (childOutcome === "success" || childOutcome === "wrong-pid") ? 0 : 1);
       const outcome = await capture;
       if (cancelAt !== "never") expect(outcome).toMatchObject({ name: "AbortError" });
       else if (childOutcome === "success") expect(outcome).toEqual(filtered);
