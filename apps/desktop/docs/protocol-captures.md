@@ -149,13 +149,45 @@ same ID to the other process. Full Access replayed both original user and
 assistant turns. Default then replayed all five turns and all three tool
 calls after the return trip. Both ACP front processes stayed up.
 
-PwrAgent's Access mode chooses the process. Antigravity's Agent mode keeps
-its own selection across a move, including Plan. Plan still instructs
-Antigravity to plan. Full Access auto-approves the tools the agent does run,
-including any tools available in Plan.
+PwrAgent exposes one unified Access mode selector for Antigravity: Default
+Access, its non-default native modes (Accept Edits, Auto, Plan) on the Default
+process, and Full Access on the `--dangerously-skip-permissions` process.
+Moving to Full Access resets the native mode to Default so a Full Access thread
+is never silently left in Plan, and moving from Full Access to a native mode
+closes the Full Access session, loads on the Default process, and confirms the
+selected native mode atomically.
 
 Raw captures are under the ignored
 `apps/desktop/.local/protocol-captures/antigravity-full-access/`.
+
+### Antigravity primary workspace on reload
+
+The November 24, 2026 macOS probe used Antigravity 1.5.16 with
+`acp --process-per-session` and two disposable directories. After one
+message in the source, `session/load` accepted the destination `cwd` and
+replayed the same session history. A bare `pwd -P` returned the source,
+including after `session/close` and a front-process restart, in both
+Default and Full Access. `session/resume` also kept the source.
+`session/list` reported the source as the primary `cwd` even with a
+destination filter. Removing the source directory still allowed
+`session/load` to replay history. Relative commands then failed because
+the original directory was gone. The runtime returned method not found
+for `session/fork`. ACP treated `/fork` as a regular message, and
+`agy --print` rejected it as interactive-only.
+
+In both access modes, a fresh `session/new` at the destination ran bare
+`pwd -P` there. The same prompt recalled a marker from the source
+conversation supplied as an embedded ACP resource. On destination
+reload, Antigravity replayed the resource separately from the user text.
+
+PwrAgent retains the old transcript in its ACP rollout, binds the same
+thread to the destination provider session, and sends recent source
+messages as context on the first destination turn. The provider keeps
+the original conversation, including its native tool state, in its
+source session.
+
+Raw captures are under the ignored
+`apps/desktop/.local/protocol-captures/antigravity-workspace.*/`.
 
 ### Antigravity MCP permission requests in Default
 

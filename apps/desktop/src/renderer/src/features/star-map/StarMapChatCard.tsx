@@ -26,7 +26,10 @@ import {
 } from "@pwragent/shared/contracts/normalized-app-server";
 import { type ReadQueuedTurnResponse } from "@pwragent/shared/contracts/agent";
 import { CelestialIcon, PauseIcon, PencilIcon, TrashIcon } from "../../icons";
-import { formatExecutionModeLabel } from "../../lib/execution-mode";
+import {
+  resolveProviderAccessControl,
+  type ProviderAccessAcpOption,
+} from "@pwragent/shared/provider-access-mode";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { buildDirectoryReferenceMarkdown } from "../../lib/directory-references";
 import { hashReferenceThreadIdentity } from "../../lib/hash-references";
@@ -1668,13 +1671,17 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
    * un-gated escalation. This window carries no settings state of its
    * own, so the gate reads the dismissed-forever preference itself.
    */
+  const pendingAccessAcpOptionRef = useRef<ProviderAccessAcpOption | undefined>(undefined);
   const applyExecutionMode = useCallback(
     (executionMode: ThreadExecutionMode): void => {
       const setExecutionMode = desktopApi?.setThreadExecutionMode;
+      const acpOption = pendingAccessAcpOptionRef.current;
+      pendingAccessAcpOptionRef.current = undefined;
       if (!setExecutionMode || !composerReadinessRef.current) return;
       void setExecutionMode({
         backend: threadSource,
         executionMode,
+        ...(acpOption && acpOption.source !== "model" ? { acpMode: acpOption } : {}),
         federationTarget,
         threadId,
       }).catch((error: unknown) => {
@@ -1694,6 +1701,10 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       currentExecutionMode: threadExecutionMode,
       desktopApi,
     });
+  const threadAcpCurrentModeId =
+    selectedConfiguration?.acpRuntime?.currentModeId ?? thread.acpRuntime?.currentModeId;
+  const threadAcpModeConfigValue =
+    selectedConfiguration?.acpRuntime?.configValues?.mode ?? thread.acpRuntime?.configValues?.mode;
 
   /**
    * The settings chip's menu: the same mutations the full composer's chip
@@ -1783,20 +1794,40 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           ?? launchpadOptions?.supportsFastMode
           ?? false
         : false;
-    // Only the modes the backend actually describes as available — the
-    // same filter the full composer applies, so an ACP thread with no
-    // approval-mode support is never offered a Full access row.
-    const availableExecutionModes = backendSummary?.executionModes
-      .filter((mode) => mode.available)
-      .map((mode) => ({
-        label: formatExecutionModeLabel(mode.mode),
-        mode: mode.mode,
-      }));
+    // Use the shared provider access control so Star Map cards offer the exact
+    // same single Access menu as the full composer (including Antigravity's
+    // unified Default Access / native modes / Full Access list).
+    const accessControl = resolveProviderAccessControl({
+      backend: backendSummary,
+      state: {
+        executionMode: threadExecutionMode,
+        acpRuntime: {
+          ...(threadAcpCurrentModeId ? { currentModeId: threadAcpCurrentModeId } : {}),
+          ...(threadAcpModeConfigValue ? { configValues: { mode: threadAcpModeConfigValue } } : {}),
+        },
+      },
+    });
+    const availableExecutionModes =
+      accessControl && accessControl.kind !== "acp"
+        ? accessControl.options
+            .filter((option) => option.available)
+            .map((option) => ({
+              label: option.label,
+              mode: option.executionMode,
+              value: option.value,
+              selected: option.value === accessControl.value,
+              danger: option.tone === "danger",
+            }))
+        : undefined;
     return {
       loading: Boolean(desktopApi.listBackends) && !backendSummaries.loaded,
       loadFailed: Boolean(backendSummaries.error),
       onOpen: onSettingsMenuOpen,
       executionModes: setExecutionMode ? availableExecutionModes : undefined,
+      accessLabel:
+        accessControl && accessControl.kind !== "acp"
+          ? accessControl.selectedOption?.label
+          : undefined,
       models: modelMenu.primary.map((option) => ({
         id: option.id,
         label: option.label,
@@ -1819,6 +1850,18 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       // is `applyExecutionMode` above.
       onSelectExecutionMode: setExecutionMode
         ? requestExecutionModeSelection
+        : undefined,
+      onSelectAccessOption: setExecutionMode && accessControl && accessControl.kind !== "acp"
+        ? (value: string) => {
+            const option = accessControl.options.find((candidate) => candidate.value === value);
+            if (!option) return;
+            pendingAccessAcpOptionRef.current = option.acpOption;
+            if (option.requiresFullAccessConfirmation) {
+              requestExecutionModeSelection(option.executionMode);
+              return;
+            }
+            applyExecutionMode(option.executionMode);
+          }
         : undefined,
       onSelectModel: setModelSettings
         ? (model) => {
@@ -1850,6 +1893,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           : undefined,
     };
   }, [
+    applyExecutionMode,
     backendSummaries.error,
     backendSummaries.loaded,
     backendSummary,
@@ -1857,6 +1901,9 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     federationTarget,
     onSettingsMenuOpen,
     requestExecutionModeSelection,
+    threadAcpCurrentModeId,
+    threadAcpModeConfigValue,
+    threadExecutionMode,
     threadId,
     threadModel,
     threadSource,

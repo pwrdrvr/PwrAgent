@@ -62,9 +62,12 @@ const DROP_FLASH_MS = 1200;
 function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => void): () => void {
   let list: HTMLElement | null = null;
   let sections: Element[] = [];
+  let children = new Map<Element, { firstSection: number; blockSize?: number }>();
   let frame = 0;
+  let samplePending = false;
   let viewportHeight: number | undefined;
-  const blocks = new Map<number, ProjectBlockBox>();
+  let listBlockSize: number | undefined;
+  const blocks: (ProjectBlockBox | undefined)[] = [];
 
   const measure = (): void => {
     const target = list;
@@ -81,75 +84,135 @@ function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => v
     const scrollTop = target.scrollTop;
     let listTop: number | undefined;
     publish(spyProjects(sections.length, (index) => {
-      const cached = blocks.get(index);
+      const cached = blocks[index];
       if (cached) return cached;
       listTop ??= target.getBoundingClientRect().top;
       const section = sections[index]!;
       const rect = section.getBoundingClientRect();
       // Sections stay in normal flow as the list scrolls. Their sticky
       // headers move inside them, so a box in list coordinates can be
-      // reused until the list, a section, or an intervening child changes.
+      // reused until this section or an earlier list child changes.
       const block = {
         key: section.getAttribute("data-directory-key")!,
         top: rect.top - listTop + scrollTop,
         bottom: rect.bottom - listTop + scrollTop,
       };
-      if (resize) blocks.set(index, block);
+      if (resize) blocks[index] = block;
       return block;
     }, scrollTop + height, scrollTop + topDockReserve(region)));
   };
   const schedule = (): void => {
-    if (frame !== 0) return;
+    if (frame !== 0 || samplePending) return;
     frame = window.requestAnimationFrame(() => {
       frame = 0;
-      measure();
+      if (!resize) {
+        measure();
+        return;
+      }
+      // A fresh observation requests a post-layout delivery even on a pure
+      // scroll. Read in the same callback that invalidates the cache, before
+      // another renderer task can lay out new boxes against the old ones.
+      samplePending = true;
+      resize.observe(region, { box: "border-box" });
     });
   };
 
-  const invalidateGeometry = (): void => {
-    blocks.clear();
-    viewportHeight = undefined;
-    schedule();
+  const invalidateFrom = (index: number): void => {
+    if (index < blocks.length) blocks.length = index;
   };
-  const resize = typeof ResizeObserver === "function" ? new ResizeObserver(invalidateGeometry) : null;
+  const onResize: ResizeObserverCallback = (entries) => {
+    let firstChanged = sections.length;
+    let viewportChanged = false;
+    let sampleRequested = false;
+    for (const entry of entries) {
+      if (entry.target === region) {
+        sampleRequested = true;
+        continue;
+      }
+      if (entry.target === list) {
+        const size = entry.contentBoxSize?.[0]?.blockSize;
+        if (size === undefined || size !== listBlockSize) {
+          listBlockSize = size;
+          viewportHeight = undefined;
+          viewportChanged = true;
+        }
+        continue;
+      }
+      const child = children.get(entry.target);
+      if (child === undefined) continue;
+      const size = entry.borderBoxSize?.[0]?.blockSize;
+      if (size === undefined || size !== child.blockSize) {
+        child.blockSize = size;
+        firstChanged = Math.min(firstChanged, child.firstSection);
+      }
+    }
+    // The list is a zero-gap column. Inline size changes do not move its
+    // project bounds unless a child also changes block size.
+    if (firstChanged < sections.length) invalidateFrom(firstChanged);
+    if (sampleRequested) {
+      resize?.unobserve(region);
+      samplePending = false;
+    }
+    if (sampleRequested || viewportChanged || firstChanged < sections.length) {
+      if (frame !== 0) {
+        window.cancelAnimationFrame(frame);
+        frame = 0;
+      }
+      measure();
+    }
+  };
+  const resize = typeof ResizeObserver === "function" ? new ResizeObserver(onResize) : null;
   const findList = () => region.querySelector<HTMLElement>(":scope > .directory-list");
   // DirectoriesList renders its sections as keyed direct children. Refresh
   // their references on membership changes. Nested thread updates can
   // invalidate the live children collection without changing this order.
   const syncSections = (): void => {
-    sections = [];
     if (list === null) return;
+    const previousOrder = children.keys();
+    const nextChildren = new Map<Element, { firstSection: number; blockSize?: number }>();
+    const nextSections: Element[] = [];
+    let firstChanged: number | undefined;
     for (const child of list.children) {
-      if (child.matches("section.directory-row[data-directory-key]")) sections.push(child);
+      const firstSection = nextSections.length;
+      if (firstChanged === undefined && previousOrder.next().value !== child) firstChanged = firstSection;
       // Starting rows and the pin divider also shift the sections below them.
-      resize?.observe(child, { box: "border-box" });
+      const previous = children.get(child);
+      if (previous === undefined) resize?.observe(child, { box: "border-box" });
+      nextChildren.set(child, { firstSection, blockSize: previous?.blockSize });
+      if (child.matches("section.directory-row[data-directory-key]")) nextSections.push(child);
     }
+    for (const child of children.keys()) {
+      if (!nextChildren.has(child)) resize?.unobserve(child);
+    }
+    // A removed suffix can leave the new direct children an exact prefix.
+    invalidateFrom(firstChanged ?? nextSections.length);
+    children = nextChildren;
+    sections = nextSections;
   };
   const mutation = new MutationObserver((records) => {
     if (records.some(({ target }) => target === region)) {
       const next = findList();
       if (next !== list) {
         watchList(next);
-        invalidateGeometry();
+        schedule();
         return;
       }
     }
-    const childChanges = records.filter(({ target }) => target === list);
-    if (childChanges.length === 0) return;
-    for (const { removedNodes } of childChanges) {
-      for (const child of removedNodes) {
-        if (child instanceof Element && child.parentElement !== list) resize?.unobserve(child);
-      }
-    }
+    if (!records.some(({ target }) => target === list)) return;
     syncSections();
-    invalidateGeometry();
+    schedule();
   });
   const watchList = (next: HTMLElement | null): void => {
     list = next;
+    sections = [];
+    children.clear();
+    blocks.length = 0;
+    viewportHeight = undefined;
+    listBlockSize = undefined;
+    samplePending = false;
     mutation.disconnect();
     mutation.observe(region, { childList: true });
     resize?.disconnect();
-    resize?.observe(region);
     if (list !== null) {
       mutation.observe(list, { childList: true });
       resize?.observe(list);
@@ -174,6 +237,7 @@ function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => v
     region.removeEventListener(TOP_DOCK_RESERVE_CHANGE_EVENT, schedule);
     mutation.disconnect();
     resize?.disconnect();
+    children.clear();
     sections = [];
     list = null;
   };

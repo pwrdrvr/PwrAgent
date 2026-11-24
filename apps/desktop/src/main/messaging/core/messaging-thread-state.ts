@@ -48,6 +48,7 @@ export type MessagingResolvedThreadState = {
    * (queued)` instead of the plain applied-mode label.
    */
   queuedExecutionMode?: ThreadExecutionMode;
+  queuedNativeMode?: string;
   /** Wall-clock ms when the queue entry was created. */
   queuedExecutionModeAt?: number;
   reasoningEffort?: string;
@@ -108,6 +109,7 @@ export function resolveMessagingThreadState(params: {
     observedGitBranch: thread.observedGitBranch,
     projectLabel: linkedDirectory?.label ?? directory?.label,
     queuedExecutionMode: thread.queuedExecutionMode,
+    queuedNativeMode: thread.queuedNativeMode,
     queuedExecutionModeAt: thread.queuedExecutionModeAt,
     reasoningEffort: thread.reasoningEffort,
     serviceTier: thread.serviceTier,

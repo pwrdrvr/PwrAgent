@@ -157,6 +157,19 @@ export class AcpSessionRuntimeOptions {
     });
   }
 
+  async applyAcpSessionRuntimeOptionNow(
+    params: SetAcpSessionRuntimeOptionRequest,
+    options?: {
+      fromQueue?: boolean;
+      queueId?: string;
+      fromValue?: string;
+      fromLabel?: string;
+      toLabel?: string;
+    },
+  ): Promise<SetAcpSessionRuntimeOptionResponse> {
+    return await this.applyAcpSessionRuntimeOption(params, options);
+  }
+
   private async applyAcpSessionRuntimeOption(
     params: SetAcpSessionRuntimeOptionRequest,
     options?: {

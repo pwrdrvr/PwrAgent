@@ -1746,6 +1746,53 @@ describe("AcpAgentClient", () => {
     ), { numRuns: 60 });
   });
 
+  it("applies Antigravity's deferred tool approval to the selected operation only", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), fc.uniqueArray(fc.constantFrom("add_todo", "handoff_task", "start_review"), {
+      minLength: 2,
+    }), async (offersAlways, writes) => {
+      const transport = new FakeAcpAgentTransport();
+      const onRequest = vi.fn((request: AppServerPendingRequestNotification) => {
+        expect(buildPendingRequestActions(request).map(({ label }) => label)).toEqual(["Allow", "Deny", "Cancel turn"]);
+        expect(request.params.prompt).toContain(writes[onRequest.mock.calls.length - 1]);
+        return { decision: "accept" };
+      });
+      const hostApprovesToolCall = vi.fn(async (_server: string, _name: string, input: unknown) =>
+        (input as { toolName?: string })?.toolName === "get_pull_request");
+      const client = new AcpAgentClient({
+        backendId: "acp:antigravity",
+        store,
+        transport,
+        onRequest,
+        mcpServers: () => ({
+          servers: [{ name: "pwragent", type: "http", url: "http://127.0.0.1:1/mcp", headers: [] }],
+          hostApprovesToolCall,
+        }),
+      });
+      try {
+        await client.initialize();
+        const session = await client.startSession({ cwd: "/repo", executionMode: "default" });
+        for (const [index, toolName] of ["get_pull_request", ...writes].entries()) {
+          const outcome = await transport.emitRequest("session/request_permission", {
+            sessionId: session.sessionId,
+            toolCall: {
+              toolCallId: `tool-${index}`, kind: "other", name: "mcp_pwragent_call_pwragent_tool",
+              rawInput: { toolName, arguments: {} },
+            },
+            options: [
+              { optionId: "allow", name: "Allow", kind: "allow_once" },
+              ...(offersAlways ? [{ optionId: "always", name: "Always allow", kind: "allow_always" }] : []),
+              { optionId: "deny", name: "Deny", kind: "reject_once" },
+            ],
+          }, index + 1);
+          expect(outcome).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+        }
+        expect(onRequest).toHaveBeenCalledTimes(writes.length);
+      } finally {
+        await client.dispose();
+      }
+    }), { numRuns: 10 });
+  });
+
   it("keeps Antigravity's own allow-always choice instead of a thread grant", async () => {
     const transport = new FakeAcpAgentTransport();
     const onRequest = vi.fn((request: AppServerPendingRequestNotification) => {

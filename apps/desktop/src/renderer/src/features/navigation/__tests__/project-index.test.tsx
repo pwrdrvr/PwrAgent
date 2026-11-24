@@ -377,7 +377,7 @@ describe("Sidebar project index", () => {
     fireEvent.scroll(list);
     await act(async () => { await new Promise((resolve) => requestAnimationFrame(resolve)); });
     expect(tail.style.height).toBe("200px");
-    expect(relayButton).toHaveAttribute("aria-current", "location");
+    await waitFor(() => expect(relayButton).toHaveAttribute("aria-current", "location"));
     scrollTop = 1400;
     fireEvent.scroll(list);
     await act(async () => { await new Promise((resolve) => requestAnimationFrame(resolve)); });

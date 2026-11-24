@@ -243,9 +243,14 @@ import { threadJobMonitorControl } from "../../lib/job-monitor-control";
 import {
   formatExecutionModeLabel,
   describeExecutionModeForBackend,
-  getAcpRuntimeModeControl,
+  getProviderAccessControl,
 } from "../../lib/execution-mode";
-import { acpRuntimeModeIsFullAccess } from "@pwragent/shared/acp-permission-mode";
+import {
+  formatAntigravityAccessStateLabel,
+  launchpadPatchForProviderAccessOption,
+  normalizeAntigravityAccessTarget,
+  type ProviderAccessModeOption,
+} from "@pwragent/shared/provider-access-mode";
 import {
   backendDefaultModel as getDefaultModelOption,
   backendDefaultReasoningEffort as getDefaultReasoningEffort,
@@ -745,7 +750,14 @@ export type ComposerProps = {
   /** Selected-thread Thinking state from useThreadSessionState. Do not rebuild it here. */
   threadBusy?: boolean;
   updatingExecutionMode?: ThreadExecutionMode;
-  onSetExecutionMode?: (executionMode: ThreadExecutionMode) => Promise<void>;
+  onSetExecutionMode?: (
+    executionMode: ThreadExecutionMode,
+    acpMode?: {
+      source: "configOption" | "mode";
+      optionId: string;
+      value: string;
+    },
+  ) => Promise<void>;
   onSetAcpRuntimeOption?: (params: {
     source: "configOption" | "mode";
     optionId: string;
@@ -12103,11 +12115,26 @@ function useComposerController(props: ComposerProps) {
     }
   };
 
+  const pendingAccessOptionRef = useRef<ProviderAccessModeOption | undefined>(undefined);
+
   const applyExecutionModeSelection = (
     executionMode: ThreadExecutionMode,
   ): void => {
+    const pendingOption = pendingAccessOptionRef.current;
+    pendingAccessOptionRef.current = undefined;
+    const acpOption =
+      pendingOption && pendingOption.executionMode === executionMode
+        ? pendingOption.acpOption
+        : undefined;
     if (props.launchpad) {
-      if (props.launchpad.executionMode !== executionMode) {
+      if (pendingOption && pendingOption.executionMode === executionMode) {
+        handleLaunchpadPatch(
+          launchpadPatchForProviderAccessOption({
+            option: pendingOption,
+            currentAcpRuntime: props.launchpad.acpRuntime,
+          }),
+        );
+      } else if (props.launchpad.executionMode !== executionMode) {
         handleLaunchpadPatch({ executionMode });
       }
       return;
@@ -12115,11 +12142,19 @@ function useComposerController(props: ComposerProps) {
 
     if (
       props.thread &&
-      props.thread.executionMode !== executionMode &&
-      !props.updatingExecutionMode
+      !props.updatingExecutionMode &&
+      (props.thread.executionMode !== executionMode || acpOption)
     ) {
       setSendError(undefined);
-      void props.onSetExecutionMode?.(executionMode);
+      if (acpOption && acpOption.source !== "model") {
+        void props.onSetExecutionMode?.(executionMode, {
+          source: acpOption.source,
+          optionId: acpOption.optionId,
+          value: acpOption.value,
+        });
+      } else {
+        void props.onSetExecutionMode?.(executionMode);
+      }
     }
   };
 
@@ -12175,7 +12210,7 @@ function useComposerController(props: ComposerProps) {
     speedOptions,
     selectedSpeed,
     selectedServiceTier,
-    acpRuntimeModeControl,
+    providerAccessControl,
     providerOptions,
     providerPickerEntries,
     launchpadModelScope,
@@ -12196,7 +12231,6 @@ function useComposerController(props: ComposerProps) {
     resolvableReviewerRecents,
     activeReviewerRecentIndex,
     patchReviewer,
-    executionModeOptions,
     workspaceLabel,
     supportsPlanMode,
     supportsSteering,
@@ -12402,7 +12436,9 @@ function useComposerController(props: ComposerProps) {
     const selectedSpeed = selectedCodexSpeed(currentSettings ?? {});
     const selectedServiceTier =
       currentSettings?.serviceTier ?? backend?.launchpadOptions?.serviceTiers?.[0];
-    const acpRuntimeModeControl = getAcpRuntimeModeControl(backend, currentSettings);
+    const providerAccessControl = getProviderAccessControl(backend, currentSettings, {
+      includeUnavailableAuto: true,
+    });
     const providerOptions = useMemo(
       () => props.backends?.filter(
         (candidate) => candidate.available && candidate.capabilities.createThread
@@ -12560,10 +12596,6 @@ function useComposerController(props: ComposerProps) {
       });
       setSendError(undefined);
     };
-    const executionModeOptions =
-      backend?.executionModes.filter((mode) =>
-        mode.available || (backend.available && mode.mode === "auto"),
-      ) ?? [];
     const workspaceLabel = formatThreadWorkspaceLabel(props.thread);
     // Claude maps Plan to its own read-only plan permission mode.
     const supportsPlanMode = PLAN_MODE_BACKENDS.has(props.launchpad?.backend ?? props.thread?.source ?? "");
@@ -13780,7 +13812,7 @@ function useComposerController(props: ComposerProps) {
       speedOptions,
       selectedSpeed,
       selectedServiceTier,
-      acpRuntimeModeControl,
+      providerAccessControl,
       providerOptions,
       providerPickerEntries,
       launchpadModelScope,
@@ -13801,7 +13833,6 @@ function useComposerController(props: ComposerProps) {
       resolvableReviewerRecents,
       activeReviewerRecentIndex,
       patchReviewer,
-      executionModeOptions,
       workspaceLabel,
       supportsPlanMode,
       supportsSteering,
@@ -13898,6 +13929,7 @@ function useComposerController(props: ComposerProps) {
   // frames small and render after the controller has returned. Call helpers
   // directly so their identity never remounts the editor or its menus.
   function renderComposerBand(): ReactNode {
+    const queuedPermissionLabel = formatQueuedPermissionLabel(props.thread, backend);
     return (
       <div className="composer__band">
       {/* A send to another machine holds this thread; say so above all else,
@@ -14030,8 +14062,7 @@ function useComposerController(props: ComposerProps) {
         </div>
       ) : null}
 
-      {props.thread?.queuedExecutionMode &&
-      props.thread.queuedExecutionMode !== props.thread.executionMode ? (
+      {queuedPermissionLabel ? (
         <div
           className="composer__queued composer__queued--permissions"
           aria-label="Queued permissions change"
@@ -14040,7 +14071,7 @@ function useComposerController(props: ComposerProps) {
             <span className="composer__queued-label">Permissions queued</span>
             <span className="composer__queued-text">
               Will switch to{" "}
-              {formatExecutionModeLabel(props.thread.queuedExecutionMode)} when
+              {queuedPermissionLabel} when
               the current turn ends
             </span>
           </div>
@@ -15783,81 +15814,66 @@ function useComposerController(props: ComposerProps) {
             </span>
           ) : null}
 
-          {executionModeOptions.length > 0 &&
-          (props.launchpad || (props.thread && props.onSetExecutionMode)) ? (
+          {providerAccessControl &&
+          (props.launchpad
+            || (props.thread
+              && (providerAccessControl.kind === "acp"
+                ? Boolean(props.onSetAcpRuntimeOption)
+                : Boolean(props.onSetExecutionMode)))) ? (
             <ComposerDropdown
-              ariaLabel="Access mode"
+              ariaLabel={providerAccessControl.ariaLabel}
               compact
-              tone={
-                (props.launchpad?.executionMode ??
-                  props.thread?.executionMode ??
-                  "default") === "full-access"
-                  ? "danger"
-                  : undefined
+              tone={providerAccessControl.selectedOption?.tone}
+              disabled={
+                launchpadSubmitting
+                || Boolean(props.updatingExecutionMode)
+                || (!props.launchpad
+                  && (providerAccessControl.kind === "acp"
+                    ? !props.onSetAcpRuntimeOption
+                    : !props.onSetExecutionMode))
               }
-              disabled={launchpadSubmitting || Boolean(props.updatingExecutionMode)}
-              value={
-                props.launchpad?.executionMode ??
-                props.thread?.executionMode ??
-                "default"
-              }
-              options={executionModeOptions.map((mode) => ({
-                label: formatExecutionModeLabel(mode.mode),
-                value: mode.mode,
-                disabled: !mode.available,
-                tooltip: mode.unavailableReason
-                  ?? (backend?.kind === "codex" || backend?.kind === "claude"
-                    ? describeExecutionModeForBackend(backend.kind, mode.mode)
-                    : undefined),
+              value={providerAccessControl.value}
+              options={providerAccessControl.options.map((option) => ({
+                label: option.label,
+                value: option.value,
+                disabled: !option.available,
+                tooltip:
+                  option.kind === "execution"
+                    ? option.unavailableReason
+                      ?? (backend?.kind === "codex" || backend?.kind === "claude"
+                        ? describeExecutionModeForBackend(backend.kind, option.executionMode)
+                        : undefined)
+                    : undefined,
               }))}
               onChange={(value) => {
-                const executionMode = value as ThreadExecutionMode;
-                requestExecutionModeSelection(executionMode);
-              }}
-            />
-          ) : null}
-
-          {acpRuntimeModeControl ? (
-            <ComposerDropdown
-              ariaLabel="Agent mode"
-              compact
-              disabled={
-                launchpadSubmitting ||
-                (!props.launchpad && !props.onSetAcpRuntimeOption)
-              }
-              value={acpRuntimeModeControl.value}
-              options={acpRuntimeModeControl.options}
-              onChange={(value) => {
+                const option = providerAccessControl.options.find(
+                  (candidate) => candidate.value === value,
+                );
+                if (!option) return;
+                if (option.requiresFullAccessConfirmation) {
+                  pendingAccessOptionRef.current = option;
+                  requestExecutionModeSelection(option.executionMode);
+                  return;
+                }
                 if (props.launchpad) {
-                  const executionMode = acpRuntimeModeIsFullAccess(value)
-                    ? "full-access"
-                    : "default";
-                  handleLaunchpadPatch({
-                    ...(backend?.kind !== "acp:antigravity" ? { executionMode } : {}),
-                    acpRuntime: {
-                      ...props.launchpad.acpRuntime,
-                      configValues:
-                        acpRuntimeModeControl.source === "configOption"
-                          ? {
-                              ...(props.launchpad.acpRuntime?.configValues ?? {}),
-                              [acpRuntimeModeControl.optionId]: value,
-                            }
-                          : props.launchpad.acpRuntime?.configValues,
-                      currentModeId:
-                        acpRuntimeModeControl.source === "mode"
-                          ? value
-                          : acpRuntimeModeControl.optionId === "permission_mode"
-                            ? props.launchpad.acpRuntime?.currentModeId
-                            : undefined,
-                    },
+                  handleLaunchpadPatch(
+                    launchpadPatchForProviderAccessOption({
+                      option,
+                      currentAcpRuntime: props.launchpad.acpRuntime,
+                    }),
+                  );
+                  return;
+                }
+                if (providerAccessControl.kind === "acp" && option.kind === "acp" && option.acpOption.source !== "model") {
+                  void props.onSetAcpRuntimeOption?.({
+                    source: option.acpOption.source,
+                    optionId: option.acpOption.optionId,
+                    value: option.acpOption.value,
                   });
                   return;
                 }
-                void props.onSetAcpRuntimeOption?.({
-                  source: acpRuntimeModeControl.source,
-                  optionId: acpRuntimeModeControl.optionId,
-                  value,
-                });
+                pendingAccessOptionRef.current = option;
+                applyExecutionModeSelection(option.executionMode);
               }}
             />
           ) : null}
@@ -17580,6 +17596,21 @@ function useComposerController(props: ComposerProps) {
 }
 
 /** Render after the controller returns, keeping it out of JSX stack captures. */
+function formatQueuedPermissionLabel(
+  thread: NavigationThreadSummary | undefined,
+  backend: BackendSummary | undefined,
+): string | undefined {
+  const queued = thread?.queuedExecutionMode;
+  if (!queued) return undefined;
+  if (thread.queuedNativeMode !== undefined) {
+    return formatAntigravityAccessStateLabel(
+      normalizeAntigravityAccessTarget({ executionMode: queued, nativeMode: thread.queuedNativeMode }),
+      backend?.acp?.runtime,
+    );
+  }
+  return queued !== thread.executionMode ? formatExecutionModeLabel(queued) : undefined;
+}
+
 function ComposerView({ render }: { render: () => ReactNode }) {
   return render();
 }

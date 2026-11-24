@@ -764,6 +764,7 @@ function projectNavigationRow(params: {
     ...(thread.queuedExecutionMode
       ? { queuedExecutionMode: thread.queuedExecutionMode }
       : {}),
+    ...(thread.queuedNativeMode !== undefined ? { queuedNativeMode: thread.queuedNativeMode } : {}),
     ...(thread.prAutoDispatchEnabled !== undefined
       ? { prAutoDispatchEnabled: thread.prAutoDispatchEnabled }
       : {}),
