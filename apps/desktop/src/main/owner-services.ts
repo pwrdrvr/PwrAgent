@@ -467,6 +467,7 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
     ),
     (entry, id) => service.prepareResourceCheckoutWakeup(entry, id),
     resourceCheckoutsEnabled,
+    (backend, threadId) => resourceCheckouts.hasAgentCheckoutToCleanUp(backend, threadId),
   );
   getDesktopBackendRegistry().setPwrAgentAppManagementHandler(
     createPwrAgentAppManagementHandler({

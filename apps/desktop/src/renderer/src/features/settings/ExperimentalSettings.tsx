@@ -245,7 +245,7 @@ export function ExperimentalSettings(props: {
             disabled={props.saving}
             label="Enable resource checkout tools"
             sub="Applies to Codex, Claude and ACP threads."
-            help="Turning this off removes resource checkout tools from agent discovery and refuses new tool calls. The Resources window stays available to inspect or release active holds. New threads and runtimes with tool refresh pick up changes on their next turn."
+            help="Turning this off blocks new agent reservations. Threads can still check status, release their holds, and cancel queued requests. The Resources window stays available. New threads and runtimes with tool refresh pick up changes on their next turn."
             source={sourceBadge(resourceCheckoutsEnabled)}
             onChange={props.onResourceCheckoutsEnabledChange}
           />

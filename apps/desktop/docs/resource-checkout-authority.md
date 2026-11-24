@@ -4,8 +4,12 @@
 `pwragent` agent tools. Agent discovery and invocation of the
 `resource_checkout_*` tools are gated behind **Settings → Experimental →
 Federation resources** (`[experimental] resource_checkouts_enabled = true`,
-disabled by default). The owner derives a local operator from its main
-window and an agent from its authenticated thread. Request keys are scoped
+disabled by default). With the setting off, threads with outstanding checkouts
+retain tools to read their receipts, release their holds, and cancel their
+queued requests. The same cleanup calls work from a previously loaded catalog.
+With the setting on, Codex loads the checkout tools eagerly when Codex Tool
+Discovery is off. The owner derives a local operator from its main window and
+an agent from its authenticated thread. Request keys are scoped
 to the actor. The profile mints a Federation instance ID once if it has
 none, giving operator and agent receipts a stable owner across restarts.
 A retry returns the recorded result. Status combines that

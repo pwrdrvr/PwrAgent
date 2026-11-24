@@ -10,6 +10,8 @@ export type CheckoutToolHandler = (
   op: CheckoutToolName, args: Record<string, unknown>, context: AgentToolCallContext,
 ) => Promise<unknown>;
 
+export type CheckoutToolMode = "enabled" | "cleanup" | "hidden";
+
 type CheckoutHandoff = Extract<ResourceCheckoutActionRequest, { kind: "delegate_execution" }>;
 type SendHandoff = (context: AgentToolCallContext, executor: CheckoutHandoff["executor"], prompt: string, bind: () => Promise<void>) => Promise<unknown>;
 
@@ -38,10 +40,26 @@ function withQueuedNextStep<T>(result: T, resourceId: string, idempotencyKey: st
   return queued ? { ...result, next: queuedCheckoutNextStep(resourceId, idempotencyKey) } : result;
 }
 
-export function buildResourceCheckoutToolDefinitions(handler?: CheckoutToolHandler): AgentToolDefinition[] {
+export function isResourceCheckoutCleanupCall(op: CheckoutToolName, args: Record<string, unknown>): boolean {
+  if (op === "resource_checkout_status") return true;
+  const action = args.action;
+  return op === "resource_checkout_action" && typeof action === "object" && action !== null
+    && "kind" in action && (action.kind === "release" || action.kind === "cancel_request");
+}
+
+export function buildResourceCheckoutToolDefinitions(
+  handler?: CheckoutToolHandler,
+  mode: CheckoutToolMode = "enabled",
+): AgentToolDefinition[] {
   if (!handler) return [];
-  return toolNames.map((name) => ({
-    namespace: PWRAGENT_TOOL_NAMESPACE, name, description: descriptions[name], deferLoading: true,
+  const names = mode === "enabled" ? toolNames : ["resource_checkout_action", "resource_checkout_status"] as const;
+  // Codex's search bootstrap defers these tools when enabled. Otherwise they
+  // must load eagerly, including on providers that cannot search for tools.
+  return names.map((name) => ({
+    namespace: PWRAGENT_TOOL_NAMESPACE, name, advertise: mode !== "hidden",
+    description: name === "resource_checkout_action" && mode !== "enabled"
+      ? "Release a checkout owned by this thread (kind=release, resourceId, allocationId, generation) or cancel its queued request (kind=cancel_request, resourceId, queueEntryId). Include idempotencyKey and reuse it after an unknown result."
+      : descriptions[name],
     annotations: { readOnlyHint: name === "resource_checkout_discover" || name === "resource_checkout_status" },
     inputSchema: {
       type: "object", additionalProperties: false,
