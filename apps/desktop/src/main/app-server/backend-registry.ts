@@ -6225,8 +6225,12 @@ export class DesktopBackendRegistry {
     sessionId: string,
     requested: ThreadExecutionMode,
   ): ThreadExecutionMode {
-    // A slash command, not the native mode, set this session's access.
-    if (this.usesSlashControlledAcpExecutionModes(backend)) return requested;
+    // A slash command, not the native mode, set this session's access, and
+    // Antigravity's access is the process its client runs, as permission
+    // requests also treat it.
+    if (backend === "acp:antigravity" || this.usesSlashControlledAcpExecutionModes(backend)) {
+      return requested;
+    }
     const session = this.acpBackend.getSession(backend, sessionId);
     const agent = this.acpBackend.getInstalledAgent(backend);
     const executionMode = acpStartedExecutionMode({
