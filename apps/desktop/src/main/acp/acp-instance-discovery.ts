@@ -140,6 +140,8 @@ export type DiscoverAcpAgentInstancesOptions = {
    * an `env.PATH` override alone does not confine discovery to a fixture.
    */
   listExecutables?: AcpPathExecutableLister;
+  /** Use absolute paths in this fixture bin directory for command probes. */
+  pathProbeRootDir?: string;
   /**
    * Root for each strategy's absolute fallback candidates (tests). Every
    * `$HOME`-relative fallback (`~/.kimi-code/bin/kimi`, `~/.grok/bin/grok`, …)
@@ -629,6 +631,7 @@ function kitDiscoveryOptions(
   options: DiscoverAcpAgentInstancesOptions | undefined,
   strategies: readonly AcpAgentStrategy[],
 ): LocalAcpDiscoveryOptions {
+  const pathProbeRootDir = options?.pathProbeRootDir;
   const overrides: Record<string, string> = {};
   for (const [registryId, pref] of Object.entries(options?.preferences ?? {})) {
     const override = pref.overridePath?.trim();
@@ -637,7 +640,17 @@ function kitDiscoveryOptions(
     }
   }
   return {
-    strategies,
+    strategies: pathProbeRootDir === undefined
+      ? strategies
+      : strategies.map((strategy) => ({
+          ...strategy,
+          discoveryProbe: {
+            ...strategy.discoveryProbe,
+            // An absolute command bypasses the kit's PATH lister and prevents
+            // Windows from resolving a bare command from the working directory.
+            command: path.resolve(pathProbeRootDir, strategy.discoveryProbe.command),
+          },
+        })),
     ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
     ...(options?.env ? { env: options.env } : {}),
     ...(options?.now ? { now: options.now } : {}),

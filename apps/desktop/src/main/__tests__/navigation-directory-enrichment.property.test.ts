@@ -14,6 +14,7 @@ import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnost
 import { createThreadDirectoryEnricher, readNavigationCheckout } from "../git-info/directory-store";
 import { StackReader } from "../stacks/stack-reader";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
+import { isolateProcessGitEnvironment, runIsolatedGitSync } from "./helpers/isolated-git";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 const overlays = vi.hoisted(() => ({
@@ -217,6 +218,36 @@ it.each([false, true])("refreshes a remembered parent mapping for a new nested c
   } finally {
     await client.close();
     vi.unstubAllEnvs();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it.skipIf(process.platform === "win32")("groups raw navigation threads by Git's root for a valid HEAD symlink", async () => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-navigation-head-link-")));
+  const nested = path.join(root, "nested");
+  const { client, read } = navigationFixture([nested]);
+  const restore = isolateProcessGitEnvironment();
+  const launches = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+  const git = (...args: string[]) => runIsolatedGitSync(root, args);
+  try {
+    await mkdir(nested);
+    git("init", "--initial-branch=topic");
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "topic");
+    const head = path.join(root, ".git", "HEAD");
+    await rm(head);
+    await symlink("refs/heads/topic", head);
+    const checkout = git("-C", nested, "rev-parse", "--show-toplevel").trim();
+    expect(checkout).toBe(root);
+    expect((await readNavigationCheckout(nested, true))?.directories).toMatchObject([{ path: checkout }]);
+    const index = await read();
+    expect(index.threads[0]?.linkedDirectories).toMatchObject([{ path: checkout }]);
+    expect(index.directories.find(({ key }) => key === `directory:${normalize(checkout)}`)?.threadKeys)
+      .toEqual(["codex:thread-0"]);
+    expect(launches).not.toHaveBeenCalled();
+  } finally {
+    launches.mockRestore();
+    await client.close();
+    restore();
     await rm(root, { recursive: true, force: true });
   }
 });

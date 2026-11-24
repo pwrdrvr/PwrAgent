@@ -12372,6 +12372,12 @@ export class DesktopBackendRegistry {
       return event;
     }
     pending.messageId = notification.params.item.id;
+    // The provider can publish the accepted user item before the steer
+    // receipt binds the staged context. Keep its attachments before that
+    // item consumes the context.
+    if (notification.method === "item/completed" && notification.params.turnId && !pending.turnId) {
+      this.bindPendingThreadMessageContext(pending.id, notification.params.turnId);
+    }
     await this.persistThreadMessageOrigin({
       backend: event.backend,
       threadId: notification.params.threadId,
@@ -13572,6 +13578,12 @@ export class DesktopBackendRegistry {
             backend: acpBackend,
             content: promptPayload.promptContent,
             interjectionId: params.requestId,
+            ...(acpBackend === "acp:antigravity"
+              ? {
+                  prompt: promptPayload.prompt,
+                  ...(promptPayload.parts.length > 0 ? { parts: promptPayload.parts } : {}),
+                }
+              : {}),
             sessionId: params.threadId,
             text,
           });

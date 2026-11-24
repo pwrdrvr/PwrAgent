@@ -4,7 +4,7 @@ import { createHmac, randomBytes } from "node:crypto";
 export type GitSubprocessPurpose =
   | "unspecified" | "directory-enrichment" | "directory-status"
   | "working-state" | "pr-remotes" | "pr-discovery" | "pr-local-head"
-  | "pr-review-coverage" | "review-working-tree";
+  | "pr-review-coverage" | "review-working-tree" | "stack-checkout" | "stack-status";
 
 type PrGitSubprocessCaller = "pr-scheduled-prefetch" | "pr-live-branch-lookup" | "pr-stored-attachment-validation";
 export const prGitSubprocessCaller = new AsyncLocalStorage<PrGitSubprocessCaller | undefined>();
@@ -16,7 +16,14 @@ type Command =
 type Counts = { started: number; succeeded: number; failed: number; durationMs: number };
 type Identity = { directory?: string; commonDirectory?: string; sshHost?: string };
 type Row = Counts & { command: Command; purpose: GitSubprocessPurpose; caller?: PrGitSubprocessCaller; directoryId: string; commonDirectoryId?: string; sshHostId?: string };
-type Bucket = { startMs: number; totals: Counts; overflow: Counts; startsByCaller: Record<PrGitSubprocessCaller, number>; rows: Map<string, Row> };
+type Bucket = {
+  startMs: number;
+  totals: Counts;
+  overflow: Counts;
+  startsByCaller: Record<PrGitSubprocessCaller, number>;
+  startsByPurpose: Partial<Record<GitSubprocessPurpose, number>>;
+  rows: Map<string, Row>;
+};
 const counts = (): Counts => ({ started: 0, succeeded: 0, failed: 0, durationMs: 0 });
 
 /** No raw argv, paths, hosts, output, environment, stacks, timers or writes.
@@ -63,12 +70,13 @@ export class GitSubprocessDiagnostics {
       if (!bucket) {
         this.prune(startMs);
         bucket = {
-          startMs, totals: counts(), overflow: counts(), rows: new Map(),
+          startMs, totals: counts(), overflow: counts(), startsByPurpose: {}, rows: new Map(),
           startsByCaller: { "pr-scheduled-prefetch": 0, "pr-live-branch-lookup": 0, "pr-stored-attachment-validation": 0 },
         };
         this.buckets.set(startMs, bucket);
       }
       if (caller) bucket.startsByCaller[caller] += delta.started;
+      if (delta.started) bucket.startsByPurpose[purpose] = (bucket.startsByPurpose[purpose] ?? 0) + delta.started;
       const key = `${command}:${purpose}:${caller ?? ""}:${directoryId}:${commonDirectoryId ?? ""}:${sshHostId ?? ""}`;
       let row = bucket.rows.get(key);
       if (!row && bucket.rows.size < 32) {
@@ -103,6 +111,7 @@ export class GitSubprocessDiagnostics {
       buckets: [...this.buckets.values()].map((bucket) => ({
         startMs: bucket.startMs, totals: { ...bucket.totals }, overflow: { ...bucket.overflow },
         startsByCaller: { ...bucket.startsByCaller },
+        startsByPurpose: { ...bucket.startsByPurpose },
         rows: [...bucket.rows.values()].map((row) => ({ ...row })),
       })),
     };

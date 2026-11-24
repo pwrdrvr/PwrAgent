@@ -14,6 +14,7 @@ import { GithubPrToolClient, type GhRunner } from "../pr-status/github-pr-tool-c
 import { validateForgeAttachments, type ForgePrToolContext } from "../pr-status/forge-pr-tool-shared";
 import { FORGE_PR_WRITE_OPERATIONS, forgePrToolGroup, validateForgePrToolArgs } from "../pr-status/forge-pr-tool-contract";
 import { ForgePrToolService } from "../pr-status/forge-pr-tool-service";
+import * as gitExecutable from "../app-server/git-executable";
 import { buildForgeToolDefinitions, buildForgePrToolDefinitions } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import { searchPwrAgentTools } from "../agent-tools/pwragent-tool-search";
@@ -369,6 +370,29 @@ describe("GitHub attachments", () => {
 describe("forge tool service", () => {
   const remotes = { github: { host: "github.com", owner: "fixture", repo: "project" }, gitlab: { host: "gitlab.com", owner: "group/sub", repo: "project" } };
   const scope = (list: Array<{ host: string; owner: string; repo: string }>) => ({ remotes: list, attached: [], directories: [], privateRoots: [] });
+  it("blocks a merge on unavailable checkout evidence but accepts a confirmed absent catalog", async () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "pwragent-forge-stack-merge-evidence-"));
+    const execute = vi.fn(async () => ({ merged: true }));
+    const service = new ForgePrToolService({
+      enabled: () => true, clients: { github: { execute }, gitlab: { execute: vi.fn() } }, defaultMergeMethod: () => "merge",
+    });
+    const run = vi.spyOn(gitExecutable, "runGitCommand")
+      .mockRejectedValueOnce(new Error("fixture Git Job startup failure"))
+      .mockRejectedValueOnce(Object.assign(new Error("fixture confirmed no repository"), {
+        code: 128, stderr: "fatal: not a git repository (or any of the parent directories): .git\n",
+      }));
+    try {
+      const request = () => service.execute("merge_pull_request", { number: 9, expectedHeadSha: "a".repeat(40) },
+        { ...scope([remotes.github]), directories: [cwd] }, new AbortController().signal);
+      await expect(request()).rejects.toMatchObject({ code: "unavailable", message: expect.stringContaining("stack evidence") });
+      expect(execute).not.toHaveBeenCalled();
+      await expect(request()).resolves.toEqual({ merged: true });
+      expect(execute).toHaveBeenCalledOnce();
+    } finally {
+      run.mockRestore();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
   it("sends each call to its repository's provider and refuses repositories outside the thread", async () => {
     const github = { execute: vi.fn(async () => ({ via: "github" })) };
     const gitlab = { execute: vi.fn(async () => ({ via: "gitlab" })) };

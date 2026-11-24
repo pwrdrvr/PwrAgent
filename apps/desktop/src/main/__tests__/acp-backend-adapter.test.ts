@@ -1284,6 +1284,124 @@ describe("AcpBackendAdapter", () => {
     }
   });
 
+  it("advertises steerTurn for Antigravity and emits item/completed userMessage on overlapping-prompt steer", async () => {
+    const backendId = "acp:antigravity" as AcpBackendId;
+    let agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "antigravity",
+      name: "Antigravity",
+      version: "1.5.15",
+      // Simulate an older persisted record whose cached capabilities had steerTurn: false.
+      capabilities: {
+        conversationRewind: false,
+        liveWorkspaceHandoff: false,
+        managedReview: false,
+        steerTurn: false,
+      },
+      launchDescriptor: {
+        backendId,
+        registryId: "antigravity",
+        distributionKind: "local",
+        command: "/fixture/agy",
+        args: ["acp", "--process-per-session"],
+        env: {},
+      },
+    };
+    const sessions = new Map<string, AcpSessionMetadata>();
+    const prompts: Array<{ resolve: (value: unknown) => void; reject: (error: unknown) => void }> = [];
+    const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentInfo: { name: "Antigravity ACP Server", version: "1.5.15" },
+      },
+      "session/new": { sessionId: "agy-session-1" },
+    });
+    const baseRequest = transport.request.bind(transport);
+    transport.request = async (method, params, timeoutMs) => {
+      if (method === "session/prompt") {
+        transport.requests.push({ method, params, timeoutMs });
+        return await new Promise((resolve, reject) => {
+          prompts.push({ resolve, reject });
+        });
+      }
+      return await baseRequest(method, params, timeoutMs);
+    };
+    const events: AgentEvent[] = [];
+    const adapter = createTestAcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn((updated: AcpInstalledAgentRecord) => { agent = updated; }),
+      },
+      acpSessionStore: {
+        listSessions: () => [...sessions.values()],
+        getSession: (_backendId, sessionId) => sessions.get(sessionId),
+        upsertSession: (metadata) => { sessions.set(metadata.sessionId, metadata); },
+      },
+      captureStores: [],
+      createAcpTransport: () => transport,
+      emit: async (event) => { events.push(event); },
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+
+    try {
+      expect(describeInstalledAcpBackend(agent).capabilities.steerTurn).toBe(true);
+      const client = await adapter.getClient(backendId);
+      const session = await client.startSession({ cwd: "/repo", executionMode: "default" });
+      await client.startPrompt({
+        sessionId: session.sessionId,
+        prompt: "Write a poem",
+        turnId: "turn-1",
+      });
+
+      const steerPromise = adapter.steerSession({
+        backend: backendId,
+        sessionId: session.sessionId,
+        text: "Say PINEAPPLE",
+        prompt: "Say PINEAPPLE",
+        parts: [{ type: "text", text: "Say PINEAPPLE" }],
+        content: [{ type: "text", text: "Say PINEAPPLE" }],
+        interjectionId: "agy-steer-1",
+      });
+      await vi.waitFor(() => expect(prompts).toHaveLength(2));
+      prompts[0]!.resolve({ stopReason: "end_turn" });
+
+      await expect(steerPromise).resolves.toEqual({ delivery: "currentTurn" });
+      await vi.waitFor(() => {
+        expect(events.some((event) => event.notification.method === "item/completed")).toBe(true);
+      });
+      expect(events.filter((event) => event.notification.method === "turn/completed")).toHaveLength(0);
+      expect(events.find((event) => event.notification.method === "item/completed")).toMatchObject({
+        backend: backendId,
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: session.sessionId,
+            turnId: "turn-1",
+            item: {
+              id: "user:turn-1:steer:agy-steer-1",
+              type: "userMessage",
+              text: "Say PINEAPPLE",
+              content: [{ type: "text", text: "Say PINEAPPLE" }],
+            },
+          },
+        },
+      });
+
+      transport.emitSessionUpdate("agy-session-1", {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "PINEAPPLE" },
+      });
+      prompts[1]!.resolve({ stopReason: "end_turn" });
+      await vi.waitFor(() => {
+        expect(events.filter((event) => event.notification.method === "turn/completed")).toHaveLength(1);
+      });
+    } finally {
+      await adapter.close();
+    }
+  });
+
   it("replaces a stale stored launch descriptor with the actively discovered executable", async () => {
     const backendId = "acp:grok" as AcpBackendId;
     const stored: AcpInstalledAgentRecord[] = [

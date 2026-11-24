@@ -45,7 +45,7 @@ vi.mock("../messaging/desktop-messaging-store", () => ({ getDesktopMessagingStor
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: vi.fn() }));
 vi.mock("../app-server/scratch-projects", () => ({ resolveScratchProjectsRoots: () => [] }));
 import { loadLocalNavigationQueryIndex, projectBoundNavigationStacks, projectSelectedStackLayers, readNavigationStackLayers } from "../app-server/navigation-query-source";
-import { StackReader } from "../stacks/stack-reader";
+import { StackReader, StackReadObservation } from "../stacks/stack-reader";
 import { resolveNavigationWorktreeProjects } from "../app-server/navigation-worktree-projects";
 import { runGitCommand } from "../app-server/git-executable";
 import { resolveWorktreeRepositoryDirectory } from "../git-info/worktree-store";
@@ -164,7 +164,7 @@ it("omits a stale automatic attachment from selected stack details and avoids a 
     source.finish();
     await readNavigationStackLayers({ backend: thread.source, threadId: thread.id });
     expect(canonicalize).toHaveBeenCalledWith([stalePr], expect.objectContaining({ allowForgeLookup: false }));
-    expect(read).toHaveBeenCalledWith([expect.objectContaining({ prs: [] })], [], undefined, expect.any(Function));
+    expect(read).toHaveBeenCalledWith([expect.objectContaining({ prs: [] })], [], undefined, expect.any(Function), expect.any(StackReadObservation));
   } finally {
     read.mockRestore();
     vi.mocked(getDesktopBackendRegistry).mockReset();

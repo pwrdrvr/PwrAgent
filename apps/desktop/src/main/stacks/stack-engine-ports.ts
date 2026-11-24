@@ -16,7 +16,7 @@ import { acquireNativeFileLock } from "../app-server/maintenance-native-lock";
 import { nativeRelayPath } from "../native-relay-path";
 
 const execute = promisify(execFile);
-const ownJournal = "pwragent-stack-op.json";
+export const STACK_OPERATION_JOURNAL = "pwragent-stack-op.json";
 const foreignJournals = {
   "gh-stack-rebase-state": "gh stack is mid-rebase in this clone.",
   "gh-stack-modify-state": "gh stack is modifying a stack in this clone.",
@@ -117,7 +117,7 @@ export class GhStackCatalogStore implements CatalogStore {
   }
 
   hasJournal(commonDir: string): Promise<boolean> {
-    return exists(join(commonDir, ownJournal));
+    return exists(join(commonDir, STACK_OPERATION_JOURNAL));
   }
 
   private async assertForeignJournalsAbsent(commonDir: string): Promise<void> {
@@ -129,7 +129,7 @@ export class GhStackCatalogStore implements CatalogStore {
   async recover(commonDir: string, recover: (entry: RuntimeJournal) => Promise<void | "retain">): Promise<void> {
     await this.withLock(commonDir, "gh-stack-operation.lock", async () => {
       await this.assertForeignJournalsAbsent(commonDir);
-      const file = await open(join(commonDir, ownJournal), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+      const file = await open(join(commonDir, STACK_OPERATION_JOURNAL), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
         .catch((error: unknown) => { if (!missing(error)) throw error; });
       if (!file) return;
       let entry: RuntimeJournal;
@@ -160,7 +160,7 @@ export class GhStackCatalogStore implements CatalogStore {
 
   journalHooks(commonDir: string, notification?: StackNotification): ApplyHooks {
     return {
-      begin: async (entry) => await this.atomicWrite(commonDir, ownJournal, {
+      begin: async (entry) => await this.atomicWrite(commonDir, STACK_OPERATION_JOURNAL, {
         ...entry, notification, provisioning: initialProvisioning(notification),
       }),
       finish: async () => await this.clearJournal(commonDir),
@@ -168,22 +168,22 @@ export class GhStackCatalogStore implements CatalogStore {
   }
 
   async markJournalCommitted(commonDir: string, entry: StackJournal, notification: StackNotification): Promise<void> {
-    await this.atomicWrite(commonDir, ownJournal, {
+    await this.atomicWrite(commonDir, STACK_OPERATION_JOURNAL, {
       provisioning: initialProvisioning(notification), ...entry, notification, committed: true,
     });
   }
 
   async writeProvisioning(commonDir: string, entry: RuntimeJournal, provisioning: StackProvisioning): Promise<void> {
-    await this.atomicWrite(commonDir, ownJournal, { ...entry, provisioning });
+    await this.atomicWrite(commonDir, STACK_OPERATION_JOURNAL, { ...entry, provisioning });
     entry.provisioning = provisioning;
   }
 
   private async clearJournal(commonDir: string): Promise<void> {
-    await unlink(join(commonDir, ownJournal));
+    await unlink(join(commonDir, STACK_OPERATION_JOURNAL));
     await syncDirectory(commonDir);
   }
 
-  private async atomicWrite(commonDir: string, filename: "gh-stack" | typeof ownJournal, value: unknown): Promise<void> {
+  private async atomicWrite(commonDir: string, filename: "gh-stack" | typeof STACK_OPERATION_JOURNAL, value: unknown): Promise<void> {
     const temporary = join(commonDir, `.pwragent-stack-${randomUUID()}.tmp`);
     const destination = join(commonDir, filename);
     const file = await open(temporary, "wx", 0o600);

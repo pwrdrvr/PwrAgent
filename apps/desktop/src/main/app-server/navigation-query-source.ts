@@ -28,7 +28,7 @@ import {
 import { getMainLogger } from "../log";
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
 import { PR_METADATA_PRIORITY } from "../pr-status/pr-metadata-process";
-import { StackReader } from "../stacks/stack-reader";
+import { StackReader, StackReadObservation } from "../stacks/stack-reader";
 import { compactStackMembership, MAX_COMPACT_STACK_MEMBERSHIPS, type CompactStackMembership, type SelectedStackLayer, type StackSummary } from "@pwragent/shared/stacks/stack-status";
 import { comparePullRequestStack } from "@pwragent/shared/pull-request-rollup";
 import { readNavigationCheckout } from "../git-info/directory-store";
@@ -368,7 +368,7 @@ async function projectNavigationStacks(
       const held = registry.stackThreadHeld?.(thread) ?? false;
       return { held, repair: !held && (Boolean(await getDesktopOverlayStore().getThreadPrAutoDispatchPending(thread))
         || await registry.stackRepairActive?.(thread) === true) };
-    });
+    }, new StackReadObservation(demand));
   signal.throwIfAborted();
   return projectBoundNavigationStacks(threads, stacks, new Map(rows.map((row) => [
     buildThreadIdentityKey(row.source, row.id), row.prs,

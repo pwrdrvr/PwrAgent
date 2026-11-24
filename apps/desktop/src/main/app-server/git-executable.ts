@@ -1,11 +1,12 @@
-import { execFile as execFileCallback, spawn, type ChildProcess } from "node:child_process";
+import { execFile as execFileCallback, spawn } from "node:child_process";
 import os from "node:os";
 import { promisify } from "node:util";
 import { noteBundledGitCommand } from "../bundled-git-lfs-advisory";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { gitRuntimeEnvironment, resolveRuntimeGitExecutable } from "../git-runtime";
-import { startWindowsJobReadyPoll, wrapCommandInWindowsJob } from "../windows-job-wrapper";
-import { collectProcessTreeIds, isProcessIdAlive, terminateOwnedProcessTree } from "../process-tree";
+import { formatWindowsJobStartupTimeout, startWindowsJobReadyPoll, windowsJobCleanupVerified, wrapCommandInWindowsJob } from "../windows-job-wrapper";
+import { windowsGitJobLauncher } from "../windows-job-launcher-path";
+import { terminateOwnedProcessTree } from "../process-tree";
 import { gitSubprocessDiagnostics, type GitSubprocessPurpose } from "../diagnostics/git-subprocess-diagnostics";
 
 const execFile = promisify(execFileCallback);
@@ -53,6 +54,9 @@ export async function runGitCommand(
           command: git,
           env,
           cwd: os.tmpdir(),
+          keepDrainEvidenceOnStop: true,
+          compiledLauncher: options.purpose === "stack-checkout" || options.purpose === "stack-status"
+            ? windowsGitJobLauncher() : undefined,
         })
       : undefined;
   const launch = windowsJobLaunch ?? {
@@ -67,6 +71,7 @@ export async function runGitCommand(
     if (options.ownProcessTree) {
       const result = await runOwnedGitProcess({
         launch,
+        windowsJob: windowsJobLaunch,
         input: options.input,
         maxBuffer: options.maxBuffer ?? 1024 * 1024 * 10,
         signal: options.signal,
@@ -112,12 +117,13 @@ export async function runGitCommand(
  */
 async function runOwnedGitProcess(params: {
   launch: { command: string; args: string[]; env: NodeJS.ProcessEnv };
+  windowsJob?: ReturnType<typeof wrapCommandInWindowsJob>;
   input?: string;
   maxBuffer: number;
   signal?: AbortSignal;
   timeout: number;
 }): Promise<{ stdout: string; stderr: string }> {
-  const { launch, signal } = params;
+  const { launch, signal, windowsJob } = params;
   const cmd = [launch.command, ...launch.args].join(" ");
   const child = spawn(launch.command, launch.args, {
     env: launch.env,
@@ -131,21 +137,54 @@ async function runOwnedGitProcess(params: {
     let stderr = "";
     let failure: Error | undefined;
     let termination: Promise<void> | undefined;
+    let timer: NodeJS.Timeout | undefined;
+    let forceStop: NodeJS.Timeout | undefined;
+    let readyPoll: ReturnType<typeof startWindowsJobReadyPoll> | undefined;
+    const cancelDeadline = () => {
+      clearTimeout(timer);
+      readyPoll?.cancel();
+    };
     const stop = (reason: Error) => {
-      if (termination) return;
+      if (failure) return;
+      cancelDeadline();
       failure = reason;
-      termination = stopOwnedGitProcessTree(child);
-      // Awaited once Git closes; a failure before then is not unhandled.
-      termination.catch(() => undefined);
+      if (!windowsJob) {
+        termination = terminateOwnedProcessTree(child, { gracefulTimeoutMs: 250, forceTimeoutMs: 1_000 });
+        // Awaited once Git closes; a failure before then is not unhandled.
+        termination.catch(() => undefined);
+      } else if (child.pid && child.exitCode === null && child.signalCode === null) {
+        // The Job wrapper can stop and drain its descendants without a process
+        // snapshot. An unresponsive wrapper is still fenced by KILL_ON_JOB_CLOSE.
+        try {
+          if (!windowsJob.requestStop) throw new Error("Windows Git Job has no stop channel.");
+          windowsJob.requestStop();
+          forceStop = setTimeout(() => child.kill("SIGKILL"), 3_000);
+        } catch {
+          child.kill("SIGKILL");
+        }
+      }
     };
     const onAbort = () => stop(Object.assign(
       new Error("The operation was aborted", { cause: signal?.reason }),
       { name: "AbortError", code: "ABORT_ERR" },
     ));
-    const timer = setTimeout(() => stop(Object.assign(
-      new Error(`Command failed: ${cmd}`),
-      { killed: true, code: null, signal: "SIGTERM", cmd },
-    )), params.timeout);
+    const timedOut = (message: string) => stop(Object.assign(new Error(message), {
+      killed: true, code: null, signal: "SIGTERM", cmd,
+    }));
+    const startCommandTimeout = () => {
+      timer = setTimeout(() => timedOut(`Command failed: ${cmd}`), params.timeout);
+    };
+    // Job startup has its own progress-aware deadline. Start the command's
+    // timeout only once the Job has launched its target.
+    if (windowsJob) {
+      readyPoll = startWindowsJobReadyPoll({
+        launch: windowsJob,
+        onReady: startCommandTimeout,
+        onTimeout: (timeout) => timedOut(formatWindowsJobStartupTimeout(timeout)),
+      });
+    } else {
+      startCommandTimeout();
+    }
     signal?.addEventListener("abort", onAbort, { once: true });
     const collect = (stream: "stdout" | "stderr", chunk: string) => {
       const text = (stream === "stdout" ? stdout : stderr) + chunk;
@@ -168,7 +207,8 @@ async function runOwnedGitProcess(params: {
     child.stdin.on("error", () => undefined);
     child.stdin.end(params.input);
     const finish = () => {
-      clearTimeout(timer);
+      cancelDeadline();
+      clearTimeout(forceStop);
       signal?.removeEventListener("abort", onAbort);
     };
     child.once("error", (error) => {
@@ -181,6 +221,9 @@ async function runOwnedGitProcess(params: {
       finish();
       void (async () => {
         await termination;
+        if (failure && windowsJob && child.pid && !windowsJobCleanupVerified(windowsJob)) {
+          throw new Error("The Windows Git Job exited without confirming cleanup.", { cause: failure });
+        }
         if (failure) throw Object.assign(failure, { stdout, stderr });
         if (code !== 0) {
           throw Object.assign(new Error(`Command failed: ${cmd}\n${stderr}`), {
@@ -191,33 +234,6 @@ async function runOwnedGitProcess(params: {
       })().then(resolve, reject);
     });
   });
-}
-
-/**
- * Stop an owned Git run, and wait until no process in it is left. POSIX
- * signals Git's process group. On Windows, killing the Job launcher closes the
- * Job, but its processes release their handles a moment after the launcher
- * exits, and orphans no longer list it as their parent, so they are listed
- * before the kill.
- */
-async function stopOwnedGitProcessTree(child: ChildProcess): Promise<void> {
-  if (!child.pid) return;
-  if (process.platform !== "win32") {
-    await terminateOwnedProcessTree(child, { gracefulTimeoutMs: 250, forceTimeoutMs: 1_000 });
-    return;
-  }
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  const knownPids = collectProcessTreeIds(child.pid);
-  child.kill();
-  // Poll the snapshot only. Each tree walk is a blocking CIM query, and the
-  // closed Job starts nothing new.
-  const deadline = Date.now() + 5_000;
-  while (knownPids.some((pid) => isProcessIdAlive(pid))) {
-    if (Date.now() >= deadline) {
-      throw new Error(`Git process tree ${child.pid} did not exit after it was stopped.`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
 }
 
 /**

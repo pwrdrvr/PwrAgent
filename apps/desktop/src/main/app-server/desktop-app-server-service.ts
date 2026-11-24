@@ -36,7 +36,7 @@ import { GitlabPrToolClient } from "../pr-status/gitlab-pr-tool-client";
 import type { ForgePrToolArgs, ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
 import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation, type ForgeRepository } from "../pr-status/forge-tool-contract";
 import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
-import { StackReader, stackMemberships } from "../stacks/stack-reader";
+import { StackReader, StackReadObservation, stackMemberships } from "../stacks/stack-reader";
 import { StackOperationsService } from "../stacks/stack-operations-service";
 import { StackOperationError } from "@pwragent/owner-core/stacks/stack-coordinator";
 import { assertGithubStackMergeAllowed, githubStackRepository, isObservedStackParent } from "../stacks/stack-merge-guard";
@@ -1236,7 +1236,8 @@ class DesktopAppServerService {
   private readonly stackPublishAttempts = new Map<string, { signature: string; retryAfter?: number }>();
   private readonly stackPublishActive = new Map<string, AbortController>();
   private readonly stackPublishAwaitingObservation = new Map<string, string>();
-  private readonly stackOperations = new StackOperationsService(undefined, async (cwd) => (await this.readScopedStacks([cwd])).stacks);
+  private readonly stackOperations = new StackOperationsService(undefined, async (cwd) =>
+    (await this.readScopedStacks([cwd], undefined, new StackReadObservation({ priority: () => PR_METADATA_PRIORITY.selected }))).stacks);
 
   async resumeInterruptedStackOperations(): Promise<void> {
     const registry = getDesktopBackendRegistry();
@@ -3823,18 +3824,22 @@ class DesktopAppServerService {
     }))];
   }
 
-  private async readPrStacks(pr: PrSummary): Promise<readonly StackSummary[]> {
+  private async readPrStacks(pr: PrSummary, observation = new StackReadObservation()): Promise<readonly StackSummary[]> {
+    observation.demand.signal?.throwIfAborted();
     const repository = `${pr.provider}:${pr.org}/${pr.repo}`.toLowerCase();
     const matches = (stack: StackSummary) => stack.repository === repository
       && stack.layers.some((layer) => layer.pullRequest?.number === pr.number);
     const directories = this.prStackDirectories(pr);
     if (!directories.length) return this.publishedStacks.filter(matches);
-    const catalogs = await this.stackReader.readCatalogs(directories);
+    const catalogs = await this.stackReader.preflightCatalogs(directories, observation);
+    if (catalogs.some(({ status }) => status === "unavailable")) throw new Error("Stack catalog evidence is unavailable.");
     const tracked = catalogs.some((read) => read.status === "ok" && read.catalog.repository.toLowerCase() === repository
       && read.catalog.stacks.some((stack) => stack.branches.some((layer) =>
         layer.pullRequest?.number === pr.number || layer.branch === pr.headRefName)));
     if (!tracked && !this.knownStackPullRequests().some((lower) => isObservedStackParent(lower, pr))) return [];
-    return (await this.readScopedStacks(directories)).stacks.filter(matches);
+    const scoped = await this.readScopedStacks(directories, undefined, observation);
+    if (scoped.catalogs.some(({ status }) => status === "unavailable")) throw new Error("Stack catalog evidence is unavailable.");
+    return scoped.stacks.filter(matches);
   }
 
   private async prStackHoldEvidence(pr: PrSummary): Promise<{ reason: string; lowerKey?: string } | undefined> {
@@ -3947,9 +3952,11 @@ class DesktopAppServerService {
   private async advanceObservedStacks(prs: readonly PrSummary[]): Promise<void> {
     const open = prs.filter((pr) => !isTerminalPullRequest(pr) && pr.headSha);
     const byLayer = new Map(open.map((pr) => [`${pr.provider}:${pr.org}/${pr.repo}#${pr.number}`.toLowerCase(), pr]));
-    const directories = [...new Set(open.flatMap((pr) => this.prStackDirectories(pr)))];
+    // Inferred stacks can hold dispatch but cannot publish automatically.
+    const observation = new StackReadObservation();
+    const directories = await observation.hints.markerCandidates(open.flatMap((pr) => this.prStackDirectories(pr)));
     if (!directories.length) return;
-    const { stacks } = await this.readScopedStacks(directories);
+    const { stacks } = await this.readScopedStacks(directories, undefined, observation);
     await Promise.all(stacks.flatMap((stack) => {
       const next = !stack.inferred && nextStackAdvance(stack.layers);
       const pr = next && next.pullRequest && byLayer.get(`${stack.repository}#${next.pullRequest.number}`);
@@ -3965,8 +3972,10 @@ class DesktopAppServerService {
       return { blocked: parents.length > 0, lowerKeys: parents.map(getPrStatusKey) };
     }
     const repository = { provider: "github" as const, host: ref.provider, owner: ref.org, repo: ref.repo };
-    const catalogs = (await this.stackReader.readCatalogs(this.prReviewOfferDirectories(thread, pr)))
-      .flatMap((read) => read.status === "ok" ? [read.catalog] : []);
+    const preflight = await this.stackReader.preflightCatalogs(
+      this.prReviewOfferDirectories(thread, pr), new StackReadObservation(),
+    );
+    const catalogs = preflight.flatMap((catalog) => catalog.status === "ok" ? [catalog.catalog] : []);
     const ci = this.getForgeCiClient();
     const path = `repos/${encodeURIComponent(ref.org)}/${encodeURIComponent(ref.repo)}`;
     const lowerKeys = new Set<string>();
@@ -3984,8 +3993,9 @@ class DesktopAppServerService {
         }) as { data?: unknown }).data,
         (number) => lowerKeys.add(getPrStatusKey({ provider: pr.provider, org: pr.org, repo: pr.repo, number })),
       );
-      const changedBase = pr.baseRefName !== undefined && base !== pr.baseRefName;
-      return { blocked: changedBase, lowerKeys: [...lowerKeys], retryOnObservation: changedBase };
+      const retryOnObservation = (pr.baseRefName !== undefined && base !== pr.baseRefName)
+        || preflight.some(({ status }) => status === "unavailable");
+      return { blocked: retryOnObservation, lowerKeys: [...lowerKeys], retryOnObservation };
     } catch (error) {
       if (!(error instanceof ForgeReadError) || error.code !== "stack_parent_open") {
         appServerLog.debug("stack merge evidence unavailable", { pr: pr.url, error: String(error) });
@@ -3995,9 +4005,15 @@ class DesktopAppServerService {
     }
   }
 
-  private async readScopedStacks(directories: readonly string[], scope?: { backend: string; threadId: string; prs: PrSummary[] }) {
+  private async readScopedStacks(
+    directories: readonly string[],
+    scope?: { backend: string; threadId: string; prs: PrSummary[] },
+    observation = new StackReadObservation(),
+  ) {
+    observation.demand.signal?.throwIfAborted();
     if (!directories.length) return { stacks: [], catalogs: [] };
     const { threads } = await this.listThreads({});
+    await observation.revalidateAfterListing();
     const attached = getDesktopOverlayStore().readNavigationPullRequests(threads.map((thread) => ({
       backend: thread.source, threadId: thread.id,
     })));
@@ -4010,7 +4026,7 @@ class DesktopAppServerService {
       };
     });
     return await this.stackReader.read(rows, this.knownStackPullRequests(), directories,
-      (key) => this.stackThreadActivity(key));
+      (key) => this.stackThreadActivity(key), observation);
   }
 
   private forgePrToolService(context?: AgentToolCallContext): ForgePrToolService {
@@ -4081,7 +4097,10 @@ class DesktopAppServerService {
       if (!context.turnId && (!this.ownerNavigationActive || !projectAllowsPrWatches(this.threadForgeAutomation(context)))) {
         throw new ForgeReadError("tools_disabled", "Project automation is paused.");
       }
-      const stacks = (await this.readPrStacks(live)).filter((stack) => !stack.inferred);
+      const stacks = (await this.readPrStacks(live, new StackReadObservation({
+        signal: context.signal,
+        priority: () => context.turnId ? PR_METADATA_PRIORITY.selected : PR_METADATA_PRIORITY.background,
+      }))).filter((stack) => !stack.inferred);
       const stack = stacks.length === 1 ? stacks[0] : undefined;
       const layer = stack?.layers.find((entry) => entry.pullRequest?.number === pr.number);
       if (!stack || !layer || layer.role !== "layer" || layer.thread?.key !== buildThreadIdentityKey(context.backend, context.threadId)) {
@@ -4104,6 +4123,7 @@ class DesktopAppServerService {
   /** Pull request and issue tools act only in the calling thread's own repositories. */
   async runForgePrToolForAgent(operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext): Promise<unknown> {
     const scope = await this.forgePrToolScope(context);
+    const stackDemand = { signal: context.signal, priority: () => PR_METADATA_PRIORITY.selected };
     if (operation === "publish_stack_layer") return await this.publishStackLayer(args, context, scope);
     if (operation === "plan_stack_operation" || operation === "apply_stack_operation" || operation === "manage_stack_operation") {
       if (!isAppServerBackendKind(context.backend)) throw new ForgeReadError("invalid_arguments", "Unknown PwrAgent backend.");
@@ -4116,7 +4136,9 @@ class DesktopAppServerService {
           ...(args.operation === "sync" ? {
             sync: { repository, github: (...parameters) => this.getForgeCiClient().requestGithub(...parameters), signal: context.signal },
           } : {}),
-          infer: async () => (await this.readScopedStacks(scope.directories, { ...actor, prs: this.canonicalizePrs(scope.attached) })).stacks,
+          infer: async () => (await this.readScopedStacks(
+            scope.directories, { ...actor, prs: this.canonicalizePrs(scope.attached) }, new StackReadObservation(stackDemand),
+          )).stacks,
         }, getDesktopBackendRegistry());
       } catch (error) {
         if (error instanceof StackOperationError) throw new ForgeReadError(error.code, error.message);
@@ -4127,7 +4149,7 @@ class DesktopAppServerService {
       const repository = args.repository && this.forgePrToolService().resolveRepository(args, scope);
       const { stacks, catalogs } = await this.readScopedStacks(scope.directories, {
         backend: context.backend, threadId: context.threadId, prs: this.canonicalizePrs(scope.attached),
-      });
+      }, new StackReadObservation(stackDemand));
       return {
         stacks: repository ? stacks.filter((stack) => stack.repository === githubStackRepository(repository)) : stacks,
         catalogIssues: catalogs.flatMap((catalog) => ["ok", "missing"].includes(catalog.status) ? [] : [catalog]),
@@ -5177,9 +5199,14 @@ class DesktopAppServerService {
     prs: PrSummary[],
   ): Promise<Array<{ text: string; held?: boolean }>> {
     if (!prs.length) return [];
-    const scoped = await Promise.all(prs.map((pr) => this.readPrStacks(pr)));
+    const scoped = await Promise.allSettled(prs.map((pr) => this.readPrStacks(pr)));
     return prs.flatMap((pr, offset) => {
-      const candidates = scoped[offset]!;
+      const result = scoped[offset]!;
+      if (result.status === "rejected") {
+        appServerLog.debug("could not read PR stack guidance", { pr: pr.url, error: String(result.reason) });
+        return [{ text: `#${pr.number} is held while stack settlement is unavailable.`, held: true }];
+      }
+      const candidates = result.value;
       const stack = candidates.find((entry) => entry.layers.some((layer) => layer.pullRequest?.number === pr.number
         && stackDispatchBlock(layer))) ?? candidates[0];
       if (!stack) return [];
