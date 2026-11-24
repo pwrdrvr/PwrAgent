@@ -626,12 +626,14 @@ describe("merge_pull_request and merge queues", () => {
       const action = expectedAction(gate);
       if (action === "direct") {
         expect(merged.summary).toBe("Squash-merged #3631");
+        expect(merged.mergedUrl).toBe("https://github.com/fixture/project/pull/3631");
         expect(ghMerges).toEqual([["pr", "merge", "3631", "--squash"]]);
         // A repository never seen with a queue merges exactly as before.
         expect(api).toHaveLength(seen ? 1 : 0);
         return;
       }
       expect(merged.queued).toBe(true);
+      expect(merged.mergedUrl).toBeUndefined();
       expect(merged.summary).not.toMatch(/merged #/i);
       expect(isMergeQueueRepository("github.com", "fixture", "project")).toBe(true);
       if (!seen) {
@@ -643,6 +645,36 @@ describe("merge_pull_request and merge queues", () => {
       expect(ghMerges).toEqual([]);
       expect(merged.summary).toMatch(action === "auto_merge" ? /Auto-merge on for #3631/ : action === "enqueue" ? /^Added #3631 to the merge queue · queued #2$/ : /^#3631 is already in the merge queue · queued/);
     }), { numRuns: 120 });
+  });
+
+  it("reports an already-merged PR without claiming that the command merged it", async () => {
+    seenRepository(false);
+    const url = "https://github.com/fixture/project/pull/3631";
+    const fetcher = new GithubPrFetcher({
+      graphqlClient: { fetchPullRequests: vi.fn(), fetchPullRequestsForBranches: vi.fn() },
+      discoverGhCommands: async () => ({ selectedCommand: "/fixture/gh" }) as never,
+      runGhCommand: async () => ({ stdout: "", stderr: "! Pull request fixture/project#3631 was already merged\n" }),
+    });
+    await expect(fetcher.mergePullRequest({ pullRequest: url, method: "squash" }))
+      .resolves.toMatchObject({ alreadyMerged: true, mergedUrl: url });
+  });
+
+  it("keeps an already-queued PR open when gh exits successfully before doing a merge", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), fc.integer({ min: 1, max: 10_000 }), async (knownQueue, number) => {
+      seenRepository(knownQueue);
+      const url = `https://github.com/fixture/project/pull/${number}`;
+      const fetcher = new GithubPrFetcher({
+        graphqlClient: { fetchPullRequests: vi.fn(), fetchPullRequestsForBranches: vi.fn() },
+        discoverGhCommands: async () => ({ selectedCommand: "/fixture/gh" }) as never,
+        runGhCommand: async (_command, args) => {
+          if (args[0] === "api") throw new Error("Queue lookup unavailable");
+          return { stdout: "", stderr: `! Pull request fixture/project#${number} is already queued to merge\n` };
+        },
+      });
+      const result = await fetcher.mergePullRequest({ pullRequest: url, method: "squash" });
+      expect(result.queued).toBe(true);
+      expect(result.mergedUrl).toBeUndefined();
+    }));
   });
 });
 

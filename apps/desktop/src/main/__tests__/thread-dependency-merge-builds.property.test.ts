@@ -331,12 +331,12 @@ describe("Continue After a merge build", () => {
   it("arms one automatic failure-only watch per merged PR, and never one the operator stopped", async () => {
     const agent = coordinator();
     merge();
-    expect(await agent.armMergeBuild({ backend: "codex", threadId: "feature" }, { url: PR_URL, title: "feat: widgets" })).toBe(true);
+    expect(await agent.armMergeBuild({ backend: "codex", threadId: "feature" }, { url: PR_URL, title: "feat: widgets" })).toBe("armed");
     expect(store.active()).toHaveLength(1);
     expect(store.active()[0]).toMatchObject({ automatic: true, wakeOn: "failure", conditions: [{ when: "merge_build", prUrl: PR_URL }] });
-    expect(await agent.armMergeBuild({ backend: "codex", threadId: "feature" }, { url: PR_URL })).toBe(false);
+    expect(await agent.armMergeBuild({ backend: "codex", threadId: "feature" }, { url: PR_URL })).toBe("covered");
     await agent.manage({ action: "cancel", backend: "codex", threadId: "feature", dependencyId: store.active()[0]!.id });
-    expect(await agent.armMergeBuild({ backend: "codex", threadId: "feature" }, { url: PR_URL })).toBe(false);
+    expect(await agent.armMergeBuild({ backend: "codex", threadId: "feature" }, { url: PR_URL })).toBe("covered");
     expect(store.active()).toHaveLength(0);
   });
 
@@ -355,7 +355,7 @@ describe("Continue After a merge build", () => {
       await agent.manage({ action: "cancel", backend: "codex", threadId: "feature", dependencyId: created!.id });
     }
     expect(store.list("codex", "feature").some((item) => item.conditions[0]!.when === "merge_build")).toBe(false);
-    expect(await agent.armMergeBuild({ backend: "codex", threadId: "feature" }, { url: PR_URL })).toBe(false);
+    expect(await agent.armMergeBuild({ backend: "codex", threadId: "feature" }, { url: PR_URL })).toBe("covered");
   });
 
   it("lists another thread's merge build wait as a dependent and refuses a cycle through it", async () => {

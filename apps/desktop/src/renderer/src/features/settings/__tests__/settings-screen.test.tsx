@@ -3448,6 +3448,15 @@ describe("SettingsScreen", () => {
     await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ experimental: { researchEnabled: true } }));
   });
 
+  it("offers Federation resource checkout tools as a default-off experiment and writes only its feature flag", async () => {
+    const settings = createSettingsState();
+    render(<SettingsScreen initialSection="experimental" settings={settings} />);
+    const toggle = screen.getByRole("switch", { name: "Enable resource checkout tools" });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ experimental: { resourceCheckoutsEnabled: true } }));
+  });
+
   it("lets research be turned on without Codex Tool Discovery, which only Codex threads need", async () => {
     for (const discovery of [true, false]) {
       const snapshot = createSnapshot();

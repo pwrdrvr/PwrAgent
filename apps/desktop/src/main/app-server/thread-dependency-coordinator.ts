@@ -49,7 +49,7 @@ import {
   THREAD_TODO_DETAIL_MAX_LENGTH,
   THREAD_TODO_TITLE_MAX_LENGTH,
 } from "@pwragent/shared/contracts/thread-todos";
-import type { ThreadDependencyStorage } from "../storage/desktop-runtime-storage";
+import { ThreadDependencyRegistrationRefusedError, type ThreadDependencyStorage } from "../storage/desktop-runtime-storage";
 import { isSameNumberInAnotherRepository } from "../pr-status/forge-reference";
 import { CI_RUN_URL_FORMS, describeCiRunObservation, evaluateCiRunCondition, mergeCiRunCheck, parseCiRunUrl, type CiRunUrlOptions } from "./thread-dependency-ci-runs";
 import {
@@ -208,9 +208,13 @@ export class ThreadDependencyCoordinator {
    * PwrAgent saw `prUrl` merge on `target`'s thread: watch its merge build,
    * waking the thread only on failure. Any earlier merge build registration
    * for that PR on the thread wins, including one the operator cancelled, so
-   * stopping a watch also stops this one. Returns whether it armed one.
+   * stopping a watch also stops this one.
    */
-  async armMergeBuild(target: { backend: AppServerBackendKind; threadId: string }, pr: { url: string; title?: string }): Promise<boolean> {
+  async armMergeBuild(
+    target: { backend: AppServerBackendKind; threadId: string },
+    pr: { url: string; title?: string },
+  ): Promise<"armed" | "covered" | "ineligible"> {
+    if (this.options.store.isConsumerLocked(target)) return "ineligible";
     const url = this.canonicalizePrUrl(pr.url);
     const covered = this.options.store.listWithCondition(target.backend, target.threadId, "merge_build").some((item) => item.conditions.some((condition) => {
       if (condition.when !== "merge_build") return false;
@@ -219,21 +223,25 @@ export class ThreadDependencyCoordinator {
       if (!named) return item.status === "waiting" || item.status === "ready" || item.status === "dispatching";
       return this.canonicalizePrUrl(named) === url;
     }));
-    if (covered) return false;
-    // The polling index can include legacy attachments. Verify the exact PR
-    // against the primary checkout before creating a durable wake.
+    // Both the polling index and the merge card can include legacy or
+    // secondary attachments. Verify against the current primary checkout.
     const snapshot = await this.options.readThread({ ...target, when: "merge_build", prUrl: url });
     const verifiedUrl = this.canonicalizePrUrl(url);
-    if (!snapshot.prs.some(({ pr: attached }) => this.canonicalizePrUrl(attached.url) === verifiedUrl)) return false;
-    await this.manage({
-      action: "create", backend: target.backend, threadId: target.threadId,
-      // The URL the thread's PR chips show, so windows can match it; the
-      // check above compares canonical forms.
-      conditions: [{ backend: target.backend, threadId: target.threadId, when: "merge_build", prUrl: pr.url,
-        ...(pr.title ? { title: pr.title.slice(0, 200) } : {}) }],
-      wakeOn: "failure",
-    }, undefined, "operator", { automatic: true });
-    return true;
+    if (!snapshot.prs.some(({ pr: attached }) => this.canonicalizePrUrl(attached.url) === verifiedUrl)) return "ineligible";
+    if (covered) return "covered";
+    try {
+      await this.manage({
+        action: "create", backend: target.backend, threadId: target.threadId,
+        conditions: [{ backend: target.backend, threadId: target.threadId, when: "merge_build", prUrl: pr.url,
+          ...(pr.title ? { title: pr.title.slice(0, 200) } : {}) }],
+        wakeOn: "failure",
+      }, undefined, "operator", { automatic: true });
+    } catch (error) {
+      // A candidate-specific refusal happens before the wait is inserted.
+      if (error instanceof ThreadDependencyRegistrationRefusedError) return "ineligible";
+      throw error;
+    }
+    return "armed";
   }
 
   /** `actor` names who marks a prerequisite done: "operator", "agent:…" or "peer:…". */

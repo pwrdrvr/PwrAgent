@@ -1,8 +1,15 @@
 # Resource checkout authority
 
 [Resources](resource-checkouts-ui.md) uses the same owner service as the
-`pwragent` agent tools. The owner derives a local operator from its main
-window and an agent from its authenticated thread. Request keys are scoped
+`pwragent` agent tools. Agent discovery and invocation of the
+`resource_checkout_*` tools are gated behind **Settings → Experimental →
+Federation resources** (`[experimental] resource_checkouts_enabled = true`,
+disabled by default). With the setting off, threads with outstanding checkouts
+retain tools to read their receipts, release their holds, and cancel their
+queued requests. The same cleanup calls work from a previously loaded catalog.
+With the setting on, Codex loads the checkout tools eagerly when Codex Tool
+Discovery is off. The owner derives a local operator from its main window and
+an agent from its authenticated thread. Request keys are scoped
 to the actor. The profile mints a Federation instance ID once if it has
 none, giving operator and agent receipts a stable owner across restarts.
 A retry returns the recorded result. Status combines that
@@ -24,11 +31,20 @@ resize the pool or invalidate reservations. Units are reservations among
 cooperating jobs. They neither measure live load nor set process affinity. The same
 machine key and queue apply to every profile in the shared root.
 
-Use `resource_checkout_action` and omit `units` to reserve the whole machine
-for a full test suite or heavy build. Known smaller jobs can request their
-expected number of parallel workers. Acquire before launching and release
-after the command exits. A large request at the head of the queue waits
-for enough slots to clear, and later small requests wait behind it.
+Supply an explicit `units` count on counted resources (such as 4 CPU slots for
+focused tests, lint, or typecheck). Acquire before launching and release when
+the command exits. In Code Mode and scripts, prefer `resource_checkout_acquire`,
+which blocks event-driven until granted, returns a ready-to-use `releaseAction`
+for a `try`/`finally` block, and automatically cancels or releases on timeout or
+abort. When a large request at the head of the queue waits for slots to clear,
+the authority uses EASY backfilling: later requests that fit in the free slots
+without delaying the head's guaranteed shadow start time (either finishing
+before the head can start or fitting in spare slots at that time) start right
+away, while requests that could delay the head wait in FIFO order. Backfilled
+holds are advisory and cannot start managed jobs. Managed holds release
+capacity only after verified cleanup, so the scheduler does not count their
+deadlines as capacity returning. Thread
+holders and waiters display their resolved thread titles in Resources.
 
 Codex environment setup, detached environment actions, and local automation
 gates do not require, claim, or wait on machine CPU checkouts. They run

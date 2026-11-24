@@ -508,6 +508,7 @@ import {
   summarizePrStatusTransition,
 } from "../pr-status/pr-transitions";
 import type { PrStatusTransition } from "../pr-status/pr-transitions";
+import type { ThreadPullRequestMergeResult } from "../pr-status/thread-pull-request-merge";
 import { selectDiscoveryDueThreadKeys, selectRecentPrDiscoveryThreads } from "../pr-status/pr-discovery";
 
 /** Listener registered via `onPrStatusTransition`. */
@@ -1233,6 +1234,7 @@ class DesktopAppServerService {
     Promise<ResolveEditCommitStatesResponse>
   >();
   private readonly prStatusRegistry = new Map<string, PrStatusRegistryEntry>();
+  private readonly prCardMerges = new Map<string, { transition?: PrStatusTransition }>();
   private readonly stackReader = new StackReader();
   private readonly stackPublishAttempts = new Map<string,
     { signature: string; retryAfter?: number } | { declinedHead: string }
@@ -5311,10 +5313,81 @@ class DesktopAppServerService {
     };
   }
 
+  /** Hold watch election while a merge button's forge write is still in flight. */
+  async runObservedThreadPullRequestMerge(
+    thread: { backend: AppServerBackendKind; threadId: string },
+    url: string,
+    run: () => Promise<ThreadPullRequestMergeResult>,
+  ): Promise<ThreadPullRequestMergeResult> {
+    const ref = parsePullRequestReferenceUrl(url);
+    if (!ref) throw new Error("That is not a pull request URL.");
+    const key = this.prRepositoryAliases.canonicalizeKey(getPrStatusKey(ref));
+    if (this.prCardMerges.has(key)) throw new Error("A merge is already in progress for this pull request.");
+    const pending: { transition?: PrStatusTransition } = {};
+    this.prCardMerges.set(key, pending);
+    let merged = false;
+    try {
+      const result = await run();
+      if (result.mergedUrl) {
+        merged = !result.alreadyMerged;
+        await this.recordThreadPullRequestMerge(thread, url, result).catch((error: unknown) => {
+          appServerLog.warn("could not record confirmed pull request merge", {
+            prKey: key, error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+      return result;
+    } finally {
+      this.prCardMerges.delete(key);
+      if (pending.transition) {
+        this.startMergeBuildWatch(pending.transition, merged ? buildThreadIdentityKey(thread.backend, thread.threadId) : undefined);
+      }
+    }
+  }
+
+  private async recordThreadPullRequestMerge(
+    thread: { backend: AppServerBackendKind; threadId: string },
+    requestedUrl: string,
+    merge: Extract<ThreadPullRequestMergeResult, { mergedUrl: string }>,
+  ): Promise<void> {
+    await this.loadPrStatusRegistry();
+    const overlay = await this.getOverlayStore().getThreadOverlayState(thread);
+    const ref = parsePullRequestReferenceUrl(merge.mergedUrl)!;
+    const identity = { provider: ref.provider, org: ref.org, repo: ref.repo, number: ref.number, url: ref.url };
+    const key = getPrStatusKey(identity);
+    const requested = parsePullRequestReferenceUrl(requestedUrl)!;
+    const requestedKey = this.prRepositoryAliases.canonicalizeKey(getPrStatusKey(requested));
+    const current = this.prStatusRegistry.get(key)?.pr;
+    const previous = current ?? this.prStatusRegistry.get(requestedKey)?.pr
+      ?? this.canonicalizePrs(overlay?.prs ?? []).find((pr) => getPrStatusKey(pr) === requestedKey)
+      ?? { ...identity, state: "unknown" as const };
+    if (requestedKey !== key) this.learnPullRequestRepository(requestedUrl, { ...previous, ...identity });
+    if (current?.lifecycleState === "merged") return;
+    if (!current) this.rememberPrStatuses([{ ...previous, ...identity }], 0, "merge-card-attachment");
+    const observedAt = this.nextPrObservationTimestamp();
+    const changed = this.rememberPrStatuses([{
+      ...previous, ...identity, lifecycleState: "merged", mergeQueue: undefined,
+      ...(!merge.alreadyMerged ? { mergedAt: Date.now() } : {}),
+    }], observedAt, "in-app-merge", { skipMergeBuildWatch: merge.alreadyMerged });
+    if (!changed.length) return;
+    // Other forge consumers can do their own follow-up reads after the
+    // mutation. The status event and cache need only the successful write.
+    void this.handlePrAutoDispatchSnapshots(changed, observedAt).catch((error: unknown) => {
+      appServerLog.warn("pull request merge follow-up failed", { prKey: key, error: String(error) });
+    });
+    void this.threadDependencyCoordinator?.handlePrEvent([ref.url])
+      .catch((error: unknown) => appServerLog.warn("thread dependency evaluation failed", { error: String(error) }));
+    await Promise.all([
+      this.writePrStatusesToCache(changed, observedAt),
+      this.publishPullRequestStatusUpdates({ backend: thread.backend, prs: changed }),
+    ]);
+  }
+
   private rememberPrStatuses(
     prs: PrSummary[],
     fetchedAt: number,
     source: string,
+    options: { skipMergeBuildWatch?: boolean } = {},
   ): PrSummary[] {
     const changedPrs: PrSummary[] = [];
     const transitions: PrStatusTransition[] = [];
@@ -5323,7 +5396,10 @@ class DesktopAppServerService {
     for (const pr of prs.map(stripPrLinkedDirectoryPaths)) {
       const key = getPrStatusKey(pr);
       const current = this.prStatusRegistry.get(key);
-      if (current && current.fetchedAt > fetchedAt) {
+      // A merge is irreversible. Reads started either side of the write can
+      // briefly report the pre-merge state.
+      if (current && (current.fetchedAt > fetchedAt
+        || (current.pr.lifecycleState === "merged" && pr.lifecycleState !== "merged"))) {
         staleKeys.push(key);
         continue;
       }
@@ -5363,7 +5439,7 @@ class DesktopAppServerService {
     }
     if (transitions.length > 0) {
       this.emitPrStatusTransitions(transitions, { observedAt: fetchedAt, source });
-      this.armMergeBuildWatches(transitions);
+      if (!options.skipMergeBuildWatch) this.armMergeBuildWatches(transitions);
     }
     this.publishPrAutoFixPrEndedChanges(endedChanged);
     return changedPrs;
@@ -5371,8 +5447,8 @@ class DesktopAppServerService {
 
   /**
    * `[git] watch_merge_builds`: a PR this instance watched just merged, so
-   * each local thread it belongs to watches the build of its merge commit and
-   * wakes only if that build fails. Only a merge seen happening arms one: a
+   * one eligible local thread watches the build of its merge commit and
+   * wakes only if that build fails. Only a merge seen happening arms one. A
    * merged PR loaded from cache or found later has no transition, and a
    * merge older than a few hours is left alone.
    */
@@ -5380,22 +5456,34 @@ class DesktopAppServerService {
     const merged = transitions.filter((transition) => transition.changed.lifecycleState?.to === "merged"
       && (transition.pr.mergedAt === undefined || Date.now() - transition.pr.mergedAt < MERGE_BUILD_ARM_MAX_AGE_MS));
     if (!merged.length || !getAppStateMode() || !this.ownerNavigationActive) return;
-    const globalDefault = getDesktopSettingsService().resolveWatchMergeBuilds();
-    const coordinator = this.getThreadDependencyCoordinator();
     for (const transition of merged) {
-      for (const threadKey of transition.threadKeys) {
-        const identity = parseThreadIdentityKey(threadKey);
-        if (!identity || getDesktopBackendRegistry().getThreadInfo(identity)?.archived === true) continue;
-        // The project's Forge Automation beats the Git setting either way.
-        if (!projectWatchesMergeBuilds(this.threadKeyForgeAutomation(threadKey), globalDefault)) continue;
-        void coordinator.armMergeBuild(identity, { url: transition.url, title: transition.title })
-          .then((armed) => {
-            if (armed) appServerLog.info("merge build watch armed", { prKey: transition.prKey, threadId: identity.threadId });
-          })
-          .catch((error) => appServerLog.warn("merge build watch could not be armed", {
-            prKey: transition.prKey, error: error instanceof Error ? error.message : String(error),
-          }));
-      }
+      const pending = this.prCardMerges.get(transition.prKey)
+        ?? this.prRepositoryAliases.equivalentStatusKeys(transition.prKey)
+          .map((key) => this.prCardMerges.get(key)).find(Boolean);
+      if (pending) pending.transition = transition;
+      else this.startMergeBuildWatch(transition);
+    }
+  }
+
+  private startMergeBuildWatch(transition: PrStatusTransition, preferredThreadKey?: string): void {
+    void this.electMergeBuildWatch(transition, preferredThreadKey).catch((error: unknown) =>
+      appServerLog.warn("merge build watch could not be armed", {
+        prKey: transition.prKey, error: error instanceof Error ? error.message : String(error),
+      }));
+  }
+
+  private async electMergeBuildWatch(transition: PrStatusTransition, preferredThreadKey?: string): Promise<void> {
+    const ordered = new Set([...(preferredThreadKey ? [preferredThreadKey] : []), ...transition.threadKeys.toSorted()]);
+    const globalDefault = getDesktopSettingsService().resolveWatchMergeBuilds();
+    const registry = getDesktopBackendRegistry();
+    for (const threadKey of ordered) {
+      const identity = parseThreadIdentityKey(threadKey);
+      if (!identity || registry.getThreadInfo(identity)?.archived === true) continue;
+      if (!projectWatchesMergeBuilds(this.threadKeyForgeAutomation(threadKey), globalDefault)) continue;
+      const result = await this.getThreadDependencyCoordinator().armMergeBuild(
+        identity, { url: transition.url, title: transition.title });
+      if (result === "armed") appServerLog.info("merge build watch armed", { prKey: transition.prKey, threadId: identity.threadId });
+      if (result !== "ineligible") return;
     }
   }
 
@@ -5491,17 +5579,25 @@ class DesktopAppServerService {
     }
   }
 
+  /** Identical observations can advance freshness while a changed status is awaiting delivery. */
+  private matchingPrStatus(pr: PrSummary): PrStatusRegistryEntry | undefined {
+    const key = this.prRepositoryAliases.canonicalizeKey(getPrStatusKey(pr));
+    const current = this.prStatusRegistry.get(key);
+    return current && prSummariesEqual([current.pr], [stripPrLinkedDirectoryPaths(pr)]) ? current : undefined;
+  }
+
   private async writePrStatusesToCache(
     prs: PrSummary[],
     fetchedAt: number,
   ): Promise<void> {
-    const entries: PrStatusCacheEntry[] = prs.map(normalizePrSummary).map((pr) => ({
-      provider: normalizePullRequestProvider(pr.provider),
-      prKey: getPrStatusKey(pr),
-      fetchedAt,
-      pr,
-    }));
-    await this.getOverlayStore().writePrStatusCacheEntries(entries);
+    const entries: PrStatusCacheEntry[] = prs.flatMap((pr) => {
+      const current = this.matchingPrStatus(pr);
+      if (!current || current.fetchedAt < fetchedAt) return [];
+      // Keep this observation's timestamp. The cache's own ordering guard
+      // drops the write if an agreeing, fresher result is already durable.
+      return [{ provider: current.pr.provider, prKey: getPrStatusKey(current.pr), fetchedAt, pr: current.pr }];
+    });
+    if (entries.length) await this.getOverlayStore().writePrStatusCacheEntries(entries);
   }
 
   /**
@@ -5838,7 +5934,11 @@ class DesktopAppServerService {
     prs: PrSummary[];
   }): Promise<void> {
     await Promise.all(
-      params.prs.map(async (pr) => {
+      params.prs.map(async (observed) => {
+        // A newer observation can supersede this one while the caller
+        // awaits cache persistence or downstream automation.
+        const pr = this.matchingPrStatus(observed)?.pr;
+        if (!pr) return;
         const prKey = getPrStatusKey(pr);
         const aliases = this.prRepositoryAliases.equivalentStatusKeys(prKey);
         await getDesktopBackendRegistry().publishLocalEvent({

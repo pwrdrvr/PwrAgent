@@ -534,6 +534,24 @@ describe("describeInstalledAcpBackend", () => {
     }));
   });
 
+  it.each([undefined, "1.4.9"])("does not advertise ACP steering for Antigravity %s", (version) => {
+    const antigravity = describeInstalledAcpBackend({
+      ...buildInstalledAgent(),
+      backendId: "acp:antigravity",
+      registryId: "antigravity",
+      name: "Antigravity",
+      version,
+      capabilities: {
+        conversationRewind: false,
+        liveWorkspaceHandoff: false,
+        managedReview: true,
+        steerTurn: true,
+      },
+    });
+
+    expect(antigravity.capabilities.steerTurn).toBe(false);
+  });
+
   it.each([undefined, "1.0.50"])("does not advertise ACP steering for vendor Grok %s", (version) => {
     const grok = describeInstalledAcpBackend({
       ...buildInstalledAgent(),
@@ -1366,6 +1384,11 @@ describe("AcpBackendAdapter", () => {
       });
       await vi.waitFor(() => expect(prompts).toHaveLength(2));
       prompts[0]!.resolve({ stopReason: "end_turn" });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      transport.emitSessionUpdate("agy-session-1", {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "PINEAPPLE" },
+      });
 
       await expect(steerPromise).resolves.toEqual({ delivery: "currentTurn" });
       await vi.waitFor(() => {
@@ -1389,10 +1412,6 @@ describe("AcpBackendAdapter", () => {
         },
       });
 
-      transport.emitSessionUpdate("agy-session-1", {
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: "PINEAPPLE" },
-      });
       prompts[1]!.resolve({ stopReason: "end_turn" });
       await vi.waitFor(() => {
         expect(events.filter((event) => event.notification.method === "turn/completed")).toHaveLength(1);

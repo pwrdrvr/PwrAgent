@@ -16,6 +16,8 @@ export function readAcpToolDescription(
   const metadataInput = asRecord(readAcpToolMetadata(record)?.input);
   return (
     readString(rawInput ?? {}, "description") ??
+    // Antigravity's sentence about a `run_command`.
+    readString(rawInput ?? {}, "toolSummary") ??
     readString(rawOutput ?? {}, "description") ??
     readString(metadataInput ?? {}, "description") ??
     readString(record, "description")
@@ -317,6 +319,8 @@ function readDirectCommand(
     "displayCommand",
     "shellCommand",
     "commandText",
+    // Antigravity's `run_command`.
+    "CommandLine",
   ]) {
     const value = record[key];
     if (typeof value === "string" && value.trim()) {

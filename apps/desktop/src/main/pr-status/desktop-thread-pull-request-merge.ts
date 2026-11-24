@@ -13,7 +13,7 @@ const mergeLog = getMainLogger("pwragent:pr-card-merge");
 /**
  * The same pieces a to-do merge card runs through, for this instance's own
  * threads. This window's merge and a peer's merge, which the owner runs for
- * it, both use them; only how the PR status refresh is asked for differs.
+ * it, both use them.
  */
 export function desktopThreadPullRequestMergeDeps(
   refresh: ThreadPullRequestMergeDeps["refresh"],
@@ -29,9 +29,9 @@ export function desktopThreadPullRequestMergeDeps(
     assertNotHeld: (thread, url) => assertMergeNotHeld(createThreadDependencyStorage().active(), {
       ...thread, pullRequest: url,
     }, (owner) => overlay.readThreadPullRequestUrls(owner)),
-    merge: async (params) => await new GithubPrFetcher().mergePullRequest({ ...params, checkStackOrder: true }),
+    merge: async (params, thread) => await new GithubPrFetcher().mergePullRequest({ ...params, thread, checkStackOrder: true }),
     refresh,
-    onRefreshFailed: (error) => mergeLog.warn("could not refresh PR status after a merge", {
+    onRefreshFailed: (error) => mergeLog.warn("could not refresh PR status after enqueuing a merge", {
       error: error instanceof Error ? error.message : String(error),
     }),
   };

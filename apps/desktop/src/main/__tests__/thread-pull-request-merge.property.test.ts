@@ -32,7 +32,7 @@ function harness(attached: string[], held: Set<string>) {
   const merge = vi.fn(async (params: { pullRequest: string; method: ThreadTodoMergeMethod; assertCanMerge: (url: string) => void }) => {
     params.assertCanMerge(params.pullRequest);
     calls.push(`merge:${params.pullRequest}:${params.method}`);
-    return { summary: "Squash-merged" };
+    return { summary: "Squash-merged", mergedUrl: params.pullRequest };
   });
   const deps: ThreadPullRequestMergeDeps = {
     readThreadPullRequestUrls: () => attached,
@@ -104,9 +104,11 @@ describe("mergeThreadPullRequest (property)", () => {
   it("keeps a queue's own summary and reports it queued", async () => {
     const url = githubUrl({ repo: REPOS[0], number: 3 });
     const { deps } = harness([url], new Set());
+    const refresh = vi.spyOn(deps, "refresh");
     deps.merge = async () => ({ summary: "Added #3 to the merge queue · queued #2", queued: true });
     await expect(mergeThreadPullRequest(deps, { ...THREAD, url, method: "squash" }))
       .resolves.toEqual({ summary: "Added #3 to the merge queue · queued #2", queued: true });
+    expect(refresh).toHaveBeenCalledExactlyOnceWith(THREAD);
   });
 
   it("reads the remembered pick and the Settings default", async () => {

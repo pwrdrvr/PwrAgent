@@ -628,7 +628,7 @@ function offerCard(
         withdrawnResults: PR_OFFER_WITHDRAWN_RESULTS,
         title: `Review ${title}`.slice(0, 120),
         detail: `CI is green at ${shortSha(offer.headSha)}, and no review covers this change yet.`,
-        action: { type: "start_review" },
+        action: { type: "start_review", pullRequest: pr.url },
         ...(cwd ? { cwd } : {}),
       }
     : {

@@ -3,6 +3,8 @@ import {
   waitForCondition,
   createOverlayStoreMock,
   MockBackendClient,
+  createAcpAgentStoreMock,
+  createAcpSessionStoreMock,
   createKimiAgentRecord,
   createKimiAcpRegistry,
   emitCompletedTurn,
@@ -10,6 +12,7 @@ import {
   discoverCodexBackendForTest,
 } from "./helpers/backend-registry-fixture";
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
+import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import { getOwnerHostServices } from "../owner-host";
 import { createPwrAgentAppManagementHandler } from "../agent-tools/pwragent-app-management-service";
 import { createQuitManager } from "../shell/quit-manager";
@@ -209,6 +212,103 @@ describe("DesktopBackendRegistry", () => {
         } finally { await registry.close(); }
       },
     ), { numRuns: 12, examples: [["acp:gemini", 1, ["review"]]] });
+  });
+
+  it.each([false, true])("uses the Antigravity turn owner's steering support (%s) after an installation switch", async (ownerSupportsSteering) => {
+    // The initialized process is the capability oracle while its prompt runs.
+    const backend = "acp:antigravity" as const;
+    const providerSessionId = "agy-owner-session";
+    const installed = (version: string) => ({
+      ...createKimiAgentRecord(backend), registryId: "antigravity", name: "Antigravity", version,
+      launchDescriptor: {
+        backendId: backend, registryId: "antigravity", distributionKind: "local" as const,
+        command: `/fixture/${version}/agy`, args: ["acp", "--process-per-session"], env: {},
+      },
+    });
+    const ownerVersion = ownerSupportsSteering ? "1.5.15" : "1.4.9";
+    const selectedVersion = ownerSupportsSteering ? "1.4.9" : "1.5.15";
+    const agentStore = createAcpAgentStoreMock([installed(ownerVersion)]);
+    const transports = new Map<string, FakeAcpAgentTransport>();
+    const prompts: Array<{ version: string; finish: (response: unknown) => void }> = [];
+    const nextPrompt = Promise.withResolvers<string>();
+    const registry = createDesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: agentStore,
+      acpSessionStore: createAcpSessionStoreMock([]),
+      threadTitleGenerationService: null,
+      createAcpTransport: (agent) => {
+        const version = agent.version!;
+        const transport = new FakeAcpAgentTransport({
+          initialize: {
+            protocolVersion: 1, agentInfo: { version },
+            agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {}, close: {} } },
+          },
+          "session/new": { sessionId: providerSessionId },
+        });
+        transports.set(version, transport);
+        const request = transport.request.bind(transport);
+        vi.spyOn(transport, "request").mockImplementation(async (method, params, timeout) => {
+          if (method !== "session/prompt") return await request(method, params, timeout);
+          const prompt = Promise.withResolvers<unknown>();
+          prompts.push({ version, finish: prompt.resolve });
+          if (prompts.length === 2) nextPrompt.resolve(version);
+          return await prompt.promise;
+        });
+        return transport;
+      },
+    });
+    const answer = (version: string, text: string) => transports.get(version)!.emitSessionUpdate(
+      providerSessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
+    );
+    try {
+      const { threadId } = await registry.startThread({ backend, cwd: "/repo", executionMode: "default" });
+      const first = await registry.startTurn({ backend, threadId, input: [{ type: "text", text: "Initial prompt" }] });
+      expect(prompts.map(({ version }) => version)).toEqual([ownerVersion]);
+      answer(ownerVersion, "Before the switch");
+      agentStore.upsertInstalledAgent(installed(selectedVersion));
+      const summary = (await registry.listBackends({ includeUnavailable: true })).backends
+        .find(({ kind }) => kind === backend);
+      expect(summary?.capabilities.steerTurn).toBe(!ownerSupportsSteering);
+
+      const delivery = Promise.withResolvers<{ status: string; turnId?: string }>();
+      registry.onEvent(({ notification }) => {
+        if (notification.method !== "thread/turnQueue/updated" || notification.params.threadId !== threadId) return;
+        const { status, errorMessage, turnId } = notification.params;
+        if (status === "held" || status === "blocked" || status === "failed") {
+          nextPrompt.resolve(typeof errorMessage === "string" ? errorMessage : status);
+        } else if (status !== "started") {
+          return;
+        }
+        delivery.resolve({ status, turnId: typeof turnId === "string" ? turnId : undefined });
+      });
+      const queued = await registry.submitTurn({
+        backend, threadId, origin: "manual", messageOrigin: { kind: "sub-agent" },
+        input: [{ type: "text", text: "Queued guidance" }],
+      });
+      expect(queued).toMatchObject({ status: "queued", entry: { delivery: "queued-steer" } });
+      if (ownerSupportsSteering) {
+        expect(await nextPrompt.promise).toBe(ownerVersion);
+        prompts[0]!.finish({ stopReason: "end_turn" });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        answer(ownerVersion, "Steered answer");
+        prompts[1]!.finish({ stopReason: "end_turn" });
+      } else {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(prompts).toHaveLength(1);
+        prompts[0]!.finish({ stopReason: "end_turn" });
+        expect(await nextPrompt.promise).toBe(selectedVersion);
+        answer(selectedVersion, "New turn answer");
+        prompts[1]!.finish({ stopReason: "end_turn" });
+      }
+      const delivered = await delivery.promise;
+      expect(delivered).toMatchObject({ status: "started", turnId: expect.any(String) });
+      expect(delivered.turnId === first.turnId).toBe(ownerSupportsSteering);
+      expect(registry.listHeldThreadQueueEntries({ backend, threadId })).toEqual([]);
+    } finally {
+      for (const prompt of prompts) prompt.finish({ stopReason: "cancelled" });
+      await registry.close();
+    }
   });
 
   it("budgets unsupported live steering Retry without releasing review holds", async () => {

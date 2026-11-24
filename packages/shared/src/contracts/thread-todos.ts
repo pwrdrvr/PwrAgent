@@ -258,7 +258,14 @@ export function resolveThreadTodoModelSettings(params: {
 }
 
 export type ThreadTodoAction =
-  | { type: "start_review" }
+  | {
+      type: "start_review";
+      /**
+       * The pull request the review is for, as its URL. A PR offer names it so
+       * the composer opens on that PR rather than guessing from the checkout.
+       */
+      pullRequest?: string;
+    }
   | {
       type: "send_message";
       prompt: string;

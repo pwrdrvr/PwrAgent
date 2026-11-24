@@ -1333,6 +1333,10 @@ export class DesktopSettingsService {
           config.experimental?.researchEnabled,
           false,
         ),
+        resourceCheckoutsEnabled: this.resolveConfigBoolean(
+          config.experimental?.resourceCheckoutsEnabled,
+          false,
+        ),
         codexDefaultModeRequestUserInput: this.resolveConfigBoolean(
           config.experimental?.codexDefaultModeRequestUserInput,
           false,
@@ -2491,6 +2495,11 @@ export class DesktopSettingsService {
   /** Research is for every local backend. Codex Tool Discovery decides only whether Codex threads are offered its tools. */
   resolveResearchEnabled(): boolean {
     return this.readExperimentalConfig().researchEnabled === true;
+  }
+
+  /** Federation and local resource checkout tools for agents. Disabled by default. */
+  resolveResourceCheckoutsEnabled(): boolean {
+    return this.readExperimentalConfig().resourceCheckoutsEnabled === true;
   }
 
   resolveManagedReviewEnabled(): boolean {

@@ -31,8 +31,7 @@ import { PR_METADATA_PRIORITY, SharedPrMetadataRead } from "../pr-status/pr-meta
 import { StackReader, StackReadObservation } from "../stacks/stack-reader";
 import { compactStackMembership, MAX_COMPACT_STACK_MEMBERSHIPS, type CompactStackMembership, type SelectedStackLayer, type StackSummary } from "@pwragent/shared/stacks/stack-status";
 import { comparePullRequestStack } from "@pwragent/shared/pull-request-rollup";
-import { readNavigationCheckout } from "../git-info/directory-store";
-import { collectConcurrent } from "../../shared/concurrent-work";
+import { readNavigationCheckouts } from "../git-info/directory-store";
 
 // Keep a bounded comparison candidate across nearby refreshes. The serving
 // window and the provider/filesystem validation on its expiry still apply.
@@ -239,11 +238,14 @@ async function projectNavigationCheckoutDirectories(
     rows.push(thread);
     candidates.set(cwd, rows);
   }
-  const observed = await collectConcurrent([...candidates], 16, async ([cwd, rows]) => {
-    signal.throwIfAborted();
-    checkpoint();
-    return { cwd, rows, checkout: await readNavigationCheckout(cwd, fresh) };
+  const entries = [...candidates];
+  const checkouts = await readNavigationCheckouts(entries.map(([cwd]) => cwd), {
+    fresh,
+    verified,
+    signal,
+    checkpoint,
   });
+  const observed = entries.map(([cwd, rows], index) => ({ cwd, rows, checkout: checkouts[index] }));
   // Git does not record the primary checkout path in a separate git-dir.
   // Join only to a primary established in this inventory, even when its row
   // follows the linked checkout. Multiple primary paths are ambiguous.
@@ -414,14 +416,18 @@ async function projectNavigationStacks(
   const attachments = getDesktopOverlayStore().readNavigationPullRequests(
     candidates.map((thread) => ({ backend: thread.source, threadId: thread.id })),
   );
-  // Navigation and detail reads share locally verified stack attachments.
-  // Opening a stack cannot initiate forge repository-name lookups.
+  // Canonical status supplies the refs used to find potential stacks. Validate
+  // automatic attachments only after checkout and stack admission. Neither
+  // navigation nor stack detail can initiate forge repository-name lookups.
   const demand = { signal, priority: () => PR_METADATA_PRIORITY.background, allowForgeLookup: false as const };
   const rows = await Promise.all(candidates.map(async (thread, index) => ({
     ...thread,
-    prs: attachments[index]?.length ? await registry.canonicalizeNavigationPullRequests(attachments[index]!, demand) : [],
+    prs: attachments[index]?.length ? await registry.canonicalizeNavigationPullRequests(attachments[index]!, demand, false) : [],
   })));
   signal.throwIfAborted();
+  const validated = new Map<string, readonly PrSummary[]>(rows.map((row) => [
+    buildThreadIdentityKey(row.source, row.id), row.prs,
+  ]));
   const { stacks } = await stackReader.read(rows, [], undefined,
     async (key) => {
       const thread = parseThreadIdentityKey(key);
@@ -429,11 +435,13 @@ async function projectNavigationStacks(
       const held = registry.stackThreadHeld?.(thread) ?? false;
       return { held, repair: !held && (Boolean(await getDesktopOverlayStore().getThreadPrAutoDispatchPending(thread))
         || await registry.stackRepairActive?.(thread) === true) };
-    }, new StackReadObservation(demand));
+    }, new StackReadObservation(demand), async (row) => {
+      const prs = await registry.canonicalizeNavigationPullRequests(row.prs, demand);
+      validated.set(buildThreadIdentityKey(row.source, row.id), prs);
+      return prs;
+    });
   signal.throwIfAborted();
-  return projectBoundNavigationStacks(threads, stacks, new Map(rows.map((row) => [
-    buildThreadIdentityKey(row.source, row.id), row.prs,
-  ])));
+  return projectBoundNavigationStacks(threads, stacks, validated);
 }
 
 export function projectBoundNavigationStacks(

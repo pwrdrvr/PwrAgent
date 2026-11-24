@@ -1,6 +1,6 @@
 import { snapshotCodexSkillProfile } from "@pwragent/shared/contracts/codex-skill-profiles";
 import type { ClaudeGatewayRequest, ClaudeGatewayResponse } from "@pwragent/shared/contracts/claude-gateway";
-import type { CheckoutToolHandler } from "../agent-tools/pwragent-resource-checkout-agent-tools";
+import { isResourceCheckoutCleanupCall, type CheckoutToolHandler, type CheckoutToolMode } from "../agent-tools/pwragent-resource-checkout-agent-tools";
 import type { ThreadModelSettings } from "./thread-model-settings";
 import type { AcpSessionRuntimeOptions } from "./acp-session-runtime-options";
 import type { HeadlessAutomationTurns } from "./headless-automation-turns";
@@ -1187,6 +1187,7 @@ export class DesktopBackendRegistry {
     string,
     AcceptedDynamicToolCall
   >();
+  private readonly blockingCheckoutTurns = new Map<string, AbortController>();
   private readonly codexProtocolCaptureSession?: CodexProtocolCaptureSession;
   private readonly captureStores: ProtocolCaptureStore[];
   readonly navigationDirectoryScope = new NavigationDirectoryScope();
@@ -1380,6 +1381,8 @@ export class DesktopBackendRegistry {
   private openAIDecisionsHandler?: PwrAgentOpenAIDecisionsHandler;
   private researchHandler?: ResearchAgentHandler;
   private checkoutHandler?: CheckoutToolHandler;
+  private resourceCheckoutsEnabled: () => boolean = () => false;
+  private hasCheckoutToCleanUp?: (backend: AppServerBackendKind, threadId: string) => boolean;
   private prepareCheckoutWakeup?: (entry: ThreadTurnQueueEntry, dependencyId: string) => Promise<AppServerTurnInputItem[]>;
   private researchEnabled: () => boolean = () => false;
   private researchWorkerCheck?: (thread: { backend: AppServerBackendKind; threadId: string }) => boolean;
@@ -1698,8 +1701,8 @@ export class DesktopBackendRegistry {
   }
 
   canonicalizeNavigationPullRequests(prs: NonNullable<NavigationSnapshot["threads"][number]["prs"]>,
-    demand?: PrMetadataDemand): Promise<typeof prs> {
-    return this.forgeToolBridge.canonicalizeNavigationPullRequests(prs, demand);
+    demand?: PrMetadataDemand, verifyAttachments?: boolean): Promise<typeof prs> {
+    return this.forgeToolBridge.canonicalizeNavigationPullRequests(prs, demand, verifyAttachments);
   }
 
   withNavigationPrimaryGitRepositories(threads: NavigationSnapshot["threads"]): NavigationSnapshot["threads"] {
@@ -1914,7 +1917,11 @@ export class DesktopBackendRegistry {
     connect: (ports: ReturnType<DesktopBackendRegistry["constructionPorts"]>) => void,
   ) {
     this.context = dependencies.context;
-    this.context.turnState.onTurnUnregistered((key) => { this.jobMonitorCreationDeferredTurns.delete(key); });
+    this.context.turnState.onTurnUnregistered((key) => {
+      this.jobMonitorCreationDeferredTurns.delete(key);
+      this.blockingCheckoutTurns.get(key)?.abort();
+      this.blockingCheckoutTurns.delete(key);
+    });
     this.turnEventObservers = dependencies.turnEventObservers;
     this.ownerAdmission = dependencies.ownerAdmission;
     this.configStore = dependencies.configStore;
@@ -2366,6 +2373,7 @@ export class DesktopBackendRegistry {
       get threadTodoHandler() { return current().threadTodoHandler; },
       get openAIDecisionsHandler() { return current().openAIDecisionsHandler; },
       get checkoutHandler() { return current().checkoutHandler; },
+      resourceCheckoutToolMode: (thread: { backend: AppServerBackendKind; threadId?: string }) => this.resourceCheckoutToolMode(thread),
       get mcpResearchHandler() { return current().mcpResearchHandler; },
       get threadTurnQueue() { return current().threadTurnQueue; },
       get tokenMiserCodeModeGroupingVersion() { return current().tokenMiserCodeModeGroupingVersion; },
@@ -2985,14 +2993,43 @@ export class DesktopBackendRegistry {
   }
 
   setResourceCheckoutHandler(
-    handler: CheckoutToolHandler,
+    handler: CheckoutToolHandler | undefined,
     prepare?: DesktopBackendRegistry["prepareCheckoutWakeup"],
+    enabled: () => boolean = () => false,
+    hasCheckoutToCleanUp?: DesktopBackendRegistry["hasCheckoutToCleanUp"],
   ): void {
     this.prepareCheckoutWakeup = prepare;
-    this.checkoutHandler = (operation, args, context) => {
-      if (!this.isLiveDynamicToolCall(context.backend, context)) throw new Error("Resource tools require an active thread turn.");
-      return handler(operation, args, context);
-    };
+    this.resourceCheckoutsEnabled = enabled;
+    this.hasCheckoutToCleanUp = hasCheckoutToCleanUp;
+    this.checkoutHandler = handler
+      ? (operation, args, context) => {
+        if (!this.resourceCheckoutsEnabled() && !isResourceCheckoutCleanupCall(operation, args)) {
+          throw new Error("Federation resource tools are disabled. Enable Federation resources in Settings → Experimental.");
+        }
+        if (!this.isLiveDynamicToolCall(context.backend, context)) throw new Error("Resource tools require an active thread turn.");
+        if (operation === "resource_checkout_acquire" && context.turnId) {
+          const turn = this.blockingCheckoutTurn(context.backend, context.threadId, context.turnId.trim());
+          const signal = context.signal ? AbortSignal.any([context.signal, turn.signal]) : turn.signal;
+          return handler(operation, args, { ...context, signal });
+        }
+        return handler(operation, args, context);
+      }
+      : undefined;
+  }
+
+  private resourceCheckoutToolMode(thread?: { backend: AppServerBackendKind; threadId?: string }): CheckoutToolMode {
+    if (this.resourceCheckoutsEnabled()) return "enabled";
+    // Hidden definitions still resolve calls from previously advertised catalogs.
+    return thread?.threadId && this.hasCheckoutToCleanUp?.(thread.backend, thread.threadId) ? "cleanup" : "hidden";
+  }
+
+  private blockingCheckoutTurn(backend: AppServerBackendKind, threadId: string, turnId: string): AbortController {
+    const key = buildActiveTurnKey(backend, threadId, turnId);
+    const existing = this.blockingCheckoutTurns.get(key);
+    if (existing) return existing;
+    const controller = new AbortController();
+    this.blockingCheckoutTurns.set(key, controller);
+    return controller;
   }
 
   setResearchHandler(handler: ResearchAgentHandler | undefined, workerCheck?: (thread: { backend: AppServerBackendKind; threadId: string }) => boolean, enabled: () => boolean = () => false): void {
@@ -8915,6 +8952,7 @@ export class DesktopBackendRegistry {
       openAIDecisionsHandler: this.openAIDecisionsHandler,
       researchHandler: this.advertisedResearchHandler,
       checkoutHandler: this.checkoutHandler,
+      checkoutMode: this.resourceCheckoutToolMode(),
     });
     const pdfMcpPreparation = resources.track(
       backend === "codex" && this.resolvePdfAnalysisEnabledFn()
@@ -10907,12 +10945,14 @@ export class DesktopBackendRegistry {
     } : undefined;
     const entry = this.threadTurnQueue.getAllQueuedEntries().find((candidate) => candidate.id === entryId);
     if (entry?.delivery === "queued-steer" && entry.manualReleaseRequired && this.getActiveTurnForThread(entry)) {
-      const backend = (await this.listBackends({ includeUnavailable: true })).backends
-        .find((candidate) => candidate.kind === entry.backend);
+      const supportsSteering = entry.backend === "acp:antigravity"
+        ? this.acpBackend.supportsActiveAntigravitySteering(entry.threadId)
+        : (await this.listBackends({ includeUnavailable: true })).backends
+          .find((candidate) => candidate.kind === entry.backend)?.capabilities.steerTurn;
       // The queue's live-owner check is optimistic. Confirm provider support
       // before Retry clears review holds, then recheck the live FIFO after IO.
       const head = this.threadTurnQueue.getQueuedEntries(entry).find((candidate) => !candidate.paused);
-      if (!backend?.capabilities.steerTurn && head?.id === entryId
+      if (!supportsSteering && head?.id === entryId
         && head.manualReleaseRequired && this.getActiveTurnForThread(head)) {
         return { queueEntryId: entryId, disposition: "busy" };
       }
@@ -13045,7 +13085,12 @@ export class DesktopBackendRegistry {
   }
 
   private readonly threadInterruption = new ThreadInterruptionLifecycle({
-    cancelTools: (target) => { this.mcpGatewayTools?.cancel(target.backend, target.threadId, target.turnId); },
+    cancelTools: (target) => {
+      this.mcpGatewayTools?.cancel(target.backend, target.threadId, target.turnId);
+      if (this.isLiveDynamicToolCall(target.backend, target)) {
+        this.blockingCheckoutTurn(target.backend, target.threadId, target.turnId).abort();
+      }
+    },
     findReview: (target) => {
       const review = this.managedReviewService.findReviewForParentTurn({
         backend: target.backend, parentThreadId: target.threadId, turnId: target.turnId,
@@ -16157,6 +16202,8 @@ export class DesktopBackendRegistry {
       await this.stopRunningTurnsForShutdown();
     }
     this.mcpGatewayTools?.cancel();
+    for (const controller of this.blockingCheckoutTurns.values()) controller.abort();
+    this.blockingCheckoutTurns.clear();
     this.threadMcpConnections.clearSessionApprovals();
     this.headlessAutomation.revokeRegistrations();
     this.closed = true;
@@ -16859,6 +16906,7 @@ export class DesktopBackendRegistry {
         openAIDecisionsHandler: this.openAIDecisionsHandler,
         researchHandler: this.advertisedResearchHandler,
         checkoutHandler: this.checkoutHandler,
+        checkoutMode: this.resourceCheckoutToolMode({ backend: "codex", threadId: caller?.threadId }),
       }, { jobMonitorCreationEnabled }),
     ), discoveryEnabled, eagerTools);
     // Tool search reads this catalog too, so it must not name refused tools.
@@ -19856,6 +19904,7 @@ export class DesktopBackendRegistry {
         openAIDecisionsHandler: this.openAIDecisionsHandler,
         researchHandler: this.advertisedResearchHandler,
         checkoutHandler: this.checkoutHandler,
+        checkoutMode: this.resourceCheckoutToolMode(),
       }, { taskMonitorRole: "all" });
       const catalog = catalogs.find(({ router }) => router.acceptsDynamicToolCall(hostToolCall));
       // These adapters retain the historical namespace normalization and

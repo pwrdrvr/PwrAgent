@@ -67,6 +67,7 @@ import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-regi
 import { AgentToolRouter } from "../agent-tools/agent-tool-router";
 import { buildMcpGatewayToolDefinitions } from "../agent-tools/pwragent-mcp-gateway-tools";
 import { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
+import { READ_MCP_CONTEXT } from "../mcp-connections/mcp-gateway-context";
 import { getTokenMiserBridgeDescriptorPath, TokenMiserHookBridge } from "../token-miser/token-miser-hook-bridge";
 import { TokenMiserPluginManager } from "../token-miser/token-miser-plugin-manager";
 import { TOKEN_MISER_DIAGNOSTICS_DIRNAME } from "../token-miser/token-miser-types";
@@ -927,6 +928,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         }] : [])]);
       },
       serverNameInAgent: (connectionId, context) => ports.threadMcpServerNameInAgent(connectionId, context),
+      contextAllowed: (context) => isAgentToolAdvertisedLocally(READ_MCP_CONTEXT) && !ports.isTaskMonitorThread(context),
       toolAllowed: (tool, context) => !ports.isTaskMonitorThread(context)
         || (tool.definition.annotations?.readOnlyHint === true && tool.definition.annotations.destructiveHint !== true),
       approve: (invocation, context, signal, annotations, catalogRevision, consentRevision) => ports.approveGatewayInvocation(invocation, context, signal, annotations, catalogRevision, consentRevision),
@@ -999,7 +1001,11 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
               openAIDecisionsHandler: ports.openAIDecisionsHandler,
               researchHandler: ports.mcpResearchHandler,
               checkoutHandler: ports.checkoutHandler,
-            }, { taskMonitorRole: "all" }),
+              checkoutMode: ports.resourceCheckoutToolMode(context),
+            }, {
+              taskMonitorRole: "all",
+              antigravityMcpContext: context.backend === "acp:antigravity" && !context.memoryOnly,
+            }),
           authorizeToolCall: (params) =>
             ports.authorizeAgentToolMcpCall(params),
           isToolAdvertised: async (name, context) => isAgentToolAdvertisedLocally(name)
@@ -1345,9 +1351,11 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     prepareSteer: async (entry) => {
       const active = ports.getActiveTurnForThread(entry);
       if (!active) return undefined;
-      const backend = (await ports.listBackends({ includeUnavailable: true })).backends
-        .find((candidate) => candidate.kind === entry.backend);
-      if (!backend?.capabilities.steerTurn) return undefined;
+      const supportsSteering = entry.backend === "acp:antigravity"
+        ? acpBackend.supportsActiveAntigravitySteering(entry.threadId)
+        : (await ports.listBackends({ includeUnavailable: true })).backends
+          .find((candidate) => candidate.kind === entry.backend)?.capabilities.steerTurn;
+      if (!supportsSteering) return undefined;
       // Review ownership can change while backend discovery is pending.
       if (ports.findReviewForParentTurn({
         backend: entry.backend,

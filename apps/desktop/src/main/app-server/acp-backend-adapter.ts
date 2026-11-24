@@ -44,6 +44,7 @@ import type { AcpAgentStorage } from "@pwragent/owner-core/acp-storage";
 import { isBannedAcpRegistryId } from "../acp/acp-agent-allowlist";
 import {
   acpAgentCapabilitiesForRegistryId,
+  isAntigravitySteerableVersion,
   isPwrAgentGrokBuildVersion,
   type AcpAgentCapabilities,
 } from "../acp/acp-agent-capabilities";
@@ -732,9 +733,13 @@ function effectiveAcpAgentCapabilities(
     managedReview: catalog.managedReview,
     // Grok's steering extension is downstream-only. Ignore the unconditional
     // steerTurn value persisted by older catalog/discovery records for vendor
-    // Grok. Antigravity steers natively through overlapping session/prompt.
+    // Grok. Antigravity 1.5.0+ steers natively through overlapping
+    // session/prompt; 1.4.x queues concurrent prompts instead.
     steerTurn:
-      agent.registryId === "antigravity"
+      (agent.registryId === "antigravity"
+        && isAntigravitySteerableVersion(
+          agent.runtimeCapabilities?.agentInfo?.version ?? agent.version,
+        ))
       || (agent.registryId === "grok"
         && (isPwrAgentOwnedGrokRuntime(agent)
           || isPwrAgentGrokBuildVersion(
@@ -2142,6 +2147,15 @@ export class AcpBackendAdapter {
     return { ...result, targetPromptIndex };
   }
 
+  supportsActiveAntigravitySteering(sessionId: string): boolean {
+    const owner = this.findSessionOwner("acp:antigravity", sessionId);
+    return owner !== undefined
+      && !owner.disposePromise
+      && !owner.client.disconnected
+      && owner.client.steerSession !== undefined
+      && owner.client.supportsTurnSteering?.() === true;
+  }
+
   async steerSession(params: {
     backend: AcpBackendId;
     content: AcpPromptContentBlock[];
@@ -2162,10 +2176,12 @@ export class AcpBackendAdapter {
       const label = params.backend === "acp:antigravity" ? "Antigravity" : "Grok";
       throw new Error(`The ${label} turn finished before steering was accepted`);
     }
-    const client = await this.getClientForSession(
-      params.backend,
-      params.sessionId,
-    );
+    const owner = params.backend === "acp:antigravity"
+      ? this.findSessionOwner(params.backend, params.sessionId)
+      : undefined;
+    const client = owner
+      ? await owner.promise
+      : await this.getClientForSession(params.backend, params.sessionId);
     if (!client.steerSession || client.supportsTurnSteering?.() !== true) {
       throw new Error(
         params.backend === "acp:antigravity"

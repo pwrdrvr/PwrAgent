@@ -550,6 +550,43 @@ describe("ThreadTodoStack", () => {
     expect(view.run).not.toHaveBeenCalled();
   });
 
+  it("waits on the composer while its review is being set up, and offers Start review again after", () => {
+    const review = todo({ id: "r", kind: "review", action: { type: "start_review" } });
+    const other = todo({ id: "r2", kind: "review", action: { type: "start_review" } });
+    const view = createView([review, other]);
+    const onShow = vi.fn();
+    const { container, rerender } = render(
+      <ThreadTodoStack
+        threadKey="codex:thread-a"
+        todos={[review, other]}
+        view={view}
+        onStartReview={vi.fn()}
+        reviewSetup={{ todoId: "r", onShow }}
+      />,
+    );
+
+    // One Start review on screen: the panel's. The card says where it went.
+    expect(screen.queryByRole("button", { name: "Start review" })).toBeNull();
+    expect(screen.getByText("Finish setup in the composer")).toBeTruthy();
+    expect(container.querySelector("[data-todo-id='r']")?.hasAttribute("data-review-setup")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: `Show review setup for ${review.title}` }));
+    expect(onShow).toHaveBeenCalledWith(review);
+
+    // Cancel in the panel clears the setup; the card offers Start review again.
+    rerender(
+      <ThreadTodoStack
+        threadKey="codex:thread-a"
+        todos={[review, other]}
+        view={view}
+        onStartReview={vi.fn()}
+        reviewSetup={{ todoId: undefined, onShow }}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Start review" })).toBeTruthy();
+    expect(screen.queryByText("Finish setup in the composer")).toBeNull();
+    expect(container.querySelector("[data-todo-id='r']")?.hasAttribute("data-review-setup")).toBe(false);
+  });
+
   it("offers Undo after Done", async () => {
     const reminder = todo({ id: "u" });
     const view = createView([reminder]);

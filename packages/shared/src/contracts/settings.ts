@@ -1619,6 +1619,8 @@ export type DesktopSettingsSnapshot = {
     codexToolDiscovery?: DesktopSettingsValue<boolean>;
     /** Opt-in native research UI and tools. Defaults to off. */
     researchEnabled?: DesktopSettingsValue<boolean>;
+    /** Opt-in Federation and local resource checkout tools for agents. Defaults to off. */
+    resourceCheckoutsEnabled?: DesktopSettingsValue<boolean>;
     /** Opt-in focused questions over retained output; independent of ordinary gating. */
     tokenMiserFocusedSummariesEnabled?: DesktopSettingsValue<boolean>;
     /** Opt-in helper review for ambiguous poll-shaped parent activity. */
@@ -2017,6 +2019,7 @@ export type DesktopSettingsConfigPatch = {
     tokenMiserDefaultEnabled?: boolean;
     codexToolDiscovery?: boolean;
     researchEnabled?: boolean;
+    resourceCheckoutsEnabled?: boolean;
     tokenMiserFocusedSummariesEnabled?: boolean;
     tokenMiserPollingReviewsEnabled?: boolean;
     tokenMiserDiagnosticsEnabled?: boolean;

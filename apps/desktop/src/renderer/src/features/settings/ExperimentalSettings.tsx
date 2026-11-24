@@ -102,6 +102,7 @@ export function ExperimentalSettings(props: {
   onTokenMiserDefaultEnabledChange: (enabled: boolean) => Promise<void>;
   onCodexToolDiscoveryChange: (enabled: boolean) => Promise<void>;
   onResearchEnabledChange: (enabled: boolean) => Promise<void>;
+  onResourceCheckoutsEnabledChange: (enabled: boolean) => Promise<void>;
   onWriteConfig: (patch: DesktopSettingsConfigPatch, onError?: (message: string) => void) => Promise<boolean>;
   onClearSecret: (secret: DesktopSettingsSecretName) => Promise<boolean>;
   onReplaceSecret: (secret: DesktopSettingsSecretName, value: string) => Promise<boolean>;
@@ -115,6 +116,8 @@ export function ExperimentalSettings(props: {
   const codexToolDiscovery = props.snapshot.experimental.codexToolDiscovery
     ?? { value: true, source: "default" as const };
   const researchEnabled = props.snapshot.experimental.researchEnabled
+    ?? { value: false, source: "default" as const };
+  const resourceCheckoutsEnabled = props.snapshot.experimental.resourceCheckoutsEnabled
     ?? { value: false, source: "default" as const };
   const tokenMiserEnabled =
     props.snapshot.experimental.tokenMiserEnabled ??
@@ -228,6 +231,26 @@ export function ExperimentalSettings(props: {
         onClearSecret={props.onClearSecret}
         onReplaceSecret={props.onReplaceSecret}
       />
+
+      <SettingsSection
+        eyebrow="Experimental"
+        title="Federation resources"
+        description="Expose local CPU and Federation resource checkout tools for agent discovery and reservations. Disabled by default."
+        chip={resourceCheckoutsEnabled.value ? "On" : "Off"}
+        chipKind={resourceCheckoutsEnabled.value ? "ok" : "default"}
+      >
+        <div className="settings-fields">
+          <ToggleField
+            checked={resourceCheckoutsEnabled.value}
+            disabled={props.saving}
+            label="Enable resource checkout tools"
+            sub="Applies to Codex, Claude and ACP threads."
+            help="Turning this off blocks new agent reservations. Threads can still check status, release their holds, and cancel queued requests. The Resources window stays available. New threads and runtimes with tool refresh pick up changes on their next turn."
+            source={sourceBadge(resourceCheckoutsEnabled)}
+            onChange={props.onResourceCheckoutsEnabledChange}
+          />
+        </div>
+      </SettingsSection>
 
       <SettingsSection
         eyebrow="Experimental"

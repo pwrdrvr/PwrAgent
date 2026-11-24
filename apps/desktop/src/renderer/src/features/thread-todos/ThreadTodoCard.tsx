@@ -124,6 +124,8 @@ export type ThreadTodoCardHandlers = {
    * with `options` as the card's open-steps answer.
    */
   onStartReview: (todo: ThreadTodo, options?: ThreadTodoResolveOptions) => void;
+  /** Which card's review the composer is setting up, and how to show it. */
+  reviewSetup?: ThreadTodoReviewSetup;
   onResolve: (
     todo: ThreadTodo,
     status: "done" | "dismissed",
@@ -148,6 +150,16 @@ export type ThreadTodoCardHandlers = {
    * owner. Absent, the card offers Review on GitHub alone.
    */
   onReviewCiDeployment?: (todo: ThreadTodo, approval: ThreadTodoCiApproval) => void;
+};
+
+/**
+ * The to-do card whose Start review opened the composer's review panel.
+ * That card waits on the panel, with Show, rather than offering Start review
+ * a second time; Cancel in the panel clears `todoId`.
+ */
+export type ThreadTodoReviewSetup = {
+  todoId?: string;
+  onShow: (todo: ThreadTodo) => void;
 };
 
 export type ThreadTodoCardProps = ThreadTodoCardHandlers & {
@@ -966,6 +978,27 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
           </button>
         );
       case "start_review":
+        if (props.reviewSetup?.todoId === todo.id) {
+          const reviewSetup = props.reviewSetup;
+          return (
+            <>
+              <span role="status" className="thread-todo-card__waiting">
+                <span className="thread-todo-card__waiting-dot" aria-hidden="true" />
+                Finish setup in the composer
+              </span>
+              {done}
+              <button
+                type="button"
+                className="button thread-todo-card__button"
+                aria-label={`Show review setup for ${todo.title}`}
+                onClick={() => reviewSetup.onShow(todo)}
+              >
+                <ChevronDownIcon size={12} />
+                Show
+              </button>
+            </>
+          );
+        }
         return (
           <>
             {done}
@@ -1148,6 +1181,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
       className="thread-todo-card"
       data-kind={todo.kind}
       data-todo-id={todo.id}
+      data-review-setup={props.reviewSetup?.todoId === todo.id && todo.action?.type === "start_review" ? "" : undefined}
       aria-labelledby={titleId}
       ref={props.cardRef}
       tabIndex={props.cardRef ? -1 : undefined}
