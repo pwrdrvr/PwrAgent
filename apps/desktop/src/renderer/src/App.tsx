@@ -2690,6 +2690,8 @@ function DesktopAppShell(props: {
         ?.capabilities.includes("thread_todo_placement") === true,
       placementSibling: liveFederationHealth?.peers.find((peer) => peer.id === target.instanceId)
         ?.capabilities.includes("thread_todo_placement_sibling") === true,
+      access: liveFederationHealth?.peers.find((peer) => peer.id === target.instanceId)
+        ?.capabilities.includes("thread_todo_access") === true,
     })),
     [federationMachines, liveFederationHealth],
   );

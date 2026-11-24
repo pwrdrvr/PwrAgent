@@ -793,6 +793,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "thread_todo_plan",
   "thread_todo_placement",
   "thread_todo_placement_sibling",
+  "thread_todo_access",
   "operator_questions",
   "operator_requests",
   "thread_display_bulk_reads",

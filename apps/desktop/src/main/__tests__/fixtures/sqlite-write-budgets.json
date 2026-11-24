@@ -1419,6 +1419,7 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "thread-todo-set-access": {"commits": 1, "note": "one Access pick on a start card, then the same pick again: one commit rewriting the card's action, and the unchanged repeat opens no transaction; only on an operator menu pick, ~0.4 MB/day at 100 picks", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
   "thread-todo-send-message": {
     "commits": 1,
     "note": "One operator Send click: one card-completion commit, no idle or per-event writes; ~8 KB/send, ~0.4 MB/day at 50 sends. Existing correspondence and queue budgets cover delivery.",

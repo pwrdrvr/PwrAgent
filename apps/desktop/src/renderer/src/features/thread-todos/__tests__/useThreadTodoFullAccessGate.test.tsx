@@ -102,7 +102,13 @@ describe("withSeenExecutionMode", () => {
     ["full-access", "full-access"],
   ] as const)("sends a %s start card as %s", (mode, seen) => {
     expect(withSeenExecutionMode(handoffTodo(mode), { workMode: "worktree" }))
-      .toEqual({ workMode: "worktree", seenExecutionMode: seen });
+      .toEqual({ workMode: "worktree", seenExecutionMode: seen, seenNativeAccessMode: "none" });
+  });
+
+  it("sends the agent mode an operator picked from the card's Access menu", () => {
+    const picked = handoffTodo("full-access");
+    if (picked.action?.type === "start_thread") picked.action.nativeAccessMode = { backend: "acp:kimi", id: "yolo" };
+    expect(withSeenExecutionMode(picked)).toEqual({ seenExecutionMode: "full-access", seenNativeAccessMode: "acp:kimi yolo" });
   });
 
   it("adds nothing to a prompt sent to an existing thread", () => {
@@ -124,6 +130,15 @@ describe("useThreadTodoFullAccessGate", () => {
 
     expect(run).toHaveBeenCalledTimes(1);
     expect(onSettled).toHaveBeenCalledWith("started");
+  });
+
+  it("holds an operator's pick of an agent's Yolo mode, which the card stores at Full Access", async () => {
+    const todo = handoffTodo("full-access");
+    if (todo.action?.type === "start_thread") todo.action.nativeAccessMode = { backend: "acp:kimi", id: "yolo" };
+    const { run } = await start({ todo });
+
+    expect(screen.getByRole("dialog", { name: "Enable Full Access?" })).toBeVisible();
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("starts nothing when the operator cancels", async () => {

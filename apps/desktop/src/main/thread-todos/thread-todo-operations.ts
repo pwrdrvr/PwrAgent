@@ -8,6 +8,7 @@ import type {
   ResolveThreadTodoRequest,
   RunThreadTodoActionRequest,
   SetThreadTodoItemCheckedRequest,
+  SetThreadTodoAccessRequest,
   SetThreadTodoProjectRequest,
   ThreadTodoMutationResponse,
   ThreadTodoFeedSnapshot,
@@ -23,6 +24,9 @@ import type {
   UpdateThreadReviewRequest,
 } from "@pwragent/shared/contracts/thread-reviews";
 import type { CodexSpeed } from "@pwragent/shared/codex-speed";
+import { isThreadExecutionMode } from "@pwragent/shared/thread-execution-mode";
+import { acpNativeAccessLevel } from "@pwragent/shared/acp-permission-mode";
+import { threadExecutionModeRank } from "@pwragent/shared/thread-todo-access";
 import { buildThreadIdentityKey, isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
 import {
   parseThreadTodoItemTexts,
@@ -202,6 +206,9 @@ export const localThreadTodoOperations = {
         ...(isThreadTodoSeenExecutionMode(request.seenExecutionMode)
           ? { seenExecutionMode: request.seenExecutionMode }
           : {}),
+        ...(typeof request.seenNativeAccessMode === "string"
+          ? { seenNativeAccessMode: request.seenNativeAccessMode }
+          : {}),
       }),
     };
   },
@@ -253,6 +260,31 @@ export const localThreadTodoOperations = {
       todo: await raiseThreadTodoPlan(getDesktopBackendRegistry(), { backend, threadId },
         // Clipped, not refused: the viewer has already told the thread its plan card exists.
         { title: title.trim().slice(0, THREAD_TODO_TITLE_MAX_LENGTH), items: items.value }),
+    };
+  },
+  setAccess: (request: SetThreadTodoAccessRequest): ThreadTodoMutationResponse => {
+    if (!isThreadExecutionMode(request.executionMode)) {
+      throw new Error("A to-do's access must be default, auto or full-access.");
+    }
+    // Peers cross with plain data: keep only a provider and a mode id.
+    const native = request.nativeAccessMode as { backend?: unknown; id?: unknown } | undefined;
+    const backend = typeof native?.backend === "string" && isAppServerBackendKind(native.backend) ? native.backend : undefined;
+    const modeId = typeof native?.id === "string" ? native.id.trim() : "";
+    if (native !== undefined && (!backend || !modeId)) {
+      throw new Error("A to-do's agent mode needs a provider and a mode id.");
+    }
+    // The Full Access gate judges the stored mode, so a pick must not carry
+    // more access than it: Yolo is stored at Full Access.
+    const level = modeId ? acpNativeAccessLevel(modeId) : undefined;
+    if (level && threadExecutionModeRank(level) > threadExecutionModeRank(request.executionMode)) {
+      throw new Error(`An agent's ${modeId} mode needs the card's access to be ${level} or higher.`);
+    }
+    return {
+      todo: getThreadTodoService().setAccess({
+        id: request.id,
+        executionMode: request.executionMode,
+        ...(native && backend ? { nativeAccessMode: { backend, id: modeId } } : {}),
+      }),
     };
   },
   setProject: async (

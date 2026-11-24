@@ -112,6 +112,7 @@ import type {
   RunThreadTodoActionRequest,
   SetThreadTodoItemCheckedRequest,
   ReviewThreadTodoCiDeploymentRequest,
+  SetThreadTodoAccessRequest,
   SetThreadTodoProjectRequest,
   ListThreadTodoDispatchEnvironmentsRequest,
   ListThreadTodoDispatchEnvironmentsResponse,
@@ -911,6 +912,7 @@ import {
   THREAD_PULL_REQUEST_READ_MERGE_CHANNEL,
   THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL,
   THREAD_TODOS_REVIEW_CI_DEPLOYMENT_CHANNEL,
+  THREAD_TODOS_SET_ACCESS_CHANNEL,
   THREAD_TODOS_SET_PROJECT_CHANNEL,
   THREAD_TODOS_LIST_DISPATCH_ENVIRONMENTS_CHANNEL,
   OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL,
@@ -2917,6 +2919,10 @@ const desktopApi = Object.freeze({
     request: SetThreadTodoProjectRequest,
   ): Promise<ThreadTodoMutationResponse> =>
     await ipcRenderer.invoke(THREAD_TODOS_SET_PROJECT_CHANNEL, request),
+  setThreadTodoAccess: async (
+    request: SetThreadTodoAccessRequest,
+  ): Promise<ThreadTodoMutationResponse> =>
+    await ipcRenderer.invoke(THREAD_TODOS_SET_ACCESS_CHANNEL, request),
   listThreadTodoDispatchEnvironments: async (
     request: ListThreadTodoDispatchEnvironmentsRequest,
   ): Promise<ListThreadTodoDispatchEnvironmentsResponse> =>

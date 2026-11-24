@@ -28,6 +28,8 @@ export const FEDERATION_THREAD_TODO_METHODS = {
   listTodos: "threadTodos.list", listReviews: "threadReviews.list", updateReview: "threadReviews.update",
   resolveTodo: "threadTodos.resolve", runAction: "threadTodos.runAction", listProjects: "threadTodos.listProjects",
   setItemChecked: "threadTodos.setItemChecked", setProject: "threadTodos.setProject",
+  // Needs `thread_todo_access` on the owner; viewers offer the Access menu only there.
+  setAccess: "threadTodos.setAccess",
   // Older owners do not answer it; the card then cannot list environments there.
   listDispatchEnvironments: "threadTodos.listDispatchEnvironments",
   // Needs `thread_todo_feed` on the owner; viewers fall back to `threadTodos.list`.
@@ -52,6 +54,7 @@ export const FEDERATION_THREAD_TODO_CAPABILITIES: Record<string, FederationCapab
   [FEDERATION_THREAD_TODO_METHODS.resolveTodo]: "turn_control",
   [FEDERATION_THREAD_TODO_METHODS.setItemChecked]: "turn_control",
   [FEDERATION_THREAD_TODO_METHODS.setProject]: "turn_control",
+  [FEDERATION_THREAD_TODO_METHODS.setAccess]: "turn_control",
   [FEDERATION_THREAD_TODO_METHODS.runAction]: "turn_control",
   [FEDERATION_THREAD_TODO_METHODS.raisePlan]: "turn_control",
   [FEDERATION_THREAD_TODO_METHODS.readReviewAutoFix]: "thread_detail",
