@@ -616,7 +616,9 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
         {/* The chip as Mission Control draws it, ✕ included. It is
             a pointer shortcut beside the row's button, not a second
             control: its number opens the PR as the row does, and
-            Delete on the row is the keyboard's detach. */}
+            Delete on the row is the keyboard's detach. Its ✕ lies on
+            the way to the card, so it keeps the card, as the
+            standalone chip's ✕ does. */}
         <span
           aria-hidden="true"
           className={[
@@ -640,7 +642,6 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
             <span
               className="pr-chip__detach"
               title={`Detach ${pr.org}/${pr.repo}#${pr.number} from thread`}
-              onMouseEnter={hideRowCard}
               onClick={(event) => {
                 event.stopPropagation();
                 detachRow(pr, index, false);
@@ -796,7 +797,9 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                 <button
                   type="button"
                   className="pr-rollup-popover__detach-all"
-                  onMouseEnter={hideRowCard}
+                  // A diagonal move down to the card's footer crosses it:
+                  // the card lasts the grace, and reaching it holds it.
+                  onMouseEnter={releaseCard}
                   onKeyDown={(event) => {
                     if (event.key !== "Tab") return;
                     if (event.shiftKey) {
