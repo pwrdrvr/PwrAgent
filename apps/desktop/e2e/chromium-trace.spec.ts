@@ -8,6 +8,7 @@ import type { HotCpuProfileCapturedEvent } from "../src/shared/hot-cpu-profile";
 import type { ChromiumTrace } from "../src/main/diagnostics/chromium-trace";
 import type { chromiumTraceProcessor } from "../src/main/diagnostics/chromium-trace-processor";
 import type { createChromiumTraceSession } from "../src/main/shell/diagnostics/chromium-trace-session";
+import type { startChromiumTraceFilterProcess } from "../src/main/shell/diagnostics/chromium-trace-filter-process";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { expect, test } from "./fixtures/electron-test";
 
@@ -17,9 +18,9 @@ test("native rolling trace evicts old events and publishes only filtered timing 
   const info = test.info();
   test.setTimeout(90_000);
   let controller = "";
-  let packagedWorker = "";
+  let packagedUtility = "";
   const mainOutput = path.join(here, "../out/main");
-  const worker = path.join(mainOutput, "chromium-trace-worker.js");
+  const utility = path.join(mainOutput, "chromium-trace-utility.js");
   const app = await launchElectronApp({
     fixturePath: path.join(here, "fixtures/smoke/replay.fixture.json"),
     async preLaunchHook(homeRoot) {
@@ -30,23 +31,24 @@ test("native rolling trace evicts old events and publishes only filtered timing 
             export { ChromiumTrace } from "./diagnostics/chromium-trace";
             export { chromiumTraceProcessor } from "./diagnostics/chromium-trace-processor";
             export { createChromiumTraceSession } from "./shell/diagnostics/chromium-trace-session";
+            export { startChromiumTraceFilterProcess } from "./shell/diagnostics/chromium-trace-filter-process";
           `,
           resolveDir: path.join(here, "../src/main"),
         },
         outfile: controller, bundle: true, platform: "node", format: "cjs",
         external: ["electron"], logLevel: "silent",
       });
-      // Exercise the actual minified worker and its local imports through
+      // Exercise the actual minified utility, worker and local imports through
       // Electron's ASAR loader, as the packaged app does.
-      const stage = path.join(homeRoot, "trace-worker-package");
-      const archive = path.join(homeRoot, "trace-worker.asar");
+      const stage = path.join(homeRoot, "trace-filter-package");
+      const archive = path.join(homeRoot, "trace-filter.asar");
       await cp(mainOutput, stage, {
         recursive: true,
         filter: (source) => !source.endsWith(".map"),
       });
       await writeFile(path.join(stage, "package.json"), '{"type":"module"}');
       await createPackage(stage, archive);
-      packagedWorker = path.join(archive, path.basename(worker));
+      packagedUtility = path.join(archive, path.basename(utility));
     },
   });
   const artifact = info.outputPath("renderer.trace.json");
@@ -69,10 +71,12 @@ test("native rolling trace evicts old events and publishes only filtered timing 
       const require = process.getBuiltinModule("node:module").createRequire(args.controller);
       const {
         ChromiumTrace: Trace, createChromiumTraceSession: createSession, chromiumTraceProcessor: createPublisher,
+        startChromiumTraceFilterProcess: startFilter,
       } = require(args.controller) as {
         ChromiumTrace: typeof ChromiumTrace;
         createChromiumTraceSession: typeof createChromiumTraceSession;
         chromiumTraceProcessor: typeof chromiumTraceProcessor;
+        startChromiumTraceFilterProcess: typeof startChromiumTraceFilterProcess;
       };
       const fs = require("node:fs/promises") as typeof import("node:fs/promises");
       process.getBuiltinModule("node:v8").setFlagsFromString("--expose_gc");
@@ -80,7 +84,7 @@ test("native rolling trace evicts old events and publishes only filtered timing 
       const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       const target = new BrowserWindow({ width: 640, height: 480, webPreferences: { backgroundThrottling: false } });
       const warnings: string[] = [];
-      const publish = createPublisher(args.worker);
+      const publish = createPublisher(() => startFilter(args.utility));
       try {
         await target.loadURL(args.origin);
         const owner = {};
@@ -115,7 +119,7 @@ test("native rolling trace evicts old events and publishes only filtered timing 
                 }
               },
             };
-          }, untilFull ? publish : createPublisher(args.packagedWorker),
+          }, untilFull ? publish : createPublisher(() => startFilter(args.packagedUtility)),
           (message) => warnings.push(message), { bufferSizeKb: 1024 });
           const owner = {};
           try {
@@ -178,12 +182,13 @@ test("native rolling trace evicts old events and publishes only filtered timing 
         const rolling = await run(false);
         return {
           old, rolling, warnings, externalConflict, externalStillOwned, conflictWarnings,
+          browserPid: process.pid,
           electron: process.versions.electron, chromium: process.versions.chrome,
         };
       } finally {
         target.destroy();
       }
-    }, { controller, artifact, externalFile, worker, packagedWorker, origin, privateValue, url });
+    }, { controller, artifact, externalFile, utility, packagedUtility, origin, privateValue, url });
 
     expect(result.externalConflict).toEqual({ status: "skipped", reason: "not-recording" });
     expect(result.externalStillOwned).toBe(true);
@@ -191,8 +196,10 @@ test("native rolling trace evicts old events and publishes only filtered timing 
     expect(result.warnings).toEqual([]);
     expect(result.old).toMatchObject({ capture: { status: "written" }, early: true, recent: false });
     expect(result.rolling).toMatchObject({
-      capture: { status: "written" }, early: false, recent: true, hadPrivateUrl: true,
+      capture: { status: "written", filterPid: expect.any(Number), filterCpuMs: expect.any(Number), filterElapsedMs: expect.any(Number) },
+      early: false, recent: true, hadPrivateUrl: true,
     });
+    expect(result.rolling.capture.filterPid).not.toBe(result.browserPid);
     expect(result.rolling.widths).toEqual([300, 513]);
     console.log(`Chromium trace oracle ran on Electron ${result.electron}, Chromium ${result.chromium}`);
     const saved = await readFile(artifact, "utf8");
@@ -286,10 +293,15 @@ test("automatic hot CPU capture preserves renderer layout while the V8 profile k
     const started = events.find((entry) => entry.type === "profile-started");
     expect(started?.detail).toMatchObject({ pid: expect.any(Number) });
     const exported = events.find((entry) => entry.type === "chromium-trace-written");
+    const browserPid = await app.electronApp.evaluate(() => process.pid);
     expect(exported?.detail).toMatchObject({
       triggeredAt: expect.any(String),
       recordingStoppedAtMs: expect.any(Number),
+      filterPid: expect.any(Number),
+      filterCpuMs: expect.any(Number),
+      filterElapsedMs: expect.any(Number),
     });
+    expect(exported.detail.filterPid).not.toBe(browserPid);
     expect(Math.abs(exported.detail.recordingStoppedAtMs - Date.parse(exported.detail.triggeredAt))).toBeLessThan(2_000);
     expect(Date.parse(event.capturedAt) - exported.detail.recordingStoppedAtMs).toBeGreaterThan(2_000);
     const profile = JSON.parse(await readFile(event.profilePath, "utf8"));

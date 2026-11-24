@@ -2,8 +2,7 @@ import { realpath } from "node:fs/promises";
 import { cpus } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { readMachineCheckoutEvidence } from "./checkout-machine-evidence";
-import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
-import type { ResourceAdvertisement, ResourceOwnershipConflict } from "@pwragent/shared/contracts/resource-checkouts";
+import type { ResourceAdvertisement, ResourceOwnershipConflict, ResourceThreadRef } from "@pwragent/shared/contracts/resource-checkouts";
 import { getMainLogger } from "../log";
 import { readOrCreateFederationMachineId } from "../federation/federation-host-info";
 import { defaultInstanceLabel } from "../federation/federation-instance-label";
@@ -48,7 +47,7 @@ export async function initializeResourceCheckouts(
   federation: DesktopFederationRuntime,
   approvedLabCheckouts?: ReadonlyMap<string, ApprovedLabCheckout>,
   isPackaged = true,
-  resolveThreadTitle?: (thread: { backend: AppServerBackendKind; threadId: string; instanceId?: string }) => string | undefined,
+  localThreadTitle?: (thread: Pick<ResourceThreadRef, "backend" | "threadId">) => string | undefined,
 ): Promise<DesktopResourceCheckoutService> {
   const root = resolvePwragentRoot();
   const [machineId, evidence] = await Promise.all([
@@ -99,7 +98,7 @@ export async function initializeResourceCheckouts(
   runtime = new DesktopResourceCheckoutService({
     viewer: { instanceId, profile, machineId, instanceLabel: defaultInstanceLabel() },
     machineStore, machineUnresolved, adoptMachineStore, machineCpuCount: cpus().length, externalStore, externalUnresolved,
-    bindings, allowAgentDrafts, approvedLabCheckouts, resolveThreadTitle, warn,
+    bindings, allowAgentDrafts, approvedLabCheckouts, warn,
     bootId: evidence.hostBinding ? evidence.bootId : undefined,
     readMachineAdvertisements: () => buildDockProfileSnapshot().profiles
       .filter((entry) => entry.name !== profile)
@@ -109,6 +108,11 @@ export async function initializeResourceCheckouts(
         note: "Live profile on this PwrAgent root",
       }))),
     requestPeer: (id, request) => federation.requestResourceCheckout(id, request),
+    threadTitle: (thread) => thread.instanceId === undefined || thread.instanceId === instanceId
+      ? localThreadTitle?.(thread)
+      : federation.remoteThreadSummaries().cachedThreadNameFromPeer({
+        target: { scope: "remote", instanceId: thread.instanceId }, backend: thread.backend, threadId: thread.threadId,
+      })?.title,
   });
   federation.setResourceCheckoutHandler((source, request) => runtime?.receivePeer(source, request));
   unsubscribe = federation.onPeerStatusChanged(() => { void runtime?.refreshPeers(); });

@@ -15,7 +15,7 @@ const processTrace: ProcessChromiumTrace = async (chunks, signal) => {
     signal.throwIfAborted();
     buffers.push(Buffer.from(chunk.data));
   }
-  return Buffer.concat(buffers);
+  return { bytes: Buffer.concat(buffers), filterCpuMs: 12, filterElapsedMs: 18, filterPid: 42 };
 };
 
 it("keeps timing and known labels while reconstructing events from untrusted native exports", () => {
@@ -146,7 +146,7 @@ it("rearms for a second renderer while the first renderer is still profiling", a
     await trace.arm(first);
     await trace.arm(second);
     expect(await trace.capture(first, path.join(root.path, "first.trace.json"), ++mono))
-      .toMatchObject({ status: "written" });
+      .toMatchObject({ status: "written", filterCpuMs: 12, filterElapsedMs: 18, filterPid: 42 });
     // The V8 tail has not finished, so neither owner has called arm again.
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(start).toHaveBeenCalledTimes(2);

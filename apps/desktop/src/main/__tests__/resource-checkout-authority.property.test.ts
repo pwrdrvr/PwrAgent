@@ -462,7 +462,7 @@ describe("the persisted resource checkout authority", () => {
         machineCpuCount: 18,
         bindings: [],
         now: () => 2,
-        resolveThreadTitle: ({ backend, threadId }) => titles.get(`${backend}:${threadId}`),
+        threadTitle: ({ backend, threadId }) => titles.get(`${backend}:${threadId}`),
         requestPeer: async () => { throw new Error("Offline"); },
         warn: () => {},
       });

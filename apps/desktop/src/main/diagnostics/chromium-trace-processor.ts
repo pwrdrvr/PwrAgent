@@ -1,28 +1,30 @@
-import { Worker } from "node:worker_threads";
-import { ChromiumTraceExportError, type ProcessChromiumTrace } from "./chromium-trace";
+import {
+  ChromiumTraceExportError, type ChromiumTraceChunk, type FilteredChromiumTrace, type ProcessChromiumTrace,
+} from "./chromium-trace";
 
 const MAX_RAW_TRACE_BYTES = 48 * 1024 * 1024;
 
-export function chromiumTraceProcessor(workerPath: string): ProcessChromiumTrace {
+export type ChromiumTraceFilterProcess = {
+  send: (chunk: ChromiumTraceChunk | null) => void;
+  result: Promise<FilteredChromiumTrace>;
+  close: () => Promise<void>;
+};
+
+export function chromiumTraceProcessor(startFilter: () => ChromiumTraceFilterProcess): ProcessChromiumTrace {
+  // A deadline can return before the previous child has exited. Allow one
+  // filter at a time even across cancelled captures.
+  let active = false;
   return async (chunks, signal, reportPhase) => {
     signal.throwIfAborted();
-    let worker: Worker;
+    if (active) throw new ChromiumTraceExportError("worker", "filter");
+    let filter: ChromiumTraceFilterProcess;
     try {
-      worker = new Worker(workerPath);
+      filter = startFilter();
     } catch {
       throw new ChromiumTraceExportError("worker", "filter");
     }
-    const complete = new Promise<Uint8Array>((resolve, reject) => {
-      const workerFailed = () => reject(new ChromiumTraceExportError("worker", "filter"));
-      worker.once("message", (message: unknown) => {
-        if (message instanceof Uint8Array) resolve(message);
-        else if (message === "invalid-data") reject(new ChromiumTraceExportError("invalid-data", "filter"));
-        else workerFailed();
-      });
-      worker.once("error", workerFailed);
-      worker.once("exit", workerFailed);
-    });
-    const abort = () => { void worker.terminate().catch(() => {}); };
+    active = true;
+    const abort = () => { void filter.close().catch(() => {}); };
     signal.addEventListener("abort", abort, { once: true });
     let closed = false;
     const transfer = async () => {
@@ -32,24 +34,27 @@ export function chromiumTraceProcessor(workerPath: string): ProcessChromiumTrace
         if (closed) break;
         bytes += Buffer.byteLength(chunk.data, chunk.base64Encoded ? "base64" : "utf8");
         if (bytes > MAX_RAW_TRACE_BYTES) throw new ChromiumTraceExportError("limit", "stream-read");
-        worker.postMessage(chunk);
+        filter.send(chunk);
       }
       signal.throwIfAborted();
       if (!closed) {
         reportPhase?.("filter");
-        worker.postMessage(null);
+        filter.send(null);
       }
-      return complete;
     };
     try {
-      // A missing or defective worker can fail before Chromium opens the stream.
-      const filtered = await Promise.race([transfer(), complete]);
+      // Either side may fail while the other is still waiting for data.
+      const [filtered] = await Promise.all([filter.result, transfer()]);
       signal.throwIfAborted();
       return filtered;
+    } catch (error) {
+      signal.throwIfAborted();
+      throw error;
     } finally {
       closed = true;
       signal.removeEventListener("abort", abort);
-      await worker.terminate().catch(() => {});
+      await filter.close().catch(() => {});
+      active = false;
     }
   };
 }
