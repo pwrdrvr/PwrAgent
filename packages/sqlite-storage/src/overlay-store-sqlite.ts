@@ -3297,7 +3297,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
    * One thread's whole pricing ledger.
    *
    * A turn end publishes the ledger once, and the renderer then reads it again
-   * for the accounting display, the transcript, and an open context panel.
+   * for the transcript and an open context panel.
    * On a long thread each read materialized thousands of rows. A read is
    * reused until a row of this thread's ledger changes on this connection
    * (`sqliteUsageLedgerVersions`) or another connection commits. Callers
@@ -3338,6 +3338,42 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       this.threadPricingCache.delete(staleKey);
     }
     return structuredClone(pricing);
+  }
+
+  /** Transcript usage candidates for the requested turn IDs in ledger order. */
+  async readThreadTurnUsageLines(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    turnIds: readonly string[];
+  }): Promise<ThreadUsageLineRecord[]> {
+    if (params.turnIds.length === 0) return [];
+    const statement = this.stateDb.raw.prepare(
+      `SELECT * FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_turn
+       WHERE backend = @backend AND thread_id = @threadId
+         AND status != 'superseded' AND scope = 'turn'
+         AND turn_id IN (SELECT value FROM json_each(@turnIds))
+       UNION ALL
+       SELECT * FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_child_turn
+       WHERE backend = @backend AND parent_thread_id = @threadId AND thread_id != @threadId
+         AND status != 'superseded' AND scope = 'turn'
+         AND turn_id IN (SELECT value FROM json_each(@turnIds))
+       ORDER BY created_at DESC, usage_line_id DESC`,
+    );
+    const keys = { ...params, turnIds: JSON.stringify(params.turnIds) };
+    const read = () => {
+      const lines = (statement.all(keys) as ThreadUsageLineRow[]).map(threadUsageLineFromRow);
+      this.attachUsageTurnMetadataSync(params.backend, params.threadId, lines);
+      return lines;
+    };
+    const lines = read();
+    // A legacy price can change only when the line is currently repairable.
+    // For those rows, keep the ledger's retry barrier and re-read after repair.
+    if (lines.some((line) => line.turnUsageAttributed !== false && line.priceStatus !== "priced"
+      && repriceTokenUsageLine(line).priceStatus === "priced")) {
+      await this.repriceThreadUsageHistory(params);
+      return read();
+    }
+    return lines;
   }
 
   private materializeThreadPricing(params: {
@@ -4335,7 +4371,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     // repricing the matched rows would skip a newer no-progress batch and
     // disagree with the thread savings total. Priced history is unnecessary.
     if (lines.some((line) => line.priceStatus !== "priced")) {
-      await this.repriceTokenMiserGateHistory(params);
+      await this.repriceThreadUsageHistory(params);
       // The retry can yield. A peer may have priced or superseded a matched
       // row even when this reader itself made no repair.
       lines = readMatches().map(threadUsageLineFromRow);
@@ -4345,12 +4381,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   }
 
   /**
-   * The full read's ten-row retry policy, without materializing priced rows
-   * or unrelated turns. A repairable history can still require every unpriced
-   * row. Page it in ledger order and yield between groups; retain one repair
-   * transaction per pass, exactly as materializeThreadPricing does.
+   * The full read's ten-row retry policy over sparse indexes of unpriced
+   * rows. A repairable history can still require every unpriced row. Page in
+   * ledger order and yield between groups, with one repair transaction per
+   * pass, exactly as materializeThreadPricing does.
    */
-  private async repriceTokenMiserGateHistory(params: {
+  private async repriceThreadUsageHistory(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
   }): Promise<void> {
@@ -4358,12 +4394,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     const versions = sqliteUsageLedgerVersions(db);
     const select = db.prepare(
       `SELECT * FROM (
-         SELECT * FROM thread_usage_lines
+         SELECT * FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_unpriced_thread
          WHERE backend = ? AND thread_id = ? AND status != 'superseded'
            AND price_status != 'priced'
            AND (created_at, usage_line_id) < (?, ?)
          UNION ALL
-         SELECT * FROM thread_usage_lines
+         SELECT * FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_unpriced_parent
          WHERE backend = ? AND parent_thread_id = ? AND thread_id != ?
            AND status != 'superseded' AND price_status != 'priced'
            AND (created_at, usage_line_id) < (?, ?)

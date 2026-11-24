@@ -70,6 +70,12 @@ export function threadDisplayPage(demand: ThreadDisplayRead, revision: string | 
   return { offset, limit };
 }
 
+export function threadDisplayAccountingTurns(demand: ThreadDisplayRead) {
+  const turns = demand.turns ?? [];
+  if (turns.length > THREAD_DISPLAY_MAX_ACCOUNTING_TURNS) throw new Error("Too many display turns in one request.");
+  return turns;
+}
+
 const compareNewestFirst = (left: ThreadSubAgentSummary, right: ThreadSubAgentSummary) =>
   (right.createdAt ?? 0) - (left.createdAt ?? 0)
   || (left.monitorId < right.monitorId ? -1 : left.monitorId > right.monitorId ? 1 : 0);
@@ -167,7 +173,7 @@ export function projectThreadDisplay(
   // transcript after selected-thread enrichment and ordinary metadata updates.
   const revision = threadDisplayRevision(demand, revisionSource);
   const { offset, limit } = threadDisplayPage(demand, revision);
-  const pricing = buildThreadPricingDisplay({
+  const pricing = buildThreadPricingDisplay(demand.resource === "accounting" ? {} : {
     pricing: response.pricing,
     subAgents: thread?.pricingSubAgents,
     tokenMiserGateTotals: thread?.tokenMiserGateTotals,
@@ -206,8 +212,7 @@ export function projectThreadDisplay(
     entries: transcriptEntries, lines: response.pricing?.lines, activeTurnId: thread?.activeTurnId,
   })) : [];
   if (demand.resource === "accounting") {
-    if ((demand.turns?.length ?? 0) > THREAD_DISPLAY_MAX_ACCOUNTING_TURNS) throw new Error("Too many display turns in one request.");
-    const turns = new Map(demand.turns?.map((turn) => [turn.id, turn]));
+    const turns = new Map(threadDisplayAccountingTurns(demand).map((turn) => [turn.id, turn]));
     const lines = new Map<string, ThreadUsageLineRecord>();
     for (const line of response.pricing?.lines ?? []) {
       const turn = line.turnId ? turns.get(line.turnId) : undefined;
@@ -313,7 +318,9 @@ export function projectThreadDisplay(
       ...(toolsPage ? { toolsPage, toolTotals: aggregateToolAccounting(tools) } : {}),
       ...((demand.resource === "pricing" || demand.resource === "tools" || demand.resource === "subagents") && offset + limit < totalRows
         ? { nextCursor: `${revision}:${offset + limit}` } : {}),
-      revision: revision ?? createHash("sha256").update(JSON.stringify([demand.resource, pricingSummary])).digest("base64url"),
+      revision: revision ?? createHash("sha256")
+        .update(JSON.stringify([demand.resource, demand.resource === "accounting" ? entries : pricingSummary]))
+        .digest("base64url"),
     },
   };
 }

@@ -1678,9 +1678,8 @@ export type RenameThreadResponse = {
 };
 
 /**
- * Request bounds for display reads. Each read rebuilds the thread's whole
- * display on the owner, so a viewer refresh asks for every loaded turn or row
- * at once. Owners without the `thread_display_bulk_reads` federation
+ * Request bounds for display reads. A viewer refresh can ask for every
+ * loaded turn or row at once. Owners without the `thread_display_bulk_reads` federation
  * capability accept only the legacy bounds; a larger `limit` is clamped there,
  * and more than 256 accounting turns is rejected.
  */
@@ -1720,6 +1719,7 @@ export type ThreadDisplayData = {
   subAgents?: ThreadSubAgentSummary[];
   subAgent?: ThreadSubAgentSummary;
   incident?: ThreadIncidentSummary;
+  /** The accounting resource carries an empty summary and returns usage activities in replay. */
   pricing: Omit<ThreadPricingDisplay, "rows" | "spendByModel">;
   pricingPage?: ThreadPricingDisplay;
   toolsPage?: ThreadToolAccounting;

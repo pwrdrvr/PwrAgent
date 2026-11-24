@@ -870,14 +870,30 @@ export class ThreadUsageLedger {
     // their whole purpose here is to explain a cold replay already in `lines`,
     // and splitting them would let the two arrive out of step.
     const compactions = await this.context.stores.usage.listThreadCompactions?.(params);
-    const withCompactions = compactions?.length
+    return this.withLiveThreadPricing(params, compactions?.length
       ? { ...pricing, compactions }
-      : pricing;
+      : pricing);
+  }
+
+  async readThreadTurnUsageWithLiveTokenMiser(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnIds: readonly string[];
+  }): Promise<ThreadPricingLedger> {
+    if (params.turnIds.length === 0) return { lines: [], summaries: [] };
+    const lines = await this.context.stores.usage.readThreadTurnUsageLines?.(params) ?? [];
+    return this.withLiveThreadPricing(params, { lines, summaries: [] });
+  }
+
+  private withLiveThreadPricing(
+    params: { backend: AppServerBackendKind; threadId: string },
+    pricing: ThreadPricingLedger,
+  ): ThreadPricingLedger {
     if (params.backend !== "codex") {
-      return withCompactions;
+      return pricing;
     }
     const merged = mergeThreadPricingLines(
-      withCompactions,
+      pricing,
       [
         ...(this.liveTokenMiserUsageLines.get(params.threadId)?.values() ?? []),
         // Held worker lines, for the parent's ledger and the worker's own.

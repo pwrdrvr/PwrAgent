@@ -50,7 +50,7 @@ export function useThreadUsageDisplay(params: {
       const sequence = ++version;
       const turns = [...new Map(current.current.entries.flatMap((entry) => entry.turn ? [[entry.turn.id, entry.turn] as const] : [])).values()];
       const activities: AppServerThreadActivityEntry[] = [];
-      // Each read rebuilds the owner's whole thread display: ask once when it can.
+      // Use the largest batch the owner supports.
       const chunk = supportsBulkDisplayReads(effectTarget, current.current.thread)
         ? THREAD_DISPLAY_MAX_ACCOUNTING_TURNS : THREAD_DISPLAY_LEGACY_MAX_ACCOUNTING_TURNS;
       try {
