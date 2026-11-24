@@ -8,13 +8,16 @@ import { readAntigravityUsage } from "../acp/antigravity-usage";
 import type { OwnedChildProcess } from "../process-tree";
 
 function launchDescriptor(command: string): AcpLaunchDescriptor {
+  // Override the inherited key with the same spelling so the merged
+  // environment doesn't give the launcher two case variants to choose from.
+  const comSpecKey = Object.keys(process.env).find((key) => key.toLowerCase() === "comspec") ?? "ComSpec";
   return {
     backendId: "acp:antigravity",
     registryId: "antigravity",
     distributionKind: "local",
     command,
     args: ["acp", "--process-per-session"],
-    env: { ComSpec: "C:\\Windows\\System32\\cmd.exe" },
+    env: { [comSpecKey]: "C:\\Windows\\System32\\cmd.exe" },
   };
 }
 
