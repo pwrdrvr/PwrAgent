@@ -1,8 +1,8 @@
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -168,11 +168,41 @@ const ON: DesktopCheckoutHibernationPolicy = {
   enabled: true, idleDays: 7, maxSnapshotMb: 5, removeRebuildableOutput: true, restoreOn: "send",
 };
 
-async function git(cwd: string, args: string[]): Promise<string> {
-  fixtureOwner.check();
+async function runGit(cwd: string, args: string[]): Promise<string> {
   return (await execute("git", ["-C", cwd, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
     "-c", "commit.gpgsign=false", "-c", "protocol.file.allow=always", ...args])).stdout;
 }
+
+async function git(cwd: string, args: string[]): Promise<string> {
+  fixtureOwner.check();
+  return await runGit(cwd, args);
+}
+
+let seedRoot: string;
+
+async function createRepoSeed(repo: string, environment: boolean) {
+  await mkdir(repo);
+  await runGit(repo, ["init", "--template=", "-b", "main"]);
+  await runGit(repo, ["config", "core.autocrlf", "false"]);
+  await writeFile(path.join(repo, "file.txt"), "original\n");
+  await writeFile(path.join(repo, ".gitignore"), "node_modules/\n.env.local\n");
+  if (environment) {
+    await mkdir(path.join(repo, ".codex", "environments"), { recursive: true });
+    await writeFile(path.join(repo, ".codex", "environments", "env.toml"), 'version = 1\nname = "Env"\n[setup]\nscript = "install"\n');
+  }
+  await runGit(repo, ["add", "-A"]);
+  await runGit(repo, ["commit", "-m", "fixture"]);
+}
+
+beforeAll(async () => {
+  seedRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-hibernate-seed-"));
+  await createRepoSeed(path.join(seedRoot, "plain"), false);
+  await createRepoSeed(path.join(seedRoot, "environment"), true);
+});
+
+afterAll(async () => {
+  if (seedRoot) await rm(seedRoot, { recursive: true, force: true });
+});
 
 async function createFixture(options: { environment?: boolean; worktreeRoot?: ".pwragent" | ".codex" } = {}) {
   const scope = fixtureOwner;
@@ -181,17 +211,9 @@ async function createFixture(options: { environment?: boolean; worktreeRoot?: ".
   roots.push(root);
   const repo = path.join(root, "repo");
   const worktree = path.join(root, options.worktreeRoot ?? ".pwragent", "worktrees", "id", "repo");
-  await mkdir(repo);
-  await git(repo, ["init", "-b", "main"]);
-  await git(repo, ["config", "core.autocrlf", "false"]);
-  await writeFile(path.join(repo, "file.txt"), "original\n");
-  await writeFile(path.join(repo, ".gitignore"), "node_modules/\n.env.local\n");
-  if (options.environment) {
-    await mkdir(path.join(repo, ".codex", "environments"), { recursive: true });
-    await writeFile(path.join(repo, ".codex", "environments", "env.toml"), 'version = 1\nname = "Env"\n[setup]\nscript = "install"\n');
-  }
-  await git(repo, ["add", "-A"]);
-  await git(repo, ["commit", "-m", "fixture"]);
+  // Copy refs, objects and index before Git writes the linked-worktree metadata.
+  // Each case owns its primary checkout and its linked worktree.
+  await cp(path.join(seedRoot, options.environment ? "environment" : "plain"), repo, { recursive: true });
   await mkdir(path.dirname(worktree), { recursive: true });
   await git(repo, ["worktree", "add", "-b", "owned", worktree]);
   const directory = { id: "owned", kind: "worktree" as const, label: "repo", path: repo, worktreePath: worktree };

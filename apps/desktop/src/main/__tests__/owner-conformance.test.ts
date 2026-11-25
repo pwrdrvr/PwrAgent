@@ -12,7 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { AgentEvent, InterruptTurnRequest } from "@pwragent/shared/contracts/agent";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type { FederationCapability } from "@pwragent/shared/contracts/federation";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
@@ -49,7 +49,7 @@ import {
   type OwnerHostName,
   type OwnerStepRecord,
 } from "./helpers/owner-conformance";
-import { OUTPOST_VIEWER_CAPABILITIES, startOutpostDaemon } from "./helpers/outpost-daemon";
+import { OUTPOST_VIEWER_CAPABILITIES, startOutpostDaemon, type OutpostViewer } from "./helpers/outpost-daemon";
 import { createFederatedThreadMessageHandler } from "../federation/federated-thread-message-service";
 import {
   canonicalDurableSteerRequest,
@@ -206,14 +206,14 @@ async function startDesktopOwner(
 /** The Outpost daemon on its Codex fixture, enrolled through a real invite. */
 async function startOutpostOwner(
   hostKind: "desktop" | "headless" = "headless",
-  options: { waitForCodexCommand?: boolean } = {},
-): Promise<OwnerHost> {
+  options: { env?: NodeJS.ProcessEnv; waitForCodexCommand?: boolean } = {},
+): Promise<OwnerHost & Pick<OutpostViewer, "waitForEvent">> {
   const outpost = await startConformanceDaemon({ capabilities: VIEWER_CAPABILITIES, hostKind, ...options });
   outpost.subscribe(EVENT_CLASSES);
   return { name: hostKind === "desktop" ? "desktop" : "outpost", ownerInstanceId: outpost.ownerInstanceId, client: outpost.client, methods: new Set(Object.keys(FEDERATION_BACKEND_METHOD_CAPABILITIES)),
     providerSteerCount: () => readFileSync(path.join(outpost.env.PWRAGENT_TEST_DATA!, "calls.jsonl"), "utf8")
       .trim().split("\n").map(line => JSON.parse(line)).filter(item => item.method === "turn/steer").length,
-    events: outpost.events, workspace: outpost.workspace, close: outpost.close };
+    events: outpost.events, workspace: outpost.workspace, waitForEvent: outpost.waitForEvent, close: outpost.close };
 }
 
 /**
@@ -229,25 +229,41 @@ async function settle(host: OwnerHost): Promise<void> {
   }
 }
 
-/**
- * Waits until an owner has finished the provider refresh it starts at boot,
- * then for its events to go quiet. Both hosts end that refresh with one
- * `navigation/invalidated` + `navigation/providerThreads/refreshed` pair, and
- * whether it lands before the viewer subscribes or inside the first step
- * depends on load, not on either owner. `listBackends` reports the refresh.
- * The owner records the outcome before it publishes the refreshed threads and
- * emits, so wait for the pair too, unless it went by before the viewer's
- * subscription took effect.
- */
-async function awaitStartupProviderRefresh(host: OwnerHost): Promise<void> {
-  const refreshed = () => host.events.some(event => event.notification.method === "navigation/providerThreads/refreshed");
-  for (const deadline = Date.now() + 30_000; ; await delay(50)) {
-    const state = (await host.client.listBackends({})).providerRefresh?.state;
-    if (state === "ready" || state === "degraded") break;
-    if (Date.now() >= deadline) throw new Error(`${host.name} never finished its startup provider refresh (${state ?? "not started"}).`);
-  }
-  for (const deadline = Date.now() + 5_000; !refreshed() && Date.now() < deadline;) await delay(50);
-  await settle(host);
+// The provider creation event reaches viewers after the owner has recorded it.
+async function startConformanceThreads(hosts: OwnerHost[]) {
+  const threads = await Promise.all(hosts.map(host => host.client.startThread({
+    backend: "codex", cwd: host.workspace, executionMode: "auto",
+  })));
+  await vi.waitFor(() => {
+    for (const [index, host] of hosts.entries()) {
+      const threadId = threads[index]!.threadId;
+      expect(host.events.some(({ backend, notification }) => backend === "codex"
+        && notification.method === "thread/started"
+        && (notification.params.threadId ?? (notification.params.thread as { id?: string } | undefined)?.id) === threadId),
+      `${host.name} published creation of ${threadId}`).toBe(true);
+    }
+  }, { interval: 10, timeout: 5_000 });
+  return threads;
+}
+
+async function interruptAndAwaitCompletion(
+  hosts: OwnerHost[],
+  turns: InterruptTurnRequest[],
+) {
+  const replies = await Promise.all(hosts.map((host, index) => host.client.interruptTurn(turns[index]!)));
+  // Interrupt can reply before terminal processing and federation delivery.
+  await vi.waitFor(() => {
+    for (const [index, host] of hosts.entries()) {
+      const turn = turns[index]!;
+      expect(host.events.some(({ backend, notification }) => {
+        if (backend !== turn.backend || notification.method !== "turn/completed"
+          || notification.params.threadId !== turn.threadId) return false;
+        const completed = notification.params.turn as { id?: string; status?: string } | undefined;
+        return completed?.id === turn.turnId && completed.status === "interrupted";
+      }), `${host.name} published interruption of ${turn.threadId}/${turn.turnId}`).toBe(true);
+    }
+  }, { interval: 10, timeout: 5_000 });
+  return replies;
 }
 
 type Step = {
@@ -2403,10 +2419,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     try {
       outpost = await startOutpostOwner();
       const hosts = [desktop, outpost];
-      const identities = await Promise.all(hosts.map((host) => host.client.startThread({
-        backend: "codex", cwd: host.workspace, executionMode: "auto",
-      })));
-      await Promise.all(hosts.map(settle));
+      const identities = await startConformanceThreads(hosts);
       const register = vi.spyOn(desktopOwner.registry as unknown as {
         registerPendingThreadMessageContext: () => Promise<string | undefined>;
       }, "registerPendingThreadMessageContext");
@@ -2439,8 +2452,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         for (const [index, turn] of turns.entries()) expect(turn).toMatchObject({
           backend: "codex", threadId: identities[index].threadId, turnId: turns[0].turnId,
         });
-        await Promise.all(hosts.map((host, index) => host.client.interruptTurn(turns[index])));
-        await Promise.all(hosts.map(settle));
+        await interruptAndAwaitCompletion(hosts, turns);
       }
     } finally {
       await outpost?.close();
@@ -2553,10 +2565,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     try {
       outpost = await startOutpostOwner();
       const hosts = [desktop, outpost];
-      const identities = await Promise.all(hosts.map((host) => host.client.startThread({
-        backend: "codex", cwd: host.workspace, executionMode: "auto",
-      })));
-      await Promise.all(hosts.map(settle));
+      const identities = await startConformanceThreads(hosts);
       const registry = desktopOwner.registry as DesktopBackendRegistry;
       const internal = registry as unknown as {
         persistStartingTurnOrigin: () => Promise<void>;
@@ -2579,11 +2588,10 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         expect(registryModules(registry).turnState.hasStartReservation(identities[0].threadId)).toBe(false);
         expect(registryModules(registry).turnState.startingOrigins().length).toBe(0);
         expect(desktop.events.filter((event) => event.notification.method === "turn/failed")).toEqual([]);
-        const interruptions = await Promise.all(hosts.map((host, index) => host.client.interruptTurn(turns[index])));
+        const interruptions = await interruptAndAwaitCompletion(hosts, turns);
         for (const [index, interruption] of interruptions.entries()) expect(interruption).toMatchObject({
           threadId: turns[index].threadId, turnId: turns[index].turnId,
         });
-        await Promise.all(hosts.map(settle));
       }
     } finally {
       await outpost?.close();
@@ -2736,10 +2744,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     try {
       outpost = await startOutpostOwner("headless", { waitForCodexCommand: true });
       const hosts = [desktop, outpost];
-      const identities = await Promise.all(hosts.map((host) => host.client.startThread({
-        backend: "codex", cwd: host.workspace, executionMode: "auto",
-      })));
-      await Promise.all(hosts.map(settle));
+      const identities = await startConformanceThreads(hosts);
       const registry = desktopOwner.registry as DesktopBackendRegistry;
       const internal = registry as unknown as { emit: (event: AgentEvent, sequence?: number) => Promise<void> };
       const emit = internal.emit.bind(registry);
@@ -2776,8 +2781,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         for (const [index, turn] of turns.entries()) expect(turn).toMatchObject({
           backend: "codex", threadId: identities[index].threadId, turnId: turns[0].turnId,
         });
-        await Promise.all(hosts.map((host, index) => host.client.interruptTurn(turns[index])));
-        await Promise.all(hosts.map(settle));
+        await interruptAndAwaitCompletion(hosts, turns);
       }
     } finally {
       await outpost?.close();
@@ -2990,37 +2994,48 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     }
   }, 120_000);
 
-  it("fresh desktop and headless owner roots conform strictly across the whole thread lifecycle", async () => {
-    const desktop = await startOutpostOwner("desktop");
-    let outpost: OwnerHost | undefined;
+  async function recordLifecycle(hostKind: "desktop" | "headless") {
+    const discovery = await openCodexGate();
+    let close: OwnerHost["close"] | undefined;
     try {
-      outpost = await startOutpostOwner();
-      const used = [...new Set(FIRST_PROMPT_SCENARIO.map((step) => step.method))];
-      for (const host of [desktop, outpost]) {
-        const missing = used.filter((method) => !host.methods.has(method));
-        expect(missing, `${host.name} does not implement methods the scenario uses`).toEqual([]);
-      }
-      // The Outpost implements a subset of desktop's owner methods, never one desktop lacks.
-      expect([...outpost.methods].filter((method) => !desktop.methods.has(method)), "outpost-only owner methods").toEqual([]);
-      await Promise.all([desktop, outpost].map(awaitStartupProviderRefresh));
-      const desktopRecords = await runScenario(desktop, FIRST_PROMPT_SCENARIO);
-      const outpostRecords = await runScenario(outpost, FIRST_PROMPT_SCENARIO);
-      const measured: OwnerConformanceBaseline = {
-        sharedMethods: [...outpost.methods].filter((method) => desktop.methods.has(method)).sort(),
-        differences: desktopRecords.flatMap((record, index) => compareStep(record, outpostRecords[index]!)),
-      };
-      expect(measured.differences).toEqual([]);
-      if (process.env.UPDATE_OWNER_CONFORMANCE === "1") {
-        writeFileSync(BASELINE_PATH, JSON.stringify(measured, null, 2) + "\n");
-        return;
-      }
-      const baseline = JSON.parse(readFileSync(BASELINE_PATH, "utf8")) as OwnerConformanceBaseline;
-      expect(measured.sharedMethods).toEqual(baseline.sharedMethods);
-
+      const host = await startOutpostOwner(hostKind, { env: { PWRAGENT_TEST_STARTUP_INVENTORY_PORT: discovery.port } });
+      close = host.close;
+      // An RPC on the same connection follows the subscription. Hold the
+      // provider refresh until the viewer is subscribed and can observe it.
+      await host.client.listBackends({});
+      await discovery.release();
+      await host.waitForEvent("navigation/providerThreads/refreshed", () => true, AbortSignal.timeout(5_000));
+      const missing = [...new Set(FIRST_PROMPT_SCENARIO.map(step => step.method))].filter(method => !host.methods.has(method));
+      expect(missing, `${host.name} does not implement methods the scenario uses`).toEqual([]);
+      const records = await runScenario(host, FIRST_PROMPT_SCENARIO);
+      return { methods: host.methods, records };
     } finally {
-      await outpost?.close();
-      await desktop.close();
+      try { await discovery.close(); }
+      finally { await close?.(); }
     }
+  }
+
+  it("fresh desktop and headless owner roots conform strictly across the whole thread lifecycle", async () => {
+    // Each process owns its profile, provider and event stream. Run the
+    // sequences together while giving every step its full observation window.
+    const [desktopResult, outpostResult] = await Promise.allSettled([recordLifecycle("desktop"), recordLifecycle("headless")]);
+    if (desktopResult.status === "rejected") throw desktopResult.reason;
+    if (outpostResult.status === "rejected") throw outpostResult.reason;
+    const { value: desktop } = desktopResult;
+    const { value: outpost } = outpostResult;
+    // The Outpost implements a subset of desktop's owner methods, never one desktop lacks.
+    expect([...outpost.methods].filter(method => !desktop.methods.has(method)), "outpost-only owner methods").toEqual([]);
+    const measured: OwnerConformanceBaseline = {
+      sharedMethods: [...outpost.methods].filter(method => desktop.methods.has(method)).sort(),
+      differences: desktop.records.flatMap((record, index) => compareStep(record, outpost.records[index]!)),
+    };
+    expect(measured.differences).toEqual([]);
+    if (process.env.UPDATE_OWNER_CONFORMANCE === "1") {
+      writeFileSync(BASELINE_PATH, JSON.stringify(measured, null, 2) + "\n");
+      return;
+    }
+    const baseline = JSON.parse(readFileSync(BASELINE_PATH, "utf8")) as OwnerConformanceBaseline;
+    expect(measured.sharedMethods).toEqual(baseline.sharedMethods);
   }, 120_000);
 });
 
