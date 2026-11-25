@@ -95,8 +95,8 @@ export default defineConfig({
   // Playwright assign them to CI shards, which distorts file-level balancing.
   testIgnore: [
     "**/*.inspect.spec.ts",
-    // CI sets this on pull requests that leave the accessibility audit to
-    // `main`; see the `a11y` output of ci.yml's change classifier.
+    // CI's Linux Desktop E2E lanes set this: the `desktop-a11y` job runs
+    // the accessibility audit instead.
     ...(process.env.PWRAGENT_E2E_SKIP_A11Y === "1" ? ["**/a11y.spec.ts"] : []),
   ],
   // One bounded Electron launch before the suite. A persistent CI guest can

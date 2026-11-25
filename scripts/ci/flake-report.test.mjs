@@ -32,11 +32,11 @@ test("E2E identifies first unexpected outcomes and matches retry results by ID",
 
 test("aggregation preserves missing slices, attempts, and distinct diagnostic samples", () => {
   const expected = expectedSlices(3);
-  assert.equal(expected.length, 35);
+  assert.equal(expected.length, 37);
   const slice = createSlice({ kind: "e2e", platform: "windows", lane: 1, sample: 2, first: null, retries: [] });
   const report = aggregateSlices({ slices: [slice], samples: 3, runId: "123", attempt: "2" });
   assert.equal(report.slices.length, 1);
-  assert.equal(report.missingSlices.length, 34);
+  assert.equal(report.missingSlices.length, 36);
   assert.equal(report.slices.find((s) => s.key === slice.key).first.available, false);
   assert.equal(report.attempt, 2);
   assert.throws(() => aggregateSlices({ slices: [slice, slice], samples: 3 }), /duplicate/i);
@@ -66,7 +66,7 @@ test("platforms the classifier skipped are not reported as missing", () => {
       createSlice({ kind: "unit", platform: "linux", lane: 1, sample: 1, first: null, retries: [] }),
       createSlice({ kind: "unit", platform: "windows-main", lane: 3, sample: 1, first: null, retries: [] }),
     ],
-    notRun: ["unit-macos", "e2e-macos", "e2e-windows"],
+    notRun: ["unit-macos", "e2e-macos", "e2e-windows", "e2e-linux-a11y"],
     lanes: { "unit-linux": [1], "unit-windows-main": [1, 2, 3], "unit-windows-renderer": [], "e2e-linux": [] },
   });
   assert.equal(narrowed.expectedSlices, 4);
@@ -77,6 +77,7 @@ test("platforms the classifier skipped are not reported as missing", () => {
   assert.deepEqual(parseNotRun(""), []);
   assert.deepEqual(parseNotRun(undefined), []);
   assert.deepEqual(parseNotRun("unit-macos,e2e-macos,e2e-windows"), ["unit-macos", "e2e-macos", "e2e-windows"]);
+  assert.deepEqual(parseNotRun("e2e-linux-a11y"), ["e2e-linux-a11y"]);
   assert.throws(() => parseNotRun("e2e-macOS"), /unknown not-run/i);
 });
 
@@ -86,7 +87,8 @@ test("retry inventory, PR unit plans, and full test shards match their workflow 
   const jobs = [
     ["test", "unit", "linux"], ["test-macos", "unit", "macos"],
     ["windows-desktop-main", "unit", "windows-main"], ["windows-renderer-packages", "unit", "windows-renderer"],
-    ["desktop-e2e", "e2e", "linux"], ["desktop-e2e-macos", "e2e", "macos"], ["windows-e2e", "e2e", "windows"],
+    ["desktop-e2e", "e2e", "linux"], ["desktop-a11y", "e2e", "linux-a11y"], ["desktop-e2e-macos", "e2e", "macos"],
+    ["windows-e2e", "e2e", "windows"],
   ];
   for (const [job, kind, platform] of jobs) {
     const section = workflow.split(`\n  ${job}:\n`)[1]?.split(/\n {2}[a-z][a-z0-9-]*:\n/)[0];
@@ -111,16 +113,18 @@ test("retry inventory, PR unit plans, and full test shards match their workflow 
     assert.match(section, /uses: \.\/\.github\/actions\/flake-slice/);
   }
   assert.match(workflow, /sample: \$\{\{ fromJSON\(contains\(github\.event\.pull_request\.labels\.\*\.name, 'ci:windows-shutdown-diagnostics'\) && '\[1, 2, 3\]' \|\| '\[1\]'\) \}\}/);
-  // Linux and Windows share one four-lane split whenever both run the
-  // accessibility audit, so a Windows-only failure is attributable to Windows
-  // rather than to a different lane assignment.
-  const linuxWeights = workflow.match(/E2E_WEIGHTS_WITH_A11Y: "([\d:]+)"/)?.[1];
-  const linuxWithoutA11y = workflow.match(/E2E_WEIGHTS_WITHOUT_A11Y: "([\d:]+)"/)?.[1];
-  const windowsSection = workflow.split("\n  windows-e2e:\n")[1];
+  // Linux leaves the accessibility audit to its own job; Windows keeps it in
+  // its lanes. Each platform's four-lane weights must cover its full matrix.
+  const linuxSection = workflow.split("\n  desktop-e2e:\n")[1]?.split(/\n {2}[a-z][a-z0-9-]*:\n/)[0];
+  const linuxWeights = linuxSection?.match(/export PWTEST_SHARD_WEIGHTS="([\d:]+)"/)?.[1];
+  const windowsSection = workflow.split("\n  windows-e2e:\n")[1]?.split(/\n {2}[a-z][a-z0-9-]*:\n/)[0];
   const windowsWeights = windowsSection?.match(/PWTEST_SHARD_WEIGHTS: "([\d:]+)"/)?.[1];
   assert.equal(linuxWeights?.split(":").length, 4, "Linux E2E weights must cover four lanes");
-  assert.equal(linuxWithoutA11y?.split(":").length, 4, "Linux E2E weights without a11y must cover four lanes");
-  assert.equal(windowsWeights, linuxWeights, "Windows E2E must use the Linux lane weights");
+  assert.equal(windowsWeights?.split(":").length, 4, "Windows E2E weights must cover four lanes");
+  assert.match(linuxSection, /export PWRAGENT_E2E_SKIP_A11Y=1\n/, "Linux E2E lanes must leave a11y to its own job");
+  const a11ySection = workflow.split("\n  desktop-a11y:\n")[1]?.split(/\n {2}[a-z][a-z0-9-]*:\n/)[0];
+  assert.doesNotMatch(a11ySection, /PWRAGENT_E2E_SKIP_A11Y|PWTEST_SHARD_WEIGHTS/, "the a11y job must collect a11y.spec.ts unweighted");
+  assert.ok(a11ySection.includes("e2e/a11y.spec.ts --shard=${{ matrix.lane }}/2"), "the a11y job must shard a11y.spec.ts across its lanes");
 });
 
 test("the CLI produces a consolidated report including incomplete and absent slices", async () => {
@@ -145,14 +149,14 @@ test("the CLI produces a consolidated report including incomplete and absent sli
       const aggregate = spawnSync(process.execPath, [script, "aggregate"], { cwd, env: { ...env, FLAKE_SAMPLES: "1", GITHUB_RUN_ATTEMPT: "1" }, encoding: "utf8" });
       assert.equal(aggregate.status, 0, aggregate.stderr);
       const result = JSON.parse(readFileSync(join(cwd, ".local/ci/flake-report/flake-report.json")));
-      assert.equal(result.expectedSlices, 27);
-      assert.equal(result.missingSlices.length, 26);
+      assert.equal(result.expectedSlices, 29);
+      assert.equal(result.missingSlices.length, 28);
       const skipped = spawnSync(process.execPath, [script, "aggregate"], { cwd, env: { ...env, FLAKE_SAMPLES: "1", GITHUB_RUN_ATTEMPT: "1", FLAKE_NOT_RUN: "unit-macos,e2e-macos,e2e-windows" }, encoding: "utf8" });
       assert.equal(skipped.status, 0, skipped.stderr);
       assert.match(skipped.stdout, /Not run in this workflow run: unit-macos, e2e-macos, e2e-windows\./);
       const pr = JSON.parse(readFileSync(join(cwd, ".local/ci/flake-report/flake-report.json")));
-      assert.equal(pr.expectedSlices, 14);
-      assert.equal(pr.missingSlices.length, 13);
+      assert.equal(pr.expectedSlices, 16);
+      assert.equal(pr.missingSlices.length, 15);
       assert.equal(result.slices[0].first.complete, false);
       assert.equal(result.slices[0].failures[0].retry, "unknown");
     }

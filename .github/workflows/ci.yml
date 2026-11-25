@@ -49,11 +49,10 @@ jobs:
       # README in this directory for the measurements). Every push, and every
       # case this script cannot decide, runs them.
       full_platforms: ${{ steps.classify.outputs.full_platforms }}
-      # `true` keeps `a11y.spec.ts` in the Desktop E2E lanes. A pull request
-      # runs the accessibility audit only with `ci:full` or `ci:a11y`, when it
-      # changes `a11y.spec.ts`, or wherever `full_platforms` is `true`. Every
-      # push runs it. A narrowed test plan runs the specs it selects either
-      # way.
+      # `true` runs the accessibility audit (the `desktop-a11y` job). A pull
+      # request runs it only with `ci:full` or `ci:a11y`, when it changes
+      # `a11y.spec.ts`, or wherever `full_platforms` is `true`; a narrowed
+      # test plan that selects the spec also runs it. Every push runs it.
       a11y: ${{ steps.classify.outputs.a11y }}
     steps:
       # Docs-only PRs skip Lint, so the instruction-size guard runs here,
@@ -831,28 +830,20 @@ jobs:
       && needs.pr-test-impact-plan.outputs.e2e_lanes != '[]' }}
     strategy:
       # Playwright weights test counts, then assigns each indivisible group
-      # by its first test's position. Files stay together except a11y's
-      # parallel groups; workers remain at 1. Include platform-skipped tests
-      # in the allocation even though their execution cost is negligible.
+      # by its first test's position. Files stay together; workers remain at
+      # 1. Include platform-skipped tests in the allocation even though their
+      # execution cost is negligible.
       #
-      # With the accessibility audit, lanes use 55:114:112:115. Pull requests
-      # without it (see the `a11y` classifier output) use 86:75:65:107, fit
-      # to Linux alone over the other 333 tests, since Windows E2E does not
-      # run there.
-      #
-      # Fit 55:114:112:115 to the 396 collected tests on Linux and Windows.
-      # The input includes every platform skip and 209 complete groups from
-      # three main runs. Lane 1 holds only the first 55 a11y tests; the rest
-      # of a11y starts lane 2. Over all contiguous group allocations, the fit
-      # minimizes the largest share of a test budget used by either platform's
-      # longest modeled lane: 590s inside this step's 10-minute limit, and
-      # 800s inside the Windows job's 15 minutes. That keeps lane 1 under the
-      # limit on a runner 1.4x slower than the median. See
+      # These lanes never run `a11y.spec.ts`: the `desktop-a11y` job does,
+      # when it runs at all. Fit 86:75:65:107 to the other 333 collected
+      # tests on Linux, from three main runs; the input includes every
+      # platform skip. It minimizes the longest modeled lane (233s, against
+      # 590s of test time inside this step's 10-minute limit). See
       # docs/desktop-e2e-shard-timings.md for measurements and the
       # reproducible fit.
       #
-      # Linux and Windows share the four-lane allocation. macOS uses a
-      # separate five-lane allocation to reduce job wall time.
+      # Windows keeps the audit in its own four lanes and has its own fit.
+      # macOS uses a separate five-lane allocation to reduce job wall time.
       #
       # GitHub-hosted Linux capacity can run every lane concurrently. Keep
       # the other shards running after a failure so their artifacts still
@@ -897,12 +888,6 @@ jobs:
         timeout-minutes: 10
         env:
           E2E_MODE: ${{ needs.pr-test-impact-plan.outputs.e2e_mode }}
-          RUN_A11Y: ${{ needs.changes.outputs.a11y }}
-          # Lane sizes by test count; see the strategy comment above. Windows
-          # uses the first set, so the two platforms split alike whenever
-          # both run the audit.
-          E2E_WEIGHTS_WITH_A11Y: "55:114:112:115"
-          E2E_WEIGHTS_WITHOUT_A11Y: "86:75:65:107"
           PWRAGENT_CI_TEST_REPORT: ${{ github.workspace }}/.local/ci/retry/e2e-first.json
           PLAYWRIGHT_LAST_RUN_OUTPUT_FILE: ${{ github.workspace }}/.local/ci/retry/e2e-last.json
         # Wide-layout specs request 1440px windows. Keep the virtual desktop
@@ -915,13 +900,10 @@ jobs:
             mapfile -t tests < <(node scripts/ci/run-pr-test-impact.mjs e2e-files)
             [[ ${#tests[@]} -gt 0 ]]
           else
-            # Only an explicit `false` leaves the audit out.
-            if [[ "$RUN_A11Y" == "false" ]]; then
-              export PWRAGENT_E2E_SKIP_A11Y=1
-              export PWTEST_SHARD_WEIGHTS="$E2E_WEIGHTS_WITHOUT_A11Y"
-            else
-              export PWTEST_SHARD_WEIGHTS="$E2E_WEIGHTS_WITH_A11Y"
-            fi
+            # `desktop-a11y` runs the accessibility audit. Lane sizes by test
+            # count; see the strategy comment above.
+            export PWRAGENT_E2E_SKIP_A11Y=1
+            export PWTEST_SHARD_WEIGHTS="86:75:65:107"
             tests=(--shard=${{ matrix.lane }}/4)
           fi
           xvfb-run --auto-servernum \
@@ -985,6 +967,115 @@ jobs:
           include-hidden-files: true
           retention-days: 30
 
+  desktop-a11y:
+    name: Linux Desktop a11y (lane ${{ matrix.lane }} of 2)
+    runs-on: ubuntu-latest
+    needs: [changes, install-deps, pr-test-impact-plan]
+    # The accessibility audit (`a11y.spec.ts`) audits every surface in all
+    # shipped appearances: about 376s of Linux test time, more than any
+    # Desktop E2E lane. It runs here instead of in those lanes, on every
+    # push, and on a pull request only when the classifier's `a11y` output
+    # is `true` or a narrowed test plan selected the spec. See
+    # .github/workflows/README.md#accessibility-audit-on-prs.
+    if: >-
+      ${{ !cancelled() && needs.changes.outputs.code_impacting == 'true'
+      && needs.install-deps.result == 'success'
+      && (needs.changes.outputs.a11y == 'true' || needs.pr-test-impact-plan.outputs.e2e_a11y == 'true') }}
+    strategy:
+      # The spec runs in `parallel` mode, so each test is its own shard group
+      # and Playwright splits its 63 tests 32/31 by count. Modeled from three
+      # main runs: 222s and 154s, 316s and 213s on the slowest runner.
+      fail-fast: false
+      matrix:
+        lane: [1, 2]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        timeout-minutes: 10
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
+        timeout-minutes: 10
+        with:
+          node-version: "^24.22.1"
+          cache-electron: "true"
+
+      - name: Install Linux window manager
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y openbox x11-utils
+
+      - name: Run the accessibility audit
+        id: e2e-tests
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          PWRAGENT_CI_TEST_REPORT: ${{ github.workspace }}/.local/ci/retry/e2e-first.json
+          PLAYWRIGHT_LAST_RUN_OUTPUT_FILE: ${{ github.workspace }}/.local/ci/retry/e2e-last.json
+        # Same display setup as the Desktop E2E lanes.
+        run: >-
+          xvfb-run --auto-servernum
+          --server-args="-screen 0 1920x1080x24 -noreset"
+          bash .github/scripts/run-linux-desktop-e2e.sh
+          e2e/a11y.spec.ts --shard=${{ matrix.lane }}/2
+          --retries=0
+
+      - name: Verify the audit slice completed
+        if: steps.e2e-tests.outcome == 'success'
+        run: node scripts/ci/run-retry-failures.mjs e2e-first-verify
+
+      - name: Select failed audit tests
+        id: e2e-selection
+        if: steps.e2e-tests.outcome == 'failure'
+        run: node scripts/ci/run-retry-failures.mjs e2e-prepare
+
+      - name: Retry failed audit tests
+        id: e2e-retry
+        if: steps.e2e-tests.outcome == 'failure'
+        continue-on-error: true
+        env:
+          PWRAGENT_E2E_PREBUILT: "1"
+          PWRAGENT_CI_TEST_REPORT: ${{ github.workspace }}/.local/ci/retry/e2e-retry.json
+          PLAYWRIGHT_LAST_RUN_OUTPUT_FILE: ${{ github.workspace }}/.local/ci/retry/e2e-last.json
+        run: >-
+          xvfb-run --auto-servernum
+          --server-args="-screen 0 1920x1080x24 -noreset"
+          bash .github/scripts/run-linux-desktop-e2e.sh
+          --last-failed --retries=0 --trace=retain-on-failure
+
+      - name: Check audit retry results
+        if: steps.e2e-tests.outcome == 'failure' && steps.e2e-selection.outcome == 'success'
+        env:
+          PWRAGENT_RETRY_OUTCOME: ${{ steps.e2e-retry.outcome }}
+        run: node scripts/ci/run-retry-failures.mjs e2e-verify
+
+      - name: Record retry slice
+        if: ${{ !cancelled() && always() }}
+        continue-on-error: true
+        uses: ./.github/actions/flake-slice
+        with:
+          kind: e2e
+          platform: linux-a11y
+          lane: ${{ matrix.lane }}
+          sample: 1
+          job-status: ${{ job.status }}
+          first-outcome: ${{ steps.e2e-tests.outcome }}
+          retry-outcome: ${{ steps.e2e-retry.outcome }}
+
+      - name: Upload audit Playwright artifacts
+        uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        with:
+          name: desktop-e2e-linux-a11y-lane-${{ matrix.lane }}-artifacts
+          path: |
+            apps/desktop/playwright-report/
+            apps/desktop/test-results/
+            .local/ci/retry/
+          include-hidden-files: true
+          retention-days: 30
+
   desktop-e2e-result:
     # Preserve the required status-check context while the work runs as
     # independently named matrix jobs across more than one platform.
@@ -1007,16 +1098,19 @@ jobs:
     # keep this job's shape identical to theirs so the three cannot drift.
     name: Desktop E2E
     runs-on: ubuntu-latest
-    needs: [changes, pr-test-impact-plan, desktop-e2e, desktop-e2e-macos]
+    needs: [changes, pr-test-impact-plan, desktop-e2e, desktop-a11y, desktop-e2e-macos]
     if: >-
       always() &&
       needs.changes.outputs.code_impacting == 'true'
     timeout-minutes: 5
     steps:
-      - name: Require the Linux and macOS Desktop E2E lanes
+      - name: Require the Linux, accessibility and macOS Desktop E2E lanes
         env:
           E2E_LANES: ${{ needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.e2e_lanes || '' }}
           LINUX_E2E_RESULT: ${{ needs.desktop-e2e.result }}
+          A11Y_RESULT: ${{ needs.desktop-a11y.result }}
+          # Mirrors the `if:` of desktop-a11y.
+          A11Y_REQUESTED: ${{ (needs.changes.outputs.a11y == 'true' || needs.pr-test-impact-plan.outputs.e2e_a11y == 'true') && 'true' || 'false' }}
           MACOS_E2E_RESULT: ${{ needs.desktop-e2e-macos.result }}
           FULL_PLATFORMS: ${{ needs.changes.outputs.full_platforms }}
         run: |
@@ -1050,6 +1144,13 @@ jobs:
             say "- SKIP \`Linux\` (the test plan found no spec that this change affects)"
           else
             require "Linux" "$LINUX_E2E_RESULT"
+          fi
+          # Pull requests leave the accessibility audit to `main` unless the
+          # classifier or the test plan asked for it.
+          if [[ "$A11Y_REQUESTED" == "false" && "$A11Y_RESULT" == "skipped" ]]; then
+            say "- SKIP \`Linux a11y\` (runs on \`main\`; add the \`ci:a11y\` label and use **Re-run all jobs** to run it here)"
+          else
+            require "Linux a11y" "$A11Y_RESULT"
           fi
           # The classifier leaves macOS to `main` on pull requests. Accept a
           # skip only when it said so; any other skip, and every other
@@ -1421,11 +1522,11 @@ jobs:
         # windows-latest provides an interactive desktop session, so unlike the
         # Linux lane this needs neither xvfb nor a window manager.
         #
-        # Sharding matches the Linux lanes exactly: the same
-        # grouping (file-level, except `a11y.spec.ts`, which runs in
-        # `parallel` mode) and the same weights. A Windows-only failure is
-        # then attributable to Windows and not to a different lane split.
-        # See the desktop-e2e strategy comment.
+        # Sharding groups by file, except `a11y.spec.ts`, which runs in
+        # `parallel` mode. Unlike Linux, these lanes keep the accessibility
+        # audit, so the weights are Windows' own: 59:121:104:112, fit to the
+        # 396 collected tests from three main runs. Lane 1 holds the first 59
+        # a11y tests. See docs/desktop-e2e-shard-timings.md.
         #
         # TEMP and TMP move every fixture root, Electron profile, state
         # database and app-spawned temp file off the OS volume (C:) onto the
@@ -1436,7 +1537,7 @@ jobs:
         id: e2e-tests
         continue-on-error: true
         env:
-          PWTEST_SHARD_WEIGHTS: "55:114:112:115"
+          PWTEST_SHARD_WEIGHTS: "59:121:104:112"
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
           PWRAGENT_CI_TEST_REPORT: ${{ github.workspace }}/.local/ci/retry/e2e-first.json
@@ -1503,7 +1604,7 @@ jobs:
   flake-report:
     name: Consolidate test retries
     runs-on: ubuntu-latest
-    needs: [changes, pr-test-impact-plan, test, test-macos, windows-desktop-main, windows-renderer-packages, desktop-e2e, desktop-e2e-macos, windows-e2e]
+    needs: [changes, pr-test-impact-plan, test, test-macos, windows-desktop-main, windows-renderer-packages, desktop-e2e, desktop-a11y, desktop-e2e-macos, windows-e2e]
     if: ${{ always() && !cancelled() && needs.changes.outputs.code_impacting == 'true' }}
     steps:
       - name: Checkout repository
@@ -1519,6 +1620,7 @@ jobs:
           FLAKE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           FULL_PLATFORMS: ${{ needs.changes.outputs.full_platforms }}
           WINDOWS_DIAGNOSTICS: ${{ contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics') }}
+          A11Y_REQUESTED: ${{ (needs.changes.outputs.a11y == 'true' || needs.pr-test-impact-plan.outputs.e2e_a11y == 'true') && 'true' || 'false' }}
           # The lanes a pull request's test plan ran. A lane it left out is
           # not a missing slice.
           FLAKE_LANES: >-
@@ -1528,8 +1630,9 @@ jobs:
             needs.pr-test-impact-plan.outputs.unit_windows_main_lanes,
             needs.pr-test-impact-plan.outputs.unit_windows_renderer_lanes,
             needs.pr-test-impact-plan.outputs.e2e_lanes) || '' }}
-        # Mirror the `if:` of test-macos, desktop-e2e-macos and windows-e2e, so
-        # a platform the classifier skipped is not reported as missing.
+        # Mirror the `if:` of test-macos, desktop-e2e-macos, windows-e2e and
+        # desktop-a11y, so a platform the classifier skipped is not reported
+        # as missing.
         run: |
           set -euo pipefail
           not_run=""
@@ -1538,6 +1641,9 @@ jobs:
             if [[ "$WINDOWS_DIAGNOSTICS" != "true" ]]; then
               not_run+=",e2e-windows"
             fi
+          fi
+          if [[ "$A11Y_REQUESTED" != "true" ]]; then
+            not_run+="${not_run:+,}e2e-linux-a11y"
           fi
           FLAKE_NOT_RUN="$not_run" node scripts/ci/write-flake-report.mjs aggregate
       - name: Upload consolidated report
@@ -1572,6 +1678,9 @@ jobs:
       unit_windows_main_lanes: ${{ steps.lanes.outputs.unit_windows_main_lanes }}
       unit_windows_renderer_lanes: ${{ steps.lanes.outputs.unit_windows_renderer_lanes }}
       e2e_lanes: ${{ steps.lanes.outputs.e2e_lanes }}
+      # `true` when a narrowed plan selected `a11y.spec.ts`, which the
+      # `desktop-a11y` job then runs; the Desktop E2E lane leaves it out.
+      e2e_a11y: ${{ steps.lanes.outputs.e2e_a11y }}
     steps:
       - name: Checkout the tested merge revision
         uses: actions/checkout@v7

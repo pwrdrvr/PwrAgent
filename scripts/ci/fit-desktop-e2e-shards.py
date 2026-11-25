@@ -35,13 +35,9 @@ def summarize(groups, weights, platforms):
     }
 
 
-def fit(groups, platforms, budgets=None):
+def fit(groups, platforms):
     # Every distinct assignment is a partition at three group boundaries.
     # Using its collected test counts as weights reproduces that partition.
-    # Without budgets, minimize the sum of each platform's longest lane.
-    # With per-platform budgets in seconds, minimize the largest fraction of
-    # a budget any platform's longest lane uses, then that sum, so the
-    # platform with the tightest deadline gets the headroom.
     counts = [0]
     durations = [[0] for _ in platforms]
     for group in groups:
@@ -56,8 +52,6 @@ def fit(groups, platforms, budgets=None):
             for prefix in durations
         ]
         score = sum(maxima)
-        if budgets:
-            score = (max(seconds / budget for seconds, budget in zip(maxima, budgets)), score)
         if best is None or score < best[0]:
             best = (score, edges)
     if best is None:
@@ -70,7 +64,6 @@ def main():
     parser.add_argument("--data", type=Path, default=Path(__file__).resolve().parents[2] / "docs/desktop-e2e-shard-durations.json")
     parser.add_argument("--weights", default="9:12:12:14")
     parser.add_argument("--fit", action="store_true")
-    parser.add_argument("--budgets", help="per-platform test seconds available in each lane, colon-separated in data order")
     parser.add_argument("--platform", help="model and fit only this platform from the data")
     parser.add_argument("--without", action="append", default=[], help="model a collection that ignores this spec file; repeatable")
     args = parser.parse_args()
@@ -99,17 +92,9 @@ def main():
     if unknown:
         parser.error(f"--without names specs absent from the data: {', '.join(sorted(unknown))}")
     groups = [group for group in groups if group["spec"] not in args.without]
-    budgets = None
-    if args.budgets:
-        try:
-            budgets = [float(budget) for budget in args.budgets.split(":")]
-            if len(budgets) != len(platforms) or min(budgets) <= 0:
-                raise ValueError()
-        except ValueError:
-            parser.error(f"--budgets requires {len(platforms)} positive numbers separated by colons")
     print(json.dumps(summarize(groups, weights, platforms), indent=2))
     if args.fit:
-        print(json.dumps(summarize(groups, fit(groups, platforms, budgets), platforms), indent=2))
+        print(json.dumps(summarize(groups, fit(groups, platforms), platforms), indent=2))
 
 
 if __name__ == "__main__":

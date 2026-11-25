@@ -6,7 +6,7 @@ namespaced with `ci:` when they start, skip, or narrow CI work.
 | Label | Workflow | Effect |
 |---|---|---|
 | `ci:full` | `ci.yml` | Runs every unit test and Desktop E2E spec on a PR, where the test plan would otherwise select the affected ones, and adds the macOS unit tests, macOS Desktop E2E and Windows Desktop E2E. Without it, PRs skip those jobs unless they change a platform-specific path and the required `Desktop E2E` check accepts the skipped macOS lanes; every push to `main` and `releases/**` still runs them. The classifier reads labels live, so after adding the label use **Re-run all jobs** or push. **Re-run failed jobs** does not rerun the succeeded classifier, so it does not pick the label up. See [cross-platform jobs on PRs](#cross-platform-jobs-on-prs). |
-| `ci:a11y` | `ci.yml` | Runs the accessibility audit (`apps/desktop/e2e/a11y.spec.ts`) in the Linux Desktop E2E lanes of a PR. Without it, a PR's full Linux run leaves the audit out unless `ci:full` is present, the PR changes `a11y.spec.ts`, or a platform-specific path runs the cross-platform jobs; every push to `main` and `releases/**` still runs it. A narrowed test plan runs whichever specs it selects. Like `ci:full`, the classifier reads it live, so use **Re-run all jobs** or push after adding it. See [accessibility audit on PRs](#accessibility-audit-on-prs). |
+| `ci:a11y` | `ci.yml` | Runs the accessibility audit (`apps/desktop/e2e/a11y.spec.ts`) on a PR, in the `Linux Desktop a11y` job's two lanes. Without it, a PR skips that job unless `ci:full` is present, the PR changes `a11y.spec.ts`, a narrowed test plan selects the spec, or a platform-specific path runs the cross-platform jobs. Every push to `main` and `releases/**` runs it. Like `ci:full`, the classifier reads it live, so after adding it use **Re-run all jobs** or push. See [accessibility audit on PRs](#accessibility-audit-on-prs). |
 | `ci:benchmark-checks` | `check-performance.yml` | Compares base and PR syntax lint, typed lint and typecheck on one GitHub-hosted `macos-26` runner. Records three paired samples, runner/hardware identity and system load. Adding this label starts the benchmark. |
 | `ci:build-preview` | `preview-build.yml` | Builds an ad-hoc signed, unnotarized macOS preview DMG and uploads it as a workflow artifact. Use for PRs that change release packaging, installer assets, or desktop distribution behavior. |
 | `ci:windows-package` | `ci.yml` | Builds the unsigned Windows NSIS installer (`release.mjs --win`) and uploads it as a workflow artifact. Off by default — the normal Windows CI job is build + test only. Adding the label alone does not start CI; add it before opening the PR, rerun CI, or push a commit after adding it. The release workflow (`release.yml`) builds the Windows installer automatically on version tags. |
@@ -48,19 +48,22 @@ so a macOS break lands on `main` and is caught there instead of on the PR.
 ## Accessibility audit on PRs
 
 `a11y.spec.ts` audits every surface in all eleven shipped appearances. On
-Linux it was the largest spec: 63 tests and about 376 of the suite's 1,290
-seconds, median over three main runs in November 2026. Its regressions are
-contrast, focus and role failures that `main` reports on the next push. Pull
-requests therefore leave it out of a full Linux Desktop E2E run, and the lanes
-use weights fit to the other specs. The audit runs on a PR in these cases:
+Linux it costs about 376 seconds of test time, more than any Desktop E2E lane;
+that is the median of three main runs in November 2026. It runs in its own job,
+`Linux Desktop a11y (lane N of 2)`, and the Linux Desktop E2E lanes never
+collect it. Its regressions are contrast, focus and role failures that `main`
+reports on the next push, so pull requests skip the job unless:
 
 - the PR has `ci:a11y` or `ci:full`;
 - it changes `apps/desktop/e2e/a11y.spec.ts`;
-- the cross-platform jobs run, which also covers a failed label or file lookup;
-- a narrowed test plan selects the spec.
+- a narrowed test plan selects the spec, for example after a change to a
+  fixture it uses;
+- the cross-platform jobs run, which also covers a failed label or file lookup.
 
-Before changing an audited surface or theme tokens, run the audit with
-`ci:a11y` or locally (see [accessibility](../../apps/desktop/docs/accessibility.md#accessibility)).
+The required `Desktop E2E` check accepts the skipped job only in that case.
+macOS and Windows Desktop E2E keep the audit in their own lanes. Before
+changing an audited surface or theme tokens, add `ci:a11y` or run the audit
+locally (see [accessibility](../../apps/desktop/docs/accessibility.md#accessibility)).
 
 ## Consolidated test retry report
 
