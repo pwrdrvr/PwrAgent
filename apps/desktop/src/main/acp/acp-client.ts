@@ -2702,30 +2702,17 @@ export class AcpAgentClient {
       return cancelledPermissionOutcome();
     }
 
-    // A session waiting on the operator must stay open to hear the answer.
     const sessionId = request.params.threadId;
-    this.pendingPermissionRequests.set(
-      sessionId,
-      (this.pendingPermissionRequests.get(sessionId) ?? 0) + 1,
-    );
-    this.touchSession(sessionId);
-    try {
-      const response = await this.options.onRequest(request);
-      const toolName = request.params.acpMcpToolName;
-      const allowOnce = allowOncePermissionOptionId(permissionOptions);
-      if (toolName && allowOnce && isThreadToolGrantResponse(response, request)) {
-        const grants = this.sessionMcpToolGrants.get(sessionId) ?? new Set<string>();
-        grants.add(toolName);
-        this.sessionMcpToolGrants.set(sessionId, grants);
-        return { outcome: { outcome: "selected", optionId: allowOnce } };
-      }
-      return permissionOutcomeFromResponse(response, permissionOptions);
-    } finally {
-      const remaining = (this.pendingPermissionRequests.get(sessionId) ?? 1) - 1;
-      if (remaining > 0) this.pendingPermissionRequests.set(sessionId, remaining);
-      else this.pendingPermissionRequests.delete(sessionId);
-      this.touchSession(sessionId);
+    const response = await this.askOperator(sessionId, request);
+    const toolName = request.params.acpMcpToolName;
+    const allowOnce = allowOncePermissionOptionId(permissionOptions);
+    if (toolName && allowOnce && isThreadToolGrantResponse(response, request)) {
+      const grants = this.sessionMcpToolGrants.get(sessionId) ?? new Set<string>();
+      grants.add(toolName);
+      this.sessionMcpToolGrants.set(sessionId, grants);
+      return { outcome: { outcome: "selected", optionId: allowOnce } };
     }
+    return permissionOutcomeFromResponse(response, permissionOptions);
   }
 
   /**

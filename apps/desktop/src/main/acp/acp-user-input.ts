@@ -43,7 +43,10 @@ const OTHER_FIELD_SUFFIXES = ["__other", "_other"] as const;
 /**
  * A form is asked as questions only when every field is a single choice, a
  * multiple choice, or plain text, and choices have distinct labels so an
- * answer names exactly one option. Anything else returns undefined.
+ * answer names exactly one option. The card needs an answer to every
+ * question, so a text field of its own must be required; an optional one
+ * leaves the form to the form card, where it can stay empty. Anything else
+ * returns undefined.
  */
 export function acpElicitationUserInput(params: Record<string, unknown>): AcpElicitationUserInput | undefined {
   const schema = asRecord(params.requestedSchema);
@@ -51,6 +54,9 @@ export function acpElicitationUserInput(params: Record<string, unknown>): AcpEli
   if (schema?.type !== "object" || !properties) return undefined;
   const entries = Object.entries(properties);
   if (entries.length === 0) return undefined;
+  const required = new Set(Array.isArray(schema.required)
+    ? schema.required.filter((key): key is string => typeof key === "string")
+    : []);
   // Cognition's agents let a choice take text with no field of its own.
   const otherIsValue = asRecord(params._meta)?.["cognition.ai/allowOther"] === true;
 
@@ -70,16 +76,20 @@ export function acpElicitationUserInput(params: Record<string, unknown>): AcpEli
   }
 
   // A plain text field whose name points at a choice is that choice's Other.
+  // An answer fills only one of the two, so neither may be required.
   const folded = new Set<string>();
   for (const key of plain.keys()) {
     const suffix = OTHER_FIELD_SUFFIXES.find((candidate) => key.endsWith(candidate));
     const owner = suffix ? parsed.get(key.slice(0, -suffix.length)) : undefined;
     if (!owner || owner.kind === "text" || owner.otherKey) continue;
+    if (required.has(owner.key) || required.has(key)) continue;
     owner.otherKey = key;
     folded.add(key);
   }
   for (const key of plain.keys()) {
-    if (!folded.has(key)) parsed.set(key, { kind: "text", key });
+    if (folded.has(key)) continue;
+    if (!required.has(key)) return undefined;
+    parsed.set(key, { kind: "text", key });
   }
 
   const message = typeof params.message === "string" ? params.message.trim() : "";
@@ -110,12 +120,13 @@ export function acpElicitationUserInput(params: Record<string, unknown>): AcpEli
   return {
     questions,
     content: (answers) => {
-      const content: Record<string, AcpFormContentValue> = {};
+      // Entries, not assignment: a `__proto__` key must stay an own property.
+      const content: Array<[string, AcpFormContentValue]> = [];
       for (const question of ordered) {
-        const values = answerStrings(answers[question.key]);
+        const values = answerStrings(ownValue(answers, question.key));
         if (values.length === 0) continue;
         if (question.kind === "text") {
-          content[question.key] = values.join("\n");
+          content.push([question.key, values.join("\n")]);
           continue;
         }
         const byLabel = new Map(question.options.map((option) => [option.label, option.value]));
@@ -125,15 +136,15 @@ export function acpElicitationUserInput(params: Record<string, unknown>): AcpEli
         });
         const other = values.filter((value) => !byLabel.has(value)).join("\n");
         if (question.kind === "multi") {
-          if (chosen.length > 0) content[question.key] = chosen;
+          if (chosen.length > 0) content.push([question.key, chosen]);
         } else if (chosen[0] !== undefined) {
-          content[question.key] = chosen[0];
+          content.push([question.key, chosen[0]]);
         } else if (other && question.otherIsValue && !question.otherKey) {
-          content[question.key] = other;
+          content.push([question.key, other]);
         }
-        if (other && question.otherKey) content[question.otherKey] = other;
+        if (other && question.otherKey) content.push([question.otherKey, other]);
       }
-      return content;
+      return Object.fromEntries(content);
     },
   };
 }
@@ -254,21 +265,22 @@ export function grokAskUserQuestionInput(raw: Record<string, unknown>): GrokUser
       ...(question.multiSelect ? { multiSelect: true } : {}),
     })),
     response: (answers) => {
-      const answered: Record<string, string[]> = {};
-      const annotations: Record<string, { notes: string }> = {};
+      // Entries, not assignment: a `__proto__` question must stay an own key.
+      const answered: Array<[string, string[]]> = [];
+      const annotations: Array<[string, { notes: string }]> = [];
       asked.forEach((question, index) => {
-        const values = answerStrings(answers[String(index)]);
+        const values = answerStrings(ownValue(answers, String(index)));
         if (values.length === 0) return;
         const labels = new Set(question.options.map((option) => option.label));
         const chosen = values.filter((value) => labels.has(value));
         const notes = values.filter((value) => !labels.has(value));
-        answered[question.prompt] = notes.length > 0 ? [...chosen, "Other"] : chosen;
-        if (notes.length > 0) annotations[question.prompt] = { notes: notes.join("\n") };
+        answered.push([question.prompt, notes.length > 0 ? [...chosen, "Other"] : chosen]);
+        if (notes.length > 0) annotations.push([question.prompt, { notes: notes.join("\n") }]);
       });
       return {
         outcome: "accepted",
-        answers: answered,
-        ...(Object.keys(annotations).length > 0 ? { annotations } : {}),
+        answers: Object.fromEntries(answered),
+        ...(annotations.length > 0 ? { annotations: Object.fromEntries(annotations) } : {}),
       };
     },
   };
@@ -278,6 +290,11 @@ export function grokAskUserQuestionInput(raw: Record<string, unknown>): GrokUser
 export function userInputAnswers(response: unknown): UserInputAnswers | undefined {
   const answers = asRecord(asRecord(response)?.answers);
   return answers as UserInputAnswers | undefined;
+}
+
+/** The record's own value at `key`, never one it inherits. */
+function ownValue(record: Record<string, unknown>, key: string): unknown {
+  return Object.hasOwn(record, key) ? record[key] : undefined;
 }
 
 function answerStrings(answer: unknown): string[] {

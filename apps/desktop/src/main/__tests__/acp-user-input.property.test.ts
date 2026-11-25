@@ -32,7 +32,9 @@ function schemaFor(fields: Field[]): Record<string, unknown> {
       properties[`${field.key}${field.other}`] = { type: "string", title: "Other", description: `Optional free-form answer to: ${field.title}` };
     }
   }
-  return { type: "object", properties };
+  // The card asks a text field of its own only when the form requires it.
+  const required = fields.filter((field) => field.kind === "text").map((field) => field.key);
+  return { type: "object", properties, ...(required.length > 0 ? { required } : {}) };
 }
 
 describe("acpElicitationUserInput", () => {
@@ -99,11 +101,64 @@ describe("acpElicitationUserInput", () => {
       { type: "string", title: "Twins", oneOf: [{ const: "a", title: "Same" }, { const: "b", title: "Same" }] },
     );
     fc.assert(fc.property(unaskable, formArb, (field, fields) => {
-      const schema = schemaFor(fields) as { properties: Record<string, unknown> };
+      const schema = schemaFor(fields) as { properties: Record<string, unknown>; required?: string[] };
       schema.properties.odd = field;
-      expect(acpElicitationUserInput({ requestedSchema: { type: "object", properties: schema.properties } })).toBeUndefined();
+      // Required, so only the field's own shape can leave it to the form card.
+      schema.required = [...(schema.required ?? []), "odd"];
+      expect(acpElicitationUserInput({ requestedSchema: schema })).toBeUndefined();
     }));
     expect(acpElicitationUserInput({ requestedSchema: { type: "object", properties: {} } })).toBeUndefined();
+  });
+
+  it("asks only what the operator may leave out when the form allows it (oracle)", () => {
+    // Every question needs an answer, so an optional text field of its own
+    // leaves the form to the form card, and a required choice or Other
+    // keeps its own field rather than share one answer.
+    fc.assert(fc.property(
+      fc.constantFrom("_other", "__other"),
+      fc.subarray(["q1", "other", "note"] as const),
+      fc.boolean(),
+      (suffix, requiredKeys, withNote) => {
+        const otherKey = `q1${suffix}`;
+        const properties: Record<string, unknown> = {
+          q1: { type: "string", title: "Color?", oneOf: [{ const: "1", title: "Red" }] },
+          [otherKey]: { type: "string", title: "Other" },
+          ...(withNote ? { note: { type: "string", title: "Anything else?" } } : {}),
+        };
+        const required = requiredKeys.map((key) => key === "other" ? otherKey : key);
+        const input = acpElicitationUserInput({ requestedSchema: { type: "object", properties, required } });
+        const folds = !required.includes("q1") && !required.includes(otherKey);
+        const askable = (folds || required.includes(otherKey)) && (!withNote || required.includes("note"));
+        if (!askable) {
+          expect(input).toBeUndefined();
+          return;
+        }
+        expect(input!.questions.map((question) => question.id))
+          .toEqual(["q1", ...(folds ? [] : [otherKey]), ...(withNote ? ["note"] : [])]);
+        expect(input!.questions[0]!.isOther).toBe(folds);
+        const answers = { q1: { answers: ["Red"] }, [otherKey]: { answers: ["Teal"] }, note: { answers: ["Thanks"] } };
+        expect(input!.content(answers)).toEqual({
+          q1: "1",
+          ...(folds ? {} : { [otherKey]: "Teal" }),
+          ...(withNote ? { note: "Thanks" } : {}),
+        });
+      },
+    ));
+  });
+
+  it("keeps a __proto__ field as the form's own answer", () => {
+    const params = JSON.parse(`{"requestedSchema": {"type": "object", "required": ["__proto__"], "properties": {
+      "__proto__": {"type": "string", "title": "Odd?"},
+      "q1": {"type": "string", "title": "Pick", "oneOf": [{"const": "1", "title": "Red"}]}
+    }}}`) as Record<string, unknown>;
+    const input = acpElicitationUserInput(params)!;
+    expect(input.questions.map((question) => question.id)).toEqual(["__proto__", "q1"]);
+    const answers = JSON.parse(`{"__proto__": {"answers": ["Yes"]}, "q1": {"answers": ["Red"]}}`) as Record<string, { answers: string[] }>;
+    const content = input.content(answers);
+    expect(Object.hasOwn(content, "__proto__")).toBe(true);
+    expect(Object.entries(content)).toEqual([["__proto__", "Yes"], ["q1", "1"]]);
+    // An answer the card never gave is not read from the prototype.
+    expect(input.content({ q1: { answers: ["Red"] } })).toEqual({ q1: "1" });
   });
 
   it("asks Antigravity's captured ask_question as two questions", () => {
@@ -188,6 +243,15 @@ describe("grokAskUserQuestionInput", () => {
         });
       },
     ));
+  });
+
+  it("answers a __proto__ question under its own key", () => {
+    const input = grokAskUserQuestionInput({ sessionId: "s", questions: [{ question: "__proto__", options: [{ label: "A" }] }] })!;
+    const response = input.response({ "0": { answers: ["A", "note"] } });
+    expect(response.outcome).toBe("accepted");
+    if (response.outcome !== "accepted") return;
+    expect(Object.entries(response.answers)).toEqual([["__proto__", ["A", "Other"]]]);
+    expect(Object.entries(response.annotations ?? {})).toEqual([["__proto__", { notes: "note" }]]);
   });
 
   it("refuses a request it cannot answer unambiguously", () => {
