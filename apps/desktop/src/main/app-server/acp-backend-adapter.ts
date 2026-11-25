@@ -469,6 +469,7 @@ function acpSteeredUserMessageNotification(params: {
         id: messageId,
         type: "userMessage",
         text,
+        steered: true,
         ...(content?.length ? { content } : {}),
         ...(createdAt !== undefined ? { createdAt } : {}),
       },

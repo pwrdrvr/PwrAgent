@@ -2589,6 +2589,12 @@ export type AppServerNotification =
           type: string;
           text?: string;
           origin?: AppServerThreadMessageOrigin;
+          /**
+           * A `userMessage` the owner accepted into a turn that was already
+           * running. It joins that turn rather than opening it, so it never
+           * stands in for the message that started the turn.
+           */
+          steered?: boolean;
           review?: string;
           command?: string;
           commandAction?: AppServerCommandAction;
