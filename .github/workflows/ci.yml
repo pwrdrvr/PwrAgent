@@ -822,7 +822,7 @@ jobs:
           retention-days: 7
 
   desktop-e2e:
-    name: Linux Desktop E2E (lane ${{ matrix.lane }} of 4)
+    name: Linux Desktop E2E (lane ${{ matrix.lane }} of 5)
     runs-on: ubuntu-latest
     needs: [changes, install-deps, pr-test-impact-plan]
     # A pull request's test plan can narrow these lanes to one that runs the
@@ -840,12 +840,9 @@ jobs:
       # execution cost is negligible.
       #
       # These lanes never run `a11y.spec.ts`: the `desktop-a11y` job does,
-      # when it runs at all. Fit 86:75:65:107 to the other 333 collected
-      # tests on Linux, from three main runs; the input includes every
-      # platform skip. It minimizes the longest modeled lane (233s, against
-      # 590s of test time inside this step's 10-minute limit). See
-      # docs/desktop-e2e-shard-timings.md for measurements and the
-      # reproducible fit.
+      # when it runs at all. Fit 54:68:68:59:84 to the other 333 collected
+      # tests on Linux, from seven full-suite PR runs. The longest modeled
+      # lane is 223s. See docs/desktop-e2e-shard-timings.md for measurements.
       #
       # Windows keeps the audit in its own four lanes and has its own fit.
       # macOS uses a separate five-lane allocation to reduce job wall time.
@@ -854,9 +851,9 @@ jobs:
       # the other shards running after a failure so their artifacts still
       # show whether the failure is isolated or suite-wide.
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 5
       matrix:
-        lane: ${{ fromJSON(needs.pr-test-impact-plan.outputs.e2e_lanes || '[1, 2, 3, 4]') }}
+        lane: ${{ fromJSON(needs.pr-test-impact-plan.outputs.e2e_lanes || '[1, 2, 3, 4, 5]') }}
     timeout-minutes: 20
     steps:
       - name: Checkout repository
@@ -908,8 +905,8 @@ jobs:
             # `desktop-a11y` runs the accessibility audit. Lane sizes by test
             # count; see the strategy comment above.
             export PWRAGENT_E2E_SKIP_A11Y=1
-            export PWTEST_SHARD_WEIGHTS="86:75:65:107"
-            tests=(--shard=${{ matrix.lane }}/4)
+            export PWTEST_SHARD_WEIGHTS="54:68:68:59:84"
+            tests=(--shard=${{ matrix.lane }}/5)
           fi
           xvfb-run --auto-servernum \
             --server-args="-screen 0 1920x1080x24 -noreset" \
