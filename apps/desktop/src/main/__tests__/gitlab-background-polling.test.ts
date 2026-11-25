@@ -450,3 +450,52 @@ it("admits a queued older-schema fallback only after the provider deadline", asy
     vi.useRealTimers();
   }
 });
+
+it("reads MR labels only in a project a hands-off label rule names, on smaller pages, and maps them sorted", async () => {
+  const { setHandsOffLabelRepositories, forgetHandsOffLabelRepositories } = await import("../pr-status/hands-off-label-repositories");
+  const labelsOf = (iid: number) => iid === 1 ? ["takeover:maintainer", "bug"] : [];
+  const queries: string[] = [];
+  const run = vi.fn(async (_command: string, args: string[]) => {
+    const endpoint = args.at(-1)!;
+    if (endpoint === "graphql") {
+      const query = args.find((arg) => arg.startsWith("query="))!;
+      queries.push(query);
+      const first = Number(query.match(/first: (\d+), after/)?.[1]);
+      const withLabels = query.includes("labels(first:");
+      const after = query.match(/after: "(\d+)"/)?.[1];
+      const start = after ? Number(after) : 0;
+      const rows = [1, 2, 3, 4, 5].map(fixtureMr).slice(start, start + first);
+      const end = start + rows.length;
+      return JSON.stringify({ data: { project: { mergeRequests: {
+        nodes: rows.map((row) => ({
+          ...graphNode(row),
+          ...(withLabels ? { labels: { nodes: labelsOf(row.iid).map((title) => ({ title })) } } : {}),
+        })),
+        pageInfo: { hasNextPage: end < 5, endCursor: end < 5 ? String(end) : null },
+      } } } });
+    }
+    throw new Error(`Unexpected ${endpoint}`);
+  });
+  const pay = vi.fn(() => true);
+  const refs = [1, 2, 3, 4, 5].map(ref);
+  try {
+    const unread = await new GitLabPrFetcher({ discover, run, tryTakeRequestToken: pay })
+      .pollProject(refs, { takeFirstRequestToken: pay, defer: vi.fn() });
+    expect(unread.every((pr) => pr.labels === undefined)).toBe(true);
+    expect(queries.every((query) => !query.includes("labels("))).toBe(true);
+
+    setHandsOffLabelRepositories([project]);
+    queries.length = 0;
+    const read = await new GitLabPrFetcher({ discover, run, tryTakeRequestToken: pay })
+      .pollProject(refs, { takeFirstRequestToken: pay, defer: vi.fn() });
+    expect(read.find((pr) => pr.number === 1)?.labels).toEqual(["bug", "takeover:maintainer"]);
+    expect(read.find((pr) => pr.number === 2)?.labels).toEqual([]);
+    expect(queries.every((query) => query.includes("labels(first: 20)") && /first: [1-4], after/.test(query))).toBe(true);
+    // The REST detail carries labels too, under the same rule.
+    expect(parseGitLabMr({ ...fixtureMr(1), web_url: fixtureMr(1).web_url, labels: ["z", " a "] }).labels).toEqual(["a", "z"]);
+    forgetHandsOffLabelRepositories();
+    expect(parseGitLabMr({ ...fixtureMr(1), labels: ["z"] }).labels).toBeUndefined();
+  } finally {
+    forgetHandsOffLabelRepositories();
+  }
+});

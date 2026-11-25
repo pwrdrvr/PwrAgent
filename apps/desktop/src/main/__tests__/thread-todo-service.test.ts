@@ -104,6 +104,23 @@ describe("ThreadTodoService", () => {
       note: "One operator Send click: one card-completion commit, no idle or per-event writes; ~8 KB/send, ~0.4 MB/day at 50 sends. Existing correspondence and queue budgets cover delivery." });
   });
 
+  it("saves a proposed hands-off rule only on click, never through an update", async () => {
+    const addForgeHandsOffRule = vi.fn(async () => ({ summary: "t3code now leaves PRs into upstream/t3code labeled takeover:* hands-off" }));
+    const service = createService({ mergePullRequest: vi.fn(), startThread: vi.fn(), addForgeHandsOffRule });
+    const { todo } = service.add({ ...THREAD, input: {
+      title: "Leave taken-over PRs to their maintainers",
+      action: { type: "add_forge_hands_off_rule", repository: "upstream/t3code", label: "takeover:*" },
+    } });
+    expect(addForgeHandsOffRule).not.toHaveBeenCalled();
+    expect(() => service.update({ id: todo.id, action: { pullRequest: "7" } })).toThrow(/cannot be edited/);
+    expect(await service.runAction(todo.id)).toMatchObject({
+      status: "done", result: "t3code now leaves PRs into upstream/t3code labeled takeover:* hands-off",
+    });
+    expect(addForgeHandsOffRule).toHaveBeenCalledWith({
+      sourceBackend: THREAD.backend, sourceThreadId: THREAD.threadId, repository: "upstream/t3code", label: "takeover:*",
+    });
+  });
+
   it("redirects an existing start-thread proposal and leaves a failed send open", async () => {
     const sendMessage = vi.fn().mockRejectedValueOnce(new Error("Owner is offline"))
       .mockResolvedValue({ summary: "Sent to owner" });

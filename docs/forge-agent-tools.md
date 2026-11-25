@@ -123,6 +123,29 @@ approve_merge = "off"
   and CI reruns, never in automations, and never when a rule set `ask`. Main
   accepts only an option it offered for that request.
 
+### Forge Automation gates
+
+A project's Forge Automation decides which pull requests PwrAgent acts on;
+its hands-off rules leave a repository's PRs, or those with a matching label,
+to their maintainers. Agents read the gates and may only propose a change:
+
+- `get_thread_status` returns `prAutomation.forgeAutomation` for a thread in
+  a Directories project: the project, its `handsOff` rules, and each primary
+  PR with the labels last read, the rule and label that match it, and
+  `autoFixOff` when the operator switched Auto-fix off for that PR. Labels
+  are read only for a repository a label rule names; absent `labels` means
+  not read, so a label rule cannot match yet.
+- `add_todo` with `action.type: "add_forge_hands_off_rule"`, a `repository`
+  (`owner/name`) and an optional `label` pattern raises a card that shows the
+  exact rule. **Add rule** saves it to the raising thread's project; an agent
+  never adds, widens or removes a rule itself. A rule already present is a
+  no-op, and a full list (20 rules) refuses the click.
+
+Read a repository's contribution guide for conventions such as maintainers
+labeling a PR `takeover:*`, and propose the rule rather than relying on prose
+instructions: an Auto-fix turn has already started by the time an agent reads
+them.
+
 ## Pull request, merge request and issue tools
 
 One contract for GitHub, GitHub Enterprise and GitLab. Tool names say "pull

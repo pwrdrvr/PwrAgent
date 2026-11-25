@@ -10,7 +10,7 @@ import { researchToolsOffered } from "./agent-tools/pwragent-research-agent-tool
 import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
 import { initializeDesktopAutomationService, prepareDesktopAutomationShutdown, disposeDesktopAutomationService } from "./automations/desktop-automation-service";
 import { initializeScheduledThreadActionService } from "./scheduled-actions/scheduled-thread-action-service";
-import { getThreadTodoService } from "./thread-todos/thread-todo-runtime";
+import { getThreadTodoService, setThreadTodoHandsOffRuleWriter } from "./thread-todos/thread-todo-runtime";
 import { setManagedGrokSignatureRejectionReporter } from "./acp/grok-managed-runtime";
 import { subscribeManagedRuntimeProgress } from "./managed-runtime-progress";
 import { setInboundPreviewSink } from "./messaging/inbound-preview-bus";
@@ -963,6 +963,7 @@ export async function disposeAppServerOwnerServices(): Promise<void> {
   registry?.setThreadPullRequestWatchToolHandler(undefined);
   registry?.setDirectoryGitStatusWriter(undefined);
   registry?.setThreadPrAutoDispatchHandler(undefined);
+  setThreadTodoHandsOffRuleWriter(undefined);
   registry?.setThreadPullRequestDetachHandler(undefined);
   registry?.setThreadPrWatchesPeerHandler(undefined);
   registry?.setThreadPullRequestRefreshHandler(undefined);
@@ -1175,6 +1176,8 @@ export function wireAppServerOwnerServices(): void {
     async (request) =>
       await appServerService.refreshThreadGitWorkingState(request),
   );
+  setThreadTodoHandsOffRuleWriter(async (request) =>
+    await appServerService.addThreadProjectHandsOffRule(request));
   getDesktopBackendRegistry().setThreadPrAutoDispatchHandler({
     preferenceChanged: async (request) =>
       await appServerService.handleThreadPrAutoDispatchPreference(request),

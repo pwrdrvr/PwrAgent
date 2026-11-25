@@ -325,6 +325,7 @@ import {
   type WatchThreadPullRequestResult,
   type ThreadPullRequestWatchListResult,
   type ThreadPullRequestAutomationStatus,
+  type ThreadForgeAutomationGates,
   type ThreadPullRequestReviewReadiness,
   type ThreadPullRequestWatchEvent,
   type ThreadPullRequestWatchSummary,
@@ -367,6 +368,8 @@ import {
   buildProjectPrDependencyNotice,
   buildProjectPrWatchRefusal,
   isDefaultProjectForgeAutomation,
+  MAX_HANDS_OFF_RULES,
+  normalizeHandsOffRules,
   PROJECT_PAUSED_ERROR_CODE,
   projectAllowsAutoFixKind,
   projectAllowsForgePolling,
@@ -5360,7 +5363,40 @@ class DesktopAppServerService {
         : {}),
       ...(watches.length > 0 ? { watches } : {}),
       ...(reviewReadiness.length > 0 ? { reviewReadiness } : {}),
+      ...this.readThreadForgeAutomationGates(params, primaryPrs),
       guidance,
+    };
+  }
+
+  /** `prAutomation.forgeAutomation`: the rules, and what they make of each PR. */
+  private readThreadForgeAutomationGates(
+    ref: { backend: AppServerBackendKind; threadId: string },
+    prs: PrSummary[],
+  ): { forgeAutomation?: ThreadForgeAutomationGates } {
+    const index = getProjectForgeAutomationIndex();
+    const directoryKey = this.threadForgeDirectoryKey(ref);
+    if (!directoryKey) return {};
+    const automation = resolveProjectForgeAutomation(index.get(directoryKey));
+    return {
+      forgeAutomation: {
+        project: index.label(directoryKey),
+        handsOff: (automation.handsOff ?? []).map((rule) => ({ ...rule })),
+        pullRequests: prs.map((pr) => {
+          const match = findHandsOffMatch(automation, pr);
+          return {
+            url: pr.url,
+            ...(pr.labels ? { labels: [...pr.labels] } : {}),
+            ...(match ? {
+              handsOff: {
+                repository: match.rule.repository,
+                ...(match.rule.label ? { label: match.rule.label } : {}),
+                ...(match.label !== undefined ? { matchedLabel: match.label } : {}),
+              },
+            } : {}),
+            ...(pr.autoFixOff ? { autoFixOff: true as const } : {}),
+          };
+        }),
+      },
     };
   }
 
@@ -6968,6 +7004,18 @@ class DesktopAppServerService {
       ...(mergeBranches.length ? { mergeBranches } : {}),
       ...(pr && !pr.baseRefName?.trim() ? { baseUnknown: true } : {}),
     });
+  }
+
+  /**
+   * The Directories project a thread files under, whether or not it stores
+   * a Forge Automation setting (`resolveThreadForgeProject` needs one).
+   */
+  private threadForgeDirectoryKey(ref: { backend: AppServerBackendKind; threadId: string }): string | undefined {
+    const thread = { backend: ref.backend, threadId: ref.threadId };
+    return getProjectForgeAutomationIndex().directoryKeyForThread(
+      thread,
+      () => getDesktopBackendRegistry().getCachedThreadSummary(thread),
+    );
   }
 
   private resolveThreadForgeProject(ref: {
@@ -8587,6 +8635,37 @@ class DesktopAppServerService {
       directoryKey: request.directoryKey,
       collapsed,
     };
+  }
+
+  /**
+   * Add one hands-off rule to the thread's project, as the operator's click
+   * on an agent's proposal card. A rule already there is a no-op; the list's
+   * cap is a refusal, not a silent drop.
+   */
+  async addThreadProjectHandsOffRule(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    repository: string;
+    label?: string;
+  }): Promise<{ summary: string }> {
+    const [rule] = normalizeHandsOffRules([{ repository: request.repository, label: request.label }]);
+    if (!rule) throw new Error("That hands-off rule needs a repository as owner/name.");
+    const index = getProjectForgeAutomationIndex();
+    const directoryKey = this.threadForgeDirectoryKey(request);
+    if (!directoryKey) throw new Error("This thread is in no Directories project, so it has no Forge Automation to add the rule to.");
+    const label = index.label(directoryKey);
+    const current = resolveProjectForgeAutomation(index.get(directoryKey));
+    const existing = current.handsOff ?? [];
+    const described = rule.label ? `PRs into ${rule.repository} labeled ${rule.label}` : `PRs into ${rule.repository}`;
+    const key = (entry: { repository: string; label?: string }) => `${entry.repository}\n${entry.label ?? ""}`.toLowerCase();
+    if (existing.some((entry) => key(entry) === key(rule))) {
+      return { summary: `${label} already leaves ${described} hands-off` };
+    }
+    if (existing.length >= MAX_HANDS_OFF_RULES) {
+      throw new Error(`${label} already has ${MAX_HANDS_OFF_RULES} hands-off rules. Remove one in Forge Automation first.`);
+    }
+    await this.setProjectForgeAutomation({ directoryKey, automation: { ...current, handsOff: [...existing, rule] } });
+    return { summary: `${label} now leaves ${described} hands-off` };
   }
 
   /**

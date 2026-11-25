@@ -226,8 +226,15 @@ Labels cost GraphQL rate-limit points, so the status poll and PR discovery ask
 for them (`...PrLabels`) only for repositories that a label rule names
 (`hands-off-label-repositories.ts`, kept in step by the Forge Automation
 index). A PR whose labels were not read never matches a label rule. A
-repository rule needs no labels. GitLab merge requests do not report labels
-yet, so only repository rules apply to them.
+repository rule needs no labels. GitLab reads merge request labels under the
+same rule: the REST detail carries them, and the GraphQL poll adds
+`labels(first: 20)` only for those projects, on pages of four merge requests
+so the label connection stays inside GitLab's default complexity budget.
+
+Agents read the gates through `get_thread_status`
+(`prAutomation.forgeAutomation`) and propose a rule with an add_todo
+`add_forge_hands_off_rule` card; see
+[forge agent tools](../../../docs/forge-agent-tools.md#forge-automation-gates).
 
 ### Auto-fix off for one pull request
 
