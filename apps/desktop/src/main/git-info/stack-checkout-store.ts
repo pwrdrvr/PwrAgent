@@ -153,7 +153,7 @@ export function createStackCheckoutHints(demand: PrMetadataDemand) {
       const runtime = getSelectedManagedGit();
       return await runPrMetadataFileProbe(async (signal) => {
         const observed = await observeInventoryCheckout(cwd, undefined, signal);
-        if (!observed?.repository || !observed.checkoutRoot || !observed.commonDirectory) return undefined;
+        if (!observed?.repository || !observed.checkoutRoot || !observed.commonDirectory || !observed.gitDirectory) return undefined;
         signal.throwIfAborted();
         const commonDir = observed.dotGitDirectory ? await realpath(observed.commonDirectory) : observed.commonDirectory;
         // Git can skip a nested .git directory when either discovery
@@ -165,6 +165,7 @@ export function createStackCheckoutHints(demand: PrMetadataDemand) {
         return {
           root: observed.checkoutRoot,
           commonDir,
+          gitDir: observed.gitDirectory,
           physicalDirectory: observed.physicalDirectory,
           commonVersion: JSON.stringify([observed.commonVersion, runtime, env.HOME, env.USERPROFILE, env.XDG_CONFIG_HOME, env.SUDO_UID]),
           registeredWorktree: observed.registeredWorktree === true,

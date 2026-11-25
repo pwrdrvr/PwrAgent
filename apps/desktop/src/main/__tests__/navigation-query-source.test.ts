@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -20,10 +20,13 @@ import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query
 import type { NavigationDirectoryGitStatus } from "@pwragent/shared/contracts/navigation";
 import budgets from "./fixtures/navigation-listing-budgets.json";
 import { isolateProcessGitEnvironment, runIsolatedGit } from "./helpers/isolated-git";
+import { StateDb } from "../state/state-db";
+import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 
 const mocks = vi.hoisted(() => {
   const findActiveBindings = vi.fn(async (): Promise<MessagingBindingRecord[]> => []);
   return {
+    profileStore: undefined as SqliteOverlayStore | undefined,
     store: {
       readNavigationPullRequests: vi.fn((): PrSummary[][] => []),
       readNavigationSourceVersion: vi.fn(() => "unchanged"),
@@ -42,16 +45,18 @@ const mocks = vi.hoisted(() => {
     },
   };
 });
-vi.mock("../storage/desktop-overlay-store", () => ({ getDesktopOverlayStore: () => mocks.store }));
+vi.mock("../storage/desktop-overlay-store", () => ({ getDesktopOverlayStore: () => mocks.profileStore ?? mocks.store }));
 vi.mock("../messaging/desktop-messaging-store", () => ({ getDesktopMessagingStore: () => mocks.messaging }));
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: vi.fn() }));
 vi.mock("../app-server/scratch-projects", () => ({ resolveScratchProjectsRoots: () => [] }));
 import { loadLocalNavigationQueryIndex, projectBoundNavigationStacks, projectSelectedStackLayers, readNavigationStackLayers } from "../app-server/navigation-query-source";
-import { StackReader } from "../stacks/stack-reader";
+import { StackReader, readStackClones } from "../stacks/stack-reader";
+import { StackOperationsService } from "../stacks/stack-operations-service";
 import { resolveNavigationWorktreeProjects } from "../app-server/navigation-worktree-projects";
 import { runGitCommand } from "../app-server/git-executable";
+import { configureBundledGit } from "../bundled-git";
 import { gitSubprocessDiagnostics, prGitSubprocessCaller } from "../diagnostics/git-subprocess-diagnostics";
-import { filterStoredDiscoveredPullRequests } from "../pr-status/pr-detection";
+import { filterStoredDiscoveredPullRequests, type PrAttachmentDemand } from "../pr-status/pr-detection";
 import { resolveWorktreeRepositoryDirectory } from "../git-info/worktree-store";
 import { NavigationQueryPool } from "../app-server/navigation-query-pool";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
@@ -1251,3 +1256,185 @@ it("observes a retired Git stack before starting a new viewer lease", async () =
     }
   });
 });
+
+it.each([true, false])("bounds cold and repeated navigation stack discovery with worktree config %s", async (extension) => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-navigation-stack-fleet-")));
+  const restoreGit = isolateProcessGitEnvironment();
+  const source = createSource();
+  const size = Number(process.env.STACK_FLEET_SIZE ?? 10);
+  const primary = path.join(root, "primary");
+  const common = path.join(primary, ".git");
+  const home = path.join(root, "home");
+  const pwragentRoot = path.join(root, "pwragent");
+  const profile = "navigation-fleet";
+  const stateDirectory = path.join(pwragentRoot, "profiles", profile, "state");
+  let db: StateDb | undefined;
+  const clock = vi.spyOn(Date, "now");
+  const starts = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+  try {
+    if (process.env.STACK_FLEET_RESOURCES) configureBundledGit(process.env.STACK_FLEET_RESOURCES);
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
+    vi.stubEnv("XDG_CONFIG_HOME", home);
+    vi.stubEnv("PWRAGENT_HOME", pwragentRoot);
+    vi.stubEnv("PWRAGENT_PROFILE", profile);
+    await Promise.all([mkdir(home), mkdir(stateDirectory, { recursive: true })]);
+    const git = async (cwd: string, ...args: string[]) => (await runGitCommand(cwd, args)).stdout.trim();
+    await git(root, "init", "-b", "main", primary);
+    await git(primary, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+      "commit", "--allow-empty", "-m", "Fixture");
+    if (extension) await git(primary, "config", "extensions.worktreeConfig", "true");
+    await git(primary, "remote", "add", "origin", "https://github.com/fixture/fleet.git");
+    const head = await git(primary, "rev-parse", "HEAD");
+    await git(primary, "update-ref", "refs/remotes/origin/main", head);
+    await git(primary, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+    const worktrees: { cwd: string; alias: string; branch: string }[] = [];
+    for (let index = 0; index < size; index++) {
+      const branch = `topic-${index}`;
+      const cwd = path.join(root, branch);
+      await git(primary, "worktree", "add", "-b", branch, cwd);
+      const alias = path.join(root, `alias-${index}`);
+      await symlink(cwd, alias, "junction");
+      worktrees.push({ cwd, alias, branch });
+    }
+    await writeFile(path.join(common, "gh-stack"), JSON.stringify({
+      schemaVersion: 1, repository: "github.com:fixture/fleet",
+      stacks: [{ trunk: { branch: "main", head }, branches: [{ branch: "topic-0", head, base: head, pullRequest: { number: 1 } }] }],
+    }));
+    const threads = worktrees.map(({ cwd, branch }, index): NavigationThreadSummary => ({
+      id: `thread-${index}`, source: "codex", title: branch, titleSource: "explicit", gitBranch: branch,
+      linkedDirectories: [{ id: cwd, path: primary, worktreePath: cwd, label: branch, kind: "worktree" }],
+      inbox: { inInbox: false },
+    }));
+    const prs = worktrees.map(({ alias, branch }, index): PrSummary[] => [{
+      number: index + 1, provider: "github.com", org: "fixture", repo: "fleet", lifecycleState: "open", state: "passing",
+      url: `https://github.com/fixture/fleet/pull/${index + 1}`, headRefName: branch, baseRefName: "main",
+      headSha: head, baseSha: head, linkedDirectoryPaths: [alias],
+    }]);
+    db = StateDb.open(path.join(stateDirectory, "state.db"), { profileName: profile });
+    const profileStore = new SqliteOverlayStore(db);
+    await Promise.all(threads.map((thread, index) => profileStore.setThreadPullRequests({
+      backend: thread.source, threadId: thread.id, prs: prs[index]!, fetchedAt: Date.now(),
+    })));
+    mocks.profileStore = profileStore;
+    let afterValidation: ((demand?: PrAttachmentDemand) => Promise<void>) | undefined;
+    source.registry.canonicalizeNavigationPullRequests = async (prs, demand, verify = true) => {
+      if (!verify) return prs;
+      const filtered = await filterStoredDiscoveredPullRequests(prs, { demand });
+      if (prs.some(({ number }) => number === 1)) await afterValidation?.(demand);
+      return filtered;
+    };
+    source.listThreads.mockResolvedValue(threads);
+    source.finish();
+
+    const now = Date.now();
+    const observations = [];
+    const read = (signal?: AbortSignal) => loadLocalNavigationQueryIndex({
+      registry: source.registry, callerReason: "renderer-navigation-query", includeStacks: true, signal,
+    });
+    for (const [offset, event] of [
+      [0, undefined],
+      [2_000, "navigation/directoryGitStatus/updated"],
+      [62_000, "pullRequest/status/updated"],
+      [124_000, "thread/backgroundTasks/updated"],
+    ] as const) {
+      clock.mockReturnValue(now + offset);
+      if (event) source.emit(event);
+      starts.mockClear();
+      const started = performance.now();
+      const result = await read();
+      const calls = starts.mock.calls;
+      observations.push({
+        offset, ms: Math.round(performance.now() - started),
+        checkout: calls.filter(([, , purpose]) => purpose === "stack-checkout").length,
+        checkoutPaths: calls.filter(([cwd, [verb], purpose]) => purpose === "stack-checkout" && verb === "rev-parse" && worktrees.some((tree) => tree.cwd === cwd)).length,
+        checkoutAliases: calls.filter(([cwd, [verb], purpose]) => purpose === "stack-checkout" && verb === "rev-parse" && worktrees.some((tree) => tree.alias === cwd)).length,
+        pr: calls.filter(([, , purpose]) => purpose === "pr-remotes" || purpose === "pr-discovery").length,
+      });
+      expect(result.stacks?.[0]?.layers[0]?.thread?.key).toBe("codex:thread-0");
+      expect(result.stacks?.[0]?.layers[0]?.pullRequest?.state).toBe("passing");
+    }
+    if (process.env.STACK_FLEET_SIZE) console.info(JSON.stringify({ size, extension, observations }));
+    // A verified roster plus matching alias identity bounds checkout Git by
+    // the number of clones, even when protected config is sampled anew.
+    expect(observations.map(({ checkoutPaths }) => checkoutPaths)).toEqual([1, 1, 1, 1]);
+    expect(observations.every(({ checkout, checkoutAliases }) => checkout <= 4 && checkoutAliases === 0)).toBe(true);
+    if (process.platform !== "win32") {
+      expect(observations.map(({ pr }) => pr)).toEqual([2, 2, 2, 2]);
+    }
+
+    if (extension && process.platform !== "win32") {
+      const selected = worktrees[0]!;
+      const unrelated = path.join(root, "unrelated");
+      await git(root, "init", "-b", "main", unrelated);
+      await git(unrelated, "remote", "add", "origin", "https://github.com/fixture/unrelated.git");
+      const retarget = async (destination: string) => {
+        await rm(selected.alias);
+        await symlink(destination, selected.alias, "junction");
+      };
+      await retarget(unrelated);
+      afterValidation = async () => {
+        afterValidation = undefined;
+        await retarget(selected.cwd);
+      };
+      source.emit("thread/name/updated");
+      expect((await read()).stacks?.[0]?.layers[0]?.pullRequest?.state).toBe("passing");
+
+      // Edit protected config after the shared remote observation has read
+      // Git. Only the fresh config may supply this layer's attached status.
+      afterValidation = async () => {
+        afterValidation = undefined;
+        await writeFile(path.join(home, ".gitconfig"),
+          '[url "https://github.com/fixture/replaced.git"]\n\tinsteadOf = https://github.com/fixture/fleet.git\n');
+      };
+      source.emit("thread/name/updated");
+      const changed = await read();
+      expect(await git(worktrees[0]!.alias, "remote", "get-url", "origin")).toBe("https://github.com/fixture/replaced.git");
+      expect(changed.stacks?.[0]?.layers[0]?.pullRequest).toMatchObject({ number: 1 });
+      expect(changed.stacks?.[0]?.layers[0]?.pullRequest?.state).toBeUndefined();
+
+      const entered = Promise.withResolvers<void>();
+      const finished = Promise.withResolvers<void>();
+      const controller = new AbortController();
+      afterValidation = async (demand) => {
+        afterValidation = undefined;
+        entered.resolve();
+        await new Promise<void>((resolve) => {
+          if (demand?.signal?.aborted) resolve();
+          else demand?.signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        finished.resolve();
+      };
+      source.emit("thread/name/updated");
+      const cancelled = read(controller.signal);
+      await entered.promise;
+      const stopped = new Error("stack projection cancelled");
+      controller.abort(stopped);
+      await expect(cancelled).rejects.toBe(stopped);
+      await finished.promise;
+      await rm(path.join(home, ".gitconfig"));
+      source.emit("thread/name/updated");
+      expect((await read()).stacks?.[0]?.layers[0]?.pullRequest?.state).toBe("passing");
+    }
+
+    // Recovery has a separate journal gate. An explicit observation always
+    // asks Git about the requested checkout after the background reads.
+    starts.mockClear();
+    await expect(new StackOperationsService().resumeInterrupted(worktrees.map(({ cwd }) => cwd), source.registry)).resolves.toEqual([]);
+    expect(starts.mock.calls.filter(([, , purpose]) => purpose === "stack-checkout")).toHaveLength(0);
+    const selected = worktrees[0]!;
+    await expect(readStackClones([selected.alias])).resolves.toMatchObject([{ root: selected.cwd, commonDir: common }]);
+    expect(starts.mock.calls.filter(([, , purpose]) => purpose === "stack-checkout").map(([cwd, [verb]]) => [cwd, verb]))
+      .toEqual([[selected.alias, "rev-parse"]]);
+  } finally {
+    starts.mockRestore();
+    clock.mockRestore();
+    source.emit("thread/name/updated");
+    mocks.profileStore = undefined;
+    db?.close();
+    configureBundledGit();
+    vi.unstubAllEnvs();
+    restoreGit();
+    await rm(root, { recursive: true, force: true });
+  }
+}, 60_000);

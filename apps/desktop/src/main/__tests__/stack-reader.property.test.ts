@@ -56,7 +56,12 @@ async function writeCatalog(cwd: string, name: string) {
 }
 
 describe("stack checkout demand", () => {
-  it.each(["attached", "detached"])("reuses Git's registered inventory for %s sibling checkouts", async (kind) => {
+  it.each([
+    { kind: "attached", worktreeConfig: false },
+    { kind: "detached", worktreeConfig: false },
+    { kind: "attached", worktreeConfig: true },
+    { kind: "detached", worktreeConfig: true },
+  ])("reuses Git's registered inventory for $kind checkouts with worktree config $worktreeConfig", async ({ kind, worktreeConfig }) => {
     const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-worktree-inventory-")));
     const primary = path.join(sandbox, "primary");
     try {
@@ -67,6 +72,7 @@ describe("stack checkout demand", () => {
       vi.stubEnv("XDG_CONFIG_HOME", home);
       initialize(primary);
       git(primary, "branch", "main");
+      if (worktreeConfig) git(primary, "config", "extensions.worktreeConfig", "true");
       await writeCatalog(primary, "registered");
       const worktrees = await Promise.all(Array.from({ length: 7 }, async (_, index) => {
         const branch = `sibling-${index}`;
@@ -103,6 +109,62 @@ describe("stack checkout demand", () => {
       expect(git(sibling, "symbolic-ref", "--short", "HEAD")).toBe("topic");
       expect(await read()).toBe("codex:sibling-0");
     } finally {
+      vi.unstubAllEnvs();
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a mixed roster live when one worktree gains or loses its own config", async () => {
+    const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-mixed-roster-")));
+    const primary = path.join(sandbox, "primary");
+    const topic = path.join(sandbox, "topic");
+    const alias = path.join(sandbox, "topic-alias");
+    const provenance = path.join(sandbox, "pr-provenance");
+    const home = path.join(sandbox, "home");
+    const starts = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    try {
+      await Promise.all([mkdir(primary), mkdir(home)]);
+      vi.stubEnv("HOME", home);
+      vi.stubEnv("USERPROFILE", home);
+      vi.stubEnv("XDG_CONFIG_HOME", home);
+      initialize(primary);
+      git(primary, "checkout", "-b", "main");
+      git(primary, "config", "extensions.worktreeConfig", "true");
+      git(primary, "worktree", "add", topic, "topic");
+      await Promise.all([symlink(topic, alias, "junction"), symlink(topic, provenance, "junction")]);
+      await writeCatalog(topic, "mixed");
+      const config = path.join(git(topic, "rev-parse", "--absolute-git-dir"), "config.worktree");
+      const sisters = Array.from({ length: 6 }, (_, index) => {
+        const branch = `sister-${index}`;
+        const cwd = path.join(sandbox, branch);
+        git(primary, "worktree", "add", "-b", branch, cwd);
+        return row(cwd, branch);
+      });
+      const attached: PrSummary = { ...inferredPr(9, "topic", "main", provenance), explicitlyAttached: true };
+      const rows = [{ ...row(alias, "topic"), prs: [attached] }, ...sisters];
+      const reader = new StackReader();
+      const read = async () => {
+        starts.mockClear();
+        return (await reader.read(rows, [])).stacks[0]?.layers[0];
+      };
+      const measured = () => starts.mock.calls.filter(([, [verb], purpose]) => purpose === "stack-checkout" && verb === "rev-parse");
+      expect((await read())?.thread?.key).toBe("codex:topic");
+      expect(measured()).toHaveLength(1);
+      await writeFile(config, "[user]\n\tname = Worktree Fixture\n");
+      expect((await read())?.thread?.key).toBe("codex:topic");
+      expect(measured().map(([cwd]) => cwd)).toEqual(expect.arrayContaining([alias, provenance]));
+      expect(measured()).toHaveLength(3);
+      await writeFile(config, "[broken config");
+      const observation = new StackReadObservation({ priority: () => PR_METADATA_PRIORITY.selected });
+      expect(await observation.checkoutLookup(alias)).toBe("unavailable");
+      expect((await read())?.role).toBe("unbound");
+      expect(measured().map(([cwd]) => cwd)).toEqual(expect.arrayContaining([alias]));
+      expect(measured()).toHaveLength(2);
+      await rm(config);
+      expect((await read())?.thread?.key).toBe("codex:topic");
+      expect(measured()).toHaveLength(1);
+    } finally {
+      starts.mockRestore();
       vi.unstubAllEnvs();
       await rm(sandbox, { recursive: true, force: true });
     }

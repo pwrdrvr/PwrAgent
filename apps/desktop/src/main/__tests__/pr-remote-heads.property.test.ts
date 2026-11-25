@@ -5,7 +5,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import * as gitExecutable from "../app-server/git-executable";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
-import { filterStoredDiscoveredPullRequests } from "../pr-status/pr-detection";
+import { createStoredAttachmentObservation, filterStoredDiscoveredPullRequests, type PrAttachmentDemand } from "../pr-status/pr-detection";
 import { clearGitHubRemoteCache } from "../pr-status/git-remote";
 import { readGitRemoteHead, readProvenRemoteHeads } from "../pr-status/pr-remote-heads";
 import { PR_METADATA_PRIORITY, runPrMetadataGit, runPrMetadataProcess } from "../pr-status/pr-metadata-process";
@@ -54,7 +54,7 @@ async function observeGit(cwd: string) {
   return { names, heads };
 }
 
-async function expectDiscoveryMatchesGit(prs: PrSummary[]) {
+async function expectDiscoveryMatchesGit(prs: PrSummary[], demand?: PrAttachmentDemand) {
   const kept: PrSummary[] = [];
   for (const cwd of new Set(prs.map((pr) => pr.linkedDirectoryPaths![0]!))) {
     const { heads, names } = await observeGit(cwd);
@@ -69,7 +69,7 @@ async function expectDiscoveryMatchesGit(prs: PrSummary[]) {
       && !defaults.has(pr.headRefName!)
       && fetchUrls.includes(`https://github.com/${pr.org}/${pr.repo}.git`)));
   }
-  expect(await filterStoredDiscoveredPullRequests(prs)).toEqual(kept);
+  expect(await filterStoredDiscoveredPullRequests(prs, { demand })).toEqual(kept);
   return kept;
 }
 
@@ -137,6 +137,34 @@ it("matches Git as shared HEADs and worktree-specific remotes change across both
   now += 300_001;
   await expectDiscoveryMatchesGit(prs);
 }, 15_000);
+
+it("uses per-checkout Git when a shared remote HEAD traverses worktree-private refs", async () => {
+  const { repository, checkouts } = await fixture();
+  const [east, west] = checkouts.map(({ cwd }) => cwd);
+  const members = new Map<string, string>();
+  for (const { cwd, remote } of checkouts) {
+    await git(cwd, "config", "--worktree", "--remove-section", `remote.${remote}`);
+    const gitDir = await git(cwd, "rev-parse", "--absolute-git-dir");
+    await rm(path.join(gitDir, "config.worktree"), { force: true });
+    members.set(cwd, gitDir);
+  }
+  await git(repository, "update-ref", "refs/remotes/origin/second", "HEAD");
+  const read = () => expectDiscoveryMatchesGit(attachments(checkouts), {
+    storedAttachmentObservation: createStoredAttachmentObservation(async (cwd) => {
+      const gitDir = members.get(cwd);
+      return gitDir ? { root: east!, gitDir } : undefined;
+    }),
+  });
+  await read();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_001);
+  onTestFinished(() => { clock.mockRestore(); });
+  await setRemoteHead(repository, "origin", "refs/bisect/bridge");
+  await git(east!, "symbolic-ref", "refs/bisect/bridge", "refs/remotes/origin/first");
+  await git(west!, "symbolic-ref", "refs/bisect/bridge", "refs/remotes/origin/second");
+  const exact = await read();
+  expect(exact.some((pr) => pr.linkedDirectoryPaths?.[0] === east && pr.headRefName === "second")).toBe(true);
+  expect(exact.some((pr) => pr.linkedDirectoryPaths?.[0] === west && pr.headRefName === "first")).toBe(true);
+});
 
 it("uses Git's reftable answers", async () => {
   const table = await fixture("reftable");
