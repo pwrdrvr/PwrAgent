@@ -7,6 +7,8 @@ import {
   deriveLifecycleState,
   deriveMergeState,
   deriveReviewState,
+  ghFailureLine,
+  ghServerErrorStatus,
   hasChecksStillRunning,
   mergeScopeHint,
   parseGhAuthStatus,
@@ -1128,14 +1130,14 @@ describe("a merge GitHub answers with a 5xx", () => {
   );
   const afterwards = fc.constantFrom("MERGED", "OPEN", "unreadable");
 
-  function fetcherFor(failure: string, state: string, merges: string[][]) {
+  function fetcherFor(failure: string | Error, state: string, merges: string[][]) {
     return new GithubPrFetcher({
       graphqlClient: { fetchPullRequests: vi.fn(), fetchPullRequestsForBranches: vi.fn() },
       discoverGhCommands: async () => ({ selectedCommand: "/fixture/gh" }) as never,
       runGhCommand: async (_command, args) => {
         if (args[0] === "pr" && args[1] === "merge") {
           merges.push(args);
-          throw Object.assign(new Error("exit 1"), { stderr: `${failure}\n` });
+          throw typeof failure === "string" ? Object.assign(new Error("exit 1"), { stderr: `${failure}\n` }) : failure;
         }
         if (args[0] === "pr" && args[1] === "view" && args.includes("state")) {
           if (state === "unreadable") throw Object.assign(new Error("exit 1"), { stderr: "HTTP 502: Bad Gateway" });
@@ -1157,10 +1159,25 @@ describe("a merge GitHub answers with a 5xx", () => {
         expect(message).toContain(`GitHub returned ${code} ${reason}`);
         expect(message).toContain("#3631");
         expect(message).not.toMatch(/[<>]|body:|\\r\\n/);
-        expect(message).toMatch(state === "OPEN" ? /did not merge/ : /could not be read/);
+        // The merge can still land after the read, so the card never says it failed.
+        expect(message).not.toMatch(/did not merge/);
+        expect(message).toMatch(state === "OPEN" ? /had not merged when checked/ : /could not be read/);
       }
       expect(merges).toHaveLength(1);
     }), { numRuns: 60 });
+  });
+
+  it("reads the state before reporting a gh it had to kill", async () => {
+    await fc.assert(fc.asyncProperty(afterwards, async (state) => {
+      const merges: string[][] = [];
+      const killed = Object.assign(new Error("Command failed: gh pr merge"), { killed: true, signal: "SIGTERM", stderr: "" });
+      const merge = fetcherFor(killed, state, merges).mergePullRequest({ pullRequest: url, method: "squash" });
+      if (state === "MERGED") {
+        await expect(merge).resolves.toMatchObject({ mergedUrl: url });
+      } else {
+        await expect(merge).rejects.toThrow(state === "OPEN" ? /within 60 seconds, and it had not merged/ : /within 60 seconds, and its state could not be read/);
+      }
+    }), { numRuns: 10 });
   });
 
   it("keeps a refusal's reason but not an HTML body gh attached", async () => {
@@ -1171,5 +1188,22 @@ describe("a merge GitHub answers with a 5xx", () => {
         .then(() => "", (error: Error) => error.message);
       expect(message).toBe("gh pr merge failed: non-200 OK status code: 405 Method Not Allowed");
     }), { numRuns: 30 });
+  });
+
+  it("reads a refusal's own status, not a 5xx quoted in its body", async () => {
+    await fc.assert(fc.asyncProperty(statuses, fc.constantFrom("405 Method Not Allowed", "422 Unprocessable Entity"), async ([code], refusal) => {
+      const failure = `non-200 OK status code: ${refusal} body: "{\\"message\\":\\"upstream HTTP ${code}\\"}"`;
+      expect(ghServerErrorStatus(failure)).toBeUndefined();
+      const message = await fetcherFor(failure, "OPEN", []).mergePullRequest({ pullRequest: url, method: "squash" })
+        .then(() => "", (error: Error) => error.message);
+      expect(message).toBe(`gh pr merge failed: ${failure}`);
+    }), { numRuns: 20 });
+  });
+
+  it("names a 5xx without its page on every gh read in the merge", () => {
+    fc.assert(fc.property(statuses, htmlBody, ghLine, ([code, reason], body, line) => {
+      const failure = ghFailureLine(`${line(code, reason, body)}\nmore output`);
+      expect(failure).toBe(`GitHub returned ${code} ${reason}, which is usually temporary`);
+    }));
   });
 });
