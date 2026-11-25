@@ -117,6 +117,7 @@ function snapshotOf(resource: ResourceDomain): ResourceCheckoutsSnapshot {
     authorities: buildPreviewAuthorities(NOW),
     resources: [{ ...resource, authorityId: base.authorityId }],
     registerGate: { allowed: true },
+    agentTools: "enabled",
   };
 }
 

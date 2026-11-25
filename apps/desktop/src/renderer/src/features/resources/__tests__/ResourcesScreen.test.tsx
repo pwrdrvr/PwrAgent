@@ -76,6 +76,18 @@ describe("ResourcesScreen", () => {
     expect(screen.queryByTestId("resources-preview-banner")).toBeNull();
   });
 
+  it("says when this profile's agents can't check out, and clears it once they can", async () => {
+    const base = buildPreviewSnapshot(NOW);
+    const { source, publish } = liveSource({ ...base, agentTools: "disabled" });
+    await renderScreen(source);
+    const notice = screen.getByTestId("resources-agent-tools-off");
+    expect(notice).toHaveTextContent(`Agents on the ${base.viewer.profile} profile can't find or reserve resources.`);
+    expect(notice).toHaveTextContent("Settings › Experimental");
+
+    await publish({ ...base, revision: base.revision + 1, agentTools: "enabled" });
+    expect(screen.queryByTestId("resources-agent-tools-off")).toBeNull();
+  });
+
   it("shows a cached busy resource behind an unreachable authority as unreachable, with its request blocked", async () => {
     await renderScreen(liveSource(buildPreviewSnapshot(Date.now())).source);
     expect(within(row("gpu-bench-02")).getByText("Authority unreachable")).toBeInTheDocument();

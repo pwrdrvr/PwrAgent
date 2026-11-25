@@ -313,6 +313,16 @@ export function ResourcesScreen(props: {
           </div>
         ) : null}
 
+        {snapshot?.agentTools === "disabled" ? (
+          <div className="resources-agent-tools-banner" data-testid="resources-agent-tools-off" role="note">
+            <span className="resources-agent-tools-banner__label">Agent checkouts off</span>
+            <span>
+              Agents on the {snapshot.viewer.profile} profile can't find or reserve resources.
+              {" "}Turn on Federation resources in Settings › Experimental. You can still request a checkout yourself.
+            </span>
+          </div>
+        ) : null}
+
         {view.status === "error" ? (
           <div className="resources-error" role="alert">
             <span>

@@ -403,6 +403,7 @@ export function buildPreviewSnapshot(now: number, role: PreviewViewerRole = "ope
     registerGate: role === "operator"
       ? { allowed: true }
       : { allowed: false, reason: "not_authorized", detail: "Only operators with manage permission can register resources." },
+    agentTools: "enabled",
   };
 }
 
