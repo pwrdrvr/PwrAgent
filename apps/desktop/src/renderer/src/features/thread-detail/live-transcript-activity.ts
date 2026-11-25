@@ -344,7 +344,7 @@ function readCommandActionLabel(item: Record<string, unknown>): string | undefin
     const fallbackName = readString(record, "name");
     if (actionType === "read") {
       if (actionPath) {
-        return `Read ${actionPath.split("/").filter(Boolean).pop() ?? actionPath}`;
+        return `Read ${actionPath.split(/[\\/]/u).filter(Boolean).at(-1) ?? actionPath}`;
       }
       if (fallbackName) {
         return /^(?:read|fetched)\b/i.test(fallbackName)

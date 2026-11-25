@@ -1,6 +1,10 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import type { AppServerThreadActivityEntry } from "@pwragent/shared/contracts/normalized-app-server";
+import {
+  buildLiveToolDetails,
+  getNotificationItem,
+} from "../../renderer/src/features/thread-detail/live-transcript-activity";
 import { acpToolUpdateNotifications } from "../acp/acp-live-notifications";
 import {
   AcpSessionReplayNormalizer,
@@ -62,6 +66,30 @@ function antigravityReadFileFrames(params: {
 }
 
 describe("ACP file read and listing normalization", () => {
+  it("keeps a late Grok line range after a location-only start and sparse completion", () => {
+    expectLateReadRange("acp:grok", "/repo/file.ts", "file.ts", {
+      target_file: "/repo/file.ts", offset: 2, limit: 1,
+    }, 2, 2);
+  });
+
+  it("keeps late read ranges in both labels after sparse updates", () => {
+    fc.assert(fc.property(
+      fc.constantFrom("acp:grok", "acp:antigravity"),
+      fc.stringMatching(/^[a-z]{1,12}\.ts$/u),
+      fc.integer({ min: 1, max: 2_000 }),
+      fc.integer({ min: 1, max: 500 }),
+      fc.boolean(),
+      (backendId, fileName, start, limit, includePath) => {
+        const path = `/repo/${fileName}`;
+        const end = start + limit - 1;
+        const rawInput = backendId === "acp:grok"
+          ? { offset: start, limit, ...(includePath ? { target_file: path } : {}) }
+          : { StartLine: start, EndLine: end, ...(includePath ? { Path: path } : {}) };
+        expectLateReadRange(backendId, path, fileName, rawInput, start, end);
+      },
+    ));
+  });
+
   it("names an Antigravity read_file row by its filename instead of its slashless worktree path", () => {
     const target = "/Users/dev/.pwragent/worktrees/ab12/PwrAgnt/docs/local-cpu-checkout.md";
     const [activity] = activities(
@@ -138,33 +166,69 @@ describe("ACP file read and listing normalization", () => {
     });
   });
 
-  it("extracts rawInput.Path for live ACP read notifications even without locations", () => {
-    const target = "/Users/dev/.pwragent/worktrees/ab12/PwrAgnt/docs/local-cpu-checkout.md";
+  it.each([
+    ["/repo/docs/guide.md", "guide.md"],
+    ["C:\\repo\\docs\\guide.md", "guide.md"],
+  ])("displays the live ACP read at %s by filename using rawInput.Path alone", (target, fileName) => {
+    expectLiveReadLabel(target, fileName);
+  });
+
+  it("displays live ACP reads by filename across Windows path forms", () => {
+    fc.assert(fc.property(
+      fc.constantFrom("C:\\", "D:\\", "\\\\server\\share\\", "C:/"),
+      fc.array(fc.stringMatching(/^[a-z]{1,12}$/u), { minLength: 1, maxLength: 5 }),
+      fc.stringMatching(/^[a-z]{1,12}\.md$/u),
+      (root, directories, fileName) => {
+        const separator = root.endsWith("\\") ? "\\" : "/";
+        expectLiveReadLabel(`${root}${[...directories, fileName].join(separator)}`, fileName);
+      },
+    ));
+  });
+
+  function expectLiveReadLabel(target: string, fileName: string): void {
     const [opening] = antigravityReadFileFrames({
       id: "call-live-read",
       path: target,
       includeLocations: false,
     });
-    const notifications = acpToolUpdateNotifications({
+    const [notification] = acpToolUpdateNotifications({
       backendId: "acp:antigravity",
       threadId: sessionId,
       turnId: "turn-1",
-      update: opening!,
+      update: { ...opening, title: fileName },
     });
+    expect(notification?.method).toBe("item/started");
+    const item = getNotificationItem(notification!.params);
+    expect(item?.commandActions).toMatchObject([{ type: "read", path: target }]);
+    expect(buildLiveToolDetails(item!)).toMatchObject([{ kind: "read", label: `Read ${fileName}` }]);
+  }
 
-    expect(notifications).toEqual([
-      expect.objectContaining({
-        method: "item/started",
-        params: expect.objectContaining({
-          item: expect.objectContaining({
-            commandActions: [
-              expect.objectContaining({ type: "read", path: target }),
-            ],
-          }),
-        }),
-      }),
+  function expectLateReadRange(
+    backendId: string,
+    path: string,
+    fileName: string,
+    rawInput: Record<string, unknown>,
+    start: number,
+    end: number,
+  ): void {
+    const toolCallId = "late-range-read";
+    const label = `Read ${fileName} (lines ${start}-${end})`;
+    const normalizer = replay(backendId, [
+      {
+        sessionUpdate: "tool_call", toolCallId, name: "read_file", title: "read_file",
+        kind: "read", status: "in_progress", locations: [{ path }],
+      },
+      { sessionUpdate: "tool_call_update", toolCallId, rawInput },
+      // A repeated location with no input must preserve the richer metadata too.
+      { sessionUpdate: "tool_call_update", toolCallId, locations: [{ path }] },
+      { sessionUpdate: "tool_call_update", toolCallId, status: "completed" },
     ]);
-  });
+    expect(activities(normalizer)).toMatchObject([{
+      summary: label,
+      status: "completed",
+      details: [{ kind: "read", label, path }],
+    }]);
+  }
 
   it("property: ACP read_file calls across backends always name the file and preserve the full path", () => {
     const segment = fc.stringMatching(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,10}$/u);

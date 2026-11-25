@@ -13,17 +13,19 @@ import {
  * canonical path in `rawInput` or `locations`, along with optional line/page
  * bounds (`offset`/`limit`/`pages` for Grok, `StartLine`/`EndLine` for
  * Antigravity). The completing update can omit both the input and the tool
- * identity, so the caller remembers the first read it derives.
+ * identity, so the caller retains the read metadata across updates.
  * `target_file` can also be an http(s) URL, which Grok fetches.
  */
 export type AcpFileRead = {
   path: string;
   label: string;
+  range?: string;
 };
 
 export function readAcpFileRead(
   record: Record<string, unknown>,
   providerTool: AcpProviderTool | undefined,
+  previous?: AcpFileRead,
 ): AcpFileRead | undefined {
   const toolName = providerTool?.name ?? readString(record, "name");
   if (!toolName) {
@@ -31,6 +33,9 @@ export function readAcpFileRead(
   }
   const rawInput = asRecord(record.rawInput);
   if (toolName === "list_dir") {
+    if (previous) {
+      return previous;
+    }
     const path =
       (rawInput
         ? readString(rawInput, "target_directory")
@@ -53,13 +58,15 @@ export function readAcpFileRead(
         ?? readString(rawInput, "Path")
         ?? readString(rawInput, "path")
       : undefined)
+    ?? previous?.path
     ?? readFirstLocationPath(record);
   if (!path) {
     return undefined;
   }
-  const range = rawInput ? readRange(rawInput) : undefined;
+  const range = (rawInput ? readRange(rawInput) : undefined) ?? previous?.range;
   return {
     path,
+    range,
     label: `Read ${targetName(path)}${range ? ` (${range})` : ""}`,
   };
 }

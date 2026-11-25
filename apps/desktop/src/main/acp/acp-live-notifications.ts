@@ -18,7 +18,7 @@ import {
   readAcpWebSearch,
 } from "./acp-command-extraction.js";
 import { sanitizeAcpToolOutput } from "./acp-tool-output.js";
-import { readAcpFileEdit } from "./acp-file-edit.js";
+import { type ReadAcpFileEditOptions, readAcpFileEdit } from "./acp-file-edit.js";
 import { fileBaseName } from "./acp-file-read.js";
 import {
   foldAcpTurnUsage,
@@ -249,7 +249,7 @@ export class AcpLiveToolUpdateResolver {
 
 export function acpToolUpdateNotifications(params: {
   backendId?: string;
-  cwd?: string;
+  cwd?: ReadAcpFileEditOptions["cwd"];
   threadId: string;
   turnId?: string;
   update: Record<string, unknown>;
