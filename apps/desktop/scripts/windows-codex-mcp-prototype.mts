@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { Duplex } from "node:stream";
+import type { McpServerStatusUpdatedNotification } from "@pwrdrvr/codex-app-server-protocol";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { AgentToolMcpServer } from "../src/main/agent-tools/agent-tool-mcp-server";
@@ -182,13 +183,30 @@ async function proofOracle(helper: string, cwd: string) {
 function rpc(runtime: ChildProcess) {
   let id = 0;
   const pending = new Map<number, (value: unknown) => void>();
+  const notifications = new EventEmitter();
   const lines = createInterface({ input: runtime.stdout! });
   lines.on("line", (line) => {
-    const response = JSON.parse(line) as { id?: number };
+    const response = JSON.parse(line) as { id?: number; method?: string; params?: unknown };
     if (response.id !== undefined) pending.get(response.id)?.(response);
+    else if (response.method) notifications.emit(response.method, response.params);
   });
   const send = (message: object) => runtime.stdin!.write(JSON.stringify(message) + "\n");
   return {
+    waitForMcpStartup: (name: string) => new Promise<string | null>((resolve, reject) => {
+      function finish(error: Error | null, threadId: string | null) {
+        clearTimeout(timer);
+        notifications.off("mcpServer/startupStatus/updated", read);
+        if (error) reject(error);
+        else resolve(threadId);
+      }
+      function read(event: McpServerStatusUpdatedNotification) {
+        if (event.name !== name || event.status === "starting") return;
+        const error = event.status === "ready" ? null : new Error(`Codex MCP startup: ${event.status} (${event.failureReason ?? "unknown"})`);
+        finish(error, event.threadId);
+      }
+      const timer = setTimeout(() => finish(new Error("Codex did not report MCP startup"), null), deadline);
+      notifications.on("mcpServer/startupStatus/updated", read);
+    }),
     notify: (method: string) => send({ method }),
     request: <T,>(method: string, params: object): Promise<T> => {
       const requestId = ++id;
@@ -222,18 +240,21 @@ async function realCodex(helper: string, codex: string, cwd: string) {
     appServer.notify("initialized");
     const registered = await owner.server.registerCodexClient({ backend: "codex" });
     const accepting = owner.accept();
+    const ready = appServer.waitForMcpStartup("pwragent_apps");
     const starting = appServer.request<{ thread: { id: string } }>("thread/start", {
       cwd, ephemeral: true, approvalPolicy: "never", sandbox: "read-only",
       config: { mcp_servers: { pwragent_apps: { required: true, enabled: true, ...registered.server } } },
     });
-    const [started] = await Promise.all([starting, accepting]);
+    const [started, readyThreadId] = await Promise.all([starting, ready, accepting]);
     const threadId = started.thread.id;
+    assert.equal(readyThreadId, threadId);
     registered.bindThread(threadId);
-    const inventory = await appServer.request<{ data: Array<{ name: string; tools: Record<string, unknown> }> }>("mcpServerStatus/list", {
-      threadId, detail: "toolsAndAuthOnly",
+    const inventory = await appServer.request<{ data: Array<{ name: string; tools: Record<string, unknown>; toolsError: string | null }> }>("mcpServerStatus/list", {
+      threadId, detail: "toolsAndAuthOnly", limit: 100,
     });
-    const tools = inventory.data.find(({ name }) => name === "pwragent_apps")?.tools;
-    assert(tools && Object.hasOwn(tools, tool), "real Codex must list the owner tool through the protected pipe");
+    const apps = inventory.data.find(({ name }) => name === "pwragent_apps");
+    const rows = inventory.data.map(({ name, tools, toolsError }) => ({ name, tools: Object.keys(tools), toolsError }));
+    assert(apps && Object.hasOwn(apps.tools, tool), `real Codex inventory omitted the owner tool: ${JSON.stringify(rows)}`);
     assert.equal(owner.dispatches(), 0);
     console.log("Real Codex App Server launched the verified relay and discovered the owner tool");
   } finally {
