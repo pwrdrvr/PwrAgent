@@ -49,6 +49,7 @@ import {
   type ResolvedThreadLink,
   type ThreadLinkSource,
 } from "../../lib/thread-links";
+import { inferPipeTables } from "../../lib/markdown-pipe-tables";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { InstanceChip } from "../federation/InstanceGlyph";
 import { AsyncQuestionCard } from "./AsyncQuestionCard";
@@ -864,10 +865,15 @@ function splitMarkdownTableSegment(segment: MessagePartSegment): MessagePartSegm
     return [segment];
   }
 
-  const referenceDefinitions = extractMarkdownReferenceDefinitions(segment.part.text);
-  const blocks = splitMarkdownTableBlocks(segment.part.text);
+  // Messages only: the file viewer and Changelog render a document as GFM
+  // would, so a pipe table without a delimiter row stays text there.
+  const text = inferPipeTables(segment.part.text);
+  const referenceDefinitions = extractMarkdownReferenceDefinitions(text);
+  const blocks = splitMarkdownTableBlocks(text);
   if (blocks.length === 1 && blocks[0]?.type === "text") {
-    return [segment];
+    return text === segment.part.text
+      ? [segment]
+      : [{ type: "text", part: { ...segment.part, text } }];
   }
 
   const segments: MessagePartSegment[] = [];

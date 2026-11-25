@@ -1819,6 +1819,46 @@ describe("TranscriptList", () => {
     expect(screen.getByText("Follow-up prose should not inherit", { exact: false })).toBeInTheDocument();
   });
 
+  it("draws an agent message's pipe rows that have no delimiter row as a table", () => {
+    const { container } = render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-pipe-rows",
+            role: "user",
+            text: [
+              "Cold and warm matched in the same-workload A/B fixture:",
+              "MRs/repos | attempts base→head | peak | fixture bytes | simulated ms",
+              "1/1 | 5→1 | 3→1 | 4,278→1,767 | 50→25",
+              "40/1 | 200→1 | 3→1 | 171,616→28,404 | 1,675→25",
+              "400/4 | 2,000→4 | 3→1 | 1,717,088→277,800 | 16,675→100",
+              "The original research-derived fixture measured the same reduction.",
+            ].join("\n"),
+            origin: {
+              kind: "agent",
+              sourceThread: { backend: "codex", threadId: "source-thread" },
+            },
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const table = container.querySelector("table");
+    expect(table).toBeInTheDocument();
+    expect(
+      [...table!.querySelectorAll("th")].map((cell) => cell.textContent),
+    ).toEqual(["MRs/repos", "attempts base→head", "peak", "fixture bytes", "simulated ms"]);
+    expect(table!.querySelectorAll("tbody tr")).toHaveLength(3);
+    expect(table).not.toHaveTextContent("Cold and warm matched");
+    expect(table).not.toHaveTextContent("The original research-derived fixture");
+    expect(screen.getByText("The original research-derived fixture", { exact: false }))
+      .toBeInTheDocument();
+  });
+
   it("keeps a trailing heading and separators with its wide table split block", async () => {
     const copyText = vi.fn(async () => undefined);
     const tableBlock = `## Quick matrix
