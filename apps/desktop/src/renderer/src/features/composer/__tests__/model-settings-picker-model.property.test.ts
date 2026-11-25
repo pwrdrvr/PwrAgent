@@ -178,7 +178,7 @@ describe("model settings picker rules", () => {
     ));
   });
 
-  it("keeps the composer panel's foot over the composer, rising with it and never dropping", () => {
+  it("keeps the composer panel's foot over the toolbar, rising with it and never dropping", () => {
     fc.assert(fc.property(
       fc.integer({ min: 0, max: 1600 }),
       fc.array(fc.integer({ min: 0, max: 1600 }), { maxLength: 12 }),
@@ -187,10 +187,10 @@ describe("model settings picker rules", () => {
         expect(foot).toBe(openedAt - 8);
         for (const shelfTop of shelves) {
           const next = heldPanelFoot({ held: foot, shelfTop });
-          // Never over the composer, never lower than it was.
+          // Never over the toolbar, never lower than it was.
           expect(next).toBeLessThanOrEqual(shelfTop - 8);
           expect(next).toBeLessThanOrEqual(foot);
-          // And it moves only when the composer has reached it.
+          // And it moves only when the toolbar has reached it.
           if (shelfTop - 8 >= foot) expect(next).toBe(foot);
           foot = next;
         }

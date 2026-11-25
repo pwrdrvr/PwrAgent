@@ -139,10 +139,10 @@ export function heldPanelOffset(params: {
 
 /**
  * The bottom edge of the panel opened above the composer, in window
- * coordinates. It sits a `gap` over the composer's top (`shelfTop`), so it
- * never covers the prompt or the toolbar's chips, and holds where it opened
- * (`held`) while picks rearrange the toolbar. It rises only when the composer
- * grows up into it, and never drops back.
+ * coordinates. It sits a `gap` over the toolbar's top row (`shelfTop`), so it
+ * never covers the chips, and holds where it opened (`held`) while picks
+ * rearrange the toolbar. It rises only when the toolbar grows up into it,
+ * and never drops back.
  */
 export function heldPanelFoot(params: { held?: number; shelfTop: number; gap?: number }): number {
   const clear = params.shelfTop - (params.gap ?? 8);

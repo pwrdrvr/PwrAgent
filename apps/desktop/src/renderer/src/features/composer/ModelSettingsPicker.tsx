@@ -196,13 +196,14 @@ export function ModelSettingsPicker(props: ModelSettingsPickerProps) {
         : next);
       return;
     }
-    // Above the composer: it opens in line with the pill, over the whole
-    // composer, then stays put while it is open. A pick can change the chips
+    // Above the composer: it opens in line with the pill, over the toolbar's
+    // top row, then stays put while it is open. A pick can change the chips
     // before the pill (the access mode, the work mode) and wrap the toolbar
     // onto another row; a panel hung from the pill slid sideways or dropped
     // under the pointer choosing in it, and one held over the pill covered
     // chips the toolbar moved up under it.
-    const shelf = wrapperRef.current?.closest<HTMLElement>(".composer")?.getBoundingClientRect().top ?? trigger.top;
+    const shelf = wrapperRef.current?.closest<HTMLElement>(".composer__setup")?.getBoundingClientRect().top
+      ?? trigger.top;
     const foot = heldPanelFoot({ held: anchorRef.current?.foot, shelfTop: shelf });
     const anchor = anchorRef.current = { left: anchorRef.current?.left ?? trigger.left, foot };
     const offset = heldPanelOffset({
@@ -228,8 +229,8 @@ export function ModelSettingsPicker(props: ModelSettingsPickerProps) {
     if (!open) return undefined;
     const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(place);
     if (panelRef.current) observer?.observe(panelRef.current);
-    // The composer can grow up into an open panel, which then rises.
-    const shelf = portalled ? null : wrapperRef.current?.closest<HTMLElement>(".composer");
+    // The toolbar can grow up into an open panel, which then rises.
+    const shelf = portalled ? null : wrapperRef.current?.closest<HTMLElement>(".composer__setup");
     if (shelf) observer?.observe(shelf);
     window.addEventListener("resize", place);
     if (portalled) window.addEventListener("scroll", place, true);

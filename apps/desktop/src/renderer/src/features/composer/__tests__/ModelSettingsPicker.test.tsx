@@ -133,8 +133,8 @@ describe("ModelSettingsPicker while disabled", () => {
 });
 
 /**
- * Above the composer the panel opens in line with its pill, over the whole
- * composer, then stays put. A pick can widen or narrow the chips before the
+ * Above the composer the panel opens in line with its pill, over the
+ * toolbar's top row (close to the pill, not past the prompt), then stays put. A pick can widen or narrow the chips before the
  * pill (a provider with another access mode) or wrap the toolbar so the pill
  * changes rows. A panel hung from the pill slid sideways and dropped under
  * the pointer choosing in it; one held over the pill covered the chips when
@@ -146,9 +146,9 @@ describe("ModelSettingsPicker composer panel position", () => {
   });
 
   function renderInComposer() {
-    const at = { pillLeft: 300, pillTop: 600, composerTop: 480 };
+    const at = { pillLeft: 300, pillTop: 600, toolbarTop: 556 };
     const picker = (label: string) => (
-      <form className="composer">
+      <div className="composer__setup">
         <ModelSettingsPicker
           model={{
             value: "opus", label, kind: "claude",
@@ -156,13 +156,13 @@ describe("ModelSettingsPicker composer panel position", () => {
             onChange: () => undefined,
           }}
         />
-      </form>
+      </div>
     );
     const { container, rerender } = render(picker("Opus 5.5"));
     const pill = screen.getByRole("button", { name: /^Model settings/ });
     vi.spyOn(pill, "getBoundingClientRect").mockImplementation(() => rect(at.pillLeft, at.pillTop, 120, 24));
-    vi.spyOn(container.querySelector("form")!, "getBoundingClientRect")
-      .mockImplementation(() => rect(0, at.composerTop, 760, at.pillTop + 40 - at.composerTop));
+    vi.spyOn(container.querySelector(".composer__setup")!, "getBoundingClientRect")
+      .mockImplementation(() => rect(0, at.toolbarTop, 760, at.pillTop + 26 - at.toolbarTop));
     const move = async (next: Partial<typeof at>, label: string) => {
       Object.assign(at, next);
       await act(async () => { rerender(picker(label)); });
@@ -178,22 +178,25 @@ describe("ModelSettingsPicker composer panel position", () => {
     return { at, pill, move, placed };
   }
 
-  it("opens over the composer and holds there while the pill moves under it", async () => {
+  it("opens over the toolbar and holds there while the pill moves under it", async () => {
     const { at, pill, move, placed } = renderInComposer();
     await act(async () => { fireEvent.click(pill); });
     const panel = screen.getByRole("dialog", { name: "Model settings" });
-    // A gap over the composer's top, not over the pill's.
-    expect(placed(panel)).toEqual({ left: 300, foot: 472 });
-    expect(panel.style.maxHeight).toBe("464px");
+    // A gap over the toolbar's top row, not over the pill's own row.
+    expect(placed(panel)).toEqual({ left: 300, foot: 548 });
+    expect(panel.style.maxHeight).toBe("540px");
 
     for (const [pillLeft, pillTop, label] of [
       [420, 600, "Sonnet 5.5"],
       [180, 644, "Opus 5.5"],
       [24, 644, "Sonnet 5.5"],
-      [300, 600, "Opus 5.5"],
+      // Up onto the toolbar's top row: still clear of the panel.
+      [300, 556, "Opus 5.5"],
+      [300, 600, "Sonnet 5.5"],
     ] as const) {
       await move({ pillLeft, pillTop }, label);
-      expect(placed(panel)).toEqual({ left: 300, foot: 472 });
+      expect(placed(panel)).toEqual({ left: 300, foot: 548 });
+      expect(placed(panel).foot).toBeLessThan(pillTop);
     }
 
     // Closed and opened again, it opens in line with the pill where it is now.
@@ -201,16 +204,16 @@ describe("ModelSettingsPicker composer panel position", () => {
     await act(async () => { fireEvent.click(pill); });
     expect(screen.queryByRole("dialog")).toBeNull();
     await act(async () => { fireEvent.click(pill); });
-    expect(placed(screen.getByRole("dialog"))).toEqual({ left: 420, foot: 472 });
+    expect(placed(screen.getByRole("dialog"))).toEqual({ left: 420, foot: 548 });
   });
 
-  it("rises when the composer grows up into it, and never drops back", async () => {
+  it("rises when the toolbar grows up into it, and never drops back", async () => {
     const { pill, move, placed } = renderInComposer();
     await act(async () => { fireEvent.click(pill); });
     const panel = screen.getByRole("dialog", { name: "Model settings" });
-    await move({ composerTop: 436 }, "Sonnet 5.5");
-    expect(placed(panel).foot).toBe(428);
-    await move({ composerTop: 480 }, "Opus 5.5");
-    expect(placed(panel).foot).toBe(428);
+    await move({ toolbarTop: 512 }, "Sonnet 5.5");
+    expect(placed(panel).foot).toBe(504);
+    await move({ toolbarTop: 556 }, "Opus 5.5");
+    expect(placed(panel).foot).toBe(504);
   });
 });
