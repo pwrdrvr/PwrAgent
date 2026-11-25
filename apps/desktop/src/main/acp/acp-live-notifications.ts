@@ -8,6 +8,7 @@ import {
   readAcpTopicTitle,
 } from "./acp-session-normalizer";
 import {
+  type AcpProviderTool,
   isGenericShellToolTitle,
   readAcpMcpToolName,
   readAcpProviderTool,
@@ -20,7 +21,7 @@ import {
 } from "./acp-command-extraction.js";
 import { sanitizeAcpToolOutput } from "./acp-tool-output.js";
 import { type ReadAcpFileEditOptions, readAcpFileEdit } from "./acp-file-edit.js";
-import { fileBaseName, readAcpFileRead } from "./acp-file-read.js";
+import { type AcpFileRead, fileBaseName, readAcpFileRead } from "./acp-file-read.js";
 import {
   foldAcpTurnUsage,
   readAcpUsageEnvelope,
@@ -114,11 +115,20 @@ function readFiniteNumber(
  * This is presentation state only. Raw ACP updates still go to the replay
  * normalizer/rollout store unchanged, which keeps the transcript inspectable.
  */
+/**
+ * Normalized file-read metadata attached to resolved live updates so live
+ * labels preserve prior paths and line bounds across sparse or nullish
+ * follow-up updates the same way `AcpSessionReplayNormalizer` does.
+ */
+const resolvedFileReads = new WeakMap<Record<string, unknown>, AcpFileRead>();
+
 export class AcpLiveToolUpdateResolver {
   private readonly activeUpdates = new Map<string, Record<string, unknown>>();
   private anonymousToolSequence = 0;
   private readonly deferredTerminalUpdateKeys = new Set<string>();
   private readonly terminalUpdates = new Map<string, Record<string, unknown>>();
+  private readonly providerTools = new Map<string, AcpProviderTool>();
+  private readonly fileReads = new Map<string, AcpFileRead>();
 
   resolve(params: {
     backendId: string;
@@ -160,6 +170,31 @@ export class AcpLiveToolUpdateResolver {
       // enrich its title/input, but must never turn the existing row back into
       // an in-progress operation.
       resolved.status = normalizeAcpToolStatus(readString(terminal, "status"));
+    }
+    const rawName = readString(params.update, "name");
+    const declared =
+      readAcpProviderTool(params.update)
+      ?? (rawName === "read_file"
+        ? { name: rawName, kind: "read" }
+        : rawName === "list_dir"
+          ? { name: rawName, kind: "list" }
+          : undefined);
+    if (declared) {
+      const previousTool = this.providerTools.get(key);
+      this.providerTools.set(key, {
+        ...previousTool,
+        ...(declared.name ? { name: declared.name } : {}),
+        ...(declared.label ? { label: declared.label } : {}),
+        ...(declared.kind ? { kind: declared.kind } : {}),
+      });
+    }
+    const providerTool = this.providerTools.get(key);
+    const previousFileRead = this.fileReads.get(key);
+    const fileRead = readAcpFileRead(params.update, providerTool, previousFileRead)
+      ?? previousFileRead;
+    if (fileRead) {
+      this.fileReads.set(key, fileRead);
+      resolvedFileReads.set(resolved, fileRead);
     }
     if (isTerminalToolStatus(resolved.status)) {
       this.activeUpdates.delete(key);
@@ -224,12 +259,24 @@ export class AcpLiveToolUpdateResolver {
         this.terminalUpdates.delete(key);
       }
     }
+    for (const key of this.providerTools.keys()) {
+      if (key.startsWith(`${prefix}\0`)) {
+        this.providerTools.delete(key);
+      }
+    }
+    for (const key of this.fileReads.keys()) {
+      if (key.startsWith(`${prefix}\0`)) {
+        this.fileReads.delete(key);
+      }
+    }
   }
 
   clear(): void {
     this.activeUpdates.clear();
     this.deferredTerminalUpdateKeys.clear();
     this.terminalUpdates.clear();
+    this.providerTools.clear();
+    this.fileReads.clear();
   }
 
   private rememberTerminalUpdate(key: string, update: Record<string, unknown>): void {
@@ -244,6 +291,8 @@ export class AcpLiveToolUpdateResolver {
       }
       this.terminalUpdates.delete(oldest);
       this.deferredTerminalUpdateKeys.delete(oldest);
+      this.providerTools.delete(oldest);
+      this.fileReads.delete(oldest);
     }
   }
 }
@@ -474,7 +523,8 @@ function liveItemForAcpToolUpdate(
     };
   }
 
-  const fileRead = readAcpFileRead(update, readAcpProviderTool(update));
+  const fileRead = resolvedFileReads.get(update)
+    ?? readAcpFileRead(update, readAcpProviderTool(update));
   const webFetchUrl = readAcpWebFetchUrl(update);
   const invocation = readAcpToolInvocation(update);
   const command = rawCommand ?? invocation ?? title;
@@ -643,11 +693,11 @@ function mergeAcpLiveToolUpdates(
   update: Record<string, unknown>,
 ): Record<string, unknown> {
   if (!previous) {
-    return update;
+    return { ...update };
   }
 
   const merged = { ...previous, ...update };
-  for (const key of ["kind", "title", "name", "command"] as const) {
+  for (const key of ["kind", "title", "name", "command", "path"] as const) {
     const previousValue = readString(previous, key);
     const updateValue = readString(update, key);
     if (
@@ -655,17 +705,45 @@ function mergeAcpLiveToolUpdates(
       && (!updateValue
         || (key === "kind"
           ? isGenericAcpToolKind(updateValue)
-          : isGenericAcpToolMetadata(updateValue)))
+          : key !== "path" && isGenericAcpToolMetadata(updateValue)))
     ) {
       merged[key] = previous[key];
     }
+  }
+  if (readFirstLocationPath(previous) && !readFirstLocationPath(update)) {
+    merged.locations = previous.locations;
   }
   for (const key of ["_meta", "rawInput", "rawOutput"] as const) {
     const previousRecord = readRecord(previous[key]);
     const updateRecord = readRecord(update[key]);
     if (previousRecord && updateRecord) {
-      merged[key] = { ...previousRecord, ...updateRecord };
+      merged[key] = mergeRecordPreservingDefined(previousRecord, updateRecord, key === "_meta");
+    } else if (previousRecord) {
+      merged[key] = previousRecord;
     }
+  }
+  return merged;
+}
+
+function mergeRecordPreservingDefined(
+  previous: Record<string, unknown>,
+  update: Record<string, unknown>,
+  mergeNestedRecords: boolean,
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...previous };
+  for (const [entryKey, value] of Object.entries(update)) {
+    if (value === null || value === undefined) {
+      continue;
+    }
+    if (mergeNestedRecords) {
+      const previousNested = readRecord(previous[entryKey]);
+      const updateNested = readRecord(value);
+      if (previousNested && updateNested) {
+        merged[entryKey] = mergeRecordPreservingDefined(previousNested, updateNested, true);
+        continue;
+      }
+    }
+    merged[entryKey] = value;
   }
   return merged;
 }
