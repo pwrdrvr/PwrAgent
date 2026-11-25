@@ -1150,6 +1150,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         overlays[key] = { ...child, parentThreadInstanceId: source.parentThreadInstanceId };
       }
     }
+    const activePrAutoDispatchKeys = this.attachNavigationPrAutoDispatchClaims(overlays);
     const launchpads: Record<string, DirectoryLaunchpadOverlayState> = {};
     const launchpadPresenceKeys = new Set<string>();
     const drafts = this.stateDb.raw.prepare(`
@@ -1198,7 +1199,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         // agreement with the saved relationships.
         return { ...thread, parentThreadId: overlay?.parentThreadId,
           parentThreadBackend: overlay?.parentThreadBackend, parentThreadInstanceId: overlay?.parentThreadInstanceId,
-          nativeSubAgentCount: nativeCounts.get(key) ?? 0 };
+          nativeSubAgentCount: nativeCounts.get(key) ?? 0,
+          ...(activePrAutoDispatchKeys.has(key) ? { prAutoDispatchActive: true as const } : {}) };
       });
     const directoryOverlays = this.readAllDirectoryOverlaysSync();
     const directories = buildDirectorySummaries({ threads, launchpadsByKey: launchpads, launchpadPresenceKeys,
@@ -7101,6 +7103,34 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       rows.forEach((row, index) => entries.push([row.id, overlays[index]]));
     }
     return Object.fromEntries(entries);
+  }
+
+  /**
+   * Auto-fix state for the navigation index's thread rows. The compact
+   * overlay projection is cached by `threads` writes, and a claim lives in
+   * its own table, so this reads claims on every index build. A pending
+   * claim becomes the row's cancellable `prAutoDispatchPending`, as in the
+   * full read. The returned keys also include a claim being tried (between
+   * a dispatch's claim and its busy refund), which marks the row active so
+   * its Scheduled chip does not drop for a refresh that lands mid-attempt.
+   */
+  private attachNavigationPrAutoDispatchClaims(overlays: Record<string, ThreadOverlayState | undefined>): ReadonlySet<string> {
+    // At most one active claim per thread (idx_pr_auto_dispatch_active_thread),
+    // and few at all: read them, not one lookup per listed thread.
+    const claims = this.stateDb.raw.prepare(`
+      SELECT backend, thread_id, status, payload FROM pr_auto_dispatch_claims
+      WHERE status IN ('pending', 'dispatching')
+    `).all() as Array<{ backend: ThreadOverlayState["backend"]; thread_id: string; status: string; payload: string }>;
+    const active = new Set<string>();
+    for (const claim of claims) {
+      const key = buildThreadIdentityKey(claim.backend, claim.thread_id);
+      const overlay = overlays[key];
+      if (!overlay) continue;
+      active.add(key);
+      const record = claim.status === "pending" ? parsePrAutoDispatchPendingRecord(claim.payload) : undefined;
+      if (record) overlays[key] = { ...overlay, prAutoDispatchPending: record.pending };
+    }
+    return active;
   }
 
   /**

@@ -13445,9 +13445,10 @@ describe("useThreadNavigation", () => {
     expect(firstRemoteThread?.prAutoDispatchEnabled).toBe(false);
     expect(firstRemoteThread?.prAutoDispatchPending).toBeUndefined();
     expect(localThread?.prAutoDispatchEnabled).toBe(true);
-    expect(localThread?.prAutoDispatchPending).toBeUndefined();
+    // Owner rows carry each thread's own pending repair.
+    expect(localThread?.prAutoDispatchPending?.fingerprint).toBe("local-pending");
     expect(secondRemoteThread?.prAutoDispatchEnabled).toBe(true);
-    expect(secondRemoteThread?.prAutoDispatchPending).toBeUndefined();
+    expect(secondRemoteThread?.prAutoDispatchPending?.fingerprint).toBe("second-owner-pending");
     // Pending dispatch configuration is independently resolved for selection,
     // and an event for the first owner must not clear either other owner.
     act(() => result.current.selectThread(localThread!));

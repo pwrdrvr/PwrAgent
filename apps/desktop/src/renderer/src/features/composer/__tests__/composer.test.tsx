@@ -2532,6 +2532,33 @@ describe("Composer", () => {
     });
   });
 
+  it("offers no Send now or Cancel for a PR repair that is only being tried", () => {
+    // A row refreshed mid-attempt: Scheduled in the sidebar, but the claim
+    // is no longer pending, so neither action could act on it.
+    render(
+      <Composer
+        backgroundPrPollingEnabled
+        disabled={false}
+        onCancelThreadPrAutoDispatch={vi.fn(async () => undefined)}
+        onSendThreadPrAutoDispatchNow={vi.fn(async () => undefined)}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Fix CI",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          prAutoDispatchEnabled: true,
+          prAutoDispatchActive: true,
+        }}
+      />,
+    );
+
+    expect(screen.queryByLabelText("Scheduled PR auto-fix")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send now" })).not.toBeInTheDocument();
+  });
+
   it("renders a newly received PR repair countdown from the current clock", () => {
     const mountedAt = new Date("2026-08-01T12:00:00.000Z").getTime();
     vi.useFakeTimers();
