@@ -52,7 +52,7 @@ function mountList(
   region.className = "sidebar__scroll-region";
   region.style.overflow = "hidden";
   region.innerHTML = `
-    <div class="directory-groups" style="overflow-y: auto">
+    <div class="directory-groups sidebar-list--dense" style="overflow-y: auto">
       <section class="directory-row" data-directory-key="pwrgit">
         <div class="directory-row__header" data-header="pwrgit"></div>
         ${options?.duplicateTop === undefined ? "" : `
@@ -339,10 +339,20 @@ describe("SelectedThreadDock", () => {
       expect(dock()).toBeNull();
     });
 
-    it("hands focus to the row once a reveal brings it in", () => {
+    it.each([false, true])("focuses a visible row after a keyboard reveal (offscreen alias: %s)", (alias) => {
       const region = mountList(900, { hidden: true });
       const view = renderDock(region, "open", { directoryKeys: ["pwragent"] });
+      dock()!.focus();
       act(() => dock()!.click());
+      if (alias) {
+        region.querySelector("[data-directory-key='pwrgit']")!.insertAdjacentHTML(
+          "beforeend",
+          `<div class="thread-row-shell" data-thread-key="open">
+            <div class="thread-row" data-row="alias"><button class="thread-row__open"></button></div>
+          </div>`,
+        );
+        place(region.querySelector("[data-row='alias']")!, -150, 60);
+      }
       region.querySelector("[data-directory-key='pwragent']")!.insertAdjacentHTML(
         "beforeend",
         `<div class="thread-row-shell" data-thread-key="open" data-thread-directory-key="pwragent">

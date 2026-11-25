@@ -36,7 +36,7 @@ const DRAGGING = ".is-pointer-dragging, .is-folding-directories";
 const STICKY_MEMBERS = `${STICKY_HEADER}, ${STICKY_DIVIDER}`;
 const TARGET_MEMBERS = ".thread-row-shell, .thread-row, .directory-row, .directory-row__header";
 const DOCK_MEMBERS = ".selected-thread-dock, .selected-thread-dock-band";
-const LANE = ".sidebar-list--dense, .directory-groups";
+const LANE = ".sidebar-list--dense";
 const LANE_CONTENT = ".thread-row-shell > .thread-row, .directory-row__header";
 // The top dock's band: the card, 6px of plate above it and 6px below.
 const DOCK_PLATE_PX = 6;
@@ -174,7 +174,8 @@ function measure(
   holders: Holders,
   elements: DockElements,
   reserve: number,
-): { state: DockState; row: HTMLElement | undefined } | undefined {
+  revealPending: boolean,
+): { state?: DockState; row?: HTMLElement } | undefined {
   // A drag reads the list's edges for auto-scroll and drop targets.
   elements.dragging ??= lane.matches(DRAGGING) || lane.querySelector(DRAGGING) !== null;
   if (elements.dragging) {
@@ -233,8 +234,14 @@ function measure(
   // A row in view speaks for itself, and so does what holds a hidden row: a
   // closed project that holds the open thread draws its header selected.
   // Only a thread the lens lists nowhere docks with nothing out of view.
-  if (!placement && (rows.length > 0 || held.some((element, index) =>
-    speaksForThread(element) && !selectedThreadDockPlacement([extents[index]!], band)))) {
+  if (!placement && rows.length > 0) {
+    // The row that came into view may be a later alias of the same thread.
+    return revealPending && band.bottom > band.top
+      ? { row: rows.find((_, index) => !selectedThreadDockPlacement([extents[index]!], band)) }
+      : undefined;
+  }
+  if (!placement && held.some((element, index) =>
+    speaksForThread(element) && !selectedThreadDockPlacement([extents[index]!], band))) {
     return undefined;
   }
   const edge = placement?.edge ?? "bottom";
@@ -455,31 +462,31 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
 
   const sync = useCallback((lane?: HTMLElement, elements?: DockElements, inFrame = false): void => {
     const region = regionRef.current;
+    const revealPending = focusOnArrivalRef.current !== undefined && focusOnArrivalRef.current === threadKey;
     const measured = region && lane && threadKey && elements
       ? measure(region, lane, threadKey, {
         ancestorThreadKeys: ancestorsKey ? ancestorsKey.split("\n") : [],
         directoryKeys: directoriesKey ? directoriesKey.split("\n") : [],
-      }, elements, topDockReserve(region))
+      }, elements, topDockReserve(region), revealPending)
       : undefined;
-    rowRef.current = measured?.row;
-    updateReserve(measured?.state.edge);
+    const next = measured?.state;
+    rowRef.current = next ? measured?.row : undefined;
+    updateReserve(next?.edge);
     if (focusOnArrivalRef.current !== undefined) {
-      const arrived = region && focusOnArrivalRef.current === threadKey && !measured
-        ? elements?.rows?.[0]
-        : undefined;
-      if (arrived || focusOnArrivalRef.current !== threadKey) {
+      const arrived = revealPending && !next ? measured?.row : undefined;
+      if (arrived || !revealPending) {
         focusOnArrivalRef.current = undefined;
       }
-      // Only from <body>, where the unmounted dock left it.
-      if (arrived && document.activeElement === document.body) {
+      // Transfer focus from the keyboard-activated card or from <body>
+      // when the card has already unmounted.
+      if (arrived && (document.activeElement === cardRef.current || document.activeElement === document.body)) {
         arrived.querySelector<HTMLElement>(".thread-row__open")?.focus({ preventScroll: true });
       }
     }
     // Compared here, not in a state updater: an updater that returns the
     // same state still schedules a render, and this runs on every scroll
     // frame and every list mutation.
-    if (!sameDock(dockRef.current, measured?.state)) {
-      const next = measured?.state;
+    if (!sameDock(dockRef.current, next)) {
       dockRef.current = next;
       // When geometry changes the edge, publish the card in this frame.
       // Ordinary scroll and child-page measurements schedule no React work.
