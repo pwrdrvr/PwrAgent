@@ -72,8 +72,9 @@ async function sampleConfig(cwd: string, checkout: LinkedCheckout, inputs: NonNu
     const includes = [...sources.includes].filter((file) => !roots.paths.has(file));
     const trackedPaths = new Set([...roots.paths, ...includes]);
     if ([...sources.origins].some((file) => !trackedPaths.has(file))) return { exact };
-    let watched = includes.length ? undefined
-      : Promise.resolve<{ files: typeof roots; sampleOrder: number } | undefined>({ files: roots, sampleOrder: result.sampleOrder });
+    type ConfigWitness = { files: typeof roots; sampleOrder: number };
+    let completed: ConfigWitness | undefined = includes.length ? undefined : { files: roots, sampleOrder: result.sampleOrder };
+    let confirming: Promise<ConfigWitness | undefined> | undefined;
     // Only a sibling needs the second Git read. Watch the discovered includes
     // before confirming the seed's config with Git again.
     const confirmIncludes = async (reader: PrMetadataDemand) => {
@@ -81,15 +82,17 @@ async function sampleConfig(cwd: string, checkout: LinkedCheckout, inputs: NonNu
         const files = await observePrCheckoutConfigFiles(cwd, [...inputs.paths, ...includes], reader);
         if (!files || files.gitDir !== checkout.gitDir) return undefined;
         const confirmed = await read(reader);
-        return !confirmed.stderr && confirmed.stdout === result.stdout ? { files, sampleOrder: confirmed.sampleOrder } : undefined;
+        if (confirmed.stderr || confirmed.stdout !== result.stdout) return undefined;
+        completed = { files, sampleOrder: confirmed.sampleOrder };
+        return completed;
       } catch {
-        if (reader.signal?.aborted) watched = undefined;
+        if (reader.signal?.aborted) confirming = undefined;
         return undefined;
       }
     };
     const unchanged = async (reader: PrMetadataDemand, confirm = true) => {
-      if (confirm) watched ??= confirmIncludes(reader);
-      const witness = await watched;
+      // A page can recheck completed evidence while inventory is busy.
+      const witness = completed ?? (confirm ? await (confirming ??= confirmIncludes(reader)) : undefined);
       if (!witness) return undefined;
       const [seed, config] = await Promise.all([checkout.unchanged(reader), witness.files.unchanged(reader)]);
       return seed && config && inputsUnchanged() ? witness.sampleOrder : undefined;

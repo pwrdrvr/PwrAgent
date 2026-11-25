@@ -600,7 +600,7 @@ function observeStackAttachments(checkouts: ReadonlyMap<string, Checkout>, obser
 
 async function resolveAttachmentCheckouts(
   rows: readonly StackThreadRow[], checkouts: ReadonlyMap<string, Checkout>, clones: ReadonlyMap<string, Checkout>,
-  observation: StackReadObservation, lookup?: (cwd: string) => Promise<CheckoutLookup>,
+  observation: StackReadObservation,
 ): Promise<Map<string, CheckoutLookup>> {
   const { hints, inventoryDemand } = observation;
   const resolved = new Map<string, CheckoutLookup>();
@@ -632,7 +632,9 @@ async function resolveAttachmentCheckouts(
       const registered = physical && rosteredRoots.get(physical);
       if (registered) return [cwd, registered.checkout] as const;
     }
-    return [cwd, await (lookup ? lookup(cwd) : locateCheckout(cwd, inventoryDemand))] as const;
+    // The selected executable can depend on config outside the checkout.
+    // Ask Git for current provenance when the filesystem cannot prove it.
+    return [cwd, await locateCheckout(cwd, inventoryDemand)] as const;
   }, STACK_CHECKOUT_SCAN_LIMITS);
   for await (const [cwd, checkout] of scan) resolved.set(cwd, checkout);
   return resolved;
@@ -1216,16 +1218,7 @@ export class StackReader {
       return { ...row, prs: await validateAttachments({ ...row, prs: row.prs }, attachments.demand) };
     })) : local;
     demand.signal?.throwIfAborted();
-    // Installed Git still establishes each alias's own result. A corroborated
-    // background read can reuse it while that spelling and checkout match.
-    // Scoped evidence and retries observe the alias with Git again.
-    const lookupAttachment = backgroundNavigation && hints.installedGitVersion && !retried
-      ? async (cwd: string) => {
-        const candidates = await hints.possibleCommonDirs(cwd);
-        return candidates?.length ? await this.readInventoryCheckout(cwd, observation, candidates)
-          : await observation.checkoutLookup(cwd, inventoryDemand);
-      } : undefined;
-    const attachmentCheckouts = await resolveAttachmentCheckouts(rows, checkouts, cloneCheckouts, observation, lookupAttachment);
+    const attachmentCheckouts = await resolveAttachmentCheckouts(rows, checkouts, cloneCheckouts, observation);
     // Scoped admission used the initial catalog. A change during discovery
     // requires fresh admission before projection can assert settlement.
     if (scopedClones.size && (await Promise.all(

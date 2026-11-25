@@ -54,46 +54,43 @@ function row(cwd: string, id: string): NavigationThreadSummary {
 }
 
 describe("StackReader installed-Git and unavailable checkout budgets", () => {
-  it("reuses installed Git's corroborated attachment alias for background reads and rechecks a retarget", async () => {
+  it("drops an alias-backed attachment when selected Git rejects changed global config", async () => {
     const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-installed-alias-")));
     restoreGit = isolateProcessGitEnvironment();
-    const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
     try {
       const checkout = path.join(sandbox, "checkout");
-      const other = path.join(sandbox, "other");
       const alias = path.join(sandbox, "alias");
-      await Promise.all([mkdir(checkout), mkdir(other)]);
+      const home = path.join(sandbox, "home");
+      const config = path.join(home, ".gitconfig");
+      await Promise.all([mkdir(checkout), mkdir(home)]);
       initialize(checkout);
-      initialize(other);
       await writeCatalog(checkout, "tracked");
       await symlink(checkout, alias, "junction");
+      vi.stubEnv("HOME", home);
+      vi.stubEnv("USERPROFILE", home);
+      vi.stubEnv("XDG_CONFIG_HOME", home);
+      await writeFile(config, "[user]\n\tname = Fixture\n");
       process.env.PWRAGENT_GIT_PATH = await gitExecutable.resolveGitExecutable();
       const rows: NavigationThreadSummary[] = [{ ...row(checkout, "tracked"), prs: [{
         number: 1, provider: "github.com", org: "fixture", repo: "tracked", lifecycleState: "open", state: "passing",
         url: "https://github.com/fixture/tracked/pull/1", headRefName: "feat", linkedDirectoryPaths: [alias],
+        explicitlyAttached: true,
       }] }];
-      let now = 0;
-      const reader = new StackReader(() => now);
-      const aliasProbes = () => start.mock.calls.filter(([cwd, [verb], purpose]) =>
-        cwd === alias && verb === "rev-parse" && purpose === "stack-checkout").length;
-      const number = async (scoped?: string[]) => (await reader.read(rows, [], scoped)).stacks[0]?.layers[0]?.pullRequest?.number;
-      expect(await number()).toBe(1);
-      expect(aliasProbes()).toBe(1);
-      expect(await number()).toBe(1);
-      expect(aliasProbes()).toBe(1);
-      expect(await number([checkout])).toBe(1);
-      expect(aliasProbes()).toBe(2);
-      now += 31_000;
-      expect(await number()).toBe(1);
-      expect(aliasProbes()).toBe(3);
+      const reader = new StackReader(() => 0);
+      const layer = async () => (await reader.read(rows, [])).stacks[0]?.layers[0];
+      expect((await layer())?.pullRequest?.number).toBe(1);
 
-      await rm(alias);
-      await symlink(other, alias, "junction");
-      expect(await realpath(git(alias, "rev-parse", "--show-toplevel"))).toBe(other);
-      expect(await number()).toBeUndefined();
-      expect(aliasProbes()).toBe(4);
+      await writeFile(config, "[invalid config\n");
+      await expect(gitExecutable.runGitCommand(alias, ["rev-parse", "--show-toplevel"])).rejects.toMatchObject({ code: 128 });
+      // The catalog can still show the layer, but Git no longer corroborates its attachment.
+      const invalid = await layer();
+      expect(invalid).toMatchObject({ branch: "feat" });
+      expect(invalid?.pullRequest).toBeUndefined();
+
+      await writeFile(config, "[user]\n\tname = Fixture\n");
+      expect((await layer())?.pullRequest?.number).toBe(1);
     } finally {
-      start.mockRestore();
+      vi.unstubAllEnvs();
       await rm(sandbox, { recursive: true, force: true });
     }
   });

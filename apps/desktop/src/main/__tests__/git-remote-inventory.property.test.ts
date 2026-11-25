@@ -4,7 +4,7 @@ import path from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
 import * as git from "../app-server/git-executable";
 import { prGitSubprocessCaller } from "../diagnostics/git-subprocess-diagnostics";
-import { clearGitHubRemoteCache, parseForgeRemote, resolveGitHubRepoForDirectory } from "../pr-status/git-remote";
+import { clearGitHubRemoteCache, observeForgeRepositoriesForDirectory, parseForgeRemote, resolveGitHubRepoForDirectory } from "../pr-status/git-remote";
 import { createInventoryRemoteConfigReader } from "../pr-status/git-remote-inventory";
 import { filterStoredDiscoveredPullRequests } from "../pr-status/pr-detection";
 import { PR_METADATA_PRIORITY } from "../pr-status/pr-metadata-process";
@@ -176,6 +176,50 @@ it.skipIf(process.platform === "win32")("only confirms shared includes when a si
   expect(probePaths()).toEqual([checkouts[0]]);
   await expect(Promise.all(checkouts.slice(1).map(read))).resolves.toEqual(checkouts.slice(1).map(() => parseForgeRemote(origin)));
   expect(probePaths()).toEqual([checkouts[0], checkouts[0]]);
+});
+
+it.skipIf(process.platform === "win32")("validates the seed's page while sibling include confirmation is pending", async () => {
+  const { root, clone, checkouts: [seed, sibling] } = await ordinaryWorktrees();
+  const include = path.join(root, "included-config");
+  await writeFile(include, "[core]\n\tautocrlf = false\n");
+  await git.runGitCommand(root, ["config", "--global", "include.path", include]);
+  await git.runGitCommand(clone, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+  const confirming = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const original = git.runGitCommand;
+  let configReads = 0;
+  const runner = vi.spyOn(git, "runGitCommand").mockImplementation(async (cwd, args, options) => {
+    if (cwd === seed && options?.purpose === "pr-remotes" && args.includes("--show-origin") && ++configReads === 2) {
+      confirming.resolve();
+      await release.promise;
+    }
+    return await original(cwd, args, options);
+  });
+  onTestFinished(() => { runner.mockRestore(); });
+  const inventoryConfig = createInventoryRemoteConfigReader();
+  const read = (cwd: string) => resolveGitHubRepoForDirectory(cwd, { inventoryConfig });
+  await expect(read(seed)).resolves.toEqual(parseForgeRemote(origin));
+  const pending = read(sibling);
+  try {
+    await Promise.race([confirming.promise, pending.then(() => { throw new Error("No include confirmation"); })]);
+    const attachments = [{
+      number: 1, provider: "github.com" as const, org: "fixture", repo: "original",
+      lifecycleState: "open" as const, state: "passing" as const,
+      url: "https://github.com/fixture/original/pull/1", headRefName: "topic", linkedDirectoryPaths: [seed],
+    }];
+    const page = filterStoredDiscoveredPullRequests(attachments, {
+      demand: { signal: AbortSignal.timeout(2_000), priority: () => PR_METADATA_PRIORITY.page },
+    });
+    // The foreground page must complete before we release the background Git read.
+    await expect(page).resolves.toEqual(attachments);
+    expect(runner.mock.calls.filter(([cwd, [verb], options]) =>
+      cwd === seed && verb === "remote" && options?.purpose === "pr-discovery")).toHaveLength(1);
+  } finally {
+    release.resolve();
+    await pending;
+  }
+  await expect(observeForgeRepositoriesForDirectory(seed, undefined, { verifyCachedRemoteNames: true }))
+    .resolves.toMatchObject({ refreshedRemoteNames: ["origin"] });
 });
 
 it.skipIf(process.platform === "win32")("reaudits shared config for a checkout observed after verification began", async () => {
