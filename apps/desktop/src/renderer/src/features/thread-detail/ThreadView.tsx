@@ -106,6 +106,7 @@ import {
 } from "../../lib/federated-thread-events";
 import { ThreadTodoStack } from "../thread-todos/ThreadTodoStack";
 import type { ThreadTodoReviewSetup } from "../thread-todos/ThreadTodoCard";
+import { useQueuedReviewTodoIds } from "../thread-todos/queued-review-todos";
 import type { ThreadTodoRevealRequest } from "../thread-todos/thread-todo-reveal";
 import type {
   ThreadTodoDoHereOptions,
@@ -4911,9 +4912,10 @@ function useThreadQuestionReplies(
     const pending = [...pendingReviewTodos.current.values()].find((entry) => entry.todo.id === todo.id);
     startTodoReview(todo, pending?.options);
   });
+  const queuedReviewTodoIds = useQueuedReviewTodoIds(props.composerDraftStore);
   const todoReviewSetup = useMemo<ThreadTodoReviewSetup>(
-    () => ({ todoId: reviewSetupTodoId, onShow: showTodoReviewSetup }),
-    [reviewSetupTodoId, showTodoReviewSetup],
+    () => ({ todoId: reviewSetupTodoId, onShow: showTodoReviewSetup, queuedTodoIds: queuedReviewTodoIds }),
+    [reviewSetupTodoId, showTodoReviewSetup, queuedReviewTodoIds],
   );
   const handleReviewRequestHandled = useEventCallback((requestId: number) => {
     setTodoReviewRequest((current) => (current?.id === requestId ? undefined : current));

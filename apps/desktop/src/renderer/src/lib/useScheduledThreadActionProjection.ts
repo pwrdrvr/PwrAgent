@@ -395,6 +395,7 @@ function projectionFromAction(action: ScheduledThreadAction) {
             action.errorMessage ?? "The scheduled action could not be dispatched.",
         }
       : { scheduledActionId: action.id }),
+    ...(action.review?.todo ? { reviewTodoId: action.review.todo.id } : {}),
     ...(action.status === "scheduled"
       ? { scheduledSendAt: action.scheduledFor }
       : {}),
