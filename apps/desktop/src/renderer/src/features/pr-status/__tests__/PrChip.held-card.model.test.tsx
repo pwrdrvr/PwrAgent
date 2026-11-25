@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PrChipState, PrSummary } from "@pwragent/shared/contracts/navigation";
@@ -380,6 +380,33 @@ describe("a held sidebar PR card", () => {
     await flushMutations();
     layoutChanged();
     fireEvent.mouseLeave(held);
+    expect(card()).toBeNull();
+  });
+
+  it("holds a card while focus is on one of its controls, and closes it when focus leaves after a move", async () => {
+    vi.useFakeTimers();
+    mockSidebarGeometry();
+    const { layoutChanged } = stubNativeGeometryObservers();
+    const view = render(<Sidebar scheduled={false} checkState="pending" />);
+    fireEvent.mouseEnter(chip());
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+    const held = card()!;
+    const control = within(held).getByRole("button", { name: "Copy URL", hidden: true });
+
+    // Focus leaving an unmoved card is the bridge's business, not this rule's.
+    act(() => control.focus());
+    act(() => control.blur());
+    expect(card()).toBe(held);
+
+    act(() => control.focus());
+    view.rerender(<Sidebar scheduled checkState="pending" />);
+    await flushMutations();
+    layoutChanged();
+    fireEvent.scroll(screen.getByTestId("lane"));
+    await flushMutations();
+    expect(card()).toBe(held);
+
+    act(() => control.blur());
     expect(card()).toBeNull();
   });
 });

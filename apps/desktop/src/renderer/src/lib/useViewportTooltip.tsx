@@ -885,6 +885,7 @@ export function useViewportTooltip(options: {
       if (active) hide();
     });
     const onScroll = (event: Event): void => {
+      if (anchorLostWhileHeldRef.current) return;
       const scrollTarget = event.target;
       const target = targetRef.current;
       if (
@@ -932,7 +933,8 @@ export function useViewportTooltip(options: {
       targetRectRef.current,
       () => tooltipRef.current,
       (rect) => {
-        if (targetRef.current !== observedTarget) return;
+        // A held card already let its anchor go: measuring again decides nothing.
+        if (targetRef.current !== observedTarget || anchorLostWhileHeldRef.current) return;
         const anchor = readAnchorState(rect);
         if (anchor.status === "gone" || anchor.status === "relocated") {
           loseAnchor();
