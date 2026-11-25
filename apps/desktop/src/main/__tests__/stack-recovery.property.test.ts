@@ -22,6 +22,14 @@ async function sandboxWithPackagedGit() {
   const sandbox = await realpath(await mkdtemp(path.join(tmpdir(), "pwragent-stack-recovery-oracle-")));
   onTestFinished(async () => await rm(sandbox, { recursive: true, force: true }));
   onTestFinished(isolateProcessGitEnvironment(sandbox));
+  // Exercise the packaged discovery path even when the runner has loader
+  // overrides or Git test flags in its environment.
+  onTestFinished(() => { vi.unstubAllEnvs(); });
+  for (const key of Object.keys(process.env)) {
+    if (/^(?:DYLD_|LD_|GIT_TEST_)/.test(key) || /^GIT_IMPLICIT_WORK_TREE$/i.test(key)) {
+      vi.stubEnv(key, undefined);
+    }
+  }
   configureBundledGit(path.dirname(bundledGitDirectory()));
   onTestFinished(() => configureBundledGit(undefined));
   process.env.PWRAGENT_GIT_PATH = bundledGitExecutable();
