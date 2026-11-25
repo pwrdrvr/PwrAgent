@@ -12856,7 +12856,9 @@ function useComposerController(props: ComposerProps) {
     // turn. Steer stays listed where the provider or model cannot do it,
     // dimmed with the reason, so the menu explains the gap. Interrupt is
     // listed only for a provider that can cut in at all; where it can but
-    // not right now, it is dimmed with the reason instead.
+    // not right now, it is dimmed with the reason instead. A peer's thread
+    // keeps it: this window cannot see that owner's capabilities, so it
+    // points to the owner's window rather than ruling Interrupt out.
     const turnSendActionsVisible =
       submitButtonLabel === "Queue"
       && Boolean(activeTurnId)
@@ -12871,7 +12873,8 @@ function useComposerController(props: ComposerProps) {
       : backend?.capabilities.steerTurn
         ? `${selectedModelOption?.label ?? selectedModelOption?.id ?? "This model"} can't take messages mid-turn`
         : `${turnBackendLabel} can't take messages mid-turn`;
-    const interruptOffered = backend?.capabilities.interruptSteerTurn === true;
+    const interruptOffered = !backendsDescribeThreadOwner
+      || backend?.capabilities.interruptSteerTurn === true;
     // Interrupt rides the steer path, so whatever blocks Steer blocks it too.
     const interruptUnavailableReason = steerUnavailableReason
       ?? (backendsDescribeThreadOwner

@@ -14137,6 +14137,73 @@ describe("Composer", () => {
       ).not.toHaveAttribute("aria-disabled");
     });
 
+    it("blames the model, not the provider, when only the model cannot steer", () => {
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          backends={[{
+            ...capableBackend("codex", { steerTurn: true, interruptSteerTurn: true }),
+            launchpadOptions: {
+              models: [{
+                id: "model-1",
+                label: "Model One",
+                current: true,
+                supportsSteering: false,
+              }],
+            },
+          }]}
+          desktopApi={{ startTurn: vi.fn(), steerTurn: vi.fn() }}
+          disabled={false}
+          skills={[]}
+          thread={runningThread("codex")}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("Reply"), {
+        target: { value: "Change course" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send options" }));
+
+      const interrupt = screen.getByRole("menuitem", { name: /^Interrupt/ });
+      expect(interrupt).toHaveAttribute("aria-disabled", "true");
+      expect(interrupt).toHaveTextContent("Model One can't take messages mid-turn");
+      expect(screen.queryByText(/can't cut in/)).not.toBeInTheDocument();
+    });
+
+    it("points a peer thread to its owner's window even when this instance cannot interrupt", () => {
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          // The local summary lacks Interrupt; the peer that owns the
+          // thread may have it, and this window cannot tell.
+          backends={[capableBackend("claude", { steerTurn: true })]}
+          desktopApi={{ startTurn: vi.fn(), steerTurn: vi.fn() }}
+          disabled={false}
+          skills={[]}
+          thread={{
+            ...runningThread("claude"),
+            federation: {
+              ref: {
+                backend: "claude",
+                target: { scope: "remote", instanceId: "peer-1" },
+                threadId: "thread-1",
+              },
+              instanceLabel: "Studio",
+            },
+          }}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("Reply"), {
+        target: { value: "Change course" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send options" }));
+
+      const interrupt = screen.getByRole("menuitem", { name: /^Interrupt/ });
+      expect(interrupt).toHaveAttribute("aria-disabled", "true");
+      expect(interrupt).toHaveTextContent("Open this instance's window to interrupt");
+    });
+
     it("dims Interrupt on a pinned peer thread whose owner it cannot see", () => {
       render(
         <Composer
