@@ -22,6 +22,7 @@ import { Profiler, StrictMode, useMemo, useState, type ComponentProps } from "re
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
   type NavigationDirectorySummary,
+  type NavigationQueryRequest,
   type NavigationThreadSummary,
   type NavigationLaunchpadDraft,
   type PrSummary,
@@ -25958,6 +25959,105 @@ describe("Composer", () => {
       });
     });
   });
+
+  it.each(["local", "cached peer", "explicit local", "off-page peer"] as const)(
+    "hydrates an off-page pasted Antigravity link and uses its title in the queued preview (%s)",
+    async (location) => {
+      const thread: NavigationThreadSummary = {
+        id: "thread-1", title: "Recipient", titleSource: "explicit", source: "codex",
+        linkedDirectories: [], inbox: { inInbox: false },
+      };
+      const instanceId = "peer-laptop";
+      const localInstanceId = "local-viewer";
+      const cachedPeer = location === "cached peer";
+      const id = "519fbd00-aa00-7100-8100-019fbbbead52";
+      const target: NavigationThreadSummary = {
+        ...thread, id, source: "acp:antigravity", title: "Review the launch checklist",
+        ...(location !== "local" ? {
+          federation: {
+            ref: buildFederatedThreadRef({ backend: "acp:antigravity", instanceId, threadId: id }),
+            instanceLabel: "Laptop", peerStatus: "connected", capabilities: [],
+          },
+        } : {}),
+      };
+      const bare = `pwragent://thread/${id}?backend=acp:antigravity`;
+      const href = location === "explicit local" ? `${bare}&instanceId=${localInstanceId}` : bare;
+      const jumpSearchRemoteThreads = vi.fn(async () => ({ results: [target] }));
+      const startTurn = vi.fn(async (_request: StartTurnRequest) => ({
+        backend: "codex" as const, threadId: thread.id, turnId: "sent", disposition: "queued" as const,
+        queueEntryId: "new-queued-entry",
+      }));
+      const desktopApi = {
+        onAgentEvent: () => () => undefined,
+        getNavigationQueryPage: vi.fn(async (request: NavigationQueryRequest) => {
+          const owner = request.federationTarget?.scope === "remote" ? request.federationTarget.instanceId : undefined;
+          const query = owner && request.query.kind === "exact"
+            ? { ...request.query, identities: request.query.identities.map((identity) => ({ ...identity, ownerInstanceId: owner })) }
+            : request.query;
+          return navigationQueryFixture({ ...request, query }, {
+            threads: location === "local" || owner ? [thread, target] : [thread],
+          });
+        }),
+        jumpSearchRemoteThreads,
+        startTurn,
+      } satisfies Pick<DesktopApi, "onAgentEvent" | "getNavigationQueryPage" | "jumpSearchRemoteThreads" | "startTurn">;
+      vi.stubGlobal("pwragent", desktopApi);
+      const draftStore = createComposerDraftStore();
+      const scope = buildThreadComposerScopeKey("codex", thread.id);
+      draftStore.setQueuedTurns(scope, [{
+        id: "queued", text: `[${id}](${href}) - check this`,
+        imageAttachments: [], fileAttachments: [],
+      }]);
+      try {
+        const view = (title: string) => (
+          <ThreadLinkProvider localInstanceId={localInstanceId} onShowThread={() => undefined}
+            threads={cachedPeer || location === "explicit local" ? [thread, { ...target, title }] : [thread]}>
+            <Composer activeTurnId="active" desktopApi={desktopApi} disabled={false}
+              draftStore={draftStore} skills={[]} thread={thread} />
+          </ThreadLinkProvider>
+        );
+        const { rerender } = render(view(target.title));
+        const input = screen.getByRole("textbox", { name: "Reply" });
+        const paste = (text: string) => fireEvent.paste(input, {
+          clipboardData: {
+            files: [], items: [], types: ["text/plain"],
+            getData: (type: string) => type === "text/plain" ? text : "",
+          },
+        });
+        paste(href);
+        expect(input.querySelector("[data-mention-kind=thread]")).toHaveAttribute("data-skill-path", href);
+        const hasTitle = location === "local" || cachedPeer;
+        let title = hasTitle ? target.title : id;
+        expect(await within(input).findByText(`#${title}`)).toBeInTheDocument();
+        expect(screen.getByLabelText("Queued message").querySelector(".composer__queued-text"))
+          .toHaveTextContent(`#${title} - check this`);
+        if (cachedPeer) {
+          title = "Renamed on the owning peer";
+          rerender(view(title));
+          expect(await within(input).findByText(`#${title}`)).toBeInTheDocument();
+          expect(screen.getByLabelText("Queued message")).toHaveTextContent(title);
+        }
+        paste(`- See [Fix \`lint\` crash](${href})
+- Keep \`${href}\` literal.`);
+        expect(input.querySelectorAll("[data-mention-kind=thread]")).toHaveLength(2);
+        expect(input.querySelector("li")).toHaveTextContent(/^See #/);
+        expect(input).toHaveTextContent(href);
+        expect(jumpSearchRemoteThreads).not.toHaveBeenCalled();
+        await clickButton("Queue");
+        const expectedHref = cachedPeer ? `${href}&instanceId=${instanceId}` : href;
+        await waitFor(() => expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
+          input: [{ type: "text", text: expect.stringContaining(`[${title}](${expectedHref})`) }],
+        })));
+        expect(startTurn.mock.calls[0]?.[0]?.input[0]).toMatchObject({
+          type: "text",
+          text: expect.stringContaining(`See [${hasTitle ? title : "Fix \`lint\` crash"}](${expectedHref})`),
+        });
+        expect(jumpSearchRemoteThreads).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
 
   it("uses a live thread name when pasting an in-progress thread id", async () => {
     const targetThreadId = "019fbbbe-ad52-77c2-b7f7-28182d9a6f83";

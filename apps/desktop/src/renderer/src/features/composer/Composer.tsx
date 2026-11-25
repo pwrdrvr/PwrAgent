@@ -55,6 +55,7 @@ import {
   reviewWorkspacePullRequests,
 } from "../../../../shared/pull-request-review";
 import { hydrateComposerDraft } from "./composer-draft-hydration";
+import { resolveComposerThreadDestinations } from "./composer-thread-references";
 import { contextWindowMoonFace } from "./context-window-moon";
 import { useContextMoonStyle } from "../../lib/context-moon-preferences";
 import {
@@ -85,6 +86,7 @@ import {
 } from "./launchpad-composer-scope";
 import {
   QueuedMessageInspector,
+  QueuedThreadReferencePreview,
   QueuedRowGrip,
   QueuedRowIconButton,
   QueuedRowPausedLabel,
@@ -292,10 +294,7 @@ import {
   usePullRequestLinks,
 } from "../../lib/pull-request-links";
 import {
-  resolveThreadHref,
-  resolveThreadIdText,
   useThreadLinks,
-  type ResolvedThreadLink,
 } from "../../lib/thread-links";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import {
@@ -8645,14 +8644,15 @@ function useComposerController(props: ComposerProps) {
     );
     const build = (
       resolvedInspection: ComposerReferenceInspection,
+      resolvedText: string,
     ): ComposerTurnPayload => {
-      const turnSkills = listMentionedSkills(textDraft, props.skills).filter(({ name }) => !hiddenSkills.has(name));
+      const turnSkills = listMentionedSkills(resolvedText, props.skills).filter(({ name }) => !hiddenSkills.has(name));
       // File-reference pills ride the outgoing text as `[@label](~/path)`
       // markdown appended after the typed draft — part of BOTH the display
       // text and the text input item, so the agent and the transcript see
       // the same message.
       const displayText = appendFileReferenceMarkdown(
-        hydrateSkillLabelsWithMarkdown(textDraft.trim(), turnSkills),
+        hydrateSkillLabelsWithMarkdown(resolvedText.trim(), turnSkills),
         fileRefs,
       );
       const imageParts = attachments.map((attachment, index) => ({
@@ -8676,7 +8676,11 @@ function useComposerController(props: ComposerProps) {
 
       return { displayText, imageParts, input };
     };
-    return isPromiseLike(inspection) ? inspection.then(build) : build(inspection);
+    const resolvedText = resolveComposerThreadDestinations(textDraft, threadLinks);
+    if (isPromiseLike(inspection) || isPromiseLike(resolvedText)) {
+      return Promise.all([inspection, resolvedText]).then(([files, text]) => build(files, text));
+    }
+    return build(inspection, resolvedText);
   };
 
   const buildQueuedTurnPayload = (
@@ -10940,13 +10944,6 @@ function useComposerController(props: ComposerProps) {
     });
   };
 
-  const applyThreadReference = (thread: ResolvedThreadLink): void => {
-    if (!inputRef.current) {
-      return;
-    }
-    inputRef.current.insertMentionToken(createComposerThreadToken(thread, 0));
-  };
-
   const applyHashReference = (
     createToken: (index: number) => ComposerSkillToken,
   ): void => {
@@ -11560,15 +11557,6 @@ function useComposerController(props: ComposerProps) {
     const pastedText = typeof event.clipboardData.getData === "function"
       ? event.clipboardData.getData("text/plain").trim()
       : "";
-    const pastedThread =
-      resolveThreadHref(pastedText, threadLinks)
-      ?? resolveThreadIdText(pastedText, threadLinks);
-    if (pastedThread) {
-      event.preventDefault();
-      setSendError(undefined);
-      applyThreadReference(pastedThread);
-      return;
-    }
     if (mayContainLinearPastedImages(pastedText)) {
       // The text pastes as usual; its images follow once they download.
       void attachLinearPastedImages(pastedText);
@@ -14103,7 +14091,7 @@ function useComposerController(props: ComposerProps) {
                     : "Pending steer"}
             </span>
             <span className="composer__queued-text">
-              {formatDraftPreview(pendingSteer)}
+              <QueuedThreadReferencePreview text={formatDraftPreview(pendingSteer)} />
             </span>
           </div>
           <QueuedImageAttachments
@@ -14551,7 +14539,7 @@ function useComposerController(props: ComposerProps) {
                   queued.title ? "" : "composer__queued-text--raw",
                 ].filter(Boolean).join(" ")}
               >
-                {queuedTitle}
+                {queued.title ?? <QueuedThreadReferencePreview text={queuedTitle} />}
               </span>
             </QueuedMessageInspector>
           </div>
