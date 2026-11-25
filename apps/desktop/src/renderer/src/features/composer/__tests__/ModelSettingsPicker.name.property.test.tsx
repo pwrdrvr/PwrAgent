@@ -46,7 +46,7 @@ describe("model settings pill name", () => {
             <ModelSettingsPicker
               size={size}
               provider={provider ? { label: provider, showInPill: true } : undefined}
-              model={{ value: "m", label: model, models: [], onChange: () => undefined }}
+              model={{ value: "m", label: model, kind: "codex", models: [], onChange: () => undefined }}
               {...(stops.length > 0 ? {
                 effort: { stops, value: stops[pick % stops.length], onChange: () => undefined },
               } : {})}
