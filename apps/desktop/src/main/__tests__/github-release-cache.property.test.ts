@@ -15,7 +15,8 @@
 //   G4  After a failure, the next automatic request waits out the failure
 //       backoff: 5, 10, 20, 40, then 60 minutes for consecutive failures,
 //       manual or automatic. Only a successful response starts it over.
-//   G5  After a success, the next automatic request waits a full hour.
+//   G5  After a success, the next automatic request waits a full hour, even
+//       if a manual request fails in the meantime.
 //   G6  No automatic request in the first 10 minutes of a fresh root.
 //
 // Wall-clock gates are checked against elapsed time: a clock that jumps
@@ -184,13 +185,16 @@ function checkRequest(requests: Request[], index: number, firstCallElapsed: numb
   const lastHour = earlier.filter((prior) =>
     !prior.manual && prior.elapsedMs > request.elapsedMs - RELEASE_AUTOMATIC_TTL_MS);
   expect(lastHour.length + 1, "G2: hourly automatic budget").toBeLessThanOrEqual(RELEASE_AUTOMATIC_HOURLY_BUDGET);
-  const previous = earlier.filter((prior) => prior.url === request.url).at(-1);
-  if (!previous) return;
-  const gap = request.elapsedMs - previous.elapsedMs;
-  if (previous.failureStreak > 0) {
+  const earlierForUrl = earlier.filter((prior) => prior.url === request.url);
+  const previous = earlierForUrl.at(-1);
+  if (previous && previous.failureStreak > 0) {
+    const gap = request.elapsedMs - previous.elapsedMs;
     expect(gap, `G4: automatic retry ${gap}ms after failure ${previous.failureStreak}`)
       .toBeGreaterThanOrEqual(failureBackoffMs(previous.failureStreak));
-  } else {
+  }
+  const success = earlierForUrl.findLast((prior) => prior.failureStreak === 0);
+  if (success) {
+    const gap = request.elapsedMs - success.elapsedMs;
     expect(gap, `G5: automatic request ${gap}ms after a success`)
       .toBeGreaterThanOrEqual(RELEASE_AUTOMATIC_TTL_MS);
   }
