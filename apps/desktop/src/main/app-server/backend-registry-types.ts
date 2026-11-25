@@ -1243,6 +1243,11 @@ export type PendingThreadMessageContext = {
   imageParts?: AppServerThreadImagePart[];
   retainedInput?: AppServerTurnInputItem[];
   origin?: AppServerThreadMessageOrigin;
+  /**
+   * The turn start writes this origin as the turn's `user:<turnId>` row, so
+   * the prompt's own user item carries it without writing that row again.
+   */
+  turnStartWritesPromptOrigin?: true;
   text?: string;
   threadId: string;
   turnId?: string;

@@ -12011,6 +12011,9 @@ export class DesktopBackendRegistry {
           ...identity, input,
           origin: resolveThreadMessageOrigin(params),
           text: extractFirstMeaningfulTextInput(params.input),
+          // persistOrigin writes the prompt's origin row once the agent
+          // accepts the turn, before or after the prompt's item lands.
+          turnStartWritesPromptOrigin: true,
         }),
         beginOrigin: () => this.beginStartingTurnOrigin({
           ...identity, origin: resolveThreadMessageOrigin(params), turnInputSource: resolveTurnInputSource(params),
@@ -12419,6 +12422,7 @@ export class DesktopBackendRegistry {
     text?: string;
     turnId?: string;
     retainAttachments?: boolean;
+    turnStartWritesPromptOrigin?: boolean;
   }): Promise<string | undefined> {
     const admittedCodexTurnSequence = params.backend === "codex" && !params.turnId
       ? this.codexMessageContextTurnSequence
@@ -12449,6 +12453,7 @@ export class DesktopBackendRegistry {
       ...(imageParts.length > 0 ? { imageParts } : {}),
       ...(retainedInput.length > 0 ? { retainedInput } : {}),
       ...(params.origin ? { origin: params.origin } : {}),
+      ...(params.origin && params.turnStartWritesPromptOrigin ? { turnStartWritesPromptOrigin: true as const } : {}),
       ...(params.text ? { text: params.text } : {}),
       threadId: params.threadId,
       ...(params.turnId ? { turnId: params.turnId } : {}),
@@ -12630,12 +12635,17 @@ export class DesktopBackendRegistry {
     if (notification.method === "item/completed" && notification.params.turnId && !pending.turnId) {
       this.bindPendingThreadMessageContext(pending.id, notification.params.turnId);
     }
-    await this.persistThreadMessageOrigin({
-      backend: event.backend,
-      threadId: notification.params.threadId,
-      messageId: notification.params.item.id,
-      origin: pending.origin,
-    });
+    const turnStartWritesThisRow = pending.turnStartWritesPromptOrigin === true
+      && notification.params.turnId !== undefined
+      && notification.params.item.id === buildTurnUserMessageOriginId(notification.params.turnId);
+    if (!turnStartWritesThisRow) {
+      await this.persistThreadMessageOrigin({
+        backend: event.backend,
+        threadId: notification.params.threadId,
+        messageId: notification.params.item.id,
+        origin: pending.origin,
+      });
+    }
     if (event.notification.method === "item/completed") {
       this.pendingThreadMessageContexts.delete(pending.id);
     }
