@@ -45,10 +45,13 @@ function steerId(index: number): string {
   return `user:${SENT_TURN}:steer:queued-turn-${index}`;
 }
 
-function ownerResponse(owned: AppServerThreadEntry[]): AppServerReadThreadResponse {
+function ownerResponse(
+  backend: AppServerReadThreadResponse["backend"],
+  owned: AppServerThreadEntry[],
+): AppServerReadThreadResponse {
   const entries = [...history, ...owned];
   return {
-    backend: "codex", threadId: THREAD_ID, fetchedAt: 2_000,
+    backend, threadId: THREAD_ID, fetchedAt: 2_000,
     threadStatus: owned.length > 0 ? "active" : "idle",
     replay: {
       entries,
@@ -61,6 +64,7 @@ function ownerResponse(owned: AppServerThreadEntry[]): AppServerReadThreadRespon
 async function mount(backend: Backend) {
   // What the owner has recorded for the sent turn, in acceptance order.
   const owned: AppServerThreadEntry[] = [];
+  const source = backend === "acp" ? "acp:antigravity" : "codex";
   let emit: (event: AgentEvent) => void = () => {
     throw new Error("missing subscription");
   };
@@ -69,9 +73,8 @@ async function mount(backend: Backend) {
       emit = listener;
       return () => undefined;
     },
-    readThread: vi.fn(() => Promise.resolve(ownerResponse(owned))),
+    readThread: vi.fn(() => Promise.resolve(ownerResponse(source, owned))),
   };
-  const source = backend === "acp" ? "acp:antigravity" : "codex";
   const thread: NavigationThreadSummary = {
     id: THREAD_ID, title: "Steered thread", titleSource: "explicit", summary: "Fixture",
     source, linkedDirectories: [], inbox: { inInbox: false }, updatedAt: 1,
@@ -171,11 +174,10 @@ const promptArbitrary = fc.constantFrom(
   "x",
 );
 
-// A steer's text never repeats the prompt: a repeat is a separate ambiguity
-// that text matching owns, not the turn binding under test here.
+// A steer may repeat the prompt's words: the operator can steer with
+// "continue" after sending "continue", and the steer still only joins the turn.
 const stepArbitrary = (prompt: string) => fc.oneof(
-  fc.constantFrom("I exited the Dev instance", "stop and rebase", "ship it now", "y")
-    .filter((text) => text !== prompt)
+  fc.constantFrom(prompt, "I exited the Dev instance", "stop and rebase", "ship it now", "y")
     .map((text): Step => ({ kind: "steer", text })),
   fc.constantFrom("Reading files", "Checking the build")
     .map((text): Step => ({ kind: "assistant", text })),
@@ -198,6 +200,18 @@ it("keeps the sent prompt above every steer delivered into its turn", async () =
     ),
     { numRuns: 80 },
   );
+});
+
+it("keeps an Antigravity prompt when the steer repeats its words", async () => {
+  await runScenario({
+    backend: "acp",
+    prompt: "ship it",
+    steps: [
+      { kind: "steer", text: "ship it" },
+      { kind: "assistant", text: "Reading files" },
+      { kind: "snapshot" },
+    ],
+  });
 });
 
 it("keeps an Antigravity prompt when a steer lands between two replies", async () => {

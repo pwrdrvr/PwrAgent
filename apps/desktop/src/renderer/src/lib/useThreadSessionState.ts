@@ -3990,6 +3990,11 @@ function messageEchoesOptimisticEntry(
   if (sentTurnId && message.turn?.id && message.turn.id !== sentTurnId) {
     return false;
   }
+  // A bound send opened its turn, and a steer only joins one, even when the
+  // operator steers with the prompt's own words.
+  if (sentTurnId && isSteeredMessage(message)) {
+    return false;
+  }
   return (
     messageTextMatchesEntry(message, entry)
     || (message.role === entry.role && messageEchoesSentTurn(message, entry))
