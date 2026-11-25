@@ -6,6 +6,8 @@ import {
   assertGithubNativeStackMergeAllowed,
   assertStackMergeBaseUnchanged,
   checkGithubStackMerge,
+  githubStackLayersAboveNote,
+  type GithubNativeStack,
   type GithubStackMergeCheck,
 } from "../stacks/stack-merge-guard";
 import type { GithubStackPull } from "../stacks/github-stack-evidence";
@@ -378,7 +380,7 @@ export class GithubPrFetcher {
     const label = `#${reference.number}`;
     // GitHub's own stacks merge only through its asynchronous merge, which
     // also takes a required merge queue.
-    if (checked?.nativeStack) return await this.mergeAsynchronously(reference, params, run, checked.headSha);
+    if (checked?.nativeStack) return await this.mergeAsynchronously(reference, params, run, checked.headSha, checked.nativeStack);
     // A repository never seen with a queue merges exactly as before.
     const queueRepository = isMergeQueueRepository(reference.provider, reference.org, reference.repo);
     if (queueRepository) {
@@ -396,8 +398,8 @@ export class GithubPrFetcher {
       if (GITHUB_ASYNC_MERGE_REQUIRED.test(detail)) {
         const get = this.githubGet(reference, run);
         const pull = await get(`/pulls/${reference.number}`) as GithubStackPull;
-        await assertGithubNativeStackMergeAllowed(reference.number, pull, get);
-        return await this.mergeAsynchronously(reference, params, run, pull?.head?.sha);
+        const stack = await assertGithubNativeStackMergeAllowed(reference.number, pull, get);
+        return await this.mergeAsynchronously(reference, params, run, pull?.head?.sha, stack);
       }
       // Refused for want of the queue: learn the repository and queue it.
       if (!queueRepository && mentionsMergeQueue(detail)) {
@@ -433,6 +435,7 @@ export class GithubPrFetcher {
     params: GithubMergeOptions,
     run: (args: string[], timeout?: number) => Promise<{ stdout: string; stderr?: string }>,
     sha: string | undefined,
+    stack: GithubNativeStack | undefined,
   ): Promise<ThreadPullRequestMergeResult> {
     const label = `#${reference.number}`;
     const endpoint = `repos/${encodeURIComponent(reference.org)}/${encodeURIComponent(reference.repo)}`;
@@ -451,7 +454,11 @@ export class GithubPrFetcher {
       if (error instanceof ForgeReadError) throw new Error(error.message, { cause: error });
       return await this.reportFailedMerge(reference, params, error, "GitHub refused the merge", `GitHub did not answer the merge of ${label} within 30 seconds`);
     }
-    if (outcome.status === "merged") return mergedResult(reference.url, params);
+    if (outcome.status === "merged") {
+      const merged = mergedResult(reference.url, params);
+      const above = githubStackLayersAboveNote(reference.number, stack);
+      return above ? { ...merged, summary: `${merged.summary}. ${above}` } : merged;
+    }
     if (outcome.status === "enqueued") {
       noteMergeQueueRepository(reference.provider, reference.org, reference.repo);
       return { queued: true, summary: `Sent ${label} to the merge queue: it merges once the queue's checks pass` };

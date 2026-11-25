@@ -4,6 +4,7 @@ import { graphql } from "@octokit/graphql";
 import {
   resolvePullRequestIdentity,
   type PrLifecycleState,
+  type PrGithubStack,
   type PrMergeMethod,
   type PrMergeQueueStatus,
   type PrSummary,
@@ -230,7 +231,10 @@ export function parsePrRefFromUrl(url: string): PrRef | undefined {
  *
  * `isMergeQueueEnabled` and `mergeQueueEntry` are a scalar and an object, and
  * cost no rate-limit points. So do the three `baseRepository` merge settings,
- * which tell the PR card which merge methods to offer. The queue's last event is a connection
+ * which tell the PR card which merge methods to offer. `stack` and
+ * `stackEntry` are objects, also free: 100 PRs cost 1 point with them and
+ * without (`rateLimit(dryRun: true)`, 2026-11-25), where a stack's `entries`
+ * connection would cost a second. The queue's last event is a connection
  * (`PR_QUEUE_EVENTS_FRAGMENT`), so only the poll of a repository known to use
  * a queue asks for it.
  */
@@ -257,6 +261,8 @@ fragment PrStatus on PullRequest {
   isMergeQueueEnabled
   mergeQueueEntry { state position enqueuedAt }
   baseRepository { squashMergeAllowed rebaseMergeAllowed mergeCommitAllowed }
+  stack { number size }
+  stackEntry { position }
   commits(last: 1) {
     totalCount
     nodes {
@@ -359,6 +365,8 @@ export type GraphqlPrNode = {
     rebaseMergeAllowed?: boolean | null;
     mergeCommitAllowed?: boolean | null;
   } | null;
+  stack?: { number?: number | null; size?: number | null } | null;
+  stackEntry?: { position?: number | null } | null;
   queueEvents?: {
     nodes?: ({
       __typename?: string | null;
@@ -692,6 +700,7 @@ export function mapGraphqlPrNode(
   const lifecycleState = deriveLifecycleState(shaped);
   const mergeQueue = readGraphqlMergeQueue(node, lifecycleState);
   const allowedMergeMethods = readAllowedMergeMethods(node.baseRepository);
+  const githubStack = readGithubStack(node);
   // The poll already carries the queue setting, so a merge in this
   // repository learns about its queue without a request of its own.
   if (node.isMergeQueueEnabled === true && node.url) {
@@ -721,6 +730,7 @@ export function mapGraphqlPrNode(
     mergeState: deriveMergeState(shaped),
     ...(mergeQueue ? { mergeQueue } : {}),
     ...(allowedMergeMethods ? { allowedMergeMethods } : {}),
+    ...(githubStack ? { githubStack } : {}),
     ...(headSha ? { headSha } : {}),
     ...(commitShas.length > 0 ? { commitShas } : {}),
     ...readPrCount(node.additions, "additions"),
@@ -753,6 +763,16 @@ function readAllowedMergeMethods(
     ...(merge ? ["merge" as const] : []),
   ];
   return allowed.length > 0 ? allowed : undefined;
+}
+
+/** The PR's layer in a GitHub stack, only when GitHub answered all three numbers coherently. */
+function readGithubStack(node: GraphqlPrNode): PrGithubStack | undefined {
+  const number = node.stack?.number;
+  const size = node.stack?.size;
+  const position = node.stackEntry?.position;
+  if (!Number.isSafeInteger(number) || !Number.isSafeInteger(size) || !Number.isSafeInteger(position)) return undefined;
+  if (number! < 1 || position! < 1 || position! > size!) return undefined;
+  return { number: number!, position: position!, size: size! };
 }
 
 function readGraphqlMergeQueue(

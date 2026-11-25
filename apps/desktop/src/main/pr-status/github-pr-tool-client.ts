@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { discoverGhCommands } from "../settings/gh-discovery";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
-import { assertStackMergeBaseUnchanged, checkGithubStackMerge } from "../stacks/stack-merge-guard";
+import { assertStackMergeBaseUnchanged, checkGithubStackMerge, githubStackLayersAboveNote, type GithubNativeStack } from "../stacks/stack-merge-guard";
 import { GITHUB_ASYNC_MERGE_REQUIRED, runGithubAsyncMerge } from "./github-async-merge";
 import { redactForgeLog, type ForgeCiClient } from "./forge-ci-client";
 import { describeMergeQueueRemoval, describeMergeQueueState } from "@pwragent/shared/pr-merge-queue";
@@ -529,7 +529,7 @@ export class GithubPrToolClient {
         // GitHub's own stacks merge only through its asynchronous merge, which
         // also takes a required merge queue. The order check refused any open
         // layer below, which that merge would land too.
-        const mergeAsynchronously = async () => {
+        const mergeAsynchronously = async (stack: GithubNativeStack | undefined) => {
           const url = `${repositoryUrl(r)}/pull/${args.number}`;
           const outcome = await runGithubAsyncMerge({
             number: args.number!, method, ...(args.expectedHeadSha ? { sha: args.expectedHeadSha } : {}),
@@ -539,7 +539,8 @@ export class GithubPrToolClient {
             signal: ctx.signal, deadlineMs: 20_000,
           });
           if (outcome.status === "merged") {
-            return writeResult({ merged: true, number: args.number, method, ...(outcome.sha ? { mergeCommitSha: str(outcome.sha, 64) } : {}), url });
+            const above = githubStackLayersAboveNote(args.number!, stack);
+            return writeResult({ merged: true, number: args.number, method, ...(outcome.sha ? { mergeCommitSha: str(outcome.sha, 64) } : {}), url, ...(above ? { note: above } : {}) });
           }
           if (outcome.status === "enqueued") {
             noteMergeQueueRepository(r.host, r.owner, r.repo);
@@ -554,7 +555,7 @@ export class GithubPrToolClient {
             nextStep: "watch_thread_pull_request with notifyOn [\"merged\"] wakes this thread when it lands.",
           });
         };
-        if (checked.nativeStack) return await mergeAsynchronously();
+        if (checked.nativeStack) return await mergeAsynchronously(checked.nativeStack);
         // A repository never seen with a queue merges exactly as before.
         if (isMergeQueueRepository(r.host, r.owner, r.repo)) {
           const gate = await readGate();
@@ -568,7 +569,7 @@ export class GithubPrToolClient {
           if (error instanceof ForgeReadError && GITHUB_ASYNC_MERGE_REQUIRED.test(error.message)) {
             const recheck = await checkGithubStackMerge(r, args.number!, ctx.stackCatalogs ?? [], (route) => call("GET", route), graphql);
             assertStackMergeBaseUnchanged(checkedBase, recheck.base);
-            return await mergeAsynchronously();
+            return await mergeAsynchronously(recheck.nativeStack);
           }
           if (error instanceof ForgeReadError && error.code === "conflict") throw new ForgeReadError("head_changed", `The pull request's head is no longer ${args.expectedHeadSha}. Read it again before merging.`);
           // GitHub refused because the branch merges through a queue: learn

@@ -85,6 +85,10 @@ type GithubNativeStackLayer = { number?: number; state?: string; merged_at?: str
  * GitHub merges a stacked pull request together with every open layer below
  * it. One merge must land one pull request, so refuse while a lower layer is
  * open. Returns the stack, or undefined for a pull request outside one.
+ *
+ * The pull request read every merge already makes carries the membership, so
+ * a pull request outside a stack, or at its bottom, costs no request here.
+ * Only a higher layer reads the stack: GitHub would land its open layers.
  */
 export async function assertGithubNativeStackMergeAllowed(
   number: number,
@@ -96,7 +100,10 @@ export async function assertGithubNativeStackMergeAllowed(
   if (!stack) return undefined;
   const unreadable = () => new ForgeReadError("stack_parent_open",
     `Could not read the GitHub stack of pull request #${number}. Confirm its lower layers have merged, then retry.`);
-  if (!Number.isInteger(stack.number) || !Number.isInteger(stack.position) || !Number.isInteger(stack.size)) throw unreadable();
+  if (!Number.isInteger(stack.number) || !Number.isInteger(stack.position) || !Number.isInteger(stack.size)
+    || stack.position! < 1 || stack.position! > stack.size!) throw unreadable();
+  const known = { number: stack.number!, position: stack.position!, size: stack.size! };
+  if (known.position === 1) return known;
   let layers: GithubNativeStackLayer[] | undefined;
   try {
     layers = (await get(`/stacks/${stack.number}`) as { pull_requests?: GithubNativeStackLayer[] } | undefined)?.pull_requests;
@@ -115,7 +122,14 @@ export async function assertGithubNativeStackMergeAllowed(
     const named = open.map((layer) => `#${layer.number}`).join(", ");
     throw new ForgeReadError("stack_parent_open", `Pull request #${number} is layer ${index + 1} of ${layers.length} in a GitHub stack, and ${named} below it ${open.length === 1 ? "is" : "are"} still open. GitHub would merge ${open.length === 1 ? "it" : "them"} too: merge ${named} first.`);
   }
-  return { number: stack.number!, position: stack.position!, size: stack.size! };
+  return known;
+}
+
+/** Said after merging one layer of a GitHub stack while layers above it stay open. */
+export function githubStackLayersAboveNote(number: number, stack: GithubNativeStack | undefined): string | undefined {
+  if (!stack || stack.position >= stack.size) return undefined;
+  const above = stack.size - stack.position;
+  return `#${number} was layer ${stack.position} of ${stack.size} in a GitHub stack: the ${above === 1 ? "layer" : `${above} layers`} above it ${above === 1 ? "is" : "are"} still open.`;
 }
 
 export type GithubStackMergeCheck = { base: string; headSha?: string; nativeStack?: GithubNativeStack };
