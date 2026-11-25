@@ -48,6 +48,7 @@ export async function initializeResourceCheckouts(
   approvedLabCheckouts?: ReadonlyMap<string, ApprovedLabCheckout>,
   isPackaged = true,
   localThreadTitle?: (thread: Pick<ResourceThreadRef, "backend" | "threadId">) => string | undefined,
+  agentToolsEnabled?: () => boolean,
 ): Promise<DesktopResourceCheckoutService> {
   const root = resolvePwragentRoot();
   const [machineId, evidence] = await Promise.all([
@@ -98,7 +99,7 @@ export async function initializeResourceCheckouts(
   runtime = new DesktopResourceCheckoutService({
     viewer: { instanceId, profile, machineId, instanceLabel: defaultInstanceLabel() },
     machineStore, machineUnresolved, adoptMachineStore, machineCpuCount: cpus().length, externalStore, externalUnresolved,
-    bindings, allowAgentDrafts, approvedLabCheckouts, warn,
+    bindings, allowAgentDrafts, approvedLabCheckouts, agentToolsEnabled, warn,
     bootId: evidence.hostBinding ? evidence.bootId : undefined,
     readMachineAdvertisements: () => buildDockProfileSnapshot().profiles
       .filter((entry) => entry.name !== profile)
